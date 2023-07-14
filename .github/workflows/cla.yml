@@ -26,7 +26,7 @@ jobs:
           # This token is required only if you have configured to store the signatures in a remote repository/organization
           PERSONAL_ACCESS_TOKEN: ${{ secrets.CLASIG_PAT }}
         with:
-          path-to-signatures: 'repos/template/cla-version1/signatures.json'
+          path-to-signatures: 'repos/tpm-rs/cla-version1/signatures.json'
           path-to-document: 'https://github.com/tpm-rs/governance/blob/main/project-docs/CONTRIBUTOR-LICENSE-AGREEMENT.md' # e.g. a CLA or a DCO document
           # branch should not be protected
           branch: 'main'
