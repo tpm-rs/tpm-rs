@@ -1,5 +1,6 @@
 #![allow(dead_code)]
-use std::mem;
+use core::mem::size_of;
+use zerocopy::{AsBytes, FromBytes};
 
 pub type TpmaLocality = u8;
 
@@ -75,7 +76,7 @@ pub union TpmuName {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bDigest {
     size: u16,
-    pub buffer: [u8; mem::size_of::<TpmuHa>()],
+    pub buffer: [u8; size_of::<TpmuHa>()],
 }
 
 type Tpm2bNonce = Tpm2bDigest;
@@ -85,7 +86,7 @@ type Tpm2bOperand = Tpm2bDigest;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bData {
     size: u16,
-    pub buffer: [u8; mem::size_of::<TpmuHa>()],
+    pub buffer: [u8; size_of::<TpmuHa>()],
 }
 
 #[repr(C)]
@@ -120,7 +121,7 @@ pub struct Tpm2bIv {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bName {
     size: u16,
-    pub name: [u8; mem::size_of::<TpmuName>()],
+    pub name: [u8; size_of::<TpmuName>()],
 }
 
 #[repr(C)]
@@ -241,7 +242,7 @@ pub struct TpmsAttest {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bAttest {
     size: u16,
-    pub attestation_data: [u8; mem::size_of::<TpmsAttest>()],
+    pub attestation_data: [u8; size_of::<TpmsAttest>()],
 }
 
 #[repr(C)]
@@ -269,7 +270,7 @@ pub struct TpmsDerive {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bDerive {
     size: u16,
-    pub buffer: [u8; mem::size_of::<TpmsDerive>()],
+    pub buffer: [u8; size_of::<TpmsDerive>()],
 }
 
 #[repr(C)]
@@ -283,7 +284,7 @@ pub union TpmuSensitiveCreate {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSensitiveData {
     size: u16,
-    pub buffer: [u8; mem::size_of::<TpmuSensitiveCreate>()],
+    pub buffer: [u8; size_of::<TpmuSensitiveCreate>()],
 }
 
 pub type Tpm2bAuth = Tpm2bDigest;
@@ -299,7 +300,7 @@ pub struct TpmsSensitiveCreate {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSensitiveCreate {
     size: u16,
-    pub sensitive: [u8; mem::size_of::<TpmsSensitiveCreate>()],
+    pub sensitive: [u8; size_of::<TpmsSensitiveCreate>()],
 }
 
 #[repr(C)]
@@ -334,23 +335,23 @@ pub struct TpmsEccPoint {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEccPoint {
     size: u16,
-    pub point: [u8; mem::size_of::<TpmsEccPoint>()],
+    pub point: [u8; size_of::<TpmsEccPoint>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub union TpmuEncryptedSecret {
-    pub ecc: [u8; mem::size_of::<TpmsEccPoint>()],
+    pub ecc: [u8; size_of::<TpmsEccPoint>()],
     pub rsa: [u8; constants::TPM2_MAX_RSA_KEY_BYTES as usize],
-    pub symmetric: [u8; mem::size_of::<Tpm2bDigest>()],
-    pub keyed_hash: [u8; mem::size_of::<Tpm2bDigest>()],
+    pub symmetric: [u8; size_of::<Tpm2bDigest>()],
+    pub keyed_hash: [u8; size_of::<Tpm2bDigest>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEncryptedSecret {
     size: u16,
-    pub secret: [u8; mem::size_of::<TpmuEncryptedSecret>()],
+    pub secret: [u8; size_of::<TpmuEncryptedSecret>()],
 }
 
 #[repr(C)]
@@ -556,14 +557,14 @@ pub struct TpmtPublic {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPublic {
     size: u16,
-    pub public_area: [u8; mem::size_of::<TpmuPublicId>()],
+    pub public_area: [u8; size_of::<TpmuPublicId>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bTemplate {
     size: u16,
-    pub buffer: [u8; mem::size_of::<TpmtPublic>()],
+    pub buffer: [u8; size_of::<TpmtPublic>()],
 }
 
 #[repr(C)]
@@ -596,7 +597,7 @@ pub struct TpmtSensitive {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSensitive {
     size: u16,
-    pub sensitive_area: [u8; mem::size_of::<TpmtSensitive>()],
+    pub sensitive_area: [u8; size_of::<TpmtSensitive>()],
 }
 
 #[repr(C)]
@@ -611,7 +612,7 @@ pub struct _PRIVATE {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPrivate {
     size: u16,
-    pub buffer: [u8; mem::size_of::<_PRIVATE>()],
+    pub buffer: [u8; size_of::<_PRIVATE>()],
 }
 
 #[repr(C)]
@@ -625,7 +626,7 @@ pub struct TpmsIdObject {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bIdObject {
     size: u16,
-    pub credential: [u8; mem::size_of::<TpmsIdObject>()],
+    pub credential: [u8; size_of::<TpmsIdObject>()],
 }
 
 #[repr(C)]
@@ -642,7 +643,7 @@ pub struct TpmsNvPublic {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bNvPublic {
     size: u16,
-    pub nv_public: [u8; mem::size_of::<TpmsNvPublic>()],
+    pub nv_public: [u8; size_of::<TpmsNvPublic>()],
 }
 
 #[repr(C)]
@@ -663,7 +664,7 @@ pub struct TpmsContextData {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bContextData {
     size: u16,
-    pub buffer: [u8; mem::size_of::<TpmsContextData>()],
+    pub buffer: [u8; size_of::<TpmsContextData>()],
 }
 
 #[repr(C)]
@@ -682,18 +683,45 @@ pub struct TpmsCreationData {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bCreationData {
     size: u16,
-    pub creation_data: [u8; mem::size_of::<TpmsCreationData>()],
+    pub creation_data: [u8; size_of::<TpmsCreationData>()],
 }
 
 pub trait Marshalable {
+    // Unmarshals self from the prefix of `buffer`. Returns the unmarshalled self and number of bytes used.
     fn untry_marshal(buffer: &[u8]) -> Result<(Self, usize), Tpm2Rc>
     where
         Self: Sized;
 
-    fn try_marshal(&self) -> Vec<u8>;
+    // Marshals self into the prefix of `buffer`. Returns the number of bytes used.
+    fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc>;
+}
+
+impl<T> Marshalable for T
+where
+    T: AsBytes + FromBytes,
+{
+    fn untry_marshal(buffer: &[u8]) -> Result<(Self, usize), Tss2Rc>
+    where
+        Self: Sized,
+    {
+        if let Some(x) = T::read_from_prefix(buffer) {
+            Ok((x, core::mem::size_of::<T>()))
+        } else {
+            Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER)
+        }
+    }
+
+    fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tss2Rc> {
+        if self.write_to_prefix(buffer).is_some() {
+            Ok(core::mem::size_of::<T>())
+        } else {
+            Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER)
+        }
+    }
 }
 
 pub trait Tpm2bSimple {
+    const MAX_BUFFER_SIZE: usize;
     fn get_size(&self) -> u16;
     fn get_buffer(&self) -> &[u8];
     fn from_bytes(buffer: &[u8]) -> Result<Self, Tpm2Rc>
@@ -701,47 +729,11 @@ pub trait Tpm2bSimple {
         Self: Sized;
 }
 
-macro_rules! impl_try_marshalable_scalar {
-    ($T:ty) => {
-        impl Marshalable for $T {
-            fn untry_marshal(buffer: &[u8]) -> Result<(Self, usize), Tss2Rc>
-            where
-                Self: Sized,
-            {
-                if buffer.len() < std::mem::size_of::<$T>() {
-                    return Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER);
-                }
-
-                let (int_bytes, _) = buffer.split_at(std::mem::size_of::<$T>());
-
-                let r = <$T>::from_be_bytes(int_bytes.try_into().unwrap());
-                Ok((r, int_bytes.len().into()))
-            }
-
-            fn try_marshal(&self) -> Vec<u8> {
-                let mut vec = Vec::new();
-
-                let be_bytes = self.to_be_bytes();
-                vec.extend_from_slice(&be_bytes);
-
-                vec
-            }
-        }
-    };
-}
-
-impl_try_marshalable_scalar! { u8 }
-impl_try_marshalable_scalar! { u16 }
-impl_try_marshalable_scalar! { u32 }
-impl_try_marshalable_scalar! { u64 }
-impl_try_marshalable_scalar! { i8 }
-impl_try_marshalable_scalar! { i16 }
-impl_try_marshalable_scalar! { i32 }
-impl_try_marshalable_scalar! { i64 }
-
 macro_rules! impl_try_marshalable_tpm2b_simple {
     ($T:ty, $F:ident) => {
         impl Tpm2bSimple for $T {
+            const MAX_BUFFER_SIZE: usize = core::mem::size_of::<$T>() - core::mem::size_of::<u16>();
+
             fn get_size(&self) -> u16 {
                 self.size
             }
@@ -752,38 +744,24 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
 
             fn from_bytes(buffer: &[u8]) -> Result<Self, Tpm2Rc> {
                 // Overflow check
-                if buffer.len() > u16::MAX as usize {
+                if buffer.len() > core::cmp::min(u16::MAX as usize, Self::MAX_BUFFER_SIZE) {
                     return Err(error_codes::TSS2_MU_RC_BAD_SIZE);
                 }
 
                 let mut dest: Self = Self {
                     size: buffer.len() as u16,
-                    $F: [0; std::mem::size_of::<$T>() - std::mem::size_of::<u16>()],
+                    $F: [0; Self::MAX_BUFFER_SIZE],
                 };
-
-                for (dst, src) in dest.$F.iter_mut().zip(buffer) {
-                    *dst = *src
-                }
-
+                dest.$F[..buffer.len()].copy_from_slice(buffer);
                 Ok(dest)
             }
         }
 
         impl Marshalable for $T {
             fn untry_marshal(buffer: &[u8]) -> Result<(Self, usize), Tpm2Rc> {
-                // split_at panics, so we make sure to avoid that condition
-                if buffer.len() < std::mem::size_of::<u16>() {
-                    return Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER);
-                }
-
-                // Split it at the sizeof(u16), ie the first two bytes
-                let (int_bytes, rest) = buffer.split_at(std::mem::size_of::<u16>());
-                let temp = int_bytes.try_into();
-                if temp.is_err() {
-                    return Err(error_codes::TSS2_BASE_RC_GENERAL_FAILURE);
-                }
-                let be_size_bytes: [u8; 2] = temp.unwrap();
-                let got_size: u16 = u16::from_be_bytes(be_size_bytes);
+                let (got_size, consumed) = u16::untry_marshal(buffer)?;
+                // Remove the prefix consumed above.
+                let (_, rest) = buffer.split_at(consumed);
 
                 // Ensure the buffer is large enough to fullfill the size indicated
                 if rest.len() != got_size.into() {
@@ -792,34 +770,27 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
 
                 let mut dest: Self = Self {
                     size: got_size,
-                    // TODO best way?
-                    $F: [0; std::mem::size_of::<$T>() - std::mem::size_of::<u16>()],
+                    $F: [0; Self::MAX_BUFFER_SIZE],
                 };
 
                 // Make sure the size indicated isn't too large for the types buffer
                 if rest.len() > dest.$F.len() {
                     return Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
+                dest.$F[..got_size.into()].copy_from_slice(&rest[..got_size.into()]);
 
-                let (field_data_buf, _) = rest.split_at(got_size.into());
-
-                // panicked at 'source slice length (5) does not match destination slice length (68)',
-                //dest.name.clone_from_slice(buffer_data);
-                for (dst, src) in dest.$F.iter_mut().zip(field_data_buf) {
-                    *dst = *src
-                }
-
-                Ok((dest, std::mem::size_of::<u16>() + usize::from(got_size)))
+                Ok((dest, consumed + (usize::from(got_size))))
             }
 
-            fn try_marshal(&self) -> Vec<u8> {
-                let mut vec = Vec::new();
-
-                let be_bytes = self.size.to_be_bytes();
-                vec.extend_from_slice(&be_bytes);
-                vec.extend_from_slice(&self.$F);
-
-                vec
+            fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
+                let used = self.size.try_marshal(buffer)?;
+                let (_, rest) = buffer.split_at_mut(used);
+                let buffer_marsh = self.size as usize;
+                if buffer_marsh > (core::cmp::max(Self::MAX_BUFFER_SIZE, rest.len())) {
+                    return Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER);
+                }
+                rest[..buffer_marsh].copy_from_slice(&self.$F[..buffer_marsh]);
+                Ok(used + buffer_marsh)
             }
         }
     };
@@ -861,8 +832,8 @@ mod tests {
     // generate the test body here.
     macro_rules! impl_test_tpm2b_simple {
         ($T:ty) => {
-            const SIZE_OF_U16: usize = std::mem::size_of::<u16>();
-            const SIZE_OF_TYPE: usize = std::mem::size_of::<$T>();
+            const SIZE_OF_U16: usize = core::mem::size_of::<u16>();
+            const SIZE_OF_TYPE: usize = core::mem::size_of::<$T>();
             const SIZE_OF_BUFFER: usize = SIZE_OF_TYPE - SIZE_OF_U16;
 
             /*
@@ -872,37 +843,19 @@ mod tests {
              *   - same size as buffer limit
              *   - exceeding buffer limit
              */
-            let too_small_size_buf: [u8; 1] = [0x00; 1];
+            let mut too_small_size_buf: [u8; 1] = [0x00; 1];
             let mut smaller_size_buf: [u8; SIZE_OF_TYPE - 8] = [0xFF; SIZE_OF_TYPE - 8];
             let mut same_size_buf: [u8; SIZE_OF_TYPE] = [0xFF; SIZE_OF_TYPE];
             let mut bigger_size_buf: [u8; SIZE_OF_TYPE + 8] = [0xFF; SIZE_OF_TYPE + 8];
 
             let mut s: u16 = (smaller_size_buf.len() - SIZE_OF_U16) as u16;
-            let mut b: Vec<u8> = s.try_marshal();
-
-            let mut index: usize = 0;
-            while index < b.len() {
-                smaller_size_buf[index] = b[index];
-                index += 1;
-            }
+            assert!(s.try_marshal(&mut smaller_size_buf).is_ok());
 
             s = (same_size_buf.len() - SIZE_OF_U16) as u16;
-            b = s.try_marshal();
-
-            index = 0;
-            while index < b.len() {
-                same_size_buf[index] = b[index];
-                index += 1;
-            }
+            assert!(s.try_marshal(&mut same_size_buf).is_ok());
 
             s = (bigger_size_buf.len() - SIZE_OF_U16) as u16;
-            b = s.try_marshal();
-
-            index = 0;
-            while index < b.len() {
-                bigger_size_buf[index] = b[index];
-                index += 1;
-            }
+            assert!(s.try_marshal(&mut bigger_size_buf).is_ok());
 
             // too small should fail
             let mut result: Result<($T, usize), Tpm2Rc> = <$T>::untry_marshal(&too_small_size_buf);
@@ -930,20 +883,35 @@ mod tests {
             assert_eq!(offset, same_size_buf.len());
             assert_eq!(
                 usize::from(digest.get_size()),
-                same_size_buf.len() - std::mem::size_of::<u16>()
+                same_size_buf.len() - core::mem::size_of::<u16>()
             );
             assert_eq!(
                 digest.get_buffer(),
-                &same_size_buf[std::mem::size_of::<u16>()..]
+                &same_size_buf[core::mem::size_of::<u16>()..]
             );
+
+            let mut mres = digest.try_marshal(&mut too_small_size_buf);
+            assert!(mres.is_err());
+
+            mres = digest.try_marshal(&mut same_size_buf);
+            assert!(mres.is_ok());
+            assert_eq!(mres.unwrap(), digest.get_size() as usize + SIZE_OF_U16);
+            let (mut new_digest, _) = <$T>::untry_marshal(&same_size_buf).unwrap();
+            assert_eq!(digest, new_digest);
+
+            mres = digest.try_marshal(&mut bigger_size_buf);
+            assert!(mres.is_ok());
+            assert_eq!(mres.unwrap(), digest.get_size() as usize + SIZE_OF_U16);
+            (new_digest, _) = <$T>::untry_marshal(&bigger_size_buf[..SIZE_OF_TYPE]).unwrap();
+            assert_eq!(digest, new_digest);
         };
     }
 
     macro_rules! impl_test_scalar {
         ($T:ty, $I:expr, $V:expr) => {
-            const SIZE_OF_TYPE: usize = std::mem::size_of::<$T>();
+            const SIZE_OF_TYPE: usize = core::mem::size_of::<$T>();
 
-            let too_small_buffer: [u8; SIZE_OF_TYPE - 1] = [$I; SIZE_OF_TYPE - 1];
+            let mut too_small_buffer: [u8; SIZE_OF_TYPE - 1] = [$I; SIZE_OF_TYPE - 1];
             let same_size_buffer: [u8; SIZE_OF_TYPE] = [$I; SIZE_OF_TYPE];
             let larger_buffer: [u8; SIZE_OF_TYPE + 4] = [$I; SIZE_OF_TYPE + 4];
 
@@ -961,6 +929,23 @@ mod tests {
             (value, offset) = res.unwrap();
             assert_eq!(value, $V);
             assert_eq!(offset, SIZE_OF_TYPE);
+
+            let marsh_value: $T = $V;
+            let mut mres = marsh_value.try_marshal(&mut too_small_buffer);
+            assert!(mres.is_err());
+
+            let mut zero_same_size: [u8; SIZE_OF_TYPE] = [0; SIZE_OF_TYPE];
+            let mut zero_larger: [u8; SIZE_OF_TYPE + 4] = [0; SIZE_OF_TYPE + 4];
+
+            mres = marsh_value.try_marshal(&mut zero_same_size);
+            assert!(mres.is_ok());
+            assert_eq!(mres.unwrap(), SIZE_OF_TYPE);
+            assert_eq!(zero_same_size, same_size_buffer);
+
+            mres = marsh_value.try_marshal(&mut zero_larger);
+            assert!(mres.is_ok());
+            assert_eq!(mres.unwrap(), SIZE_OF_TYPE);
+            assert!(zero_larger.starts_with(&same_size_buffer));
         };
     }
 
