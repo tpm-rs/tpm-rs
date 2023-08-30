@@ -930,7 +930,7 @@ mod tests {
             assert_eq!(value, $V);
             assert_eq!(offset, SIZE_OF_TYPE);
 
-            let marsh_value : $T = $V;
+            let marsh_value: $T = $V;
             let mut mres = marsh_value.try_marshal(&mut too_small_buffer);
             assert!(mres.is_err());
 
