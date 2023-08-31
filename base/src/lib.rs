@@ -688,7 +688,7 @@ pub struct Tpm2bCreationData {
 
 pub trait Marshalable {
     // Unmarshals self from the prefix of `buffer`. Returns the unmarshalled self and number of bytes used.
-    fn untry_marshal(buffer: &[u8]) -> Result<(Self, usize), Tpm2Rc>
+    fn try_unmarshal(buffer: &[u8]) -> Result<(Self, usize), Tpm2Rc>
     where
         Self: Sized;
 
@@ -700,12 +700,12 @@ impl<T> Marshalable for T
 where
     T: AsBytes + FromBytes,
 {
-    fn untry_marshal(buffer: &[u8]) -> Result<(Self, usize), Tss2Rc>
+    fn try_unmarshal(buffer: &[u8]) -> Result<(Self, usize), Tss2Rc>
     where
         Self: Sized,
     {
         if let Some(x) = T::read_from_prefix(buffer) {
-            Ok((x, core::mem::size_of::<T>()))
+            Ok((x, size_of::<T>()))
         } else {
             Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER)
         }
@@ -713,7 +713,7 @@ where
 
     fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tss2Rc> {
         if self.write_to_prefix(buffer).is_some() {
-            Ok(core::mem::size_of::<T>())
+            Ok(size_of::<T>())
         } else {
             Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER)
         }
@@ -758,8 +758,8 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
         }
 
         impl Marshalable for $T {
-            fn untry_marshal(buffer: &[u8]) -> Result<(Self, usize), Tpm2Rc> {
-                let (got_size, consumed) = u16::untry_marshal(buffer)?;
+            fn try_unmarshal(buffer: &[u8]) -> Result<(Self, usize), Tpm2Rc> {
+                let (got_size, consumed) = u16::try_unmarshal(buffer)?;
                 // Remove the prefix consumed above.
                 let (_, rest) = buffer.split_at(consumed);
 
@@ -858,15 +858,15 @@ mod tests {
             assert!(s.try_marshal(&mut bigger_size_buf).is_ok());
 
             // too small should fail
-            let mut result: Result<($T, usize), Tpm2Rc> = <$T>::untry_marshal(&too_small_size_buf);
+            let mut result: Result<($T, usize), Tpm2Rc> = <$T>::try_unmarshal(&too_small_size_buf);
             assert!(result.is_err());
 
             // bigger size should fail
-            result = <$T>::untry_marshal(&bigger_size_buf);
+            result = <$T>::try_unmarshal(&bigger_size_buf);
             assert!(result.is_err());
 
             // small, should be good
-            result = <$T>::untry_marshal(&smaller_size_buf);
+            result = <$T>::try_unmarshal(&smaller_size_buf);
             assert!(result.is_ok());
             let (mut digest, mut offset) = result.unwrap();
             assert_eq!(offset, smaller_size_buf.len());
@@ -877,7 +877,7 @@ mod tests {
             assert_eq!(digest.get_buffer(), &smaller_size_buf[SIZE_OF_U16..]);
 
             // same size should be good
-            result = <$T>::untry_marshal(&same_size_buf);
+            result = <$T>::try_unmarshal(&same_size_buf);
             assert!(result.is_ok());
             (digest, offset) = result.unwrap();
             assert_eq!(offset, same_size_buf.len());
@@ -896,13 +896,13 @@ mod tests {
             mres = digest.try_marshal(&mut same_size_buf);
             assert!(mres.is_ok());
             assert_eq!(mres.unwrap(), digest.get_size() as usize + SIZE_OF_U16);
-            let (mut new_digest, _) = <$T>::untry_marshal(&same_size_buf).unwrap();
+            let (mut new_digest, _) = <$T>::try_unmarshal(&same_size_buf).unwrap();
             assert_eq!(digest, new_digest);
 
             mres = digest.try_marshal(&mut bigger_size_buf);
             assert!(mres.is_ok());
             assert_eq!(mres.unwrap(), digest.get_size() as usize + SIZE_OF_U16);
-            (new_digest, _) = <$T>::untry_marshal(&bigger_size_buf[..SIZE_OF_TYPE]).unwrap();
+            (new_digest, _) = <$T>::try_unmarshal(&bigger_size_buf[..SIZE_OF_TYPE]).unwrap();
             assert_eq!(digest, new_digest);
         };
     }
@@ -915,16 +915,16 @@ mod tests {
             let same_size_buffer: [u8; SIZE_OF_TYPE] = [$I; SIZE_OF_TYPE];
             let larger_buffer: [u8; SIZE_OF_TYPE + 4] = [$I; SIZE_OF_TYPE + 4];
 
-            let mut res: Result<($T, usize), Tpm2Rc> = <$T>::untry_marshal(&too_small_buffer);
+            let mut res: Result<($T, usize), Tpm2Rc> = <$T>::try_unmarshal(&too_small_buffer);
             assert!(res.is_err());
 
-            res = <$T>::untry_marshal(&same_size_buffer);
+            res = <$T>::try_unmarshal(&same_size_buffer);
             assert!(res.is_ok());
             let (mut value, mut offset) = res.unwrap();
             assert_eq!(value, $V);
             assert_eq!(offset, SIZE_OF_TYPE);
 
-            res = <$T>::untry_marshal(&larger_buffer);
+            res = <$T>::try_unmarshal(&larger_buffer);
             assert!(res.is_ok());
             (value, offset) = res.unwrap();
             assert_eq!(value, $V);
@@ -950,142 +950,142 @@ mod tests {
     }
 
     #[test]
-    fn test_untry_marshal_u8() {
+    fn test_try_unmarshal_u8() {
         impl_test_scalar! {u8, 0xFF, 0xFF}
     }
 
     #[test]
-    fn test_untry_marshal_i8() {
+    fn test_try_unmarshal_i8() {
         impl_test_scalar! {i8, 0x7F, 0x7F}
     }
 
     #[test]
-    fn test_untry_marshal_u16() {
+    fn test_try_unmarshal_u16() {
         impl_test_scalar! {u16, 0xFF, 0xFFFF}
     }
 
     #[test]
-    fn test_untry_marshal_i16() {
+    fn test_try_unmarshal_i16() {
         impl_test_scalar! {i16, 0x7F, 0x7F7F}
     }
 
     #[test]
-    fn test_untry_marshal_u32() {
+    fn test_try_unmarshal_u32() {
         impl_test_scalar! {u32, 0xFF, 0xFFFFFFFF}
     }
 
     #[test]
-    fn test_untry_marshal_i32() {
+    fn test_try_unmarshal_i32() {
         impl_test_scalar! {i32, 0x7F, 0x7F7F7F7F}
     }
 
     #[test]
-    fn test_untry_marshal_u64() {
+    fn test_try_unmarshal_u64() {
         impl_test_scalar! {u64, 0xFF, 0xFFFFFFFFFFFFFFFF}
     }
 
     #[test]
-    fn test_untry_marshal_i64() {
+    fn test_try_unmarshal_i64() {
         impl_test_scalar! {i64, 0x7F, 0x7F7F7F7F7F7F7F7F}
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_name() {
+    fn test_try_unmarshal_tpm2b_name() {
         impl_test_tpm2b_simple! {Tpm2bName};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_attest() {
+    fn test_try_unmarshal_tpm2b_attest() {
         impl_test_tpm2b_simple! {Tpm2bAttest};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_context_data() {
+    fn test_try_unmarshal_tpm2b_context_data() {
         impl_test_tpm2b_simple! {Tpm2bContextData};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_context_sensitive() {
+    fn test_try_unmarshal_tpm2b_context_sensitive() {
         impl_test_tpm2b_simple! {Tpm2bContextSensitive};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_data() {
+    fn test_try_unmarshal_tpm2b_data() {
         impl_test_tpm2b_simple! {Tpm2bData};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_digest() {
+    fn test_try_unmarshal_tpm2b_digest() {
         impl_test_tpm2b_simple! {Tpm2bDigest};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_ecc_parameter() {
+    fn test_try_unmarshal_tpm2b_ecc_parameter() {
         impl_test_tpm2b_simple! {Tpm2bEccParameter};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_encrypted_secret() {
+    fn test_try_unmarshal_tpm2b_encrypted_secret() {
         impl_test_tpm2b_simple! {Tpm2bEncryptedSecret};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_event() {
+    fn test_try_unmarshal_tpm2b_event() {
         impl_test_tpm2b_simple! {Tpm2bEvent};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_id_object() {
+    fn test_try_unmarshal_tpm2b_id_object() {
         impl_test_tpm2b_simple! {Tpm2bIdObject};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_iv() {
+    fn test_try_unmarshal_tpm2b_iv() {
         impl_test_tpm2b_simple! {Tpm2bIv};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_max_buffer() {
+    fn test_try_unmarshal_tpm2b_max_buffer() {
         impl_test_tpm2b_simple! {Tpm2bMaxBuffer};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_max_nv_buffer() {
+    fn test_try_unmarshal_tpm2b_max_nv_buffer() {
         impl_test_tpm2b_simple! {Tpm2bMaxNvBuffer};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_private() {
+    fn test_try_unmarshal_tpm2b_private() {
         impl_test_tpm2b_simple! {Tpm2bPrivate};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_private_key_rsa() {
+    fn test_try_unmarshal_tpm2b_private_key_rsa() {
         impl_test_tpm2b_simple! {Tpm2bPrivateKeyRsa};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_private_vendor_specific() {
+    fn test_try_unmarshal_tpm2b_private_vendor_specific() {
         impl_test_tpm2b_simple! {Tpm2bPrivateVendorSpecific};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_public_key_rsa() {
+    fn test_try_unmarshal_tpm2b_public_key_rsa() {
         impl_test_tpm2b_simple! {Tpm2bPublicKeyRsa};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_sensitive_data() {
+    fn test_try_unmarshal_tpm2b_sensitive_data() {
         impl_test_tpm2b_simple! {Tpm2bSensitiveData};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_sym_key() {
+    fn test_try_unmarshal_tpm2b_sym_key() {
         impl_test_tpm2b_simple! {Tpm2bSymKey};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_template() {
+    fn test_try_unmarshal_tpm2b_template() {
         impl_test_tpm2b_simple! {Tpm2bTemplate};
     }
 }
