@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use core::mem::size_of;
+use marshal_derive::Marshal;
 use zerocopy::{AsBytes, FromBytes};
 
 pub type TpmaLocality = u8;
@@ -132,7 +133,7 @@ pub struct Tpm2bMaxCapBuffer {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmsClockInfo {
     pub clock: u64,
     pub reset_count: u32,
@@ -193,7 +194,7 @@ pub struct TpmsSessionAuditInfo {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmsTimeInfo {
     pub time: u64,
     pub clock_info: TpmsClockInfo,
@@ -207,7 +208,7 @@ pub struct TpmsTimeAttestInfo {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmsNvCertifyInfo {
     pub index_name: Tpm2bName,
     pub offset: u16,
@@ -764,7 +765,7 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
                 let (_, rest) = buffer.split_at(consumed);
 
                 // Ensure the buffer is large enough to fullfill the size indicated
-                if rest.len() != got_size.into() {
+                if rest.len() < got_size.into() {
                     return Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
 
@@ -824,7 +825,7 @@ mod tests {
         Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bEvent, Tpm2bIdObject, Tpm2bIv,
         Tpm2bMaxBuffer, Tpm2bMaxNvBuffer, Tpm2bName, Tpm2bPrivate, Tpm2bPrivateKeyRsa,
         Tpm2bPrivateVendorSpecific, Tpm2bPublicKeyRsa, Tpm2bSensitiveData, Tpm2bSimple,
-        Tpm2bSymKey, Tpm2bTemplate,
+        Tpm2bSymKey, Tpm2bTemplate, TpmsNvCertifyInfo, TpmsClockInfo, TpmsTimeInfo, TpmsEmpty,
     };
 
     // Unfortunately, I didn't see a way to generate a function name easily, see
@@ -1087,5 +1088,63 @@ mod tests {
     #[test]
     fn test_untry_marshal_tpm2b_template() {
         impl_test_tpm2b_simple! {Tpm2bTemplate};
+    }
+
+    #[test]
+    fn test_marshal_struct_derive() {
+        let name_buffer: [u8; 4] = [1, 2, 3, 4];
+        let index_name = Tpm2bName::from_bytes(&name_buffer).unwrap();
+        let nv_buffer = [24u8; 10];
+        let nv_contents = Tpm2bMaxNvBuffer::from_bytes(&nv_buffer).unwrap();
+        let info = TpmsNvCertifyInfo {
+            index_name,
+            offset: 10,
+            nv_contents,
+        };
+        let mut marshal_buffer = [0u8; 48];
+        let bytes = info.try_marshal(&mut marshal_buffer);
+        assert!(bytes.is_ok());
+
+        // Build the expected output manually.
+        // TODO: We don't actually want little endian here...;
+        let mut expected = Vec::with_capacity(bytes.unwrap());
+        expected.extend_from_slice(&index_name.size.to_le_bytes());
+        expected.extend_from_slice(&name_buffer);
+        expected.extend_from_slice(&info.offset.to_le_bytes());
+        expected.extend_from_slice(&nv_contents.size.to_le_bytes());
+        expected.extend_from_slice(&nv_buffer);
+
+        assert_eq!(expected.len(), bytes.unwrap());
+        assert_eq!(expected, marshal_buffer[..expected.len()]);
+
+        let unmarshaled = TpmsNvCertifyInfo::untry_marshal(&marshal_buffer);
+        assert!(unmarshaled.is_ok());
+        let (unmarsh_info, unmarsh_bytes) = unmarshaled.unwrap();
+        assert_eq!(unmarsh_bytes, bytes.unwrap());
+        assert_eq!(unmarsh_info, info);
+    }
+
+    #[test]
+    fn test_marshal_nested_derive() {
+        let clock_info = TpmsClockInfo{clock: 333, reset_count: 0, restart_count: 39, safe: 0};
+        let time_info = TpmsTimeInfo{time: 444, clock_info};
+        let mut marshal_buffer = [0u8; 25];
+        let bytes = time_info.try_marshal(&mut marshal_buffer);
+        assert!(bytes.is_ok());
+        assert_eq!(bytes.unwrap(), 25);
+        
+        // Too small returns error.
+        let mut tiny_buffer = [0u8; 3];
+        assert!(time_info.try_marshal(&mut tiny_buffer).is_err());
+        // Too large is happy and prefix matches perfectly-sized buffer.
+        let mut huge_buffer = [0u8; 64];
+        assert!(time_info.try_marshal(&mut huge_buffer).is_ok());
+        assert_eq!(huge_buffer[..marshal_buffer.len()], marshal_buffer);
+
+        let unmarshaled = TpmsTimeInfo::untry_marshal(&marshal_buffer);
+        assert!(unmarshaled.is_ok());
+        let (unmarsh_info, unmarsh_bytes) = unmarshaled.unwrap(); 
+        assert_eq!(unmarsh_bytes, bytes.unwrap());
+        assert_eq!(unmarsh_info, time_info);
     }
 }
