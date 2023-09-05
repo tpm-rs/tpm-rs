@@ -13,10 +13,9 @@ pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     let expanded = quote! {
         // The generated impl.
         impl Marshalable for #name  {
-            fn untry_marshal(buffer: &[u8]) -> Result<(Self, usize), Tss2Rc> {
-                let mut read: usize = 0;
+            fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tss2Rc> {
                 #unmarshal_text;
-                Ok((#name{#field_list}, read))
+                Ok(#name{#field_list})
                 
             }
 
@@ -72,8 +71,7 @@ fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
                     let name = &f.ident;
                     let field_type = &f.ty;
                     quote_spanned! {f.span()=>
-                        let (#name, added) = #field_type::untry_marshal(&buffer[read..])?;
-                        read += added;
+                        let #name = #field_type::untry_marshal(buffer)?;
                     }
                 });
                 quote! {

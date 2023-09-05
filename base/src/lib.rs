@@ -687,9 +687,29 @@ pub struct Tpm2bCreationData {
     pub creation_data: [u8; size_of::<TpmsCreationData>()],
 }
 
+// Helper for splitting up ranges of an unmarshal buffer.
+pub struct UnmarshalBuf<'a> {
+    buffer: &'a [u8],
+}
+impl<'a> UnmarshalBuf<'a> {
+    pub fn new(buffer: &'a [u8]) -> UnmarshalBuf<'a> {
+        UnmarshalBuf { buffer }
+    }
+
+    pub fn get(&mut self, len: usize) -> Option<&'a [u8]> {
+        if len > self.buffer.len() {
+            None
+        } else {
+            let (yours, mine) = self.buffer.split_at(len);
+            self.buffer = mine;
+            Some(yours)
+        }
+    }
+}
+
 pub trait Marshalable {
     // Unmarshals self from the prefix of `buffer`. Returns the unmarshalled self and number of bytes used.
-    fn untry_marshal(buffer: &[u8]) -> Result<(Self, usize), Tpm2Rc>
+    fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc>
     where
         Self: Sized;
 
@@ -701,15 +721,16 @@ impl<T> Marshalable for T
 where
     T: AsBytes + FromBytes,
 {
-    fn untry_marshal(buffer: &[u8]) -> Result<(Self, usize), Tss2Rc>
+    fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tss2Rc>
     where
         Self: Sized,
     {
-        if let Some(x) = T::read_from_prefix(buffer) {
-            Ok((x, core::mem::size_of::<T>()))
-        } else {
-            Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER)
+        if let Some(mine) = buffer.get(size_of::<T>()) {
+            if let Some(x) = T::read_from(mine) {
+                return Ok(x);
+            }
         }
+        Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER)
     }
 
     fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tss2Rc> {
@@ -759,13 +780,12 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
         }
 
         impl Marshalable for $T {
-            fn untry_marshal(buffer: &[u8]) -> Result<(Self, usize), Tpm2Rc> {
-                let (got_size, consumed) = u16::untry_marshal(buffer)?;
-                // Remove the prefix consumed above.
-                let (_, rest) = buffer.split_at(consumed);
+            fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
+                let got_size = u16::untry_marshal(buffer)?;
 
                 // Ensure the buffer is large enough to fullfill the size indicated
-                if rest.len() < got_size.into() {
+                let sized_buffer = buffer.get(got_size as usize);
+                if !sized_buffer.is_some() {
                     return Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
 
@@ -775,12 +795,12 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
                 };
 
                 // Make sure the size indicated isn't too large for the types buffer
-                if rest.len() > dest.$F.len() {
+                if sized_buffer.unwrap().len() > dest.$F.len() {
                     return Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
-                dest.$F[..got_size.into()].copy_from_slice(&rest[..got_size.into()]);
+                dest.$F[..got_size.into()].copy_from_slice(&sized_buffer.unwrap());
 
-                Ok((dest, consumed + (usize::from(got_size))))
+                Ok(dest)
             }
 
             fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
@@ -825,7 +845,7 @@ mod tests {
         Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bEvent, Tpm2bIdObject, Tpm2bIv,
         Tpm2bMaxBuffer, Tpm2bMaxNvBuffer, Tpm2bName, Tpm2bPrivate, Tpm2bPrivateKeyRsa,
         Tpm2bPrivateVendorSpecific, Tpm2bPublicKeyRsa, Tpm2bSensitiveData, Tpm2bSimple,
-        Tpm2bSymKey, Tpm2bTemplate, TpmsNvCertifyInfo, TpmsClockInfo, TpmsTimeInfo, TpmsEmpty,
+        Tpm2bSymKey, Tpm2bTemplate, TpmsNvCertifyInfo, TpmsClockInfo, TpmsTimeInfo, UnmarshalBuf,
     };
 
     // Unfortunately, I didn't see a way to generate a function name easily, see
@@ -859,18 +879,17 @@ mod tests {
             assert!(s.try_marshal(&mut bigger_size_buf).is_ok());
 
             // too small should fail
-            let mut result: Result<($T, usize), Tpm2Rc> = <$T>::untry_marshal(&too_small_size_buf);
+            let mut result: Result<$T, Tpm2Rc> = <$T>::untry_marshal(&mut UnmarshalBuf::new(&too_small_size_buf));
             assert!(result.is_err());
 
             // bigger size should fail
-            result = <$T>::untry_marshal(&bigger_size_buf);
+            result = <$T>::untry_marshal(&mut UnmarshalBuf::new(&bigger_size_buf));
             assert!(result.is_err());
 
             // small, should be good
-            result = <$T>::untry_marshal(&smaller_size_buf);
+            result = <$T>::untry_marshal(&mut UnmarshalBuf::new(&smaller_size_buf));
             assert!(result.is_ok());
-            let (mut digest, mut offset) = result.unwrap();
-            assert_eq!(offset, smaller_size_buf.len());
+            let mut digest = result.unwrap();
             assert_eq!(
                 usize::from(digest.get_size()),
                 smaller_size_buf.len() - SIZE_OF_U16
@@ -878,10 +897,9 @@ mod tests {
             assert_eq!(digest.get_buffer(), &smaller_size_buf[SIZE_OF_U16..]);
 
             // same size should be good
-            result = <$T>::untry_marshal(&same_size_buf);
+            result = <$T>::untry_marshal(&mut UnmarshalBuf::new(&same_size_buf));
             assert!(result.is_ok());
-            (digest, offset) = result.unwrap();
-            assert_eq!(offset, same_size_buf.len());
+            digest = result.unwrap();
             assert_eq!(
                 usize::from(digest.get_size()),
                 same_size_buf.len() - core::mem::size_of::<u16>()
@@ -897,13 +915,13 @@ mod tests {
             mres = digest.try_marshal(&mut same_size_buf);
             assert!(mres.is_ok());
             assert_eq!(mres.unwrap(), digest.get_size() as usize + SIZE_OF_U16);
-            let (mut new_digest, _) = <$T>::untry_marshal(&same_size_buf).unwrap();
+            let mut new_digest = <$T>::untry_marshal(&mut UnmarshalBuf::new(&same_size_buf)).unwrap();
             assert_eq!(digest, new_digest);
 
             mres = digest.try_marshal(&mut bigger_size_buf);
             assert!(mres.is_ok());
             assert_eq!(mres.unwrap(), digest.get_size() as usize + SIZE_OF_U16);
-            (new_digest, _) = <$T>::untry_marshal(&bigger_size_buf[..SIZE_OF_TYPE]).unwrap();
+            new_digest = <$T>::untry_marshal(&mut UnmarshalBuf::new(&bigger_size_buf[..SIZE_OF_TYPE])).unwrap();
             assert_eq!(digest, new_digest);
         };
     }
@@ -916,20 +934,16 @@ mod tests {
             let same_size_buffer: [u8; SIZE_OF_TYPE] = [$I; SIZE_OF_TYPE];
             let larger_buffer: [u8; SIZE_OF_TYPE + 4] = [$I; SIZE_OF_TYPE + 4];
 
-            let mut res: Result<($T, usize), Tpm2Rc> = <$T>::untry_marshal(&too_small_buffer);
+            let mut res: Result<$T, Tpm2Rc> = <$T>::untry_marshal(&mut UnmarshalBuf::new(&too_small_buffer));
             assert!(res.is_err());
 
-            res = <$T>::untry_marshal(&same_size_buffer);
+            res = <$T>::untry_marshal(&mut UnmarshalBuf::new(&same_size_buffer));
             assert!(res.is_ok());
-            let (mut value, mut offset) = res.unwrap();
-            assert_eq!(value, $V);
-            assert_eq!(offset, SIZE_OF_TYPE);
+            assert_eq!(res.unwrap(), $V);
 
-            res = <$T>::untry_marshal(&larger_buffer);
+            res = <$T>::untry_marshal(&mut UnmarshalBuf::new(&larger_buffer));
             assert!(res.is_ok());
-            (value, offset) = res.unwrap();
-            assert_eq!(value, $V);
-            assert_eq!(offset, SIZE_OF_TYPE);
+            assert_eq!(res.unwrap(), $V);
 
             let marsh_value: $T = $V;
             let mut mres = marsh_value.try_marshal(&mut too_small_buffer);
@@ -1117,11 +1131,9 @@ mod tests {
         assert_eq!(expected.len(), bytes.unwrap());
         assert_eq!(expected, marshal_buffer[..expected.len()]);
 
-        let unmarshaled = TpmsNvCertifyInfo::untry_marshal(&marshal_buffer);
+        let unmarshaled = TpmsNvCertifyInfo::untry_marshal(&mut UnmarshalBuf::new(&marshal_buffer));
         assert!(unmarshaled.is_ok());
-        let (unmarsh_info, unmarsh_bytes) = unmarshaled.unwrap();
-        assert_eq!(unmarsh_bytes, bytes.unwrap());
-        assert_eq!(unmarsh_info, info);
+        assert_eq!(unmarshaled.unwrap(), info);
     }
 
     #[test]
@@ -1141,10 +1153,8 @@ mod tests {
         assert!(time_info.try_marshal(&mut huge_buffer).is_ok());
         assert_eq!(huge_buffer[..marshal_buffer.len()], marshal_buffer);
 
-        let unmarshaled = TpmsTimeInfo::untry_marshal(&marshal_buffer);
+        let unmarshaled = TpmsTimeInfo::untry_marshal(&mut UnmarshalBuf::new(&marshal_buffer));
         assert!(unmarshaled.is_ok());
-        let (unmarsh_info, unmarsh_bytes) = unmarshaled.unwrap(); 
-        assert_eq!(unmarsh_bytes, bytes.unwrap());
-        assert_eq!(unmarsh_info, time_info);
+        assert_eq!(unmarshaled.unwrap(), time_info);
     }
 }
