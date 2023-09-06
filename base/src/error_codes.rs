@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use crate::Tss2Rc;
+use crate::Tpm2Rc;
 
 pub const TSS2_RC_LAYER_SHIFT: u32 = 16;
 pub const TSS2_RC_LAYER_MASK: Tss2Rc = 0xFF << TSS2_RC_LAYER_SHIFT;
@@ -28,3 +29,6 @@ pub const TSS2_BASE_RC_INSUFFICIENT_RESPONSE: Tss2Rc = 19;
 pub const TSS2_MU_RC_INSUFFICIENT_BUFFER: Tss2Rc =
     TSS2_MU_RC_LAYER | TSS2_BASE_RC_INSUFFICIENT_BUFFER;
 pub const TSS2_MU_RC_BAD_SIZE: Tss2Rc = TSS2_MU_RC_LAYER | TSS2_BASE_RC_BAD_SIZE;
+
+const TPM2_RC_FMT1: Tpm2Rc = 0x080;
+pub const TPM2_RC_SELECTOR: Tpm2Rc = TPM2_RC_FMT1 + 0x018;
