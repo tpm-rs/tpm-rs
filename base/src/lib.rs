@@ -506,34 +506,13 @@ impl TpmuSymMode {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Marshal)]
 pub struct TpmtSymDefObject {
     pub algorithm: TpmiAlgSymObject,
+    #[selector(algorithm)]
     pub key_bits: TpmuSymKeyBits,
+    #[selector(algorithm)]
     pub mode: TpmuSymMode,
-}
-impl Marshalable for TpmtSymDefObject {
-    fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
-        let mut written = self.algorithm.try_marshal(&mut buffer[..])?;
-        written += self
-            .key_bits
-            .try_marshal(self.algorithm, &mut buffer[written..])?;
-        written += self
-            .mode
-            .try_marshal(self.algorithm, &mut buffer[written..])?;
-        Ok(written)
-    }
-    fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc>
-    where
-        Self: Sized,
-    {
-        let algorithm = TpmiAlgSymObject::untry_marshal(buffer)?;
-        Ok(TpmtSymDefObject {
-            algorithm,
-            key_bits: TpmuSymKeyBits::untry_marshal(algorithm, buffer)?,
-            mode: TpmuSymMode::untry_marshal(algorithm, buffer)?,
-        })
-    }
 }
 
 #[repr(C)]
@@ -629,27 +608,11 @@ impl TpmuAsymScheme {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Marshal)]
 pub struct TpmtRsaScheme {
     pub scheme: TpmiAlgRsaScheme,
+    #[selector(scheme)]
     pub details: TpmuAsymScheme,
-}
-impl Marshalable for TpmtRsaScheme {
-    fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
-        let mut written = 0;
-        written += self.scheme.try_marshal(buffer)?;
-        written += self
-            .details
-            .try_marshal(self.scheme, &mut buffer[written..])?;
-        Ok(written)
-    }
-    fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
-        let scheme = TpmiAlgRsaScheme::untry_marshal(buffer)?;
-        Ok(TpmtRsaScheme {
-            scheme,
-            details: TpmuAsymScheme::untry_marshal(scheme, buffer)?,
-        })
-    }
 }
 
 #[repr(C)]
@@ -662,27 +625,11 @@ pub struct TpmsRsaParms {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Marshal)]
 pub struct TpmtEccScheme {
     pub scheme: TpmiAlgEccScheme,
+    #[selector(scheme)]
     pub details: TpmuAsymScheme,
-}
-impl Marshalable for TpmtEccScheme {
-    fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
-        let mut written = 0;
-        written += self.scheme.try_marshal(buffer)?;
-        written += self
-            .details
-            .try_marshal(self.scheme, &mut buffer[written..])?;
-        Ok(written)
-    }
-    fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
-        let scheme = TpmiAlgEccScheme::untry_marshal(buffer)?;
-        Ok(TpmtEccScheme {
-            scheme,
-            details: TpmuAsymScheme::untry_marshal(scheme, buffer)?,
-        })
-    }
 }
 
 pub type TpmsSchemeMgf1 = TpmsSchemeHash;
@@ -765,27 +712,11 @@ pub struct TpmsEccParms {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Marshal)]
 pub struct TpmtAsymScheme {
     pub scheme: TpmiAlgAsymScheme,
+    #[selector(scheme)]
     pub details: TpmuAsymScheme,
-}
-impl Marshalable for TpmtAsymScheme {
-    fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
-        let mut written = 0;
-        written += self.scheme.try_marshal(buffer)?;
-        written += self
-            .details
-            .try_marshal(self.scheme, &mut buffer[written..])?;
-        Ok(written)
-    }
-    fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
-        let scheme = TpmiAlgAsymScheme::untry_marshal(buffer)?;
-        Ok(TpmtAsymScheme {
-            scheme,
-            details: TpmuAsymScheme::untry_marshal(scheme, buffer)?,
-        })
-    }
 }
 
 #[repr(C)]
@@ -872,40 +803,16 @@ impl TpmuPublicId {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Marshal)]
 pub struct TpmtPublic {
     pub tipe: TpmiAlgPublic,
     pub name_alg: TpmiAlgHash,
     pub object_attributes: TpmaObject,
     pub auth_policy: Tpm2bDigest,
+    #[selector(tipe)]
     pub parameters: TpmuPublicParms,
+    #[selector(tipe)]
     pub unique: TpmuPublicId,
-}
-impl Marshalable for TpmtPublic {
-    fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
-        let mut written = 0;
-        written += self.tipe.try_marshal(buffer)?;
-        written += self.name_alg.try_marshal(&mut buffer[written..])?;
-        written += self.object_attributes.try_marshal(&mut buffer[written..])?;
-        written += self.auth_policy.try_marshal(&mut buffer[written..])?;
-        written += self
-            .parameters
-            .try_marshal(self.tipe, &mut buffer[written..])?;
-        written += self.unique.try_marshal(self.tipe, &mut buffer[written..])?;
-        Ok(written)
-    }
-
-    fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
-        let tipe = TpmiAlgPublic::untry_marshal(buffer)?;
-        Ok(TpmtPublic {
-            tipe,
-            name_alg: TpmiAlgHash::untry_marshal(buffer)?,
-            object_attributes: TpmaObject::untry_marshal(buffer)?,
-            auth_policy: Tpm2bDigest::untry_marshal(buffer)?,
-            parameters: TpmuPublicParms::untry_marshal(tipe, buffer)?,
-            unique: TpmuPublicId::untry_marshal(tipe, buffer)?,
-        })
-    }
 }
 
 #[repr(C)]

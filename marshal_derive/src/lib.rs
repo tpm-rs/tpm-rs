@@ -1,8 +1,10 @@
-use proc_macro2::{TokenStream, Span};
+use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
-use syn::{parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Fields, Ident, Index};
+use syn::{
+    parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Fields, Ident, Index, Path,
+};
 
-#[proc_macro_derive(Marshal)]
+#[proc_macro_derive(Marshal, attributes(selector))]
 pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = input.ident;
@@ -16,7 +18,7 @@ pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tss2Rc> {
                 #unmarshal_text;
                 Ok(#name{#field_list})
-                
+
             }
 
             fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tss2Rc> {
@@ -36,9 +38,15 @@ fn get_marshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
             Fields::Named(ref fields) => {
                 let recurse = fields.named.iter().map(|f| {
                     let name = &f.ident;
+                    if let Some(selector) = get_selector_attr(&f.attrs) {
+                        quote_spanned! {f.span()=>
+                            written += self.#name.try_marshal(self.#selector, &mut buffer[written..])?
+                        }
+                    } else {
                     quote_spanned! {f.span()=>
                         written += self.#name.try_marshal(&mut buffer[written..])?
                     }
+                }
                 });
                 quote! {
                     0 #(; #recurse)*
@@ -62,6 +70,21 @@ fn get_marshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
     }
 }
 
+fn get_selector_attr(attrs: &[Attribute]) -> Option<Path> {
+    let mut path = None::<Path>;
+    for attr in attrs {
+        if attr.path().is_ident("selector") {
+            let _ = attr.parse_nested_meta(|meta| {
+                if path.is_some() {
+                    unimplemented!("Only one selector is permitted.");
+                }
+                path = Some(meta.path);
+                Ok(())
+            });
+        }
+    }
+    path
+}
 
 fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
     match *data {
@@ -70,8 +93,14 @@ fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
                 let recurse = fields.named.iter().map(|f| {
                     let name = &f.ident;
                     let field_type = &f.ty;
-                    quote_spanned! {f.span()=>
-                        let #name = #field_type::untry_marshal(buffer)?;
+                    if let Some(selector) = get_selector_attr(&f.attrs) {
+                        quote_spanned! {f.span()=>
+                            let #name = #field_type::untry_marshal(#selector, buffer)?;
+                        }
+                    } else {
+                        quote_spanned! {f.span()=>
+                            let #name = #field_type::untry_marshal(buffer)?;
+                        }
                     }
                 });
                 quote! {
