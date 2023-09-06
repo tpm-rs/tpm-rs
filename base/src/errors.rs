@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-use crate::Tss2Rc;
-use crate::Tpm2Rc;
+pub type Tpm2Rc = u32;
+pub type Tss2Rc = Tpm2Rc;
 
 pub const TSS2_RC_LAYER_SHIFT: u32 = 16;
 pub const TSS2_RC_LAYER_MASK: Tss2Rc = 0xFF << TSS2_RC_LAYER_SHIFT;
