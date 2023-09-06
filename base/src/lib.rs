@@ -22,6 +22,7 @@ pub type TpmiAlgKdf = Tpm2AlgId;
 pub type TpmiAlgPublic = Tpm2AlgId;
 pub type TpmiAlgSymMode = Tpm2AlgId;
 pub type TpmiAlgSymObject = Tpm2AlgId;
+pub type TpmiAlgKeyedhashScheme = Tpm2AlgId;
 pub type TpmiAlgRsaScheme = Tpm2AlgId;
 pub type TpmiAlgEccScheme = Tpm2AlgId;
 pub type TpmiAlgAsymScheme = Tpm2AlgId;
@@ -366,49 +367,60 @@ pub struct TpmsSchemeXor {
 
 pub type TpmsSchemeHmac = TpmsSchemeHash;
 
-#[repr(C, u16)]
+#[repr(C)]
 #[derive(Clone, Copy)]
-pub enum TpmtKeyedHashScheme {
-    Hmac(TpmsSchemeHmac) = TPM2_ALG_HMAC,
-    ExclusiveOr(TpmsSchemeXor) = TPM2_ALG_XOR,
-    Null() = TPM2_ALG_NONE,
+pub union TpmuSchemeKeyedHash {
+    pub hmac: TpmsSchemeHmac,
+    pub exclusive_or: TpmsSchemeXor,
+    pub null: TpmsEmpty,
 }
+impl TpmuSchemeKeyedHash {
+    fn try_marshal(
+        &self,
+        selector: TpmiAlgKeyedhashScheme,
+        buffer: &mut [u8],
+    ) -> Result<usize, Tpm2Rc> {
+        match selector.get() {
+            TPM2_ALG_HMAC => unsafe { self.hmac.try_marshal(buffer) },
+            TPM2_ALG_XOR => unsafe { self.exclusive_or.try_marshal(buffer) },
+            TPM2_ALG_NONE => Ok(0),
+            _ => Err(TPM2_RC_SELECTOR),
+        }
+    }
+
+    fn untry_marshal(
+        selector: TpmiAlgKeyedhashScheme,
+        buffer: &mut UnmarshalBuf,
+    ) -> Result<Self, Tpm2Rc>
+    where
+        Self: Sized,
+    {
+        match selector.get() {
+            TPM2_ALG_HMAC => Ok(TpmuSchemeKeyedHash {
+                hmac: TpmsSchemeHmac::untry_marshal(buffer)?,
+            }),
+            TPM2_ALG_XOR => Ok(TpmuSchemeKeyedHash {
+                exclusive_or: TpmsSchemeXor::untry_marshal(buffer)?,
+            }),
+            TPM2_ALG_NONE => Ok(TpmuSchemeKeyedHash { null: TpmsEmpty {} }),
+            _ => Err(TPM2_RC_SELECTOR),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Marshal)]
+pub struct TpmtKeyedHashScheme {
+    pub scheme: TpmiAlgKeyedhashScheme,
+    #[selector(scheme)]
+    pub details: TpmuSchemeKeyedHash,
+}
+
 impl TpmtKeyedHashScheme {
     // Safe due to primitive representation.
     // TODO: A macro of some sort to generate this. num_enum objects to having #[repr(C)].
     fn discriminant(&self) -> u16 {
         unsafe { *<*const _>::from(self).cast::<u16>() }
-    }
-}
-impl Marshalable for TpmtKeyedHashScheme {
-    fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
-        let mut written = U16::new(self.discriminant()).try_marshal(buffer)?;
-        match self {
-            TpmtKeyedHashScheme::Hmac(x) => {
-                written += x.try_marshal(&mut buffer[written..])?;
-            }
-            TpmtKeyedHashScheme::ExclusiveOr(x) => {
-                written += x.try_marshal(&mut buffer[written..])?;
-            }
-            TpmtKeyedHashScheme::Null() => {}
-        }
-        Ok(written)
-    }
-
-    fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc>
-    where
-        Self: Sized,
-    {
-        match U16::untry_marshal(buffer)?.get() {
-            TPM2_ALG_HMAC => Ok(TpmtKeyedHashScheme::Hmac(TpmsSchemeHmac::untry_marshal(
-                buffer,
-            )?)),
-            TPM2_ALG_XOR => Ok(TpmtKeyedHashScheme::ExclusiveOr(
-                TpmsSchemeXor::untry_marshal(buffer)?,
-            )),
-            TPM2_ALG_NONE => Ok(TpmtKeyedHashScheme::Null()),
-            _ => Err(TPM2_RC_SELECTOR),
-        }
     }
 }
 
@@ -1431,7 +1443,10 @@ mod tests {
         let hmac = TpmsSchemeHmac {
             hash_alg: U16::new(0xB),
         };
-        let scheme = TpmtKeyedHashScheme::Hmac(hmac);
+        let scheme = TpmtKeyedHashScheme {
+            scheme: U16::from(TPM2_ALG_HMAC),
+            details: TpmuSchemeKeyedHash { hmac },
+        };
         let mut buffer = [0u8; size_of::<TpmtKeyedHashScheme>()];
         assert!(scheme.try_marshal(&mut buffer).is_ok());
     }
@@ -1486,7 +1501,10 @@ mod tests {
         let mut buffer = [0u8; 256];
         marsh = example.try_marshal(&mut buffer);
         assert!(marsh.is_ok());
-        let expected: [u8; 54] = [0, 1, 0, 11, 0, 0, 25, 143, 0, 4, 2, 2, 4, 4, 0, 10, 0, 11, 0, 24, 0, 11, 0, 74, 0, 0, 0, 2, 0, 24, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9];
+        let expected: [u8; 54] = [
+            0, 1, 0, 11, 0, 0, 25, 143, 0, 4, 2, 2, 4, 4, 0, 10, 0, 11, 0, 24, 0, 11, 0, 74, 0, 0,
+            0, 2, 0, 24, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+        ];
         assert_eq!(expected.len(), marsh.unwrap());
         assert_eq!(buffer[..expected.len()], expected);
         let unmarsh_buf = buffer.clone();
