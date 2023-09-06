@@ -15,7 +15,7 @@ pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     let expanded = quote! {
         // The generated impl.
         impl Marshalable for #name  {
-            fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tss2Rc> {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tss2Rc> {
                 #unmarshal_text;
                 Ok(#name{#field_list})
 
@@ -95,11 +95,11 @@ fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
                     let field_type = &f.ty;
                     if let Some(selector) = get_selector_attr(&f.attrs) {
                         quote_spanned! {f.span()=>
-                            let #name = #field_type::untry_marshal(#selector, buffer)?;
+                            let #name = #field_type::try_unmarshal(#selector, buffer)?;
                         }
                     } else {
                         quote_spanned! {f.span()=>
-                            let #name = #field_type::untry_marshal(buffer)?;
+                            let #name = #field_type::try_unmarshal(buffer)?;
                         }
                     }
                 });
@@ -112,7 +112,7 @@ fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
                     let var_name = Ident::new(&format!("f{}", i), Span::call_site());
                     let field_type = &f.ty;
                     quote_spanned! {f.span()=>
-                        let (#var_name, added) = #field_type::untry_marshal(&buffer[read..])?;
+                        let (#var_name, added) = #field_type::try_unmarshal(&buffer[read..])?;
                         read += added;
                     }
                 });

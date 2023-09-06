@@ -388,7 +388,7 @@ impl TpmuSchemeKeyedHash {
         }
     }
 
-    fn untry_marshal(
+    fn try_unmarshal(
         selector: TpmiAlgKeyedhashScheme,
         buffer: &mut UnmarshalBuf,
     ) -> Result<Self, Tpm2Rc>
@@ -397,10 +397,10 @@ impl TpmuSchemeKeyedHash {
     {
         match selector.get() {
             TPM2_ALG_HMAC => Ok(TpmuSchemeKeyedHash {
-                hmac: TpmsSchemeHmac::untry_marshal(buffer)?,
+                hmac: TpmsSchemeHmac::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_XOR => Ok(TpmuSchemeKeyedHash {
-                exclusive_or: TpmsSchemeXor::untry_marshal(buffer)?,
+                exclusive_or: TpmsSchemeXor::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_NONE => Ok(TpmuSchemeKeyedHash { null: TpmsEmpty {} }),
             _ => Err(TPM2_RC_SELECTOR),
@@ -451,22 +451,22 @@ impl TpmuSymKeyBits {
             _ => Err(TPM2_RC_SELECTOR),
         }
     }
-    fn untry_marshal(
+    fn try_unmarshal(
         selector: TpmiAlgSymObject,
         buffer: &mut UnmarshalBuf,
     ) -> Result<Self, Tpm2Rc> {
         match selector.get() {
             TPM2_ALG_AES => Ok(TpmuSymKeyBits {
-                aes: TpmiAesKeyBits::untry_marshal(buffer)?,
+                aes: TpmiAesKeyBits::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_SM4 => Ok(TpmuSymKeyBits {
-                sm4: TpmiSm4KeyBits::untry_marshal(buffer)?,
+                sm4: TpmiSm4KeyBits::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_CAMELLIA => Ok(TpmuSymKeyBits {
-                camellia: TpmiCamelliaKeyBits::untry_marshal(buffer)?,
+                camellia: TpmiCamelliaKeyBits::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_XOR => Ok(TpmuSymKeyBits {
-                exclusive_or: TpmiAlgHash::untry_marshal(buffer)?,
+                exclusive_or: TpmiAlgHash::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_NONE => Ok(TpmuSymKeyBits { null: TpmsEmpty {} }),
             _ => Err(TPM2_RC_SELECTOR),
@@ -494,19 +494,19 @@ impl TpmuSymMode {
             _ => Err(TPM2_RC_SELECTOR),
         }
     }
-    fn untry_marshal(
+    fn try_unmarshal(
         selector: TpmiAlgSymObject,
         buffer: &mut UnmarshalBuf,
     ) -> Result<Self, Tpm2Rc> {
         match selector.get() {
             TPM2_ALG_AES => Ok(TpmuSymMode {
-                aes: TpmiAlgSymMode::untry_marshal(buffer)?,
+                aes: TpmiAlgSymMode::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_SM4 => Ok(TpmuSymMode {
-                sm4: TpmiAlgSymMode::untry_marshal(buffer)?,
+                sm4: TpmiAlgSymMode::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_CAMELLIA => Ok(TpmuSymMode {
-                camellia: TpmiAlgSymMode::untry_marshal(buffer)?,
+                camellia: TpmiAlgSymMode::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_XOR => Ok(TpmuSymMode {
                 exclusive_or: TpmsEmpty {},
@@ -581,34 +581,34 @@ impl TpmuAsymScheme {
             _ => Err(TPM2_RC_SELECTOR),
         }
     }
-    fn untry_marshal(
+    fn try_unmarshal(
         selector: TpmiAlgAsymScheme,
         buffer: &mut UnmarshalBuf,
     ) -> Result<Self, Tpm2Rc> {
         match selector.get() {
             TPM2_ALG_ECDH => Ok(TpmuAsymScheme {
-                ecdh: TpmsKeySchemeEcdh::untry_marshal(buffer)?,
+                ecdh: TpmsKeySchemeEcdh::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_ECMQV => Ok(TpmuAsymScheme {
-                ecmqv: TpmsKeySchemeEcmqv::untry_marshal(buffer)?,
+                ecmqv: TpmsKeySchemeEcmqv::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_RSASSA => Ok(TpmuAsymScheme {
-                rsassa: TpmsSigSchemeRsassa::untry_marshal(buffer)?,
+                rsassa: TpmsSigSchemeRsassa::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_ECDSA => Ok(TpmuAsymScheme {
-                ecdsa: TpmsSigSchemeEcdsa::untry_marshal(buffer)?,
+                ecdsa: TpmsSigSchemeEcdsa::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_ECDAA => Ok(TpmuAsymScheme {
-                ecdaa: TpmsSigSchemeEcdaa::untry_marshal(buffer)?,
+                ecdaa: TpmsSigSchemeEcdaa::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_SM2 => Ok(TpmuAsymScheme {
-                sm2: TpmsSigSchemeSm2::untry_marshal(buffer)?,
+                sm2: TpmsSigSchemeSm2::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_ECSCHNORR => Ok(TpmuAsymScheme {
-                ecschnorr: TpmsSigSchemeEcschnorr::untry_marshal(buffer)?,
+                ecschnorr: TpmsSigSchemeEcschnorr::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_OAEP => Ok(TpmuAsymScheme {
-                oaep: TpmsEncSchemeOaep::untry_marshal(buffer)?,
+                oaep: TpmsEncSchemeOaep::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_RSAES => Ok(TpmuAsymScheme {
                 rsaes: TpmsEmpty {},
@@ -695,18 +695,18 @@ impl Marshalable for TpmtKdfScheme {
         Ok(written)
     }
 
-    fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc>
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc>
     where
         Self: Sized,
     {
-        match U16::untry_marshal(buffer)?.get() {
-            TPM2_ALG_MGF1 => Ok(TpmtKdfScheme::Mgf1(TpmsSchemeMgf1::untry_marshal(buffer)?)),
+        match U16::try_unmarshal(buffer)?.get() {
+            TPM2_ALG_MGF1 => Ok(TpmtKdfScheme::Mgf1(TpmsSchemeMgf1::try_unmarshal(buffer)?)),
             TPM2_ALG_KDF1_SP800_56A => Ok(TpmtKdfScheme::Kdf1Sp800_56a(
-                TpmsSchemeKdf1Sp800_56a::untry_marshal(buffer)?,
+                TpmsSchemeKdf1Sp800_56a::try_unmarshal(buffer)?,
             )),
-            TPM2_ALG_KDF2 => Ok(TpmtKdfScheme::Kdf2(TpmsSchemeKdf2::untry_marshal(buffer)?)),
+            TPM2_ALG_KDF2 => Ok(TpmtKdfScheme::Kdf2(TpmsSchemeKdf2::try_unmarshal(buffer)?)),
             TPM2_ALG_KDF1_SP800_108 => Ok(TpmtKdfScheme::Kdf1Sp800_108(
-                TpmsSchemeKdf1Sp800_108::untry_marshal(buffer)?,
+                TpmsSchemeKdf1Sp800_108::try_unmarshal(buffer)?,
             )),
             TPM2_ALG_NONE => Ok(TpmtKdfScheme::Null()),
             _ => Err(TPM2_RC_SELECTOR),
@@ -757,19 +757,19 @@ impl TpmuPublicParms {
             _ => Err(TPM2_RC_SELECTOR),
         }
     }
-    fn untry_marshal(selector: TpmiAlgPublic, buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
+    fn try_unmarshal(selector: TpmiAlgPublic, buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
         match selector.get() {
             TPM2_ALG_KEYEDHASH => Ok(TpmuPublicParms {
-                keyed_hash_detail: TpmsKeyedHashParms::untry_marshal(buffer)?,
+                keyed_hash_detail: TpmsKeyedHashParms::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_SYMCIPHER => Ok(TpmuPublicParms {
-                sym_detail: TpmsSymCipherParms::untry_marshal(buffer)?,
+                sym_detail: TpmsSymCipherParms::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_RSA => Ok(TpmuPublicParms {
-                rsa_detail: TpmsRsaParms::untry_marshal(buffer)?,
+                rsa_detail: TpmsRsaParms::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_ECC => Ok(TpmuPublicParms {
-                ecc_detail: TpmsEccParms::untry_marshal(buffer)?,
+                ecc_detail: TpmsEccParms::try_unmarshal(buffer)?,
             }),
             _ => Err(TPM2_RC_SELECTOR),
         }
@@ -795,19 +795,19 @@ impl TpmuPublicId {
             _ => Err(TPM2_RC_SELECTOR),
         }
     }
-    fn untry_marshal(selector: TpmiAlgPublic, buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
+    fn try_unmarshal(selector: TpmiAlgPublic, buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
         match selector.get() {
             TPM2_ALG_KEYEDHASH => Ok(TpmuPublicId {
-                keyed_hash: Tpm2bDigest::untry_marshal(buffer)?,
+                keyed_hash: Tpm2bDigest::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_SYMCIPHER => Ok(TpmuPublicId {
-                sym: Tpm2bDigest::untry_marshal(buffer)?,
+                sym: Tpm2bDigest::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_RSA => Ok(TpmuPublicId {
-                rsa: Tpm2bPublicKeyRsa::untry_marshal(buffer)?,
+                rsa: Tpm2bPublicKeyRsa::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_ECC => Ok(TpmuPublicId {
-                ecc: TpmsEccPoint::untry_marshal(buffer)?,
+                ecc: TpmsEccPoint::try_unmarshal(buffer)?,
             }),
             _ => Err(TPM2_RC_SELECTOR),
         }
@@ -982,7 +982,7 @@ impl<'a> UnmarshalBuf<'a> {
 
 pub trait Marshalable {
     // Unmarshals self from the prefix of `buffer`. Returns the unmarshalled self and number of bytes used.
-    fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc>
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc>
     where
         Self: Sized;
 
@@ -994,7 +994,7 @@ impl<T> Marshalable for T
 where
     T: AsBytes + FromBytes,
 {
-    fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tss2Rc>
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tss2Rc>
     where
         Self: Sized,
     {
@@ -1008,7 +1008,7 @@ where
 
     fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tss2Rc> {
         if self.write_to_prefix(buffer).is_some() {
-            Ok(core::mem::size_of::<T>())
+            Ok(size_of::<T>())
         } else {
             Err(error_codes::TSS2_MU_RC_INSUFFICIENT_BUFFER)
         }
@@ -1027,7 +1027,7 @@ pub trait Tpm2bSimple {
 macro_rules! impl_try_marshalable_tpm2b_simple {
     ($T:ty, $F:ident) => {
         impl Tpm2bSimple for $T {
-            const MAX_BUFFER_SIZE: usize = core::mem::size_of::<$T>() - core::mem::size_of::<u16>();
+            const MAX_BUFFER_SIZE: usize = size_of::<$T>() - size_of::<u16>();
 
             fn get_size(&self) -> u16 {
                 self.size.get()
@@ -1053,8 +1053,8 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
         }
 
         impl Marshalable for $T {
-            fn untry_marshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
-                let got_size = U16::untry_marshal(buffer)?;
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
+                let got_size = U16::try_unmarshal(buffer)?;
                 // Ensure the buffer is large enough to fullfill the size indicated
                 let sized_buffer = buffer.get(got_size.get() as usize);
                 if !sized_buffer.is_some() {
@@ -1121,8 +1121,8 @@ mod tests {
     // generate the test body here.
     macro_rules! impl_test_tpm2b_simple {
         ($T:ty) => {
-            const SIZE_OF_U16: usize = core::mem::size_of::<u16>();
-            const SIZE_OF_TYPE: usize = core::mem::size_of::<$T>();
+            const SIZE_OF_U16: usize = size_of::<u16>();
+            const SIZE_OF_TYPE: usize = size_of::<$T>();
             const SIZE_OF_BUFFER: usize = SIZE_OF_TYPE - SIZE_OF_U16;
 
             /*
@@ -1148,15 +1148,15 @@ mod tests {
 
             // too small should fail
             let mut result: Result<$T, Tpm2Rc> =
-                <$T>::untry_marshal(&mut UnmarshalBuf::new(&too_small_size_buf));
+                <$T>::try_unmarshal(&mut UnmarshalBuf::new(&too_small_size_buf));
             assert!(result.is_err());
 
             // bigger size should consume only the prefix
-            result = <$T>::untry_marshal(&mut UnmarshalBuf::new(&bigger_size_buf));
+            result = <$T>::try_unmarshal(&mut UnmarshalBuf::new(&bigger_size_buf));
             assert!(result.is_err());
 
             // small, should be good
-            result = <$T>::untry_marshal(&mut UnmarshalBuf::new(&smaller_size_buf));
+            result = <$T>::try_unmarshal(&mut UnmarshalBuf::new(&smaller_size_buf));
             assert!(result.is_ok());
             let mut digest = result.unwrap();
             assert_eq!(
@@ -1166,16 +1166,16 @@ mod tests {
             assert_eq!(digest.get_buffer(), &smaller_size_buf[SIZE_OF_U16..]);
 
             // same size should be good
-            result = <$T>::untry_marshal(&mut UnmarshalBuf::new(&same_size_buf));
+            result = <$T>::try_unmarshal(&mut UnmarshalBuf::new(&same_size_buf));
             assert!(result.is_ok());
             digest = result.unwrap();
             assert_eq!(
                 usize::from(digest.get_size()),
-                same_size_buf.len() - core::mem::size_of::<u16>()
+                same_size_buf.len() - size_of::<u16>()
             );
             assert_eq!(
                 digest.get_buffer(),
-                &same_size_buf[core::mem::size_of::<u16>()..]
+                &same_size_buf[size_of::<u16>()..]
             );
 
             let mut mres = digest.try_marshal(&mut too_small_size_buf);
@@ -1185,14 +1185,14 @@ mod tests {
             assert!(mres.is_ok());
             assert_eq!(mres.unwrap(), digest.get_size() as usize + SIZE_OF_U16);
             let mut new_digest =
-                <$T>::untry_marshal(&mut UnmarshalBuf::new(&same_size_buf)).unwrap();
+                <$T>::try_unmarshal(&mut UnmarshalBuf::new(&same_size_buf)).unwrap();
             assert_eq!(digest, new_digest);
 
             mres = digest.try_marshal(&mut bigger_size_buf);
             assert!(mres.is_ok());
             assert_eq!(mres.unwrap(), digest.get_size() as usize + SIZE_OF_U16);
             new_digest =
-                <$T>::untry_marshal(&mut UnmarshalBuf::new(&bigger_size_buf[..SIZE_OF_TYPE]))
+                <$T>::try_unmarshal(&mut UnmarshalBuf::new(&bigger_size_buf[..SIZE_OF_TYPE]))
                     .unwrap();
             assert_eq!(digest, new_digest);
         };
@@ -1200,21 +1200,21 @@ mod tests {
 
     macro_rules! impl_test_scalar {
         ($T:ty, $I:expr, $V:expr) => {
-            const SIZE_OF_TYPE: usize = core::mem::size_of::<$T>();
+            const SIZE_OF_TYPE: usize = size_of::<$T>();
 
             let mut too_small_buffer: [u8; SIZE_OF_TYPE - 1] = [$I; SIZE_OF_TYPE - 1];
             let same_size_buffer: [u8; SIZE_OF_TYPE] = [$I; SIZE_OF_TYPE];
             let larger_buffer: [u8; SIZE_OF_TYPE + 4] = [$I; SIZE_OF_TYPE + 4];
 
             let mut res: Result<$T, Tpm2Rc> =
-                <$T>::untry_marshal(&mut UnmarshalBuf::new(&too_small_buffer));
+                <$T>::try_unmarshal(&mut UnmarshalBuf::new(&too_small_buffer));
             assert!(res.is_err());
 
-            res = <$T>::untry_marshal(&mut UnmarshalBuf::new(&same_size_buffer));
+            res = <$T>::try_unmarshal(&mut UnmarshalBuf::new(&same_size_buffer));
             assert!(res.is_ok());
             assert_eq!(res.unwrap(), $V);
 
-            res = <$T>::untry_marshal(&mut UnmarshalBuf::new(&larger_buffer));
+            res = <$T>::try_unmarshal(&mut UnmarshalBuf::new(&larger_buffer));
             assert!(res.is_ok());
             assert_eq!(res.unwrap(), $V);
 
@@ -1238,142 +1238,142 @@ mod tests {
     }
 
     #[test]
-    fn test_untry_marshal_u8() {
+    fn test_try_unmarshal_u8() {
         impl_test_scalar! {u8, 0xFF, 0xFF}
     }
 
     #[test]
-    fn test_untry_marshal_i8() {
+    fn test_try_unmarshal_i8() {
         impl_test_scalar! {i8, 0x7F, 0x7F}
     }
 
     #[test]
-    fn test_untry_marshal_u16() {
+    fn test_try_unmarshal_u16() {
         impl_test_scalar! {u16, 0xFF, 0xFFFF}
     }
 
     #[test]
-    fn test_untry_marshal_i16() {
+    fn test_try_unmarshal_i16() {
         impl_test_scalar! {i16, 0x7F, 0x7F7F}
     }
 
     #[test]
-    fn test_untry_marshal_u32() {
+    fn test_try_unmarshal_u32() {
         impl_test_scalar! {u32, 0xFF, 0xFFFFFFFF}
     }
 
     #[test]
-    fn test_untry_marshal_i32() {
+    fn test_try_unmarshal_i32() {
         impl_test_scalar! {i32, 0x7F, 0x7F7F7F7F}
     }
 
     #[test]
-    fn test_untry_marshal_u64() {
+    fn test_try_unmarshal_u64() {
         impl_test_scalar! {u64, 0xFF, 0xFFFFFFFFFFFFFFFF}
     }
 
     #[test]
-    fn test_untry_marshal_i64() {
+    fn test_try_unmarshal_i64() {
         impl_test_scalar! {i64, 0x7F, 0x7F7F7F7F7F7F7F7F}
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_name() {
+    fn test_try_unmarshal_tpm2b_name() {
         impl_test_tpm2b_simple! {Tpm2bName};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_attest() {
+    fn test_try_unmarshal_tpm2b_attest() {
         impl_test_tpm2b_simple! {Tpm2bAttest};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_context_data() {
+    fn test_try_unmarshal_tpm2b_context_data() {
         impl_test_tpm2b_simple! {Tpm2bContextData};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_context_sensitive() {
+    fn test_try_unmarshal_tpm2b_context_sensitive() {
         impl_test_tpm2b_simple! {Tpm2bContextSensitive};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_data() {
+    fn test_try_unmarshal_tpm2b_data() {
         impl_test_tpm2b_simple! {Tpm2bData};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_digest() {
+    fn test_try_unmarshal_tpm2b_digest() {
         impl_test_tpm2b_simple! {Tpm2bDigest};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_ecc_parameter() {
+    fn test_try_unmarshal_tpm2b_ecc_parameter() {
         impl_test_tpm2b_simple! {Tpm2bEccParameter};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_encrypted_secret() {
+    fn test_try_unmarshal_tpm2b_encrypted_secret() {
         impl_test_tpm2b_simple! {Tpm2bEncryptedSecret};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_event() {
+    fn test_try_unmarshal_tpm2b_event() {
         impl_test_tpm2b_simple! {Tpm2bEvent};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_id_object() {
+    fn test_try_unmarshal_tpm2b_id_object() {
         impl_test_tpm2b_simple! {Tpm2bIdObject};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_iv() {
+    fn test_try_unmarshal_tpm2b_iv() {
         impl_test_tpm2b_simple! {Tpm2bIv};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_max_buffer() {
+    fn test_try_unmarshal_tpm2b_max_buffer() {
         impl_test_tpm2b_simple! {Tpm2bMaxBuffer};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_max_nv_buffer() {
+    fn test_try_unmarshal_tpm2b_max_nv_buffer() {
         impl_test_tpm2b_simple! {Tpm2bMaxNvBuffer};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_private() {
+    fn test_try_unmarshal_tpm2b_private() {
         impl_test_tpm2b_simple! {Tpm2bPrivate};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_private_key_rsa() {
+    fn test_try_unmarshal_tpm2b_private_key_rsa() {
         impl_test_tpm2b_simple! {Tpm2bPrivateKeyRsa};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_private_vendor_specific() {
+    fn test_try_unmarshal_tpm2b_private_vendor_specific() {
         impl_test_tpm2b_simple! {Tpm2bPrivateVendorSpecific};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_public_key_rsa() {
+    fn test_try_unmarshal_tpm2b_public_key_rsa() {
         impl_test_tpm2b_simple! {Tpm2bPublicKeyRsa};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_sensitive_data() {
+    fn test_try_unmarshal_tpm2b_sensitive_data() {
         impl_test_tpm2b_simple! {Tpm2bSensitiveData};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_sym_key() {
+    fn test_try_unmarshal_tpm2b_sym_key() {
         impl_test_tpm2b_simple! {Tpm2bSymKey};
     }
 
     #[test]
-    fn test_untry_marshal_tpm2b_template() {
+    fn test_try_unmarshal_tpm2b_template() {
         impl_test_tpm2b_simple! {Tpm2bTemplate};
     }
 
@@ -1403,7 +1403,7 @@ mod tests {
         assert_eq!(expected.len(), bytes.unwrap());
         assert_eq!(expected, marshal_buffer[..expected.len()]);
 
-        let unmarshaled = TpmsNvCertifyInfo::untry_marshal(&mut UnmarshalBuf::new(&marshal_buffer));
+        let unmarshaled = TpmsNvCertifyInfo::try_unmarshal(&mut UnmarshalBuf::new(&marshal_buffer));
         assert!(unmarshaled.is_ok());
         assert_eq!(unmarshaled.unwrap(), info);
     }
@@ -1433,7 +1433,7 @@ mod tests {
         assert!(time_info.try_marshal(&mut huge_buffer).is_ok());
         assert_eq!(huge_buffer[..marshal_buffer.len()], marshal_buffer);
 
-        let unmarshaled = TpmsTimeInfo::untry_marshal(&mut UnmarshalBuf::new(&marshal_buffer));
+        let unmarshaled = TpmsTimeInfo::try_unmarshal(&mut UnmarshalBuf::new(&marshal_buffer));
         assert!(unmarshaled.is_ok());
         assert_eq!(unmarshaled.unwrap(), time_info);
     }
@@ -1508,7 +1508,7 @@ mod tests {
         assert_eq!(expected.len(), marsh.unwrap());
         assert_eq!(buffer[..expected.len()], expected);
         let unmarsh_buf = buffer.clone();
-        let mut unmarsh = TpmtPublic::untry_marshal(&mut UnmarshalBuf::new(&unmarsh_buf));
+        let mut unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&unmarsh_buf));
         assert!(unmarsh.is_ok());
         let bytes_example = unmarsh.unwrap();
         assert_eq!(bytes_example.object_attributes, example.object_attributes);
@@ -1520,7 +1520,7 @@ mod tests {
         // Test invalid selector value.
         example.tipe = U16::new(TPM2_ALG_SHA256);
         assert_eq!(example.try_marshal(&mut buffer), Err(TPM2_RC_SELECTOR));
-        unmarsh = TpmtPublic::untry_marshal(&mut UnmarshalBuf::new(&buffer));
+        unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
         assert!(unmarsh.is_err());
         assert_eq!(unmarsh.err(), Some(TPM2_RC_SELECTOR));
     }
