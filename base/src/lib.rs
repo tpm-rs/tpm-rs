@@ -142,17 +142,19 @@ pub struct TpmsClockInfo {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmsPcrSelection {
     pub hash: TpmiAlgHash,
     pub sizeof_select: u8,
+    #[length(sizeof_select)]
     pub pcr_select: [u8; constants::TPM2_PCR_SELECT_MAX as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlPcrSelection {
     pub count: u32,
+    #[length(count)]
     pub pcr_selections: [TpmsPcrSelection; constants::TPM2_NUM_PCR_BANKS as usize],
 }
 

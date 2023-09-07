@@ -15,6 +15,10 @@ use zerocopy::{AsBytes, FromBytes};
 // that take this selector as the first argument. The owning struct providing
 // the selector can use the selector attribute to tag what field provides the
 // selector. See TpmtKeyedHashScheme for an example.
+//
+// Array fields which should only {un}marshal a subset of their entries can 
+// use the length attribute to specify the field providing the number of 
+// entries that should be marshaled. See TpmlPcrSelection for an example.
 pub trait Marshalable {
     // Unmarshals self from the prefix of `buffer`. Returns the unmarshalled self and number of bytes used.
     fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc>
@@ -217,5 +221,31 @@ mod tests {
         let unmarshaled = NestedFields::try_unmarshal(&mut UnmarshalBuf::new(&huge_buffer));
         assert!(unmarshaled.is_ok());
         assert_eq!(unmarshaled.unwrap(), info);
+    }
+
+    #[derive(PartialEq, Debug, Marshal)]
+    struct HasArray {
+        count: u32,
+        other: u32,
+        #[length(count)]
+        array: [u8; 128],
+    }
+
+    fn test_derive_custom_len() {
+        let value = HasArray{count: 10, other: 0, array: [9u8; 128]};
+        let mut buffer = [0u8; 256];
+        let marshal = value.try_marshal(&mut buffer);
+        assert!(marshal.is_ok());
+        assert_eq!(marshal.unwrap(), value.count as usize + 2*size_of::<u32>());
+
+        let unmarshal  = HasArray::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
+        assert!(unmarshal.is_ok());
+        let unmarsh_value  = unmarshal.unwrap();
+        // Marshaled fields match.
+        assert_eq!(unmarsh_value.count, value.count);
+        assert_eq!(unmarsh_value.other, value.other);
+        assert_eq!(unmarsh_value.array[..value.count as usize], value.array[..value.count as usize]);
+        // But the full structs don't, because the unmarshaled array bytes are different.
+        assert_ne!(unmarsh_value, value);
     }
 }

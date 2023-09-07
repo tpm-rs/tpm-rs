@@ -1,10 +1,10 @@
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use syn::{
-    parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Fields, Ident, Index, Path,
+    parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Fields, Ident, Index, Path, Expr, Type, 
 };
 
-#[proc_macro_derive(Marshal, attributes(selector))]
+#[proc_macro_derive(Marshal, attributes(selector, length))]
 pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = input.ident;
@@ -38,29 +38,39 @@ fn get_marshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
             Fields::Named(ref fields) => {
                 let recurse = fields.named.iter().map(|f| {
                     let name = &f.ident;
-                    if let Some(selector) = get_selector_attr(&f.attrs) {
+                    match get_marshal_attr(&f.attrs) {
+                       Some(MarshalAttr::Selector(selector)) => {
                         quote_spanned! {f.span()=>
-                            written += self.#name.try_marshal(self.#selector, &mut buffer[written..])?
+                            written += self.#name.try_marshal(self.#selector, &mut buffer[written..])?;
                         }
-                    } else {
-                    quote_spanned! {f.span()=>
-                        written += self.#name.try_marshal(&mut buffer[written..])?
+                    }, 
+                        Some(MarshalAttr::Length(length)) => {
+                            quote_spanned! {f.span()=>
+                                for i in 0..self.#length as usize {
+                                    written += self.#name[i].try_marshal(&mut buffer[written..])?;
+                                }
+                            }
+                    },
+                        None => {
+                        quote_spanned! {f.span()=>
+                            written += self.#name.try_marshal(&mut buffer[written..])?;
+                        }
                     }
                 }
                 });
                 quote! {
-                    0 #(; #recurse)*
+                    #(; #recurse)*
                 }
             }
             Fields::Unnamed(ref fields) => {
                 let recurse = fields.unnamed.iter().enumerate().map(|(i, f)| {
                     let index = Index::from(i);
                     quote_spanned! {f.span()=>
-                        written += self.#index.try_marshal(&mut buffer[written..])?
+                        written += self.#index.try_marshal(&mut buffer[written..])?;
                     }
                 });
                 quote! {
-                    0 #(; #recurse)*
+                    #(#recurse)*
                 }
             }
             Fields::Unit => unimplemented!(),
@@ -70,20 +80,42 @@ fn get_marshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
     }
 }
 
-fn get_selector_attr(attrs: &[Attribute]) -> Option<Path> {
-    let mut path = None::<Path>;
+enum MarshalAttr {
+    Selector(Path),
+    Length(Path),
+}
+
+fn get_marshal_attr(attrs: &[Attribute]) -> Option<MarshalAttr> {
+    let mut marshal_attr = None;
     for attr in attrs {
         if attr.path().is_ident("selector") {
             let _ = attr.parse_nested_meta(|meta| {
-                if path.is_some() {
-                    unimplemented!("Only one selector is permitted.");
+                if marshal_attr.is_some() {
+                    unimplemented!("Only one selector or length is permitted.");
                 }
-                path = Some(meta.path);
+                marshal_attr = Some(MarshalAttr::Selector(meta.path));
+                Ok(())
+            });
+        }
+        if attr.path().is_ident("length") {
+            let _ = attr.parse_nested_meta(|meta| {
+                if marshal_attr.is_some() {
+                    unimplemented!("Only one selector or length is permitted.");
+                }
+                marshal_attr = Some(MarshalAttr::Length(meta.path));
                 Ok(())
             });
         }
     }
-    path
+    marshal_attr
+}
+
+fn get_array_default(field_type: &Type) -> (&Expr, &Type) {
+    if let Type::Array(array) = field_type {
+       (&array.len, &*array.elem)
+    } else {
+        unimplemented!("length attribute is only permitted for array types")
+    }
 }
 
 fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
@@ -93,13 +125,25 @@ fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
                 let recurse = fields.named.iter().map(|f| {
                     let name = &f.ident;
                     let field_type = &f.ty;
-                    if let Some(selector) = get_selector_attr(&f.attrs) {
-                        quote_spanned! {f.span()=>
-                            let #name = #field_type::try_unmarshal(#selector, buffer)?;
+                    match get_marshal_attr(&f.attrs) {
+                        Some(MarshalAttr::Selector(selector)) => {
+                            quote_spanned! {f.span()=>
+                                let #name = #field_type::try_unmarshal(#selector, buffer)?;
+                            }
+                        },
+                        Some(MarshalAttr::Length(length)) => {
+                            let (max_size, entry_type) = get_array_default(field_type);
+                            quote_spanned! {f.span()=>
+                                let mut #name = [#entry_type::default(); #max_size];
+                                for i in #name.iter_mut().take(#length as usize) {
+                                    *i = #entry_type::try_unmarshal(buffer)?;
+                                }
+                            }
                         }
-                    } else {
-                        quote_spanned! {f.span()=>
-                            let #name = #field_type::try_unmarshal(buffer)?;
+                        None => {
+                            quote_spanned! {f.span()=>
+                                let #name = #field_type::try_unmarshal(buffer)?;
+                            }
                         }
                     }
                 });
