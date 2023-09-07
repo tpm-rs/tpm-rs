@@ -412,14 +412,6 @@ pub struct TpmtKeyedHashScheme {
     pub details: TpmuSchemeKeyedHash,
 }
 
-impl TpmtKeyedHashScheme {
-    // Safe due to primitive representation.
-    // TODO: A macro of some sort to generate this. num_enum objects to having #[repr(C)].
-    fn discriminant(&self) -> u16 {
-        unsafe { *<*const _>::from(self).cast::<u16>() }
-    }
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Marshal)]
 pub struct TpmsKeyedHashParms {
