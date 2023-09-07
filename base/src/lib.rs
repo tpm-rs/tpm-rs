@@ -390,8 +390,7 @@ impl TpmuSchemeKeyedHash {
     fn try_unmarshal(
         selector: TpmiAlgKeyedhashScheme,
         buffer: &mut UnmarshalBuf,
-    ) -> Result<Self, Tpm2Rc>
-    {
+    ) -> Result<Self, Tpm2Rc> {
         match selector.get() {
             TPM2_ALG_HMAC => Ok(TpmuSchemeKeyedHash {
                 hmac: TpmsSchemeHmac::try_unmarshal(buffer)?,
@@ -692,8 +691,7 @@ impl Marshalable for TpmtKdfScheme {
         Ok(written)
     }
 
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc>
-    {
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
         match U16::try_unmarshal(buffer)?.get() {
             TPM2_ALG_MGF1 => Ok(TpmtKdfScheme::Mgf1(TpmsSchemeMgf1::try_unmarshal(buffer)?)),
             TPM2_ALG_KDF1_SP800_56A => Ok(TpmtKdfScheme::Kdf1Sp800_56a(
@@ -1115,10 +1113,7 @@ mod tests {
                 usize::from(digest.get_size()),
                 same_size_buf.len() - size_of::<u16>()
             );
-            assert_eq!(
-                digest.get_buffer(),
-                &same_size_buf[size_of::<u16>()..]
-            );
+            assert_eq!(digest.get_buffer(), &same_size_buf[size_of::<u16>()..]);
 
             let mut mres = digest.try_marshal(&mut too_small_size_buf);
             assert!(mres.is_err());
