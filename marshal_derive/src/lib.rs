@@ -1,7 +1,8 @@
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use syn::{
-    parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Fields, Ident, Index, Path, Expr, Type, 
+    parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Expr, Fields, Ident, Index,
+    Path, Type,
 };
 
 #[proc_macro_derive(Marshal, attributes(selector, length))]
@@ -43,7 +44,7 @@ fn get_marshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
                         quote_spanned! {f.span()=>
                             written += self.#name.try_marshal(self.#selector, &mut buffer[written..])?;
                         }
-                    }, 
+                    },
                         Some(MarshalAttr::Length(length)) => {
                             quote_spanned! {f.span()=>
                                 for i in 0..self.#length as usize {
@@ -112,7 +113,7 @@ fn get_marshal_attr(attrs: &[Attribute]) -> Option<MarshalAttr> {
 
 fn get_array_default(field_type: &Type) -> (&Expr, &Type) {
     if let Type::Array(array) = field_type {
-       (&array.len, &*array.elem)
+        (&array.len, &*array.elem)
     } else {
         unimplemented!("length attribute is only permitted for array types")
     }
@@ -130,7 +131,7 @@ fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
                             quote_spanned! {f.span()=>
                                 let #name = #field_type::try_unmarshal(#selector, buffer)?;
                             }
-                        },
+                        }
                         Some(MarshalAttr::Length(length)) => {
                             let (max_size, entry_type) = get_array_default(field_type);
                             quote_spanned! {f.span()=>

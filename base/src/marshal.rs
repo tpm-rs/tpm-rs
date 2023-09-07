@@ -16,8 +16,8 @@ use zerocopy::{AsBytes, FromBytes};
 // the selector can use the selector attribute to tag what field provides the
 // selector. See TpmtKeyedHashScheme for an example.
 //
-// Array fields which should only {un}marshal a subset of their entries can 
-// use the length attribute to specify the field providing the number of 
+// Array fields which should only {un}marshal a subset of their entries can
+// use the length attribute to specify the field providing the number of
 // entries that should be marshaled. See TpmlPcrSelection for an example.
 pub trait Marshalable {
     // Unmarshals self from the prefix of `buffer`. Returns the unmarshalled self and number of bytes used.
@@ -232,19 +232,29 @@ mod tests {
     }
 
     fn test_derive_custom_len() {
-        let value = HasArray{count: 10, other: 0, array: [9u8; 128]};
+        let value = HasArray {
+            count: 10,
+            other: 0,
+            array: [9u8; 128],
+        };
         let mut buffer = [0u8; 256];
         let marshal = value.try_marshal(&mut buffer);
         assert!(marshal.is_ok());
-        assert_eq!(marshal.unwrap(), value.count as usize + 2*size_of::<u32>());
+        assert_eq!(
+            marshal.unwrap(),
+            value.count as usize + 2 * size_of::<u32>()
+        );
 
-        let unmarshal  = HasArray::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
+        let unmarshal = HasArray::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
         assert!(unmarshal.is_ok());
-        let unmarsh_value  = unmarshal.unwrap();
+        let unmarsh_value = unmarshal.unwrap();
         // Marshaled fields match.
         assert_eq!(unmarsh_value.count, value.count);
         assert_eq!(unmarsh_value.other, value.other);
-        assert_eq!(unmarsh_value.array[..value.count as usize], value.array[..value.count as usize]);
+        assert_eq!(
+            unmarsh_value.array[..value.count as usize],
+            value.array[..value.count as usize]
+        );
         // But the full structs don't, because the unmarshaled array bytes are different.
         assert_ne!(unmarsh_value, value);
     }
