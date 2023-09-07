@@ -646,57 +646,44 @@ pub union TpmuKdfScheme {
     pub kdf1_sp800_108: TpmsSchemeKdf1Sp800_108,
     pub null: TpmsEmpty,
 }
-
-#[repr(C, u16)]
-#[derive(Clone, Copy)]
-pub enum TpmtKdfScheme {
-    Mgf1(TpmsSchemeMgf1) = TPM2_ALG_MGF1,
-    Kdf1Sp800_56a(TpmsSchemeKdf1Sp800_56a) = TPM2_ALG_KDF1_SP800_56A,
-    Kdf2(TpmsSchemeKdf2) = TPM2_ALG_KDF2,
-    Kdf1Sp800_108(TpmsSchemeKdf1Sp800_108) = TPM2_ALG_KDF1_SP800_108,
-    Null(),
-}
-impl TpmtKdfScheme {
-    // Safe due to primitive representation.
-    fn discriminant(&self) -> u16 {
-        unsafe { *<*const _>::from(self).cast::<u16>() }
-    }
-}
-impl Marshalable for TpmtKdfScheme {
-    fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
-        let mut written = U16::new(self.discriminant()).try_marshal(buffer)?;
-        match self {
-            TpmtKdfScheme::Mgf1(x) => {
-                written += x.try_marshal(&mut buffer[written..])?;
-            }
-            TpmtKdfScheme::Kdf1Sp800_56a(x) => {
-                written += x.try_marshal(&mut buffer[written..])?;
-            }
-            TpmtKdfScheme::Kdf2(x) => {
-                written += x.try_marshal(&mut buffer[written..])?;
-            }
-            TpmtKdfScheme::Kdf1Sp800_108(x) => {
-                written += x.try_marshal(&mut buffer[written..])?;
-            }
-            TpmtKdfScheme::Null() => {}
-        }
-        Ok(written)
-    }
-
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
-        match U16::try_unmarshal(buffer)?.get() {
-            TPM2_ALG_MGF1 => Ok(TpmtKdfScheme::Mgf1(TpmsSchemeMgf1::try_unmarshal(buffer)?)),
-            TPM2_ALG_KDF1_SP800_56A => Ok(TpmtKdfScheme::Kdf1Sp800_56a(
-                TpmsSchemeKdf1Sp800_56a::try_unmarshal(buffer)?,
-            )),
-            TPM2_ALG_KDF2 => Ok(TpmtKdfScheme::Kdf2(TpmsSchemeKdf2::try_unmarshal(buffer)?)),
-            TPM2_ALG_KDF1_SP800_108 => Ok(TpmtKdfScheme::Kdf1Sp800_108(
-                TpmsSchemeKdf1Sp800_108::try_unmarshal(buffer)?,
-            )),
-            TPM2_ALG_NONE => Ok(TpmtKdfScheme::Null()),
+impl TpmuKdfScheme {
+    fn try_marshal(&self, selector: TpmiAlgKdf, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
+        match selector.get() {
+            TPM2_ALG_MGF1 => unsafe { self.mgf1.try_marshal(buffer) },
+            TPM2_ALG_KDF1_SP800_56A => unsafe { self.kdf1_sp800_56a.try_marshal(buffer) },
+            TPM2_ALG_KDF2 => unsafe { self.kdf2.try_marshal(buffer) },
+            TPM2_ALG_KDF1_SP800_108 => unsafe { self.kdf1_sp800_108.try_marshal(buffer) },
+            TPM2_ALG_NONE => Ok(0),
             _ => Err(TPM2_RC_SELECTOR),
         }
     }
+
+    fn try_unmarshal(selector: TpmiAlgKdf, buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
+        match selector.get() {
+            TPM2_ALG_MGF1 => Ok(TpmuKdfScheme {
+                mgf1: TpmsSchemeMgf1::try_unmarshal(buffer)?,
+            }),
+            TPM2_ALG_KDF1_SP800_56A => Ok(TpmuKdfScheme {
+                kdf1_sp800_56a: TpmsSchemeKdf1Sp800_56a::try_unmarshal(buffer)?,
+            }),
+            TPM2_ALG_KDF2 => Ok(TpmuKdfScheme {
+                kdf2: TpmsSchemeKdf2::try_unmarshal(buffer)?,
+            }),
+            TPM2_ALG_KDF1_SP800_108 => Ok(TpmuKdfScheme {
+                kdf1_sp800_108: TpmsSchemeKdf1Sp800_108::try_unmarshal(buffer)?,
+            }),
+            TPM2_ALG_NONE => Ok(TpmuKdfScheme { null: TpmsEmpty {} }),
+            _ => Err(TPM2_RC_SELECTOR),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Marshal)]
+pub struct TpmtKdfScheme {
+    pub scheme: TpmiAlgKdf,
+    #[selector(scheme)]
+    pub details: TpmuKdfScheme,
 }
 
 #[repr(C)]

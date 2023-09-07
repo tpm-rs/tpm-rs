@@ -77,7 +77,7 @@ fn get_marshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
             Fields::Unit => unimplemented!(),
         },
         Data::Enum(_) => unimplemented!("Marshal cannot be derived yet for enums"),
-        Data::Union(_) => unimplemented!("Marshal cannot be derived yet for unions"),
+        Data::Union(_) => unimplemented!("Marshal cannot be derived for union types, which must implement Marshalable to provide selector->variant mappings"),
     }
 }
 
@@ -168,7 +168,7 @@ fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
             Fields::Unit => unimplemented!("Marshal cannot be derived yet for unit fields"),
         },
         Data::Enum(_) => unimplemented!("Marshal cannot be derived yet for enums"),
-        Data::Union(_) => unimplemented!("Marshal cannot be derived yet for unions"),
+        Data::Union(_) => unimplemented!("Marshal cannot be derived for union types, which must implement Marshalable to provide selector->variant mappings"),
     }
 }
 
@@ -201,6 +201,6 @@ fn get_field_list(data: &Data) -> TokenStream {
             Fields::Unit => unimplemented!("Marshal cannot be derived yet for unit fields"),
         },
         Data::Enum(_) => unimplemented!("Marshal cannot be derived yet for enums"),
-        Data::Union(_) => unimplemented!("Marshal cannot be derived yet for unions"),
+        Data::Union(_) => unimplemented!("Marshal cannot be derived for union types, which must implement Marshalable to provide selector->variant mappings"),
     }
 }
