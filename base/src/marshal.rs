@@ -91,11 +91,9 @@ mod tests {
             assert!(res.is_err());
 
             res = <$T>::try_unmarshal(&mut UnmarshalBuf::new(&same_size_buffer));
-            assert!(res.is_ok());
             assert_eq!(res.unwrap(), $V);
 
             res = <$T>::try_unmarshal(&mut UnmarshalBuf::new(&larger_buffer));
-            assert!(res.is_ok());
             assert_eq!(res.unwrap(), $V);
 
             let marsh_value: $T = $V;
@@ -106,12 +104,10 @@ mod tests {
             let mut zero_larger: [u8; SIZE_OF_TYPE + 4] = [0; SIZE_OF_TYPE + 4];
 
             mres = marsh_value.try_marshal(&mut zero_same_size);
-            assert!(mres.is_ok());
             assert_eq!(mres.unwrap(), SIZE_OF_TYPE);
             assert_eq!(zero_same_size, same_size_buffer);
 
             mres = marsh_value.try_marshal(&mut zero_larger);
-            assert!(mres.is_ok());
             assert_eq!(mres.unwrap(), SIZE_OF_TYPE);
             assert!(zero_larger.starts_with(&same_size_buffer));
         };
@@ -176,7 +172,6 @@ mod tests {
         let mut buffer = [0u8; 8];
         assert!(begin.try_marshal(&mut buffer).is_ok());
         let middle = BasicFields::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
-        assert!(middle.is_ok());
         assert_eq!(middle.unwrap(), begin);
         let end = [0xFu8; 8];
         assert!(end.try_marshal(&mut buffer).is_ok());
@@ -200,6 +195,7 @@ mod tests {
         assert_eq!(buffer, end);
     }
 
+    #[test]
     fn test_derive_bounds() {
         let info = NestedFields {
             one: BasicFields { x: 10, y: 32, z: 4 },
@@ -219,7 +215,6 @@ mod tests {
 
         // We can also unmarshal from oversized buffer.
         let unmarshaled = NestedFields::try_unmarshal(&mut UnmarshalBuf::new(&huge_buffer));
-        assert!(unmarshaled.is_ok());
         assert_eq!(unmarshaled.unwrap(), info);
     }
 
@@ -231,6 +226,7 @@ mod tests {
         array: [u8; 128],
     }
 
+    #[test]
     fn test_derive_custom_len() {
         let value = HasArray {
             count: 10,
@@ -239,14 +235,12 @@ mod tests {
         };
         let mut buffer = [0u8; 256];
         let marshal = value.try_marshal(&mut buffer);
-        assert!(marshal.is_ok());
         assert_eq!(
             marshal.unwrap(),
             value.count as usize + 2 * size_of::<u32>()
         );
 
         let unmarshal = HasArray::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
-        assert!(unmarshal.is_ok());
         let unmarsh_value = unmarshal.unwrap();
         // Marshaled fields match.
         assert_eq!(unmarsh_value.count, value.count);

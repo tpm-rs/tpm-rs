@@ -5,6 +5,23 @@ use syn::{
     Path, Type,
 };
 
+// The Marshal derive macro generates an implementation of the Marshalable trait
+// for a struct by calling try_{un}marshal on each field in the struct. This
+// requires that the type of each field in the struct meets one of the
+// following conditions:
+//  - The type implements zerocopy::AsBytes and zerocopy::FromBytes
+//  - The type is a union type where the union field is tagged with the
+//    #[selector($selector_field)] attribute, $selector_field is a field in the
+//    struct appearing before the union field, and the union type implements
+//    try_{un}marshal methods that accept the type of $selector_field as their
+//    first parameter.
+//  - The type is an array, the array entry type also meets these Marshal
+//    conditions, and the array field is tagged with the #[length($length_field)]
+//    attribute, where $length_field is a field in the struct appearing before
+//    the array field that can be converted to usize. In this case, the
+//    generated code will {un}marshal first N entries in the array, where N is
+//    the value of $length_field.
+
 #[proc_macro_derive(Marshal, attributes(selector, length))]
 pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -135,6 +152,9 @@ fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
                         Some(MarshalAttr::Length(length)) => {
                             let (max_size, entry_type) = get_array_default(field_type);
                             quote_spanned! {f.span()=>
+                                if #length as usize > #max_size {
+                                    return Err(TPM2_RC_SIZE);
+                                }
                                 let mut #name = [#entry_type::default(); #max_size];
                                 for i in #name.iter_mut().take(#length as usize) {
                                     *i = #entry_type::try_unmarshal(buffer)?;

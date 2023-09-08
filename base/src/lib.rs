@@ -153,6 +153,7 @@ pub struct TpmsPcrSelection {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlPcrSelection {
+    // TODO: Make this BE and handle gracefully in Marshal.
     pub count: u32,
     #[length(count)]
     pub pcr_selections: [TpmsPcrSelection; constants::TPM2_NUM_PCR_BANKS as usize],
@@ -557,14 +558,14 @@ pub union TpmuAsymScheme {
 impl TpmuAsymScheme {
     fn try_marshal(&self, selector: TpmiAlgAsymScheme, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
         match selector.get() {
-            TPM2_ALG_ECDH => unsafe { Ok(self.ecdh.try_marshal(buffer)?) },
-            TPM2_ALG_ECMQV => unsafe { Ok(self.ecmqv.try_marshal(buffer)?) },
-            TPM2_ALG_RSASSA => unsafe { Ok(self.rsassa.try_marshal(buffer)?) },
-            TPM2_ALG_ECDSA => unsafe { Ok(self.ecdsa.try_marshal(buffer)?) },
-            TPM2_ALG_ECDAA => unsafe { Ok(self.ecdaa.try_marshal(buffer)?) },
-            TPM2_ALG_SM2 => unsafe { Ok(self.sm2.try_marshal(buffer)?) },
-            TPM2_ALG_ECSCHNORR => unsafe { Ok(self.ecschnorr.try_marshal(buffer)?) },
-            TPM2_ALG_OAEP => unsafe { Ok(self.oaep.try_marshal(buffer)?) },
+            TPM2_ALG_ECDH => unsafe { self.ecdh.try_marshal(buffer) },
+            TPM2_ALG_ECMQV => unsafe { self.ecmqv.try_marshal(buffer) },
+            TPM2_ALG_RSASSA => unsafe { self.rsassa.try_marshal(buffer) },
+            TPM2_ALG_ECDSA => unsafe { self.ecdsa.try_marshal(buffer) },
+            TPM2_ALG_ECDAA => unsafe { self.ecdaa.try_marshal(buffer) },
+            TPM2_ALG_SM2 => unsafe { self.sm2.try_marshal(buffer) },
+            TPM2_ALG_ECSCHNORR => unsafe { self.ecschnorr.try_marshal(buffer) },
+            TPM2_ALG_OAEP => unsafe { self.oaep.try_marshal(buffer) },
             TPM2_ALG_RSAES | TPM2_ALG_NONE => Ok(0),
             _ => Err(TPM2_RC_SELECTOR),
         }
@@ -722,10 +723,10 @@ pub union TpmuPublicParms {
 impl TpmuPublicParms {
     fn try_marshal(&self, selector: TpmiAlgPublic, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
         match selector.get() {
-            TPM2_ALG_KEYEDHASH => unsafe { Ok(self.keyed_hash_detail.try_marshal(buffer)?) },
-            TPM2_ALG_SYMCIPHER => unsafe { Ok(self.sym_detail.try_marshal(buffer)?) },
-            TPM2_ALG_RSA => unsafe { Ok(self.rsa_detail.try_marshal(buffer)?) },
-            TPM2_ALG_ECC => unsafe { Ok(self.ecc_detail.try_marshal(buffer)?) },
+            TPM2_ALG_KEYEDHASH => unsafe { self.keyed_hash_detail.try_marshal(buffer) },
+            TPM2_ALG_SYMCIPHER => unsafe { self.sym_detail.try_marshal(buffer) },
+            TPM2_ALG_RSA => unsafe { self.rsa_detail.try_marshal(buffer) },
+            TPM2_ALG_ECC => unsafe { self.ecc_detail.try_marshal(buffer) },
             _ => Err(TPM2_RC_SELECTOR),
         }
     }
@@ -760,10 +761,10 @@ pub union TpmuPublicId {
 impl TpmuPublicId {
     fn try_marshal(&self, selector: TpmiAlgPublic, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
         match selector.get() {
-            TPM2_ALG_KEYEDHASH => unsafe { Ok(self.keyed_hash.try_marshal(buffer)?) },
-            TPM2_ALG_SYMCIPHER => unsafe { Ok(self.sym.try_marshal(buffer)?) },
-            TPM2_ALG_RSA => unsafe { Ok(self.rsa.try_marshal(buffer)?) },
-            TPM2_ALG_ECC => unsafe { Ok(self.ecc.try_marshal(buffer)?) },
+            TPM2_ALG_KEYEDHASH => unsafe { self.keyed_hash.try_marshal(buffer) },
+            TPM2_ALG_SYMCIPHER => unsafe { self.sym.try_marshal(buffer) },
+            TPM2_ALG_RSA => unsafe { self.rsa.try_marshal(buffer) },
+            TPM2_ALG_ECC => unsafe { self.ecc.try_marshal(buffer) },
             _ => Err(TPM2_RC_SELECTOR),
         }
     }
@@ -1226,22 +1227,20 @@ mod tests {
             nv_contents,
         };
         let mut marshal_buffer = [0u8; 48];
-        let bytes = info.try_marshal(&mut marshal_buffer);
-        assert!(bytes.is_ok());
+        let bytes = info.try_marshal(&mut marshal_buffer).unwrap();
 
         // Build the expected output manually.
-        let mut expected = Vec::with_capacity(bytes.unwrap());
+        let mut expected = Vec::with_capacity(bytes);
         expected.extend_from_slice(&index_name.get_size().to_be_bytes());
         expected.extend_from_slice(&name_buffer);
         expected.extend_from_slice(&info.offset.get().to_be_bytes());
         expected.extend_from_slice(&nv_contents.get_size().to_be_bytes());
         expected.extend_from_slice(&nv_buffer);
 
-        assert_eq!(expected.len(), bytes.unwrap());
+        assert_eq!(expected.len(), bytes);
         assert_eq!(expected, marshal_buffer[..expected.len()]);
 
         let unmarshaled = TpmsNvCertifyInfo::try_unmarshal(&mut UnmarshalBuf::new(&marshal_buffer));
-        assert!(unmarshaled.is_ok());
         assert_eq!(unmarshaled.unwrap(), info);
     }
 
@@ -1271,7 +1270,6 @@ mod tests {
         };
         let mut buffer = [0u8; size_of::<TpmtSymDefObject>()];
         let mut marsh = xor_sym_def_obj.try_marshal(&mut buffer);
-        assert!(marsh.is_ok());
         // Because XOR does not populate TpmuSymMode, we have bytes left over.
         assert!(marsh.unwrap() < buffer.len());
         let rsa_scheme = TpmtRsaScheme {
@@ -1316,7 +1314,6 @@ mod tests {
         assert_eq!(buffer[..expected.len()], expected);
         let unmarsh_buf = buffer.clone();
         let mut unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&unmarsh_buf));
-        assert!(unmarsh.is_ok());
         let bytes_example = unmarsh.unwrap();
         assert_eq!(bytes_example.object_attributes, example.object_attributes);
         let mut remarsh_buffer = [1u8; 256];
@@ -1328,7 +1325,6 @@ mod tests {
         example.tipe = U16::new(TPM2_ALG_SHA256);
         assert_eq!(example.try_marshal(&mut buffer), Err(TPM2_RC_SELECTOR));
         unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
-        assert!(unmarsh.is_err());
         assert_eq!(unmarsh.err(), Some(TPM2_RC_SELECTOR));
     }
 }
