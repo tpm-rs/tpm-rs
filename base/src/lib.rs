@@ -153,8 +153,7 @@ pub struct TpmsPcrSelection {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlPcrSelection {
-    // TODO: Make this BE and handle gracefully in Marshal.
-    pub count: u32,
+    pub count: U32,
     #[length(count)]
     pub pcr_selections: [TpmsPcrSelection; constants::TPM2_NUM_PCR_BANKS as usize],
 }

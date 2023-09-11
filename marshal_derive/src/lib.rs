@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use syn::{
@@ -51,6 +53,7 @@ pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenSt
 }
 
 fn get_marshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
+    let mut basic_field_types = HashMap::new();
     match *data {
         Data::Struct(ref data) => match data.fields {
             Fields::Named(ref fields) => {
@@ -63,13 +66,17 @@ fn get_marshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
                         }
                     },
                         Some(MarshalAttr::Length(length)) => {
+                            let usize_length = get_usize_length(&length, basic_field_types.get(length.get_ident().unwrap()));
                             quote_spanned! {f.span()=>
-                                for i in 0..self.#length as usize {
+                                for i in 0..self.#usize_length {
                                     written += self.#name[i].try_marshal(&mut buffer[written..])?;
                                 }
                             }
                     },
                         None => {
+                            if let Some(ident) = name {
+                                basic_field_types.insert(ident, f.ty.clone());
+                            }
                         quote_spanned! {f.span()=>
                             written += self.#name.try_marshal(&mut buffer[written..])?;
                         }
@@ -136,7 +143,26 @@ fn get_array_default(field_type: &Type) -> (&Expr, &Type) {
     }
 }
 
+// Gets a token stream for the usize value of a var based on its type.
+fn get_usize_length(path: &Path, field_type: Option<&Type>) -> TokenStream {
+    if field_type.is_none() {
+        unimplemented!("length field must appear before fields using it in a length attribute");
+    }
+    // Unlike other primitive ints, u8 doesn't have a separate big endian type.
+    if let Some(Type::Path(x)) = field_type {
+        if x.path.is_ident("u8") {
+            return quote! {
+                #path as usize
+            };
+        }
+    }
+    quote! {
+        #path.get() as usize
+    }
+}
+
 fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
+    let mut basic_field_types = HashMap::new();
     match *data {
         Data::Struct(ref data) => match data.fields {
             Fields::Named(ref fields) => {
@@ -151,17 +177,21 @@ fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
                         }
                         Some(MarshalAttr::Length(length)) => {
                             let (max_size, entry_type) = get_array_default(field_type);
+                            let usize_length = get_usize_length(&length, basic_field_types.get(length.get_ident().unwrap()));
                             quote_spanned! {f.span()=>
-                                if #length as usize > #max_size {
+                                if #usize_length > #max_size {
                                     return Err(TPM2_RC_SIZE);
                                 }
                                 let mut #name = [#entry_type::default(); #max_size];
-                                for i in #name.iter_mut().take(#length as usize) {
+                                for i in #name.iter_mut().take(#usize_length) {
                                     *i = #entry_type::try_unmarshal(buffer)?;
                                 }
                             }
                         }
                         None => {
+                            if let Some(ident) = name {
+                                basic_field_types.insert(ident, field_type.clone());
+                            }
                             quote_spanned! {f.span()=>
                                 let #name = #field_type::try_unmarshal(buffer)?;
                             }

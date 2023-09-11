@@ -220,7 +220,7 @@ mod tests {
 
     #[derive(PartialEq, Debug, Marshal)]
     struct HasArray {
-        count: u32,
+        count: u8,
         other: u32,
         #[length(count)]
         array: [u8; 128],
@@ -237,7 +237,7 @@ mod tests {
         let marshal = value.try_marshal(&mut buffer);
         assert_eq!(
             marshal.unwrap(),
-            value.count as usize + 2 * size_of::<u32>()
+            value.count as usize + size_of::<u32>() + size_of::<u8>()
         );
 
         let unmarshal = HasArray::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
