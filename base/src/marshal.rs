@@ -252,4 +252,17 @@ mod tests {
         // But the full structs don't, because the unmarshaled array bytes are different.
         assert_ne!(unmarsh_value, value);
     }
+
+    #[derive(PartialEq, Debug, Marshal)]
+    struct Nameless(u32, u16);
+
+    #[test]
+    fn test_derive_nameless_fields() {
+        let value = Nameless(7777777, 61);
+        let mut buffer = [0u8; 6];
+        let marshal = value.try_marshal(&mut buffer);
+        assert!(marshal.is_ok());
+        let unmarshal = Nameless::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
+        assert_eq!(value, unmarshal.unwrap());
+    }
 }

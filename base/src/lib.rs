@@ -47,7 +47,7 @@ mod errors;
 mod marshal;
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, AsBytes, FromBytes, FromZeroes)]
 pub struct TpmsEmpty;
 
 #[repr(C)]
@@ -368,46 +368,12 @@ pub struct TpmsSchemeXor {
 
 pub type TpmsSchemeHmac = TpmsSchemeHash;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub union TpmuSchemeKeyedHash {
-    pub hmac: TpmsSchemeHmac,
-    pub exclusive_or: TpmsSchemeXor,
-    pub null: TpmsEmpty,
-}
-impl TpmuSchemeKeyedHash {
-    fn try_marshal(&self, selector: TpmiAlgKeyedhashScheme, buffer: &mut [u8]) -> TpmResult<usize> {
-        match selector.get() {
-            TPM2_ALG_HMAC => unsafe { self.hmac.try_marshal(buffer) },
-            TPM2_ALG_XOR => unsafe { self.exclusive_or.try_marshal(buffer) },
-            TPM2_ALG_NONE => Ok(0),
-            _ => Err(TpmError::TPM2_RC_SELECTOR),
-        }
-    }
-
-    fn try_unmarshal(
-        selector: TpmiAlgKeyedhashScheme,
-        buffer: &mut UnmarshalBuf,
-    ) -> TpmResult<Self> {
-        match selector.get() {
-            TPM2_ALG_HMAC => Ok(TpmuSchemeKeyedHash {
-                hmac: TpmsSchemeHmac::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_XOR => Ok(TpmuSchemeKeyedHash {
-                exclusive_or: TpmsSchemeXor::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_NONE => Ok(TpmuSchemeKeyedHash { null: TpmsEmpty {} }),
-            _ => Err(TpmError::TPM2_RC_SELECTOR),
-        }
-    }
-}
-
-#[repr(C)]
+#[repr(C, u16)]
 #[derive(Clone, Copy, Marshal)]
-pub struct TpmtKeyedHashScheme {
-    pub scheme: TpmiAlgKeyedhashScheme,
-    #[selector(scheme)]
-    pub details: TpmuSchemeKeyedHash,
+pub enum TpmtKeyedHashScheme {
+    Hmac(TpmsSchemeHmac) = TPM2_ALG_HMAC,
+    ExclusiveOr(TpmsSchemeXor) = TPM2_ALG_XOR,
+    Null(TpmsEmpty) = TPM2_ALG_NONE,
 }
 
 #[repr(C)]
@@ -416,95 +382,14 @@ pub struct TpmsKeyedHashParms {
     pub scheme: TpmtKeyedHashScheme,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub union TpmuSymKeyBits {
-    pub aes: TpmiAesKeyBits,
-    pub sm4: TpmiSm4KeyBits,
-    pub camellia: TpmiCamelliaKeyBits,
-    pub sym: Tpm2KeyBits,
-    pub exclusive_or: TpmiAlgHash,
-    pub null: TpmsEmpty,
-}
-impl TpmuSymKeyBits {
-    fn try_marshal(&self, selector: TpmiAlgSymObject, buffer: &mut [u8]) -> TpmResult<usize> {
-        match selector.get() {
-            TPM2_ALG_AES => unsafe { self.aes.try_marshal(buffer) },
-            TPM2_ALG_SM4 => unsafe { self.sm4.try_marshal(buffer) },
-            TPM2_ALG_CAMELLIA => unsafe { self.camellia.try_marshal(buffer) },
-            TPM2_ALG_XOR => unsafe { self.exclusive_or.try_marshal(buffer) },
-            TPM2_ALG_NONE => Ok(0),
-            _ => Err(TpmError::TPM2_RC_SELECTOR),
-        }
-    }
-    fn try_unmarshal(selector: TpmiAlgSymObject, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
-        match selector.get() {
-            TPM2_ALG_AES => Ok(TpmuSymKeyBits {
-                aes: TpmiAesKeyBits::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_SM4 => Ok(TpmuSymKeyBits {
-                sm4: TpmiSm4KeyBits::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_CAMELLIA => Ok(TpmuSymKeyBits {
-                camellia: TpmiCamelliaKeyBits::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_XOR => Ok(TpmuSymKeyBits {
-                exclusive_or: TpmiAlgHash::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_NONE => Ok(TpmuSymKeyBits { null: TpmsEmpty {} }),
-            _ => Err(TpmError::TPM2_RC_SELECTOR),
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub union TpmuSymMode {
-    pub aes: TpmiAlgSymMode,
-    pub sm4: TpmiAlgSymMode,
-    pub camellia: TpmiAlgSymMode,
-    pub sym: TpmiAlgSymMode,
-    pub exclusive_or: TpmsEmpty,
-    pub null: TpmsEmpty,
-}
-impl TpmuSymMode {
-    fn try_marshal(&self, selector: TpmiAlgSymObject, buffer: &mut [u8]) -> TpmResult<usize> {
-        match selector.get() {
-            TPM2_ALG_AES => unsafe { self.aes.try_marshal(buffer) },
-            TPM2_ALG_SM4 => unsafe { self.sm4.try_marshal(buffer) },
-            TPM2_ALG_CAMELLIA => unsafe { self.camellia.try_marshal(buffer) },
-            TPM2_ALG_XOR | TPM2_ALG_NONE => Ok(0),
-            _ => Err(TpmError::TPM2_RC_SELECTOR),
-        }
-    }
-    fn try_unmarshal(selector: TpmiAlgSymObject, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
-        match selector.get() {
-            TPM2_ALG_AES => Ok(TpmuSymMode {
-                aes: TpmiAlgSymMode::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_SM4 => Ok(TpmuSymMode {
-                sm4: TpmiAlgSymMode::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_CAMELLIA => Ok(TpmuSymMode {
-                camellia: TpmiAlgSymMode::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_XOR => Ok(TpmuSymMode {
-                exclusive_or: TpmsEmpty {},
-            }),
-            TPM2_ALG_NONE => Ok(TpmuSymMode { null: TpmsEmpty {} }),
-            _ => Err(TpmError::TPM2_RC_SELECTOR),
-        }
-    }
-}
-
-#[repr(C)]
+#[repr(C, u16)]
 #[derive(Clone, Copy, Marshal)]
-pub struct TpmtSymDefObject {
-    pub algorithm: TpmiAlgSymObject,
-    #[selector(algorithm)]
-    pub key_bits: TpmuSymKeyBits,
-    #[selector(algorithm)]
-    pub mode: TpmuSymMode,
+pub enum TpmtSymDefObject {
+    Aes(TpmiAesKeyBits, TpmiAlgSymMode) = TPM2_ALG_AES,
+    Sm4(TpmiSm4KeyBits, TpmiAlgSymMode) = TPM2_ALG_SM4,
+    Camellia(TpmiCamelliaKeyBits, TpmiAlgSymMode) = TPM2_ALG_CAMELLIA,
+    ExclusiveOr(TpmiAlgHash, TpmsEmpty) = TPM2_ALG_XOR,
+    Null(TpmsEmpty, TpmsEmpty) = TPM2_ALG_NONE,
 }
 
 #[repr(C)]
@@ -530,78 +415,18 @@ pub type TpmsSigSchemeEcdaa = TpmsSchemeHash;
 pub type TpmsEncSchemeOaep = TpmsSchemeHash;
 pub type TpmsEncSchemeRsaes = TpmsEmpty;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub union TpmuAsymScheme {
-    pub ecdh: TpmsKeySchemeEcdh,
-    pub ecmqv: TpmsKeySchemeEcmqv,
-    pub rsassa: TpmsSigSchemeRsassa,
-    pub rsapss: TpmsSigSchemeRsapss,
-    pub ecdsa: TpmsSigSchemeEcdsa,
-    pub ecdaa: TpmsSigSchemeEcdaa,
-    pub sm2: TpmsSigSchemeSm2,
-    pub ecschnorr: TpmsSigSchemeEcschnorr,
-    pub rsaes: TpmsEncSchemeRsaes,
-    pub oaep: TpmsEncSchemeOaep,
-    pub any_sig: TpmsSchemeHash,
-    pub null: TpmsEmpty,
-}
-impl TpmuAsymScheme {
-    fn try_marshal(&self, selector: TpmiAlgAsymScheme, buffer: &mut [u8]) -> TpmResult<usize> {
-        match selector.get() {
-            TPM2_ALG_ECDH => unsafe { self.ecdh.try_marshal(buffer) },
-            TPM2_ALG_ECMQV => unsafe { self.ecmqv.try_marshal(buffer) },
-            TPM2_ALG_RSASSA => unsafe { self.rsassa.try_marshal(buffer) },
-            TPM2_ALG_ECDSA => unsafe { self.ecdsa.try_marshal(buffer) },
-            TPM2_ALG_ECDAA => unsafe { self.ecdaa.try_marshal(buffer) },
-            TPM2_ALG_SM2 => unsafe { self.sm2.try_marshal(buffer) },
-            TPM2_ALG_ECSCHNORR => unsafe { self.ecschnorr.try_marshal(buffer) },
-            TPM2_ALG_OAEP => unsafe { self.oaep.try_marshal(buffer) },
-            TPM2_ALG_RSAES | TPM2_ALG_NONE => Ok(0),
-            _ => Err(TpmError::TPM2_RC_SELECTOR),
-        }
-    }
-    fn try_unmarshal(selector: TpmiAlgAsymScheme, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
-        match selector.get() {
-            TPM2_ALG_ECDH => Ok(TpmuAsymScheme {
-                ecdh: TpmsKeySchemeEcdh::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_ECMQV => Ok(TpmuAsymScheme {
-                ecmqv: TpmsKeySchemeEcmqv::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_RSASSA => Ok(TpmuAsymScheme {
-                rsassa: TpmsSigSchemeRsassa::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_ECDSA => Ok(TpmuAsymScheme {
-                ecdsa: TpmsSigSchemeEcdsa::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_ECDAA => Ok(TpmuAsymScheme {
-                ecdaa: TpmsSigSchemeEcdaa::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_SM2 => Ok(TpmuAsymScheme {
-                sm2: TpmsSigSchemeSm2::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_ECSCHNORR => Ok(TpmuAsymScheme {
-                ecschnorr: TpmsSigSchemeEcschnorr::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_OAEP => Ok(TpmuAsymScheme {
-                oaep: TpmsEncSchemeOaep::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_RSAES => Ok(TpmuAsymScheme {
-                rsaes: TpmsEmpty {},
-            }),
-            TPM2_ALG_NONE => Ok(TpmuAsymScheme { null: TpmsEmpty {} }),
-            _ => Err(TpmError::TPM2_RC_SELECTOR),
-        }
-    }
-}
-
-#[repr(C)]
+#[repr(C, u16)]
 #[derive(Clone, Copy, Marshal)]
-pub struct TpmtRsaScheme {
-    pub scheme: TpmiAlgRsaScheme,
-    #[selector(scheme)]
-    pub details: TpmuAsymScheme,
+pub enum TpmtRsaScheme {
+    Rsapss(TpmsSigSchemeRsapss) = TPM2_ALG_RSAPSS,
+    Rsassa(TpmsSigSchemeRsassa) = TPM2_ALG_RSASSA,
+    Ecdsa(TpmsSigSchemeEcdsa) = TPM2_ALG_ECDSA,
+    Ecdaa(TpmsSigSchemeEcdaa) = TPM2_ALG_ECDAA,
+    Sm2(TpmsSigSchemeSm2) = TPM2_ALG_SM2,
+    Ecschnorr(TpmsSigSchemeEcschnorr) = TPM2_ALG_ECSCHNORR,
+    Rsaes(TpmsEncSchemeRsaes) = TPM2_ALG_RSAES,
+    Oaep(TpmsEncSchemeOaep) = TPM2_ALG_OAEP,
+    Null(TpmsEmpty) = TPM2_ALG_NONE,
 }
 
 #[repr(C)]
@@ -613,12 +438,18 @@ pub struct TpmsRsaParms {
     pub exponent: U32,
 }
 
-#[repr(C)]
+#[repr(C, u16)]
 #[derive(Clone, Copy, Marshal)]
-pub struct TpmtEccScheme {
-    pub scheme: TpmiAlgEccScheme,
-    #[selector(scheme)]
-    pub details: TpmuAsymScheme,
+pub enum TpmtEccScheme {
+    Rsapss(TpmsSigSchemeRsapss) = TPM2_ALG_RSAPSS,
+    Rsassa(TpmsSigSchemeRsassa) = TPM2_ALG_RSASSA,
+    Ecdsa(TpmsSigSchemeEcdsa) = TPM2_ALG_ECDSA,
+    Ecdaa(TpmsSigSchemeEcdaa) = TPM2_ALG_ECDAA,
+    Sm2(TpmsSigSchemeSm2) = TPM2_ALG_SM2,
+    Ecschnorr(TpmsSigSchemeEcschnorr) = TPM2_ALG_ECSCHNORR,
+    Ecdh(TpmsKeySchemeEcdh) = TPM2_ALG_ECDH,
+    Ecmqv(TpmsKeySchemeEcmqv) = TPM2_ALG_ECMQV,
+    Null(TpmsEmpty) = TPM2_ALG_NONE,
 }
 
 pub type TpmsSchemeMgf1 = TpmsSchemeHash;
@@ -626,53 +457,14 @@ pub type TpmsSchemeKdf1Sp800_56a = TpmsSchemeHash;
 pub type TpmsSchemeKdf2 = TpmsSchemeHash;
 pub type TpmsSchemeKdf1Sp800_108 = TpmsSchemeHash;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub union TpmuKdfScheme {
-    pub mgf1: TpmsSchemeMgf1,
-    pub kdf1_sp800_56a: TpmsSchemeKdf1Sp800_56a,
-    pub kdf2: TpmsSchemeKdf2,
-    pub kdf1_sp800_108: TpmsSchemeKdf1Sp800_108,
-    pub null: TpmsEmpty,
-}
-impl TpmuKdfScheme {
-    fn try_marshal(&self, selector: TpmiAlgKdf, buffer: &mut [u8]) -> TpmResult<usize> {
-        match selector.get() {
-            TPM2_ALG_MGF1 => unsafe { self.mgf1.try_marshal(buffer) },
-            TPM2_ALG_KDF1_SP800_56A => unsafe { self.kdf1_sp800_56a.try_marshal(buffer) },
-            TPM2_ALG_KDF2 => unsafe { self.kdf2.try_marshal(buffer) },
-            TPM2_ALG_KDF1_SP800_108 => unsafe { self.kdf1_sp800_108.try_marshal(buffer) },
-            TPM2_ALG_NONE => Ok(0),
-            _ => Err(TpmError::TPM2_RC_SELECTOR),
-        }
-    }
-
-    fn try_unmarshal(selector: TpmiAlgKdf, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
-        match selector.get() {
-            TPM2_ALG_MGF1 => Ok(TpmuKdfScheme {
-                mgf1: TpmsSchemeMgf1::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_KDF1_SP800_56A => Ok(TpmuKdfScheme {
-                kdf1_sp800_56a: TpmsSchemeKdf1Sp800_56a::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_KDF2 => Ok(TpmuKdfScheme {
-                kdf2: TpmsSchemeKdf2::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_KDF1_SP800_108 => Ok(TpmuKdfScheme {
-                kdf1_sp800_108: TpmsSchemeKdf1Sp800_108::try_unmarshal(buffer)?,
-            }),
-            TPM2_ALG_NONE => Ok(TpmuKdfScheme { null: TpmsEmpty {} }),
-            _ => Err(TpmError::TPM2_RC_SELECTOR),
-        }
-    }
-}
-
-#[repr(C)]
+#[repr(C, u16)]
 #[derive(Clone, Copy, Marshal)]
-pub struct TpmtKdfScheme {
-    pub scheme: TpmiAlgKdf,
-    #[selector(scheme)]
-    pub details: TpmuKdfScheme,
+pub enum TpmtKdfScheme {
+    Mgf1(TpmsSchemeMgf1) = TPM2_ALG_MGF1,
+    Kdf1Sp800_56a(TpmsSchemeKdf1Sp800_56a) = TPM2_ALG_KDF1_SP800_56A,
+    Kdf2(TpmsSchemeKdf2) = TPM2_ALG_KDF2,
+    Kdf1Sp800_108(TpmsSchemeKdf1Sp800_108) = TPM2_ALG_KDF1_SP800_108,
+    Null(TpmsEmpty) = TPM2_ALG_NONE,
 }
 
 #[repr(C)]
@@ -684,12 +476,20 @@ pub struct TpmsEccParms {
     pub kdf: TpmtKdfScheme,
 }
 
-#[repr(C)]
+#[repr(C, u16)]
 #[derive(Clone, Copy, Marshal)]
-pub struct TpmtAsymScheme {
-    pub scheme: TpmiAlgAsymScheme,
-    #[selector(scheme)]
-    pub details: TpmuAsymScheme,
+pub enum TpmtAsymScheme {
+    Ecdh(TpmsKeySchemeEcdh) = TPM2_ALG_ECDH,
+    Ecmqv(TpmsKeySchemeEcmqv) = TPM2_ALG_ECMQV,
+    Sm2(TpmsSigSchemeSm2) = TPM2_ALG_SM2,
+    Rsapss(TpmsSigSchemeRsapss) = TPM2_ALG_RSAPSS,
+    Rsassa(TpmsSigSchemeRsassa) = TPM2_ALG_RSASSA,
+    Ecdsa(TpmsSigSchemeEcdsa) = TPM2_ALG_ECDSA,
+    Ecdaa(TpmsSigSchemeEcdaa) = TPM2_ALG_ECDAA,
+    Ecschnorr(TpmsSigSchemeEcschnorr) = TPM2_ALG_ECSCHNORR,
+    Rsaes(TpmsEncSchemeRsaes) = TPM2_ALG_RSAES,
+    Oaep(TpmsEncSchemeOaep) = TPM2_ALG_OAEP,
+    Null(TpmsEmpty) = TPM2_ALG_NONE,
 }
 
 #[repr(C)]
@@ -1237,37 +1037,22 @@ mod tests {
         let hmac = TpmsSchemeHmac {
             hash_alg: U16::new(0xB),
         };
-        let scheme = TpmtKeyedHashScheme {
-            scheme: U16::from(TPM2_ALG_HMAC),
-            details: TpmuSchemeKeyedHash { hmac },
-        };
+        let scheme = TpmtKeyedHashScheme::Hmac(hmac);
         let mut buffer = [0u8; size_of::<TpmtKeyedHashScheme>()];
         assert!(scheme.try_marshal(&mut buffer).is_ok());
     }
 
     #[test]
     fn test_marshal_tpmt_public() {
-        let xor_sym_def_obj = TpmtSymDefObject {
-            algorithm: U16::new(TPM2_ALG_XOR),
-            key_bits: TpmuSymKeyBits {
-                exclusive_or: U16::new(TPM2_ALG_SHA256),
-            },
-            mode: TpmuSymMode {
-                exclusive_or: TpmsEmpty {},
-            },
-        };
+        let xor_sym_def_obj =
+            TpmtSymDefObject::ExclusiveOr(U16::new(TPM2_ALG_SHA256), TpmsEmpty {});
         let mut buffer = [0u8; size_of::<TpmtSymDefObject>()];
         let mut marsh = xor_sym_def_obj.try_marshal(&mut buffer);
         // Because XOR does not populate TpmuSymMode, we have bytes left over.
         assert!(marsh.unwrap() < buffer.len());
-        let rsa_scheme = TpmtRsaScheme {
-            scheme: U16::new(TPM2_ALG_ECDSA),
-            details: TpmuAsymScheme {
-                ecdsa: TpmsSigSchemeEcdsa {
-                    hash_alg: U16::from(TPM2_ALG_SHA256),
-                },
-            },
-        };
+        let rsa_scheme = TpmtRsaScheme::Ecdsa(TpmsSigSchemeEcdsa {
+            hash_alg: U16::from(TPM2_ALG_SHA256),
+        });
 
         let rsa_parms = TpmsRsaParms {
             symmetric: xor_sym_def_obj,
