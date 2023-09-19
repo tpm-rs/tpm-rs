@@ -527,7 +527,11 @@ pub struct TpmtPublic {
 }
 // Custom overload of Marshalable, because the selector for parms_and_id is {un}marshaled first.
 impl Marshalable for TpmtPublic {
+<<<<<<< HEAD
     fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
+=======
+    fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+>>>>>>> 14830fc (Support {un}marshaling enum selectors separately)
         let mut written = 0;
         written +=
             U16::new(self.parms_and_id.discriminant()).try_marshal(&mut buffer[written..])?;
@@ -539,7 +543,11 @@ impl Marshalable for TpmtPublic {
             .try_marshal_variant(&mut buffer[written..])?;
         Ok(written)
     }
+<<<<<<< HEAD
     fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
+=======
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+>>>>>>> 14830fc (Support {un}marshaling enum selectors separately)
         let selector = U16::try_unmarshal(buffer)?;
         Ok(TpmtPublic {
             name_alg: TpmiAlgHash::try_unmarshal(buffer)?,

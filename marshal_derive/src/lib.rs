@@ -122,12 +122,20 @@ fn get_enum_impl(name: &Ident, data: &DataEnum, attrs: &[Attribute]) -> TokenStr
                 fn discriminant(&self) -> #prim {
                     unsafe { *<*const _>::from(self).cast::<#prim>() }
                 }
+<<<<<<< HEAD
                 fn try_marshal_variant(&self, buffer: &mut [u8]) -> Result<usize, Tss2Rc> {
+=======
+                fn try_marshal_variant(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+>>>>>>> 14830fc (Support {un}marshaling enum selectors separately)
                     let mut written: usize = 0;
                     #marshal_text;
                     Ok(written)
                 }
+<<<<<<< HEAD
                 fn try_unmarshal_variant(selector: #prim, buffer: &mut UnmarshalBuf) -> Result<Self, Tss2Rc> {
+=======
+                fn try_unmarshal_variant(selector: #prim, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+>>>>>>> 14830fc (Support {un}marshaling enum selectors separately)
                     #unmarshal_text
                 }
             }
