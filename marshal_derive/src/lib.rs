@@ -12,11 +12,6 @@ use syn::{
 /// requires that the type of each field in the struct meets one of the
 /// following conditions:
 ///  - The type implements zerocopy::AsBytes and zerocopy::FromBytes
-///  - The type is a union type where the union field is tagged with the
-///    #[selector($selector_field)] attribute, $selector_field is a field in the
-///    struct appearing before the union field, and the union type implements
-///    try_{un}marshal methods that accept the type of $selector_field as their
-///    first parameter.
 ///  - The type is an array, the array entry type also meets these Marshal
 ///    conditions, and the array field is tagged with the #[length($length_field)]
 ///    attribute, where $length_field is a field in the struct appearing before
@@ -24,14 +19,15 @@ use syn::{
 ///    generated code will {un}marshal first N entries in the array, where N is
 ///    the value of $length_field.
 ///  - The type is an enum type with #[repr(C, $primitive)] representation. The
-///    generated code will include a discriminant() implementation, and will
+///    generated code will include a discriminant() implementation that returns
+///    $primitive, try_{un}marshal routines that accept an external selector, and will
 ///    {un}marshal the discriminant in BE format prior to the variant.
 
-#[proc_macro_derive(Marshal, attributes(selector, length))]
+#[proc_macro_derive(Marshal, attributes(length))]
 pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = input.ident;
-    let (marsh_text, unmarsh_text, disc_impl) = match input.data {
+    let (marsh_text, unmarsh_text, pure_impl) = match input.data {
         Data::Struct(stru) => {
             let marshal_text = get_field_marshal_body(&stru.fields);
             let field_list = get_field_list(&stru.fields);
@@ -48,18 +44,18 @@ pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             (marshal_text, unmarshal_text, TokenStream::new())
         }
         Data::Enum(enu) => {
-            let marshal_text = get_enum_marshal_body(&name, &enu, &input.attrs);
-            let unmarshal_text = get_enum_unmarshal_body(&name, &enu, &input.attrs);
-            let disc_text = get_enum_discriminant(&name, &input.attrs);
-            (marshal_text, unmarshal_text, disc_text)
+            let marshal_text = get_enum_marshal_impl(&input.attrs);
+            let unmarshal_text = get_enum_unmarshal_impl(&name, &input.attrs);
+            let pure_impl = get_enum_impl(&name, &enu, &input.attrs);
+            (marshal_text, unmarshal_text, pure_impl)
         }
         Data::Union(_) => {
-            unimplemented!("Marshal cannot be derived for union types, which must implement Marshalable to provide selector->variant mappings");
+            unimplemented!("Marshal cannot be derived for union types");
         }
     };
 
     let expanded = quote! {
-        #disc_impl
+        #pure_impl
         // The generated impl.
         impl Marshalable for #name  {
             fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
@@ -114,19 +110,29 @@ fn get_enum_repr(attrs: &[Attribute]) -> EnumRepr {
     path
 }
 
-// Produces a `discriminant` implementation for a #[repr(C, $primitive)] enum.
-fn get_enum_discriminant(name: &Ident, attrs: &[Attribute]) -> TokenStream {
+// Produces a `discriminant` and variant {un}marshal implementations for a #[repr(C, $primitive)] enum.
+fn get_enum_impl(name: &Ident, data: &DataEnum, attrs: &[Attribute]) -> TokenStream {
+    let marshal_text = get_enum_marshal_body(name, data);
+    let unmarshal_text = get_enum_unmarshal_body(name, data);
     if let EnumRepr::CPrim(prim) = get_enum_repr(attrs) {
-        let disc = quote! {
+        let pure_impl = quote! {
             impl #name {
                 // This is explicitly allowed for enums with primitive representation.
                 // https://doc.rust-lang.org/std/mem/fn.discriminant.html#accessing-the-numeric-value-of-the-discriminant.
                 fn discriminant(&self) -> #prim {
                     unsafe { *<*const _>::from(self).cast::<#prim>() }
                 }
+                fn try_marshal_variant(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+                    let mut written: usize = 0;
+                    #marshal_text;
+                    Ok(written)
+                }
+                fn try_unmarshal_variant(selector: #prim, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+                    #unmarshal_text
+                }
             }
         };
-        return disc;
+        return pure_impl;
     }
     unimplemented!("Only enums with primitive discriminant representation may derive Marshal");
 }
@@ -181,31 +187,24 @@ fn get_field_marshal_body(all_fields: &Fields) -> TokenStream {
     match all_fields {
         Fields::Named(ref fields) => {
             let recurse = fields.named.iter().map(|f| {
-                    let name = &f.ident;
-                    match get_marshal_attr(&f.attrs) {
-                       Some(MarshalAttr::Selector(selector)) => {
-                        quote_spanned! {f.span()=>
-                            written += self.#name.try_marshal(self.#selector, &mut buffer[written..])?;
-                        }
-                    },
-                        Some(MarshalAttr::Length(length)) => {
-                            let usize_length = get_usize_length(&length, basic_field_types.get(length.get_ident().unwrap()));
-                            quote_spanned! {f.span()=>
-                                for i in 0..self.#usize_length {
-                                    written += self.#name[i].try_marshal(&mut buffer[written..])?;
-                                }
-                            }
-                    },
-                        None => {
-                            if let Some(ident) = name {
-                                basic_field_types.insert(ident, f.ty.clone());
-                            }
-                        quote_spanned! {f.span()=>
-                            written += self.#name.try_marshal(&mut buffer[written..])?;
+                let name = &f.ident;
+                if let Some(length) = get_marshal_length(&f.attrs) {
+                    let length_prim =
+                        get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()));
+                    quote_spanned! {f.span()=>
+                        for i in 0..self.#length_prim as usize {
+                            written += self.#name[i].try_marshal(&mut buffer[written..])?;
                         }
                     }
+                } else {
+                    if let Some(ident) = name {
+                        basic_field_types.insert(ident, f.ty.clone());
+                    }
+                    quote_spanned! {f.span()=>
+                        written += self.#name.try_marshal(&mut buffer[written..])?;
+                    }
                 }
-                });
+            });
             quote! {
                 #(; #recurse)*
             }
@@ -225,8 +224,15 @@ fn get_field_marshal_body(all_fields: &Fields) -> TokenStream {
     }
 }
 
-fn get_enum_marshal_body(struct_name: &Ident, data: &DataEnum, attrs: &[Attribute]) -> TokenStream {
+fn get_enum_marshal_impl(attrs: &[Attribute]) -> TokenStream {
     let marsh_disc = get_marshalable_discriminant(attrs);
+    quote! {
+        written += #marsh_disc.try_marshal(&mut buffer[written..])?;
+        written += self.try_marshal_variant(&mut buffer[written..])?;
+    }
+}
+
+fn get_enum_marshal_body(struct_name: &Ident, data: &DataEnum) -> TokenStream {
     let list = data.variants.iter().map(|v| {
         let var_name = &v.ident;
         let field_marshal;
@@ -252,36 +258,21 @@ fn get_enum_marshal_body(struct_name: &Ident, data: &DataEnum, attrs: &[Attribut
         }
     });
     quote! {
-        written += #marsh_disc.try_marshal(buffer)?;
         match self {
             #(#list)*
         }
     }
 }
 
-enum MarshalAttr {
-    Selector(Path),
-    Length(Path),
-}
-
-fn get_marshal_attr(attrs: &[Attribute]) -> Option<MarshalAttr> {
+fn get_marshal_length(attrs: &[Attribute]) -> Option<Path> {
     let mut marshal_attr = None;
     for attr in attrs {
-        if attr.path().is_ident("selector") {
-            let _ = attr.parse_nested_meta(|meta| {
-                if marshal_attr.is_some() {
-                    unimplemented!("Only one selector or length is permitted.");
-                }
-                marshal_attr = Some(MarshalAttr::Selector(meta.path));
-                Ok(())
-            });
-        }
         if attr.path().is_ident("length") {
             let _ = attr.parse_nested_meta(|meta| {
                 if marshal_attr.is_some() {
-                    unimplemented!("Only one selector or length is permitted.");
+                    unimplemented!("Only one length is permitted.");
                 }
-                marshal_attr = Some(MarshalAttr::Length(meta.path));
+                marshal_attr = Some(meta.path);
                 Ok(())
             });
         }
@@ -297,21 +288,23 @@ fn get_array_default(field_type: &Type) -> (&Expr, &Type) {
     }
 }
 
-// Gets a token stream for the usize value of a var based on its type.
-fn get_usize_length(path: &Path, field_type: Option<&Type>) -> TokenStream {
+// Gets a token stream for the primitive value of a var based on its type.
+fn get_primitive(path: &Path, field_type: Option<&Type>) -> TokenStream {
     if field_type.is_none() {
-        unimplemented!("length field must appear before fields using it in a length attribute");
+        unimplemented!(
+            "length/selector field must appear before fields using it in a length attribute"
+        );
     }
     // Unlike other primitive ints, u8 doesn't have a separate big endian type.
     if let Some(Type::Path(x)) = field_type {
         if x.path.is_ident("u8") {
             return quote! {
-                #path as usize
+                #path
             };
         }
     }
     quote! {
-        #path.get() as usize
+        #path.get()
     }
 }
 
@@ -322,35 +315,25 @@ fn get_field_unmarshal(all_fields: &Fields) -> TokenStream {
             let recurse = fields.named.iter().map(|f| {
                 let name = &f.ident;
                 let field_type = &f.ty;
-                match get_marshal_attr(&f.attrs) {
-                    Some(MarshalAttr::Selector(selector)) => {
-                        quote_spanned! {f.span()=>
-                            let #name = #field_type::try_unmarshal(#selector, buffer)?;
+                if let Some(length) = get_marshal_length(&f.attrs) {
+                    let (max_size, entry_type) = get_array_default(field_type);
+                    let length_prim =
+                        get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()));
+                    quote_spanned! {f.span()=>
+                        if #length_prim as usize > #max_size {
+                            return Err(TpmError::TPM2_RC_SIZE);
+                        }
+                        let mut #name = [#entry_type::default(); #max_size];
+                        for i in #name.iter_mut().take(#length_prim as usize) {
+                            *i = #entry_type::try_unmarshal(buffer)?;
                         }
                     }
-                    Some(MarshalAttr::Length(length)) => {
-                        let (max_size, entry_type) = get_array_default(field_type);
-                        let usize_length = get_usize_length(
-                            &length,
-                            basic_field_types.get(length.get_ident().unwrap()),
-                        );
-                        quote_spanned! {f.span()=>
-                            if #usize_length > #max_size {
-                                return Err(TpmError::TPM2_RC_SIZE);
-                            }
-                            let mut #name = [#entry_type::default(); #max_size];
-                            for i in #name.iter_mut().take(#usize_length) {
-                                *i = #entry_type::try_unmarshal(buffer)?;
-                            }
-                        }
+                } else {
+                    if let Some(ident) = name {
+                        basic_field_types.insert(ident, field_type.clone());
                     }
-                    None => {
-                        if let Some(ident) = name {
-                            basic_field_types.insert(ident, field_type.clone());
-                        }
-                        quote_spanned! {f.span()=>
-                            let #name = #field_type::try_unmarshal(buffer)?;
-                        }
+                    quote_spanned! {f.span()=>
+                        let #name = #field_type::try_unmarshal(buffer)?;
                     }
                 }
             });
@@ -381,12 +364,15 @@ fn get_selection(disc: &Option<(syn::token::Eq, Expr)>) -> &Expr {
     unimplemented!("Enum variants must declare selectors");
 }
 
-fn get_enum_unmarshal_body(
-    struct_name: &Ident,
-    data: &DataEnum,
-    attrs: &[Attribute],
-) -> TokenStream {
+fn get_enum_unmarshal_impl(struct_name: &Ident, attrs: &[Attribute]) -> TokenStream {
     let (unmarsh_selector, get_selector) = get_enum_selector(attrs);
+    quote! {
+        #unmarsh_selector
+        #struct_name::try_unmarshal_variant(#get_selector, buffer)
+    }
+}
+
+fn get_enum_unmarshal_body(struct_name: &Ident, data: &DataEnum) -> TokenStream {
     let list = data.variants.iter().map(|v| {
         let var_name = &v.ident;
         let variant_unmarshal = get_field_unmarshal(&v.fields);
@@ -400,8 +386,7 @@ fn get_enum_unmarshal_body(
         }
     });
     quote! {
-        #unmarsh_selector
-        match #get_selector {
+        match selector {
             #(#list)*
             _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
