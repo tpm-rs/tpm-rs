@@ -1,4 +1,6 @@
 #![allow(dead_code, clippy::large_enum_variant)]
+#![cfg_attr(not(test), no_std)]
+
 use crate::{constants::*, errors::*, marshal::*};
 use core::mem::size_of;
 use marshal_derive::Marshal;
