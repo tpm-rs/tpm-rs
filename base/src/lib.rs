@@ -689,7 +689,7 @@ pub trait Tpm2bSimple {
     const MAX_BUFFER_SIZE: usize;
     fn get_size(&self) -> u16;
     fn get_buffer(&self) -> &[u8];
-    fn from_bytes(buffer: &[u8]) -> Result<Self, Tpm2Rc>
+    fn from_bytes(buffer: &[u8]) -> TpmResult<Self>
     where
         Self: Sized;
 }
@@ -707,10 +707,10 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
                 &self.$F[0..self.get_size() as usize]
             }
 
-            fn from_bytes(buffer: &[u8]) -> Result<Self, Tpm2Rc> {
+            fn from_bytes(buffer: &[u8]) -> TpmResult<Self> {
                 // Overflow check
                 if buffer.len() > core::cmp::min(u16::MAX as usize, Self::MAX_BUFFER_SIZE) {
-                    return Err(TSS2_MU_RC_BAD_SIZE);
+                    return Err(TpmError::TSS2_MU_RC_BAD_SIZE);
                 }
 
                 let mut dest: Self = Self {
@@ -723,12 +723,12 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
         }
 
         impl Marshalable for $T {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
                 let got_size = U16::try_unmarshal(buffer)?;
                 // Ensure the buffer is large enough to fullfill the size indicated
                 let sized_buffer = buffer.get(got_size.get() as usize);
                 if !sized_buffer.is_some() {
-                    return Err(TSS2_MU_RC_INSUFFICIENT_BUFFER);
+                    return Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
 
                 let mut dest: Self = Self {
@@ -738,19 +738,19 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
 
                 // Make sure the size indicated isn't too large for the types buffer
                 if sized_buffer.unwrap().len() > dest.$F.len() {
-                    return Err(TSS2_MU_RC_INSUFFICIENT_BUFFER);
+                    return Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
                 dest.$F[..got_size.into()].copy_from_slice(&sized_buffer.unwrap());
 
                 Ok(dest)
             }
 
-            fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
+            fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
                 let used = self.size.try_marshal(buffer)?;
                 let (_, rest) = buffer.split_at_mut(used);
                 let buffer_marsh = self.get_size() as usize;
                 if buffer_marsh > (core::cmp::max(Self::MAX_BUFFER_SIZE, rest.len())) {
-                    return Err(TSS2_MU_RC_INSUFFICIENT_BUFFER);
+                    return Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
                 rest[..buffer_marsh].copy_from_slice(&self.$F[..buffer_marsh]);
                 Ok(used + buffer_marsh)
@@ -817,7 +817,7 @@ mod tests {
             assert!(s.try_marshal(&mut bigger_size_buf).is_ok());
 
             // too small should fail
-            let mut result: Result<$T, Tpm2Rc> =
+            let mut result: TpmResult<$T> =
                 <$T>::try_unmarshal(&mut UnmarshalBuf::new(&too_small_size_buf));
             assert!(result.is_err());
 
@@ -1055,6 +1055,6 @@ mod tests {
         // Test invalid selector value.
         assert!(U16::new(TPM2_ALG_SHA256).try_marshal(&mut buffer).is_ok());
         unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
-        assert_eq!(unmarsh.err(), Some(TPM2_RC_SELECTOR));
+        assert_eq!(unmarsh.err(), Some(TpmError::TPM2_RC_SELECTOR));
     }
 }
