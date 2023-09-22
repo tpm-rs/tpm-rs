@@ -376,23 +376,19 @@ pub union TpmuSchemeKeyedHash {
     pub null: TpmsEmpty,
 }
 impl TpmuSchemeKeyedHash {
-    fn try_marshal(
-        &self,
-        selector: TpmiAlgKeyedhashScheme,
-        buffer: &mut [u8],
-    ) -> Result<usize, Tpm2Rc> {
+    fn try_marshal(&self, selector: TpmiAlgKeyedhashScheme, buffer: &mut [u8]) -> TpmResult<usize> {
         match selector.get() {
             TPM2_ALG_HMAC => unsafe { self.hmac.try_marshal(buffer) },
             TPM2_ALG_XOR => unsafe { self.exclusive_or.try_marshal(buffer) },
             TPM2_ALG_NONE => Ok(0),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
 
     fn try_unmarshal(
         selector: TpmiAlgKeyedhashScheme,
         buffer: &mut UnmarshalBuf,
-    ) -> Result<Self, Tpm2Rc> {
+    ) -> TpmResult<Self> {
         match selector.get() {
             TPM2_ALG_HMAC => Ok(TpmuSchemeKeyedHash {
                 hmac: TpmsSchemeHmac::try_unmarshal(buffer)?,
@@ -401,7 +397,7 @@ impl TpmuSchemeKeyedHash {
                 exclusive_or: TpmsSchemeXor::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_NONE => Ok(TpmuSchemeKeyedHash { null: TpmsEmpty {} }),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
 }
@@ -431,20 +427,17 @@ pub union TpmuSymKeyBits {
     pub null: TpmsEmpty,
 }
 impl TpmuSymKeyBits {
-    fn try_marshal(&self, selector: TpmiAlgSymObject, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
+    fn try_marshal(&self, selector: TpmiAlgSymObject, buffer: &mut [u8]) -> TpmResult<usize> {
         match selector.get() {
             TPM2_ALG_AES => unsafe { self.aes.try_marshal(buffer) },
             TPM2_ALG_SM4 => unsafe { self.sm4.try_marshal(buffer) },
             TPM2_ALG_CAMELLIA => unsafe { self.camellia.try_marshal(buffer) },
             TPM2_ALG_XOR => unsafe { self.exclusive_or.try_marshal(buffer) },
             TPM2_ALG_NONE => Ok(0),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
-    fn try_unmarshal(
-        selector: TpmiAlgSymObject,
-        buffer: &mut UnmarshalBuf,
-    ) -> Result<Self, Tpm2Rc> {
+    fn try_unmarshal(selector: TpmiAlgSymObject, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
         match selector.get() {
             TPM2_ALG_AES => Ok(TpmuSymKeyBits {
                 aes: TpmiAesKeyBits::try_unmarshal(buffer)?,
@@ -459,7 +452,7 @@ impl TpmuSymKeyBits {
                 exclusive_or: TpmiAlgHash::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_NONE => Ok(TpmuSymKeyBits { null: TpmsEmpty {} }),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
 }
@@ -475,19 +468,16 @@ pub union TpmuSymMode {
     pub null: TpmsEmpty,
 }
 impl TpmuSymMode {
-    fn try_marshal(&self, selector: TpmiAlgSymObject, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
+    fn try_marshal(&self, selector: TpmiAlgSymObject, buffer: &mut [u8]) -> TpmResult<usize> {
         match selector.get() {
             TPM2_ALG_AES => unsafe { self.aes.try_marshal(buffer) },
             TPM2_ALG_SM4 => unsafe { self.sm4.try_marshal(buffer) },
             TPM2_ALG_CAMELLIA => unsafe { self.camellia.try_marshal(buffer) },
             TPM2_ALG_XOR | TPM2_ALG_NONE => Ok(0),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
-    fn try_unmarshal(
-        selector: TpmiAlgSymObject,
-        buffer: &mut UnmarshalBuf,
-    ) -> Result<Self, Tpm2Rc> {
+    fn try_unmarshal(selector: TpmiAlgSymObject, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
         match selector.get() {
             TPM2_ALG_AES => Ok(TpmuSymMode {
                 aes: TpmiAlgSymMode::try_unmarshal(buffer)?,
@@ -502,7 +492,7 @@ impl TpmuSymMode {
                 exclusive_or: TpmsEmpty {},
             }),
             TPM2_ALG_NONE => Ok(TpmuSymMode { null: TpmsEmpty {} }),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
 }
@@ -557,7 +547,7 @@ pub union TpmuAsymScheme {
     pub null: TpmsEmpty,
 }
 impl TpmuAsymScheme {
-    fn try_marshal(&self, selector: TpmiAlgAsymScheme, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
+    fn try_marshal(&self, selector: TpmiAlgAsymScheme, buffer: &mut [u8]) -> TpmResult<usize> {
         match selector.get() {
             TPM2_ALG_ECDH => unsafe { self.ecdh.try_marshal(buffer) },
             TPM2_ALG_ECMQV => unsafe { self.ecmqv.try_marshal(buffer) },
@@ -568,13 +558,10 @@ impl TpmuAsymScheme {
             TPM2_ALG_ECSCHNORR => unsafe { self.ecschnorr.try_marshal(buffer) },
             TPM2_ALG_OAEP => unsafe { self.oaep.try_marshal(buffer) },
             TPM2_ALG_RSAES | TPM2_ALG_NONE => Ok(0),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
-    fn try_unmarshal(
-        selector: TpmiAlgAsymScheme,
-        buffer: &mut UnmarshalBuf,
-    ) -> Result<Self, Tpm2Rc> {
+    fn try_unmarshal(selector: TpmiAlgAsymScheme, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
         match selector.get() {
             TPM2_ALG_ECDH => Ok(TpmuAsymScheme {
                 ecdh: TpmsKeySchemeEcdh::try_unmarshal(buffer)?,
@@ -604,7 +591,7 @@ impl TpmuAsymScheme {
                 rsaes: TpmsEmpty {},
             }),
             TPM2_ALG_NONE => Ok(TpmuAsymScheme { null: TpmsEmpty {} }),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
 }
@@ -649,18 +636,18 @@ pub union TpmuKdfScheme {
     pub null: TpmsEmpty,
 }
 impl TpmuKdfScheme {
-    fn try_marshal(&self, selector: TpmiAlgKdf, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
+    fn try_marshal(&self, selector: TpmiAlgKdf, buffer: &mut [u8]) -> TpmResult<usize> {
         match selector.get() {
             TPM2_ALG_MGF1 => unsafe { self.mgf1.try_marshal(buffer) },
             TPM2_ALG_KDF1_SP800_56A => unsafe { self.kdf1_sp800_56a.try_marshal(buffer) },
             TPM2_ALG_KDF2 => unsafe { self.kdf2.try_marshal(buffer) },
             TPM2_ALG_KDF1_SP800_108 => unsafe { self.kdf1_sp800_108.try_marshal(buffer) },
             TPM2_ALG_NONE => Ok(0),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
 
-    fn try_unmarshal(selector: TpmiAlgKdf, buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
+    fn try_unmarshal(selector: TpmiAlgKdf, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
         match selector.get() {
             TPM2_ALG_MGF1 => Ok(TpmuKdfScheme {
                 mgf1: TpmsSchemeMgf1::try_unmarshal(buffer)?,
@@ -675,7 +662,7 @@ impl TpmuKdfScheme {
                 kdf1_sp800_108: TpmsSchemeKdf1Sp800_108::try_unmarshal(buffer)?,
             }),
             TPM2_ALG_NONE => Ok(TpmuKdfScheme { null: TpmsEmpty {} }),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
 }
@@ -722,16 +709,16 @@ pub union TpmuPublicParms {
     pub asym_detail: TpmsAsymParms,
 }
 impl TpmuPublicParms {
-    fn try_marshal(&self, selector: TpmiAlgPublic, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
+    fn try_marshal(&self, selector: TpmiAlgPublic, buffer: &mut [u8]) -> TpmResult<usize> {
         match selector.get() {
             TPM2_ALG_KEYEDHASH => unsafe { self.keyed_hash_detail.try_marshal(buffer) },
             TPM2_ALG_SYMCIPHER => unsafe { self.sym_detail.try_marshal(buffer) },
             TPM2_ALG_RSA => unsafe { self.rsa_detail.try_marshal(buffer) },
             TPM2_ALG_ECC => unsafe { self.ecc_detail.try_marshal(buffer) },
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
-    fn try_unmarshal(selector: TpmiAlgPublic, buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
+    fn try_unmarshal(selector: TpmiAlgPublic, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
         match selector.get() {
             TPM2_ALG_KEYEDHASH => Ok(TpmuPublicParms {
                 keyed_hash_detail: TpmsKeyedHashParms::try_unmarshal(buffer)?,
@@ -745,7 +732,7 @@ impl TpmuPublicParms {
             TPM2_ALG_ECC => Ok(TpmuPublicParms {
                 ecc_detail: TpmsEccParms::try_unmarshal(buffer)?,
             }),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
 }
@@ -760,16 +747,16 @@ pub union TpmuPublicId {
     pub derive: TpmsDerive,
 }
 impl TpmuPublicId {
-    fn try_marshal(&self, selector: TpmiAlgPublic, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
+    fn try_marshal(&self, selector: TpmiAlgPublic, buffer: &mut [u8]) -> TpmResult<usize> {
         match selector.get() {
             TPM2_ALG_KEYEDHASH => unsafe { self.keyed_hash.try_marshal(buffer) },
             TPM2_ALG_SYMCIPHER => unsafe { self.sym.try_marshal(buffer) },
             TPM2_ALG_RSA => unsafe { self.rsa.try_marshal(buffer) },
             TPM2_ALG_ECC => unsafe { self.ecc.try_marshal(buffer) },
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
-    fn try_unmarshal(selector: TpmiAlgPublic, buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
+    fn try_unmarshal(selector: TpmiAlgPublic, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
         match selector.get() {
             TPM2_ALG_KEYEDHASH => Ok(TpmuPublicId {
                 keyed_hash: Tpm2bDigest::try_unmarshal(buffer)?,
@@ -783,7 +770,7 @@ impl TpmuPublicId {
             TPM2_ALG_ECC => Ok(TpmuPublicId {
                 ecc: TpmsEccPoint::try_unmarshal(buffer)?,
             }),
-            _ => Err(TPM2_RC_SELECTOR),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
         }
     }
 }
@@ -940,7 +927,7 @@ pub trait Tpm2bSimple {
     const MAX_BUFFER_SIZE: usize;
     fn get_size(&self) -> u16;
     fn get_buffer(&self) -> &[u8];
-    fn from_bytes(buffer: &[u8]) -> Result<Self, Tpm2Rc>
+    fn from_bytes(buffer: &[u8]) -> TpmResult<Self>
     where
         Self: Sized;
 }
@@ -958,10 +945,10 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
                 &self.$F[0..self.get_size() as usize]
             }
 
-            fn from_bytes(buffer: &[u8]) -> Result<Self, Tpm2Rc> {
+            fn from_bytes(buffer: &[u8]) -> TpmResult<Self> {
                 // Overflow check
                 if buffer.len() > core::cmp::min(u16::MAX as usize, Self::MAX_BUFFER_SIZE) {
-                    return Err(TSS2_MU_RC_BAD_SIZE);
+                    return Err(TpmError::TSS2_MU_RC_BAD_SIZE);
                 }
 
                 let mut dest: Self = Self {
@@ -974,12 +961,12 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
         }
 
         impl Marshalable for $T {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc> {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
                 let got_size = U16::try_unmarshal(buffer)?;
                 // Ensure the buffer is large enough to fullfill the size indicated
                 let sized_buffer = buffer.get(got_size.get() as usize);
                 if !sized_buffer.is_some() {
-                    return Err(TSS2_MU_RC_INSUFFICIENT_BUFFER);
+                    return Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
 
                 let mut dest: Self = Self {
@@ -989,19 +976,19 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
 
                 // Make sure the size indicated isn't too large for the types buffer
                 if sized_buffer.unwrap().len() > dest.$F.len() {
-                    return Err(TSS2_MU_RC_INSUFFICIENT_BUFFER);
+                    return Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
                 dest.$F[..got_size.into()].copy_from_slice(&sized_buffer.unwrap());
 
                 Ok(dest)
             }
 
-            fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc> {
+            fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
                 let used = self.size.try_marshal(buffer)?;
                 let (_, rest) = buffer.split_at_mut(used);
                 let buffer_marsh = self.get_size() as usize;
                 if buffer_marsh > (core::cmp::max(Self::MAX_BUFFER_SIZE, rest.len())) {
-                    return Err(TSS2_MU_RC_INSUFFICIENT_BUFFER);
+                    return Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
                 rest[..buffer_marsh].copy_from_slice(&self.$F[..buffer_marsh]);
                 Ok(used + buffer_marsh)
@@ -1068,7 +1055,7 @@ mod tests {
             assert!(s.try_marshal(&mut bigger_size_buf).is_ok());
 
             // too small should fail
-            let mut result: Result<$T, Tpm2Rc> =
+            let mut result: TpmResult<$T> =
                 <$T>::try_unmarshal(&mut UnmarshalBuf::new(&too_small_size_buf));
             assert!(result.is_err());
 
@@ -1324,8 +1311,11 @@ mod tests {
 
         // Test invalid selector value.
         example.tipe = U16::new(TPM2_ALG_SHA256);
-        assert_eq!(example.try_marshal(&mut buffer), Err(TPM2_RC_SELECTOR));
+        assert_eq!(
+            example.try_marshal(&mut buffer),
+            Err(TpmError::TPM2_RC_SELECTOR)
+        );
         unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
-        assert_eq!(unmarsh.err(), Some(TPM2_RC_SELECTOR));
+        assert_eq!(unmarsh.err(), Some(TpmError::TPM2_RC_SELECTOR));
     }
 }
