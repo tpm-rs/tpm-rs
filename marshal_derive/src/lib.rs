@@ -35,13 +35,13 @@ pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     let expanded = quote! {
         // The generated impl.
         impl Marshalable for #name  {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tss2Rc> {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
                 #unmarshal_text;
                 Ok(#name{#field_list})
 
             }
 
-            fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tss2Rc> {
+            fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
                 let mut written: usize = 0;
                 #marshal_text;
                 Ok(written)
@@ -180,7 +180,7 @@ fn get_unmarshal_body(data: &Data, _: &[Attribute]) -> TokenStream {
                             let usize_length = get_usize_length(&length, basic_field_types.get(length.get_ident().unwrap()));
                             quote_spanned! {f.span()=>
                                 if #usize_length > #max_size {
-                                    return Err(TPM2_RC_SIZE);
+                                    return Err(TpmError::TPM2_RC_SIZE);
                                 }
                                 let mut #name = [#entry_type::default(); #max_size];
                                 for i in #name.iter_mut().take(#usize_length) {
