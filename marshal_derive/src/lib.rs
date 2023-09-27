@@ -44,13 +44,13 @@ pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             (marshal_text, unmarshal_text, TokenStream::new())
         }
         Data::Enum(enu) => {
-            let marshal_text = get_enum_marshal_impl(&input.attrs);
+            let marshal_text = get_enum_marshal_impl(&name, &input.attrs);
             let unmarshal_text = get_enum_unmarshal_impl(&name, &input.attrs);
             let pure_impl = get_enum_impl(&name, &enu, &input.attrs);
             (marshal_text, unmarshal_text, pure_impl)
         }
         Data::Union(_) => {
-            unimplemented!("Marshal cannot be derived for union types");
+            unimplemented!("Marshal cannot be derived for union type {}", name);
         }
     };
 
@@ -90,24 +90,32 @@ fn is_uprimitive(path: &Path) -> bool {
 // Gets the EnumRepr from `attrs`.
 fn get_enum_repr(attrs: &[Attribute]) -> EnumRepr {
     let mut c_repr = false;
-    let mut path = EnumRepr::None;
+    let mut prim = Option::None;
+
+    // Go find any `C` and/or unsigned primitive in a #repr attribute.
     for attr in attrs {
         if attr.path().is_ident("repr") {
             let _ = attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("C") {
                     c_repr = true;
                 } else if is_uprimitive(&meta.path) {
-                    if c_repr {
-                        path = EnumRepr::CPrim(meta.path);
-                    } else {
-                        path = EnumRepr::Prim(meta.path);
-                    }
+                    prim = Some(meta.path);
                 }
                 Ok(())
             });
         }
     }
-    path
+
+    // Construct the appropriate EnumRepr from the findings.
+    if let Some(p) = prim {
+        if c_repr {
+            EnumRepr::CPrim(p)
+        } else {
+            EnumRepr::Prim(p)
+        }
+    } else {
+        EnumRepr::None
+    }
 }
 
 // Produces a `discriminant` and variant {un}marshal implementations for a #[repr(C, $primitive)] enum.
@@ -134,7 +142,10 @@ fn get_enum_impl(name: &Ident, data: &DataEnum, attrs: &[Attribute]) -> TokenStr
         };
         return pure_impl;
     }
-    unimplemented!("Only enums with primitive discriminant representation may derive Marshal");
+    unimplemented!(
+        "Marshal cannot be derived for enum {} without primitive discriminant representation",
+        name
+    );
 }
 
 // Returns the BE type and whether using it requires a .get() call for `primitive`.
@@ -148,11 +159,11 @@ fn get_be_type_for(primitive: &Path) -> (TokenStream, bool) {
     } else if primitive.is_ident("u64") {
         return (quote! {U64}, true);
     }
-    unimplemented!("Missing BE type mapping");
+    unimplemented!("Missing BE type mapping for {:?}", primitive.get_ident());
 }
 
 // Helper to get a BE discriminant for a #[repr(C, $primitive)] enum.
-fn get_marshalable_discriminant(attrs: &[Attribute]) -> TokenStream {
+fn get_marshalable_discriminant(name: &Ident, attrs: &[Attribute]) -> TokenStream {
     if let EnumRepr::CPrim(prim) = get_enum_repr(attrs) {
         let (be_type, needs_convert) = get_be_type_for(&prim);
         if needs_convert {
@@ -161,11 +172,14 @@ fn get_marshalable_discriminant(attrs: &[Attribute]) -> TokenStream {
             return quote! {self.discriminant()};
         }
     }
-    unimplemented!("Enums with fields must have primitive representation for their discriminant");
+    unimplemented!(
+        "Enum {} does not have primitive representation for its discriminant",
+        name
+    );
 }
 
 // Helper to unmarshal a #[repr(C, $primitive)] discriminant.
-fn get_enum_selector(attrs: &[Attribute]) -> (TokenStream, TokenStream) {
+fn get_enum_selector(name: &Ident, attrs: &[Attribute]) -> (TokenStream, TokenStream) {
     if let EnumRepr::CPrim(prim) = get_enum_repr(attrs) {
         let (be_type, needs_get) = get_be_type_for(&prim);
         let unmarsh_selector = quote! {
@@ -179,7 +193,10 @@ fn get_enum_selector(attrs: &[Attribute]) -> (TokenStream, TokenStream) {
         };
         return (unmarsh_selector, get_selector);
     }
-    unimplemented!("Enums with fields must have primitive representation for their discriminant");
+    unimplemented!(
+        "Enum {} does not have primitive representation for its discriminant",
+        name
+    );
 }
 
 fn get_field_marshal_body(all_fields: &Fields) -> TokenStream {
@@ -188,7 +205,7 @@ fn get_field_marshal_body(all_fields: &Fields) -> TokenStream {
         Fields::Named(ref fields) => {
             let recurse = fields.named.iter().map(|f| {
                 let name = &f.ident;
-                if let Some(length) = get_marshal_length(&f.attrs) {
+                if let Some(length) = get_marshal_length(name, &f.attrs) {
                     let length_prim =
                         get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()));
                     quote_spanned! {f.span()=>
@@ -224,8 +241,8 @@ fn get_field_marshal_body(all_fields: &Fields) -> TokenStream {
     }
 }
 
-fn get_enum_marshal_impl(attrs: &[Attribute]) -> TokenStream {
-    let marsh_disc = get_marshalable_discriminant(attrs);
+fn get_enum_marshal_impl(name: &Ident, attrs: &[Attribute]) -> TokenStream {
+    let marsh_disc = get_marshalable_discriminant(name, attrs);
     quote! {
         written += #marsh_disc.try_marshal(&mut buffer[written..])?;
         written += self.try_marshal_variant(&mut buffer[written..])?;
@@ -248,7 +265,7 @@ fn get_enum_marshal_body(struct_name: &Ident, data: &DataEnum) -> TokenStream {
                 #(#recurse)*
             }
         } else {
-            unimplemented!("Enum fields cannot be named");
+            unimplemented!("Cannot marshal enum {} with named fields", struct_name);
         }
 
         quote_spanned! {v.span()=>
@@ -264,13 +281,13 @@ fn get_enum_marshal_body(struct_name: &Ident, data: &DataEnum) -> TokenStream {
     }
 }
 
-fn get_marshal_length(attrs: &[Attribute]) -> Option<Path> {
+fn get_marshal_length(name: &Option<Ident>, attrs: &[Attribute]) -> Option<Path> {
     let mut marshal_attr = None;
     for attr in attrs {
         if attr.path().is_ident("length") {
             let _ = attr.parse_nested_meta(|meta| {
                 if marshal_attr.is_some() {
-                    unimplemented!("Only one length is permitted.");
+                    unimplemented!("Only one length is permitted for field {:?}", name);
                 }
                 marshal_attr = Some(meta.path);
                 Ok(())
@@ -280,11 +297,14 @@ fn get_marshal_length(attrs: &[Attribute]) -> Option<Path> {
     marshal_attr
 }
 
-fn get_array_default(field_type: &Type) -> (&Expr, &Type) {
+fn get_array_default<'a>(name: &Option<Ident>, field_type: &'a Type) -> (&'a Expr, &'a Type) {
     if let Type::Array(array) = field_type {
         (&array.len, &*array.elem)
     } else {
-        unimplemented!("length attribute is only permitted for array types")
+        unimplemented!(
+            "length attribute is not permitted for non-array field {:?}",
+            name
+        )
     }
 }
 
@@ -292,7 +312,8 @@ fn get_array_default(field_type: &Type) -> (&Expr, &Type) {
 fn get_primitive(path: &Path, field_type: Option<&Type>) -> TokenStream {
     if field_type.is_none() {
         unimplemented!(
-            "length/selector field must appear before fields using it in a length attribute"
+            "length/selector field must appear before field {:?} using it in a length attribute",
+            path.get_ident()
         );
     }
     // Unlike other primitive ints, u8 doesn't have a separate big endian type.
@@ -315,8 +336,8 @@ fn get_field_unmarshal(all_fields: &Fields) -> TokenStream {
             let recurse = fields.named.iter().map(|f| {
                 let name = &f.ident;
                 let field_type = &f.ty;
-                if let Some(length) = get_marshal_length(&f.attrs) {
-                    let (max_size, entry_type) = get_array_default(field_type);
+                if let Some(length) = get_marshal_length(name, &f.attrs) {
+                    let (max_size, entry_type) = get_array_default(name, field_type);
                     let length_prim =
                         get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()));
                     quote_spanned! {f.span()=>
@@ -357,15 +378,15 @@ fn get_field_unmarshal(all_fields: &Fields) -> TokenStream {
     }
 }
 
-fn get_selection(disc: &Option<(syn::token::Eq, Expr)>) -> &Expr {
+fn get_selection<'a>(var_name: &Ident, disc: &'a Option<(syn::token::Eq, Expr)>) -> &'a Expr {
     if let Some((_, sel)) = disc {
         return sel;
     }
-    unimplemented!("Enum variants must declare selectors");
+    unimplemented!("Enum variant {} must declare a selector", var_name);
 }
 
 fn get_enum_unmarshal_impl(struct_name: &Ident, attrs: &[Attribute]) -> TokenStream {
-    let (unmarsh_selector, get_selector) = get_enum_selector(attrs);
+    let (unmarsh_selector, get_selector) = get_enum_selector(struct_name, attrs);
     quote! {
         #unmarsh_selector
         #struct_name::try_unmarshal_variant(#get_selector, buffer)
@@ -377,7 +398,7 @@ fn get_enum_unmarshal_body(struct_name: &Ident, data: &DataEnum) -> TokenStream 
         let var_name = &v.ident;
         let variant_unmarshal = get_field_unmarshal(&v.fields);
         let variant_fields = get_field_list(&v.fields);
-        let var_sel = get_selection(&v.discriminant);
+        let var_sel = get_selection(var_name, &v.discriminant);
         quote_spanned! {v.span()=>
                 #var_sel => {
                     #variant_unmarshal
