@@ -54,3 +54,12 @@ pub const TPM2_ALG_KDF1_SP800_108: u16 = 0x0022;
 pub const TPM2_ALG_ECC: u16 = 0x0023;
 pub const TPM2_ALG_SYMCIPHER: u16 = 0x0025;
 pub const TPM2_ALG_CAMELLIA: u16 = 0x0026;
+
+/* Structure Tags */
+pub const TPM2_ST_ATTEST_NV: u16 = 0x8014;
+pub const TPM2_ST_ATTEST_COMMAND_AUDIT: u16 = 0x8015;
+pub const TPM2_ST_ATTEST_SESSION_AUDIT: u16 = 0x8016;
+pub const TPM2_ST_ATTEST_CERTIFY: u16 = 0x8017;
+pub const TPM2_ST_ATTEST_QUOTE: u16 = 0x8018;
+pub const TPM2_ST_ATTEST_TIME: u16 = 0x8019;
+pub const TPM2_ST_ATTEST_CREATION: u16 = 0x801A;
