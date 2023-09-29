@@ -265,4 +265,23 @@ mod tests {
         let unmarshal = Nameless::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
         assert_eq!(value, unmarshal.unwrap());
     }
+
+    #[derive(PartialEq, Debug, Marshal)]
+    struct HasPlainArrayField {
+        a: u32,
+        b: [u8; 10],
+    }
+
+    #[test]
+    fn test_derive_array_field() {
+        let value = HasPlainArrayField {
+            a: 0x10101010,
+            b: [3, 4, 3, 4, 3, 4, 3, 4, 3, 4],
+        };
+        let mut buffer = [0u8; 16];
+        let marshal = value.try_marshal(&mut buffer);
+        assert!(marshal.is_ok());
+        let unmarshal = HasPlainArrayField::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
+        assert_eq!(value, unmarshal.unwrap());
+    }
 }

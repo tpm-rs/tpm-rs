@@ -213,6 +213,13 @@ fn get_field_marshal_body(all_fields: &Fields) -> TokenStream {
                             written += self.#name[i].try_marshal(&mut buffer[written..])?;
                         }
                     }
+                } else if let Type::Array(array) = &f.ty {
+                    let max_size = &array.len;
+                    quote_spanned! {f.span()=>
+                        for i in 0..#max_size {
+                            written += self.#name[i].try_marshal(&mut buffer[written..])?;
+                        }
+                    }
                 } else {
                     if let Some(ident) = name {
                         basic_field_types.insert(ident, f.ty.clone());
@@ -223,7 +230,7 @@ fn get_field_marshal_body(all_fields: &Fields) -> TokenStream {
                 }
             });
             quote! {
-                #(; #recurse)*
+                #(#recurse)*
             }
         }
         Fields::Unnamed(ref fields) => {
@@ -349,6 +356,15 @@ fn get_field_unmarshal(all_fields: &Fields) -> TokenStream {
                             *i = #entry_type::try_unmarshal(buffer)?;
                         }
                     }
+                } else if let Type::Array(array) = &f.ty {
+                    let max_size = &array.len;
+                    let entry_type = &*array.elem;
+                    quote_spanned! { f.span()=>
+                        let mut #name = [#entry_type::default(); #max_size];
+                        for i in #name.iter_mut().take(#max_size) {
+                            *i = #entry_type::try_unmarshal(buffer)?;
+                        }
+                    }
                 } else {
                     if let Some(ident) = name {
                         basic_field_types.insert(ident, field_type.clone());
@@ -367,7 +383,7 @@ fn get_field_unmarshal(all_fields: &Fields) -> TokenStream {
                 let var_name = Ident::new(&format!("f{}", i), Span::call_site());
                 let field_type = &f.ty;
                 quote_spanned! {f.span()=>
-                    let #var_name = #field_type::try_unmarshal(buffer)?;
+                    let #var_name = <#field_type>::try_unmarshal(buffer)?;
                 }
             });
             quote! {
