@@ -8,8 +8,8 @@ use tpm2_rs_base::{TpmCc, TpmSt, TpmiStCommandTag};
 use zerocopy::byteorder::big_endian::U32;
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
-const CMD_BUFFER_SIZE: usize = 4096;
-const RSP_BUFFER_SIZE: usize = 4096;
+const MAX_CMD_SIZE: usize = 4096 - size_of::<CmdHeader>();
+const MAX_RESP_SIZE: usize = 4096 - size_of::<RespHeader>();
 
 pub trait Tpm {
     fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TpmResult<()>;
@@ -36,11 +36,7 @@ where
     CmdT: TpmCommand,
     T: Tpm,
 {
-    let mut cmd_buffer = [0u8; CMD_BUFFER_SIZE];
-    const _: () = assert!(
-        CMD_BUFFER_SIZE > size_of::<CmdHeader>(),
-        "assert buffer can fit header"
-    );
+    let mut cmd_buffer = [0u8; MAX_CMD_SIZE + size_of::<CmdHeader>()];
     let (hdr_space, cmd_space) = cmd_buffer.split_at_mut(size_of::<CmdHeader>());
     let cmd_size = cmd.try_marshal(cmd_space)? + size_of::<CmdHeader>();
     let header = CmdHeader {
@@ -50,7 +46,7 @@ where
     };
     let _ = header.try_marshal(hdr_space)?;
 
-    let mut resp_buffer = [0u8; RSP_BUFFER_SIZE];
+    let mut resp_buffer = [0u8; MAX_RESP_SIZE + size_of::<RespHeader>()];
     tpm.transact(&cmd_buffer[..cmd_size], &mut resp_buffer)?;
     let (hdr, resp) = resp_buffer.split_at(size_of::<RespHeader>());
     let mut unmarsh = UnmarshalBuf::new(hdr);
@@ -82,7 +78,8 @@ mod tests {
 
     #[derive(AsBytes, FromBytes, FromZeroes)]
     #[repr(C)]
-    struct HugeFakeCommand([u8; CMD_BUFFER_SIZE]);
+    // Larger than the maximum size.
+    struct HugeFakeCommand([u8; MAX_CMD_SIZE + 1]);
     impl TpmCommand for HugeFakeCommand {
         const CMD_CODE: TpmCc = to_be(10);
         type RespT = u8;
@@ -90,7 +87,7 @@ mod tests {
     #[test]
     fn test_command_too_large() {
         let mut fake_tpm = ErrorTpm();
-        let too_large = HugeFakeCommand([0; CMD_BUFFER_SIZE]);
+        let too_large = HugeFakeCommand([0; MAX_CMD_SIZE + 1]);
         assert_eq!(
             run_command(&too_large, &mut fake_tpm),
             Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER)
