@@ -1,7 +1,7 @@
 use core::mem::size_of;
 use std::num::NonZeroU32;
 use tpm2_rs_base::commands::*;
-use tpm2_rs_base::constants::TPM_ST_NO_SESSIONS;
+use tpm2_rs_base::constants::TPM2_ST_NO_SESSIONS;
 use tpm2_rs_base::errors::{TpmError, TpmResult};
 use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
 use tpm2_rs_base::{TpmCc, TpmSt, TpmiStCommandTag};
@@ -44,7 +44,7 @@ where
     let (hdr_space, cmd_space) = cmd_buffer.split_at_mut(size_of::<CmdHeader>());
     let cmd_size = cmd.try_marshal(cmd_space)? + size_of::<CmdHeader>();
     let header = CmdHeader {
-        tag: TpmiStCommandTag::new(TPM_ST_NO_SESSIONS),
+        tag: TpmiStCommandTag::new(TPM2_ST_NO_SESSIONS),
         size: U32::new(cmd_size as u32),
         code: CmdT::CMD_CODE,
     };
@@ -72,7 +72,7 @@ mod tests {
     use tpm2_rs_base::errors::TpmError;
     use zerocopy::big_endian::U16;
 
-    // A TPM that just returns a general failure.
+    // A Tpm that just returns a general failure error.
     struct ErrorTpm();
     impl Tpm for ErrorTpm {
         fn transact(&mut self, _: &[u8], _: &mut [u8]) -> TpmResult<()> {
@@ -129,7 +129,7 @@ mod tests {
             let rxed_value = u32::try_unmarshal(&mut buf)?;
 
             let tx_header = RespHeader {
-                tag: U16::new(TPM_ST_NO_SESSIONS),
+                tag: U16::new(TPM2_ST_NO_SESSIONS),
                 size: U32::new((size_of::<RespHeader>() + size_of::<u32>()) as u32),
                 rc: U32::ZERO,
             };

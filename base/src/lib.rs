@@ -676,16 +676,16 @@ impl Marshalable for TpmtSensitive {
 #[repr(C, u32)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub enum TpmsCapabilityData {
-    Algorithms(TpmlAlgProperty) = TPM_CAP_ALGS,
-    Handles(TpmlHandle) = TPM_CAP_HANDLES,
-    Command(TpmlCca) = TPM_CAP_COMMANDS,
-    PpCommands(TpmlCc) = TPM_CAP_PP_COMMANDS,
-    AuditCommands(TpmlCc) = TPM_CAP_AUDIT_COMMANDS,
-    AssignedPcr(TpmlPcrSelection) = TPM_CAP_PCRS,
-    TpmProperties(TpmlTaggedTpmProperty) = TPM_CAP_TPM_PROPERTIES,
-    PcrProperties(TpmlTaggedPcrProperty) = TPM_CAP_PCR_PROPERTIES,
-    EccCurves(TpmlEccCurve) = TPM_CAP_ECC_CURVES,
-    AuthPolicies(TpmlTaggedPolicy) = TPM_CAP_AUTH_POLICIES,
+    Algorithms(TpmlAlgProperty) = TPM2_CAP_ALGS,
+    Handles(TpmlHandle) = TPM2_CAP_HANDLES,
+    Command(TpmlCca) = TPM2_CAP_COMMANDS,
+    PpCommands(TpmlCc) = TPM2_CAP_PP_COMMANDS,
+    AuditCommands(TpmlCc) = TPM2_CAP_AUDIT_COMMANDS,
+    AssignedPcr(TpmlPcrSelection) = TPM2_CAP_PCRS,
+    TpmProperties(TpmlTaggedTpmProperty) = TPM2_CAP_TPM_PROPERTIES,
+    PcrProperties(TpmlTaggedPcrProperty) = TPM2_CAP_PCR_PROPERTIES,
+    EccCurves(TpmlEccCurve) = TPM2_CAP_ECC_CURVES,
+    AuthPolicies(TpmlTaggedPolicy) = TPM2_CAP_AUTH_POLICIES,
 }
 
 #[repr(C)]
