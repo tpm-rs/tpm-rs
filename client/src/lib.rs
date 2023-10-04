@@ -5,7 +5,7 @@ use tpm2_rs_base::constants::TPM2_ST_NO_SESSIONS;
 use tpm2_rs_base::errors::{TpmError, TpmResult};
 use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
 use tpm2_rs_base::{TpmCc, TpmSt, TpmiStCommandTag};
-use zerocopy::byteorder::big_endian::U32;
+use zerocopy::byteorder::big_endian::{U32, U16};
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 const MAX_CMD_SIZE: usize = 4096 - size_of::<CmdHeader>();
@@ -40,7 +40,7 @@ where
     let (hdr_space, cmd_space) = cmd_buffer.split_at_mut(size_of::<CmdHeader>());
     let cmd_size = cmd.try_marshal(cmd_space)? + size_of::<CmdHeader>();
     let header = CmdHeader {
-        tag: TpmiStCommandTag::new(TPM2_ST_NO_SESSIONS),
+        tag: TpmiStCommandTag(U16::new(TPM2_ST_NO_SESSIONS)),
         size: U32::new(cmd_size as u32),
         code: CmdT::CMD_CODE,
     };
@@ -66,7 +66,6 @@ where
 mod tests {
     use super::*;
     use tpm2_rs_base::errors::TpmError;
-    use zerocopy::big_endian::U16;
 
     // A Tpm that just returns a general failure error.
     struct ErrorTpm();
@@ -81,7 +80,7 @@ mod tests {
     // Larger than the maximum size.
     struct HugeFakeCommand([u8; MAX_CMD_SIZE + 1]);
     impl TpmCommand for HugeFakeCommand {
-        const CMD_CODE: TpmCc = to_be(10);
+        const CMD_CODE: TpmCc = TpmCc(to_be_u32(10));
         type RespT = u8;
     }
     #[test]
@@ -98,7 +97,7 @@ mod tests {
     #[repr(C)]
     struct TestCommand(u32);
     impl TpmCommand for TestCommand {
-        const CMD_CODE: TpmCc = to_be(99);
+        const CMD_CODE: TpmCc = TpmCc(to_be_u32(99));
         type RespT = u32;
     }
 
@@ -126,7 +125,7 @@ mod tests {
             let rxed_value = u32::try_unmarshal(&mut buf)?;
 
             let tx_header = RespHeader {
-                tag: U16::new(TPM2_ST_NO_SESSIONS),
+                tag: TpmSt(U16::new(TPM2_ST_NO_SESSIONS)),
                 size: U32::new((size_of::<RespHeader>() + size_of::<u32>()) as u32),
                 rc: U32::ZERO,
             };
@@ -157,7 +156,7 @@ mod tests {
     impl Tpm for EvilSizeTpm {
         fn transact(&mut self, _: &[u8], response: &mut [u8]) -> TpmResult<()> {
             let tx_header = RespHeader {
-                tag: U16::ZERO,
+                tag: TpmSt(U16::ZERO),
                 size: U32::new(response.len() as u32 + 2),
                 rc: U32::ZERO,
             };

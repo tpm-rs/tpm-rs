@@ -6,7 +6,7 @@ use zerocopy::byteorder::big_endian::*;
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 // Provides a const way to turn a u32 into a U32.
-pub const fn to_be(val: u32) -> U32 {
+pub const fn to_be_u32(val: u32) -> U32 {
     U32::from_bytes(val.to_be_bytes())
 }
 
@@ -23,7 +23,7 @@ pub struct GetCapabilityCmd {
     property_count: U32,
 }
 impl TpmCommand for GetCapabilityCmd {
-    const CMD_CODE: TpmCc = to_be(0x0000017A);
+    const CMD_CODE: TpmCc = TpmCc(to_be_u32(0x0000017A));
     type RespT = GetCapabilityResp;
 }
 
@@ -40,7 +40,7 @@ pub struct PcrReadCmd {
     pcr_selection_in: TpmlPcrSelection,
 }
 impl TpmCommand for PcrReadCmd {
-    const CMD_CODE: TpmCc = to_be(0x0000017E);
+    const CMD_CODE: TpmCc = TpmCc(to_be_u32(0x0000017E));
     type RespT = PcrReadResp;
 }
 
