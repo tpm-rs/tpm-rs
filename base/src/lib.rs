@@ -7,52 +7,129 @@ use marshal_derive::Marshal;
 use zerocopy::byteorder::big_endian::*;
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
-pub type TpmaLocality = u8;
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmaLocality(u8);
 
-pub type Tpm2AlgId = U16;
-pub type Tpm2KeyBits = U16;
-pub type Tpm2St = U16;
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct Tpm2AlgId(U16);
 
-pub type Tpm2Generated = U32;
-pub type Tpm2Handle = U32;
-pub type TpmaNv = U32;
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct Tpm2KeyBits(U16);
 
-pub type TpmiAlgHash = Tpm2AlgId;
-pub type TpmiAlgKdf = Tpm2AlgId;
-pub type TpmiAlgPublic = Tpm2AlgId;
-pub type TpmiAlgSymMode = Tpm2AlgId;
-pub type TpmiAlgSymObject = Tpm2AlgId;
-pub type TpmiAlgKeyedhashScheme = Tpm2AlgId;
-pub type TpmiAlgRsaScheme = Tpm2AlgId;
-pub type TpmiAlgEccScheme = Tpm2AlgId;
-pub type TpmiAlgAsymScheme = Tpm2AlgId;
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct Tpm2St(U16);
 
-pub type TpmiRhNvIndex = Tpm2Handle;
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct Tpm2Generated(U32);
 
-pub type Tpm2EccCurve = U16;
-pub type TpmiEccCurve = Tpm2EccCurve;
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct Tpm2Handle(U32);
 
-pub type TpmiYesNo = u8;
-pub type TpmiStAttest = Tpm2St;
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmaNv(U32);
 
-pub type TpmiAesKeyBits = Tpm2KeyBits;
-pub type TpmiSm4KeyBits = Tpm2KeyBits;
-pub type TpmiCamelliaKeyBits = Tpm2KeyBits;
-pub type TpmiRsaKeyBits = Tpm2KeyBits;
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiAlgHash(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiAlgKdf(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiAlgPublic(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiAlgSymMode(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiAlgSymObject(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiAlgKeyedhashScheme(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiAlgRsaScheme(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiAlgEccScheme(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiAlgAsymScheme(U16);
 
-pub type TpmaObject = U32;
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiRhNvIndex(U32);
 
-pub type TpmCap = U32;
-pub type TpmaAlgorithm = U32;
-pub type TpmaCc = U32;
-pub type TpmHandle = U32;
-pub type TpmCc = U32;
-pub type TpmPt = U32;
-pub type TpmPtPcr = U32;
-pub type TpmEccCurve = U16;
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct Tpm2EccCurve(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiEccCurve(U16);
 
-pub type TpmSt = U16;
-pub type TpmiStCommandTag = TpmSt;
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiYesNo(u8);
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiStAttest(U16);
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiAesKeyBits(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiSm4KeyBits(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiCamelliaKeyBits(U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiRsaKeyBits(U16);
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmaObject(U32);
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmCap(U32);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmaAlgorithm(U32);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmaCc(U32);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmHandle(U32);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmCc(pub U32);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmPt(U32);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmPtPcr(U32);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmEccCurve(U16);
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmSt(pub U16);
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
+pub struct TpmiStCommandTag(pub U16);
 
 const TPM2_MAX_CAP_DATA: usize =
     TPM2_MAX_CAP_BUFFER as usize - size_of::<TpmCap>() - size_of::<u32>();
@@ -1206,7 +1283,7 @@ mod tests {
     #[test]
     fn test_marshal_enum_override() {
         let hmac = TpmsSchemeHmac {
-            hash_alg: U16::new(0xB),
+            hash_alg: TpmiAlgHash(U16::new(0xB)),
         };
         let scheme = TpmtKeyedHashScheme::Hmac(hmac);
         let mut buffer = [0u8; size_of::<TpmtKeyedHashScheme>()];
@@ -1216,19 +1293,19 @@ mod tests {
     #[test]
     fn test_marshal_tpmt_public() {
         let xor_sym_def_obj =
-            TpmtSymDefObject::ExclusiveOr(U16::new(TPM2_ALG_SHA256), TpmsEmpty {});
+            TpmtSymDefObject::ExclusiveOr(TpmiAlgHash(U16::new(TPM2_ALG_SHA256)), TpmsEmpty {});
         let mut buffer = [0u8; size_of::<TpmtSymDefObject>()];
         let mut marsh = xor_sym_def_obj.try_marshal(&mut buffer);
         // Because XOR does not populate TpmuSymMode, we have bytes left over.
         assert!(marsh.unwrap() < buffer.len());
         let rsa_scheme = TpmtRsaScheme::Ecdsa(TpmsSigSchemeEcdsa {
-            hash_alg: U16::from(TPM2_ALG_SHA256),
+            hash_alg: TpmiAlgHash(U16::from(TPM2_ALG_SHA256)),
         });
 
         let rsa_parms = TpmsRsaParms {
             symmetric: xor_sym_def_obj,
             scheme: rsa_scheme,
-            key_bits: U16::new(74),
+            key_bits: TpmiRsaKeyBits(U16::new(74)),
             exponent: U32::new(2),
         };
 
@@ -1236,8 +1313,8 @@ mod tests {
         let pubkey = Tpm2bPublicKeyRsa::from_bytes(&pubkey_buf).unwrap();
 
         let example = TpmtPublic {
-            name_alg: U16::new(TPM2_ALG_SHA256),
-            object_attributes: U32::new(6543),
+            name_alg: TpmiAlgHash(U16::new(TPM2_ALG_SHA256)),
+            object_attributes: TpmaObject(U32::new(6543)),
             auth_policy: Tpm2bDigest::from_bytes(&[2, 2, 4, 4]).unwrap(),
             parms_and_id: PublicParmsAndId::Rsa(rsa_parms, pubkey),
         };
