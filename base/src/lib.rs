@@ -42,9 +42,32 @@ pub type TpmiRsaKeyBits = Tpm2KeyBits;
 
 pub type TpmaObject = U32;
 
-mod constants;
-mod errors;
-mod marshal;
+pub type TpmCap = U32;
+pub type TpmaAlgorithm = U32;
+pub type TpmaCc = U32;
+pub type TpmHandle = U32;
+pub type TpmCc = U32;
+pub type TpmPt = U32;
+pub type TpmPtPcr = U32;
+pub type TpmEccCurve = U16;
+
+pub type TpmSt = U16;
+pub type TpmiStCommandTag = TpmSt;
+
+const TPM2_MAX_CAP_DATA: usize =
+    TPM2_MAX_CAP_BUFFER as usize - size_of::<TpmCap>() - size_of::<u32>();
+const TPM2_MAX_CAP_ALGS: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsAlgProperty>();
+const TPM2_MAX_CAP_HANDLES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmHandle>();
+const TPM2_MAX_CAP_CC: usize = TPM2_MAX_CAP_DATA / size_of::<TpmCc>();
+const TPM2_MAX_TPM_PROPERTIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedProperty>();
+const TPM2_MAX_PCR_PROPERTIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedPcrSelect>();
+const TPM2_MAX_ECC_CURVES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmEccCurve>();
+const TPM2_MAX_TAGGED_POLICIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedPolicy>();
+
+pub mod commands;
+pub mod constants;
+pub mod errors;
+pub mod marshal;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, AsBytes, FromBytes, FromZeroes)]
@@ -62,6 +85,11 @@ pub enum TpmtHa {
 impl TpmtHa {
     pub const fn union_size() -> usize {
         size_of::<TpmtHa>() - align_of::<TpmtHa>() - size_of::<u16>()
+    }
+}
+impl Default for TpmtHa {
+    fn default() -> Self {
+        TpmtHa::Sha1([0; constants::TPM2_SHA1_DIGEST_SIZE as usize])
     }
 }
 
@@ -645,6 +673,123 @@ impl Marshalable for TpmtSensitive {
     }
 }
 
+#[repr(C, u32)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub enum TpmsCapabilityData {
+    Algorithms(TpmlAlgProperty) = TPM2_CAP_ALGS,
+    Handles(TpmlHandle) = TPM2_CAP_HANDLES,
+    Command(TpmlCca) = TPM2_CAP_COMMANDS,
+    PpCommands(TpmlCc) = TPM2_CAP_PP_COMMANDS,
+    AuditCommands(TpmlCc) = TPM2_CAP_AUDIT_COMMANDS,
+    AssignedPcr(TpmlPcrSelection) = TPM2_CAP_PCRS,
+    TpmProperties(TpmlTaggedTpmProperty) = TPM2_CAP_TPM_PROPERTIES,
+    PcrProperties(TpmlTaggedPcrProperty) = TPM2_CAP_PCR_PROPERTIES,
+    EccCurves(TpmlEccCurve) = TPM2_CAP_ECC_CURVES,
+    AuthPolicies(TpmlTaggedPolicy) = TPM2_CAP_AUTH_POLICIES,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub struct TpmlAlgProperty {
+    count: U32,
+    #[length(count)]
+    alg_properties: [TpmsAlgProperty; TPM2_MAX_CAP_ALGS],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub struct TpmlHandle {
+    count: U32,
+    #[length(count)]
+    handle: [TpmHandle; TPM2_MAX_CAP_HANDLES],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub struct TpmlCca {
+    count: U32,
+    #[length(count)]
+    command_attributes: [TpmaCc; TPM2_MAX_CAP_CC],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub struct TpmlCc {
+    count: U32,
+    #[length(count)]
+    command_codes: [TpmCc; TPM2_MAX_CAP_CC],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub struct TpmlTaggedTpmProperty {
+    count: U32,
+    #[length(count)]
+    tpm_property: [TpmsTaggedProperty; TPM2_MAX_TPM_PROPERTIES],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub struct TpmlTaggedPcrProperty {
+    count: U32,
+    #[length(count)]
+    pcr_property: [TpmsTaggedPcrSelect; TPM2_MAX_PCR_PROPERTIES],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub struct TpmlEccCurve {
+    count: U32,
+    #[length(count)]
+    ecc_curves: [TpmEccCurve; TPM2_MAX_ECC_CURVES],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub struct TpmlTaggedPolicy {
+    count: U32,
+    #[length(count)]
+    policies: [TpmsTaggedPolicy; TPM2_MAX_TAGGED_POLICIES],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+pub struct TpmsAlgProperty {
+    alg: Tpm2AlgId,
+    alg_properties: TpmaAlgorithm,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+pub struct TpmsTaggedProperty {
+    property: TpmPt,
+    value: U32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+pub struct TpmsTaggedPcrSelect {
+    tag: TpmPtPcr,
+    size_of_select: u8,
+    #[length(size_of_select)]
+    pcr_select: [u8; TPM2_PCR_SELECT_MAX as usize],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal, Default)]
+pub struct TpmsTaggedPolicy {
+    handle: TpmHandle,
+    policy_hash: TpmtHa,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, Debug, Marshal)]
+pub struct TpmlDigest {
+    count: U32,
+    #[length(count)]
+    digests: [Tpm2bDigest; 8],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSensitive {
@@ -774,6 +919,15 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
                 };
                 dest.$F[..buffer.len()].copy_from_slice(buffer);
                 Ok(dest)
+            }
+        }
+
+        impl Default for $T {
+            fn default() -> Self {
+                Self {
+                    size: U16::ZERO,
+                    $F: [0; Self::MAX_BUFFER_SIZE],
+                }
             }
         }
 
