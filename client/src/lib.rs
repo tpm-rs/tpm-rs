@@ -5,7 +5,7 @@ use tpm2_rs_base::constants::TPM2_ST_NO_SESSIONS;
 use tpm2_rs_base::errors::{TpmError, TpmResult};
 use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
 use tpm2_rs_base::{TpmCc, TpmSt, TpmiStCommandTag};
-use zerocopy::byteorder::big_endian::{U32, U16};
+use zerocopy::byteorder::big_endian::{U16, U32};
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 const MAX_CMD_SIZE: usize = 4096 - size_of::<CmdHeader>();
