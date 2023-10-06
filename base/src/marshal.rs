@@ -10,7 +10,7 @@ use zerocopy::{AsBytes, FromBytes};
 // try_{un}marshal for each of it's fields. Types can also provide their own
 // implementation if needed.
 //
-// Union types where not all veriants have the same size require an external
+// Union types where not all variants have the same size require an external
 // selector to {un}marshal. These should implement try_{un}marshal functions
 // that take this selector as the first argument. The owning struct providing
 // the selector can use the selector attribute to tag what field provides the
@@ -21,12 +21,12 @@ use zerocopy::{AsBytes, FromBytes};
 // entries that should be marshaled. See TpmlPcrSelection for an example.
 pub trait Marshalable {
     // Unmarshals self from the prefix of `buffer`. Returns the unmarshalled self and number of bytes used.
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tpm2Rc>
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self>
     where
         Self: Sized;
 
     // Marshals self into the prefix of `buffer`. Returns the number of bytes used.
-    fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tpm2Rc>;
+    fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize>;
 }
 
 pub struct UnmarshalBuf<'a> {
@@ -52,7 +52,7 @@ impl<T> Marshalable for T
 where
     T: AsBytes + FromBytes,
 {
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> Result<Self, Tss2Rc>
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self>
     where
         Self: Sized,
     {
@@ -61,14 +61,14 @@ where
                 return Ok(x);
             }
         }
-        Err(TSS2_MU_RC_INSUFFICIENT_BUFFER)
+        Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER)
     }
 
-    fn try_marshal(&self, buffer: &mut [u8]) -> Result<usize, Tss2Rc> {
+    fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
         if self.write_to_prefix(buffer).is_some() {
             Ok(size_of::<T>())
         } else {
-            Err(TSS2_MU_RC_INSUFFICIENT_BUFFER)
+            Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER)
         }
     }
 }
@@ -86,7 +86,7 @@ mod tests {
             let same_size_buffer: [u8; SIZE_OF_TYPE] = [$I; SIZE_OF_TYPE];
             let larger_buffer: [u8; SIZE_OF_TYPE + 4] = [$I; SIZE_OF_TYPE + 4];
 
-            let mut res: Result<$T, Tpm2Rc> =
+            let mut res: TpmResult<$T> =
                 <$T>::try_unmarshal(&mut UnmarshalBuf::new(&too_small_buffer));
             assert!(res.is_err());
 
@@ -251,5 +251,37 @@ mod tests {
         );
         // But the full structs don't, because the unmarshaled array bytes are different.
         assert_ne!(unmarsh_value, value);
+    }
+
+    #[derive(PartialEq, Debug, Marshal)]
+    struct Nameless(u32, u16);
+
+    #[test]
+    fn test_derive_nameless_fields() {
+        let value = Nameless(7777777, 61);
+        let mut buffer = [0u8; 6];
+        let marshal = value.try_marshal(&mut buffer);
+        assert!(marshal.is_ok());
+        let unmarshal = Nameless::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
+        assert_eq!(value, unmarshal.unwrap());
+    }
+
+    #[derive(PartialEq, Debug, Marshal)]
+    struct HasPlainArrayField {
+        a: u32,
+        b: [u8; 10],
+    }
+
+    #[test]
+    fn test_derive_array_field() {
+        let value = HasPlainArrayField {
+            a: 0x10101010,
+            b: [3, 4, 3, 4, 3, 4, 3, 4, 3, 4],
+        };
+        let mut buffer = [0u8; 16];
+        let marshal = value.try_marshal(&mut buffer);
+        assert!(marshal.is_ok());
+        let unmarshal = HasPlainArrayField::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
+        assert_eq!(value, unmarshal.unwrap());
     }
 }
