@@ -11,6 +11,7 @@ use zerocopy::{AsBytes, FromBytes, FromZeroes};
 #[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
 pub struct TpmaLocality(u8);
 
+// Todo use U16<BE> instead to make it less subtle
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
 pub struct Tpm2AlgId(U16);
@@ -143,8 +144,12 @@ const TPM2_MAX_TAGGED_POLICIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTagged
 
 pub mod commands;
 pub mod constants;
+pub mod crypto;
+pub mod structures;
 pub mod errors;
+pub mod storage;
 pub mod marshal;
+pub mod server;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, AsBytes, FromBytes, FromZeroes)]

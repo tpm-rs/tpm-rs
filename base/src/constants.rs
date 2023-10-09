@@ -1,9 +1,9 @@
-pub const TPM2_SHA_DIGEST_SIZE: u32 = 20;
-pub const TPM2_SHA1_DIGEST_SIZE: u32 = 20;
-pub const TPM2_SHA256_DIGEST_SIZE: u32 = 32;
-pub const TPM2_SHA384_DIGEST_SIZE: u32 = 48;
-pub const TPM2_SHA512_DIGEST_SIZE: u32 = 64;
-pub const TPM2_SM3_256_DIGEST_SIZE: u32 = 32;
+pub const TPM2_SHA_DIGEST_SIZE: usize = 20;
+pub const TPM2_SHA1_DIGEST_SIZE: usize = 20;
+pub const TPM2_SHA256_DIGEST_SIZE: usize = 32;
+pub const TPM2_SHA384_DIGEST_SIZE: usize = 48;
+pub const TPM2_SHA512_DIGEST_SIZE: usize = 64;
+pub const TPM2_SM3_256_DIGEST_SIZE: usize = 32;
 
 pub const TPM2_MAX_DIGEST_BUFFER: u32 = 1024;
 pub const TPM2_MAX_NV_BUFFER_SIZE: u32 = 2048;
