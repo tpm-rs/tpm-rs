@@ -5,12 +5,12 @@ use marshal_derive::Marshal;
 use open_enum::open_enum;
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
-pub const TPM2_SHA_DIGEST_SIZE: u32 = 20;
-pub const TPM2_SHA1_DIGEST_SIZE: u32 = 20;
-pub const TPM2_SHA256_DIGEST_SIZE: u32 = 32;
-pub const TPM2_SHA384_DIGEST_SIZE: u32 = 48;
-pub const TPM2_SHA512_DIGEST_SIZE: u32 = 64;
-pub const TPM2_SM3_256_DIGEST_SIZE: u32 = 32;
+pub const TPM2_SHA_DIGEST_SIZE: usize = 20;
+pub const TPM2_SHA1_DIGEST_SIZE: usize = 20;
+pub const TPM2_SHA256_DIGEST_SIZE: usize = 32;
+pub const TPM2_SHA384_DIGEST_SIZE: usize = 48;
+pub const TPM2_SHA512_DIGEST_SIZE: usize = 64;
+pub const TPM2_SM3_256_DIGEST_SIZE: usize = 32;
 
 pub const TPM2_MAX_DIGEST_BUFFER: u32 = 1024;
 pub const TPM2_MAX_NV_BUFFER_SIZE: u32 = 2048;
@@ -231,13 +231,13 @@ pub enum TPM2RC {
     Failure = TPM2RC::RC_VER_1 + 0x001,
     Sequence = TPM2RC::RC_VER_1 + 0x003,
     Private = TPM2RC::RC_VER_1 + 0x00B,
-    HMAC = TPM2RC::RC_VER_1 + 0x019,
+    Hmac = TPM2RC::RC_VER_1 + 0x019,
     Disabled = TPM2RC::RC_VER_1 + 0x020,
     Exclusive = TPM2RC::RC_VER_1 + 0x021,
     AuthType = TPM2RC::RC_VER_1 + 0x024,
     AuthMissing = TPM2RC::RC_VER_1 + 0x025,
     Policy = TPM2RC::RC_VER_1 + 0x026,
-    PCR = TPM2RC::RC_VER_1 + 0x027,
+    Pcr = TPM2RC::RC_VER_1 + 0x027,
     PCRChanged = TPM2RC::RC_VER_1 + 0x028,
     Upgrade = TPM2RC::RC_VER_1 + 0x02D,
     TooManyContexts = TPM2RC::RC_VER_1 + 0x02E,
@@ -268,11 +268,11 @@ pub enum TPM2RC {
     Value = TPM2RC::RC_FMT_1 + 0x004,
     Hierarchy = TPM2RC::RC_FMT_1 + 0x005,
     KeySize = TPM2RC::RC_FMT_1 + 0x007,
-    MGF = TPM2RC::RC_FMT_1 + 0x008,
+    Mgf = TPM2RC::RC_FMT_1 + 0x008,
     Mode = TPM2RC::RC_FMT_1 + 0x009,
     Type = TPM2RC::RC_FMT_1 + 0x00A,
     Handle = TPM2RC::RC_FMT_1 + 0x00B,
-    KDF = TPM2RC::RC_FMT_1 + 0x00C,
+    Kdf = TPM2RC::RC_FMT_1 + 0x00C,
     Range = TPM2RC::RC_FMT_1 + 0x00D,
     AuthFail = TPM2RC::RC_FMT_1 + 0x00E,
     Nonce = TPM2RC::RC_FMT_1 + 0x00F,

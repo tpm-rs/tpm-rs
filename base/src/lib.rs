@@ -108,7 +108,9 @@ const TPM2_MAX_TAGGED_POLICIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTagged
 pub mod commands;
 pub mod constants;
 pub mod errors;
+pub mod hash;
 pub mod marshal;
+pub mod policy;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, AsBytes, FromBytes, FromZeroes)]
@@ -117,20 +119,31 @@ pub struct TpmsEmpty;
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub enum TpmtHa {
-    Sha1([u8; constants::TPM2_SHA_DIGEST_SIZE as usize]) = TPM2AlgID::SHA1.0,
-    Sha256([u8; constants::TPM2_SHA256_DIGEST_SIZE as usize]) = TPM2AlgID::SHA256.0,
-    Sha384([u8; constants::TPM2_SHA384_DIGEST_SIZE as usize]) = TPM2AlgID::SHA384.0,
-    Sha512([u8; constants::TPM2_SHA512_DIGEST_SIZE as usize]) = TPM2AlgID::SHA512.0,
-    Sm3_256([u8; constants::TPM2_SM3_256_DIGEST_SIZE as usize]) = TPM2AlgID::SM3256.0,
+    Sha1([u8; constants::TPM2_SHA_DIGEST_SIZE]) = TPM2AlgID::SHA1.0,
+    Sha256([u8; constants::TPM2_SHA256_DIGEST_SIZE]) = TPM2AlgID::SHA256.0,
+    Sha384([u8; constants::TPM2_SHA384_DIGEST_SIZE]) = TPM2AlgID::SHA384.0,
+    Sha512([u8; constants::TPM2_SHA512_DIGEST_SIZE]) = TPM2AlgID::SHA512.0,
+    Sm3_256([u8; constants::TPM2_SM3_256_DIGEST_SIZE]) = TPM2AlgID::SM3256.0,
 }
 impl TpmtHa {
     pub const fn union_size() -> usize {
         size_of::<TpmtHa>() - align_of::<TpmtHa>() - size_of::<u16>()
     }
+
+    pub const fn new(alg_id: TPM2AlgID) -> TpmResult<TpmtHa> {
+        match alg_id {
+            TPM2AlgID::SHA1 => Ok(TpmtHa::Sha1([0u8; TPM2_SHA1_DIGEST_SIZE])),
+            TPM2AlgID::SHA256 => Ok(TpmtHa::Sha256([0u8; TPM2_SHA256_DIGEST_SIZE])),
+            TPM2AlgID::SHA384 => Ok(TpmtHa::Sha384([0u8; TPM2_SHA384_DIGEST_SIZE])),
+            TPM2AlgID::SHA512 => Ok(TpmtHa::Sha512([0u8; TPM2_SHA512_DIGEST_SIZE])),
+            TPM2AlgID::SM3256 => Ok(TpmtHa::Sm3_256([0u8; TPM2_SM3_256_DIGEST_SIZE])),
+            _ => Err(TpmError::TPM2_RC_SELECTOR),
+        }
+    }
 }
 impl Default for TpmtHa {
     fn default() -> Self {
-        TpmtHa::Sha1([0; constants::TPM2_SHA1_DIGEST_SIZE as usize])
+        TpmtHa::Sha1([0; constants::TPM2_SHA1_DIGEST_SIZE])
     }
 }
 
