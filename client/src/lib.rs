@@ -1,10 +1,10 @@
 use core::mem::size_of;
-use std::num::NonZeroU32;
+use core::num::NonZeroU32;
 use tpm2_rs_base::commands::*;
-use tpm2_rs_base::constants::TPM2_ST_NO_SESSIONS;
+use tpm2_rs_base::constants::{TPM2CC, TPM2ST};
 use tpm2_rs_base::errors::{TpmError, TpmResult};
 use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
-use tpm2_rs_base::{TpmCc, TpmSt, TpmiStCommandTag};
+use tpm2_rs_base::TpmiStCommandTag;
 use zerocopy::byteorder::big_endian::{U16, U32};
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
@@ -16,17 +16,17 @@ pub trait Tpm {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, AsBytes, FromBytes, FromZeroes)]
+#[derive(Clone, Copy, PartialEq, AsBytes, FromBytes, FromZeroes)]
 pub struct CmdHeader {
     tag: TpmiStCommandTag,
     size: U32,
-    code: TpmCc,
+    code: TPM2CC,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, AsBytes, FromBytes, FromZeroes)]
+#[derive(Clone, Copy, PartialEq, AsBytes, FromBytes, FromZeroes)]
 pub struct RespHeader {
-    tag: TpmSt,
+    tag: TPM2ST,
     size: U32,
     rc: U32,
 }
@@ -40,7 +40,7 @@ where
     let (hdr_space, cmd_space) = cmd_buffer.split_at_mut(size_of::<CmdHeader>());
     let cmd_size = cmd.try_marshal(cmd_space)? + size_of::<CmdHeader>();
     let header = CmdHeader {
-        tag: TpmiStCommandTag(U16::new(TPM2_ST_NO_SESSIONS)),
+        tag: TpmiStCommandTag(U16::new(TPM2ST::NoSessions.0)),
         size: U32::new(cmd_size as u32),
         code: CmdT::CMD_CODE,
     };
@@ -80,7 +80,7 @@ mod tests {
     // Larger than the maximum size.
     struct HugeFakeCommand([u8; MAX_CMD_SIZE + 1]);
     impl TpmCommand for HugeFakeCommand {
-        const CMD_CODE: TpmCc = TpmCc(to_be_u32(10));
+        const CMD_CODE: TPM2CC = TPM2CC::NVUndefineSpaceSpecial;
         type RespT = u8;
     }
     #[test]
@@ -97,7 +97,7 @@ mod tests {
     #[repr(C)]
     struct TestCommand(u32);
     impl TpmCommand for TestCommand {
-        const CMD_CODE: TpmCc = TpmCc(to_be_u32(99));
+        const CMD_CODE: TPM2CC = TPM2CC::NVUndefineSpaceSpecial;
         type RespT = u32;
     }
 
@@ -125,7 +125,7 @@ mod tests {
             let rxed_value = u32::try_unmarshal(&mut buf)?;
 
             let tx_header = RespHeader {
-                tag: TpmSt(U16::new(TPM2_ST_NO_SESSIONS)),
+                tag: TPM2ST::NoSessions,
                 size: U32::new((size_of::<RespHeader>() + size_of::<u32>()) as u32),
                 rc: U32::ZERO,
             };
@@ -143,7 +143,10 @@ mod tests {
         };
         let cmd = TestCommand(56789);
         let result = run_command(&cmd, &mut fake_tpm);
-        assert_eq!(fake_tpm.rxed_header.unwrap().code, TestCommand::CMD_CODE);
+        assert_eq!(
+            fake_tpm.rxed_header.unwrap().code.0,
+            TestCommand::CMD_CODE.0
+        );
         assert_eq!(
             fake_tpm.rxed_bytes,
             size_of::<CmdHeader>() + size_of::<u32>()
@@ -156,7 +159,7 @@ mod tests {
     impl Tpm for EvilSizeTpm {
         fn transact(&mut self, _: &[u8], response: &mut [u8]) -> TpmResult<()> {
             let tx_header = RespHeader {
-                tag: TpmSt(U16::ZERO),
+                tag: TPM2ST::NoSessions,
                 size: U32::new(response.len() as u32 + 2),
                 rc: U32::ZERO,
             };

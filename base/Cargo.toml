@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 zerocopy = {version="0.7.0", features = ["derive"]}
 marshal_derive = { path = "../marshal_derive" }
+open-enum = "0.4.0"

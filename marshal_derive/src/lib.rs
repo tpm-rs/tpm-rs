@@ -410,24 +410,31 @@ fn get_enum_unmarshal_impl(struct_name: &Ident, attrs: &[Attribute]) -> TokenStr
 }
 
 fn get_enum_unmarshal_body(struct_name: &Ident, data: &DataEnum) -> TokenStream {
-    let list = data.variants.iter().map(|v| {
+    let mut conditional_code = TokenStream::new();
+
+    for v in &data.variants {
         let var_name = &v.ident;
         let variant_unmarshal = get_field_unmarshal(&v.fields);
         let variant_fields = get_field_list(&v.fields);
         let var_sel = get_selection(var_name, &v.discriminant);
-        quote_spanned! {v.span()=>
-                #var_sel => {
-                    #variant_unmarshal
-                     Ok(#struct_name::#var_name(#variant_fields))
-                }
-        }
-    });
-    quote! {
-        match selector {
-            #(#list)*
-            _ => Err(TpmError::TPM2_RC_SELECTOR),
-        }
+
+        let variant_code = quote_spanned! {v.span()=>
+            if selector == #var_sel {
+                #variant_unmarshal
+                return Ok(#struct_name::#var_name(#variant_fields));
+            }
+        };
+
+        conditional_code.extend(variant_code);
     }
+
+    let fallback_code = quote! {
+        Err(TpmError::TPM2_RC_SELECTOR)
+    };
+
+    conditional_code.extend(fallback_code);
+
+    conditional_code
 }
 
 fn get_field_list(all_fields: &Fields) -> TokenStream {
