@@ -1,10 +1,10 @@
 use core::mem::size_of;
 use core::num::NonZeroU32;
-use tpm2_rs_base::commands::*;
-use tpm2_rs_base::constants::{TPM2CC, TPM2ST};
+use tpm2_rs_base::constants::{TPM2AlgID, TPM2Cap, TPM2ST};
 use tpm2_rs_base::errors::{TpmError, TpmResult};
 use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
 use tpm2_rs_base::TpmiStCommandTag;
+use tpm2_rs_base::{commands::*, TpmsCapabilityData};
 use zerocopy::byteorder::big_endian::{U16, U32};
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
@@ -20,7 +20,7 @@ pub trait Tpm {
 pub struct CmdHeader {
     tag: TpmiStCommandTag,
     size: U32,
-    code: TPM2CC,
+    code: U32,
 }
 
 #[repr(C)]
@@ -29,6 +29,28 @@ pub struct RespHeader {
     tag: TPM2ST,
     size: U32,
     rc: U32,
+}
+
+pub fn is_algorithm_supported<T>(tpm: &mut T, algorithm: TPM2AlgID) -> TpmResult<bool>
+where
+    T: Tpm,
+{
+    let cmd: GetCapabilityCmd = GetCapabilityCmd {
+        capability: to_be_u32(TPM2Cap::Algs.0),
+        property: to_be_u32(algorithm.0 as u32),
+        property_count: to_be_u32(1),
+    };
+    let resp = run_command(&cmd, tpm)?;
+
+    if let TpmsCapabilityData::Algorithms(prop) = resp.capability_data {
+        if prop.count.get() == 1 {
+            Ok(prop.alg_properties[0].alg.get() == algorithm.0)
+        } else {
+            Err(TpmError::TPM2_RC_SIZE)
+        }
+    } else {
+        Err(TpmError::TPM2_RC_SELECTOR)
+    }
 }
 
 pub fn run_command<CmdT, T>(cmd: &CmdT, tpm: &mut T) -> TpmResult<CmdT::RespT>
@@ -42,7 +64,7 @@ where
     let header = CmdHeader {
         tag: TpmiStCommandTag(U16::new(TPM2ST::NoSessions.0)),
         size: U32::new(cmd_size as u32),
-        code: CmdT::CMD_CODE,
+        code: U32::new(CmdT::CMD_CODE.0),
     };
     let _ = header.try_marshal(hdr_space)?;
 
@@ -65,7 +87,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tpm2_rs_base::errors::TpmError;
+    use tpm2_rs_base::{
+        errors::TpmError, TpmaAlgorithm, TpmiYesNo, TpmlAlgProperty, TpmsAlgProperty, constants::TPM2CC,
+    };
 
     // A Tpm that just returns a general failure error.
     struct ErrorTpm();
@@ -144,8 +168,8 @@ mod tests {
         let cmd = TestCommand(56789);
         let result = run_command(&cmd, &mut fake_tpm);
         assert_eq!(
-            fake_tpm.rxed_header.unwrap().code.0,
-            TestCommand::CMD_CODE.0
+            fake_tpm.rxed_header.unwrap().code.get(),
+            TestCommand::CMD_CODE.0 as u32
         );
         assert_eq!(
             fake_tpm.rxed_bytes,
@@ -175,6 +199,63 @@ mod tests {
         assert_eq!(
             run_command(&cmd, &mut fake_tpm),
             Err(TpmError::TSS2_MU_RC_BAD_SIZE)
+        );
+    }
+
+    // FixedResponseTpm returns a set value for all requests to the TPM.
+    struct FixedResponseTpm<CmdT: TpmCommand> {
+        resp: CmdT::RespT,
+    }
+    impl<CmdT: TpmCommand> Tpm for FixedResponseTpm<CmdT> {
+        fn transact(&mut self, _command: &[u8], response: &mut [u8]) -> TpmResult<()> {
+            let tx_header = RespHeader {
+                tag: TPM2ST::NoSessions,
+                size: U32::new((size_of::<RespHeader>() + size_of::<CmdT::RespT>()) as u32),
+                rc: U32::ZERO,
+            };
+            let written = tx_header.try_marshal(response)?;
+            self.resp.try_marshal(&mut response[written..])?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_is_algorithm_not_supported() {
+        let response: GetCapabilityResp = GetCapabilityResp {
+            more_data: TpmiYesNo(0),
+            capability_data: crate::TpmsCapabilityData::Algorithms(TpmlAlgProperty {
+                count: to_be_u32(1),
+                alg_properties: [TpmsAlgProperty {
+                    alg: to_be_u16(3),
+                    alg_properties: TpmaAlgorithm(to_be_u32(3)),
+                }; 169],
+            }),
+        };
+        let mut fake_tpm: FixedResponseTpm<GetCapabilityCmd> = FixedResponseTpm { resp: response };
+
+        assert_eq!(
+            is_algorithm_supported(&mut fake_tpm, TPM2AlgID::SHA256),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn test_is_algorithm_supported() {
+        let response: GetCapabilityResp = GetCapabilityResp {
+            more_data: TpmiYesNo(0),
+            capability_data: crate::TpmsCapabilityData::Algorithms(TpmlAlgProperty {
+                count: to_be_u32(1),
+                alg_properties: [TpmsAlgProperty {
+                    alg: to_be_u16(11),
+                    alg_properties: TpmaAlgorithm(to_be_u32(11)),
+                }; 169],
+            }),
+        };
+        let mut fake_tpm: FixedResponseTpm<GetCapabilityCmd> = FixedResponseTpm { resp: response };
+
+        assert_eq!(
+            is_algorithm_supported(&mut fake_tpm, TPM2AlgID::SHA256),
+            Ok(true)
         );
     }
 }

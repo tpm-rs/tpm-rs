@@ -98,7 +98,7 @@ pub enum TPM2ECCCurve {
 // TPM2CC represents a TPM_CC.
 // See definition in Part 2: Structures, section 6.5.2.
 #[open_enum]
-#[repr(u16)]
+#[repr(u32)]
 #[derive(Copy, Clone, AsBytes, FromBytes, FromZeroes, Default)]
 pub enum TPM2CC {
     NVUndefineSpaceSpecial = 0x0000011F,
@@ -420,7 +420,7 @@ pub enum TPM2Cap {
 // TPM2PT represents a TPM_PT.
 // See definition in Part 2: Structures, section 6.13.
 #[open_enum]
-#[repr(u16)]
+#[repr(u32)]
 #[derive(Copy, Clone, AsBytes, FromBytes, FromZeroes, Default)]
 pub enum TPM2PT {
     // a 4-octet character string containing the TPM Family value

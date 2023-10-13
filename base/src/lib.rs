@@ -61,7 +61,7 @@ pub struct TpmiEccCurve(U16);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
-pub struct TpmiYesNo(u8);
+pub struct TpmiYesNo(pub u8);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
@@ -86,7 +86,7 @@ pub struct TpmaObject(U32);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
-pub struct TpmaAlgorithm(U32);
+pub struct TpmaAlgorithm(pub U32);
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, AsBytes, FromBytes, FromZeroes)]
 pub struct TpmaCc(U32);
@@ -732,9 +732,9 @@ pub enum TpmsCapabilityData {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct TpmlAlgProperty {
-    count: U32,
+    pub count: U32,
     #[length(count)]
-    alg_properties: [TpmsAlgProperty; TPM2_MAX_CAP_ALGS],
+    pub alg_properties: [TpmsAlgProperty; TPM2_MAX_CAP_ALGS],
 }
 
 #[repr(C)]
@@ -764,9 +764,9 @@ pub struct TpmlCc {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct TpmlTaggedTpmProperty {
-    count: U32,
+    pub count: U32,
     #[length(count)]
-    tpm_property: [TpmsTaggedProperty; TPM2_MAX_TPM_PROPERTIES],
+    pub tpm_property: [TpmsTaggedProperty; TPM2_MAX_TPM_PROPERTIES],
 }
 
 #[repr(C)]
@@ -796,15 +796,15 @@ pub struct TpmlTaggedPolicy {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Default, Marshal)]
 pub struct TpmsAlgProperty {
-    alg: TPM2AlgID,
-    alg_properties: TpmaAlgorithm,
+    pub alg: U16,
+    pub alg_properties: TpmaAlgorithm,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Default, Marshal)]
 pub struct TpmsTaggedProperty {
-    property: TPM2PT,
-    value: U32,
+    pub property: TPM2PT,
+    pub value: U32,
 }
 
 #[repr(C)]
