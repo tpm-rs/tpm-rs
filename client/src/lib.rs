@@ -1,6 +1,6 @@
 use core::mem::size_of;
 use core::num::NonZeroU32;
-use tpm2_rs_base::constants::{TPM2AlgID, TPM2Cap, TPM2ST};
+use tpm2_rs_base::constants::{TPM2AlgID, TPM2Cap, TPM2PT, TPM2ST};
 use tpm2_rs_base::errors::{TpmError, TpmResult};
 use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
 use tpm2_rs_base::TpmiStCommandTag;
@@ -53,6 +53,28 @@ where
     }
 }
 
+pub fn get_manufacturer_id<T>(tpm: &mut T) -> TpmResult<u32>
+where
+    T: Tpm,
+{
+    let cmd: GetCapabilityCmd = GetCapabilityCmd {
+        capability: to_be_u32(TPM2Cap::TPMProperties.0),
+        property: to_be_u32(TPM2PT::Manufacturer.0),
+        property_count: to_be_u32(1),
+    };
+    let resp = run_command(&cmd, tpm)?;
+
+    if let TpmsCapabilityData::TpmProperties(prop) = resp.capability_data {
+        if prop.count.get() == 1 {
+            Ok(prop.tpm_property[0].value.get())
+        } else {
+            Err(TpmError::TPM2_RC_SIZE)
+        }
+    } else {
+        Err(TpmError::TPM2_RC_SELECTOR)
+    }
+}
+
 pub fn run_command<CmdT, T>(cmd: &CmdT, tpm: &mut T) -> TpmResult<CmdT::RespT>
 where
     CmdT: TpmCommand,
@@ -88,7 +110,8 @@ where
 mod tests {
     use super::*;
     use tpm2_rs_base::{
-        errors::TpmError, TpmaAlgorithm, TpmiYesNo, TpmlAlgProperty, TpmsAlgProperty, constants::TPM2CC,
+        constants::TPM2CC, errors::TpmError, TpmaAlgorithm, TpmiYesNo, TpmlAlgProperty,
+        TpmlTaggedTpmProperty, TpmsAlgProperty, TpmsTaggedProperty,
     };
 
     // A Tpm that just returns a general failure error.
@@ -257,5 +280,22 @@ mod tests {
             is_algorithm_supported(&mut fake_tpm, TPM2AlgID::SHA256),
             Ok(true)
         );
+    }
+
+    #[test]
+    fn test_get_manufactuer_id() {
+        let response: GetCapabilityResp = GetCapabilityResp {
+            more_data: TpmiYesNo(0),
+            capability_data: crate::TpmsCapabilityData::TpmProperties(TpmlTaggedTpmProperty {
+                count: to_be_u32(1),
+                tpm_property: [TpmsTaggedProperty {
+                    property: TPM2PT::Manufacturer,
+                    value: to_be_u32(12345),
+                }; 127],
+            }),
+        };
+        let mut fake_tpm: FixedResponseTpm<GetCapabilityCmd> = FixedResponseTpm { resp: response };
+
+        assert_eq!(get_manufacturer_id(&mut fake_tpm), Ok(12345));
     }
 }
