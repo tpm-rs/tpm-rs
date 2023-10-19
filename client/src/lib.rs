@@ -1,5 +1,6 @@
 use core::mem::size_of;
 use core::num::NonZeroU32;
+use marshal_derive::Marshal;
 use tpm2_rs_base::commands::*;
 use tpm2_rs_base::constants::{TPM2CC, TPM2ST};
 use tpm2_rs_base::errors::{TpmError, TpmResult};
@@ -15,16 +16,25 @@ pub trait Tpm {
     fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TpmResult<()>;
 }
 
-#[repr(C)]
+#[repr(C, packed)]
 #[derive(Clone, Copy, PartialEq, AsBytes, FromBytes, FromZeroes)]
 pub struct CmdHeader {
-    tag: TpmiStCommandTag,
+    tag: U16,
     size: U32,
-    code: TPM2CC,
+    code: U32,
+}
+impl CmdHeader {
+    fn new(tag: TpmiStCommandTag, size: usize, code: TPM2CC) -> CmdHeader {
+        CmdHeader {
+            tag: U16::new(tag.0 .0),
+            size: U32::new(size as u32),
+            code: U32::new(code.0),
+        }
+    }
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, AsBytes, FromBytes, FromZeroes)]
+#[derive(Clone, Copy, PartialEq, Marshal, Debug)]
 pub struct RespHeader {
     tag: TPM2ST,
     size: U32,
@@ -39,11 +49,11 @@ where
     let mut cmd_buffer = [0u8; MAX_CMD_SIZE + size_of::<CmdHeader>()];
     let (hdr_space, cmd_space) = cmd_buffer.split_at_mut(size_of::<CmdHeader>());
     let cmd_size = cmd.try_marshal(cmd_space)? + size_of::<CmdHeader>();
-    let header = CmdHeader {
-        tag: TpmiStCommandTag(U16::new(TPM2ST::NoSessions.0)),
-        size: U32::new(cmd_size as u32),
-        code: CmdT::CMD_CODE,
-    };
+    let header = CmdHeader::new(
+        TpmiStCommandTag(TPM2ST::NoSessions),
+        cmd_size,
+        CmdT::CMD_CODE,
+    );
     let _ = header.try_marshal(hdr_space)?;
 
     let mut resp_buffer = [0u8; MAX_RESP_SIZE + size_of::<RespHeader>()];
@@ -66,6 +76,7 @@ where
 mod tests {
     use super::*;
     use tpm2_rs_base::errors::TpmError;
+    use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
     // A Tpm that just returns a general failure error.
     struct ErrorTpm();
@@ -144,7 +155,7 @@ mod tests {
         let cmd = TestCommand(56789);
         let result = run_command(&cmd, &mut fake_tpm);
         assert_eq!(
-            fake_tpm.rxed_header.unwrap().code.0,
+            fake_tpm.rxed_header.unwrap().code.get(),
             TestCommand::CMD_CODE.0
         );
         assert_eq!(
