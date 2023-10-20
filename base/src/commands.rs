@@ -4,7 +4,6 @@ use crate::{Marshalable, UnmarshalBuf};
 use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
 use marshal_derive::Marshal;
 use zerocopy::byteorder::big_endian::*;
-use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 // Provides a const way to turn a u32 into a U32.
 pub const fn to_be_u32(val: u32) -> U32 {
@@ -17,14 +16,14 @@ pub trait TpmCommand: Marshalable {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, AsBytes, FromBytes, FromZeroes)]
+#[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct GetCapabilityCmd {
     capability: TPM2Cap,
     property: U32,
     property_count: U32,
 }
 impl TpmCommand for GetCapabilityCmd {
-    const CMD_CODE: TPM2CC = TPM2CC::PCRRead;
+    const CMD_CODE: TPM2CC = TPM2CC::GetCapability;
     type RespT = GetCapabilityResp;
 }
 
