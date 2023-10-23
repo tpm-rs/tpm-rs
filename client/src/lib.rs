@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use core::mem::size_of;
 use core::num::NonZeroU32;
 use tpm2_rs_base::commands::*;

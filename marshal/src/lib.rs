@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use core::mem::size_of;
 use zerocopy::{AsBytes, FromBytes};
 

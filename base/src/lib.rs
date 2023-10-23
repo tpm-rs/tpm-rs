@@ -1,4 +1,5 @@
 #![allow(dead_code, clippy::large_enum_variant)]
+#![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
 
 use crate::{constants::*, errors::*, marshal::*};
