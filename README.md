@@ -3,6 +3,9 @@
 ## About
 TPM 2.0 Implementation in Rust
 
+## Status
+This is an early development environment and is currently very unstable - Everything is subject to change, perhaps on a daily basis.
+
 ## What needs to be done
 
 See the [Project] for a list of tasks to do.  Feel free to contribute PRs to achieve those, or to add goals to the Project list.
