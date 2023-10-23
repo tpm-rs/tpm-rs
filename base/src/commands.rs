@@ -1,8 +1,7 @@
 use crate::constants::{TPM2Cap, TPM2CC};
 use crate::errors::TpmResult;
-use crate::{Marshalable, UnmarshalBuf};
+use crate::{Marshal, Marshalable, UnmarshalBuf};
 use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
-use marshal_derive::Marshal;
 use zerocopy::byteorder::big_endian::*;
 
 // Provides a const way to turn a u32 into a U32.

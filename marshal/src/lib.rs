@@ -1,6 +1,8 @@
-use crate::errors::*;
 use core::mem::size_of;
 use zerocopy::{AsBytes, FromBytes};
+
+use tpm2_rs_errors::*;
+pub use tpm2_rs_marshal_derive::Marshal;
 
 // The Marshalable trait defines the API for {un}marshaling TPM structs. It is
 // implemented for all types that implement zerocopy AsBytes and FromBytes, but
@@ -75,8 +77,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use marshal_derive::Marshal;
-
     use super::*;
     macro_rules! impl_test_scalar {
         ($T:ty, $I:expr, $V:expr) => {
