@@ -1,14 +1,10 @@
+
+use crate::big_endian::*;
 use crate::constants::{TPM2Cap, TPM2CC};
 use crate::errors::TpmResult;
 use crate::{Marshalable, UnmarshalBuf};
 use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
 use marshal_derive::Marshal;
-use zerocopy::byteorder::big_endian::*;
-
-// Provides a const way to turn a u32 into a U32.
-pub const fn to_be_u32(val: u32) -> U32 {
-    U32::from_bytes(val.to_be_bytes())
-}
 
 pub trait TpmCommand: Marshalable {
     const CMD_CODE: TPM2CC;

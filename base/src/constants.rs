@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
+use crate::big_endian::*;
 use crate::{Marshalable, TpmResult, UnmarshalBuf};
 use open_enum::open_enum;
-use zerocopy::big_endian::*;
 
 pub const TPM2_SHA_DIGEST_SIZE: u32 = 20;
 pub const TPM2_SHA1_DIGEST_SIZE: u32 = 20;

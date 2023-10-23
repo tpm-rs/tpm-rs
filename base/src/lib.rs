@@ -1,10 +1,9 @@
 #![allow(dead_code, clippy::large_enum_variant)]
 #![cfg_attr(not(test), no_std)]
 
-use crate::{constants::*, errors::*, marshal::*};
+use crate::{big_endian::*, constants::*, errors::*, marshal::*};
 use core::mem::{align_of, size_of};
 use marshal_derive::Marshal;
-use zerocopy::byteorder::big_endian::*;
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 #[repr(C)]
@@ -105,6 +104,7 @@ const TPM2_MAX_PCR_PROPERTIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedP
 const TPM2_MAX_ECC_CURVES: usize = TPM2_MAX_CAP_DATA / size_of::<TPM2ECCCurve>();
 const TPM2_MAX_TAGGED_POLICIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedPolicy>();
 
+pub mod big_endian;
 pub mod commands;
 pub mod constants;
 pub mod errors;
@@ -990,7 +990,7 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
                 if sized_buffer.unwrap().len() > dest.$F.len() {
                     return Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
-                dest.$F[..got_size.into()].copy_from_slice(&sized_buffer.unwrap());
+                dest.$F[..got_size.get().into()].copy_from_slice(&sized_buffer.unwrap());
 
                 Ok(dest)
             }
