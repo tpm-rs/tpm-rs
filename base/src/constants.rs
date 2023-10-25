@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
 use crate::{Marshalable, TpmResult, UnmarshalBuf};
+use marshal_derive::Marshal;
 use open_enum::open_enum;
-use zerocopy::big_endian::*;
 
 pub const TPM2_SHA_DIGEST_SIZE: u32 = 20;
 pub const TPM2_SHA1_DIGEST_SIZE: u32 = 20;
@@ -30,28 +30,12 @@ pub const TPM2_PRIVATE_VENDOR_SPECIFIC_BYTES: u32 = (TPM2_MAX_RSA_KEY_BYTES / 2)
 
 pub const TPM2_MAX_CONTEXT_SIZE: u32 = 5120;
 
-// Helper to marshal the primitive used for an open_enum in big-endian.
-// T is the open_enum type.
-// B is the big-endian type to {un}marshal as.
-macro_rules! impl_open_enum_marshalable {
-    ($T:ty, $B:ty) => {
-        impl Marshalable for $T {
-            fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
-                <$B>::new(self.0).try_marshal(buffer)
-            }
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
-                Ok(Self(<$B>::try_unmarshal(buffer)?.get()))
-            }
-        }
-    };
-}
-
 // TPM2AlgID represents a TPM_ALG_ID.
 // See definition in Part 2: Structures, section 6.3.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Marshal)]
 pub enum TPM2AlgID {
     RSA = 0x0001,
     TDES = 0x0003,
@@ -93,13 +77,13 @@ pub enum TPM2AlgID {
     CFB = 0x0043,
     ECB = 0x0044,
 }
-impl_open_enum_marshalable! {TPM2AlgID, U16}
 
 // TPM2ECCCurve represents a TPM_ECC_Curve.
 // See definition in Part 2: Structures, section 6.4.
 #[open_enum]
 #[repr(u16)]
-#[derive(Copy, Clone, Default)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, Default, Marshal)]
 pub enum TPM2ECCCurve {
     None = 0x0000,
     NistP192 = 0x0001,
@@ -111,14 +95,13 @@ pub enum TPM2ECCCurve {
     BNP638 = 0x0011,
     SM2P256 = 0x0020,
 }
-impl_open_enum_marshalable! {TPM2ECCCurve, U16}
 
 // TPM2CC represents a TPM_CC.
 // See definition in Part 2: Structures, section 6.5.2.
 #[open_enum]
 #[repr(u32)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Marshal)]
 pub enum TPM2CC {
     NVUndefineSpaceSpecial = 0x0000011F,
     EvictControl = 0x00000120,
@@ -238,7 +221,6 @@ pub enum TPM2CC {
     CertifyX509 = 0x00000197,
     ACTSetTimeout = 0x00000198,
 }
-impl_open_enum_marshalable! {TPM2CC, U32}
 
 // TPM2RC represents a TPM_RC.
 // See definition in Part 2: Structures, section 6.6.
@@ -345,7 +327,6 @@ pub enum TPM2RC {
     Retry = TPM2RC::RC_WARN + 0x022,
     NVUnavailable = TPM2RC::RC_WARN + 0x023,
 }
-impl_open_enum_marshalable! {TPM2RC, U32}
 
 impl TPM2RC {
     pub const RC_VER_1: u32 = 0x00000100;
@@ -373,14 +354,13 @@ pub enum TPM2EO {
     BitSet = 0x000A,
     BitClear = 0x000B,
 }
-impl_open_enum_marshalable! {TPM2EO, U16}
 
 // TPM2ST represents a TPM_ST.
 // See definition in Part 2: Structures, section 6.9.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Marshal)]
 pub enum TPM2ST {
     RspCommand = 0x00C4,
     Null = 0x8000,
@@ -401,17 +381,17 @@ pub enum TPM2ST {
     AuthSigned = 0x8025,
     FuManifest = 0x8029,
 }
-impl_open_enum_marshalable! {TPM2ST, U16}
 
 // TPM2SU represents a TPM_SU.
 // See definition in Part 2: Structures, section 6.10.
 #[open_enum]
 #[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, Default, Marshal)]
 pub enum TPM2SU {
     Clear = 0x0000,
     State = 0x0001,
 }
-impl_open_enum_marshalable! {TPM2SU, U16}
 
 // TPM2SE represents a TPM_SE.
 // See definition in Part 2: Structures, section 6.11.
@@ -427,7 +407,8 @@ pub enum TPM2SE {
 // See definition in Part 2: Structures, section 6.12
 #[open_enum]
 #[repr(u32)]
-#[derive(Copy, Clone)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, Default, Marshal)]
 pub enum TPM2Cap {
     Algs = 0x00000000,
     Handles = 0x00000001,
@@ -441,13 +422,13 @@ pub enum TPM2Cap {
     AuthPolicies = 0x00000009,
     ACT = 0x0000000A,
 }
-impl_open_enum_marshalable! {TPM2Cap, U32}
 
 // TPM2PT represents a TPM_PT.
 // See definition in Part 2: Structures, section 6.13.
 #[open_enum]
 #[repr(u32)]
-#[derive(Copy, Clone, Default)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, Default, Marshal)]
 pub enum TPM2PT {
     // a 4-octet character string containing the TPM Family value
     // (TPM_SPEC_FAMILY)
@@ -610,7 +591,6 @@ pub enum TPM2PT {
     // the low-order 32 bits of the command audit counter
     AuditCounter1 = 0x00000214,
 }
-impl_open_enum_marshalable! {TPM2PT, U32}
 
 // TPM2PTPCR represents a TPM_PT_PCR.
 // See definition in Part 2: Structures, section 6.14.
@@ -664,7 +644,6 @@ pub enum TPM2PTPCR {
     // by an authorization value
     Auth = 0x00000014,
 }
-impl_open_enum_marshalable! {TPM2PTPCR, U32}
 
 // TPM2HT represents a TPM_HT.
 // See definition in Part 2: Structures, section 7.2.
@@ -685,7 +664,8 @@ pub enum TPM2HT {
 // See definition in Part 2: Structures, section 7.1.
 #[open_enum]
 #[repr(u32)]
-#[derive(Copy, Clone, Default)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, Default, Marshal)]
 pub enum TPM2Handle {
     RHOwner = 0x40000001,
     RHNull = 0x40000007,
@@ -695,7 +675,6 @@ pub enum TPM2Handle {
     RHPlatform = 0x4000000C,
     RHPlatformNV = 0x4000000D,
 }
-impl_open_enum_marshalable! {TPM2Handle, U32}
 
 // TPM2NT represents a TPM_NT.
 // See definition in Part 2: Structures, section 13.4.
