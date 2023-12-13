@@ -1,4 +1,4 @@
-use crate::buffer::{BufferAccessor, RequestThenResponse};
+use crate::buffer::{RequestThenResponse, TpmBuffers};
 use crate::crypto::{Crypto, CryptoRandom as _};
 use crate::error::TpmError;
 
@@ -18,7 +18,7 @@ pub struct CommandContext<'a, Deps: ContextDeps> {
 
 /// Handles the `TPM_CC_GetRandom` (`0x17B`) command.
 pub fn get_random(
-    request_response: RequestThenResponse<impl BufferAccessor>,
+    request_response: RequestThenResponse<impl TpmBuffers>,
     context: &mut CommandContext<impl ContextDeps>,
 ) -> Result<(), TpmError> {
     let mut request = request_response;

@@ -1,19 +1,19 @@
 use crate::buffer::{
-    BufferAccessor, ReadOutOfBounds, RequestResponseCursor, TpmReadBuffer, TpmWriteBuffer,
+    ReadOutOfBounds, RequestResponseCursor, TpmBuffers, TpmReadBuffer, TpmWriteBuffer,
 };
 use crate::crypto::Crypto;
 use crate::error::TpmError;
 use crate::handler::{self, CommandContext, ContextDeps};
-use crate::Command;
+use tpm2_rs_base::constants::Command;
 
 /// Specifies all of the dependent types for `Service`.
 pub trait ServiceDeps {
     /// Interface to perform cryptographic operations.
     type Crypto: Crypto;
     /// The type of the input request buffer for command processing.
-    type Request: TpmReadBuffer;
+    type Request: TpmReadBuffer + ?Sized;
     /// The type of the output response buffer for command processing.
-    type Response: TpmWriteBuffer;
+    type Response: TpmWriteBuffer + ?Sized;
 }
 
 /// The object that processes incoming TPM requests and produces the corresponding TPM response.
@@ -61,7 +61,7 @@ impl<'a, Deps: ServiceDeps> Service<'a, Deps> {
         10
     }
 
-    fn execute_command(&mut self, buffers: impl BufferAccessor) -> Result<usize, TpmError> {
+    fn execute_command(&mut self, buffers: impl TpmBuffers) -> Result<usize, TpmError> {
         let request_size = buffers.get_request().len();
         const CMD_HANDLER_RESPONSE_OFFSET: usize = 10;
         let mut request_and_response =
@@ -85,19 +85,19 @@ impl<'a, Deps: ServiceDeps> Service<'a, Deps> {
             _ => Err(TpmError::CommandCode),
         }?;
 
-        let mut response_view = request_and_response.response_view();
+        let response_size = request_and_response.last_response_byte_written();
+        let response = request_and_response.response();
         // TODO add session information
         let session_tag = 0x8001_u16;
-        response_view
+        response
             .write(0, &(session_tag).to_be_bytes())
             .or(Err(TpmError::Memory))?;
 
-        let response_size = response_view.len();
-        response_view
+        response
             .write(2, &(response_size as u32).to_be_bytes())
             .or(Err(TpmError::Memory))?;
         const SUCCESS_STATUS: u32 = 0;
-        response_view
+        response
             .write(6, &SUCCESS_STATUS.to_be_bytes())
             .or(Err(TpmError::Memory))?;
 
@@ -112,8 +112,8 @@ impl<T: ServiceDeps> ContextDeps for T {
 }
 
 /// Represents a request and response that existing in the same mutable buffer.
-struct InOutBuffer<'a, W: TpmWriteBuffer>(&'a mut W, usize);
-impl<'a, W: TpmWriteBuffer> BufferAccessor for InOutBuffer<'a, W> {
+struct InOutBuffer<'a, W: TpmWriteBuffer + ?Sized>(&'a mut W, usize);
+impl<'a, W: TpmWriteBuffer + ?Sized> TpmBuffers for InOutBuffer<'a, W> {
     type Request = Self;
     type Response = W;
 
@@ -125,13 +125,13 @@ impl<'a, W: TpmWriteBuffer> BufferAccessor for InOutBuffer<'a, W> {
     }
 }
 
-impl<'a, W: TpmWriteBuffer> InOutBuffer<'a, W> {
+impl<'a, W: TpmWriteBuffer + ?Sized> InOutBuffer<'a, W> {
     pub fn new(buffer: &'a mut W, request_size: usize) -> Self {
         Self(buffer, request_size.min(buffer.len()))
     }
 }
 
-impl<'a, W: TpmWriteBuffer> TpmReadBuffer for InOutBuffer<'a, W> {
+impl<'a, W: TpmWriteBuffer + ?Sized> TpmReadBuffer for InOutBuffer<'a, W> {
     fn len(&self) -> usize {
         self.1
     }
@@ -146,8 +146,10 @@ impl<'a, W: TpmWriteBuffer> TpmReadBuffer for InOutBuffer<'a, W> {
 }
 
 /// Represents a separate request and response buffer.
-struct SeparateBuffers<'a, R: TpmReadBuffer, W: TpmWriteBuffer>(&'a R, &'a mut W);
-impl<'a, R: TpmReadBuffer, W: TpmWriteBuffer> BufferAccessor for SeparateBuffers<'a, R, W> {
+struct SeparateBuffers<'a, R: TpmReadBuffer + ?Sized, W: TpmWriteBuffer + ?Sized>(&'a R, &'a mut W);
+impl<'a, R: TpmReadBuffer + ?Sized, W: TpmWriteBuffer + ?Sized> TpmBuffers
+    for SeparateBuffers<'a, R, W>
+{
     type Request = R;
     type Response = W;
 

@@ -5,5 +5,5 @@ edition = "2021"
 
 
 [dependencies]
-open-enum = {version = "0.4.0"}
+tpm2-rs-base = { path = "../base" }
 hex-literal = { version = "0.4.1" }

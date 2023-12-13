@@ -1,6 +1,6 @@
 use super::service::*;
-use hex_literal::hex;
 use crypto::FakeCrypto;
+use hex_literal::hex;
 
 pub mod crypto;
 
@@ -11,8 +11,8 @@ struct TestDeps {
 
 impl ServiceDeps for TestDeps {
     type Crypto = FakeCrypto;
-    type Request = &'static [u8];
-    type Response = Vec<u8>;
+    type Request = [u8];
+    type Response = [u8];
 }
 
 impl TestDeps {
@@ -56,13 +56,13 @@ fn get_random_separate() {
     let mut test_deps = TestDeps::new();
     let mut service = test_deps.service();
 
-    let request: &[u8] = &hex!(
+    let request = hex!(
         "8001" // tag
         "0000000c" // size
         "0000017B" // command code
         "000c" // requested random bytes
     );
-    let expected_response = &hex!(
+    let expected_response = hex!(
         "8001" // session
         "00000016" // size
         "00000000" // successful response

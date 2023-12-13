@@ -18,8 +18,6 @@ impl TpmError {
     /// parameters (`TPM_RC_ASYMMETRIC`).
     #[allow(non_snake_case)]
     pub const fn AsymmetricFor(on: ErrorType, pos: ErrorPosition) -> Self {
-        // TODO. This should be generated with a macro and it may need to use unsafe to avoid
-        // a panic path.
         Self::new(Self::Asymmetric.0.get() | on.to_mask() | pos.to_mask())
     }
 

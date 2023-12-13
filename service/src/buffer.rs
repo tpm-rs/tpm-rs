@@ -1,5 +1,3 @@
-use core::ops::{Deref, DerefMut};
-
 /// Error indicating that read would have read past the of of the `TpmReadBuffer`.
 pub struct ReadOutOfBounds;
 
@@ -10,7 +8,7 @@ pub trait TpmReadBuffer {
 
     // Reads into the specified buffer from the specified offset. The size of the out buffer
     // determines the size of the read operation. Returns [`ReadOutOfBounds`] if the request read
-    // would go beyond the length fo the buffer.
+    // would go beyond the length of the buffer.
     fn read_into(&self, offset: usize, out: &mut [u8]) -> Result<(), ReadOutOfBounds>;
 
     /// Reads a `u16` encoded in big endian at the specified offset. Specific implementors may
@@ -52,9 +50,9 @@ pub trait TpmWriteBuffer: TpmReadBuffer {
     ) -> Result<(), WriteOutOfBounds>;
 }
 
-impl<T: Deref<Target = [u8]>> TpmReadBuffer for T {
+impl TpmReadBuffer for [u8] {
     fn len(&self) -> usize {
-        self.deref().len()
+        self.len()
     }
     fn read_into(&self, offset: usize, out: &mut [u8]) -> Result<(), ReadOutOfBounds> {
         let read_from = self
@@ -65,7 +63,7 @@ impl<T: Deref<Target = [u8]>> TpmReadBuffer for T {
     }
 }
 
-impl<T: DerefMut<Target = [u8]>> TpmWriteBuffer for T {
+impl TpmWriteBuffer for [u8] {
     fn write(&mut self, write_offset: usize, data: &[u8]) -> Result<(), WriteOutOfBounds> {
         let write_to = self
             .get_mut(write_offset..write_offset + data.len())
@@ -88,14 +86,14 @@ impl<T: DerefMut<Target = [u8]>> TpmWriteBuffer for T {
     }
 }
 
-
 /// Allows access to the TPM request or TPM response. This layers allows handler code to be written
-/// generically to handle either two separate buffers or a single in-place buffer.
-pub trait BufferAccessor {
+/// generically to handle either two separate buffers or a single in-place buffer. This is not meant
+/// to be implemented by client code and is only used internally.
+pub trait TpmBuffers {
     /// The type of the input request buffer for command processing.
-    type Request: TpmReadBuffer;
+    type Request: TpmReadBuffer + ?Sized;
     /// The type of the output response buffer for command processing.
-    type Response: TpmWriteBuffer;
+    type Response: TpmWriteBuffer + ?Sized;
 
     /// Gets the request object.
     fn get_request(&self) -> &Self::Request;
@@ -106,16 +104,17 @@ pub trait BufferAccessor {
 
 /// Provides access to the TPM command request object and then a one-way conversion to the mutable
 /// response object for the TPM command.
-pub struct RequestThenResponse<'a, B: BufferAccessor> {
+pub struct RequestThenResponse<'a, B: TpmBuffers> {
     buffers: &'a mut RequestResponseCursor<B>,
 }
 
-impl<'a, B: BufferAccessor> RequestThenResponse<'a, B> {
+impl<'a, B: TpmBuffers> RequestThenResponse<'a, B> {
     /// Reads a `u16` encoded in big endian from the request's last read position. Increments the
     /// last position past this field. Returns `None` if the read would have read past the end of
     /// the request.
     pub fn read_be_u16(&mut self) -> Option<u16> {
-        let result = self.buffers
+        let result = self
+            .buffers
             .buffers
             .get_request()
             .read_be_u16(self.buffers.request_offset)
@@ -128,7 +127,8 @@ impl<'a, B: BufferAccessor> RequestThenResponse<'a, B> {
     /// last position past this field. Returns `None` if the read would have read past the end of
     /// the request.
     pub fn read_be_u32(&mut self) -> Option<u32> {
-        let result = self.buffers
+        let result = self
+            .buffers
             .buffers
             .get_request()
             .read_be_u32(self.buffers.request_offset)
@@ -146,11 +146,11 @@ impl<'a, B: BufferAccessor> RequestThenResponse<'a, B> {
 }
 
 /// A mutable [`Response`] view of the output `TpmWriteBuffer`.
-pub struct Response<'a, B: BufferAccessor> {
+pub struct Response<'a, B: TpmBuffers> {
     buffers: &'a mut RequestResponseCursor<B>,
 }
 
-impl<'a, B: BufferAccessor> Response<'a, B> {
+impl<'a, B: TpmBuffers> Response<'a, B> {
     /// Writes the specified `data` at the last written location and updates the internal
     /// last written location. Returns [`WriteOutOfBounds`] if write would have written past the the
     /// of the underlying [`TpmWriteBuffer`].
@@ -183,13 +183,13 @@ impl<'a, B: BufferAccessor> Response<'a, B> {
 
 /// Provides access to request and response while along tracking most recent read and written
 /// locations.
-pub struct RequestResponseCursor<B: BufferAccessor> {
+pub struct RequestResponseCursor<B: TpmBuffers> {
     buffers: B,
     request_offset: usize,
     response_offset: usize,
 }
 
-impl<B: BufferAccessor> RequestResponseCursor<B> {
+impl<B: TpmBuffers> RequestResponseCursor<B> {
     /// Create a new [`RequestResponseCursor`] with a request offset of `0` and the specified
     /// response offset.
     pub fn new(buffers: B, response_offset: usize) -> Self {
@@ -206,61 +206,13 @@ impl<B: BufferAccessor> RequestResponseCursor<B> {
         RequestThenResponse { buffers: self }
     }
 
-    /// Gets the response view that includes only the data that has been written so far
-    pub fn response_view(&mut self) -> WriteView<B::Response> {
-        WriteView::new(self.buffers.get_response(), self.response_offset)
-    }
-}
-
-
-/// A limited view of a `TpmWriterBuffer` that only gives access to a portion of the underlying
-/// `TpmWriteBuffer`.
-pub struct WriteView<'a, W: TpmWriteBuffer> {
-    buffer: &'a mut W,
-    max: usize,
-}
-
-impl<'a, W: TpmWriteBuffer> WriteView<'a, W> {
-    /// Creates a new [`WriteView`] that limits the access to the specified [`TpmWriteBuffer`] up to
-    /// the specified max size.
-    pub fn new(buffer: &'a mut W, max: usize) -> Self {
-        Self {
-            max: max.min(buffer.len()),
-            buffer,
-        }
-    }
-}
-
-impl<'a, W: TpmWriteBuffer> TpmReadBuffer for WriteView<'a, W> {
-    fn len(&self) -> usize {
-        self.max
+    /// Gets the index of the last byte written to response buffer.
+    pub fn last_response_byte_written(&self) -> usize {
+        self.response_offset
     }
 
-    fn read_into(&self, offset: usize, out: &mut [u8]) -> Result<(), ReadOutOfBounds> {
-        if self.max < offset + out.len() {
-            return Err(ReadOutOfBounds);
-        }
-        self.buffer.read_into(offset, out)
-    }
-}
-
-impl<'a, W: TpmWriteBuffer> TpmWriteBuffer for WriteView<'a, W> {
-    fn write(&mut self, write_offset: usize, data: &[u8]) -> Result<(), WriteOutOfBounds> {
-        if self.max < write_offset + data.len() {
-            return Err(WriteOutOfBounds);
-        }
-        self.buffer.write(write_offset, data)
-    }
-
-    fn write_callback(
-        &mut self,
-        write_offset: usize,
-        size: usize,
-        callback: impl FnOnce(&mut [u8]),
-    ) -> Result<(), WriteOutOfBounds> {
-        if self.max < write_offset + size {
-            return Err(WriteOutOfBounds);
-        }
-        self.buffer.write_callback(write_offset, size, callback)
+    /// Gets the full response buffer including any unwritten portions.
+    pub fn response(&mut self) -> &mut B::Response {
+        self.buffers.get_response()
     }
 }
