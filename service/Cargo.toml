@@ -1,0 +1,9 @@
+[package]
+name = "service"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+tpm2-rs-base = { path = "../base" }
+hex-literal = { version = "0.4.1" }

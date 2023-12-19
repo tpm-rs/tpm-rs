@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "base",
-    "marshal_derive",
     "client",
+    "marshal_derive",
+    "service",
 ]
