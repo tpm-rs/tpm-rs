@@ -6,5 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-marshal_derive = { path = "../marshal_derive" }
+tpm2-rs-errors = { path = "../errors" }
+tpm2-rs-marshal = { path = "../marshal" }
 open-enum = "0.4.0"

@@ -1,10 +1,12 @@
-#![allow(dead_code)]
+#![forbid(unsafe_code)]
+
 use core::convert::From;
 use core::num::{NonZeroU32, TryFromIntError};
 
 pub type Tpm2Rc = u32;
 pub type Tss2Rc = Tpm2Rc;
 
+// TODO replace with version from service::error
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct TpmError(pub NonZeroU32);
 impl TpmError {

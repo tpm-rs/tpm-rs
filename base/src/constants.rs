@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
-use crate::{Marshalable, TpmResult, UnmarshalBuf};
-use marshal_derive::Marshal;
+use crate::{Marshal, Marshalable, TpmResult, UnmarshalBuf};
 use open_enum::open_enum;
 
 pub const TPM2_SHA_DIGEST_SIZE: u32 = 20;
@@ -95,14 +94,16 @@ pub enum TPM2ECCCurve {
     BNP638 = 0x0011,
     SM2P256 = 0x0020,
 }
+// TODO remove this alias and convert everything to using Command
+pub type TPM2CC = Command;
 
-// TPM2CC represents a TPM_CC.
+// The TPM_CC command codes
 // See definition in Part 2: Structures, section 6.5.2.
 #[open_enum]
 #[repr(u32)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshal)]
-pub enum TPM2CC {
+pub enum Command {
     NVUndefineSpaceSpecial = 0x0000011F,
     EvictControl = 0x00000120,
     HierarchyControl = 0x00000121,
@@ -190,6 +191,7 @@ pub enum TPM2CC {
     ECCParameters = 0x00000178,
     FirmwareRead = 0x00000179,
     GetCapability = 0x0000017A,
+    /// Gets a random sequence of bytes (`TPM_CC_GetRandom`).
     GetRandom = 0x0000017B,
     GetTestResult = 0x0000017C,
     Hash = 0x0000017D,

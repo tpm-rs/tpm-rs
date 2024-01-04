@@ -1,8 +1,7 @@
 use crate::constants::{TPM2Cap, TPM2CC, TPM2PT};
 use crate::errors::TpmResult;
-use crate::{Marshalable, UnmarshalBuf};
+use crate::{Marshal, Marshalable, UnmarshalBuf};
 use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
-use marshal_derive::Marshal;
 
 pub trait TpmCommand: Marshalable {
     const CMD_CODE: TPM2CC;

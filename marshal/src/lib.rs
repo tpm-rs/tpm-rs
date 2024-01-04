@@ -1,5 +1,9 @@
-use crate::errors::*;
+#![forbid(unsafe_code)]
+
 use core::mem::size_of;
+
+use tpm2_rs_errors::*;
+pub use tpm2_rs_marshal_derive::Marshal;
 
 // The Marshalable trait defines the API for {un}marshaling TPM structs. It
 // is implemented for primitive types. The marshal_derive::Marshal macro
@@ -101,9 +105,8 @@ impl<const M: usize> Marshalable for [u8; M] {
 
 #[cfg(test)]
 mod tests {
-    use marshal_derive::Marshal;
-
     use super::*;
+
     macro_rules! impl_test_scalar {
         ($T:ty, $I:expr, $V:expr) => {
             const SIZE_OF_TYPE: usize = size_of::<$T>();
