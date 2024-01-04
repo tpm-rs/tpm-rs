@@ -1,11 +1,17 @@
 #![allow(dead_code, clippy::large_enum_variant)]
+#![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
 
 use crate::{constants::*, errors::*, marshal::*};
 use core::mem::{align_of, size_of};
-use marshal_derive::Marshal;
+pub use tpm2_rs_errors as errors;
+pub use tpm2_rs_marshal as marshal;
+
 use zerocopy::byteorder::big_endian::*;
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
+
+pub mod commands;
+pub mod constants;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
@@ -104,11 +110,6 @@ const TPM2_MAX_TPM_PROPERTIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedP
 const TPM2_MAX_PCR_PROPERTIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedPcrSelect>();
 const TPM2_MAX_ECC_CURVES: usize = TPM2_MAX_CAP_DATA / size_of::<TPM2ECCCurve>();
 const TPM2_MAX_TAGGED_POLICIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedPolicy>();
-
-pub mod commands;
-pub mod constants;
-pub mod errors;
-pub mod marshal;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, AsBytes, FromBytes, FromZeroes)]

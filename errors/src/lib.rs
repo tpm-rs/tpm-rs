@@ -1,4 +1,5 @@
-#![allow(dead_code)]
+#![forbid(unsafe_code)]
+
 use core::convert::From;
 use core::num::{NonZeroU32, TryFromIntError};
 

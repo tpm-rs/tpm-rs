@@ -1,10 +1,10 @@
+#![forbid(unsafe_code)]
 use core::mem::size_of;
 use core::num::NonZeroU32;
-use marshal_derive::Marshal;
 use tpm2_rs_base::commands::*;
 use tpm2_rs_base::constants::{TPM2CC, TPM2ST};
 use tpm2_rs_base::errors::{TpmError, TpmResult};
-use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
+use tpm2_rs_base::marshal::{Marshal, Marshalable, UnmarshalBuf};
 use tpm2_rs_base::TpmiStCommandTag;
 use zerocopy::byteorder::big_endian::{U16, U32};
 use zerocopy::{AsBytes, FromBytes, FromZeroes};

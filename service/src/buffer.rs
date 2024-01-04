@@ -6,6 +6,11 @@ pub trait TpmReadBuffer {
     /// Returns the available length of this buffer.
     fn len(&self) -> usize;
 
+    /// Returns if the buffer is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     // Reads into the specified buffer from the specified offset. The size of the out buffer
     // determines the size of the read operation. Returns [`ReadOutOfBounds`] if the request read
     // would go beyond the length of the buffer.

@@ -1,10 +1,11 @@
 [package]
-name = "client"
+name = "tpm2-rs-marshal"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-zerocopy = {version="0.7.0", features = ["derive"]}
-tpm2-rs-base = { path = "../base" }
+tpm2-rs-marshal-derive = { path = "derive" }
+tpm2-rs-errors = { path = "../errors" }
+zerocopy = { version="0.7.0" }

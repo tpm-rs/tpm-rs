@@ -1,7 +1,9 @@
 [workspace]
+resolver =  "2"
 members = [
     "base",
     "client",
-    "marshal_derive",
+    "marshal",
+    "marshal/derive",
     "service",
 ]
