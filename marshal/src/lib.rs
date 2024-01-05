@@ -1,24 +1,20 @@
 #![forbid(unsafe_code)]
 
 use core::mem::size_of;
-use zerocopy::{AsBytes, FromBytes};
 
 use tpm2_rs_errors::*;
 pub use tpm2_rs_marshal_derive::Marshal;
 
-// The Marshalable trait defines the API for {un}marshaling TPM structs. It is
-// implemented for all types that implement zerocopy AsBytes and FromBytes, but
-// beware that this will not produce the correct output for types that have
-// variable sized marshaling output based on their contents. The
-// marsh_derive::Marshal macro will provide an implementation that calls
-// try_{un}marshal for each of it's fields. Types can also provide their own
-// implementation if needed.
+// The Marshalable trait defines the API for {un}marshaling TPM structs. It
+// is implemented for primitive types. The marshal_derive::Marshal macro
+// will provide an implementation that calls try_{un}marshal for each of
+// it's fields, but beware that this will not produce the correct output
+// for types that have variable sized marshaling output based on their
+// contents. Types can also provide their own implementation if needed.
 //
-// Union types where not all variants have the same size require an external
-// selector to {un}marshal. These should implement try_{un}marshal functions
-// that take this selector as the first argument. The owning struct providing
-// the selector can use the selector attribute to tag what field provides the
-// selector. See TpmtKeyedHashScheme for an example.
+// Enums with fields require a primitive representation and explicit selector
+// values. These will be marshaled as the primitive selector followed by the
+// selected variant.
 //
 // Array fields which should only {un}marshal a subset of their entries can
 // use the length attribute to specify the field providing the number of
@@ -52,25 +48,55 @@ impl<'a> UnmarshalBuf<'a> {
     }
 }
 
-impl<T> Marshalable for T
-where
-    T: AsBytes + FromBytes,
-{
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self>
-    where
-        Self: Sized,
-    {
-        if let Some(mine) = buffer.get(size_of::<T>()) {
-            if let Some(x) = T::read_from(mine) {
-                return Ok(x);
+// Helper to define Marshalable for primitive types with {to,from}_be_bytes methods.
+// T is the primitive type.
+macro_rules! impl_be_prim_marshalable {
+    ($T:ty) => {
+        impl Marshalable for $T {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+                let x = <[u8; size_of::<$T>()]>::try_unmarshal(buffer)?;
+                Ok(Self::from_be_bytes(x))
+            }
+
+            fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+                self.to_be_bytes().try_marshal(buffer)
             }
         }
-        Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER)
+    };
+}
+impl_be_prim_marshalable! {u8}
+impl_be_prim_marshalable! {u16}
+impl_be_prim_marshalable! {u32}
+impl_be_prim_marshalable! {u64}
+impl_be_prim_marshalable! {i8}
+impl_be_prim_marshalable! {i16}
+impl_be_prim_marshalable! {i32}
+impl_be_prim_marshalable! {i64}
+
+impl Marshalable for () {
+    fn try_marshal(&self, _buffer: &mut [u8]) -> TpmResult<usize> {
+        Ok(0)
+    }
+    fn try_unmarshal(_buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+        Ok(())
+    }
+}
+
+impl<const M: usize> Marshalable for [u8; M] {
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+        if let Some(mine) = buffer.get(M) {
+            let mut x = [0u8; M];
+            x.copy_from_slice(mine);
+            Ok(x)
+        } else {
+            Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER)
+        }
     }
 
     fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
-        if self.write_to_prefix(buffer).is_some() {
-            Ok(size_of::<T>())
+        if buffer.len() >= self.len() {
+            buffer[..self.len()].copy_from_slice(self);
+            Ok(self.len())
         } else {
             Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER)
         }
@@ -80,6 +106,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
     macro_rules! impl_test_scalar {
         ($T:ty, $I:expr, $V:expr) => {
             const SIZE_OF_TYPE: usize = size_of::<$T>();
@@ -285,5 +312,25 @@ mod tests {
         assert!(marshal.is_ok());
         let unmarshal = HasPlainArrayField::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
         assert_eq!(value, unmarshal.unwrap());
+    }
+
+    #[derive(PartialEq, Debug, Marshal)]
+    struct HasUnitField {
+        a: u8,
+        b: (),
+        c: u32,
+    }
+
+    #[test]
+    fn test_derive_unit_struct() {
+        let value = HasUnitField {
+            a: 0x4,
+            b: (),
+            c: 0x12122121,
+        };
+        let mut buffer = [0u8; size_of::<u8>() + size_of::<u32>()];
+        assert!(value.try_marshal(&mut buffer).is_ok());
+        let unmarshal = HasUnitField::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
+        assert_eq!(value, unmarshal.unwrap())
     }
 }

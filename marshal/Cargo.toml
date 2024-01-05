@@ -8,4 +8,3 @@ edition = "2021"
 [dependencies]
 tpm2-rs-marshal-derive = { path = "derive" }
 tpm2-rs-errors = { path = "../errors" }
-zerocopy = { version="0.7.0" }

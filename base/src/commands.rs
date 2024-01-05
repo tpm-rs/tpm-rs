@@ -1,13 +1,7 @@
-use crate::constants::{TPM2Cap, TPM2CC};
+use crate::constants::{TPM2Cap, TPM2CC, TPM2PT};
 use crate::errors::TpmResult;
 use crate::{Marshal, Marshalable, UnmarshalBuf};
 use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
-use zerocopy::byteorder::big_endian::*;
-
-// Provides a const way to turn a u32 into a U32.
-pub const fn to_be_u32(val: u32) -> U32 {
-    U32::from_bytes(val.to_be_bytes())
-}
 
 pub trait TpmCommand: Marshalable {
     const CMD_CODE: TPM2CC;
@@ -17,9 +11,9 @@ pub trait TpmCommand: Marshalable {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct GetCapabilityCmd {
-    capability: TPM2Cap,
-    property: U32,
-    property_count: U32,
+    pub capability: TPM2Cap,
+    pub property: TPM2PT,
+    pub property_count: u32,
 }
 impl TpmCommand for GetCapabilityCmd {
     const CMD_CODE: TPM2CC = TPM2CC::GetCapability;
@@ -46,7 +40,7 @@ impl TpmCommand for PcrReadCmd {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct PcrReadResp {
-    pcr_update_counter: U32,
+    pcr_update_counter: u32,
     pcr_selection_out: TpmlPcrSelection,
     pcr_values: TpmlDigest,
 }

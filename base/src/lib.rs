@@ -7,9 +7,6 @@ use core::mem::{align_of, size_of};
 pub use tpm2_rs_errors as errors;
 pub use tpm2_rs_marshal as marshal;
 
-use zerocopy::byteorder::big_endian::*;
-use zerocopy::{AsBytes, FromBytes, FromZeroes};
-
 pub mod commands;
 pub mod constants;
 
@@ -19,15 +16,15 @@ pub struct TpmaLocality(u8);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct Tpm2KeyBits(U16);
+pub struct Tpm2KeyBits(u16);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct Tpm2Generated(U32);
+pub struct Tpm2Generated(u32);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmaNv(U32);
+pub struct TpmaNv(u32);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
@@ -59,11 +56,11 @@ pub struct TpmiAlgAsymScheme(TPM2AlgID);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiRhNvIndex(U32);
+pub struct TpmiRhNvIndex(u32);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiEccCurve(U16);
+pub struct TpmiEccCurve(u16);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
@@ -71,31 +68,31 @@ pub struct TpmiYesNo(u8);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiStAttest(U16);
+pub struct TpmiStAttest(u16);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAesKeyBits(U16);
+pub struct TpmiAesKeyBits(u16);
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiSm4KeyBits(U16);
+pub struct TpmiSm4KeyBits(u16);
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiCamelliaKeyBits(U16);
+pub struct TpmiCamelliaKeyBits(u16);
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiRsaKeyBits(U16);
+pub struct TpmiRsaKeyBits(u16);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmaObject(U32);
+pub struct TpmaObject(u32);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmaAlgorithm(U32);
+pub struct TpmaAlgorithm(u32);
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmaCc(U32);
+pub struct TpmaCc(u32);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
@@ -112,7 +109,7 @@ const TPM2_MAX_ECC_CURVES: usize = TPM2_MAX_CAP_DATA / size_of::<TPM2ECCCurve>()
 const TPM2_MAX_TAGGED_POLICIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedPolicy>();
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, AsBytes, FromBytes, FromZeroes)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmsEmpty;
 
 #[repr(C, u16)]
@@ -149,7 +146,7 @@ impl TpmuName {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bDigest {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TpmtHa::union_size()],
 }
 
@@ -159,58 +156,58 @@ type Tpm2bOperand = Tpm2bDigest;
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bData {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TpmtHa::union_size()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEvent {
-    size: U16,
+    size: u16,
     pub buffer: [u8; 1024],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bMaxBuffer {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TPM2_MAX_DIGEST_BUFFER as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bMaxNvBuffer {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TPM2_MAX_NV_BUFFER_SIZE as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bIv {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TPM2_MAX_SYM_BLOCK_SIZE as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bName {
-    size: U16,
+    size: u16,
     pub name: [u8; TpmuName::union_size()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bMaxCapBuffer {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TPM2_MAX_CAP_BUFFER as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmsClockInfo {
-    pub clock: U64,
-    pub reset_count: U32,
-    pub restart_count: U32,
+    pub clock: u64,
+    pub reset_count: u32,
+    pub restart_count: u32,
     pub safe: TpmiYesNo,
 }
 
@@ -226,7 +223,7 @@ pub struct TpmsPcrSelection {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlPcrSelection {
-    pub count: U32,
+    pub count: u32,
     #[length(count)]
     pub pcr_selections: [TpmsPcrSelection; TPM2_NUM_PCR_BANKS as usize],
 }
@@ -255,8 +252,8 @@ pub struct TpmsCertifyInfo {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct TpmsCommandAuditInfo {
-    pub audit_counter: U64,
-    pub digest_alg: TPM2AlgID,
+    pub audit_counter: u64,
+    pub digest_alg: u16,
     pub audit_digest: Tpm2bDigest,
     pub command_digest: Tpm2bDigest,
 }
@@ -271,7 +268,7 @@ pub struct TpmsSessionAuditInfo {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmsTimeInfo {
-    pub time: U64,
+    pub time: u64,
     pub clock_info: TpmsClockInfo,
 }
 
@@ -279,14 +276,14 @@ pub struct TpmsTimeInfo {
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmsTimeAttestInfo {
     pub time: TpmsTimeInfo,
-    pub firmware_version: U64,
+    pub firmware_version: u64,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmsNvCertifyInfo {
     pub index_name: Tpm2bName,
-    pub offset: U16,
+    pub offset: u16,
     pub nv_contents: Tpm2bMaxNvBuffer,
 }
 
@@ -309,7 +306,7 @@ pub struct TpmsAttest {
     pub qualified_signer: Tpm2bName,
     pub extra_data: Tpm2bData,
     pub clock_info: TpmsClockInfo,
-    pub firmware_version: U64,
+    pub firmware_version: u64,
     pub attested: TpmuAttest,
 }
 // Custom overload of Marshalable, because the selector for attested is {un}marshaled separate from the field.
@@ -317,7 +314,10 @@ impl Marshalable for TpmsAttest {
     fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
         let mut written = 0;
         written += self.magic.try_marshal(&mut buffer[written..])?;
-        written += U16::new(self.attested.discriminant()).try_marshal(&mut buffer[written..])?;
+        written += self
+            .attested
+            .discriminant()
+            .try_marshal(&mut buffer[written..])?;
         written += self.qualified_signer.try_marshal(&mut buffer[written..])?;
         written += self.extra_data.try_marshal(&mut buffer[written..])?;
         written += self.clock_info.try_marshal(&mut buffer[written..])?;
@@ -328,14 +328,14 @@ impl Marshalable for TpmsAttest {
 
     fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
         let magic = Tpm2Generated::try_unmarshal(buffer)?;
-        let selector = U16::try_unmarshal(buffer)?;
+        let selector = u16::try_unmarshal(buffer)?;
         Ok(TpmsAttest {
             magic,
             qualified_signer: Tpm2bName::try_unmarshal(buffer)?,
             extra_data: Tpm2bData::try_unmarshal(buffer)?,
             clock_info: TpmsClockInfo::try_unmarshal(buffer)?,
-            firmware_version: U64::try_unmarshal(buffer)?,
-            attested: TpmuAttest::try_unmarshal_variant(selector.get(), buffer)?,
+            firmware_version: u64::try_unmarshal(buffer)?,
+            attested: TpmuAttest::try_unmarshal_variant(selector, buffer)?,
         })
     }
 }
@@ -343,21 +343,21 @@ impl Marshalable for TpmsAttest {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bAttest {
-    size: U16,
+    size: u16,
     pub attestation_data: [u8; size_of::<TpmsAttest>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSymKey {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TPM2_MAX_SYM_KEY_BYTES as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bLabel {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TPM2_LABEL_MAX_BUFFER as usize],
 }
 
@@ -371,7 +371,7 @@ pub struct TpmsDerive {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bDerive {
-    size: U16,
+    size: u16,
     pub buffer: [u8; size_of::<TpmsDerive>()],
 }
 
@@ -389,7 +389,7 @@ impl TpmuSensitiveCreate {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSensitiveData {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TpmuSensitiveCreate::union_size()],
 }
 
@@ -405,28 +405,28 @@ pub struct TpmsSensitiveCreate {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSensitiveCreate {
-    size: U16,
+    size: u16,
     pub sensitive: [u8; size_of::<TpmsSensitiveCreate>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPublicKeyRsa {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TPM2_MAX_RSA_KEY_BYTES as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPrivateKeyRsa {
-    size: U16,
+    size: u16,
     pub buffer: [u8; (TPM2_MAX_RSA_KEY_BYTES / 2) as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEccParameter {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TPM2_MAX_ECC_KEY_BYTES as usize],
 }
 
@@ -440,7 +440,7 @@ pub struct TpmsEccPoint {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEccPoint {
-    size: U16,
+    size: u16,
     pub point: [u8; size_of::<TpmsEccPoint>()],
 }
 
@@ -460,7 +460,7 @@ impl TpmuEncryptedSecret {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEncryptedSecret {
-    size: U16,
+    size: u16,
     pub secret: [u8; TpmuEncryptedSecret::union_size()],
 }
 
@@ -540,7 +540,7 @@ pub struct TpmsRsaParms {
     pub symmetric: TpmtSymDefObject,
     pub scheme: TpmtRsaScheme,
     pub key_bits: TpmiRsaKeyBits,
-    pub exponent: U32,
+    pub exponent: u32,
 }
 
 #[repr(C, u16)]
@@ -634,8 +634,10 @@ pub struct TpmtPublic {
 impl Marshalable for TpmtPublic {
     fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
         let mut written = 0;
-        written +=
-            U16::new(self.parms_and_id.discriminant()).try_marshal(&mut buffer[written..])?;
+        written += self
+            .parms_and_id
+            .discriminant()
+            .try_marshal(&mut buffer[written..])?;
         written += self.name_alg.try_marshal(&mut buffer[written..])?;
         written += self.object_attributes.try_marshal(&mut buffer[written..])?;
         written += self.auth_policy.try_marshal(&mut buffer[written..])?;
@@ -645,12 +647,12 @@ impl Marshalable for TpmtPublic {
         Ok(written)
     }
     fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
-        let selector = U16::try_unmarshal(buffer)?;
+        let selector = u16::try_unmarshal(buffer)?;
         Ok(TpmtPublic {
             name_alg: TpmiAlgHash::try_unmarshal(buffer)?,
             object_attributes: TpmaObject::try_unmarshal(buffer)?,
             auth_policy: Tpm2bDigest::try_unmarshal(buffer)?,
-            parms_and_id: PublicParmsAndId::try_unmarshal_variant(selector.get(), buffer)?,
+            parms_and_id: PublicParmsAndId::try_unmarshal_variant(selector, buffer)?,
         })
     }
 }
@@ -658,21 +660,21 @@ impl Marshalable for TpmtPublic {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPublic {
-    size: U16,
+    size: u16,
     pub public_area: [u8; size_of::<TpmuPublicId>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bTemplate {
-    size: U16,
+    size: u16,
     pub buffer: [u8; size_of::<TpmtPublic>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPrivateVendorSpecific {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TPM2_PRIVATE_VENDOR_SPECIFIC_BYTES as usize],
 }
 
@@ -698,7 +700,10 @@ pub struct TpmtSensitive {
 impl Marshalable for TpmtSensitive {
     fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
         let mut written = 0;
-        written += U16::new(self.sensitive.discriminant()).try_marshal(&mut buffer[written..])?;
+        written += self
+            .sensitive
+            .discriminant()
+            .try_marshal(&mut buffer[written..])?;
         written += self.auth_value.try_marshal(&mut buffer[written..])?;
         written += self.seed_value.try_marshal(&mut buffer[written..])?;
         written += self.sensitive.try_marshal_variant(&mut buffer[written..])?;
@@ -706,11 +711,11 @@ impl Marshalable for TpmtSensitive {
     }
 
     fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
-        let selector = U16::try_unmarshal(buffer)?;
+        let selector = u16::try_unmarshal(buffer)?;
         Ok(TpmtSensitive {
             auth_value: Tpm2bAuth::try_unmarshal(buffer)?,
             seed_value: Tpm2bDigest::try_unmarshal(buffer)?,
-            sensitive: TpmuSensitiveComposite::try_unmarshal_variant(selector.get(), buffer)?,
+            sensitive: TpmuSensitiveComposite::try_unmarshal_variant(selector, buffer)?,
         })
     }
 }
@@ -733,7 +738,7 @@ pub enum TpmsCapabilityData {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct TpmlAlgProperty {
-    count: U32,
+    count: u32,
     #[length(count)]
     alg_properties: [TpmsAlgProperty; TPM2_MAX_CAP_ALGS],
 }
@@ -741,7 +746,7 @@ pub struct TpmlAlgProperty {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct TpmlHandle {
-    count: U32,
+    count: u32,
     #[length(count)]
     handle: [TPM2Handle; TPM2_MAX_CAP_HANDLES],
 }
@@ -749,7 +754,7 @@ pub struct TpmlHandle {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlCca {
-    count: U32,
+    count: u32,
     #[length(count)]
     command_attributes: [TpmaCc; TPM2_MAX_CAP_CC],
 }
@@ -757,7 +762,7 @@ pub struct TpmlCca {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct TpmlCc {
-    count: U32,
+    count: u32,
     #[length(count)]
     command_codes: [TPM2CC; TPM2_MAX_CAP_CC],
 }
@@ -765,7 +770,7 @@ pub struct TpmlCc {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct TpmlTaggedTpmProperty {
-    count: U32,
+    pub count: u32,
     #[length(count)]
     tpm_property: [TpmsTaggedProperty; TPM2_MAX_TPM_PROPERTIES],
 }
@@ -773,7 +778,7 @@ pub struct TpmlTaggedTpmProperty {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct TpmlTaggedPcrProperty {
-    count: U32,
+    count: u32,
     #[length(count)]
     pcr_property: [TpmsTaggedPcrSelect; TPM2_MAX_PCR_PROPERTIES],
 }
@@ -781,7 +786,7 @@ pub struct TpmlTaggedPcrProperty {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct TpmlEccCurve {
-    count: U32,
+    count: u32,
     #[length(count)]
     ecc_curves: [TPM2ECCCurve; TPM2_MAX_ECC_CURVES],
 }
@@ -789,7 +794,7 @@ pub struct TpmlEccCurve {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal)]
 pub struct TpmlTaggedPolicy {
-    count: U32,
+    count: u32,
     #[length(count)]
     policies: [TpmsTaggedPolicy; TPM2_MAX_TAGGED_POLICIES],
 }
@@ -797,21 +802,21 @@ pub struct TpmlTaggedPolicy {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Default, Marshal)]
 pub struct TpmsAlgProperty {
-    alg: TPM2AlgID,
+    alg: u16,
     alg_properties: TpmaAlgorithm,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Default, Marshal)]
 pub struct TpmsTaggedProperty {
-    property: TPM2PT,
-    value: U32,
+    pub property: u32,
+    pub value: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Default, Marshal)]
 pub struct TpmsTaggedPcrSelect {
-    tag: TPM2PTPCR,
+    tag: u32,
     size_of_select: u8,
     #[length(size_of_select)]
     pcr_select: [u8; TPM2_PCR_SELECT_MAX as usize],
@@ -820,14 +825,14 @@ pub struct TpmsTaggedPcrSelect {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal, Default)]
 pub struct TpmsTaggedPolicy {
-    handle: TPM2Handle,
+    handle: u32,
     policy_hash: TpmtHa,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Debug, Marshal)]
 pub struct TpmlDigest {
-    count: U32,
+    count: u32,
     #[length(count)]
     digests: [Tpm2bDigest; 8],
 }
@@ -835,7 +840,7 @@ pub struct TpmlDigest {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSensitive {
-    size: U16,
+    size: u16,
     pub sensitive_area: [u8; size_of::<TpmtSensitive>()],
 }
 
@@ -850,7 +855,7 @@ pub struct _PRIVATE {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPrivate {
-    size: U16,
+    size: u16,
     pub buffer: [u8; size_of::<_PRIVATE>()],
 }
 
@@ -864,7 +869,7 @@ pub struct TpmsIdObject {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bIdObject {
-    size: U16,
+    size: u16,
     pub credential: [u8; size_of::<TpmsIdObject>()],
 }
 
@@ -875,20 +880,20 @@ pub struct TpmsNvPublic {
     pub name_alg: TpmiAlgHash,
     pub attributes: TpmaNv,
     pub auth_policy: Tpm2bDigest,
-    pub data_size: U16,
+    pub data_size: u16,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bNvPublic {
-    size: U16,
+    size: u16,
     pub nv_public: [u8; size_of::<TpmsNvPublic>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bContextSensitive {
-    size: U16,
+    size: u16,
     pub buffer: [u8; TPM2_MAX_CONTEXT_SIZE as usize],
 }
 
@@ -902,7 +907,7 @@ pub struct TpmsContextData {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bContextData {
-    size: U16,
+    size: u16,
     pub buffer: [u8; size_of::<TpmsContextData>()],
 }
 
@@ -921,7 +926,7 @@ pub struct TpmsCreationData {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bCreationData {
-    size: U16,
+    size: u16,
     pub creation_data: [u8; size_of::<TpmsCreationData>()],
 }
 
@@ -942,7 +947,7 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
             const MAX_BUFFER_SIZE: usize = size_of::<$T>() - size_of::<u16>();
 
             fn get_size(&self) -> u16 {
-                self.size.get()
+                self.size
             }
 
             fn get_buffer(&self) -> &[u8] {
@@ -956,7 +961,7 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
                 }
 
                 let mut dest: Self = Self {
-                    size: U16::new(buffer.len() as u16),
+                    size: buffer.len() as u16,
                     $F: [0; Self::MAX_BUFFER_SIZE],
                 };
                 dest.$F[..buffer.len()].copy_from_slice(buffer);
@@ -967,7 +972,7 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
         impl Default for $T {
             fn default() -> Self {
                 Self {
-                    size: U16::ZERO,
+                    size: 0,
                     $F: [0; Self::MAX_BUFFER_SIZE],
                 }
             }
@@ -975,9 +980,9 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
 
         impl Marshalable for $T {
             fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
-                let got_size = U16::try_unmarshal(buffer)?;
+                let got_size = u16::try_unmarshal(buffer)?;
                 // Ensure the buffer is large enough to fullfill the size indicated
-                let sized_buffer = buffer.get(got_size.get() as usize);
+                let sized_buffer = buffer.get(got_size as usize);
                 if !sized_buffer.is_some() {
                     return Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER);
                 }
@@ -1058,13 +1063,13 @@ mod tests {
             let mut same_size_buf: [u8; SIZE_OF_TYPE] = [0xFF; SIZE_OF_TYPE];
             let mut bigger_size_buf: [u8; SIZE_OF_TYPE + 8] = [0xFF; SIZE_OF_TYPE + 8];
 
-            let mut s = U16::from((smaller_size_buf.len() - SIZE_OF_U16) as u16);
+            let mut s = (smaller_size_buf.len() - SIZE_OF_U16) as u16;
             assert!(s.try_marshal(&mut smaller_size_buf).is_ok());
 
-            s = U16::from((same_size_buf.len() - SIZE_OF_U16) as u16);
+            s = (same_size_buf.len() - SIZE_OF_U16) as u16;
             assert!(s.try_marshal(&mut same_size_buf).is_ok());
 
-            s = U16::from((bigger_size_buf.len() - SIZE_OF_U16) as u16);
+            s = (bigger_size_buf.len() - SIZE_OF_U16) as u16;
             assert!(s.try_marshal(&mut bigger_size_buf).is_ok());
 
             // too small should fail
@@ -1224,7 +1229,7 @@ mod tests {
         let nv_contents = Tpm2bMaxNvBuffer::from_bytes(&nv_buffer).unwrap();
         let info: TpmsNvCertifyInfo = TpmsNvCertifyInfo {
             index_name,
-            offset: U16::new(10),
+            offset: 10,
             nv_contents,
         };
         let mut marshal_buffer = [0u8; 48];
@@ -1234,7 +1239,7 @@ mod tests {
         let mut expected = Vec::with_capacity(bytes);
         expected.extend_from_slice(&index_name.get_size().to_be_bytes());
         expected.extend_from_slice(&name_buffer);
-        expected.extend_from_slice(&info.offset.get().to_be_bytes());
+        expected.extend_from_slice(&info.offset.to_be_bytes());
         expected.extend_from_slice(&nv_contents.get_size().to_be_bytes());
         expected.extend_from_slice(&nv_buffer);
 
@@ -1270,8 +1275,8 @@ mod tests {
         let rsa_parms = TpmsRsaParms {
             symmetric: xor_sym_def_obj,
             scheme: rsa_scheme,
-            key_bits: TpmiRsaKeyBits(U16::new(74)),
-            exponent: U32::new(2),
+            key_bits: TpmiRsaKeyBits(74),
+            exponent: 2,
         };
 
         let pubkey_buf = [9u8; 24];
@@ -1279,7 +1284,7 @@ mod tests {
 
         let example = TpmtPublic {
             name_alg: TpmiAlgHash(TPM2AlgID::SHA256),
-            object_attributes: TpmaObject(U32::new(6543)),
+            object_attributes: TpmaObject(6543),
             auth_policy: Tpm2bDigest::from_bytes(&[2, 2, 4, 4]).unwrap(),
             parms_and_id: PublicParmsAndId::Rsa(rsa_parms, pubkey),
         };
@@ -1304,9 +1309,7 @@ mod tests {
         assert_eq!(remarsh_buffer[..marsh.unwrap()], buffer[..marsh.unwrap()]);
 
         // Test invalid selector value.
-        assert!(U16::new(TPM2AlgID::SHA256.0)
-            .try_marshal(&mut buffer)
-            .is_ok());
+        assert!(TPM2AlgID::SHA256.try_marshal(&mut buffer).is_ok());
         unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
         assert_eq!(unmarsh.err(), Some(TpmError::TPM2_RC_SELECTOR));
     }
