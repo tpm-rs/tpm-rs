@@ -1,4 +1,4 @@
-use crate::constants::{TPM2Cap, TPM2CC, TPM2SU, TPM2PT};
+use crate::constants::{TPM2Cap, TPM2CC, TPM2PT, TPM2SU};
 use crate::errors::TpmResult;
 use crate::{Marshal, Marshalable, UnmarshalBuf};
 use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
