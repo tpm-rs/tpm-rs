@@ -9,6 +9,7 @@ pub mod tcp_simulator {
     use zerocopy::AsBytes;
 
     const SIMULATOR_IP: &str = "127.0.0.1";
+    // TODO: Either pass ports or get simulator to export ports for multithreaded-use.
     const SIMULATOR_TPM_PORT: u16 = 2321;
     const SIMULATOR_PLAT_PORT: u16 = 2322;
 
