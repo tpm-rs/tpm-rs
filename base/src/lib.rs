@@ -107,6 +107,7 @@ const TPM2_MAX_TPM_PROPERTIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedP
 const TPM2_MAX_PCR_PROPERTIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedPcrSelect>();
 const TPM2_MAX_ECC_CURVES: usize = TPM2_MAX_CAP_DATA / size_of::<TPM2ECCCurve>();
 const TPM2_MAX_TAGGED_POLICIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedPolicy>();
+const TPML_DIGEST_MAX_DIGESTS: usize = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
@@ -223,9 +224,9 @@ pub struct TpmsPcrSelection {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlPcrSelection {
-    pub count: u32,
+    count: u32,
     #[length(count)]
-    pub pcr_selections: [TpmsPcrSelection; TPM2_NUM_PCR_BANKS as usize],
+    pcr_selections: [TpmsPcrSelection; TPM2_NUM_PCR_BANKS as usize],
 }
 
 #[repr(C)]
@@ -738,9 +739,9 @@ pub enum TpmsCapabilityData {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlAlgProperty {
-    pub count: u32,
+    count: u32,
     #[length(count)]
-    pub alg_properties: [TpmsAlgProperty; TPM2_MAX_CAP_ALGS],
+    alg_properties: [TpmsAlgProperty; TPM2_MAX_CAP_ALGS],
 }
 
 #[repr(C)]
@@ -770,9 +771,9 @@ pub struct TpmlCc {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlTaggedTpmProperty {
-    pub count: u32,
+    count: u32,
     #[length(count)]
-    pub tpm_property: [TpmsTaggedProperty; TPM2_MAX_TPM_PROPERTIES],
+    tpm_property: [TpmsTaggedProperty; TPM2_MAX_TPM_PROPERTIES],
 }
 
 #[repr(C)]
@@ -830,11 +831,11 @@ pub struct TpmsTaggedPolicy {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlDigest {
     count: u32,
     #[length(count)]
-    digests: [Tpm2bDigest; 8],
+    digests: [Tpm2bDigest; TPML_DIGEST_MAX_DIGESTS],
 }
 
 #[repr(C)]
@@ -1037,6 +1038,59 @@ impl_try_marshalable_tpm2b_simple! {Tpm2bSymKey, buffer}
 impl_try_marshalable_tpm2b_simple! {Tpm2bTemplate, buffer}
 impl_try_marshalable_tpm2b_simple! {Tpm2bLabel, buffer}
 
+// Adds common helpers for TPML type $T.
+macro_rules! impl_tpml {
+    ($T:ty,  $ListField:ident, $ListType:ty, $ListCapacity:ident) => {
+        // Implement Default for the type. This cannot usually be derived, because $ListCapacity is too large.
+        impl Default for $T {
+            fn default() -> Self {
+                Self {
+                    count: 0,
+                    $ListField: [<$ListType>::default(); $ListCapacity as usize],
+                }
+            }
+        }
+
+        impl $T {
+            pub fn new(elements: &[$ListType]) -> TpmResult<$T> {
+                let mut x = Self::default();
+                if elements.len() > x.$ListField.len() {
+                    return Err(TpmError::TPM2_RC_SIZE);
+                }
+                x.count = elements.len() as u32;
+                x.$ListField[..elements.len()].copy_from_slice(elements);
+                Ok(x)
+            }
+
+            pub fn add(&mut self, element: &$ListType) -> TpmResult<()> {
+                if self.count() == self.$ListField.len() {
+                    return Err(TpmError::TPM2_RC_SIZE);
+                }
+                self.$ListField[self.count()] = *element;
+                self.count += 1;
+                Ok(())
+            }
+
+            pub fn count(&self) -> usize {
+                self.count as usize
+            }
+
+            pub fn $ListField(&self) -> &[$ListType] {
+                &self.$ListField[..self.count()]
+            }
+        }
+    };
+}
+impl_tpml! {TpmlPcrSelection, pcr_selections, TpmsPcrSelection, TPM2_NUM_PCR_BANKS}
+impl_tpml! {TpmlAlgProperty, alg_properties, TpmsAlgProperty, TPM2_MAX_CAP_ALGS}
+impl_tpml! {TpmlHandle, handle, TPM2Handle, TPM2_MAX_CAP_HANDLES}
+impl_tpml! {TpmlCc, command_codes, TPM2CC, TPM2_MAX_CAP_CC}
+impl_tpml! {TpmlTaggedTpmProperty, tpm_property, TpmsTaggedProperty, TPM2_MAX_TPM_PROPERTIES}
+impl_tpml! {TpmlTaggedPcrProperty, pcr_property, TpmsTaggedPcrSelect, TPM2_MAX_PCR_PROPERTIES}
+impl_tpml! {TpmlEccCurve, ecc_curves, TPM2ECCCurve, TPM2_MAX_ECC_CURVES}
+impl_tpml! {TpmlTaggedPolicy, policies, TpmsTaggedPolicy, TPM2_MAX_TAGGED_POLICIES}
+impl_tpml! {TpmlDigest, digests, Tpm2bDigest, TPML_DIGEST_MAX_DIGESTS}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1219,6 +1273,36 @@ mod tests {
     #[test]
     fn test_try_unmarshal_tpm2b_template() {
         impl_test_tpm2b_simple! {Tpm2bTemplate};
+    }
+
+    #[test]
+    fn test_impl_tpml_new() {
+        let elements: Vec<TPM2Handle> = (0..TPM2_MAX_CAP_HANDLES + 1)
+            .map(|i| TPM2Handle(i as u32))
+            .collect();
+        for x in 0..TPM2_MAX_CAP_HANDLES {
+            let slice = &elements.as_slice()[..x];
+            let list = TpmlHandle::new(&slice).unwrap();
+            assert_eq!(list.count(), x);
+            assert_eq!(list.handle(), slice);
+        }
+        assert!(TpmlHandle::new(elements.as_slice()).is_err());
+    }
+
+    #[test]
+    fn test_impl_tpml_default_add() {
+        let elements: Vec<TPM2Handle> = (0..TPM2_MAX_CAP_HANDLES + 1)
+            .map(|i| TPM2Handle(i as u32))
+            .collect();
+        let mut list = TpmlHandle::default();
+        for x in 0..TPM2_MAX_CAP_HANDLES {
+            let slice = &elements.as_slice()[..x];
+            assert_eq!(list.handle(), slice);
+
+            list.add(&elements.get(x).unwrap()).unwrap();
+            assert_eq!(list.count(), x + 1);
+        }
+        assert!(TpmlHandle::new(elements.as_slice()).is_err());
     }
 
     #[test]
