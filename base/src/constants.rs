@@ -598,7 +598,8 @@ pub enum TPM2PT {
 // See definition in Part 2: Structures, section 6.14.
 #[open_enum]
 #[repr(u32)]
-#[derive(Copy, Clone, Default)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, Default, Marshal)]
 pub enum TPM2PTPCR {
     // a SET bit in the TPMS_PCR_SELECT indicates that the PCR is saved and
     // restored by TPM_SU_STATE

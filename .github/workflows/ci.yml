@@ -35,6 +35,19 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
+  
+  integration_test:
+    name: Client Integration Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Build container for simulator tests
+        run: docker compose build
+
+      - name: Run integration tests against simulator
+        run: cd client && docker compose run simulator_tests
 
   fmt:
     name: Rustfmt

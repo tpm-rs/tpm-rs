@@ -1,4 +1,4 @@
-use crate::constants::{TPM2Cap, TPM2CC, TPM2PT};
+use crate::constants::{TPM2Cap, TPM2CC, TPM2PT, TPM2SU};
 use crate::errors::TpmResult;
 use crate::{Marshal, Marshalable, UnmarshalBuf};
 use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
@@ -6,6 +6,16 @@ use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
 pub trait TpmCommand: Marshalable {
     const CMD_CODE: TPM2CC;
     type RespT: Marshalable;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Marshal)]
+pub struct StartupCmd {
+    pub startup_type: TPM2SU,
+}
+impl TpmCommand for StartupCmd {
+    const CMD_CODE: TPM2CC = TPM2CC::Startup;
+    type RespT = ();
 }
 
 #[repr(C)]
@@ -21,10 +31,10 @@ impl TpmCommand for GetCapabilityCmd {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct GetCapabilityResp {
-    more_data: TpmiYesNo,
-    capability_data: TpmsCapabilityData,
+    pub more_data: TpmiYesNo,
+    pub capability_data: TpmsCapabilityData,
 }
 
 #[repr(C)]

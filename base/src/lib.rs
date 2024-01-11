@@ -64,7 +64,7 @@ pub struct TpmiEccCurve(u16);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiYesNo(u8);
+pub struct TpmiYesNo(pub u8);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
@@ -89,7 +89,7 @@ pub struct TpmaObject(u32);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmaAlgorithm(u32);
+pub struct TpmaAlgorithm(pub u32);
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaCc(u32);
@@ -721,7 +721,7 @@ impl Marshalable for TpmtSensitive {
 }
 
 #[repr(C, u32)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub enum TpmsCapabilityData {
     Algorithms(TpmlAlgProperty) = TPM2Cap::Algs.0,
     Handles(TpmlHandle) = TPM2Cap::Handles.0,
@@ -736,15 +736,15 @@ pub enum TpmsCapabilityData {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlAlgProperty {
-    count: u32,
+    pub count: u32,
     #[length(count)]
-    alg_properties: [TpmsAlgProperty; TPM2_MAX_CAP_ALGS],
+    pub alg_properties: [TpmsAlgProperty; TPM2_MAX_CAP_ALGS],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlHandle {
     count: u32,
     #[length(count)]
@@ -760,7 +760,7 @@ pub struct TpmlCca {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlCc {
     count: u32,
     #[length(count)]
@@ -768,15 +768,15 @@ pub struct TpmlCc {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlTaggedTpmProperty {
     pub count: u32,
     #[length(count)]
-    tpm_property: [TpmsTaggedProperty; TPM2_MAX_TPM_PROPERTIES],
+    pub tpm_property: [TpmsTaggedProperty; TPM2_MAX_TPM_PROPERTIES],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlTaggedPcrProperty {
     count: u32,
     #[length(count)]
@@ -784,7 +784,7 @@ pub struct TpmlTaggedPcrProperty {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlEccCurve {
     count: u32,
     #[length(count)]
@@ -792,7 +792,7 @@ pub struct TpmlEccCurve {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmlTaggedPolicy {
     count: u32,
     #[length(count)]
@@ -800,32 +800,32 @@ pub struct TpmlTaggedPolicy {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Default, Debug, Marshal)]
 pub struct TpmsAlgProperty {
-    alg: u16,
-    alg_properties: TpmaAlgorithm,
+    pub alg: TPM2AlgID,
+    pub alg_properties: TpmaAlgorithm,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Default, Debug, Marshal)]
 pub struct TpmsTaggedProperty {
-    pub property: u32,
+    pub property: TPM2PT,
     pub value: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Default, Debug, Marshal)]
 pub struct TpmsTaggedPcrSelect {
-    tag: u32,
+    tag: TPM2PTPCR,
     size_of_select: u8,
     #[length(size_of_select)]
     pcr_select: [u8; TPM2_PCR_SELECT_MAX as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal, Default)]
 pub struct TpmsTaggedPolicy {
-    handle: u32,
+    handle: TPM2Handle,
     policy_hash: TpmtHa,
 }
 
