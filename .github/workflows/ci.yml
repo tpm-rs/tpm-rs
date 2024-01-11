@@ -43,11 +43,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Build container for simulator tests
-        run: cd client && docker build -t simulator_tests .
-
-      - name: Run integration tests against simulator
-        run: cd client && docker compose run simulator_tests
+      - name: Build container and run simulator tests in it
+        run: cd client && docker build -t simulator_tests . && docker compose run simulator_tests
 
   fmt:
     name: Rustfmt
