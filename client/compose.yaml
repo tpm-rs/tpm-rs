@@ -1,6 +1,6 @@
 services:
   simulator_tests:
-    build: ../
+    build: .
     volumes:
        - ../:/tpm-rs
     # Simulator tests must be single-threaded because they use a single TCP port.
