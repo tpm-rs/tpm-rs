@@ -44,10 +44,10 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Build container for simulator tests
-        run: docker compose build
+        run: cd client && docker build -t simulator_tests .
 
       - name: Run integration tests against simulator
-        run: cd client && docker compose run simulator_tests
+        run: docker compose run simulator_tests
 
   fmt:
     name: Rustfmt
