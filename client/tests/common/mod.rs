@@ -1,10 +1,10 @@
 #[cfg(feature = "tpm-simulator-tests")]
 pub mod tcp_simulator {
-    use client::Tpm;
     use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
     use std::net::TcpStream;
     use std::process::{Child, Command};
     use tpm2_rs_base::errors::{TpmError, TpmResult};
+    use tpm2_rs_client::Tpm;
     use zerocopy::big_endian::U32;
     use zerocopy::AsBytes;
 
