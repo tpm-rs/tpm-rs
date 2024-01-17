@@ -1,5 +1,5 @@
 [package]
-name = "client"
+name = "tpm2-rs-client"
 version = "0.1.0"
 edition = "2021"
 
@@ -12,4 +12,5 @@ tpm2-rs-base = { path = "../base" }
 tpm2-rs-marshal = { path = "../marshal" }
 
 [dev-dependencies]
-zerocopy = { version="0.7.0", features = ["derive"] }
+zerocopy = { version="0.7.0", features = ["derive"] } 
+tpm2-rs-features-client = {path = "feature" }

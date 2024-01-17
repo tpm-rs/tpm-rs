@@ -1,38 +1,25 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(not(test), no_std)]
 use core::mem::size_of;
 use core::num::NonZeroU32;
 use tpm2_rs_base::commands::*;
-use tpm2_rs_base::constants::{TPM2Cap, TPM2CC, TPM2PT, TPM2ST};
+use tpm2_rs_base::constants::{TPM2CC, TPM2ST};
 use tpm2_rs_base::errors::{TpmError, TpmResult};
 use tpm2_rs_base::marshal::{Marshal, Marshalable, UnmarshalBuf};
-use tpm2_rs_base::{TpmiStCommandTag, TpmsCapabilityData};
+use tpm2_rs_base::TpmiStCommandTag;
 
-const MAX_CMD_SIZE: usize = 4096 - CmdHeader::wire_size();
-const MAX_RESP_SIZE: usize = 4096 - RespHeader::wire_size();
+pub const MAX_CMD_SIZE: usize = 4096 - CmdHeader::wire_size();
+pub const MAX_RESP_SIZE: usize = 4096 - RespHeader::wire_size();
 
 pub trait Tpm {
     fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TpmResult<()>;
 }
 
-pub fn get_manufacturer_id<T>(tpm: &mut T) -> TpmResult<u32>
-where
-    T: Tpm,
-{
-    const CMD: GetCapabilityCmd = GetCapabilityCmd {
-        capability: TPM2Cap::TPMProperties,
-        property: TPM2PT::Manufacturer,
-        property_count: 1,
-    };
-    let resp = run_command(&CMD, tpm)?;
-    if let TpmsCapabilityData::TpmProperties(prop) = resp.capability_data {
-        if prop.count == 1 {
-            Ok(prop.tpm_property[0].value)
-        } else {
-            Err(TpmError::TPM2_RC_SIZE)
-        }
-    } else {
-        Err(TpmError::TPM2_RC_SELECTOR)
-    }
+pub fn get_capability<T: Tpm>(
+    tpm: &mut T,
+    command: &GetCapabilityCmd,
+) -> TpmResult<GetCapabilityResp> {
+    run_command(command, tpm)
 }
 
 #[repr(C)]
@@ -52,9 +39,9 @@ impl CmdHeader {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshal, Debug)]
 pub struct RespHeader {
-    tag: TPM2ST,
-    size: u32,
-    rc: u32,
+    pub tag: TPM2ST,
+    pub size: u32,
+    pub rc: u32,
 }
 impl RespHeader {
     // This could be generated, but it won't work once we add sessions.
@@ -96,10 +83,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tpm2_rs_base::{
-        constants::TPM2AlgID, errors::TpmError, TpmaAlgorithm, TpmiYesNo, TpmlAlgProperty,
-        TpmlTaggedTpmProperty, TpmsAlgProperty, TpmsTaggedProperty,
-    };
+    use tpm2_rs_base::errors::TpmError;
+
     // A Tpm that just returns a general failure error.
     struct ErrorTpm();
     impl Tpm for ErrorTpm {
@@ -205,76 +190,6 @@ mod tests {
         assert_eq!(
             run_command(&cmd, &mut fake_tpm),
             Err(TpmError::TSS2_MU_RC_BAD_SIZE)
-        );
-    }
-
-    struct FakeTpm {
-        len: usize,
-        response: [u8; MAX_RESP_SIZE],
-    }
-    impl Default for FakeTpm {
-        fn default() -> Self {
-            FakeTpm {
-                len: 0,
-                response: [0; MAX_RESP_SIZE],
-            }
-        }
-    }
-    impl Tpm for FakeTpm {
-        fn transact(&mut self, _: &[u8], response: &mut [u8]) -> TpmResult<()> {
-            let mut tx_header = RespHeader {
-                tag: TPM2ST::NoSessions,
-                size: 0,
-                rc: 0,
-            };
-            let off = tx_header.try_marshal(response)?;
-            let length = off + self.response.len();
-            if length > response.len() {
-                return Err(TpmError::TSS2_MU_RC_BAD_SIZE);
-            }
-            response[off..length].copy_from_slice(&self.response);
-            tx_header.size = length as u32;
-            tx_header.try_marshal(response)?;
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn test_get_manufacturer_too_many_properties() {
-        let response = GetCapabilityResp {
-            more_data: TpmiYesNo(0),
-            capability_data: TpmsCapabilityData::TpmProperties(TpmlTaggedTpmProperty {
-                count: 6,
-                tpm_property: [TpmsTaggedProperty {
-                    property: TPM2PT::Manufacturer,
-                    value: 4,
-                }; 127],
-            }),
-        };
-        let mut tpm = FakeTpm::default();
-        tpm.len = response.try_marshal(&mut tpm.response).unwrap();
-
-        assert_eq!(get_manufacturer_id(&mut tpm), Err(TpmError::TPM2_RC_SIZE));
-    }
-
-    #[test]
-    fn test_get_manufacturer_wrong_type_properties() {
-        let response = GetCapabilityResp {
-            more_data: TpmiYesNo(0),
-            capability_data: TpmsCapabilityData::Algorithms(TpmlAlgProperty {
-                count: 1,
-                alg_properties: [TpmsAlgProperty {
-                    alg: TPM2AlgID::SHA256,
-                    alg_properties: TpmaAlgorithm(0),
-                }; 127],
-            }),
-        };
-        let mut tpm = FakeTpm::default();
-        tpm.len = response.try_marshal(&mut tpm.response).unwrap();
-
-        assert_eq!(
-            get_manufacturer_id(&mut tpm),
-            Err(TpmError::TPM2_RC_SELECTOR)
         );
     }
 }
