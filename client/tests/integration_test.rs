@@ -15,8 +15,9 @@ mod common;
 mod simulator_tests {
 
     use crate::common::tcp_simulator::*;
-    use client::{get_manufacturer_id, run_command};
     use tpm2_rs_base::{commands::StartupCmd, constants::TPM2SU};
+    use tpm2_rs_client::run_command;
+    use tpm2_rs_features_client::*;
 
     const TPM_SIMULATOR_ENV_VAR: &str = "TPM_RS_SIMULATOR";
     fn get_simulator_path() -> String {
