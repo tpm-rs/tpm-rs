@@ -21,8 +21,8 @@ where
     };
     let resp = run_command(&CMD, tpm)?;
     if let TpmsCapabilityData::TpmProperties(prop) = resp.capability_data {
-        if prop.count == 1 {
-            Ok(prop.tpm_property[0].value)
+        if prop.count() == 1 {
+            Ok(prop.tpm_property()[0].value)
         } else {
             Err(TpmError::TPM2_RC_SIZE)
         }
@@ -76,13 +76,15 @@ mod tests {
     fn test_get_manufacturer_too_many_properties() {
         let response = GetCapabilityResp {
             more_data: TpmiYesNo(0),
-            capability_data: TpmsCapabilityData::TpmProperties(TpmlTaggedTpmProperty {
-                count: 6,
-                tpm_property: [TpmsTaggedProperty {
-                    property: TPM2PT::Manufacturer,
-                    value: 4,
-                }; 127],
-            }),
+            capability_data: TpmsCapabilityData::TpmProperties(
+                TpmlTaggedTpmProperty::new(
+                    &[TpmsTaggedProperty {
+                        property: TPM2PT::Manufacturer,
+                        value: 4,
+                    }; 6],
+                )
+                .unwrap(),
+            ),
         };
         let mut tpm = FakeTpm::default();
         tpm.len = response.try_marshal(&mut tpm.response).unwrap();
@@ -94,13 +96,13 @@ mod tests {
     fn test_get_manufacturer_wrong_type_properties() {
         let response = GetCapabilityResp {
             more_data: TpmiYesNo(0),
-            capability_data: TpmsCapabilityData::Algorithms(TpmlAlgProperty {
-                count: 1,
-                alg_properties: [TpmsAlgProperty {
+            capability_data: TpmsCapabilityData::Algorithms(
+                TpmlAlgProperty::new(&[TpmsAlgProperty {
                     alg: TPM2AlgID::SHA256,
                     alg_properties: TpmaAlgorithm(0),
-                }; 127],
-            }),
+                }])
+                .unwrap(),
+            ),
         };
         let mut tpm = FakeTpm::default();
         tpm.len = response.try_marshal(&mut tpm.response).unwrap();
