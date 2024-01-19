@@ -2,9 +2,16 @@ use crate::constants::{TPM2Cap, TPM2CC, TPM2PT, TPM2SU};
 use crate::{Marshal, Marshalable, UnmarshalBuf};
 use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
 
+/// Trait for a TPM command transaction.
 pub trait TpmCommand: Marshalable {
+    /// The command code.
     const CMD_CODE: TPM2CC;
+    /// The command handles type.
+    type Handles: Marshalable + Default;
+    /// The response parameters type.
     type RespT: Marshalable;
+    /// The reponse handles type.
+    type RespHandles: Marshalable;
 }
 
 #[repr(C)]
@@ -14,7 +21,9 @@ pub struct StartupCmd {
 }
 impl TpmCommand for StartupCmd {
     const CMD_CODE: TPM2CC = TPM2CC::Startup;
+    type Handles = ();
     type RespT = ();
+    type RespHandles = ();
 }
 
 #[repr(C)]
@@ -26,7 +35,9 @@ pub struct GetCapabilityCmd {
 }
 impl TpmCommand for GetCapabilityCmd {
     const CMD_CODE: TPM2CC = TPM2CC::GetCapability;
+    type Handles = ();
     type RespT = GetCapabilityResp;
+    type RespHandles = ();
 }
 
 #[repr(C)]
@@ -43,7 +54,9 @@ pub struct PcrReadCmd {
 }
 impl TpmCommand for PcrReadCmd {
     const CMD_CODE: TPM2CC = TPM2CC::PCRRead;
+    type Handles = ();
     type RespT = PcrReadResp;
+    type RespHandles = ();
 }
 
 #[repr(C)]

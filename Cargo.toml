@@ -12,6 +12,7 @@ members = [
 
 [workspace.dependencies]
 # Third party dependencies
+arrayvec = { version="0.7.4", default-features=false }
 bitflags = "2.4.2"
 hex-literal = { version = "0.4.1" }
 open-enum = "0.4.1"
