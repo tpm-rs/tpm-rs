@@ -3,6 +3,7 @@
 #![cfg_attr(not(test), no_std)]
 
 use crate::{constants::*, errors::*, marshal::*};
+use core::cmp::min;
 use core::mem::{align_of, size_of};
 pub use tpm2_rs_errors as errors;
 pub use tpm2_rs_marshal as marshal;
@@ -1053,17 +1054,17 @@ macro_rules! impl_tpml {
 
         impl $T {
             pub fn new(elements: &[$ListType]) -> TpmResult<$T> {
-                let mut x = Self::default();
-                if elements.len() > x.$ListField.len() {
+                if elements.len() > $ListCapacity as usize {
                     return Err(TpmError::TPM2_RC_SIZE);
                 }
+                let mut x = Self::default();
                 x.count = elements.len() as u32;
                 x.$ListField[..elements.len()].copy_from_slice(elements);
                 Ok(x)
             }
 
             pub fn add(&mut self, element: &$ListType) -> TpmResult<()> {
-                if self.count() == self.$ListField.len() {
+                if self.count() >= self.$ListField.len() {
                     return Err(TpmError::TPM2_RC_SIZE);
                 }
                 self.$ListField[self.count()] = *element;
@@ -1076,7 +1077,7 @@ macro_rules! impl_tpml {
             }
 
             pub fn $ListField(&self) -> &[$ListType] {
-                &self.$ListField[..self.count()]
+                &self.$ListField[..min(self.count(), $ListCapacity as usize)]
             }
         }
     };
@@ -1286,7 +1287,10 @@ mod tests {
             assert_eq!(list.count(), x);
             assert_eq!(list.handle(), slice);
         }
-        assert!(TpmlHandle::new(elements.as_slice()).is_err());
+        assert!(
+            TpmlHandle::new(elements.as_slice()).is_err(),
+            "Creating a TpmlHandle with more elements than capacity should fail."
+        );
     }
 
     #[test]
@@ -1302,7 +1306,10 @@ mod tests {
             list.add(&elements.get(x).unwrap()).unwrap();
             assert_eq!(list.count(), x + 1);
         }
-        assert!(TpmlHandle::new(elements.as_slice()).is_err());
+        assert!(
+            TpmlHandle::new(elements.as_slice()).is_err(),
+            "Creating a TpmlHandle with more elements than capacity should fail."
+        );
     }
 
     #[test]
