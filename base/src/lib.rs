@@ -11,91 +11,91 @@ pub use tpm2_rs_marshal as marshal;
 pub mod commands;
 pub mod constants;
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaLocality(u8);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct Tpm2KeyBits(u16);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct Tpm2Generated(u32);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaNv(u32);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiAlgHash(TPM2AlgID);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiAlgKdf(TPM2AlgID);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiAlgPublic(TPM2AlgID);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiAlgSymMode(TPM2AlgID);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiAlgSymObject(TPM2AlgID);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiAlgKeyedhashScheme(TPM2AlgID);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiAlgRsaScheme(TPM2AlgID);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiAlgEccScheme(TPM2AlgID);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiAlgAsymScheme(TPM2AlgID);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiRhNvIndex(u32);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiEccCurve(u16);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiYesNo(pub u8);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiStAttest(u16);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiAesKeyBits(u16);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiSm4KeyBits(u16);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiCamelliaKeyBits(u16);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiRsaKeyBits(u16);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaObject(u32);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaAlgorithm(pub u32);
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaCc(u32);
 
-#[repr(C)]
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiStCommandTag(pub TPM2ST);
 
