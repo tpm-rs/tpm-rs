@@ -3,9 +3,7 @@ name = "tpm2-rs-base"
 version = "0.0.1"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-tpm2-rs-errors = { path = "../errors" }
-tpm2-rs-marshal = { path = "../marshal" }
-open-enum = "0.4.0"
+tpm2-rs-errors = { workspace = true }
+tpm2-rs-marshal = { workspace = true }
+open-enum = { workspace = true }

@@ -1,10 +1,29 @@
 [workspace]
-resolver =  "2"
+resolver = "2"
 members = [
     "base",
     "client",
     "client/feature",
+    "errors",
     "marshal",
     "marshal/derive",
     "service",
 ]
+
+[workspace.dependencies]
+# Third party dependencies
+hex-literal = { version = "0.4.1" }
+open-enum = "0.4.0"
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
+zerocopy = { version = "0.7.0", features = ["derive"] }
+
+# Common workspace crates
+tpm2-rs-base = { path = "base" }
+tpm2-rs-client = { path = "client" }
+tpm2-rs-errors = { path = "errors" }
+tpm2-rs-features-client = { path = "client/feature" }
+tpm2-rs-marshal = { path = "marshal" }
+tpm2-rs-marshal-derive = { path = "marshal/derive" }
+tpm2-rs-service = { path = "service" }
