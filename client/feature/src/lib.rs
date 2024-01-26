@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 use tpm2_rs_base::commands::*;
 use tpm2_rs_base::constants::{TPM2Cap, TPM2PT};
-use tpm2_rs_base::errors::{TpmError, TpmResult};
+use tpm2_rs_base::errors::{TpmRcError, TpmResult};
 use tpm2_rs_base::TpmsCapabilityData;
 use tpm2_rs_client::*;
 
@@ -24,10 +24,10 @@ where
         if prop.count() == 1 {
             Ok(prop.tpm_property()[0].value)
         } else {
-            Err(TpmError::TPM2_RC_SIZE)
+            Err(TpmRcError::Size.into())
         }
     } else {
-        Err(TpmError::TPM2_RC_SELECTOR)
+        Err(TpmRcError::Selector.into())
     }
 }
 
@@ -35,6 +35,7 @@ where
 mod tests {
     use super::*;
     use tpm2_rs_base::constants::{TPM2AlgID, TPM2ST};
+    use tpm2_rs_base::errors::TssRcError;
     use tpm2_rs_base::marshal::Marshalable;
     use tpm2_rs_base::{
         TpmaAlgorithm, TpmiYesNo, TpmlAlgProperty, TpmlTaggedTpmProperty, TpmsAlgProperty,
@@ -63,7 +64,7 @@ mod tests {
             let off = tx_header.try_marshal(response)?;
             let length = off + self.response.len();
             if length > response.len() {
-                return Err(TpmError::TSS2_MU_RC_BAD_SIZE);
+                return Err(TssRcError::BadSize.into());
             }
             response[off..length].copy_from_slice(&self.response);
             tx_header.size = length as u32;
@@ -89,7 +90,7 @@ mod tests {
         let mut tpm = FakeTpm::default();
         tpm.len = response.try_marshal(&mut tpm.response).unwrap();
 
-        assert_eq!(get_manufacturer_id(&mut tpm), Err(TpmError::TPM2_RC_SIZE));
+        assert_eq!(get_manufacturer_id(&mut tpm), Err(TpmRcError::Size.into()));
     }
 
     #[test]
@@ -109,7 +110,7 @@ mod tests {
 
         assert_eq!(
             get_manufacturer_id(&mut tpm),
-            Err(TpmError::TPM2_RC_SELECTOR)
+            Err(TpmRcError::Selector.into())
         );
     }
 }

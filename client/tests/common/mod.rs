@@ -3,7 +3,7 @@ pub mod tcp_simulator {
     use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
     use std::net::TcpStream;
     use std::process::{Child, Command};
-    use tpm2_rs_base::errors::{TpmError, TpmResult};
+    use tpm2_rs_base::errors::{TpmResult, TssRcError};
     use tpm2_rs_client::Tpm;
     use zerocopy::big_endian::U32;
     use zerocopy::AsBytes;
@@ -102,17 +102,14 @@ pub mod tcp_simulator {
             let mut val = U32::ZERO;
             self.tpm_conn
                 .read_exact(val.as_bytes_mut())
-                .map_err(|_| TpmError::TSS2_BASE_RC_IO_ERROR)?;
+                .map_err(|_| TssRcError::IoError)?;
             Ok(val.get())
         }
     }
 
     impl Tpm for TcpTpm {
         fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TpmResult<()> {
-            let cmd_size: u32 = command
-                .len()
-                .try_into()
-                .map_err(|_| TpmError::TSS2_BASE_RC_BAD_SIZE)?;
+            let cmd_size: u32 = command.len().try_into().map_err(|_| TssRcError::BadSize)?;
             let tcp_hdr = TcpTpmHeader {
                 tcp_cmd: U32::new(TpmCommand::SendCommand as u32),
                 locality: 0,
@@ -122,19 +119,19 @@ pub mod tcp_simulator {
                 .tpm_conn
                 .write_vectored(&[IoSlice::new(tcp_hdr.as_bytes()), IoSlice::new(command)]);
             if txed.unwrap_or(0) != tcp_hdr.as_bytes().len() + command.len() {
-                return Err(TpmError::TSS2_BASE_RC_IO_ERROR);
+                return Err(TssRcError::IoError.into());
             }
 
             // Response contains a u32 size, the TPM response, and then an always-zero u32 trailer.
             let resp_size = self.read_tpm_u32()?;
             if resp_size as usize > response.len() {
-                return Err(TpmError::TSS2_BASE_RC_INSUFFICIENT_BUFFER);
+                return Err(TssRcError::InsufficientBuffer.into());
             }
             self.tpm_conn
                 .read_exact(&mut response[..resp_size as usize])
-                .map_err(|_| TpmError::TSS2_BASE_RC_IO_ERROR)?;
+                .map_err(|_| TssRcError::IoError)?;
             if self.read_tpm_u32()? != 0 {
-                return Err(TpmError::TSS2_BASE_RC_IO_ERROR);
+                return Err(TssRcError::IoError.into());
             }
             Ok(())
         }

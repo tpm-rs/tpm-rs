@@ -1,24 +1,45 @@
 use core::num::NonZeroU32;
 
-/// Represents success or [`TpmError`] failure
-pub type TpmResult<T> = Result<T, TpmError>;
+/// Represents success or [`TpmRcError`] failure.
+pub type TpmRcResult<T> = Result<T, TpmRcError>;
 
-/// Represents a TPM 2.0 error as defined specification
+/// Represents a TPM 2.0 service error as defined specification as TPM_RC.
 #[derive(PartialEq, Eq, Clone, Copy)]
 #[cfg_attr(test, derive(Debug))]
-pub struct TpmError(NonZeroU32);
+pub struct TpmRcError(NonZeroU32);
 
 // Allow constant to have enum-style case.
 #[allow(non_upper_case_globals)]
-impl TpmError {
+impl TpmRcError {
+    /// Offset for Format 1 style TPM_RC error codes.
+    const RC_FMT1: u32 = 0x080;
+
     /// Asymmetric algorithm not supported or not correct (`TPM_RC_ASYMMETRIC`).
-    pub const Asymmetric: Self = Self::new(0x81);
+    pub const Asymmetric: Self = Self::new(Self::RC_FMT1 + 0x001);
 
     /// Asymmetric algorithm not supported or not correct for the specified
     /// parameters (`TPM_RC_ASYMMETRIC`).
     #[allow(non_snake_case)]
     pub const fn AsymmetricFor(on: ErrorType, pos: ErrorPosition) -> Self {
         Self::new(Self::Asymmetric.0.get() | on.to_mask() | pos.to_mask())
+    }
+
+    /// Structure is the wrong size (`TPM_RC_SIZE`).
+    pub const Size: Self = Self::new(Self::RC_FMT1 + 0x015);
+
+    /// Structure is the wrong size for the specified parameters (`TPM_RC_SIZE`).
+    #[allow(non_snake_case)]
+    pub const fn SizeFor(on: ErrorType, pos: ErrorPosition) -> Self {
+        Self::new(Self::Size.0.get() | on.to_mask() | pos.to_mask())
+    }
+
+    /// Union selector is incorrect (`TPM_RC_SELECTOR`).
+    pub const Selector: Self = Self::new(Self::RC_FMT1 + 0x018);
+
+    /// Union selector is incorrect for the specified parameters (`TPM_RC_SELECTOR`).
+    #[allow(non_snake_case)]
+    pub const fn SelectorFor(on: ErrorType, pos: ErrorPosition) -> Self {
+        Self::new(Self::Selector.0.get() | on.to_mask() | pos.to_mask())
     }
 
     /// The tag is bad (`TPM_RC_BAD_TAG`).
@@ -70,13 +91,13 @@ impl TpmError {
             ErrorType::from_mask(self.get()),
             ErrorPosition::from_mask(self.get()),
         ) {
-            // TODO is is possible to have ErrorType without ErrorPosition?
+            // TODO: Is it possible to have ErrorType without ErrorPosition?
             (Some(on), Some(pos)) => Some((on, pos)),
             _ => None,
         }
     }
 
-    /// Creates a new [`TpmError`] from a non-zero value.
+    /// Creates a new [`TpmRcError`] from a non-zero value.
     ///
     /// # Panics
     ///
@@ -84,26 +105,12 @@ impl TpmError {
     const fn new(val: u32) -> Self {
         match NonZeroU32::new(val) {
             Some(val) => Self(val),
-            None => panic!("TpmError cannot be 0"),
+            None => panic!("TpmRcError cannot be 0"),
         }
     }
 }
 
-/// Error returned when trying to convert `0` into `TpmError`.
-#[cfg_attr(test, derive(Debug))]
-pub struct TpmErrorCannotBeZero;
-
-impl TryFrom<u32> for TpmError {
-    type Error = TpmErrorCannotBeZero;
-    fn try_from(val: u32) -> Result<Self, Self::Error> {
-        match NonZeroU32::try_from(val) {
-            Ok(val) => Ok(TpmError(val)),
-            Err(_) => Err(TpmErrorCannotBeZero),
-        }
-    }
-}
-
-/// Represents the type of error for a Format1 `TpmError` code.
+/// Represents the type of error for a Format1 `TpmRcError` code.
 #[derive(PartialEq, Eq, Clone, Copy)]
 #[cfg_attr(test, derive(Debug))]
 pub enum ErrorType {
@@ -142,7 +149,7 @@ impl ErrorType {
     }
 }
 
-/// Represents the positional parameter of the error starting from 1 of a Format1 [`TpmError`].
+/// Represents the positional parameter of the error starting from 1 of a Format1 [`TpmRcError`].
 #[derive(PartialEq, Eq, Clone, Copy)]
 #[cfg_attr(test, derive(Debug))]
 pub enum ErrorPosition {
@@ -208,19 +215,19 @@ impl ErrorPosition {
     }
 }
 
+impl From<TpmRcError> for super::TpmError {
+    fn from(val: TpmRcError) -> Self {
+        super::TpmError(val.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_try_from() {
-        assert!(TpmError::try_from(0).is_err());
-        assert_eq!(TpmError::Failure, TpmError::try_from(0x101).unwrap());
-    }
-
-    #[test]
     fn test_format1() {
-        let error = TpmError::AsymmetricFor(ErrorType::Parameter, ErrorPosition::Pos2);
+        let error = TpmRcError::AsymmetricFor(ErrorType::Parameter, ErrorPosition::Pos2);
         assert_eq!(error.get(), 0x2C1);
 
         let (on, pos) = error
@@ -232,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_warning() {
-        let error = TpmError::Memory;
+        let error = TpmRcError::Memory;
         assert!(error.is_warning());
     }
 }

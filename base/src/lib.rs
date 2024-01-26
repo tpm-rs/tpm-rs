@@ -959,7 +959,8 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
             fn from_bytes(buffer: &[u8]) -> TpmResult<Self> {
                 // Overflow check
                 if buffer.len() > core::cmp::min(u16::MAX as usize, Self::MAX_BUFFER_SIZE) {
-                    return Err(TpmError::TSS2_MU_RC_BAD_SIZE);
+                    // TODO: Should this return error in server or client value space?
+                    return Err(TssRcError::BadSize.into());
                 }
 
                 let mut dest: Self = Self {
@@ -986,7 +987,8 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
                 // Ensure the buffer is large enough to fullfill the size indicated
                 let sized_buffer = buffer.get(got_size as usize);
                 if !sized_buffer.is_some() {
-                    return Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER);
+                    // TODO: Should this return error in server or client value space?
+                    return Err(TssRcError::InsufficientBuffer.into());
                 }
 
                 let mut dest: Self = Self {
@@ -996,7 +998,8 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
 
                 // Make sure the size indicated isn't too large for the types buffer
                 if sized_buffer.unwrap().len() > dest.$F.len() {
-                    return Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER);
+                    // TODO: Should this return error in server or client value space?
+                    return Err(TssRcError::InsufficientBuffer.into());
                 }
                 dest.$F[..got_size.into()].copy_from_slice(&sized_buffer.unwrap());
 
@@ -1008,7 +1011,8 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
                 let (_, rest) = buffer.split_at_mut(used);
                 let buffer_marsh = self.get_size() as usize;
                 if buffer_marsh > (core::cmp::max(Self::MAX_BUFFER_SIZE, rest.len())) {
-                    return Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER);
+                    // TODO: Should this return error in server or client value space?
+                    return Err(TssRcError::InsufficientBuffer.into());
                 }
                 rest[..buffer_marsh].copy_from_slice(&self.$F[..buffer_marsh]);
                 Ok(used + buffer_marsh)
@@ -1055,7 +1059,8 @@ macro_rules! impl_tpml {
         impl $T {
             pub fn new(elements: &[$ListType]) -> TpmResult<$T> {
                 if elements.len() > $ListCapacity as usize {
-                    return Err(TpmError::TPM2_RC_SIZE);
+                    // TODO: Should this return error in server or client value space?
+                    return Err(TpmRcError::Size.into());
                 }
                 let mut x = Self::default();
                 x.count = elements.len() as u32;
@@ -1065,7 +1070,8 @@ macro_rules! impl_tpml {
 
             pub fn add(&mut self, element: &$ListType) -> TpmResult<()> {
                 if self.count() >= self.$ListField.len() {
-                    return Err(TpmError::TPM2_RC_SIZE);
+                    // TODO: Should this return error in server or client value space?
+                    return Err(TpmRcError::Size.into());
                 }
                 self.$ListField[self.count()] = *element;
                 self.count += 1;
@@ -1402,6 +1408,6 @@ mod tests {
         // Test invalid selector value.
         assert!(TPM2AlgID::SHA256.try_marshal(&mut buffer).is_ok());
         unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
-        assert_eq!(unmarsh.err(), Some(TpmError::TPM2_RC_SELECTOR));
+        assert_eq!(unmarsh.err(), Some(TpmRcError::Selector.into()));
     }
 }

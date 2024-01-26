@@ -1,10 +1,9 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
 use core::mem::size_of;
-use core::num::NonZeroU32;
 use tpm2_rs_base::commands::*;
 use tpm2_rs_base::constants::{TPM2CC, TPM2ST};
-use tpm2_rs_base::errors::{TpmError, TpmResult};
+use tpm2_rs_base::errors::{TpmError, TpmResult, TssRcError};
 use tpm2_rs_base::marshal::{Marshal, Marshalable, UnmarshalBuf};
 use tpm2_rs_base::TpmiStCommandTag;
 
@@ -69,12 +68,12 @@ where
     let (hdr, resp) = resp_buffer.split_at(RespHeader::wire_size());
     let mut unmarsh = UnmarshalBuf::new(hdr);
     let rh = RespHeader::try_unmarshal(&mut unmarsh)?;
-    if let Ok(value) = NonZeroU32::try_from(rh.rc) {
-        return TpmResult::Err(value.into());
+    if let Ok(value) = TpmError::try_from(rh.rc) {
+        return TpmResult::Err(value);
     }
     let resp_size = rh.size as usize - hdr.len();
     if resp_size > resp.len() {
-        return TpmResult::Err(TpmError::TSS2_MU_RC_BAD_SIZE);
+        return Err(TssRcError::BadSize.into());
     }
     unmarsh = UnmarshalBuf::new(&resp[..(rh.size as usize - hdr.len())]);
     CmdT::RespT::try_unmarshal(&mut unmarsh)
@@ -83,13 +82,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tpm2_rs_base::errors::TpmError;
 
     // A Tpm that just returns a general failure error.
     struct ErrorTpm();
     impl Tpm for ErrorTpm {
         fn transact(&mut self, _: &[u8], _: &mut [u8]) -> TpmResult<()> {
-            return Err(TpmError::TSS2_BASE_RC_GENERAL_FAILURE);
+            return Err(TssRcError::GeneralFailure.into());
         }
     }
 
@@ -107,7 +105,7 @@ mod tests {
         let too_large = HugeFakeCommand([0; MAX_CMD_SIZE + 1]);
         assert_eq!(
             run_command(&too_large, &mut fake_tpm),
-            Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER)
+            Err(TssRcError::InsufficientBuffer.into())
         );
     }
 
@@ -125,7 +123,7 @@ mod tests {
         let cmd = TestCommand(56789);
         assert_eq!(
             run_command(&cmd, &mut fake_tpm),
-            Err(TpmError::TSS2_BASE_RC_GENERAL_FAILURE)
+            Err(TssRcError::GeneralFailure.into())
         );
     }
 
@@ -189,7 +187,7 @@ mod tests {
         let cmd = TestCommand(2);
         assert_eq!(
             run_command(&cmd, &mut fake_tpm),
-            Err(TpmError::TSS2_MU_RC_BAD_SIZE)
+            Err(TssRcError::BadSize.into())
         );
     }
 }

@@ -89,7 +89,7 @@ impl<const M: usize> Marshalable for [u8; M] {
             x.copy_from_slice(mine);
             Ok(x)
         } else {
-            Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER)
+            Err(TssRcError::InsufficientBuffer.into())
         }
     }
 
@@ -98,7 +98,7 @@ impl<const M: usize> Marshalable for [u8; M] {
             buffer[..self.len()].copy_from_slice(self);
             Ok(self.len())
         } else {
-            Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER)
+            Err(TssRcError::InsufficientBuffer.into())
         }
     }
 }

@@ -3,7 +3,6 @@
 
 pub mod buffer;
 pub mod crypto;
-pub mod error;
 mod handler;
 pub mod service;
 #[cfg(test)]
