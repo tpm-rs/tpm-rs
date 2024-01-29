@@ -3,14 +3,13 @@ name = "tpm2-rs-client"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
 tpm-simulator-tests = []
 
 [dependencies]
-tpm2-rs-base = { path = "../base" }
-tpm2-rs-marshal = { path = "../marshal" }
+tpm2-rs-base = { workspace = true }
+tpm2-rs-marshal = { workspace = true }
 
 [dev-dependencies]
-zerocopy = { version="0.7.0", features = ["derive"] } 
-tpm2-rs-features-client = {path = "feature" }
+zerocopy = { workspace = true }
+tpm2-rs-features-client = { workspace = true }
