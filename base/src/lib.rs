@@ -3,8 +3,10 @@
 #![cfg_attr(not(test), no_std)]
 
 use crate::{constants::*, errors::*, marshal::*};
+use bitflags::bitflags;
 use core::cmp::min;
 use core::mem::{align_of, size_of};
+use open_enum::open_enum;
 pub use tpm2_rs_errors as errors;
 pub use tpm2_rs_marshal as marshal;
 
@@ -27,9 +29,21 @@ pub struct Tpm2Generated(u32);
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaNv(u32);
 
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAlgHash(TPM2AlgID);
+// All hash algorithms.
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+pub enum TpmiAlgHash {
+    SHA1 = TPM2AlgID::SHA1.0,
+    SHA256  = TPM2AlgID::SHA256.0,
+    SHA384   = TPM2AlgID::SHA384.0,
+    SHA512 = TPM2AlgID::SHA512.0,
+    SM3256 = TPM2AlgID::SM3256.0,
+    SHA3256 = TPM2AlgID::SHA3256.0,
+    SHA3384 = TPM2AlgID::SHA3384.0,
+    SHA3512 = TPM2AlgID::SHA3512.0,
+}
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiAlgKdf(TPM2AlgID);
@@ -91,6 +105,18 @@ pub struct TpmaObject(u32);
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaAlgorithm(pub u32);
+bitflags! {
+    impl TpmaAlgorithm : u32 {
+        const ASYMMETRIC = 1;
+        const SYMMETRIC = 1 << 1;
+        const HASH = 1 << 2;
+        const OBJECT = 1 << 3;
+        const SIGNING = 1 << 8;
+        const ENCRYPTING = 1 << 9;
+        const METHOD = 1 << 10;
+    }
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaCc(u32);
@@ -1344,7 +1370,7 @@ mod tests {
     #[test]
     fn test_marshal_enum_override() {
         let hmac = TpmsSchemeHmac {
-            hash_alg: TpmiAlgHash(TPM2AlgID::SHA256),
+            hash_alg: TpmiAlgHash::SHA256,
         };
         let scheme = TpmtKeyedHashScheme::Hmac(hmac);
         let mut buffer = [0u8; size_of::<TpmtKeyedHashScheme>()];
@@ -1353,14 +1379,13 @@ mod tests {
 
     #[test]
     fn test_marshal_tpmt_public() {
-        let xor_sym_def_obj =
-            TpmtSymDefObject::ExclusiveOr(TpmiAlgHash(TPM2AlgID::SHA256), TpmsEmpty {});
+        let xor_sym_def_obj = TpmtSymDefObject::ExclusiveOr(TpmiAlgHash::SHA256, TpmsEmpty {});
         let mut buffer = [0u8; size_of::<TpmtSymDefObject>()];
         let mut marsh = xor_sym_def_obj.try_marshal(&mut buffer);
         // Because XOR does not populate TpmuSymMode, we have bytes left over.
         assert!(marsh.unwrap() < buffer.len());
         let rsa_scheme = TpmtRsaScheme::Ecdsa(TpmsSigSchemeEcdsa {
-            hash_alg: TpmiAlgHash(TPM2AlgID::SHA256),
+            hash_alg: TpmiAlgHash::SHA256,
         });
 
         let rsa_parms = TpmsRsaParms {
@@ -1374,7 +1399,7 @@ mod tests {
         let pubkey = Tpm2bPublicKeyRsa::from_bytes(&pubkey_buf).unwrap();
 
         let example = TpmtPublic {
-            name_alg: TpmiAlgHash(TPM2AlgID::SHA256),
+            name_alg: TpmiAlgHash::SHA256,
             object_attributes: TpmaObject(6543),
             auth_policy: Tpm2bDigest::from_bytes(&[2, 2, 4, 4]).unwrap(),
             parms_and_id: PublicParmsAndId::Rsa(rsa_parms, pubkey),
