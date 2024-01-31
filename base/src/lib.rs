@@ -313,7 +313,7 @@ pub struct TpmsAttest {
 }
 // Custom overload of Marshalable, because the selector for attested is {un}marshaled separate from the field.
 impl Marshalable for TpmsAttest {
-    fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+    fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
         let mut written = 0;
         written += self.magic.try_marshal(&mut buffer[written..])?;
         written += self
@@ -328,7 +328,7 @@ impl Marshalable for TpmsAttest {
         Ok(written)
     }
 
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
         let magic = Tpm2Generated::try_unmarshal(buffer)?;
         let selector = u16::try_unmarshal(buffer)?;
         Ok(TpmsAttest {
@@ -634,7 +634,7 @@ pub struct TpmtPublic {
 }
 // Custom overload of Marshalable, because the selector for parms_and_id is {un}marshaled first.
 impl Marshalable for TpmtPublic {
-    fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+    fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
         let mut written = 0;
         written += self
             .parms_and_id
@@ -648,7 +648,7 @@ impl Marshalable for TpmtPublic {
             .try_marshal_variant(&mut buffer[written..])?;
         Ok(written)
     }
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
         let selector = u16::try_unmarshal(buffer)?;
         Ok(TpmtPublic {
             name_alg: TpmiAlgHash::try_unmarshal(buffer)?,
@@ -700,7 +700,7 @@ pub struct TpmtSensitive {
 }
 // Custom overload of Marshalable, because the selector for sensitive is {un}marshaled first.
 impl Marshalable for TpmtSensitive {
-    fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+    fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
         let mut written = 0;
         written += self
             .sensitive
@@ -712,7 +712,7 @@ impl Marshalable for TpmtSensitive {
         Ok(written)
     }
 
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
         let selector = u16::try_unmarshal(buffer)?;
         Ok(TpmtSensitive {
             auth_value: Tpm2bAuth::try_unmarshal(buffer)?,
@@ -938,7 +938,7 @@ pub trait Tpm2bSimple {
     const MAX_BUFFER_SIZE: usize;
     fn get_size(&self) -> u16;
     fn get_buffer(&self) -> &[u8];
-    fn from_bytes(buffer: &[u8]) -> TpmResult<Self>
+    fn from_bytes(buffer: &[u8]) -> TpmRcResult<Self>
     where
         Self: Sized;
 }
@@ -956,11 +956,10 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
                 &self.$F[0..self.get_size() as usize]
             }
 
-            fn from_bytes(buffer: &[u8]) -> TpmResult<Self> {
+            fn from_bytes(buffer: &[u8]) -> TpmRcResult<Self> {
                 // Overflow check
                 if buffer.len() > core::cmp::min(u16::MAX as usize, Self::MAX_BUFFER_SIZE) {
-                    // TODO: Should this return error in server or client value space?
-                    return Err(TssRcError::BadSize.into());
+                    return Err(TpmRcError::Size);
                 }
 
                 let mut dest: Self = Self {
@@ -982,13 +981,12 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
         }
 
         impl Marshalable for $T {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
                 let got_size = u16::try_unmarshal(buffer)?;
                 // Ensure the buffer is large enough to fullfill the size indicated
                 let sized_buffer = buffer.get(got_size as usize);
                 if !sized_buffer.is_some() {
-                    // TODO: Should this return error in server or client value space?
-                    return Err(TssRcError::InsufficientBuffer.into());
+                    return Err(TpmRcError::Memory);
                 }
 
                 let mut dest: Self = Self {
@@ -998,21 +996,19 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
 
                 // Make sure the size indicated isn't too large for the types buffer
                 if sized_buffer.unwrap().len() > dest.$F.len() {
-                    // TODO: Should this return error in server or client value space?
-                    return Err(TssRcError::InsufficientBuffer.into());
+                    return Err(TpmRcError::Memory);
                 }
                 dest.$F[..got_size.into()].copy_from_slice(&sized_buffer.unwrap());
 
                 Ok(dest)
             }
 
-            fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+            fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
                 let used = self.size.try_marshal(buffer)?;
                 let (_, rest) = buffer.split_at_mut(used);
                 let buffer_marsh = self.get_size() as usize;
                 if buffer_marsh > (core::cmp::max(Self::MAX_BUFFER_SIZE, rest.len())) {
-                    // TODO: Should this return error in server or client value space?
-                    return Err(TssRcError::InsufficientBuffer.into());
+                    return Err(TpmRcError::Memory);
                 }
                 rest[..buffer_marsh].copy_from_slice(&self.$F[..buffer_marsh]);
                 Ok(used + buffer_marsh)
@@ -1057,7 +1053,7 @@ macro_rules! impl_tpml {
         }
 
         impl $T {
-            pub fn new(elements: &[$ListType]) -> TpmResult<$T> {
+            pub fn new(elements: &[$ListType]) -> TpmRcResult<$T> {
                 if elements.len() > $ListCapacity as usize {
                     // TODO: Should this return error in server or client value space?
                     return Err(TpmRcError::Size.into());
@@ -1068,7 +1064,7 @@ macro_rules! impl_tpml {
                 Ok(x)
             }
 
-            pub fn add(&mut self, element: &$ListType) -> TpmResult<()> {
+            pub fn add(&mut self, element: &$ListType) -> TpmRcResult<()> {
                 if self.count() >= self.$ListField.len() {
                     // TODO: Should this return error in server or client value space?
                     return Err(TpmRcError::Size.into());
@@ -1134,7 +1130,7 @@ mod tests {
             assert!(s.try_marshal(&mut bigger_size_buf).is_ok());
 
             // too small should fail
-            let mut result: TpmResult<$T> =
+            let mut result: TpmRcResult<$T> =
                 <$T>::try_unmarshal(&mut UnmarshalBuf::new(&too_small_size_buf));
             assert!(result.is_err());
 

@@ -76,7 +76,8 @@ where
         return Err(TssRcError::BadSize.into());
     }
     unmarsh = UnmarshalBuf::new(&resp[..(rh.size as usize - hdr.len())]);
-    CmdT::RespT::try_unmarshal(&mut unmarsh)
+    // If there is a marshalling error, return a Tss layer error instead of a service level error
+    CmdT::RespT::try_unmarshal(&mut unmarsh).or(Err(TssRcError::InsufficientBuffer.into()))
 }
 
 #[cfg(test)]
