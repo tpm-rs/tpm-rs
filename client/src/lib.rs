@@ -58,7 +58,7 @@ where
     let (hdr_space, cmd_space) = cmd_buffer.split_at_mut(CmdHeader::wire_size());
     let cmd_size = cmd.try_marshal(cmd_space)? + CmdHeader::wire_size();
     let header = CmdHeader {
-        tag: TpmiStCommandTag(TPM2ST::NoSessions),
+        tag: TpmiStCommandTag::NoSessions,
         size: cmd_size as u32,
         code: CmdT::CMD_CODE,
     };

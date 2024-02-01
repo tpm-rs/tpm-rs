@@ -678,6 +678,30 @@ pub enum TPM2Handle {
     RHPlatform = 0x4000000C,
     RHPlatformNV = 0x4000000D,
 }
+// TPM2HC represents a TPM_HC.
+// See definition in Part 2: Structures, section 7.5.
+// TODO: Add remaining values, some of which are profile-dependent.
+#[open_enum]
+#[repr(u32)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, Default, Marshal)]
+pub enum TPM2HC {
+    HRHandleMask =  0x00FFFFFF,
+    HRRangeMask = 0xFF000000,
+    HRShift = 24,               
+    HRPcr = (TPM2HT::PCR.0 as u32) << TPM2HC::HRShift.0,
+    HRHMACSession = (TPM2HT::HMACSession.0 as u32) <<TPM2HC::HRShift.0,
+    HRPolicySession = (TPM2HT::PolicySession.0 as u32) << TPM2HC::HRShift.0,
+    HRTransient =  (TPM2HT::Transient.0 as u32) << TPM2HC::HRShift.0,
+    HRPersistent = (TPM2HT::Persistent.0 as u32) << TPM2HC::HRShift.0,
+    HRNvIndex = (TPM2HT::NVIndex.0 as u32) << TPM2HC::HRShift.0,
+    HRPermanent = (TPM2HT::Permanent.0 as u32) << TPM2HC::HRShift.0,
+    NVIndexLast = TPM2HC::NVIndexFirst.0 + 0x00FFFFFF,
+}
+#[allow(non_upper_case_globals)]
+impl TPM2HC {
+    pub const NVIndexFirst: TPM2HC = TPM2HC::HRNvIndex;
+}
 
 // TPM2NT represents a TPM_NT.
 // See definition in Part 2: Structures, section 13.4.
@@ -703,4 +727,14 @@ pub enum TPM2NT {
     // contains pinCount that increments on a PIN authorization success and
     // a pinLimit
     PinPass = 0x9,
+}
+
+// TPM2Generated represents a TPM_GENERATED.
+// See definition in Part 2: Structures, section 6.2.
+#[open_enum]
+#[repr(u32)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, Default, Marshal)]
+pub enum TPM2Generated {
+    VALUE = 0x0xFF544347,
 }

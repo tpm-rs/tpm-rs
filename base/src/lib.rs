@@ -13,21 +13,93 @@ pub use tpm2_rs_marshal as marshal;
 pub mod commands;
 pub mod constants;
 
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmaLocality(u8);
+// Helpers for building/reading/writing fields defined by a mask and shift.
+macro_rules! new_attribute_field {
+    ($Value:expr, $Mask:ident, $Shift:ident) => {
+        ($Value << Self::$Shift) & Self::$Mask
+    };
+}
+macro_rules! get_attribute_field {
+    ($Field:expr, $Mask:ident, $Shift:ident) => {
+        (($Field & Self::$Mask) >> Self::$Shift)
+    };
+}
+macro_rules! set_attribute_field {
+    ($Field:expr, $Value:expr, $Mask:ident, $Shift:ident) => {
+        $Field = ($Field & !Self::$Mask) | (($Value << Self::$Shift) & Self::$Mask)
+    };
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct Tpm2KeyBits(u16);
+pub struct TpmaLocality(pub u8);
+bitflags! {
+    impl TpmaLocality : u8 {
+        const LOC_ZERO = 1 << 0;
+        const LOC_ONE = 1 << 1;
+        const LOC_TWO = 1 << 2;
+        const LOC_THREE = 1 << 3;
+        const LOC_FOUR = 1 << 4;
+        // If any other bits are set, an extended locality is indicated.
+        const _ = !0;
+    }
+}
+impl TpmaLocality {
+    const EXTENDED_LOCALITY_MASK: u8 = 0xE0;
+    fn is_extended(&self) -> bool {
+        (self.0 & Self::EXTENDED_LOCALITY_MASK) != 0
+    }
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct Tpm2Generated(u32);
+pub struct Tpm2KeyBits(pub u16);
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmaNv(u32);
+pub struct TpmaNv(pub u32);
+bitflags! {
+    impl TpmaNv : u32 {
+        const PPWRITE = 1 << 0;
+        const OWNERWRITE = 1 <<  1;
+        const AUTHWRITE = 1 << 2;
+        const POLICYWRITE = 1 << 3;
+        const POLICY_DELETE = 1 << 10;
+        const WRITELOCKED = 1 << 11;
+        const WRITEALL = 1 << 12;
+        const WRITEDEFINE = 1 << 13;
+        const WRITE_STCLEAR = 1 << 14;
+        const GLOBALLOCK = 1 << 15;
+        const PPREAD = 1 << 16;
+        const OWNERREAD = 1 << 17;
+        const AUTHREAD = 1 << 18;
+        const POLICYREAD = 1 << 19;
+        const NO_DA = 1 << 25;
+        const ORDERLY = 1 << 26;
+        const CLEAR_STCLEAR = 1 << 27;
+        const READLOCKED = 1 << 28;
+        const WRITTEN = 1 << 29;
+        const PLATFORMCREATE = 1 << 30;
+        const READ_STCLEAR = 1 << 31;
+        // See multi-bit type field below.
+        const _ = !0;
+    }
+}
+impl TpmaNv {
+    const NT_MASK: u32 = 0xF0;
+    const NT_SHIFT: u32 = 4;
+
+    const fn index_type(index_type: TPM2NT) -> TpmaNv {
+        TpmaNv(new_attribute_field!(index_type.0 as u32, NT_MASK, NT_SHIFT))
+    }
+
+    fn get_index_type(&self) -> TPM2NT {
+        TPM2NT(get_attribute_field!(self.0, NT_MASK, NT_SHIFT) as u8)
+    }
+    fn set_type(&mut self, index_type: TPM2NT) {
+        set_attribute_field!(self.0, index_type.0 as u32, NT_MASK, NT_SHIFT);
+    }
+}
 
 // All hash algorithms.
 #[open_enum]
@@ -44,63 +116,189 @@ pub enum TpmiAlgHash {
     SHA3384 = TPM2AlgID::SHA3384.0,
     SHA3512 = TPM2AlgID::SHA3512.0,
 }
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAlgKdf(TPM2AlgID);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAlgPublic(TPM2AlgID);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAlgSymMode(TPM2AlgID);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAlgSymObject(TPM2AlgID);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAlgKeyedhashScheme(TPM2AlgID);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAlgRsaScheme(TPM2AlgID);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAlgEccScheme(TPM2AlgID);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAlgAsymScheme(TPM2AlgID);
+
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+pub enum TpmiAlgKdf {
+    MGF1 = TPM2AlgID::MGF1.0,
+    KDF1SP80056A = TPM2AlgID::KDF1SP80056A.0,
+    KDF2 = TPM2AlgID::KDF2.0,
+    KDF1SP800108 = TPM2AlgID::KDF1SP800108.0,
+}
+
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum TpmiAlgPublic{
+    RSA = TPM2AlgID::RSA.0,
+    KeyedHash = TPM2AlgID::KeyedHash.0,
+    ECC = TPM2AlgID::ECC.0,
+    SymCipher = TPM2AlgID::SymCipher.0,
+}
+
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum TpmiAlgSymMode{
+    CMAC = TPM2AlgID::CMAC.0,
+    CTR = TPM2AlgID::CTR.0,
+    OFB = TPM2AlgID::OFB.0,
+    CBC = TPM2AlgID::CBC.0,
+    CFB = TPM2AlgID::CFB.0,
+    ECB = TPM2AlgID::ECB.0,
+}
+
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum TpmiAlgSymObject{
+    TDES = TPM2AlgID::TDES.0,
+    AES = TPM2AlgID::AES.0,
+    SM4 = TPM2AlgID::SM4.0,
+    Camellia = TPM2AlgID::Camellia.0,
+}
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum TpmiAlgKeyedhashScheme{
+    HMAC = TPM2AlgID::HMAC.0,
+    XOR = TPM2AlgID::XOR.0,
+}
+
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum TpmiAlgRsaScheme{
+    RSAPSS = TPM2AlgID::RSAPSS.0,
+    RSASSA = TPM2AlgID::RSASSA.0,
+    ECDSA = TPM2AlgID::ECDSA.0,
+    ECDAA = TPM2AlgID::ECDAA.0,
+    SM2 = TPM2AlgID::SM2.0,
+    ECSchnorr = TPM2AlgID::ECSchnorr.0,
+    RSAES = TPM2AlgID::RSAES.0,
+    OAEP = TPM2AlgID::OAEP.0,
+}
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum TpmiAlgEccScheme{
+    RSAPSS = TPM2AlgID::RSAPSS.0,
+    RSASSA = TPM2AlgID::RSASSA.0,
+    ECDSA = TPM2AlgID::ECDSA.0,
+    ECDAA = TPM2AlgID::ECDAA.0,
+    SM2 = TPM2AlgID::SM2.0,
+    ECSchnorr = TPM2AlgID::ECSchnorr.0,
+    ECDH = TPM2AlgID::ECDH.0,
+    ECMQV = TPM2AlgID::ECMQV.0,
+}
+
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum TpmiAlgAsymScheme{
+    SM2 = TPM2AlgID::SM2.0,
+    ECDH = TPM2AlgID::ECDH.0,
+    ECMQV = TPM2AlgID::ECMQV.0,
+    RSAPSS = TPM2AlgID::RSAPSS.0,
+    RSASSA = TPM2AlgID::RSASSA.0,
+    ECDSA = TPM2AlgID::ECDSA.0,
+    ECDAA = TPM2AlgID::ECDAA.0,
+    ECSchnorr = TPM2AlgID::ECSchnorr.0,
+    RSAES = TPM2AlgID::RSAES.0,
+    OAEP = TPM2AlgID::OAEP.0,
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiRhNvIndex(u32);
+impl TryFrom<u32> for TpmiRhNvIndex {
+    type Error = TpmRcError;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        const FIRST: u32 = TPM2HC::NVIndexFirst.0;
+        const LAST: u32 = TPM2HC::NVIndexLast.0;
+        match value {
+            FIRST..=LAST => Ok(TpmiRhNvIndex(value)),
+            _ => Err(TpmRcError::Value),
+        }
+    }
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiEccCurve(u16);
+pub struct TpmiEccCurve(pub TPM2ECCCurve);
+
+#[open_enum]
+#[repr(u8)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+pub enum TpmiYesNo {
+    NO = 0,
+    YES = 1,
+}
+
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+pub enum TpmiStAttest {
+    AttestCertify = TPM2ST::AttestCertify.0,
+    AttestQuote = TPM2ST::AttestQuote.0,
+    AttestSessionAudit = TPM2ST::AttestSessionAudit.0,
+    AttestCommandAudit = TPM2ST::AttestCommandAudit.0,
+    AttestTime = TPM2ST::AttestTime.0,
+    AttestCreation = TPM2ST::AttestCreation.0,
+    AttestNV = TPM2ST::AttestNV.0,
+    AttestNVDigest = TPM2ST::AttestNVDigest.0,
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiYesNo(pub u8);
+pub struct TpmiAesKeyBits(pub u16);
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+pub struct TpmiSm4KeyBits(pub u16);
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+pub struct TpmiCamelliaKeyBits(pub u16);
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+pub struct TpmiRsaKeyBits(pub u16);
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiStAttest(u16);
-
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAesKeyBits(u16);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiSm4KeyBits(u16);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiCamelliaKeyBits(u16);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiRsaKeyBits(u16);
-
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmaObject(u32);
+pub struct TpmaObject(pub u32);
+bitflags! {
+    impl TpmaObject : u32 {
+        const FIXED_TPM = 1 << 1;
+        const ST_CLEAR = 1 << 2;
+        const FIXED_PARENT = 1 << 4;
+        const SENSITIVE_DATA_ORIGIN = 1 << 5;
+        const USER_WITH_AUTH = 1 << 6;
+        const ADMIN_WITH_POLICY = 1 << 7;
+        const NO_DA = 1 << 10;
+        const ENCRYPTED_DUPLICATION = 1 << 11;
+        const RESTRICTED = 1 << 16;
+        const DECRYPT = 1 << 17;
+        const SIGN_ENCRYPT = 1 << 18;
+        const X509_SIGN = 1 << 19;
+    }
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
@@ -119,11 +317,63 @@ bitflags! {
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmaCc(u32);
+pub struct TpmaCc(pub u32);
+bitflags! {
+    impl TpmaCc : u32 {
+        const NV  = 1 << 22;
+        const EXTENSIVE = 1 << 23;
+        const FLUSHED = 1 << 24;
+        const R_HANDLE = 1 << 28;
+        const V = 1 << 29;
+        // See multi-bit fields below.
+        const _ = !0;
+    }
+}
+impl TpmaCc {
+    const COMMAND_INDEX_SHIFT: u32 = 0;
+    const COMMAND_INDEX_MASK: u32 = 0xFFFF;
+    const C_HANDLES_SHIFT: u32 = 25;
+    const C_HANDLES_MASK: u32 = 0x7 << TpmaCc::C_HANDLES_SHIFT;
 
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiStCommandTag(pub TPM2ST);
+    const fn command_index(index: u16) -> TpmaCc {
+        TpmaCc(new_attribute_field!(
+            index as u32,
+            COMMAND_INDEX_MASK,
+            COMMAND_INDEX_SHIFT
+        ))
+    }
+    const fn c_handles(count: u32) -> TpmaCc {
+        TpmaCc(new_attribute_field!(count, C_HANDLES_MASK, C_HANDLES_SHIFT))
+    }
+
+    fn get_command_index(&self) -> u16 {
+        get_attribute_field!(self.0, COMMAND_INDEX_MASK, COMMAND_INDEX_SHIFT) as u16
+    }
+    fn get_c_handles(&self) -> u32 {
+        get_attribute_field!(self.0, C_HANDLES_MASK, C_HANDLES_SHIFT)
+    }
+
+    fn set_command_index(&mut self, index: u16) {
+        set_attribute_field!(
+            self.0,
+            index as u32,
+            COMMAND_INDEX_MASK,
+            COMMAND_INDEX_SHIFT
+        );
+    }
+    fn set_c_handles(&mut self, count: u32) {
+        set_attribute_field!(self.0, count, C_HANDLES_MASK, C_HANDLES_SHIFT);
+    }
+}
+
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+pub enum TpmiStCommandTag{
+    NoSessions = TPM2ST::NoSessions.0,
+    Sessions = TPM2ST::Sessions.0,
+}
 
 const TPM2_MAX_CAP_DATA: usize =
     TPM2_MAX_CAP_BUFFER as usize - size_of::<TPM2Cap>() - size_of::<u32>();
@@ -330,7 +580,7 @@ pub enum TpmuAttest {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq)]
 pub struct TpmsAttest {
-    pub magic: Tpm2Generated,
+    pub magic: TPM2Generated,
     pub qualified_signer: Tpm2bName,
     pub extra_data: Tpm2bData,
     pub clock_info: TpmsClockInfo,
@@ -355,7 +605,7 @@ impl Marshalable for TpmsAttest {
     }
 
     fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
-        let magic = Tpm2Generated::try_unmarshal(buffer)?;
+        let magic = TPM2Generated::try_unmarshal(buffer)?;
         let selector = u16::try_unmarshal(buffer)?;
         Ok(TpmsAttest {
             magic,
@@ -1402,7 +1652,7 @@ mod tests {
 
         let example = TpmtPublic {
             name_alg: TpmiAlgHash::SHA256,
-            object_attributes: TpmaObject(6543),
+            object_attributes: TpmaObject::RESTRICTED | TpmaObject::SENSITIVE_DATA_ORIGIN,
             auth_policy: Tpm2bDigest::from_bytes(&[2, 2, 4, 4]).unwrap(),
             parms_and_id: PublicParmsAndId::Rsa(rsa_parms, pubkey),
         };
@@ -1412,8 +1662,8 @@ mod tests {
         marsh = example.try_marshal(&mut buffer);
         assert!(marsh.is_ok());
         let expected: [u8; 54] = [
-            0, 1, 0, 11, 0, 0, 25, 143, 0, 4, 2, 2, 4, 4, 0, 10, 0, 11, 0, 24, 0, 11, 0, 74, 0, 0,
-            0, 2, 0, 24, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+            0, 1, 0, 11, 0, 1, 0, 32, 0, 4, 2, 2, 4, 4, 0, 10, 0, 11, 0, 24, 0, 11, 0, 74, 0, 0, 0,
+            2, 0, 24, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
         ];
         //assert_eq!(expected.len(), marsh.unwrap());
         assert_eq!(buffer[..expected.len()], expected);
@@ -1430,5 +1680,31 @@ mod tests {
         assert!(TPM2AlgID::SHA256.try_marshal(&mut buffer).is_ok());
         unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
         assert_eq!(unmarsh.err(), Some(TpmRcError::Selector.into()));
+    }
+
+    #[test]
+    fn test_attributes_field() {
+        let mut cc = TpmaCc::NV | TpmaCc::FLUSHED | TpmaCc::command_index(0x8);
+        assert_eq!(cc.get_command_index(), 0x8);
+        cc.set_command_index(0xA0);
+        assert_eq!(cc.get_command_index(), 0xA0);
+
+        // Set a field to a value that is wider than the field.
+        cc.set_c_handles(0xFFFFFFFF);
+        assert_eq!(cc.get_c_handles(), 0x7, "Only the field bits should be set");
+        assert_eq!(cc.get_command_index(), 0xA0);
+        assert!(cc.contains(TpmaCc::NV));
+        assert!((cc & TpmaCc::FLUSHED).0 != 0);
+    }
+
+    #[test]
+    fn test_nv_index_range() {
+        let lowest_ok = TPM2HC::NVIndexFirst.0;
+        assert!(TpmiRhNvIndex::try_from(lowest_ok - 1).is_err());
+        assert!(TpmiRhNvIndex::try_from(lowest_ok).is_ok());
+        assert!(TpmiRhNvIndex::try_from(lowest_ok + 432).is_ok());
+        let highest_ok = TPM2HC::NVIndexLast.0;
+        assert!(TpmiRhNvIndex::try_from(highest_ok).is_ok());
+        assert!(TpmiRhNvIndex::try_from(highest_ok + 1).is_err());
     }
 }

@@ -24,6 +24,16 @@ impl TpmRcError {
         Self::new(Self::Asymmetric.0.get() | on.to_mask() | pos.to_mask())
     }
 
+    /// Value is out of range or is not correct for the context (`TPM_RC_VALUE`).
+    pub const Value: Self = Self::new(Self::RC_FMT1 + 0x004);
+
+    /// Value is out of range or is not correct for the context for the specified
+    /// parameters (`TPM_RC_VALUE`).
+    #[allow(non_snake_case)]
+    pub const fn ValueFor(on: ErrorType, pos: ErrorPosition) -> Self {
+        Self::new(Self::Value.0.get() | on.to_mask() | pos.to_mask())
+    }
+
     /// Structure is the wrong size (`TPM_RC_SIZE`).
     pub const Size: Self = Self::new(Self::RC_FMT1 + 0x015);
 
