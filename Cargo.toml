@@ -12,6 +12,7 @@ members = [
 
 [workspace.dependencies]
 # Third party dependencies
+bitflags = "2.4.2"
 hex-literal = { version = "0.4.1" }
 open-enum = "0.4.1"
 proc-macro2 = "1"
