@@ -114,8 +114,6 @@ bitflags! {
         const SIGNING = 1 << 8;
         const ENCRYPTING = 1 << 9;
         const METHOD = 1 << 10;
-
-        const _ = !0;
     }
 }
 
