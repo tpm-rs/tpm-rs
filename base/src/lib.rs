@@ -107,13 +107,15 @@ pub struct TpmaObject(u32);
 pub struct TpmaAlgorithm(pub u32);
 bitflags! {
     impl TpmaAlgorithm : u32 {
-        const ASYMMETRIC = 1;
+        const ASYMMETRIC = 1 << 0;
         const SYMMETRIC = 1 << 1;
         const HASH = 1 << 2;
         const OBJECT = 1 << 3;
         const SIGNING = 1 << 8;
         const ENCRYPTING = 1 << 9;
         const METHOD = 1 << 10;
+
+        const _ = !0;
     }
 }
 
