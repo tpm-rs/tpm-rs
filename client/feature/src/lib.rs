@@ -35,7 +35,7 @@ where
 mod tests {
     use super::*;
     use tpm2_rs_base::constants::{TPM2AlgID, TPM2ST};
-    use tpm2_rs_base::errors::TssRcError;
+    use tpm2_rs_base::errors::TssTcsError;
     use tpm2_rs_base::marshal::Marshalable;
     use tpm2_rs_base::{
         TpmaAlgorithm, TpmiYesNo, TpmlAlgProperty, TpmlTaggedTpmProperty, TpmsAlgProperty,
@@ -64,7 +64,7 @@ mod tests {
             let off = tx_header.try_marshal(response)?;
             let length = off + self.response.len();
             if length > response.len() {
-                return Err(TssRcError::BadSize.into());
+                return Err(TssTcsError::OutOfMemory.into());
             }
             response[off..length].copy_from_slice(&self.response);
             tx_header.size = length as u32;

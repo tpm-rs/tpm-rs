@@ -3,7 +3,7 @@
 use core::mem::size_of;
 use tpm2_rs_base::commands::*;
 use tpm2_rs_base::constants::{TPM2CC, TPM2ST};
-use tpm2_rs_base::errors::{TpmError, TpmResult, TssRcError};
+use tpm2_rs_base::errors::{TpmError, TpmResult, TssTcsError};
 use tpm2_rs_base::marshal::{Marshal, Marshalable, UnmarshalBuf};
 use tpm2_rs_base::TpmiStCommandTag;
 
@@ -73,11 +73,11 @@ where
     }
     let resp_size = rh.size as usize - hdr.len();
     if resp_size > resp.len() {
-        return Err(TssRcError::BadSize.into());
+        return Err(TssTcsError::OutOfMemory.into());
     }
     unmarsh = UnmarshalBuf::new(&resp[..(rh.size as usize - hdr.len())]);
     // If there is a marshalling error, return a Tss layer error instead of a service level error
-    CmdT::RespT::try_unmarshal(&mut unmarsh).or(Err(TssRcError::InsufficientBuffer.into()))
+    CmdT::RespT::try_unmarshal(&mut unmarsh).or(Err(TssTcsError::OutOfMemory.into()))
 }
 
 #[cfg(test)]
@@ -88,7 +88,7 @@ mod tests {
     struct ErrorTpm();
     impl Tpm for ErrorTpm {
         fn transact(&mut self, _: &[u8], _: &mut [u8]) -> TpmResult<()> {
-            return Err(TssRcError::GeneralFailure.into());
+            return Err(TssTcsError::GeneralFailure.into());
         }
     }
 
@@ -106,7 +106,7 @@ mod tests {
         let too_large = HugeFakeCommand([0; MAX_CMD_SIZE + 1]);
         assert_eq!(
             run_command(&too_large, &mut fake_tpm),
-            Err(TssRcError::InsufficientBuffer.into())
+            Err(TssTcsError::OutOfMemory.into())
         );
     }
 
@@ -124,7 +124,7 @@ mod tests {
         let cmd = TestCommand(56789);
         assert_eq!(
             run_command(&cmd, &mut fake_tpm),
-            Err(TssRcError::GeneralFailure.into())
+            Err(TssTcsError::GeneralFailure.into())
         );
     }
 
@@ -188,7 +188,7 @@ mod tests {
         let cmd = TestCommand(2);
         assert_eq!(
             run_command(&cmd, &mut fake_tpm),
-            Err(TssRcError::BadSize.into())
+            Err(TssTcsError::OutOfMemory.into())
         );
     }
 }
