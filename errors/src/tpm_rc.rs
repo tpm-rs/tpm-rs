@@ -5,7 +5,7 @@ pub type TpmRcResult<T> = Result<T, TpmRcError>;
 
 /// Represents a TPM 2.0 service error as defined in specification as TPM_RC.
 #[derive(PartialEq, Eq, Clone, Copy)]
-#[cfg_attr(test, derive(Debug))]
+#[cfg_attr(feature = "debug", derive(Debug))]
 pub struct TpmRcError(NonZeroU32);
 
 // Allow constant to have enum-style case.

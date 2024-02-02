@@ -3,4 +3,8 @@ name = "tpm2-rs-errors"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Includes debug trait implementation. Useful for unit tests.
+debug = []
+
 [dependencies]
