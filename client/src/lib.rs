@@ -83,6 +83,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tpm2_rs_base::errors::TpmRcError;
 
     // A Tpm that just returns a general failure error.
     struct ErrorTpm();
@@ -106,7 +107,7 @@ mod tests {
         let too_large = HugeFakeCommand([0; MAX_CMD_SIZE + 1]);
         assert_eq!(
             run_command(&too_large, &mut fake_tpm),
-            Err(TssTcsError::OutOfMemory.into())
+            Err(TpmRcError::Memory.into())
         );
     }
 
