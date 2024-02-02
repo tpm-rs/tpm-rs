@@ -297,7 +297,7 @@ fn get_field_unmarshal(all_fields: &Fields) -> TokenStream {
                         get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()));
                     quote_spanned! {f.span()=>
                         if #length_prim as usize > #max_size {
-                            return Err(TpmRcError::Size.into());
+                            return Err(TpmRcError::Size);
                         }
                         let mut #name = [#entry_type::default(); #max_size];
                         for i in #name.iter_mut().take(#length_prim as usize) {
