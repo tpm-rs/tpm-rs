@@ -60,11 +60,11 @@ pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenSt
         #pure_impl
         // The generated impl.
         impl Marshalable for #name  {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> ::tpm2_rs_marshal::exports::errors::TpmRcResult<Self> {
                 #unmarsh_text
             }
 
-            fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+            fn try_marshal(&self, buffer: &mut [u8]) -> ::tpm2_rs_marshal::exports::errors::TpmRcResult<usize> {
                 let mut written: usize = 0;
                 #marsh_text;
                 Ok(written)
@@ -132,12 +132,12 @@ fn get_enum_impl(name: &Ident, data: &DataEnum, attrs: &[Attribute]) -> TokenStr
                 fn discriminant(&self) -> #prim {
                     unsafe { *<*const _>::from(self).cast::<#prim>() }
                 }
-                fn try_marshal_variant(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+                fn try_marshal_variant(&self, buffer: &mut [u8]) -> ::tpm2_rs_marshal::exports::errors::TpmRcResult<usize> {
                     let mut written: usize = 0;
                     #marshal_text;
                     Ok(written)
                 }
-                fn try_unmarshal_variant(selector: #prim, buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+                fn try_unmarshal_variant(selector: #prim, buffer: &mut UnmarshalBuf) -> ::tpm2_rs_marshal::exports::errors::TpmRcResult<Self> {
                     #unmarshal_text
                 }
             }
@@ -297,7 +297,7 @@ fn get_field_unmarshal(all_fields: &Fields) -> TokenStream {
                         get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()));
                     quote_spanned! {f.span()=>
                         if #length_prim as usize > #max_size {
-                            return Err(TpmError::TPM2_RC_SIZE);
+                            return Err(TpmRcError::Size.into());
                         }
                         let mut #name = [#entry_type::default(); #max_size];
                         for i in #name.iter_mut().take(#length_prim as usize) {
@@ -382,7 +382,7 @@ fn get_enum_unmarshal_body(struct_name: &Ident, data: &DataEnum) -> TokenStream 
     }
 
     let fallback_code = quote! {
-        Err(TpmError::TPM2_RC_SELECTOR)
+        Err(TpmRcError::Selector.into())
     };
 
     conditional_code.extend(fallback_code);

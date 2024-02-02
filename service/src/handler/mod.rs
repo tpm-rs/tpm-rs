@@ -1,6 +1,6 @@
 use crate::buffer::{RequestThenResponse, TpmBuffers};
 use crate::crypto::{Crypto, CryptoRandom as _};
-use crate::error::TpmError;
+use tpm2_rs_base::errors::TpmRcError;
 
 /// Specifies all of the dependent types for the `CommandContext` parameter that all command handler
 /// functions get access to to handle their specific command.
@@ -20,16 +20,16 @@ pub struct CommandContext<'a, Deps: ContextDeps> {
 pub fn get_random(
     request_response: RequestThenResponse<impl TpmBuffers>,
     context: &mut CommandContext<impl ContextDeps>,
-) -> Result<(), TpmError> {
+) -> Result<(), TpmRcError> {
     let mut request = request_response;
-    let requested_bytes = request.read_be_u16().ok_or(TpmError::CommandSize)? as usize;
+    let requested_bytes = request.read_be_u16().ok_or(TpmRcError::CommandSize)? as usize;
 
     let mut response = request.into_response();
     response
         .write_callback(requested_bytes, |buffer| {
             context.crypto.get_random_bytes(buffer)
         })
-        .map_err(|_| TpmError::Memory)?;
+        .map_err(|_| TpmRcError::Memory)?;
 
     Ok(())
 }

@@ -5,6 +5,11 @@ use core::mem::size_of;
 use tpm2_rs_errors::*;
 pub use tpm2_rs_marshal_derive::Marshal;
 
+/// Exports needed for macro expansion
+pub mod exports {
+    pub use tpm2_rs_errors as errors;
+}
+
 // The Marshalable trait defines the API for {un}marshaling TPM structs. It
 // is implemented for primitive types. The marshal_derive::Marshal macro
 // will provide an implementation that calls try_{un}marshal for each of
@@ -21,12 +26,12 @@ pub use tpm2_rs_marshal_derive::Marshal;
 // entries that should be marshaled. See TpmlPcrSelection for an example.
 pub trait Marshalable {
     // Unmarshals self from the prefix of `buffer`. Returns the unmarshalled self and number of bytes used.
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self>
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self>
     where
         Self: Sized;
 
     // Marshals self into the prefix of `buffer`. Returns the number of bytes used.
-    fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize>;
+    fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize>;
 }
 
 pub struct UnmarshalBuf<'a> {
@@ -53,12 +58,12 @@ impl<'a> UnmarshalBuf<'a> {
 macro_rules! impl_be_prim_marshalable {
     ($T:ty) => {
         impl Marshalable for $T {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
                 let x = <[u8; size_of::<$T>()]>::try_unmarshal(buffer)?;
                 Ok(Self::from_be_bytes(x))
             }
 
-            fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+            fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
                 self.to_be_bytes().try_marshal(buffer)
             }
         }
@@ -74,31 +79,31 @@ impl_be_prim_marshalable! {i32}
 impl_be_prim_marshalable! {i64}
 
 impl Marshalable for () {
-    fn try_marshal(&self, _buffer: &mut [u8]) -> TpmResult<usize> {
+    fn try_marshal(&self, _buffer: &mut [u8]) -> TpmRcResult<usize> {
         Ok(0)
     }
-    fn try_unmarshal(_buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+    fn try_unmarshal(_buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
         Ok(())
     }
 }
 
 impl<const M: usize> Marshalable for [u8; M] {
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmResult<Self> {
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
         if let Some(mine) = buffer.get(M) {
             let mut x = [0u8; M];
             x.copy_from_slice(mine);
             Ok(x)
         } else {
-            Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER)
+            Err(TpmRcError::Memory)
         }
     }
 
-    fn try_marshal(&self, buffer: &mut [u8]) -> TpmResult<usize> {
+    fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
         if buffer.len() >= self.len() {
             buffer[..self.len()].copy_from_slice(self);
             Ok(self.len())
         } else {
-            Err(TpmError::TSS2_MU_RC_INSUFFICIENT_BUFFER)
+            Err(TpmRcError::Memory)
         }
     }
 }
@@ -115,7 +120,7 @@ mod tests {
             let same_size_buffer: [u8; SIZE_OF_TYPE] = [$I; SIZE_OF_TYPE];
             let larger_buffer: [u8; SIZE_OF_TYPE + 4] = [$I; SIZE_OF_TYPE + 4];
 
-            let mut res: TpmResult<$T> =
+            let mut res: TpmRcResult<$T> =
                 <$T>::try_unmarshal(&mut UnmarshalBuf::new(&too_small_buffer));
             assert!(res.is_err());
 

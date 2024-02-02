@@ -2,9 +2,9 @@ use crate::buffer::{
     ReadOutOfBounds, RequestResponseCursor, TpmBuffers, TpmReadBuffer, TpmWriteBuffer,
 };
 use crate::crypto::Crypto;
-use crate::error::TpmError;
 use crate::handler::{self, CommandContext, ContextDeps};
 use tpm2_rs_base::constants::Command;
+use tpm2_rs_base::errors::TpmRcError;
 
 /// Specifies all of the dependent types for `Service`.
 pub trait ServiceDeps {
@@ -53,7 +53,7 @@ impl<'a, Deps: ServiceDeps> Service<'a, Deps> {
         }
     }
 
-    fn fill_error(&mut self, response: &mut Deps::Response, error: TpmError) -> usize {
+    fn fill_error(&mut self, response: &mut Deps::Response, error: TpmRcError) -> usize {
         // TODO fill out more of the TPM header for an error
         if response.write(6, &error.get().to_be_bytes()).is_err() {
             return 0;
@@ -61,18 +61,18 @@ impl<'a, Deps: ServiceDeps> Service<'a, Deps> {
         10
     }
 
-    fn execute_command(&mut self, buffers: impl TpmBuffers) -> Result<usize, TpmError> {
+    fn execute_command(&mut self, buffers: impl TpmBuffers) -> Result<usize, TpmRcError> {
         let request_size = buffers.get_request().len();
         const CMD_HANDLER_RESPONSE_OFFSET: usize = 10;
         let mut request_and_response =
             RequestResponseCursor::new(buffers, CMD_HANDLER_RESPONSE_OFFSET);
         let mut request = request_and_response.request();
-        let _session = request.read_be_u16().ok_or(TpmError::CommandSize)?;
-        let size = request.read_be_u32().ok_or(TpmError::CommandSize)?;
+        let _session = request.read_be_u16().ok_or(TpmRcError::CommandSize)?;
+        let size = request.read_be_u32().ok_or(TpmRcError::CommandSize)?;
         if size as usize != request_size {
-            return Err(TpmError::CommandSize);
+            return Err(TpmRcError::CommandSize);
         }
-        let command_code = request.read_be_u32().ok_or(TpmError::CommandSize)?;
+        let command_code = request.read_be_u32().ok_or(TpmRcError::CommandSize)?;
 
         // TODO, if _session is not NoSession, then parse session stuff here
 
@@ -82,7 +82,7 @@ impl<'a, Deps: ServiceDeps> Service<'a, Deps> {
 
         match Command(command_code) {
             Command::GetRandom => handler::get_random(request, context),
-            _ => Err(TpmError::CommandCode),
+            _ => Err(TpmRcError::CommandCode),
         }?;
 
         let response_size = request_and_response.last_response_byte_written();
@@ -91,15 +91,15 @@ impl<'a, Deps: ServiceDeps> Service<'a, Deps> {
         let session_tag = 0x8001_u16;
         response
             .write(0, &(session_tag).to_be_bytes())
-            .or(Err(TpmError::Memory))?;
+            .or(Err(TpmRcError::Memory))?;
 
         response
             .write(2, &(response_size as u32).to_be_bytes())
-            .or(Err(TpmError::Memory))?;
+            .or(Err(TpmRcError::Memory))?;
         const SUCCESS_STATUS: u32 = 0;
         response
             .write(6, &SUCCESS_STATUS.to_be_bytes())
-            .or(Err(TpmError::Memory))?;
+            .or(Err(TpmRcError::Memory))?;
 
         Ok(response_size)
     }
