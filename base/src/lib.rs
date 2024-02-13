@@ -13,23 +13,21 @@ pub use tpm2_rs_marshal as marshal;
 pub mod commands;
 pub mod constants;
 
-// Helpers for building/reading/writing fields defined by a mask and shift.
-macro_rules! new_attribute_field {
-    ($Value:expr, $Mask:ident, $Shift:ident) => {
-        ($Value << Self::$Shift) & Self::$Mask
-    };
+/// Returns an attribute field built by applying the mask/shift to the value.
+const fn new_attribute_field(value: u32, mask: u32, shift: u32) -> u32 {
+    (value << shift) & mask
 }
-macro_rules! get_attribute_field {
-    ($Field:expr, $Mask:ident, $Shift:ident) => {
-        (($Field & Self::$Mask) >> Self::$Shift)
-    };
+/// Returns the attribute field retrieved from the value with the mask/shift.
+const fn get_attribute_field(value: u32, mask: u32, shift: u32) -> u32 {
+    (value & mask) >> shift
 }
-macro_rules! set_attribute_field {
-    ($Field:expr, $Value:expr, $Mask:ident, $Shift:ident) => {
-        $Field = ($Field & !Self::$Mask) | (($Value << Self::$Shift) & Self::$Mask)
-    };
+/// Sets the attribute field defined by mask/shift in the value to the field value, and returns the result.
+const fn set_attribute_field(value: u32, field_value: u32, mask: u32, shift: u32) -> u32 {
+    (value & !mask) | new_attribute_field(field_value, mask, shift)
 }
 
+/// TpmaLocality represents the locality attribute (TPMA_LOCALITY).
+/// See definition in Part 2: Structures, section 8.5.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaLocality(pub u8);
@@ -46,62 +44,100 @@ bitflags! {
 }
 impl TpmaLocality {
     const EXTENDED_LOCALITY_MASK: u8 = 0xE0;
+    /// Returns whether this attribute indicates an extended locality.
     fn is_extended(&self) -> bool {
         (self.0 & Self::EXTENDED_LOCALITY_MASK) != 0
     }
 }
 
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct Tpm2KeyBits(pub u16);
-
+/// TpmNv represents the NV index attributes (TPMA_NV).
+/// See definition in Part 2: Structures, section 13.4.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaNv(pub u32);
 bitflags! {
     impl TpmaNv : u32 {
+        /// Whether the index data can be written if platform authorization is provided.
         const PPWRITE = 1 << 0;
+        /// Whether the index data can be written if owner authorization is provided.
         const OWNERWRITE = 1 <<  1;
+        /// Whether authorizations to change the index contents that require USER role may be provided with an HMAC session or password.
         const AUTHWRITE = 1 << 2;
+        /// Whether authorizations to change the index contents that require USER role may be provided with a policy session.
         const POLICYWRITE = 1 << 3;
+        /// If set, the index may not be deteled unless the auth_policy is satisfied using nv_undefined_space_special.
+        /// If clear, the index may be deleted with proper platform/owner authorization using nv_undefine_space.
         const POLICY_DELETE = 1 << 10;
+        /// Whether the index can NOT be written.
         const WRITELOCKED = 1 << 11;
+        /// Whether a partial write of the index data is NOT allowed.
         const WRITEALL = 1 << 12;
+        /// Whether nv_write_lock may be used to prevent futher writes to this location.
         const WRITEDEFINE = 1 << 13;
+        /// Whether nv_write_lock may be used to prevent further writes to this location until the next TPM reset/restart.
         const WRITE_STCLEAR = 1 << 14;
+        /// Whether WRITELOCKED is set if nv_global_write_lock is successful.
         const GLOBALLOCK = 1 << 15;
+        /// Whether the index data can be read if platform authorization is provided.
         const PPREAD = 1 << 16;
+        /// Whether the index data can be read if owner authorization is provided.
         const OWNERREAD = 1 << 17;
+        /// Whether the index data can be read if auth_value is provided.
         const AUTHREAD = 1 << 18;
+        /// Whether the index data can be read if the auth_policy is satisfied.
         const POLICYREAD = 1 << 19;
+        /// If set, authorizationn failures of the index do not affect the DA logic and authorization of the index is not blocked when the TPM is in Lockout mode.
+        /// If clear, authorization failures of the index will increment the authorization failure counter and authorizations of this index are not allowed when the TPM is in Lockout mode.
         const NO_DA = 1 << 25;
+        /// Whether NV index state is required to be saved only when the TPM performs an orderly shutdown.
         const ORDERLY = 1 << 26;
+        /// Whether WRITTEN is cleared by TPM reset/restart.
         const CLEAR_STCLEAR = 1 << 27;
+        /// Whether reads of the index are blocked  until the next TPM reset/restart.
         const READLOCKED = 1 << 28;
+        /// Whether the index has been written.
         const WRITTEN = 1 << 29;
+        /// If set, the index may be undefined with platform authorization but not owner authorization.
+        /// If clear, the index may be undefined with owner authorization but not platform authorization.
         const PLATFORMCREATE = 1 << 30;
+        /// Whether nv_read_lock may be used to set READLOCKED for this index.
         const READ_STCLEAR = 1 << 31;
         // See multi-bit type field below.
         const _ = !0;
     }
 }
 impl TpmaNv {
+    /// Mask for the index type field.
     const NT_MASK: u32 = 0xF0;
+    /// Shift of the index type field.
     const NT_SHIFT: u32 = 4;
 
-    const fn index_type(index_type: TPM2NT) -> TpmaNv {
-        TpmaNv(new_attribute_field!(index_type.0 as u32, NT_MASK, NT_SHIFT))
+    /// Returns the attribute for an index type (with all other field clear).
+    const fn from_index_type(index_type: TPM2NT) -> TpmaNv {
+        TpmaNv(new_attribute_field(
+            index_type.0 as u32,
+            Self::NT_MASK,
+            Self::NT_SHIFT,
+        ))
     }
 
-    fn get_index_type(&self) -> TPM2NT {
-        TPM2NT(get_attribute_field!(self.0, NT_MASK, NT_SHIFT) as u8)
+    /// Returns the type of the index.
+    pub fn get_index_type(&self) -> TPM2NT {
+        TPM2NT(get_attribute_field(self.0, Self::NT_MASK, Self::NT_SHIFT) as u8)
     }
-    fn set_type(&mut self, index_type: TPM2NT) {
-        set_attribute_field!(self.0, index_type.0 as u32, NT_MASK, NT_SHIFT);
+    /// Sets the type of the index.
+    pub fn set_type(&mut self, index_type: TPM2NT) {
+        self.0 = set_attribute_field(self.0, index_type.0 as u32, Self::NT_MASK, Self::NT_SHIFT);
+    }
+}
+impl From<TPM2NT> for TpmaNv {
+    fn from(value: TPM2NT) -> Self {
+        Self::from_index_type(value)
     }
 }
 
-// All hash algorithms.
+/// TpmiAlgHash represents all of the hash algorithms (TPMI_ALG_HASH).
+/// See definition in Part 2: Structures, section 9.27.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -117,6 +153,8 @@ pub enum TpmiAlgHash {
     SHA3512 = TPM2AlgID::SHA3512.0,
 }
 
+/// TpmiAlgKdf represents all of key derivation functions (TPMI_ALG_KDF).
+/// See definition in Part 2: Structures, section 9.32.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -128,6 +166,8 @@ pub enum TpmiAlgKdf {
     KDF1SP800108 = TPM2AlgID::KDF1SP800108.0,
 }
 
+/// TpmiAlgPublic represents all object types (TPMI_ALG_PUBLIC).
+/// See definition in Part 2: Structures, section 12.2.2.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -140,6 +180,8 @@ pub enum TpmiAlgPublic{
     SymCipher = TPM2AlgID::SymCipher.0,
 }
 
+/// TpmiAlgSymMode represents all of block-cipher modes of operation (TPMI_ALG_SYM_MODE).
+/// See definition in Part 2: Structures, section 9.31.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -154,6 +196,8 @@ pub enum TpmiAlgSymMode{
     ECB = TPM2AlgID::ECB.0,
 }
 
+/// TpmiAlgSymObject represents all of the symmetric algorithms that may be used as a companion encryption algortihm for an asymmetric object (TPMI_ALG_SYM_OBJECT).
+/// See definition in Part 2: Structures, section 9.30.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -165,6 +209,9 @@ pub enum TpmiAlgSymObject{
     SM4 = TPM2AlgID::SM4.0,
     Camellia = TPM2AlgID::Camellia.0,
 }
+
+/// TpmiAlgKeyedhashScheme represents values that may appear in a keyed_hash as the scheme parameter (TPMI_ALG_KEYEDHASH_SCHEME).
+/// See definition in Part 2: Structures, section 11.1.19.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -175,6 +222,8 @@ pub enum TpmiAlgKeyedhashScheme{
     XOR = TPM2AlgID::XOR.0,
 }
 
+/// TpmiAlgRsaScheme represents values that may appear in the scheme parameter of a TpmsRsaParms (TPMI_ALG_RSA_SCHEME).
+/// See definition in Part 2: Structures, section 11.2.4.1.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -190,6 +239,9 @@ pub enum TpmiAlgRsaScheme{
     RSAES = TPM2AlgID::RSAES.0,
     OAEP = TPM2AlgID::OAEP.0,
 }
+
+/// TpmiAlgEccScheme represents values that may appear in the scheme parameter of a TpmtEccScheme (TPMI_ALG_ECC_SCHEME).
+/// See definition in Part 2: Structures, section 11.2.5.4.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -206,6 +258,8 @@ pub enum TpmiAlgEccScheme{
     ECMQV = TPM2AlgID::ECMQV.0,
 }
 
+/// TpmiAlgAsymScheme represents all the scheme types for any asymmetric algortihm (TPMI_ALG_ASYM_SCHEME).
+/// See definition in Part 2: Structures, section 11.2.3.4.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -224,25 +278,30 @@ pub enum TpmiAlgAsymScheme{
     OAEP = TPM2AlgID::OAEP.0,
 }
 
+/// TpmiRhNvIndex represents an NV location (TPMI_RH_NV_INDEX).
+/// See definition in Part 2: Structures, section 9.24.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiRhNvIndex(u32);
 impl TryFrom<u32> for TpmiRhNvIndex {
     type Error = TpmRcError;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        const FIRST: u32 = TPM2HC::NVIndexFirst.0;
-        const LAST: u32 = TPM2HC::NVIndexLast.0;
-        match value {
-            FIRST..=LAST => Ok(TpmiRhNvIndex(value)),
-            _ => Err(TpmRcError::Value),
+        if TpmHc::is_nv_index(value) {
+            Ok(TpmiRhNvIndex(value))
+        } else {
+            Err(TpmRcError::Value)
         }
     }
 }
 
+/// TpmiEccCurve represents an implemented ECC curve (TPMI_ECC_SCHEME).
+/// See definition in Part 2: Structures, section 11.2.5.5.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiEccCurve(pub TPM2ECCCurve);
+pub struct TpmiEccCurve(TPM2ECCCurve);
 
+/// TpmiYesNo is used in place of a boolean.
+/// See TPMI_YES_NO definition in Part 2: Structures, section 9.2.
 #[open_enum]
 #[repr(u8)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -252,6 +311,8 @@ pub enum TpmiYesNo {
     YES = 1,
 }
 
+/// TpmiStAttest represents an attestation structure type (TPMI_ST_ATTEST).
+/// See definition in Part 2: Structures, section 10.12.10.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -267,105 +328,155 @@ pub enum TpmiStAttest {
     AttestNVDigest = TPM2ST::AttestNVDigest.0,
 }
 
+/// The number of bits in an AES key.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiAesKeyBits(pub u16);
+pub struct TpmiAesKeyBits(u16);
+/// The number of bits in an SM4 key.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiSm4KeyBits(pub u16);
+pub struct TpmiSm4KeyBits(u16);
+/// The number of bits in a Camellia key.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiCamelliaKeyBits(pub u16);
+pub struct TpmiCamelliaKeyBits(u16);
+/// The number of bits in an RSA key.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
-pub struct TpmiRsaKeyBits(pub u16);
+pub struct TpmiRsaKeyBits(u16);
 
+/// TpmaObject indicates an object's use, authorization types, and relationship to other objects (TPMA_OBJECT).
+/// See definition in Part 2: Structures, section 8.3.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaObject(pub u32);
 bitflags! {
     impl TpmaObject : u32 {
+        /// Whether the hierarchy of the object may NOT change.
         const FIXED_TPM = 1 << 1;
+        /// Whether saved contexts of this object may NO be loaded after startup(CLEAR).
         const ST_CLEAR = 1 << 2;
+        /// Whether the parent of the object may NOT change.
         const FIXED_PARENT = 1 << 4;
+        /// Whether the TPM generated all of the sensitive data, other than auth_value, when the object was created.
         const SENSITIVE_DATA_ORIGIN = 1 << 5;
+        /// Whether approval of USER role actions with the object may be with an HMAC session or password using the auth_value of the object or a policy session.
         const USER_WITH_AUTH = 1 << 6;
+        /// Whether approval of ADMIN role actions with the object may ONLY be done with a policy session.
         const ADMIN_WITH_POLICY = 1 << 7;
+        /// Whether the object is NOT subject to dictionary attack protections.
         const NO_DA = 1 << 10;
+        /// Whether, if the object is duplicated, symmetric_alg and new_parent_handle shall not be null.
         const ENCRYPTED_DUPLICATION = 1 << 11;
+        /// Whether key usage is restricated to manipulate structures of known format.
         const RESTRICTED = 1 << 16;
+        /// Whether the private portion of the key may be used to decrypt.
         const DECRYPT = 1 << 17;
+        /// Whether the private portion of the key may be used to encrypt (for symmetric cipher objects) or sign.
         const SIGN_ENCRYPT = 1 << 18;
+        /// Whether this is an asymmetric key that may not be used to sign with sign().
         const X509_SIGN = 1 << 19;
     }
 }
 
+/// TpmaAlgorithm defines the attributes of an algorithm (TPMA_ALGORITHM).
+/// See definition in Part 2: Structures, section 8.2.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaAlgorithm(pub u32);
 bitflags! {
     impl TpmaAlgorithm : u32 {
+        /// Indicates an asymmetric algorithm with public and private portions.
         const ASYMMETRIC = 1 << 0;
+        /// Indicates a symmetric block cipher.
         const SYMMETRIC = 1 << 1;
+        /// Indicates a hash algorithm.
         const HASH = 1 << 2;
+        /// Indicates an algorithm that may be used as an object type.
         const OBJECT = 1 << 3;
+        /// Indicates a signing algorithm.
         const SIGNING = 1 << 8;
+        /// Indicates an encryption/decryption algorithm.
         const ENCRYPTING = 1 << 9;
+        /// Indicates a method such as a key derivative function.
         const METHOD = 1 << 10;
     }
 }
 
+/// TpmaCc defines the attributes of a command (TPMA_CC).
+/// See definition in Part 2: Structures, section 8.9.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmaCc(pub u32);
 bitflags! {
     impl TpmaCc : u32 {
+        /// Whether the command may write to NV.
         const NV  = 1 << 22;
+        /// Whether the command could flush any number of loaded contexts.
         const EXTENSIVE = 1 << 23;
+        /// Whether the conext associated with any transient handle in the command will be flushed when this command completes.
         const FLUSHED = 1 << 24;
+        /// Wether there is a handle area in the response.
         const R_HANDLE = 1 << 28;
+        /// Whether the command is vendor-specific.
         const V = 1 << 29;
         // See multi-bit fields below.
         const _ = !0;
     }
 }
 impl TpmaCc {
+    /// Shift for the command index field.
     const COMMAND_INDEX_SHIFT: u32 = 0;
+    /// Mask for the command index field.
     const COMMAND_INDEX_MASK: u32 = 0xFFFF;
+    /// Shift for the command handles field.
     const C_HANDLES_SHIFT: u32 = 25;
+    /// Mask for the command handles field.
     const C_HANDLES_MASK: u32 = 0x7 << TpmaCc::C_HANDLES_SHIFT;
 
+    /// Creates a TpmaCc with the command index field set to the provided value.
     const fn command_index(index: u16) -> TpmaCc {
-        TpmaCc(new_attribute_field!(
+        TpmaCc(new_attribute_field(
             index as u32,
-            COMMAND_INDEX_MASK,
-            COMMAND_INDEX_SHIFT
+            Self::COMMAND_INDEX_MASK,
+            Self::COMMAND_INDEX_SHIFT,
         ))
     }
+    /// Creates a TpmaCc with the command handles field set to the provided value.
     const fn c_handles(count: u32) -> TpmaCc {
-        TpmaCc(new_attribute_field!(count, C_HANDLES_MASK, C_HANDLES_SHIFT))
+        TpmaCc(new_attribute_field(
+            count,
+            Self::C_HANDLES_MASK,
+            Self::C_HANDLES_SHIFT,
+        ))
     }
 
+    /// Returns the command being selected.
     fn get_command_index(&self) -> u16 {
-        get_attribute_field!(self.0, COMMAND_INDEX_MASK, COMMAND_INDEX_SHIFT) as u16
+        get_attribute_field(self.0, Self::COMMAND_INDEX_MASK, Self::COMMAND_INDEX_SHIFT) as u16
     }
+    /// Returns the number of handles in the handle area for this command.
     fn get_c_handles(&self) -> u32 {
-        get_attribute_field!(self.0, C_HANDLES_MASK, C_HANDLES_SHIFT)
+        get_attribute_field(self.0, Self::C_HANDLES_MASK, Self::C_HANDLES_SHIFT)
     }
 
+    /// Sets the command being selected.
     fn set_command_index(&mut self, index: u16) {
-        set_attribute_field!(
+        self.0 = set_attribute_field(
             self.0,
             index as u32,
-            COMMAND_INDEX_MASK,
-            COMMAND_INDEX_SHIFT
+            Self::COMMAND_INDEX_MASK,
+            Self::COMMAND_INDEX_SHIFT,
         );
     }
+    /// Sets the number of handles in the handle area for this command.
     fn set_c_handles(&mut self, count: u32) {
-        set_attribute_field!(self.0, count, C_HANDLES_MASK, C_HANDLES_SHIFT);
+        self.0 = set_attribute_field(self.0, count, Self::C_HANDLES_MASK, Self::C_HANDLES_SHIFT);
     }
 }
 
+/// TpmiStCommandTag defines the command tags (TPMI_ST_COMMAND_TAG).
+/// See definition in Part 2: Structures, section 9.35.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
@@ -1699,11 +1810,11 @@ mod tests {
 
     #[test]
     fn test_nv_index_range() {
-        let lowest_ok = TPM2HC::NVIndexFirst.0;
+        let lowest_ok = TpmHc::NVIndexFirst.get();
         assert!(TpmiRhNvIndex::try_from(lowest_ok - 1).is_err());
         assert!(TpmiRhNvIndex::try_from(lowest_ok).is_ok());
         assert!(TpmiRhNvIndex::try_from(lowest_ok + 432).is_ok());
-        let highest_ok = TPM2HC::NVIndexLast.0;
+        let highest_ok = TpmHc::NVIndexLast.get();
         assert!(TpmiRhNvIndex::try_from(highest_ok).is_ok());
         assert!(TpmiRhNvIndex::try_from(highest_ok + 1).is_err());
     }

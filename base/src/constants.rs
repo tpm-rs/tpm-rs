@@ -678,29 +678,53 @@ pub enum TPM2Handle {
     RHPlatform = 0x4000000C,
     RHPlatformNV = 0x4000000D,
 }
-// TPM2HC represents a TPM_HC.
-// See definition in Part 2: Structures, section 7.5.
-// TODO: Add remaining values, some of which are profile-dependent.
-#[open_enum]
-#[repr(u32)]
-#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, Default, Marshal)]
-pub enum TPM2HC {
-    HRHandleMask =  0x00FFFFFF,
-    HRRangeMask = 0xFF000000,
-    HRShift = 24,               
-    HRPcr = (TPM2HT::PCR.0 as u32) << TPM2HC::HRShift.0,
-    HRHMACSession = (TPM2HT::HMACSession.0 as u32) <<TPM2HC::HRShift.0,
-    HRPolicySession = (TPM2HT::PolicySession.0 as u32) << TPM2HC::HRShift.0,
-    HRTransient =  (TPM2HT::Transient.0 as u32) << TPM2HC::HRShift.0,
-    HRPersistent = (TPM2HT::Persistent.0 as u32) << TPM2HC::HRShift.0,
-    HRNvIndex = (TPM2HT::NVIndex.0 as u32) << TPM2HC::HRShift.0,
-    HRPermanent = (TPM2HT::Permanent.0 as u32) << TPM2HC::HRShift.0,
-    NVIndexLast = TPM2HC::NVIndexFirst.0 + 0x00FFFFFF,
-}
+/// TpmHc represents a TPM_HC.
+/// See definition in Part 2: Structures, section 7.5.
+#[derive(Copy, Clone, Debug, Default, Marshal)]
+pub struct TpmHc(u32);
 #[allow(non_upper_case_globals)]
-impl TPM2HC {
-    pub const NVIndexFirst: TPM2HC = TPM2HC::HRNvIndex;
+impl TpmHc {
+    /// Masks off the HR.
+    const HRHandleMask: u32 = 0x00FFFFFF;
+    /// Masks off the variable part.
+    const HRRangeMask: u32 = 0xFF000000;
+    /// Handle constant shift.
+    const HRShift: u32 = 24;
+
+    const fn new(handle_type: TPM2HT) -> TpmHc {
+        TpmHc((handle_type.0 as u32) << TpmHc::HRShift)
+    }
+
+    pub fn get(&self) -> u32 {
+        self.0
+    }
+
+    /// PCR handle range base.
+    const HRPcr: TpmHc = TpmHc::new(TPM2HT::PCR);
+    /// HMAC session handle range base.
+    const HRHMACSession: TpmHc = TpmHc::new(TPM2HT::HMACSession);
+    /// Policy session handle range base.
+    const HRPolicySession: TpmHc = TpmHc::new(TPM2HT::PolicySession);
+    /// Transient object handle range base.
+    const HRTransient: TpmHc = TpmHc::new(TPM2HT::Transient);
+    /// Persistent object handle range base.
+    const HRPersistent: TpmHc = TpmHc::new(TPM2HT::Persistent);
+    /// NV index handle range base.
+    const HRNvIndex: TpmHc = TpmHc::new(TPM2HT::NVIndex);
+    // TODO: Add remaining values and ranges, some of which are profile-dependent.
+
+    /// The first persistent object.
+    pub const PersistentFirst: TpmHc = TpmHc::HRPersistent;
+    /// The last persistent object.
+    pub const PersistentLast: TpmHc = TpmHc(TpmHc::HRPersistent.0 + 0x00FFFFFF);
+    /// The first allowed NV index.
+    pub const NVIndexFirst: TpmHc = TpmHc::HRNvIndex;
+    /// The last allowed NV index.
+    pub const NVIndexLast: TpmHc = TpmHc(TpmHc::NVIndexFirst.0 + 0x00FFFFFF);
+    /// Returns true if the value is an allowed NV index.
+    pub fn is_nv_index(value: u32) -> bool {
+        (value >= TpmHc::NVIndexFirst.0) && (value <= TpmHc::NVIndexLast.0)
+    }
 }
 
 // TPM2NT represents a TPM_NT.
@@ -729,12 +753,12 @@ pub enum TPM2NT {
     PinPass = 0x9,
 }
 
-// TPM2Generated represents a TPM_GENERATED.
-// See definition in Part 2: Structures, section 6.2.
+/// TPM2Generated represents a TPM_GENERATED.
+/// See definition in Part 2: Structures, section 6.2.
 #[open_enum]
 #[repr(u32)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshal)]
 pub enum TPM2Generated {
-    VALUE = 0x0xFF544347,
+    VALUE = 0xFF544347,
 }
