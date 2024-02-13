@@ -723,7 +723,7 @@ impl TpmHc {
     pub const NVIndexLast: TpmHc = TpmHc(TpmHc::NVIndexFirst.0 + 0x00FFFFFF);
     /// Returns true if the value is an allowed NV index.
     pub fn is_nv_index(value: u32) -> bool {
-        (value >= TpmHc::NVIndexFirst.0) && (value <= TpmHc::NVIndexLast.0)
+        (TpmHc::NVIndexFirst.0..=TpmHc::NVIndexLast.0).contains(&value)
     }
 }
 
