@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn test_get_manufacturer_too_many_properties() {
         let response = GetCapabilityResp {
-            more_data: TpmiYesNo(0),
+            more_data: TpmiYesNo::NO,
             capability_data: TpmsCapabilityData::TpmProperties(
                 TpmlTaggedTpmProperty::new(
                     &[TpmsTaggedProperty {
@@ -96,11 +96,11 @@ mod tests {
     #[test]
     fn test_get_manufacturer_wrong_type_properties() {
         let response = GetCapabilityResp {
-            more_data: TpmiYesNo(0),
+            more_data: TpmiYesNo::NO,
             capability_data: TpmsCapabilityData::Algorithms(
                 TpmlAlgProperty::new(&[TpmsAlgProperty {
                     alg: TPM2AlgID::SHA256,
-                    alg_properties: TpmaAlgorithm(0),
+                    alg_properties: TpmaAlgorithm::empty(),
                 }])
                 .unwrap(),
             ),
