@@ -1050,7 +1050,7 @@ impl Marshalable for TpmtPublic {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPublic {
     size: u16,
-    pub public_area: [u8; size_of::<TpmuPublicId>()],
+    pub public_area: [u8; size_of::<TpmtPublic>()],
 }
 
 #[repr(C)]
@@ -1301,7 +1301,7 @@ pub struct Tpm2bContextData {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmsCreationData {
     pub pcr_select: TpmlPcrSelection,
     pub pcr_digest: Tpm2bDigest,
@@ -1425,6 +1425,43 @@ impl_try_marshalable_tpm2b_simple! {Tpm2bSensitiveData, buffer}
 impl_try_marshalable_tpm2b_simple! {Tpm2bSymKey, buffer}
 impl_try_marshalable_tpm2b_simple! {Tpm2bTemplate, buffer}
 impl_try_marshalable_tpm2b_simple! {Tpm2bLabel, buffer}
+impl_try_marshalable_tpm2b_simple! {Tpm2bSensitiveCreate, sensitive}
+impl_try_marshalable_tpm2b_simple! {Tpm2bPublic, public_area}
+impl_try_marshalable_tpm2b_simple! {Tpm2bCreationData, creation_data}
+
+/// Provides conversion to/from a struct type for TPM2B types that don't hold a bytes buffer.
+pub trait Tpm2bStruct: Tpm2bSimple {
+    type StructType: Marshalable;
+
+    /// Marshals the value into the 2b holder.
+    fn from_struct(val: &Self::StructType) -> TpmRcResult<Self>
+    where
+        Self: Sized;
+
+    /// Extracts the struct value from the 2b holder.
+    fn to_struct(&self) -> TpmRcResult<Self::StructType>;
+}
+macro_rules! impl_try_marshalable_tpm2b_struct {
+    ($T:ty, $StructType:ty, $F:ident) => {
+        impl Tpm2bStruct for $T {
+            type StructType = $StructType;
+
+            fn from_struct(val: &Self::StructType) -> TpmRcResult<Self> {
+                let mut x = Self::default();
+                x.size = val.try_marshal(&mut x.$F)? as u16;
+                Ok(x)
+            }
+
+            fn to_struct(&self) -> TpmRcResult<Self::StructType> {
+                let mut buf = UnmarshalBuf::new(&self.$F[0..self.get_size() as usize]);
+                Self::StructType::try_unmarshal(&mut buf)
+            }
+        }
+    };
+}
+impl_try_marshalable_tpm2b_struct! {Tpm2bSensitiveCreate, TpmsSensitiveCreate, sensitive}
+impl_try_marshalable_tpm2b_struct! {Tpm2bPublic, TpmtPublic, public_area}
+impl_try_marshalable_tpm2b_struct! {Tpm2bCreationData, TpmsCreationData, creation_data}
 
 // Adds common helpers for TPML type $T.
 macro_rules! impl_tpml {
@@ -1817,5 +1854,27 @@ mod tests {
         let highest_ok = TpmHc::NVIndexLast.get();
         assert!(TpmiRhNvIndex::try_from(highest_ok).is_ok());
         assert!(TpmiRhNvIndex::try_from(highest_ok + 1).is_err());
+    }
+
+    #[test]
+    fn test_2b_struct() {
+        let creation_data = TpmsCreationData {
+            pcr_select: TpmlPcrSelection::new(&[TpmsPcrSelection {
+                hash: TpmiAlgHash::SHA256,
+                sizeof_select: 2,
+                pcr_select: [0xF, 0xF, 0x0, 0x0],
+            }])
+            .unwrap(),
+            pcr_digest: Tpm2bDigest::from_bytes(&[0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9])
+                .unwrap(),
+            locality: TpmaLocality(0xA),
+            parent_name_alg: TPM2AlgID::SHA384,
+            parent_name: Tpm2bName::from_bytes(&[0xA, 0xB, 0xC, 0xD, 0xE, 0xF]).unwrap(),
+            parent_qualified_name: Tpm2bName::default(),
+            outside_info: Tpm2bData::from_bytes(&[0x1; 32]).unwrap(),
+        };
+        let creation_data_2b = Tpm2bCreationData::from_struct(&creation_data).unwrap();
+        let out_creation_data = creation_data_2b.to_struct().unwrap();
+        assert_eq!(creation_data, out_creation_data);
     }
 }
