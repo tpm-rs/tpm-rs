@@ -1431,7 +1431,7 @@ impl_try_marshalable_tpm2b_simple! {Tpm2bCreationData, creation_data}
 
 /// Provides conversion to/from a struct type for TPM2B types that don't hold a bytes buffer.
 pub trait Tpm2bStruct: Tpm2bSimple {
-    type StructType: Marshalable + Sized;
+    type StructType: Marshalable;
 
     /// Marshals the value into the 2b holder.
     fn from_struct(val: &Self::StructType) -> TpmRcResult<Self>
