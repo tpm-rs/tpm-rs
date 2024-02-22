@@ -1,0 +1,5 @@
+error: UnionSize is only supported on enums without generics
+ --> tests/fail/generics.rs:4:13
+  |
+4 | pub enum Foo<T> {
+  |             ^

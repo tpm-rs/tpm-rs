@@ -1,0 +1,5 @@
+error: UnionSize is not derivable for enum variants containing more than one field
+ --> tests/fail/multi_unnamed_variants.rs:5:6
+  |
+5 |     A(u8, u8),
+  |      ^^^^^^^^
