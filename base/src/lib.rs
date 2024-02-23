@@ -5,10 +5,11 @@
 use crate::{constants::*, errors::*, marshal::*};
 use bitflags::bitflags;
 use core::cmp::min;
-use core::mem::{align_of, size_of};
+use core::mem::size_of;
 use open_enum::open_enum;
 pub use tpm2_rs_errors as errors;
 pub use tpm2_rs_marshal as marshal;
+use unionify::unionify;
 
 pub mod commands;
 pub mod constants;
@@ -501,6 +502,7 @@ const TPML_DIGEST_MAX_DIGESTS: usize = 8;
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub struct TpmsEmpty;
 
+#[unionify(TpmuHaUnion)]
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshal)]
 pub enum TpmtHa {
@@ -512,7 +514,7 @@ pub enum TpmtHa {
 }
 impl TpmtHa {
     pub const fn union_size() -> usize {
-        size_of::<TpmtHa>() - align_of::<TpmtHa>() - size_of::<u16>()
+        size_of::<TpmuHaUnion>()
     }
 }
 impl Default for TpmtHa {
@@ -521,6 +523,7 @@ impl Default for TpmtHa {
     }
 }
 
+#[unionify(TpmuNameUnion)]
 #[repr(C, u16)]
 enum TpmuName {
     Digest(TpmtHa),
@@ -528,7 +531,7 @@ enum TpmuName {
 }
 impl TpmuName {
     pub const fn union_size() -> usize {
-        size_of::<TpmuName>() - align_of::<TpmuName>() - size_of::<u16>()
+        size_of::<TpmuNameUnion>()
     }
 }
 
@@ -763,7 +766,7 @@ pub struct Tpm2bDerive {
     size: u16,
     pub buffer: [u8; size_of::<TpmsDerive>()],
 }
-
+#[unionify(TpmuSensitiveCreateUnion)]
 #[repr(C, u16)]
 enum TpmuSensitiveCreate {
     Create([u8; constants::TPM2_MAX_SYM_DATA as usize]),
@@ -771,7 +774,7 @@ enum TpmuSensitiveCreate {
 }
 impl TpmuSensitiveCreate {
     pub const fn union_size() -> usize {
-        size_of::<TpmuSensitiveCreate>() - align_of::<TpmuSensitiveCreate>() - size_of::<u16>()
+        size_of::<TpmuSensitiveCreateUnion>()
     }
 }
 
@@ -833,6 +836,7 @@ pub struct Tpm2bEccPoint {
     pub point: [u8; size_of::<TpmsEccPoint>()],
 }
 
+#[unionify(TpmuEncryptedSecretUnion)]
 #[repr(C, u16)]
 enum TpmuEncryptedSecret {
     Ecc([u8; size_of::<TpmsEccPoint>()]),
@@ -842,7 +846,7 @@ enum TpmuEncryptedSecret {
 }
 impl TpmuEncryptedSecret {
     pub const fn union_size() -> usize {
-        size_of::<TpmuEncryptedSecret>() - align_of::<TpmuEncryptedSecret>() - size_of::<u16>()
+        size_of::<TpmuEncryptedSecretUnion>()
     }
 }
 

@@ -8,7 +8,7 @@ tpm2-rs-errors = { workspace = true }
 tpm2-rs-marshal = { workspace = true }
 open-enum = { workspace = true }
 bitflags = { workspace = true }
-
+unionify = { workspace = true }
 [dev-dependencies]
 # Include debug implemenation for unit tests
 tpm2-rs-errors = { workspace = true, features = ["debug"] }
