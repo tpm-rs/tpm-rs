@@ -20,7 +20,7 @@ proc-macro2 = "1"
 quote = "1"
 syn = {version = "2", features = ["full"]}
 zerocopy = { version = "0.7.0", features = ["derive"] }
-
+trybuild = { version = "1.0.89", features = ["diff"] }
 # Common workspace crates
 tpm2-rs-base = { path = "base" }
 tpm2-rs-client = { path = "client" }

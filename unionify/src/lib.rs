@@ -1,3 +1,23 @@
+//! `unionify` is a macro that that derives union equivalent to tagged or untagged enums.
+//!
+//! # Example
+//! ```rust
+//! use core::mem::size_of;
+//! use unionify::unionify;
+//! #[unionify(Bar)]
+//! enum Foo {
+//!     V1(u8),
+//!     V2([u32; 128]),
+//!     V3{
+//!         buffer: [u8;32]
+//!     },
+//!     V4
+//! }
+//! assert_eq!(size_of::<Bar>(), 128*32/8);
+//! ```
+
+#![forbid(unsafe_code)]
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
@@ -111,4 +131,15 @@ pub fn unionify(argumnt: TokenStream, mut annotated_item: TokenStream) -> TokenS
     };
     annotated_item.extend(untagged_union);
     annotated_item
+}
+
+#[cfg(test)]
+
+mod test {
+    #[test]
+    fn test_unionify() {
+        let t = trybuild::TestCases::new();
+        t.pass("tests/pass/*.rs");
+        t.compile_fail("tests/fail/*.rs")
+    }
 }

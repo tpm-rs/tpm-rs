@@ -1,0 +1,5 @@
+error: Enum variants containing more than one field is not supported
+ --> tests/fail/multi_named_variants.rs:5:7
+  |
+5 |     A { a1: u8, a2: u8 },
+  |       ^^^^^^^^^^^^^^^^^^

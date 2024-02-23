@@ -1,0 +1,7 @@
+error: unions cannot have zero fields
+ --> tests/fail/zero_sized_union.rs:3:1
+  |
+3 | #[unionify(Bar)]
+  | ^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `unionify` (in Nightly builds, run with -Z macro-backtrace for more info)
