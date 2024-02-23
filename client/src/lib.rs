@@ -17,7 +17,7 @@ pub trait Tpm {
     fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TpmResult<()>;
 }
 
-pub fn get_capability<T: Tpm + ?Sized>(
+pub fn get_capability<T: Tpm>(
     tpm: &mut T,
     command: &GetCapabilityCmd,
 ) -> TpmResult<GetCapabilityResp> {
@@ -54,7 +54,7 @@ pub struct RespHeader {
 pub fn run_command<CmdT, T>(cmd: &CmdT, tpm: &mut T) -> TpmResult<CmdT::RespT>
 where
     CmdT: TpmCommand,
-    T: Tpm + ?Sized,
+    T: Tpm,
 {
     Ok(run_command_with_handles(cmd, CmdT::Handles::default(), CmdSessions::default(), tpm)?.0)
 }
@@ -105,7 +105,7 @@ pub fn run_command_with_handles<CmdT, T>(
 ) -> TpmResult<(CmdT::RespT, CmdT::RespHandles)>
 where
     CmdT: TpmCommand,
-    T: Tpm + ?Sized,
+    T: Tpm,
 {
     let mut cmd_buffer = [0u8; CMD_BUFFER_SIZE];
     let mut cmd_header = CmdHeader::new(cmd_sessions.is_empty(), CmdT::CMD_CODE);
