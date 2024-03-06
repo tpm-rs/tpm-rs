@@ -294,6 +294,29 @@ impl TryFrom<u32> for TpmiRhNvIndex {
     }
 }
 
+/// TpmiShAuthSessions represents handles referring to an authorization session (TPMI_SH_AUTH_SESSION).
+/// See definition in Part 2: Structures, section 9.8.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+pub struct TpmiShAuthSession(u32);
+impl TryFrom<u32> for TpmiShAuthSession {
+    type Error = TpmRcError;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if TpmHc::is_hmac_session(value)
+            || TpmHc::is_policy_session(value)
+            || (value == Self::RS_PW.0)
+        {
+            Ok(TpmiShAuthSession(value))
+        } else {
+            Err(TpmRcError::Value)
+        }
+    }
+}
+impl TpmiShAuthSession {
+    /// A password authorization.
+    pub const RS_PW: TpmiShAuthSession = TpmiShAuthSession(TPM2Handle::RSPW.0);
+}
+
 /// TpmiEccCurve represents an implemented ECC curve (TPMI_ECC_SCHEME).
 /// See definition in Part 2: Structures, section 11.2.5.5.
 #[repr(transparent)]
@@ -400,6 +423,28 @@ bitflags! {
         const ENCRYPTING = 1 << 9;
         /// Indicates a method such as a key derivative function.
         const METHOD = 1 << 10;
+    }
+}
+
+/// TpmaSession defines the attributes of a session (TPMA_SESSION).
+/// See definition in Part 2: Structures, section 8.4.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+pub struct TpmaSession(pub u8);
+bitflags! {
+    impl TpmaSession : u8 {
+        /// Indicates if the session is to remain active (in commands) or does remain active (in reponses) after successful completion of the command.
+        const CONTINUE_SESSION = 1 << 0;
+        /// Indicates if the command should only be executed if the session is exclusive at the start of the command (in commands) or is exclusive (in responses).
+        const AUDIT_EXCLUSIVE = 1 << 1;
+        /// Indicates if the audit digest of the session should be initialized and exclusive status set in commands.
+        const AUDIT_RESET = 1 << 2;
+        /// Indicates if the first parameter in the command is symmetrically encrpyted.
+        const DECRYPT = 1 << 5;
+        /// Indicates if the session should (in commands) or did (in responses) encrypt the first parameter in the response.
+        const ENCRYPT = 1 << 6;
+        /// Indicates that the session is for audit, and that AUDIT_EXLCUSIVE/AUDIT_RESET have meaning.
+        const AUDIT = 1 << 7;
     }
 }
 
@@ -539,8 +584,8 @@ pub struct Tpm2bDigest {
     pub buffer: [u8; TpmtHa::union_size()],
 }
 
-type Tpm2bNonce = Tpm2bDigest;
-type Tpm2bOperand = Tpm2bDigest;
+pub type Tpm2bNonce = Tpm2bDigest;
+pub type Tpm2bOperand = Tpm2bDigest;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1224,6 +1269,23 @@ pub struct TpmlDigest {
     count: u32,
     #[length(count)]
     digests: [Tpm2bDigest; TPML_DIGEST_MAX_DIGESTS],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, Debug, Marshal)]
+pub struct TpmsAuthCommand {
+    pub session_handle: TpmiShAuthSession,
+    pub nonce: Tpm2bNonce,
+    pub session_attributes: TpmaSession,
+    pub hmac: Tpm2bAuth,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, Debug, Marshal)]
+pub struct TpmsAuthResponse {
+    pub nonce: Tpm2bNonce,
+    pub session_attributes: TpmaSession,
+    pub hmac: Tpm2bData,
 }
 
 #[repr(C)]

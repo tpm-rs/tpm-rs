@@ -51,6 +51,14 @@ impl<'a> UnmarshalBuf<'a> {
             Some(yours)
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
 }
 
 // Helper to define Marshalable for primitive types with {to,from}_be_bytes methods.

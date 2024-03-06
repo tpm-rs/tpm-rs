@@ -28,6 +28,7 @@ pub const TPM2_MAX_RSA_KEY_BYTES: u32 = 512;
 pub const TPM2_PRIVATE_VENDOR_SPECIFIC_BYTES: u32 = (TPM2_MAX_RSA_KEY_BYTES / 2) * (3 + 2);
 
 pub const TPM2_MAX_CONTEXT_SIZE: u32 = 5120;
+pub const TPM2_MAX_ACTIVE_SESSIONS: u32 = 64;
 
 // TPM2AlgID represents a TPM_ALG_ID.
 // See definition in Part 2: Structures, section 6.3.
@@ -713,6 +714,23 @@ impl TpmHc {
     const HRNvIndex: TpmHc = TpmHc::new(TPM2HT::NVIndex);
     // TODO: Add remaining values and ranges, some of which are profile-dependent.
 
+    /// The first HMAC session.
+    pub const HmacSessionFirst: TpmHc = TpmHc::HRHMACSession;
+    /// The last HMAC session.
+    pub const HmacSessionLast: TpmHc = TpmHc(TpmHc::HRHMACSession.0 + TPM2_MAX_ACTIVE_SESSIONS - 1);
+    /// Returns true if the value is a valid HMAC session handle.
+    pub fn is_hmac_session(value: u32) -> bool {
+        (TpmHc::HmacSessionFirst.0..=TpmHc::HmacSessionLast.0).contains(&value)
+    }
+    /// The first policy session.
+    pub const PolicySessionFirst: TpmHc = TpmHc::HRPolicySession;
+    /// The last policy session.
+    pub const PolicySessionLast: TpmHc =
+        TpmHc(TpmHc::HRPolicySession.0 + TPM2_MAX_ACTIVE_SESSIONS - 1);
+    /// Returns true if the value is a valid policy session handle.
+    pub fn is_policy_session(value: u32) -> bool {
+        (TpmHc::PolicySessionFirst.0..=TpmHc::PolicySessionLast.0).contains(&value)
+    }
     /// The first persistent object.
     pub const PersistentFirst: TpmHc = TpmHc::HRPersistent;
     /// The last persistent object.

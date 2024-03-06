@@ -35,7 +35,6 @@ where
 mod tests {
     use super::*;
     use tpm2_rs_base::constants::{TPM2AlgID, TPM2ST};
-    use tpm2_rs_base::errors::TssTcsError;
     use tpm2_rs_base::marshal::Marshalable;
     use tpm2_rs_base::{
         TpmaAlgorithm, TpmiYesNo, TpmlAlgProperty, TpmlTaggedTpmProperty, TpmsAlgProperty,
@@ -44,13 +43,13 @@ mod tests {
 
     struct FakeTpm {
         len: usize,
-        response: [u8; MAX_RESP_SIZE],
+        response: [u8; RESP_BUFFER_SIZE],
     }
     impl Default for FakeTpm {
         fn default() -> Self {
             FakeTpm {
                 len: 0,
-                response: [0; MAX_RESP_SIZE],
+                response: [0; RESP_BUFFER_SIZE],
             }
         }
     }
@@ -62,11 +61,11 @@ mod tests {
                 rc: 0,
             };
             let off = tx_header.try_marshal(response)?;
-            let length = off + self.response.len();
+            let length = off + self.len;
             if length > response.len() {
-                return Err(TssTcsError::OutOfMemory.into());
+                return Err(TpmRcError::Size.into());
             }
-            response[off..length].copy_from_slice(&self.response);
+            response[off..length].copy_from_slice(&self.response[..self.len]);
             tx_header.size = length as u32;
             tx_header.try_marshal(response)?;
             Ok(())

@@ -7,6 +7,7 @@ edition = "2021"
 tpm-simulator-tests = []
 
 [dependencies]
+arrayvec = { workspace = true }
 tpm2-rs-base = { workspace = true }
 tpm2-rs-marshal = { workspace = true }
 
