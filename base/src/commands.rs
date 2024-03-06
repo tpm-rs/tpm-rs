@@ -1,5 +1,8 @@
 use crate::constants::{TPM2Cap, TPM2CC, TPM2PT, TPM2SU};
-use crate::{Marshal, Marshalable, UnmarshalBuf};
+use crate::{
+    Marshal, Marshalable, TPM2Handle, Tpm2bCreationData, Tpm2bData, Tpm2bDigest, Tpm2bName,
+    Tpm2bPublic, Tpm2bSensitiveCreate, TpmiRhHierarchy, TpmtTkCreation, UnmarshalBuf,
+};
 use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
 
 /// Trait for a TPM command transaction.
@@ -65,4 +68,29 @@ pub struct PcrReadResp {
     pcr_update_counter: u32,
     pcr_selection_out: TpmlPcrSelection,
     pcr_values: TpmlDigest,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub struct CreatePrimaryCmd {
+    pub in_sensitive: Tpm2bSensitiveCreate,
+    pub in_public: Tpm2bPublic,
+    pub outside_info: Tpm2bData,
+    pub creation_pcr: TpmlPcrSelection,
+}
+impl TpmCommand for CreatePrimaryCmd {
+    const CMD_CODE: TPM2CC = TPM2CC::CreatePrimary;
+    type Handles = TpmiRhHierarchy;
+    type RespT = CreatePrimaryResp;
+    type RespHandles = TPM2Handle;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub struct CreatePrimaryResp {
+    pub out_public: Tpm2bPublic,
+    pub creation_data: Tpm2bCreationData,
+    pub creation_hash: Tpm2bDigest,
+    pub creation_ticket: TpmtTkCreation,
+    pub name: Tpm2bName,
 }

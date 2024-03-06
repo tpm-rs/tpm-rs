@@ -294,6 +294,18 @@ impl TryFrom<u32> for TpmiRhNvIndex {
     }
 }
 
+/// TpmiRhHierarchy represents a hierarchy selector handle (TPMI_RH_HIERARCHY).
+/// See definition in Part 2: Structures, section 9.13.
+#[open_enum]
+#[repr(u32)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+pub enum TpmiRhHierarchy {
+    Owner = TPM2Handle::RHOwner.0,
+    Platform = TPM2Handle::RHPlatform.0,
+    Endorsement = TPM2Handle::RHEndorsement.0,
+}
+
 /// TpmiShAuthSessions represents handles referring to an authorization session (TPMI_SH_AUTH_SESSION).
 /// See definition in Part 2: Structures, section 9.8.
 #[repr(transparent)]
@@ -322,6 +334,11 @@ impl TpmiShAuthSession {
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmiEccCurve(TPM2ECCCurve);
+impl TpmiEccCurve {
+    pub fn new(curve: TPM2ECCCurve) -> TpmiEccCurve {
+        TpmiEccCurve(curve)
+    }
+}
 
 /// TpmiYesNo is used in place of a boolean.
 /// See TPMI_YES_NO definition in Part 2: Structures, section 9.2.
@@ -575,6 +592,14 @@ impl TpmuName {
     pub const fn union_size() -> usize {
         size_of::<TpmuName>() - align_of::<TpmuName>() - size_of::<u16>()
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+pub struct TpmtTkCreation {
+    tag: TPM2ST,
+    hierarchy: TpmiRhHierarchy,
+    digest: Tpm2bDigest,
 }
 
 #[repr(C)]
@@ -865,7 +890,7 @@ pub struct Tpm2bEccParameter {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
 pub struct TpmsEccPoint {
     pub x: Tpm2bEccParameter,
     pub y: Tpm2bEccParameter,

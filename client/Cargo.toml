@@ -14,3 +14,4 @@ tpm2-rs-marshal = { workspace = true }
 [dev-dependencies]
 zerocopy = { workspace = true }
 tpm2-rs-features-client = { workspace = true }
+tpm2-rs-errors = { workspace = true, features = ["debug"] }
