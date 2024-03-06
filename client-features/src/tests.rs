@@ -53,8 +53,8 @@ fn test_get_manufacturer_too_many_properties() {
     };
     let mut tpm = FakeTpm::default();
     tpm.len = response.try_marshal(&mut tpm.response).unwrap();
-
-    assert_eq!(get_manufacturer_id(&mut tpm), Err(TpmRcError::Size.into()));
+    let mut client = TpmClient { tpm };
+    assert_eq!(client.get_manufacturer_id(), Err(TpmRcError::Size.into()));
 }
 
 #[test]
@@ -72,8 +72,9 @@ fn test_get_manufacturer_wrong_type_properties() {
     let mut tpm = FakeTpm::default();
     tpm.len = response.try_marshal(&mut tpm.response).unwrap();
 
+    let mut client = TpmClient { tpm };
     assert_eq!(
-        get_manufacturer_id(&mut tpm),
+        client.get_manufacturer_id(),
         Err(TpmRcError::Selector.into())
     );
 }

@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
 use core::mem::size_of;
-use sessions::CmdSessions;
+use sessions::{CmdSessions, PasswordSession};
 use tpm2_rs_base::commands::*;
-use tpm2_rs_base::constants::{TPM2CC, TPM2ST};
+use tpm2_rs_base::constants::{TPM2Handle, TPM2CC, TPM2ST};
 use tpm2_rs_base::errors::{TpmError, TpmResult, TssTcsError};
 use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
-use tpm2_rs_base::{TpmiStCommandTag, TpmsAuthResponse};
+use tpm2_rs_base::{TpmiRhHierarchy, TpmiStCommandTag, TpmsAuthResponse};
 
 pub const CMD_BUFFER_SIZE: usize = 4096;
 pub const RESP_BUFFER_SIZE: usize = 4096;
@@ -17,11 +17,24 @@ pub trait Tpm {
     fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TpmResult<()>;
 }
 
+// These methods are syntatic sugar for calling run_command* with a specific command.
+
 pub fn get_capability<T: Tpm>(
     tpm: &mut T,
     command: &GetCapabilityCmd,
 ) -> TpmResult<GetCapabilityResp> {
     run_command(command, tpm)
+}
+
+pub fn create_primary<T: Tpm>(
+    tpm: &mut T,
+    command: &CreatePrimaryCmd,
+    primary_handle: TpmiRhHierarchy,
+) -> TpmResult<(CreatePrimaryResp, TPM2Handle)> {
+    let mut session = PasswordSession::default();
+    let mut sessions = CmdSessions::default();
+    sessions.push(&mut session);
+    run_command_with_handles(command, primary_handle, sessions, tpm)
 }
 
 #[repr(C)]

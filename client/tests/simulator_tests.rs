@@ -12,11 +12,16 @@
 use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command};
+use tpm2_rs_base::constants::{TPM2ECCCurve, TPM2SU, TPM2_SHA256_DIGEST_SIZE};
 use tpm2_rs_base::errors::{TpmResult, TssTcsError};
-use tpm2_rs_base::{commands::StartupCmd, constants::TPM2SU};
+use tpm2_rs_base::{
+    commands::StartupCmd, PublicParmsAndId, Tpm2bDigest, Tpm2bSimple, TpmaObject, TpmiAlgHash,
+    TpmiEccCurve, TpmiRhHierarchy, TpmsEccPoint, TpmsEmpty, TpmsSchemeHash, TpmtEccScheme,
+    TpmtKdfScheme, TpmtPublic, TpmtSymDefObject,
+};
 use tpm2_rs_client::run_command;
 use tpm2_rs_client::Tpm;
-use tpm2_rs_client_features::*;
+use tpm2_rs_client_features::TpmClient;
 use zerocopy::big_endian::U32;
 use zerocopy::AsBytes;
 
@@ -31,6 +36,28 @@ fn get_simulator_path() -> String {
         .expect("Set TPM_RS_SIMULATOR to run tests against a simulator")
 }
 
+fn unrestricted_signing_key_template() -> TpmtPublic {
+    TpmtPublic {
+        name_alg: TpmiAlgHash::SHA256,
+        object_attributes: TpmaObject::FIXED_TPM
+            | TpmaObject::FIXED_PARENT
+            | TpmaObject::SENSITIVE_DATA_ORIGIN
+            | TpmaObject::SIGN_ENCRYPT,
+        auth_policy: Tpm2bDigest::default(),
+        parms_and_id: PublicParmsAndId::Ecc(
+            tpm2_rs_base::TpmsEccParms {
+                symmetric: TpmtSymDefObject::Null(TpmsEmpty, TpmsEmpty),
+                scheme: TpmtEccScheme::Ecdsa(TpmsSchemeHash {
+                    hash_alg: TpmiAlgHash::SHA256,
+                }),
+                curve_id: TpmiEccCurve::new(TPM2ECCCurve::NistP256),
+                kdf: TpmtKdfScheme::Null(TpmsEmpty),
+            },
+            TpmsEccPoint::default(),
+        ),
+    }
+}
+
 #[test]
 fn test_startup_tpm() {
     let (_sim_lifeline, mut tpm) = run_tpm_simulator(&get_simulator_path()).unwrap();
@@ -41,19 +68,19 @@ fn test_startup_tpm() {
 }
 
 // If test_startup_tpm passes, this will not panic.
-fn get_started_tpm() -> (TpmSim, TcpTpm) {
+fn get_started_tpm() -> (TpmSim, TpmClient<TcpTpm>) {
     let (sim_lifeline, mut tpm) = run_tpm_simulator(&get_simulator_path()).unwrap();
     let startup = StartupCmd {
         startup_type: TPM2SU::Clear,
     };
     run_command(&startup, &mut tpm).unwrap();
-    (sim_lifeline, tpm)
+    (sim_lifeline, TpmClient { tpm: tpm })
 }
 
 #[test]
 fn test_get_manufacturer_id() {
-    let (_sim_lifeline, mut tpm) = get_started_tpm();
-    assert!(get_manufacturer_id(&mut tpm).is_ok());
+    let (_sim_lifeline, mut client) = get_started_tpm();
+    assert!(client.get_manufacturer_id().is_ok());
 }
 
 // Launches the TPM simulator at the given path in a subprocess and powers it up.
@@ -181,4 +208,16 @@ impl Tpm for TcpTpm {
         }
         Ok(())
     }
+}
+
+#[test]
+fn test_create_primary() {
+    let (_sim_lifeline, mut client) = get_started_tpm();
+
+    let mut template = unrestricted_signing_key_template();
+    template.auth_policy =
+        Tpm2bDigest::from_bytes(&[0u8; TPM2_SHA256_DIGEST_SIZE as usize]).unwrap();
+    assert!(client
+        .create_primary(TpmiRhHierarchy::Endorsement, template, None)
+        .is_ok());
 }

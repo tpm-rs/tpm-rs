@@ -1,0 +1,11 @@
+[package]
+name = "tpm2-rs-features-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tpm2-rs-base = { path = "../../base" }
+tpm2-rs-client = { path = "../" }
+
+[dev-dependencies]
+tpm2-rs-errors = { workspace = true, features = ["debug"] }
