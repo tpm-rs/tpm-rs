@@ -1,5 +1,5 @@
-//! [UnionSize] is a derivable trait that calculates the size of union part
-//! in a tagged or untagged enum.
+//! [UnionSize] is a derivable trait that calculates the size of
+//! `repr(C)` union part in a tagged or untagged enum.
 //!
 //! # Example
 //! ```rust
@@ -19,7 +19,7 @@
 pub use unionify_derive::UnionSize;
 
 pub trait UnionSize {
-    /// The size (in bytes) of union equivalent to the algebraic enum in question.
+    /// The size (in bytes) of `repr(C)`-union-equivalent to the algebraic enum in question.
     const UNION_SIZE: usize;
 }
 
