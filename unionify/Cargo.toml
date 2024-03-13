@@ -1,0 +1,12 @@
+[package]
+name = "unionify"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# unionify-derive is not part of workspace because we do not want anyone
+# to accidentally import it
+unionify-derive = { path = "./unionify-derive/" }
+
+[dev-dependencies]
+trybuild = { workspace = true }

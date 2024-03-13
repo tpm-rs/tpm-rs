@@ -1,0 +1,7 @@
+error: unions cannot have zero fields
+ --> tests/fail/zero_sized_union.rs:3:10
+  |
+3 | #[derive(UnionSize)]
+  |          ^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `UnionSize` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,5 @@
+error: UnionSize is only supported on enums without generics
+ --> tests/fail/const_generics.rs:5:13
+  |
+5 | pub enum Foo<const N: usize> {
+  |             ^

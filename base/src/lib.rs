@@ -5,10 +5,11 @@
 use crate::{constants::*, errors::*, marshal::*};
 use bitflags::bitflags;
 use core::cmp::min;
-use core::mem::{align_of, size_of};
+use core::mem::size_of;
 use open_enum::open_enum;
 pub use tpm2_rs_errors as errors;
 pub use tpm2_rs_marshal as marshal;
+use unionify::UnionSize;
 
 pub mod commands;
 pub mod constants;
@@ -547,7 +548,7 @@ const TPML_DIGEST_MAX_DIGESTS: usize = 8;
 pub struct TpmsEmpty;
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshal, UnionSize)]
 pub enum TpmtHa {
     Sha1([u8; constants::TPM2_SHA_DIGEST_SIZE as usize]) = TPM2AlgID::SHA1.0,
     Sha256([u8; constants::TPM2_SHA256_DIGEST_SIZE as usize]) = TPM2AlgID::SHA256.0,
@@ -555,33 +556,25 @@ pub enum TpmtHa {
     Sha512([u8; constants::TPM2_SHA512_DIGEST_SIZE as usize]) = TPM2AlgID::SHA512.0,
     Sm3_256([u8; constants::TPM2_SM3_256_DIGEST_SIZE as usize]) = TPM2AlgID::SM3256.0,
 }
-impl TpmtHa {
-    pub const fn union_size() -> usize {
-        size_of::<TpmtHa>() - align_of::<TpmtHa>() - size_of::<u16>()
-    }
-}
+
 impl Default for TpmtHa {
     fn default() -> Self {
         TpmtHa::Sha1([0; constants::TPM2_SHA1_DIGEST_SIZE as usize])
     }
 }
 
+#[derive(UnionSize)]
 #[repr(C, u16)]
 enum TpmuName {
     Digest(TpmtHa),
     Handle(TPM2Handle),
-}
-impl TpmuName {
-    pub const fn union_size() -> usize {
-        size_of::<TpmuName>() - align_of::<TpmuName>() - size_of::<u16>()
-    }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bDigest {
     size: u16,
-    pub buffer: [u8; TpmtHa::union_size()],
+    pub buffer: [u8; TpmtHa::UNION_SIZE],
 }
 
 pub type Tpm2bNonce = Tpm2bDigest;
@@ -591,7 +584,7 @@ pub type Tpm2bOperand = Tpm2bDigest;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bData {
     size: u16,
-    pub buffer: [u8; TpmtHa::union_size()],
+    pub buffer: [u8; TpmtHa::UNION_SIZE],
 }
 
 #[repr(C)]
@@ -626,7 +619,7 @@ pub struct Tpm2bIv {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bName {
     size: u16,
-    pub name: [u8; TpmuName::union_size()],
+    pub name: [u8; TpmuName::UNION_SIZE],
 }
 
 #[repr(C)]
@@ -808,23 +801,18 @@ pub struct Tpm2bDerive {
     size: u16,
     pub buffer: [u8; size_of::<TpmsDerive>()],
 }
-
+#[derive(UnionSize)]
 #[repr(C, u16)]
 enum TpmuSensitiveCreate {
     Create([u8; constants::TPM2_MAX_SYM_DATA as usize]),
     Derive(TpmsDerive),
-}
-impl TpmuSensitiveCreate {
-    pub const fn union_size() -> usize {
-        size_of::<TpmuSensitiveCreate>() - align_of::<TpmuSensitiveCreate>() - size_of::<u16>()
-    }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSensitiveData {
     size: u16,
-    pub buffer: [u8; TpmuSensitiveCreate::union_size()],
+    pub buffer: [u8; TpmuSensitiveCreate::UNION_SIZE],
 }
 
 pub type Tpm2bAuth = Tpm2bDigest;
@@ -878,6 +866,7 @@ pub struct Tpm2bEccPoint {
     pub point: [u8; size_of::<TpmsEccPoint>()],
 }
 
+#[derive(UnionSize)]
 #[repr(C, u16)]
 enum TpmuEncryptedSecret {
     Ecc([u8; size_of::<TpmsEccPoint>()]),
@@ -885,17 +874,12 @@ enum TpmuEncryptedSecret {
     Symmetric([u8; size_of::<Tpm2bDigest>()]),
     KeyedHash([u8; size_of::<Tpm2bDigest>()]),
 }
-impl TpmuEncryptedSecret {
-    pub const fn union_size() -> usize {
-        size_of::<TpmuEncryptedSecret>() - align_of::<TpmuEncryptedSecret>() - size_of::<u16>()
-    }
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEncryptedSecret {
     size: u16,
-    pub secret: [u8; TpmuEncryptedSecret::union_size()],
+    pub secret: [u8; TpmuEncryptedSecret::UNION_SIZE],
 }
 
 #[repr(C)]
