@@ -6,7 +6,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use syn::{
     parse_macro_input, spanned::Spanned, Attribute, Data, DataEnum, DeriveInput, Error, Expr,
-    Field, Fields, FieldsNamed, Ident, Index, Path, Result, Type,
+    Field, Fields, FieldsNamed, Ident, Index, MetaNameValue, Path, Result, Type,
 };
 
 /// The Marshal derive macro generates an implementation of the Marshalable trait
@@ -15,7 +15,7 @@ use syn::{
 /// following conditions:
 ///  - The type implements zerocopy::AsBytes and zerocopy::FromBytes
 ///  - The type is an array, the array entry type also meets these Marshal
-///    conditions, and the array field is tagged with the #[length($length_field)]
+///    conditions, and the array field is tagged with the #[marshal(length = $length_field)]
 ///    attribute, where $length_field is a field in the struct appearing before
 ///    the array field that can be converted to usize. In this case, the
 ///    generated code will {un}marshal first N entries in the array, where N is
@@ -25,7 +25,7 @@ use syn::{
 ///    $primitive, try_{un}marshal routines that accept an external selector, and will
 ///    {un}marshal the discriminant in BE format prior to the variant.
 
-#[proc_macro_derive(Marshal, attributes(length))]
+#[proc_macro_derive(Marshal, attributes(marshal))]
 pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match derive_tpm_marshal_inner(input) {
@@ -165,7 +165,7 @@ fn get_named_field_marshal<'a>(
     field: &'a Field,
 ) -> Result<TokenStream> {
     let name = &field.ident;
-    if let Some(length) = get_marshal_length(&field.attrs)? {
+    if let Some(length) = get_marshal_attribute(&field.attrs, "length")? {
         let length_prim =
             get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()))?;
         Ok(quote_spanned! {field.span()=>
@@ -284,23 +284,47 @@ fn get_enum_marshal_body(struct_name: &Ident, data: &DataEnum) -> Result<TokenSt
     })
 }
 
-fn get_marshal_length(attrs: &[Attribute]) -> Result<Option<Path>> {
-    let mut marshal_attr = None;
+fn get_marshal_attribute(attrs: &[Attribute], key: &str) -> Result<Option<Path>> {
+    let mut marshal_attr: Option<MetaNameValue> = None;
     for attr in attrs {
-        if attr.path().is_ident("length") {
+        if attr.path().is_ident("marshal") {
             if marshal_attr.is_some() {
                 return Err(Error::new(
                     attr.span(),
-                    "Only one length is permitted for field",
+                    "Only one #[marshal(...)] is permitted for field",
                 ));
             }
-            let _ = attr.parse_nested_meta(|meta| {
-                marshal_attr = Some(meta.path);
-                Ok(())
-            });
+            marshal_attr = Some(attr.parse_args()?);
         }
     }
-    Ok(marshal_attr)
+    let Some(marshal_attr) = marshal_attr else {
+        return Ok(None);
+    };
+    if !marshal_attr.path.is_ident(key) {
+        return Err(Error::new(
+            marshal_attr.path.span(),
+            format!("Unknown attribute: Expected `{}`", key),
+        ));
+    };
+    let Expr::Path(expr_path) = marshal_attr.value else {
+        return Err(Error::new(
+            marshal_attr.value.span(),
+            "Unknown expression: Expected identifier",
+        ));
+    };
+    if !expr_path.attrs.is_empty() {
+        return Err(Error::new(
+            expr_path.span(),
+            "Attributes are not allowed here",
+        ));
+    };
+    if expr_path.qself.is_some() {
+        return Err(Error::new(
+            expr_path.span(),
+            "Explicit Self types are not allowed here",
+        ));
+    };
+    Ok(Some(expr_path.path))
 }
 
 fn get_array_default<'a>(
@@ -340,7 +364,7 @@ fn get_named_field_unmarshal<'a>(
 ) -> Result<TokenStream> {
     let name = &field.ident;
     let field_type = &field.ty;
-    if let Some(length) = get_marshal_length(&field.attrs)? {
+    if let Some(length) = get_marshal_attribute(&field.attrs, "length")? {
         let (max_size, entry_type) = get_array_default(name, field_type)?;
         let length_prim =
             get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()))?;

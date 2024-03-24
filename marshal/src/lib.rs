@@ -266,7 +266,7 @@ mod tests {
     struct HasArray {
         count: u8,
         other: u32,
-        #[length(count)]
+        #[marshal(length=count)]
         array: [u8; 128],
     }
 
