@@ -348,4 +348,59 @@ mod tests {
         let unmarshal = HasUnitField::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
         assert_eq!(value, unmarshal.unwrap())
     }
+
+    #[test]
+    fn test_marshal_via() {
+        struct NotMarshalable;
+        #[derive(Marshal)]
+        #[marshal(via=u32)]
+        struct Enriched {
+            b1: u8,
+            // b2: must be zero
+            b34: u16,
+            #[allow(unused)]
+            nm: NotMarshalable,
+        }
+        impl From<&Enriched> for u32 {
+            fn from(value: &Enriched) -> Self {
+                ((value.b1 as u32) << 24) | (value.b34 as u32)
+            }
+        }
+        impl TryFrom<u32> for Enriched {
+            type Error = TpmRcError;
+            fn try_from(value: u32) -> Result<Self, Self::Error> {
+                if (value >> 16) & 0xff != 0 {
+                    return Err(TpmRcError::Value);
+                }
+                Ok(Enriched {
+                    b1: (value >> 24) as u8,
+                    b34: (value & 0xffff) as u16,
+                    nm: NotMarshalable,
+                })
+            }
+        }
+        // first we test that the happy case works for marshalling
+        let mut buffer = [0u8; 4];
+        let data = Enriched {
+            b1: 5,
+            b34: 0x1234,
+            nm: NotMarshalable,
+        };
+        assert_eq!(data.try_marshal(&mut buffer), Ok(4));
+        assert_eq!(buffer, [5, 0, 0x12, 0x34]);
+        // next we test that the happy case works for unmarshalling
+        let mut ubuf = UnmarshalBuf::new(&buffer);
+        let data = Enriched::try_unmarshal(&mut ubuf).unwrap();
+        assert_eq!(data.b1, 5);
+        assert_eq!(data.b34, 0x1234);
+
+        // we do not have unhappy marshal case, but we hav unhappy unmarshal case,
+        // and that is what we test here
+        let buffer = [1, 2, 3, 4]; // note second byte is not zero
+        let mut ubuf = UnmarshalBuf::new(&buffer);
+        assert_eq!(
+            Enriched::try_unmarshal(&mut ubuf).err(),
+            Some(TpmRcError::Value)
+        );
+    }
 }

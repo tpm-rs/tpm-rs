@@ -10,9 +10,11 @@ use syn::{
 };
 
 /// The Marshal derive macro generates an implementation of the Marshalable trait
-/// for a struct by calling try_{un}marshal on each field in the struct. This
-/// requires that the type of each field in the struct meets one of the
-/// following conditions:
+/// for a struct or union using either directly or indirectly:
+///
+/// The direct implementation calls try_{un}marshal on each field in the struct
+/// or union. This requires that the type of each field in the struct meets one
+/// of the following conditions:
 ///  - The type implements zerocopy::AsBytes and zerocopy::FromBytes
 ///  - The type is an array, the array entry type also meets these Marshal
 ///    conditions, and the array field is tagged with the #[marshal(length = $length_field)]
@@ -24,6 +26,12 @@ use syn::{
 ///    generated code will include a discriminant() implementation that returns
 ///    $primitive, try_{un}marshal routines that accept an external selector, and will
 ///    {un}marshal the discriminant in BE format prior to the variant.
+///
+/// The indirect approach works as follows: To derive [Marshal] for a type `T`,
+/// we requires a top level `#[marshal(via=$U)]` such that:
+/// - `U: Marshalable`
+/// - `T: From<&U>`
+/// - `U: TryFrom<T>`
 
 #[proc_macro_derive(Marshal, attributes(marshal))]
 pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -35,6 +43,31 @@ pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenSt
 }
 
 fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
+    match get_marshal_attribute(&input.attrs, "via")? {
+        Some(ty) => derive_tpm_marshal_via(input.ident, ty),
+        None => derive_tpm_marshal_directly(input),
+    }
+}
+
+/// derives marshal trait using `Into` and `TryInto`
+fn derive_tpm_marshal_via(name: Ident, ty: Path) -> Result<TokenStream> {
+    Ok(quote!(
+        impl Marshalable for #name  {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> tpm2_rs_marshal::exports::errors::TpmRcResult<Self> {
+                let unrefined = #ty::try_unmarshal(buffer)?;
+                unrefined.try_into()
+            }
+
+            fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshal::exports::errors::TpmRcResult<usize> {
+                let unrefined : #ty = self.into();
+                unrefined.try_marshal(buffer)
+            }
+        }
+    ))
+}
+
+/// derives marshal trait by marshalling each field/variant on its own
+fn derive_tpm_marshal_directly(input: DeriveInput) -> Result<TokenStream> {
     let input_span = input.span();
     let name = input.ident;
     let (marsh_text, unmarsh_text, pure_impl) = match input.data {
