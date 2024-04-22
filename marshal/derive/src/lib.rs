@@ -91,7 +91,7 @@ enum EnumRepr {
     // #[repr(C, $primitive)]
     CPrim(Path),
     // #[repr($primitive)]
-    Prim(Path),
+    Prim,
     None,
 }
 
@@ -124,7 +124,7 @@ fn get_enum_repr(attrs: &[Attribute]) -> EnumRepr {
         if c_repr {
             EnumRepr::CPrim(p)
         } else {
-            EnumRepr::Prim(p)
+            EnumRepr::Prim
         }
     } else {
         EnumRepr::None
