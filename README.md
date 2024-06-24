@@ -15,6 +15,6 @@ See the [Project] for a list of tasks to do.  Feel free to contribute PRs to ach
 Good test coverage is key to code velocity and reliability. The easiest way to maintain good test coverage is to require it from
 the beginning. Since we are starting from a green field, we treat test coverage as a first-class feature that underpins all others. 
 
-Hence, any PR for code needs meaningful tests, and those tests need to be integrated into our CI pipeline.
+Hence, any PR for code needs meaningful tests, and those tests need to be integrated into our CI pipeline..
 
 [Project]: https://github.com/orgs/tpm-rs/projects/2
