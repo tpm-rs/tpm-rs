@@ -4,7 +4,7 @@
 /// command line.
 ///
 /// To run locally in the docker container:
-///  `cd client && docker compose run simulator_tests``
+///  `cd client && docker compose run simulator_tests`
 ///
 /// These tests must be run with `--test-threads=1`, because they use a single TCP port.
 
@@ -17,7 +17,7 @@ mod simulator_tests {
     use crate::common::tcp_simulator::*;
     use tpm2_rs_base::{commands::StartupCmd, constants::TPM2SU};
     use tpm2_rs_client::run_command;
-    use tpm2_rs_features_client::*;
+    use tpm2_rs_client_features::*;
 
     const TPM_SIMULATOR_ENV_VAR: &str = "TPM_RS_SIMULATOR";
     fn get_simulator_path() -> String {

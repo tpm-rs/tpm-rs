@@ -1,4 +1,4 @@
-use unionify::UnionSize;
+use tpm2_rs_unionify::UnionSize;
 
 ///TODO support me
 #[derive(UnionSize)]

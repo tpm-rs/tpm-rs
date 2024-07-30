@@ -3,7 +3,7 @@
 //!
 //! # Example
 //! ```rust
-//! use unionify::UnionSize;
+//! use tpm2_rs_unionify::UnionSize;
 //! #[derive(UnionSize)]
 //! enum Foo {
 //!     V1(u8),
@@ -16,7 +16,7 @@
 //! assert_eq!(Foo::UNION_SIZE, 128*32/8);
 //! ```
 
-pub use unionify_derive::UnionSize;
+pub use tpm2_rs_unionify_derive::UnionSize;
 
 pub trait UnionSize {
     /// The size (in bytes) of `repr(C)`-union-equivalent to the algebraic enum in question.
