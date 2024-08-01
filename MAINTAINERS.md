@@ -25,6 +25,7 @@ have the authority to bind that organization to these policies.
 | a-pronin | Google | yes |
 | esmusick | Google | yes |
 | jettr | Google | yes |
+| oddcoder | Huawei | yes |
 
 ## Attribution
 
