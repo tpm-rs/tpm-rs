@@ -103,7 +103,7 @@ fn tagged_enum_to_union(tagged_enum: ItemEnum, union_name: &Ident) -> Result<Tok
 }
 
 /// build anonymous module containing the generated union, and trait implementation of
-/// `unionify::UnionSize`
+/// `UnionSize`
 fn construct_module(tagged_enum: ItemEnum) -> Result<TokenStream> {
     let enum_ident = tagged_enum.ident.clone();
     let union_name = Ident::new("InnerUnion", Span::call_site());
@@ -111,7 +111,7 @@ fn construct_module(tagged_enum: ItemEnum) -> Result<TokenStream> {
     let module = quote! (
         const _ : () = {
             #union
-            impl unionify::UnionSize for #enum_ident {
+            impl tpm2_rs_unionify::UnionSize for #enum_ident {
                 const UNION_SIZE : usize = core::mem::size_of::<#union_name>();
             }
         };

@@ -3,12 +3,13 @@ resolver = "2"
 members = [
     "base",
     "client",
-    "client/feature",
+    "client-features",
     "errors",
     "marshal",
-    "marshal/derive",
+    "marshal-derive",
     "service",
-    "unionify"
+    "unionify",
+    "unionify-derive"
 ]
 
 [workspace.dependencies]
@@ -20,14 +21,16 @@ open-enum = "0.4.1"
 proc-macro2 = "1"
 quote = "1"
 syn = {version = "2", features = ["full"]}
-zerocopy = { version = "0.7.0", features = ["derive"] }
 trybuild = { version = "1.0.89", features = ["diff"] }
+zerocopy = { version = "0.7.0", features = ["derive"] }
+
 # Common workspace crates
 tpm2-rs-base = { path = "base" }
 tpm2-rs-client = { path = "client" }
+tpm2-rs-client-features = { path = "client-features" }
 tpm2-rs-errors = { path = "errors" }
-tpm2-rs-features-client = { path = "client/feature" }
 tpm2-rs-marshal = { path = "marshal" }
-tpm2-rs-marshal-derive = { path = "marshal/derive" }
+tpm2-rs-marshal-derive = { path = "marshal-derive" }
 tpm2-rs-service = { path = "service" }
-unionify = { path = "unionify" }
+tpm2-rs-unionify = { path = "unionify" }
+tpm2-rs-unionify-derive = { path = "unionify-derive" }
