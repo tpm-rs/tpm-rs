@@ -3,8 +3,8 @@ pub mod tcp_simulator {
     use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
     use std::net::TcpStream;
     use std::process::{Child, Command};
-    use tpm2_rs_base::errors::{TpmResult, TssTcsError};
     use tpm2_rs_client::Tpm;
+    use tpm2_rs_errors::{TpmResult, TssTcsError};
     use zerocopy::big_endian::U32;
     use zerocopy::AsBytes;
 

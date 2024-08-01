@@ -1,6 +1,6 @@
 use crate::buffer::{RequestThenResponse, TpmBuffers};
 use crate::crypto::{Crypto, CryptoRandom as _};
-use tpm2_rs_base::errors::TpmRcError;
+use tpm2_rs_errors::TpmRcError;
 
 /// Specifies all of the dependent types for the `CommandContext` parameter that all command handler
 /// functions get access to to handle their specific command.

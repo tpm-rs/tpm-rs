@@ -1,9 +1,9 @@
 use arrayvec::ArrayVec;
-use tpm2_rs_base::errors::{TpmResult, TssTcsError};
-use tpm2_rs_base::{
+use tpm2_rs_base::types::{
     Tpm2bAuth, Tpm2bNonce, Tpm2bSimple, TpmaSession, TpmiShAuthSession, TpmsAuthCommand,
     TpmsAuthResponse,
 };
+use tpm2_rs_errors::{TpmResult, TssTcsError};
 
 /// Trait for types representing TPM sessions.
 pub trait Session {
@@ -45,18 +45,4 @@ impl Session for PasswordSession {
 }
 
 #[cfg(test)]
-mod tests {
-    use tpm2_rs_base::Tpm2bSimple;
-
-    use super::*;
-
-    #[test]
-    fn test_password_get_auth_command() {
-        let auth = Tpm2bAuth::from_bytes("hello".as_bytes()).unwrap();
-        let session = PasswordSession { auth };
-
-        let tpm_auth = session.get_auth_command();
-        assert_eq!(tpm_auth.session_handle, TpmiShAuthSession::RS_PW);
-        assert_eq!(auth, tpm_auth.hmac);
-    }
-}
+mod tests;

@@ -2,32 +2,31 @@
 // USES
 // =============================================================================
 
-use crate::types::TPM2CC;
+use crate::types::{Tpm2bDigest, Tpm2bSensitive, Tpm2bSimple};
+use core::mem::size_of;
 use tpm2_rs_marshal::Marshalable;
 
 // =============================================================================
-// MODULES
+// HELPER TYPES
 // =============================================================================
 
-mod get_capability;
-pub use get_capability::*;
-mod pcr_read;
-pub use pcr_read::*;
-mod startup;
-pub use startup::*;
-
-// =============================================================================
-// TRAITS
-// =============================================================================
-
-/// Trait for a TPM command transaction.
-pub trait TpmCommand: Marshalable {
-    /// The command code.
-    const CMD_CODE: TPM2CC;
-    /// The command handles type.
-    type Handles: Marshalable + Default;
-    /// The response parameters type.
-    type RespT: Marshalable;
-    /// The reponse handles type.
-    type RespHandles: Marshalable;
+// TODO: Not a fan of this name...
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct _PRIVATE {
+    integrity_outer: Tpm2bDigest,
+    integrity_inner: Tpm2bDigest,
+    sensitive: Tpm2bSensitive,
 }
+
+// =============================================================================
+// TYPE
+// =============================================================================
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Tpm2bPrivate {
+    size: u16,
+    pub buffer: [u8; size_of::<_PRIVATE>()],
+}
+impl_try_marshalable_tpm2b_simple! {Tpm2bPrivate, buffer}

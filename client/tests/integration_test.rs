@@ -15,7 +15,7 @@ mod common;
 mod simulator_tests {
 
     use crate::common::tcp_simulator::*;
-    use tpm2_rs_base::{commands::StartupCmd, constants::TPM2SU};
+    use tpm2_rs_base::{commands::StartupCmd, types::TPM2SU};
     use tpm2_rs_client::run_command;
     use tpm2_rs_client_features::*;
 
