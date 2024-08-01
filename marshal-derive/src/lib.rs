@@ -70,12 +70,14 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
     let expanded = quote! {
         #pure_impl
         // The generated impl.
-        impl Marshalable for #name  {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> tpm2_rs_marshal::exports::errors::TpmRcResult<Self> {
+        impl tpm2_rs_marshal::Marshalable for #name  {
+            fn try_unmarshal(buffer: &mut tpm2_rs_marshal::UnmarshalBuf) -> tpm2_rs_marshal::exports::errors::TpmRcResult<Self> {
+                use tpm2_rs_marshal::{Marshalable, MarshalableEnum};
                 #unmarsh_text
             }
 
             fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshal::exports::errors::TpmRcResult<usize> {
+                use tpm2_rs_marshal::{Marshalable, MarshalableEnum};
                 let mut written: usize = 0;
                 #marsh_text;
                 Ok(written)
@@ -142,18 +144,21 @@ fn get_enum_impl(name: &Ident, data: &DataEnum, attrs: &[Attribute]) -> Result<T
         ));
     };
     Ok(quote! {
-        impl #name {
+        impl tpm2_rs_marshal::MarshalableEnum for #name {
+            type Selector = #prim;
             // This is explicitly allowed for enums with primitive representation.
             // https://doc.rust-lang.org/std/mem/fn.discriminant.html#accessing-the-numeric-value-of-the-discriminant.
             fn discriminant(&self) -> #prim {
                 unsafe { *<*const _>::from(self).cast::<#prim>() }
             }
             fn try_marshal_variant(&self, buffer: &mut [u8]) -> tpm2_rs_marshal::exports::errors::TpmRcResult<usize> {
+                use tpm2_rs_marshal::Marshalable;
                 let mut written: usize = 0;
                 #marshal_text;
                 Ok(written)
             }
-            fn try_unmarshal_variant(selector: #prim, buffer: &mut UnmarshalBuf) -> tpm2_rs_marshal::exports::errors::TpmRcResult<Self> {
+            fn try_unmarshal_variant(selector: #prim, buffer: &mut tpm2_rs_marshal::UnmarshalBuf) -> tpm2_rs_marshal::exports::errors::TpmRcResult<Self> {
+                use tpm2_rs_marshal::Marshalable;
                 #unmarshal_text
             }
         }
@@ -370,7 +375,7 @@ fn get_named_field_unmarshal<'a>(
             get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()))?;
         Ok(quote_spanned! {field.span()=>
             if #length_prim as usize > #max_size {
-                return Err(TpmRcError::Size);
+                return Err(tpm2_rs_marshal::exports::errors::TpmRcError::Size);
             }
             let mut #name = [#entry_type::default(); #max_size];
             for i in #name.iter_mut().take(#length_prim as usize) {
@@ -486,7 +491,7 @@ fn get_enum_unmarshal_body(struct_name: &Ident, data: &DataEnum) -> Result<Token
     }
     errors_to_error(errors.into_iter())?;
     let fallback_code = quote! {
-        Err(TpmRcError::Selector.into())
+        Err(tpm2_rs_marshal::exports::errors::TpmRcError::Selector.into())
     };
 
     conditional_code.extend(fallback_code);

@@ -24,14 +24,21 @@ pub mod exports {
 // Array fields which should only {un}marshal a subset of their entries can
 // use the length attribute to specify the field providing the number of
 // entries that should be marshaled. See TpmlPcrSelection for an example.
-pub trait Marshalable {
+pub trait Marshalable: Sized {
     // Unmarshals self from the prefix of `buffer`. Returns the unmarshalled self and number of bytes used.
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self>
-    where
-        Self: Sized;
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self>;
 
     // Marshals self into the prefix of `buffer`. Returns the number of bytes used.
     fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize>;
+}
+
+// Some code will depend on acting on enums, as such we need a separate trait
+// that will provide more functionality in the case of a marshalable enum.
+pub trait MarshalableEnum: Marshalable {
+  type Selector: Sized;
+  fn discriminant(&self) -> Self::Selector;
+  fn try_unmarshal_variant(selector: Self::Selector, buffer: &mut UnmarshalBuf) -> TpmRcResult<Self>;
+  fn try_marshal_variant(&self, buffer: &mut [u8]) -> TpmRcResult<usize>;
 }
 
 pub struct UnmarshalBuf<'a> {
