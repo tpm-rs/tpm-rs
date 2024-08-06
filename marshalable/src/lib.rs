@@ -3,7 +3,7 @@
 use core::mem::size_of;
 
 use tpm2_rs_errors::*;
-pub use tpm2_rs_marshal_derive::Marshalable;
+pub use tpm2_rs_marshalable_derive::Marshalable;
 
 /// Exports needed for macro expansion
 pub mod exports {
@@ -119,8 +119,8 @@ impl<const M: usize> Marshalable for [u8; M] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // Provide the tpm2_rs_marshal path to root to enable derive macro to work properly
-    use crate as tpm2_rs_marshal;
+    // Provide the tpm2_rs_marshalable path to root to enable derive macro to work properly
+    use crate as tpm2_rs_marshalable;
 
     macro_rules! impl_test_scalar {
         ($T:ty, $I:expr, $V:expr) => {

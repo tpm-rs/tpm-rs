@@ -7,7 +7,7 @@ edition = "2021"
 bitflags = { workspace = true }
 open-enum = { workspace = true }
 tpm2-rs-errors = { workspace = true }
-tpm2-rs-marshal = { workspace = true }
+tpm2-rs-marshalable = { workspace = true }
 tpm2-rs-unionify = { workspace = true }
 
 [dev-dependencies]

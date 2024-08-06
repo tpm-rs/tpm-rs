@@ -9,7 +9,7 @@ tpm-simulator-tests = []
 [dependencies]
 arrayvec = { workspace = true }
 tpm2-rs-base = { workspace = true }
-tpm2-rs-marshal = { workspace = true }
+tpm2-rs-marshalable = { workspace = true }
 
 [dev-dependencies]
 tpm2-rs-client-features = { workspace = true }

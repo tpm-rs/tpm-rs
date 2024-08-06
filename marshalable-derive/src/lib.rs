@@ -71,11 +71,11 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
         #pure_impl
         // The generated impl.
         impl Marshalable for #name  {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> tpm2_rs_marshal::exports::errors::TpmRcResult<Self> {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<Self> {
                 #unmarsh_text
             }
 
-            fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshal::exports::errors::TpmRcResult<usize> {
+            fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<usize> {
                 let mut written: usize = 0;
                 #marsh_text;
                 Ok(written)
@@ -148,12 +148,12 @@ fn get_enum_impl(name: &Ident, data: &DataEnum, attrs: &[Attribute]) -> Result<T
             fn discriminant(&self) -> #prim {
                 unsafe { *<*const _>::from(self).cast::<#prim>() }
             }
-            fn try_marshal_variant(&self, buffer: &mut [u8]) -> tpm2_rs_marshal::exports::errors::TpmRcResult<usize> {
+            fn try_marshal_variant(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<usize> {
                 let mut written: usize = 0;
                 #marshal_text;
                 Ok(written)
             }
-            fn try_unmarshal_variant(selector: #prim, buffer: &mut UnmarshalBuf) -> tpm2_rs_marshal::exports::errors::TpmRcResult<Self> {
+            fn try_unmarshal_variant(selector: #prim, buffer: &mut UnmarshalBuf) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<Self> {
                 #unmarshal_text
             }
         }
