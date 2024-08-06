@@ -1,5 +1,5 @@
 [package]
-name = "tpm2-rs-marshal-derive"
+name = "tpm2-rs-marshalable-derive"
 version = "0.1.0"
 edition = "2021"
 

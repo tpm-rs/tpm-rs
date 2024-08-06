@@ -8,7 +8,7 @@ use core::cmp::min;
 use core::mem::size_of;
 use open_enum::open_enum;
 pub use tpm2_rs_errors as errors;
-pub use tpm2_rs_marshal as marshal;
+pub use tpm2_rs_marshalable as marshal;
 use tpm2_rs_unionify::UnionSize;
 
 pub mod commands;

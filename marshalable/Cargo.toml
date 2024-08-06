@@ -1,8 +1,8 @@
 [package]
-name = "tpm2-rs-marshal"
+name = "tpm2-rs-marshalable"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 tpm2-rs-errors = { workspace = true }
-tpm2-rs-marshal-derive = { workspace = true }
+tpm2-rs-marshalable-derive = { workspace = true }
