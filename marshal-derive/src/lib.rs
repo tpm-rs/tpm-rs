@@ -9,7 +9,7 @@ use syn::{
     Field, Fields, FieldsNamed, Ident, Index, MetaNameValue, Path, Result, Type,
 };
 
-/// The Marshal derive macro generates an implementation of the Marshalable trait
+/// The Marshalable derive macro generates an implementation of the Marshalable trait
 /// for a struct by calling try_{un}marshal on each field in the struct. This
 /// requires that the type of each field in the struct meets one of the
 /// following conditions:
@@ -25,7 +25,7 @@ use syn::{
 ///    $primitive, try_{un}marshal routines that accept an external selector, and will
 ///    {un}marshal the discriminant in BE format prior to the variant.
 
-#[proc_macro_derive(Marshal, attributes(marshal))]
+#[proc_macro_derive(Marshalable, attributes(marshal))]
 pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match derive_tpm_marshal_inner(input) {
@@ -62,7 +62,7 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
         Data::Union(_) => {
             return Err(Error::new(
                 input_span.span(),
-                "Marshal cannot be derived for union type",
+                "Marshalable cannot be derived for union type",
             ));
         }
     };
@@ -138,7 +138,7 @@ fn get_enum_impl(name: &Ident, data: &DataEnum, attrs: &[Attribute]) -> Result<T
     let EnumRepr::CPrim(prim) = get_enum_repr(attrs) else {
         return Err(Error::new(
             name.span(),
-            "Marshal cannot be derived for an enum without primitive discriminant representation",
+            "Marshalable cannot be derived for an enum without primitive discriminant representation",
         ));
     };
     Ok(quote! {

@@ -5,7 +5,7 @@ use sessions::CmdSessions;
 use tpm2_rs_base::commands::*;
 use tpm2_rs_base::constants::{TPM2CC, TPM2ST};
 use tpm2_rs_base::errors::{TpmError, TpmResult, TssTcsError};
-use tpm2_rs_base::marshal::{Marshal, Marshalable, UnmarshalBuf};
+use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
 use tpm2_rs_base::{TpmiStCommandTag, TpmsAuthResponse};
 
 pub const CMD_BUFFER_SIZE: usize = 4096;
@@ -25,7 +25,7 @@ pub fn get_capability<T: Tpm>(
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Marshalable)]
 pub struct CmdHeader {
     tag: TpmiStCommandTag,
     size: u32,
@@ -43,7 +43,7 @@ impl CmdHeader {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal, Debug)]
+#[derive(Clone, Copy, PartialEq, Marshalable, Debug)]
 pub struct RespHeader {
     pub tag: TPM2ST,
     pub size: u32,
@@ -158,7 +158,7 @@ mod tests {
         }
     }
 
-    #[derive(Marshal)]
+    #[derive(Marshalable)]
     #[repr(C)]
     // Larger than the maximum size.
     struct HugeFakeCommand([u8; CMD_BUFFER_SIZE]);
@@ -179,7 +179,7 @@ mod tests {
         );
     }
 
-    #[derive(Marshal)]
+    #[derive(Marshalable)]
     #[repr(C)]
     struct TestCommand(u32);
     impl TpmCommand for TestCommand {
@@ -299,7 +299,7 @@ mod tests {
         }
     }
 
-    #[derive(Marshal)]
+    #[derive(Marshalable)]
     #[repr(C)]
     struct TestHandlesCommand();
     impl TpmCommand for TestHandlesCommand {

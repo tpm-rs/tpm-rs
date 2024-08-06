@@ -3,7 +3,7 @@
 use core::mem::size_of;
 
 use tpm2_rs_errors::*;
-pub use tpm2_rs_marshal_derive::Marshal;
+pub use tpm2_rs_marshal_derive::Marshalable;
 
 /// Exports needed for macro expansion
 pub mod exports {
@@ -11,7 +11,7 @@ pub mod exports {
 }
 
 // The Marshalable trait defines the API for {un}marshaling TPM structs. It
-// is implemented for primitive types. The marshal_derive::Marshal macro
+// is implemented for primitive types. The marshal_derive::Marshalable macro
 // will provide an implementation that calls try_{un}marshal for each of
 // it's fields, but beware that this will not produce the correct output
 // for types that have variable sized marshaling output based on their
@@ -197,14 +197,14 @@ mod tests {
         impl_test_scalar! {i64, 0x7F, 0x7F7F7F7F7F7F7F7F}
     }
 
-    #[derive(PartialEq, Marshal, Debug)]
+    #[derive(PartialEq, Marshalable, Debug)]
     struct BasicFields {
         x: u32,
         y: u16,
         z: u8,
     }
 
-    #[derive(PartialEq, Marshal, Debug)]
+    #[derive(PartialEq, Marshalable, Debug)]
     struct NestedFields {
         one: BasicFields,
         two: u32,
@@ -262,7 +262,7 @@ mod tests {
         assert_eq!(unmarshaled.unwrap(), info);
     }
 
-    #[derive(PartialEq, Debug, Marshal)]
+    #[derive(PartialEq, Debug, Marshalable)]
     struct HasArray {
         count: u8,
         other: u32,
@@ -297,7 +297,7 @@ mod tests {
         assert_ne!(unmarsh_value, value);
     }
 
-    #[derive(PartialEq, Debug, Marshal)]
+    #[derive(PartialEq, Debug, Marshalable)]
     struct Nameless(u32, u16);
 
     #[test]
@@ -310,7 +310,7 @@ mod tests {
         assert_eq!(value, unmarshal.unwrap());
     }
 
-    #[derive(PartialEq, Debug, Marshal)]
+    #[derive(PartialEq, Debug, Marshalable)]
     struct HasPlainArrayField {
         a: u32,
         b: [u8; 10],
@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(value, unmarshal.unwrap());
     }
 
-    #[derive(PartialEq, Debug, Marshal)]
+    #[derive(PartialEq, Debug, Marshalable)]
     struct HasUnitField {
         a: u8,
         b: (),
