@@ -1,5 +1,5 @@
 use crate::constants::{TPM2Cap, TPM2CC, TPM2PT, TPM2SU};
-use crate::{Marshal, Marshalable, UnmarshalBuf};
+use crate::{Marshalable, UnmarshalBuf};
 use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
 
 /// Trait for a TPM command transaction.
@@ -15,7 +15,7 @@ pub trait TpmCommand: Marshalable {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Marshalable)]
 pub struct StartupCmd {
     pub startup_type: TPM2SU,
 }
@@ -27,7 +27,7 @@ impl TpmCommand for StartupCmd {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Marshalable)]
 pub struct GetCapabilityCmd {
     pub capability: TPM2Cap,
     pub property: TPM2PT,
@@ -41,14 +41,14 @@ impl TpmCommand for GetCapabilityCmd {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct GetCapabilityResp {
     pub more_data: TpmiYesNo,
     pub capability_data: TpmsCapabilityData,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct PcrReadCmd {
     pcr_selection_in: TpmlPcrSelection,
 }
@@ -60,7 +60,7 @@ impl TpmCommand for PcrReadCmd {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct PcrReadResp {
     pcr_update_counter: u32,
     pcr_selection_out: TpmlPcrSelection,

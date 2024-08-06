@@ -30,7 +30,7 @@ const fn set_attribute_field(value: u32, field_value: u32, mask: u32, shift: u32
 /// TpmaLocality represents the locality attribute (TPMA_LOCALITY).
 /// See definition in Part 2: Structures, section 8.5.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmaLocality(pub u8);
 bitflags! {
     impl TpmaLocality : u8 {
@@ -54,7 +54,7 @@ impl TpmaLocality {
 /// TpmNv represents the NV index attributes (TPMA_NV).
 /// See definition in Part 2: Structures, section 13.4.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmaNv(pub u32);
 bitflags! {
     impl TpmaNv : u32 {
@@ -142,7 +142,7 @@ impl From<TPM2NT> for TpmaNv {
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 pub enum TpmiAlgHash {
     SHA1 = TPM2AlgID::SHA1.0,
     SHA256  = TPM2AlgID::SHA256.0,
@@ -159,7 +159,7 @@ pub enum TpmiAlgHash {
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 pub enum TpmiAlgKdf {
     MGF1 = TPM2AlgID::MGF1.0,
     KDF1SP80056A = TPM2AlgID::KDF1SP80056A.0,
@@ -172,7 +172,7 @@ pub enum TpmiAlgKdf {
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgPublic{
     RSA = TPM2AlgID::RSA.0,
@@ -186,7 +186,7 @@ pub enum TpmiAlgPublic{
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgSymMode{
     CMAC = TPM2AlgID::CMAC.0,
@@ -202,7 +202,7 @@ pub enum TpmiAlgSymMode{
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgSymObject{
     TDES = TPM2AlgID::TDES.0,
@@ -216,7 +216,7 @@ pub enum TpmiAlgSymObject{
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgKeyedhashScheme{
     HMAC = TPM2AlgID::HMAC.0,
@@ -228,7 +228,7 @@ pub enum TpmiAlgKeyedhashScheme{
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgRsaScheme{
     RSAPSS = TPM2AlgID::RSAPSS.0,
@@ -246,7 +246,7 @@ pub enum TpmiAlgRsaScheme{
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgEccScheme{
     RSAPSS = TPM2AlgID::RSAPSS.0,
@@ -264,7 +264,7 @@ pub enum TpmiAlgEccScheme{
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgAsymScheme{
     SM2 = TPM2AlgID::SM2.0,
@@ -282,7 +282,7 @@ pub enum TpmiAlgAsymScheme{
 /// TpmiRhNvIndex represents an NV location (TPMI_RH_NV_INDEX).
 /// See definition in Part 2: Structures, section 9.24.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmiRhNvIndex(u32);
 impl TryFrom<u32> for TpmiRhNvIndex {
     type Error = TpmRcError;
@@ -298,7 +298,7 @@ impl TryFrom<u32> for TpmiRhNvIndex {
 /// TpmiShAuthSessions represents handles referring to an authorization session (TPMI_SH_AUTH_SESSION).
 /// See definition in Part 2: Structures, section 9.8.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmiShAuthSession(u32);
 impl TryFrom<u32> for TpmiShAuthSession {
     type Error = TpmRcError;
@@ -321,7 +321,7 @@ impl TpmiShAuthSession {
 /// TpmiEccCurve represents an implemented ECC curve (TPMI_ECC_SCHEME).
 /// See definition in Part 2: Structures, section 11.2.5.5.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmiEccCurve(TPM2ECCCurve);
 
 /// TpmiYesNo is used in place of a boolean.
@@ -329,7 +329,7 @@ pub struct TpmiEccCurve(TPM2ECCCurve);
 #[open_enum]
 #[repr(u8)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 pub enum TpmiYesNo {
     NO = 0,
     YES = 1,
@@ -340,7 +340,7 @@ pub enum TpmiYesNo {
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 pub enum TpmiStAttest {
     AttestCertify = TPM2ST::AttestCertify.0,
     AttestQuote = TPM2ST::AttestQuote.0,
@@ -354,25 +354,25 @@ pub enum TpmiStAttest {
 
 /// The number of bits in an AES key.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmiAesKeyBits(u16);
 /// The number of bits in an SM4 key.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmiSm4KeyBits(u16);
 /// The number of bits in a Camellia key.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmiCamelliaKeyBits(u16);
 /// The number of bits in an RSA key.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmiRsaKeyBits(u16);
 
 /// TpmaObject indicates an object's use, authorization types, and relationship to other objects (TPMA_OBJECT).
 /// See definition in Part 2: Structures, section 8.3.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmaObject(pub u32);
 bitflags! {
     impl TpmaObject : u32 {
@@ -406,7 +406,7 @@ bitflags! {
 /// TpmaAlgorithm defines the attributes of an algorithm (TPMA_ALGORITHM).
 /// See definition in Part 2: Structures, section 8.2.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmaAlgorithm(pub u32);
 bitflags! {
     impl TpmaAlgorithm : u32 {
@@ -430,7 +430,7 @@ bitflags! {
 /// TpmaSession defines the attributes of a session (TPMA_SESSION).
 /// See definition in Part 2: Structures, section 8.4.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmaSession(pub u8);
 bitflags! {
     impl TpmaSession : u8 {
@@ -452,7 +452,7 @@ bitflags! {
 /// TpmaCc defines the attributes of a command (TPMA_CC).
 /// See definition in Part 2: Structures, section 8.9.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmaCc(pub u32);
 bitflags! {
     impl TpmaCc : u32 {
@@ -526,7 +526,7 @@ impl TpmaCc {
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
-#[derive(Copy, Clone, PartialEq, Default, Marshal)]
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 pub enum TpmiStCommandTag{
     NoSessions = TPM2ST::NoSessions.0,
     Sessions = TPM2ST::Sessions.0,
@@ -544,11 +544,11 @@ const TPM2_MAX_TAGGED_POLICIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTagged
 const TPML_DIGEST_MAX_DIGESTS: usize = 8;
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsEmpty;
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal, UnionSize)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable, UnionSize)]
 pub enum TpmtHa {
     Sha1([u8; constants::TPM2_SHA_DIGEST_SIZE as usize]) = TPM2AlgID::SHA1.0,
     Sha256([u8; constants::TPM2_SHA256_DIGEST_SIZE as usize]) = TPM2AlgID::SHA256.0,
@@ -630,7 +630,7 @@ pub struct Tpm2bMaxCapBuffer {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsClockInfo {
     pub clock: u64,
     pub reset_count: u32,
@@ -639,7 +639,7 @@ pub struct TpmsClockInfo {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmsPcrSelection {
     pub hash: TpmiAlgHash,
     pub sizeof_select: u8,
@@ -648,7 +648,7 @@ pub struct TpmsPcrSelection {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlPcrSelection {
     count: u32,
     #[marshal(length=count)]
@@ -656,28 +656,28 @@ pub struct TpmlPcrSelection {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsQuoteInfo {
     pub pcr_select: TpmlPcrSelection,
     pub pcr_digest: Tpm2bDigest,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsCreationInfo {
     pub object_name: Tpm2bName,
     pub creation_hash: Tpm2bDigest,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsCertifyInfo {
     pub name: Tpm2bName,
     pub qualified_name: Tpm2bName,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Marshalable)]
 pub struct TpmsCommandAuditInfo {
     pub audit_counter: u64,
     pub digest_alg: u16,
@@ -686,28 +686,28 @@ pub struct TpmsCommandAuditInfo {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsSessionAuditInfo {
     pub exclusive_session: TpmiYesNo,
     pub session_digest: Tpm2bDigest,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsTimeInfo {
     pub time: u64,
     pub clock_info: TpmsClockInfo,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsTimeAttestInfo {
     pub time: TpmsTimeInfo,
     pub firmware_version: u64,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsNvCertifyInfo {
     pub index_name: Tpm2bName,
     pub offset: u16,
@@ -715,7 +715,7 @@ pub struct TpmsNvCertifyInfo {
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Marshal)]
+#[derive(Clone, Copy, PartialEq, Marshalable)]
 pub enum TpmuAttest {
     Certify(TpmsCertifyInfo) = TPM2ST::AttestCertify.0,
     Creation(TpmsCreationInfo) = TPM2ST::AttestCreation.0,
@@ -789,7 +789,7 @@ pub struct Tpm2bLabel {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsDerive {
     pub label: Tpm2bLabel,
     pub context: Tpm2bLabel,
@@ -818,7 +818,7 @@ pub struct Tpm2bSensitiveData {
 pub type Tpm2bAuth = Tpm2bDigest;
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsSensitiveCreate {
     pub user_auth: Tpm2bAuth,
     pub data: Tpm2bSensitiveData,
@@ -853,7 +853,7 @@ pub struct Tpm2bEccParameter {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsEccPoint {
     pub x: Tpm2bEccParameter,
     pub y: Tpm2bEccParameter,
@@ -883,7 +883,7 @@ pub struct Tpm2bEncryptedSecret {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsSchemeXor {
     pub hash_alg: TpmiAlgHash,
     pub kdf: TpmiAlgKdf,
@@ -892,7 +892,7 @@ pub struct TpmsSchemeXor {
 pub type TpmsSchemeHmac = TpmsSchemeHash;
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub enum TpmtKeyedHashScheme {
     Hmac(TpmsSchemeHmac) = TPM2AlgID::HMAC.0,
     ExclusiveOr(TpmsSchemeXor) = TPM2AlgID::XOR.0,
@@ -900,13 +900,13 @@ pub enum TpmtKeyedHashScheme {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsKeyedHashParms {
     pub scheme: TpmtKeyedHashScheme,
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub enum TpmtSymDefObject {
     Aes(TpmiAesKeyBits, TpmiAlgSymMode) = TPM2AlgID::AES.0,
     Sm4(TpmiSm4KeyBits, TpmiAlgSymMode) = TPM2AlgID::SM4.0,
@@ -916,13 +916,13 @@ pub enum TpmtSymDefObject {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsSymCipherParms {
     pub sym: TpmtSymDefObject,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsSchemeHash {
     pub hash_alg: TpmiAlgHash,
 }
@@ -939,7 +939,7 @@ pub type TpmsEncSchemeOaep = TpmsSchemeHash;
 pub type TpmsEncSchemeRsaes = TpmsEmpty;
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub enum TpmtRsaScheme {
     Rsapss(TpmsSigSchemeRsapss) = TPM2AlgID::RSAPSS.0,
     Rsassa(TpmsSigSchemeRsassa) = TPM2AlgID::RSASSA.0,
@@ -953,7 +953,7 @@ pub enum TpmtRsaScheme {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsRsaParms {
     pub symmetric: TpmtSymDefObject,
     pub scheme: TpmtRsaScheme,
@@ -962,7 +962,7 @@ pub struct TpmsRsaParms {
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub enum TpmtEccScheme {
     Rsapss(TpmsSigSchemeRsapss) = TPM2AlgID::RSAPSS.0,
     Rsassa(TpmsSigSchemeRsassa) = TPM2AlgID::RSASSA.0,
@@ -981,7 +981,7 @@ pub type TpmsSchemeKdf2 = TpmsSchemeHash;
 pub type TpmsSchemeKdf1Sp800_108 = TpmsSchemeHash;
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub enum TpmtKdfScheme {
     Mgf1(TpmsSchemeMgf1) = TPM2AlgID::MGF1.0,
     Kdf1Sp800_56a(TpmsSchemeKdf1Sp800_56a) = TPM2AlgID::KDF1SP80056A.0,
@@ -991,7 +991,7 @@ pub enum TpmtKdfScheme {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsEccParms {
     pub symmetric: TpmtSymDefObject,
     pub scheme: TpmtEccScheme,
@@ -1000,7 +1000,7 @@ pub struct TpmsEccParms {
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub enum TpmtAsymScheme {
     Ecdh(TpmsKeySchemeEcdh) = TPM2AlgID::ECDH.0,
     Ecmqv(TpmsKeySchemeEcmqv) = TPM2AlgID::ECMQV.0,
@@ -1016,7 +1016,7 @@ pub enum TpmtAsymScheme {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsAsymParms {
     pub symmetric: TpmtSymDefObject,
     pub scheme: TpmtAsymScheme,
@@ -1032,7 +1032,7 @@ union TpmuPublicId {
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub enum PublicParmsAndId {
     KeyedHash(TpmsKeyedHashParms, Tpm2bDigest) = TPM2AlgID::KeyedHash.0,
     Sym(TpmsSymCipherParms, Tpm2bDigest) = TPM2AlgID::SymCipher.0,
@@ -1097,7 +1097,7 @@ pub struct Tpm2bPrivateVendorSpecific {
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub enum TpmuSensitiveComposite {
     Rsa(Tpm2bPrivateKeyRsa) = TPM2AlgID::RSA.0,
     Ecc(Tpm2bEccParameter) = TPM2AlgID::ECC.0,
@@ -1139,7 +1139,7 @@ impl Marshalable for TpmtSensitive {
 }
 
 #[repr(C, u32)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub enum TpmsCapabilityData {
     Algorithms(TpmlAlgProperty) = TPM2Cap::Algs.0,
     Handles(TpmlHandle) = TPM2Cap::Handles.0,
@@ -1154,7 +1154,7 @@ pub enum TpmsCapabilityData {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlAlgProperty {
     count: u32,
     #[marshal(length=count)]
@@ -1162,7 +1162,7 @@ pub struct TpmlAlgProperty {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlHandle {
     count: u32,
     #[marshal(length=count)]
@@ -1170,7 +1170,7 @@ pub struct TpmlHandle {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlCca {
     count: u32,
     #[marshal(length=count)]
@@ -1178,7 +1178,7 @@ pub struct TpmlCca {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlCc {
     count: u32,
     #[marshal(length=count)]
@@ -1186,7 +1186,7 @@ pub struct TpmlCc {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlTaggedTpmProperty {
     count: u32,
     #[marshal(length=count)]
@@ -1194,7 +1194,7 @@ pub struct TpmlTaggedTpmProperty {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlTaggedPcrProperty {
     count: u32,
     #[marshal(length=count)]
@@ -1202,7 +1202,7 @@ pub struct TpmlTaggedPcrProperty {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlEccCurve {
     count: u32,
     #[marshal(length=count)]
@@ -1210,7 +1210,7 @@ pub struct TpmlEccCurve {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlTaggedPolicy {
     count: u32,
     #[marshal(length=count)]
@@ -1218,21 +1218,21 @@ pub struct TpmlTaggedPolicy {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Default, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Default, Debug, Marshalable)]
 pub struct TpmsAlgProperty {
     pub alg: TPM2AlgID,
     pub alg_properties: TpmaAlgorithm,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Default, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Default, Debug, Marshalable)]
 pub struct TpmsTaggedProperty {
     pub property: TPM2PT,
     pub value: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Default, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Default, Debug, Marshalable)]
 pub struct TpmsTaggedPcrSelect {
     tag: TPM2PTPCR,
     size_of_select: u8,
@@ -1241,14 +1241,14 @@ pub struct TpmsTaggedPcrSelect {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable, Default)]
 pub struct TpmsTaggedPolicy {
     handle: TPM2Handle,
     policy_hash: TpmtHa,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlDigest {
     count: u32,
     #[marshal(length=count)]
@@ -1256,7 +1256,7 @@ pub struct TpmlDigest {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, Default, PartialEq, Debug, Marshalable)]
 pub struct TpmsAuthCommand {
     pub session_handle: TpmiShAuthSession,
     pub nonce: Tpm2bNonce,
@@ -1265,7 +1265,7 @@ pub struct TpmsAuthCommand {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, Default, PartialEq, Debug, Marshalable)]
 pub struct TpmsAuthResponse {
     pub nonce: Tpm2bNonce,
     pub session_attributes: TpmaSession,
@@ -1295,7 +1295,7 @@ pub struct Tpm2bPrivate {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsIdObject {
     pub integrity_hmac: Tpm2bDigest,
     pub enc_identity: Tpm2bDigest,
@@ -1309,7 +1309,7 @@ pub struct Tpm2bIdObject {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsNvPublic {
     pub nv_index: TpmiRhNvIndex,
     pub name_alg: TpmiAlgHash,
@@ -1333,7 +1333,7 @@ pub struct Tpm2bContextSensitive {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsContextData {
     pub integrity: Tpm2bDigest,
     pub encrypted: Tpm2bContextSensitive,
@@ -1347,7 +1347,7 @@ pub struct Tpm2bContextData {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshal)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsCreationData {
     pub pcr_select: TpmlPcrSelection,
     pub pcr_digest: Tpm2bDigest,
