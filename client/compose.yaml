@@ -4,4 +4,4 @@ services:
     volumes:
        - ../:/tpm-rs
     # Simulator tests must be single-threaded because they use a single TCP port.
-    command: bash -c 'cargo test -p tpm2-rs-client --features="tpm-simulator-tests" --test integration_test -- --nocapture --test-threads=1'
+    command: bash -c 'cargo test -p tpm2-rs-client --features="tpm-simulator-tests" --test integration_tests -- --nocapture --test-threads=1'
