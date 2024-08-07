@@ -9,7 +9,6 @@
 ///  `cd client && docker compose run simulator_tests`
 ///
 /// These tests must be run with `--test-threads=1`, because they use a single TCP port.
-
 use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command};
