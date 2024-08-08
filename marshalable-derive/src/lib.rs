@@ -15,7 +15,7 @@ use syn::{
 /// following conditions:
 ///  - The type implements zerocopy::AsBytes and zerocopy::FromBytes
 ///  - The type is an array, the array entry type also meets these Marshal
-///    conditions, and the array field is tagged with the #[marshal(length = $length_field)]
+///    conditions, and the array field is tagged with the #[marshalable(length = $length_field)]
 ///    attribute, where $length_field is a field in the struct appearing before
 ///    the array field that can be converted to usize. In this case, the
 ///    generated code will {un}marshal first N entries in the array, where N is
@@ -25,7 +25,7 @@ use syn::{
 ///    $primitive, try_{un}marshal routines that accept an external selector, and will
 ///    {un}marshal the discriminant in BE format prior to the variant.
 
-#[proc_macro_derive(Marshalable, attributes(marshal))]
+#[proc_macro_derive(Marshalable, attributes(marshalable))]
 pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match derive_tpm_marshal_inner(input) {
@@ -287,11 +287,11 @@ fn get_enum_marshal_body(struct_name: &Ident, data: &DataEnum) -> Result<TokenSt
 fn get_marshal_attribute(attrs: &[Attribute], key: &str) -> Result<Option<Path>> {
     let mut marshal_attr: Option<MetaNameValue> = None;
     for attr in attrs {
-        if attr.path().is_ident("marshal") {
+        if attr.path().is_ident("marshalable") {
             if marshal_attr.is_some() {
                 return Err(Error::new(
                     attr.span(),
-                    "Only one #[marshal(...)] is permitted for field",
+                    "Only one #[marshalable(...)] is permitted for field",
                 ));
             }
             marshal_attr = Some(attr.parse_args()?);
