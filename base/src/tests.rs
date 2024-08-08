@@ -185,7 +185,7 @@ fn test_impl_tpml_new() {
         .collect();
     for x in 0..TPM2_MAX_CAP_HANDLES {
         let slice = &elements.as_slice()[..x];
-        let list = TpmlHandle::new(&slice).unwrap();
+        let list = TpmlHandle::new(slice).unwrap();
         assert_eq!(list.count(), x);
         assert_eq!(list.handle(), slice);
     }
@@ -205,7 +205,7 @@ fn test_impl_tpml_default_add() {
         let slice = &elements.as_slice()[..x];
         assert_eq!(list.handle(), slice);
 
-        list.add(&elements.get(x).unwrap()).unwrap();
+        list.add(elements.get(x).unwrap()).unwrap();
         assert_eq!(list.count(), x + 1);
     }
     assert!(
@@ -291,8 +291,7 @@ fn test_marshal_tpmt_public() {
     ];
     //assert_eq!(expected.len(), marsh.unwrap());
     assert_eq!(buffer[..expected.len()], expected);
-    let unmarsh_buf = buffer.clone();
-    let mut unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&unmarsh_buf));
+    let mut unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
     let bytes_example = unmarsh.unwrap();
     assert_eq!(bytes_example.object_attributes, example.object_attributes);
     let mut remarsh_buffer = [1u8; 256];
@@ -303,7 +302,7 @@ fn test_marshal_tpmt_public() {
     // Test invalid selector value.
     assert!(TPM2AlgID::SHA256.try_marshal(&mut buffer).is_ok());
     unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
-    assert_eq!(unmarsh.err(), Some(TpmRcError::Selector.into()));
+    assert_eq!(unmarsh.err(), Some(TpmRcError::Selector));
 }
 
 #[test]
