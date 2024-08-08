@@ -643,7 +643,7 @@ pub struct TpmsClockInfo {
 pub struct TpmsPcrSelection {
     pub hash: TpmiAlgHash,
     pub sizeof_select: u8,
-    #[marshal(length=sizeof_select)]
+    #[marshalable(length=sizeof_select)]
     pub pcr_select: [u8; TPM2_PCR_SELECT_MAX as usize],
 }
 
@@ -651,7 +651,7 @@ pub struct TpmsPcrSelection {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlPcrSelection {
     count: u32,
-    #[marshal(length=count)]
+    #[marshalable(length=count)]
     pcr_selections: [TpmsPcrSelection; TPM2_NUM_PCR_BANKS as usize],
 }
 
@@ -1157,7 +1157,7 @@ pub enum TpmsCapabilityData {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlAlgProperty {
     count: u32,
-    #[marshal(length=count)]
+    #[marshalable(length=count)]
     alg_properties: [TpmsAlgProperty; TPM2_MAX_CAP_ALGS],
 }
 
@@ -1165,7 +1165,7 @@ pub struct TpmlAlgProperty {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlHandle {
     count: u32,
-    #[marshal(length=count)]
+    #[marshalable(length=count)]
     handle: [TPM2Handle; TPM2_MAX_CAP_HANDLES],
 }
 
@@ -1173,7 +1173,7 @@ pub struct TpmlHandle {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlCca {
     count: u32,
-    #[marshal(length=count)]
+    #[marshalable(length=count)]
     command_attributes: [TpmaCc; TPM2_MAX_CAP_CC],
 }
 
@@ -1181,7 +1181,7 @@ pub struct TpmlCca {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlCc {
     count: u32,
-    #[marshal(length=count)]
+    #[marshalable(length=count)]
     command_codes: [TPM2CC; TPM2_MAX_CAP_CC],
 }
 
@@ -1189,7 +1189,7 @@ pub struct TpmlCc {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlTaggedTpmProperty {
     count: u32,
-    #[marshal(length=count)]
+    #[marshalable(length=count)]
     tpm_property: [TpmsTaggedProperty; TPM2_MAX_TPM_PROPERTIES],
 }
 
@@ -1197,7 +1197,7 @@ pub struct TpmlTaggedTpmProperty {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlTaggedPcrProperty {
     count: u32,
-    #[marshal(length=count)]
+    #[marshalable(length=count)]
     pcr_property: [TpmsTaggedPcrSelect; TPM2_MAX_PCR_PROPERTIES],
 }
 
@@ -1205,7 +1205,7 @@ pub struct TpmlTaggedPcrProperty {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlEccCurve {
     count: u32,
-    #[marshal(length=count)]
+    #[marshalable(length=count)]
     ecc_curves: [TPM2ECCCurve; TPM2_MAX_ECC_CURVES],
 }
 
@@ -1213,7 +1213,7 @@ pub struct TpmlEccCurve {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlTaggedPolicy {
     count: u32,
-    #[marshal(length=count)]
+    #[marshalable(length=count)]
     policies: [TpmsTaggedPolicy; TPM2_MAX_TAGGED_POLICIES],
 }
 
@@ -1236,7 +1236,7 @@ pub struct TpmsTaggedProperty {
 pub struct TpmsTaggedPcrSelect {
     tag: TPM2PTPCR,
     size_of_select: u8,
-    #[marshal(length=size_of_select)]
+    #[marshalable(length=size_of_select)]
     pcr_select: [u8; TPM2_PCR_SELECT_MAX as usize],
 }
 
@@ -1251,7 +1251,7 @@ pub struct TpmsTaggedPolicy {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlDigest {
     count: u32,
-    #[marshal(length=count)]
+    #[marshalable(length=count)]
     digests: [Tpm2bDigest; TPML_DIGEST_MAX_DIGESTS],
 }
 

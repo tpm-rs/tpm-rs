@@ -147,7 +147,7 @@ fn test_derive_bounds() {
 struct HasArray {
     count: u8,
     other: u32,
-    #[marshal(length=count)]
+    #[marshalable(length=count)]
     array: [u8; 128],
 }
 
