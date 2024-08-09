@@ -9,7 +9,7 @@ use tpm2_rs_base::TpmaSession;
 struct ErrorTpm();
 impl Tpm for ErrorTpm {
     fn transact(&mut self, _: &[u8], _: &mut [u8]) -> TpmResult<()> {
-        return Err(TssTcsError::GeneralFailure.into());
+        Err(TssTcsError::GeneralFailure.into())
     }
 }
 
@@ -195,8 +195,10 @@ fn test_response_session_fails_validation() {
     let mut fake_tpm = FakeTpm::default();
     // Respond with the single response handle, and an invalid password auth.
     fake_tpm.add_to_response(&TPM2Handle(77));
-    let mut invalid_auth = TpmsAuthResponse::default();
-    invalid_auth.session_attributes = TpmaSession(0xf);
+    let invalid_auth = TpmsAuthResponse {
+        session_attributes: TpmaSession(0xf),
+        ..Default::default()
+    };
     let validation_failure = PasswordSession::default().validate_auth_response(&invalid_auth);
     assert!(validation_failure.is_err());
     fake_tpm.add_to_response(&invalid_auth);
