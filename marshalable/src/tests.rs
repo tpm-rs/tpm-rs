@@ -236,3 +236,27 @@ fn test_derive_unit_struct() {
     let unmarshal = HasUnitField::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
     assert_eq!(value, unmarshal.unwrap())
 }
+
+#[repr(C, u8)]
+#[derive(Copy, Clone, Debug, Marshalable, PartialEq)]
+enum EnumWithVariantData {
+    A(u8) = 1,
+    B(u8) = 2,
+    C(u64) = 3,
+}
+
+#[test]
+fn test_derive_enum() -> Result<(), TpmRcError> {
+    let original = EnumWithVariantData::B(0x42);
+    assert_eq!(original.discriminant(), 2);
+
+    let mut buffer = [0u8; size_of::<u8>()];
+    assert_eq!(original.try_marshal_variant(&mut buffer), Ok(1));
+    assert_eq!(&buffer, &[0x42]);
+    let unmarshaled =
+        EnumWithVariantData::try_unmarshal_variant(2, &mut UnmarshalBuf::new(&buffer))?;
+    assert_eq!(unmarshaled.discriminant(), 2);
+    assert_eq!(unmarshaled, original);
+
+    Ok(())
+}
