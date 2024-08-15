@@ -24,11 +24,9 @@ pub mod exports {
 // Array fields which should only {un}marshal a subset of their entries can
 // use the length attribute to specify the field providing the number of
 // entries that should be marshaled. See TpmlPcrSelection for an example.
-pub trait Marshalable {
+pub trait Marshalable: Sized {
     // Unmarshals self from the prefix of `buffer`. Returns the unmarshalled self and number of bytes used.
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self>
-    where
-        Self: Sized;
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self>;
 
     // Marshals self into the prefix of `buffer`. Returns the number of bytes used.
     fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize>;
@@ -49,7 +47,7 @@ pub trait Marshalable {
 /// derive proc-macro.
 ///
 /// See: https://github.com/tpm-rs/tpm-rs/issues/84
-pub trait MarshalableVariant {
+pub trait MarshalableVariant: Sized {
     /// The type responsible for holding the discriminant in the enum.
     type Selector: Copy;
 
@@ -64,9 +62,7 @@ pub trait MarshalableVariant {
     fn try_unmarshal_variant(
         selector: Self::Selector,
         buffer: &mut UnmarshalBuf,
-    ) -> TpmRcResult<Self>
-    where
-        Self: Sized;
+    ) -> TpmRcResult<Self>;
 
     /// Only marshals the variant data for the enum.
     ///
