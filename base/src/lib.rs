@@ -7,6 +7,7 @@ use bitflags::bitflags;
 use core::cmp::min;
 use core::mem::size_of;
 use open_enum::open_enum;
+use safe_discriminant::Discriminant;
 pub use tpm2_rs_errors as errors;
 pub use tpm2_rs_marshalable as marshal;
 use tpm2_rs_unionify::UnionSize;
@@ -548,7 +549,7 @@ const TPML_DIGEST_MAX_DIGESTS: usize = 8;
 pub struct TpmsEmpty;
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable, UnionSize)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable, UnionSize)]
 pub enum TpmtHa {
     Sha1([u8; constants::TPM2_SHA_DIGEST_SIZE as usize]) = TPM2AlgID::SHA1.0,
     Sha256([u8; constants::TPM2_SHA256_DIGEST_SIZE as usize]) = TPM2AlgID::SHA256.0,
@@ -715,7 +716,7 @@ pub struct TpmsNvCertifyInfo {
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Discriminant, Marshalable)]
 pub enum TpmuAttest {
     Certify(TpmsCertifyInfo) = TPM2ST::AttestCertify.0,
     Creation(TpmsCreationInfo) = TPM2ST::AttestCreation.0,
@@ -892,7 +893,7 @@ pub struct TpmsSchemeXor {
 pub type TpmsSchemeHmac = TpmsSchemeHash;
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtKeyedHashScheme {
     Hmac(TpmsSchemeHmac) = TPM2AlgID::HMAC.0,
     ExclusiveOr(TpmsSchemeXor) = TPM2AlgID::XOR.0,
@@ -906,7 +907,7 @@ pub struct TpmsKeyedHashParms {
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtSymDefObject {
     Aes(TpmiAesKeyBits, TpmiAlgSymMode) = TPM2AlgID::AES.0,
     Sm4(TpmiSm4KeyBits, TpmiAlgSymMode) = TPM2AlgID::SM4.0,
@@ -939,7 +940,7 @@ pub type TpmsEncSchemeOaep = TpmsSchemeHash;
 pub type TpmsEncSchemeRsaes = TpmsEmpty;
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtRsaScheme {
     Rsapss(TpmsSigSchemeRsapss) = TPM2AlgID::RSAPSS.0,
     Rsassa(TpmsSigSchemeRsassa) = TPM2AlgID::RSASSA.0,
@@ -962,7 +963,7 @@ pub struct TpmsRsaParms {
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtEccScheme {
     Rsapss(TpmsSigSchemeRsapss) = TPM2AlgID::RSAPSS.0,
     Rsassa(TpmsSigSchemeRsassa) = TPM2AlgID::RSASSA.0,
@@ -981,7 +982,7 @@ pub type TpmsSchemeKdf2 = TpmsSchemeHash;
 pub type TpmsSchemeKdf1Sp800_108 = TpmsSchemeHash;
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtKdfScheme {
     Mgf1(TpmsSchemeMgf1) = TPM2AlgID::MGF1.0,
     Kdf1Sp800_56a(TpmsSchemeKdf1Sp800_56a) = TPM2AlgID::KDF1SP80056A.0,
@@ -1000,7 +1001,7 @@ pub struct TpmsEccParms {
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtAsymScheme {
     Ecdh(TpmsKeySchemeEcdh) = TPM2AlgID::ECDH.0,
     Ecmqv(TpmsKeySchemeEcmqv) = TPM2AlgID::ECMQV.0,
@@ -1032,7 +1033,7 @@ union TpmuPublicId {
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum PublicParmsAndId {
     KeyedHash(TpmsKeyedHashParms, Tpm2bDigest) = TPM2AlgID::KeyedHash.0,
     Sym(TpmsSymCipherParms, Tpm2bDigest) = TPM2AlgID::SymCipher.0,
@@ -1097,7 +1098,7 @@ pub struct Tpm2bPrivateVendorSpecific {
 }
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmuSensitiveComposite {
     Rsa(Tpm2bPrivateKeyRsa) = TPM2AlgID::RSA.0,
     Ecc(Tpm2bEccParameter) = TPM2AlgID::ECC.0,
@@ -1139,7 +1140,7 @@ impl Marshalable for TpmtSensitive {
 }
 
 #[repr(C, u32)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmsCapabilityData {
     Algorithms(TpmlAlgProperty) = TPM2Cap::Algs.0,
     Handles(TpmlHandle) = TPM2Cap::Handles.0,

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use core::mem::size_of;
+use safe_discriminant::Discriminant;
 
 use tpm2_rs_errors::*;
 pub use tpm2_rs_marshalable_derive::Marshalable;
@@ -47,22 +48,13 @@ pub trait Marshalable: Sized {
 /// derive proc-macro.
 ///
 /// See: https://github.com/tpm-rs/tpm-rs/issues/84
-pub trait MarshalableVariant: Sized {
-    /// The type responsible for holding the discriminant in the enum.
-    type Selector: Copy;
-
-    /// Returns the discriminant of the current enum.
-    fn discriminant(&self) -> Self::Selector;
-
+pub trait MarshalableVariant: Sized + Discriminant {
     /// Tries to unmarshal into an enum with a specific selector's data.
     ///
     /// Because the way the data in `buffer` is interpreted changes depending on
     /// the variant we are unmarshaling, we have to be told explicitly which
     /// variant is being targeted.
-    fn try_unmarshal_variant(
-        selector: Self::Selector,
-        buffer: &mut UnmarshalBuf,
-    ) -> TpmRcResult<Self>;
+    fn try_unmarshal_variant(selector: Self::Repr, buffer: &mut UnmarshalBuf) -> TpmRcResult<Self>;
 
     /// Only marshals the variant data for the enum.
     ///

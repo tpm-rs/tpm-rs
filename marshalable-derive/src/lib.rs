@@ -135,7 +135,7 @@ fn get_enum_repr(attrs: &[Attribute]) -> EnumRepr {
 fn get_enum_impl(name: &Ident, data: &DataEnum, attrs: &[Attribute]) -> Result<TokenStream> {
     let marshal_text = get_enum_marshal_body(name, data)?;
     let unmarshal_text = get_enum_unmarshal_body(name, data)?;
-    let EnumRepr::CPrim(prim) = get_enum_repr(attrs) else {
+    let EnumRepr::CPrim(_) = get_enum_repr(attrs) else {
         return Err(Error::new(
             name.span(),
             "Marshalable cannot be derived for an enum without primitive discriminant representation",
@@ -144,21 +144,16 @@ fn get_enum_impl(name: &Ident, data: &DataEnum, attrs: &[Attribute]) -> Result<T
     // TODO(#84): Move this to it's own derive proc-macro after cleaning up base.
     Ok(quote! {
         impl MarshalableVariant for #name {
-            type Selector = #prim;
-
-            // This is explicitly allowed for enums with primitive representation.
-            // https://doc.rust-lang.org/std/mem/fn.discriminant.html#accessing-the-numeric-value-of-the-discriminant.
-            fn discriminant(&self) -> Self::Selector {
-                unsafe { *<*const _>::from(self).cast::<Self::Selector>() }
-            }
-
             fn try_marshal_variant(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<usize> {
                 let mut written: usize = 0;
                 #marshal_text;
                 Ok(written)
             }
 
-            fn try_unmarshal_variant(selector: Self::Selector, buffer: &mut UnmarshalBuf) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<Self> {
+            fn try_unmarshal_variant(
+                selector: <Self as safe_discriminant::Discriminant>::Repr,
+                buffer: &mut UnmarshalBuf) ->
+                tpm2_rs_marshalable::exports::errors::TpmRcResult<Self> {
                 #unmarshal_text
             }
         }
