@@ -34,6 +34,49 @@ pub trait Marshalable {
     fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize>;
 }
 
+/// Defines the ability to marshal an enum by its variant data alone.
+///
+/// The separation of this trait from `Marshalable` is useful for cases where
+/// an enum's data is not directly after the variant's selector. This is
+/// something that can happen in some TPM types, so we need to be able to
+/// support it (and it needs to be able to function cross-crates in order to
+/// support vendors creating their own types, commands, etc).
+///
+/// # Notice
+///
+/// Today, you can get this trait simply by deriving the `Marshalable` trait.
+/// However, in the future we will be separating this out into a different
+/// derive proc-macro.
+///
+/// See: https://github.com/tpm-rs/tpm-rs/issues/84
+pub trait MarshalableVariant {
+    /// The type responsible for holding the discriminant in the enum.
+    type Selector: Copy;
+
+    /// Returns the discriminant of the current enum.
+    fn discriminant(&self) -> Self::Selector;
+
+    /// Tries to unmarshal into an enum with a specific selector's data.
+    ///
+    /// Because the way the data in `buffer` is interpreted changes depending on
+    /// the variant we are unmarshaling, we have to be told explicitly which
+    /// variant is being targeted.
+    fn try_unmarshal_variant(
+        selector: Self::Selector,
+        buffer: &mut UnmarshalBuf,
+    ) -> TpmRcResult<Self>
+    where
+        Self: Sized;
+
+    /// Only marshals the variant data for the enum.
+    ///
+    /// It is up to the caller to marshal the discriminant somewhere before this
+    /// call so that they can recover it later.
+    ///
+    /// If the variant has no data, this returns `Ok(0)`.
+    fn try_marshal_variant(&self, buffer: &mut [u8]) -> TpmRcResult<usize>;
+}
+
 pub struct UnmarshalBuf<'a> {
     buffer: &'a [u8],
 }
