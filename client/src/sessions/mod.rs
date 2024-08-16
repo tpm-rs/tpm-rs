@@ -1,48 +1,31 @@
-use arrayvec::ArrayVec;
-use tpm2_rs_base::errors::{TssResult, TssTcsError};
-use tpm2_rs_base::{
-    Tpm2bAuth, Tpm2bNonce, Tpm2bSimple, TpmaSession, TpmiShAuthSession, TpmsAuthCommand,
-    TpmsAuthResponse,
-};
-
-/// Trait for types representing TPM sessions.
-pub trait Session {
-    /// Computes the authorization HMAC for this session.
-    fn get_auth_command(&self) -> TpmsAuthCommand;
-    /// Validates the authorization response for this session.
-    fn validate_auth_response(&self, auth: &TpmsAuthResponse) -> TssResult<()>;
-}
-
-/// Container for sessions associated with a TPM command. A command can have up to three sessions.
-pub type CmdSessions<'a> = ArrayVec<&'a mut dyn Session, 3>;
-
-/// A password session.
-#[derive(Debug, PartialEq, Default)]
-pub struct PasswordSession {
-    auth: Tpm2bAuth,
-}
-
-impl Session for PasswordSession {
-    fn get_auth_command(&self) -> TpmsAuthCommand {
-        TpmsAuthCommand {
-            session_handle: TpmiShAuthSession::RS_PW,
-            nonce: Tpm2bNonce::default(),
-            session_attributes: TpmaSession(0),
-            hmac: self.auth,
-        }
-    }
-    fn validate_auth_response(&self, auth: &TpmsAuthResponse) -> TssResult<()> {
-        // Password response auth should have empty nonce/hmac and ContinueSession attribute.
-        if auth.nonce.get_size() != 0
-            || auth.session_attributes.0 != 0x1
-            || auth.hmac.get_size() != 0
-        {
-            Err(TssTcsError::BadParameter.into())
-        } else {
-            Ok(())
-        }
-    }
-}
-
+//! This module contains a collection of traits setting lower bounds
+//! on how many sessions are allowed in an authorization area.
+//! In particular the this module defines the following traits
+//! - [`AuthorizationArea`]: A trait for an authorization area with
+//!   (possibly zero) unknown number of sessions up to three.
+//! - [`AuthorizationArea1Plus`]: A trait for an authorization area
+//!   with at least one session and at most three sessions
+//! - [`AuthorizationArea2Plus`]: A trait for an authorization area
+//!   with either two or three sessions.
+//!
+//! The concept of a session is defined by [`Session`].
+//!
+//! For command implementor, they need use the right trait from [`AuthorizationArea`],
+//! [`AuthorizationArea1Plus`], and [`AuthorizationArea2Plus`]. Additionally the expected
+//! authorization area type can be [`unit`] if no session is be expectd, or a tuple of
+//! exactly three sessions if exactly three sessions are to be expected.
+//!
+//! For command users, they may pass a single session or a tuple of two or three sessions
+//! depending on the command. The compiler should be able to catch cases where unsupported number
+//! of sessions is being passed and return a compile time error.
+mod authorization_area;
+mod nosession;
+mod password;
+mod session;
 #[cfg(test)]
 mod tests;
+
+pub use authorization_area::*;
+pub use nosession::*;
+pub use password::*;
+pub use session::*;
