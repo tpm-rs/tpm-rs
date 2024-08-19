@@ -238,7 +238,7 @@ fn test_derive_unit_struct() {
 }
 
 #[repr(C, u8)]
-#[derive(Copy, Clone, Debug, Marshalable, PartialEq)]
+#[derive(Copy, Clone, Debug, Discriminant, Marshalable, PartialEq)]
 enum EnumWithVariantData {
     A(u8) = 1,
     B(u8) = 2,

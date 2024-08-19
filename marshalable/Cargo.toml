@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+safe-discriminant = {workspace = true}
 tpm2-rs-errors = { workspace = true }
 tpm2-rs-marshalable-derive = { workspace = true }

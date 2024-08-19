@@ -20,6 +20,7 @@ hex-literal = { version = "0.4.1" }
 open-enum = "0.4.1"
 proc-macro2 = "1"
 quote = "1"
+safe-discriminant = "0.2.0"
 syn = {version = "2", features = ["full"]}
 trybuild = { version = "1.0.89", features = ["diff"] }
 zerocopy = { version = "0.7.0", features = ["derive"] }
