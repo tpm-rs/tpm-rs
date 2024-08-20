@@ -54,9 +54,9 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
             (marshal_text, unmarshal_text, TokenStream::new())
         }
         Data::Enum(enu) => {
-            let marshal_text = get_enum_marshal_impl(&name, &input.attrs)?;
-            let unmarshal_text = get_enum_unmarshal_impl(&name, &input.attrs)?;
-            let pure_impl = get_enum_impl(&name, &enu, &input.attrs)?;
+            let marshal_text = get_enum_marshal_impl();
+            let unmarshal_text = get_enum_unmarshal_impl();
+            let pure_impl = get_enum_impl(&name, &enu)?;
             (marshal_text, unmarshal_text, pure_impl)
         }
         Data::Union(_) => {
@@ -86,61 +86,10 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
     Ok(expanded)
 }
 
-// Different enum representation attributes.
-enum EnumRepr {
-    // #[repr(C, $primitive)]
-    CPrim(Path),
-    // #[repr($primitive)]
-    Prim,
-    None,
-}
-
-// Returns whether `path` is an unsigned primitive.
-fn is_uprimitive(path: &Path) -> bool {
-    path.is_ident("u8") || path.is_ident("u16") || path.is_ident("u32") || path.is_ident("u64")
-}
-
-// Gets the EnumRepr from `attrs`.
-fn get_enum_repr(attrs: &[Attribute]) -> EnumRepr {
-    let mut c_repr = false;
-    let mut prim = Option::None;
-
-    // Go find any `C` and/or unsigned primitive in a #repr attribute.
-    for attr in attrs {
-        if attr.path().is_ident("repr") {
-            let _ = attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("C") {
-                    c_repr = true;
-                } else if is_uprimitive(&meta.path) {
-                    prim = Some(meta.path);
-                }
-                Ok(())
-            });
-        }
-    }
-
-    // Construct the appropriate EnumRepr from the findings.
-    if let Some(p) = prim {
-        if c_repr {
-            EnumRepr::CPrim(p)
-        } else {
-            EnumRepr::Prim
-        }
-    } else {
-        EnumRepr::None
-    }
-}
-
-// Produces a `discriminant` and variant {un}marshal implementations for a #[repr(C, $primitive)] enum.
-fn get_enum_impl(name: &Ident, data: &DataEnum, attrs: &[Attribute]) -> Result<TokenStream> {
+/// Produces a variant {un}marshal implementations for an enum.
+fn get_enum_impl(name: &Ident, data: &DataEnum) -> Result<TokenStream> {
     let marshal_text = get_enum_marshal_body(name, data)?;
     let unmarshal_text = get_enum_unmarshal_body(name, data)?;
-    let EnumRepr::CPrim(_) = get_enum_repr(attrs) else {
-        return Err(Error::new(
-            name.span(),
-            "Marshalable cannot be derived for an enum without primitive discriminant representation",
-        ));
-    };
     // TODO(#84): Move this to it's own derive proc-macro after cleaning up base.
     Ok(quote! {
         impl MarshalableVariant for #name {
@@ -227,18 +176,11 @@ fn get_field_marshal_body(all_fields: &Fields) -> Result<TokenStream> {
     }
 }
 
-fn get_enum_marshal_impl(name: &Ident, attrs: &[Attribute]) -> Result<TokenStream> {
-    let EnumRepr::CPrim(_) = get_enum_repr(attrs) else {
-        let msg = format!(
-            "Enum {} does not have primitive representation for its discriminant",
-            name
-        );
-        return Err(Error::new(name.span(), msg));
-    };
-    Ok(quote! {
+fn get_enum_marshal_impl() -> TokenStream {
+    quote! {
         written += self.discriminant().try_marshal(&mut buffer[written..])?;
         written += self.try_marshal_variant(&mut buffer[written..])?;
-    })
+    }
 }
 
 fn errors_to_error<I: Iterator<Item = Error>>(mut errors: I) -> Result<()> {
@@ -446,18 +388,13 @@ fn get_selection<'a>(
     }
 }
 
-fn get_enum_unmarshal_impl(struct_name: &Ident, attrs: &[Attribute]) -> Result<TokenStream> {
-    let EnumRepr::CPrim(prim) = get_enum_repr(attrs) else {
-        let msg = format!(
-            "Enum {} does not have primitive representation for its discriminant",
-            struct_name
-        );
-        return Err(Error::new(struct_name.span(), msg));
-    };
-    Ok(quote! {
-        let selector = #prim::try_unmarshal(buffer)?;
-        #struct_name::try_unmarshal_variant(selector, buffer)
-    })
+fn get_enum_unmarshal_impl() -> TokenStream {
+    quote! {
+        let selector =
+            <Self as safe_discriminant::Discriminant>::
+            Repr::try_unmarshal(buffer)?;
+        Self::try_unmarshal_variant(selector, buffer)
+    }
 }
 
 fn get_enum_unmarshal_body(struct_name: &Ident, data: &DataEnum) -> Result<TokenStream> {
