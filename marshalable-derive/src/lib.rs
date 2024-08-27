@@ -69,7 +69,7 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
     let expanded = quote! {
         #[doc(hidden)]
         const _: () = {
-            use tpm2_rs_marshalable::__prelude::*;
+            use tpm2_rs_marshalable::__private::*;
             #pure_impl
             // The generated impl.
             impl Marshalable for #name  {

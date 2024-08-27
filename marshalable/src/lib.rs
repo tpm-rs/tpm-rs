@@ -9,7 +9,7 @@ pub use tpm2_rs_marshalable_derive::Marshalable;
 // This is a module that is exposed publicly, but isn't expected to be used.
 // It's for the internal usage of having a prelude for the marshalalbe macro.
 #[doc(hidden)]
-pub mod __prelude {
+pub mod __private {
     pub use crate::Marshalable;
     pub use crate::MarshalableVariant;
     pub use crate::UnmarshalBuf;
