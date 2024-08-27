@@ -1,5 +1,5 @@
 use crate::constants::{TPM2Cap, TPM2CC, TPM2PT, TPM2SU};
-use crate::{Marshalable, UnmarshalBuf};
+use crate::Marshalable;
 use crate::{TpmiYesNo, TpmlDigest, TpmlPcrSelection, TpmsCapabilityData};
 
 /// Trait for a TPM command transaction.
