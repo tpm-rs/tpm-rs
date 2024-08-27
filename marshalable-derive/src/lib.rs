@@ -67,17 +67,15 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
         }
     };
     let expanded = quote! {
-        #[doc(hidden)]
         const _: () = {
-            use tpm2_rs_marshalable::__private::*;
             #pure_impl
             // The generated impl.
             impl Marshalable for #name  {
-                fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
+                fn try_unmarshal(buffer: &mut tpm2_rs_marshalable::UnmarshalBuf) -> tpm2_rs_marshalable::__private::TpmRcResult<Self> {
                     #unmarsh_text
                 }
 
-                fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
+                fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::__private::TpmRcResult<usize> {
                     let mut written: usize = 0;
                     #marsh_text;
                     Ok(written)
@@ -96,7 +94,7 @@ fn get_enum_impl(name: &Ident, data: &DataEnum) -> Result<TokenStream> {
     // TODO(#84): Move this to it's own derive proc-macro after cleaning up base.
     Ok(quote! {
         impl MarshalableVariant for #name {
-            fn try_marshal_variant(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<usize> {
+            fn try_marshal_variant(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::__private::TpmRcResult<usize> {
                 let mut written: usize = 0;
                 #marshal_text;
                 Ok(written)
@@ -104,8 +102,8 @@ fn get_enum_impl(name: &Ident, data: &DataEnum) -> Result<TokenStream> {
 
             fn try_unmarshal_variant(
                 selector: <Self as safe_discriminant::Discriminant>::Repr,
-                buffer: &mut UnmarshalBuf) ->
-                tpm2_rs_marshalable::exports::errors::TpmRcResult<Self> {
+                buffer: &mut tpm2_rs_marshalable::UnmarshalBuf) ->
+                tpm2_rs_marshalable::__private::TpmRcResult<Self> {
                 #unmarshal_text
             }
         }

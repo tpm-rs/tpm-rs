@@ -10,9 +10,6 @@ pub use tpm2_rs_marshalable_derive::Marshalable;
 // It's for the internal usage of having a prelude for the marshalalbe macro.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::Marshalable;
-    pub use crate::MarshalableVariant;
-    pub use crate::UnmarshalBuf;
     pub use tpm2_rs_errors::TpmRcError;
     pub use tpm2_rs_errors::TpmRcResult;
 }
