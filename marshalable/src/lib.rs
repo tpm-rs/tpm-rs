@@ -10,11 +10,11 @@ pub use tpm2_rs_marshalable_derive::Marshalable;
 // It's for the internal usage of having a prelude for the marshalalbe macro.
 #[doc(hidden)]
 pub mod __prelude {
-  pub use crate::Marshalable;
-  pub use crate::MarshalableVariant;
-  pub use crate::UnmarshalBuf;
-  pub use tpm2_rs_errors::TpmRcError;
-  pub use tpm2_rs_errors::TpmRcResult;
+    pub use crate::Marshalable;
+    pub use crate::MarshalableVariant;
+    pub use crate::UnmarshalBuf;
+    pub use tpm2_rs_errors::TpmRcError;
+    pub use tpm2_rs_errors::TpmRcResult;
 }
 
 // The Marshalable trait defines the API for {un}marshaling TPM structs. It
