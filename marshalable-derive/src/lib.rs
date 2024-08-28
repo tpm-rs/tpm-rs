@@ -67,21 +67,19 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
         }
     };
     let expanded = quote! {
-        const _: () = {
-            #pure_impl
-            // The generated impl.
-            impl Marshalable for #name  {
-                fn try_unmarshal(buffer: &mut tpm2_rs_marshalable::UnmarshalBuf) -> tpm2_rs_marshalable::__private::TpmRcResult<Self> {
-                    #unmarsh_text
-                }
-
-                fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::__private::TpmRcResult<usize> {
-                    let mut written: usize = 0;
-                    #marsh_text;
-                    Ok(written)
-                }
+        #pure_impl
+        // The generated impl.
+        impl Marshalable for #name  {
+            fn try_unmarshal(buffer: &mut tpm2_rs_marshalable::UnmarshalBuf) -> tpm2_rs_marshalable::__private::TpmRcResult<Self> {
+                #unmarsh_text
             }
-        };
+
+            fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::__private::TpmRcResult<usize> {
+                let mut written: usize = 0;
+                #marsh_text;
+                Ok(written)
+            }
+        }
     };
 
     Ok(expanded)
