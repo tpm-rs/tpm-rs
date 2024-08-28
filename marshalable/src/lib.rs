@@ -6,12 +6,9 @@ use safe_discriminant::Discriminant;
 use tpm2_rs_errors::*;
 pub use tpm2_rs_marshalable_derive::Marshalable;
 
-// This is a module that is exposed publicly, but isn't expected to be used.
-// It's for the internal usage of having a prelude for the marshalalbe macro.
-#[doc(hidden)]
-pub mod __private {
-    pub use tpm2_rs_errors::TpmRcError;
-    pub use tpm2_rs_errors::TpmRcResult;
+/// Exports needed for macro expansion
+pub mod exports {
+    pub use tpm2_rs_errors as errors;
 }
 
 // The Marshalable trait defines the API for {un}marshaling TPM structs. It
