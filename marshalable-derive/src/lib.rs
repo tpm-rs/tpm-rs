@@ -66,12 +66,11 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
             ));
         }
     };
-
     let expanded = quote! {
         #pure_impl
         // The generated impl.
         impl Marshalable for #name  {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<Self> {
+            fn try_unmarshal(buffer: &mut tpm2_rs_marshalable::UnmarshalBuf) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<Self> {
                 #unmarsh_text
             }
 
@@ -101,7 +100,7 @@ fn get_enum_impl(name: &Ident, data: &DataEnum) -> Result<TokenStream> {
 
             fn try_unmarshal_variant(
                 selector: <Self as safe_discriminant::Discriminant>::Repr,
-                buffer: &mut UnmarshalBuf) ->
+                buffer: &mut tpm2_rs_marshalable::UnmarshalBuf) ->
                 tpm2_rs_marshalable::exports::errors::TpmRcResult<Self> {
                 #unmarshal_text
             }

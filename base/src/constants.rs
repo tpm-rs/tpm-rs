@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::{Marshalable, UnmarshalBuf};
+use crate::Marshalable;
 use open_enum::open_enum;
 
 pub const TPM2_SHA_DIGEST_SIZE: u32 = 20;
