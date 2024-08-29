@@ -12,7 +12,7 @@
 use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command};
-use tpm2_rs_base::errors::{TpmResult, TssTcsError};
+use tpm2_rs_base::errors::{TssResult, TssTcsError};
 use tpm2_rs_base::{commands::StartupCmd, constants::TPM2SU};
 use tpm2_rs_client::run_command;
 use tpm2_rs_client::Tpm;
@@ -141,7 +141,7 @@ impl TcpTpm {
         })
     }
 
-    fn read_tpm_u32(&mut self) -> TpmResult<u32> {
+    fn read_tpm_u32(&mut self) -> TssResult<u32> {
         let mut val = U32::ZERO;
         self.tpm_conn
             .read_exact(val.as_bytes_mut())
@@ -151,7 +151,7 @@ impl TcpTpm {
 }
 
 impl Tpm for TcpTpm {
-    fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TpmResult<()> {
+    fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TssResult<()> {
         let cmd_size: u32 = command
             .len()
             .try_into()

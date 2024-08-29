@@ -225,9 +225,9 @@ impl ErrorPosition {
     }
 }
 
-impl From<TpmRcError> for super::TpmError {
+impl From<TpmRcError> for super::TssError {
     fn from(val: TpmRcError) -> Self {
-        super::TpmError(val.0)
+        super::TssError(val.0)
     }
 }
 

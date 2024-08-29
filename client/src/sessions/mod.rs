@@ -1,5 +1,5 @@
 use arrayvec::ArrayVec;
-use tpm2_rs_base::errors::{TpmResult, TssTcsError};
+use tpm2_rs_base::errors::{TssResult, TssTcsError};
 use tpm2_rs_base::{
     Tpm2bAuth, Tpm2bNonce, Tpm2bSimple, TpmaSession, TpmiShAuthSession, TpmsAuthCommand,
     TpmsAuthResponse,
@@ -10,7 +10,7 @@ pub trait Session {
     /// Computes the authorization HMAC for this session.
     fn get_auth_command(&self) -> TpmsAuthCommand;
     /// Validates the authorization response for this session.
-    fn validate_auth_response(&self, auth: &TpmsAuthResponse) -> TpmResult<()>;
+    fn validate_auth_response(&self, auth: &TpmsAuthResponse) -> TssResult<()>;
 }
 
 /// Container for sessions associated with a TPM command. A command can have up to three sessions.
@@ -31,7 +31,7 @@ impl Session for PasswordSession {
             hmac: self.auth,
         }
     }
-    fn validate_auth_response(&self, auth: &TpmsAuthResponse) -> TpmResult<()> {
+    fn validate_auth_response(&self, auth: &TpmsAuthResponse) -> TssResult<()> {
         // Password response auth should have empty nonce/hmac and ContinueSession attribute.
         if auth.nonce.get_size() != 0
             || auth.session_attributes.0 != 0x1
