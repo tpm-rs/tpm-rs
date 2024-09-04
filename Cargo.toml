@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "base",
     "client",
-    "client-features",
     "errors",
     "marshalable",
     "marshalable-derive",
@@ -28,7 +27,6 @@ zerocopy = { version = "0.7.0", features = ["derive"] }
 # Common workspace crates
 tpm2-rs-base = { path = "base" }
 tpm2-rs-client = { path = "client" }
-tpm2-rs-client-features = { path = "client-features" }
 tpm2-rs-errors = { path = "errors" }
 tpm2-rs-marshalable = { path = "marshalable" }
 tpm2-rs-marshalable-derive = { path = "marshalable-derive" }

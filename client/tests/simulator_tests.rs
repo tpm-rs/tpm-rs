@@ -12,11 +12,12 @@
 use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command};
+use tpm2_rs_base::commands::{GetCapabilityCmd, StartupCmd};
+use tpm2_rs_base::constants::{TpmCap, TpmPt, TpmSu};
 use tpm2_rs_base::errors::{TssResult, TssTcsError};
-use tpm2_rs_base::{commands::StartupCmd, constants::TpmSu};
+use tpm2_rs_base::{TpmlTaggedTpmProperty, TpmsCapabilityData, TpmsTaggedProperty};
 use tpm2_rs_client::run_command;
 use tpm2_rs_client::Tpm;
-use tpm2_rs_client_features::*;
 use zerocopy::big_endian::U32;
 use zerocopy::AsBytes;
 
@@ -51,9 +52,35 @@ fn get_started_tpm() -> (TpmSim, TcpTpm) {
 }
 
 #[test]
-fn test_get_manufacturer_id() {
+fn test_get_capability_manufacturer_id() {
     let (_sim_lifeline, mut tpm) = get_started_tpm();
-    assert!(get_manufacturer_id(&mut tpm).is_ok());
+
+    let mut expected = TpmlTaggedTpmProperty {
+        count: 1,
+        tpm_property: [TpmsTaggedProperty::default(); 127],
+    };
+
+    expected.tpm_property[0] = TpmsTaggedProperty {
+        property: TpmPt::Manufacturer,
+        value: 0x4D534654,
+    };
+
+    let command = GetCapabilityCmd {
+        capability: TpmCap::TPMProperties,
+        property: TpmPt::Manufacturer,
+        property_count: 1,
+    };
+
+    // We allow panic in test cases.
+    let resp = run_command(&command, &mut tpm).expect("Failed running command.");
+
+    // Extract the TpmlTaggedTpmProperty data form the response.
+    let TpmsCapabilityData::TpmProperties(received) = resp.capability_data else {
+        panic!("Unexpected variant data.")
+    };
+
+    // Confirm we received the expected response.
+    assert_eq!(received, expected);
 }
 
 // Launches the TPM simulator at the given path in a subprocess and powers it up.

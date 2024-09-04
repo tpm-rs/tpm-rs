@@ -1189,9 +1189,9 @@ pub struct TpmlCc {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmlTaggedTpmProperty {
-    count: u32,
+    pub count: u32,
     #[marshalable(length=count)]
-    tpm_property: [TpmsTaggedProperty; TPM2_MAX_TPM_PROPERTIES],
+    pub tpm_property: [TpmsTaggedProperty; TPM2_MAX_TPM_PROPERTIES],
 }
 
 #[repr(C)]
