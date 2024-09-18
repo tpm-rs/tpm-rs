@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 use tpm2_rs_base::commands::*;
 use tpm2_rs_base::constants::{TPM2Cap, TPM2PT};
-use tpm2_rs_base::errors::{TpmRcError, TpmResult};
+use tpm2_rs_base::errors::{TpmRcError, TssResult};
 use tpm2_rs_base::TpmsCapabilityData;
 use tpm2_rs_client::*;
 
@@ -10,7 +10,7 @@ use tpm2_rs_client::*;
 // The feature client provides higher-level abstractions than the base TPM client.
 
 // Gets the TPM manufacturer ID.
-pub fn get_manufacturer_id<T>(tpm: &mut T) -> TpmResult<u32>
+pub fn get_manufacturer_id<T>(tpm: &mut T) -> TssResult<u32>
 where
     T: Tpm,
 {

@@ -19,7 +19,7 @@ impl Default for FakeTpm {
     }
 }
 impl Tpm for FakeTpm {
-    fn transact(&mut self, _: &[u8], response: &mut [u8]) -> TpmResult<()> {
+    fn transact(&mut self, _: &[u8], response: &mut [u8]) -> TssResult<()> {
         let mut tx_header = RespHeader {
             tag: TPM2ST::NoSessions,
             size: 0,

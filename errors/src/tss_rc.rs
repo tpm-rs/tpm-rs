@@ -47,9 +47,9 @@ macro_rules! generate_tss_layer_error {
             }
         }
 
-        impl From<$error_name> for super::TpmError {
+        impl From<$error_name> for super::TssError {
             fn from(val: $error_name) -> Self {
-                super::TpmError(val.0)
+                super::TssError(val.0)
             }
         }
     };
