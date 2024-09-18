@@ -1,7 +1,7 @@
 use crate::sessions::{PasswordSession, Session};
 
 use super::*;
-use tpm2_rs_base::constants::TPM2Handle;
+use tpm2_rs_base::constants::TpmHandle;
 use tpm2_rs_base::errors::TpmRcError;
 use tpm2_rs_base::TpmaSession;
 
@@ -18,7 +18,7 @@ impl Tpm for ErrorTpm {
 // Larger than the maximum size.
 struct HugeFakeCommand([u8; CMD_BUFFER_SIZE]);
 impl TpmCommand for HugeFakeCommand {
-    const CMD_CODE: TPM2CC = TPM2CC::NVUndefineSpaceSpecial;
+    const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
     type Handles = ();
     type RespT = u8;
     type RespHandles = ();
@@ -38,7 +38,7 @@ fn test_command_too_large() {
 #[repr(C)]
 struct TestCommand(u32);
 impl TpmCommand for TestCommand {
-    const CMD_CODE: TPM2CC = TPM2CC::NVUndefineSpaceSpecial;
+    const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
     type Handles = ();
     type RespT = u32;
     type RespHandles = ();
@@ -68,7 +68,7 @@ impl Tpm for FakeU32LoopbackTpm {
         let rxed_value = u32::try_unmarshal(&mut buf)?;
 
         let mut tx_header = RespHeader {
-            tag: TPM2ST::NoSessions,
+            tag: TpmSt::NoSessions,
             size: 0,
             rc: 0,
         };
@@ -98,7 +98,7 @@ struct EvilSizeTpm();
 impl Tpm for EvilSizeTpm {
     fn transact(&mut self, _: &[u8], response: &mut [u8]) -> TssResult<()> {
         let tx_header = RespHeader {
-            tag: TPM2ST::NoSessions,
+            tag: TpmSt::NoSessions,
             size: response.len() as u32 + 2,
             rc: 0,
         };
@@ -128,7 +128,7 @@ impl Default for FakeTpm {
             len: 0,
             response: [0; RESP_BUFFER_SIZE],
             header: RespHeader {
-                tag: TPM2ST::NoSessions,
+                tag: TpmSt::NoSessions,
                 size: 0,
                 rc: 0,
             },
@@ -158,10 +158,10 @@ impl FakeTpm {
 #[repr(C)]
 struct TestHandlesCommand();
 impl TpmCommand for TestHandlesCommand {
-    const CMD_CODE: TPM2CC = TPM2CC::NVUndefineSpaceSpecial;
-    type Handles = TPM2Handle;
+    const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
+    type Handles = TpmHandle;
     type RespT = ();
-    type RespHandles = TPM2Handle;
+    type RespHandles = TpmHandle;
 }
 
 #[test]
@@ -178,14 +178,14 @@ fn test_response_missing_handles() {
 fn test_response_missing_sessions() {
     let mut fake_tpm = FakeTpm::default();
     // Respond with the single response handle.
-    fake_tpm.add_to_response(&TPM2Handle(77));
+    fake_tpm.add_to_response(&TpmHandle(77));
 
     let cmd = TestHandlesCommand();
     let mut sessions = CmdSessions::default();
     let mut session = PasswordSession::default();
     sessions.push(&mut session);
     assert_eq!(
-        run_command_with_handles(&cmd, TPM2Handle::RSPW, sessions, &mut fake_tpm),
+        run_command_with_handles(&cmd, TpmHandle::RSPW, sessions, &mut fake_tpm),
         Err(TpmRcError::Memory.into())
     );
 }
@@ -194,7 +194,7 @@ fn test_response_missing_sessions() {
 fn test_response_session_fails_validation() {
     let mut fake_tpm = FakeTpm::default();
     // Respond with the single response handle, and an invalid password auth.
-    fake_tpm.add_to_response(&TPM2Handle(77));
+    fake_tpm.add_to_response(&TpmHandle(77));
     let invalid_auth = TpmsAuthResponse {
         session_attributes: TpmaSession(0xf),
         ..Default::default()
@@ -208,7 +208,7 @@ fn test_response_session_fails_validation() {
     let mut session = PasswordSession::default();
     sessions.push(&mut session);
     assert_eq!(
-        run_command_with_handles(&cmd, TPM2Handle::RSPW, sessions, &mut fake_tpm),
+        run_command_with_handles(&cmd, TpmHandle::RSPW, sessions, &mut fake_tpm),
         Err(validation_failure.err().unwrap())
     );
 }

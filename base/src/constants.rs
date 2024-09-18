@@ -30,13 +30,13 @@ pub const TPM2_PRIVATE_VENDOR_SPECIFIC_BYTES: u32 = (TPM2_MAX_RSA_KEY_BYTES / 2)
 pub const TPM2_MAX_CONTEXT_SIZE: u32 = 5120;
 pub const TPM2_MAX_ACTIVE_SESSIONS: u32 = 64;
 
-// TPM2AlgID represents a TPM_ALG_ID.
+// TpmAlgId represents a TPM_ALG_ID.
 // See definition in Part 2: Structures, section 6.3.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshalable)]
-pub enum TPM2AlgID {
+pub enum TpmAlgId {
     RSA = 0x0001,
     TDES = 0x0003,
     SHA1 = 0x0004,
@@ -78,13 +78,13 @@ pub enum TPM2AlgID {
     ECB = 0x0044,
 }
 
-// TPM2ECCCurve represents a TPM_ECC_Curve.
+// TpmEccCurve represents a TPM_ECC_Curve.
 // See definition in Part 2: Structures, section 6.4.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshalable)]
-pub enum TPM2ECCCurve {
+pub enum TpmEccCurve {
     None = 0x0000,
     NistP192 = 0x0001,
     NistP224 = 0x0002,
@@ -95,8 +95,6 @@ pub enum TPM2ECCCurve {
     BNP638 = 0x0011,
     SM2P256 = 0x0020,
 }
-// TODO remove this alias and convert everything to using Command
-pub type TPM2CC = Command;
 
 // The TPM_CC command codes
 // See definition in Part 2: Structures, section 6.5.2.
@@ -104,7 +102,7 @@ pub type TPM2CC = Command;
 #[repr(u32)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshalable)]
-pub enum Command {
+pub enum TpmCc {
     NVUndefineSpaceSpecial = 0x0000011F,
     EvictControl = 0x00000120,
     HierarchyControl = 0x00000121,
@@ -225,113 +223,113 @@ pub enum Command {
     ACTSetTimeout = 0x00000198,
 }
 
-// TPM2RC represents a TPM_RC.
+// TpmRc represents a TPM_RC.
 // See definition in Part 2: Structures, section 6.6.
 #[open_enum]
 #[repr(u32)]
-pub enum TPM2RC {
+pub enum TpmRc {
     Success = 0x00000000,
     // FMT0 error codes
-    Initialize = TPM2RC::RC_VER_1,
-    Failure = TPM2RC::RC_VER_1 + 0x001,
-    Sequence = TPM2RC::RC_VER_1 + 0x003,
-    Private = TPM2RC::RC_VER_1 + 0x00B,
-    Hmac = TPM2RC::RC_VER_1 + 0x019,
-    Disabled = TPM2RC::RC_VER_1 + 0x020,
-    Exclusive = TPM2RC::RC_VER_1 + 0x021,
-    AuthType = TPM2RC::RC_VER_1 + 0x024,
-    AuthMissing = TPM2RC::RC_VER_1 + 0x025,
-    Policy = TPM2RC::RC_VER_1 + 0x026,
-    Pcr = TPM2RC::RC_VER_1 + 0x027,
-    PCRChanged = TPM2RC::RC_VER_1 + 0x028,
-    Upgrade = TPM2RC::RC_VER_1 + 0x02D,
-    TooManyContexts = TPM2RC::RC_VER_1 + 0x02E,
-    AuthUnavailable = TPM2RC::RC_VER_1 + 0x02F,
-    Reboot = TPM2RC::RC_VER_1 + 0x030,
-    Unbalanced = TPM2RC::RC_VER_1 + 0x031,
-    CommandSize = TPM2RC::RC_VER_1 + 0x042,
-    CommandCode = TPM2RC::RC_VER_1 + 0x043,
-    AuthSize = TPM2RC::RC_VER_1 + 0x044,
-    AuthContext = TPM2RC::RC_VER_1 + 0x045,
-    NVRange = TPM2RC::RC_VER_1 + 0x046,
-    NVSize = TPM2RC::RC_VER_1 + 0x047,
-    NVLocked = TPM2RC::RC_VER_1 + 0x048,
-    NVAuthorization = TPM2RC::RC_VER_1 + 0x049,
-    NVUninitialized = TPM2RC::RC_VER_1 + 0x04A,
-    NVSpace = TPM2RC::RC_VER_1 + 0x04B,
-    NVDefined = TPM2RC::RC_VER_1 + 0x04C,
-    BadContext = TPM2RC::RC_VER_1 + 0x050,
-    CPHash = TPM2RC::RC_VER_1 + 0x051,
-    Parent = TPM2RC::RC_VER_1 + 0x052,
-    NeedsTest = TPM2RC::RC_VER_1 + 0x053,
-    NoResult = TPM2RC::RC_VER_1 + 0x054,
-    Sensitive = TPM2RC::RC_VER_1 + 0x055,
+    Initialize = TpmRc::RC_VER_1,
+    Failure = TpmRc::RC_VER_1 + 0x001,
+    Sequence = TpmRc::RC_VER_1 + 0x003,
+    Private = TpmRc::RC_VER_1 + 0x00B,
+    Hmac = TpmRc::RC_VER_1 + 0x019,
+    Disabled = TpmRc::RC_VER_1 + 0x020,
+    Exclusive = TpmRc::RC_VER_1 + 0x021,
+    AuthType = TpmRc::RC_VER_1 + 0x024,
+    AuthMissing = TpmRc::RC_VER_1 + 0x025,
+    Policy = TpmRc::RC_VER_1 + 0x026,
+    Pcr = TpmRc::RC_VER_1 + 0x027,
+    PCRChanged = TpmRc::RC_VER_1 + 0x028,
+    Upgrade = TpmRc::RC_VER_1 + 0x02D,
+    TooManyContexts = TpmRc::RC_VER_1 + 0x02E,
+    AuthUnavailable = TpmRc::RC_VER_1 + 0x02F,
+    Reboot = TpmRc::RC_VER_1 + 0x030,
+    Unbalanced = TpmRc::RC_VER_1 + 0x031,
+    CommandSize = TpmRc::RC_VER_1 + 0x042,
+    CommandCode = TpmRc::RC_VER_1 + 0x043,
+    AuthSize = TpmRc::RC_VER_1 + 0x044,
+    AuthContext = TpmRc::RC_VER_1 + 0x045,
+    NVRange = TpmRc::RC_VER_1 + 0x046,
+    NVSize = TpmRc::RC_VER_1 + 0x047,
+    NVLocked = TpmRc::RC_VER_1 + 0x048,
+    NVAuthorization = TpmRc::RC_VER_1 + 0x049,
+    NVUninitialized = TpmRc::RC_VER_1 + 0x04A,
+    NVSpace = TpmRc::RC_VER_1 + 0x04B,
+    NVDefined = TpmRc::RC_VER_1 + 0x04C,
+    BadContext = TpmRc::RC_VER_1 + 0x050,
+    CPHash = TpmRc::RC_VER_1 + 0x051,
+    Parent = TpmRc::RC_VER_1 + 0x052,
+    NeedsTest = TpmRc::RC_VER_1 + 0x053,
+    NoResult = TpmRc::RC_VER_1 + 0x054,
+    Sensitive = TpmRc::RC_VER_1 + 0x055,
     // FMT1 error codes
-    CAsymmetric = TPM2RC::RC_FMT_1 + 0x001,
-    Attributes = TPM2RC::RC_FMT_1 + 0x002,
-    Hash = TPM2RC::RC_FMT_1 + 0x003,
-    Value = TPM2RC::RC_FMT_1 + 0x004,
-    Hierarchy = TPM2RC::RC_FMT_1 + 0x005,
-    KeySize = TPM2RC::RC_FMT_1 + 0x007,
-    Mgf = TPM2RC::RC_FMT_1 + 0x008,
-    Mode = TPM2RC::RC_FMT_1 + 0x009,
-    Type = TPM2RC::RC_FMT_1 + 0x00A,
-    Handle = TPM2RC::RC_FMT_1 + 0x00B,
-    Kdf = TPM2RC::RC_FMT_1 + 0x00C,
-    Range = TPM2RC::RC_FMT_1 + 0x00D,
-    AuthFail = TPM2RC::RC_FMT_1 + 0x00E,
-    Nonce = TPM2RC::RC_FMT_1 + 0x00F,
-    PP = TPM2RC::RC_FMT_1 + 0x010,
-    Scheme = TPM2RC::RC_FMT_1 + 0x012,
-    Size = TPM2RC::RC_FMT_1 + 0x015,
-    Symmetric = TPM2RC::RC_FMT_1 + 0x016,
-    Tag = TPM2RC::RC_FMT_1 + 0x017,
-    Selector = TPM2RC::RC_FMT_1 + 0x018,
-    Insufficient = TPM2RC::RC_FMT_1 + 0x01A,
-    Signature = TPM2RC::RC_FMT_1 + 0x01B,
-    Key = TPM2RC::RC_FMT_1 + 0x01C,
-    PolicyFail = TPM2RC::RC_FMT_1 + 0x01D,
-    Integrity = TPM2RC::RC_FMT_1 + 0x01F,
-    Ticket = TPM2RC::RC_FMT_1 + 0x020,
-    ReservedBits = TPM2RC::RC_FMT_1 + 0x021,
-    BadAuth = TPM2RC::RC_FMT_1 + 0x022,
-    Expired = TPM2RC::RC_FMT_1 + 0x023,
-    PolicyCC = TPM2RC::RC_FMT_1 + 0x024,
-    Binding = TPM2RC::RC_FMT_1 + 0x025,
-    Curve = TPM2RC::RC_FMT_1 + 0x026,
-    ECCPoint = TPM2RC::RC_FMT_1 + 0x027,
+    CAsymmetric = TpmRc::RC_FMT_1 + 0x001,
+    Attributes = TpmRc::RC_FMT_1 + 0x002,
+    Hash = TpmRc::RC_FMT_1 + 0x003,
+    Value = TpmRc::RC_FMT_1 + 0x004,
+    Hierarchy = TpmRc::RC_FMT_1 + 0x005,
+    KeySize = TpmRc::RC_FMT_1 + 0x007,
+    Mgf = TpmRc::RC_FMT_1 + 0x008,
+    Mode = TpmRc::RC_FMT_1 + 0x009,
+    Type = TpmRc::RC_FMT_1 + 0x00A,
+    Handle = TpmRc::RC_FMT_1 + 0x00B,
+    Kdf = TpmRc::RC_FMT_1 + 0x00C,
+    Range = TpmRc::RC_FMT_1 + 0x00D,
+    AuthFail = TpmRc::RC_FMT_1 + 0x00E,
+    Nonce = TpmRc::RC_FMT_1 + 0x00F,
+    PP = TpmRc::RC_FMT_1 + 0x010,
+    Scheme = TpmRc::RC_FMT_1 + 0x012,
+    Size = TpmRc::RC_FMT_1 + 0x015,
+    Symmetric = TpmRc::RC_FMT_1 + 0x016,
+    Tag = TpmRc::RC_FMT_1 + 0x017,
+    Selector = TpmRc::RC_FMT_1 + 0x018,
+    Insufficient = TpmRc::RC_FMT_1 + 0x01A,
+    Signature = TpmRc::RC_FMT_1 + 0x01B,
+    Key = TpmRc::RC_FMT_1 + 0x01C,
+    PolicyFail = TpmRc::RC_FMT_1 + 0x01D,
+    Integrity = TpmRc::RC_FMT_1 + 0x01F,
+    Ticket = TpmRc::RC_FMT_1 + 0x020,
+    ReservedBits = TpmRc::RC_FMT_1 + 0x021,
+    BadAuth = TpmRc::RC_FMT_1 + 0x022,
+    Expired = TpmRc::RC_FMT_1 + 0x023,
+    PolicyCC = TpmRc::RC_FMT_1 + 0x024,
+    Binding = TpmRc::RC_FMT_1 + 0x025,
+    Curve = TpmRc::RC_FMT_1 + 0x026,
+    ECCPoint = TpmRc::RC_FMT_1 + 0x027,
     // Warnings
-    ContextGap = TPM2RC::RC_WARN + 0x001,
-    ObjectMemory = TPM2RC::RC_WARN + 0x002,
-    SessionMemory = TPM2RC::RC_WARN + 0x003,
-    Memory = TPM2RC::RC_WARN + 0x004,
-    SessionHandles = TPM2RC::RC_WARN + 0x005,
-    ObjectHandles = TPM2RC::RC_WARN + 0x006,
-    Locality = TPM2RC::RC_WARN + 0x007,
-    Yielded = TPM2RC::RC_WARN + 0x008,
-    Canceled = TPM2RC::RC_WARN + 0x009,
-    Testing = TPM2RC::RC_WARN + 0x00A,
-    ReferenceH0 = TPM2RC::RC_WARN + 0x010,
-    ReferenceH1 = TPM2RC::RC_WARN + 0x011,
-    ReferenceH2 = TPM2RC::RC_WARN + 0x012,
-    ReferenceH3 = TPM2RC::RC_WARN + 0x013,
-    ReferenceH4 = TPM2RC::RC_WARN + 0x014,
-    ReferenceH5 = TPM2RC::RC_WARN + 0x015,
-    ReferenceH6 = TPM2RC::RC_WARN + 0x016,
-    ReferenceS0 = TPM2RC::RC_WARN + 0x018,
-    ReferenceS1 = TPM2RC::RC_WARN + 0x019,
-    ReferenceS2 = TPM2RC::RC_WARN + 0x01A,
-    ReferenceS3 = TPM2RC::RC_WARN + 0x01B,
-    ReferenceS4 = TPM2RC::RC_WARN + 0x01C,
-    ReferenceS5 = TPM2RC::RC_WARN + 0x01D,
-    ReferenceS6 = TPM2RC::RC_WARN + 0x01E,
-    NVRate = TPM2RC::RC_WARN + 0x020,
-    Lockout = TPM2RC::RC_WARN + 0x021,
-    Retry = TPM2RC::RC_WARN + 0x022,
-    NVUnavailable = TPM2RC::RC_WARN + 0x023,
+    ContextGap = TpmRc::RC_WARN + 0x001,
+    ObjectMemory = TpmRc::RC_WARN + 0x002,
+    SessionMemory = TpmRc::RC_WARN + 0x003,
+    Memory = TpmRc::RC_WARN + 0x004,
+    SessionHandles = TpmRc::RC_WARN + 0x005,
+    ObjectHandles = TpmRc::RC_WARN + 0x006,
+    Locality = TpmRc::RC_WARN + 0x007,
+    Yielded = TpmRc::RC_WARN + 0x008,
+    Canceled = TpmRc::RC_WARN + 0x009,
+    Testing = TpmRc::RC_WARN + 0x00A,
+    ReferenceH0 = TpmRc::RC_WARN + 0x010,
+    ReferenceH1 = TpmRc::RC_WARN + 0x011,
+    ReferenceH2 = TpmRc::RC_WARN + 0x012,
+    ReferenceH3 = TpmRc::RC_WARN + 0x013,
+    ReferenceH4 = TpmRc::RC_WARN + 0x014,
+    ReferenceH5 = TpmRc::RC_WARN + 0x015,
+    ReferenceH6 = TpmRc::RC_WARN + 0x016,
+    ReferenceS0 = TpmRc::RC_WARN + 0x018,
+    ReferenceS1 = TpmRc::RC_WARN + 0x019,
+    ReferenceS2 = TpmRc::RC_WARN + 0x01A,
+    ReferenceS3 = TpmRc::RC_WARN + 0x01B,
+    ReferenceS4 = TpmRc::RC_WARN + 0x01C,
+    ReferenceS5 = TpmRc::RC_WARN + 0x01D,
+    ReferenceS6 = TpmRc::RC_WARN + 0x01E,
+    NVRate = TpmRc::RC_WARN + 0x020,
+    Lockout = TpmRc::RC_WARN + 0x021,
+    Retry = TpmRc::RC_WARN + 0x022,
+    NVUnavailable = TpmRc::RC_WARN + 0x023,
 }
 
-impl TPM2RC {
+impl TpmRc {
     pub const RC_VER_1: u32 = 0x00000100;
     pub const RC_FMT_1: u32 = 0x00000080;
     pub const RC_WARN: u32 = 0x00000900;
@@ -339,11 +337,11 @@ impl TPM2RC {
     pub const RC_S: u32 = 0x00000800;
 }
 
-// TPM2EO represents a TPM_EO.
+// TpmEo represents a TPM_EO.
 // See definition in Part 2: Structures, section 6.8.
 #[open_enum]
 #[repr(u16)]
-pub enum TPM2EO {
+pub enum TpmEo {
     Eq = 0x0000,
     Neq = 0x0001,
     SignedGT = 0x0002,
@@ -358,13 +356,13 @@ pub enum TPM2EO {
     BitClear = 0x000B,
 }
 
-// TPM2ST represents a TPM_ST.
+// TpmSt represents a TPM_ST.
 // See definition in Part 2: Structures, section 6.9.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshalable)]
-pub enum TPM2ST {
+pub enum TpmSt {
     RspCommand = 0x00C4,
     Null = 0x8000,
     NoSessions = 0x8001,
@@ -385,34 +383,34 @@ pub enum TPM2ST {
     FuManifest = 0x8029,
 }
 
-// TPM2SU represents a TPM_SU.
+// TpmSu represents a TPM_SU.
 // See definition in Part 2: Structures, section 6.10.
 #[open_enum]
 #[repr(u16)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshalable)]
-pub enum TPM2SU {
+pub enum TpmSu {
     Clear = 0x0000,
     State = 0x0001,
 }
 
-// TPM2SE represents a TPM_SE.
+// TpmSe represents a TPM_SE.
 // See definition in Part 2: Structures, section 6.11.
 #[open_enum]
 #[repr(u8)]
-pub enum TPM2SE {
+pub enum TpmSe {
     HMAC = 0x00,
     Policy = 0x01,
     Trial = 0x03,
 }
 
-// TPM2Cap represents a TPM_CAP.
+// TpmCap represents a TPM_CAP.
 // See definition in Part 2: Structures, section 6.12
 #[open_enum]
 #[repr(u32)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshalable)]
-pub enum TPM2Cap {
+pub enum TpmCap {
     Algs = 0x00000000,
     Handles = 0x00000001,
     Commands = 0x00000002,
@@ -426,13 +424,13 @@ pub enum TPM2Cap {
     ACT = 0x0000000A,
 }
 
-// TPM2PT represents a TPM_PT.
+// TpmPt represents a TPM_PT.
 // See definition in Part 2: Structures, section 6.13.
 #[open_enum]
 #[repr(u32)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshalable)]
-pub enum TPM2PT {
+pub enum TpmPt {
     // a 4-octet character string containing the TPM Family value
     // (TPM_SPEC_FAMILY)
     FamilyIndicator = 0x00000100,
@@ -595,13 +593,13 @@ pub enum TPM2PT {
     AuditCounter1 = 0x00000214,
 }
 
-// TPM2PTPCR represents a TPM_PT_PCR.
+// TpmPtPcr represents a TPM_PT_PCR.
 // See definition in Part 2: Structures, section 6.14.
 #[open_enum]
 #[repr(u32)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshalable)]
-pub enum TPM2PTPCR {
+pub enum TpmPtPcr {
     // a SET bit in the TPMS_PCR_SELECT indicates that the PCR is saved and
     // restored by TPM_SU_STATE
     Save = 0x00000000,
@@ -649,11 +647,11 @@ pub enum TPM2PTPCR {
     Auth = 0x00000014,
 }
 
-// TPM2HT represents a TPM_HT.
+// TpmHt represents a TPM_HT.
 // See definition in Part 2: Structures, section 7.2.
 #[open_enum]
 #[repr(u8)]
-pub enum TPM2HT {
+pub enum TpmHt {
     PCR = 0x00,
     NVIndex = 0x01,
     HMACSession = 0x02,
@@ -664,13 +662,13 @@ pub enum TPM2HT {
     AC = 0x90,
 }
 
-// TPM2Handle represents a TPM_HANDLE.
+// TpmHandle represents a TPM_HANDLE.
 // See definition in Part 2: Structures, section 7.1.
 #[open_enum]
 #[repr(u32)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshalable)]
-pub enum TPM2Handle {
+pub enum TpmHandle {
     RHOwner = 0x40000001,
     RHNull = 0x40000007,
     RSPW = 0x40000009,
@@ -692,7 +690,7 @@ impl TpmHc {
     /// Handle constant shift.
     const HRShift: u32 = 24;
 
-    const fn new(handle_type: TPM2HT) -> TpmHc {
+    const fn new(handle_type: TpmHt) -> TpmHc {
         TpmHc((handle_type.0 as u32) << TpmHc::HRShift)
     }
 
@@ -701,17 +699,17 @@ impl TpmHc {
     }
 
     /// PCR handle range base.
-    const HRPcr: TpmHc = TpmHc::new(TPM2HT::PCR);
+    const HRPcr: TpmHc = TpmHc::new(TpmHt::PCR);
     /// HMAC session handle range base.
-    const HRHMACSession: TpmHc = TpmHc::new(TPM2HT::HMACSession);
+    const HRHMACSession: TpmHc = TpmHc::new(TpmHt::HMACSession);
     /// Policy session handle range base.
-    const HRPolicySession: TpmHc = TpmHc::new(TPM2HT::PolicySession);
+    const HRPolicySession: TpmHc = TpmHc::new(TpmHt::PolicySession);
     /// Transient object handle range base.
-    const HRTransient: TpmHc = TpmHc::new(TPM2HT::Transient);
+    const HRTransient: TpmHc = TpmHc::new(TpmHt::Transient);
     /// Persistent object handle range base.
-    const HRPersistent: TpmHc = TpmHc::new(TPM2HT::Persistent);
+    const HRPersistent: TpmHc = TpmHc::new(TpmHt::Persistent);
     /// NV index handle range base.
-    const HRNvIndex: TpmHc = TpmHc::new(TPM2HT::NVIndex);
+    const HRNvIndex: TpmHc = TpmHc::new(TpmHt::NVIndex);
     // TODO: Add remaining values and ranges, some of which are profile-dependent.
 
     /// The first HMAC session.
@@ -745,11 +743,11 @@ impl TpmHc {
     }
 }
 
-// TPM2NT represents a TPM_NT.
+// TpmNt represents a TPM_NT.
 // See definition in Part 2: Structures, section 13.4.
 #[open_enum]
 #[repr(u8)]
-pub enum TPM2NT {
+pub enum TpmNt {
     // contains data that is opaque to the TPM that can only be modified
     // using TPM2_NV_Write().
     Ordinary = 0x0,
@@ -771,12 +769,12 @@ pub enum TPM2NT {
     PinPass = 0x9,
 }
 
-/// TPM2Generated represents a TPM_GENERATED.
+/// TpmGenerated represents a TPM_GENERATED.
 /// See definition in Part 2: Structures, section 6.2.
 #[open_enum]
 #[repr(u32)]
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, Default, Marshalable)]
-pub enum TPM2Generated {
+pub enum TpmGenerated {
     VALUE = 0xFF544347,
 }

@@ -3,7 +3,7 @@ use crate::buffer::{
 };
 use crate::crypto::Crypto;
 use crate::handler::{self, CommandContext, ContextDeps};
-use tpm2_rs_base::constants::Command;
+use tpm2_rs_base::constants::TpmCc;
 use tpm2_rs_base::errors::TpmRcError;
 
 /// Specifies all of the dependent types for `Service`.
@@ -80,8 +80,8 @@ impl<'a, Deps: ServiceDeps> Service<'a, Deps> {
             crypto: self.crypto,
         };
 
-        match Command(command_code) {
-            Command::GetRandom => handler::get_random(request, context),
+        match TpmCc(command_code) {
+            TpmCc::GetRandom => handler::get_random(request, context),
             _ => Err(TpmRcError::CommandCode),
         }?;
 

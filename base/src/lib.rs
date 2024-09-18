@@ -115,7 +115,7 @@ impl TpmaNv {
     const NT_SHIFT: u32 = 4;
 
     /// Returns the attribute for an index type (with all other field clear).
-    const fn from_index_type(index_type: TPM2NT) -> TpmaNv {
+    const fn from_index_type(index_type: TpmNt) -> TpmaNv {
         TpmaNv(new_attribute_field(
             index_type.0 as u32,
             Self::NT_MASK,
@@ -124,16 +124,16 @@ impl TpmaNv {
     }
 
     /// Returns the type of the index.
-    pub fn get_index_type(&self) -> TPM2NT {
-        TPM2NT(get_attribute_field(self.0, Self::NT_MASK, Self::NT_SHIFT) as u8)
+    pub fn get_index_type(&self) -> TpmNt {
+        TpmNt(get_attribute_field(self.0, Self::NT_MASK, Self::NT_SHIFT) as u8)
     }
     /// Sets the type of the index.
-    pub fn set_type(&mut self, index_type: TPM2NT) {
+    pub fn set_type(&mut self, index_type: TpmNt) {
         self.0 = set_attribute_field(self.0, index_type.0 as u32, Self::NT_MASK, Self::NT_SHIFT);
     }
 }
-impl From<TPM2NT> for TpmaNv {
-    fn from(value: TPM2NT) -> Self {
+impl From<TpmNt> for TpmaNv {
+    fn from(value: TpmNt) -> Self {
         Self::from_index_type(value)
     }
 }
@@ -145,14 +145,14 @@ impl From<TPM2NT> for TpmaNv {
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 pub enum TpmiAlgHash {
-    SHA1 = TPM2AlgID::SHA1.0,
-    SHA256  = TPM2AlgID::SHA256.0,
-    SHA384   = TPM2AlgID::SHA384.0,
-    SHA512 = TPM2AlgID::SHA512.0,
-    SM3256 = TPM2AlgID::SM3256.0,
-    SHA3256 = TPM2AlgID::SHA3256.0,
-    SHA3384 = TPM2AlgID::SHA3384.0,
-    SHA3512 = TPM2AlgID::SHA3512.0,
+    SHA1 = TpmAlgId::SHA1.0,
+    SHA256  = TpmAlgId::SHA256.0,
+    SHA384   = TpmAlgId::SHA384.0,
+    SHA512 = TpmAlgId::SHA512.0,
+    SM3256 = TpmAlgId::SM3256.0,
+    SHA3256 = TpmAlgId::SHA3256.0,
+    SHA3384 = TpmAlgId::SHA3384.0,
+    SHA3512 = TpmAlgId::SHA3512.0,
 }
 
 /// TpmiAlgKdf represents all of key derivation functions (TPMI_ALG_KDF).
@@ -162,10 +162,10 @@ pub enum TpmiAlgHash {
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 pub enum TpmiAlgKdf {
-    MGF1 = TPM2AlgID::MGF1.0,
-    KDF1SP80056A = TPM2AlgID::KDF1SP80056A.0,
-    KDF2 = TPM2AlgID::KDF2.0,
-    KDF1SP800108 = TPM2AlgID::KDF1SP800108.0,
+    MGF1 = TpmAlgId::MGF1.0,
+    KDF1SP80056A = TpmAlgId::KDF1SP80056A.0,
+    KDF2 = TpmAlgId::KDF2.0,
+    KDF1SP800108 = TpmAlgId::KDF1SP800108.0,
 }
 
 /// TpmiAlgPublic represents all object types (TPMI_ALG_PUBLIC).
@@ -176,10 +176,10 @@ pub enum TpmiAlgKdf {
 #[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgPublic{
-    RSA = TPM2AlgID::RSA.0,
-    KeyedHash = TPM2AlgID::KeyedHash.0,
-    ECC = TPM2AlgID::ECC.0,
-    SymCipher = TPM2AlgID::SymCipher.0,
+    RSA = TpmAlgId::RSA.0,
+    KeyedHash = TpmAlgId::KeyedHash.0,
+    ECC = TpmAlgId::ECC.0,
+    SymCipher = TpmAlgId::SymCipher.0,
 }
 
 /// TpmiAlgSymMode represents all of block-cipher modes of operation (TPMI_ALG_SYM_MODE).
@@ -190,12 +190,12 @@ pub enum TpmiAlgPublic{
 #[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgSymMode{
-    CMAC = TPM2AlgID::CMAC.0,
-    CTR = TPM2AlgID::CTR.0,
-    OFB = TPM2AlgID::OFB.0,
-    CBC = TPM2AlgID::CBC.0,
-    CFB = TPM2AlgID::CFB.0,
-    ECB = TPM2AlgID::ECB.0,
+    CMAC = TpmAlgId::CMAC.0,
+    CTR = TpmAlgId::CTR.0,
+    OFB = TpmAlgId::OFB.0,
+    CBC = TpmAlgId::CBC.0,
+    CFB = TpmAlgId::CFB.0,
+    ECB = TpmAlgId::ECB.0,
 }
 
 /// TpmiAlgSymObject represents all of the symmetric algorithms that may be used as a companion encryption algortihm for an asymmetric object (TPMI_ALG_SYM_OBJECT).
@@ -206,10 +206,10 @@ pub enum TpmiAlgSymMode{
 #[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgSymObject{
-    TDES = TPM2AlgID::TDES.0,
-    AES = TPM2AlgID::AES.0,
-    SM4 = TPM2AlgID::SM4.0,
-    Camellia = TPM2AlgID::Camellia.0,
+    TDES = TpmAlgId::TDES.0,
+    AES = TpmAlgId::AES.0,
+    SM4 = TpmAlgId::SM4.0,
+    Camellia = TpmAlgId::Camellia.0,
 }
 
 /// TpmiAlgKeyedhashScheme represents values that may appear in a keyed_hash as the scheme parameter (TPMI_ALG_KEYEDHASH_SCHEME).
@@ -220,8 +220,8 @@ pub enum TpmiAlgSymObject{
 #[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgKeyedhashScheme{
-    HMAC = TPM2AlgID::HMAC.0,
-    XOR = TPM2AlgID::XOR.0,
+    HMAC = TpmAlgId::HMAC.0,
+    XOR = TpmAlgId::XOR.0,
 }
 
 /// TpmiAlgRsaScheme represents values that may appear in the scheme parameter of a TpmsRsaParms (TPMI_ALG_RSA_SCHEME).
@@ -232,14 +232,14 @@ pub enum TpmiAlgKeyedhashScheme{
 #[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgRsaScheme{
-    RSAPSS = TPM2AlgID::RSAPSS.0,
-    RSASSA = TPM2AlgID::RSASSA.0,
-    ECDSA = TPM2AlgID::ECDSA.0,
-    ECDAA = TPM2AlgID::ECDAA.0,
-    SM2 = TPM2AlgID::SM2.0,
-    ECSchnorr = TPM2AlgID::ECSchnorr.0,
-    RSAES = TPM2AlgID::RSAES.0,
-    OAEP = TPM2AlgID::OAEP.0,
+    RSAPSS = TpmAlgId::RSAPSS.0,
+    RSASSA = TpmAlgId::RSASSA.0,
+    ECDSA = TpmAlgId::ECDSA.0,
+    ECDAA = TpmAlgId::ECDAA.0,
+    SM2 = TpmAlgId::SM2.0,
+    ECSchnorr = TpmAlgId::ECSchnorr.0,
+    RSAES = TpmAlgId::RSAES.0,
+    OAEP = TpmAlgId::OAEP.0,
 }
 
 /// TpmiAlgEccScheme represents values that may appear in the scheme parameter of a TpmtEccScheme (TPMI_ALG_ECC_SCHEME).
@@ -250,14 +250,14 @@ pub enum TpmiAlgRsaScheme{
 #[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgEccScheme{
-    RSAPSS = TPM2AlgID::RSAPSS.0,
-    RSASSA = TPM2AlgID::RSASSA.0,
-    ECDSA = TPM2AlgID::ECDSA.0,
-    ECDAA = TPM2AlgID::ECDAA.0,
-    SM2 = TPM2AlgID::SM2.0,
-    ECSchnorr = TPM2AlgID::ECSchnorr.0,
-    ECDH = TPM2AlgID::ECDH.0,
-    ECMQV = TPM2AlgID::ECMQV.0,
+    RSAPSS = TpmAlgId::RSAPSS.0,
+    RSASSA = TpmAlgId::RSASSA.0,
+    ECDSA = TpmAlgId::ECDSA.0,
+    ECDAA = TpmAlgId::ECDAA.0,
+    SM2 = TpmAlgId::SM2.0,
+    ECSchnorr = TpmAlgId::ECSchnorr.0,
+    ECDH = TpmAlgId::ECDH.0,
+    ECMQV = TpmAlgId::ECMQV.0,
 }
 
 /// TpmiAlgAsymScheme represents all the scheme types for any asymmetric algortihm (TPMI_ALG_ASYM_SCHEME).
@@ -268,16 +268,16 @@ pub enum TpmiAlgEccScheme{
 #[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TpmiAlgAsymScheme{
-    SM2 = TPM2AlgID::SM2.0,
-    ECDH = TPM2AlgID::ECDH.0,
-    ECMQV = TPM2AlgID::ECMQV.0,
-    RSAPSS = TPM2AlgID::RSAPSS.0,
-    RSASSA = TPM2AlgID::RSASSA.0,
-    ECDSA = TPM2AlgID::ECDSA.0,
-    ECDAA = TPM2AlgID::ECDAA.0,
-    ECSchnorr = TPM2AlgID::ECSchnorr.0,
-    RSAES = TPM2AlgID::RSAES.0,
-    OAEP = TPM2AlgID::OAEP.0,
+    SM2 = TpmAlgId::SM2.0,
+    ECDH = TpmAlgId::ECDH.0,
+    ECMQV = TpmAlgId::ECMQV.0,
+    RSAPSS = TpmAlgId::RSAPSS.0,
+    RSASSA = TpmAlgId::RSASSA.0,
+    ECDSA = TpmAlgId::ECDSA.0,
+    ECDAA = TpmAlgId::ECDAA.0,
+    ECSchnorr = TpmAlgId::ECSchnorr.0,
+    RSAES = TpmAlgId::RSAES.0,
+    OAEP = TpmAlgId::OAEP.0,
 }
 
 /// TpmiRhNvIndex represents an NV location (TPMI_RH_NV_INDEX).
@@ -316,14 +316,14 @@ impl TryFrom<u32> for TpmiShAuthSession {
 }
 impl TpmiShAuthSession {
     /// A password authorization.
-    pub const RS_PW: TpmiShAuthSession = TpmiShAuthSession(TPM2Handle::RSPW.0);
+    pub const RS_PW: TpmiShAuthSession = TpmiShAuthSession(TpmHandle::RSPW.0);
 }
 
 /// TpmiEccCurve represents an implemented ECC curve (TPMI_ECC_SCHEME).
 /// See definition in Part 2: Structures, section 11.2.5.5.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
-pub struct TpmiEccCurve(TPM2ECCCurve);
+pub struct TpmiEccCurve(TpmEccCurve);
 
 /// TpmiYesNo is used in place of a boolean.
 /// See TPMI_YES_NO definition in Part 2: Structures, section 9.2.
@@ -343,14 +343,14 @@ pub enum TpmiYesNo {
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 pub enum TpmiStAttest {
-    AttestCertify = TPM2ST::AttestCertify.0,
-    AttestQuote = TPM2ST::AttestQuote.0,
-    AttestSessionAudit = TPM2ST::AttestSessionAudit.0,
-    AttestCommandAudit = TPM2ST::AttestCommandAudit.0,
-    AttestTime = TPM2ST::AttestTime.0,
-    AttestCreation = TPM2ST::AttestCreation.0,
-    AttestNV = TPM2ST::AttestNV.0,
-    AttestNVDigest = TPM2ST::AttestNVDigest.0,
+    AttestCertify = TpmSt::AttestCertify.0,
+    AttestQuote = TpmSt::AttestQuote.0,
+    AttestSessionAudit = TpmSt::AttestSessionAudit.0,
+    AttestCommandAudit = TpmSt::AttestCommandAudit.0,
+    AttestTime = TpmSt::AttestTime.0,
+    AttestCreation = TpmSt::AttestCreation.0,
+    AttestNV = TpmSt::AttestNV.0,
+    AttestNVDigest = TpmSt::AttestNVDigest.0,
 }
 
 /// The number of bits in an AES key.
@@ -529,18 +529,18 @@ impl TpmaCc {
 #[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
 #[derive(Copy, Clone, PartialEq, Default, Marshalable)]
 pub enum TpmiStCommandTag{
-    NoSessions = TPM2ST::NoSessions.0,
-    Sessions = TPM2ST::Sessions.0,
+    NoSessions = TpmSt::NoSessions.0,
+    Sessions = TpmSt::Sessions.0,
 }
 
 const TPM2_MAX_CAP_DATA: usize =
-    TPM2_MAX_CAP_BUFFER as usize - size_of::<TPM2Cap>() - size_of::<u32>();
+    TPM2_MAX_CAP_BUFFER as usize - size_of::<TpmCap>() - size_of::<u32>();
 const TPM2_MAX_CAP_ALGS: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsAlgProperty>();
-const TPM2_MAX_CAP_HANDLES: usize = TPM2_MAX_CAP_DATA / size_of::<TPM2Handle>();
-const TPM2_MAX_CAP_CC: usize = TPM2_MAX_CAP_DATA / size_of::<TPM2CC>();
+const TPM2_MAX_CAP_HANDLES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmHandle>();
+const TPM2_MAX_CAP_CC: usize = TPM2_MAX_CAP_DATA / size_of::<TpmCc>();
 const TPM2_MAX_TPM_PROPERTIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedProperty>();
 const TPM2_MAX_PCR_PROPERTIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedPcrSelect>();
-const TPM2_MAX_ECC_CURVES: usize = TPM2_MAX_CAP_DATA / size_of::<TPM2ECCCurve>();
+const TPM2_MAX_ECC_CURVES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmEccCurve>();
 const TPM2_MAX_TAGGED_POLICIES: usize = TPM2_MAX_CAP_DATA / size_of::<TpmsTaggedPolicy>();
 const TPML_DIGEST_MAX_DIGESTS: usize = 8;
 
@@ -551,11 +551,11 @@ pub struct TpmsEmpty;
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable, UnionSize)]
 pub enum TpmtHa {
-    Sha1([u8; constants::TPM2_SHA_DIGEST_SIZE as usize]) = TPM2AlgID::SHA1.0,
-    Sha256([u8; constants::TPM2_SHA256_DIGEST_SIZE as usize]) = TPM2AlgID::SHA256.0,
-    Sha384([u8; constants::TPM2_SHA384_DIGEST_SIZE as usize]) = TPM2AlgID::SHA384.0,
-    Sha512([u8; constants::TPM2_SHA512_DIGEST_SIZE as usize]) = TPM2AlgID::SHA512.0,
-    Sm3_256([u8; constants::TPM2_SM3_256_DIGEST_SIZE as usize]) = TPM2AlgID::SM3256.0,
+    Sha1([u8; constants::TPM2_SHA_DIGEST_SIZE as usize]) = TpmAlgId::SHA1.0,
+    Sha256([u8; constants::TPM2_SHA256_DIGEST_SIZE as usize]) = TpmAlgId::SHA256.0,
+    Sha384([u8; constants::TPM2_SHA384_DIGEST_SIZE as usize]) = TpmAlgId::SHA384.0,
+    Sha512([u8; constants::TPM2_SHA512_DIGEST_SIZE as usize]) = TpmAlgId::SHA512.0,
+    Sm3_256([u8; constants::TPM2_SM3_256_DIGEST_SIZE as usize]) = TpmAlgId::SM3256.0,
 }
 
 impl Default for TpmtHa {
@@ -568,7 +568,7 @@ impl Default for TpmtHa {
 #[repr(C, u16)]
 enum TpmuName {
     Digest(TpmtHa),
-    Handle(TPM2Handle),
+    Handle(TpmHandle),
 }
 
 #[repr(C)]
@@ -718,19 +718,19 @@ pub struct TpmsNvCertifyInfo {
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Discriminant, Marshalable)]
 pub enum TpmuAttest {
-    Certify(TpmsCertifyInfo) = TPM2ST::AttestCertify.0,
-    Creation(TpmsCreationInfo) = TPM2ST::AttestCreation.0,
-    Quote(TpmsQuoteInfo) = TPM2ST::AttestQuote.0,
-    CommandAudit(TpmsCommandAuditInfo) = TPM2ST::AttestCommandAudit.0,
-    SessionAudit(TpmsSessionAuditInfo) = TPM2ST::AttestSessionAudit.0,
-    Time(TpmsTimeAttestInfo) = TPM2ST::AttestTime.0,
-    Nv(TpmsNvCertifyInfo) = TPM2ST::AttestNV.0,
+    Certify(TpmsCertifyInfo) = TpmSt::AttestCertify.0,
+    Creation(TpmsCreationInfo) = TpmSt::AttestCreation.0,
+    Quote(TpmsQuoteInfo) = TpmSt::AttestQuote.0,
+    CommandAudit(TpmsCommandAuditInfo) = TpmSt::AttestCommandAudit.0,
+    SessionAudit(TpmsSessionAuditInfo) = TpmSt::AttestSessionAudit.0,
+    Time(TpmsTimeAttestInfo) = TpmSt::AttestTime.0,
+    Nv(TpmsNvCertifyInfo) = TpmSt::AttestNV.0,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq)]
 pub struct TpmsAttest {
-    pub magic: TPM2Generated,
+    pub magic: TpmGenerated,
     pub qualified_signer: Tpm2bName,
     pub extra_data: Tpm2bData,
     pub clock_info: TpmsClockInfo,
@@ -755,7 +755,7 @@ impl Marshalable for TpmsAttest {
     }
 
     fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
-        let magic = TPM2Generated::try_unmarshal(buffer)?;
+        let magic = TpmGenerated::try_unmarshal(buffer)?;
         let selector = u16::try_unmarshal(buffer)?;
         Ok(TpmsAttest {
             magic,
@@ -895,9 +895,9 @@ pub type TpmsSchemeHmac = TpmsSchemeHash;
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtKeyedHashScheme {
-    Hmac(TpmsSchemeHmac) = TPM2AlgID::HMAC.0,
-    ExclusiveOr(TpmsSchemeXor) = TPM2AlgID::XOR.0,
-    Null(TpmsEmpty) = TPM2AlgID::Null.0,
+    Hmac(TpmsSchemeHmac) = TpmAlgId::HMAC.0,
+    ExclusiveOr(TpmsSchemeXor) = TpmAlgId::XOR.0,
+    Null(TpmsEmpty) = TpmAlgId::Null.0,
 }
 
 #[repr(C)]
@@ -909,11 +909,11 @@ pub struct TpmsKeyedHashParms {
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtSymDefObject {
-    Aes(TpmiAesKeyBits, TpmiAlgSymMode) = TPM2AlgID::AES.0,
-    Sm4(TpmiSm4KeyBits, TpmiAlgSymMode) = TPM2AlgID::SM4.0,
-    Camellia(TpmiCamelliaKeyBits, TpmiAlgSymMode) = TPM2AlgID::Camellia.0,
-    ExclusiveOr(TpmiAlgHash, TpmsEmpty) = TPM2AlgID::XOR.0,
-    Null(TpmsEmpty, TpmsEmpty) = TPM2AlgID::Null.0,
+    Aes(TpmiAesKeyBits, TpmiAlgSymMode) = TpmAlgId::AES.0,
+    Sm4(TpmiSm4KeyBits, TpmiAlgSymMode) = TpmAlgId::SM4.0,
+    Camellia(TpmiCamelliaKeyBits, TpmiAlgSymMode) = TpmAlgId::Camellia.0,
+    ExclusiveOr(TpmiAlgHash, TpmsEmpty) = TpmAlgId::XOR.0,
+    Null(TpmsEmpty, TpmsEmpty) = TpmAlgId::Null.0,
 }
 
 #[repr(C)]
@@ -942,15 +942,15 @@ pub type TpmsEncSchemeRsaes = TpmsEmpty;
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtRsaScheme {
-    Rsapss(TpmsSigSchemeRsapss) = TPM2AlgID::RSAPSS.0,
-    Rsassa(TpmsSigSchemeRsassa) = TPM2AlgID::RSASSA.0,
-    Ecdsa(TpmsSigSchemeEcdsa) = TPM2AlgID::ECDSA.0,
-    Ecdaa(TpmsSigSchemeEcdaa) = TPM2AlgID::ECDAA.0,
-    Sm2(TpmsSigSchemeSm2) = TPM2AlgID::SM2.0,
-    Ecschnorr(TpmsSigSchemeEcschnorr) = TPM2AlgID::ECSchnorr.0,
-    Rsaes(TpmsEncSchemeRsaes) = TPM2AlgID::RSAES.0,
-    Oaep(TpmsEncSchemeOaep) = TPM2AlgID::OAEP.0,
-    Null(TpmsEmpty) = TPM2AlgID::Null.0,
+    Rsapss(TpmsSigSchemeRsapss) = TpmAlgId::RSAPSS.0,
+    Rsassa(TpmsSigSchemeRsassa) = TpmAlgId::RSASSA.0,
+    Ecdsa(TpmsSigSchemeEcdsa) = TpmAlgId::ECDSA.0,
+    Ecdaa(TpmsSigSchemeEcdaa) = TpmAlgId::ECDAA.0,
+    Sm2(TpmsSigSchemeSm2) = TpmAlgId::SM2.0,
+    Ecschnorr(TpmsSigSchemeEcschnorr) = TpmAlgId::ECSchnorr.0,
+    Rsaes(TpmsEncSchemeRsaes) = TpmAlgId::RSAES.0,
+    Oaep(TpmsEncSchemeOaep) = TpmAlgId::OAEP.0,
+    Null(TpmsEmpty) = TpmAlgId::Null.0,
 }
 
 #[repr(C)]
@@ -965,15 +965,15 @@ pub struct TpmsRsaParms {
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtEccScheme {
-    Rsapss(TpmsSigSchemeRsapss) = TPM2AlgID::RSAPSS.0,
-    Rsassa(TpmsSigSchemeRsassa) = TPM2AlgID::RSASSA.0,
-    Ecdsa(TpmsSigSchemeEcdsa) = TPM2AlgID::ECDSA.0,
-    Ecdaa(TpmsSigSchemeEcdaa) = TPM2AlgID::ECDAA.0,
-    Sm2(TpmsSigSchemeSm2) = TPM2AlgID::SM2.0,
-    Ecschnorr(TpmsSigSchemeEcschnorr) = TPM2AlgID::ECSchnorr.0,
-    Ecdh(TpmsKeySchemeEcdh) = TPM2AlgID::ECDH.0,
-    Ecmqv(TpmsKeySchemeEcmqv) = TPM2AlgID::ECMQV.0,
-    Null(TpmsEmpty) = TPM2AlgID::Null.0,
+    Rsapss(TpmsSigSchemeRsapss) = TpmAlgId::RSAPSS.0,
+    Rsassa(TpmsSigSchemeRsassa) = TpmAlgId::RSASSA.0,
+    Ecdsa(TpmsSigSchemeEcdsa) = TpmAlgId::ECDSA.0,
+    Ecdaa(TpmsSigSchemeEcdaa) = TpmAlgId::ECDAA.0,
+    Sm2(TpmsSigSchemeSm2) = TpmAlgId::SM2.0,
+    Ecschnorr(TpmsSigSchemeEcschnorr) = TpmAlgId::ECSchnorr.0,
+    Ecdh(TpmsKeySchemeEcdh) = TpmAlgId::ECDH.0,
+    Ecmqv(TpmsKeySchemeEcmqv) = TpmAlgId::ECMQV.0,
+    Null(TpmsEmpty) = TpmAlgId::Null.0,
 }
 
 pub type TpmsSchemeMgf1 = TpmsSchemeHash;
@@ -984,11 +984,11 @@ pub type TpmsSchemeKdf1Sp800_108 = TpmsSchemeHash;
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtKdfScheme {
-    Mgf1(TpmsSchemeMgf1) = TPM2AlgID::MGF1.0,
-    Kdf1Sp800_56a(TpmsSchemeKdf1Sp800_56a) = TPM2AlgID::KDF1SP80056A.0,
-    Kdf2(TpmsSchemeKdf2) = TPM2AlgID::KDF2.0,
-    Kdf1Sp800_108(TpmsSchemeKdf1Sp800_108) = TPM2AlgID::KDF1SP800108.0,
-    Null(TpmsEmpty) = TPM2AlgID::Null.0,
+    Mgf1(TpmsSchemeMgf1) = TpmAlgId::MGF1.0,
+    Kdf1Sp800_56a(TpmsSchemeKdf1Sp800_56a) = TpmAlgId::KDF1SP80056A.0,
+    Kdf2(TpmsSchemeKdf2) = TpmAlgId::KDF2.0,
+    Kdf1Sp800_108(TpmsSchemeKdf1Sp800_108) = TpmAlgId::KDF1SP800108.0,
+    Null(TpmsEmpty) = TpmAlgId::Null.0,
 }
 
 #[repr(C)]
@@ -1003,17 +1003,17 @@ pub struct TpmsEccParms {
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtAsymScheme {
-    Ecdh(TpmsKeySchemeEcdh) = TPM2AlgID::ECDH.0,
-    Ecmqv(TpmsKeySchemeEcmqv) = TPM2AlgID::ECMQV.0,
-    Sm2(TpmsSigSchemeSm2) = TPM2AlgID::SM2.0,
-    Rsapss(TpmsSigSchemeRsapss) = TPM2AlgID::RSAPSS.0,
-    Rsassa(TpmsSigSchemeRsassa) = TPM2AlgID::RSASSA.0,
-    Ecdsa(TpmsSigSchemeEcdsa) = TPM2AlgID::ECDSA.0,
-    Ecdaa(TpmsSigSchemeEcdaa) = TPM2AlgID::ECDAA.0,
-    Ecschnorr(TpmsSigSchemeEcschnorr) = TPM2AlgID::ECSchnorr.0,
-    Rsaes(TpmsEncSchemeRsaes) = TPM2AlgID::RSAES.0,
-    Oaep(TpmsEncSchemeOaep) = TPM2AlgID::OAEP.0,
-    Null(TpmsEmpty) = TPM2AlgID::Null.0,
+    Ecdh(TpmsKeySchemeEcdh) = TpmAlgId::ECDH.0,
+    Ecmqv(TpmsKeySchemeEcmqv) = TpmAlgId::ECMQV.0,
+    Sm2(TpmsSigSchemeSm2) = TpmAlgId::SM2.0,
+    Rsapss(TpmsSigSchemeRsapss) = TpmAlgId::RSAPSS.0,
+    Rsassa(TpmsSigSchemeRsassa) = TpmAlgId::RSASSA.0,
+    Ecdsa(TpmsSigSchemeEcdsa) = TpmAlgId::ECDSA.0,
+    Ecdaa(TpmsSigSchemeEcdaa) = TpmAlgId::ECDAA.0,
+    Ecschnorr(TpmsSigSchemeEcschnorr) = TpmAlgId::ECSchnorr.0,
+    Rsaes(TpmsEncSchemeRsaes) = TpmAlgId::RSAES.0,
+    Oaep(TpmsEncSchemeOaep) = TpmAlgId::OAEP.0,
+    Null(TpmsEmpty) = TpmAlgId::Null.0,
 }
 
 #[repr(C)]
@@ -1035,10 +1035,10 @@ union TpmuPublicId {
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum PublicParmsAndId {
-    KeyedHash(TpmsKeyedHashParms, Tpm2bDigest) = TPM2AlgID::KeyedHash.0,
-    Sym(TpmsSymCipherParms, Tpm2bDigest) = TPM2AlgID::SymCipher.0,
-    Rsa(TpmsRsaParms, Tpm2bPublicKeyRsa) = TPM2AlgID::RSA.0,
-    Ecc(TpmsEccParms, TpmsEccPoint) = TPM2AlgID::ECC.0,
+    KeyedHash(TpmsKeyedHashParms, Tpm2bDigest) = TpmAlgId::KeyedHash.0,
+    Sym(TpmsSymCipherParms, Tpm2bDigest) = TpmAlgId::SymCipher.0,
+    Rsa(TpmsRsaParms, Tpm2bPublicKeyRsa) = TpmAlgId::RSA.0,
+    Ecc(TpmsEccParms, TpmsEccPoint) = TpmAlgId::ECC.0,
 }
 
 #[repr(C)]
@@ -1100,12 +1100,12 @@ pub struct Tpm2bPrivateVendorSpecific {
 #[repr(C, u16)]
 #[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmuSensitiveComposite {
-    Rsa(Tpm2bPrivateKeyRsa) = TPM2AlgID::RSA.0,
-    Ecc(Tpm2bEccParameter) = TPM2AlgID::ECC.0,
-    Bits(Tpm2bSensitiveData) = TPM2AlgID::KeyedHash.0,
-    Sym(Tpm2bSymKey) = TPM2AlgID::SymCipher.0,
+    Rsa(Tpm2bPrivateKeyRsa) = TpmAlgId::RSA.0,
+    Ecc(Tpm2bEccParameter) = TpmAlgId::ECC.0,
+    Bits(Tpm2bSensitiveData) = TpmAlgId::KeyedHash.0,
+    Sym(Tpm2bSymKey) = TpmAlgId::SymCipher.0,
     /* For size purposes only */
-    Any(Tpm2bPrivateVendorSpecific) = TPM2AlgID::Null.0,
+    Any(Tpm2bPrivateVendorSpecific) = TpmAlgId::Null.0,
 }
 
 #[repr(C)]
@@ -1142,16 +1142,16 @@ impl Marshalable for TpmtSensitive {
 #[repr(C, u32)]
 #[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmsCapabilityData {
-    Algorithms(TpmlAlgProperty) = TPM2Cap::Algs.0,
-    Handles(TpmlHandle) = TPM2Cap::Handles.0,
-    Command(TpmlCca) = TPM2Cap::Commands.0,
-    PpCommands(TpmlCc) = TPM2Cap::PPCommands.0,
-    AuditCommands(TpmlCc) = TPM2Cap::AuditCommands.0,
-    AssignedPcr(TpmlPcrSelection) = TPM2Cap::PCRs.0,
-    TpmProperties(TpmlTaggedTpmProperty) = TPM2Cap::TPMProperties.0,
-    PcrProperties(TpmlTaggedPcrProperty) = TPM2Cap::PCRProperties.0,
-    EccCurves(TpmlEccCurve) = TPM2Cap::ECCCurves.0,
-    AuthPolicies(TpmlTaggedPolicy) = TPM2Cap::AuthPolicies.0,
+    Algorithms(TpmlAlgProperty) = TpmCap::Algs.0,
+    Handles(TpmlHandle) = TpmCap::Handles.0,
+    Command(TpmlCca) = TpmCap::Commands.0,
+    PpCommands(TpmlCc) = TpmCap::PPCommands.0,
+    AuditCommands(TpmlCc) = TpmCap::AuditCommands.0,
+    AssignedPcr(TpmlPcrSelection) = TpmCap::PCRs.0,
+    TpmProperties(TpmlTaggedTpmProperty) = TpmCap::TPMProperties.0,
+    PcrProperties(TpmlTaggedPcrProperty) = TpmCap::PCRProperties.0,
+    EccCurves(TpmlEccCurve) = TpmCap::ECCCurves.0,
+    AuthPolicies(TpmlTaggedPolicy) = TpmCap::AuthPolicies.0,
 }
 
 #[repr(C)]
@@ -1167,7 +1167,7 @@ pub struct TpmlAlgProperty {
 pub struct TpmlHandle {
     count: u32,
     #[marshalable(length=count)]
-    handle: [TPM2Handle; TPM2_MAX_CAP_HANDLES],
+    handle: [TpmHandle; TPM2_MAX_CAP_HANDLES],
 }
 
 #[repr(C)]
@@ -1183,7 +1183,7 @@ pub struct TpmlCca {
 pub struct TpmlCc {
     count: u32,
     #[marshalable(length=count)]
-    command_codes: [TPM2CC; TPM2_MAX_CAP_CC],
+    command_codes: [TpmCc; TPM2_MAX_CAP_CC],
 }
 
 #[repr(C)]
@@ -1207,7 +1207,7 @@ pub struct TpmlTaggedPcrProperty {
 pub struct TpmlEccCurve {
     count: u32,
     #[marshalable(length=count)]
-    ecc_curves: [TPM2ECCCurve; TPM2_MAX_ECC_CURVES],
+    ecc_curves: [TpmEccCurve; TPM2_MAX_ECC_CURVES],
 }
 
 #[repr(C)]
@@ -1221,21 +1221,21 @@ pub struct TpmlTaggedPolicy {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Default, Debug, Marshalable)]
 pub struct TpmsAlgProperty {
-    pub alg: TPM2AlgID,
+    pub alg: TpmAlgId,
     pub alg_properties: TpmaAlgorithm,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Default, Debug, Marshalable)]
 pub struct TpmsTaggedProperty {
-    pub property: TPM2PT,
+    pub property: TpmPt,
     pub value: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Default, Debug, Marshalable)]
 pub struct TpmsTaggedPcrSelect {
-    tag: TPM2PTPCR,
+    tag: TpmPtPcr,
     size_of_select: u8,
     #[marshalable(length=size_of_select)]
     pcr_select: [u8; TPM2_PCR_SELECT_MAX as usize],
@@ -1244,7 +1244,7 @@ pub struct TpmsTaggedPcrSelect {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable, Default)]
 pub struct TpmsTaggedPolicy {
-    handle: TPM2Handle,
+    handle: TpmHandle,
     policy_hash: TpmtHa,
 }
 
@@ -1353,7 +1353,7 @@ pub struct TpmsCreationData {
     pub pcr_select: TpmlPcrSelection,
     pub pcr_digest: Tpm2bDigest,
     pub locality: TpmaLocality,
-    pub parent_name_alg: TPM2AlgID,
+    pub parent_name_alg: TpmAlgId,
     pub parent_name: Tpm2bName,
     pub parent_qualified_name: Tpm2bName,
     pub outside_info: Tpm2bData,
@@ -1557,11 +1557,11 @@ macro_rules! impl_tpml {
 }
 impl_tpml! {TpmlPcrSelection, pcr_selections, TpmsPcrSelection, TPM2_NUM_PCR_BANKS}
 impl_tpml! {TpmlAlgProperty, alg_properties, TpmsAlgProperty, TPM2_MAX_CAP_ALGS}
-impl_tpml! {TpmlHandle, handle, TPM2Handle, TPM2_MAX_CAP_HANDLES}
-impl_tpml! {TpmlCc, command_codes, TPM2CC, TPM2_MAX_CAP_CC}
+impl_tpml! {TpmlHandle, handle, TpmHandle, TPM2_MAX_CAP_HANDLES}
+impl_tpml! {TpmlCc, command_codes, TpmCc, TPM2_MAX_CAP_CC}
 impl_tpml! {TpmlTaggedTpmProperty, tpm_property, TpmsTaggedProperty, TPM2_MAX_TPM_PROPERTIES}
 impl_tpml! {TpmlTaggedPcrProperty, pcr_property, TpmsTaggedPcrSelect, TPM2_MAX_PCR_PROPERTIES}
-impl_tpml! {TpmlEccCurve, ecc_curves, TPM2ECCCurve, TPM2_MAX_ECC_CURVES}
+impl_tpml! {TpmlEccCurve, ecc_curves, TpmEccCurve, TPM2_MAX_ECC_CURVES}
 impl_tpml! {TpmlTaggedPolicy, policies, TpmsTaggedPolicy, TPM2_MAX_TAGGED_POLICIES}
 impl_tpml! {TpmlDigest, digests, Tpm2bDigest, TPML_DIGEST_MAX_DIGESTS}
 

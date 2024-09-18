@@ -13,7 +13,7 @@ use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command};
 use tpm2_rs_base::errors::{TssResult, TssTcsError};
-use tpm2_rs_base::{commands::StartupCmd, constants::TPM2SU};
+use tpm2_rs_base::{commands::StartupCmd, constants::TpmSu};
 use tpm2_rs_client::run_command;
 use tpm2_rs_client::Tpm;
 use tpm2_rs_client_features::*;
@@ -35,7 +35,7 @@ fn get_simulator_path() -> String {
 fn test_startup_tpm() {
     let (_sim_lifeline, mut tpm) = run_tpm_simulator(&get_simulator_path()).unwrap();
     let startup = StartupCmd {
-        startup_type: TPM2SU::Clear,
+        startup_type: TpmSu::Clear,
     };
     assert!(run_command(&startup, &mut tpm).is_ok());
 }
@@ -44,7 +44,7 @@ fn test_startup_tpm() {
 fn get_started_tpm() -> (TpmSim, TcpTpm) {
     let (sim_lifeline, mut tpm) = run_tpm_simulator(&get_simulator_path()).unwrap();
     let startup = StartupCmd {
-        startup_type: TPM2SU::Clear,
+        startup_type: TpmSu::Clear,
     };
     run_command(&startup, &mut tpm).unwrap();
     (sim_lifeline, tpm)

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 use tpm2_rs_base::commands::*;
-use tpm2_rs_base::constants::{TPM2Cap, TPM2PT};
+use tpm2_rs_base::constants::{TpmCap, TpmPt};
 use tpm2_rs_base::errors::{TpmRcError, TssResult};
 use tpm2_rs_base::TpmsCapabilityData;
 use tpm2_rs_client::*;
@@ -15,8 +15,8 @@ where
     T: Tpm,
 {
     const CMD: GetCapabilityCmd = GetCapabilityCmd {
-        capability: TPM2Cap::TPMProperties,
-        property: TPM2PT::Manufacturer,
+        capability: TpmCap::TPMProperties,
+        property: TpmPt::Manufacturer,
         property_count: 1,
     };
     let resp = run_command(&CMD, tpm)?;

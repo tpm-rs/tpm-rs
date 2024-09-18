@@ -180,8 +180,8 @@ fn test_try_unmarshal_tpm2b_template() {
 
 #[test]
 fn test_impl_tpml_new() {
-    let elements: Vec<TPM2Handle> = (0..TPM2_MAX_CAP_HANDLES + 1)
-        .map(|i| TPM2Handle(i as u32))
+    let elements: Vec<TpmHandle> = (0..TPM2_MAX_CAP_HANDLES + 1)
+        .map(|i| TpmHandle(i as u32))
         .collect();
     for x in 0..TPM2_MAX_CAP_HANDLES {
         let slice = &elements.as_slice()[..x];
@@ -197,8 +197,8 @@ fn test_impl_tpml_new() {
 
 #[test]
 fn test_impl_tpml_default_add() {
-    let elements: Vec<TPM2Handle> = (0..TPM2_MAX_CAP_HANDLES + 1)
-        .map(|i| TPM2Handle(i as u32))
+    let elements: Vec<TpmHandle> = (0..TPM2_MAX_CAP_HANDLES + 1)
+        .map(|i| TpmHandle(i as u32))
         .collect();
     let mut list = TpmlHandle::default();
     for x in 0..TPM2_MAX_CAP_HANDLES {
@@ -300,7 +300,7 @@ fn test_marshal_tpmt_public() {
     assert_eq!(remarsh_buffer[..marsh.unwrap()], buffer[..marsh.unwrap()]);
 
     // Test invalid selector value.
-    assert!(TPM2AlgID::SHA256.try_marshal(&mut buffer).is_ok());
+    assert!(TpmAlgId::SHA256.try_marshal(&mut buffer).is_ok());
     unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
     assert_eq!(unmarsh.err(), Some(TpmRcError::Selector));
 }
@@ -343,7 +343,7 @@ fn test_2b_struct() {
         pcr_digest: Tpm2bDigest::from_bytes(&[0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9])
             .unwrap(),
         locality: TpmaLocality(0xA),
-        parent_name_alg: TPM2AlgID::SHA384,
+        parent_name_alg: TpmAlgId::SHA384,
         parent_name: Tpm2bName::from_bytes(&[0xA, 0xB, 0xC, 0xD, 0xE, 0xF]).unwrap(),
         parent_qualified_name: Tpm2bName::default(),
         outside_info: Tpm2bData::from_bytes(&[0x1; 32]).unwrap(),
