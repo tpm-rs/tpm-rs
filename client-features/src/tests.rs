@@ -1,5 +1,5 @@
 use super::*;
-use tpm2_rs_base::constants::{TPM2AlgID, TPM2ST};
+use tpm2_rs_base::constants::{TpmAlgId, TpmSt};
 use tpm2_rs_base::marshal::Marshalable;
 use tpm2_rs_base::{
     TpmaAlgorithm, TpmiYesNo, TpmlAlgProperty, TpmlTaggedTpmProperty, TpmsAlgProperty,
@@ -21,7 +21,7 @@ impl Default for FakeTpm {
 impl Tpm for FakeTpm {
     fn transact(&mut self, _: &[u8], response: &mut [u8]) -> TssResult<()> {
         let mut tx_header = RespHeader {
-            tag: TPM2ST::NoSessions,
+            tag: TpmSt::NoSessions,
             size: 0,
             rc: 0,
         };
@@ -44,7 +44,7 @@ fn test_get_manufacturer_too_many_properties() {
         capability_data: TpmsCapabilityData::TpmProperties(
             TpmlTaggedTpmProperty::new(
                 &[TpmsTaggedProperty {
-                    property: TPM2PT::Manufacturer,
+                    property: TpmPt::Manufacturer,
                     value: 4,
                 }; 6],
             )
@@ -63,7 +63,7 @@ fn test_get_manufacturer_wrong_type_properties() {
         more_data: TpmiYesNo::NO,
         capability_data: TpmsCapabilityData::Algorithms(
             TpmlAlgProperty::new(&[TpmsAlgProperty {
-                alg: TPM2AlgID::SHA256,
+                alg: TpmAlgId::SHA256,
                 alg_properties: TpmaAlgorithm::empty(),
             }])
             .unwrap(),

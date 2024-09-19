@@ -3,7 +3,7 @@
 use core::mem::size_of;
 use sessions::CmdSessions;
 use tpm2_rs_base::commands::*;
-use tpm2_rs_base::constants::{TPM2CC, TPM2ST};
+use tpm2_rs_base::constants::{TpmCc, TpmSt};
 use tpm2_rs_base::errors::{TssError, TssResult, TssTcsError};
 use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
 use tpm2_rs_base::{TpmiStCommandTag, TpmsAuthResponse};
@@ -29,10 +29,10 @@ pub fn get_capability<T: Tpm>(
 pub struct CmdHeader {
     tag: TpmiStCommandTag,
     size: u32,
-    code: TPM2CC,
+    code: TpmCc,
 }
 impl CmdHeader {
-    fn new(has_sessions: bool, code: TPM2CC) -> CmdHeader {
+    fn new(has_sessions: bool, code: TpmCc) -> CmdHeader {
         let tag = if has_sessions {
             TpmiStCommandTag::NoSessions
         } else {
@@ -45,7 +45,7 @@ impl CmdHeader {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Marshalable, Debug)]
 pub struct RespHeader {
-    pub tag: TPM2ST,
+    pub tag: TpmSt,
     pub size: u32,
     pub rc: u32,
 }
@@ -129,7 +129,7 @@ where
     }
     let mut unmarsh = UnmarshalBuf::new(&resp_buffer[read..resp_size]);
     let resp_handles = CmdT::RespHandles::try_unmarshal(&mut unmarsh)?;
-    if resp_header.tag == TPM2ST::Sessions {
+    if resp_header.tag == TpmSt::Sessions {
         let _param_size = u32::try_unmarshal(&mut unmarsh)?;
     }
     let resp = CmdT::RespT::try_unmarshal(&mut unmarsh)?;
