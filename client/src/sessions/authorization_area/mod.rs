@@ -3,7 +3,7 @@ mod s1;
 mod s2;
 mod s3;
 
-use super::Session;
+use crate::sessions::Session;
 
 /// A trait for authorization area with (possibly zero) unkown number of sessions.
 /// Check top level module documentation.

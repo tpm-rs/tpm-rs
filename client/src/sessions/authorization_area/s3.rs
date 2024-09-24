@@ -1,5 +1,4 @@
-use super::{AuthorizationArea, AuthorizationArea1Plus, AuthorizationArea2Plus};
-use crate::sessions::Session;
+use crate::sessions::{AuthorizationArea, AuthorizationArea1Plus, AuthorizationArea2Plus, Session};
 
 impl<T: Session, U: Session, V: Session> AuthorizationArea<T, U, V> for (T, U, V) {
     fn decompose(self) -> (Option<T>, Option<U>, Option<V>) {

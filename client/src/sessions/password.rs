@@ -1,4 +1,4 @@
-use super::session::Session;
+use crate::sessions::Session;
 use tpm2_rs_base::errors::{TssResult, TssTcsError};
 use tpm2_rs_base::{
     Tpm2bAuth, Tpm2bNonce, Tpm2bSimple, TpmaSession, TpmiShAuthSession, TpmsAuthCommand,

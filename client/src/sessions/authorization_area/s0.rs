@@ -1,5 +1,4 @@
-use super::AuthorizationArea;
-use crate::sessions::PasswordSession;
+use crate::sessions::{AuthorizationArea, PasswordSession};
 
 impl AuthorizationArea<PasswordSession, PasswordSession, PasswordSession> for () {
     fn decompose(

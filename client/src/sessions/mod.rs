@@ -1,15 +1,14 @@
-//! This module contains collection of traits setting lower bounds
+//! This module contains a collection of traits setting lower bounds
 //! on how many sessions are allowed in an authorization area.
 //! In particular the this module defines the following traits
-//! - [`AuthorizationArea`]: A trait for authorization area with
-//!   (possibly zero) unkown number of sessions up to three.
-//! - [`AuthorizationArea1Plus`]: A trait for authorization area
+//! - [`AuthorizationArea`]: A trait for an authorization area with
+//!   (possibly zero) unknown number of sessions up to three.
+//! - [`AuthorizationArea1Plus`]: A trait for an authorization area
 //!   with at least one session and at most three sessions
-//! - [`AuthorizationArea2Plus`]: A trait for authorization area
+//! - [`AuthorizationArea2Plus`]: A trait for an authorization area
 //!   with either two or three sessions.
 //!
-//! The concept of a session is defined by [`Session`].  
-// TODO we may need more than that & This is intentionally left out of cargo docs
+//! The concept of a session is defined by [`Session`].
 //!
 //! For command implementor, they need use the right trait from [`AuthorizationArea`],
 //! [`AuthorizationArea1Plus`], and [`AuthorizationArea2Plus`]. Additionally the expected
@@ -22,10 +21,9 @@
 mod authorization_area;
 mod password;
 mod session;
+#[cfg(test)]
+mod tests;
 
 pub use authorization_area::*;
 pub use password::*;
 pub use session::*;
-
-#[cfg(test)]
-mod tests;
