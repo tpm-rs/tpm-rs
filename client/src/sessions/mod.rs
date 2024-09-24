@@ -19,11 +19,13 @@
 //! depending on the command. The compiler should be able to catch cases where unsupported number
 //! of sessions is being passed and return a compile time error.
 mod authorization_area;
+mod notsession;
 mod password;
 mod session;
 #[cfg(test)]
 mod tests;
 
 pub use authorization_area::*;
+pub use notsession::*;
 pub use password::*;
 pub use session::*;

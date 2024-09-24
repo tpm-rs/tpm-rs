@@ -1,12 +1,12 @@
-use crate::sessions::{AuthorizationArea, PasswordSession};
+use crate::sessions::{AuthorizationArea, NotSession};
 
-impl AuthorizationArea<PasswordSession, PasswordSession, PasswordSession> for () {
+impl AuthorizationArea<NotSession, NotSession, NotSession> for () {
     fn decompose_ref(
         &self,
     ) -> (
-        Option<&PasswordSession>,
-        Option<&PasswordSession>,
-        Option<&PasswordSession>,
+        Option<&NotSession>,
+        Option<&NotSession>,
+        Option<&NotSession>,
     ) {
         (None, None, None)
     }
