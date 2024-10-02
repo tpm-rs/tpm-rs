@@ -47,7 +47,7 @@ pub trait Marshalable: Sized {
 /// However, in the future we will be separating this out into a different
 /// derive proc-macro.
 ///
-/// See: https://github.com/tpm-rs/tpm-rs/issues/84
+/// See: <https://github.com/tpm-rs/tpm-rs/issues/84>
 pub trait MarshalableVariant: Sized + Discriminant {
     /// Tries to unmarshal into an enum with a specific selector's data.
     ///
