@@ -1,4 +1,4 @@
-use tpm2_rs_base::Tpm2bSimple;
+use tpm2_rs_base::{Tpm2bAuth, Tpm2bSimple, TpmiShAuthSession};
 
 use super::*;
 
