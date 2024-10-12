@@ -1,10 +1,3 @@
-// TODO potential bug in clippy? we need to have unit values for testing the
-// behavior of marshaling on unit, but the I could not allow this warning for
-// HasUnitField, possibly because of span bug, clippy suggested fix is syntax
-// error possibly due to another bug, and placing the allow attribute on the
-// struct or the let binding does not make the warning go aways
-#![allow(clippy::let_unit_value)]
-
 use super::*;
 
 // Provide the tpm2_rs_marshal path to root to enable derive macro to work properly
