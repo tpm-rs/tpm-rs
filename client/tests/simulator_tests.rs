@@ -62,7 +62,7 @@ fn test_get_capability_manufacturer_id() {
 
     expected.tpm_property[0] = TpmsTaggedProperty {
         property: TpmPt::Manufacturer,
-        value: 0x4D534654,
+        value: 0x58595A20,
     };
 
     let command = GetCapabilityCmd {
