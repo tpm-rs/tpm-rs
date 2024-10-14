@@ -10,4 +10,6 @@ fn test_password_get_auth_command() {
     let tpm_auth = session.get_auth_command();
     assert_eq!(tpm_auth.session_handle, TpmiShAuthSession::RS_PW);
     assert_eq!(auth, tpm_auth.hmac);
+    panic!("break tests");
 }
+
