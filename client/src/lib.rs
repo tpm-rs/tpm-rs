@@ -32,7 +32,8 @@ pub struct CmdHeader {
     code: TpmCc,
 }
 impl CmdHeader {
-    fn new(has_sessions: bool, code: TpmCc) -> CmdHeader {
+    fn
+    new(has_sessions: bool, code: TpmCc) -> CmdHeader {
         let tag = if has_sessions {
             TpmiStCommandTag::NoSessions
         } else {
