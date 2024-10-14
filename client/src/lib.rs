@@ -39,7 +39,7 @@ impl CmdHeader {
         } else {
             TpmiStCommandTag::Sessions
         };
-        CmdHeader { tag, size: 0, code }
+        return CmdHeader { tag, size: 0, code };
     }
 }
 
