@@ -113,17 +113,18 @@ fn get_named_field_marshal<'a>(
     field: &'a Field,
 ) -> Result<TokenStream> {
     let name = &field.ident;
+    let span = Span::call_site().located_at(field.span());
     if let Some(length) = get_marshal_attribute(&field.attrs, "length")? {
         let length_prim =
             get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()))?;
-        Ok(quote_spanned! {field.span()=>
+        Ok(quote_spanned! {span =>
             for i in 0..self.#length_prim as usize {
                 written += self.#name[i].try_marshal(&mut buffer[written..])?;
             }
         })
     } else if let Type::Array(array) = &field.ty {
         let max_size = &array.len;
-        Ok(quote_spanned! {field.span()=>
+        Ok(quote_spanned! {span =>
             for i in 0..#max_size {
                 written += self.#name[i].try_marshal(&mut buffer[written..])?;
             }
@@ -132,7 +133,7 @@ fn get_named_field_marshal<'a>(
         if let Some(ident) = name {
             basic_field_types.insert(ident, field.ty.clone());
         }
-        Ok(quote_spanned! {field.span()=>
+        Ok(quote_spanned! {span =>
             written += self.#name.try_marshal(&mut buffer[written..])?;
         })
     }
@@ -305,11 +306,12 @@ fn get_named_field_unmarshal<'a>(
 ) -> Result<TokenStream> {
     let name = &field.ident;
     let field_type = &field.ty;
+    let span = Span::call_site().located_at(field.span());
     if let Some(length) = get_marshal_attribute(&field.attrs, "length")? {
         let (max_size, entry_type) = get_array_default(name, field_type)?;
         let length_prim =
             get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()))?;
-        Ok(quote_spanned! {field.span()=>
+        Ok(quote_spanned! {span =>
             if #length_prim as usize > #max_size {
                 return Err(TpmRcError::Size);
             }
@@ -321,7 +323,7 @@ fn get_named_field_unmarshal<'a>(
     } else if let Type::Array(array) = &field.ty {
         let max_size = &array.len;
         let entry_type = &*array.elem;
-        Ok(quote_spanned! { field.span()=>
+        Ok(quote_spanned! { span =>
             let mut #name = [#entry_type::default(); #max_size];
             for i in #name.iter_mut().take(#max_size) {
                 *i = #entry_type::try_unmarshal(buffer)?;
@@ -331,7 +333,7 @@ fn get_named_field_unmarshal<'a>(
         if let Some(ident) = name {
             basic_field_types.insert(ident, field_type.clone());
         }
-        Ok(quote_spanned! {field.span()=>
+        Ok(quote_spanned! {span =>
             let #name = <#field_type>::try_unmarshal(buffer)?;
         })
     }
