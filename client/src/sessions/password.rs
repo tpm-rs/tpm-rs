@@ -27,8 +27,20 @@ impl PasswordSession {
     /// specified password.
     ///
     /// # Errors:
-    /// Returns [`tpm2_rs_base::errors::TpmRcError::Size`] if the
+    /// Returns [TpmRcError::Size](tpm2_rs_base::errors::TpmRcError::Size) if the
     /// password size in bytes exceeds [`Tpm2bAuth::MAX_BUFFER_SIZE`].
+    ///
+    /// ```
+    /// use tpm2_rs_base::{errors::TpmRcError, Tpm2bAuth, Tpm2bSimple};
+    /// use tpm2_rs_client::sessions::PasswordSession;
+    ///
+    /// let bad_password = [0u8; Tpm2bAuth::MAX_BUFFER_SIZE + 1];
+    /// assert_eq!(
+    ///     PasswordSession::new(&bad_password).err().unwrap(),
+    ///     TpmRcError::Size
+    /// );
+
+    /// ```
     pub fn new<T: AsRef<[u8]> + ?Sized>(password: &T) -> TpmRcResult<Self> {
         Ok(PasswordSession {
             auth: Tpm2bAuth::from_bytes(password.as_ref())?,
