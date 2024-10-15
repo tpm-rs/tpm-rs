@@ -13,7 +13,7 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - run: rustc --version
       - run: cargo check
 
@@ -21,7 +21,7 @@ jobs:
     name: Test Suite
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - run: rustc --version
       - run: cargo test
 
@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Build container and run simulator tests in it
         run: cd client && docker compose build && docker compose run simulator_tests
@@ -39,7 +39,7 @@ jobs:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - run: rustc --version
       - run: cargo fmt --all -- --check
 
@@ -47,7 +47,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - run: rustc --version
       - run: cargo clippy --all-targets -- -D warnings
 
@@ -57,6 +57,6 @@ jobs:
     env:
       RUSTDOCFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - run: rustc --version
       - run: cargo doc
