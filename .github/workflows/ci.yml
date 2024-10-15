@@ -14,11 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+      - run: rustc --version
       - run: cargo check
 
   test:
@@ -26,11 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+      - run: rustc --version
       - run: cargo test
 
   integration_test:
@@ -48,12 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - run: rustup component add rustfmt
+      - run: rustc --version
       - run: cargo fmt --all -- --check
 
   clippy:
@@ -61,12 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - run: rustup component add clippy
+      - run: rustc --version
       - run: cargo clippy --all-targets -- -D warnings
 
   docs:
@@ -76,9 +58,5 @@ jobs:
       RUSTDOCFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+      - run: rustc --version
       - run: cargo doc
