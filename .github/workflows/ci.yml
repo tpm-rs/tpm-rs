@@ -60,3 +60,16 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustc --version
       - run: cargo doc
+
+  miri:
+    name: Miri UB Test Suite
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup default nightly
+      - run: rustup component add miri
+      - run: rustc --version
+      # trybuild uses stat systemcall which is not supported by miri
+      - run: cargo miri test -- --skip unionify
