@@ -1,12 +1,12 @@
 use crate::{
-    platform::{ContextDeps, CryptoRandom, TpmBuffers},
+    platform::{CryptoRandom, ServiceDeps, TpmBuffers},
     req_resp::RequestThenResponse,
 };
 use tpm2_rs_base::errors::TpmRcError;
 
 /// The context that all command handler functions are given access to in order for them to process
 /// their given command.
-pub struct CommandContext<'a, Deps: ContextDeps> {
+pub struct CommandContext<'a, Deps: ServiceDeps> {
     /// Gives access to cryptographic operations.
     pub crypto: &'a mut Deps::Crypto,
 }
@@ -14,7 +14,7 @@ pub struct CommandContext<'a, Deps: ContextDeps> {
 /// Handles the `TPM_CC_GetRandom` (`0x17B`) command.
 pub fn get_random(
     request_response: RequestThenResponse<impl TpmBuffers>,
-    context: &mut CommandContext<impl ContextDeps>,
+    context: &mut CommandContext<impl ServiceDeps>,
 ) -> Result<(), TpmRcError> {
     let mut request = request_response;
     let requested_bytes = request.read_be_u16().ok_or(TpmRcError::CommandSize)? as usize;
