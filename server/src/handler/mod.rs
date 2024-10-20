@@ -16,21 +16,21 @@ impl<Deps: TpmContextDeps> CommandHandler<Deps> {
     pub fn new(crypto: Deps::Crypto) -> Self {
         Self { crypto }
     }
-}
-/// Handles the `TPM_CC_GetRandom` (`0x17B`) command.
-pub fn get_random(
-    request_response: RequestThenResponse<impl TpmBuffers>,
-    context: &mut CommandHandler<impl TpmContextDeps>,
-) -> Result<(), TpmRcError> {
-    let mut request = request_response;
-    let requested_bytes = request.read_be_u16().ok_or(TpmRcError::CommandSize)? as usize;
+    /// Handles the [TpmCc::GetRandom] (`0x17B`) command.
+    pub fn get_random(
+        &mut self,
+        request_response: RequestThenResponse<impl TpmBuffers>,
+    ) -> Result<(), TpmRcError> {
+        let mut request = request_response;
+        let requested_bytes = request.read_be_u16().ok_or(TpmRcError::CommandSize)? as usize;
 
-    let mut response = request.into_response();
-    response
-        .write_callback(requested_bytes, |buffer| {
-            context.crypto.get_random_bytes(buffer)
-        })
-        .map_err(|_| TpmRcError::Memory)?;
+        let mut response = request.into_response();
+        response
+            .write_callback(requested_bytes, |buffer| {
+                self.crypto.get_random_bytes(buffer)
+            })
+            .map_err(|_| TpmRcError::Memory)?;
 
-    Ok(())
+        Ok(())
+    }
 }
