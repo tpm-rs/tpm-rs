@@ -1,4 +1,4 @@
-use crate::handler::{self, CommandHandler};
+use crate::handler::CommandHandler;
 use crate::platform::{ReadOutOfBounds, TpmBuffers, TpmContextDeps, TpmReadBuffer, TpmWriteBuffer};
 use crate::req_resp::RequestResponseCursor;
 use tpm2_rs_base::constants::TpmCc;
@@ -67,7 +67,7 @@ impl<Deps: TpmContextDeps> TpmContext<Deps> {
         // TODO, if _session is not NoSession, then parse session stuff here
 
         match TpmCc(command_code) {
-            TpmCc::GetRandom => handler::get_random(request, &mut self.handler),
+            TpmCc::GetRandom => self.handler.get_random(request),
             _ => Err(TpmRcError::CommandCode),
         }?;
 
