@@ -1,23 +1,26 @@
 use crate::platform::TpmContextDeps;
 
 use super::tpmctx::*;
-use crypto::FakeCrypto;
+use drbg::FakeDrbg;
+use entropy::FakeEntropy;
 use hex_literal::hex;
 
-pub mod crypto;
+pub mod drbg;
+pub mod entropy;
 
 /// Contains all of the test dependencies to create a [`TpmContext`] for unit testing
 struct TestDeps;
 
 impl TpmContextDeps for TestDeps {
-    type Crypto = FakeCrypto;
+    type Drbg = FakeDrbg;
+    type EntropySource = FakeEntropy;
     type Request = [u8];
     type Response = [u8];
 }
 
 #[test]
 fn get_random_in_place() {
-    let mut tpm: TpmContext<TestDeps> = TpmContext::new(FakeCrypto::new());
+    let mut tpm: TpmContext<TestDeps> = TpmContext::new().unwrap();
 
     let request = hex!(
         "8001" // tag
@@ -40,7 +43,7 @@ fn get_random_in_place() {
 
 #[test]
 fn get_random_separate() {
-    let mut tpm: TpmContext<TestDeps> = TpmContext::new(FakeCrypto::new());
+    let mut tpm: TpmContext<TestDeps> = TpmContext::new().unwrap();
 
     let request = hex!(
         "8001" // tag

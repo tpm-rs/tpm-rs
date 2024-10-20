@@ -1,9 +1,8 @@
-use crate::{
-    buffers::{InOutBuffer, SeparateBuffers},
-    handler::CommandHandler,
-    platform::{TpmBuffers, TpmContextDeps, TpmReadBuffer, TpmWriteBuffer},
-    req_resp::RequestResponseCursor,
-};
+use crate::buffers::{InOutBuffer, SeparateBuffers};
+use crate::handler::CommandHandler;
+use crate::platform::{TpmBuffers, TpmContextDeps, TpmReadBuffer, TpmWriteBuffer};
+use crate::req_resp::RequestResponseCursor;
+use crate::ServerError;
 use tpm2_rs_base::constants::TpmCc;
 use tpm2_rs_base::errors::TpmRcError;
 
@@ -14,10 +13,10 @@ pub struct TpmContext<Deps: TpmContextDeps> {
 
 impl<Deps: TpmContextDeps> TpmContext<Deps> {
     /// Creates a new [`TpmContext`] object that processes incoming TPM requests.
-    pub fn new(crypto: Deps::Crypto) -> Self {
-        Self {
-            handler: CommandHandler::new(crypto),
-        }
+    pub fn new() -> Result<Self, ServerError<Deps>> {
+        Ok(Self {
+            handler: CommandHandler::new()?,
+        })
     }
 
     /// Process a TPM request and writes the response in a separate buffer. Returns the number of
