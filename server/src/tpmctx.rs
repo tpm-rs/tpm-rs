@@ -6,13 +6,15 @@ use tpm2_rs_base::errors::TpmRcError;
 
 /// The object that processes incoming TPM requests and produces the corresponding TPM response.
 pub struct TpmContext<Deps: TpmContextDeps> {
-    crypto: Deps::Crypto,
+    handler: CommandHandler<Deps>,
 }
 
 impl<Deps: TpmContextDeps> TpmContext<Deps> {
     /// Creates a new [`TpmContext`] object that processes incoming TPM requests.
     pub fn new(crypto: Deps::Crypto) -> Self {
-        Self { crypto }
+        Self {
+            handler: CommandHandler::new(crypto),
+        }
     }
 
     /// Process a TPM request and writes the response in a separate buffer. Returns the number of
@@ -64,12 +66,8 @@ impl<Deps: TpmContextDeps> TpmContext<Deps> {
 
         // TODO, if _session is not NoSession, then parse session stuff here
 
-        let context = &mut CommandHandler::<Deps> {
-            crypto: &mut self.crypto,
-        };
-
         match TpmCc(command_code) {
-            TpmCc::GetRandom => handler::get_random(request, context),
+            TpmCc::GetRandom => handler::get_random(request, &mut self.handler),
             _ => Err(TpmRcError::CommandCode),
         }?;
 
