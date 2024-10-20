@@ -6,7 +6,7 @@ members = [
     "errors",
     "marshalable",
     "marshalable-derive",
-    "service",
+    "server",
     "unionify",
     "unionify-derive"
 ]
@@ -30,6 +30,6 @@ tpm2-rs-client = { path = "client" }
 tpm2-rs-errors = { path = "errors" }
 tpm2-rs-marshalable = { path = "marshalable" }
 tpm2-rs-marshalable-derive = { path = "marshalable-derive" }
-tpm2-rs-service = { path = "service" }
+tpm2-rs-server = { path = "server" }
 tpm2-rs-unionify = { path = "unionify" }
 tpm2-rs-unionify-derive = { path = "unionify-derive" }
