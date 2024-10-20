@@ -5,7 +5,7 @@ pub use buffer::*;
 pub use crypto::*;
 
 /// Specifies all of the dependent types for `Service`.
-pub trait ServiceDeps {
+pub trait TpmContextDeps {
     /// Interface to perform cryptographic operations.
     type Crypto: Crypto;
     /// The type of the input request buffer for command processing.

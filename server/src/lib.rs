@@ -4,6 +4,6 @@
 mod handler;
 pub mod platform;
 pub mod req_resp;
-pub mod service;
 #[cfg(test)]
 mod tests;
+pub mod tpmctx;
