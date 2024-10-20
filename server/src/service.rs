@@ -1,20 +1,8 @@
-use crate::buffer::{
-    ReadOutOfBounds, RequestResponseCursor, TpmBuffers, TpmReadBuffer, TpmWriteBuffer,
-};
-use crate::crypto::Crypto;
-use crate::handler::{self, CommandContext, ContextDeps};
+use crate::handler::{self, CommandContext};
+use crate::platform::{ReadOutOfBounds, ServiceDeps, TpmBuffers, TpmReadBuffer, TpmWriteBuffer};
+use crate::req_resp::RequestResponseCursor;
 use tpm2_rs_base::constants::TpmCc;
 use tpm2_rs_base::errors::TpmRcError;
-
-/// Specifies all of the dependent types for `Service`.
-pub trait ServiceDeps {
-    /// Interface to perform cryptographic operations.
-    type Crypto: Crypto;
-    /// The type of the input request buffer for command processing.
-    type Request: TpmReadBuffer + ?Sized;
-    /// The type of the output response buffer for command processing.
-    type Response: TpmWriteBuffer + ?Sized;
-}
 
 /// The object that processes incoming TPM requests and produces the corresponding TPM response.
 pub struct Service<'a, Deps: ServiceDeps> {
@@ -103,12 +91,6 @@ impl<'a, Deps: ServiceDeps> Service<'a, Deps> {
 
         Ok(response_size)
     }
-}
-
-// Implement the `ContextDeps` for all types that implement `ServiceDeps` since ContextDeps is a
-// subset.
-impl<T: ServiceDeps> ContextDeps for T {
-    type Crypto = T::Crypto;
 }
 
 /// Represents a request and response that existing in the same mutable buffer.

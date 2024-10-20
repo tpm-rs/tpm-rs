@@ -1,13 +1,8 @@
-use crate::buffer::{RequestThenResponse, TpmBuffers};
-use crate::crypto::{Crypto, CryptoRandom as _};
+use crate::{
+    platform::{ContextDeps, CryptoRandom, TpmBuffers},
+    req_resp::RequestThenResponse,
+};
 use tpm2_rs_base::errors::TpmRcError;
-
-/// Specifies all of the dependent types for the `CommandContext` parameter that all command handler
-/// functions get access to to handle their specific command.
-pub trait ContextDeps {
-    /// Interface to perform cryptographic operations.
-    type Crypto: Crypto;
-}
 
 /// The context that all command handler functions are given access to in order for them to process
 /// their given command.
