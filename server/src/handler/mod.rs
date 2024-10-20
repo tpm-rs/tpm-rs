@@ -6,11 +6,17 @@ use tpm2_rs_base::errors::TpmRcError;
 
 /// The context that all command handler functions are given access to in order for them to process
 /// their given command.
-pub struct CommandHandler<'a, Deps: TpmContextDeps> {
+pub struct CommandHandler<Deps: TpmContextDeps> {
     /// Gives access to cryptographic operations.
-    pub crypto: &'a mut Deps::Crypto,
+    crypto: Deps::Crypto,
 }
 
+impl<Deps: TpmContextDeps> CommandHandler<Deps> {
+    /// Creates a new [`TpmContext`] object that processes incoming TPM requests.
+    pub fn new(crypto: Deps::Crypto) -> Self {
+        Self { crypto }
+    }
+}
 /// Handles the `TPM_CC_GetRandom` (`0x17B`) command.
 pub fn get_random(
     request_response: RequestThenResponse<impl TpmBuffers>,
