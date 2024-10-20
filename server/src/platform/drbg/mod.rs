@@ -1,0 +1,88 @@
+//! Deterministic Random Bit Generator. Heavily inspired by
+//! <https://docs.rs/rand_core>
+pub mod helpers;
+
+/// This trait wraps functionalities common to all Deterministic Random Bit
+/// Generators.
+///
+/// Three different methods for generating random data are required similar to
+/// [RngCore](https://docs.rs/rand_core/latest/rand_core/trait.RngCore.html).
+/// There is no required relationship between the output of each; e.g. an
+/// implementations of [`fill_bytes`] may consume a whole number of u32 or
+/// u64 values and drop any remaining unused bytes. The same can happen
+/// with the [`next_u32`] and [`next_u64`] methods, implementations may
+/// discard some random bits for efficiency.
+/// Implementation should normally have portable, reproducible output,
+/// i.e. fix Endianness when converting values to avoid platform
+/// differences, and avoid making any changes which affect output.
+///
+/// A DRBG may implement only one of the [`next_u32`], [`next_u64`],
+/// [`fill_bytes`] methods available in this trait directly, then use
+/// the helper functions from the [helpers] module to implement the
+/// other methods.
+///
+/// [`fill_bytes`]: Drbg::fill_bytes
+/// [`next_u32`]: Drbg::next_u32
+/// [`next_u64`]: Drbg::next_u64
+pub trait Drbg {
+    /// Seed type, which is restricted to types mutably-dereferenceable as u8 arrays
+    /// (we recommend `[u8; N]` for some `N`).
+    ///
+    /// ## Implementing [`Drbg`] for large seeds
+    ///
+    /// Note that the required traits [`core::default::Default`] and
+    /// [`core::convert::AsMut<u8>`] are not implemented for large arrays
+    /// [u8; N] with N > 32. To be able to implement the traits required
+    /// by SeedableRng for RNGs with such large seeds, the newtype pattern
+    /// can be used:
+    ///
+    /// ```rust
+    /// const N: usize = 64;
+    /// pub struct MyRngSeed(pub [u8; N]);
+    ///
+    /// impl Default for MyRngSeed {
+    ///     fn default() -> MyRngSeed {
+    ///         MyRngSeed([0; N])
+    ///     }
+    /// }
+    ///
+    /// impl AsMut<[u8]> for MyRngSeed {
+    ///     fn as_mut(&mut self) -> &mut [u8] {
+    ///         &mut self.0
+    ///     }
+    /// }
+    /// ```
+    type Seed: Sized + Default + AsMut<[u8]>;
+    /// Create a new DRBG using the given seed.
+    ///
+    /// All PRNG implementations should be reproducible: given a fixed seed,
+    /// the same sequence of output should be produced on all runs, library
+    /// versions and architectures (e.g. check endianness).
+    fn from_seed(seed: Self::Seed) -> Self;
+    /// Add additional entropy to th current RNG
+    ///
+    /// All PRNG implementations should be reproducible: given a fixed seed,
+    /// the same sequence of output should be produced on all runs, library
+    /// versions and architectures (e.g. check endianness).
+    fn reseed(&mut self, seed: Self::Seed);
+    /// Return the next random [u32].
+    ///
+    /// In the case this method is not implemented directly, it can be
+    /// implemented using `self.next_u64() as u32` or via
+    /// [helpers::next_u32_via_fill].
+    fn next_u32(&mut self) -> u32;
+    /// Return the next random [u64].
+    ///
+    /// In the case this method is not implemented directly, it can be
+    /// implemented via [helpers::next_u64_via_u32] or via
+    /// [helpers::next_u64_via_fill].
+    fn next_u64(&mut self) -> u64;
+    /// Fill `dest` with random data.
+    ///
+    /// In the case this method is not implemented directly, it can be
+    /// implemented via [helpers::fill_bytes_via_next].
+    ///
+    /// This method should guarantee that `dest` is entirely filled with
+    /// new data.
+    fn fill_bytes(&mut self, dest: &mut [u8]);
+}
