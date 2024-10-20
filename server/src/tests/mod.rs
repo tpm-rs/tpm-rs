@@ -1,3 +1,5 @@
+use crate::platform::ServiceDeps;
+
 use super::service::*;
 use crypto::FakeCrypto;
 use hex_literal::hex;

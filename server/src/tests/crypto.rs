@@ -1,4 +1,4 @@
-use crate::crypto::CryptoRandom;
+use crate::platform::CryptoRandom;
 
 /// Implements fake cryptographic operations to be used in unit testing.
 pub struct FakeCrypto {
