@@ -7,9 +7,7 @@ use hex_literal::hex;
 pub mod crypto;
 
 /// Contains all of the test dependencies to create a [`TpmContext`] for unit testing
-struct TestDeps {
-    crypto: FakeCrypto,
-}
+struct TestDeps;
 
 impl TpmContextDeps for TestDeps {
     type Crypto = FakeCrypto;
@@ -17,22 +15,9 @@ impl TpmContextDeps for TestDeps {
     type Response = [u8];
 }
 
-impl TestDeps {
-    pub fn new() -> Self {
-        Self {
-            crypto: FakeCrypto::new(),
-        }
-    }
-
-    pub fn tpm(&mut self) -> TpmContext<Self> {
-        TpmContext::new(&mut self.crypto)
-    }
-}
-
 #[test]
 fn get_random_in_place() {
-    let mut test_deps = TestDeps::new();
-    let mut tpm = test_deps.tpm();
+    let mut tpm: TpmContext<TestDeps> = TpmContext::new(FakeCrypto::new());
 
     let request = hex!(
         "8001" // tag
@@ -55,8 +40,7 @@ fn get_random_in_place() {
 
 #[test]
 fn get_random_separate() {
-    let mut test_deps = TestDeps::new();
-    let mut tpm = test_deps.tpm();
+    let mut tpm: TpmContext<TestDeps> = TpmContext::new(FakeCrypto::new());
 
     let request = hex!(
         "8001" // tag
