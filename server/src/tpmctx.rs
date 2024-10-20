@@ -5,13 +5,13 @@ use tpm2_rs_base::constants::TpmCc;
 use tpm2_rs_base::errors::TpmRcError;
 
 /// The object that processes incoming TPM requests and produces the corresponding TPM response.
-pub struct TpmContext<'a, Deps: TpmContextDeps> {
-    crypto: &'a mut Deps::Crypto,
+pub struct TpmContext<Deps: TpmContextDeps> {
+    crypto: Deps::Crypto,
 }
 
-impl<'a, Deps: TpmContextDeps> TpmContext<'a, Deps> {
+impl<Deps: TpmContextDeps> TpmContext<Deps> {
     /// Creates a new [`TpmContext`] object that processes incoming TPM requests.
-    pub fn new(crypto: &'a mut Deps::Crypto) -> Self {
+    pub fn new(crypto: Deps::Crypto) -> Self {
         Self { crypto }
     }
 
@@ -65,7 +65,7 @@ impl<'a, Deps: TpmContextDeps> TpmContext<'a, Deps> {
         // TODO, if _session is not NoSession, then parse session stuff here
 
         let context = &mut CommandHandler::<Deps> {
-            crypto: self.crypto,
+            crypto: &mut self.crypto,
         };
 
         match TpmCc(command_code) {
