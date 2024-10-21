@@ -6,6 +6,7 @@ members = [
     "errors",
     "marshalable",
     "marshalable-derive",
+    "rwtpm",
     "server",
     "unionify",
     "unionify-derive"
@@ -14,12 +15,15 @@ members = [
 [workspace.dependencies]
 # Third party dependencies
 bitflags = "2.4.2"
+clap = "4.5.20"
 hex-literal = { version = "0.4.1" }
 open-enum = "0.4.1"
 proc-macro2 = "1"
 quote = "1"
 safe-discriminant = "0.2.0"
 syn = {version = "2", features = ["full"]}
+tracing = "0.1.40"
+tracing-subscriber="0.3.17"
 trybuild = { version = "1.0.89", features = ["diff"] }
 zerocopy = { version = "0.7.0", features = ["derive"] }
 
