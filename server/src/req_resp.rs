@@ -52,6 +52,10 @@ impl<'a, B: TpmBuffers> Response<'a, B> {
     /// Writes the specified `data` at the last written location and updates the internal
     /// last written location. Returns [`WriteOutOfBounds`] if write would have written past the the
     /// of the underlying [`TpmWriteBuffer`].
+    #[expect(
+        dead_code,
+        reason = "This function may be used later in the future, but it is not yet"
+    )]
     pub fn write(&mut self, data: &[u8]) -> Result<(), WriteOutOfBounds> {
         self.buffers
             .buffers
