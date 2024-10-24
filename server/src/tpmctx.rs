@@ -5,14 +5,16 @@ use tpm2_rs_base::constants::TpmCc;
 use tpm2_rs_base::errors::TpmRcError;
 
 /// The object that processes incoming TPM requests and produces the corresponding TPM response.
-pub struct TpmContext<'a, Deps: TpmContextDeps> {
-    crypto: &'a mut Deps::Crypto,
+pub struct TpmContext<Deps: TpmContextDeps> {
+    handler: CommandHandler<Deps>,
 }
 
-impl<'a, Deps: TpmContextDeps> TpmContext<'a, Deps> {
+impl<Deps: TpmContextDeps> TpmContext<Deps> {
     /// Creates a new [`TpmContext`] object that processes incoming TPM requests.
-    pub fn new(crypto: &'a mut Deps::Crypto) -> Self {
-        Self { crypto }
+    pub fn new(crypto: Deps::Crypto) -> Self {
+        Self {
+            handler: CommandHandler::new(crypto),
+        }
     }
 
     /// Process a TPM request and writes the response in a separate buffer. Returns the number of
@@ -64,12 +66,8 @@ impl<'a, Deps: TpmContextDeps> TpmContext<'a, Deps> {
 
         // TODO, if _session is not NoSession, then parse session stuff here
 
-        let context = &mut CommandHandler::<Deps> {
-            crypto: self.crypto,
-        };
-
         match TpmCc(command_code) {
-            TpmCc::GetRandom => handler::get_random(request, context),
+            TpmCc::GetRandom => handler::get_random(request, &mut self.handler),
             _ => Err(TpmRcError::CommandCode),
         }?;
 
