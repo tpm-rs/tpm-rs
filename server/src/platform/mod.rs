@@ -4,7 +4,7 @@ mod crypto;
 pub use buffer::*;
 pub use crypto::*;
 
-/// Specifies all of the dependent types for `Service`.
+/// Specifies all of the dependent types for [`TpmContext`].
 pub trait TpmContextDeps {
     /// Interface to perform cryptographic operations.
     type Crypto: Crypto;
