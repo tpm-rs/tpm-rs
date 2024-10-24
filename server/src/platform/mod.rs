@@ -1,8 +1,13 @@
 mod buffer;
-mod crypto;
-
+pub mod drbg;
 pub use buffer::*;
-pub use crypto::*;
+use drbg::Drbg;
+
+/// Provides access to cryptographic operations.
+pub trait Crypto: Drbg {}
+
+// For all types that implement every Crypto sub trait, also implement the combined trait.
+impl<T> Crypto for T where T: Drbg {}
 
 /// Specifies all of the dependent types for [`TpmContext`].
 ///

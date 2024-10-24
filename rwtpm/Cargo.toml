@@ -1,0 +1,15 @@
+[package]
+name = "rwtpm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = {workspace = true, features = ["derive"]}
+tpm2-rs-server = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = {workspace = true, features = ["env-filter"]}
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+strip = "symbols"
