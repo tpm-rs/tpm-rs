@@ -1,17 +1,17 @@
-use crate::platform::ServiceDeps;
+use crate::platform::TpmContextDeps;
 
-use super::service::*;
+use super::tpmctx::*;
 use crypto::FakeCrypto;
 use hex_literal::hex;
 
 pub mod crypto;
 
-/// Contains all of the test dependencies to create a `Service` for unit testing
+/// Contains all of the test dependencies to create a [`TpmContext`] for unit testing
 struct TestDeps {
     crypto: FakeCrypto,
 }
 
-impl ServiceDeps for TestDeps {
+impl TpmContextDeps for TestDeps {
     type Crypto = FakeCrypto;
     type Request = [u8];
     type Response = [u8];
@@ -24,15 +24,15 @@ impl TestDeps {
         }
     }
 
-    pub fn service(&mut self) -> Service<Self> {
-        Service::new(&mut self.crypto)
+    pub fn tpm(&mut self) -> TpmContext<Self> {
+        TpmContext::new(&mut self.crypto)
     }
 }
 
 #[test]
 fn get_random_in_place() {
     let mut test_deps = TestDeps::new();
-    let mut service = test_deps.service();
+    let mut tpm = test_deps.tpm();
 
     let request = hex!(
         "8001" // tag
@@ -49,14 +49,14 @@ fn get_random_in_place() {
 
     let mut response = request.to_vec();
     response.resize(256, 0xFF);
-    let size = service.execute_command_in_place(&mut response, request.len());
+    let size = tpm.execute_command_in_place(&mut response, request.len());
     assert_eq!(&response[..size], expected_response);
 }
 
 #[test]
 fn get_random_separate() {
     let mut test_deps = TestDeps::new();
-    let mut service = test_deps.service();
+    let mut tpm = test_deps.tpm();
 
     let request = hex!(
         "8001" // tag
@@ -73,6 +73,6 @@ fn get_random_separate() {
 
     let mut response = Vec::new();
     response.resize(256, 0xFF);
-    let size = service.execute_command_separate(&request, &mut response);
+    let size = tpm.execute_command_separate(&request, &mut response);
     assert_eq!(&response[..size], expected_response);
 }

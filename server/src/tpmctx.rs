@@ -1,16 +1,16 @@
-use crate::handler::{self, CommandContext};
-use crate::platform::{ReadOutOfBounds, ServiceDeps, TpmBuffers, TpmReadBuffer, TpmWriteBuffer};
+use crate::handler::{self, CommandHandler};
+use crate::platform::{ReadOutOfBounds, TpmBuffers, TpmContextDeps, TpmReadBuffer, TpmWriteBuffer};
 use crate::req_resp::RequestResponseCursor;
 use tpm2_rs_base::constants::TpmCc;
 use tpm2_rs_base::errors::TpmRcError;
 
 /// The object that processes incoming TPM requests and produces the corresponding TPM response.
-pub struct Service<'a, Deps: ServiceDeps> {
+pub struct TpmContext<'a, Deps: TpmContextDeps> {
     crypto: &'a mut Deps::Crypto,
 }
 
-impl<'a, Deps: ServiceDeps> Service<'a, Deps> {
-    /// Creates a new `Service` object that processes incoming TPM requests.
+impl<'a, Deps: TpmContextDeps> TpmContext<'a, Deps> {
+    /// Creates a new [`TpmContext`] object that processes incoming TPM requests.
     pub fn new(crypto: &'a mut Deps::Crypto) -> Self {
         Self { crypto }
     }
@@ -64,7 +64,7 @@ impl<'a, Deps: ServiceDeps> Service<'a, Deps> {
 
         // TODO, if _session is not NoSession, then parse session stuff here
 
-        let context = &mut CommandContext::<Deps> {
+        let context = &mut CommandHandler::<Deps> {
             crypto: self.crypto,
         };
 
