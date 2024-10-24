@@ -71,5 +71,6 @@ jobs:
       - run: rustup default nightly
       - run: rustup component add miri
       - run: rustc --version
-      # trybuild uses stat systemcall which is not supported by miri
-      - run: cargo miri test -- --skip unionify
+      # unionify: trybuild uses stat systemcall which is not supported by miri
+      # nist_tests: they take forever to run
+      - run: cargo miri test -- --skip unionify --skip test::nist_tests
