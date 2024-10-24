@@ -1,0 +1,15 @@
+[package]
+name = "tpm2-rs-drbg"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+digest = { workspace = true }
+sha2 = {workspace = true, optional = true}
+
+[features]
+# Implement HashDrbgProps for hash functions from sha2
+rustcrypto = ["dep:sha2"]
+[dev-dependencies]
+sha1 = {workspace = true}
+sha2 = {workspace = true}

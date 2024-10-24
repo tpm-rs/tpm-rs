@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "base",
     "client",
+    "drbg",
     "errors",
     "marshalable",
     "marshalable-derive",
@@ -16,11 +17,14 @@ members = [
 # Third party dependencies
 bitflags = "2.4.2"
 clap = "4.5.20"
+digest = "0.10.7"
 hex-literal = { version = "0.4.1" }
 open-enum = "0.4.1"
 proc-macro2 = "1"
 quote = "1"
 safe-discriminant = "0.2.0"
+sha1="0.10.6"
+sha2="0.10.8"
 syn = {version = "2", features = ["full"]}
 tracing = "0.1.40"
 tracing-subscriber="0.3.17"
