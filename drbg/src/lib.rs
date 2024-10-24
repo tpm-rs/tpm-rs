@@ -5,10 +5,16 @@
 //! come directly from
 //! [NIST.SP.800-90Ar1](http://dx.doi.org/10.6028/NIST.SP.800-90Ar1).
 
+mod hashdrbg;
+mod helpers;
 mod props;
 #[cfg(any(test, feature = "rustcrypto"))]
 mod rustcrypto;
 
+pub use crypto_bigint;
+pub use digest;
+pub use hashdrbg::HashDrbg;
 pub use props::HashDrbgProps;
+
 #[cfg(feature = "rustcrypto")]
 pub use sha2;

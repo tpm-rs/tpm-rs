@@ -17,6 +17,7 @@ members = [
 # Third party dependencies
 bitflags = "2.4.2"
 clap = "4.5.20"
+crypto-bigint = "0.5.5"
 digest = "0.10.7"
 hex-literal = { version = "0.4.1" }
 open-enum = "0.4.1"

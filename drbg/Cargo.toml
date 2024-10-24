@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+crypto-bigint = {workspace = true, features = ["generic-array"]}
 digest = { workspace = true }
 sha2 = {workspace = true, optional = true}
 
