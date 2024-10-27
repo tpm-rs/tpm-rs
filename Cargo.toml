@@ -32,3 +32,8 @@ tpm2-rs-marshalable-derive = { path = "marshalable-derive" }
 tpm2-rs-server = { path = "server" }
 tpm2-rs-unionify = { path = "unionify" }
 tpm2-rs-unionify-derive = { path = "unionify-derive" }
+
+[profile.release]
+lto = true          # default is lto = false
+codegen-units = 1   # default is codegen-units = 16
+strip = true        # default is strip = "none"
