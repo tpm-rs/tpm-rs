@@ -4,3 +4,4 @@
 NVChip
 /client/command.port
 /client/platform.port
+*.patch
