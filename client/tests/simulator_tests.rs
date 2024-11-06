@@ -12,14 +12,16 @@
 use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command};
-use tpm2_rs_base::commands::{GetCapabilityCmd, StartupCmd};
-use tpm2_rs_base::constants::{TpmCap, TpmPt, TpmSu};
+use tpm2_rs_base::commands::StartupCmd;
+use tpm2_rs_base::constants::TpmSu;
 use tpm2_rs_base::errors::{TssResult, TssTcsError};
-use tpm2_rs_base::{TpmlTaggedTpmProperty, TpmsCapabilityData, TpmsTaggedProperty};
 use tpm2_rs_client::run_command;
 use tpm2_rs_client::Tpm;
 use zerocopy::big_endian::U32;
 use zerocopy::AsBytes;
+
+// Include the simulator test module.
+mod simulator_tests_registration;
 
 const SIMULATOR_IP: &str = "127.0.0.1";
 // TODO: Either pass ports or get simulator to export ports for multithreaded-use.
@@ -49,38 +51,6 @@ fn get_started_tpm() -> (TpmSim, TcpTpm) {
     };
     run_command(&startup, &mut tpm).unwrap();
     (sim_lifeline, tpm)
-}
-
-#[test]
-fn test_get_capability_manufacturer_id() {
-    let (_sim_lifeline, mut tpm) = get_started_tpm();
-
-    let mut expected = TpmlTaggedTpmProperty {
-        count: 1,
-        tpm_property: [TpmsTaggedProperty::default(); 127],
-    };
-
-    expected.tpm_property[0] = TpmsTaggedProperty {
-        property: TpmPt::Manufacturer,
-        value: 0x58595A20,
-    };
-
-    let command = GetCapabilityCmd {
-        capability: TpmCap::TPMProperties,
-        property: TpmPt::Manufacturer,
-        property_count: 1,
-    };
-
-    // We allow panic in test cases.
-    let resp = run_command(&command, &mut tpm).expect("Failed running command.");
-
-    // Extract the TpmlTaggedTpmProperty data form the response.
-    let TpmsCapabilityData::TpmProperties(received) = resp.capability_data else {
-        panic!("Unexpected variant data.")
-    };
-
-    // Confirm we received the expected response.
-    assert_eq!(received, expected);
 }
 
 // Launches the TPM simulator at the given path in a subprocess and powers it up.
