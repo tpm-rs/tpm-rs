@@ -12,7 +12,7 @@
 use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command};
-use tpm2_rs_base::commands::{GetCapabilityCmd, StartupCmd};
+use tpm2_rs_base::commands::{GetCapabilityCmd, GetRandomCmd, StartupCmd};
 use tpm2_rs_base::constants::{TpmCap, TpmPt, TpmSu};
 use tpm2_rs_base::errors::{TssResult, TssTcsError};
 use tpm2_rs_base::{TpmlTaggedTpmProperty, TpmsCapabilityData, TpmsTaggedProperty};
@@ -81,6 +81,63 @@ fn test_get_capability_manufacturer_id() {
 
     // Confirm we received the expected response.
     assert_eq!(received, expected);
+}
+
+#[test]
+fn test_get_random() {
+    const REQUEST_SIZE: u16 = 32;
+    const MIN_RECEIVED: u16 = 32;
+
+    let (_sim_lifeline, mut tpm) = get_started_tpm();
+
+    let command = GetRandomCmd {
+        bytes_requested: REQUEST_SIZE,
+    };
+
+    // We allow panic in test cases.
+    let resp = run_command(&command, &mut tpm).expect("Failed running command.");
+
+    // Validate that retrieved data contains at least 32 values (SHA256 digest),
+    // and is less that requested amount.
+    assert!(resp.random_bytes.size >= MIN_RECEIVED);
+    assert!(resp.random_bytes.size <= REQUEST_SIZE);
+
+    // Lets pull out the actual data as a slice for convenience
+    let random_slice = &resp.random_bytes.buffer[0..resp.random_bytes.size as usize];
+
+    // Print for test inspection.
+    println!("Got random sequence: {:?}", random_slice);
+
+    // Crude randomness test. Confirm we did not get identical data sequences.
+    {
+        let mut zeros: u16 = 0;
+        let mut count: [u16; 16] = [0; 16]; // 16 slots.
+        let mut last_value = random_slice[random_slice.len() - 1];
+        let mut i = 0;
+        for i in 0..random_slice.len() as usize {
+            // Calculate the circular distance modulo 256 going upwards from first value.
+            // This will give an even probability distribution of values [0 ; 255].
+            let diff: u16 = (256 as u16 + random_slice[i] as u16 - last_value as u16) % 256;
+            count[(diff >> 4) as usize] += 1;
+            last_value = random_slice[i];
+        }
+
+        for i in 0..count.len() as usize {
+            if count[i] == 0 {
+                zeros += 1;
+            }
+        }
+        println!(
+            "Filled circular distance of RND bytes into {} slots: {:?}",
+            count.len(),
+            count
+        );
+        println!(
+            "After drawing 32 values, allow at most 8 empty slots. Empty slots {}",
+            zeros
+        );
+        assert!(zeros <= 8); // Probability of 8 empty slots after 32 draws is < 0.0003%
+    }
 }
 
 // Launches the TPM simulator at the given path in a subprocess and powers it up.

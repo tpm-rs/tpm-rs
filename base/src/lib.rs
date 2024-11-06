@@ -574,7 +574,7 @@ enum TpmuName {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bDigest {
-    size: u16,
+    pub size: u16,
     pub buffer: [u8; TpmtHa::UNION_SIZE],
 }
 
@@ -584,49 +584,49 @@ pub type Tpm2bOperand = Tpm2bDigest;
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bData {
-    size: u16,
+    pub size: u16,
     pub buffer: [u8; TpmtHa::UNION_SIZE],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEvent {
-    size: u16,
+    pub size: u16,
     pub buffer: [u8; 1024],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bMaxBuffer {
-    size: u16,
+    pub size: u16,
     pub buffer: [u8; TPM2_MAX_DIGEST_BUFFER as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bMaxNvBuffer {
-    size: u16,
+    pub size: u16,
     pub buffer: [u8; TPM2_MAX_NV_BUFFER_SIZE as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bIv {
-    size: u16,
+    pub size: u16,
     pub buffer: [u8; TPM2_MAX_SYM_BLOCK_SIZE as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bName {
-    size: u16,
+    pub size: u16,
     pub name: [u8; TpmuName::UNION_SIZE],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bMaxCapBuffer {
-    size: u16,
+    pub size: u16,
     pub buffer: [u8; TPM2_MAX_CAP_BUFFER as usize],
 }
 
