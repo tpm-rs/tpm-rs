@@ -1,5 +1,5 @@
 //! [TPM2.0 1.83] 9 Start-up
-use crate::commands::{Marshalable, TpmCommand};
+use crate::commands::{Marshalable, TpmCommandProps};
 use crate::constants::{TpmCc, TpmSu};
 
 /// [TPM2.0 1.83] 9.2 _TPM_Init
@@ -11,7 +11,7 @@ pub struct InitCmd {}
 pub struct StartupCmd {
     pub startup_type: TpmSu,
 }
-impl TpmCommand for StartupCmd {
+impl TpmCommandProps for StartupCmd {
     const CMD_CODE: TpmCc = TpmCc::Startup;
     type Handles = ();
     type RespT = ();

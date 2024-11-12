@@ -1,6 +1,6 @@
 //! [TPM2.0 1.83] 22 Integrity Collection (PCR)
 
-use crate::commands::{Marshalable, TpmCommand};
+use crate::commands::{Marshalable, TpmCommandProps};
 use crate::constants::TpmCc;
 use crate::{TpmlDigest, TpmlPcrSelection};
 
@@ -16,7 +16,7 @@ pub struct PcrEventCmd {}
 pub struct PcrReadCmd {
     pcr_selection_in: TpmlPcrSelection,
 }
-impl TpmCommand for PcrReadCmd {
+impl TpmCommandProps for PcrReadCmd {
     const CMD_CODE: TpmCc = TpmCc::PCRRead;
     type Handles = ();
     type RespT = PcrReadResp;

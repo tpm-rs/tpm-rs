@@ -53,7 +53,7 @@ pub struct RespHeader {
 /// Runs a command with default/unset handles.
 pub fn run_command<CmdT, T>(cmd: &CmdT, tpm: &mut T) -> TssResult<CmdT::RespT>
 where
-    CmdT: TpmCommand,
+    CmdT: TpmCommandProps,
     T: Tpm,
 {
     Ok(run_command_with_handles(cmd, CmdT::Handles::default(), (), tpm)?.0)
@@ -155,7 +155,7 @@ pub fn run_command_with_handles<
     tpm: &mut T,
 ) -> TssResult<(CmdT::RespT, CmdT::RespHandles)>
 where
-    CmdT: TpmCommand,
+    CmdT: TpmCommandProps,
     T: Tpm,
 {
     let mut cmd_buffer = [0u8; CMD_BUFFER_SIZE];
