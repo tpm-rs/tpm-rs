@@ -1,6 +1,9 @@
-use crate::handler::CommandHandler;
-use crate::platform::{ReadOutOfBounds, TpmBuffers, TpmContextDeps, TpmReadBuffer, TpmWriteBuffer};
-use crate::req_resp::RequestResponseCursor;
+use crate::{
+    buffers::{InOutBuffer, SeparateBuffers},
+    handler::CommandHandler,
+    platform::{TpmBuffers, TpmContextDeps, TpmReadBuffer, TpmWriteBuffer},
+    req_resp::RequestResponseCursor,
+};
 use tpm2_rs_base::constants::TpmCc;
 use tpm2_rs_base::errors::TpmRcError;
 
@@ -24,7 +27,8 @@ impl<Deps: TpmContextDeps> TpmContext<Deps> {
         request: &Deps::Request,
         response: &mut Deps::Response,
     ) -> usize {
-        match self.execute_command(SeparateBuffers(request, response)) {
+        let buf = SeparateBuffers::new(request, response);
+        match self.execute_command(buf) {
             Ok(size) => size,
             Err(err) => self.fill_error(response, err),
         }
@@ -37,7 +41,8 @@ impl<Deps: TpmContextDeps> TpmContext<Deps> {
         in_out: &mut Deps::Response,
         request_size: usize,
     ) -> usize {
-        match self.execute_command(InOutBuffer::new(in_out, request_size)) {
+        let buf = InOutBuffer::new(in_out, request_size);
+        match self.execute_command(buf) {
             Ok(size) => size,
             Err(err) => self.fill_error(in_out, err),
         }
@@ -88,55 +93,5 @@ impl<Deps: TpmContextDeps> TpmContext<Deps> {
             .or(Err(TpmRcError::Memory))?;
 
         Ok(response_size)
-    }
-}
-
-/// Represents a request and response that existing in the same mutable buffer.
-struct InOutBuffer<'a, W: TpmWriteBuffer + ?Sized>(&'a mut W, usize);
-impl<'a, W: TpmWriteBuffer + ?Sized> TpmBuffers for InOutBuffer<'a, W> {
-    type Request = Self;
-    type Response = W;
-
-    fn get_request(&self) -> &Self::Request {
-        self
-    }
-    fn get_response(&mut self) -> &mut Self::Response {
-        self.0
-    }
-}
-
-impl<'a, W: TpmWriteBuffer + ?Sized> InOutBuffer<'a, W> {
-    pub fn new(buffer: &'a mut W, request_size: usize) -> Self {
-        Self(buffer, request_size.min(buffer.len()))
-    }
-}
-
-impl<'a, W: TpmWriteBuffer + ?Sized> TpmReadBuffer for InOutBuffer<'a, W> {
-    fn len(&self) -> usize {
-        self.1
-    }
-
-    fn read_into(&self, offset: usize, out: &mut [u8]) -> Result<(), ReadOutOfBounds> {
-        // Limit the read view to only the request portion of the in-place buffer
-        if self.1 < offset + out.len() {
-            return Err(ReadOutOfBounds);
-        }
-        self.0.read_into(offset, out)
-    }
-}
-
-/// Represents a separate request and response buffer.
-struct SeparateBuffers<'a, R: TpmReadBuffer + ?Sized, W: TpmWriteBuffer + ?Sized>(&'a R, &'a mut W);
-impl<'a, R: TpmReadBuffer + ?Sized, W: TpmWriteBuffer + ?Sized> TpmBuffers
-    for SeparateBuffers<'a, R, W>
-{
-    type Request = R;
-    type Response = W;
-
-    fn get_request(&self) -> &Self::Request {
-        self.0
-    }
-    fn get_response(&mut self) -> &mut Self::Response {
-        self.1
     }
 }
