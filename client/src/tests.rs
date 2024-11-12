@@ -17,7 +17,7 @@ impl Tpm for ErrorTpm {
 #[repr(C)]
 // Larger than the maximum size.
 struct HugeFakeCommand([u8; CMD_BUFFER_SIZE]);
-impl TpmCommand for HugeFakeCommand {
+impl TpmCommandProps for HugeFakeCommand {
     const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
     type Handles = ();
     type RespT = u8;
@@ -37,7 +37,7 @@ fn test_command_too_large() {
 #[derive(Marshalable)]
 #[repr(C)]
 struct TestCommand(u32);
-impl TpmCommand for TestCommand {
+impl TpmCommandProps for TestCommand {
     const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
     type Handles = ();
     type RespT = u32;
@@ -157,7 +157,7 @@ impl FakeTpm {
 #[derive(Marshalable)]
 #[repr(C)]
 struct TestHandlesCommand();
-impl TpmCommand for TestHandlesCommand {
+impl TpmCommandProps for TestHandlesCommand {
     const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
     type Handles = TpmHandle;
     type RespT = ();

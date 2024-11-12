@@ -1,6 +1,6 @@
 //! [TPM2.0 1.83] 30 Capability Commands
 
-use crate::commands::{Marshalable, TpmCommand};
+use crate::commands::{Marshalable, TpmCommandProps};
 use crate::constants::{TpmCap, TpmCc, TpmPt};
 use crate::{TpmiYesNo, TpmsCapabilityData};
 
@@ -12,7 +12,7 @@ pub struct GetCapabilityCmd {
     pub property: TpmPt,
     pub property_count: u32,
 }
-impl TpmCommand for GetCapabilityCmd {
+impl TpmCommandProps for GetCapabilityCmd {
     const CMD_CODE: TpmCc = TpmCc::GetCapability;
     type Handles = ();
     type RespT = GetCapabilityResp;
