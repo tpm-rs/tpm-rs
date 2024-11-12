@@ -1,6 +1,6 @@
 //! [TPM2.0 1.83] 16 Random Number Generator
 
-use crate::commands::{Marshalable, TpmCommand};
+use crate::commands::{Marshalable, TpmCommandProps};
 use crate::constants::TpmCc;
 use crate::Tpm2bDigest;
 
@@ -10,7 +10,7 @@ use crate::Tpm2bDigest;
 pub struct GetRandomCmd {
     pub bytes_requested: u16,
 }
-impl TpmCommand for GetRandomCmd {
+impl TpmCommandProps for GetRandomCmd {
     const CMD_CODE: TpmCc = TpmCc::GetRandom;
     type Handles = ();
     type RespT = GetRandomResp;
