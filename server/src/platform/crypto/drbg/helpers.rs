@@ -47,6 +47,6 @@ pub fn next_u64_via_fill<R: Drbg>(rng: &mut R, additional_input: &[u8]) -> Resul
 pub fn next_u64_via_u32<R: Drbg>(rng: &mut R, additional_input: &[u8]) -> Result<u64, R::Error> {
     // Use LE; we explicitly generate one value before the next.
     let x = u64::from(rng.next_u32(additional_input)?);
-    let y = u64::from(rng.next_u32(additional_input)?);
+    let y = u64::from(rng.next_u32(&[])?);
     Ok((y << 32) | x)
 }
