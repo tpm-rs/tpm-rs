@@ -575,7 +575,7 @@ enum TpmuName {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bDigest {
     size: u16,
-    pub buffer: [u8; TpmtHa::UNION_SIZE],
+    buffer: [u8; TpmtHa::UNION_SIZE],
 }
 
 pub type Tpm2bNonce = Tpm2bDigest;
@@ -585,49 +585,49 @@ pub type Tpm2bOperand = Tpm2bDigest;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bData {
     size: u16,
-    pub buffer: [u8; TpmtHa::UNION_SIZE],
+    buffer: [u8; TpmtHa::UNION_SIZE],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEvent {
     size: u16,
-    pub buffer: [u8; 1024],
+    buffer: [u8; 1024],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bMaxBuffer {
     size: u16,
-    pub buffer: [u8; TPM2_MAX_DIGEST_BUFFER as usize],
+    buffer: [u8; TPM2_MAX_DIGEST_BUFFER as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bMaxNvBuffer {
     size: u16,
-    pub buffer: [u8; TPM2_MAX_NV_BUFFER_SIZE as usize],
+    buffer: [u8; TPM2_MAX_NV_BUFFER_SIZE as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bIv {
     size: u16,
-    pub buffer: [u8; TPM2_MAX_SYM_BLOCK_SIZE as usize],
+    buffer: [u8; TPM2_MAX_SYM_BLOCK_SIZE as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bName {
     size: u16,
-    pub name: [u8; TpmuName::UNION_SIZE],
+    name: [u8; TpmuName::UNION_SIZE],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bMaxCapBuffer {
     size: u16,
-    pub buffer: [u8; TPM2_MAX_CAP_BUFFER as usize],
+    buffer: [u8; TPM2_MAX_CAP_BUFFER as usize],
 }
 
 #[repr(C)]
@@ -772,21 +772,21 @@ impl Marshalable for TpmsAttest {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bAttest {
     size: u16,
-    pub attestation_data: [u8; size_of::<TpmsAttest>()],
+    attestation_data: [u8; size_of::<TpmsAttest>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSymKey {
     size: u16,
-    pub buffer: [u8; TPM2_MAX_SYM_KEY_BYTES as usize],
+    buffer: [u8; TPM2_MAX_SYM_KEY_BYTES as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bLabel {
     size: u16,
-    pub buffer: [u8; TPM2_LABEL_MAX_BUFFER as usize],
+    buffer: [u8; TPM2_LABEL_MAX_BUFFER as usize],
 }
 
 #[repr(C)]
@@ -800,7 +800,7 @@ pub struct TpmsDerive {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bDerive {
     size: u16,
-    pub buffer: [u8; size_of::<TpmsDerive>()],
+    buffer: [u8; size_of::<TpmsDerive>()],
 }
 #[derive(UnionSize)]
 #[repr(C, u16)]
@@ -813,7 +813,7 @@ enum TpmuSensitiveCreate {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSensitiveData {
     size: u16,
-    pub buffer: [u8; TpmuSensitiveCreate::UNION_SIZE],
+    buffer: [u8; TpmuSensitiveCreate::UNION_SIZE],
 }
 
 pub type Tpm2bAuth = Tpm2bDigest;
@@ -829,28 +829,28 @@ pub struct TpmsSensitiveCreate {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSensitiveCreate {
     size: u16,
-    pub sensitive: [u8; size_of::<TpmsSensitiveCreate>()],
+    sensitive: [u8; size_of::<TpmsSensitiveCreate>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPublicKeyRsa {
     size: u16,
-    pub buffer: [u8; TPM2_MAX_RSA_KEY_BYTES as usize],
+    buffer: [u8; TPM2_MAX_RSA_KEY_BYTES as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPrivateKeyRsa {
     size: u16,
-    pub buffer: [u8; (TPM2_MAX_RSA_KEY_BYTES / 2) as usize],
+    buffer: [u8; (TPM2_MAX_RSA_KEY_BYTES / 2) as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEccParameter {
     size: u16,
-    pub buffer: [u8; TPM2_MAX_ECC_KEY_BYTES as usize],
+    buffer: [u8; TPM2_MAX_ECC_KEY_BYTES as usize],
 }
 
 #[repr(C)]
@@ -864,7 +864,7 @@ pub struct TpmsEccPoint {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEccPoint {
     size: u16,
-    pub point: [u8; size_of::<TpmsEccPoint>()],
+    point: [u8; size_of::<TpmsEccPoint>()],
 }
 
 #[derive(UnionSize)]
@@ -880,7 +880,7 @@ enum TpmuEncryptedSecret {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bEncryptedSecret {
     size: u16,
-    pub secret: [u8; TpmuEncryptedSecret::UNION_SIZE],
+    secret: [u8; TpmuEncryptedSecret::UNION_SIZE],
 }
 
 #[repr(C)]
@@ -1080,21 +1080,21 @@ impl Marshalable for TpmtPublic {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPublic {
     size: u16,
-    pub public_area: [u8; size_of::<TpmtPublic>()],
+    public_area: [u8; size_of::<TpmtPublic>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bTemplate {
     size: u16,
-    pub buffer: [u8; size_of::<TpmtPublic>()],
+    buffer: [u8; size_of::<TpmtPublic>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPrivateVendorSpecific {
     size: u16,
-    pub buffer: [u8; TPM2_PRIVATE_VENDOR_SPECIFIC_BYTES as usize],
+    buffer: [u8; TPM2_PRIVATE_VENDOR_SPECIFIC_BYTES as usize],
 }
 
 #[repr(C, u16)]
@@ -1277,7 +1277,7 @@ pub struct TpmsAuthResponse {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bSensitive {
     size: u16,
-    pub sensitive_area: [u8; size_of::<TpmtSensitive>()],
+    sensitive_area: [u8; size_of::<TpmtSensitive>()],
 }
 
 #[repr(C)]
@@ -1292,7 +1292,7 @@ pub struct _PRIVATE {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bPrivate {
     size: u16,
-    pub buffer: [u8; size_of::<_PRIVATE>()],
+    buffer: [u8; size_of::<_PRIVATE>()],
 }
 
 #[repr(C)]
@@ -1306,7 +1306,7 @@ pub struct TpmsIdObject {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bIdObject {
     size: u16,
-    pub credential: [u8; size_of::<TpmsIdObject>()],
+    credential: [u8; size_of::<TpmsIdObject>()],
 }
 
 #[repr(C)]
@@ -1323,14 +1323,14 @@ pub struct TpmsNvPublic {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bNvPublic {
     size: u16,
-    pub nv_public: [u8; size_of::<TpmsNvPublic>()],
+    nv_public: [u8; size_of::<TpmsNvPublic>()],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bContextSensitive {
     size: u16,
-    pub buffer: [u8; TPM2_MAX_CONTEXT_SIZE as usize],
+    buffer: [u8; TPM2_MAX_CONTEXT_SIZE as usize],
 }
 
 #[repr(C)]
@@ -1344,7 +1344,7 @@ pub struct TpmsContextData {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bContextData {
     size: u16,
-    pub buffer: [u8; size_of::<TpmsContextData>()],
+    buffer: [u8; size_of::<TpmsContextData>()],
 }
 
 #[repr(C)]
@@ -1363,7 +1363,7 @@ pub struct TpmsCreationData {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tpm2bCreationData {
     size: u16,
-    pub creation_data: [u8; size_of::<TpmsCreationData>()],
+    creation_data: [u8; size_of::<TpmsCreationData>()],
 }
 
 // Helper for splitting up ranges of an unmarshal buffer.
@@ -1411,6 +1411,12 @@ macro_rules! impl_try_marshalable_tpm2b_simple {
                     size: 0,
                     $F: [0; Self::MAX_BUFFER_SIZE],
                 }
+            }
+        }
+
+        impl AsRef<[u8]> for $T {
+            fn as_ref(&self) -> &[u8] {
+                &self.$F[..self.size as usize]
             }
         }
 
