@@ -1,8 +1,8 @@
 //! Deterministic Random Bit Generator. Heavily inspired by
 //! <https://docs.rs/rand_core>
 
-pub mod helpers;
 mod error;
+pub mod helpers;
 pub use error::DrbgError;
 
 /// This trait wraps functionalities common to all Deterministic Random Bit

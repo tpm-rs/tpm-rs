@@ -19,8 +19,7 @@ impl<Deps: TpmContextDeps> Crypto<Deps> {
         let mut nonce = <Deps::Drbg as Drbg>::Nonce::default();
         entropy_source.fill_entropy(entropy_input.as_mut());
         entropy_source.fill_entropy(nonce.as_mut());
-        let drbg =
-            Deps::Drbg::instantiate(&entropy_input, &nonce, &[])?;
+        let drbg = Deps::Drbg::instantiate(&entropy_input, &nonce, &[])?;
         Ok(Self {
             drbg,
             entropy: entropy_source,

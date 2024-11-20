@@ -28,11 +28,7 @@ impl FakeDrbg {
 impl Drbg for FakeDrbg {
     type Entropy = [u8; 1];
     type Nonce = [u8; 0];
-    fn instantiate(
-        entropy_input: &[u8; 1],
-        _: &Self::Nonce,
-        _: &[u8],
-    ) -> Result<Self, DrbgError> {
+    fn instantiate(entropy_input: &[u8; 1], _: &Self::Nonce, _: &[u8]) -> Result<Self, DrbgError> {
         Ok(Self {
             counter: entropy_input[0],
         })
