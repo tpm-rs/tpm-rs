@@ -2,7 +2,7 @@ use core::{error::Error, fmt::Display};
 
 use crate::platform::crypto::{
     drbg_helpers::{next_u32_via_fill, next_u64_via_fill},
-    Drbg,
+    Drbg, DrbgError,
 };
 
 #[derive(Debug)]
@@ -26,23 +26,22 @@ impl FakeDrbg {
 }
 
 impl Drbg for FakeDrbg {
-    type Error = FakeDrbgError;
     type Entropy = [u8; 1];
     type Nonce = [u8; 0];
     fn instantiate(
         entropy_input: &[u8; 1],
         _: &Self::Nonce,
         _: &[u8],
-    ) -> Result<Self, FakeDrbgError> {
+    ) -> Result<Self, DrbgError> {
         Ok(Self {
             counter: entropy_input[0],
         })
     }
-    fn reseed(&mut self, entropy_input: &[u8; 1], _: &[u8]) -> Result<(), FakeDrbgError> {
+    fn reseed(&mut self, entropy_input: &[u8; 1], _: &[u8]) -> Result<(), DrbgError> {
         self.counter += entropy_input[0];
         Ok(())
     }
-    fn fill_bytes(&mut self, _: &[u8], buffer: &mut [u8]) -> Result<(), FakeDrbgError> {
+    fn fill_bytes(&mut self, _: &[u8], buffer: &mut [u8]) -> Result<(), DrbgError> {
         for i in buffer {
             self.counter = self.counter.wrapping_add(1);
             *i = self.counter;
@@ -50,11 +49,11 @@ impl Drbg for FakeDrbg {
         Ok(())
     }
 
-    fn next_u32(&mut self, additional_input: &[u8]) -> Result<u32, FakeDrbgError> {
+    fn next_u32(&mut self, additional_input: &[u8]) -> Result<u32, DrbgError> {
         next_u32_via_fill(self, additional_input)
     }
 
-    fn next_u64(&mut self, additional_input: &[u8]) -> Result<u64, FakeDrbgError> {
+    fn next_u64(&mut self, additional_input: &[u8]) -> Result<u64, DrbgError> {
         next_u64_via_fill(self, additional_input)
     }
 

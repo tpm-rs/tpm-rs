@@ -13,7 +13,7 @@ pub struct TpmContext<Deps: TpmContextDeps> {
 
 impl<Deps: TpmContextDeps> TpmContext<Deps> {
     /// Creates a new [`TpmContext`] object that processes incoming TPM requests.
-    pub fn new() -> Result<Self, ServerError<Deps>> {
+    pub fn new() -> Result<Self, ServerError> {
         Ok(Self {
             handler: CommandHandler::new()?,
         })

@@ -12,7 +12,7 @@ pub struct Crypto<Deps: TpmContextDeps> {
 }
 
 impl<Deps: TpmContextDeps> Crypto<Deps> {
-    pub fn new() -> Result<Self, ServerError<Deps>> {
+    pub fn new() -> Result<Self, ServerError> {
         let mut entropy_source: <Deps as TpmContextDeps>::EntropySource =
             Deps::EntropySource::instantiate();
         let mut entropy_input = <Deps::Drbg as Drbg>::Entropy::default();
@@ -20,7 +20,7 @@ impl<Deps: TpmContextDeps> Crypto<Deps> {
         entropy_source.fill_entropy(entropy_input.as_mut());
         entropy_source.fill_entropy(nonce.as_mut());
         let drbg =
-            Deps::Drbg::instantiate(&entropy_input, &nonce, &[]).map_err(ServerError::Drbg)?;
+            Deps::Drbg::instantiate(&entropy_input, &nonce, &[])?;
         Ok(Self {
             drbg,
             entropy: entropy_source,

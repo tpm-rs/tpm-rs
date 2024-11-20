@@ -11,19 +11,13 @@ use crate::{
 };
 
 impl<Deps: TpmContextDeps> CommandHandler<Deps> {
-    fn try_get_random(&mut self, buffer: &mut [u8]) -> Result<(), ServerError<Deps>> {
+    fn try_get_random(&mut self, buffer: &mut [u8]) -> Result<(), ServerError> {
         if self.crypto.drbg.requires_reseeding() {
             let mut seed = <Deps::Drbg as Drbg>::Entropy::default();
             self.crypto.entropy.fill_entropy(seed.as_mut());
-            self.crypto
-                .drbg
-                .reseed(&seed, &[])
-                .map_err(ServerError::<Deps>::Drbg)?;
+            self.crypto.drbg.reseed(&seed, &[])?;
         }
-        self.crypto
-            .drbg
-            .fill_bytes(&[], buffer)
-            .map_err(ServerError::<Deps>::Drbg)
+        self.crypto.drbg.fill_bytes(&[], buffer).map_err(Into::into)
     }
 
     fn get_random_or_faiure_mode(&mut self, buffer: &mut [u8]) {

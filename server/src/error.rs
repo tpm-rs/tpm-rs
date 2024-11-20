@@ -3,24 +3,17 @@ use core::{
     fmt::{Debug, Display},
 };
 
-use crate::platform::{crypto::Drbg, TpmContextDeps};
-
-pub enum ServerError<Deps: TpmContextDeps> {
-    Drbg(<Deps::Drbg as Drbg>::Error),
+#[derive(Debug)]
+pub enum ServerError {
+    DrbgError,
 }
 
-impl<Deps: TpmContextDeps> Debug for ServerError<Deps> {
+impl Display for ServerError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Drbg(arg0) => f.debug_tuple("Drbg").field(arg0).finish(),
+            ServerError::DrbgError => write!(f, "Drbg operation failed"),
         }
     }
 }
 
-impl<Deps: TpmContextDeps> Display for ServerError<Deps> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:#?}", self)
-    }
-}
-
-impl<Deps: TpmContextDeps> Error for ServerError<Deps> {}
+impl Error for ServerError {}

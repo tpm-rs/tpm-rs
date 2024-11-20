@@ -11,7 +11,7 @@ pub struct CommandHandler<Deps: TpmContextDeps> {
 
 impl<Deps: TpmContextDeps> CommandHandler<Deps> {
     /// Creates a new [`TpmContext`] object that processes incoming TPM requests.
-    pub fn new() -> Result<Self, ServerError<Deps>> {
+    pub fn new() -> Result<Self, ServerError> {
         Ok(Self {
             crypto: Crypto::new()?,
         })
