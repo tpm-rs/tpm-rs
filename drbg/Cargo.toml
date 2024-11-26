@@ -1,0 +1,18 @@
+[package]
+name = "tpm2-rs-drbg"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crypto-bigint = {workspace = true, features = ["generic-array"]}
+digest = { workspace = true }
+sha2 = {workspace = true, optional = true}
+tpm2-rs-server = { workspace = true }
+
+[features]
+# Implement HashDrbgProps for hash functions from sha2
+rustcrypto = ["dep:sha2"]
+[dev-dependencies]
+hex-literal = { workspace = true }
+sha1 = {workspace = true}
+sha2 = {workspace = true}
