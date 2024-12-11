@@ -48,7 +48,7 @@ pub struct Response<'a, B: TpmBuffers> {
     buffers: &'a mut RequestResponseCursor<B>,
 }
 
-impl<'a, B: TpmBuffers> Response<'a, B> {
+impl<B: TpmBuffers> Response<'_, B> {
     /// Writes the specified `data` at the last written location and updates the internal
     /// last written location. Returns [`WriteOutOfBounds`] if write would have written past the the
     /// of the underlying [`TpmWriteBuffer`].

@@ -39,7 +39,6 @@ impl PasswordSession {
     ///     PasswordSession::new(&bad_password).err().unwrap(),
     ///     TpmRcError::Size
     /// );
-
     /// ```
     pub fn new<T: AsRef<[u8]> + ?Sized>(password: &T) -> TpmRcResult<Self> {
         Ok(PasswordSession {
