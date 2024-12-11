@@ -242,6 +242,23 @@ pub enum TpmiAlgRsaScheme{
     OAEP = TpmAlgId::OAEP.0,
 }
 
+/// TpmiAlgSigScheme represents values that may appear in the scheme parameter of a TpmtSigScheme (TPMI_ALG_SIG_SCHEME).
+/// See definition in Part 2: Structures, section 9.37.
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum TpmiAlgSigScheme {
+    RSAPSS = TpmAlgId::RSAPSS.0,
+    RSASSA = TpmAlgId::RSASSA.0,
+    ECDSA = TpmAlgId::ECDSA.0,
+    ECDAA = TpmAlgId::ECDAA.0,
+    SM2 = TpmAlgId::SM2.0,
+    ECSchnorr = TpmAlgId::ECSchnorr.0,
+    HMAC = TpmAlgId::HMAC.0,
+}
+
 /// TpmiAlgEccScheme represents values that may appear in the scheme parameter of a TpmtEccScheme (TPMI_ALG_ECC_SCHEME).
 /// See definition in Part 2: Structures, section 11.2.5.4.
 #[open_enum]
@@ -920,6 +937,54 @@ pub enum TpmtSymDefObject {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 pub struct TpmsSymCipherParms {
     pub sym: TpmtSymDefObject,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+pub struct TpmsSignatureRsa {
+    pub hash: TpmiAlgHash,
+    pub sig: Tpm2bPublicKeyRsa,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+pub struct TpmsSignatureEcc {
+    pub hash: TpmiAlgHash,
+    pub signature_r: Tpm2bEccParameter,
+    pub signature_s: Tpm2bEccParameter,
+}
+
+pub type TpmsSignatureRsassa = TpmsSignatureRsa;
+pub type TpmsSignatureRsapss = TpmsSignatureRsa;
+pub type TpmsSignatureEcdsa = TpmsSignatureEcc;
+pub type TpmsSignatureEcdaa = TpmsSignatureEcc;
+pub type TpmsSignatureSm2 = TpmsSignatureEcc;
+pub type TpmsSignatureEcschnorr = TpmsSignatureEcc;
+
+#[repr(C, u16)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
+pub enum TpmtSignature {
+    Rsassa(TpmsSignatureRsassa) = TpmAlgId::RSASSA.0,
+    Rsapss(TpmsSignatureRsapss) = TpmAlgId::RSAPSS.0,
+    Ecdsa(TpmsSignatureEcdsa) = TpmAlgId::ECDSA.0,
+    Ecdaa(TpmsSignatureEcdaa) = TpmAlgId::ECDAA.0,
+    Sm2(TpmsSignatureSm2) = TpmAlgId::SM2.0,
+    Ecschnorr(TpmsSignatureEcschnorr) = TpmAlgId::ECSchnorr.0,
+    Hmac(TpmtHa) = TpmAlgId::HMAC.0,
+    Null(TpmsEmpty) = TpmAlgId::Null.0,
+}
+
+#[repr(C, u16)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
+pub enum TpmtSigScheme {
+    Rsassa(TpmsSigSchemeRsassa) = TpmAlgId::RSASSA.0,
+    Rsapss(TpmsSigSchemeRsapss) = TpmAlgId::RSAPSS.0,
+    Ecdsa(TpmsSigSchemeEcdsa) = TpmAlgId::ECDSA.0,
+    Ecdaa(TpmsSigSchemeEcdaa) = TpmAlgId::ECDAA.0,
+    Sm2(TpmsSigSchemeSm2) = TpmAlgId::SM2.0,
+    Ecschnorr(TpmsSigSchemeEcschnorr) = TpmAlgId::ECSchnorr.0,
+    Hmac(TpmsSchemeHmac) = TpmAlgId::HMAC.0,
+    Null(TpmsEmpty) = TpmAlgId::Null.0,
 }
 
 #[repr(C)]
