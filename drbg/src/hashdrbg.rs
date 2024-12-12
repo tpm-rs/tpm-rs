@@ -105,7 +105,7 @@ impl<Hash: Digest + HashDrbgProps> HashDrbg<Hash> {
     }
     /// This is the `Hash_DRBG_Generate_algorithm()` from _10.1.1.4_.
     fn generate_inner(&mut self, additional_input: &[u8], out: &mut [u8]) {
-        let p = U896::from_u64(2).shl(Hash::SeedLenBytes::USIZE * 8);
+        let p = U896::ONE.shl(Hash::SeedLenBytes::USIZE * 8);
         let mut v = slice_to_u896(&self.v);
         if !additional_input.is_empty() {
             let w = Self::hash([&[0x2], self.v.as_slice(), additional_input].iter());
@@ -131,7 +131,7 @@ impl<Hash: Digest + HashDrbgProps> HashDrbg<Hash> {
     /// This is the `Hashgen()` function from _10.1.1.4_.
     fn hash_gen(&self, out: &mut [u8]) {
         let m = out.len() / Hash::OutputSize::USIZE;
-        let p = U896::from_u64(2).shl(Hash::SeedLenBytes::USIZE * 8);
+        let p = U896::ONE.shl(Hash::SeedLenBytes::USIZE * 8);
 
         let mut data = self.v.clone();
         for i in 0..m {
@@ -154,7 +154,7 @@ impl<Hash: Digest + HashDrbgProps> Drbg for HashDrbg<Hash> {
     type Entropy = GenericArray<u8, Hash::EntropyLenBytes>;
     type Nonce = GenericArray<u8, Hash::NonceLenBytes>;
     /// according to Table 2: Definitions for Hash-Based DRBG Mechanisms,
-    /// instantiate should fail if `personalization_string` contains more
+    /// `instantiate` should fail if `personalization_string` contains more
     /// than `2**35` bits which is ~ 4GB.
     #[allow(refining_impl_trait)]
     fn instantiate(
@@ -172,7 +172,7 @@ impl<Hash: Digest + HashDrbgProps> Drbg for HashDrbg<Hash> {
         ))
     }
     /// according to Table 2: Definitions for Hash-Based DRBG Mechanisms,
-    /// instantiate should fail if `additional_input` contains more
+    /// `reseed` should fail if `additional_input` contains more
     /// than `2**35` bits which is ~ 4GB.
     fn reseed(
         &mut self,
@@ -186,22 +186,21 @@ impl<Hash: Digest + HashDrbgProps> Drbg for HashDrbg<Hash> {
         Ok(())
     }
     /// according to Table 2: Definitions for Hash-Based DRBG Mechanisms,
-    /// instantiate should fail if `additional_input` contains more
+    /// `next_u32` should fail if `additional_input` contains more
     /// than `2**35` bits which is ~ 4GB.
     fn next_u32(&mut self, additional_input: &[u8]) -> Result<u32, DrbgError> {
         next_u32_via_fill(self, additional_input)
     }
     /// according to Table 2: Definitions for Hash-Based DRBG Mechanisms,
-    /// instantiate should fail if `additional_input` contains more
-    /// than `2**35` bits which is ~ 4GB, we ignore that check since it is
-    /// not possible to pass that many data into a tpm chip.
+    /// `next_u64` should fail if `additional_input` contains more
+    /// than `2**35` bits which is ~ 4GB.
     fn next_u64(&mut self, additional_input: &[u8]) -> Result<u64, DrbgError> {
         next_u64_via_fill(self, additional_input)
     }
     /// according to Table 2: Definitions for Hash-Based DRBG Mechanisms,
-    /// instantiate should fail if `additional_input` contains more
-    /// than `2**35` bits which is ~ 4GB, we ignore that check since it is
-    /// not possible to pass that many data into a tpm chip.
+    /// `fill_bytes` should fail if `additional_input` contains more
+    /// than `2**35` bits which is ~ 4GB or if `dest` is more than `2**24` bits
+    /// which is ~64KB or if reseeding is required.
     fn fill_bytes(&mut self, additional_input: &[u8], dest: &mut [u8]) -> Result<(), DrbgError> {
         if dest.len() > MAX_BYTES_PER_REQUEST || additional_input.len() > MAX_BYTES_ADDITIONAL_INPUT
         {
