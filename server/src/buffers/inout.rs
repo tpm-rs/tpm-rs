@@ -14,7 +14,7 @@ impl<'a, W: TpmWriteBuffer + ?Sized> InOutBuffer<'a, W> {
     }
 }
 
-impl<'a, W: TpmWriteBuffer + ?Sized> TpmBuffers for InOutBuffer<'a, W> {
+impl<W: TpmWriteBuffer + ?Sized> TpmBuffers for InOutBuffer<'_, W> {
     type Request = Self;
     type Response = W;
 
@@ -26,7 +26,7 @@ impl<'a, W: TpmWriteBuffer + ?Sized> TpmBuffers for InOutBuffer<'a, W> {
     }
 }
 
-impl<'a, W: TpmWriteBuffer + ?Sized> TpmReadBuffer for InOutBuffer<'a, W> {
+impl<W: TpmWriteBuffer + ?Sized> TpmReadBuffer for InOutBuffer<'_, W> {
     fn len(&self) -> usize {
         self.len
     }

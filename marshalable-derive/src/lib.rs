@@ -24,7 +24,6 @@ use syn::{
 ///    generated code will include a discriminant() implementation that returns
 ///    $primitive, try_{un}marshal routines that accept an external selector, and will
 ///    {un}marshal the discriminant in BE format prior to the variant.
-
 #[proc_macro_derive(Marshalable, attributes(marshalable))]
 pub fn derive_tpm_marshal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

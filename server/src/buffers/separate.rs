@@ -16,7 +16,7 @@ where
     }
 }
 
-impl<'a, R, W> TpmBuffers for SeparateBuffers<'a, R, W>
+impl<R, W> TpmBuffers for SeparateBuffers<'_, R, W>
 where
     R: TpmReadBuffer + ?Sized,
     W: TpmWriteBuffer + ?Sized,
