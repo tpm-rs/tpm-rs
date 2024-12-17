@@ -993,6 +993,13 @@ pub struct TpmsSchemeHash {
     pub hash_alg: TpmiAlgHash,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+pub struct TpmsSchemeEcdaa {
+    pub hash_alg: TpmiAlgHash,
+    pub count: u16,
+}
+
 pub type TpmsKeySchemeEcdh = TpmsSchemeHash;
 pub type TpmsKeySchemeEcmqv = TpmsSchemeHash;
 pub type TpmsSigSchemeRsassa = TpmsSchemeHash;
@@ -1000,7 +1007,7 @@ pub type TpmsSigSchemeRsapss = TpmsSchemeHash;
 pub type TpmsSigSchemeEcdsa = TpmsSchemeHash;
 pub type TpmsSigSchemeSm2 = TpmsSchemeHash;
 pub type TpmsSigSchemeEcschnorr = TpmsSchemeHash;
-pub type TpmsSigSchemeEcdaa = TpmsSchemeHash;
+pub type TpmsSigSchemeEcdaa = TpmsSchemeEcdaa;
 pub type TpmsEncSchemeOaep = TpmsSchemeHash;
 pub type TpmsEncSchemeRsaes = TpmsEmpty;
 
