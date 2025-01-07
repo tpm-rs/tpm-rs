@@ -61,7 +61,7 @@ macro_rules! derive_hash_drbg_props {
             /// taken from [NIST SP 800-57 Part 1 Revision
             /// 5](https://doi.org/10.6028/NIST.SP.800-57pt1r5) Table 3: Maximum
             /// security strengths for hash and hash-based functions
-            const SECURITY_STRENGTH_BITS: usize = 122;
+            const SECURITY_STRENGTH_BITS: usize = 112;
         }
     };
     ("sha512/224", $ty:path) => {
@@ -74,7 +74,7 @@ macro_rules! derive_hash_drbg_props {
             /// taken from [NIST SP 800-57 Part 1 Revision
             /// 5](https://doi.org/10.6028/NIST.SP.800-57pt1r5) Table 3: Maximum
             /// security strengths for hash and hash-based functions
-            const SECURITY_STRENGTH_BITS: usize = 122;
+            const SECURITY_STRENGTH_BITS: usize = 112;
         }
     };
     ("sha256", $ty:path) => {
