@@ -8,7 +8,6 @@ use crate::{
 };
 use core::iter::once;
 use crypto_bigint::{prelude::ArrayEncoding, U896};
-pub use digest;
 use digest::{generic_array::GenericArray, typenum::Unsigned, Digest, Output};
 use tpm2_rs_server::platform::crypto::{
     drbg_helpers::{next_u32_via_fill, next_u64_via_fill},
