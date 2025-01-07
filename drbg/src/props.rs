@@ -2,6 +2,7 @@ use core::ops::{Add, Shr};
 use digest::{
     consts::{U3, U7},
     generic_array::ArrayLength,
+    Digest,
 };
 
 /// Table 2: Definitions for Hash-Based DRBG Mechanisms.
@@ -9,7 +10,7 @@ use digest::{
 /// Do not derive this trait manually, instead use [`derive_hash_drbg_props`].
 ///
 /// [`derive_hash_drbg_props`]: crate::derive_hash_drbg_props
-pub trait HashDrbgProps {
+pub trait HashDrbgProps: Digest {
     /// Seed length (seedlen) for Hash_DRBG in bits
     type SeedLenBits: ArrayLength<u8>;
     /// Seed length (seedlen) for Hash_DRBG converted to bytes

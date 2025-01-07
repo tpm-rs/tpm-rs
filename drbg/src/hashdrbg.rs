@@ -8,7 +8,7 @@ use crate::{
 };
 use core::iter::once;
 use crypto_bigint::{prelude::ArrayEncoding, U896};
-use digest::{generic_array::GenericArray, typenum::Unsigned, Digest, Output};
+use digest::{generic_array::GenericArray, typenum::Unsigned, Output};
 use tpm2_rs_server::platform::crypto::{
     drbg_helpers::{next_u32_via_fill, next_u64_via_fill},
     Drbg, DrbgError,
@@ -27,7 +27,7 @@ use tpm2_rs_server::platform::crypto::{
 /// ## Notes
 ///  `Hash` is expected to be cryptographically secure hash function.
 ///
-pub struct HashDrbg<Hash: Digest + HashDrbgProps> {
+pub struct HashDrbg<Hash: HashDrbgProps> {
     /// _10.1.1.1 1. a._ A value (V) of _seedlen_ bits that is updated during
     /// each call to the DRBG.
     pub(crate) v: GenericArray<u8, Hash::SeedLenBytes>,
@@ -39,7 +39,7 @@ pub struct HashDrbg<Hash: Digest + HashDrbgProps> {
     pub(crate) reseed_counter: u64,
 }
 
-impl<Hash: Digest + HashDrbgProps> HashDrbg<Hash> {
+impl<Hash: HashDrbgProps> HashDrbg<Hash> {
     /// Generic hash function defined by `Hash` type
     fn hash(data: impl Iterator<Item = impl AsRef<[u8]>>) -> Output<Hash> {
         let mut hasher = Hash::new();
@@ -149,7 +149,7 @@ impl<Hash: Digest + HashDrbgProps> HashDrbg<Hash> {
     }
 }
 
-impl<Hash: Digest + HashDrbgProps> Drbg for HashDrbg<Hash> {
+impl<Hash: HashDrbgProps> Drbg for HashDrbg<Hash> {
     type Entropy = GenericArray<u8, Hash::EntropyLenBytes>;
     type Nonce = GenericArray<u8, Hash::NonceLenBytes>;
     /// according to Table 2: Definitions for Hash-Based DRBG Mechanisms,

@@ -4,7 +4,7 @@ use crate::{
     HashDrbg, HashDrbgProps,
 };
 use digest::generic_array::GenericArray;
-use sha1::{Digest, Sha1};
+use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512, Sha512_224, Sha512_256};
 use std::fs::read_to_string;
 use tpm2_rs_server::platform::crypto::Drbg;
@@ -14,12 +14,7 @@ use tpm2_rs_server::platform::crypto::Drbg;
 fn line_filter(line: &str) -> bool {
     !(line.is_empty() || line.starts_with('#'))
 }
-fn test_round<Hash: Digest + HashDrbgProps>(
-    e: &RoundEntry,
-    out: &mut [u8],
-    reseed: bool,
-    pr: bool,
-) {
+fn test_round<Hash: HashDrbgProps>(e: &RoundEntry, out: &mut [u8], reseed: bool, pr: bool) {
     let entropy = GenericArray::from_slice(&e.entropy_input);
     let nonce = GenericArray::from_slice(&e.nonce);
     let mut drbg: HashDrbg<Hash> =
@@ -61,7 +56,7 @@ fn test_round<Hash: Digest + HashDrbgProps>(
     assert_eq!(out, e.returned_bits);
 }
 
-fn test_rounds<Hash: Digest + HashDrbgProps>(vector: &TestVector, reseed: bool) {
+fn test_rounds<Hash: HashDrbgProps>(vector: &TestVector, reseed: bool) {
     let mut out = vec![0; bits_to_bytes(vector.props.returned_bits_len)];
     for entry in &vector.entries {
         test_round::<Hash>(entry, &mut out, reseed, vector.props.prediction_resistance);
