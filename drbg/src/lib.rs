@@ -16,6 +16,6 @@ mod test;
 pub use crypto_bigint;
 pub use digest;
 pub use hashdrbg::HashDrbg;
-pub use props::{BitsToBytes, HashDrbgProps};
+pub use props::{bits_to_bytes, BitsToBytes, HashDrbgProps};
 #[cfg(feature = "rustcrypto")]
 pub use sha2;

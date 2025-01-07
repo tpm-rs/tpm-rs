@@ -1,4 +1,5 @@
 use crate::{
+    bits_to_bytes,
     test::nist_parser::{Alg, RoundEntry, TestVector},
     HashDrbg, HashDrbgProps,
 };
@@ -61,7 +62,7 @@ fn test_round<Hash: Digest + HashDrbgProps>(
 }
 
 fn test_rounds<Hash: Digest + HashDrbgProps>(vector: &TestVector, reseed: bool) {
-    let mut out = vec![0; vector.props.returned_bits_len / 8];
+    let mut out = vec![0; bits_to_bytes(vector.props.returned_bits_len)];
     for entry in &vector.entries {
         test_round::<Hash>(entry, &mut out, reseed, vector.props.prediction_resistance);
     }
