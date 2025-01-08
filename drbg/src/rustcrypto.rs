@@ -24,6 +24,6 @@ mod test {
         /// taken from [NIST SP 800-57 Part 1 Revision
         /// 5](https://doi.org/10.6028/NIST.SP.800-57pt1r5) Table 3: Maximum
         /// security strengths for hash and hash-based functions
-        const SECURITY_STRENGTH_BITS: usize = 80;
+        const HIGHEST_SUPPORTED_SECURITY_STRENGTH_BITS: usize = 80;
     }
 }

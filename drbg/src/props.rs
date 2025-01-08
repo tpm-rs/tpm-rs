@@ -20,10 +20,11 @@ pub trait HashDrbgProps: Digest {
     /// the numbers are taken from NIST test Vectors
     type NonceLenBytes: ArrayLength<u8>;
     /// highest_supported_security_strength
-    const SECURITY_STRENGTH_BITS: usize;
-    const SECURITY_STRENGTH_BYTES: usize = bits_to_bytes(Self::SECURITY_STRENGTH_BITS);
+    const HIGHEST_SUPPORTED_SECURITY_STRENGTH_BITS: usize;
+    const HIGHEST_SUPPORTED_SECURITY_STRENGTH_BYTES: usize =
+        bits_to_bytes(Self::HIGHEST_SUPPORTED_SECURITY_STRENGTH_BITS);
     /// 8.6.7.a Nonce: A value with at least (security_strength/2) bits of entropy
-    const NONCE_BYTES_MIN: usize = Self::SECURITY_STRENGTH_BYTES / 2;
+    const NONCE_BYTES_MIN: usize = Self::HIGHEST_SUPPORTED_SECURITY_STRENGTH_BYTES / 2;
 }
 
 /// Divides by 8, rounding up ... type-wise
@@ -142,7 +143,7 @@ macro_rules! derive_hash_drbg_props {
             /// taken from [NIST SP 800-57 Part 1 Revision
             /// 5](https://doi.org/10.6028/NIST.SP.800-57pt1r5) Table 3: Maximum
             /// security strengths for hash and hash-based functions
-            const SECURITY_STRENGTH_BITS: usize = 112;
+            const HIGHEST_SUPPORTED_SECURITY_STRENGTH_BITS: usize = 112;
         }
     };
     ("sha512/224", $ty:path) => {
@@ -155,7 +156,7 @@ macro_rules! derive_hash_drbg_props {
             /// taken from [NIST SP 800-57 Part 1 Revision
             /// 5](https://doi.org/10.6028/NIST.SP.800-57pt1r5) Table 3: Maximum
             /// security strengths for hash and hash-based functions
-            const SECURITY_STRENGTH_BITS: usize = 112;
+            const HIGHEST_SUPPORTED_SECURITY_STRENGTH_BITS: usize = 112;
         }
     };
     ("sha256", $ty:path) => {
@@ -168,7 +169,7 @@ macro_rules! derive_hash_drbg_props {
             /// taken from [NIST SP 800-57 Part 1 Revision
             /// 5](https://doi.org/10.6028/NIST.SP.800-57pt1r5) Table 3: Maximum
             /// security strengths for hash and hash-based functions
-            const SECURITY_STRENGTH_BITS: usize = 128;
+            const HIGHEST_SUPPORTED_SECURITY_STRENGTH_BITS: usize = 128;
         }
     };
     ("sha512/256", $ty:path) => {
@@ -181,7 +182,7 @@ macro_rules! derive_hash_drbg_props {
             /// taken from [NIST SP 800-57 Part 1 Revision
             /// 5](https://doi.org/10.6028/NIST.SP.800-57pt1r5) Table 3: Maximum
             /// security strengths for hash and hash-based functions
-            const SECURITY_STRENGTH_BITS: usize = 128;
+            const HIGHEST_SUPPORTED_SECURITY_STRENGTH_BITS: usize = 128;
         }
     };
     ("sha384", $ty:path) => {
@@ -194,7 +195,7 @@ macro_rules! derive_hash_drbg_props {
             /// taken from [NIST SP 800-57 Part 1 Revision
             /// 5](https://doi.org/10.6028/NIST.SP.800-57pt1r5) Table 3: Maximum
             /// security strengths for hash and hash-based functions
-            const SECURITY_STRENGTH_BITS: usize = 192;
+            const HIGHEST_SUPPORTED_SECURITY_STRENGTH_BITS: usize = 192;
         }
     };
     ("sha512", $ty:path) => {
@@ -207,7 +208,7 @@ macro_rules! derive_hash_drbg_props {
             /// taken from [NIST SP 800-57 Part 1 Revision
             /// 5](https://doi.org/10.6028/NIST.SP.800-57pt1r5) Table 3: Maximum
             /// security strengths for hash and hash-based functions
-            const SECURITY_STRENGTH_BITS: usize = 256;
+            const HIGHEST_SUPPORTED_SECURITY_STRENGTH_BITS: usize = 256;
         }
     };
 }
