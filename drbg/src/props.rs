@@ -53,15 +53,81 @@ pub const fn bits_to_bytes(bits: usize) -> usize {
 /// # Examples
 ///
 /// ```
+/// use digest::{
+///     consts::U32, Digest, FixedOutput, FixedOutputReset, Output, OutputSizeUser, Reset, Update,
+/// };
 /// use tpm2_rs_drbg::derive_hash_drbg_props;
-///
+/// #[derive(Default)]
 /// struct MyCustomSha256;
 ///
-/// // the rest of the implementation of sha256 follows here
-/// // including implementing Digest.
-///
+/// impl OutputSizeUser for MyCustomSha256 {
+///     type OutputSize = U32;
+/// }
+/// impl Reset for MyCustomSha256 {
+///     fn reset(&mut self) {
+///         todo!()
+///     }
+/// }
+/// impl Update for MyCustomSha256 {
+///     fn update(&mut self, data: &[u8]) {
+///         todo!()
+///     }
+/// }
+/// impl FixedOutput for MyCustomSha256 {
+///     fn finalize_into(self, out: &mut Output<Self>) {
+///         todo!()
+///     }
+/// }
+/// impl FixedOutputReset for MyCustomSha256 {
+///     fn finalize_into_reset(&mut self, out: &mut Output<Self>) {
+///         todo!()
+///     }
+/// }
+/// impl Digest for MyCustomSha256 {
+///     fn new() -> Self {
+///         todo!()
+///     }
+///     fn new_with_prefix(data: impl AsRef<[u8]>) -> Self {
+///         todo!()
+///     }
+///     fn update(&mut self, data: impl AsRef<[u8]>) {
+///         todo!()
+///     }
+///     fn chain_update(self, data: impl AsRef<[u8]>) -> Self {
+///         todo!()
+///     }
+///     fn finalize(self) -> Output<Self> {
+///         todo!()
+///     }
+///     fn finalize_into(self, out: &mut Output<Self>) {
+///         todo!()
+///     }
+///     fn finalize_reset(&mut self) -> Output<Self>
+///     where
+///         Self: FixedOutputReset,
+///     {
+///         todo!()
+///     }
+///     fn finalize_into_reset(&mut self, out: &mut Output<Self>)
+///     where
+///         Self: FixedOutputReset,
+///     {
+///         todo!()
+///     }
+///     fn reset(&mut self)
+///     where
+///         Self: Reset,
+///     {
+///         todo!()
+///     }
+///     fn output_size() -> usize {
+///         todo!()
+///     }
+///     fn digest(data: impl AsRef<[u8]>) -> Output<Self> {
+///         todo!()
+///     }
+/// }
 /// derive_hash_drbg_props!("sha256", MyCustomSha256);
-///
 /// // now you can use HashDrbg<MyCustomSha256>
 /// ```
 #[macro_export]
