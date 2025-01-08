@@ -1,6 +1,6 @@
 use crate::{
     bits_to_bytes,
-    test::nist_parser::{Alg, RoundEntry, TestVector},
+    hashdrbg::test::nist_parser::{Alg, RoundEntry, TestVector},
     HashDrbg, HashDrbgProps,
 };
 use digest::generic_array::GenericArray;

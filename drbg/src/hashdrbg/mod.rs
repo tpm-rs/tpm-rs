@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod test;
+
 use crate::{
     helpers::{slice_to_u896, truncate_from_start},
     props::{
@@ -30,13 +33,13 @@ use tpm2_rs_server::platform::crypto::{
 pub struct HashDrbg<Hash: HashDrbgProps> {
     /// _10.1.1.1 1. a._ A value (V) of _seedlen_ bits that is updated during
     /// each call to the DRBG.
-    pub(crate) v: GenericArray<u8, Hash::SeedLenBytes>,
+    pub v: GenericArray<u8, Hash::SeedLenBytes>,
     /// _10.1.1.1 1. b._ constant (C) of _seedlen_ bits that depends on the seed
-    pub(crate) c: GenericArray<u8, Hash::SeedLenBytes>,
+    pub c: GenericArray<u8, Hash::SeedLenBytes>,
     /// _10.1.1.1 1. c._ A counter (reseed_counter) that indicates the number of
     /// requests for pseudorandom bits since new _entropy_input_ was obtained
     /// during instantiation or reseeding.
-    pub(crate) reseed_counter: u64,
+    pub reseed_counter: u64,
 }
 
 impl<Hash: HashDrbgProps> HashDrbg<Hash> {

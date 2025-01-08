@@ -10,9 +10,6 @@ mod helpers;
 mod props;
 #[cfg(any(test, feature = "rustcrypto"))]
 mod rustcrypto;
-#[cfg(test)]
-mod test;
-
 pub use crypto_bigint;
 pub use digest;
 pub use hashdrbg::HashDrbg;
