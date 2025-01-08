@@ -56,14 +56,14 @@ impl<Hash: HashDrbgProps> HashDrbg<Hash> {
         let mut tmp = GenericArray::default();
         let mut counter: u8 = 1;
         let len = Hash::SeedLenBytes::USIZE / Hash::OutputSize::USIZE;
-        let no_of_bits_to_return: &[u8] = &(Hash::SeedLenBytes::U32 * 8).to_be_bytes();
-        for i in 0..len {
+        let no_of_bits_to_return: &[u8] = &Hash::SeedLenBits::U32.to_be_bytes();
+        for i in 1..=len {
             let counter_byte: &[u8] = &[counter];
             let hashables = once(&counter_byte)
                 .chain(once(&no_of_bits_to_return))
                 .chain(data.iter());
             let out = Self::hash(hashables);
-            tmp[i * Hash::OutputSize::USIZE..(i + 1) * Hash::OutputSize::USIZE]
+            tmp[(i - 1) * Hash::OutputSize::USIZE..i * Hash::OutputSize::USIZE]
                 .copy_from_slice(&out);
             counter += 1;
         }
