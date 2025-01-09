@@ -86,6 +86,14 @@ impl<Hash: HashDrbgProps> HashDrbg<Hash> {
     ///
     /// Note that security strength is not used in the
     /// implementation so it is not passed here.
+    ///
+    /// # Invariants
+    ///
+    /// According to _9.1_ caller must verify that:
+    /// - `entropy_input` < [MAX_BYTES_ADDITIONAL_INPUT]
+    /// - `entropy_input` > [HIGHEST_SUPPORTED_SECURITY_STRENGTH_BYTES]
+    /// - `nonce` > [NONCE_BYTES_MIN]
+    /// - `personalization_string.len()` < [MAX_BYTES_PERSONALIZATION_STRING]
     fn instantiate_inner(
         entropy_input: &[u8],
         nonce: &[u8],
@@ -100,12 +108,25 @@ impl<Hash: HashDrbgProps> HashDrbg<Hash> {
         }
     }
     /// This is the `Hash_DRBG_Reseed_algorithm()` from _10.1.1.3_.
+    ///
+    /// # Invariants
+    ///
+    /// According to _9.2_, caller must verfy that:
+    /// - `entropy_input` < [MAX_BYTES_ADDITIONAL_INPUT]
+    /// - `entropy_input` > [HIGHEST_SUPPORTED_SECURITY_STRENGTH_BYTES]
+    /// - `additional_input` < [MAX_BYTES_ADDITIONAL_INPUT]
     fn reseed_inner(&mut self, entropy_input: &[u8], additional_input: &[u8]) {
         self.v = Self::hash_df(&[&[0x1], self.v.as_slice(), entropy_input, additional_input]);
         self.c = Self::hash_df(&[&[0x0], self.v.as_slice()]);
         self.reseed_counter = 1;
     }
     /// This is the `Hash_DRBG_Generate_algorithm()` from _10.1.1.4_.
+    ///
+    /// # Invariants
+    /// Caller to this function must verify that:
+    /// - `out` < [MAX_BYTES_PER_REQUEST]
+    /// - `additional_input` < [MAX_BYTES_ADDITIONAL_INPUT]
+    /// - self.reseed_counter < [MAX_REQUESTS_BETWEEN_RESEEDS]
     fn generate_inner(&mut self, additional_input: &[u8], out: &mut [u8]) {
         let p = U896::ONE.shl(Hash::SeedLenBytes::USIZE * 8);
         let mut v = slice_to_u896(&self.v);
