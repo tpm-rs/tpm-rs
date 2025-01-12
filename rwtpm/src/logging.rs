@@ -18,7 +18,7 @@ pub fn init_tracing(verbosity: u8, logfile: Option<&str>, ansi: bool) {
     exit(-1);
 }
 
-/// This function initializes logging return error it fails to do so
+/// This function initializes logging and return an error when failing to do so
 pub fn init_tracing_inner(verbosity: u8, logfile: Option<&str>, ansi: bool) -> Result<(), String> {
     let filter = verbosity_to_filter(verbosity)?;
     let logger = fmt().with_env_filter(filter).with_ansi(ansi);
@@ -31,7 +31,7 @@ pub fn init_tracing_inner(verbosity: u8, logfile: Option<&str>, ansi: bool) -> R
     Ok(())
 }
 
-/// This function converts verbosity to filter or returns error on failure
+/// This function converts verbosity count to a filter or returns error on failure
 fn verbosity_to_filter(verbosity: u8) -> Result<EnvFilter, String> {
     let level = match verbosity {
         0 => LevelFilter::WARN,
