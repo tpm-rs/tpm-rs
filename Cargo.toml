@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "base",
     "client",
+    "drbg",
     "errors",
     "marshalable",
     "marshalable-derive",
@@ -14,11 +15,15 @@ members = [
 [workspace.dependencies]
 # Third party dependencies
 bitflags = "2.4.2"
+crypto-bigint = "0.5.5"
+digest = "0.10.7"
 hex-literal = { version = "0.4.1" }
 open-enum = "0.4.1"
 proc-macro2 = "1"
 quote = "1"
 safe-discriminant = "0.2.0"
+sha1="0.10.6"
+sha2="0.10.8"
 syn = {version = "2", features = ["full"]}
 trybuild = { version = "1.0.89", features = ["diff"] }
 zerocopy = { version = "0.7.0", features = ["derive"] }
@@ -26,6 +31,7 @@ zerocopy = { version = "0.7.0", features = ["derive"] }
 # Common workspace crates
 tpm2-rs-base = { path = "base" }
 tpm2-rs-client = { path = "client" }
+tpm2-rs-drbg = {path = "drbg"}
 tpm2-rs-errors = { path = "errors" }
 tpm2-rs-marshalable = { path = "marshalable" }
 tpm2-rs-marshalable-derive = { path = "marshalable-derive" }
