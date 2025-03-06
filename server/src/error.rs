@@ -1,5 +1,4 @@
 use core::{
-    error::Error,
     fmt::{Debug, Display},
 };
 
@@ -15,5 +14,3 @@ impl Display for ServerError {
         }
     }
 }
-
-impl Error for ServerError {}

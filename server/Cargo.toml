@@ -6,3 +6,7 @@ edition = "2021"
 [dependencies]
 hex-literal = { workspace = true }
 tpm2-rs-base = { workspace = true }
+
+[features]
+default = []
+unstable = []
