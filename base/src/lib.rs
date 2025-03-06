@@ -5,6 +5,7 @@
 use crate::{constants::*, errors::*, marshal::*};
 use bitflags::bitflags;
 use core::cmp::min;
+use core::convert::{From, TryFrom};
 use core::mem::size_of;
 use open_enum::open_enum;
 use safe_discriminant::Discriminant;

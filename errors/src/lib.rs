@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(not(test), no_std)]
 
+use core::convert::TryFrom;
 use core::num::NonZeroU32;
-
+use core::result::{Result, Result::*};
 pub use tpm_rc::*;
 pub use tss_rc::*;
 
