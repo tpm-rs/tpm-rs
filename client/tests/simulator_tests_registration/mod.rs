@@ -7,4 +7,5 @@
 //! <chaptername>/<commandname_1>.rs
 //! <chaptername>/<commandname_2>.rs
 pub mod capability;
+pub mod nv_storage;
 pub mod random;
