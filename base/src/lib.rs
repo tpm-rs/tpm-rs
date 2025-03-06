@@ -29,6 +29,19 @@ const fn set_attribute_field(value: u32, field_value: u32, mask: u32, shift: u32
     (value & !mask) | new_attribute_field(field_value, mask, shift)
 }
 
+/// Returns an attribute field built by applying the mask/shift to the value.
+const fn new_attribute_field64(value: u64, mask: u64, shift: u64) -> u64 {
+    (value << shift) & mask
+}
+/// Returns the attribute field retrieved from the value with the mask/shift.
+const fn get_attribute_field64(value: u64, mask: u64, shift: u64) -> u64 {
+    (value & mask) >> shift
+}
+/// Sets the attribute field defined by mask/shift in the value to the field value, and returns the result.
+const fn set_attribute_field64(value: u64, field_value: u64, mask: u64, shift: u64) -> u64 {
+    (value & !mask) | new_attribute_field64(field_value, mask, shift)
+}
+
 /// TpmaLocality represents the locality attribute (TPMA_LOCALITY).
 /// See definition in Part 2: Structures, section 8.5.
 #[repr(transparent)]
@@ -136,6 +149,93 @@ impl TpmaNv {
 impl From<TpmNt> for TpmaNv {
     fn from(value: TpmNt) -> Self {
         Self::from_index_type(value)
+    }
+}
+
+/// TpmNvExp represents the expanded NV index attributes (TPMA_NV_EXP).
+/// See definition in Part 2: Structures, section 13.5.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
+pub struct TpmaNvExp(pub u64);
+bitflags! {
+    impl TpmaNvExp : u64 {
+        /// Whether the index data can be written if platform authorization is provided.
+        const PPWRITE = 1 << 0;
+        /// Whether the index data can be written if owner authorization is provided.
+        const OWNERWRITE = 1 <<  1;
+        /// Whether authorizations to change the index contents that require USER role may be provided with an HMAC session or password.
+        const AUTHWRITE = 1 << 2;
+        /// Whether authorizations to change the index contents that require USER role may be provided with a policy session.
+        const POLICYWRITE = 1 << 3;
+        /// If set, the index may not be deteled unless the auth_policy is satisfied using nv_undefined_space_special.
+        /// If clear, the index may be deleted with proper platform/owner authorization using nv_undefine_space.
+        const POLICY_DELETE = 1 << 10;
+        /// Whether the index can NOT be written.
+        const WRITELOCKED = 1 << 11;
+        /// Whether a partial write of the index data is NOT allowed.
+        const WRITEALL = 1 << 12;
+        /// Whether nv_write_lock may be used to prevent futher writes to this location.
+        const WRITEDEFINE = 1 << 13;
+        /// Whether nv_write_lock may be used to prevent further writes to this location until the next TPM reset/restart.
+        const WRITE_STCLEAR = 1 << 14;
+        /// Whether WRITELOCKED is set if nv_global_write_lock is successful.
+        const GLOBALLOCK = 1 << 15;
+        /// Whether the index data can be read if platform authorization is provided.
+        const PPREAD = 1 << 16;
+        /// Whether the index data can be read if owner authorization is provided.
+        const OWNERREAD = 1 << 17;
+        /// Whether the index data can be read if auth_value is provided.
+        const AUTHREAD = 1 << 18;
+        /// Whether the index data can be read if the auth_policy is satisfied.
+        const POLICYREAD = 1 << 19;
+        /// If set, authorizationn failures of the index do not affect the DA logic and authorization of the index is not blocked when the TPM is in Lockout mode.
+        /// If clear, authorization failures of the index will increment the authorization failure counter and authorizations of this index are not allowed when the TPM is in Lockout mode.
+        const NO_DA = 1 << 25;
+        /// Whether NV index state is required to be saved only when the TPM performs an orderly shutdown.
+        const ORDERLY = 1 << 26;
+        /// Whether WRITTEN is cleared by TPM reset/restart.
+        const CLEAR_STCLEAR = 1 << 27;
+        /// Whether reads of the index are blocked  until the next TPM reset/restart.
+        const READLOCKED = 1 << 28;
+        /// Whether the index has been written.
+        const WRITTEN = 1 << 29;
+        /// If set, the index may be undefined with platform authorization but not owner authorization.
+        /// If clear, the index may be undefined with owner authorization but not platform authorization.
+        const PLATFORMCREATE = 1 << 30;
+        /// Whether nv_read_lock may be used to set READLOCKED for this index.
+        const READ_STCLEAR = 1 << 31;
+        // External NV index contents are encrypted.
+        const EXTERNAL_ENCRYPTION = 1 << 32;
+        // External NV index contents are integrity-protected.
+        const EXTERNAL_INTEGRITY = 1 << 33;
+        // External NV index contents are rollback-protected.
+        const EXTERNAL_ANTI_ROLLBACK = 1 << 34;
+        // See multi-bit type field below.
+        const _ = !0;
+    }
+}
+impl TpmaNvExp {
+    /// Mask for the index type field.
+    const NT_MASK: u64 = 0xF0;
+    /// Shift of the index type field.
+    const NT_SHIFT: u64 = 4;
+
+    /// Returns the attribute for an index type (with all other field clear).
+    const fn from_index_type(index_type: TpmNt) -> Self {
+        TpmaNvExp(new_attribute_field64(
+            index_type.0 as u64,
+            Self::NT_MASK,
+            Self::NT_SHIFT,
+        ))
+    }
+
+    /// Returns the type of the index.
+    pub fn get_index_type(&self) -> TpmNt {
+        TpmNt(get_attribute_field64(self.0, Self::NT_MASK, Self::NT_SHIFT) as u8)
+    }
+    /// Sets the type of the index.
+    pub fn set_type(&mut self, index_type: TpmNt) {
+        self.0 = set_attribute_field64(self.0, index_type.0 as u64, Self::NT_MASK, Self::NT_SHIFT);
     }
 }
 
@@ -308,6 +408,25 @@ impl TryFrom<u32> for TpmiRhNvIndex {
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         if TpmHc::is_nv_index(value) {
             Ok(TpmiRhNvIndex(value))
+        } else {
+            Err(TpmRcError::Value)
+        }
+    }
+}
+
+/// TpmiRhNvAuth represents an NV authorization policy (TPMI_RH_NV_AUTH).
+/// See definition in Part 2: Structures, section 9.23.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
+pub struct TpmiRhNvAuth(u32);
+impl TryFrom<u32> for TpmiRhNvAuth {
+    type Error = TpmRcError;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if value == TpmHandle::RHPlatform.0
+            || value == TpmHandle::RHOwner.0
+            || TpmHc::is_nv_index(value)
+        {
+            Ok(TpmiRhNvAuth(value))
         } else {
             Err(TpmRcError::Value)
         }
@@ -628,8 +747,8 @@ pub struct Tpm2bMaxBuffer {
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 #[marshalable(tpm2b_simple)]
 pub struct Tpm2bMaxNvBuffer {
-    size: u16,
-    buffer: [u8; TPM2_MAX_NV_BUFFER_SIZE as usize],
+    pub size: u16,
+    pub buffer: [u8; TPM2_MAX_NV_BUFFER_SIZE as usize],
 }
 
 #[repr(C)]
@@ -1414,10 +1533,37 @@ pub struct TpmsNvPublic {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+pub struct TpmsNvPublicExpAttr {
+    pub nv_index: TpmiRhNvIndex,
+    pub name_alg: TpmiAlgHash,
+    pub attributes: TpmaNvExp,
+    pub auth_policy: Tpm2bDigest,
+    pub data_size: u16,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bNvPublic {
     size: u16,
     nv_public: [u8; size_of::<TpmsNvPublic>()],
+}
+
+#[repr(C, u8)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable, Discriminant, UnionSize)]
+pub enum TpmtNvPublic2 {
+    NVIndex(TpmsNvPublic) = TpmHt::NVIndex.0,
+    ExternalNV(TpmsNvPublicExpAttr) = TpmHt::ExternalNV.0,
+    PermanentNV(TpmsNvPublic) = TpmHt::PermanentNV.0,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[marshalable(tpm2b_simple)]
+pub struct Tpm2bNvPublic2 {
+    pub size: u16,
+    pub buffer: [u8; TpmtNvPublic2::UNION_SIZE],
 }
 
 #[repr(C)]
