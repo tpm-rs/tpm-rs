@@ -1,4 +1,7 @@
+use core::convert::From;
 use core::num::NonZeroU32;
+use core::option::Option::*;
+use core::result::Result;
 
 /// Generate a typed error and result for a specifc TSS client layer.
 macro_rules! generate_tss_layer_error {

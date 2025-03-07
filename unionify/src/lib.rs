@@ -1,3 +1,4 @@
+#![cfg_attr(not(test), no_std)]
 //! [UnionSize] is a derivable trait that calculates the size of
 //! `repr(C)` union part in a tagged or untagged enum.
 //!

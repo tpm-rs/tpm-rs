@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(not(test), no_std)]
 
 use core::mem::size_of;
+use core::option::{Option, Option::*};
+use core::result::Result::*;
 use safe_discriminant::Discriminant;
 
 use tpm2_rs_errors::*;

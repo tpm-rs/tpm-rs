@@ -1,4 +1,6 @@
 use core::num::NonZeroU32;
+use core::option::{Option, Option::*};
+use core::result::Result;
 
 /// Represents success or [`TpmRcError`] failure.
 pub type TpmRcResult<T> = Result<T, TpmRcError>;
