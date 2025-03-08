@@ -221,6 +221,13 @@ pub enum TpmCc {
     PolicyACSendSelect = 0x00000196,
     CertifyX509 = 0x00000197,
     ACTSetTimeout = 0x00000198,
+    ECCEncrypt = 0x00000199,
+    ECCDecrypt = 0x0000019a,
+    PolicyCapability = 0x0000019b,
+    PolicyParameters = 0x0000019c,
+    NVDefineSpace2 = 0x0000019d,
+    NVReadPublic2 = 0x0000019e,
+    SetCapability = 0x0000019f,
 }
 
 // TpmRc represents a TPM_RC.
@@ -656,6 +663,8 @@ pub enum TpmHt {
     NVIndex = 0x01,
     HMACSession = 0x02,
     PolicySession = 0x03,
+    ExternalNV = 0x11,
+    PermanentNV = 0x12,
     Permanent = 0x40,
     Transient = 0x80,
     Persistent = 0x81,
