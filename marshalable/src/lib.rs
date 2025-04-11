@@ -5,6 +5,7 @@ use safe_discriminant::Discriminant;
 
 use tpm2_rs_errors::*;
 pub use tpm2_rs_marshalable_derive::Marshalable;
+pub use tpm2_rs_marshalable_derive::Tpm2bStruct;
 
 /// Exports needed for macro expansion
 pub mod exports {

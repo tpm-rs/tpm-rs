@@ -854,9 +854,8 @@ pub struct TpmsSensitiveCreate {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable, Tpm2bStruct)]
 #[marshalable(tpm2b_simple)]
-#[marshalable(tpm2b_struct)]
 pub struct Tpm2bSensitiveCreate {
     size: u16,
     sensitive: [u8; size_of::<TpmsSensitiveCreate>()],
@@ -1166,9 +1165,8 @@ impl Marshalable for TpmtPublic {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable, Tpm2bStruct)]
 #[marshalable(tpm2b_simple)]
-#[marshalable(tpm2b_struct)]
 pub struct Tpm2bPublic {
     size: u16,
     public_area: [u8; size_of::<TpmtPublic>()],
@@ -1457,9 +1455,8 @@ pub struct TpmsCreationData {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable, Tpm2bStruct)]
 #[marshalable(tpm2b_simple)]
-#[marshalable(tpm2b_struct)]
 pub struct Tpm2bCreationData {
     size: u16,
     creation_data: [u8; size_of::<TpmsCreationData>()],

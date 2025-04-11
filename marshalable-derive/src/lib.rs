@@ -5,9 +5,106 @@ use quote::{quote, quote_spanned};
 use std::collections::HashMap;
 use syn::{
     parse_macro_input, spanned::Spanned, Attribute, Data, DataEnum, DeriveInput, Error, Expr,
-    ExprCall, ExprPath, Field, Fields, FieldsNamed, Ident, Index, MetaNameValue, Path,
-    PathArguments, Result, Type,
+    ExprCall, ExprPath, Field, Fields, FieldsNamed, GenericArgument, Ident, Index, MetaNameValue,
+    Path, PathArguments, Result, Type,
 };
+
+/// The Tpm2bStruct derive macro generates an implementation of the Tpm2bStruct trait
+/// for a struct. This requires that the struct implements the Marshalable trait
+/// as well, due to dependency to try_{un}marshal functions.
+///
+/// In order to generate the implementation of the trait, the derive mechanism requires
+/// that the struct follows the following format:
+///
+/// pub struct Tpm2bNAME {
+///     size: u16,
+///     FIELD_NAME: [u8; SIZE_EXPRESSION],
+/// }
+///
+/// The Tpm2bNAME is the name for the structure definition. The FIELD_NAME is the
+/// name if the u8 array and the SIZE_EXPRESSION is a size_of::SOME_TYPE().
+#[proc_macro_derive(Tpm2bStruct)]
+pub fn derive_tpm_2b_struct(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match derive_tpm_2b_struct_inner(input) {
+        Ok(t) => t.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+fn derive_tpm_2b_struct_inner(input: DeriveInput) -> Result<TokenStream> {
+    match &input.data {
+        Data::Struct(data) => derive_tpm2b_struct(&input.ident, data),
+        _ => Err(Error::new(
+            input.span(),
+            "The #[derive(Tpm2bStruct)] can only be applied to a struct.",
+        )),
+    }
+}
+
+fn derive_tpm2b_struct(
+    tpm2b_outer_struct_name: &Ident,
+    data_struct: &syn::DataStruct,
+) -> Result<TokenStream> {
+    const TPM2B_STRUCT_ERR_2ND_ELM: &str = "Second element in Tpm2b struct must define a u8 buffer using sizeof expression: <buffer name>: [u8, sizeof(<some struct>) ] when using #[derive(Tpm2bStruct)].";
+
+    // Lets extracts the 2nd element u8 field name (&Ident) and its size expression (&Expr).
+    let (field_name, size_expression) = derive_tpm2b_common(tpm2b_outer_struct_name, data_struct)?;
+
+    // Lets extract the <some struct> name from tpm2b buffer definition <buffer name>: [u8, sizeof( <some struct>) ]
+    // Extract the func, args.
+    let Expr::Call(ExprCall { func, .. }) = size_expression else {
+        return Err(Error::new(size_expression.span(), TPM2B_STRUCT_ERR_2ND_ELM));
+    };
+
+    // Check if the function being called is "sizeof"
+    let Expr::Path(ExprPath { path, .. }) = &**func else {
+        return Err(Error::new(func.span(), TPM2B_STRUCT_ERR_2ND_ELM));
+    };
+
+    // The path contains multiple elements, the first must be sizeof.
+    let Some(segment) = path.segments.first() else {
+        return Err(Error::new(func.span(), TPM2B_STRUCT_ERR_2ND_ELM));
+    };
+    if segment.ident != "size_of" {
+        return Err(Error::new(path.segments.span(), TPM2B_STRUCT_ERR_2ND_ELM));
+    };
+
+    // Extract the size_of arguments.
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return Err(Error::new(
+            segment.arguments.span(),
+            TPM2B_STRUCT_ERR_2ND_ELM,
+        ));
+    };
+
+    let Some(struct_type) = arguments.args.first() else {
+        return Err(Error::new(segment.span(), TPM2B_STRUCT_ERR_2ND_ELM));
+    };
+
+    let GenericArgument::Type(Type::Path(struct_path)) = struct_type else {
+        return Err(Error::new(struct_type.span(), TPM2B_STRUCT_ERR_2ND_ELM));
+    };
+
+    let tpm2b_inner_struct_name = &struct_path.path;
+
+    Ok(quote! {
+        impl Tpm2bStruct for #tpm2b_outer_struct_name {
+            type StructType = #tpm2b_inner_struct_name;
+
+            fn from_struct(val: &Self::StructType) -> TpmRcResult<Self> {
+                let mut x = Self::default();
+                x.size = val.try_marshal(&mut x.#field_name)? as u16;
+                Ok(x)
+            }
+
+            fn to_struct(&self) -> TpmRcResult<Self::StructType> {
+                let mut buf = UnmarshalBuf::new(&self.as_ref());
+                Self::StructType::try_unmarshal(&mut buf)
+            }
+        }
+    })
+}
 
 /// The Marshalable derive macro generates an implementation of the Marshalable trait
 /// for a struct by calling try_{un}marshal on each field in the struct. This
@@ -59,8 +156,8 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
                 Ok(#instantiation)
             };
 
-            let pure_impl = if has_tpm2b_simple || has_tpm2b_struct {
-                derive_tpm2b_code(&name, &stru, has_tpm2b_simple, has_tpm2b_struct)?
+            let pure_impl = if has_tpm2b_simple {
+                derive_tpm2b_simple(&name, &stru)?
             } else {
                 TokenStream::new()
             };
@@ -104,228 +201,158 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
     Ok(expanded)
 }
 
-fn derive_tpm2b_code(
+fn derive_tpm2b_simple(
     tpm2b_outer_struct_name: &Ident,
     stru: &syn::DataStruct,
-    tpm2b_simple: bool,
-    tpm2b_struct: bool,
 ) -> Result<TokenStream> {
-    const TPM2B_SIMPLE_ERR_GENERAL: &str = "A Tpm2b struct must contain just two elements, a u16 size and a buffer array when using #[marshalable(tpm2b_simple)]";
-    const TPM2B_SIMPLE_ERR_1ST_ELM: &str = "First element in Tpm2b struct must be a 'size: u16' when using #[marshalable(tpm2b_simple)]";
-    const TPM2B_SIMPLE_ERR_2ND_ELM: &str = "Second element in Tpm2b struct must be u8 buffer: <buffer name>: [u8, <buffer size>] when using #[marshalable(tpm2b_simple)].";
-    const TPM2B_STRUCT_ERR_2ND_ELM: &str = "Second element in Tpm2b struct must define a u8 buffer using sizeof expression: <buffer name>: [u8, sizeof( <some struct>) ] when using #[marshalable(tpm2b_struct)].";
+    // Lets extracts the 2nd element u8 field name (&Ident) and its size expression (&Expr).
+    let (field_name, size_expression) = derive_tpm2b_common(tpm2b_outer_struct_name, stru)?;
 
-    // Note: At least one of "tpm2b_simple" and "tpm2b_struct" is true.
-    if !tpm2b_simple {
-        return Err(Error::new(
-            tpm2b_outer_struct_name.span(),
-            "We can't have #[marshalable(tpm2b_struct)] without #[marshalable(tpm2b_simple)]",
-        ));
-    }
+    // First generate the actual code for structs marked with #[marshalable(tpm2b_simple)].
+    let tpm2b_simple_code = quote! {
+        // The generated impl.
+        impl Tpm2bSimple for #tpm2b_outer_struct_name {
+            const MAX_BUFFER_SIZE: usize = #size_expression;
 
-    if let Fields::Named(ref fields) = stru.fields {
-        // First make sure we have precisely 2 elements:
-        if fields.named.len() != 2 {
-            return Err(Error::new(fields.named.span(), TPM2B_SIMPLE_ERR_GENERAL));
+            fn get_size(&self) -> u16 {
+                self.size
+            }
+
+            fn get_buffer(&self) -> &[u8] {
+                &self.#field_name[..self.get_size() as usize]
+            }
+
+            fn from_bytes(buffer: &[u8]) -> TpmRcResult<Self> {
+                // Overflow check
+                if buffer.len() > core::cmp::min(u16::MAX as usize, Self::MAX_BUFFER_SIZE) {
+                    return Err(TpmRcError::Size);
+                }
+
+                let mut dest: Self = Self {
+                    size: buffer.len() as u16,
+                    #field_name: [0; Self::MAX_BUFFER_SIZE],
+                };
+                dest.#field_name[..buffer.len()].copy_from_slice(buffer);
+                Ok(dest)
+            }
+        }
+        impl Default for #tpm2b_outer_struct_name {
+            fn default() -> Self {
+                Self {
+                    size: 0,
+                    #field_name: [0; Self::MAX_BUFFER_SIZE],
+                }
+            }
         }
 
-        // Lets validate the first element is named size and has type u16.
-        {
-            let first = &fields.named[0];
-            let field_name = first.ident.as_ref().unwrap();
-            let field_type = &first.ty;
-            if field_name != "size"
-                || !matches!(
-                    field_type,
-                    syn::Type::Path(type_path) if type_path.path.is_ident("u16")
-                )
-            {
-                return Err(Error::new(field_name.span(), TPM2B_SIMPLE_ERR_1ST_ELM));
+        impl AsRef<[u8]> for #tpm2b_outer_struct_name {
+            fn as_ref(&self) -> &[u8] {
+                &self.#field_name[..self.size as usize]
             }
-        };
+        }
 
-        // Lets validate the second element in the Tpm2b structure and extract name and size expression.
-        let second = &fields.named[1];
-        let field_name = second.ident.as_ref().unwrap();
-        let field_type = &second.ty;
+        impl Marshalable for #tpm2b_outer_struct_name {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
+                let got_size = u16::try_unmarshal(buffer)?;
+                // Ensure the buffer is large enough to fullfill the size indicated
+                let sized_buffer = buffer.get(got_size as usize);
+                if !sized_buffer.is_some() {
+                    return Err(TpmRcError::Memory);
+                }
 
-        // Expect array type.
-        let type_array = if let syn::Type::Array(type_array) = field_type {
-            type_array
-        } else {
-            return Err(Error::new(field_type.span(), TPM2B_SIMPLE_ERR_2ND_ELM));
-        };
-
-        // Extract the type used.
-        let type_path = if let syn::Type::Path(type_path) = &*type_array.elem {
-            type_path
-        } else {
-            return Err(Error::new(type_array.elem.span(), TPM2B_SIMPLE_ERR_2ND_ELM));
-        };
-
-        // Confirm it is an array of u8 elements.
-        if !type_path.path.is_ident("u8") {
-            return Err(Error::new(type_array.elem.span(), TPM2B_SIMPLE_ERR_2ND_ELM));
-        };
-
-        // Lets extract the size expression.
-        let size_expression = &type_array.len;
-
-        // Lets extract the <some struct> name from tpm2b buffer definition <buffer name>: [u8, sizeof( <some struct>) ]
-        let tpm2b_inner_struct_name = if tpm2b_struct {
-            // Extract the func, args.
-            let func = if let Expr::Call(ExprCall { func, .. }) = size_expression {
-                func
-            } else {
-                return Err(Error::new(size_expression.span(), TPM2B_SIMPLE_ERR_2ND_ELM));
-            };
-
-            // Check if the function being called is "sizeof"
-            let tpm2b_inner_struct_name = if let Expr::Path(ExprPath { path, .. }) = &**func {
-                // The path contains multiple elements, the first must be sizeof.
-                let segment = path.segments.first().expect(TPM2B_STRUCT_ERR_2ND_ELM);
-                if segment.ident != "size_of" {
-                    return Err(Error::new(path.segments.span(), TPM2B_SIMPLE_ERR_2ND_ELM));
+                let mut dest: Self = Self {
+                    size: got_size,
+                    #field_name: [0; Self::MAX_BUFFER_SIZE],
                 };
-                let arguments =
-                    if let PathArguments::AngleBracketed(sizeof_args) = &segment.arguments {
-                        sizeof_args
-                    } else {
-                        return Err(Error::new(
-                            segment.arguments.span(),
-                            TPM2B_SIMPLE_ERR_2ND_ELM,
-                        ));
-                    };
 
-                let struct_type = arguments.args.first().expect(TPM2B_STRUCT_ERR_2ND_ELM);
-
-                let struct_path =
-                    if let syn::GenericArgument::Type(syn::Type::Path(type_path)) = struct_type {
-                        type_path
-                    } else {
-                        return Err(Error::new(struct_type.span(), TPM2B_SIMPLE_ERR_2ND_ELM));
-                    };
-
-                let struct_ident = struct_path
-                    .path
-                    .segments
-                    .first()
-                    .expect(TPM2B_STRUCT_ERR_2ND_ELM);
-                struct_ident
-            } else {
-                return Err(Error::new(func.span(), TPM2B_SIMPLE_ERR_2ND_ELM));
-            };
-            Some(&tpm2b_inner_struct_name.ident)
-        } else {
-            None
-        };
-
-        // First generate the actual code for structs marked with #[marshalable(tpm2b_simple)].
-        let tpm2b_simple_code = quote! {
-            // The generated impl.
-            impl Tpm2bSimple for #tpm2b_outer_struct_name {
-                const MAX_BUFFER_SIZE: usize = #size_expression;
-
-                fn get_size(&self) -> u16 {
-                    self.size
+                // Make sure the size indicated isn't too large for the types buffer
+                if sized_buffer.unwrap().len() > dest.#field_name.len() {
+                    return Err(TpmRcError::Memory);
                 }
+                dest.#field_name[..got_size.into()].copy_from_slice(&sized_buffer.unwrap());
 
-                fn get_buffer(&self) -> &[u8] {
-                    &self.#field_name[0..self.get_size() as usize]
-                }
-
-                fn from_bytes(buffer: &[u8]) -> TpmRcResult<Self> {
-                    // Overflow check
-                    if buffer.len() > core::cmp::min(u16::MAX as usize, Self::MAX_BUFFER_SIZE) {
-                        return Err(TpmRcError::Size);
-                    }
-
-                    let mut dest: Self = Self {
-                        size: buffer.len() as u16,
-                        #field_name: [0; Self::MAX_BUFFER_SIZE],
-                    };
-                    dest.#field_name[..buffer.len()].copy_from_slice(buffer);
-                    Ok(dest)
-                }
-            }
-            impl Default for #tpm2b_outer_struct_name {
-                fn default() -> Self {
-                    Self {
-                        size: 0,
-                        #field_name: [0; Self::MAX_BUFFER_SIZE],
-                    }
-                }
+                Ok(dest)
             }
 
-            impl AsRef<[u8]> for #tpm2b_outer_struct_name {
-                fn as_ref(&self) -> &[u8] {
-                    &self.#field_name[..self.size as usize]
+            fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
+                let used = self.size.try_marshal(buffer)?;
+                let (_, rest) = buffer.split_at_mut(used);
+                let buffer_marsh = self.get_size() as usize;
+                if buffer_marsh > (core::cmp::max(Self::MAX_BUFFER_SIZE, rest.len())) {
+                    return Err(TpmRcError::Memory);
                 }
+                rest[..buffer_marsh].copy_from_slice(&self.#field_name[..buffer_marsh]);
+                Ok(used + buffer_marsh)
             }
+        }
+    };
 
-            impl Marshalable for #tpm2b_outer_struct_name {
-                fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
-                    let got_size = u16::try_unmarshal(buffer)?;
-                    // Ensure the buffer is large enough to fullfill the size indicated
-                    let sized_buffer = buffer.get(got_size as usize);
-                    if !sized_buffer.is_some() {
-                        return Err(TpmRcError::Memory);
-                    }
+    Ok(quote! { #tpm2b_simple_code })
+}
 
-                    let mut dest: Self = Self {
-                        size: got_size,
-                        #field_name: [0; Self::MAX_BUFFER_SIZE],
-                    };
+// Extracts the 2nd element u8 field name (&Ident) and its size expression (&Expr).
+// The size expression can both be a single value (usize) or a size_of::<SomeType>().
+fn derive_tpm2b_common<'a>(
+    tpm2b_outer_struct_name: &Ident,
+    data_struct: &'a syn::DataStruct,
+) -> Result<(&'a Ident, &'a Expr)> {
+    const TPM2B_SIMPLE_ERR_GENERAL: &str =
+        "A Tpm2b struct must contain just two elements, a u16 size and a buffer array";
+    const TPM2B_SIMPLE_ERR_1ST_ELM: &str = "First element in Tpm2b struct must be a 'size: u16'";
+    const TPM2B_SIMPLE_ERR_2ND_ELM: &str =
+        "Second element in Tpm2b struct must be u8 buffer: <buffer name>: [u8, <buffer size>].";
 
-                    // Make sure the size indicated isn't too large for the types buffer
-                    if sized_buffer.unwrap().len() > dest.#field_name.len() {
-                        return Err(TpmRcError::Memory);
-                    }
-                    dest.#field_name[..got_size.into()].copy_from_slice(&sized_buffer.unwrap());
-
-                    Ok(dest)
-                }
-
-                fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
-                    let used = self.size.try_marshal(buffer)?;
-                    let (_, rest) = buffer.split_at_mut(used);
-                    let buffer_marsh = self.get_size() as usize;
-                    if buffer_marsh > (core::cmp::max(Self::MAX_BUFFER_SIZE, rest.len())) {
-                        return Err(TpmRcError::Memory);
-                    }
-                    rest[..buffer_marsh].copy_from_slice(&self.#field_name[..buffer_marsh]);
-                    Ok(used + buffer_marsh)
-                }
-            }
-        };
-
-        let tpm2b_struct_code = if tpm2b_inner_struct_name.is_some() {
-            quote! {
-                impl Tpm2bStruct for #tpm2b_outer_struct_name {
-                    type StructType = #tpm2b_inner_struct_name;
-
-                    fn from_struct(val: &Self::StructType) -> TpmRcResult<Self> {
-                        let mut x = Self::default();
-                        x.size = val.try_marshal(&mut x.#field_name)? as u16;
-                        Ok(x)
-                    }
-
-                    fn to_struct(&self) -> TpmRcResult<Self::StructType> {
-                        let mut buf = UnmarshalBuf::new(&self.#field_name[0..self.get_size() as usize]);
-                        Self::StructType::try_unmarshal(&mut buf)
-                    }
-                }
-            }
-        } else {
-            quote! {}
-        };
-        Ok(quote! { #tpm2b_simple_code #tpm2b_struct_code })
-    } else {
-        Err(Error::new(
+    let Fields::Named(ref fields) = data_struct.fields else {
+        return Err(Error::new(
             tpm2b_outer_struct_name.span(),
             TPM2B_SIMPLE_ERR_GENERAL,
-        ))
+        ));
+    };
+
+    let fields_vec: Vec<&Field> = fields.named.iter().collect();
+
+    let (first, second) = match fields_vec.as_slice() {
+        [first, second] => (first, second),
+        _ => return Err(Error::new(fields.named.span(), TPM2B_SIMPLE_ERR_GENERAL)),
+    };
+
+    // Lets validate the first element is named size and has type u16.
+    {
+        let Some(field_name) = first.ident.as_ref() else {
+            return Err(Error::new(first.ident.span(), TPM2B_SIMPLE_ERR_1ST_ELM));
+        };
+        let field_type = &first.ty;
+        if field_name != "size"
+            || !matches!(
+                field_type,
+                Type::Path(type_path) if type_path.path.is_ident("u16")
+            )
+        {
+            return Err(Error::new(field_name.span(), TPM2B_SIMPLE_ERR_1ST_ELM));
+        }
     }
+
+    // Lets validate the second element in the Tpm2b structure and extract name and size expression.
+    let field_name = second.ident.as_ref().unwrap();
+    let field_type = &second.ty;
+
+    // Expect array type.
+    let Type::Array(type_array) = field_type else {
+        return Err(Error::new(field_type.span(), TPM2B_SIMPLE_ERR_2ND_ELM));
+    };
+
+    // Extract the type used.
+    let Type::Path(type_path) = &*type_array.elem else {
+        return Err(Error::new(type_array.elem.span(), TPM2B_SIMPLE_ERR_2ND_ELM));
+    };
+
+    // Confirm it is an array of u8 elements.
+    if !type_path.path.is_ident("u8") {
+        return Err(Error::new(type_array.elem.span(), TPM2B_SIMPLE_ERR_2ND_ELM));
+    };
+
+    // Lets extract the size expression.
+    Ok((field_name, &type_array.len))
 }
 
 fn has_marshalable_attr(attr: &Attribute, attribute: &str) -> bool {
