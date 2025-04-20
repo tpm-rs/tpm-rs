@@ -15,7 +15,7 @@ pub const TPM2_MAX_NV_BUFFER_SIZE: u32 = 2048;
 pub const TPM2_MAX_CAP_BUFFER: u32 = 1024;
 pub const TPM2_NUM_PCR_BANKS: u32 = 16;
 pub const TPM2_MAX_PCRS: u32 = 32;
-pub const TPM2_PCR_SELECT_MAX: u32 = (TPM2_MAX_PCRS + 7) / 8;
+pub const TPM2_PCR_SELECT_MAX: u32 = TPM2_MAX_PCRS.div_ceil(8);
 pub const TPM2_LABEL_MAX_BUFFER: u32 = 32;
 
 /* Encryption block sizes */
