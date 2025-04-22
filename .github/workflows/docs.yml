@@ -1,0 +1,65 @@
+name: Publish Documentation
+
+on:
+  # Generate and publish docs when main is updated (e.g. merged PRs)
+  push:
+    branches:
+      - main
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # explicitly check out the main branch to ensure that docs are generated
+        # for the correct ref.
+        with:
+          ref: main
+
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: List Tool Versions
+        run: rustc --version
+
+      - name: Build Docs
+        id: build
+        run: cargo doc --no-deps
+
+        # This step is needed because rustdoc doesn't generate a main landing
+        # page. The approach here is to redirect the main page to one of the
+        # crate index pages.
+      - name: Create Index Redirect
+        # Change the 'url' field to choose the default crate to show.
+        run: echo '<meta http-equiv="refresh" content="0; url=tpm2_rs_base/index.html">' > target/doc/index.html
+
+      - name: Upload Artifact
+        id: upload
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
+    permissions:
+      pages: write # to deploy to Pages
+      id-token: write # to verify the deployment originates from an appropriate source
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
