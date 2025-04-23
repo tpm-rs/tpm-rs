@@ -109,6 +109,6 @@ pub trait TpmCommand: Marshalable {
     type Handles: Marshalable + Default;
     /// The response parameters type.
     type RespT: Marshalable;
-    /// The reponse handles type.
+    /// The response handles type.
     type RespHandles: Marshalable;
 }
