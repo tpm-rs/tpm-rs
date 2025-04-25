@@ -11,8 +11,8 @@ RUN cd openssl-1.1.1w && ./config && make && make install
 RUN ldconfig
 
 # Build and copy the simulator
-RUN git clone https://github.com/microsoft/ms-tpm-20-ref.git
-RUN cd ms-tpm-20-ref/TPMCmd && ./bootstrap && ./configure && make \
+RUN git clone https://github.com/TrustedComputingGroup/TPM.git
+RUN cd TPM/TPMCmd && ./bootstrap && ./configure && make \
 && cp ./Simulator/src/tpm2-simulator /
 ENV TPM_RS_SIMULATOR=/tpm2-simulator
 
