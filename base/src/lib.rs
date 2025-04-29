@@ -590,7 +590,8 @@ enum TpmuName {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bDigest {
     size: u16,
     buffer: [u8; TpmtHa::UNION_SIZE],
@@ -600,42 +601,48 @@ pub type Tpm2bNonce = Tpm2bDigest;
 pub type Tpm2bOperand = Tpm2bDigest;
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bData {
     size: u16,
     buffer: [u8; TpmtHa::UNION_SIZE],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bEvent {
     size: u16,
     buffer: [u8; 1024],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bMaxBuffer {
     size: u16,
     buffer: [u8; TPM2_MAX_DIGEST_BUFFER as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bMaxNvBuffer {
     size: u16,
     buffer: [u8; TPM2_MAX_NV_BUFFER_SIZE as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bIv {
     size: u16,
     buffer: [u8; TPM2_MAX_SYM_BLOCK_SIZE as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bName {
     size: u16,
     name: [u8; TpmuName::UNION_SIZE],
@@ -787,21 +794,24 @@ impl Marshalable for TpmsAttest {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bAttest {
     size: u16,
     attestation_data: [u8; size_of::<TpmsAttest>()],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bSymKey {
     size: u16,
     buffer: [u8; TPM2_MAX_SYM_KEY_BYTES as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bLabel {
     size: u16,
     buffer: [u8; TPM2_LABEL_MAX_BUFFER as usize],
@@ -828,7 +838,8 @@ enum TpmuSensitiveCreate {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bSensitiveData {
     size: u16,
     buffer: [u8; TpmuSensitiveCreate::UNION_SIZE],
@@ -844,28 +855,32 @@ pub struct TpmsSensitiveCreate {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable, Tpm2bStruct)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bSensitiveCreate {
     size: u16,
     sensitive: [u8; size_of::<TpmsSensitiveCreate>()],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bPublicKeyRsa {
     size: u16,
     buffer: [u8; TPM2_MAX_RSA_KEY_BYTES as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bPrivateKeyRsa {
     size: u16,
     buffer: [u8; (TPM2_MAX_RSA_KEY_BYTES / 2) as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bEccParameter {
     size: u16,
     buffer: [u8; TPM2_MAX_ECC_KEY_BYTES as usize],
@@ -895,7 +910,8 @@ enum TpmuEncryptedSecret {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bEncryptedSecret {
     size: u16,
     secret: [u8; TpmuEncryptedSecret::UNION_SIZE],
@@ -1150,21 +1166,24 @@ impl Marshalable for TpmtPublic {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable, Tpm2bStruct)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bPublic {
     size: u16,
     public_area: [u8; size_of::<TpmtPublic>()],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bTemplate {
     size: u16,
     buffer: [u8; size_of::<TpmtPublic>()],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bPrivateVendorSpecific {
     size: u16,
     buffer: [u8; TPM2_PRIVATE_VENDOR_SPECIFIC_BYTES as usize],
@@ -1362,7 +1381,8 @@ pub struct _PRIVATE {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bPrivate {
     size: u16,
     buffer: [u8; size_of::<_PRIVATE>()],
@@ -1376,7 +1396,8 @@ pub struct TpmsIdObject {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bIdObject {
     size: u16,
     credential: [u8; size_of::<TpmsIdObject>()],
@@ -1400,7 +1421,8 @@ pub struct Tpm2bNvPublic {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bContextSensitive {
     size: u16,
     buffer: [u8; TPM2_MAX_CONTEXT_SIZE as usize],
@@ -1414,7 +1436,8 @@ pub struct TpmsContextData {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bContextData {
     size: u16,
     buffer: [u8; size_of::<TpmsContextData>()],
@@ -1433,7 +1456,8 @@ pub struct TpmsCreationData {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable, Tpm2bStruct)]
+#[marshalable(tpm2b_simple)]
 pub struct Tpm2bCreationData {
     size: u16,
     creation_data: [u8; size_of::<TpmsCreationData>()],
@@ -1450,111 +1474,6 @@ pub trait Tpm2bSimple {
         Self: Sized;
 }
 
-macro_rules! impl_try_marshalable_tpm2b_simple {
-    ($T:ty, $F:ident) => {
-        impl Tpm2bSimple for $T {
-            const MAX_BUFFER_SIZE: usize = size_of::<$T>() - size_of::<u16>();
-
-            fn get_size(&self) -> u16 {
-                self.size
-            }
-
-            fn get_buffer(&self) -> &[u8] {
-                &self.$F[0..self.get_size() as usize]
-            }
-
-            fn from_bytes(buffer: &[u8]) -> TpmRcResult<Self> {
-                // Overflow check
-                if buffer.len() > core::cmp::min(u16::MAX as usize, Self::MAX_BUFFER_SIZE) {
-                    return Err(TpmRcError::Size);
-                }
-
-                let mut dest: Self = Self {
-                    size: buffer.len() as u16,
-                    $F: [0; Self::MAX_BUFFER_SIZE],
-                };
-                dest.$F[..buffer.len()].copy_from_slice(buffer);
-                Ok(dest)
-            }
-        }
-
-        impl Default for $T {
-            fn default() -> Self {
-                Self {
-                    size: 0,
-                    $F: [0; Self::MAX_BUFFER_SIZE],
-                }
-            }
-        }
-
-        impl AsRef<[u8]> for $T {
-            fn as_ref(&self) -> &[u8] {
-                &self.$F[..self.size as usize]
-            }
-        }
-
-        impl Marshalable for $T {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
-                let got_size = u16::try_unmarshal(buffer)?;
-                // Ensure the buffer is large enough to fullfill the size indicated
-                let sized_buffer = buffer.get(got_size as usize);
-                if !sized_buffer.is_some() {
-                    return Err(TpmRcError::Memory);
-                }
-
-                let mut dest: Self = Self {
-                    size: got_size,
-                    $F: [0; Self::MAX_BUFFER_SIZE],
-                };
-
-                // Make sure the size indicated isn't too large for the types buffer
-                if sized_buffer.unwrap().len() > dest.$F.len() {
-                    return Err(TpmRcError::Memory);
-                }
-                dest.$F[..got_size.into()].copy_from_slice(&sized_buffer.unwrap());
-
-                Ok(dest)
-            }
-
-            fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
-                let used = self.size.try_marshal(buffer)?;
-                let (_, rest) = buffer.split_at_mut(used);
-                let buffer_marsh = self.get_size() as usize;
-                if buffer_marsh > (core::cmp::max(Self::MAX_BUFFER_SIZE, rest.len())) {
-                    return Err(TpmRcError::Memory);
-                }
-                rest[..buffer_marsh].copy_from_slice(&self.$F[..buffer_marsh]);
-                Ok(used + buffer_marsh)
-            }
-        }
-    };
-}
-
-impl_try_marshalable_tpm2b_simple! {Tpm2bName, name}
-impl_try_marshalable_tpm2b_simple! {Tpm2bAttest, attestation_data}
-impl_try_marshalable_tpm2b_simple! {Tpm2bContextData, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bContextSensitive, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bData, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bDigest, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bEccParameter, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bEncryptedSecret, secret}
-impl_try_marshalable_tpm2b_simple! {Tpm2bEvent, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bIdObject, credential}
-impl_try_marshalable_tpm2b_simple! {Tpm2bIv, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bMaxBuffer, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bMaxNvBuffer, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bPrivate, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bPrivateKeyRsa, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bPrivateVendorSpecific, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bPublicKeyRsa, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bSensitiveData, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bSymKey, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bTemplate, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bLabel, buffer}
-impl_try_marshalable_tpm2b_simple! {Tpm2bSensitiveCreate, sensitive}
-impl_try_marshalable_tpm2b_simple! {Tpm2bPublic, public_area}
-impl_try_marshalable_tpm2b_simple! {Tpm2bCreationData, creation_data}
-
 /// Provides conversion to/from a struct type for TPM2B types that don't hold a bytes buffer.
 pub trait Tpm2bStruct: Tpm2bSimple {
     type StructType: Marshalable;
@@ -1567,27 +1486,6 @@ pub trait Tpm2bStruct: Tpm2bSimple {
     /// Extracts the struct value from the 2b holder.
     fn to_struct(&self) -> TpmRcResult<Self::StructType>;
 }
-macro_rules! impl_try_marshalable_tpm2b_struct {
-    ($T:ty, $StructType:ty, $F:ident) => {
-        impl Tpm2bStruct for $T {
-            type StructType = $StructType;
-
-            fn from_struct(val: &Self::StructType) -> TpmRcResult<Self> {
-                let mut x = Self::default();
-                x.size = val.try_marshal(&mut x.$F)? as u16;
-                Ok(x)
-            }
-
-            fn to_struct(&self) -> TpmRcResult<Self::StructType> {
-                let mut buf = UnmarshalBuf::new(&self.$F[0..self.get_size() as usize]);
-                Self::StructType::try_unmarshal(&mut buf)
-            }
-        }
-    };
-}
-impl_try_marshalable_tpm2b_struct! {Tpm2bSensitiveCreate, TpmsSensitiveCreate, sensitive}
-impl_try_marshalable_tpm2b_struct! {Tpm2bPublic, TpmtPublic, public_area}
-impl_try_marshalable_tpm2b_struct! {Tpm2bCreationData, TpmsCreationData, creation_data}
 
 // Adds common helpers for TPML type $T.
 macro_rules! impl_tpml {
