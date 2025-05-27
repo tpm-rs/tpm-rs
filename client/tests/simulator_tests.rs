@@ -6,7 +6,7 @@
 /// command line.
 ///
 /// To run locally in the docker container:
-///  `cd client && docker compose run simulator_tests`
+///  `cd client && docker compose run --rm simulator_tests`
 ///
 /// These tests must be run with `--test-threads=1`, because they use a single TCP port.
 use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
@@ -36,7 +36,7 @@ fn get_simulator_path() -> String {
 
 #[test]
 fn test_startup_tpm() {
-    let (_sim_lifeline, mut tpm) = run_tpm_simulator(&get_simulator_path()).unwrap();
+    let mut tpm = run_tpm_simulator(&get_simulator_path()).unwrap();
     let startup = StartupCmd {
         startup_type: TpmSu::Clear,
     };
@@ -44,55 +44,142 @@ fn test_startup_tpm() {
 }
 
 // If test_startup_tpm passes, this will not panic.
-fn get_started_tpm() -> (TpmSim, TcpTpm) {
-    let (sim_lifeline, mut tpm) = run_tpm_simulator(&get_simulator_path()).unwrap();
+fn get_started_tpm() -> TpmSim {
+    let mut tpm = run_tpm_simulator(&get_simulator_path()).unwrap();
     let startup = StartupCmd {
         startup_type: TpmSu::Clear,
     };
     run_command(&startup, &mut tpm).unwrap();
-    (sim_lifeline, tpm)
+    tpm
 }
 
 // Launches the TPM simulator at the given path in a subprocess and powers it up.
-pub fn run_tpm_simulator(simulator_bin: &str) -> Result<(TpmSim, TcpTpm)> {
-    let sim_lifeline = TpmSim::new(simulator_bin)?;
+pub fn run_tpm_simulator(simulator_bin: &str) -> Result<TpmSim> {
+    let mut tpm = TpmSim::new(
+        simulator_bin,
+        SIMULATOR_IP,
+        SIMULATOR_PLAT_PORT,
+        SIMULATOR_TPM_PORT,
+    )?;
     let mut attempts = 0;
-    while let Err(err) = start_tcp_tpm(SIMULATOR_IP, SIMULATOR_PLAT_PORT) {
+    while let Err(err) = tpm.start_tcp_tpm() {
         if attempts == 3 {
             return Err(err);
         }
         attempts += 1;
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
-    Ok((sim_lifeline, TcpTpm::new(SIMULATOR_IP, SIMULATOR_TPM_PORT)?))
+    Ok(tpm)
 }
 
 // Holder that manages the lifetime of the simulator subprocess.
-pub struct TpmSim(Child);
+pub struct TpmSim {
+    child: Child,
+    plat_channel: TcpTpmChannel,
+    tpm_channel: TcpTpmChannel,
+}
+
 impl TpmSim {
-    fn new(simulator_bin: &str) -> Result<TpmSim> {
-        Ok(TpmSim(
-            Command::new(format!(".{simulator_bin}"))
-                .current_dir("/")
-                .spawn()?,
-        ))
+    fn new(simulator_bin: &str, ip: &str, plat_port: u16, tpm_port: u16) -> Result<TpmSim> {
+        let child = Command::new(format!(".{simulator_bin}"))
+            .current_dir("/")
+            .spawn()?;
+
+        let child_guard = ChildGuard(Some(child));
+
+        let plat_channel = TcpTpmChannel::new(ip, plat_port)?;
+        let tpm_channel = TcpTpmChannel::new(ip, tpm_port)?;
+
+        let child = child_guard.into_inner();
+        Ok(TpmSim {
+            child,
+            plat_channel,
+            tpm_channel,
+        })
+    }
+
+    // Starts up the TPM simulator with a platform server listening at the give IP/port.
+    fn start_tcp_tpm(&mut self) -> Result<()> {
+        TpmCommand::SignalNvOff.issue_to_platform(&mut self.plat_channel)?;
+        TpmCommand::SignalPowerOff.issue_to_platform(&mut self.plat_channel)?;
+        TpmCommand::SignalPowerOn.issue_to_platform(&mut self.plat_channel)?;
+        TpmCommand::SignalNvOn.issue_to_platform(&mut self.plat_channel)
+    }
+}
+impl Tpm for TpmSim {
+    fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TssResult<()> {
+        let cmd_size: u32 = command
+            .len()
+            .try_into()
+            .map_err(|_| TssTcsError::OutOfMemory)?;
+        let tcp_hdr = TcpTpmHeader {
+            tcp_cmd: U32::new(TpmCommand::SendCommand as u32),
+            locality: 0,
+            cmd_len: U32::new(cmd_size),
+        };
+        let txed = self
+            .tpm_channel
+            .0
+            .write_vectored(&[IoSlice::new(tcp_hdr.as_bytes()), IoSlice::new(command)]);
+        if txed.unwrap_or(0) != tcp_hdr.as_bytes().len() + command.len() {
+            return Err(TssTcsError::OutOfMemory.into());
+        }
+
+        // Response contains a u32 size, the TPM response, and then an always-zero u32 trailer.
+        let resp_size = self
+            .tpm_channel
+            .read_tpm_u32()
+            .map_err(|_| TssTcsError::OutOfMemory)?;
+        let (response, _) = response
+            .split_at_mut_checked(resp_size as usize)
+            .ok_or(TssTcsError::OutOfMemory)?;
+        self.tpm_channel
+            .0
+            .read_exact(response)
+            .map_err(|_| TssTcsError::OutOfMemory)?;
+        if self
+            .tpm_channel
+            .read_tpm_u32()
+            .map_err(|_| TssTcsError::OutOfMemory)?
+            != 0
+        {
+            return Err(TssTcsError::OutOfMemory.into());
+        }
+        Ok(())
     }
 }
 impl Drop for TpmSim {
     fn drop(&mut self) {
-        if let Err(x) = self.0.kill() {
-            println!("Failed to stop simulator: {x}");
+        if let Err(x) = self.child.kill() {
+            eprintln!("Failed to stop simulator: {x}");
         }
     }
 }
 
-// Starts up the TPM simulator with a platform server listening at the give IP/port.
-fn start_tcp_tpm(ip: &str, plat_port: u16) -> Result<()> {
-    let mut connection = TcpStream::connect(format!("{ip}:{plat_port}"))?;
-    TpmCommand::SignalNvOff.issue_to_platform(&mut connection)?;
-    TpmCommand::SignalPowerOff.issue_to_platform(&mut connection)?;
-    TpmCommand::SignalPowerOn.issue_to_platform(&mut connection)?;
-    TpmCommand::SignalNvOn.issue_to_platform(&mut connection)
+struct ChildGuard(Option<Child>);
+
+impl ChildGuard {
+    fn into_inner(mut self) -> Child {
+        self.0.take().expect("Child already dropped")
+    }
+}
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            if let Err(kill_err) = child.kill() {
+                eprintln!(
+                    "Failed to kill simulator child process after setup failure: {}",
+                    kill_err
+                );
+            }
+            if let Err(wait_err) = child.wait() {
+                eprintln!(
+                    "Failed to wait for simulator child process after setup failure: {}",
+                    wait_err
+                );
+            }
+        }
+    }
 }
 
 #[repr(u32)]
@@ -105,14 +192,13 @@ enum TpmCommand {
 }
 impl TpmCommand {
     // Issues a platform TPM command on the given TCP stream.
-    pub fn issue_to_platform(self, connection: &mut TcpStream) -> Result<()> {
-        connection.write_all(U32::from(self as u32).as_bytes())?;
-        let mut rc = U32::ZERO;
-        connection.read_exact(rc.as_bytes_mut())?;
-        if rc != U32::ZERO {
+    pub fn issue_to_platform(self, connection: &mut TcpTpmChannel) -> Result<()> {
+        connection.0.write_all(U32::from(self as u32).as_bytes())?;
+        let rc = connection.read_tpm_u32()?;
+        if rc != 0 {
             Err(Error::new(
                 ErrorKind::Other,
-                format!("Platform command error {}", rc.get()),
+                format!("Platform command error {}", rc),
             ))
         } else {
             Ok(())
@@ -127,55 +213,27 @@ struct TcpTpmHeader {
     locality: u8,
     cmd_len: U32,
 }
+
 // Provides TCP transport for talking to a TPM simulator.
-pub struct TcpTpm {
-    tpm_conn: TcpStream,
-}
-impl TcpTpm {
-    pub fn new(ip: &str, tpm_port: u16) -> Result<TcpTpm> {
-        Ok(TcpTpm {
-            tpm_conn: TcpStream::connect(format!("{ip}:{tpm_port}"))?,
-        })
+struct TcpTpmChannel(TcpStream);
+impl TcpTpmChannel {
+    fn new(ip: &str, tpm_port: u16) -> Result<TcpTpmChannel> {
+        let mut last_err = None;
+        for _ in 0..4 {
+            match TcpStream::connect(format!("{ip}:{tpm_port}")) {
+                Ok(stream) => return Ok(TcpTpmChannel(stream)),
+                Err(err) => {
+                    last_err = Some(err);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+        Err(last_err.unwrap())
     }
 
-    fn read_tpm_u32(&mut self) -> TssResult<u32> {
+    fn read_tpm_u32(&mut self) -> Result<u32> {
         let mut val = U32::ZERO;
-        self.tpm_conn
-            .read_exact(val.as_bytes_mut())
-            .map_err(|_| TssTcsError::OutOfMemory)?;
+        self.0.read_exact(val.as_bytes_mut())?;
         Ok(val.get())
-    }
-}
-
-impl Tpm for TcpTpm {
-    fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TssResult<()> {
-        let cmd_size: u32 = command
-            .len()
-            .try_into()
-            .map_err(|_| TssTcsError::OutOfMemory)?;
-        let tcp_hdr = TcpTpmHeader {
-            tcp_cmd: U32::new(TpmCommand::SendCommand as u32),
-            locality: 0,
-            cmd_len: U32::new(cmd_size),
-        };
-        let txed = self
-            .tpm_conn
-            .write_vectored(&[IoSlice::new(tcp_hdr.as_bytes()), IoSlice::new(command)]);
-        if txed.unwrap_or(0) != tcp_hdr.as_bytes().len() + command.len() {
-            return Err(TssTcsError::OutOfMemory.into());
-        }
-
-        // Response contains a u32 size, the TPM response, and then an always-zero u32 trailer.
-        let resp_size = self.read_tpm_u32()?;
-        if resp_size as usize > response.len() {
-            return Err(TssTcsError::OutOfMemory.into());
-        }
-        self.tpm_conn
-            .read_exact(&mut response[..resp_size as usize])
-            .map_err(|_| TssTcsError::OutOfMemory)?;
-        if self.read_tpm_u32()? != 0 {
-            return Err(TssTcsError::OutOfMemory.into());
-        }
-        Ok(())
     }
 }
