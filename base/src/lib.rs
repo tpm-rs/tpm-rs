@@ -433,6 +433,69 @@ impl TryFrom<u32> for TpmiRhNvAuth {
     }
 }
 
+/// TpmiRhProvision represents a TPMI_RH_PROVISION type.
+/// See definition in Part 2: Structures, section 9.21.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+pub struct TpmiRhProvision(u32);
+impl TryFrom<u32> for TpmiRhProvision {
+    type Error = TpmRcError;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if value == TpmHandle::RHPlatform.0 || value == TpmHandle::RHOwner.0 {
+            Ok(TpmiRhProvision(value))
+        } else {
+            Err(TpmRcError::Value)
+        }
+    }
+}
+impl Default for TpmiRhProvision {
+    fn default() -> Self {
+        TpmiRhProvision(TpmHandle::RHOwner.0)
+    }
+}
+
+/// TpmiRhPlatform represents a TPMI_RH_PLATFORM type.
+/// See definition in Part 2: Structures, section 9.18.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+pub struct TpmiRhPlatform(u32);
+impl TryFrom<u32> for TpmiRhPlatform {
+    type Error = TpmRcError;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if value == TpmHandle::RHPlatform.0 {
+            Ok(TpmiRhPlatform(value))
+        } else {
+            Err(TpmRcError::Value)
+        }
+    }
+}
+impl Default for TpmiRhPlatform {
+    fn default() -> Self {
+        TpmiRhPlatform(TpmHandle::RHPlatform.0)
+    }
+}
+
+// TpmiRhNvDefinedIndex represents a TPMI_RH_NV_DEFINED_INDEX.
+// See definition in Part 2: Structures, section 9.26
+#[repr(transparent)]
+#[derive(Copy, Clone, PartialEq, Debug, Marshalable)]
+pub struct TpmiRhNvDefinedIndex(u32);
+impl TryFrom<u32> for TpmiRhNvDefinedIndex {
+    type Error = TpmRcError;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if TpmHc::is_nv_index(value) || TpmHc::is_external_nv_index(value) {
+            Ok(TpmiRhNvDefinedIndex(value))
+        } else {
+            Err(TpmRcError::Value)
+        }
+    }
+}
+impl Default for TpmiRhNvDefinedIndex {
+    fn default() -> Self {
+        TpmiRhNvDefinedIndex(0x84) // #TPM_RC_VALUE
+    }
+}
+
 /// TpmiShAuthSessions represents handles referring to an authorization session (TPMI_SH_AUTH_SESSION).
 /// See definition in Part 2: Structures, section 9.8.
 #[repr(transparent)]
@@ -1543,11 +1606,11 @@ pub struct TpmsNvPublicExpAttr {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 #[marshalable(tpm2b_simple)]
 pub struct Tpm2bNvPublic {
-    size: u16,
-    nv_public: [u8; size_of::<TpmsNvPublic>()],
+    pub size: u16,
+    pub nv_public: [u8; size_of::<TpmsNvPublic>()],
 }
 
 #[repr(C, u8)]
@@ -1559,7 +1622,7 @@ pub enum TpmtNvPublic2 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
 #[marshalable(tpm2b_simple)]
 pub struct Tpm2bNvPublic2 {
     pub size: u16,

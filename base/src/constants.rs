@@ -686,6 +686,7 @@ pub enum TpmHandle {
     RHPlatform = 0x4000000C,
     RHPlatformNV = 0x4000000D,
 }
+
 /// TpmHc represents a TPM_HC.
 /// See definition in Part 2: Structures, section 7.5.
 #[derive(Copy, Clone, Debug, Default, Marshalable)]
@@ -719,6 +720,8 @@ impl TpmHc {
     const HRPersistent: TpmHc = TpmHc::new(TpmHt::Persistent);
     /// NV index handle range base.
     const HRNvIndex: TpmHc = TpmHc::new(TpmHt::NVIndex);
+    /// External NV handle range base.
+    const HRExternalNV: TpmHc = TpmHc::new(TpmHt::ExternalNV);
     // TODO: Add remaining values and ranges, some of which are profile-dependent.
 
     /// The first HMAC session.
@@ -746,9 +749,17 @@ impl TpmHc {
     pub const NVIndexFirst: TpmHc = TpmHc::HRNvIndex;
     /// The last allowed NV index.
     pub const NVIndexLast: TpmHc = TpmHc(TpmHc::NVIndexFirst.0 + 0x00FFFFFF);
+    /// The first external NV index.
+    pub const ExternalNVFirst: TpmHc = TpmHc(TpmHc::HRExternalNV.0 + 0);
+    /// The last external NV index.
+    pub const ExternalNVLast: TpmHc = TpmHc(TpmHc::ExternalNVFirst.0 + 0x00FFFFFF);
     /// Returns true if the value is an allowed NV index.
     pub fn is_nv_index(value: u32) -> bool {
         (TpmHc::NVIndexFirst.0..=TpmHc::NVIndexLast.0).contains(&value)
+    }
+    /// Returns true if the value is an allowed external NV index.
+    pub fn is_external_nv_index(value: u32) -> bool {
+        (TpmHc::ExternalNVFirst.0..=TpmHc::ExternalNVLast.0).contains(&value)
     }
 }
 
