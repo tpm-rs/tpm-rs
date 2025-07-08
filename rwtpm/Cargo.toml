@@ -1,0 +1,12 @@
+[package]
+name = "rwtpm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = {workspace = true, features = ["derive"]}
+getrandom = {workspace = true}
+tpm2-rs-drbg = { workspace = true, features = ["rustcrypto"]}
+tpm2-rs-server = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = {workspace = true, features = ["env-filter"]}
