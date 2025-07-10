@@ -7,7 +7,7 @@ use tpm2_rs_unionify::UnionSize;
 
 #[test]
 fn test_get_random_duplicate_value_trap() {
-    let (_sim_lifeline, mut tpm) = get_started_tpm();
+    let mut tpm = get_started_tpm();
 
     let command = GetRandomCmd {
         bytes_requested: TPM2_SHA256_DIGEST_SIZE as u16,
@@ -40,7 +40,7 @@ fn test_get_random_duplicate_value_trap() {
 
 #[test]
 fn test_get_random_large_sizes() {
-    let (_sim_lifeline, mut tpm) = get_started_tpm();
+    let mut tpm = get_started_tpm();
     let mut detected_max_size = 0;
 
     // The first value is used to detect the servers max digest size.
@@ -77,7 +77,7 @@ fn test_get_random_large_sizes() {
 
 #[test]
 fn test_get_random_small_sizes() {
-    let (_sim_lifeline, mut tpm) = get_started_tpm();
+    let mut tpm = get_started_tpm();
 
     for i in 0..1 {
         let command = GetRandomCmd { bytes_requested: i };
