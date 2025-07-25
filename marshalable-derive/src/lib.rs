@@ -92,13 +92,13 @@ fn derive_tpm2b_struct(
         impl Tpm2bStruct for #tpm2b_outer_struct_name {
             type StructType = #tpm2b_inner_struct_name;
 
-            fn from_struct(val: &Self::StructType) -> TpmRcResult<Self> {
+            fn from_struct(val: &Self::StructType) -> tpm2_rs_marshalable::Result<Self> {
                 let mut x = Self::default();
                 x.size = val.try_marshal(&mut x.#field_name)? as u16;
                 Ok(x)
             }
 
-            fn to_struct(&self) -> TpmRcResult<Self::StructType> {
+            fn to_struct(&self) -> tpm2_rs_marshalable::Result<Self::StructType> {
                 let mut buf = UnmarshalBuf::new(&self.as_ref());
                 Self::StructType::try_unmarshal(&mut buf)
             }
@@ -186,11 +186,11 @@ fn derive_tpm_marshal_inner(input: DeriveInput) -> Result<TokenStream> {
             #pure_impl
             // The generated impl.
             impl Marshalable for #name  {
-                fn try_unmarshal(buffer: &mut tpm2_rs_marshalable::UnmarshalBuf) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<Self> {
+                fn try_unmarshal(buffer: &mut tpm2_rs_marshalable::UnmarshalBuf) -> tpm2_rs_marshalable::Result<Self> {
                     #unmarsh_text
                 }
 
-                fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<usize> {
+                fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::Result<usize> {
                     let mut written: usize = 0;
                     #marsh_text;
                     Ok(written)
@@ -222,10 +222,10 @@ fn derive_tpm2b_simple(
                 &self.#field_name[..self.get_size() as usize]
             }
 
-            fn from_bytes(buffer: &[u8]) -> TpmRcResult<Self> {
+            fn from_bytes(buffer: &[u8]) -> tpm2_rs_marshalable::Result<Self> {
                 // Overflow check
                 if buffer.len() > core::cmp::min(u16::MAX as usize, Self::MAX_BUFFER_SIZE) {
-                    return Err(TpmRcError::Size);
+                    return Err(tpm2_rs_marshalable::Error::ArrayLengthExceeded);
                 }
 
                 let mut dest: Self = Self {
@@ -252,12 +252,12 @@ fn derive_tpm2b_simple(
         }
 
         impl Marshalable for #tpm2b_outer_struct_name {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> tpm2_rs_marshalable::Result<Self> {
                 let got_size = u16::try_unmarshal(buffer)?;
-                // Ensure the buffer is large enough to fullfill the size indicated
+                // Ensure the buffer is large enough to fulfill the size indicated
                 let sized_buffer = buffer.get(got_size as usize);
                 if !sized_buffer.is_some() {
-                    return Err(TpmRcError::Memory);
+                    return Err(tpm2_rs_marshalable::Error::UnexpectedEndOfBuffer);
                 }
 
                 let mut dest: Self = Self {
@@ -267,19 +267,19 @@ fn derive_tpm2b_simple(
 
                 // Make sure the size indicated isn't too large for the types buffer
                 if sized_buffer.unwrap().len() > dest.#field_name.len() {
-                    return Err(TpmRcError::Memory);
+                    return Err(tpm2_rs_marshalable::Error::UnexpectedEndOfBuffer);
                 }
                 dest.#field_name[..got_size.into()].copy_from_slice(&sized_buffer.unwrap());
 
                 Ok(dest)
             }
 
-            fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
+            fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::Result<usize> {
                 let used = self.size.try_marshal(buffer)?;
                 let (_, rest) = buffer.split_at_mut(used);
                 let buffer_marsh = self.get_size() as usize;
                 if buffer_marsh > (core::cmp::max(Self::MAX_BUFFER_SIZE, rest.len())) {
-                    return Err(TpmRcError::Memory);
+                    return Err(tpm2_rs_marshalable::Error::UnexpectedEndOfBuffer);
                 }
                 rest[..buffer_marsh].copy_from_slice(&self.#field_name[..buffer_marsh]);
                 Ok(used + buffer_marsh)
@@ -386,7 +386,7 @@ fn get_enum_impl(name: &Ident, data: &DataEnum) -> Result<TokenStream> {
     // TODO(#84): Move this to it's own derive proc-macro after cleaning up base.
     Ok(quote! {
         impl MarshalableVariant for #name {
-            fn try_marshal_variant(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::exports::errors::TpmRcResult<usize> {
+            fn try_marshal_variant(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::Result<usize> {
                 let mut written: usize = 0;
                 #marshal_text;
                 Ok(written)
@@ -395,7 +395,7 @@ fn get_enum_impl(name: &Ident, data: &DataEnum) -> Result<TokenStream> {
             fn try_unmarshal_variant(
                 selector: <Self as safe_discriminant::Discriminant>::Repr,
                 buffer: &mut tpm2_rs_marshalable::UnmarshalBuf) ->
-                tpm2_rs_marshalable::exports::errors::TpmRcResult<Self> {
+                tpm2_rs_marshalable::Result<Self> {
                 #unmarshal_text
             }
         }
@@ -501,7 +501,7 @@ fn get_enum_marshal_body(struct_name: &Ident, data: &DataEnum) -> Result<TokenSt
             continue;
         };
         let recurse = x.unnamed.iter().enumerate().map(|(i, f)| {
-            let var_name = Ident::new(&format!("f{}", i), Span::call_site());
+            let var_name = Ident::new(&format!("f{i}"), Span::call_site());
             quote_spanned! {f.span()=>
                 written += #var_name.try_marshal(&mut buffer[written..])?;
             }
@@ -539,7 +539,7 @@ fn get_marshal_attribute(attrs: &[Attribute], key: &str) -> Result<Option<Path>>
     if !marshal_attr.path.is_ident(key) {
         return Err(Error::new(
             marshal_attr.path.span(),
-            format!("Unknown attribute: Expected `{}`", key),
+            format!("Unknown attribute: Expected `{key}`"),
         ));
     };
     let Expr::Path(expr_path) = marshal_attr.value else {
@@ -607,7 +607,7 @@ fn get_named_field_unmarshal<'a>(
             get_primitive(&length, basic_field_types.get(length.get_ident().unwrap()))?;
         Ok(quote_spanned! {span =>
             if #length_prim as usize > #max_size {
-                return Err(TpmRcError::Size);
+                return Err(tpm2_rs_marshalable::Error::ArrayLengthExceeded);
             }
             let mut #name = [#entry_type::default(); #max_size];
             for i in #name.iter_mut().take(#length_prim as usize) {
@@ -656,7 +656,7 @@ fn get_field_unmarshal(all_fields: &Fields) -> Result<TokenStream> {
         Fields::Named(ref fields) => get_named_fields_unmarshal(&mut basic_field_types, fields),
         Fields::Unnamed(ref fields) => {
             let recurse = fields.unnamed.iter().enumerate().map(|(i, f)| {
-                let var_name = Ident::new(&format!("f{}", i), Span::call_site());
+                let var_name = Ident::new(&format!("f{i}"), Span::call_site());
                 let field_type = &f.ty;
                 quote_spanned! {f.span()=>
                     let #var_name = <#field_type>::try_unmarshal(buffer)?;
@@ -718,7 +718,7 @@ fn get_enum_unmarshal_body(struct_name: &Ident, data: &DataEnum) -> Result<Token
     }
     errors_to_error(errors.into_iter())?;
     let fallback_code = quote! {
-        Err(TpmRcError::Selector.into())
+        Err(tpm2_rs_marshalable::Error::UnknownSelector)
     };
 
     conditional_code.extend(fallback_code);
@@ -741,7 +741,7 @@ fn get_field_list(all_fields: &Fields) -> TokenStream {
         }
         Fields::Unnamed(ref fields) => {
             let list = fields.unnamed.iter().enumerate().map(|(i, f)| {
-                let var_name = Ident::new(&format!("f{}", i), Span::call_site());
+                let var_name = Ident::new(&format!("f{i}"), Span::call_site());
                 quote_spanned! {f.span()=>
                     #var_name
                 }
