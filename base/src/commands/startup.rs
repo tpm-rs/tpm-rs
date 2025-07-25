@@ -1,6 +1,7 @@
 //! [TPM2.0 1.83] 9 Start-up
 use crate::commands::{Marshalable, TpmCommand};
 use crate::constants::{TpmCc, TpmSu};
+use tpm2_rs_errors::MarshalingResult;
 
 /// [TPM2.0 1.83] 9.2 _TPM_Init
 pub struct InitCmd {}

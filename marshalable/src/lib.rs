@@ -31,10 +31,10 @@ pub mod exports {
 // entries that should be marshaled. See TpmlPcrSelection for an example.
 pub trait Marshalable: Sized {
     // Unmarshals self from the prefix of `buffer`. Returns the unmarshalled self and number of bytes used.
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self>;
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> MarshalingResult<Self>;
 
     // Marshals self into the prefix of `buffer`. Returns the number of bytes used.
-    fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize>;
+    fn try_marshal(&self, buffer: &mut [u8]) -> MarshalingResult<usize>;
 }
 
 /// Defines the ability to marshal an enum by its variant data alone.
@@ -58,7 +58,10 @@ pub trait MarshalableVariant: Sized + Discriminant {
     /// Because the way the data in `buffer` is interpreted changes depending on
     /// the variant we are unmarshaling, we have to be told explicitly which
     /// variant is being targeted.
-    fn try_unmarshal_variant(selector: Self::Repr, buffer: &mut UnmarshalBuf) -> TpmRcResult<Self>;
+    fn try_unmarshal_variant(
+        selector: Self::Repr,
+        buffer: &mut UnmarshalBuf,
+    ) -> MarshalingResult<Self>;
 
     /// Only marshals the variant data for the enum.
     ///
@@ -66,7 +69,7 @@ pub trait MarshalableVariant: Sized + Discriminant {
     /// call so that they can recover it later.
     ///
     /// If the variant has no data, this returns `Ok(0)`.
-    fn try_marshal_variant(&self, buffer: &mut [u8]) -> TpmRcResult<usize>;
+    fn try_marshal_variant(&self, buffer: &mut [u8]) -> MarshalingResult<usize>;
 }
 
 pub struct UnmarshalBuf<'a> {
@@ -101,12 +104,12 @@ impl<'a> UnmarshalBuf<'a> {
 macro_rules! impl_be_prim_marshalable {
     ($T:ty) => {
         impl Marshalable for $T {
-            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
+            fn try_unmarshal(buffer: &mut UnmarshalBuf) -> MarshalingResult<Self> {
                 let x = <[u8; size_of::<$T>()]>::try_unmarshal(buffer)?;
                 Ok(Self::from_be_bytes(x))
             }
 
-            fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
+            fn try_marshal(&self, buffer: &mut [u8]) -> MarshalingResult<usize> {
                 self.to_be_bytes().try_marshal(buffer)
             }
         }
@@ -122,31 +125,31 @@ impl_be_prim_marshalable! {i32}
 impl_be_prim_marshalable! {i64}
 
 impl Marshalable for () {
-    fn try_marshal(&self, _buffer: &mut [u8]) -> TpmRcResult<usize> {
+    fn try_marshal(&self, _buffer: &mut [u8]) -> MarshalingResult<usize> {
         Ok(0)
     }
-    fn try_unmarshal(_buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
+    fn try_unmarshal(_buffer: &mut UnmarshalBuf) -> MarshalingResult<Self> {
         Ok(())
     }
 }
 
 impl<const M: usize> Marshalable for [u8; M] {
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> MarshalingResult<Self> {
         if let Some(mine) = buffer.get(M) {
             let mut x = [0u8; M];
             x.copy_from_slice(mine);
             Ok(x)
         } else {
-            Err(TpmRcError::Memory)
+            Err(MarshalingError::UnexpectedEndOfBuffer)
         }
     }
 
-    fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
+    fn try_marshal(&self, buffer: &mut [u8]) -> MarshalingResult<usize> {
         if buffer.len() >= self.len() {
             buffer[..self.len()].copy_from_slice(self);
             Ok(self.len())
         } else {
-            Err(TpmRcError::Memory)
+            Err(MarshalingError::UnexpectedEndOfBuffer)
         }
     }
 }

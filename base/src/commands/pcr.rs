@@ -2,7 +2,7 @@
 
 use crate::commands::{Marshalable, TpmCommand};
 use crate::constants::TpmCc;
-use crate::{TpmlDigest, TpmlPcrSelection};
+use crate::{MarshalingResult, TpmlDigest, TpmlPcrSelection};
 
 /// [TPM2.0 1.83] 22.2 TPM2_PCR_Extend (Command)
 pub struct PcrExtendCmd {}
