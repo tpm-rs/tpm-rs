@@ -2,6 +2,8 @@
 #![cfg_attr(not(test), no_std)]
 
 use core::convert::TryFrom;
+use core::error::Error;
+use core::fmt;
 use core::num::NonZeroU32;
 use core::result::{Result, Result::*};
 pub use tpm_rc::*;
@@ -36,4 +38,58 @@ impl TryFrom<u32> for TssError {
             Err(_) => Err(TssErrorCannotBeZero),
         }
     }
+}
+
+/// Represents success or [`MarshalingError`] failure, which is used for unmarshal/marshal functionality.
+pub type MarshalingResult<T> = Result<T, MarshalingError>;
+
+impl Error for MarshalingError {}
+
+impl fmt::Display for MarshalingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ArrayLengthExceeded => {
+                write!(f, "length of array is larger than the type allows")
+            }
+            Self::UnexpectedEndOfBuffer => {
+                write!(f, "expected to have more buffer data but found none")
+            }
+            Self::UnknownSelector => {
+                write!(f, "selector targeted is not known to the unmarshaling code")
+            }
+            Self::MarshalingDeriveError => write!(f, "unexpected derive error"),
+        }
+    }
+}
+
+impl From<MarshalingError> for TpmRcError {
+    fn from(orig: MarshalingError) -> Self {
+        match orig {
+            MarshalingError::ArrayLengthExceeded => TpmRcError::Size,
+            MarshalingError::UnexpectedEndOfBuffer => TpmRcError::Memory,
+            MarshalingError::UnknownSelector => TpmRcError::Selector,
+            MarshalingError::MarshalingDeriveError => TpmRcError::Failure,
+        }
+    }
+}
+
+impl From<MarshalingError> for TssError {
+    fn from(orig: MarshalingError) -> Self {
+        match orig {
+            MarshalingError::ArrayLengthExceeded => TpmRcError::Size.into(),
+            MarshalingError::UnexpectedEndOfBuffer => TpmRcError::Memory.into(),
+            MarshalingError::UnknownSelector => TpmRcError::Selector.into(),
+            MarshalingError::MarshalingDeriveError => TpmRcError::Failure.into(),
+        }
+    }
+}
+
+// The MarshalingError defines Unmarshaling/Marshaling errors codes,
+// providing more explicit error codes for try_marshal* and try_unmarchal*.
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+pub enum MarshalingError {
+    ArrayLengthExceeded,
+    UnexpectedEndOfBuffer,
+    UnknownSelector,
+    MarshalingDeriveError,
 }

@@ -2,7 +2,7 @@
 
 use crate::commands::{Marshalable, TpmCommand};
 use crate::constants::{TpmCap, TpmCc, TpmPt};
-use crate::{TpmiYesNo, TpmsCapabilityData};
+use crate::{MarshalingResult, TpmiYesNo, TpmsCapabilityData};
 
 /// [TPM2.0 1.83] 30.2 TPM2_GetCapability (Command)
 #[repr(C)]
