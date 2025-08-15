@@ -1,46 +1,58 @@
-# CLA bot from: https://github.com/contributor-assistant/github-action
-name: "CLA Assistant"
+name: "CLA"
+
 on:
+  # Run on pull_request_target, so we run with the base version of this file.
+  # This ensures we don't provide secrets to unreviewed action code.
+  pull_request_target:
+    types: [opened, closed, synchronize]
+  # Run on issue_comment to retrigger on "recheck" or "I hereby sign" comments
   issue_comment:
     types: [created]
-  pull_request_target:
-    types: [opened,closed,synchronize]
 
-# explicitly configure permissions, in case your GITHUB_TOKEN workflow permissions are set to read-only in repository settings
+# We explicitly configure permissions, as our GITHUB_TOKEN defaults to read-only.
 permissions:
-  actions: write
-  contents: write
-  pull-requests: write
+  # Writing contents isn't needed as signatures are in a remote repository.
+  contents: read
+  # Necessary to indicate success/failure of the action.
   statuses: write
+  # Necessary to relaunch the action on signing of the CLA.
+  actions: write
+  # Necessary to comment on the PR
+  pull-requests: write
 
 jobs:
-  CLAAssistant:
+  assistant:
+    name: "CLA Assistant"
     runs-on: ubuntu-latest
     steps:
-      - name: "CLA Assistant"
+      - uses: contributor-assistant/github-action@v2.6.1
         if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
-        uses: contributor-assistant/github-action@v2.3.0
         env:
+          # Automaticaly created by GitHub Actions with the above permissions
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # the below token should have repo scope and must be manually added by you in the repository's secret
-          # This token is required only if you have configured to store the signatures in a remote repository/organization
+          # This is josephlr@'s PAT, and is stored as an Organization Secret.
+          # TODO: Move to GitHub App Authentication, when that's supported, see
+          # https://github.com/contributor-assistant/github-action/issues/172.
           PERSONAL_ACCESS_TOKEN: ${{ secrets.CLASIG_PAT }}
         with:
-          path-to-signatures: 'repos/tpm-rs/cla-version1/signatures.json'
-          path-to-document: 'https://github.com/tpm-rs/governance/blob/main/project-docs/CONTRIBUTOR-LICENSE-AGREEMENT.md' # e.g. a CLA or a DCO document
-          # branch should not be protected
-          branch: 'main'
-          allowlist: bot*
-          # enter the  remote repository name where the signatures should be stored (Default is storing the signatures in the same repository)
-          remote-repository-name: cla-signatures
-          #remote-organization-name: enter the remote organization name where the signatures should be stored (Default is storing the signatures in the same repository)
-          remote-organization-name: tpm-rs
-          
-         # the followings are the optional inputs - If the optional inputs are not given, then default values will be taken
-          #create-file-commit-message: 'For example: Creating file for storing CLA Signatures'
-          #signed-commit-message: 'For example: $contributorName has signed the CLA in $owner/$repo#$pullRequestNo'
-          #custom-notsigned-prcomment: 'pull request comment with Introductory message to ask new contributors to sign'
-          #custom-pr-sign-comment: 'The signature to be committed in order to sign the CLA'
-          #custom-allsigned-prcomment: 'pull request comment when all contributors has signed, defaults to **CLA Assistant Lite bot** All Contributors have signed the CLA.'
-          #lock-pullrequest-aftermerge: false - if you don't want this bot to automatically lock the pull request after merging (default - true)
-          #use-dco-flag: true - If you are using DCO instead of CLA
+          # Our CLA Document, update the path in the governance repo changes.
+          path-to-document: "https://github.com/tpm-rs/governance/blob/main/project-docs/CONTRIBUTOR-LICENSE-AGREEMENT.md"
+
+          # Signature repo: https://github.com/tpm-rs/cla-signatures/tree/main/
+          # If that repo changes, update the values below:
+          path-to-signatures: "${{ github.event.repository.name }}.json"
+          branch: "main"
+          remote-repository-name: "cla-signatures"
+          # remote-organization-name: "tpm-rs"
+
+          # Allow certain users (like bots) to bypass the CLA check
+          # allowlist: bot*
+
+          # Optional inputs:
+          # create-file-commit-message: 'For example: Creating file for storing CLA Signatures'
+          # signed-commit-message: 'For example: $contributorName has signed the CLA in $owner/$repo#$pullRequestNo'
+          # custom-notsigned-prcomment: 'pull request comment with Introductory message to ask new contributors to sign'
+          # custom-pr-sign-comment: 'The signature to be committed in order to sign the CLA'
+          # custom-allsigned-prcomment: 'pull request comment when all contributors has signed, defaults to **CLA Assistant Lite bot** All Contributors have signed the CLA.'
+          # lock-pullrequest-aftermerge: false - if you don't want this bot to automatically lock the pull request after merging (default - true)
+          # use-dco-flag: true - If you are using DCO instead of CLA
