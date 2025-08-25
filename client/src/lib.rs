@@ -6,7 +6,7 @@ use core::mem::size_of;
 use sessions::{AuthorizationArea, Session};
 use tpm2_rs_base::commands::*;
 use tpm2_rs_base::constants::{TpmCc, TpmSt};
-use tpm2_rs_base::errors::{TssError, TssResult, TssTcsError};
+use tpm2_rs_base::errors::{MarshalingResult, TssError, TssResult, TssTcsError};
 use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
 use tpm2_rs_base::{TpmiStCommandTag, TpmsAuthResponse};
 
