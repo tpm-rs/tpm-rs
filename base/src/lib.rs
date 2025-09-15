@@ -337,6 +337,19 @@ impl TpmiShAuthSession {
     pub const RS_PW: TpmiShAuthSession = TpmiShAuthSession(TpmHandle::RSPW.0);
 }
 
+/// TpmiRhHierarchy represents a hierarchy selector.
+/// See definition in Part 2: Structures, section 9.13
+#[open_enum]
+#[repr(u32)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
+pub enum TpmiRhHierarchy {
+    TpmRhOwner = TpmHandle::RHOwner.0,
+    TpmRhPlatform = TpmHandle::RHPlatform.0,
+    TpmRhEndorsement = TpmHandle::RHEndorsement.0,
+    TpmRhNull = TpmHandle::RHNull.0,
+}
+
 /// TpmiEccCurve represents an implemented ECC curve (TPMI_ECC_SCHEME).
 /// See definition in Part 2: Structures, section 11.2.5.5.
 #[repr(transparent)]
@@ -352,6 +365,34 @@ pub struct TpmiEccCurve(TpmEccCurve);
 pub enum TpmiYesNo {
     NO = 0,
     YES = 1,
+}
+
+/// TpmiDhObject represents a handle that references a loaded object.
+/// See definition in Part 2: Structures, section 9.3.
+#[open_enum]
+#[repr(u32)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum TpmiDhObject {
+    RHNull = TpmHandle::RHNull.0,
+}
+
+/// TpmiDhEntity represents TPM-defined values that indicate that a handle
+/// refers to an _authValue_. The range of these values would change according
+/// to the TPM implementation.
+/// See definition in Part 2: Structures, section 9.6.
+#[open_enum]
+#[repr(u32)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum TpmiDhEntity {
+    RHOwner = TpmHandle::RHOwner.0,
+    RHEndorsement = TpmHandle::RHEndorsement.0,
+    RHPlatform = TpmHandle::RHPlatform.0,
+    RHLockout = TpmHandle::RHLockout.0,
+    RHNull = TpmHandle::RHNull.0,
 }
 
 /// TpmiStAttest represents an attestation structure type (TPMI_ST_ATTEST).
