@@ -959,7 +959,7 @@ pub struct Tpm2bEccPoint {
 
 #[derive(UnionSize)]
 #[repr(C, u16)]
-enum TpmuEncryptedSecret {
+pub enum TpmuEncryptedSecret {
     Ecc([u8; size_of::<TpmsEccPoint>()]),
     Rsa([u8; constants::TPM2_MAX_RSA_KEY_BYTES as usize]),
     Symmetric([u8; size_of::<Tpm2bDigest>()]),

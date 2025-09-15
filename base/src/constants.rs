@@ -398,6 +398,7 @@ pub enum TpmSu {
 // See definition in Part 2: Structures, section 6.11.
 #[open_enum]
 #[repr(u8)]
+#[derive(Copy, Clone, Default, Marshalable)]
 pub enum TpmSe {
     HMAC = 0x00,
     Policy = 0x01,
@@ -651,6 +652,8 @@ pub enum TpmPtPcr {
 // See definition in Part 2: Structures, section 7.2.
 #[open_enum]
 #[repr(u8)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, Default, Marshalable)]
 pub enum TpmHt {
     PCR = 0x00,
     NVIndex = 0x01,
@@ -671,6 +674,7 @@ pub enum TpmHt {
 pub enum TpmHandle {
     RHOwner = 0x40000001,
     RHNull = 0x40000007,
+    RHUnassigned = 0x40000008,
     RSPW = 0x40000009,
     RHLockout = 0x4000000A,
     RHEndorsement = 0x4000000B,
