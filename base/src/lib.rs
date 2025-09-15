@@ -648,6 +648,7 @@ enum TpmuName {
 #[marshalable(tpm2b_simple)]
 pub struct Tpm2bDigest {
     size: u16,
+    #[marshalable(length=size)]
     buffer: [u8; TpmtHa::UNION_SIZE],
 }
 
@@ -659,6 +660,7 @@ pub type Tpm2bOperand = Tpm2bDigest;
 #[marshalable(tpm2b_simple)]
 pub struct Tpm2bData {
     size: u16,
+    #[marshalable(length=size)]
     buffer: [u8; TpmtHa::UNION_SIZE],
 }
 
@@ -699,6 +701,7 @@ pub struct Tpm2bIv {
 #[marshalable(tpm2b_simple)]
 pub struct Tpm2bName {
     size: u16,
+    #[marshalable(length=size)]
     name: [u8; TpmuName::UNION_SIZE],
 }
 
@@ -1224,6 +1227,7 @@ impl Marshalable for TpmtPublic {
 #[marshalable(tpm2b_simple)]
 pub struct Tpm2bPublic {
     size: u16,
+    #[marshalable(length=size)]
     public_area: [u8; size_of::<TpmtPublic>()],
 }
 
@@ -1525,6 +1529,7 @@ pub struct TpmtTkCreation {
 #[marshalable(tpm2b_simple)]
 pub struct Tpm2bCreationData {
     size: u16,
+    #[marshalable(length=size)]
     creation_data: [u8; size_of::<TpmsCreationData>()],
 }
 
