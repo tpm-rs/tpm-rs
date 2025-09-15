@@ -733,6 +733,14 @@ impl TpmHc {
     pub fn is_policy_session(value: u32) -> bool {
         (TpmHc::PolicySessionFirst.0..=TpmHc::PolicySessionLast.0).contains(&value)
     }
+    // The first transient object.
+    pub const TransientFirst: TpmHc = TpmHc::HRTransient;
+    // The last transient object.
+    pub const TransientLast: TpmHc = TpmHc(TpmHc::HRTransient.0 + 0x00FFFFFF);
+    /// Returns true if the value is a valid transient object handle.
+    pub fn is_transient_object(value: u32) -> bool {
+        (TpmHc::TransientFirst.0..=TpmHc::TransientLast.0).contains(&value)
+    }
     /// The first persistent object.
     pub const PersistentFirst: TpmHc = TpmHc::HRPersistent;
     /// The last persistent object.
