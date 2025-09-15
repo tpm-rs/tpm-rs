@@ -1496,6 +1496,17 @@ pub struct TpmsCreationData {
     pub outside_info: Tpm2bData,
 }
 
+/// TpmtTkCreation represents a ticket produced by `TPM2_Create()` or
+/// `TPM2_CreatePrimary`, used to bind the created data to the object it's
+/// applied to. See definition in Part 2: Structures, section 10.7.3.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+pub struct TpmtTkCreation {
+    pub tag: TpmSt,
+    pub hierarchy: TpmiRhHierarchy,
+    pub digest: Tpm2bDigest,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Debug, Marshalable, Tpm2bStruct)]
 #[marshalable(tpm2b_simple)]
