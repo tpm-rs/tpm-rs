@@ -413,9 +413,16 @@ pub enum TpmiStAttest {
 }
 
 /// The number of bits in an AES key.
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
-pub struct TpmiAesKeyBits(u16);
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
+pub enum TpmiAesKeyBits {
+    Aes128 = 128,
+    Aes192 = 192,
+    Aes256 = 256,
+}
+
 /// The number of bits in an SM4 key.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
@@ -425,9 +432,15 @@ pub struct TpmiSm4KeyBits(u16);
 #[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
 pub struct TpmiCamelliaKeyBits(u16);
 /// The number of bits in an RSA key.
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Marshalable)]
-pub struct TpmiRsaKeyBits(u16);
+#[open_enum]
+#[repr(u16)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, PartialEq, Default, Marshalable)]
+pub enum TpmiRsaKeyBits {
+    Rsa1024 = 1_024,
+    Rsa2048 = 2_048,
+    Rsa3072 = 3_072,
+}
 
 /// TpmaObject indicates an object's use, authorization types, and relationship to other objects (TPMA_OBJECT).
 /// See definition in Part 2: Structures, section 8.3.
