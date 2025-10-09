@@ -2,7 +2,8 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
 
-use crate::{constants::*, errors::*, marshal::*};
+use crate::marshal::{Marshalable, MarshalableVariant, Tpm2bStruct, UnmarshalBuf};
+use crate::{constants::*, errors::*};
 use bitflags::bitflags;
 use core::cmp::min;
 use core::convert::{From, TryFrom};
@@ -764,7 +765,7 @@ pub struct TpmsAttest {
 }
 // Custom overload of Marshalable, because the selector for attested is {un}marshaled separate from the field.
 impl Marshalable for TpmsAttest {
-    fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
+    fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::Result<usize> {
         let mut written = 0;
         written += self.magic.try_marshal(&mut buffer[written..])?;
         written += self
@@ -779,7 +780,7 @@ impl Marshalable for TpmsAttest {
         Ok(written)
     }
 
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> tpm2_rs_marshalable::Result<Self> {
         let magic = TpmGenerated::try_unmarshal(buffer)?;
         let selector = u16::try_unmarshal(buffer)?;
         Ok(TpmsAttest {
@@ -1140,7 +1141,7 @@ pub struct TpmtPublic {
 }
 // Custom overload of Marshalable, because the selector for parms_and_id is {un}marshaled first.
 impl Marshalable for TpmtPublic {
-    fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
+    fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::Result<usize> {
         let mut written = 0;
         written += self
             .parms_and_id
@@ -1154,7 +1155,7 @@ impl Marshalable for TpmtPublic {
             .try_marshal_variant(&mut buffer[written..])?;
         Ok(written)
     }
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> tpm2_rs_marshalable::Result<Self> {
         let selector = u16::try_unmarshal(buffer)?;
         Ok(TpmtPublic {
             name_alg: TpmiAlgHash::try_unmarshal(buffer)?,
@@ -1209,7 +1210,7 @@ pub struct TpmtSensitive {
 }
 // Custom overload of Marshalable, because the selector for sensitive is {un}marshaled first.
 impl Marshalable for TpmtSensitive {
-    fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
+    fn try_marshal(&self, buffer: &mut [u8]) -> tpm2_rs_marshalable::Result<usize> {
         let mut written = 0;
         written += self
             .sensitive
@@ -1221,7 +1222,7 @@ impl Marshalable for TpmtSensitive {
         Ok(written)
     }
 
-    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> tpm2_rs_marshalable::Result<Self> {
         let selector = u16::try_unmarshal(buffer)?;
         Ok(TpmtSensitive {
             auth_value: Tpm2bAuth::try_unmarshal(buffer)?,
@@ -1469,7 +1470,7 @@ pub trait Tpm2bSimple {
     const MAX_BUFFER_SIZE: usize;
     fn get_size(&self) -> u16;
     fn get_buffer(&self) -> &[u8];
-    fn from_bytes(buffer: &[u8]) -> TpmRcResult<Self>
+    fn from_bytes(buffer: &[u8]) -> tpm2_rs_marshalable::Result<Self>
     where
         Self: Sized;
 }
@@ -1479,12 +1480,12 @@ pub trait Tpm2bStruct: Tpm2bSimple {
     type StructType: Marshalable;
 
     /// Marshals the value into the 2b holder.
-    fn from_struct(val: &Self::StructType) -> TpmRcResult<Self>
+    fn from_struct(val: &Self::StructType) -> tpm2_rs_marshalable::Result<Self>
     where
         Self: Sized;
 
     /// Extracts the struct value from the 2b holder.
-    fn to_struct(&self) -> TpmRcResult<Self::StructType>;
+    fn to_struct(&self) -> tpm2_rs_marshalable::Result<Self::StructType>;
 }
 
 // Adds common helpers for TPML type $T.

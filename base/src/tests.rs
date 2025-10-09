@@ -32,7 +32,7 @@ macro_rules! impl_test_tpm2b_simple {
         assert!(s.try_marshal(&mut bigger_size_buf).is_ok());
 
         // too small should fail
-        let mut result: TpmRcResult<$T> =
+        let mut result: tpm2_rs_marshalable::Result<$T> =
             <$T>::try_unmarshal(&mut UnmarshalBuf::new(&too_small_size_buf));
         assert!(result.is_err());
 
@@ -302,7 +302,10 @@ fn test_marshal_tpmt_public() {
     // Test invalid selector value.
     assert!(TpmAlgId::SHA256.try_marshal(&mut buffer).is_ok());
     unmarsh = TpmtPublic::try_unmarshal(&mut UnmarshalBuf::new(&buffer));
-    assert_eq!(unmarsh.err(), Some(TpmRcError::Selector));
+    assert_eq!(
+        unmarsh.err(),
+        Some(tpm2_rs_marshalable::Error::UnknownSelector)
+    );
 }
 
 #[test]

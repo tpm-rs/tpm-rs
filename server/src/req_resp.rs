@@ -104,7 +104,7 @@ impl<B: TpmBuffers> RequestResponseCursor<B> {
 
     /// Gets the [`RequestThenResponse`] that can access the request, then be converted into a
     /// response view.
-    pub fn request(&mut self) -> RequestThenResponse<B> {
+    pub fn request(&mut self) -> RequestThenResponse<'_, B> {
         RequestThenResponse { buffers: self }
     }
 
