@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "base",
     "client",
@@ -10,6 +10,18 @@ members = [
     "unionify",
     "unionify-derive",
 ]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Trusted Computing Group", "TPM-RS Project Developers"]
+license = "Apache-2.0"
+documentation = "https://docs.rs/tpm2"
+homepage = "https://github.com/tpm-rs"
+repository = "https://github.com/tpm-rs/tpm-rs"
+keywords = ["tpm", "tss", "tpm2"]
+categories = ["cryptography", "no-std"]
 
 [workspace.dependencies]
 # Third party dependencies
