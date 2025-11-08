@@ -20,7 +20,7 @@ default-members = [
     "marshalable-derive",
     "server",
     "unionify",
-    "unionify-derive"
+    "unionify-derive",
 ]
 
 [workspace.package]
@@ -71,6 +71,11 @@ keywords.workspace = true
 categories.workspace = true
 
 [profile.release]
-lto = true        # default is lto = false
+lto = true # default is lto = false
 codegen-units = 1 # default is codegen-units = 16
-strip = true      # default is strip = "none"
+strip = true # default is strip = "none"
+panic = "abort"
+
+[[example]]
+name = "code_size"
+crate-type = ["lib"]
