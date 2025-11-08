@@ -22,20 +22,8 @@ use crate::{
 ///     must support can significantly reduce the final binary size, which is
 ///     critical for constrained environments.
 pub trait Limits {
-    const SUPPORTED_HASH_ALGS: &[TpmiAlgHash];
-    const MAX_DIGEST_SIZE: usize = max_digest_size(Self::SUPPORTED_HASH_ALGS);
-}
-const fn max_digest_size(hash_algs: &[TpmiAlgHash]) -> usize {
-    let mut max = 0;
-    let mut i = 0;
-    while i < hash_algs.len() {
-        let hash_alg = hash_algs[i];
-        if max < hash_alg.digest_size() {
-            max = hash_alg.digest_size();
-        }
-        i += 1;
-    }
-    max
+    const MAX_DIGEST_SIZE: usize;
+    fn supports_hash_alg(hash_alg: TpmiAlgHash) -> bool;
 }
 
 /// A type that can be marshalled into a destincation byte buffer

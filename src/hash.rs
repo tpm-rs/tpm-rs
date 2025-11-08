@@ -197,7 +197,7 @@ impl<'a> Marshal for TpmtHa<'a> {
         &self,
         buf: &'dst mut [u8],
     ) -> Result<&'dst mut [u8], MarshalError> {
-        if !L::SUPPORTED_HASH_ALGS.contains(&self.hash_alg()) {
+        if !L::supports_hash_alg(self.hash_alg()) {
             return Err(MarshalError);
         }
         let buf = self.hash_alg().marshal::<L>(buf)?;
@@ -222,28 +222,14 @@ impl<'a> Marshal for TpmtHa<'a> {
 impl<'a, 'src: 'a> Unmarshal<'src> for TpmtHa<'a> {
     fn unmarshal<L: Limits>(&mut self, mut buf: &'src [u8]) -> Result<&'src [u8], UnmarshalError> {
         *self = match TpmiAlgHash::unmarshal_value(pop_array(&mut buf)?)? {
-            Sha1 if L::SUPPORTED_HASH_ALGS.contains(&Sha1) => Self::Sha1(pop_array(&mut buf)?),
-            Sha256 if L::SUPPORTED_HASH_ALGS.contains(&Sha256) => {
-                Self::Sha256(pop_array(&mut buf)?)
-            }
-            Sha384 if L::SUPPORTED_HASH_ALGS.contains(&Sha384) => {
-                Self::Sha384(pop_array(&mut buf)?)
-            }
-            Sha512 if L::SUPPORTED_HASH_ALGS.contains(&Sha512) => {
-                Self::Sha512(pop_array(&mut buf)?)
-            }
-            Sm3_256 if L::SUPPORTED_HASH_ALGS.contains(&Sm3_256) => {
-                Self::Sm3_256(pop_array(&mut buf)?)
-            }
-            Sha3_256 if L::SUPPORTED_HASH_ALGS.contains(&Sha3_256) => {
-                Self::Sha3_256(pop_array(&mut buf)?)
-            }
-            Sha3_384 if L::SUPPORTED_HASH_ALGS.contains(&Sha3_384) => {
-                Self::Sha3_384(pop_array(&mut buf)?)
-            }
-            Sha3_512 if L::SUPPORTED_HASH_ALGS.contains(&Sha3_512) => {
-                Self::Sha3_512(pop_array(&mut buf)?)
-            }
+            Sha1 if L::supports_hash_alg(Sha1) => Self::Sha1(pop_array(&mut buf)?),
+            Sha256 if L::supports_hash_alg(Sha256) => Self::Sha256(pop_array(&mut buf)?),
+            Sha384 if L::supports_hash_alg(Sha384) => Self::Sha384(pop_array(&mut buf)?),
+            Sha512 if L::supports_hash_alg(Sha512) => Self::Sha512(pop_array(&mut buf)?),
+            Sm3_256 if L::supports_hash_alg(Sm3_256) => Self::Sm3_256(pop_array(&mut buf)?),
+            Sha3_256 if L::supports_hash_alg(Sha3_256) => Self::Sha3_256(pop_array(&mut buf)?),
+            Sha3_384 if L::supports_hash_alg(Sha3_384) => Self::Sha3_384(pop_array(&mut buf)?),
+            Sha3_512 if L::supports_hash_alg(Sha3_512) => Self::Sha3_512(pop_array(&mut buf)?),
             _ => return Err(UnmarshalError),
         };
         Ok(buf)
