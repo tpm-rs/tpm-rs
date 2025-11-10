@@ -26,8 +26,6 @@
 //!
 //! will not have a `Tpm` prefix.
 //!
-//! [TPM2 Specification]: https://trustedcomputinggroup.org/work-groups/trusted-platform-module/
-//!
 //! ## Platform Support
 //!
 //! Unlike some other crates under the TPM-RS project, this crate is intended
@@ -50,6 +48,9 @@
 //! [dev-dependencies] for running additional tests, but such additional
 //! dev-dependencies should be gated by opt-in Cargo features.
 //!
+//! [`Marshal`]: marshal::Marshal
+//! [`Unmarshal`]: marshal::Unmarshal
+//! [TPM2 Specification]: https://trustedcomputinggroup.org/work-groups/trusted-platform-module/
 //! [build-dependencies]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#build-dependencies
 //! [dev-dependencies]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#development-dependencies
 #![no_std]
@@ -61,6 +62,13 @@ pub use commands::Command;
 pub mod errors;
 pub mod marshal;
 
-// We use submodules for organizing the TPM Spec types, but expose them .
-mod hash;
-pub use hash::*;
+// We use submodules for organizing the TPM Spec types, but expose a flat API.
+mod base;
+mod constants;
+pub use constants::*;
+mod tpma;
+pub use tpma::*;
+mod tpmi;
+pub use tpmi::*;
+mod tpmt;
+pub use tpmt::*;

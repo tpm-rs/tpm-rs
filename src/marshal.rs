@@ -1,6 +1,6 @@
 //! Submodule defining traits used for Marshalling and Unmarshalling
 use crate::{
-    TpmiAlgHash,
+    TpmaHashAlgs,
     errors::{MarshalError, UnmarshalError},
 };
 
@@ -22,8 +22,8 @@ use crate::{
 ///     must support can significantly reduce the final binary size, which is
 ///     critical for constrained environments.
 pub trait Limits {
-    const MAX_DIGEST_SIZE: usize;
-    fn supports_hash_alg(hash_alg: TpmiAlgHash) -> bool;
+    const HASH_ALGS: TpmaHashAlgs;
+    const MAX_DIGEST_SIZE: usize = Self::HASH_ALGS.max_digest_size();
 }
 
 /// A type that can be marshalled into a destincation byte buffer
@@ -51,17 +51,14 @@ pub trait MarshalFixed: Marshal {
 }
 // Blanket impl so a type only needs to implement `marshal_fixed()`.
 impl<T: MarshalFixed<Array = [u8; N]>, const N: usize> Marshal for T {
-    #[inline(always)]
     fn marshal<'d, L: Limits>(&self, buf: &'d mut [u8]) -> Result<&'d mut [u8], MarshalError> {
         let (arr, buf) = buf.split_first_chunk_mut().ok_or(MarshalError)?;
         self.marshal_fixed(arr);
         Ok(buf)
     }
-    #[inline(always)]
     fn marshaled_size(&self) -> usize {
         Self::SIZE
     }
-    #[inline(always)]
     fn marshaled_size_max<L: Limits>() -> usize {
         Self::SIZE
     }
@@ -74,58 +71,18 @@ impl<T: MarshalFixed<Array = [u8; N]>, const N: usize> Marshal for T {
 /// references to the source buffer.
 pub trait UnmarshalFixed: MarshalFixed + for<'s> Unmarshal<'s> + Sized {
     /// For fixed-size structures, we can just return the value.
-    fn unmarshal_value(arr: &Self::Array) -> Result<Self, UnmarshalError>;
-    /// Helper function for unmarshalling a value into a reference.
-    /// This is useful for implementing [Unmarshal::unmarshal].
-    fn unmarshal_fixed(&mut self, arr: &Self::Array) -> Result<(), UnmarshalError> {
-        *self = Self::unmarshal_value(arr)?;
-        Ok(())
-    }
+    fn unmarshal_fixed<L: Limits>(arr: &Self::Array) -> Result<Self, UnmarshalError>;
 }
 // Blanket impl so a type only needs to implement `unmarshal_fixed()`.
 impl<'s, T: UnmarshalFixed<Array = [u8; N]>, const N: usize> Unmarshal<'s> for T {
-    #[inline(always)]
     fn unmarshal<L: Limits>(&mut self, mut buf: &'s [u8]) -> Result<&'s [u8], UnmarshalError> {
-        self.unmarshal_fixed(pop_array(&mut buf)?)?;
+        *self = Self::unmarshal_fixed::<L>(pop_array(&mut buf)?)?;
         Ok(buf)
     }
 }
-#[inline(always)]
+
 pub fn pop_array<'s, const N: usize>(buf: &mut &'s [u8]) -> Result<&'s [u8; N], UnmarshalError> {
     let arr;
     (arr, *buf) = buf.split_first_chunk().ok_or(UnmarshalError)?;
     Ok(arr)
-}
-
-/// Implement [`MarshalFixed`] and [`UnmarshalFixed`] for integer types
-macro_rules! impl_ints { ($($T: ty),+) => { $(
-    impl MarshalFixed for $T {
-        const SIZE: usize = size_of::<Self>();
-        type Array = [u8; size_of::<Self>()];
-        fn marshal_fixed(&self, arr: &mut [u8; Self::SIZE]) {
-            *arr = self.to_be_bytes();
-        }
-    }
-    impl UnmarshalFixed for $T {
-        #[inline(always)]
-        fn unmarshal_value(arr: &[u8; Self::SIZE]) -> Result<Self, UnmarshalError> {
-            Ok(Self::from_be_bytes(*arr))
-        }
-    }
-)+ } }
-impl_ints!(u8, u16, u32, u64, i8, i16, i32, i64);
-
-impl<const N: usize> MarshalFixed for &[u8; N] {
-    const SIZE: usize = N;
-    type Array = [u8; N];
-    #[inline(always)]
-    fn marshal_fixed(&self, arr: &mut [u8; N]) {
-        *arr = **self;
-    }
-}
-impl<'a, 's: 'a, const N: usize> Unmarshal<'s> for &'a [u8; N] {
-    fn unmarshal<L: Limits>(&mut self, mut buf: &'s [u8]) -> Result<&'s [u8], UnmarshalError> {
-        *self = pop_array(&mut buf)?;
-        Ok(buf)
-    }
 }
