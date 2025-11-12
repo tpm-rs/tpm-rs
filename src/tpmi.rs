@@ -36,7 +36,7 @@ impl TpmiAlgHash {
         }
     }
     pub const fn supported<L: Limits>(self) -> bool {
-        L::HASH_ALGS.contains_alg(self)
+        L::HASH_ALGS.supports_alg(self)
     }
     pub const fn from_alg<L: Limits>(a: Alg) -> Option<Self> {
         match a {
@@ -97,3 +97,100 @@ impl UnmarshalFixed for Option<TpmiAlgHash> {
         }
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+#[repr(u16)]
+pub enum TpmiAlgSymMode {
+    Ctr = Alg::Ctr.0,
+    // TODO add other variants
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+#[repr(u16)]
+pub enum TpmiAlgKdf {
+    Hkdf = Alg::Hkdf.0,
+    // TODO add other variants
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct TpmiRsaKeyBits(pub u16);
+
+impl TpmiRsaKeyBits {
+    pub const fn new<L: Limits>(bits: u16) -> Option<Self> {
+        if L::RSA_KEY_SIZES.supports_key_bits(bits) {
+            Some(Self(bits))
+        } else {
+            None
+        }
+    }
+}
+
+impl MarshalFixed for TpmiRsaKeyBits {
+    const SIZE: usize = 2;
+    type Array = [u8; 2];
+    fn marshal_fixed(&self, arr: &mut [u8; Self::SIZE]) {
+        self.0.marshal_fixed(arr)
+    }
+}
+impl UnmarshalFixed for TpmiRsaKeyBits {
+    fn unmarshal_fixed<L: Limits>(arr: &Self::Array) -> Result<Self, UnmarshalError> {
+        Self::new::<L>(u16::unmarshal_fixed::<L>(arr)?).ok_or(UnmarshalError)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct TpmiAesKeyBits(pub u16);
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct TpmiSm4KeyBits(pub u16);
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct TpmiCamelliaKeyBits(pub u16);
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct TpmiTdesKeyBits(pub u16);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct TpmiEccCurve(pub u16);
+
+impl TpmiEccCurve {
+    /// NIST P-192.
+    pub const NIST_P192: Self = Self(0x0001);
+    /// NIST P-224.
+    pub const NIST_P224: Self = Self(0x0002);
+    /// NIST P-256.
+    pub const NIST_P256: Self = Self(0x0003);
+    /// NIST P-384.
+    pub const NIST_P384: Self = Self(0x0004);
+    /// NIST P-521.
+    pub const NIST_P521: Self = Self(0x0005);
+    /// Barreto-Naehrig P-256.
+    pub const BN_P256: Self = Self(0x0010);
+    /// Barreto-Naehrig P-638.
+    pub const BN_P638: Self = Self(0x0011);
+    /// SM2 P-256.
+    pub const SM2_P256: Self = Self(0x0020);
+    /// Brainpool P-256 R1.
+    pub const BP_P256_R1: Self = Self(0x0030);
+    /// Brainpool P-384 R1.
+    pub const BP_P384_R1: Self = Self(0x0031);
+    /// Brainpool P-512 R1.
+    pub const BP_P512_R1: Self = Self(0x0032);
+    /// Curve25519.
+    pub const CURVE_25519: Self = Self(0x0040);
+    /// Curve448-Goldilocks.
+    pub const CURVE_448: Self = Self(0x0041);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct TpmiMldsaParms(pub u16);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct TpmiMlkemParms(pub u16);

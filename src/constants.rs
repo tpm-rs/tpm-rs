@@ -42,6 +42,7 @@ impl Alg {
     pub const Sm2: Self = Self(0x001B);
     pub const EcSchnorr: Self = Self(0x001C);
     pub const Ecmqv: Self = Self(0x001D);
+    pub const Hkdf: Self = Self(0x001F);
     pub const Kdf1Sp800_56A: Self = Self(0x0020);
     pub const Kdf2: Self = Self(0x0021);
     pub const Kdf1Sp800_108: Self = Self(0x0022);
@@ -56,6 +57,9 @@ impl Alg {
     pub const Cbc: Self = Self(0x0042);
     pub const Cfb: Self = Self(0x0043);
     pub const Ecb: Self = Self(0x0044);
+    pub const Mlkem: Self = Self(0x00A0);
+    pub const Mldsa: Self = Self(0x00A1);
+    pub const HashMldsa: Self = Self(0x00A2);
 }
 
 impl MarshalFixed for Alg {

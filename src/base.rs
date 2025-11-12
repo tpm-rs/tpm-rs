@@ -16,6 +16,24 @@ impl UnmarshalFixed for () {
     }
 }
 
+impl MarshalFixed for bool {
+    const SIZE: usize = 1;
+    type Array = [u8; 1];
+
+    fn marshal_fixed(&self, arr: &mut [u8; 1]) {
+        *arr = [u8::from(*self)];
+    }
+}
+impl UnmarshalFixed for bool {
+    fn unmarshal_fixed<L: Limits>(arr: &Self::Array) -> Result<Self, UnmarshalError> {
+        match *arr {
+            [0] => Ok(false),
+            [1] => Ok(true),
+            _ => Err(UnmarshalError),
+        }
+    }
+}
+
 /// Implement [`MarshalFixed`] and [`UnmarshalFixed`] for integer types
 macro_rules! impl_ints { ($($T: ty),+) => { $(
     impl MarshalFixed for $T {
