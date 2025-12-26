@@ -6,7 +6,7 @@ use tpm2_rs_client::run_command;
 
 #[test]
 fn test_get_capability_manufacturer_id() {
-    let (_sim_lifeline, mut tpm) = get_started_tpm();
+    let mut tpm = get_started_tpm();
 
     let mut expected = TpmlTaggedTpmProperty {
         count: 1,
