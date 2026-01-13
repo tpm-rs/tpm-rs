@@ -2,6 +2,8 @@
 #![cfg_attr(not(test), no_std)]
 
 use core::convert::TryFrom;
+use core::error::Error;
+use core::fmt;
 use core::num::NonZeroU32;
 use core::result::{Result, Result::*};
 pub use tpm_rc::*;
@@ -23,6 +25,14 @@ impl TssError {
         self.0.get()
     }
 }
+
+impl fmt::Display for TssError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.get())
+    }
+}
+
+impl Error for TssError {}
 
 /// Error returned when trying to convert `0` into `TssError`.
 #[cfg_attr(test, derive(Debug))]

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
-pub mod sessions;
 
+use connection::Connection;
 use core::mem::size_of;
 use sessions::{AuthorizationArea, Session};
 use tpm2_rs_base::commands::*;
@@ -10,17 +10,17 @@ use tpm2_rs_base::errors::{TssError, TssResult, TssTcsError};
 use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
 use tpm2_rs_base::{TpmiStCommandTag, TpmsAuthResponse};
 
+pub mod connection;
+pub mod sessions;
+
 pub const CMD_BUFFER_SIZE: usize = 4096;
 pub const RESP_BUFFER_SIZE: usize = 4096;
 
-pub trait Tpm {
-    fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TssResult<()>;
-}
-
-pub fn get_capability<T: Tpm>(
-    tpm: &mut T,
-    command: &GetCapabilityCmd,
-) -> TssResult<GetCapabilityResp> {
+pub fn get_capability<T>(tpm: &mut T, command: &GetCapabilityCmd) -> TssResult<GetCapabilityResp>
+where
+    T: Connection,
+    TssError: From<<T as Connection>::Error>,
+{
     run_command(command, tpm)
 }
 
@@ -54,7 +54,8 @@ pub struct RespHeader {
 pub fn run_command<CmdT, T>(cmd: &CmdT, tpm: &mut T) -> TssResult<CmdT::RespT>
 where
     CmdT: TpmCommand,
-    T: Tpm,
+    T: Connection,
+    TssError: From<<T as Connection>::Error>,
 {
     Ok(run_command_with_handles(cmd, CmdT::Handles::default(), (), tpm)?.0)
 }
@@ -156,7 +157,8 @@ pub fn run_command_with_handles<
 ) -> TssResult<(CmdT::RespT, CmdT::RespHandles)>
 where
     CmdT: TpmCommand,
-    T: Tpm,
+    T: Connection,
+    TssError: From<<T as Connection>::Error>,
 {
     let mut cmd_buffer = [0u8; CMD_BUFFER_SIZE];
     let mut cmd_header = CmdHeader::new(cmd_sessions.is_empty(), CmdT::CMD_CODE);
