@@ -18,7 +18,7 @@ use tpm2_rs_base::errors::{TssResult, TssTcsError};
 use tpm2_rs_client::run_command;
 use tpm2_rs_client::Tpm;
 use zerocopy::big_endian::U32;
-use zerocopy::AsBytes;
+use zerocopy::IntoBytes;
 
 // Include the simulator test module.
 mod simulator_tests_registration;
@@ -120,7 +120,7 @@ impl TpmCommand {
     }
 }
 
-#[derive(AsBytes)]
+#[derive(IntoBytes)]
 #[repr(C, packed)]
 struct TcpTpmHeader {
     tcp_cmd: U32,
