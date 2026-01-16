@@ -5,6 +5,7 @@ edition = "2021"
 
 [features]
 tpm-simulator-tests = []
+debug = []
 
 [dependencies]
 tpm2-rs-base = { workspace = true }
@@ -13,3 +14,4 @@ tpm2-rs-marshalable = { workspace = true }
 [dev-dependencies]
 zerocopy = { workspace = true }
 tpm2-rs-unionify = { workspace = true }
+tpm2-rs-errors = { workspace = true, features = ["debug"] }

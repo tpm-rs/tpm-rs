@@ -355,3 +355,35 @@ fn test_2b_struct() {
     let out_creation_data = creation_data_2b.to_struct().unwrap();
     assert_eq!(creation_data, out_creation_data);
 }
+
+#[test]
+fn test_tpmirhauth() {
+    assert!(TpmiRhNvAuth::try_from(TpmHandle::RHPlatform.0).is_ok());
+    assert!(TpmiRhNvAuth::try_from(TpmHandle::RHPlatformNV.0).is_err());
+    assert!(TpmiRhNvAuth::try_from(TpmHandle::RHOwner.0).is_ok());
+    let nv_index_last: u32 = 33554431;
+    assert_eq!(
+        TpmiRhNvAuth::try_from(nv_index_last).unwrap().0,
+        nv_index_last
+    );
+}
+
+#[test]
+fn test_tpmanv() {
+    assert_eq!(TpmaNv::from_index_type(TpmNt::Ordinary), TpmaNv(0x00));
+    assert_eq!(TpmaNv::from_index_type(TpmNt::Counter), TpmaNv(0x10));
+    assert_eq!(TpmaNv::from_index_type(TpmNt::Bits), TpmaNv(0x20));
+    assert_eq!(TpmaNv::from_index_type(TpmNt::Extend), TpmaNv(0x40));
+    assert_eq!(TpmaNv::from_index_type(TpmNt::PinFail), TpmaNv(0x80));
+    assert_eq!(TpmaNv::from_index_type(TpmNt::PinPass), TpmaNv(0x90));
+}
+
+#[test]
+fn test_tpmanvexp() {
+    assert_eq!(TpmaNvExp::from_index_type(TpmNt::Ordinary), TpmaNvExp(0x00));
+    assert_eq!(TpmaNvExp::from_index_type(TpmNt::Counter), TpmaNvExp(0x10));
+    assert_eq!(TpmaNvExp::from_index_type(TpmNt::Bits), TpmaNvExp(0x20));
+    assert_eq!(TpmaNvExp::from_index_type(TpmNt::Extend), TpmaNvExp(0x40));
+    assert_eq!(TpmaNvExp::from_index_type(TpmNt::PinFail), TpmaNvExp(0x80));
+    assert_eq!(TpmaNvExp::from_index_type(TpmNt::PinPass), TpmaNvExp(0x90));
+}
