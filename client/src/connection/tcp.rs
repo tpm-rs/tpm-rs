@@ -341,7 +341,7 @@ impl TcpConnection {
 
 impl Connection for TcpConnection {
     type Error = std::io::Error;
-    fn transact(&mut self, command: &[u8], response: &mut [u8]) -> Result<()> {
+    fn transact<'a>(&mut self, command: &[u8], response: &'a mut [u8]) -> Result<&'a mut [u8]> {
         let cmd_size: u32 = command
             .len()
             .try_into()
@@ -377,7 +377,8 @@ impl Connection for TcpConnection {
             .read_exact(&mut response[..resp_hdr.length.get() as usize])?;
 
         // The TPM simulator completes each command with a u32 `0`.
-        Self::check_response_end(&mut self.tpm_tcp)
+        Self::check_response_end(&mut self.tpm_tcp)?;
+        Ok(&mut response[..resp_hdr.length.get() as usize])
     }
 }
 
