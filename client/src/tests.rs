@@ -7,7 +7,8 @@ use tpm2_rs_base::TpmaSession;
 
 // A Tpm that just returns a general failure error.
 struct ErrorTpm();
-impl Tpm for ErrorTpm {
+impl Connection for ErrorTpm {
+    type Error = TssError;
     fn transact(&mut self, _: &[u8], _: &mut [u8]) -> TssResult<()> {
         Err(TssTcsError::GeneralFailure.into())
     }
@@ -60,7 +61,8 @@ struct FakeU32LoopbackTpm {
     rxed_header: Option<CmdHeader>,
     rxed_bytes: usize,
 }
-impl Tpm for FakeU32LoopbackTpm {
+impl Connection for FakeU32LoopbackTpm {
+    type Error = TssError;
     fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TssResult<()> {
         self.rxed_bytes = command.len();
         let mut buf = UnmarshalBuf::new(command);
@@ -95,7 +97,8 @@ fn test_fake_command() {
 
 // EvilSizeTpm writes a reponse header with a size value that is larger than the reponse buffer.
 struct EvilSizeTpm();
-impl Tpm for EvilSizeTpm {
+impl Connection for EvilSizeTpm {
+    type Error = TssError;
     fn transact(&mut self, _: &[u8], response: &mut [u8]) -> TssResult<()> {
         let tx_header = RespHeader {
             tag: TpmSt::NoSessions,
@@ -135,7 +138,8 @@ impl Default for FakeTpm {
         }
     }
 }
-impl Tpm for FakeTpm {
+impl Connection for FakeTpm {
+    type Error = TssError;
     fn transact(&mut self, _: &[u8], response: &mut [u8]) -> TssResult<()> {
         let off = self.header.try_marshal(response)?;
         let length = off + self.len;

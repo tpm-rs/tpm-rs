@@ -14,11 +14,11 @@ use std::net::TcpStream;
 use std::process::{Child, Command};
 use tpm2_rs_base::commands::StartupCmd;
 use tpm2_rs_base::constants::TpmSu;
-use tpm2_rs_base::errors::{TssResult, TssTcsError};
+use tpm2_rs_base::errors::{TssError, TssResult, TssTcsError};
+use tpm2_rs_client::connection::Connection;
 use tpm2_rs_client::run_command;
-use tpm2_rs_client::Tpm;
 use zerocopy::big_endian::U32;
-use zerocopy::IntoBytes;
+use zerocopy::{Immutable, IntoBytes};
 
 // Include the simulator test module.
 mod simulator_tests_registration;
@@ -108,7 +108,7 @@ impl TpmCommand {
     pub fn issue_to_platform(self, connection: &mut TcpStream) -> Result<()> {
         connection.write_all(U32::from(self as u32).as_bytes())?;
         let mut rc = U32::ZERO;
-        connection.read_exact(rc.as_bytes_mut())?;
+        connection.read_exact(rc.as_mut_bytes())?;
         if rc != U32::ZERO {
             Err(Error::new(
                 ErrorKind::Other,
@@ -120,7 +120,7 @@ impl TpmCommand {
     }
 }
 
-#[derive(IntoBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C, packed)]
 struct TcpTpmHeader {
     tcp_cmd: U32,
@@ -141,13 +141,14 @@ impl TcpTpm {
     fn read_tpm_u32(&mut self) -> TssResult<u32> {
         let mut val = U32::ZERO;
         self.tpm_conn
-            .read_exact(val.as_bytes_mut())
+            .read_exact(val.as_mut_bytes())
             .map_err(|_| TssTcsError::OutOfMemory)?;
         Ok(val.get())
     }
 }
 
-impl Tpm for TcpTpm {
+impl Connection for TcpTpm {
+    type Error = TssError;
     fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TssResult<()> {
         let cmd_size: u32 = command
             .len()
