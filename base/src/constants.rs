@@ -227,6 +227,7 @@ pub enum TpmCc {
 // See definition in Part 2: Structures, section 6.6.
 #[open_enum]
 #[repr(u32)]
+#[derive(Debug, Copy, Clone, Default, Marshalable)]
 pub enum TpmRc {
     Success = 0x00000000,
     // FMT0 error codes
