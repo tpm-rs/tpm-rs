@@ -16,11 +16,10 @@ pub mod sessions;
 pub const CMD_BUFFER_SIZE: usize = 4096;
 pub const RESP_BUFFER_SIZE: usize = 4096;
 
-pub fn get_capability<T>(tpm: &mut T, command: &GetCapabilityCmd) -> TssResult<GetCapabilityResp>
-where
-    T: Connection,
-    TssError: From<<T as Connection>::Error>,
-{
+pub fn get_capability<T: Connection<Error: From<TssError>>>(
+    tpm: &mut T,
+    command: &GetCapabilityCmd,
+) -> Result<GetCapabilityResp, T::Error> {
     run_command(command, tpm)
 }
 
@@ -51,12 +50,10 @@ pub struct RespHeader {
 }
 
 /// Runs a command with default/unset handles.
-pub fn run_command<CmdT, T>(cmd: &CmdT, tpm: &mut T) -> TssResult<CmdT::RespT>
-where
-    CmdT: TpmCommand,
-    T: Connection,
-    TssError: From<<T as Connection>::Error>,
-{
+pub fn run_command<CmdT: TpmCommand, T: Connection<Error: From<TssError>>>(
+    cmd: &CmdT,
+    tpm: &mut T,
+) -> Result<CmdT::RespT, T::Error> {
     Ok(run_command_with_handles(cmd, CmdT::Handles::default(), (), tpm)?.0)
 }
 
@@ -143,8 +140,8 @@ pub fn read_response_sessions<
 
 /// Runs a command with provided handles and sessions.
 pub fn run_command_with_handles<
-    CmdT,
-    T,
+    CmdT: TpmCommand,
+    T: Connection<Error: From<TssError>>,
     X: Session,
     Y: Session,
     Z: Session,
@@ -154,23 +151,26 @@ pub fn run_command_with_handles<
     cmd_handles: CmdT::Handles,
     cmd_sessions: AA,
     tpm: &mut T,
-) -> TssResult<(CmdT::RespT, CmdT::RespHandles)>
-where
-    CmdT: TpmCommand,
-    T: Connection,
-    TssError: From<<T as Connection>::Error>,
-{
+) -> Result<(CmdT::RespT, CmdT::RespHandles), T::Error> {
     let mut cmd_buffer = [0u8; CMD_BUFFER_SIZE];
     let mut cmd_header = CmdHeader::new(cmd_sessions.is_empty(), CmdT::CMD_CODE);
-    let mut written = cmd_header.try_marshal(&mut cmd_buffer)?;
+    let mut written = cmd_header
+        .try_marshal(&mut cmd_buffer)
+        .map_err(TssError::from)?;
 
-    written += cmd_handles.try_marshal(&mut cmd_buffer[written..])?;
+    written += cmd_handles
+        .try_marshal(&mut cmd_buffer[written..])
+        .map_err(TssError::from)?;
     written += write_command_sessions(&cmd_sessions, &mut cmd_buffer[written..])?;
-    written += cmd.try_marshal(&mut cmd_buffer[written..])?;
+    written += cmd
+        .try_marshal(&mut cmd_buffer[written..])
+        .map_err(TssError::from)?;
 
     // Update the command size
     cmd_header.size = written as u32;
-    let _ = cmd_header.try_marshal(&mut cmd_buffer)?;
+    let _ = cmd_header
+        .try_marshal(&mut cmd_buffer)
+        .map_err(TssError::from)?;
 
     let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     tpm.transact(&cmd_buffer[..written], &mut resp_buffer)?;
@@ -178,18 +178,18 @@ where
     let (resp_header, read) = read_response_header(&resp_buffer)?;
     let resp_size = resp_header.size as usize;
     if resp_size > resp_buffer.len() {
-        return TssResult::Err(TssTcsError::OutOfMemory.into());
+        return Err(TssError::from(TssTcsError::OutOfMemory).into());
     }
     let mut unmarsh = UnmarshalBuf::new(&resp_buffer[read..resp_size]);
-    let resp_handles = CmdT::RespHandles::try_unmarshal(&mut unmarsh)?;
+    let resp_handles = CmdT::RespHandles::try_unmarshal(&mut unmarsh).map_err(TssError::from)?;
     if resp_header.tag == TpmSt::Sessions {
-        let _param_size = u32::try_unmarshal(&mut unmarsh)?;
+        let _param_size = u32::try_unmarshal(&mut unmarsh).map_err(TssError::from)?;
     }
-    let resp = CmdT::RespT::try_unmarshal(&mut unmarsh)?;
+    let resp = CmdT::RespT::try_unmarshal(&mut unmarsh).map_err(TssError::from)?;
     read_response_sessions(&cmd_sessions, &mut unmarsh)?;
 
     if !unmarsh.is_empty() {
-        return TssResult::Err(TssTcsError::TpmUnexpected.into());
+        return Err(TssError::from(TssTcsError::TpmUnexpected).into());
     }
     Ok((resp, resp_handles))
 }
