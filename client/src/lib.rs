@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-#![cfg_attr(not(feature = "std"), no_std)]
+#![no_std]
 
 use connection::Connection;
 use core::mem::size_of;

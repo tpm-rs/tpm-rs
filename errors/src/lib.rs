@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-#![cfg_attr(not(feature = "std"), no_std)]
+#![no_std]
 
 use core::convert::TryFrom;
 use core::error::Error;
@@ -9,6 +9,8 @@ use core::result::{Result, Result::*};
 pub use tpm_rc::*;
 pub use tss_rc::*;
 
+#[cfg(feature = "std")]
+mod std;
 mod tpm_rc;
 mod tss_rc;
 
@@ -34,17 +36,8 @@ impl fmt::Display for TssError {
 
 impl Error for TssError {}
 
-#[cfg(feature = "std")]
-impl From<std::io::Error> for TssError {
-    fn from(_: std::io::Error) -> Self {
-        // Note that this impl drops information from the io error.
-        // We should make our error type more robust than TssError.
-        TssError(NonZeroU32::new(0xFFFFFFFF).unwrap())
-    }
-}
-
 /// Error returned when trying to convert `0` into `TssError`.
-#[cfg_attr(test, derive(Debug))]
+#[derive(Debug)]
 pub struct TssErrorCannotBeZero;
 
 impl TryFrom<u32> for TssError {

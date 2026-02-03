@@ -1,9 +1,9 @@
-#![cfg(feature = "connection-tcp")]
-
 //! A connection to the TCG TPM 2.0 Simulator over TCP.
 //!
 //! This module provides the [`TcpConnection`] struct, which implements the
 //! [`Connection`] trait for communicating with a TPM simulator.
+#![cfg(feature = "connection-tcp")]
+extern crate std;
 
 use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;

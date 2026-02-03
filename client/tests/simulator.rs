@@ -1,7 +1,5 @@
-#![cfg(feature = "tpm-simulator-tests")]
-
-/// These tests are enabled with the tpm-simulator-tests feature and only run against a TPM
-/// simulator. The docker container in this crate builds a simulator binary, or you may provide
+/// These tests are not enabled by default and only run against a TPM simulator.
+/// The docker container in this crate builds a simulator binary, or you may provide
 /// your own simulator binary by setting the TPM_RS_SIMULATOR env var for `cargo test` on the
 /// command line.
 ///
@@ -17,8 +15,8 @@ use tpm2_rs_client::connection::SimulatorPlatformSignal;
 use tpm2_rs_client::connection::TcpConnection;
 use tpm2_rs_client::run_command;
 
-// Include the simulator test module.
-mod simulator_tests_registration;
+// Include the command-specific tests
+mod commands;
 
 const SIMULATOR_IP: &str = "127.0.0.1";
 const TPM_SIMULATOR_ENV_VAR: &str = "TPM_RS_SIMULATOR";

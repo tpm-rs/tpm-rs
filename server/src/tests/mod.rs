@@ -1,3 +1,7 @@
+//! Unit tests for the base crate (uses std)
+extern crate std;
+use std::vec::Vec;
+
 use crate::platform::TpmContextDeps;
 
 use super::tpmctx::*;

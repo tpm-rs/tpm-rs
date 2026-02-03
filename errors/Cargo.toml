@@ -4,12 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["std"]
-
-# Provide conversion to/from std error types
+# Implement conversions/traits which require std
 std = []
-
-# Includes debug trait implementation. Useful for unit tests.
-debug = []
 
 [dependencies]

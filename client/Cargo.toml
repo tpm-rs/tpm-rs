@@ -6,14 +6,8 @@ edition = "2021"
 [features]
 default = ["connection-tcp"]
 
-# Provide implementations of TPM clients that depend on std
-std = []
-
 # Enable the TCP TPM connection (e.g. for the TPM simulator)
-connection-tcp = ["std", "zerocopy"]
-
-# Enable tests run against the TPM simulator
-tpm-simulator-tests = ["connection-tcp"]
+connection-tcp = ["dep:zerocopy", "tpm2-rs-base/std"]
 
 [dependencies]
 tpm2-rs-base = { workspace = true }
@@ -22,3 +16,9 @@ zerocopy = { workspace = true, optional = true }
 
 [dev-dependencies]
 tpm2-rs-unionify = { workspace = true }
+
+[[test]]
+name = "simulator"
+path = "tests/simulator.rs"
+test = false # Do not test by default
+required-features = ["connection-tcp"]

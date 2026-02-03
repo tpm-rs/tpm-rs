@@ -1,4 +1,4 @@
-//! Please see "simulator_tests.rs" for details.
+//! Please see "simulator.rs" for details.
 //!
 //! Add at least one test module file for each chapter in TPM command spec.
 //! If there are many tests for a single command, it is recommended to split into command submodules:

@@ -1,3 +1,7 @@
+//! Unit tests for the base crate (uses std)
+extern crate std;
+use std::vec::Vec;
+
 use super::*;
 use core::mem::size_of;
 
