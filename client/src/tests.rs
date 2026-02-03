@@ -9,7 +9,7 @@ use tpm2_rs_base::TpmaSession;
 struct ErrorTpm();
 impl Connection for ErrorTpm {
     type Error = TssError;
-    fn transact(&mut self, _: &[u8], _: &mut [u8]) -> TssResult<()> {
+    fn transact<'a>(&mut self, _: &[u8], _: &'a mut [u8]) -> TssResult<&'a mut [u8]> {
         Err(TssTcsError::GeneralFailure.into())
     }
 }
@@ -63,7 +63,7 @@ struct FakeU32LoopbackTpm {
 }
 impl Connection for FakeU32LoopbackTpm {
     type Error = TssError;
-    fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TssResult<()> {
+    fn transact<'a>(&mut self, command: &[u8], response: &'a mut [u8]) -> TssResult<&'a mut [u8]> {
         self.rxed_bytes = command.len();
         let mut buf = UnmarshalBuf::new(command);
         self.rxed_header = Some(CmdHeader::try_unmarshal(&mut buf)?);
@@ -79,7 +79,7 @@ impl Connection for FakeU32LoopbackTpm {
         tx_header.size = written as u32;
         // Update the size.
         tx_header.try_marshal(response)?;
-        Ok(())
+        Ok(&mut response[..written])
     }
 }
 
@@ -99,14 +99,15 @@ fn test_fake_command() {
 struct EvilSizeTpm();
 impl Connection for EvilSizeTpm {
     type Error = TssError;
-    fn transact(&mut self, _: &[u8], response: &mut [u8]) -> TssResult<()> {
+    fn transact<'a>(&mut self, _: &[u8], response: &'a mut [u8]) -> TssResult<&'a mut [u8]> {
         let tx_header = RespHeader {
             tag: TpmSt::NoSessions,
             size: response.len() as u32 + 2,
             rc: 0,
         };
-        tx_header.try_marshal(response)?;
-        Ok(())
+        let written = tx_header.try_marshal(response)?;
+        // Return the slice of the response that was written.
+        Ok(&mut response[..written])
     }
 }
 
@@ -140,7 +141,7 @@ impl Default for FakeTpm {
 }
 impl Connection for FakeTpm {
     type Error = TssError;
-    fn transact(&mut self, _: &[u8], response: &mut [u8]) -> TssResult<()> {
+    fn transact<'a>(&mut self, _: &[u8], response: &'a mut [u8]) -> TssResult<&'a mut [u8]> {
         let off = self.header.try_marshal(response)?;
         let length = off + self.len;
         if self.len > response.len() {
@@ -149,7 +150,7 @@ impl Connection for FakeTpm {
         response[off..length].copy_from_slice(&self.response[..self.len]);
         self.header.size = length as u32;
         self.header.try_marshal(response)?;
-        Ok(())
+        Ok(&mut response[..length])
     }
 }
 impl FakeTpm {

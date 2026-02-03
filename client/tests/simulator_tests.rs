@@ -9,7 +9,7 @@
 ///  `cd client && docker compose run simulator_tests`
 ///
 /// These tests must be run with `--test-threads=1`, because they use a single TCP port.
-use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
+use std::io::{Error, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command};
 use tpm2_rs_base::commands::StartupCmd;
@@ -110,10 +110,7 @@ impl TpmCommand {
         let mut rc = U32::ZERO;
         connection.read_exact(rc.as_mut_bytes())?;
         if rc != U32::ZERO {
-            Err(Error::new(
-                ErrorKind::Other,
-                format!("Platform command error {}", rc.get()),
-            ))
+            Err(Error::other(format!("Platform command error {}", rc.get())))
         } else {
             Ok(())
         }
@@ -149,7 +146,7 @@ impl TcpTpm {
 
 impl Connection for TcpTpm {
     type Error = TssError;
-    fn transact(&mut self, command: &[u8], response: &mut [u8]) -> TssResult<()> {
+    fn transact<'a>(&mut self, command: &[u8], response: &'a mut [u8]) -> TssResult<&'a mut [u8]> {
         let cmd_size: u32 = command
             .len()
             .try_into()
@@ -177,6 +174,6 @@ impl Connection for TcpTpm {
         if self.read_tpm_u32()? != 0 {
             return Err(TssTcsError::OutOfMemory.into());
         }
-        Ok(())
+        Ok(&mut response[..resp_size as usize])
     }
 }
