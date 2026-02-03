@@ -33,7 +33,7 @@ fn test_get_random_duplicate_value_trap() {
         .count();
 
     assert!(
-        same_twice_occurrences < (random_slice.len() / 2).into(),
+        same_twice_occurrences < (random_slice.len() / 2),
         "More than 50% of the values equals previous value: {random_slice:?}"
     );
 }
@@ -55,7 +55,7 @@ fn test_get_random_large_sizes() {
         if detected_max_size == 0 {
             // Detect the max size used by the server.
             assert!(
-                TpmtHa::UNION_SIZE as usize >= random_slice_len,
+                TpmtHa::UNION_SIZE >= random_slice_len,
                 "We received more random data, than client implementation supports {random_slice_len} > {}.",
                 TpmtHa::UNION_SIZE
             );
