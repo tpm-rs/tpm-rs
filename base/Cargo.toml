@@ -11,6 +11,6 @@ tpm2-rs-errors = { workspace = true }
 tpm2-rs-marshalable = { workspace = true }
 tpm2-rs-unionify = { workspace = true }
 
-[dev-dependencies]
-# Include debug implemenation for unit tests
-tpm2-rs-errors = { workspace = true, features = ["debug"] }
+[features]
+# Implement conversions/traits which require std
+std = ["tpm2-rs-errors/std"]

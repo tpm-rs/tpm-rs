@@ -4,6 +4,9 @@
 
 use core::error::Error;
 
+mod tcp;
+pub use tcp::*;
+
 /// Trait for communicating with a TPM.
 pub trait Connection {
     /// The type returned if [`Connection::transact`] fails.

@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-#![cfg_attr(not(test), no_std)]
+#![no_std]
 
 use core::convert::TryFrom;
 use core::error::Error;
@@ -9,6 +9,8 @@ use core::result::{Result, Result::*};
 pub use tpm_rc::*;
 pub use tss_rc::*;
 
+#[cfg(feature = "std")]
+mod std;
 mod tpm_rc;
 mod tss_rc;
 
@@ -35,7 +37,7 @@ impl fmt::Display for TssError {
 impl Error for TssError {}
 
 /// Error returned when trying to convert `0` into `TssError`.
-#[cfg_attr(test, derive(Debug))]
+#[derive(Debug)]
 pub struct TssErrorCannotBeZero;
 
 impl TryFrom<u32> for TssError {

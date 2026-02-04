@@ -1,6 +1,6 @@
 #![allow(dead_code, clippy::large_enum_variant)]
 #![forbid(unsafe_code)]
-#![cfg_attr(not(test), no_std)]
+#![no_std]
 
 use crate::marshal::{Marshalable, MarshalableVariant, Tpm2bStruct, UnmarshalBuf};
 use crate::{constants::*, errors::*};

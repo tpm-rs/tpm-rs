@@ -6,8 +6,7 @@ use core::result::Result;
 pub type TpmRcResult<T> = Result<T, TpmRcError>;
 
 /// Represents a TPM 2.0 service error as defined in specification as TPM_RC.
-#[derive(PartialEq, Eq, Clone, Copy)]
-#[cfg_attr(feature = "debug", derive(Debug))]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct TpmRcError(NonZeroU32);
 
 // Allow constant to have enum-style case.
@@ -123,8 +122,7 @@ impl TpmRcError {
 }
 
 /// Represents the type of error for a Format1 `TpmRcError` code.
-#[derive(PartialEq, Eq, Clone, Copy)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ErrorType {
     /// Error occurred with a Handle.
     Handle,
@@ -162,8 +160,7 @@ impl ErrorType {
 }
 
 /// Represents the positional parameter of the error starting from 1 of a Format1 [`TpmRcError`].
-#[derive(PartialEq, Eq, Clone, Copy)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ErrorPosition {
     /// First handle/parameter/session caused the failure.
     Pos1 = 1,

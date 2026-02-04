@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-#![cfg_attr(not(test), no_std)]
+#![no_std]
 
 use core::mem::size_of;
 use core::option::{Option, Option::*};
