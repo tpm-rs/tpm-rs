@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "base",
     "client",
@@ -10,6 +10,30 @@ members = [
     "unionify",
     "unionify-derive",
 ]
+# TODO: Shorten this default
+default-members = [
+    ".",
+    "base",
+    "client",
+    "errors",
+    "marshalable",
+    "marshalable-derive",
+    "server",
+    "unionify",
+    "unionify-derive",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Trusted Computing Group", "TPM-RS Project Developers"]
+license = "Apache-2.0"
+documentation = "https://docs.rs/tpm2"
+homepage = "https://github.com/tpm-rs"
+repository = "https://github.com/tpm-rs/tpm-rs"
+keywords = ["tpm", "tss", "tpm2"]
+categories = ["cryptography", "no-std"]
 
 [workspace.dependencies]
 # Third party dependencies
@@ -33,7 +57,26 @@ tpm2-rs-server = { path = "server" }
 tpm2-rs-unionify = { path = "unionify" }
 tpm2-rs-unionify-derive = { path = "unionify-derive" }
 
+[package]
+name = "tpm2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
 [profile.release]
-lto = true        # default is lto = false
+lto = true # default is lto = false
 codegen-units = 1 # default is codegen-units = 16
-strip = true      # default is strip = "none"
+strip = true # default is strip = "none"
+panic = "abort"
+opt-level = 2
+
+[[example]]
+name = "code_size"
+crate-type = ["lib"]
