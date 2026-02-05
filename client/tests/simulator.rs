@@ -8,89 +8,96 @@
 ///
 /// These tests must be run with `--test-threads=1`, because they use a single TCP port.
 use std::io::Result;
-use std::process::{Child, Command};
+
 use tpm2_rs_base::commands::StartupCmd;
 use tpm2_rs_base::constants::TpmSu;
-use tpm2_rs_client::connection::SimulatorPlatformSignal;
-use tpm2_rs_client::connection::TcpConnection;
+use tpm2_rs_client::connection::TcpSimulator;
 use tpm2_rs_client::run_command;
 
 // Include the command-specific tests
 mod commands;
 
-const SIMULATOR_IP: &str = "127.0.0.1";
-const TPM_SIMULATOR_ENV_VAR: &str = "TPM_RS_SIMULATOR";
+/// Environment variable used to connect to the TPM simulator over TCP.
+const ENV_VAR_SIMULATOR_IP: &str = "SIMULATOR_IP";
 
+/// Default IP address of the TPM simulator program. This value assumes the
+/// simulator is running on the same location as the test.
+const DEFAULT_SIMULATOR_IP: &str = "127.0.0.1";
+
+/// Get the IP address to connect to the TPM simulator. Set the environment
+/// variable at the command line to specify a different IP address, e.g.
+///
+/// ```shell
+/// SIMULATOR_IP="192.168.1.1" cargo test
+/// ```
+fn get_simulator_ip() -> String {
+    std::env::var(ENV_VAR_SIMULATOR_IP).unwrap_or(DEFAULT_SIMULATOR_IP.to_string())
+}
+
+/// Environment variable used to override the TPM simulator program.
+const ENV_VAR_SIMULATOR_PROGRAM: &str = "SIMULATOR_BIN";
+
+/// Default location of the TPM simulator program. This value assumes we're
+/// running in a docker container built by the TPM-provided Dockerfile.
+const DEFAULT_SIMULATOR_PROGRAM: &str = "/tpm2-simulator";
+
+/// Get the program to run to launch the TPM simulator. Set the environment
+/// variable at the command line to specify a different program to run, e.g.
+///
+/// ```shell
+/// SIMULATOR_BIN="/my/custom/simulator" cargo test
+/// ```
 fn get_simulator_path() -> String {
-    std::env::var(TPM_SIMULATOR_ENV_VAR)
-        .expect("Set TPM_RS_SIMULATOR to run tests against a simulator")
+    std::env::var(ENV_VAR_SIMULATOR_PROGRAM).unwrap_or(DEFAULT_SIMULATOR_PROGRAM.to_string())
+}
+
+/// Environment variable used to override the arguments to the TPM simulator.
+const ENV_VAR_SIMULATOR_ARGS: &str = "SIMULATOR_ARGS";
+
+/// Default arguments to pass to the TPM simulator.
+const DEFAULT_SIMULATOR_ARGS: &str = "";
+
+/// Get the arguments to pass to the TPM simulator. Set the environment
+/// variable at the command line to specify different arguments, e.g.
+///
+/// ```shell
+/// SIMULATOR_ARGS="--custom-arg" cargo test
+/// ```
+fn get_simulator_args() -> Vec<String> {
+    std::env::var(ENV_VAR_SIMULATOR_ARGS)
+        .unwrap_or(DEFAULT_SIMULATOR_ARGS.to_string())
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Convenience function to spawn a TPM simulator and establish a TCP connection.
+pub fn spawn_simulator_and_connect() -> Result<TcpSimulator> {
+    let mut simulator = TcpSimulator::new(
+        get_simulator_path(),
+        get_simulator_args().as_slice(),
+        &get_simulator_ip(),
+    )?;
+    simulator.connection_mut().reinit()?;
+
+    Ok(simulator)
 }
 
 #[test]
 fn test_startup_tpm() {
-    let (_sim_lifeline, mut conn) = run_tpm_simulator(&get_simulator_path()).unwrap();
+    let mut simulator = spawn_simulator_and_connect().unwrap();
     let startup = StartupCmd {
         startup_type: TpmSu::Clear,
     };
-    assert!(run_command(&startup, &mut conn).is_ok());
+    assert!(run_command(&startup, simulator.connection_mut()).is_ok());
 }
 
 // If test_startup_tpm passes, this will not panic.
-fn get_started_tpm() -> (TpmSim, TcpConnection) {
-    let (sim_lifeline, mut conn) = run_tpm_simulator(&get_simulator_path()).unwrap();
+fn get_started_tpm() -> TcpSimulator {
+    let mut simulator = spawn_simulator_and_connect().unwrap();
     let startup = StartupCmd {
         startup_type: TpmSu::Clear,
     };
-    run_command(&startup, &mut conn).unwrap();
-    (sim_lifeline, conn)
-}
-
-// Launches the TPM simulator at the given path in a subprocess and powers it up.
-pub fn run_tpm_simulator(simulator_bin: &str) -> Result<(TpmSim, TcpConnection)> {
-    let sim_lifeline = TpmSim::new(simulator_bin)?;
-    let mut attempts = 0;
-
-    let mut conn = loop {
-        attempts += 1;
-        match TcpConnection::new_default(SIMULATOR_IP) {
-            Ok(conn) => break conn,
-            Err(err) => {
-                if attempts > 3 {
-                    return Err(err);
-                }
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-        }
-    };
-
-    initialize_tpm_simulator(&mut conn)?;
-
-    Ok((sim_lifeline, conn))
-}
-
-// Holder that manages the lifetime of the simulator subprocess.
-pub struct TpmSim(Child);
-impl TpmSim {
-    fn new(simulator_bin: &str) -> Result<TpmSim> {
-        Ok(TpmSim(
-            Command::new(format!(".{simulator_bin}"))
-                .current_dir("/")
-                .spawn()?,
-        ))
-    }
-}
-impl Drop for TpmSim {
-    fn drop(&mut self) {
-        if let Err(x) = self.0.kill() {
-            println!("Failed to stop simulator: {x}");
-        }
-    }
-}
-
-// Issues the commands to initialize the TPM simulator.
-fn initialize_tpm_simulator(conn: &mut TcpConnection) -> Result<()> {
-    conn.platform_signal(SimulatorPlatformSignal::NvOff)?;
-    conn.platform_signal(SimulatorPlatformSignal::PowerOff)?;
-    conn.platform_signal(SimulatorPlatformSignal::PowerOn)?;
-    conn.platform_signal(SimulatorPlatformSignal::NvOn)
+    run_command(&startup, simulator.connection_mut()).unwrap();
+    simulator
 }

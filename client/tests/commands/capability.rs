@@ -6,7 +6,7 @@ use tpm2_rs_client::run_command;
 
 #[test]
 fn test_get_capability_manufacturer_id() {
-    let (_sim_lifeline, mut tpm) = get_started_tpm();
+    let mut tpm = get_started_tpm();
 
     let mut expected = TpmlTaggedTpmProperty {
         count: 1,
@@ -25,7 +25,7 @@ fn test_get_capability_manufacturer_id() {
     };
 
     // We allow panic in test cases.
-    let resp = run_command(&command, &mut tpm).expect("Failed running command.");
+    let resp = run_command(&command, tpm.connection_mut()).expect("Failed running command.");
 
     // Extract the TpmlTaggedTpmProperty data form the response.
     let TpmsCapabilityData::TpmProperties(received) = resp.capability_data else {

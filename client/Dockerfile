@@ -80,7 +80,6 @@ RUN ln -s /simulators/openssl1/tpm2-simulator /tpm2-simulator
 #  - replace the COPY statement with RUN git clone to obtain the TPM sources.
 
 WORKDIR /tpm-rs
-ENV TPM_RS_SIMULATOR=/tpm2-simulator
 
 # Install Rust
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
