@@ -7,13 +7,13 @@ use tpm2_rs_unionify::UnionSize;
 
 #[test]
 fn test_get_random_duplicate_value_trap() {
-    let (_sim_lifeline, mut tpm) = get_started_tpm();
+    let mut tpm = get_started_tpm();
 
     let command = GetRandomCmd {
         bytes_requested: TPM2_SHA256_DIGEST_SIZE as u16,
     };
 
-    let resp = run_command(&command, &mut tpm).expect("Failed running command.");
+    let resp = run_command(&command, tpm.connection_mut()).expect("Failed running command.");
 
     // Lets pull out the actual data as a slice for convenience
     let random_slice = &resp.random_bytes.as_ref();
@@ -40,14 +40,14 @@ fn test_get_random_duplicate_value_trap() {
 
 #[test]
 fn test_get_random_large_sizes() {
-    let (_sim_lifeline, mut tpm) = get_started_tpm();
+    let mut tpm = get_started_tpm();
     let mut detected_max_size = 0;
 
     // The first value is used to detect the servers max digest size.
     // The second value is used to confirm that server is still providing that size.
     for i in [0xFFF, 0xFFFF] {
         let command = GetRandomCmd { bytes_requested: i };
-        let resp = run_command(&command, &mut tpm).expect("Failed running command.");
+        let resp = run_command(&command, tpm.connection_mut()).expect("Failed running command.");
 
         // Lets pull out the actual slice size for convenience
         let random_slice_len = resp.random_bytes.as_ref().len();
@@ -77,12 +77,12 @@ fn test_get_random_large_sizes() {
 
 #[test]
 fn test_get_random_small_sizes() {
-    let (_sim_lifeline, mut tpm) = get_started_tpm();
+    let mut tpm = get_started_tpm();
 
     for i in 0..1 {
         let command = GetRandomCmd { bytes_requested: i };
 
-        let resp = run_command(&command, &mut tpm).expect("Failed running command.");
+        let resp = run_command(&command, tpm.connection_mut()).expect("Failed running command.");
 
         // Lets pull out the actual slice size for convenience
         let random_slice_len = resp.random_bytes.as_ref().len();

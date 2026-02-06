@@ -1,12 +1,18 @@
 //! A connection to the TCG TPM 2.0 Simulator over TCP.
 //!
 //! This module provides the [`TcpConnection`] struct, which implements the
-//! [`Connection`] trait for communicating with a TPM simulator.
+//! [`Connection`] trait for communicating with a TPM simulator. It also
+//! provides a [`TcpSimulator`] struct that manages the lifetime of a TPM
+//! simulator process and a connection to it.
 #![cfg(feature = "connection-tcp")]
 extern crate std;
 
+use std::ffi::{OsStr, OsString};
+use std::format;
 use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
+use std::process::{Child, Command};
+
 use zerocopy::network_endian::U32;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
@@ -31,31 +37,50 @@ pub struct TcpConnection {
 }
 
 impl TcpConnection {
-    /// Connects to the TPM simulator using the specified ports.
+    /// Connects to an already running TPM simulator using the specified ports.
     ///
     /// # Errors
     ///
     /// Returns an error if the connection to the TPM or Platform port fails.
-    pub fn new(ip: &str, tpm_port: u16, plat_port: u16) -> Result<TcpConnection> {
+    pub fn connect(
+        ip: &str,
+        tpm_port: Option<u16>,
+        plat_port: Option<u16>,
+    ) -> Result<TcpConnection> {
+        let tpm_port = tpm_port.unwrap_or(SIMULATOR_DEFAULT_TPM_PORT);
+        let plat_port = plat_port.unwrap_or(SIMULATOR_DEFAULT_PLATFORM_PORT);
+
         Ok(TcpConnection {
             tpm_tcp: TcpStream::connect((ip, tpm_port))?,
             plat_tcp: TcpStream::connect((ip, plat_port))?,
         })
     }
 
-    /// Connects to the TPM simulator using the default ports.
-    ///
-    /// The default ports are 2321 for the TPM and 2322 for the Platform.
+    /// Connects to an already running TPM simulator with retries.
     ///
     /// # Errors
     ///
-    /// Returns an error if the connection to the TPM or Platform port fails.
-    pub fn new_default(ip: &str) -> Result<TcpConnection> {
-        Self::new(
-            ip,
-            SIMULATOR_DEFAULT_TPM_PORT,
-            SIMULATOR_DEFAULT_PLATFORM_PORT,
-        )
+    /// Returns an error if the connection to the TPM or Platform port fails
+    /// after the number of retries has been exhausted.
+    pub fn connect_with_retries(
+        ip: &str,
+        tpm_port: Option<u16>,
+        plat_port: Option<u16>,
+    ) -> Result<TcpConnection> {
+        let mut attempts = 0;
+        let conn = loop {
+            attempts += 1;
+            match TcpConnection::connect(ip, tpm_port, plat_port) {
+                Ok(conn) => break conn,
+                Err(err) => {
+                    if attempts > 3 {
+                        return Err(err);
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        };
+        Ok(conn)
     }
 
     /// Performs an H-CRTM Event Sequence against the TPM simulator.
@@ -164,6 +189,20 @@ impl TcpConnection {
         self.plat_tcp.write_all(cmd_code.as_bytes())?;
 
         Self::check_response_end(&mut self.plat_tcp)
+    }
+
+    /// Convenience function to reinitialize the TPM simulator, causing it to
+    /// call _TPM_Init.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the plaform signals fail.
+    pub fn reinit(&mut self) -> Result<()> {
+        self.platform_signal(SimulatorPlatformSignal::NvOff)?;
+        self.platform_signal(SimulatorPlatformSignal::PowerOff)?;
+        self.platform_signal(SimulatorPlatformSignal::PowerOn)?;
+        self.platform_signal(SimulatorPlatformSignal::NvOn)?;
+        Ok(())
     }
 
     /// Puts the TPM simulator into failure mode.
@@ -568,4 +607,74 @@ struct SetFirmwareHashRequest {
 #[repr(C, packed)]
 struct SetFirmwareSvnRequest {
     svn: U32,
+}
+
+/// Structure to manage the subprocess used to spawn the TPM simulator.
+#[derive(Debug)]
+pub struct TcpSimulator {
+    child: Child,
+    conn: TcpConnection,
+}
+
+impl TcpSimulator {
+    /// Starts the TPM simulator binary with the given arguments and connects to it.
+    pub fn new<B: AsRef<OsStr>, A: AsRef<OsStr>>(
+        bin: B,
+        args: &[A],
+        ip: &str,
+    ) -> Result<TcpSimulator> {
+        let mut command = Command::new(bin.as_ref());
+        command.current_dir("/");
+        if !args.is_empty() {
+            command.args(args);
+        }
+
+        let child = command.spawn().map_err(|e| {
+            let argstr = if !args.is_empty() {
+                // Ideally this would just be `args.join(" ")`, but the join
+                // impl for OsStr is a permanent unstable feature, see
+                // https://github.com/rust-lang/rust/issues/27747.
+                let mut argstr = OsString::new();
+                for arg in args {
+                    argstr.push(" ");
+                    argstr.push(arg);
+                }
+                argstr
+            } else {
+                OsString::new()
+            };
+            Error::other(format!(
+                "failed to start TCP simulator \"{}{}\": {e}",
+                bin.as_ref().to_string_lossy(),
+                argstr.to_string_lossy()
+            ))
+        })?;
+
+        let conn = TcpConnection::connect_with_retries(ip, None, None)?;
+
+        Ok(TcpSimulator { child, conn })
+    }
+
+    /// Stops the TPM simulator process.
+    pub fn stop(&mut self) -> Result<()> {
+        self.child
+            .kill()
+            .map_err(|e| Error::other(format!("failed to stop TCP simulator: {e}")))
+    }
+
+    /// Returns a reference to the underlying TCP connection.
+    pub fn connection(&self) -> &TcpConnection {
+        &self.conn
+    }
+
+    /// Returns a mutable reference to the underlying TCP connection.
+    pub fn connection_mut(&mut self) -> &mut TcpConnection {
+        &mut self.conn
+    }
+}
+
+impl Drop for TcpSimulator {
+    fn drop(&mut self) {
+        _ = self.stop();
+    }
 }
