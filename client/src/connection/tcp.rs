@@ -34,6 +34,9 @@ pub struct TcpConnection {
 
     /// TCP connection to the Platform port of the TPM simulator
     plat_tcp: TcpStream,
+
+    /// The locality to use when sending commands to the TPM
+    locality: u8,
 }
 
 impl TcpConnection {
@@ -53,6 +56,7 @@ impl TcpConnection {
         Ok(TcpConnection {
             tpm_tcp: TcpStream::connect((ip, tpm_port))?,
             plat_tcp: TcpStream::connect((ip, plat_port))?,
+            locality: 0,
         })
     }
 
@@ -329,6 +333,11 @@ impl TcpConnection {
         Self::check_response_end(&mut self.plat_tcp)
     }
 
+    /// Sets the locality used when issuing subsequent commands.
+    pub fn set_locality(&mut self, locality: u8) {
+        self.locality = locality;
+    }
+
     /// Ends the session with the TPM simulator. This causes the simulator to
     /// listen for new incoming connections.
     ///
@@ -388,7 +397,7 @@ impl Connection for TcpConnection {
 
         let cmd_code = U32::new(SimulatorTpmCommandCode::SendCommand as u32);
         let cmd_hdr = &SendCommandRequestHeader {
-            locality: 0,
+            locality: self.locality,
             length: U32::new(cmd_size),
         };
 
