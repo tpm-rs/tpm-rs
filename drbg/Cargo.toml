@@ -1,0 +1,7 @@
+[package]
+name = "tpm2-rs-drbg"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+digest = { workspace = true }
