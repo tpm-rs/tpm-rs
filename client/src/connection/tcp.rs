@@ -7,16 +7,15 @@
 #![cfg(feature = "connection-tcp")]
 extern crate std;
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::format;
-use std::io::{BufReader, Error, ErrorKind, IoSlice, Read, Result, Write};
+use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::string::String;
-use std::thread;
+use std::vec::Vec;
 
-use thread::JoinHandle;
 use zerocopy::network_endian::U32;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
@@ -626,8 +625,6 @@ struct SetFirmwareSvnRequest {
 #[derive(Debug)]
 pub struct TcpSimulator {
     child: Child,
-    stdout_thread: Option<JoinHandle<String>>,
-    stderr_thread: Option<JoinHandle<String>>,
     conn: TcpConnection,
 }
 
@@ -645,53 +642,21 @@ impl TcpSimulator {
             command.args(args);
         }
 
-        let mut child = command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+        let child = command
+            // TODO: Capture stdout/stderr to display when requested.
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|e| {
-                let argstr = if !args.is_empty() {
-                    // Ideally this would just be `args.join(" ")`, but the join
-                    // impl for OsStr is a permanent unstable feature, see
-                    // https://github.com/rust-lang/rust/issues/27747.
-                    let mut argstr = OsString::new();
-                    for arg in args {
-                        argstr.push(" ");
-                        argstr.push(arg);
-                    }
-                    argstr
-                } else {
-                    OsString::new()
-                };
-                Error::other(format!(
-                    "failed to start TCP simulator \"{}{}\": {e}",
-                    bin.as_ref().to_string_lossy(),
-                    argstr.to_string_lossy()
-                ))
+                Error::new(
+                    e.kind(),
+                    format!(
+                        "failed to start TCP simulator \"{:?} {:?}\": {e}",
+                        command.get_program(),
+                        command.get_args().collect::<Vec<_>>(),
+                    ),
+                )
             })?;
-
-        // Capture stdout and stderr for logging. Note that this implementation
-        // only allows the main thread to receive stdout/stderr after the
-        // simulator process terminates.
-        let child_stdout = child.stdout.take().ok_or(Error::other(
-            "failed to acquire stdout of simulator process",
-        ))?;
-        let stdout_thread = Some(thread::spawn(move || {
-            let mut s = String::new();
-            let mut reader = BufReader::new(child_stdout);
-            let _ = reader.read_to_string(&mut s);
-            s
-        }));
-
-        let child_stderr = child.stderr.take().ok_or(Error::other(
-            "failed to acquire stderr of simulator process",
-        ))?;
-        let stderr_thread = Some(thread::spawn(move || {
-            let mut s = String::new();
-            let mut reader = BufReader::new(child_stderr);
-            let _ = reader.read_to_string(&mut s);
-            s
-        }));
 
         // The TCG TPM simulator writes the ports it uses to two files:
         //   - TPM port: "command.port"
@@ -702,12 +667,7 @@ impl TcpSimulator {
 
         let conn = TcpConnection::connect_with_retries(ip, Some(tpm_port), Some(plat_port))?;
 
-        Ok(TcpSimulator {
-            child,
-            stdout_thread,
-            stderr_thread,
-            conn,
-        })
+        Ok(TcpSimulator { child, conn })
     }
 
     /// Reads a port from a file with retires.
@@ -733,25 +693,9 @@ impl TcpSimulator {
         }
     }
 
-    /// Collects stdout and stderr from the simulator. It is assumed that the
-    /// simulator has already been stopped.
+    /// Collects stdout and stderr from the simulator.
     pub fn collect_output(&mut self) -> Result<String> {
-        let stdout = self
-            .stdout_thread
-            .take()
-            .ok_or_else(|| Error::other("stdout_thread already taken"))?
-            .join()
-            .map_err(|e| Error::other(format!("failed to join stdout thread: {e:?}")))?;
-        let stderr = self
-            .stderr_thread
-            .take()
-            .ok_or_else(|| Error::other("stderr_thread already taken"))?
-            .join()
-            .map_err(|e| Error::other(format!("failed to join stderr thread: {e:?}")))?;
-
-        Ok(format!(
-            "--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
-        ))
+        Err(Error::other("Unimplemented"))
     }
 
     /// Stops the TPM simulator process nicely.

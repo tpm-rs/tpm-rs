@@ -8,6 +8,7 @@
 ///
 /// These tests must be run with `--test-threads=1`, because they use a single TCP port.
 use std::io::Result;
+use std::net::Ipv4Addr;
 
 use tempfile::tempdir;
 use tpm2_rs_base::commands::StartupCmd;
@@ -17,23 +18,6 @@ use tpm2_rs_client::run_command;
 
 // Include the command-specific tests
 mod commands;
-
-/// Environment variable used to connect to the TPM simulator over TCP.
-const ENV_VAR_SIMULATOR_IP: &str = "SIMULATOR_IP";
-
-/// Default IP address of the TPM simulator program. This value assumes the
-/// simulator is running on the same location as the test.
-const DEFAULT_SIMULATOR_IP: &str = "127.0.0.1";
-
-/// Get the IP address to connect to the TPM simulator. Set the environment
-/// variable at the command line to specify a different IP address, e.g.
-///
-/// ```shell
-/// SIMULATOR_IP="192.168.1.1" cargo test
-/// ```
-fn get_simulator_ip() -> String {
-    std::env::var(ENV_VAR_SIMULATOR_IP).unwrap_or(DEFAULT_SIMULATOR_IP.to_string())
-}
 
 /// Environment variable used to override the TPM simulator program.
 const ENV_VAR_SIMULATOR_PROGRAM: &str = "SIMULATOR_BIN";
@@ -52,34 +36,14 @@ fn get_simulator_path() -> String {
     std::env::var(ENV_VAR_SIMULATOR_PROGRAM).unwrap_or(DEFAULT_SIMULATOR_PROGRAM.to_string())
 }
 
-/// Environment variable used to override the arguments to the TPM simulator.
-const ENV_VAR_SIMULATOR_ARGS: &str = "SIMULATOR_ARGS";
-
-/// Default arguments to pass to the TPM simulator.
-const DEFAULT_SIMULATOR_ARGS: &str = "--pick_ports";
-
-/// Get the arguments to pass to the TPM simulator. Set the environment
-/// variable at the command line to specify different arguments, e.g.
-///
-/// ```shell
-/// SIMULATOR_ARGS="--custom-arg" cargo test
-/// ```
-fn get_simulator_args() -> Vec<String> {
-    std::env::var(ENV_VAR_SIMULATOR_ARGS)
-        .unwrap_or(DEFAULT_SIMULATOR_ARGS.to_string())
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect()
-}
-
 /// Convenience function to spawn a TPM simulator and establish a TCP connection.
 pub fn spawn_simulator_and_connect() -> Result<TcpSimulator> {
     let tempdir = tempdir()?;
     let mut simulator = TcpSimulator::new(
         get_simulator_path(),
-        get_simulator_args().as_slice(),
+        &["--pick_ports"],
         tempdir.keep(), // cwd
-        &get_simulator_ip(),
+        &Ipv4Addr::LOCALHOST.to_string(),
     )?;
     simulator.connection_mut().reinit()?;
 
