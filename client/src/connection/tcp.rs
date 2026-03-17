@@ -13,7 +13,6 @@ use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::string::String;
 use std::vec::Vec;
 
 use zerocopy::network_endian::U32;
@@ -691,11 +690,6 @@ impl TcpSimulator {
                 }
             }
         }
-    }
-
-    /// Collects stdout and stderr from the simulator.
-    pub fn collect_output(&mut self) -> Result<String> {
-        Err(Error::other("Unimplemented"))
     }
 
     /// Stops the TPM simulator process nicely.
