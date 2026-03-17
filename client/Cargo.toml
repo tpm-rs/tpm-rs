@@ -16,9 +16,11 @@ zerocopy = { workspace = true, optional = true }
 
 [dev-dependencies]
 tpm2-rs-unionify = { workspace = true }
+tempfile = { workspace = true }
 
 [[test]]
 name = "simulator"
 path = "tests/simulator.rs"
-test = false # Do not test by default
+# Do not test by default
+test = false
 required-features = ["connection-tcp"]

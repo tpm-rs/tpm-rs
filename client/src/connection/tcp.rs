@@ -7,11 +7,13 @@
 #![cfg(feature = "connection-tcp")]
 extern crate std;
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::format;
 use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
-use std::process::{Child, Command};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::vec::Vec;
 
 use zerocopy::network_endian::U32;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
@@ -627,41 +629,72 @@ pub struct TcpSimulator {
 
 impl TcpSimulator {
     /// Starts the TPM simulator binary with the given arguments and connects to it.
-    pub fn new<B: AsRef<OsStr>, A: AsRef<OsStr>>(
+    pub fn new<B: AsRef<OsStr>, A: AsRef<OsStr>, P: AsRef<Path>>(
         bin: B,
         args: &[A],
+        cwd: P,
         ip: &str,
     ) -> Result<TcpSimulator> {
         let mut command = Command::new(bin.as_ref());
-        command.current_dir("/");
+        command.current_dir(&cwd);
         if !args.is_empty() {
             command.args(args);
         }
 
-        let child = command.spawn().map_err(|e| {
-            let argstr = if !args.is_empty() {
-                // Ideally this would just be `args.join(" ")`, but the join
-                // impl for OsStr is a permanent unstable feature, see
-                // https://github.com/rust-lang/rust/issues/27747.
-                let mut argstr = OsString::new();
-                for arg in args {
-                    argstr.push(" ");
-                    argstr.push(arg);
-                }
-                argstr
-            } else {
-                OsString::new()
-            };
-            Error::other(format!(
-                "failed to start TCP simulator \"{}{}\": {e}",
-                bin.as_ref().to_string_lossy(),
-                argstr.to_string_lossy()
-            ))
-        })?;
+        let child = command
+            // TODO: Capture stdout/stderr to display when requested.
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| {
+                Error::new(
+                    e.kind(),
+                    format!(
+                        "failed to start TCP simulator \"{:?} {:?}\": {e}",
+                        command.get_program(),
+                        command.get_args().collect::<Vec<_>>(),
+                    ),
+                )
+            })?;
 
-        let conn = TcpConnection::connect_with_retries(ip, None, None)?;
+        // The TCG TPM simulator writes the ports it uses to two files:
+        //   - TPM port: "command.port"
+        //   - Platform port: "platform.port"
+        let tpm_port = Self::read_port_from_file_with_retries(&cwd.as_ref().join("command.port"))?;
+        let plat_port =
+            Self::read_port_from_file_with_retries(&cwd.as_ref().join("platform.port"))?;
+
+        let conn = TcpConnection::connect_with_retries(ip, Some(tpm_port), Some(plat_port))?;
 
         Ok(TcpSimulator { child, conn })
+    }
+
+    /// Reads a port from a file with retires.
+    fn read_port_from_file_with_retries(path: &Path) -> Result<u16> {
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            match std::fs::read_to_string(path) {
+                Ok(port_str) => {
+                    let port = port_str
+                        .trim()
+                        .parse::<u16>()
+                        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+                    return Ok(port);
+                }
+                Err(err) => {
+                    if attempts > 3 {
+                        return Err(err);
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        }
+    }
+
+    /// Stops the TPM simulator process nicely.
+    pub fn stop_nicely(&mut self) -> Result<()> {
+        self.conn.stop_simulator()
     }
 
     /// Stops the TPM simulator process.
@@ -684,6 +717,6 @@ impl TcpSimulator {
 
 impl Drop for TcpSimulator {
     fn drop(&mut self) {
-        _ = self.stop();
+        let _ = self.stop_nicely().or_else(|_| self.stop());
     }
 }
