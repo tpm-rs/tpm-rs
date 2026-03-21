@@ -1,7 +1,41 @@
 //! [TPM2.0 1.83] 24 Hierarchy Commands
 
+use crate::commands::{Marshalable, TpmCommand};
+use crate::constants::{TpmCc, TpmHandle};
+use crate::{
+    Tpm2bCreationData, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bPublic, Tpm2bSensitiveCreate,
+    TpmiRhHierarchy, TpmlPcrSelection, TpmtTkCreation,
+};
+
 /// [TPM2.0 1.83] 24.1 TPM2_CreatePrimary (Command)
-pub struct CreatePrimaryCmd {}
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Marshalable)]
+pub struct CreatePrimaryCmd {
+    pub in_sensitive: Tpm2bSensitiveCreate,
+    pub in_public: Tpm2bPublic,
+    pub outside_info: Tpm2bData,
+    pub creation_pcr: TpmlPcrSelection,
+}
+
+impl TpmCommand for CreatePrimaryCmd {
+    const CMD_CODE: TpmCc = TpmCc::CreatePrimary;
+
+    type Handles = TpmiRhHierarchy;
+    type RespT = CreatePrimaryResp;
+    // Object handle of type TPM_HT_TRANSIENT.
+    type RespHandles = TpmHandle;
+}
+
+/// [TPM2.0 1.83] 24.1 TPM2_CreatePrimary (Response)
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+pub struct CreatePrimaryResp {
+    pub out_public: Tpm2bPublic,
+    pub creation_data: Tpm2bCreationData,
+    pub creation_hash: Tpm2bDigest,
+    pub creation_ticket: TpmtTkCreation,
+    pub name: Tpm2bName,
+}
 
 /// [TPM2.0 1.83] 24.2 TPM2_HierarchyControl (Command)
 pub struct HierarchyControlCmd {}

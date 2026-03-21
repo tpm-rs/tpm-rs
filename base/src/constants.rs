@@ -398,6 +398,7 @@ pub enum TpmSu {
 // See definition in Part 2: Structures, section 6.11.
 #[open_enum]
 #[repr(u8)]
+#[derive(Copy, Clone, Default, Marshalable)]
 pub enum TpmSe {
     HMAC = 0x00,
     Policy = 0x01,
@@ -651,6 +652,8 @@ pub enum TpmPtPcr {
 // See definition in Part 2: Structures, section 7.2.
 #[open_enum]
 #[repr(u8)]
+#[rustfmt::skip] #[derive(Debug)] // Keep debug derivation separate for open_enum override.
+#[derive(Copy, Clone, Default, Marshalable)]
 pub enum TpmHt {
     PCR = 0x00,
     NVIndex = 0x01,
@@ -671,6 +674,7 @@ pub enum TpmHt {
 pub enum TpmHandle {
     RHOwner = 0x40000001,
     RHNull = 0x40000007,
+    RHUnassigned = 0x40000008,
     RSPW = 0x40000009,
     RHLockout = 0x4000000A,
     RHEndorsement = 0x4000000B,
@@ -728,6 +732,14 @@ impl TpmHc {
     /// Returns true if the value is a valid policy session handle.
     pub fn is_policy_session(value: u32) -> bool {
         (TpmHc::PolicySessionFirst.0..=TpmHc::PolicySessionLast.0).contains(&value)
+    }
+    // The first transient object.
+    pub const TransientFirst: TpmHc = TpmHc::HRTransient;
+    // The last transient object.
+    pub const TransientLast: TpmHc = TpmHc(TpmHc::HRTransient.0 + 0x00FFFFFF);
+    /// Returns true if the value is a valid transient object handle.
+    pub fn is_transient_object(value: u32) -> bool {
+        (TpmHc::TransientFirst.0..=TpmHc::TransientLast.0).contains(&value)
     }
     /// The first persistent object.
     pub const PersistentFirst: TpmHc = TpmHc::HRPersistent;
