@@ -12,6 +12,17 @@ members = [
     "unionify",
     "unionify-derive",
 ]
+default-members = [
+    ".",
+    "base",
+    "client",
+    "errors",
+    "marshalable",
+    "marshalable-derive",
+    "server",
+    "unionify",
+    "unionify-derive",
+]
 
 # Package keys that should be used by all packages.
 # We don't set: authors (deprecated), license-file, exclude, include, or publish
@@ -49,6 +60,19 @@ tpm2-rs-marshalable-derive = { path = "marshalable-derive" }
 tpm2-rs-server = { path = "server" }
 tpm2-rs-unionify = { path = "unionify" }
 tpm2-rs-unionify-derive = { path = "unionify-derive" }
+
+[package]
+name = "tpm2"
+description = "Core types and traits for communicating with a TPM 2.0"
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [profile.release]
 lto = true # default is lto = false
