@@ -4,9 +4,9 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use std::collections::HashMap;
 use syn::{
-    parse_macro_input, spanned::Spanned, Attribute, Data, DataEnum, DeriveInput, Error, Expr,
-    ExprCall, ExprPath, Field, Fields, FieldsNamed, GenericArgument, Ident, Index, MetaNameValue,
-    Path, PathArguments, Result, Type,
+    Attribute, Data, DataEnum, DeriveInput, Error, Expr, ExprCall, ExprPath, Field, Fields,
+    FieldsNamed, GenericArgument, Ident, Index, MetaNameValue, Path, PathArguments, Result, Type,
+    parse_macro_input, spanned::Spanned,
 };
 
 /// The Tpm2bStruct derive macro generates an implementation of the Tpm2bStruct trait
@@ -454,8 +454,8 @@ fn get_named_fields_marshal<'a>(
 fn get_field_marshal_body(all_fields: &Fields) -> Result<TokenStream> {
     let mut basic_field_types = HashMap::new();
     match all_fields {
-        Fields::Named(ref fields) => get_named_fields_marshal(&mut basic_field_types, fields),
-        Fields::Unnamed(ref fields) => {
+        Fields::Named(fields) => get_named_fields_marshal(&mut basic_field_types, fields),
+        Fields::Unnamed(fields) => {
             let recurse = fields.unnamed.iter().enumerate().map(|(i, f)| {
                 let index = Index::from(i);
                 quote_spanned! {f.span()=>
@@ -653,8 +653,8 @@ fn get_named_fields_unmarshal<'a>(
 fn get_field_unmarshal(all_fields: &Fields) -> Result<TokenStream> {
     let mut basic_field_types = HashMap::new();
     match all_fields {
-        Fields::Named(ref fields) => get_named_fields_unmarshal(&mut basic_field_types, fields),
-        Fields::Unnamed(ref fields) => {
+        Fields::Named(fields) => get_named_fields_unmarshal(&mut basic_field_types, fields),
+        Fields::Unnamed(fields) => {
             let recurse = fields.unnamed.iter().enumerate().map(|(i, f)| {
                 let var_name = Ident::new(&format!("f{i}"), Span::call_site());
                 let field_type = &f.ty;
@@ -728,7 +728,7 @@ fn get_enum_unmarshal_body(struct_name: &Ident, data: &DataEnum) -> Result<Token
 
 fn get_field_list(all_fields: &Fields) -> TokenStream {
     match all_fields {
-        Fields::Named(ref fields) => {
+        Fields::Named(fields) => {
             let list = fields.named.iter().map(|f| {
                 let name = &f.ident;
                 quote_spanned! {f.span()=>
@@ -739,7 +739,7 @@ fn get_field_list(all_fields: &Fields) -> TokenStream {
                 #(#list)*
             }
         }
-        Fields::Unnamed(ref fields) => {
+        Fields::Unnamed(fields) => {
             let list = fields.unnamed.iter().enumerate().map(|(i, f)| {
                 let var_name = Ident::new(&format!("f{i}"), Span::call_site());
                 quote_spanned! {f.span()=>

@@ -1,9 +1,16 @@
 [package]
 name = "tpm2-rs-marshalable"
-version = "0.1.0"
-edition = "2021"
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-safe-discriminant = {workspace = true}
+safe-discriminant = { workspace = true }
 tpm2-rs-errors = { workspace = true }
 tpm2-rs-marshalable-derive = { workspace = true }

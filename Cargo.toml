@@ -1,5 +1,7 @@
 [workspace]
-resolver = "2"
+resolver = "3"
+
+# TODO (https://github.com/tpm-rs/tpm-rs/issues/215): Reduce number of crates
 members = [
     "base",
     "client",
@@ -10,6 +12,20 @@ members = [
     "unionify",
     "unionify-derive",
 ]
+
+# Package keys that should be used by all packages.
+# We don't set: authors (deprecated), license-file, exclude, include, or publish
+# Defaults are fine for: documentation (crates.io) and readme (README.md)
+# Packages should set their own: name and description
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+homepage = "https://github.com/tpm-rs"
+repository = "https://github.com/tpm-rs/tpm-rs"
+license = "Apache-2.0"
+keywords = ["tpm", "tss", "tpm2"]
+categories = ["cryptography", "no-std"]
 
 [workspace.dependencies]
 # Third party dependencies
@@ -35,6 +51,6 @@ tpm2-rs-unionify = { path = "unionify" }
 tpm2-rs-unionify-derive = { path = "unionify-derive" }
 
 [profile.release]
-lto = true        # default is lto = false
+lto = true # default is lto = false
 codegen-units = 1 # default is codegen-units = 16
-strip = true      # default is strip = "none"
+strip = true # default is strip = "none"
