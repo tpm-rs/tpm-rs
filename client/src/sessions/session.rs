@@ -1,4 +1,4 @@
-use tpm2_rs_base::{errors::TssResult, TpmsAuthCommand, TpmsAuthResponse};
+use tpm2_rs_base::{TpmsAuthCommand, TpmsAuthResponse, errors::TssResult};
 
 /// Trait for types representing TPM sessions.
 pub trait Session {

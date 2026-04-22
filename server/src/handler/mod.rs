@@ -1,6 +1,6 @@
 mod random;
 
-use crate::{crypto::Crypto, platform::TpmContextDeps, ServerError};
+use crate::{ServerError, crypto::Crypto, platform::TpmContextDeps};
 
 /// The context that all command handler functions are given access to in order for them to process
 /// their given command.

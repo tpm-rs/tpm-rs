@@ -1,9 +1,9 @@
 use crate::sessions::{PasswordSession, Session};
 
 use super::*;
+use tpm2_rs_base::TpmaSession;
 use tpm2_rs_base::constants::TpmHandle;
 use tpm2_rs_base::errors::TpmRcError;
-use tpm2_rs_base::TpmaSession;
 
 // A Tpm that just returns a general failure error.
 struct ErrorTpm();

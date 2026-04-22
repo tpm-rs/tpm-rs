@@ -1,8 +1,8 @@
 //! [TPM2.0 1.83] 16 Random Number Generator
 
+use crate::Tpm2bDigest;
 use crate::commands::{Marshalable, TpmCommand};
 use crate::constants::TpmCc;
-use crate::Tpm2bDigest;
 
 /// [TPM2.0 1.83] 16.1 TPM2_GetRandom (Command)
 #[repr(C)]

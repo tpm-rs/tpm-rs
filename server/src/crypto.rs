@@ -1,9 +1,9 @@
 use crate::{
-    platform::{
-        crypto::{Drbg, EntropySource},
-        TpmContextDeps,
-    },
     ServerError,
+    platform::{
+        TpmContextDeps,
+        crypto::{Drbg, EntropySource},
+    },
 };
 
 pub struct Crypto<Deps: TpmContextDeps> {

@@ -1,5 +1,5 @@
 use crate::sessions::Session;
-use tpm2_rs_base::{errors::TssResult, TpmsAuthCommand, TpmsAuthResponse};
+use tpm2_rs_base::{TpmsAuthCommand, TpmsAuthResponse, errors::TssResult};
 
 /// [`NoSession`] is not a standard TPM session and cannot be instantiated,
 /// making it unsuitable for use as a session. Its primary purpose is to serve

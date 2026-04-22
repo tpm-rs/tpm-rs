@@ -1,8 +1,8 @@
 use core::{error::Error, fmt::Display};
 
 use crate::platform::crypto::{
-    drbg_helpers::{next_u32_via_fill, next_u64_via_fill},
     Drbg, DrbgError,
+    drbg_helpers::{next_u32_via_fill, next_u64_via_fill},
 };
 
 #[derive(Debug)]

@@ -1,13 +1,13 @@
 use tpm2_rs_base::errors::TpmRcError;
 
 use crate::{
+    ServerError,
     handler::CommandHandler,
     platform::{
-        crypto::{Drbg, EntropySource},
         TpmBuffers, TpmContextDeps,
+        crypto::{Drbg, EntropySource},
     },
     req_resp::RequestThenResponse,
-    ServerError,
 };
 
 impl<Deps: TpmContextDeps> CommandHandler<Deps> {

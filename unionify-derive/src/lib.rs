@@ -3,8 +3,8 @@
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{
-    parse_macro_input, punctuated::Punctuated, spanned::Spanned, Error, Field, Fields, Ident,
-    ItemEnum, Result, Token, Type, Variant, Visibility,
+    Error, Field, Fields, Ident, ItemEnum, Result, Token, Type, Variant, Visibility,
+    parse_macro_input, punctuated::Punctuated, spanned::Spanned,
 };
 
 fn enum_fields_to_union_type(fields: Fields) -> Result<Option<Type>> {
