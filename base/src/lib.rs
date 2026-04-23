@@ -849,7 +849,7 @@ pub struct Tpm2bSensitiveData {
 pub type Tpm2bAuth = Tpm2bDigest;
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, PartialEq, Debug, Marshalable, Default)]
 pub struct TpmsSensitiveCreate {
     pub user_auth: Tpm2bAuth,
     pub data: Tpm2bSensitiveData,
@@ -1462,6 +1462,41 @@ pub struct TpmsCreationData {
 pub struct Tpm2bCreationData {
     size: u16,
     creation_data: [u8; size_of::<TpmsCreationData>()],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TpmtTkCreation {
+    pub rc: TpmRc,            // If success, represents TPM_ST_CREATION.
+    pub hierarchy: TpmHandle, // RH hierarchy expected.
+    pub digest: Tpm2bDigest,
+}
+
+impl Marshalable for TpmtTkCreation {
+    fn try_marshal(&self, buffer: &mut [u8]) -> TpmRcResult<usize> {
+        let mut written = 0;
+        if self.rc == TpmRc::Success {
+            written += TpmSt::AttestCreation.try_marshal(&mut buffer[written..])?;
+        } else {
+            written += self.rc.try_marshal(&mut buffer[written..])?;
+        }
+        written += self.hierarchy.try_marshal(&mut buffer[written..])?;
+        written += self.digest.try_marshal(&mut buffer[written..])?;
+        Ok(written)
+    }
+    fn try_unmarshal(buffer: &mut UnmarshalBuf) -> TpmRcResult<Self> {
+        let tag = u32::try_unmarshal(buffer)?;
+        let rc = if tag == TpmSt::AttestCreation.0 as u32 {
+            TpmRc::Success
+        } else {
+            TpmRc(tag)
+        };
+        Ok(TpmtTkCreation {
+            rc: rc,
+            hierarchy: TpmHandle::try_unmarshal(buffer)?,
+            digest: Tpm2bDigest::try_unmarshal(buffer)?,
+        })
+    }
 }
 
 // Helper for splitting up ranges of an unmarshal buffer.
