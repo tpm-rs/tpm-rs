@@ -23,7 +23,6 @@ have the authority to bind that organization to these policies.
 | bradlitterell | Microsoft | yes |
 | chrisfenner | Google | yes |
 | a-pronin | Google | yes |
-| trent-reed | Google | yes |
 | jettr | Google | yes |
 | oddcoder | Huawei | yes |
 
