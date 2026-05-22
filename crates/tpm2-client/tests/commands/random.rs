@@ -2,7 +2,7 @@ use crate::get_started_tpm;
 use tpm2_rs_base::TpmtHa;
 use tpm2_rs_base::commands::GetRandomCmd;
 use tpm2_rs_base::constants::TPM2_SHA256_DIGEST_SIZE;
-use tpm2_rs_client::run_command;
+use tpm2_client::run_command;
 
 #[test]
 fn test_get_random_duplicate_value_trap() {

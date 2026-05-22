@@ -13,8 +13,8 @@ use std::net::Ipv4Addr;
 use tempfile::tempdir;
 use tpm2_rs_base::commands::StartupCmd;
 use tpm2_rs_base::constants::TpmSu;
-use tpm2_rs_client::connection::TcpSimulator;
-use tpm2_rs_client::run_command;
+use tpm2_client::connection::TcpSimulator;
+use tpm2_client::run_command;
 
 // Include the command-specific tests
 mod commands;

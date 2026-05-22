@@ -1,5 +1,5 @@
 [package]
-name = "tpm2-rs-client"
+name = "tpm2-client"
 # Inherit from Workspace Settings
 version.workspace = true
 edition.workspace = true

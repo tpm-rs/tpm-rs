@@ -2,7 +2,7 @@ use crate::get_started_tpm;
 use tpm2_rs_base::commands::GetCapabilityCmd;
 use tpm2_rs_base::constants::{TpmCap, TpmPt};
 use tpm2_rs_base::{TpmlTaggedTpmProperty, TpmsCapabilityData, TpmsTaggedProperty};
-use tpm2_rs_client::run_command;
+use tpm2_client::run_command;
 
 #[test]
 fn test_get_capability_manufacturer_id() {

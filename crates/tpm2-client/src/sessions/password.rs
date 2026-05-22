@@ -9,7 +9,7 @@ use tpm2_rs_base::{
 ///
 /// # Usage:
 /// ```
-/// use tpm2_rs_client::sessions::PasswordSession;
+/// use tpm2_client::sessions::PasswordSession;
 ///
 /// let password1 = PasswordSession::new("hello world").unwrap(); // from a string
 /// let password2 = PasswordSession::new(&[1, 2, 3, 4, 5, 6]).unwrap(); // from a byte array
@@ -32,7 +32,7 @@ impl PasswordSession {
     ///
     /// ```
     /// use tpm2_rs_base::{errors::TpmRcError, Tpm2bAuth, Tpm2bSimple};
-    /// use tpm2_rs_client::sessions::PasswordSession;
+    /// use tpm2_client::sessions::PasswordSession;
     ///
     /// let bad_password = [0u8; Tpm2bAuth::MAX_BUFFER_SIZE + 1];
     /// assert_eq!(
