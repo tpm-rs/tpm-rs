@@ -16,7 +16,6 @@ open-enum = { workspace = true }
 safe-discriminant = { workspace = true }
 tpm2-rs-errors = { workspace = true }
 tpm2-rs-marshalable = { workspace = true }
-tpm2-rs-unionify = { workspace = true }
 
 [features]
 # Implement conversions/traits which require std

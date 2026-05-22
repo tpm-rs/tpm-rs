@@ -12,7 +12,6 @@ use open_enum::open_enum;
 use safe_discriminant::Discriminant;
 pub use tpm2_rs_errors as errors;
 pub use tpm2_rs_marshalable as marshal;
-use tpm2_rs_unionify::UnionSize;
 
 pub mod commands;
 pub mod constants;
@@ -568,7 +567,7 @@ const TPML_DIGEST_MAX_DIGESTS: usize = 8;
 pub struct TpmsEmpty;
 
 #[repr(C, u16)]
-#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable, UnionSize)]
+#[derive(Clone, Copy, PartialEq, Debug, Discriminant, Marshalable)]
 pub enum TpmtHa {
     Sha1([u8; constants::TPM2_SHA_DIGEST_SIZE as usize]) = TpmAlgId::SHA1.0,
     Sha256([u8; constants::TPM2_SHA256_DIGEST_SIZE as usize]) = TpmAlgId::SHA256.0,
@@ -577,17 +576,25 @@ pub enum TpmtHa {
     Sm3_256([u8; constants::TPM2_SM3_256_DIGEST_SIZE as usize]) = TpmAlgId::SM3256.0,
 }
 
+impl TpmtHa {
+    /// The maximum digest size (TPM2_SHA512_DIGEST_SIZE)
+    pub const UNION_SIZE: usize = 64;
+}
+
 impl Default for TpmtHa {
     fn default() -> Self {
         TpmtHa::Sha1([0; constants::TPM2_SHA1_DIGEST_SIZE as usize])
     }
 }
 
-#[derive(UnionSize)]
 #[repr(C, u16)]
 enum TpmuName {
     Digest(TpmtHa),
     Handle(TpmHandle),
+}
+
+impl TpmuName {
+    pub const UNION_SIZE: usize = size_of::<TpmtHa>();
 }
 
 #[repr(C)]
@@ -831,11 +838,22 @@ pub struct Tpm2bDerive {
     size: u16,
     buffer: [u8; size_of::<TpmsDerive>()],
 }
-#[derive(UnionSize)]
 #[repr(C, u16)]
 enum TpmuSensitiveCreate {
     Create([u8; constants::TPM2_MAX_SYM_DATA as usize]),
     Derive(TpmsDerive),
+}
+
+impl TpmuSensitiveCreate {
+    pub const UNION_SIZE: usize = {
+        let size_create = constants::TPM2_MAX_SYM_DATA as usize;
+        let size_derive = size_of::<TpmsDerive>();
+        if size_create > size_derive {
+            size_create
+        } else {
+            size_derive
+        }
+    };
 }
 
 #[repr(C)]
@@ -901,13 +919,32 @@ pub struct Tpm2bEccPoint {
     point: [u8; size_of::<TpmsEccPoint>()],
 }
 
-#[derive(UnionSize)]
 #[repr(C, u16)]
 enum TpmuEncryptedSecret {
     Ecc([u8; size_of::<TpmsEccPoint>()]),
     Rsa([u8; constants::TPM2_MAX_RSA_KEY_BYTES as usize]),
     Symmetric([u8; size_of::<Tpm2bDigest>()]),
     KeyedHash([u8; size_of::<Tpm2bDigest>()]),
+}
+
+impl TpmuEncryptedSecret {
+    pub const UNION_SIZE: usize = {
+        let ecc = size_of::<TpmsEccPoint>();
+        let rsa = constants::TPM2_MAX_RSA_KEY_BYTES as usize;
+        let symmetric = size_of::<Tpm2bDigest>();
+        let keyedhash = size_of::<Tpm2bDigest>();
+        let mut max = ecc;
+        if rsa > max {
+            max = rsa;
+        }
+        if symmetric > max {
+            max = symmetric;
+        }
+        if keyedhash > max {
+            max = keyedhash;
+        }
+        max
+    };
 }
 
 #[repr(C)]

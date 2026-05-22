@@ -22,7 +22,6 @@ tpm2-rs-marshalable = { workspace = true }
 zerocopy = { workspace = true, optional = true }
 
 [dev-dependencies]
-tpm2-rs-unionify = { workspace = true }
 tempfile = { workspace = true }
 
 [[test]]
