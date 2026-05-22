@@ -12,4 +12,8 @@ license.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+# Implement conversions/traits which require std
+std = []
+
 [dependencies]

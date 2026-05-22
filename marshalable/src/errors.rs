@@ -1,5 +1,5 @@
 use core::fmt;
-use tpm2_rs_errors::{TpmRcError, TssError};
+use tpm2::errors::{TpmRcError, TssError};
 
 /// The [`Result`] represents success or [`Error`] failure, which is used for unmarshal/marshal functionality.
 pub type Result<T> = core::result::Result<T, Error>;

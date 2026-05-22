@@ -3,7 +3,7 @@ use super::*;
 // Provide the tpm2_rs_marshal path to root to enable derive macro to work properly
 use crate as tpm2_rs_marshalable;
 use core::result::Result;
-use tpm2_rs_errors::TpmRcError;
+use tpm2::errors::TpmRcError;
 
 macro_rules! impl_test_scalar {
     ($T:ty, $I:expr, $V:expr) => {

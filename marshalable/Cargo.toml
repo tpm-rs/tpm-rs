@@ -12,5 +12,5 @@ categories.workspace = true
 
 [dependencies]
 safe-discriminant = { workspace = true }
-tpm2-rs-errors = { workspace = true }
+tpm2 = { workspace = true }
 tpm2-rs-marshalable-derive = { workspace = true }

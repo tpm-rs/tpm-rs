@@ -10,7 +10,7 @@ use core::convert::{From, TryFrom};
 use core::mem::size_of;
 use open_enum::open_enum;
 use safe_discriminant::Discriminant;
-pub use tpm2_rs_errors as errors;
+pub use tpm2::errors;
 pub use tpm2_rs_marshalable as marshal;
 
 pub mod commands;
