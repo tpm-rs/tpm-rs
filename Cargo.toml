@@ -6,10 +6,10 @@ members = [
     "base",
     "crates/tpm2",
     "crates/tpm2-client",
+    "crates/tpm2-impl",
     "errors",
     "marshalable",
     "marshalable-derive",
-    "server",
 ]
 
 # Package keys that should be used by all packages.
@@ -44,9 +44,9 @@ tpm2-rs-base = { path = "base" }
 tpm2-rs-errors = { path = "errors" }
 tpm2-rs-marshalable = { path = "marshalable" }
 tpm2-rs-marshalable-derive = { path = "marshalable-derive" }
-tpm2-rs-server = { path = "server" }
 tpm2 = { path = "crates/tpm2" }
 tpm2-client = { path = "crates/tpm2-client" }
+tpm2-impl = { path = "crates/tpm2-impl" }
 
 [profile.release]
 lto = true # default is lto = false
