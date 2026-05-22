@@ -1,11 +1,11 @@
 //! `TPMT_` tagged union types
 
+use TpmiAlgHash::*;
+
 use crate::{
     Alg, Limits, Marshal, TpmiAlgHash, Unmarshal, UnmarshalArray,
     errors::{MarshalError, UnmarshalError},
 };
-
-use TpmiAlgHash::*;
 /// `TPMT_HA`
 ///
 /// There is no type for `TPMU_HA` in this crate, use this type instead.

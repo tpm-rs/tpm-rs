@@ -1,10 +1,11 @@
 //! Submodule defining traits used for Marshalling and Unmarshalling
 
+use core::convert::Infallible;
+
 use crate::{
     TpmiAlgHash,
     errors::{MarshalError, UnmarshalError},
 };
-use core::convert::Infallible;
 
 /// Allows an implementation to restrict which values it can [`Marshal`] and
 /// [`Unmarshal`].

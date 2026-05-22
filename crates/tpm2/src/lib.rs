@@ -1,6 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
-// Copyright (c) 2023-2025 Trusted Computing Group and TPM-RS Project Devolopers
-
 //! # Trusted Platform Module 2.0 (TPM2) Structures and Commands
 //!
 //! This base crate provides:
@@ -54,89 +51,22 @@
 //! [dev-dependencies]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#development-dependencies
 #![no_std]
 
+// We use submodules for code organization, but mostly present a flat API to
+// external users, with the exception of the commands and errors modules.
 pub mod commands;
-use core::convert::Infallible;
+mod constants;
+pub mod errors;
+mod marshal;
+mod tpm2b;
+mod tpmi;
+mod tpmt;
 
 pub use commands::Command;
-
-pub mod errors;
-
-// We use submodules for code organization, but present a flat API to external users.
-mod marshal;
+pub use constants::*;
 pub use marshal::*;
-mod tpm2b;
 pub use tpm2b::*;
-mod tpmi;
 pub use tpmi::*;
-mod tpmt;
 pub use tpmt::*;
-
-/// Algorithms defined by either the `TPM_ALG_ID` listing in Part 2 of the
-/// [TPM2 Specification] or the `TCG_ALG_ID` list in the
-/// [TCG Algorithm Registry](https://trustedcomputinggroup.org/resource/tcg-algorithm-registry/).
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct Alg(pub u16);
-
-// We do this for naming consistnancy with the other algorithm enums.
-// TODO: Should this just be an enum?
-#[allow(non_upper_case_globals)]
-impl Alg {
-    pub const Rsa: Self = Self(0x0001);
-    pub const Tdes: Self = Self(0x0003);
-    pub const Sha1: Self = Self(0x0004);
-    pub const Hmac: Self = Self(0x0005);
-    pub const Aes: Self = Self(0x0006);
-    pub const Mgf1: Self = Self(0x0007);
-    pub const KeyedHash: Self = Self(0x0008);
-    pub const Null: Self = Self(0x0010);
-    pub const Xor: Self = Self(0x000A);
-    pub const Sha256: Self = Self(0x000B);
-    pub const Sha384: Self = Self(0x000C);
-    pub const Sha512: Self = Self(0x000D);
-    pub const Sm3_256: Self = Self(0x0012);
-    pub const Sm4: Self = Self(0x0013);
-    pub const RsaSsa: Self = Self(0x0014);
-    pub const RsaEs: Self = Self(0x0015);
-    pub const RsaPss: Self = Self(0x0016);
-    pub const Oaep: Self = Self(0x0017);
-    pub const Ecdsa: Self = Self(0x0018);
-    pub const Ecdh: Self = Self(0x0019);
-    pub const Ecdaa: Self = Self(0x001A);
-    pub const Sm2: Self = Self(0x001B);
-    pub const EcSchnorr: Self = Self(0x001C);
-    pub const Ecmqv: Self = Self(0x001D);
-    pub const Kdf1Sp800_56A: Self = Self(0x0020);
-    pub const Kdf2: Self = Self(0x0021);
-    pub const Kdf1Sp800_108: Self = Self(0x0022);
-    pub const Ecc: Self = Self(0x0023);
-    pub const SymCipher: Self = Self(0x0025);
-    pub const Camellia: Self = Self(0x0026);
-    pub const Sha3_256: Self = Self(0x0027);
-    pub const Sha3_384: Self = Self(0x0028);
-    pub const Sha3_512: Self = Self(0x0029);
-    pub const Ctr: Self = Self(0x0040);
-    pub const Ofb: Self = Self(0x0041);
-    pub const Cbc: Self = Self(0x0042);
-    pub const Cfb: Self = Self(0x0043);
-    pub const Ecb: Self = Self(0x0044);
-}
-
-impl MarshalArray for Alg {
-    const SIZE: usize = 2;
-    type Array = [u8; 2];
-    #[inline(always)]
-    fn marshal_array(&self, arr: &mut [u8; Self::SIZE]) {
-        self.0.marshal_array(arr)
-    }
-}
-impl UnmarshalArray for Alg {
-    type Error = Infallible;
-    #[inline(always)]
-    fn unmarshal_array(arr: &[u8; Self::SIZE]) -> Result<Self, Infallible> {
-        Ok(Self(u16::unmarshal_array(arr)?))
-    }
-}
 
 #[cfg(test)]
 mod test {
