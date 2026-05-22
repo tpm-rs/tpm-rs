@@ -1,0 +1,15 @@
+[package]
+name = "tpm2"
+description = "Core types and traits for communicating with a TPM 2.0"
+
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
