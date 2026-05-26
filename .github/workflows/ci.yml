@@ -33,7 +33,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build container and run simulator tests in it
-        run: cd client && docker compose build && docker compose run simulator_tests
+        run: cd crates/tpm2-client && docker compose build && docker compose run simulator_tests
 
   fmt:
     name: Rustfmt

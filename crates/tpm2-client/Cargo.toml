@@ -1,0 +1,32 @@
+[package]
+name = "tpm2-client"
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["connection-tcp"]
+
+# Enable the TCP TPM connection (e.g. for the TPM simulator)
+connection-tcp = ["dep:zerocopy", "tpm2-rs-base/std"]
+
+[dependencies]
+tpm2-rs-base = { workspace = true }
+tpm2-rs-marshalable = { workspace = true }
+zerocopy = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[test]]
+name = "simulator"
+path = "tests/simulator.rs"
+# Do not test by default
+test = false
+required-features = ["connection-tcp"]

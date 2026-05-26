@@ -1,5 +1,7 @@
 [package]
-name = "tpm2-rs-base"
+name = "tpm2"
+description = "Core types and traits for communicating with a TPM 2.0"
+
 # Inherit from Workspace Settings
 version.workspace = true
 edition.workspace = true
@@ -10,13 +12,8 @@ license.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[dependencies]
-bitflags = { workspace = true }
-open-enum = { workspace = true }
-safe-discriminant = { workspace = true }
-tpm2 = { workspace = true }
-tpm2-rs-marshalable = { workspace = true }
-
 [features]
 # Implement conversions/traits which require std
-std = ["tpm2/std"]
+std = []
+
+[dependencies]

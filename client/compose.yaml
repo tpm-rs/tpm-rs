@@ -1,6 +1,0 @@
-services:
-  simulator_tests:
-    build: .
-    volumes:
-      - ../:/tpm-rs
-    command: bash -c 'cargo test -p tpm2-rs-client --test simulator'
