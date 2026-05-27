@@ -68,3 +68,28 @@ fn get_started_tpm() -> TcpSimulator {
     run_command(&startup, simulator.connection_mut()).unwrap();
     simulator
 }
+
+#[test]
+fn run_simulator_for_go_tests() {
+    let mut simulator = spawn_simulator_and_connect().unwrap();
+
+    let cmd_port = simulator.tpm_port();
+    let plat_port = simulator.plat_port();
+
+    // Write dynamic ports for go_tests (relative to client/ directory)
+    std::fs::write("../../go_tests/command.port", cmd_port.to_string()).unwrap();
+    std::fs::write("../../go_tests/platform.port", plat_port.to_string()).unwrap();
+
+    simulator.connection_mut().session_end().unwrap();
+
+    // Execute the Go tests automatically
+    println!("Executing go-tpm integration tests...");
+    let status = std::process::Command::new("go")
+        .args(&["test", "-v", "-count=1", "github.com/google/go-tpm/tpm2/test/..."])
+        .current_dir("../../go_tests")
+        .status()
+        .expect("failed to execute go test");
+
+    println!("{:?}", status);
+}
+

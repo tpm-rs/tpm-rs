@@ -340,6 +340,16 @@ impl TcpConnection {
         self.locality = locality;
     }
 
+    /// Gets the peer port of the TPM connection.
+    pub fn tpm_port(&self) -> u16 {
+        self.tpm_tcp.peer_addr().unwrap().port()
+    }
+
+    /// Gets the peer port of the Platform connection.
+    pub fn plat_port(&self) -> u16 {
+        self.plat_tcp.peer_addr().unwrap().port()
+    }
+
     /// Ends the session with the TPM simulator. This causes the simulator to
     /// listen for new incoming connections.
     ///
@@ -712,6 +722,16 @@ impl TcpSimulator {
     /// Returns a mutable reference to the underlying TCP connection.
     pub fn connection_mut(&mut self) -> &mut TcpConnection {
         &mut self.conn
+    }
+
+    /// Returns the TPM port of the running simulator.
+    pub fn tpm_port(&self) -> u16 {
+        self.conn.tpm_port()
+    }
+
+    /// Returns the Platform port of the running simulator.
+    pub fn plat_port(&self) -> u16 {
+        self.conn.plat_port()
     }
 }
 

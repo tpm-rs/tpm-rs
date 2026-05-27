@@ -85,3 +85,13 @@ WORKDIR /tpm-rs
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN cargo --version
+
+# Install Go 1.24
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then GO_ARCH="amd64"; else GO_ARCH="arm64"; fi && \
+    wget https://go.dev/dl/go1.24.0.linux-${GO_ARCH}.tar.gz && \
+    rm -rf /usr/local/go && \
+    tar -C /usr/local -xzf go1.24.0.linux-${GO_ARCH}.tar.gz && \
+    rm go1.24.0.linux-${GO_ARCH}.tar.gz
+ENV PATH="/usr/local/go/bin:${PATH}"
+RUN go version

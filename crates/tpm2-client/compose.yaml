@@ -3,4 +3,5 @@ services:
     build: .
     volumes:
       - ../../:/tpm-rs
+      - ../../../go-tpm:/go-tpm
     command: bash -c 'cargo test -p tpm2-client --test simulator'
