@@ -18,7 +18,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 homepage = "https://github.com/tpm-rs"
 repository = "https://github.com/tpm-rs/tpm-rs"
 license = "Apache-2.0"

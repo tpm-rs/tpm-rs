@@ -1,145 +1,171 @@
-//! Submodule defining traits used for Marshalling and Unmarshalling
+//! Marshalling and Unmarshalling traits
+use core::fmt;
 
-use core::convert::Infallible;
+use crate::errors::UnmarshalError;
 
-use crate::{
-    TpmiAlgHash,
-    errors::{MarshalError, UnmarshalError},
-};
-
-/// Allows an implementation to restrict which values it can [`Marshal`] and
-/// [`Unmarshal`].
+/// A type that can be marshalled into a destination byte buffer.
 ///
-/// This trait enables different implementations to share the same core type
-/// definitions while selectively supporting only a subset of variants. This
-/// selection can be enforced either at compile time or at runtime.
+/// [`Self::MaxBuffer`] is always [`[u8; Self::MAX_SIZE]`](Self::MAX_SIZE),
+/// so types should implement this trait like:
+/// ```
+/// # use tpm2::Marshal;
+/// # const fn calculate_foo_max_size() -> usize { 42 }
+/// struct Foo;
 ///
-/// This approach is important for two main reasons:
+/// impl Marshal for Foo {
+///     const MAX_SIZE: usize = calculate_foo_max_size();
+///     type MaxBuffer = [u8; Self::MAX_SIZE];
 ///
-/// 1.  **ABI Stability**: It avoids the many compile-time `#define`s found in C
-///     implementations. Those defines often alter structure layouts, leading to
-///     API and ABI incompatibilities between libraries compiled with different
-///     options.
-///
-/// 2.  **Code Size**: Restricting which algorithms and types the marshaling code
-///     must support can significantly reduce the final binary size, which is
-///     critical for constrained environments.
-pub trait Limits: Copy {
-    fn supports_hash(self, h: TpmiAlgHash) -> bool;
-
-    fn max_digest_size(self) -> usize {
-        for &h in TpmiAlgHash::BY_SIZE_DESC {
-            if self.supports_hash(h) {
-                return h.digest_size();
-            }
-        }
-        0
-    }
-}
-
-/// A type that can be marshalled into a destincation byte buffer
+///     fn marshal(&self, dst: &mut [u8; Self::MAX_SIZE]) -> usize {
+///         todo!()
+///     }
+/// }
+/// ```
 pub trait Marshal {
-    fn marshal<'dst>(
-        &self,
-        limits: impl Limits,
-        buf: &'dst mut [u8],
-    ) -> Result<&'dst mut [u8], MarshalError>;
-    fn marshaled_size(&self) -> usize;
-    fn marshaled_size_max(limits: impl Limits) -> usize;
+    /// The maximum possible size (in bytes) of this structure when encoded.
+    const MAX_SIZE: usize;
+    /// [`[u8; Self::MAX_SIZE]`](Self::MAX_SIZE)
+    ///
+    /// However, this has to be part of the trait definition until
+    /// [`#![feature(min_generic_const_args)]`](https://doc.rust-lang.org/nightly/unstable-book/language-features/min-generic-const-args.html#min_generic_const_args)
+    /// is finalized.
+    type MaxBuffer;
+
+    /// Marshals the structure into the provided array, which will always be
+    /// `&mut`[`[u8; Self::MAX_SIZE]`](Self::MAX_SIZE).
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize;
 }
 
-/// A type that can be unmarshalled from a source byte buffer
-pub trait Unmarshal<'src> {
-    fn unmarshal(
-        &mut self,
-        limits: impl Limits,
-        buf: &'src [u8],
-    ) -> Result<&'src [u8], UnmarshalError>;
-}
+/// A type that can be unmarshalled from a source byte buffer.
+pub trait Unmarshal<'a> {
+    /// Unmarshals the structure from the provided byte buffer, modifying the
+    /// structure in-place.
+    ///
+    /// On success, returns the remaining, unused bytes from `src`.
+    fn unmarshal_ref(&mut self, src: &'a [u8]) -> Result<&'a [u8], UnmarshalError>;
 
-/// A type that has a consistent size when marshalled
-pub trait MarshalArray: Marshal {
-    const SIZE: usize;
-    /// This type will always be `[u8; Self::SIZE]`. However, until the
-    /// [`min_generic_const_args` feature](https://doc.rust-lang.org/nightly/unstable-book/language-features/min-generic-const-args.html#min_generic_const_args)
-    /// is stabilized, we need this type to write the signature of
-    /// [`marshal_array`][MarshalArray::marshal_array].
-    type Array;
-    /// Infallible as we statically know the buffer is long enough
-    fn marshal_array(&self, arr: &mut Self::Array);
-}
-// Blanket impl so a type only needs to implement `marshal_array()`.
-impl<T: MarshalArray<Array = [u8; N]>, const N: usize> Marshal for T {
+    /// Returns a value unmarshaled from `*src`.
+    ///
+    /// On success, `*src` will be the remaining, unused bytes. On failure,
+    /// `*src` will be unmodified.
     #[inline(always)]
-    fn marshal<'dst>(
-        &self,
-        _: impl Limits,
-        buf: &'dst mut [u8],
-    ) -> Result<&'dst mut [u8], MarshalError> {
-        let (arr, buf) = buf.split_first_chunk_mut().ok_or(MarshalError)?;
-        self.marshal_array(arr);
-        Ok(buf)
-    }
-    #[inline(always)]
-    fn marshaled_size(&self) -> usize {
-        Self::SIZE
-    }
-    #[inline(always)]
-    fn marshaled_size_max(_: impl Limits) -> usize {
-        Self::SIZE
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError>
+    where
+        Self: Default,
+    {
+        let mut v = Self::default();
+        *src = v.unmarshal_ref(src)?;
+        Ok(v)
     }
 }
 
-/// Similar to [`MarshalArray`] but for unmarshalling
-///
-/// This trait doesn't have a `'src` lifetime parameter like [`Unmarshal`], as
-/// types with fixed [`SIZE`][`MarshalArray::SIZE`] don't need to retain
-/// references to the source buffer.
-pub trait UnmarshalArray: Sized + MarshalArray + for<'src> Unmarshal<'src>
-where
-    UnmarshalError: From<Self::Error>,
-{
-    type Error;
-    /// This can still fail if the source buffer has a bad value, but we know
-    /// we have a buffer of the correct length.
-    fn unmarshal_array(arr: &Self::Array) -> Result<Self, Self::Error>;
+/// A wrapper type for numeric values stored in big-endian byte order.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[repr(transparent)]
+pub(crate) struct BE<T>(pub(crate) T);
+
+macro_rules! impl_unmarshal_ref {
+    () => {
+        #[inline(always)]
+        fn unmarshal_ref(&mut self, mut src: &'a [u8]) -> Result<&'a [u8], UnmarshalError> {
+            *self = Unmarshal::unmarshal(&mut src)?;
+            Ok(src)
+        }
+    };
 }
-// Blanket impl so a type only needs to implement `unmarshal_array()`.
-impl<'src, T: UnmarshalArray<Array = [u8; N]>, const N: usize> Unmarshal<'src> for T
-where
-    UnmarshalError: From<T::Error>,
-{
+
+impl<const N: usize> Marshal for [u8; N] {
+    const MAX_SIZE: usize = N;
+    type MaxBuffer = [u8; N];
     #[inline(always)]
-    fn unmarshal(&mut self, _: impl Limits, buf: &'src [u8]) -> Result<&'src [u8], UnmarshalError> {
-        let (arr, buf) = buf.split_first_chunk().ok_or(UnmarshalError)?;
-        *self = Self::unmarshal_array(arr)?;
-        Ok(buf)
+    fn marshal(&self, dst: &mut [u8; N]) -> usize {
+        *dst = *self;
+        N
     }
 }
 
-/// Implement [`MarshalArray`] and [`UnmarshalArray`] for integer types
+/// Unmarshals a reference to a fixed-size byte array `&'a [u8; N]` from `src`.
+#[inline(always)]
+pub(crate) fn unmarshal_array_ref<'a, const N: usize>(
+    src: &mut &'a [u8],
+) -> Result<&'a [u8; N], UnmarshalError> {
+    let (arr, rest) = src.split_first_chunk().ok_or(UnmarshalError)?;
+    *src = rest;
+    Ok(arr)
+}
+
+impl<'a, const N: usize> Unmarshal<'a> for [u8; N] {
+    #[inline(always)]
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        unmarshal_array_ref(src).copied()
+    }
+    #[inline(always)]
+    fn unmarshal_ref(&mut self, mut src: &'a [u8]) -> Result<&'a [u8], UnmarshalError> {
+        *self = *unmarshal_array_ref(&mut src)?;
+        Ok(src)
+    }
+}
+impl<'a, const N: usize> Unmarshal<'a> for &'a [u8; N] {
+    #[inline(always)]
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        unmarshal_array_ref(src)
+    }
+    #[inline(always)]
+    fn unmarshal_ref(&mut self, mut src: &'a [u8]) -> Result<&'a [u8], UnmarshalError> {
+        *self = unmarshal_array_ref(&mut src)?;
+        Ok(src)
+    }
+}
+
 macro_rules! impl_ints { ($($T: ty),+) => { $(
-    impl MarshalArray for $T {
-        const SIZE: usize = size_of::<Self>();
-        type Array = [u8; size_of::<Self>()];
-        fn marshal_array(&self, arr: &mut [u8; Self::SIZE]) {
-            *arr = self.to_be_bytes();
+    impl Marshal for $T {
+        const MAX_SIZE: usize = size_of::<Self>();
+        type MaxBuffer = [u8; Self::MAX_SIZE];
+
+        #[inline(always)]
+        fn marshal(&self, dst: &mut [u8; Self::MAX_SIZE]) -> usize {
+            self.to_be_bytes().marshal(dst)
         }
     }
-    impl UnmarshalArray for $T {
-        type Error = Infallible;
-        fn unmarshal_array(arr: &[u8; Self::SIZE]) -> Result<Self, Infallible> {
-            Ok(Self::from_be_bytes(*arr))
+    impl<'a> Unmarshal<'a> for $T {
+        #[inline(always)]
+        fn unmarshal(src: &mut &[u8]) -> Result<Self, UnmarshalError> {
+            Unmarshal::unmarshal(src).map(Self::from_be_bytes)
+        }
+        impl_unmarshal_ref!();
+    }
+
+    impl BE<$T> {
+        #[inline(always)]
+        #[allow(dead_code)]
+        pub const fn new(t: $T) -> Self {
+            Self(t.to_be())
+        }
+        #[inline(always)]
+        pub const fn get(self) -> $T {
+            <$T>::from_be(self.0)
+        }
+    }
+    impl Marshal for BE<$T> {
+        const MAX_SIZE: usize = size_of::<Self>();
+        type MaxBuffer = [u8; Self::MAX_SIZE];
+
+        #[inline(always)]
+        fn marshal(&self, dst: &mut [u8; Self::MAX_SIZE]) -> usize {
+            self.0.to_ne_bytes().marshal(dst)
+        }
+    }
+    impl<'a> Unmarshal<'a> for BE<$T> {
+        #[inline(always)]
+        fn unmarshal(src: &mut &[u8]) -> Result<Self, UnmarshalError> {
+            Ok(Self(<$T>::from_ne_bytes(Unmarshal::unmarshal(src)?)))
+        }
+        impl_unmarshal_ref!();
+    }
+    impl fmt::Debug for BE<$T> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.get().fmt(f)
         }
     }
 )+ } }
 impl_ints!(u8, u16, u32, u64, i8, i16, i32, i64);
-
-impl<const N: usize> MarshalArray for [u8; N] {
-    const SIZE: usize = N;
-    type Array = [u8; N];
-    #[inline(always)]
-    fn marshal_array(&self, arr: &mut [u8; N]) {
-        *arr = *self;
-    }
-}
