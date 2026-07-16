@@ -21,8 +21,6 @@
 //! (e.g., [`Marshal`] or [`Command`]) or have semantics differing from those in
 //! the spec (e.g., [`Alg`]) will not have a `Tpm` prefix.
 //!
-//! will not have a `Tpm` prefix.
-//!
 //! [TPM2 Specification]: https://trustedcomputinggroup.org/work-groups/trusted-platform-module/
 //!
 //! ## Platform Support
@@ -49,32 +47,30 @@
 //!
 //! [build-dependencies]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#build-dependencies
 //! [dev-dependencies]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#development-dependencies
+//!
+//! ## Submodule Organization
+//!
+//! Internally, we use submodules for code organization, but mostly present a
+//! flat API to external users, with the exception of the [`commands`] and
+//! [`errors`] submodules.
 #![no_std]
 
-// We use submodules for code organization, but mostly present a flat API to
-// external users, with the exception of the commands and errors modules.
 pub mod commands;
-mod constants;
-pub mod errors;
-mod marshal;
-mod tpm2b;
-mod tpmi;
-mod tpmt;
-
 pub use commands::Command;
-pub use constants::*;
+pub mod errors;
+
+// Reexport for a flat API.
+mod marshal;
 pub use marshal::*;
+mod constants;
+pub use constants::*;
+mod tpm2b;
 pub use tpm2b::*;
+mod tpmi;
 pub use tpmi::*;
+mod tpmt;
 pub use tpmt::*;
 
-#[cfg(test)]
-mod test {
-    use crate::TpmtHa;
-
-    #[test]
-    fn size_of_tpmt_ha() {
-        assert_eq!(size_of::<TpmtHa>(), 2 * size_of::<usize>());
-        assert_eq!(size_of::<Option<TpmtHa>>(), 2 * size_of::<usize>());
-    }
-}
+/// Implementations of [`Marshal`], [`Unmarshal`], and [`Command`] which will
+/// eventually be moved to procedural macros.
+mod impls;

@@ -6,7 +6,7 @@
 //! Command structs appear without the leading `TPM2_`. For example, the
 //! `TPM2_GetRandom` command in the spec corresponds to [`GetRandom`].
 //!
-//! Using the [`Command::Response`] associated type is preffered to using the
+//! Using the [`Command::Response`] associated type is preferred to using the
 //! standalone type in the [`responses`] sub-module. For example, when referring
 //! to the TPM2_GetRandom Response, prefer [`GetRandom::Response`]
 //! for `TPM2_GetRandom` should use ``
@@ -29,12 +29,7 @@ pub trait Command {
 ///
 /// Returns the next `bytesRequested` octets from the random number generator (RNG).
 #[doc(alias("TPM2_GetRandom", "GetRandom_In"))]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct GetRandom {
     pub bytes_requested: u16,
-}
-
-// TODO: Implement these with a proc-macro or macro_rules!
-impl Command for GetRandom {
-    type Response<'a> = responses::GetRandom<'a>;
 }

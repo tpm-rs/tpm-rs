@@ -15,10 +15,6 @@ mod std;
 mod tpm_rc;
 mod tss_rc;
 
-/// Any error which can happen when marshalling
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MarshalError;
-
 /// Any error which can happen when unmarshalling
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnmarshalError;
