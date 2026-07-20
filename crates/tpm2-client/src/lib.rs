@@ -24,7 +24,7 @@ pub fn get_capability<T: Connection<Error: From<TssError>>>(
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshalable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Marshalable)]
 pub struct CmdHeader {
     tag: TpmiStCommandTag,
     size: u32,
@@ -42,7 +42,7 @@ impl CmdHeader {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshalable, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Marshalable)]
 pub struct RespHeader {
     pub tag: TpmSt,
     pub size: u32,

@@ -1,4 +1,5 @@
 /// Error indicating that read would have read past the of of the `TpmReadBuffer`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ReadOutOfBounds;
 
 /// The input request buffer that can be read via random access.
@@ -34,6 +35,7 @@ pub trait TpmReadBuffer {
 }
 
 /// Error indicating that write would have written past the of of the [`TpmWriteBuffer`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WriteOutOfBounds;
 
 /// The output response buffer that can be read and written via random access.

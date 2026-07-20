@@ -6,7 +6,7 @@ use crate::{TpmiYesNo, TpmsCapabilityData};
 
 /// [TPM2.0 1.83] 30.2 TPM2_GetCapability (Command)
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshalable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Marshalable)]
 pub struct GetCapabilityCmd {
     pub capability: TpmCap,
     pub property: TpmPt,
@@ -21,7 +21,7 @@ impl TpmCommand for GetCapabilityCmd {
 
 /// [TPM2.0 1.83] 30.2 TPM2_GetCapability (Response)
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Marshalable)]
 pub struct GetCapabilityResp {
     pub more_data: TpmiYesNo,
     pub capability_data: TpmsCapabilityData,

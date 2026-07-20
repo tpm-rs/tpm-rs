@@ -16,11 +16,11 @@ mod tpm_rc;
 mod tss_rc;
 
 /// Any error which can happen when marshalling
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MarshalError;
 
 /// Any error which can happen when unmarshalling
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UnmarshalError;
 
 impl From<Infallible> for UnmarshalError {
@@ -30,7 +30,7 @@ impl From<Infallible> for UnmarshalError {
 }
 
 /// Specific error type corresponding to TPM_RC_HASH
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HashError;
 
 impl From<HashError> for UnmarshalError {
@@ -44,7 +44,7 @@ pub type TssResult<T> = Result<T, TssError>;
 
 /// A TSS error that can occur at any layer, e.g. Service (`TpmRcError`) and Client errors
 /// can be coalesced into this error type.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct TssError(NonZeroU32);
 impl TssError {
     /// Returns the underlying non-zero `u32`.
@@ -62,7 +62,7 @@ impl fmt::Display for TssError {
 impl Error for TssError {}
 
 /// Error returned when trying to convert `0` into `TssError`.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TssErrorCannotBeZero;
 
 impl TryFrom<u32> for TssError {

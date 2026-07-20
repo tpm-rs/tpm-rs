@@ -6,7 +6,7 @@ use crate::constants::TpmCc;
 
 /// [TPM2.0 1.83] 16.1 TPM2_GetRandom (Command)
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Marshalable)]
 pub struct GetRandomCmd {
     pub bytes_requested: u16,
 }
@@ -18,7 +18,7 @@ impl TpmCommand for GetRandomCmd {
 }
 /// [TPM2.0 1.83] 16.1 TPM2_GetRandom (Response)
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Debug, Marshalable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Marshalable)]
 pub struct GetRandomResp {
     pub random_bytes: Tpm2bDigest,
 }

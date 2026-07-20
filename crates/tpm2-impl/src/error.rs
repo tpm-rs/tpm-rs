@@ -3,7 +3,7 @@ use core::{
     fmt::{Debug, Display},
 };
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ServerError {
     DrbgError,
 }

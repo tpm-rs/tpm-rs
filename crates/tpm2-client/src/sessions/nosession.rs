@@ -5,8 +5,8 @@ use tpm2_rs_base::{TpmsAuthCommand, TpmsAuthResponse, errors::TssResult};
 /// making it unsuitable for use as a session. Its primary purpose is to serve
 /// as a placeholder type for the `AuthorizationArea*` traits whenever
 /// necessary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NoSession {
-    #[expect(dead_code, reason = "This prevents having NotSession instances")]
     inaccessible: (),
 }
 

@@ -7,7 +7,7 @@ pub struct InitCmd {}
 
 /// [TPM2.0 1.83] 9.3 TPM2_Startup (Command)
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Marshalable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Marshalable)]
 pub struct StartupCmd {
     pub startup_type: TpmSu,
 }
