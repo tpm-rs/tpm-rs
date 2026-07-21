@@ -1,5 +1,9 @@
 //! # Trusted Platform Module 2.0 (TPM2) Structures and Commands
 //!
+//! <div class="warning">
+//! This code is unstable and there are no guarantees of stability at this time.
+//! </div>
+//!
 //! This base crate provides:
 //!   - Definitions of the TPM2 constants and structures.
 //!   - Definitions of the [TPM2 Commands](commands).
@@ -20,8 +24,6 @@
 //! Conversely, types or items that either do not map to a type in the spec
 //! (e.g., [`Marshal`] or [`Command`]) or have semantics differing from those in
 //! the spec (e.g., [`Alg`]) will not have a `Tpm` prefix.
-//!
-//! will not have a `Tpm` prefix.
 //!
 //! [TPM2 Specification]: https://trustedcomputinggroup.org/work-groups/trusted-platform-module/
 //!

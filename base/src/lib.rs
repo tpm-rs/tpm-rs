@@ -1,3 +1,9 @@
+//! # TPM2 Base Types and Structures
+//!
+//! <div class="warning">
+//! This code is unstable and there are no guarantees of stability at this time.
+//! </div>
+//!
 #![allow(dead_code, clippy::large_enum_variant)]
 #![forbid(unsafe_code)]
 #![no_std]

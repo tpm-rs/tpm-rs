@@ -1,55 +1,51 @@
+//! # Trusted Platform Module 2.0 (TPM2) Client Library
+//!
+//! <div class="warning">
+//! This code is unstable and there are no guarantees of stability at this time.
+//! </div>
+//!
+//! This client crate provides:
+//!   - A [`Connection`] trait for communicating with a TPM
+//!   - Various structs implementing [`Connection`] for specific transports.
+//!   - High-level abstractions for building and sending commands over the
+//!     interface.
+//!
+//! ## Example
+//!
+//! ```rust,no_run
+//! use tpm2_client::{run_command, connection::tcp::TcpConnection};
+//! use tpm2_rs_base::commands::GetRandomCmd;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut tpm = TcpConnection::connect("127.0.0.1", None, None)?;
+//! let cmd = GetRandomCmd{ bytes_requested: 16 };
+//! let resp = run_command(&cmd, &mut tpm)?;
+//! # Ok(())
+//! # }
+//! ```
 #![forbid(unsafe_code)]
 #![no_std]
 
 use connection::Connection;
-use core::mem::size_of;
+use protocol::*;
 use sessions::{AuthorizationArea, Session};
 use tpm2_rs_base::commands::*;
-use tpm2_rs_base::constants::{TpmCc, TpmSt};
-use tpm2_rs_base::errors::{TssError, TssResult, TssTcsError};
+use tpm2_rs_base::constants::TpmSt;
+use tpm2_rs_base::errors::{TssError, TssTcsError};
 use tpm2_rs_base::marshal::{Marshalable, UnmarshalBuf};
-use tpm2_rs_base::{TpmiStCommandTag, TpmsAuthResponse};
 
 pub mod connection;
+pub mod protocol;
 pub mod sessions;
 
-pub const CMD_BUFFER_SIZE: usize = 4096;
-pub const RESP_BUFFER_SIZE: usize = 4096;
-
-pub fn get_capability<T: Connection<Error: From<TssError>>>(
-    tpm: &mut T,
-    command: &GetCapabilityCmd,
-) -> Result<GetCapabilityResp, T::Error> {
-    run_command(command, tpm)
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Marshalable)]
-pub struct CmdHeader {
-    tag: TpmiStCommandTag,
-    size: u32,
-    code: TpmCc,
-}
-impl CmdHeader {
-    fn new(has_sessions: bool, code: TpmCc) -> CmdHeader {
-        let tag = if has_sessions {
-            TpmiStCommandTag::NoSessions
-        } else {
-            TpmiStCommandTag::Sessions
-        };
-        CmdHeader { tag, size: 0, code }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Marshalable)]
-pub struct RespHeader {
-    pub tag: TpmSt,
-    pub size: u32,
-    pub rc: u32,
-}
-
-/// Runs a command with default/unset handles.
+/// Runs a TPM command without sessions or handles over the given connectino.
+///
+/// # Errors
+/// Returns an error when marshaling, the underlying transaction on the
+/// connection, or unmarshaling the response fails.
+///
+/// Note that a `TPM_RC` error in the response header does not translate to an
+/// error in this function.
 pub fn run_command<CmdT: TpmCommand, T: Connection<Error: From<TssError>>>(
     cmd: &CmdT,
     tpm: &mut T,
@@ -57,88 +53,15 @@ pub fn run_command<CmdT: TpmCommand, T: Connection<Error: From<TssError>>>(
     Ok(run_command_with_handles(cmd, CmdT::Handles::default(), (), tpm)?.0)
 }
 
-/// This function serializes the size of the authorization area. `buffer` should
-/// point to the beginning of the authorization area, specifically to the location
-/// where the size of the authorization area will be serialized. The `auth_offset`
-/// indicates the offset to the end of the authorization area. The size to be
-/// serialized is calculated as the difference between the offset and the start
-/// of the buffer, excluding the size of the integer used to store the size.
-fn marshal_auth_size(auth_offset: usize, buffer: &mut [u8]) -> TssResult<usize> {
-    let auth_size = (auth_offset - size_of::<u32>()) as u32;
-    auth_size.try_marshal(buffer)?;
-    Ok(auth_offset)
-}
-
-/// Adds any command sessions to the command buffer.
-pub fn write_command_sessions<
-    X: Session,
-    Y: Session,
-    Z: Session,
-    AA: AuthorizationArea<X, Y, Z>,
->(
-    sessions: &AA,
-    buffer: &mut [u8],
-) -> TssResult<usize> {
-    if sessions.is_empty() {
-        return Ok(0);
-    }
-    let mut auth_offset = size_of::<u32>();
-    let (s1, s2, s3) = sessions.decompose_ref();
-    let Some(s1) = s1 else {
-        return marshal_auth_size(auth_offset, buffer);
-    };
-    auth_offset += s1
-        .get_auth_command()
-        .try_marshal(&mut buffer[auth_offset..])?;
-    let Some(s2) = s2 else {
-        return marshal_auth_size(auth_offset, buffer);
-    };
-    auth_offset += s2
-        .get_auth_command()
-        .try_marshal(&mut buffer[auth_offset..])?;
-    let Some(s3) = s3 else {
-        return marshal_auth_size(auth_offset, buffer);
-    };
-    auth_offset += s3
-        .get_auth_command()
-        .try_marshal(&mut buffer[auth_offset..])?;
-    marshal_auth_size(auth_offset, buffer)
-}
-
-/// Umarshals the response header and checks the contained response code.
-pub fn read_response_header(buffer: &[u8]) -> TssResult<(RespHeader, usize)> {
-    let mut unmarsh = UnmarshalBuf::new(buffer);
-    let resp_header = RespHeader::try_unmarshal(&mut unmarsh)?;
-    if let Ok(error) = TssError::try_from(resp_header.rc) {
-        return TssResult::Err(error);
-    }
-    Ok((resp_header, buffer.len() - unmarsh.len()))
-}
-
-/// Unmarshals any response sessions.
-pub fn read_response_sessions<
-    X: Session,
-    Y: Session,
-    Z: Session,
-    AA: AuthorizationArea<X, Y, Z>,
->(
-    sessions: &AA,
-    buffer: &mut UnmarshalBuf,
-) -> TssResult<()> {
-    let (s1, s2, s3) = sessions.decompose_ref();
-    let Some(s1) = s1 else { return Ok(()) };
-    let auth = TpmsAuthResponse::try_unmarshal(buffer)?;
-    s1.validate_auth_response(&auth)?;
-    let Some(s2) = s2 else { return Ok(()) };
-    let auth = TpmsAuthResponse::try_unmarshal(buffer)?;
-    s2.validate_auth_response(&auth)?;
-    let Some(s3) = s3 else { return Ok(()) };
-    let auth = TpmsAuthResponse::try_unmarshal(buffer)?;
-    s3.validate_auth_response(&auth)?;
-    Ok(())
-}
-
-/// Runs a command with provided handles and sessions.
+/// Runs a TPM command with the provided handles and sessions over the given
+/// connectino.
+///
+/// # Errors
+/// Returns an error when marshaling, the underlying transaction on the
+/// connection, or unmarshaling the response fails.
+///
+/// Note that a `TPM_RC` error in the response header does not translate to an
+/// error in this function.
 pub fn run_command_with_handles<
     CmdT: TpmCommand,
     T: Connection<Error: From<TssError>>,

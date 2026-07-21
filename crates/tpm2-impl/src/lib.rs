@@ -1,3 +1,9 @@
+//! # TPM2 Implementation Core
+//!
+//! <div class="warning">
+//! This code is unstable and there are no guarantees of stability at this time.
+//! </div>
+//!
 #![no_std]
 #![forbid(unsafe_code)]
 #![allow(dead_code)] // rustc >= 1.90.0 (1159e78c4 2025-09-14)

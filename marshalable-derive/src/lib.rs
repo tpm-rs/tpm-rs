@@ -1,3 +1,9 @@
+//! # Proc-macro Derive for TPM2 Marshalable
+//!
+//! <div class="warning">
+//! This code is unstable and there are no guarantees of stability at this time.
+//! </div>
+//!
 #![forbid(unsafe_code)]
 
 use proc_macro2::{Span, TokenStream};

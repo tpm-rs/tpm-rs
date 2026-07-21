@@ -1,9 +1,10 @@
 //! A connection to the TCG TPM 2.0 Simulator over TCP.
 //!
-//! This module provides the [`TcpConnection`] struct, which implements the
-//! [`Connection`] trait for communicating with a TPM simulator. It also
-//! provides a [`TcpSimulator`] struct that manages the lifetime of a TPM
-//! simulator process and a connection to it.
+//! This module provides two types for communicating with the TPM over TCP:
+//!
+//! - The [`TcpConnection`] struct, which implements the [`Connection`] trait.
+//! - A [`TcpSimulator`] struct that manages the lifetime of a TPM simulator
+//!   process and a [`TcpConnection`] to it.
 #![cfg(feature = "connection-tcp")]
 extern crate std;
 
@@ -26,7 +27,7 @@ const SIMULATOR_DEFAULT_TPM_PORT: u16 = 2321;
 /// The default Platform port of the TPM simulator
 const SIMULATOR_DEFAULT_PLATFORM_PORT: u16 = 2322;
 
-/// A connection to a TPM over TCP, designed for use with the TCG TPM 2.0 Simulator.
+/// A TPM connection over TCP, designed for use with the TCG TPM 2.0 Simulator.
 ///
 /// This struct implements the [`Connection`] trait.
 #[derive(Debug)]
@@ -188,8 +189,8 @@ impl TcpConnection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the communication with the Platform port fails or if the
-    /// response terminator is invalid.
+    /// Returns an error if the communication with the Platform port fails or if
+    /// the response terminator is invalid.
     pub fn platform_signal(&mut self, signal: SimulatorPlatformSignal) -> Result<()> {
         let cmd_code = U32::new(signal as u32);
         self.plat_tcp.write_all(cmd_code.as_bytes())?;
@@ -215,8 +216,8 @@ impl TcpConnection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the communication with the Platform port fails or if the
-    /// response terminator is invalid.
+    /// Returns an error if the communication with the Platform port fails or if
+    /// the response terminator is invalid.
     pub fn test_failure_mode(&mut self) -> Result<()> {
         let cmd_code = U32::new(SimulatorPlatformCommandCode::TestFailureMode as u32);
         self.plat_tcp.write_all(cmd_code.as_bytes())?;
@@ -229,8 +230,8 @@ impl TcpConnection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the communication with the Platform port fails or if the
-    /// response terminator is invalid.
+    /// Returns an error if the communication with the Platform port fails or if
+    /// the response terminator is invalid.
     pub fn get_command_response_sizes(&mut self) -> Result<GetCommandResponseSizesResponse> {
         let cmd_code = U32::new(SimulatorPlatformCommandCode::GetCommandResponseSizes as u32);
         self.plat_tcp.write_all(cmd_code.as_bytes())?;
@@ -258,8 +259,8 @@ impl TcpConnection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the communication with the Platform port fails or if the
-    /// response terminator is invalid.
+    /// Returns an error if the communication with the Platform port fails or if
+    /// the response terminator is invalid.
     pub fn act_get_signaled(&mut self, act_handle: u32) -> Result<u32> {
         let cmd_code = U32::new(SimulatorPlatformCommandCode::ActGetSignaled as u32);
         let cmd_payload = &ActGetSignaledRequest {
@@ -289,8 +290,8 @@ impl TcpConnection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the communication with the Platform port fails or if the
-    /// response terminator is invalid.
+    /// Returns an error if the communication with the Platform port fails or if
+    /// the response terminator is invalid.
     pub fn set_firmware_hash(&mut self, hash: u32) -> Result<()> {
         let cmd_code = U32::new(SimulatorPlatformCommandCode::SetFirmwareHash as u32);
         let cmd_payload = &SetFirmwareHashRequest {
@@ -315,8 +316,8 @@ impl TcpConnection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the communication with the Platform port fails or if the
-    /// response terminator is invalid.
+    /// Returns an error if the communication with the Platform port fails or if
+    /// the response terminator is invalid.
     pub fn set_firmware_svn(&mut self, svn: u32) -> Result<()> {
         let cmd_code = U32::new(SimulatorPlatformCommandCode::SetFirmwareSvn as u32);
         let cmd_payload = &SetFirmwareSvnRequest { svn: U32::new(svn) };
@@ -345,7 +346,8 @@ impl TcpConnection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the communication with the TPM or Platform port fails.
+    /// Returns an error if the communication with the TPM or Platform port
+    /// fails.
     pub fn session_end(&mut self) -> Result<()> {
         let cmd_code = U32::new(SimulatorTpmCommandCode::SessionEnd as u32);
         self.tpm_tcp.write_all(cmd_code.as_bytes())?;
@@ -362,7 +364,8 @@ impl TcpConnection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the communication with the TPM or Platform port fails.
+    /// Returns an error if the communication with the TPM or Platform port
+    /// fails.
     pub fn stop_simulator(&mut self) -> Result<()> {
         let cmd_code = U32::new(SimulatorTpmCommandCode::Stop as u32);
         self.tpm_tcp.write_all(cmd_code.as_bytes())?;
@@ -620,7 +623,8 @@ struct SetFirmwareSvnRequest {
     svn: U32,
 }
 
-/// Structure to manage the subprocess used to spawn the TPM simulator.
+/// Structure to manage the subprocess used to spawn the TPM simulator and a
+/// connection to it.
 #[derive(Debug)]
 pub struct TcpSimulator {
     child: Child,
@@ -628,7 +632,8 @@ pub struct TcpSimulator {
 }
 
 impl TcpSimulator {
-    /// Starts the TPM simulator binary with the given arguments and connects to it.
+    /// Starts the TPM simulator binary with the given arguments and connects to
+    /// it.
     pub fn new<B: AsRef<OsStr>, A: AsRef<OsStr>, P: AsRef<Path>>(
         bin: B,
         args: &[A],
