@@ -1,3 +1,9 @@
+//! # TPM2 Marshalable Trait & Utilities
+//!
+//! <div class="warning">
+//! This code is unstable and there are no guarantees of stability at this time.
+//! </div>
+//!
 #![forbid(unsafe_code)]
 #![no_std]
 
