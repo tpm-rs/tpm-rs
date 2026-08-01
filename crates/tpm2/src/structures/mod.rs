@@ -184,9 +184,3 @@ impl Marshal for PublicParmsAndId<'_> {
         }
     }
 }
-
-impl Default for PublicParmsAndId<'_> {
-    fn default() -> Self {
-        Self::KeyedHash(None, Default::default())
-    }
-}

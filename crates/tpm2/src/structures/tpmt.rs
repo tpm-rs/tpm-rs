@@ -1216,12 +1216,6 @@ impl<'a> Unmarshal<'a> for TpmtPublicParms {
     }
 }
 
-impl Default for TpmtPublicParms {
-    fn default() -> Self {
-        Self::KeyedHash(None)
-    }
-}
-
 /// Common trait for all `TpmtTk*` ticket types.
 pub trait Ticket {
     fn tag(&self) -> TpmSt;
@@ -1279,12 +1273,6 @@ impl<'a> Unmarshal<'a> for TpmtTkCreation<'a> {
             }
             _ => return Err(UnmarshalError),
         })
-    }
-}
-
-impl Default for TpmtTkCreation<'_> {
-    fn default() -> Self {
-        Self::Creation(Handle::RH_NULL, Tpm2bDigest::default())
     }
 }
 
@@ -1362,12 +1350,6 @@ impl<'a> Unmarshal<'a> for TpmtTkVerified<'a> {
             ),
             _ => return Err(UnmarshalError),
         })
-    }
-}
-
-impl Default for TpmtTkVerified<'_> {
-    fn default() -> Self {
-        Self::Verified(Handle::RH_NULL, Tpm2bDigest::default())
     }
 }
 
@@ -1486,17 +1468,11 @@ impl<'a> Unmarshal<'a> for TpmtTkHashcheck<'a> {
     }
 }
 
-impl Default for TpmtTkHashcheck<'_> {
-    fn default() -> Self {
-        Self::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default())
-    }
-}
-
 /// `TPMT_PUBLIC` structure defined in TPM 2.0 Part 2: Structures, Section 12.2.4 (Table 211).
 ///
 /// Defines the public area of a TPM object (object type, name algorithm, object attributes, auth policy, parameters, and public key data).
 #[doc(alias = "TPMT_PUBLIC")]
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmtPublic<'a> {
     pub name_alg: Option<TpmiAlgHash>,
     pub object_attributes: TpmaObject,

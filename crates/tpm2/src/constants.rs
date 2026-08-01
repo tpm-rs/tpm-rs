@@ -546,9 +546,8 @@ impl fmt::Debug for TpmCc {
 /// Defines comparison and arithmetic operations used in conditional policy assertions
 /// (such as `TPM2_PolicyNV` and `TPM2_PolicyAuthorizeNV`).
 #[doc(alias = "TPM_EO")]
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmEo {
-    #[default]
     Eq = 0x0000,
     Neq = 0x0001,
     SignedGT = 0x0002,
@@ -696,9 +695,8 @@ impl fmt::Debug for TpmSt {
 ///
 /// Passed as a parameter to `TPM2_Startup` and `TPM2_Shutdown`.
 #[doc(alias = "TPM_SU")]
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmSu {
-    #[default]
     Clear = 0x0000,
     State = 0x0001,
 }
@@ -742,9 +740,8 @@ impl<'a> Unmarshal<'a> for TpmSu {
 ///
 /// Passed to `TPM2_StartAuthSession`.
 #[doc(alias = "TPM_SE")]
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmSe {
-    #[default]
     HMAC = 0x00,
     Policy = 0x01,
     Trial = 0x03,
@@ -786,9 +783,8 @@ impl<'a> Unmarshal<'a> for TpmSe {
 /// Selects the capability category queried in `TPM2_GetCapability` and `TPM2_TestParms`,
 /// and acts as the selector tag for `TPMS_CAPABILITY_DATA`.
 #[doc(alias = "TPM_CAP")]
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmCap {
-    #[default]
     Algs = 0x00000000,
     Handles = 0x00000001,
     Commands = 0x00000002,
@@ -850,11 +846,10 @@ impl<'a> Unmarshal<'a> for TpmCap {
 /// Identifies properties queried using `TPM2_GetCapability` with `capability = TPM_CAP_TPM_PROPERTIES` ([`TpmCap::TPMProperties`]).
 /// Properties are divided into fixed/invariant properties (`PT_FIXED`, group 1) and variable properties (`PT_VAR`, group 2).
 #[doc(alias = "TPM_PT")]
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmPt {
     // a 4-octet character string containing the TPM Family value
     // (TPM_SPEC_FAMILY)
-    #[default]
     FamilyIndicator = 0x00000100,
     // the level of the specification
     Level = 0x00000101,
@@ -1126,11 +1121,10 @@ impl<'a> Unmarshal<'a> for TpmPt {
 /// Defines PCR property tags queried using `TPM2_GetCapability` with `capability = TPM_CAP_PCR_PROPERTIES` ([`TpmCap::PCRProperties`]).
 /// Each tag identifies a bit position in a `TPMS_PCR_SELECT` bitmap indicating attributes and behavior of the selected PCRs.
 #[doc(alias = "TPM_PT_PCR")]
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmPtPcr {
     // a SET bit in the TPMS_PCR_SELECT indicates that the PCR is saved and
     // restored by TPM_SU_STATE
-    #[default]
     Save = 0x00000000,
     // a SET bit in the TPMS_PCR_SELECT indicates that the PCR may be
     // extended from locality 0
@@ -1224,9 +1218,8 @@ impl<'a> Unmarshal<'a> for TpmPtPcr {
 /// Represents the handle type encoded in the most significant byte (bits 31..24) of a 32-bit TPM handle ([`Handle`]).
 /// Used to classify handles (PCRs, NV Indices, HMAC/Policy sessions, Permanent handles, Transient/Persistent objects).
 #[doc(alias = "TPM_HT")]
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmHt {
-    #[default]
     PCR = 0x00,
     NVIndex = 0x01,
     HMACSession = 0x02,
@@ -1356,11 +1349,10 @@ impl<'a> Unmarshal<'a> for Handle {
 /// Encoded in bits 7:4 of `TPMA_NV` attributes to define the type and behavior of an NV Index
 /// (Ordinary data blob, Counter, Bitfield, Extend digest, or PIN counter).
 #[doc(alias = "TPM_NT")]
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmNt {
     // contains data that is opaque to the TPM that can only be modified
     // using TPM2_NV_Write().
-    #[default]
     Ordinary = 0x0,
     // contains an 8-octet value that is to be used as a counter and can
     // only be modified with TPM2_NV_Increment()
@@ -1419,7 +1411,7 @@ impl<'a> Unmarshal<'a> for TpmNt {
 /// Represents the adjustment steps (-3 to +3) passed to `TPM2_ClockRateAdjust` to calibrate
 /// the TPM Clock update rate relative to external reference time without disrupting the clock epoch.
 #[doc(alias = "TPM_CLOCK_ADJUST")]
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmClockAdjust {
     /// Slow the Clock update rate by one coarse adjustment step (-3).
     CoarseSlower = -3,
@@ -1428,7 +1420,6 @@ pub enum TpmClockAdjust {
     /// Slow the Clock update rate by one fine adjustment step (-1).
     FineSlower = -1,
     /// No change to the Clock update rate (0).
-    #[default]
     NoChange = 0,
     /// Speed the Clock update rate by one fine adjustment step (1).
     FineFaster = 1,
@@ -1645,7 +1636,5 @@ mod tests {
 
         assert_eq!(Alg::default(), Alg::NULL);
         assert_eq!(TpmSt::default(), TpmSt::NULL);
-        assert_eq!(TpmPtPcr::default(), TpmPtPcr::Save);
-        assert_eq!(TpmHt::default(), TpmHt::PCR);
     }
 }

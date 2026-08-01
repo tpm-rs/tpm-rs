@@ -63,6 +63,19 @@ pub enum CryptoError {
     Internal,
 }
 
+impl core::fmt::Display for CryptoError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unsupported => {
+                write!(f, "unsupported cryptographic algorithm, mode, or key size")
+            }
+            Self::Internal => write!(f, "internal cryptographic error"),
+        }
+    }
+}
+
+impl core::error::Error for CryptoError {}
+
 /// A complete cryptography backend.
 ///
 /// Backends implement [`Random`], the [`backend`] family traits, and then this
@@ -146,3 +159,23 @@ macro_rules! match_sym_alg {
 
 // Lets the submodules (declared above) import these macros by path.
 use {match_hash_alg, match_sym_alg, match_variants};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_crypto_error_display_and_error() {
+        fn assert_error<T: core::error::Error>(_: &T) {}
+        assert_error(&CryptoError::Unsupported);
+        assert_error(&CryptoError::Internal);
+        assert_eq!(
+            format!("{}", CryptoError::Unsupported),
+            "unsupported cryptographic algorithm, mode, or key size"
+        );
+        assert_eq!(
+            format!("{}", CryptoError::Internal),
+            "internal cryptographic error"
+        );
+    }
+}

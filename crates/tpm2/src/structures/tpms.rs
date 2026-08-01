@@ -1118,7 +1118,7 @@ impl<'a> Unmarshal<'a> for TpmsAlgProperty {
 ///
 /// Structure reporting tagged UINT32 TPM properties (`property`, `value`).
 #[doc(alias = "TPMS_TAGGED_PROPERTY")]
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsTaggedProperty {
     pub property: TpmPt,
     pub value: u32,
@@ -1146,7 +1146,7 @@ impl<'a> Unmarshal<'a> for TpmsTaggedProperty {
 ///
 /// Structure reporting tagged PCR properties (`tag`, `sizeofSelect`, `pcrSelect`).
 #[doc(alias = "TPMS_TAGGED_PCR_SELECT")]
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsTaggedPcrSelect {
     pub tag: TpmPtPcr,
     pub selection: TpmsPcrSelect,

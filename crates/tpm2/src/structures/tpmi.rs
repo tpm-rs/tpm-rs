@@ -469,9 +469,8 @@ impl<'a> Unmarshal<'a> for TpmiMldsaParms {
 ///
 /// Specifies the structure tag in a command header (`TPM_ST_NO_SESSIONS` or `TPM_ST_SESSIONS`).
 #[doc(alias = "TPMI_ST_COMMAND_TAG")]
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmiStCommandTag {
-    #[default]
     NoSessions = TpmSt::NO_SESSIONS.tag(),
     Sessions = TpmSt::SESSIONS.tag(),
 }
