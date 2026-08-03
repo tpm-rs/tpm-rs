@@ -29,7 +29,7 @@ pub trait Command {
 ///
 /// Returns the next `bytesRequested` octets from the random number generator (RNG).
 #[doc(alias("TPM2_GetRandom", "GetRandom_In"))]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct GetRandom {
     pub bytes_requested: u16,
 }

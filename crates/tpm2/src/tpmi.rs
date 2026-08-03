@@ -6,7 +6,7 @@ use crate::{
 };
 
 /// `TPMI_ALG_HASH`
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(u16)]
 #[non_exhaustive]
 pub enum TpmiAlgHash {

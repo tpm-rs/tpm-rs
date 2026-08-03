@@ -495,7 +495,7 @@ struct RemoteHandshakeRequest {
 
 /// Parameters for the RemoteHandshake response
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, FromBytes, IntoBytes, KnownLayout, Immutable,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, FromBytes, IntoBytes, KnownLayout, Immutable,
 )]
 #[repr(C, packed)]
 pub struct RemoteHandshakeResponse {
@@ -515,7 +515,7 @@ impl RemoteHandshakeResponse {
 }
 
 /// A signal that can be sent to the Platform port of the TPM simulator
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum SimulatorPlatformSignal {
     /// Signal that power is applied to the TPM.
@@ -566,7 +566,7 @@ enum SimulatorPlatformCommandCode {
 
 /// Parameters for the GetCommandResponseSizes response
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, FromBytes, IntoBytes, KnownLayout, Immutable,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, FromBytes, IntoBytes, KnownLayout, Immutable,
 )]
 #[repr(C)]
 pub struct GetCommandResponseSizesResponse {

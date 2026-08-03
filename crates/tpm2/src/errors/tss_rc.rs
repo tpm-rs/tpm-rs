@@ -1,4 +1,6 @@
 use core::convert::From;
+use core::error::Error;
+use core::fmt;
 use core::num::NonZeroU32;
 use core::option::Option::*;
 use core::result::Result;
@@ -10,8 +12,16 @@ macro_rules! generate_tss_layer_error {
         pub type $result_name<T> = Result<T, $error_name>;
 
         /// Represents a TSS client side error.
-        #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+        #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
         pub struct $error_name(NonZeroU32);
+
+        impl fmt::Display for $error_name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "TSS error: {:#x}", self.0.get())
+            }
+        }
+
+        impl Error for $error_name {}
 
         // Allow constant to have enum-style case.
         #[allow(non_upper_case_globals)]

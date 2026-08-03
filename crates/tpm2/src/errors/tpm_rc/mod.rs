@@ -1,3 +1,5 @@
+use core::error::Error;
+use core::fmt;
 use core::num::NonZeroU32;
 use core::option::{Option, Option::*};
 use core::result::Result;
@@ -6,8 +8,16 @@ use core::result::Result;
 pub type TpmRcResult<T> = Result<T, TpmRcError>;
 
 /// Represents a TPM 2.0 service error as defined in specification as TPM_RC.
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
 pub struct TpmRcError(NonZeroU32);
+
+impl fmt::Display for TpmRcError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TPM RC error: {:#x}", self.0.get())
+    }
+}
+
+impl Error for TpmRcError {}
 
 // Allow constant to have enum-style case.
 #[allow(non_upper_case_globals)]
@@ -118,9 +128,10 @@ impl TpmRcError {
 }
 
 /// Represents the type of error for a Format1 `TpmRcError` code.
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Hash, Default)]
 pub enum ErrorType {
     /// Error occurred with a Handle.
+    #[default]
     Handle,
     /// Error occurred with a Parameter.
     Parameter,
@@ -156,9 +167,10 @@ impl ErrorType {
 }
 
 /// Represents the positional parameter of the error starting from 1 of a Format1 [`TpmRcError`].
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Hash, Default)]
 pub enum ErrorPosition {
     /// First handle/parameter/session caused the failure.
+    #[default]
     Pos1 = 1,
     /// Second handle/parameter/session caused the failure.
     Pos2,

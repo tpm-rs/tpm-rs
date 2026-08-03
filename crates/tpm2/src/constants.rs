@@ -9,7 +9,7 @@ use crate::{MarshalArray, UnmarshalArray};
 /// [TCG Algorithm Registry](https://trustedcomputinggroup.org/resource/tcg-algorithm-registry/).
 ///
 /// [TPM2 Specification]: https://trustedcomputinggroup.org/work-groups/trusted-platform-module/
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 #[repr(transparent)]
 pub struct Alg(pub u16);
 

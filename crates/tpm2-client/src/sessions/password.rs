@@ -17,7 +17,7 @@ use tpm2_rs_base::{
 /// assert_eq!(password1.secret(), b"hello world");
 /// assert_eq!(password2.secret(), &[1, 2, 3, 4, 5, 6]);
 /// ```
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct PasswordSession {
     auth: Tpm2bAuth,
 }

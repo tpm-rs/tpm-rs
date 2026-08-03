@@ -9,7 +9,7 @@ use crate::{
 /// `TPMT_HA`
 ///
 /// There is no type for `TPMU_HA` in this crate, use this type instead.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 #[repr(u16)]
 pub enum TpmtHa<'a> {
     Sha1(&'a [u8; Sha1.digest_size()]) = Alg::Sha1.0,

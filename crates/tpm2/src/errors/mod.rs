@@ -16,12 +16,28 @@ mod tpm_rc;
 mod tss_rc;
 
 /// Any error which can happen when marshalling
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct MarshalError;
 
+impl fmt::Display for MarshalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "marshal error")
+    }
+}
+
+impl Error for MarshalError {}
+
 /// Any error which can happen when unmarshalling
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct UnmarshalError;
+
+impl fmt::Display for UnmarshalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unmarshal error")
+    }
+}
+
+impl Error for UnmarshalError {}
 
 impl From<Infallible> for UnmarshalError {
     fn from(value: Infallible) -> Self {
@@ -30,8 +46,16 @@ impl From<Infallible> for UnmarshalError {
 }
 
 /// Specific error type corresponding to TPM_RC_HASH
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct HashError;
+
+impl fmt::Display for HashError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "hash error")
+    }
+}
+
+impl Error for HashError {}
 
 impl From<HashError> for UnmarshalError {
     fn from(_: HashError) -> Self {
@@ -62,8 +86,16 @@ impl fmt::Display for TssError {
 impl Error for TssError {}
 
 /// Error returned when trying to convert `0` into `TssError`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct TssErrorCannotBeZero;
+
+impl fmt::Display for TssErrorCannotBeZero {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TSS error cannot be zero")
+    }
+}
+
+impl Error for TssErrorCannotBeZero {}
 
 impl TryFrom<u32> for TssError {
     type Error = TssErrorCannotBeZero;

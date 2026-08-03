@@ -15,7 +15,7 @@ pub const RESP_BUFFER_SIZE: usize = 4096;
 
 /// TPM 2.0 Command Header
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Marshalable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Marshalable)]
 pub struct CmdHeader {
     /// Command tag indicating session usage (`TPM_ST_NO_SESSIONS` or `TPM_ST_SESSIONS`).
     pub tag: TpmiStCommandTag,
@@ -37,7 +37,7 @@ impl CmdHeader {
 
 /// TPM 2.0 Response Header
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Marshalable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Marshalable)]
 pub struct RespHeader {
     /// Response tag which matches the corresponding tag in the command.
     pub tag: TpmSt,
