@@ -99,7 +99,7 @@ fn test_2b_struct() {
         pcr_digest: Tpm2bDigest::from_bytes(&[0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9])
             .unwrap(),
         locality: TpmaLocality(0xA),
-        parent_name_alg: Some(TpmiAlgHash::Sha384),
+        parent_name_alg: Some(TpmiAlgHash::Sha256),
         parent_name: Tpm2bName::from_bytes(&[0xA, 0xB, 0xC, 0xD, 0xE, 0xF]).unwrap(),
         parent_qualified_name: Tpm2bName::default(),
         outside_info: Tpm2bData::from_bytes(&[0x1; 32]).unwrap(),
@@ -113,7 +113,7 @@ fn test_2b_struct() {
 fn test_tpml_digest_values_marshalling() {
     let mut lp = TpmlDigestValues::default();
     lp.add(&TpmtHa::Sha256(&[0xaa; 32])).unwrap();
-    lp.add(&TpmtHa::Sha1(&[0xbb; 20])).unwrap();
+    lp.add(&TpmtHa::Sha256(&[0xbb; 32])).unwrap();
 
     let mut buf = [0u8; TpmlDigestValues::MAX_SIZE];
     let len = lp.marshal(&mut buf);
@@ -129,8 +129,8 @@ fn test_tpml_digest_values_marshalling() {
     let mut offset = 4;
     for _ in 0..invalid_count {
         invalid_buf[offset..offset + 2]
-            .copy_from_slice(&Alg::from(TpmiAlgHash::Sha1).id().to_be_bytes());
-        offset += 2 + 20; // 2 bytes alg ID + 20 bytes SHA1 digest
+            .copy_from_slice(&Alg::from(TpmiAlgHash::Sha256).id().to_be_bytes());
+        offset += 2 + 32; // 2 bytes alg ID + 32 bytes SHA256 digest
     }
 
     let mut reader = &invalid_buf[..offset];

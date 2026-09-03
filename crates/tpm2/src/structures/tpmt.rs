@@ -13,45 +13,86 @@ use TpmiAlgHash::*;
 #[doc(alias = "TPMU_HA")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TpmtHa<'a> {
+    #[cfg(feature = "sha1")]
     Sha1(&'a [u8; Sha1.digest_size()]),
+    #[cfg(feature = "sha256")]
     Sha256(&'a [u8; Sha256.digest_size()]),
+    #[cfg(feature = "sha384")]
     Sha384(&'a [u8; Sha384.digest_size()]),
+    #[cfg(feature = "sha512")]
     Sha512(&'a [u8; Sha512.digest_size()]),
+    #[cfg(feature = "sm3_256")]
     Sm3_256(&'a [u8; Sm3_256.digest_size()]),
+    #[cfg(feature = "sha3_256")]
     Sha3_256(&'a [u8; Sha3_256.digest_size()]),
+    #[cfg(feature = "sha3_384")]
     Sha3_384(&'a [u8; Sha3_384.digest_size()]),
+    #[cfg(feature = "sha3_512")]
     Sha3_512(&'a [u8; Sha3_512.digest_size()]),
 }
 
 impl<'a> TpmtHa<'a> {
     /// The maximum digest size (in bytes) across all supported TPM2 hash algorithms.
-    pub const MAX_DIGEST_SIZE: usize = 64;
+    pub const MAX_DIGEST_SIZE: usize = max(&[
+        #[cfg(feature = "sha1")]
+        Sha1.digest_size(),
+        #[cfg(feature = "sha256")]
+        Sha256.digest_size(),
+        #[cfg(feature = "sha384")]
+        Sha384.digest_size(),
+        #[cfg(feature = "sha512")]
+        Sha512.digest_size(),
+        #[cfg(feature = "sm3_256")]
+        Sm3_256.digest_size(),
+        #[cfg(feature = "sha3_256")]
+        Sha3_256.digest_size(),
+        #[cfg(feature = "sha3_384")]
+        Sha3_384.digest_size(),
+        #[cfg(feature = "sha3_512")]
+        Sha3_512.digest_size(),
+    ]);
     /// The maximum number of implemented hash algorithms.
     #[doc(alias = "TPM2_NUM_PCR_BANKS")]
     pub const HASH_COUNT: usize = 8;
 
     pub const fn hash_alg(self) -> TpmiAlgHash {
         match self {
+            #[cfg(feature = "sha1")]
             Self::Sha1(_) => Sha1,
+            #[cfg(feature = "sha256")]
             Self::Sha256(_) => Sha256,
+            #[cfg(feature = "sha384")]
             Self::Sha384(_) => Sha384,
+            #[cfg(feature = "sha512")]
             Self::Sha512(_) => Sha512,
+            #[cfg(feature = "sm3_256")]
             Self::Sm3_256(_) => Sm3_256,
+            #[cfg(feature = "sha3_256")]
             Self::Sha3_256(_) => Sha3_256,
+            #[cfg(feature = "sha3_384")]
             Self::Sha3_384(_) => Sha3_384,
+            #[cfg(feature = "sha3_512")]
             Self::Sha3_512(_) => Sha3_512,
         }
     }
 
     pub const fn digest(self) -> &'a [u8] {
         match self {
+            #[cfg(feature = "sha1")]
             Self::Sha1(b) => b,
+            #[cfg(feature = "sha256")]
             Self::Sha256(b) => b,
+            #[cfg(feature = "sha384")]
             Self::Sha384(b) => b,
+            #[cfg(feature = "sha512")]
             Self::Sha512(b) => b,
+            #[cfg(feature = "sm3_256")]
             Self::Sm3_256(b) => b,
+            #[cfg(feature = "sha3_256")]
             Self::Sha3_256(b) => b,
+            #[cfg(feature = "sha3_384")]
             Self::Sha3_384(b) => b,
+            #[cfg(feature = "sha3_512")]
             Self::Sha3_512(b) => b,
         }
     }
@@ -72,13 +113,21 @@ impl<'a> Marshal for TpmtHa<'a> {
 impl<'a> Unmarshal<'a> for TpmtHa<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match TpmiAlgHash::unmarshal(src)? {
+            #[cfg(feature = "sha1")]
             TpmiAlgHash::Sha1 => Self::Sha1(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "sha256")]
             TpmiAlgHash::Sha256 => Self::Sha256(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "sha384")]
             TpmiAlgHash::Sha384 => Self::Sha384(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "sha512")]
             TpmiAlgHash::Sha512 => Self::Sha512(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "sm3_256")]
             TpmiAlgHash::Sm3_256 => Self::Sm3_256(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "sha3_256")]
             TpmiAlgHash::Sha3_256 => Self::Sha3_256(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "sha3_384")]
             TpmiAlgHash::Sha3_384 => Self::Sha3_384(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "sha3_512")]
             TpmiAlgHash::Sha3_512 => Self::Sha3_512(Unmarshal::unmarshal(src)?),
         })
     }

@@ -16,6 +16,16 @@ categories.workspace = true
 # Implement conversions/traits which require std
 std = []
 
+# Only enable SHA2 by default
+default = ["sha256", "sha384", "sha512"]
+sha1 = []
+sha256 = []
+sha384 = []
+sha512 = []
+sm3_256 = []
+sha3_256 = []
+sha3_384 = []
+sha3_512 = []
+
 [dependencies]
 bitflags = { workspace = true }
-

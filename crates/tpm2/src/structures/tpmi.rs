@@ -207,13 +207,21 @@ impl<'a> Unmarshal<'a> for TpmiStCommandTag {
 #[doc(alias = "TPMI_ALG_HASH")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmiAlgHash {
+    #[cfg(feature = "sha1")]
     Sha1 = Alg::SHA1.tag(),
+    #[cfg(feature = "sha256")]
     Sha256 = Alg::SHA256.tag(),
+    #[cfg(feature = "sha384")]
     Sha384 = Alg::SHA384.tag(),
+    #[cfg(feature = "sha512")]
     Sha512 = Alg::SHA512.tag(),
+    #[cfg(feature = "sm3_256")]
     Sm3_256 = Alg::SM3_256.tag(),
+    #[cfg(feature = "sha3_256")]
     Sha3_256 = Alg::SHA3_256.tag(),
+    #[cfg(feature = "sha3_384")]
     Sha3_384 = Alg::SHA3_384.tag(),
+    #[cfg(feature = "sha3_512")]
     Sha3_512 = Alg::SHA3_512.tag(),
 }
 
@@ -221,26 +229,42 @@ impl TpmiAlgHash {
     /// Returns the digest size (in bytes) of this hash algorithm.
     pub const fn digest_size(self) -> usize {
         match self {
+            #[cfg(feature = "sha1")]
             Self::Sha1 => 20,
+            #[cfg(feature = "sha256")]
             Self::Sha256 => 32,
+            #[cfg(feature = "sha384")]
             Self::Sha384 => 48,
+            #[cfg(feature = "sha512")]
             Self::Sha512 => 64,
+            #[cfg(feature = "sm3_256")]
             Self::Sm3_256 => 32,
+            #[cfg(feature = "sha3_256")]
             Self::Sha3_256 => 32,
+            #[cfg(feature = "sha3_384")]
             Self::Sha3_384 => 48,
+            #[cfg(feature = "sha3_512")]
             Self::Sha3_512 => 64,
         }
     }
 
     pub const fn block_size(self) -> u16 {
         match self {
+            #[cfg(feature = "sha1")]
             Self::Sha1 => 64,
+            #[cfg(feature = "sha256")]
             Self::Sha256 => 64,
+            #[cfg(feature = "sha384")]
             Self::Sha384 => 128,
+            #[cfg(feature = "sha512")]
             Self::Sha512 => 128,
+            #[cfg(feature = "sm3_256")]
             Self::Sm3_256 => 64,
+            #[cfg(feature = "sha3_256")]
             Self::Sha3_256 => 136,
+            #[cfg(feature = "sha3_384")]
             Self::Sha3_384 => 104,
+            #[cfg(feature = "sha3_512")]
             Self::Sha3_512 => 72,
         }
     }
@@ -250,13 +274,21 @@ impl TryFrom<Alg> for TpmiAlgHash {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<TpmiAlgHash, Self::Error> {
         match a {
+            #[cfg(feature = "sha1")]
             Alg::SHA1 => Ok(Self::Sha1),
+            #[cfg(feature = "sha256")]
             Alg::SHA256 => Ok(Self::Sha256),
+            #[cfg(feature = "sha384")]
             Alg::SHA384 => Ok(Self::Sha384),
+            #[cfg(feature = "sha512")]
             Alg::SHA512 => Ok(Self::Sha512),
+            #[cfg(feature = "sm3_256")]
             Alg::SM3_256 => Ok(Self::Sm3_256),
+            #[cfg(feature = "sha3_256")]
             Alg::SHA3_256 => Ok(Self::Sha3_256),
+            #[cfg(feature = "sha3_384")]
             Alg::SHA3_384 => Ok(Self::Sha3_384),
+            #[cfg(feature = "sha3_512")]
             Alg::SHA3_512 => Ok(Self::Sha3_512),
             _ => Err(UnmarshalError),
         }

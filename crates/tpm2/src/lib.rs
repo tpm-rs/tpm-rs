@@ -64,6 +64,7 @@
 
 pub mod commands;
 mod constants;
+pub mod crypto;
 pub mod errors;
 mod marshal;
 #[cfg(feature = "std")]
