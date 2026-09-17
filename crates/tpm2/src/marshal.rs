@@ -51,7 +51,7 @@ pub trait Unmarshal<'a>: Sized {
     /// Returns a value unmarshaled from `*src`.
     ///
     /// On success, `*src` will be the remaining, unused bytes. On failure,
-    /// `*src` will be unmodified.
+    /// `*src` will be in an unspecified state.
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError>;
 }
 

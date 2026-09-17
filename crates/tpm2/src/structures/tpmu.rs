@@ -10,17 +10,17 @@ use crate::{
 /// tag inside [`TpmsAttest`].
 #[doc(alias = "TPMU_ATTEST")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TpmuAttest {
-    Certify(TpmsCertifyInfo),
-    Creation(TpmsCreationInfo),
-    Quote(TpmsQuoteInfo),
-    CommandAudit(TpmsCommandAuditInfo),
-    SessionAudit(TpmsSessionAuditInfo),
+pub enum TpmuAttest<'a> {
+    Certify(TpmsCertifyInfo<'a>),
+    Creation(TpmsCreationInfo<'a>),
+    Quote(TpmsQuoteInfo<'a>),
+    CommandAudit(TpmsCommandAuditInfo<'a>),
+    SessionAudit(TpmsSessionAuditInfo<'a>),
     Time(TpmsTimeAttestInfo),
-    Nv(TpmsNvCertifyInfo),
+    Nv(TpmsNvCertifyInfo<'a>),
 }
 
-impl TpmuAttest {
+impl TpmuAttest<'_> {
     #[doc(alias = "TPMI_ST_ATTEST")]
     pub fn attested_type(&self) -> TpmSt {
         match self {
@@ -33,8 +33,9 @@ impl TpmuAttest {
             Self::Nv(_) => TpmSt::ATTEST_NV,
         }
     }
-
-    pub fn unmarshal_variant(selector: TpmSt, src: &mut &[u8]) -> Result<Self, UnmarshalError> {
+}
+impl<'a> TpmuAttest<'a> {
+    pub fn unmarshal_variant(selector: TpmSt, src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match selector {
             TpmSt::ATTEST_CERTIFY => Self::Certify(Unmarshal::unmarshal(src)?),
             TpmSt::ATTEST_CREATION => Self::Creation(Unmarshal::unmarshal(src)?),
@@ -48,7 +49,7 @@ impl TpmuAttest {
     }
 }
 
-impl Marshal for TpmuAttest {
+impl Marshal for TpmuAttest<'_> {
     const MAX_SIZE: usize = max(&[
         TpmsCertifyInfo::MAX_SIZE,
         TpmsCreationInfo::MAX_SIZE,
@@ -58,9 +59,9 @@ impl Marshal for TpmuAttest {
         TpmsTimeAttestInfo::MAX_SIZE,
         TpmsNvCertifyInfo::MAX_SIZE,
     ]);
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmuAttest::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmuAttest::MAX_SIZE]) -> usize {
         match self {
             Self::Certify(x) => marshal_helper(x, dst, 0),
             Self::Creation(x) => marshal_helper(x, dst, 0),
@@ -79,14 +80,14 @@ impl Marshal for TpmuAttest {
 /// selected by object type.
 #[doc(alias = "TPMU_SENSITIVE_COMPOSITE")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TpmuSensitiveComposite {
-    KeyedHash(Tpm2bSensitiveData),
-    Sym(Tpm2bSymKey),
-    Rsa(Tpm2bPrivateKeyRsa),
-    Ecc(Tpm2bEccParameter),
+pub enum TpmuSensitiveComposite<'a> {
+    KeyedHash(Tpm2bSensitiveData<'a>),
+    Sym(Tpm2bSymKey<'a>),
+    Rsa(Tpm2bPrivateKeyRsa<'a>),
+    Ecc(Tpm2bEccParameter<'a>),
 }
 
-impl TpmuSensitiveComposite {
+impl TpmuSensitiveComposite<'_> {
     #[doc(alias = "TPMI_ALG_PUBLIC")]
     pub const fn sensitive_type(self) -> Alg {
         match self {
@@ -96,8 +97,9 @@ impl TpmuSensitiveComposite {
             Self::Ecc(_) => Alg::ECC,
         }
     }
-
-    pub fn unmarshal_variant(selector: Alg, src: &mut &[u8]) -> Result<Self, UnmarshalError> {
+}
+impl<'a> TpmuSensitiveComposite<'a> {
+    pub fn unmarshal_variant(selector: Alg, src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match selector {
             Alg::KEYEDHASH => Self::KeyedHash(Unmarshal::unmarshal(src)?),
             Alg::SYMCIPHER => Self::Sym(Unmarshal::unmarshal(src)?),
@@ -108,16 +110,16 @@ impl TpmuSensitiveComposite {
     }
 }
 
-impl Marshal for TpmuSensitiveComposite {
+impl Marshal for TpmuSensitiveComposite<'_> {
     const MAX_SIZE: usize = max(&[
         Tpm2bSensitiveData::MAX_SIZE,
         Tpm2bSymKey::MAX_SIZE,
         Tpm2bPrivateKeyRsa::MAX_SIZE,
         Tpm2bEccParameter::MAX_SIZE,
     ]);
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmuSensitiveComposite::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmuSensitiveComposite::MAX_SIZE]) -> usize {
         match self {
             Self::KeyedHash(x) => marshal_helper(x, dst, 0),
             Self::Sym(x) => marshal_helper(x, dst, 0),

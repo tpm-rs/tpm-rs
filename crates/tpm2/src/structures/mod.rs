@@ -33,6 +33,7 @@
 //! via `tpm2::*`.
 
 mod headers;
+pub mod limits;
 mod tpm2b;
 mod tpma;
 mod tpmi;
@@ -64,14 +65,14 @@ use crate::{
 #[doc(alias = "TPMU_PUBLIC_PARMS")]
 #[doc(alias = "TPMU_PUBLIC_ID")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PublicParmsAndId {
-    KeyedHash(Option<TpmtKeyedHashScheme>, Tpm2bDigest),
-    Sym(TpmtSymDefObject, Tpm2bDigest),
-    Rsa(TpmsRsaParms, Tpm2bPublicKeyRsa),
-    Ecc(TpmsEccParms, TpmsEccPoint),
+pub enum PublicParmsAndId<'a> {
+    KeyedHash(Option<TpmtKeyedHashScheme>, Tpm2bDigest<'a>),
+    Sym(TpmtSymDefObject, Tpm2bDigest<'a>),
+    Rsa(TpmsRsaParms, Tpm2bPublicKeyRsa<'a>),
+    Ecc(TpmsEccParms, TpmsEccPoint<'a>),
 }
 
-impl PublicParmsAndId {
+impl PublicParmsAndId<'_> {
     pub const fn parms(self) -> TpmtPublicParms {
         match self {
             Self::KeyedHash(p, _) => TpmtPublicParms::KeyedHash(p),
@@ -82,13 +83,14 @@ impl PublicParmsAndId {
     }
 }
 
-impl PublicParmsAndId {
+impl PublicParmsAndId<'_> {
     #[doc(alias = "TPMI_ALG_PUBLIC")]
     pub const fn algorithm(self) -> Alg {
         self.parms().algorithm()
     }
-
-    fn unmarshal_variant(selector: Alg, src: &mut &[u8]) -> Result<Self, UnmarshalError> {
+}
+impl<'a> PublicParmsAndId<'a> {
+    fn unmarshal_variant(selector: Alg, src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match selector {
             Alg::KEYEDHASH => {
                 Self::KeyedHash(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
@@ -101,16 +103,16 @@ impl PublicParmsAndId {
     }
 }
 
-impl Marshal for PublicParmsAndId {
+impl Marshal for PublicParmsAndId<'_> {
     const MAX_SIZE: usize = max(&[
         <Option<TpmtKeyedHashScheme>>::MAX_SIZE + Tpm2bDigest::MAX_SIZE,
         TpmtSymDefObject::MAX_SIZE + Tpm2bDigest::MAX_SIZE,
         TpmsRsaParms::MAX_SIZE + Tpm2bPublicKeyRsa::MAX_SIZE,
         TpmsEccParms::MAX_SIZE + TpmsEccPoint::MAX_SIZE,
     ]);
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; PublicParmsAndId::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; PublicParmsAndId::MAX_SIZE]) -> usize {
         match self {
             Self::KeyedHash(parms, id) => {
                 let count = marshal_helper(parms, dst, 0);
@@ -132,7 +134,7 @@ impl Marshal for PublicParmsAndId {
     }
 }
 
-impl Default for PublicParmsAndId {
+impl Default for PublicParmsAndId<'_> {
     fn default() -> Self {
         Self::KeyedHash(None, Default::default())
     }
