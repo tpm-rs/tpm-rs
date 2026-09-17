@@ -33,7 +33,6 @@
 //! via `tpm2::*`.
 
 mod headers;
-pub mod limits;
 mod tpm2b;
 mod tpma;
 mod tpmi;
