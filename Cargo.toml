@@ -1,12 +1,7 @@
 [workspace]
 resolver = "3"
 
-# TODO (https://github.com/tpm-rs/tpm-rs/issues/215): Reduce number of crates
-members = [
-    "crates/tpm2",
-    "crates/tpm2-client",
-    "crates/tpm2-impl",
-]
+members = ["crates/tpm2", "crates/tpm2-client", "crates/tpm2-impl"]
 
 # Package keys that should be used by all packages.
 # We don't set: authors (deprecated), license-file, exclude, include, or publish
@@ -15,7 +10,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.100"
 homepage = "https://github.com/tpm-rs"
 repository = "https://github.com/tpm-rs/tpm-rs"
 license = "Apache-2.0"
