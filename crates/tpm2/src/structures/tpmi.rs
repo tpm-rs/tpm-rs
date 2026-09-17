@@ -122,6 +122,12 @@ pub enum TpmiRsaKeyBits {
     Rsa4096 = 4096,
 }
 
+impl TpmiRsaKeyBits {
+    pub const MAX_PUB_KEY_BITS: usize = 4096;
+    pub const MAX_PUB_KEY_BYTES: usize = Self::MAX_PUB_KEY_BITS.div_ceil(8);
+    pub const MAX_PRIV_KEY_BYTES: usize = Self::MAX_PUB_KEY_BYTES.div_ceil(2);
+}
+
 impl TryFrom<u16> for TpmiRsaKeyBits {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
@@ -218,6 +224,12 @@ pub enum TpmiAlgHash {
 }
 
 impl TpmiAlgHash {
+    /// The maximum digest size (in bytes) across all supported TPM2 hash algorithms.
+    pub const MAX_DIGEST_BYTES: usize = 64;
+    /// The maximum number of implemented hash algorithms.
+    #[doc(alias = "TPM2_NUM_PCR_BANKS")]
+    pub const HASH_COUNT: usize = 8;
+
     /// Returns the digest size (in bytes) of this hash algorithm.
     pub const fn digest_size(self) -> usize {
         match self {

@@ -13,13 +13,14 @@
 //! ## Example
 //!
 //! ```rust,no_run
-//! use tpm2_client::{run_command, connection::tcp::TcpConnection};
+//! use tpm2_client::{run_command, connection::tcp::TcpConnection, protocol::RESP_BUFFER_SIZE};
 //! use tpm2::commands::GetRandom;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut tpm = TcpConnection::connect("127.0.0.1", None, None)?;
 //! let cmd = GetRandom { bytes_requested: 16 };
-//! let resp = run_command(&cmd, &mut tpm)?;
+//! let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
+//! let resp = run_command(&cmd, &mut tpm, &mut resp_buffer)?;
 //! # Ok(())
 //! # }
 //! ```
@@ -138,12 +139,12 @@ impl<E> PartialEq<AuthError> for ClientError<E> {
 pub fn run_command<'a, CmdT: Command, T: Connection>(
     cmd: &CmdT,
     tpm: &mut T,
+    resp_buffer: &'a mut [u8],
 ) -> Result<CmdT::Response<'a>, ClientError<T::Error>>
 where
-    CmdT::Response<'a>: for<'b> Unmarshal<'b>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    run_command_with_sessions(cmd, (), tpm)
+    run_command_with_sessions(cmd, (), tpm, resp_buffer)
 }
 
 /// Runs a TPM command with the provided sessions over the given
@@ -168,9 +169,9 @@ pub fn run_command_with_sessions<
     cmd: &CmdT,
     cmd_sessions: AA,
     tpm: &mut T,
+    resp_buffer: &'a mut [u8],
 ) -> Result<CmdT::Response<'a>, ClientError<T::Error>>
 where
-    CmdT::Response<'a>: for<'b> Unmarshal<'b>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut cmd_buffer = [0u8; CMD_BUFFER_SIZE];
@@ -201,11 +202,11 @@ where
             .unwrap(),
     );
 
-    let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
-    tpm.transact(&cmd_buffer[..written], &mut resp_buffer)
+    let resp_buffer = tpm
+        .transact(&cmd_buffer[..written], resp_buffer)
         .map_err(ClientError::Connection)?;
 
-    let (resp_header, read) = read_response_header(&resp_buffer)?;
+    let (resp_header, read) = read_response_header(resp_buffer)?;
     let resp_size = resp_header.size as usize;
     if resp_size > resp_buffer.len() {
         return Err(ClientError::ResponseTooLarge);

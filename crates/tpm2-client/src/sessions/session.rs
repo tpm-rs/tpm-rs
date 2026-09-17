@@ -20,7 +20,7 @@ impl core::error::Error for AuthError {}
 /// Trait for types representing TPM sessions.
 pub trait Session {
     /// Computes the authorization HMAC for this session.
-    fn auth_command(&self) -> TpmsAuthCommand;
+    fn auth_command(&self) -> TpmsAuthCommand<'_>;
     /// Validates the authorization response for this session.
     fn validate_auth_response(&self, auth: &TpmsAuthResponse) -> Result<(), AuthError>;
 }

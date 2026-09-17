@@ -57,9 +57,9 @@ fn test_tpms_pcr_selection_bounds() {
 
     // 2. Check construction limits (sizeof_select > MAX or < MIN)
     let too_large = [0u8; TpmsPcrSelect::MAX + 1];
-    assert!(TpmsPcrSelect::new(&too_large).is_err());
+    assert!(TpmsPcrSelect::new(&too_large).is_none());
     let too_small = [0u8; TpmsPcrSelect::MIN - 1];
-    assert!(TpmsPcrSelect::new(&too_small).is_err());
+    assert!(TpmsPcrSelect::new(&too_small).is_none());
 
     // 3. Unmarshal outside limits (sizeof_select > TpmsPcrSelect::MAX)
     for invalid_size in (TpmsPcrSelect::MAX as u8 + 1)..=255 {
@@ -75,7 +75,7 @@ fn test_tpms_pcr_selection_bounds() {
 #[test]
 fn test_tpml_pcr_selection_bounds() {
     // 1. Valid counts (0..=HASH_COUNT)
-    for count in 0..=TpmtHa::HASH_COUNT {
+    for count in 0..=TpmiAlgHash::HASH_COUNT {
         let mut selections = Vec::new();
         for i in 0..count {
             let pcr_sel = TpmsPcrSelection {
@@ -85,9 +85,10 @@ fn test_tpml_pcr_selection_bounds() {
             selections.push(pcr_sel);
         }
         let list = TpmlPcrSelection::new(&selections).unwrap();
-        assert_eq!(list.count(), count);
+        assert_eq!(list.as_slice().len(), count);
         assert!(
-            list.pcr_selections()
+            list.as_slice()
+                .iter()
                 .copied()
                 .eq(selections.iter().copied())
         );
@@ -105,18 +106,18 @@ fn test_tpml_pcr_selection_bounds() {
 
     // 2. Check construction limits (count > HASH_COUNT)
     let mut too_many_selections = Vec::new();
-    for _ in 0..=TpmtHa::HASH_COUNT {
+    for _ in 0..=TpmiAlgHash::HASH_COUNT {
         too_many_selections.push(TpmsPcrSelection {
             hash: TpmiAlgHash::Sha256,
             selection: TpmsPcrSelect::new(&[0u8; TpmsPcrSelect::MIN]).unwrap(),
         });
     }
-    assert!(TpmlPcrSelection::new(&too_many_selections).is_err());
+    assert!(TpmlPcrSelection::new(&too_many_selections).is_none());
 
     // 3. Unmarshal outside count limits (count > HASH_COUNT)
     for invalid_count in [
-        (TpmtHa::HASH_COUNT + 1) as u32,
-        (TpmtHa::HASH_COUNT + 2) as u32,
+        (TpmiAlgHash::HASH_COUNT + 1) as u32,
+        (TpmiAlgHash::HASH_COUNT + 2) as u32,
         50,
         1000,
         1000000,

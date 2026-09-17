@@ -16,7 +16,7 @@ impl Session for NoSession {
         // replace it with a loop {}.
         unreachable!()
     }
-    fn auth_command(&self) -> TpmsAuthCommand {
+    fn auth_command(&self) -> TpmsAuthCommand<'_> {
         unreachable!()
     }
 }

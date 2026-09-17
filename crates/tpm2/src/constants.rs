@@ -6,6 +6,8 @@
 //! For example, `Alg` is valid for any value, but interface types such as
 //! [`TpmiAlgHash`](crate::structures::TpmiAlgHash) check that the `Alg` is a valid
 //! hash algorithm ID, returning an `Err` if not.
+use core::fmt;
+
 use crate::errors::UnmarshalError;
 use crate::marshal::{Marshal, Unmarshal};
 
@@ -153,8 +155,8 @@ impl<'a> Unmarshal<'a> for Alg {
     }
 }
 
-impl core::fmt::Debug for Alg {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl fmt::Debug for Alg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::KEYEDHASH => write!(f, "Alg::KEYEDHASH"),
             Self::SYMCIPHER => write!(f, "Alg::SYMCIPHER"),
@@ -206,22 +208,6 @@ impl core::fmt::Debug for Alg {
     }
 }
 
-pub const TPM2_MAX_DIGEST_BUFFER: u32 = 1024;
-pub const TPM2_MAX_NV_BUFFER_SIZE: u32 = 2048;
-pub const TPM2_MAX_CAP_BUFFER: u32 = 1024;
-pub const TPM2_LABEL_MAX_BUFFER: u32 = 32;
-
-/* Encryption block sizes */
-pub const TPM2_MAX_SYM_BLOCK_SIZE: u32 = 16;
-pub const TPM2_MAX_SYM_DATA: u32 = 256;
-pub const TPM2_MAX_ECC_KEY_BYTES: u32 = 128;
-pub const TPM2_MAX_SYM_KEY_BYTES: u32 = 32;
-pub const TPM2_MAX_RSA_KEY_BYTES: u32 = 512;
-
-pub const TPM2_MAX_CONTEXT_SIZE: u32 = 5120;
-pub const TPM2_MAX_PRIVATE_SIZE: usize = 1024;
-pub const TPM2_MAX_ACTIVE_SESSIONS: u32 = 64;
-
 /// `TPM_ECC_CURVE` and `TPMI_ECC_CURVE` defined in TPM 2.0 Part 2: Structures, Section 6.4 (Table 10) and Section 9.7 (Table 38).
 ///
 /// Defines ECC curve identifiers supported by the TPM (NIST, Brainpool, Barreto-Naehrig, SM2, Edwards/Curve25519/448).
@@ -245,6 +231,11 @@ pub enum TpmEccCurve {
     BpP512R1 = 0x0032,
     Curve25519 = 0x0040,
     Curve448 = 0x0041,
+}
+
+impl TpmEccCurve {
+    pub const MAX_ECC_KEY_BITS: usize = 638;
+    pub const MAX_ECC_KEY_BYTES: usize = Self::MAX_ECC_KEY_BITS.div_ceil(8);
 }
 
 impl TryFrom<u16> for TpmEccCurve {
@@ -458,8 +449,8 @@ impl<'a> Unmarshal<'a> for TpmCc {
     }
 }
 
-impl core::fmt::Debug for TpmCc {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl fmt::Debug for TpmCc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TPM_CC(0x{:08X})", self.code())
     }
 }
@@ -605,8 +596,8 @@ impl<'a> Unmarshal<'a> for TpmSt {
     }
 }
 
-impl core::fmt::Debug for TpmSt {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl fmt::Debug for TpmSt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TPM_ST(0x{:04X})", self.id())
     }
 }

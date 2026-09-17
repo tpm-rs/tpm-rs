@@ -1,6 +1,6 @@
 use crate::get_started_tpm;
 use tpm2::commands::GetRandom;
-use tpm2::{Tpm2bDigest, Tpm2bSimple, TpmiAlgHash};
+use tpm2::{Tpm2bDigest, TpmiAlgHash};
 use tpm2_client::run_command;
 
 #[test]
@@ -12,7 +12,9 @@ fn test_get_random_duplicate_value_trap() {
         bytes_requested: TpmiAlgHash::Sha256.digest_size() as u16,
     };
 
-    let resp = run_command(&command, tpm.connection_mut()).expect("Failed running command.");
+    let mut resp_buffer = [0u8; tpm2_client::protocol::RESP_BUFFER_SIZE];
+    let resp = run_command(&command, tpm.connection_mut(), &mut resp_buffer)
+        .expect("Failed running command.");
 
     // Lets pull out the actual data as a slice for convenience
     let random_slice = &resp.random_bytes.as_ref();
@@ -47,7 +49,9 @@ fn test_get_random_large_sizes() {
     // The second value is used to confirm that server is still providing that size.
     for i in [0xFFF, 0xFFFF] {
         let command = GetRandom { bytes_requested: i };
-        let resp = run_command(&command, tpm.connection_mut()).expect("Failed running command.");
+        let mut resp_buffer = [0u8; tpm2_client::protocol::RESP_BUFFER_SIZE];
+        let resp = run_command(&command, tpm.connection_mut(), &mut resp_buffer)
+            .expect("Failed running command.");
 
         // Lets pull out the actual slice size for convenience
         let random_slice_len = resp.random_bytes.as_ref().len();
@@ -55,9 +59,9 @@ fn test_get_random_large_sizes() {
         if detected_max_size == 0 {
             // Detect the max size used by the server.
             assert!(
-                Tpm2bDigest::MAX_BUFFER_SIZE >= random_slice_len,
+                Tpm2bDigest::CAP >= random_slice_len,
                 "We received more random data, than client implementation supports {random_slice_len} > {}.",
-                Tpm2bDigest::MAX_BUFFER_SIZE
+                Tpm2bDigest::CAP
             );
 
             assert!(
@@ -83,7 +87,9 @@ fn test_get_random_small_sizes() {
     for i in 0..1 {
         let command = GetRandom { bytes_requested: i };
 
-        let resp = run_command(&command, tpm.connection_mut()).expect("Failed running command.");
+        let mut resp_buffer = [0u8; tpm2_client::protocol::RESP_BUFFER_SIZE];
+        let resp = run_command(&command, tpm.connection_mut(), &mut resp_buffer)
+            .expect("Failed running command.");
 
         // Lets pull out the actual slice size for convenience
         let random_slice_len = resp.random_bytes.as_ref().len();
