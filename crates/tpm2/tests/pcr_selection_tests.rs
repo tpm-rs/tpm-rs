@@ -60,9 +60,9 @@ fn test_pcr_selection_valid_bounds() {
 fn test_pcr_selection_invalid_bounds() {
     // Constructing with length > MAX or < MIN must fail.
     let too_large_data = [1; TpmsPcrSelect::MAX + 1];
-    assert!(TpmsPcrSelect::new(&too_large_data).is_err());
+    assert!(TpmsPcrSelect::new(&too_large_data).is_none());
     let too_small_data = [1; TpmsPcrSelect::MIN - 1];
-    assert!(TpmsPcrSelect::new(&too_small_data).is_err());
+    assert!(TpmsPcrSelect::new(&too_small_data).is_none());
 
     // Unmarshalling a buffer with sizeof_select > TpmsPcrSelect::MAX must fail.
     for invalid_len in (TpmsPcrSelect::MAX as u8 + 1)..=255 {

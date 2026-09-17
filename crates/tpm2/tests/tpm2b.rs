@@ -42,25 +42,22 @@ macro_rules! impl_test_tpm2b_simple {
         assert!(result.is_ok());
         let digest = result.unwrap();
         assert_eq!(
-            usize::from(digest.get_size()),
+            digest.as_slice().len(),
             smaller_size_buf.len() - SIZE_OF_U16
         );
-        assert_eq!(digest.get_buffer(), &smaller_size_buf[SIZE_OF_U16..]);
+        assert_eq!(digest.as_slice(), &smaller_size_buf[SIZE_OF_U16..]);
 
         // same size should be good
         let mut slice = &same_size_buf[..];
         result = <$T>::unmarshal(&mut slice);
         assert!(result.is_ok());
         let digest = result.unwrap();
-        assert_eq!(
-            usize::from(digest.get_size()),
-            same_size_buf.len() - SIZE_OF_U16
-        );
-        assert_eq!(digest.get_buffer(), &same_size_buf[SIZE_OF_U16..]);
+        assert_eq!(digest.as_slice().len(), same_size_buf.len() - SIZE_OF_U16);
+        assert_eq!(digest.as_slice(), &same_size_buf[SIZE_OF_U16..]);
 
         let mut mbuf = [0u8; <$T>::MAX_SIZE];
         let mres = digest.marshal(&mut mbuf);
-        assert_eq!(mres, digest.get_size() as usize + SIZE_OF_U16);
+        assert_eq!(mres, digest.as_slice().len() + SIZE_OF_U16);
         let mut slice = &mbuf[..mres];
         let new_digest = <$T>::unmarshal(&mut slice).unwrap();
         assert_eq!(digest, new_digest);
@@ -73,18 +70,8 @@ fn test_try_unmarshal_tpm2b_name() {
 }
 
 #[test]
-fn test_try_unmarshal_tpm2b_attest() {
-    impl_test_tpm2b_simple! {Tpm2bAttest};
-}
-
-#[test]
 fn test_try_unmarshal_tpm2b_context_data() {
     impl_test_tpm2b_simple! {Tpm2bContextData};
-}
-
-#[test]
-fn test_try_unmarshal_tpm2b_context_sensitive() {
-    impl_test_tpm2b_simple! {Tpm2bContextSensitive};
 }
 
 #[test]
@@ -153,30 +140,20 @@ fn test_try_unmarshal_tpm2b_sensitive_data() {
 }
 
 #[test]
-fn test_try_unmarshal_tpm2b_sensitive() {
-    impl_test_tpm2b_simple! {Tpm2bSensitive};
-}
-
-#[test]
 fn test_try_unmarshal_tpm2b_sym_key() {
     impl_test_tpm2b_simple! {Tpm2bSymKey};
 }
 
-#[test]
-fn test_try_unmarshal_tpm2b_template() {
-    impl_test_tpm2b_simple! {Tpm2bTemplate};
-}
-
 macro_rules! impl_stress_test_tpm2b_simple {
     ($T:ty) => {
-        let max_size = <$T>::MAX_BUFFER_SIZE;
+        let max_size = <$T>::CAP;
         let test_sizes = [0, 1, 2, max_size / 2, max_size];
         for &size in &test_sizes {
             if size > max_size {
                 continue;
             }
             let bytes = vec![0u8; size];
-            let struct_val = <$T>::from_bytes(&bytes).unwrap();
+            let struct_val = <$T>::new(&bytes).unwrap();
             let expected_marshaled_len = 2 + size;
 
             let mut mbuf = [0u8; <$T>::MAX_SIZE];
@@ -192,9 +169,7 @@ macro_rules! impl_stress_test_tpm2b_simple {
 #[test]
 fn test_all_tpm2b_simple_marshalling_bounds() {
     impl_stress_test_tpm2b_simple! {Tpm2bName};
-    impl_stress_test_tpm2b_simple! {Tpm2bAttest};
     impl_stress_test_tpm2b_simple! {Tpm2bContextData};
-    impl_stress_test_tpm2b_simple! {Tpm2bContextSensitive};
     impl_stress_test_tpm2b_simple! {Tpm2bData};
     impl_stress_test_tpm2b_simple! {Tpm2bDigest};
     impl_stress_test_tpm2b_simple! {Tpm2bEccParameter};
@@ -208,7 +183,54 @@ fn test_all_tpm2b_simple_marshalling_bounds() {
     impl_stress_test_tpm2b_simple! {Tpm2bPrivateKeyRsa};
     impl_stress_test_tpm2b_simple! {Tpm2bPublicKeyRsa};
     impl_stress_test_tpm2b_simple! {Tpm2bSensitiveData};
-    impl_stress_test_tpm2b_simple! {Tpm2bSensitive};
     impl_stress_test_tpm2b_simple! {Tpm2bSymKey};
-    impl_stress_test_tpm2b_simple! {Tpm2bTemplate};
+}
+
+#[test]
+fn test_unmarshal_invalid_public_type() {
+    let mut buf = [0u8; 12];
+    buf[0] = 0x00;
+    buf[1] = 10; // size of TpmtPublic
+    buf[2] = 0x00;
+    buf[3] = 0x00; // type = 0 (invalid)
+    buf[4] = 0x00;
+    buf[5] = 0x0B; // name_alg = SHA256
+    // rest are 0 (attrs = 0, auth_policy size = 0)
+
+    let mut slice: &[u8] = &buf;
+    let res = Tpm2bPublic::unmarshal(&mut slice);
+    assert_eq!(res.unwrap_err(), tpm2::errors::UnmarshalError);
+}
+
+#[test]
+fn test_option_tpm2b_sensitive() {
+    // None <-> [0, 0]
+    let none: Option<Tpm2bSensitive> = None;
+    let mut buf = [0xFFu8; Option::<Tpm2bSensitive>::MAX_SIZE];
+    let written = none.marshal(&mut buf);
+    assert_eq!(written, 2);
+    assert_eq!(&buf[..2], &[0, 0]);
+
+    let mut slice: &[u8] = &[0, 0, 0xAA];
+    let unmarshaled = Option::<Tpm2bSensitive>::unmarshal(&mut slice).unwrap();
+    assert_eq!(unmarshaled, None);
+    assert_eq!(slice, &[0xAA]);
+
+    // Some(...) roundtrip
+    let some: Option<Tpm2bSensitive> = Some(Tpm2b(TpmtSensitive {
+        auth_value: Tpm2bAuth::new(&[1, 2, 3, 4]).unwrap(),
+        seed_value: Tpm2bDigest::new(&[]).unwrap(),
+        sensitive: TpmuSensitiveComposite::KeyedHash(
+            Tpm2bSensitiveData::new(&[0xDE, 0xAD]).unwrap(),
+        ),
+    }));
+    let written = some.marshal(&mut buf);
+    let mut slice: &[u8] = &buf[..written];
+    let unmarshaled = Option::<Tpm2bSensitive>::unmarshal(&mut slice).unwrap();
+    assert_eq!(unmarshaled, some);
+    assert!(slice.is_empty());
+
+    // Direct Tpm2bSensitive unmarshal rejects empty size
+    let mut empty_slice: &[u8] = &[0, 0];
+    assert!(Tpm2bSensitive::unmarshal(&mut empty_slice).is_err());
 }

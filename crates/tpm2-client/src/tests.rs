@@ -56,8 +56,9 @@ impl Command for HugeFakeCommand {
 fn test_command_too_large() {
     let mut fake_tpm = ErrorTpm();
     let too_large = HugeFakeCommand([0; CMD_BUFFER_SIZE]);
+    let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
-        run_command(&too_large, &mut fake_tpm),
+        run_command(&too_large, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::CommandTooLarge)
     );
 }
@@ -88,8 +89,9 @@ impl Command for TestCommand {
 fn test_tpm_error() {
     let mut fake_tpm = ErrorTpm();
     let cmd = TestCommand(56789);
+    let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
-        run_command(&cmd, &mut fake_tpm),
+        run_command(&cmd, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::Connection(TransportError))
     );
 }
@@ -141,7 +143,8 @@ fn test_fake_command() {
         rxed_bytes: 0,
     };
     let cmd = TestCommand(56789);
-    let result = run_command(&cmd, &mut fake_tpm);
+    let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
+    let result = run_command(&cmd, &mut fake_tpm, &mut resp_buffer);
     assert_eq!(fake_tpm.rxed_header.unwrap().code, TestCommand::CMD_CODE);
     assert_eq!(result.unwrap(), cmd.0);
 }
@@ -174,8 +177,9 @@ impl Connection for EvilSizeTpm {
 fn test_bad_response_size() {
     let mut fake_tpm = EvilSizeTpm();
     let cmd = TestCommand(2);
+    let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
-        run_command(&cmd, &mut fake_tpm),
+        run_command(&cmd, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::ResponseTooLarge)
     );
 }
@@ -254,8 +258,9 @@ fn test_response_missing_sessions() {
     let mut fake_tpm = FakeTpm::default();
     let cmd = TestSessionsCommand();
     let session = PasswordSession::default();
+    let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
-        run_command_with_sessions(&cmd, session, &mut fake_tpm),
+        run_command_with_sessions(&cmd, session, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::Unmarshal(UnmarshalError))
     );
 }
@@ -273,8 +278,9 @@ fn test_response_session_fails_validation() {
 
     let cmd = TestSessionsCommand();
     let session = PasswordSession::default();
+    let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
-        run_command_with_sessions(&cmd, session, &mut fake_tpm),
+        run_command_with_sessions(&cmd, session, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::Auth(validation_failure.err().unwrap()))
     );
 }
