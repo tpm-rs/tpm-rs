@@ -68,24 +68,35 @@ impl TpmsPcrSelect {
 
     /// Create a new [`TpmsPcrSelect`] from the given bit array.
     ///
-    /// Returns an error unless:
+    /// Returns [`None`] unless:
     /// [`TpmsPcrSelect::MIN`] `<= selection.len() <=` [`TpmsPcrSelect::MAX`].
-    pub const fn new(selection: &[u8]) -> Result<Self, UnmarshalError> {
-        if selection.len() < Self::MIN || selection.len() > Self::MAX {
-            return Err(UnmarshalError);
+    pub const fn new(selection: &[u8]) -> Option<Self> {
+        if selection.len() < Self::MIN {
+            return None;
         }
-        let mut sel = [0u8; Self::MAX];
-        let dst = sel.split_at_mut(selection.len()).0;
+        let mut pcr_select = [0u8; Self::MAX];
+        let Some((dst, _)) = pcr_select.split_at_mut_checked(selection.len()) else {
+            return None;
+        };
         dst.copy_from_slice(selection);
-        Ok(Self {
+        Some(Self {
             sizeof_select: selection.len() as u8,
-            pcr_select: sel,
+            pcr_select,
         })
     }
 
     /// Returns the slice of selected PCR bits.
-    pub fn pcrs(&self) -> &[u8] {
-        &self.pcr_select[..self.sizeof_select as usize]
+    pub const fn pcrs(&self) -> &[u8] {
+        debug_assert!(self.sizeof_select as usize >= Self::MIN);
+        debug_assert!(self.sizeof_select as usize <= Self::MAX);
+        if let Some((head, _)) = self
+            .pcr_select
+            .split_at_checked(self.sizeof_select as usize)
+        {
+            head
+        } else {
+            &self.pcr_select
+        }
     }
 }
 
@@ -103,9 +114,11 @@ impl Marshal for TpmsPcrSelect {
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; Self::MAX_SIZE]) -> usize {
-        let count = marshal_helper(&self.sizeof_select, dst, 0);
-        let len = self.sizeof_select as usize;
-        dst[count..count + len].copy_from_slice(&self.pcr_select[..len]);
+        let (head, rest) = dst.split_first_chunk_mut::<1>().unwrap();
+        let src = self.pcrs();
+        let len = src.len();
+        let count = self.sizeof_select.marshal(head);
+        rest[..len].copy_from_slice(src);
         count + len
     }
 }
@@ -164,21 +177,21 @@ impl Unmarshal<'_> for TpmsPcrSelection {
 /// Contains quote attestation data including the PCR selection bitmap and PCR composite digest.
 #[doc(alias = "TPMS_QUOTE_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsQuoteInfo {
+pub struct TpmsQuoteInfo<'a> {
     pub pcr_select: TpmlPcrSelection,
-    pub pcr_digest: Tpm2bDigest,
+    pub pcr_digest: Tpm2bDigest<'a>,
 }
-impl Marshal for TpmsQuoteInfo {
+impl Marshal for TpmsQuoteInfo<'_> {
     const MAX_SIZE: usize = TpmlPcrSelection::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsQuoteInfo::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsQuoteInfo::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.pcr_select, dst, 0);
         marshal_helper(&self.pcr_digest, dst, count)
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsQuoteInfo {
+impl<'a> Unmarshal<'a> for TpmsQuoteInfo<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             pcr_select: Unmarshal::unmarshal(src)?,
@@ -192,21 +205,21 @@ impl<'a> Unmarshal<'a> for TpmsQuoteInfo {
 /// Contains creation attestation data including the created object's Name and creation digest.
 #[doc(alias = "TPMS_CREATION_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsCreationInfo {
-    pub object_name: Tpm2bName,
-    pub creation_hash: Tpm2bDigest,
+pub struct TpmsCreationInfo<'a> {
+    pub object_name: Tpm2bName<'a>,
+    pub creation_hash: Tpm2bDigest<'a>,
 }
-impl Marshal for TpmsCreationInfo {
+impl Marshal for TpmsCreationInfo<'_> {
     const MAX_SIZE: usize = Tpm2bName::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsCreationInfo::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsCreationInfo::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.object_name, dst, 0);
         marshal_helper(&self.creation_hash, dst, count)
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsCreationInfo {
+impl<'a> Unmarshal<'a> for TpmsCreationInfo<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             object_name: Unmarshal::unmarshal(src)?,
@@ -220,21 +233,21 @@ impl<'a> Unmarshal<'a> for TpmsCreationInfo {
 /// Contains certification attestation data including the object Name and qualified Name of a certified key.
 #[doc(alias = "TPMS_CERTIFY_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsCertifyInfo {
-    pub name: Tpm2bName,
-    pub qualified_name: Tpm2bName,
+pub struct TpmsCertifyInfo<'a> {
+    pub name: Tpm2bName<'a>,
+    pub qualified_name: Tpm2bName<'a>,
 }
-impl Marshal for TpmsCertifyInfo {
+impl Marshal for TpmsCertifyInfo<'_> {
     const MAX_SIZE: usize = Tpm2bName::MAX_SIZE + Tpm2bName::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsCertifyInfo::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsCertifyInfo::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.name, dst, 0);
         marshal_helper(&self.qualified_name, dst, count)
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsCertifyInfo {
+impl<'a> Unmarshal<'a> for TpmsCertifyInfo<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             name: Unmarshal::unmarshal(src)?,
@@ -248,18 +261,18 @@ impl<'a> Unmarshal<'a> for TpmsCertifyInfo {
 /// Contains command audit attestation data including audit counter, digest algorithm, audit digest, and command digest.
 #[doc(alias = "TPMS_COMMAND_AUDIT_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsCommandAuditInfo {
+pub struct TpmsCommandAuditInfo<'a> {
     pub audit_counter: u64,
     pub digest_alg: u16,
-    pub audit_digest: Tpm2bDigest,
-    pub command_digest: Tpm2bDigest,
+    pub audit_digest: Tpm2bDigest<'a>,
+    pub command_digest: Tpm2bDigest<'a>,
 }
-impl Marshal for TpmsCommandAuditInfo {
+impl Marshal for TpmsCommandAuditInfo<'_> {
     const MAX_SIZE: usize =
         u64::MAX_SIZE + u16::MAX_SIZE + Tpm2bDigest::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsCommandAuditInfo::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsCommandAuditInfo::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.audit_counter, dst, 0);
         let count = marshal_helper(&self.digest_alg, dst, count);
         let count = marshal_helper(&self.audit_digest, dst, count);
@@ -267,7 +280,7 @@ impl Marshal for TpmsCommandAuditInfo {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsCommandAuditInfo {
+impl<'a> Unmarshal<'a> for TpmsCommandAuditInfo<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             audit_counter: Unmarshal::unmarshal(src)?,
@@ -283,21 +296,21 @@ impl<'a> Unmarshal<'a> for TpmsCommandAuditInfo {
 /// Contains session audit attestation data including exclusive session flag and session digest.
 #[doc(alias = "TPMS_SESSION_AUDIT_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsSessionAuditInfo {
+pub struct TpmsSessionAuditInfo<'a> {
     pub exclusive_session: bool,
-    pub session_digest: Tpm2bDigest,
+    pub session_digest: Tpm2bDigest<'a>,
 }
-impl Marshal for TpmsSessionAuditInfo {
+impl Marshal for TpmsSessionAuditInfo<'_> {
     const MAX_SIZE: usize = bool::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsSessionAuditInfo::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsSessionAuditInfo::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.exclusive_session, dst, 0);
         marshal_helper(&self.session_digest, dst, count)
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsSessionAuditInfo {
+impl<'a> Unmarshal<'a> for TpmsSessionAuditInfo<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             exclusive_session: Unmarshal::unmarshal(src)?,
@@ -367,23 +380,23 @@ impl<'a> Unmarshal<'a> for TpmsTimeAttestInfo {
 /// Contains NV Index certification attestation data including NV Index Name, offset, and data contents.
 #[doc(alias = "TPMS_NV_CERTIFY_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsNvCertifyInfo {
-    pub index_name: Tpm2bName,
+pub struct TpmsNvCertifyInfo<'a> {
+    pub index_name: Tpm2bName<'a>,
     pub offset: u16,
-    pub nv_contents: Tpm2bMaxNvBuffer,
+    pub nv_contents: Tpm2bMaxNvBuffer<'a>,
 }
-impl Marshal for TpmsNvCertifyInfo {
+impl Marshal for TpmsNvCertifyInfo<'_> {
     const MAX_SIZE: usize = Tpm2bName::MAX_SIZE + u16::MAX_SIZE + Tpm2bMaxNvBuffer::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsNvCertifyInfo::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsNvCertifyInfo::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.index_name, dst, 0);
         let count = marshal_helper(&self.offset, dst, count);
         marshal_helper(&self.nv_contents, dst, count)
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsNvCertifyInfo {
+impl<'a> Unmarshal<'a> for TpmsNvCertifyInfo<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             index_name: Unmarshal::unmarshal(src)?,
@@ -398,23 +411,23 @@ impl<'a> Unmarshal<'a> for TpmsNvCertifyInfo {
 /// Standard attestation structure signed during TPM attestation commands (`TPM2_Certify`, `TPM2_Quote`, `TPM2_GetTime`, etc.).
 #[doc(alias = "TPMS_ATTEST")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsAttest {
+pub struct TpmsAttest<'a> {
     pub magic: TpmGenerated,
-    pub qualified_signer: Tpm2bName,
-    pub extra_data: Tpm2bData,
+    pub qualified_signer: Tpm2bName<'a>,
+    pub extra_data: Tpm2bData<'a>,
     pub clock_info: TpmsClockInfo,
     pub firmware_version: u64,
-    pub attested: TpmuAttest,
+    pub attested: TpmuAttest<'a>,
 }
 
-impl TpmsAttest {
+impl TpmsAttest<'_> {
     #[doc(alias = "TPMI_ST_ATTEST")]
     pub fn attested_type(&self) -> TpmSt {
         self.attested.attested_type()
     }
 }
 
-impl Marshal for TpmsAttest {
+impl Marshal for TpmsAttest<'_> {
     const MAX_SIZE: usize = TpmGenerated::MAX_SIZE
         + TpmSt::MAX_SIZE
         + Tpm2bName::MAX_SIZE
@@ -422,9 +435,9 @@ impl Marshal for TpmsAttest {
         + TpmsClockInfo::MAX_SIZE
         + u64::MAX_SIZE
         + TpmuAttest::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsAttest::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsAttest::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.magic, dst, 0);
         let count = marshal_helper(&self.attested_type(), dst, count);
         let count = marshal_helper(&self.qualified_signer, dst, count);
@@ -435,7 +448,7 @@ impl Marshal for TpmsAttest {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsAttest {
+impl<'a> Unmarshal<'a> for TpmsAttest<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let magic = Unmarshal::unmarshal(src)?;
         let type_tag = Unmarshal::unmarshal(src)?;
@@ -460,21 +473,21 @@ impl<'a> Unmarshal<'a> for TpmsAttest {
 /// Parameters for key derivation input (`label`, `context`).
 #[doc(alias = "TPMS_DERIVE")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct TpmsDerive {
-    pub label: Tpm2bLabel,
-    pub context: Tpm2bLabel,
+pub struct TpmsDerive<'a> {
+    pub label: Tpm2bLabel<'a>,
+    pub context: Tpm2bLabel<'a>,
 }
-impl Marshal for TpmsDerive {
+impl Marshal for TpmsDerive<'_> {
     const MAX_SIZE: usize = Tpm2bLabel::MAX_SIZE + Tpm2bLabel::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsDerive::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsDerive::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.label, dst, 0);
         marshal_helper(&self.context, dst, count)
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsDerive {
+impl<'a> Unmarshal<'a> for TpmsDerive<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             label: Unmarshal::unmarshal(src)?,
@@ -488,21 +501,21 @@ impl<'a> Unmarshal<'a> for TpmsDerive {
 /// Sensitive creation data structure containing the user authorization value and sensitive data buffer.
 #[doc(alias = "TPMS_SENSITIVE_CREATE")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct TpmsSensitiveCreate {
-    pub user_auth: Tpm2bAuth,
-    pub data: Tpm2bSensitiveData,
+pub struct TpmsSensitiveCreate<'a> {
+    pub user_auth: Tpm2bAuth<'a>,
+    pub data: Tpm2bSensitiveData<'a>,
 }
-impl Marshal for TpmsSensitiveCreate {
+impl Marshal for TpmsSensitiveCreate<'_> {
     const MAX_SIZE: usize = Tpm2bAuth::MAX_SIZE + Tpm2bSensitiveData::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsSensitiveCreate::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsSensitiveCreate::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.user_auth, dst, 0);
         marshal_helper(&self.data, dst, count)
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsSensitiveCreate {
+impl<'a> Unmarshal<'a> for TpmsSensitiveCreate<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             user_auth: Unmarshal::unmarshal(src)?,
@@ -516,21 +529,21 @@ impl<'a> Unmarshal<'a> for TpmsSensitiveCreate {
 /// Holds the affine coordinates (X, Y) of an Elliptic Curve cryptography point.
 #[doc(alias = "TPMS_ECC_POINT")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct TpmsEccPoint {
-    pub x: Tpm2bEccParameter,
-    pub y: Tpm2bEccParameter,
+pub struct TpmsEccPoint<'a> {
+    pub x: Tpm2bEccParameter<'a>,
+    pub y: Tpm2bEccParameter<'a>,
 }
-impl Marshal for TpmsEccPoint {
+impl Marshal for TpmsEccPoint<'_> {
     const MAX_SIZE: usize = Tpm2bEccParameter::MAX_SIZE + Tpm2bEccParameter::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsEccPoint::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsEccPoint::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.x, dst, 0);
         marshal_helper(&self.y, dst, count)
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsEccPoint {
+impl<'a> Unmarshal<'a> for TpmsEccPoint<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             x: Unmarshal::unmarshal(src)?,
@@ -572,21 +585,21 @@ impl<'a> Unmarshal<'a> for TpmsSchemeXor {
 /// Signature structure for RSA signatures, containing hash algorithm and signature buffer.
 #[doc(alias = "TPMS_SIGNATURE_RSA")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsSignatureRsa {
+pub struct TpmsSignatureRsa<'a> {
     pub hash: TpmiAlgHash,
-    pub sig: Tpm2bPublicKeyRsa,
+    pub sig: Tpm2bPublicKeyRsa<'a>,
 }
-impl Marshal for TpmsSignatureRsa {
+impl Marshal for TpmsSignatureRsa<'_> {
     const MAX_SIZE: usize = TpmiAlgHash::MAX_SIZE + Tpm2bPublicKeyRsa::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsSignatureRsa::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsSignatureRsa::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.hash, dst, 0);
         marshal_helper(&self.sig, dst, count)
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsSignatureRsa {
+impl<'a> Unmarshal<'a> for TpmsSignatureRsa<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             hash: Unmarshal::unmarshal(src)?,
@@ -600,24 +613,24 @@ impl<'a> Unmarshal<'a> for TpmsSignatureRsa {
 /// Signature structure for ECC signatures, containing hash algorithm and (r, s) signature coordinates.
 #[doc(alias = "TPMS_SIGNATURE_ECC")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsSignatureEcc {
+pub struct TpmsSignatureEcc<'a> {
     pub hash: TpmiAlgHash,
-    pub signature_r: Tpm2bEccParameter,
-    pub signature_s: Tpm2bEccParameter,
+    pub signature_r: Tpm2bEccParameter<'a>,
+    pub signature_s: Tpm2bEccParameter<'a>,
 }
-impl Marshal for TpmsSignatureEcc {
+impl Marshal for TpmsSignatureEcc<'_> {
     const MAX_SIZE: usize =
         TpmiAlgHash::MAX_SIZE + Tpm2bEccParameter::MAX_SIZE + Tpm2bEccParameter::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsSignatureEcc::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsSignatureEcc::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.hash, dst, 0);
         let count = marshal_helper(&self.signature_r, dst, count);
         marshal_helper(&self.signature_s, dst, count)
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsSignatureEcc {
+impl<'a> Unmarshal<'a> for TpmsSignatureEcc<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             hash: Unmarshal::unmarshal(src)?,
@@ -741,20 +754,20 @@ impl<'a> Unmarshal<'a> for TpmsEccParms {
 /// Details structure for ECC curve parameters returned by `TPM2_ECC_Parameters`.
 #[doc(alias = "TPMS_ALGORITHM_DETAIL_ECC")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsAlgorithmDetailEcc {
+pub struct TpmsAlgorithmDetailEcc<'a> {
     pub curve_id: TpmEccCurve,
     pub key_size: u16,
     pub kdf: Option<TpmtKdfScheme>,
     pub sign: Option<TpmtEccScheme>,
-    pub curve_p: Tpm2bEccParameter,
-    pub curve_a: Tpm2bEccParameter,
-    pub curve_b: Tpm2bEccParameter,
-    pub g_x: Tpm2bEccParameter,
-    pub g_y: Tpm2bEccParameter,
-    pub n: Tpm2bEccParameter,
-    pub h: Tpm2bEccParameter,
+    pub curve_p: Tpm2bEccParameter<'a>,
+    pub curve_a: Tpm2bEccParameter<'a>,
+    pub curve_b: Tpm2bEccParameter<'a>,
+    pub g_x: Tpm2bEccParameter<'a>,
+    pub g_y: Tpm2bEccParameter<'a>,
+    pub n: Tpm2bEccParameter<'a>,
+    pub h: Tpm2bEccParameter<'a>,
 }
-impl Marshal for TpmsAlgorithmDetailEcc {
+impl Marshal for TpmsAlgorithmDetailEcc<'_> {
     const MAX_SIZE: usize = TpmEccCurve::MAX_SIZE
         + u16::MAX_SIZE
         + <Option<TpmtKdfScheme>>::MAX_SIZE
@@ -766,9 +779,9 @@ impl Marshal for TpmsAlgorithmDetailEcc {
         + Tpm2bEccParameter::MAX_SIZE
         + Tpm2bEccParameter::MAX_SIZE
         + Tpm2bEccParameter::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsAlgorithmDetailEcc::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsAlgorithmDetailEcc::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.curve_id, dst, 0);
         let count = marshal_helper(&self.key_size, dst, count);
         let count = marshal_helper(&self.kdf, dst, count);
@@ -783,7 +796,7 @@ impl Marshal for TpmsAlgorithmDetailEcc {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsAlgorithmDetailEcc {
+impl<'a> Unmarshal<'a> for TpmsAlgorithmDetailEcc<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let curve_id = Unmarshal::unmarshal(src)?;
         let key_size = Unmarshal::unmarshal(src)?;
@@ -848,7 +861,7 @@ impl<'a> TpmsCapabilityData<'a> {
     }
 }
 
-impl<'a> Marshal for TpmsCapabilityData<'a> {
+impl Marshal for TpmsCapabilityData<'_> {
     const MAX_SIZE: usize = TpmCap::MAX_SIZE
         + max(&[
             TpmlAlgProperty::MAX_SIZE,
@@ -863,7 +876,7 @@ impl<'a> Marshal for TpmsCapabilityData<'a> {
         ]);
     type MaxBuffer = [u8; TpmsCapabilityData::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsCapabilityData::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.capability(), dst, 0);
         match self {
             Self::Algorithms(x) => marshal_helper(x, dst, count),
@@ -992,11 +1005,11 @@ pub struct TpmsTaggedPolicy<'a> {
     pub policy_hash: TpmtHa<'a>,
 }
 
-impl<'a> Marshal for TpmsTaggedPolicy<'a> {
+impl Marshal for TpmsTaggedPolicy<'_> {
     const MAX_SIZE: usize = Handle::MAX_SIZE + TpmtHa::MAX_SIZE;
     type MaxBuffer = [u8; TpmsTaggedPolicy::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsTaggedPolicy::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.handle, dst, 0);
         marshal_helper(&self.policy_hash, dst, count)
     }
@@ -1016,18 +1029,18 @@ impl<'a> Unmarshal<'a> for TpmsTaggedPolicy<'a> {
 /// Format for each authorization in the session area of a command.
 #[doc(alias = "TPMS_AUTH_COMMAND")]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct TpmsAuthCommand {
+pub struct TpmsAuthCommand<'a> {
     pub session_handle: Handle,
-    pub nonce: Tpm2bNonce,
+    pub nonce: Tpm2bNonce<'a>,
     pub session_attributes: TpmaSession,
-    pub hmac: Tpm2bAuth,
+    pub hmac: Tpm2bAuth<'a>,
 }
-impl Marshal for TpmsAuthCommand {
+impl Marshal for TpmsAuthCommand<'_> {
     const MAX_SIZE: usize =
         Handle::MAX_SIZE + Tpm2bNonce::MAX_SIZE + TpmaSession::MAX_SIZE + Tpm2bAuth::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsAuthCommand::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsAuthCommand::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.session_handle, dst, 0);
         let count = marshal_helper(&self.nonce, dst, count);
         let count = marshal_helper(&self.session_attributes, dst, count);
@@ -1035,7 +1048,7 @@ impl Marshal for TpmsAuthCommand {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsAuthCommand {
+impl<'a> Unmarshal<'a> for TpmsAuthCommand<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             session_handle: Unmarshal::unmarshal(src)?,
@@ -1051,23 +1064,23 @@ impl<'a> Unmarshal<'a> for TpmsAuthCommand {
 /// Format for each authorization in the session area of a response.
 #[doc(alias = "TPMS_AUTH_RESPONSE")]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct TpmsAuthResponse {
-    pub nonce: Tpm2bNonce,
+pub struct TpmsAuthResponse<'a> {
+    pub nonce: Tpm2bNonce<'a>,
     pub session_attributes: TpmaSession,
-    pub hmac: Tpm2bData,
+    pub hmac: Tpm2bData<'a>,
 }
-impl Marshal for TpmsAuthResponse {
+impl Marshal for TpmsAuthResponse<'_> {
     const MAX_SIZE: usize = Tpm2bNonce::MAX_SIZE + TpmaSession::MAX_SIZE + Tpm2bData::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsAuthResponse::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsAuthResponse::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.nonce, dst, 0);
         let count = marshal_helper(&self.session_attributes, dst, count);
         marshal_helper(&self.hmac, dst, count)
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsAuthResponse {
+impl<'a> Unmarshal<'a> for TpmsAuthResponse<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             nonce: Unmarshal::unmarshal(src)?,
@@ -1077,55 +1090,27 @@ impl<'a> Unmarshal<'a> for TpmsAuthResponse {
     }
 }
 
-/// `TPMS_ID_OBJECT` structure defined in TPM 2.0 Part 2: Structures, Section 12.3 (Table 220).
-///
-/// Structure containing credential integrity HMAC and encrypted credential for `TPM2_ActivateCredential`.
-#[doc(alias = "TPMS_ID_OBJECT")]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsIdObject {
-    pub integrity_hmac: Tpm2bDigest,
-    pub enc_identity: Tpm2bDigest,
-}
-impl Marshal for TpmsIdObject {
-    const MAX_SIZE: usize = Tpm2bDigest::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        let count = marshal_helper(&self.integrity_hmac, dst, 0);
-        marshal_helper(&self.enc_identity, dst, count)
-    }
-}
-
-impl<'a> Unmarshal<'a> for TpmsIdObject {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            integrity_hmac: Unmarshal::unmarshal(src)?,
-            enc_identity: Unmarshal::unmarshal(src)?,
-        })
-    }
-}
-
 /// `TPMS_NV_PUBLIC` structure defined in TPM 2.0 Part 2: Structures, Section 13.2 (Table 227).
 ///
 /// Defines the public area parameters for an NV Index (index handle, name hash algorithm, attributes, policy, and data size).
 #[doc(alias = "TPMS_NV_PUBLIC")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsNvPublic {
+pub struct TpmsNvPublic<'a> {
     pub nv_index: Handle,
     pub name_alg: TpmiAlgHash,
     pub attributes: TpmaNv,
-    pub auth_policy: Tpm2bDigest,
+    pub auth_policy: Tpm2bDigest<'a>,
     pub data_size: u16,
 }
-impl Marshal for TpmsNvPublic {
+impl Marshal for TpmsNvPublic<'_> {
     const MAX_SIZE: usize = Handle::MAX_SIZE
         + TpmiAlgHash::MAX_SIZE
         + TpmaNv::MAX_SIZE
         + Tpm2bDigest::MAX_SIZE
         + u16::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsNvPublic::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsNvPublic::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.nv_index, dst, 0);
         let count = marshal_helper(&self.name_alg, dst, count);
         let count = marshal_helper(&self.attributes, dst, count);
@@ -1134,7 +1119,7 @@ impl Marshal for TpmsNvPublic {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsNvPublic {
+impl<'a> Unmarshal<'a> for TpmsNvPublic<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             nv_index: Unmarshal::unmarshal(src)?,
@@ -1146,51 +1131,23 @@ impl<'a> Unmarshal<'a> for TpmsNvPublic {
     }
 }
 
-/// `TPMS_CONTEXT_DATA` structure defined in TPM 2.0 Part 2: Structures, Section 14.3 (Table 234).
-///
-/// Holds integrity values and encrypted data for a saved context in `TPM2_ContextSave` and `TPM2_ContextLoad`.
-#[doc(alias = "TPMS_CONTEXT_DATA")]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmsContextData {
-    pub integrity: Tpm2bDigest,
-    pub encrypted: Tpm2bContextSensitive,
-}
-impl Marshal for TpmsContextData {
-    const MAX_SIZE: usize = Tpm2bDigest::MAX_SIZE + Tpm2bContextSensitive::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        let count = marshal_helper(&self.integrity, dst, 0);
-        marshal_helper(&self.encrypted, dst, count)
-    }
-}
-
-impl<'a> Unmarshal<'a> for TpmsContextData {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            integrity: Unmarshal::unmarshal(src)?,
-            encrypted: Unmarshal::unmarshal(src)?,
-        })
-    }
-}
-
 /// `TPMS_CONTEXT` structure defined in TPM 2.0 Part 2: Structures, Section 14.3 (Table 233).
 ///
 /// Parameter structure for `TPM2_ContextSave` and `TPM2_ContextLoad` containing sequence number, handle, hierarchy, and context data.
 #[doc(alias = "TPMS_CONTEXT")]
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
-pub struct TpmsContext {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TpmsContext<'a> {
     pub sequence: u64,
     pub saved_handle: Handle,
     pub hierarchy: Handle,
-    pub context_blob: Tpm2bContextData,
+    pub context_blob: Tpm2bContextData<'a>,
 }
-impl Marshal for TpmsContext {
+impl Marshal for TpmsContext<'_> {
     const MAX_SIZE: usize =
         u64::MAX_SIZE + Handle::MAX_SIZE + Handle::MAX_SIZE + Tpm2bContextData::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsContext::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsContext::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.sequence, dst, 0);
         let count = marshal_helper(&self.saved_handle, dst, count);
         let count = marshal_helper(&self.hierarchy, dst, count);
@@ -1198,7 +1155,7 @@ impl Marshal for TpmsContext {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsContext {
+impl<'a> Unmarshal<'a> for TpmsContext<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             sequence: Unmarshal::unmarshal(src)?,
@@ -1213,18 +1170,18 @@ impl<'a> Unmarshal<'a> for TpmsContext {
 ///
 /// Creation data recorded when an object is created, including parent name and creation PCR digest.
 #[doc(alias = "TPMS_CREATION_DATA")]
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct TpmsCreationData {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TpmsCreationData<'a> {
     pub pcr_select: TpmlPcrSelection,
-    pub pcr_digest: Tpm2bDigest,
+    pub pcr_digest: Tpm2bDigest<'a>,
     pub locality: TpmaLocality,
     pub parent_name_alg: Option<TpmiAlgHash>,
-    pub parent_name: Tpm2bName,
-    pub parent_qualified_name: Tpm2bName,
-    pub outside_info: Tpm2bData,
+    pub parent_name: Tpm2bName<'a>,
+    pub parent_qualified_name: Tpm2bName<'a>,
+    pub outside_info: Tpm2bData<'a>,
 }
 
-impl Marshal for TpmsCreationData {
+impl Marshal for TpmsCreationData<'_> {
     const MAX_SIZE: usize = TpmlPcrSelection::MAX_SIZE
         + Tpm2bDigest::MAX_SIZE
         + TpmaLocality::MAX_SIZE
@@ -1232,9 +1189,9 @@ impl Marshal for TpmsCreationData {
         + Tpm2bName::MAX_SIZE
         + Tpm2bName::MAX_SIZE
         + Tpm2bData::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmsCreationData::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmsCreationData::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.pcr_select, dst, 0);
         let count = marshal_helper(&self.pcr_digest, dst, count);
         let count = marshal_helper(&self.locality, dst, count);
@@ -1245,7 +1202,7 @@ impl Marshal for TpmsCreationData {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmsCreationData {
+impl<'a> Unmarshal<'a> for TpmsCreationData<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             pcr_select: Unmarshal::unmarshal(src)?,

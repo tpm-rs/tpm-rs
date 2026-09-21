@@ -65,6 +65,7 @@
 pub mod commands;
 mod constants;
 pub mod errors;
+pub mod limits;
 mod marshal;
 #[cfg(feature = "std")]
 mod std;

@@ -1,7 +1,4 @@
-use crate::{
-    errors::{TpmRc, UnmarshalError},
-    *,
-};
+use crate::{errors::UnmarshalError, *};
 use bitflags::bitflags;
 
 /// Returns an attribute field built by applying the mask/shift to the value.
@@ -142,9 +139,8 @@ impl TpmaNv {
     }
 
     /// Returns the type of the index.
-    pub fn get_index_type(&self) -> Result<TpmNt, TpmRc> {
-        TpmNt::try_from(get_attribute_field(self.0, Self::NT_MASK, Self::NT_SHIFT) as u8)
-            .map_err(|_| TpmRc::VALUE.to_rc())
+    pub fn get_index_type(&self) -> Option<TpmNt> {
+        TpmNt::try_from(get_attribute_field(self.0, Self::NT_MASK, Self::NT_SHIFT) as u8).ok()
     }
     /// Sets the type of the index.
     pub fn set_type(&mut self, index_type: TpmNt) {

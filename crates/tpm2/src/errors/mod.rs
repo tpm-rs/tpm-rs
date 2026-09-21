@@ -31,9 +31,3 @@ impl fmt::Display for UnmarshalError {
 }
 
 impl error::Error for UnmarshalError {}
-
-impl From<UnmarshalError> for TpmRc {
-    fn from(_: UnmarshalError) -> Self {
-        TpmRc::SIZE.to_rc()
-    }
-}

@@ -24,12 +24,6 @@ pub enum TpmtHa<'a> {
 }
 
 impl<'a> TpmtHa<'a> {
-    /// The maximum digest size (in bytes) across all supported TPM2 hash algorithms.
-    pub const MAX_DIGEST_SIZE: usize = 64;
-    /// The maximum number of implemented hash algorithms.
-    #[doc(alias = "TPM2_NUM_PCR_BANKS")]
-    pub const HASH_COUNT: usize = 8;
-
     pub const fn hash_alg(self) -> TpmiAlgHash {
         match self {
             Self::Sha1(_) => Sha1,
@@ -57,8 +51,8 @@ impl<'a> TpmtHa<'a> {
     }
 }
 
-impl<'a> Marshal for TpmtHa<'a> {
-    const MAX_SIZE: usize = TpmiAlgHash::MAX_SIZE + Self::MAX_DIGEST_SIZE;
+impl Marshal for TpmtHa<'_> {
+    const MAX_SIZE: usize = TpmiAlgHash::MAX_SIZE + TpmiAlgHash::MAX_DIGEST_BYTES;
     type MaxBuffer = [u8; TpmtHa::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmtHa::MAX_SIZE]) -> usize {
@@ -154,6 +148,10 @@ pub enum TpmtSymDefObject {
 }
 
 impl TpmtSymDefObject {
+    pub const MAX_KEY_BITS: usize = 256;
+    pub const MAX_KEY_BYTES: usize = Self::MAX_KEY_BITS.div_ceil(8);
+    pub const MAX_BLOCK_SIZE_BYTES: usize = 16;
+
     #[doc(alias = "TPMI_ALG_SYM_OBJECT")]
     pub const fn algorithm(self) -> Alg {
         match self {
@@ -303,12 +301,12 @@ impl<'a> Unmarshal<'a> for Option<TpmtSymDef> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TpmtSignature<'a> {
     Hmac(TpmtHa<'a>),
-    Rsassa(TpmsSignatureRsa),
-    Rsapss(TpmsSignatureRsa),
-    Ecdsa(TpmsSignatureEcc),
-    Ecdaa(TpmsSignatureEcc),
-    Sm2(TpmsSignatureEcc),
-    Ecschnorr(TpmsSignatureEcc),
+    Rsassa(TpmsSignatureRsa<'a>),
+    Rsapss(TpmsSignatureRsa<'a>),
+    Ecdsa(TpmsSignatureEcc<'a>),
+    Ecdaa(TpmsSignatureEcc<'a>),
+    Sm2(TpmsSignatureEcc<'a>),
+    Ecschnorr(TpmsSignatureEcc<'a>),
 }
 
 impl<'a> TpmtSignature<'a> {
@@ -326,7 +324,7 @@ impl<'a> TpmtSignature<'a> {
     }
 }
 
-impl<'a> Marshal for TpmtSignature<'a> {
+impl Marshal for TpmtSignature<'_> {
     const MAX_SIZE: usize = Alg::MAX_SIZE
         + max(&[
             TpmtHa::MAX_SIZE,
@@ -335,7 +333,7 @@ impl<'a> Marshal for TpmtSignature<'a> {
         ]);
     type MaxBuffer = [u8; TpmtSignature::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmtSignature::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.sig_alg(), dst, 0);
         match self {
             Self::Hmac(x) => marshal_helper(x, dst, count),
@@ -665,6 +663,10 @@ pub enum TpmtPublicParms {
 }
 
 impl TpmtPublicParms {
+    pub const MAX_SHARED_SECRET_BYTES: usize = TpmEccCurve::MAX_ECC_KEY_BYTES;
+    pub const MAX_KEM_CIPHERTEXT_BYTES: usize = TpmsEccPoint::MAX_SIZE;
+    pub const MAX_ENCRYPTED_SECRET_BYTES: usize = TpmiRsaKeyBits::MAX_PUB_KEY_BYTES;
+
     #[doc(alias = "TPMI_ALG_PUBLIC")]
     pub const fn algorithm(self) -> Alg {
         match self {
@@ -719,19 +721,19 @@ impl Default for TpmtPublicParms {
 pub trait Ticket {
     fn tag(&self) -> TpmSt;
     fn hierarchy(&self) -> Handle;
-    fn digest(&self) -> Tpm2bDigest;
+    fn digest(&self) -> Tpm2bDigest<'_>;
 }
 
 /// `TPMT_TK_CREATION` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.5 (Table 104).
 ///
 /// Creation ticket produced by `TPM2_Create` or `TPM2_CreatePrimary` to prove that a creation digest was produced by the TPM.
 #[doc(alias = "TPMT_TK_CREATION")]
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum TpmtTkCreation {
-    Creation(Handle, Tpm2bDigest),
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TpmtTkCreation<'a> {
+    Creation(Handle, Tpm2bDigest<'a>),
 }
 
-impl Ticket for TpmtTkCreation {
+impl Ticket for TpmtTkCreation<'_> {
     fn tag(&self) -> TpmSt {
         match self {
             Self::Creation(..) => TpmSt::CREATION,
@@ -742,18 +744,18 @@ impl Ticket for TpmtTkCreation {
             Self::Creation(hierarchy, _) => *hierarchy,
         }
     }
-    fn digest(&self) -> Tpm2bDigest {
+    fn digest(&self) -> Tpm2bDigest<'_> {
         match self {
             Self::Creation(_, digest) => *digest,
         }
     }
 }
 
-impl Marshal for TpmtTkCreation {
+impl Marshal for TpmtTkCreation<'_> {
     const MAX_SIZE: usize = TpmSt::MAX_SIZE + Handle::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmtTkCreation::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmtTkCreation::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.tag(), dst, 0);
         match self {
             Self::Creation(hierarchy, digest) => {
@@ -764,7 +766,7 @@ impl Marshal for TpmtTkCreation {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmtTkCreation {
+impl<'a> Unmarshal<'a> for TpmtTkCreation<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match TpmSt::unmarshal(src)? {
             TpmSt::CREATION => {
@@ -775,7 +777,7 @@ impl<'a> Unmarshal<'a> for TpmtTkCreation {
     }
 }
 
-impl Default for TpmtTkCreation {
+impl Default for TpmtTkCreation<'_> {
     fn default() -> Self {
         Self::Creation(Handle::RH_NULL, Tpm2bDigest::default())
     }
@@ -785,12 +787,12 @@ impl Default for TpmtTkCreation {
 ///
 /// Verification ticket produced by `TPM2_VerifySignature` proving that a signature was verified by the TPM.
 #[doc(alias = "TPMT_TK_VERIFIED")]
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum TpmtTkVerified {
-    Verified(Handle, Tpm2bDigest),
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TpmtTkVerified<'a> {
+    Verified(Handle, Tpm2bDigest<'a>),
 }
 
-impl Ticket for TpmtTkVerified {
+impl Ticket for TpmtTkVerified<'_> {
     fn tag(&self) -> TpmSt {
         match self {
             Self::Verified(..) => TpmSt::VERIFIED,
@@ -801,18 +803,18 @@ impl Ticket for TpmtTkVerified {
             Self::Verified(hierarchy, _) => *hierarchy,
         }
     }
-    fn digest(&self) -> Tpm2bDigest {
+    fn digest(&self) -> Tpm2bDigest<'_> {
         match self {
             Self::Verified(_, digest) => *digest,
         }
     }
 }
 
-impl Marshal for TpmtTkVerified {
+impl Marshal for TpmtTkVerified<'_> {
     const MAX_SIZE: usize = TpmSt::MAX_SIZE + Handle::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmtTkVerified::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmtTkVerified::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.tag(), dst, 0);
         match self {
             Self::Verified(hierarchy, digest) => {
@@ -823,7 +825,7 @@ impl Marshal for TpmtTkVerified {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmtTkVerified {
+impl<'a> Unmarshal<'a> for TpmtTkVerified<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match TpmSt::unmarshal(src)? {
             TpmSt::VERIFIED => {
@@ -834,7 +836,7 @@ impl<'a> Unmarshal<'a> for TpmtTkVerified {
     }
 }
 
-impl Default for TpmtTkVerified {
+impl Default for TpmtTkVerified<'_> {
     fn default() -> Self {
         Self::Verified(Handle::RH_NULL, Tpm2bDigest::default())
     }
@@ -844,13 +846,13 @@ impl Default for TpmtTkVerified {
 ///
 /// Authorization ticket produced by `TPM2_PolicySigned` or `TPM2_PolicySecret` when authorization has an expiration time.
 #[doc(alias = "TPMT_TK_AUTH")]
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum TpmtTkAuth {
-    Signed(Handle, Tpm2bDigest),
-    Secret(Handle, Tpm2bDigest),
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TpmtTkAuth<'a> {
+    Signed(Handle, Tpm2bDigest<'a>),
+    Secret(Handle, Tpm2bDigest<'a>),
 }
 
-impl Ticket for TpmtTkAuth {
+impl Ticket for TpmtTkAuth<'_> {
     fn tag(&self) -> TpmSt {
         match self {
             Self::Signed(..) => TpmSt::AUTH_SIGNED,
@@ -864,18 +866,18 @@ impl Ticket for TpmtTkAuth {
         }
     }
 
-    fn digest(&self) -> Tpm2bDigest {
+    fn digest(&self) -> Tpm2bDigest<'_> {
         match self {
             Self::Signed(_, digest) | Self::Secret(_, digest) => *digest,
         }
     }
 }
 
-impl Marshal for TpmtTkAuth {
+impl Marshal for TpmtTkAuth<'_> {
     const MAX_SIZE: usize = TpmSt::MAX_SIZE + Handle::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmtTkAuth::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmtTkAuth::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.tag(), dst, 0);
         match self {
             Self::Signed(hierarchy, digest) | Self::Secret(hierarchy, digest) => {
@@ -886,7 +888,7 @@ impl Marshal for TpmtTkAuth {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmtTkAuth {
+impl<'a> Unmarshal<'a> for TpmtTkAuth<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match TpmSt::unmarshal(src)? {
             TpmSt::AUTH_SIGNED => {
@@ -904,18 +906,12 @@ impl<'a> Unmarshal<'a> for TpmtTkAuth {
 ///
 /// Hash check ticket produced by `TPM2_Hash` or `TPM2_SequenceComplete` proving that a hash digest was computed by the TPM.
 #[doc(alias = "TPMT_TK_HASHCHECK")]
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum TpmtTkHashcheck {
-    Hashcheck(Handle, Tpm2bDigest),
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TpmtTkHashcheck<'a> {
+    Hashcheck(Handle, Tpm2bDigest<'a>),
 }
 
-impl TpmtTkHashcheck {
-    pub const fn new(hierarchy: Handle, digest: Tpm2bDigest) -> Self {
-        Self::Hashcheck(hierarchy, digest)
-    }
-}
-
-impl Ticket for TpmtTkHashcheck {
+impl Ticket for TpmtTkHashcheck<'_> {
     fn tag(&self) -> TpmSt {
         match self {
             Self::Hashcheck(..) => TpmSt::HASHCHECK,
@@ -928,18 +924,18 @@ impl Ticket for TpmtTkHashcheck {
         }
     }
 
-    fn digest(&self) -> Tpm2bDigest {
+    fn digest(&self) -> Tpm2bDigest<'_> {
         match self {
             Self::Hashcheck(_, digest) => *digest,
         }
     }
 }
 
-impl Marshal for TpmtTkHashcheck {
+impl Marshal for TpmtTkHashcheck<'_> {
     const MAX_SIZE: usize = TpmSt::MAX_SIZE + Handle::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmtTkHashcheck::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmtTkHashcheck::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.tag(), dst, 0);
         match self {
             Self::Hashcheck(hierarchy, digest) => {
@@ -950,7 +946,7 @@ impl Marshal for TpmtTkHashcheck {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmtTkHashcheck {
+impl<'a> Unmarshal<'a> for TpmtTkHashcheck<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match TpmSt::unmarshal(src)? {
             TpmSt::HASHCHECK => {
@@ -961,7 +957,7 @@ impl<'a> Unmarshal<'a> for TpmtTkHashcheck {
     }
 }
 
-impl Default for TpmtTkHashcheck {
+impl Default for TpmtTkHashcheck<'_> {
     fn default() -> Self {
         Self::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default())
     }
@@ -972,14 +968,14 @@ impl Default for TpmtTkHashcheck {
 /// Defines the public area of a TPM object (object type, name algorithm, object attributes, auth policy, parameters, and public key data).
 #[doc(alias = "TPMT_PUBLIC")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct TpmtPublic {
+pub struct TpmtPublic<'a> {
     pub name_alg: Option<TpmiAlgHash>,
     pub object_attributes: TpmaObject,
-    pub auth_policy: Tpm2bDigest,
-    pub parms_and_id: PublicParmsAndId,
+    pub auth_policy: Tpm2bDigest<'a>,
+    pub parms_and_id: PublicParmsAndId<'a>,
 }
 
-impl TpmtPublic {
+impl TpmtPublic<'_> {
     #[doc(alias = "TPMI_ALG_PUBLIC")]
     pub const fn algorithm(self) -> Alg {
         self.parms_and_id.algorithm()
@@ -989,15 +985,15 @@ impl TpmtPublic {
     }
 }
 
-impl Marshal for TpmtPublic {
+impl Marshal for TpmtPublic<'_> {
     const MAX_SIZE: usize = Alg::MAX_SIZE
         + <Option<TpmiAlgHash>>::MAX_SIZE
         + TpmaObject::MAX_SIZE
         + Tpm2bDigest::MAX_SIZE
         + PublicParmsAndId::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmtPublic::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmtPublic::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.parms_and_id.algorithm(), dst, 0);
         let count = marshal_helper(&self.name_alg, dst, count);
         let count = marshal_helper(&self.object_attributes, dst, count);
@@ -1006,7 +1002,7 @@ impl Marshal for TpmtPublic {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmtPublic {
+impl<'a> Unmarshal<'a> for TpmtPublic<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let selector = Alg::unmarshal(src)?;
         Ok(TpmtPublic {
@@ -1023,27 +1019,27 @@ impl<'a> Unmarshal<'a> for TpmtPublic {
 /// Defines the sensitive/private area of a TPM object (sensitive type, auth value, seed value, and private key composite).
 #[doc(alias = "TPMT_SENSITIVE")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TpmtSensitive {
-    pub auth_value: Tpm2bAuth,
-    pub seed_value: Tpm2bDigest,
-    pub sensitive: TpmuSensitiveComposite,
+pub struct TpmtSensitive<'a> {
+    pub auth_value: Tpm2bAuth<'a>,
+    pub seed_value: Tpm2bDigest<'a>,
+    pub sensitive: TpmuSensitiveComposite<'a>,
 }
 
-impl TpmtSensitive {
+impl TpmtSensitive<'_> {
     #[doc(alias = "TPMI_ALG_PUBLIC")]
     pub const fn sensitive_type(self) -> Alg {
         self.sensitive.sensitive_type()
     }
 }
 
-impl Marshal for TpmtSensitive {
+impl Marshal for TpmtSensitive<'_> {
     const MAX_SIZE: usize = Alg::MAX_SIZE
         + Tpm2bAuth::MAX_SIZE
         + Tpm2bDigest::MAX_SIZE
         + TpmuSensitiveComposite::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; TpmtSensitive::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, dst: &mut [u8; TpmtSensitive::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.sensitive_type(), dst, 0);
         let count = marshal_helper(&self.auth_value, dst, count);
         let count = marshal_helper(&self.seed_value, dst, count);
@@ -1051,7 +1047,7 @@ impl Marshal for TpmtSensitive {
     }
 }
 
-impl<'a> Unmarshal<'a> for TpmtSensitive {
+impl<'a> Unmarshal<'a> for TpmtSensitive<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let selector = Unmarshal::unmarshal(src)?;
         Ok(Self {
