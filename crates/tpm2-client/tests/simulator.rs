@@ -70,7 +70,8 @@ fn test_startup_tpm() {
     let startup = Startup {
         startup_type: TpmSu::Clear,
     };
-    assert!(run_command(&startup, simulator.connection_mut()).is_ok());
+    let mut resp_buffer = [0u8; tpm2_client::protocol::RESP_BUFFER_SIZE];
+    assert!(run_command(&startup, simulator.connection_mut(), &mut resp_buffer).is_ok());
 }
 
 // If test_startup_tpm passes, this will not panic.
@@ -79,6 +80,7 @@ fn get_started_tpm() -> TcpSimulator {
     let startup = Startup {
         startup_type: TpmSu::Clear,
     };
-    run_command(&startup, simulator.connection_mut()).unwrap();
+    let mut resp_buffer = [0u8; tpm2_client::protocol::RESP_BUFFER_SIZE];
+    run_command(&startup, simulator.connection_mut(), &mut resp_buffer).unwrap();
     simulator
 }

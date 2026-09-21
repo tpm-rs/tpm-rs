@@ -3,9 +3,9 @@ use tpm2::*;
 #[test]
 fn test_marshal_struct_derive() {
     let name_buffer: [u8; 4] = [1, 2, 3, 4];
-    let index_name = Tpm2bName::from_bytes(&name_buffer).unwrap();
+    let index_name = Tpm2bName::new(&name_buffer).unwrap();
     let nv_buffer = [24u8; 10];
-    let nv_contents = Tpm2bMaxNvBuffer::from_bytes(&nv_buffer).unwrap();
+    let nv_contents = Tpm2bMaxNvBuffer::new(&nv_buffer).unwrap();
     let info: TpmsNvCertifyInfo = TpmsNvCertifyInfo {
         index_name,
         offset: 10,
@@ -16,10 +16,10 @@ fn test_marshal_struct_derive() {
 
     // Build the expected output manually.
     let mut expected = Vec::with_capacity(bytes);
-    expected.extend_from_slice(&index_name.get_size().to_be_bytes());
+    expected.extend_from_slice(&(index_name.as_slice().len() as u16).to_be_bytes());
     expected.extend_from_slice(&name_buffer);
     expected.extend_from_slice(&info.offset.to_be_bytes());
-    expected.extend_from_slice(&nv_contents.get_size().to_be_bytes());
+    expected.extend_from_slice(&(nv_contents.as_slice().len() as u16).to_be_bytes());
     expected.extend_from_slice(&nv_buffer);
 
     assert_eq!(expected.len(), bytes);
@@ -53,12 +53,12 @@ fn test_marshal_tpmt_public() {
     };
 
     let pubkey_buf = [9u8; 24];
-    let pubkey = Tpm2bPublicKeyRsa::from_bytes(&pubkey_buf).unwrap();
+    let pubkey = Tpm2bPublicKeyRsa::new(&pubkey_buf).unwrap();
 
     let example = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::RESTRICTED | TpmaObject::SENSITIVE_DATA_ORIGIN,
-        auth_policy: Tpm2bDigest::from_bytes(&[2, 2, 4, 4]).unwrap(),
+        auth_policy: Tpm2bDigest::new(&[2, 2, 4, 4]).unwrap(),
         parms_and_id: PublicParmsAndId::Rsa(rsa_parms, pubkey),
     };
 
@@ -96,24 +96,22 @@ fn test_2b_struct() {
             selection: TpmsPcrSelect::new(&[0xF, 0xF, 0xF]).unwrap(),
         }])
         .unwrap(),
-        pcr_digest: Tpm2bDigest::from_bytes(&[0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9])
-            .unwrap(),
+        pcr_digest: Tpm2bDigest::new(&[0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9]).unwrap(),
         locality: TpmaLocality(0xA),
         parent_name_alg: Some(TpmiAlgHash::Sha384),
-        parent_name: Tpm2bName::from_bytes(&[0xA, 0xB, 0xC, 0xD, 0xE, 0xF]).unwrap(),
+        parent_name: Tpm2bName::new(&[0xA, 0xB, 0xC, 0xD, 0xE, 0xF]).unwrap(),
         parent_qualified_name: Tpm2bName::default(),
-        outside_info: Tpm2bData::from_bytes(&[0x1; 32]).unwrap(),
+        outside_info: Tpm2bData::new(&[0x1; 32]).unwrap(),
     };
-    let creation_data_2b = Tpm2bCreationData::from_struct(&creation_data).unwrap();
-    let out_creation_data = creation_data_2b.to_struct().unwrap();
+    let creation_data_2b: Tpm2bCreationData = Tpm2b(creation_data);
+    let out_creation_data = creation_data_2b.0;
     assert_eq!(creation_data, out_creation_data);
 }
 
 #[test]
 fn test_tpml_digest_values_marshalling() {
-    let mut lp = TpmlDigestValues::default();
-    lp.add(&TpmtHa::Sha256(&[0xaa; 32])).unwrap();
-    lp.add(&TpmtHa::Sha1(&[0xbb; 20])).unwrap();
+    let lp =
+        TpmlDigestValues::new(&[TpmtHa::Sha256(&[0xaa; 32]), TpmtHa::Sha1(&[0xbb; 20])]).unwrap();
 
     let mut buf = [0u8; TpmlDigestValues::MAX_SIZE];
     let len = lp.marshal(&mut buf);
@@ -122,8 +120,8 @@ fn test_tpml_digest_values_marshalling() {
     let unmarshaled = TpmlDigestValues::unmarshal(&mut reader).unwrap();
     assert_eq!(unmarshaled, lp);
 
-    // Test count > TpmtHa::HASH_COUNT fails.
-    let invalid_count = (TpmtHa::HASH_COUNT + 1) as u32;
+    // Test count > TpmiAlgHash::HASH_COUNT fails.
+    let invalid_count = (TpmiAlgHash::HASH_COUNT + 1) as u32;
     let mut invalid_buf = [0u8; 512];
     invalid_buf[0..4].copy_from_slice(&invalid_count.to_be_bytes());
     let mut offset = 4;
@@ -153,8 +151,8 @@ fn test_tpml_pcr_selection_marshalling() {
     let unmarshaled = TpmlPcrSelection::unmarshal(&mut reader).unwrap();
     assert_eq!(unmarshaled, lp);
 
-    // Test count > TpmtHa::HASH_COUNT fails.
-    let invalid_count = (TpmtHa::HASH_COUNT + 1) as u32;
+    // Test count > TpmiAlgHash::HASH_COUNT fails.
+    let invalid_count = (TpmiAlgHash::HASH_COUNT + 1) as u32;
     let mut invalid_buf = [0u8; 512];
     invalid_buf[0..4].copy_from_slice(&invalid_count.to_be_bytes());
     let mut offset = 4;
@@ -172,8 +170,8 @@ fn test_tpml_pcr_selection_marshalling() {
     assert_eq!(err, tpm2::errors::UnmarshalError);
 
     // Verifying constructing TpmsPcrSelect with invalid bounds (length > MAX or < MIN) fails
-    assert!(TpmsPcrSelect::new(&[0xF; TpmsPcrSelect::MAX + 1]).is_err());
-    assert!(TpmsPcrSelect::new(&[0xF; TpmsPcrSelect::MIN - 1]).is_err());
+    assert!(TpmsPcrSelect::new(&[0xF; TpmsPcrSelect::MAX + 1]).is_none());
+    assert!(TpmsPcrSelect::new(&[0xF; TpmsPcrSelect::MIN - 1]).is_none());
 
     // Verifying unmarshalling invalid bounds (sizeof_select > MAX) fails
     let mut invalid_select_buf = [0u8; 10];
@@ -208,7 +206,7 @@ fn test_print_ecc_parent() {
             TpmsEccPoint::default(),
         ),
     };
-    let tpm2b_pub = Tpm2bPublic::from_struct(&public_area).unwrap();
+    let tpm2b_pub: Tpm2bPublic = Tpm2b(public_area);
     let mut buf = [0u8; Tpm2bPublic::MAX_SIZE];
     let len = tpm2b_pub.marshal(&mut buf);
     println!(
