@@ -34,6 +34,24 @@
 //! Library or memory allocation. To that end, this crate is `#[no_std]`,
 //! and does not use the `std` or `alloc` libraries (only `core` is used).
 //!
+//! ## Lifetimes (`'a`) in types
+//!
+//! Many of the complex structures in this crate (such as [`TpmtPublic<'a>`])
+//! have associated lifetimes to allow for components like [`Tpm2bDigest<'a>`]
+//! or [`TpmtHa<'a>`] to take byte buffers by reference. This allows our types
+//! to remain small, implement [`Copy`], and avoid allocating additional memory
+//! on the stack or heap.
+//!
+//! ```
+//! # use tpm2::{TpmtPublic, Unmarshal, errors::UnmarshalError};
+//! fn parse<'a>(mut buf: &'a [u8]) -> Result<&'a [u8], UnmarshalError> {
+//!     // Parse a structure from a raw byte buffer:
+//!     let public: TpmtPublic<'a> = TpmtPublic::unmarshal(&mut buf)?;
+//!     // The auth_policy buffer is just a sub-slice of buf. No copying!
+//!     Ok(public.auth_policy.as_slice())
+//! }
+//! ```
+//!
 //! ## Panics
 //!
 //! Furthermore, we **strive to avoid panics in this library**. While this cannot
@@ -55,8 +73,8 @@
 //! ## Submodule Organization
 //!
 //! Internally, we use submodules for code organization, but mostly present a
-//! flat API to external users, with the exception of the [`commands`] and
-//! [`errors`] submodules.
+//! flat API to external users, with the exception of the [`commands`],
+//! [`errors`], and [`limits`] submodules.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 #![forbid(unreachable_pub)]
