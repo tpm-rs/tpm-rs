@@ -16,6 +16,38 @@ categories.workspace = true
 # Implement conversions/traits which require std
 std = []
 
+# We enable all algorithms by default.
+default = [
+    "sha1", "sha256", "sha384", "sha512", "sm3_256", "sha3_256", "sha3_384", "sha3_512",
+    "aes128", "aes192", "aes256", "sm4_128", "camellia128", "camellia192", "camellia256",
+    "cmac", "ctr", "ofb", "cbc", "ecb",
+]
+
+# Hash Algorithms
+sha1 = []
+sha256 = []
+sha384 = []
+sha512 = []
+sm3_256 = []
+sha3_256 = []
+sha3_384 = []
+sha3_512 = []
+
+# Symmetric Encryption Algorithms
+aes128 = []
+aes192 = []
+aes256 = []
+sm4_128 = []
+camellia128 = []
+camellia192 = []
+camellia256 = []
+
+# Symmetric Encryption Modes (CFB always enabled)
+cmac = []
+ctr = []
+ofb = []
+cbc = []
+ecb = []
+
 [dependencies]
 bitflags = { workspace = true }
-

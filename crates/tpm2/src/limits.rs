@@ -132,15 +132,15 @@ pub struct Name;
 impl Tag for Name {
     const CAP: usize = TpmtHa::MAX_SIZE;
 }
-/// Sized to the largest symmetric block size ([`TpmtSymDefObject::MAX_BLOCK_SIZE_BYTES`]).
+/// Sized to the symmetric block size ([`AlgSym::BLOCK_SIZE`]).
 pub struct Iv;
 impl Tag for Iv {
-    const CAP: usize = TpmtSymDefObject::MAX_BLOCK_SIZE_BYTES;
+    const CAP: usize = AlgSym::BLOCK_SIZE;
 }
-/// Sized to the largest symmetric key size ([`TpmtSymDefObject::MAX_KEY_BYTES`]).
+/// Sized to the largest symmetric key size ([`AlgSym::MAX_KEY_BYTES`]).
 pub struct SymKey;
 impl Tag for SymKey {
-    const CAP: usize = TpmtSymDefObject::MAX_KEY_BYTES;
+    const CAP: usize = AlgSym::MAX_KEY_BYTES;
 }
 /// Sized to the maximum supported RSA key modulus ([`TpmiRsaKeyBits::MAX_PUB_KEY_BYTES`]).
 pub struct PublicKeyRsa;

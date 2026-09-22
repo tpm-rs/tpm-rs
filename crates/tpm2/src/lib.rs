@@ -27,6 +27,22 @@
 //!
 //! [TPM2 Specification]: https://trustedcomputinggroup.org/work-groups/trusted-platform-module/
 //!
+//! ## Algorithm Feature Flags
+//!
+//! Cargo features control which cryptographic algorithms and modes are enabled
+//! in types (like [`TpmiAlgHash`], [`TpmtHa`], [`AlgSym`], [`TpmiAlgSymMode`],
+//! and [`TpmiAlgCipherMode`]), size limits (like
+//! [`TpmiAlgHash::MAX_DIGEST_BYTES`] and [`AlgSym::MAX_KEY_BYTES`]), and
+//! [`crypto`] wrappers. All algorithm features are enabled by default;
+//! constrained builds can set `default-features = false` and enable a subset:
+//!
+//! - **Hash algorithms** (at least one required): `sha1`, `sha256`, `sha384`,
+//!   `sha512`, `sm3_256`, `sha3_256`, `sha3_384`, `sha3_512`
+//! - **Symmetric ciphers** (at least one required): `aes128`, `aes192`,
+//!   `aes256`, `sm4_128`, `camellia128`, `camellia192`, `camellia256`
+//! - **Symmetric modes** (`CFB` is always enabled): `cmac`, `ctr`, `ofb`,
+//!   `cbc`, `ecb`
+//!
 //! ## Platform Support
 //!
 //! Unlike some other crates under the TPM-RS project, this crate is intended
@@ -82,6 +98,7 @@
 
 pub mod commands;
 mod constants;
+pub mod crypto;
 pub mod errors;
 pub mod limits;
 mod marshal;
