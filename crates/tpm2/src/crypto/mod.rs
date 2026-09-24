@@ -1,11 +1,14 @@
 //! Cryptography Interfaces for TPM implementations and clients
 mod cmac;
+mod ecc;
 mod hash;
 mod hmac;
 mod kdf;
 mod rng;
+mod rsa;
+mod signing;
 mod symmetric;
-pub use {cmac::*, hash::*, hmac::*, kdf::*, rng::*, symmetric::*};
+pub use {cmac::*, ecc::*, hash::*, hmac::*, kdf::*, rng::*, rsa::*, signing::*, symmetric::*};
 
 /// Common error type for all cryptographic traits.
 ///
