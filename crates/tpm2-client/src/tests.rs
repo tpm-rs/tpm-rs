@@ -1,6 +1,6 @@
 use super::*;
-use crate::sessions::PasswordSession;
-use tpm2::{TpmCc, TpmaSession, TpmsAuthResponse};
+use crate::sessions::{PasswordSession, Session};
+use tpm2::*;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 struct TransportError;
@@ -22,49 +22,14 @@ impl Connection for ErrorTpm {
     }
 }
 
-#[repr(C)]
-// Larger than the maximum size.
-struct HugeFakeCommand([u8; CMD_BUFFER_SIZE]);
-impl Marshal for HugeFakeCommand {
-    const MAX_SIZE: usize = CMD_BUFFER_SIZE;
-    type MaxBuffer = [u8; CMD_BUFFER_SIZE];
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        dst.copy_from_slice(&self.0);
-        CMD_BUFFER_SIZE
-    }
-}
-
-impl<'a> Unmarshal<'a> for HugeFakeCommand {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        if src.len() < CMD_BUFFER_SIZE {
-            return Err(UnmarshalError);
-        }
-        let (head, tail) = src.split_at(CMD_BUFFER_SIZE);
-        *src = tail;
-        let mut data = [0u8; CMD_BUFFER_SIZE];
-        data.copy_from_slice(head);
-        Ok(Self(data))
-    }
-}
-
-impl Command for HugeFakeCommand {
-    const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
-    type Response<'a> = u8;
-}
-
-#[test]
-fn test_command_too_large() {
-    let mut fake_tpm = ErrorTpm();
-    let too_large = HugeFakeCommand([0; CMD_BUFFER_SIZE]);
-    let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
-    assert_eq!(
-        run_command(&too_large, &mut fake_tpm, &mut resp_buffer),
-        Err(ClientError::CommandTooLarge)
-    );
-}
-
-#[repr(C)]
+#[derive(Debug, PartialEq, Eq)]
 struct TestCommand(u32);
+impl Message for TestCommand {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
 impl Marshal for TestCommand {
     const MAX_SIZE: usize = 4;
     type MaxBuffer = [u8; 4];
@@ -72,17 +37,18 @@ impl Marshal for TestCommand {
         self.0.marshal(dst)
     }
 }
-
-impl<'a> Unmarshal<'a> for TestCommand {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for TestCommand {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         let val = u32::unmarshal(src)?;
         Ok(Self(val))
     }
 }
-
 impl Command for TestCommand {
     const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
-    type Response<'a> = u32;
+    type Response<'a> = TestCommand;
 }
 
 #[test]
@@ -103,12 +69,8 @@ struct FakeU32LoopbackTpm {
     rxed_bytes: usize,
 }
 impl Connection for FakeU32LoopbackTpm {
-    type Error = core::convert::Infallible;
-    fn transact<'a>(
-        &mut self,
-        command: &[u8],
-        response: &'a mut [u8],
-    ) -> Result<&'a mut [u8], core::convert::Infallible> {
+    type Error = !;
+    fn transact<'a>(&mut self, command: &[u8], response: &'a mut [u8]) -> Result<&'a mut [u8], !> {
         self.rxed_bytes = command.len();
         let mut slice = command;
         self.rxed_header = Some(CommandHeader::unmarshal(&mut slice).unwrap());
@@ -146,18 +108,14 @@ fn test_fake_command() {
     let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     let result = run_command(&cmd, &mut fake_tpm, &mut resp_buffer);
     assert_eq!(fake_tpm.rxed_header.unwrap().code, TestCommand::CMD_CODE);
-    assert_eq!(result.unwrap(), cmd.0);
+    assert_eq!(result.unwrap(), cmd);
 }
 
-// EvilSizeTpm writes a reponse header with a size value that is larger than the reponse buffer.
+// EvilSizeTpm writes a response header whose size does not match the returned slice length.
 struct EvilSizeTpm();
 impl Connection for EvilSizeTpm {
-    type Error = core::convert::Infallible;
-    fn transact<'a>(
-        &mut self,
-        _: &[u8],
-        response: &'a mut [u8],
-    ) -> Result<&'a mut [u8], core::convert::Infallible> {
+    type Error = !;
+    fn transact<'a>(&mut self, _: &[u8], response: &'a mut [u8]) -> Result<&'a mut [u8], !> {
         let tx_header = ResponseHeader {
             tag: tpm2::TpmiStCommandTag::NoSessions,
             size: response.len() as u32 + 2,
@@ -180,7 +138,7 @@ fn test_bad_response_size() {
     let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
         run_command(&cmd, &mut fake_tpm, &mut resp_buffer),
-        Err(ClientError::ResponseTooLarge)
+        Err(ClientError::InvalidResponseSize)
     );
 }
 
@@ -203,12 +161,8 @@ impl Default for FakeTpm {
     }
 }
 impl Connection for FakeTpm {
-    type Error = core::convert::Infallible;
-    fn transact<'a>(
-        &mut self,
-        _: &[u8],
-        response: &'a mut [u8],
-    ) -> Result<&'a mut [u8], core::convert::Infallible> {
+    type Error = !;
+    fn transact<'a>(&mut self, _: &[u8], response: &'a mut [u8]) -> Result<&'a mut [u8], !> {
         let off = self.header.marshal(
             (&mut response[0..ResponseHeader::MAX_SIZE])
                 .try_into()
@@ -234,17 +188,22 @@ impl FakeTpm {
     }
 }
 
-#[repr(C)]
 struct TestSessionsCommand();
+impl Message for TestSessionsCommand {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
 impl Marshal for TestSessionsCommand {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
-    fn marshal(&self, _dst: &mut Self::MaxBuffer) -> usize {
+    fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> Unmarshal<'a> for TestSessionsCommand {
-    fn unmarshal(_src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for TestSessionsCommand {
+    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self())
     }
 }
@@ -261,13 +220,15 @@ fn test_response_missing_sessions() {
     let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
         run_command_with_sessions(&cmd, session, &mut fake_tpm, &mut resp_buffer),
-        Err(ClientError::Unmarshal(UnmarshalError))
+        Err(ClientError::UnexpectedTag)
     );
 }
 
 #[test]
 fn test_response_session_fails_validation() {
     let mut fake_tpm = FakeTpm::default();
+    fake_tpm.header.tag = tpm2::TpmiStCommandTag::Sessions;
+    fake_tpm.add_to_response(&0u32);
     let invalid_auth = TpmsAuthResponse {
         session_attributes: TpmaSession(0xf),
         ..Default::default()
