@@ -421,6 +421,23 @@ impl TpmCc {
     pub const PolicyACSendSelect: Self = Self::new(0x00000196);
     pub const CertifyX509: Self = Self::new(0x00000197);
     pub const ACTSetTimeout: Self = Self::new(0x00000198);
+    pub const ECCEncrypt: Self = Self::new(0x00000199);
+    pub const ECCDecrypt: Self = Self::new(0x0000019A);
+    pub const PolicyCapability: Self = Self::new(0x0000019B);
+    pub const PolicyParameters: Self = Self::new(0x0000019C);
+    pub const NVDefineSpace2: Self = Self::new(0x0000019D);
+    pub const NVReadPublic2: Self = Self::new(0x0000019E);
+    pub const SetCapability: Self = Self::new(0x0000019F);
+    pub const ReadOnlyControl: Self = Self::new(0x000001A0);
+    pub const PolicyTransportSPDM: Self = Self::new(0x000001A1);
+    pub const VerifySequenceComplete: Self = Self::new(0x000001A3);
+    pub const SignSequenceComplete: Self = Self::new(0x000001A4);
+    pub const VerifyDigestSignature: Self = Self::new(0x000001A5);
+    pub const SignDigest: Self = Self::new(0x000001A6);
+    pub const Encapsulate: Self = Self::new(0x000001A7);
+    pub const Decapsulate: Self = Self::new(0x000001A8);
+    pub const VerifySequenceStart: Self = Self::new(0x000001A9);
+    pub const SignSequenceStart: Self = Self::new(0x000001AA);
 }
 
 impl From<u32> for TpmCc {
