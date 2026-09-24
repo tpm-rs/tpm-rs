@@ -16,6 +16,42 @@ categories.workspace = true
 # Implement conversions/traits which require std
 std = []
 
+# We enable all algorithms by default for ease of testing. This is likely fine
+# for a client, but a TPM implementation will want to be more selective.
+default = [
+    # Hash Algorithms
+    "sha1", "sha256", "sha384", "sha512", "sm3_256", "sha3_256", "sha3_384", "sha3_512",
+    # Symmetric Encryption Algorithms
+    "aes128", "aes192", "aes256", "sm4_128", "camellia128", "camellia192", "camellia256",
+    # Symmetric Encryption Modes (CFB is mandatory)
+    "cmac", "ctr", "ofb", "cbc", "ecb",
+]
+
+# Hash Algorithms
+sha1 = []
+sha256 = []
+sha384 = []
+sha512 = []
+sm3_256 = []
+sha3_256 = []
+sha3_384 = []
+sha3_512 = []
+
+# Symmetric Encryption Algorithms
+aes128 = []
+aes192 = []
+aes256 = []
+sm4_128 = []
+camellia128 = []
+camellia192 = []
+camellia256 = []
+
+# Symmetric Encryption Modes
+cmac = []
+ctr = []
+ofb = []
+cbc = []
+ecb = []
+
 [dependencies]
 bitflags = { workspace = true }
-

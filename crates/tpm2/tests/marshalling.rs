@@ -39,7 +39,10 @@ fn test_marshal_enum_override() {
 
 #[test]
 fn test_marshal_tpmt_public() {
-    let aes_sym_def_obj = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+    let aes_sym_def_obj = Some(TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: Some(TpmiAlgCipherMode::Cfb.into()),
+    });
     let mut buffer = [0u8; <Option<TpmtSymDefObject>>::MAX_SIZE];
     let marsh = aes_sym_def_obj.marshal(&mut buffer);
     assert_eq!(marsh, buffer.len());
@@ -98,7 +101,7 @@ fn test_2b_struct() {
         .unwrap(),
         pcr_digest: Tpm2bDigest::new(&[0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9]).unwrap(),
         locality: TpmaLocality(0xA),
-        parent_name_alg: Some(TpmiAlgHash::Sha384),
+        parent_name_alg: Some(TpmiAlgHash::Sha256),
         parent_name: Tpm2bName::new(&[0xA, 0xB, 0xC, 0xD, 0xE, 0xF]).unwrap(),
         parent_qualified_name: Tpm2bName::default(),
         outside_info: Tpm2bData::new(&[0x1; 32]).unwrap(),
@@ -111,7 +114,7 @@ fn test_2b_struct() {
 #[test]
 fn test_tpml_digest_values_marshalling() {
     let lp =
-        TpmlDigestValues::new(&[TpmtHa::Sha256(&[0xaa; 32]), TpmtHa::Sha1(&[0xbb; 20])]).unwrap();
+        TpmlDigestValues::new(&[TpmtHa::Sha256(&[0xaa; 32]), TpmtHa::Sha256(&[0xbb; 32])]).unwrap();
 
     let mut buf = [0u8; TpmlDigestValues::MAX_SIZE];
     let len = lp.marshal(&mut buf);
@@ -127,8 +130,8 @@ fn test_tpml_digest_values_marshalling() {
     let mut offset = 4;
     for _ in 0..invalid_count {
         invalid_buf[offset..offset + 2]
-            .copy_from_slice(&Alg::from(TpmiAlgHash::Sha1).id().to_be_bytes());
-        offset += 2 + 20; // 2 bytes alg ID + 20 bytes SHA1 digest
+            .copy_from_slice(&Alg::from(TpmiAlgHash::Sha256).id().to_be_bytes());
+        offset += 2 + 32; // 2 bytes alg ID + 32 bytes SHA256 digest
     }
 
     let mut reader = &invalid_buf[..offset];
@@ -198,7 +201,10 @@ fn test_print_ecc_parent() {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,

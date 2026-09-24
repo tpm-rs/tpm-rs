@@ -82,6 +82,7 @@
 
 pub mod commands;
 mod constants;
+pub mod crypto;
 pub mod errors;
 pub mod limits;
 mod marshal;
