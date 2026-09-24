@@ -89,25 +89,17 @@ mod marshal;
 mod std;
 mod structures;
 
+pub use commands::{Command, Message, UnmarshalMessage};
 pub use constants::*;
 pub use marshal::{Marshal, Unmarshal};
 pub use structures::*;
-
-/// Trait for a TPM command transaction.
-pub trait Command: Marshal {
-    /// The command code.
-    const CMD_CODE: TpmCc;
-    /// The response parameters type.
-    type Response<'a>: Marshal + Unmarshal<'a>;
-}
 
 /// Common trait for communicating with a TPM.
 pub trait Connection {
     /// The type returned if [`Connection::transact`] fails.
     ///
     /// This type does not include `TPM_RC` errors, only errors related to the
-    /// connection itself. If the connection can never fail, this can be
-    /// [`Infallible`](core::convert::Infallible).
+    /// connection itself. If the connection can never fail, this can be [`!`].
     type Error: core::error::Error;
 
     /// Perform a command/response transaction with the TPM.

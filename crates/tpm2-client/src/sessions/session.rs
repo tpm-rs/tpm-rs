@@ -24,3 +24,12 @@ pub trait Session {
     /// Validates the authorization response for this session.
     fn validate_auth_response(&self, auth: &TpmsAuthResponse) -> Result<(), AuthError>;
 }
+
+impl Session for ! {
+    fn auth_command(&self) -> TpmsAuthCommand<'_> {
+        match *self {}
+    }
+    fn validate_auth_response(&self, _: &TpmsAuthResponse) -> Result<(), AuthError> {
+        match *self {}
+    }
+}
