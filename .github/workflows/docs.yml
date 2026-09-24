@@ -38,7 +38,7 @@ jobs:
         # crate index pages.
       - name: Create Index Redirect
         # Change the 'url' field to choose the default crate to show.
-        run: echo '<meta http-equiv="refresh" content="0; url=tpm2_rs_base/index.html">' > target/doc/index.html
+        run: echo '<meta http-equiv="refresh" content="0; url=tpm2/index.html">' > target/doc/index.html
 
       - name: Upload Artifact
         id: upload
