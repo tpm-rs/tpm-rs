@@ -30,9 +30,9 @@
 use connection::Connection;
 use core::fmt;
 use protocol::*;
-use sessions::{AuthError, AuthorizationArea, Session};
+use sessions::{AuthError, AuthorizationArea};
+use tpm2::Command;
 use tpm2::errors::{TpmRc, UnmarshalError};
-use tpm2::{Command, Marshal, Unmarshal};
 
 pub mod connection;
 pub mod protocol;
@@ -40,7 +40,7 @@ pub mod sessions;
 
 /// Errors that can occur during TPM client operations.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum ClientError<ConnErr = core::convert::Infallible> {
+pub enum ClientError<ConnErr = !> {
     /// Error returned by the underlying transport connection.
     Connection(ConnErr),
     /// TPM device returned a response code error (`TPM_RC`).
@@ -49,10 +49,10 @@ pub enum ClientError<ConnErr = core::convert::Infallible> {
     Unmarshal(UnmarshalError),
     /// Session authorization validation failed.
     Auth(AuthError),
-    /// Command exceeded the maximum buffer capacity.
-    CommandTooLarge,
-    /// Response exceeded the response buffer capacity.
-    ResponseTooLarge,
+    /// Response header size does not match the received buffer length.
+    InvalidResponseSize,
+    /// Response header tag does not match whether sessions were used.
+    UnexpectedTag,
     /// Unexpected trailing bytes left after unmarshaling the response.
     TrailingBytes,
 }
@@ -64,8 +64,10 @@ impl<E: fmt::Display> fmt::Display for ClientError<E> {
             Self::Tpm(rc) => write!(f, "TPM error: {rc}"),
             Self::Unmarshal(e) => write!(f, "unmarshal error: {e}"),
             Self::Auth(e) => write!(f, "auth error: {e}"),
-            Self::CommandTooLarge => write!(f, "command size exceeds buffer capacity"),
-            Self::ResponseTooLarge => write!(f, "response size exceeds buffer capacity"),
+            Self::InvalidResponseSize => {
+                write!(f, "response header size does not match buffer length")
+            }
+            Self::UnexpectedTag => write!(f, "unexpected response header tag"),
             Self::TrailingBytes => write!(f, "unexpected trailing bytes in response"),
         }
     }
@@ -136,14 +138,11 @@ impl<E> PartialEq<AuthError> for ClientError<E> {
 ///
 /// Note that a `TPM_RC` error in the response header translates to
 /// [`ClientError::Tpm`].
-pub fn run_command<'a, CmdT: Command, T: Connection>(
-    cmd: &CmdT,
+pub fn run_command<'a, C: Command<MaxBuffer = [u8; N]>, T: Connection, const N: usize>(
+    cmd: &C,
     tpm: &mut T,
     resp_buffer: &'a mut [u8],
-) -> Result<CmdT::Response<'a>, ClientError<T::Error>>
-where
-    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-{
+) -> Result<C::Response<'a>, ClientError<T::Error>> {
     run_command_with_sessions(cmd, (), tpm, resp_buffer)
 }
 
@@ -156,72 +155,25 @@ where
 ///
 /// Note that a `TPM_RC` error in the response header translates to
 /// [`ClientError::Tpm`].
-#[allow(clippy::type_complexity)]
 pub fn run_command_with_sessions<
     'a,
-    CmdT: Command,
+    C: Command<MaxBuffer = [u8; N]>,
     T: Connection,
-    X: Session,
-    Y: Session,
-    Z: Session,
-    AA: AuthorizationArea<X, Y, Z>,
+    const N: usize,
 >(
-    cmd: &CmdT,
-    cmd_sessions: AA,
+    cmd: &C,
+    cmd_sessions: impl AuthorizationArea,
     tpm: &mut T,
     resp_buffer: &'a mut [u8],
-) -> Result<CmdT::Response<'a>, ClientError<T::Error>>
-where
-    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-{
+) -> Result<C::Response<'a>, ClientError<T::Error>> {
     let mut cmd_buffer = [0u8; CMD_BUFFER_SIZE];
-    let mut cmd_header = CommandHeader::with_sessions(!cmd_sessions.is_empty(), CmdT::CMD_CODE);
-    let mut written = cmd_header.marshal(
-        (&mut cmd_buffer[0..CommandHeader::MAX_SIZE])
-            .try_into()
-            .unwrap(),
-    );
-
-    written += write_command_sessions(&cmd_sessions, &mut cmd_buffer[written..])?;
-    if written + CmdT::MAX_SIZE > CMD_BUFFER_SIZE {
-        return Err(ClientError::CommandTooLarge);
-    }
-    let cmd_len = cmd.marshal(
-        (&mut cmd_buffer[written..written + CmdT::MAX_SIZE])
-            .try_into()
-            .ok()
-            .unwrap(),
-    );
-    written += cmd_len;
-
-    // Update the command size
-    cmd_header.size = written as u32;
-    let _ = cmd_header.marshal(
-        (&mut cmd_buffer[0..CommandHeader::MAX_SIZE])
-            .try_into()
-            .unwrap(),
-    );
+    let written = marshal_command(cmd, &cmd_sessions, &mut cmd_buffer);
 
     let resp_buffer = tpm
         .transact(&cmd_buffer[..written], resp_buffer)
         .map_err(ClientError::Connection)?;
 
-    let (resp_header, read) = read_response_header(resp_buffer)?;
-    let resp_size = resp_header.size as usize;
-    if resp_size > resp_buffer.len() {
-        return Err(ClientError::ResponseTooLarge);
-    }
-    let mut slice = &resp_buffer[read..resp_size];
-    if resp_header.tag == tpm2::TpmiStCommandTag::Sessions {
-        let _param_size = u32::unmarshal(&mut slice)?;
-    }
-    let resp = <CmdT::Response<'a>>::unmarshal(&mut slice)?;
-    read_response_sessions(&cmd_sessions, &mut slice)?;
-
-    if !slice.is_empty() {
-        return Err(ClientError::TrailingBytes);
-    }
-    Ok(resp)
+    unmarshal_response(&cmd_sessions, resp_buffer)
 }
 
 #[cfg(test)]
