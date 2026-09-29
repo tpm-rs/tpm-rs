@@ -11,24 +11,36 @@ Everything is subject to change, perhaps on a daily basis.
 
 ## Building & Testing
 
-Building and testing tpm-rs is the same as other Cargo projects:
+Building and testing `tpm-rs` requires selecting a cryptographic backend. The workspace supports three backends:
+- `rust` (default): Pure-Rust implementations.
+- `crux`: Cryspen `libcrux` verification-oriented cryptography.
+- `bssl`: BoringSSL integration.
 
+To check compilation:
+```bash
+# Check with Rust (default)
+cargo check -p tpm2-simulator --features rust
+
+# Check with Crux
+cargo check -p tpm2-simulator --no-default-features --features crux
+
+# Check with BoringSSL (BORINGSSL_BUILD_DIR defaults to <project-dir>/boringssl-build)
+cargo check -p tpm2-simulator --no-default-features --features bssl
 ```
-# Just build the project
-cargo build
 
-# Run most of the tests (excluding simulator tests)
-cargo test
-```
+### Running Unit and Integration Tests
 
-### Simulator Tests
+Run the test suite for the selected cryptographic backend:
+```bash
+# Rust
+cargo test --workspace --no-default-features --features rust
 
-Simulator tests use the TPM simulator provided by TCG to test the TPM client
-against a running simulation. This depends on having the TPM simulator built.
+# Crux
+cargo test --workspace --no-default-features --features crux
 
-There is a Dockerfile that can build this for you, making the process easier:
+# BoringSSL (BORINGSSL_BUILD_DIR defaults to <project-dir>/boringssl-build)
+cargo test --workspace --no-default-features --features bssl
 
-```
 # Build the simulator, and run only the simulator tests
 cd crates/tpm2-client && docker compose run --rm simulator_tests
 ```

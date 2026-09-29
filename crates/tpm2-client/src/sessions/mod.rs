@@ -22,8 +22,6 @@ mod authorization_area;
 mod nosession;
 mod password;
 mod session;
-#[cfg(test)]
-mod tests;
 
 pub use authorization_area::*;
 pub use nosession::*;

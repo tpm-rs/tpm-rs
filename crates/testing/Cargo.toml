@@ -1,0 +1,31 @@
+[package]
+name = "testing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tpm2-simulator = { path = "../tpm2-simulator", default-features = false }
+tpm2-platform-linux = { path = "../tpm2-platforms/linux", default-features = false }
+tpm2 = { workspace = true }
+tpm2-impl = { workspace = true }
+rsa = { version = "0.9.10", features = ["sha2", "sha1", "getrandom"] }
+sha2 = "0.10.9"
+sha1 = "0.10.6"
+rand = "0.8.5"
+p256 = { version = "0.13.2", features = ["ecdh", "arithmetic"] }
+aes = "0.8.4"
+cfb-mode = "0.8.2"
+hmac = "0.12.1"
+
+[features]
+default = ["bssl"]
+rust = ["tpm2-simulator/rust", "tpm2-platform-linux/rust"]
+crux = ["tpm2-simulator/crux", "tpm2-platform-linux/crux"]
+bssl = ["tpm2-simulator/bssl", "tpm2-platform-linux/bssl"]
+

@@ -16,6 +16,80 @@ categories.workspace = true
 # Implement conversions/traits which require std
 std = []
 
+# Only enable SHA2, AES, RSA-2048+, and NIST P-256+ by default
+default = [
+    "sha256",
+    "sha384",
+    "sha512",
+    "aes128",
+    "aes256",
+    "ecc_curve_nist_p256",
+    "ecc_curve_nist_p384",
+    "ecc_curve_nist_p521",
+    "rsa2048",
+    "rsa3072",
+    "rsa4096",
+    "rsassa",
+    "rsapss",
+    "rsaes",
+    "oaep",
+    "nist_p256",
+    "nist_p384",
+    "nist_p521",
+    "ecdsa",
+    "ecdh",
+    "ecdaa",
+]
+sha1 = []
+sha256 = []
+sha384 = []
+sha512 = []
+sm3_256 = []
+sha3_256 = []
+sha3_384 = []
+sha3_512 = []
+aes128 = []
+aes192 = []
+aes256 = []
+sm4_128 = []
+camellia128 = []
+camellia192 = []
+camellia256 = []
+ecc_curve_nist_p192 = ["ecc"]
+ecc_curve_nist_p224 = ["ecc"]
+ecc_curve_nist_p256 = ["ecc"]
+ecc_curve_nist_p384 = ["ecc"]
+ecc_curve_nist_p521 = ["ecc"]
+ecc_curve_bn_p256 = ["ecc"]
+ecc_curve_bn_p638 = ["ecc"]
+ecc_curve_sm2_p256 = ["ecc"]
+ecc_curve_bp_p256_r1 = ["ecc"]
+ecc_curve_bp_p384_r1 = ["ecc"]
+ecc_curve_bp_p512_r1 = ["ecc"]
+ecc_curve_curve25519 = ["ecc"]
+ecc_curve_curve448 = ["ecc"]
+rsa = []
+rsa1024 = ["rsa"]
+rsa2048 = ["rsa"]
+rsa3072 = ["rsa"]
+rsa4096 = ["rsa"]
+rsassa = ["rsa"]
+rsapss = ["rsa"]
+rsaes = ["rsa"]
+oaep = ["rsa"]
+ecc = []
+nist_p224 = ["ecc", "ecc_curve_nist_p224"]
+nist_p256 = ["ecc", "ecc_curve_nist_p256"]
+nist_p384 = ["ecc", "ecc_curve_nist_p384"]
+nist_p521 = ["ecc", "ecc_curve_nist_p521"]
+bn_p256 = ["ecc", "ecc_curve_bn_p256"]
+sm2_p256 = ["ecc", "ecc_curve_sm2_p256"]
+ecdsa = ["ecc"]
+ecdh = ["ecc"]
+ecdaa = ["ecc"]
+sm2 = ["ecc"]
+ecschnorr = ["ecc"]
+ecmqv = ["ecc"]
+
 [dependencies]
 bitflags = { workspace = true }
-

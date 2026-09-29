@@ -8,7 +8,8 @@
 //!   - Definitions of the TPM2 constants and structures.
 //!   - Definitions of the [TPM2 Commands](commands).
 //!   - Common traits for [`Marshal`]ing and [`Unmarshal`]ing.
-//!
+//!   - Platform abstraction for crypto, timers, PCRs, and NV Storage.
+
 //! ## Design Goals
 //!
 //! This crate defines a low-level interface to any TPM2. The types and
@@ -21,18 +22,25 @@
 //!   - The [`TpmtHa`] enum corresponds to the `TPMT_HA` type.
 //!   - The [`TpmiAlgHash`] C-like enum corresponds to the `TPMI_ALG_HASH` type.
 //!
-//! Conversely, types or items that either do not map to a type in the spec
+//! Types or items that either do not map to a type in the spec
 //! (e.g., [`Marshal`] or [`Command`]) or have semantics differing from those in
 //! the spec (e.g., [`Alg`]) will not have a `Tpm` prefix.
 //!
 //! [TPM2 Specification]: https://trustedcomputinggroup.org/work-groups/trusted-platform-module/
 //!
-//! ## Platform Support
+//! ## Platform Support and Abstraction
 //!
-//! Unlike some other crates under the TPM-RS project, this crate is intended
-//! to work on platforms and in environments which lack the Rust Standard
-//! Library or memory allocation. To that end, this crate is `#[no_std]`,
-//! and does not use the `std` or `alloc` libraries (only `core` is used).
+//! The core TPM 2.0 library is designed to execute in a wide variety of environments—ranging
+//! from resource-constrained embedded firmware (utilizing custom hardware accelerators) to hosted
+//! user-space applications running on modern operating systems (e.g., Linux, Windows).
+//!
+//! The [`platform`] module defines abstract interfaces for functionality the library depends
+//! on that implemented by the underlying platform, such as cryptography, random number
+//! generation, non-volatile storage, monotonic timers, and PCR registers. These interfaces decouple
+//! the core command execution and state engine from a particular platform.
+//!
+//! This crate is `#[no_std]` and strictly avoids depending on the `std` or `alloc` libraries
+//! (only `core` is used) to support bare-metal execution.
 //!
 //! ## Lifetimes (`'a`) in types
 //!
@@ -54,18 +62,14 @@
 //!
 //! ## Panics
 //!
-//! Furthermore, we **strive to avoid panics in this library**. While this cannot
-//! be statically guaranteed by Rust, we will run tests to ensure that panic code
-//! is not emitted, provided sufficient optimizations are enabled.
+//! The library seeks to avoid panics. While there currently aren't tools to
+//! statically guarantee that this is the case, we will incorporate tests and checks
+//! that panic code is not emitted.
 //!
 //! ## Dependencies
 //!
 //! To allow this crate to be used in constrained environments (like kernels or
-//! TPM2 implementations), we disallow any _runtime_ dependencies. Also, we
-//! restrict our [build-dependencies] to a subset necessary to create Procedural
-//! Macros (`proc_macro`, `syn`, `quote`, etc...). We will have more
-//! [dev-dependencies] for running additional tests, but such additional
-//! dev-dependencies should be gated by opt-in Cargo features.
+//! TPM2 firmware), it does not allow runtime dependencies.
 //!
 //! [build-dependencies]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#build-dependencies
 //! [dev-dependencies]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#development-dependencies
@@ -75,16 +79,18 @@
 //! Internally, we use submodules for code organization, but mostly present a
 //! flat API to external users, with the exception of the [`commands`],
 //! [`errors`], and [`limits`] submodules.
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![forbid(unsafe_code)]
 #![forbid(unreachable_pub)]
 #![allow(clippy::large_enum_variant)]
 
 pub mod commands;
 mod constants;
+pub mod crypto;
 pub mod errors;
 pub mod limits;
 mod marshal;
+pub mod platform;
 #[cfg(feature = "std")]
 mod std;
 mod structures;
@@ -94,11 +100,19 @@ pub use marshal::{Marshal, Unmarshal};
 pub use structures::*;
 
 /// Trait for a TPM command transaction.
-pub trait Command: Marshal {
+pub trait Command: Marshal
+where
+    for<'a> &'a mut Self::MaxBuffer: TryFrom<&'a mut [u8]>,
+    for<'a> &'a mut <Self::Handles as Marshal>::MaxBuffer: TryFrom<&'a mut [u8]>,
+{
     /// The command code.
     const CMD_CODE: TpmCc;
+    /// The command handles type.
+    type Handles: Marshal + for<'a> Unmarshal<'a> + Default;
     /// The response parameters type.
     type Response<'a>: Marshal + Unmarshal<'a>;
+    /// The response handles type.
+    type RespHandles: Marshal + for<'a> Unmarshal<'a>;
 }
 
 /// Common trait for communicating with a TPM.

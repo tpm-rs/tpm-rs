@@ -1,7 +1,19 @@
 [workspace]
 resolver = "3"
 
-members = ["crates/tpm2", "crates/tpm2-client", "crates/tpm2-impl"]
+members = [
+    "crates/tpm2",
+    "crates/tpm2-client",
+    "crates/tpm2-impl",
+    "crates/tpm2-platforms/linux",
+    "crates/tpm2-simulator",
+    "crates/tpm2-crypto/rust",
+    "crates/tpm2-crypto/crux",
+    "crates/tpm2-crypto/bssl",
+    "crates/tpm2-crypto/tests",
+    "crates/testing",
+]
+exclude = ["crates/tpm2-crypto/bssl/bssl-sys"]
 
 # Package keys that should be used by all packages.
 # We don't set: authors (deprecated), license-file, exclude, include, or publish
@@ -29,11 +41,68 @@ trybuild = { version = "1.0.89", features = ["diff"] }
 zerocopy = { version = "0.8.33", features = ["derive"] }
 
 # Common workspace crates
-tpm2 = { path = "crates/tpm2" }
+tpm2 = { path = "crates/tpm2", features = [
+    "sha1",
+    "sha256",
+    "sha384",
+    "sha512",
+    "sm3_256",
+    "sha3_256",
+    "sha3_384",
+    "sha3_512",
+    "aes128",
+    "aes192",
+    "aes256",
+    "sm4_128",
+    "camellia128",
+    "camellia192",
+    "camellia256",
+    "ecc_curve_nist_p192",
+    "ecc_curve_nist_p224",
+    "ecc_curve_nist_p256",
+    "ecc_curve_nist_p384",
+    "ecc_curve_nist_p521",
+    "ecc_curve_bn_p256",
+    "ecc_curve_bn_p638",
+    "ecc_curve_sm2_p256",
+    "ecc_curve_bp_p256_r1",
+    "ecc_curve_bp_p384_r1",
+    "ecc_curve_bp_p512_r1",
+    "ecc_curve_curve25519",
+    "ecc_curve_curve448",
+    "rsa1024",
+    "rsa2048",
+    "rsa3072",
+    "rsa4096",
+    "rsassa",
+    "rsapss",
+    "rsaes",
+    "oaep",
+    "nist_p224",
+    "nist_p256",
+    "nist_p384",
+    "nist_p521",
+    "bn_p256",
+    "sm2_p256",
+    "ecdsa",
+    "ecdh",
+    "ecdaa",
+    "sm2",
+    "ecschnorr",
+    "ecmqv",
+] }
 tpm2-client = { path = "crates/tpm2-client" }
 tpm2-impl = { path = "crates/tpm2-impl" }
+tpm2-crypto-rust = { path = "crates/tpm2-crypto/rust" }
+tpm2-crypto-crux = { path = "crates/tpm2-crypto/crux" }
+tpm2-crypto-bssl = { path = "crates/tpm2-crypto/bssl" }
+tpm2-crypto-tests = { path = "crates/tpm2-crypto/tests" }
 
 [profile.release]
 lto = true # default is lto = false
 codegen-units = 1 # default is codegen-units = 16
 strip = true # default is strip = "none"
+
+[patch."https://boringssl.googlesource.com/boringssl"]
+bssl-sys = { path = "crates/tpm2-crypto/bssl/bssl-sys" }
+

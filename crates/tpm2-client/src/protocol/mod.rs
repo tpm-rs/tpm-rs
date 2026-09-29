@@ -1,8 +1,9 @@
 use crate::ClientError;
 use crate::sessions::{AuthorizationArea, Session};
 use core::mem::size_of;
+use tpm2::errors::UnmarshalError;
 pub use tpm2::{CommandHeader, ResponseHeader};
-use tpm2::{Marshal, TpmsAuthResponse, Unmarshal, errors::UnmarshalError};
+use tpm2::{Marshal, TpmsAuthResponse, Unmarshal};
 
 /// Maximum buffer size for sending TPM commands.
 pub const CMD_BUFFER_SIZE: usize = 4096;
@@ -16,7 +17,7 @@ pub const RESP_BUFFER_SIZE: usize = 4096;
 fn marshal_auth_size(auth_offset: usize, buffer: &mut [u8]) -> Result<usize, UnmarshalError> {
     let auth_size = (auth_offset - size_of::<u32>()) as u32;
     if buffer.len() < 4 {
-        return Err(UnmarshalError);
+        return Err(UnmarshalError::SIZE);
     }
     auth_size.marshal((&mut buffer[..4]).try_into().unwrap());
     Ok(auth_offset)
@@ -42,7 +43,7 @@ pub fn write_command_sessions<
         return marshal_auth_size(auth_offset, buffer);
     };
     if buffer.len() < auth_offset + tpm2::TpmsAuthCommand::MAX_SIZE {
-        return Err(UnmarshalError);
+        return Err(UnmarshalError::SIZE);
     }
     auth_offset += s1.auth_command().marshal(
         (&mut buffer[auth_offset..auth_offset + tpm2::TpmsAuthCommand::MAX_SIZE])
@@ -53,7 +54,7 @@ pub fn write_command_sessions<
         return marshal_auth_size(auth_offset, buffer);
     };
     if buffer.len() < auth_offset + tpm2::TpmsAuthCommand::MAX_SIZE {
-        return Err(UnmarshalError);
+        return Err(UnmarshalError::SIZE);
     }
     auth_offset += s2.auth_command().marshal(
         (&mut buffer[auth_offset..auth_offset + tpm2::TpmsAuthCommand::MAX_SIZE])
@@ -64,7 +65,7 @@ pub fn write_command_sessions<
         return marshal_auth_size(auth_offset, buffer);
     };
     if buffer.len() < auth_offset + tpm2::TpmsAuthCommand::MAX_SIZE {
-        return Err(UnmarshalError);
+        return Err(UnmarshalError::SIZE);
     }
     auth_offset += s3.auth_command().marshal(
         (&mut buffer[auth_offset..auth_offset + tpm2::TpmsAuthCommand::MAX_SIZE])

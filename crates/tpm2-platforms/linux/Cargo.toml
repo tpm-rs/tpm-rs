@@ -1,0 +1,25 @@
+[package]
+name = "tpm2-platform-linux"
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tpm2 = { workspace = true }
+tpm2-impl = { workspace = true }
+tpm2-crypto-rust = { workspace = true, optional = true }
+tpm2-crypto-crux = { workspace = true, optional = true }
+tpm2-crypto-bssl = { workspace = true, optional = true }
+
+[features]
+default = ["bssl"]
+rust = ["dep:tpm2-crypto-rust"]
+crux = ["dep:tpm2-crypto-crux"]
+bssl = ["dep:tpm2-crypto-bssl"]
+

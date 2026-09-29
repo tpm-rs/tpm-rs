@@ -13,3 +13,17 @@ categories.workspace = true
 [dependencies]
 hex-literal = { workspace = true }
 tpm2 = { workspace = true }
+
+[dev-dependencies]
+tpm2-crypto-rust = { workspace = true }
+tpm2-crypto-crux = { workspace = true }
+tpm2-crypto-bssl = { workspace = true }
+
+[features]
+default = ["dev_crypto_bssl"]
+dev_crypto_rust = []
+dev_crypto_crux = []
+dev_crypto_bssl = []
+
+
+

@@ -9,6 +9,7 @@
 //! Each command includes its corresponding request parameters, handle list,
 //! response parameters, and [`Command`] trait implementation.
 
+use super::Command;
 use crate::{errors::UnmarshalError, *};
 
 /// [TPM2.0 1.83] 16.1 TPM2_GetRandom (Command)
@@ -20,7 +21,9 @@ pub struct GetRandom {
 }
 impl Command for GetRandom {
     const CMD_CODE: TpmCc = TpmCc::GetRandom;
+    type Handles = ();
     type Response<'a> = GetRandomRsp<'a>;
+    type RespHandles = ();
 }
 impl Marshal for GetRandom {
     const MAX_SIZE: usize = u16::MAX_SIZE;
@@ -34,7 +37,7 @@ impl Marshal for GetRandom {
 impl<'a> Unmarshal<'a> for GetRandom {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            bytes_requested: Unmarshal::unmarshal(src)?,
+            bytes_requested: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
         })
     }
 }
@@ -71,7 +74,9 @@ pub struct StirRandom<'a> {
 }
 impl Command for StirRandom<'_> {
     const CMD_CODE: TpmCc = TpmCc::StirRandom;
+    type Handles = ();
     type Response<'a> = ();
+    type RespHandles = ();
 }
 impl Marshal for StirRandom<'_> {
     const MAX_SIZE: usize = Tpm2bSensitiveData::MAX_SIZE;
@@ -85,7 +90,7 @@ impl Marshal for StirRandom<'_> {
 impl<'a> Unmarshal<'a> for StirRandom<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            in_data: Unmarshal::unmarshal(src)?,
+            in_data: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
         })
     }
 }

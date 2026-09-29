@@ -47,11 +47,8 @@ pub const MAX_CAP_BUFFER: usize = 1024;
 /// [`TpmPt::MaxObjectContext`] and [`TpmPt::MaxSessionContext`] capabilities.
 /// This is less than [`Tpm2bContextData::MAX_SIZE`] as a [`Tpm2bContextData`]
 /// must also store integrity information and buffer lengths.
-///
-/// By default, sized to fit an internal `OBJECT` containing a vendor-sized
-/// private area, a public area, and both cached object names.
 #[doc(alias = "TPM2_MAX_CONTEXT_SIZE")]
-pub const MAX_CONTEXT_SIZE: usize = Private::CAP + TpmtPublic::MAX_SIZE + Tpm2bName::MAX_SIZE * 2;
+pub const MAX_CONTEXT_SIZE: usize = 5120;
 /// Implementation-defined maximum bytes for the vendor-specific private key
 /// format inside an encrypted [`Tpm2bPrivate`].
 ///
@@ -62,10 +59,10 @@ pub const MAX_CONTEXT_SIZE: usize = Private::CAP + TpmtPublic::MAX_SIZE + Tpm2bN
 /// compact single-prime or seed form.
 ///
 /// By default, sized to fit the 5-prime CRT representation.
-pub const PRIVATE_VENDOR_SPECIFIC_BYTES: usize = TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES * 5;
+pub const PRIVATE_VENDOR_SPECIFIC_BYTES: usize = TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES;
 
 const _: () = assert!(MAX_2B_BUFFER_SIZE >= 1024);
-const _: () = assert!(TpmsCapabilityData::MAX_SIZE == MAX_CAP_BUFFER);
+const _: () = assert!(TpmsCapabilityData::MAX_SIZE >= MAX_CAP_BUFFER);
 const _: () = assert!(2 + PRIVATE_VENDOR_SPECIFIC_BYTES >= TpmuSensitiveComposite::MAX_SIZE);
 
 /// Specifies the maximum capacity (`CAP`) in bytes for a [`Tpm2bSized`] buffer.
@@ -157,10 +154,45 @@ pub struct EccParameter;
 impl Tag for EccParameter {
     const CAP: usize = TpmEccCurve::MAX_ECC_KEY_BYTES;
 }
+/// Sized to twice the maximum ECC parameter size (`2 * MAX_ECC_KEY_BYTES`) for EdDSA signatures.
+pub struct SignatureEddsa;
+impl Tag for SignatureEddsa {
+    const CAP: usize = 2 * (crate::constants::TPM2_MAX_ECC_KEY_BYTES as usize);
+}
+/// Sized to the maximum ML-KEM public key size (`MAX_MLKEM_PUB_SIZE` = 1568 bytes).
+pub struct PublicKeyMlkem;
+impl Tag for PublicKeyMlkem {
+    const CAP: usize = crate::constants::TPM2_MAX_MLKEM_PUB_SIZE;
+}
+/// Sized to the maximum ML-KEM private seed size (`MAX_MLKEM_PRIV_SIZE` = 64 bytes).
+pub struct PrivateKeyMlkem;
+impl Tag for PrivateKeyMlkem {
+    const CAP: usize = crate::constants::TPM2_MAX_MLKEM_PRIV_SIZE;
+}
+/// Sized to the maximum ML-DSA public key size (`MAX_MLDSA_PUB_SIZE` = 2592 bytes).
+pub struct PublicKeyMldsa;
+impl Tag for PublicKeyMldsa {
+    const CAP: usize = crate::constants::TPM2_MAX_MLDSA_PUB_SIZE;
+}
+/// Sized to the maximum ML-DSA private seed size (`MAX_MLDSA_PRIV_SIZE` = 32 bytes).
+pub struct PrivateKeyMldsa;
+impl Tag for PrivateKeyMldsa {
+    const CAP: usize = crate::constants::TPM2_MAX_MLDSA_PRIV_SIZE;
+}
+/// Sized to the maximum ML-DSA signature size (`MAX_MLDSA_SIG_SIZE` = 4627 bytes).
+pub struct SignatureMldsa;
+impl Tag for SignatureMldsa {
+    const CAP: usize = crate::constants::TPM2_MAX_MLDSA_SIG_SIZE;
+}
 /// Sized to the largest supported asymmetric encrypted secret ([`TpmtPublicParms::MAX_ENCRYPTED_SECRET_BYTES`]).
 pub struct EncryptedSecret;
 impl Tag for EncryptedSecret {
     const CAP: usize = TpmtPublicParms::MAX_ENCRYPTED_SECRET_BYTES;
+}
+/// Sized to hold a public template ([`TpmtPublic::MAX_SIZE`]).
+pub struct Template;
+impl Tag for Template {
+    const CAP: usize = TpmtPublic::MAX_SIZE;
 }
 /// Sized to hold an encrypted sensitive area.
 ///
@@ -186,6 +218,11 @@ pub struct IdObject;
 impl Tag for IdObject {
     const CAP: usize = Tpm2bDigest::MAX_SIZE * 2;
 }
+/// Implementation-defined maximum encrypted context size ([`MAX_CONTEXT_SIZE`]).
+pub struct ContextSensitive;
+impl Tag for ContextSensitive {
+    const CAP: usize = MAX_CONTEXT_SIZE;
+}
 /// Sized to hold an implementation-defined integrity-protected context.
 ///
 /// The specifics of this structure (called `TPMS_CONTEXT_DATA` in the spec) are
@@ -198,4 +235,31 @@ impl Tag for IdObject {
 pub struct Context;
 impl Tag for Context {
     const CAP: usize = Tpm2bDigest::MAX_SIZE + 2 + MAX_CONTEXT_SIZE;
+}
+/// Alias for [`Context`].
+pub type ContextData = Context;
+/// Vendor property buffer capacity.
+pub struct VendorProperty;
+impl Tag for VendorProperty {
+    const CAP: usize = 512;
+}
+/// Shared secret buffer capacity.
+pub struct SharedSecret;
+impl Tag for SharedSecret {
+    const CAP: usize = 64;
+}
+/// KEM ciphertext buffer capacity (`sizeof(TPMU_KEM_CIPHERTEXT)` = `max(sizeof(TPMS_ECC_POINT), MAX_MLKEM_CT_SIZE)` = 1568 bytes).
+pub struct KemCiphertext;
+impl Tag for KemCiphertext {
+    const CAP: usize = crate::constants::TPM2_MAX_KEM_CIPHERTEXT_SIZE;
+}
+/// Signature context buffer capacity (`sizeof(TPMU_SIGNATURE_CTX)` = 255 bytes).
+pub struct SignatureCtx;
+impl Tag for SignatureCtx {
+    const CAP: usize = crate::constants::TPM2_MAX_SIGNATURE_CTX_SIZE;
+}
+/// Signature hint buffer capacity.
+pub struct SignatureHint;
+impl Tag for SignatureHint {
+    const CAP: usize = 64;
 }

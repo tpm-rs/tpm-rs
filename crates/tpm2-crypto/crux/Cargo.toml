@@ -1,0 +1,32 @@
+[package]
+name = "tpm2-crypto-crux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tpm2 = { workspace = true }
+hex-literal = { workspace = true }
+libcrux-sha2 = "0.0.7"
+libcrux-hmac = "0.0.6"
+libcrux-ecdsa = "0.0.6"
+libcrux-p256 = { version = "0.0.7", features = ["expose-hacl"] }
+libcrux-rsa = "0.0.6"
+libcrux-aesgcm = "0.0.7"
+rand = "0.9.4"
+rand_chacha = "0.3.1"
+p384 = { version = "0.13", features = ["ecdh", "arithmetic"] }
+p521 = { version = "0.13", features = ["ecdh", "arithmetic"] }
+rsa = { version = "0.9.10", features = ["sha2", "sha1", "getrandom"] }
+sha1 = "0.10.6"
+sha2 = "0.10.9"
+hmac = "0.12.1"
+cmac = "0.7.2"
+aes = "0.8.4"
+cfb-mode = "0.8.2"
+rand_core = "0.6.4"

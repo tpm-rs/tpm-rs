@@ -1,0 +1,19 @@
+[package]
+name = "tpm2-crypto-bssl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+build = false
+
+[dependencies]
+tpm2 = { workspace = true }
+bssl-crypto = { git = "https://boringssl.googlesource.com/boringssl" }
+bssl-sys = { git = "https://boringssl.googlesource.com/boringssl" }
+rand_chacha = "0.3.1"
+rand_core = "0.6.4"
+hex-literal = { workspace = true }

@@ -1,0 +1,24 @@
+[package]
+name = "tpm2-simulator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+tpm2-impl = { workspace = true }
+tpm2 = { workspace = true }
+tpm2-platform-linux = { path = "../tpm2-platforms/linux", default-features = false }
+anyhow = { version = "1.0.102", features = ["backtrace"] }
+
+[features]
+default = ["bssl"]
+rust = ["tpm2-platform-linux/rust"]
+crux = ["tpm2-platform-linux/crux"]
+bssl = ["tpm2-platform-linux/bssl"]
+

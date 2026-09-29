@@ -5,3 +5,12 @@ NVChip
 /client/command.port
 /client/platform.port
 *.patch
+command.port
+platform.port
+/boringssl-build
+*.pyc
+__pycache__
+/GEMINI.md
+/pyrightconfig.json
+/.agents
+/_agents

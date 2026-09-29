@@ -1,0 +1,14 @@
+[package]
+name = "bssl-sys"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+links = "bssl"
+build = "../build.rs"
+
+[dependencies]
+bssl-macros = { git = "https://boringssl.googlesource.com/boringssl" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(bindgen_rs_file)'] }

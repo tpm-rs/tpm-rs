@@ -1,11 +1,10 @@
 use crate::{
-    TpmCc, TpmiStCommandTag,
+    TpmCc, TpmSt, TpmiStCommandTag,
     errors::{TpmRc, UnmarshalError},
     marshal::{Marshal, Unmarshal, marshal_helper},
 };
 
 /// TPM 2.0 10-byte standard command header.
-#[doc(alias = "Header_In")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CommandHeader {
     /// Command tag indicating session presence (`TPM_ST_NO_SESSIONS` or `TPM_ST_SESSIONS`).
@@ -53,11 +52,10 @@ impl<'a> Unmarshal<'a> for CommandHeader {
 }
 
 /// TPM 2.0 10-byte standard response header.
-#[doc(alias = "Header_Out")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ResponseHeader {
-    /// Response tag indicating session presence (`TPM_ST_NO_SESSIONS` or `TPM_ST_SESSIONS`).
-    pub tag: TpmiStCommandTag,
+    /// Response tag (`TPM_ST_NO_SESSIONS`, `TPM_ST_SESSIONS`, or `TPM_ST_RSP_COMMAND`).
+    pub tag: TpmSt,
     /// Total size (in bytes) of the response, including this header.
     pub size: u32,
     /// Response code: `Ok(())` for `TPM_RC_SUCCESS` (0), or `Err(TpmRc)` for failures.
@@ -65,8 +63,7 @@ pub struct ResponseHeader {
 }
 
 impl Marshal for ResponseHeader {
-    const MAX_SIZE: usize =
-        TpmiStCommandTag::MAX_SIZE + u32::MAX_SIZE + <Result<(), TpmRc>>::MAX_SIZE;
+    const MAX_SIZE: usize = TpmSt::MAX_SIZE + u32::MAX_SIZE + <Result<(), TpmRc>>::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
@@ -78,8 +75,15 @@ impl Marshal for ResponseHeader {
 
 impl<'a> Unmarshal<'a> for ResponseHeader {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        let tag: TpmSt = Unmarshal::unmarshal(src)?;
+        if !matches!(
+            tag,
+            TpmSt::NO_SESSIONS | TpmSt::SESSIONS | TpmSt::RSP_COMMAND
+        ) {
+            return Err(UnmarshalError::BAD_TAG);
+        }
         Ok(Self {
-            tag: Unmarshal::unmarshal(src)?,
+            tag,
             size: Unmarshal::unmarshal(src)?,
             rc: Unmarshal::unmarshal(src)?,
         })

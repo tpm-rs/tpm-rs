@@ -27,3 +27,8 @@ tempfile = { workspace = true }
 name = "simulator"
 path = "tests/simulator.rs"
 required-features = ["connection-tcp"]
+
+[[test]]
+name = "client_tests"
+path = "tests/client_tests.rs"
+

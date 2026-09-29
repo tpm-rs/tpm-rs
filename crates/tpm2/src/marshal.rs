@@ -42,7 +42,8 @@ pub trait Unmarshal<'a>: Sized {
     /// Unmarshals the structure from the provided byte buffer, modifying the
     /// structure in-place.
     ///
-    /// On success, returns the remaining, unused bytes from `src`.
+    /// On success, returns the remaining, unused bytes from `src`. On failure,
+    /// `*self` remains unmodified.
     fn unmarshal_ref(&mut self, mut src: &'a [u8]) -> Result<&'a [u8], UnmarshalError> {
         *self = Self::unmarshal(&mut src)?;
         Ok(src)
@@ -65,7 +66,9 @@ impl<const N: usize> Marshal for [u8; N] {
 }
 impl<'a, const N: usize> Unmarshal<'a> for &'a [u8; N] {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        let (arr, rest) = src.split_first_chunk().ok_or(UnmarshalError)?;
+        let (arr, rest) = src
+            .split_first_chunk()
+            .ok_or(UnmarshalError::INSUFFICIENT)?;
         *src = rest;
         Ok(arr)
     }
@@ -98,13 +101,17 @@ impl Marshal for bool {
     const MAX_SIZE: usize = u8::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut [u8; Self::MAX_SIZE]) -> usize {
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         u8::from(*self).marshal(dst)
     }
 }
 impl<'a> Unmarshal<'a> for bool {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        u8::unmarshal(src)?.try_into().map_err(|_| UnmarshalError)
+        match u8::unmarshal(src)? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(UnmarshalError::VALUE),
+        }
     }
 }
 
@@ -119,18 +126,5 @@ impl Marshal for () {
 impl<'a> Unmarshal<'a> for () {
     fn unmarshal(_src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_max() {
-        assert_eq!(max(&[]), 0);
-        assert_eq!(max(&[5]), 5);
-        assert_eq!(max(&[1, 5, 3, 9, 2]), 9);
-        assert_eq!(max(&[10, 20, 30]), 30);
     }
 }

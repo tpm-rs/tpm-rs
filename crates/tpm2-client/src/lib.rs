@@ -31,8 +31,9 @@ use connection::Connection;
 use core::fmt;
 use protocol::*;
 use sessions::{AuthError, AuthorizationArea, Session};
+use tpm2::commands::*;
 use tpm2::errors::{TpmRc, UnmarshalError};
-use tpm2::{Command, Marshal, Unmarshal};
+use tpm2::{Marshal, Unmarshal};
 
 pub mod connection;
 pub mod protocol;
@@ -128,7 +129,7 @@ impl<E> PartialEq<AuthError> for ClientError<E> {
     }
 }
 
-/// Runs a TPM command without sessions over the given connection.
+/// Runs a TPM command without sessions or handles over the given connection.
 ///
 /// # Errors
 /// Returns an error when marshaling, the underlying transaction on the
@@ -143,11 +144,12 @@ pub fn run_command<'a, CmdT: Command, T: Connection>(
 ) -> Result<CmdT::Response<'a>, ClientError<T::Error>>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
+    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    run_command_with_sessions(cmd, (), tpm, resp_buffer)
+    Ok(run_command_with_handles(cmd, CmdT::Handles::default(), (), tpm, resp_buffer)?.0)
 }
 
-/// Runs a TPM command with the provided sessions over the given
+/// Runs a TPM command with the provided handles and sessions over the given
 /// connection.
 ///
 /// # Errors
@@ -157,7 +159,7 @@ where
 /// Note that a `TPM_RC` error in the response header translates to
 /// [`ClientError::Tpm`].
 #[allow(clippy::type_complexity)]
-pub fn run_command_with_sessions<
+pub fn run_command_with_handles<
     'a,
     CmdT: Command,
     T: Connection,
@@ -167,12 +169,14 @@ pub fn run_command_with_sessions<
     AA: AuthorizationArea<X, Y, Z>,
 >(
     cmd: &CmdT,
+    cmd_handles: CmdT::Handles,
     cmd_sessions: AA,
     tpm: &mut T,
     resp_buffer: &'a mut [u8],
-) -> Result<CmdT::Response<'a>, ClientError<T::Error>>
+) -> Result<(CmdT::Response<'a>, CmdT::RespHandles), ClientError<T::Error>>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
+    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut cmd_buffer = [0u8; CMD_BUFFER_SIZE];
     let mut cmd_header = CommandHeader::with_sessions(!cmd_sessions.is_empty(), CmdT::CMD_CODE);
@@ -182,16 +186,26 @@ where
             .unwrap(),
     );
 
-    written += write_command_sessions(&cmd_sessions, &mut cmd_buffer[written..])?;
-    if written + CmdT::MAX_SIZE > CMD_BUFFER_SIZE {
+    if written + CmdT::Handles::MAX_SIZE > CMD_BUFFER_SIZE {
         return Err(ClientError::CommandTooLarge);
     }
-    let cmd_len = cmd.marshal(
-        (&mut cmd_buffer[written..written + CmdT::MAX_SIZE])
+    let handles_len = cmd_handles.marshal(
+        (&mut cmd_buffer[written..written + CmdT::Handles::MAX_SIZE])
             .try_into()
             .ok()
             .unwrap(),
     );
+    written += handles_len;
+    written += write_command_sessions(&cmd_sessions, &mut cmd_buffer[written..])?;
+    let mut param_buf = [0u8; 8192];
+    if CmdT::MAX_SIZE > param_buf.len() {
+        return Err(ClientError::CommandTooLarge);
+    }
+    let cmd_len = cmd.marshal((&mut param_buf[..CmdT::MAX_SIZE]).try_into().ok().unwrap());
+    if written + cmd_len > CMD_BUFFER_SIZE {
+        return Err(ClientError::CommandTooLarge);
+    }
+    cmd_buffer[written..written + cmd_len].copy_from_slice(&param_buf[..cmd_len]);
     written += cmd_len;
 
     // Update the command size
@@ -212,7 +226,8 @@ where
         return Err(ClientError::ResponseTooLarge);
     }
     let mut slice = &resp_buffer[read..resp_size];
-    if resp_header.tag == tpm2::TpmiStCommandTag::Sessions {
+    let resp_handles = CmdT::RespHandles::unmarshal(&mut slice)?;
+    if resp_header.tag == tpm2::TpmSt::SESSIONS {
         let _param_size = u32::unmarshal(&mut slice)?;
     }
     let resp = <CmdT::Response<'a>>::unmarshal(&mut slice)?;
@@ -221,8 +236,5 @@ where
     if !slice.is_empty() {
         return Err(ClientError::TrailingBytes);
     }
-    Ok(resp)
+    Ok((resp, resp_handles))
 }
-
-#[cfg(test)]
-mod tests;

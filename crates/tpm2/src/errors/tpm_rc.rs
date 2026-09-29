@@ -3,7 +3,6 @@ use core::{error, fmt, num::NonZero};
 use crate::{Marshal, Unmarshal, errors::UnmarshalError};
 
 /// Represents a TPM 2.0 service error as defined in specification as `TPM_RC`.
-#[doc(alias = "TPM_RC")]
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct TpmRc(NonZero<u32>);
 
@@ -59,6 +58,7 @@ impl TpmRc {
     const WARN: u32 = 1 << 11;
 
     /// Creates a Format-Zero Response Code (bit 7 must be clear).
+    #[inline]
     const fn fmt0(e: u8) -> Self {
         let x = e as u32;
         assert!(x & Self::FMT0_E_MASK == x);
@@ -66,10 +66,19 @@ impl TpmRc {
     }
     /// Returns true if this is a Format-Zero Response Code.
     pub const fn is_fmt0(self) -> bool {
-        const MASK: u32 = TpmRc::FMT1 | TpmRc::VER1 | TpmRc::FMT0_RESERVED | TpmRc::RESERVED;
-        self.get() & MASK == Self::VER1
+        const MASK: u32 = TpmRc::FMT1 | TpmRc::FMT0_RESERVED | TpmRc::RESERVED;
+        self.get() & MASK == 0
+    }
+    /// Returns true if this is a TPM 2.0 Format-Zero Response Code (bit 8 `V` is set).
+    pub const fn is_ver1(self) -> bool {
+        self.is_fmt0() && (self.get() & Self::VER1 == Self::VER1)
+    }
+    /// Returns true if this is a legacy (TPM 1.2) Format-Zero Response Code (bit 8 `V` is clear).
+    pub const fn is_legacy(self) -> bool {
+        self.is_fmt0() && (self.get() & Self::VER1 == 0)
     }
     /// Set the warning bit (must be Format-Zero).
+    #[inline]
     const fn warning(self) -> Self {
         assert!(self.is_fmt0());
         assert!(!self.is_warning());
@@ -102,6 +111,7 @@ impl TpmRc {
     const FMT1_N_MASK: u32 = 0b1111_0000_0000;
     const FMT1_S: u32 = 1 << 11;
     /// Create a Format-One Response Code (bits 6 & 7 must be clear).
+    #[inline]
     const fn fmt1(e: u8) -> Fmt1 {
         let x = e as u32;
         assert!(x & Self::FMT1_E_MASK == x);
@@ -119,10 +129,19 @@ impl TpmRc {
         }
         let fmt1 = (self.get() & Self::FMT1_E_MASK) | Self::FMT1;
         let pos = match self.get() & (Self::FMT1_P | Self::FMT1_N_MASK) {
-            0x000 | 0x040 | 0x800 => None,
+            0x000 => None,
             pos => Some(Position(NonZero::new(pos).unwrap())),
         };
         Some((Fmt1(NonZero::new(fmt1).unwrap()), pos))
+    }
+
+    /// Attaches a [`Position`] to this response code if it is a Format-One code without a position.
+    #[inline]
+    pub const fn with_position(self, pos: Position) -> Self {
+        match self.to_fmt1() {
+            Some((fmt1, None)) => fmt1.with(pos),
+            _ => self,
+        }
     }
 }
 
@@ -393,24 +412,61 @@ impl PartialEq<TpmRc> for Fmt1 {
 pub struct Position(NonZero<u32>);
 
 impl Position {
+    /// Position modifier for an unspecified parameter (`TPM_RC_P`, index 0).
+    pub const UNSPECIFIED_PARAMETER: Self = Self::parameter(0);
+
+    /// Position modifier for an unspecified session (`TPM_RC_S`, index 0).
+    pub const UNSPECIFIED_SESSION: Self = Self::session(0);
+
+    /// Creates a position modifier for an unspecified parameter (`TPM_RC_P`).
+    #[inline]
+    pub const fn unspecified_parameter() -> Self {
+        Self::UNSPECIFIED_PARAMETER
+    }
+
+    /// Creates a position modifier for an unspecified session (`TPM_RC_S`).
+    #[inline]
+    pub const fn unspecified_session() -> Self {
+        Self::UNSPECIFIED_SESSION
+    }
+
     /// Position for a handle (1-based index, 1..=7).
+    #[inline]
     pub const fn handle(n: u8) -> Self {
         assert!(n >= 1 && n <= 7, "handle index must be 1..=7");
         let raw_n = (n as u32) << 8;
         Self(NonZero::new(raw_n).unwrap())
     }
-    /// Position for a session (1-based index, 1..=7).
+
+    /// Position for a session (0..=7, where 0 indicates an unspecified session `TPM_RC_S`).
+    #[inline]
     pub const fn session(n: u8) -> Self {
-        assert!(n >= 1 && n <= 7, "session index must be 1..=7");
+        assert!(n <= 7, "session index must be 0..=7");
         let raw_n = (n as u32) << 8;
         Self(NonZero::new(raw_n | TpmRc::FMT1_S).unwrap())
     }
-    /// Position for a parameter (1-based index, 1..=15).
+
+    /// Position for a parameter (0..=15, where 0 indicates an unspecified parameter `TPM_RC_P`).
+    #[inline]
     pub const fn parameter(n: u8) -> Self {
-        assert!(n >= 1 && n <= 15, "parameter index must be 1..=15");
+        assert!(n <= 15, "parameter index must be 0..=15");
         let raw_n = (n as u32) << 8;
         Self(NonZero::new(raw_n | TpmRc::FMT1_P).unwrap())
     }
+
+    /// Returns the raw `u32` bits of this position modifier.
+    #[inline]
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+
+    /// Returns true if this position represents an unspecified parameter or session (index 0).
+    #[inline]
+    pub const fn is_unspecified(self) -> bool {
+        self.0.get() == TpmRc::FMT1_P || self.0.get() == TpmRc::FMT1_S
+    }
+
+    /// Returns the 1-based handle index (1..=7) if this position represents a handle.
     pub const fn handle_num(self) -> Option<u8> {
         if self.0.get() & (TpmRc::FMT1_P | TpmRc::FMT1_S) == 0 {
             let n = (self.0.get() >> 8) as u8;
@@ -420,6 +476,9 @@ impl Position {
         }
         None
     }
+
+    /// Returns the session index (0..=7) if this position represents a session,
+    /// where 0 indicates an unspecified session (`TPM_RC_S`).
     pub const fn session_num(self) -> Option<u8> {
         if self.0.get() & (TpmRc::FMT1_P | TpmRc::FMT1_S) == TpmRc::FMT1_S {
             let n = (self.0.get() >> 8) as u8;
@@ -429,6 +488,9 @@ impl Position {
         }
         None
     }
+
+    /// Returns the parameter index (0..=15) if this position represents a parameter,
+    /// where 0 indicates an unspecified parameter (`TPM_RC_P`).
     pub const fn parameter_num(self) -> Option<u8> {
         if self.0.get() & TpmRc::FMT1_P == TpmRc::FMT1_P {
             return Some((self.0.get() >> 8) as u8);
@@ -442,9 +504,17 @@ impl fmt::Display for Position {
         if let Some(n) = self.handle_num() {
             write!(f, "Position::handle({})", n)
         } else if let Some(n) = self.session_num() {
-            write!(f, "Position::session({})", n)
+            if n == 0 {
+                write!(f, "Position::unspecified_session()")
+            } else {
+                write!(f, "Position::session({})", n)
+            }
         } else if let Some(n) = self.parameter_num() {
-            write!(f, "Position::parameter({})", n)
+            if n == 0 {
+                write!(f, "Position::unspecified_parameter()")
+            } else {
+                write!(f, "Position::parameter({})", n)
+            }
         } else {
             write!(f, "Position(0x{:03X})", self.0.get())
         }

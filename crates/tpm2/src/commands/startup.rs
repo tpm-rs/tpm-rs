@@ -9,7 +9,14 @@
 //! Each command includes its corresponding request parameters, handle list,
 //! response parameters, and [`Command`] trait implementation.
 
+use super::Command;
 use crate::{errors::UnmarshalError, *};
+
+/// [TPM2.0 1.83] 9.2 _TPM_Init
+///
+/// Hardware indication / architectural platform signal sent by the platform
+/// to reset the TPM (power-on, reset, or restart). Not transmitted as an over-the-wire command.
+pub struct Init {}
 
 /// [TPM2.0 1.83] 9.3 TPM2_Startup (Command)
 #[doc(alias = "TPM2_Startup")]
@@ -20,7 +27,9 @@ pub struct Startup {
 }
 impl Command for Startup {
     const CMD_CODE: TpmCc = TpmCc::Startup;
+    type Handles = ();
     type Response<'a> = ();
+    type RespHandles = ();
 }
 impl Marshal for Startup {
     const MAX_SIZE: usize = TpmSu::MAX_SIZE;
@@ -34,7 +43,7 @@ impl Marshal for Startup {
 impl<'a> Unmarshal<'a> for Startup {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            startup_type: Unmarshal::unmarshal(src)?,
+            startup_type: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
         })
     }
 }
@@ -48,7 +57,9 @@ pub struct Shutdown {
 }
 impl Command for Shutdown {
     const CMD_CODE: TpmCc = TpmCc::Shutdown;
+    type Handles = ();
     type Response<'a> = ();
+    type RespHandles = ();
 }
 impl Marshal for Shutdown {
     const MAX_SIZE: usize = TpmSu::MAX_SIZE;
@@ -62,7 +73,7 @@ impl Marshal for Shutdown {
 impl<'a> Unmarshal<'a> for Shutdown {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            shutdown_type: Unmarshal::unmarshal(src)?,
+            shutdown_type: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
         })
     }
 }
