@@ -485,6 +485,31 @@ impl<'a> Unmarshal<'a> for TpmtSignature<'a> {
     }
 }
 
+impl Marshal for Option<TpmtSignature<'_>> {
+    const MAX_SIZE: usize = TpmtSignature::MAX_SIZE;
+    type MaxBuffer = [u8; TpmtSignature::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let Some(s) = self else {
+            return marshal_helper(&Alg::NULL, dst, 0);
+        };
+        s.marshal(dst)
+    }
+}
+
+impl<'a> Unmarshal<'a> for Option<TpmtSignature<'a>> {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        let orig = *src;
+        Ok(match Alg::unmarshal(src)? {
+            Alg::NULL => None,
+            _ => {
+                *src = orig;
+                Some(TpmtSignature::unmarshal(src)?)
+            }
+        })
+    }
+}
+
 /// Tagged signature scheme structure specifying a signature algorithm (HMAC, RSASSA, RSAPSS, ECDSA, ECDAA, SM2, ECSchnorr) and its hash algorithm.
 #[doc(alias = "TPMT_SIG_SCHEME")]
 #[doc(alias = "TPMU_SIG_SCHEME")]

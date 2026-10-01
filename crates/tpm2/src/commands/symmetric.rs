@@ -13,7 +13,7 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 pub struct EncryptDecrypt<'a> {
     pub key_handle: Handle,
     pub decrypt: bool,
-    pub mode: Option<TpmiAlgSymMode>,
+    pub mode: Option<TpmiAlgCipherMode>,
     pub iv_in: Tpm2bIv<'a>,
     pub in_data: Tpm2bMaxBuffer<'a>,
 }
@@ -38,7 +38,7 @@ impl Message for EncryptDecrypt<'_> {
 }
 impl Marshal for EncryptDecrypt<'_> {
     const MAX_SIZE: usize = bool::MAX_SIZE
-        + <Option<TpmiAlgSymMode>>::MAX_SIZE
+        + <Option<TpmiAlgCipherMode>>::MAX_SIZE
         + Tpm2bIv::MAX_SIZE
         + Tpm2bMaxBuffer::MAX_SIZE;
     type MaxBuffer = [u8; EncryptDecrypt::MAX_SIZE];
@@ -98,7 +98,7 @@ pub struct EncryptDecrypt2<'a> {
     pub key_handle: Handle,
     pub in_data: Tpm2bMaxBuffer<'a>,
     pub decrypt: bool,
-    pub mode: Option<TpmiAlgSymMode>,
+    pub mode: Option<TpmiAlgCipherMode>,
     pub iv_in: Tpm2bIv<'a>,
 }
 /// TPM2_EncryptDecrypt2 (Response)
@@ -122,7 +122,7 @@ impl Message for EncryptDecrypt2<'_> {
 impl Marshal for EncryptDecrypt2<'_> {
     const MAX_SIZE: usize = Tpm2bMaxBuffer::MAX_SIZE
         + bool::MAX_SIZE
-        + <Option<TpmiAlgSymMode>>::MAX_SIZE
+        + <Option<TpmiAlgCipherMode>>::MAX_SIZE
         + Tpm2bIv::MAX_SIZE;
     type MaxBuffer = [u8; EncryptDecrypt2::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {

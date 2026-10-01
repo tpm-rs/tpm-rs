@@ -20,7 +20,7 @@ pub struct Certify<'a> {
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct CertifyRsp<'a> {
     pub certify_info: Tpm2bAttest<'a>,
-    pub signature: TpmtSignature<'a>,
+    pub signature: Option<TpmtSignature<'a>>,
 }
 
 impl Command for Certify<'_> {
@@ -62,7 +62,7 @@ impl Message for CertifyRsp<'_> {
     }
 }
 impl Marshal for CertifyRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + TpmtSignature::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + <Option<TpmtSignature>>::MAX_SIZE;
     type MaxBuffer = [u8; CertifyRsp::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.certify_info, dst, 0);
@@ -98,7 +98,7 @@ pub struct CertifyCreation<'a> {
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct CertifyCreationRsp<'a> {
     pub certify_info: Tpm2bAttest<'a>,
-    pub signature: TpmtSignature<'a>,
+    pub signature: Option<TpmtSignature<'a>>,
 }
 
 impl Command for CertifyCreation<'_> {
@@ -147,7 +147,7 @@ impl Message for CertifyCreationRsp<'_> {
     }
 }
 impl Marshal for CertifyCreationRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + TpmtSignature::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + <Option<TpmtSignature>>::MAX_SIZE;
     type MaxBuffer = [u8; CertifyCreationRsp::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.certify_info, dst, 0);
@@ -174,14 +174,14 @@ pub struct Quote<'a> {
     pub sign_handle: Handle,
     pub qualifying_data: Tpm2bData<'a>,
     pub in_scheme: Option<TpmtSigScheme>,
-    pub pc_rselect: TpmlPcrSelection,
+    pub pcr_select: TpmlPcrSelection,
 }
 /// TPM2_Quote (Response)
 #[doc(alias = "Quote_Out")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct QuoteRsp<'a> {
     pub quoted: Tpm2bAttest<'a>,
-    pub signature: TpmtSignature<'a>,
+    pub signature: Option<TpmtSignature<'a>>,
 }
 
 impl Command for Quote<'_> {
@@ -201,7 +201,7 @@ impl Marshal for Quote<'_> {
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.qualifying_data, dst, 0);
         let count = marshal_helper(&self.in_scheme, dst, count);
-        marshal_helper(&self.pc_rselect, dst, count)
+        marshal_helper(&self.pcr_select, dst, count)
     }
 }
 impl<'a> UnmarshalMessage<'a> for Quote<'a> {
@@ -213,7 +213,7 @@ impl<'a> UnmarshalMessage<'a> for Quote<'a> {
             sign_handle,
             qualifying_data: Unmarshal::unmarshal(src)?,
             in_scheme: Unmarshal::unmarshal(src)?,
-            pc_rselect: Unmarshal::unmarshal(src)?,
+            pcr_select: Unmarshal::unmarshal(src)?,
         })
     }
 }
@@ -225,7 +225,7 @@ impl Message for QuoteRsp<'_> {
     }
 }
 impl Marshal for QuoteRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + TpmtSignature::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + <Option<TpmtSignature>>::MAX_SIZE;
     type MaxBuffer = [u8; QuoteRsp::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.quoted, dst, 0);
@@ -260,7 +260,7 @@ pub struct GetSessionAuditDigest<'a> {
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct GetSessionAuditDigestRsp<'a> {
     pub audit_info: Tpm2bAttest<'a>,
-    pub signature: TpmtSignature<'a>,
+    pub signature: Option<TpmtSignature<'a>>,
 }
 
 impl Command for GetSessionAuditDigest<'_> {
@@ -307,7 +307,7 @@ impl Message for GetSessionAuditDigestRsp<'_> {
     }
 }
 impl Marshal for GetSessionAuditDigestRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + TpmtSignature::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + <Option<TpmtSignature>>::MAX_SIZE;
     type MaxBuffer = [u8; GetSessionAuditDigestRsp::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.audit_info, dst, 0);
@@ -341,7 +341,7 @@ pub struct GetCommandAuditDigest<'a> {
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct GetCommandAuditDigestRsp<'a> {
     pub audit_info: Tpm2bAttest<'a>,
-    pub signature: TpmtSignature<'a>,
+    pub signature: Option<TpmtSignature<'a>>,
 }
 
 impl Command for GetCommandAuditDigest<'_> {
@@ -383,7 +383,7 @@ impl Message for GetCommandAuditDigestRsp<'_> {
     }
 }
 impl Marshal for GetCommandAuditDigestRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + TpmtSignature::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + <Option<TpmtSignature>>::MAX_SIZE;
     type MaxBuffer = [u8; GetCommandAuditDigestRsp::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.audit_info, dst, 0);
@@ -417,7 +417,7 @@ pub struct GetTime<'a> {
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct GetTimeRsp<'a> {
     pub time_info: Tpm2bAttest<'a>,
-    pub signature: TpmtSignature<'a>,
+    pub signature: Option<TpmtSignature<'a>>,
 }
 
 impl Command for GetTime<'_> {
@@ -459,7 +459,7 @@ impl Message for GetTimeRsp<'_> {
     }
 }
 impl Marshal for GetTimeRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + TpmtSignature::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + <Option<TpmtSignature>>::MAX_SIZE;
     type MaxBuffer = [u8; GetTimeRsp::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.time_info, dst, 0);

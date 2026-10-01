@@ -262,9 +262,13 @@ impl<'a> UnmarshalMessage<'a> for PolicyOR<'a> {
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
+        let p_hash_list = TpmlDigest::unmarshal(src)?;
+        if p_hash_list.as_slice().len() < 2 {
+            return Err(UnmarshalError);
+        }
         Ok(Self {
             policy_session,
-            p_hash_list: Unmarshal::unmarshal(src)?,
+            p_hash_list,
         })
     }
 }

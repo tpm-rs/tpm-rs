@@ -9,6 +9,14 @@
 //! **Part 3: Commands** of the TPM 2.0 Specification, several intentional
 //! design differences exist:
 //!
+//! ### [`Handle`] types
+//!
+//! Currently, we do not use different types for any of the handles, so types
+//! like `TPMI_DH_OBJECT`, `TPMI_DH_PCR`, or `TPMI_RH_NV_INDEX` are all just
+//! represented by a [`Handle`]. In the future, when more fine-grained handle
+//! types are added, [`UnmarshalMessage::unmarshal_with_handles`] will perform
+//! additional validation to ensure handles are in the correct range.
+//!
 //! ### Intentionally omitted commands
 //!
 //! While we intend to have comprehensive definitions for most commands, we
@@ -79,6 +87,16 @@
 //!   - [`VerifySequenceStart`](TpmCc::VerifySequenceStart)
 //!
 //! This module comment will be updated as we add new commands.
+//!
+//! ## [`Message`] / [`UnmarshalMessage`] implementations
+//!
+//! Currently, these traits are implemented manually (and repetitively) for all
+//! the commands and responses. However these implementations are very simple
+//! and just call [`Marshal`] / `Unmarshal` on each parameter, and do no
+//! additional command validation, with the following exceptions:
+//!
+//! - [`PolicyOR::p_hash_list`] is checked to ensure it has at least 2 digests.
+//!
 #![allow(deprecated)] // So we can define now-deprecated Commands / impls.
 use crate::{Handle, Marshal, TpmCc, errors::UnmarshalError};
 

@@ -586,7 +586,7 @@ pub struct NVCertify<'a> {
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct NVCertifyRsp<'a> {
     pub certify_info: Tpm2bAttest<'a>,
-    pub signature: TpmtSignature<'a>,
+    pub signature: Option<TpmtSignature<'a>>,
 }
 
 impl Command for NVCertify<'_> {
@@ -634,7 +634,7 @@ impl Message for NVCertifyRsp<'_> {
     }
 }
 impl Marshal for NVCertifyRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + TpmtSignature::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bAttest::MAX_SIZE + <Option<TpmtSignature>>::MAX_SIZE;
     type MaxBuffer = [u8; NVCertifyRsp::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.certify_info, dst, 0);
