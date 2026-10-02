@@ -1,5 +1,5 @@
 use crate::ClientError;
-use crate::sessions::AuthorizationArea;
+use crate::sessions::{AuthError, AuthorizationArea, CommandData, ResponseData};
 use core::mem::size_of;
 use tpm2::errors::UnmarshalError;
 use tpm2::*;
@@ -17,6 +17,9 @@ pub const RESP_BUFFER_SIZE: usize = 8192;
 /// - the [`Handle`]s
 /// - the [`AuthorizationArea`] (if present)
 /// - the [`Command`]'s parameters
+///
+/// `names` are the Names of the command's handles, which sessions may need
+/// (see [`CommandData::names`]).
 ///
 /// ## Compile-time checks
 ///
@@ -51,64 +54,77 @@ pub const RESP_BUFFER_SIZE: usize = 8192;
 /// let mut buf = [0u8; CMD_BUFFER_SIZE];
 /// let cmd = TooBig([0; CMD_BUFFER_SIZE]);
 /// // Fails to compile, raising "command is too big for buffer".
-/// marshal_command(&cmd, &(), &mut buf);
+/// marshal_command(&cmd, &[], &mut (), &mut buf);
 /// ```
 pub fn marshal_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
     cmd: &C,
-    cmd_sessions: &impl AuthorizationArea,
+    names: &[Option<Tpm2bName>],
+    cmd_sessions: &mut impl AuthorizationArea,
     dst: &mut [u8; CMD_BUFFER_SIZE],
-) -> usize {
+) -> Result<usize, AuthError> {
+    const MAX_AUTH_SIZE: usize = 3 * TpmsAuthCommand::MAX_SIZE;
     const {
         // Note: size_of::<Handle>() == Handle::MAX_SIZE (4 bytes).
         let max_size = CommandHeader::MAX_SIZE
             + size_of::<C::Handles>()
-            + (u32::MAX_SIZE + 3 * TpmsAuthCommand::MAX_SIZE)
+            + (u32::MAX_SIZE + MAX_AUTH_SIZE)
             + C::MAX_SIZE;
         assert!(max_size <= CMD_BUFFER_SIZE, "command is too big for buffer");
     };
 
-    let mut remaining_buf: &mut [u8] = dst;
-
-    // Don't marshal the header until later, but increment bytes_written.
-    let header_buf: &mut [u8; CommandHeader::MAX_SIZE];
-    (header_buf, remaining_buf) = remaining_buf.split_first_chunk_mut().unwrap();
-    let mut bytes_written = CommandHeader::MAX_SIZE;
+    // Don't marshal the header until later, but skip over it.
+    let mut offset = CommandHeader::MAX_SIZE;
 
     // Marshal Handles
-    for handle in cmd.handles().as_ref() {
-        let handle_buf: &mut [u8; Handle::MAX_SIZE];
-        (handle_buf, remaining_buf) = remaining_buf.split_first_chunk_mut().unwrap();
-        bytes_written += handle.marshal(handle_buf);
+    let handles = cmd.handles();
+    for handle in handles.as_ref() {
+        offset += handle.marshal(dst[offset..].first_chunk_mut().unwrap());
     }
 
-    // Marshal Sessions
     if cmd_sessions.tag() == TpmiStCommandTag::Sessions {
-        // Don't marshal auth_size until later, but increment bytes_written.
-        let auth_size_buf: &mut [u8; u32::MAX_SIZE];
-        (auth_size_buf, remaining_buf) = remaining_buf.split_first_chunk_mut().unwrap();
-        bytes_written += u32::MAX_SIZE;
+        // The sessions (via cpHash) depend on the parameters, so marshal the
+        // parameters first, after space reserved for the largest possible
+        // authorization area. Then marshal the sessions and move the
+        // parameters down to directly follow them.
+        let auth_size_offset = offset;
+        let auth_offset = auth_size_offset + u32::MAX_SIZE;
+        let params_offset = auth_offset + MAX_AUTH_SIZE;
 
-        let auth_buf: &mut [u8; 3 * TpmsAuthCommand::MAX_SIZE] =
-            remaining_buf.first_chunk_mut().unwrap();
-        let auth_size = cmd_sessions.marshal_auth_commands(auth_buf);
-        remaining_buf = &mut remaining_buf[auth_size..];
-        bytes_written += auth_size;
+        let (auth_buf, params_buf) = dst[auth_offset..].split_at_mut(MAX_AUTH_SIZE);
+        let auth_buf: &mut [u8; MAX_AUTH_SIZE] = auth_buf.try_into().unwrap();
+        let params_buf: &mut [u8; N] = params_buf.first_chunk_mut().unwrap();
 
-        (auth_size as u32).marshal(auth_size_buf);
+        // Marshal Parameters
+        let params_size = cmd.marshal(params_buf);
+
+        // Marshal Sessions
+        let cmd_data = CommandData {
+            code: C::CMD_CODE,
+            handles: handles.as_ref(),
+            names,
+            params: &params_buf[..params_size],
+        };
+        let auth_size = cmd_sessions.marshal_auth_commands(&cmd_data, auth_buf)?;
+        (auth_size as u32).marshal(dst[auth_size_offset..].first_chunk_mut().unwrap());
+
+        dst.copy_within(
+            params_offset..params_offset + params_size,
+            auth_offset + auth_size,
+        );
+        offset = auth_offset + auth_size + params_size;
+    } else {
+        // Marshal Parameters
+        offset += cmd.marshal(dst[offset..].first_chunk_mut().unwrap());
     }
-
-    // Marshal Parameters
-    let dst: &mut [u8; N] = remaining_buf.first_chunk_mut().unwrap();
-    bytes_written += cmd.marshal(dst);
 
     // Marshal the header after we've computed the total bytes written.
     CommandHeader {
         tag: cmd_sessions.tag(),
-        size: bytes_written as u32,
+        size: offset as u32,
         code: C::CMD_CODE,
     }
-    .marshal(header_buf);
-    bytes_written
+    .marshal(dst.first_chunk_mut().unwrap());
+    Ok(offset)
 }
 
 /// Unmarshals a full response from `src`.
@@ -119,9 +135,11 @@ pub fn marshal_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
 /// - [`TpmiStCommandTag`] session tag
 /// - the response [`Handle`]s
 /// - the `parameterSize` and response parameters
-/// - the [`AuthorizationArea`] responses (if present)
+/// - the [`AuthorizationArea`] responses (if present), for the command
+///   `cmd_code`
 pub fn unmarshal_response<'a, R: UnmarshalMessage<'a>, E>(
-    cmd_sessions: &impl AuthorizationArea,
+    cmd_code: TpmCc,
+    cmd_sessions: &mut impl AuthorizationArea,
     src: &'a [u8],
 ) -> Result<R, ClientError<E>> {
     let mut remaining = src;
@@ -154,12 +172,16 @@ pub fn unmarshal_response<'a, R: UnmarshalMessage<'a>, E>(
     }
 
     // Unmarshal Parameters
+    let rsp_data = ResponseData {
+        code: cmd_code,
+        params: remaining,
+    };
     let resp = R::unmarshal_with_handles(rsp_handles, &mut remaining)?;
     if !remaining.is_empty() {
         return Err(ClientError::TrailingBytes);
     }
 
     // Unmarshal and validate Sessions
-    cmd_sessions.validate_auth_responses(sessions)?;
+    cmd_sessions.validate_auth_responses(&rsp_data, sessions)?;
     Ok(resp)
 }

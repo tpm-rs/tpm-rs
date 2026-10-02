@@ -1,4 +1,4 @@
-use crate::sessions::{AuthError, Session};
+use crate::sessions::{AuthError, CommandData, ResponseData, Session};
 use tpm2::{Handle, Tpm2bAuth, Tpm2bNonce, TpmaSession, TpmsAuthCommand, TpmsAuthResponse};
 
 /// A password session.
@@ -41,15 +41,19 @@ impl<'a> PasswordSession<'a> {
 }
 
 impl Session for PasswordSession<'_> {
-    fn auth_command(&self) -> TpmsAuthCommand<'_> {
-        TpmsAuthCommand {
+    fn auth_command(&mut self, _: &CommandData) -> Result<TpmsAuthCommand<'_>, AuthError> {
+        Ok(TpmsAuthCommand {
             session_handle: Handle::RS_PW,
             nonce: Tpm2bNonce::default(),
             session_attributes: TpmaSession(0),
             hmac: self.auth,
-        }
+        })
     }
-    fn validate_auth_response(&self, auth: &TpmsAuthResponse) -> Result<(), AuthError> {
+    fn validate_auth_response(
+        &mut self,
+        _: &ResponseData,
+        auth: &TpmsAuthResponse,
+    ) -> Result<(), AuthError> {
         // Password response auth should have empty nonce/hmac and ContinueSession attribute.
         if !auth.nonce.as_slice().is_empty()
             || auth.session_attributes.0 != 0x1
