@@ -31,7 +31,8 @@ use connection::Connection;
 use core::fmt;
 use protocol::*;
 use sessions::{AuthError, AuthorizationArea};
-use tpm2::Command;
+use tpm2::{Command, Marshal, Tpm2bName, TpmiAlgHash, TpmsNvPublic, TpmtHa};
+use tpm2::crypto::{CryptoError, Hash, hash};
 use tpm2::errors::{TpmRc, UnmarshalError};
 
 pub mod connection;
@@ -130,6 +131,38 @@ impl<E> PartialEq<AuthError> for ClientError<E> {
     }
 }
 
+/// Computes the Name of an NV index from its public area
+/// (TPM 2.0 Part 1, Section 16):
+///
+/// ```text
+/// Name := nameAlg || H_nameAlg(TPMS_NV_PUBLIC)
+/// ```
+///
+/// Note that the TPM sets [`TpmaNv::WRITTEN`](tpm2::TpmaNv::WRITTEN) on the
+/// first write to an index, which changes its Name. Commands after that
+/// (e.g. `TPM2_NV_Read`) need the Name computed with that attribute set.
+pub fn nv_name<'a>(
+    h: &impl Hash,
+    public: &TpmsNvPublic,
+    out: &'a mut [u8; Tpm2bName::CAP],
+) -> Result<Tpm2bName<'a>, CryptoError> {
+    let mut public_buf = [0u8; TpmsNvPublic::MAX_SIZE];
+    let public_size = public.marshal(&mut public_buf);
+
+    let mut digest_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+    let digest = hash(
+        h,
+        public.name_alg,
+        &public_buf[..public_size],
+        &mut digest_buf,
+    )?;
+
+    // A Name is a marshaled TPMT_HA.
+    const { assert!(Tpm2bName::CAP == TpmtHa::MAX_SIZE) };
+    let name_size = digest.marshal(out);
+    Ok(Tpm2bName::new(&out[..name_size]).unwrap())
+}
+
 /// Runs a TPM command without sessions over the given connection.
 ///
 /// # Errors
@@ -143,11 +176,21 @@ pub fn run_command<'a, C: Command<MaxBuffer = [u8; N]>, T: Connection, const N: 
     tpm: &mut T,
     resp_buffer: &'a mut [u8],
 ) -> Result<C::Response<'a>, ClientError<T::Error>> {
-    run_command_with_sessions(cmd, (), tpm, resp_buffer)
+    run_command_with_sessions(cmd, &[], &mut (), tpm, resp_buffer)
 }
 
 /// Runs a TPM command with the provided sessions over the given
 /// connection.
+///
+/// `names` are the Names of the command's handles, in handle order. Sessions
+/// that compute a cpHash (e.g. [`HmacSession`](sessions::HmacSession)) need
+/// a Name for every handle. Names of PCR, session, and permanent handles are
+/// derived from the handle, so a `None` (or missing) entry can be used.
+/// Other Names (e.g. of NV indices or objects) must be provided.
+///
+/// Sessions are updated in place (e.g. rolling nonces), so they are borrowed
+/// mutably. Multiple sessions can be passed as a tuple of `&mut` references,
+/// e.g. `&mut (&mut s1, &mut s2)`.
 ///
 /// # Errors
 /// Returns an error when marshaling, the underlying transaction on the
@@ -162,18 +205,19 @@ pub fn run_command_with_sessions<
     const N: usize,
 >(
     cmd: &C,
-    cmd_sessions: impl AuthorizationArea,
+    names: &[Option<Tpm2bName>],
+    cmd_sessions: &mut impl AuthorizationArea,
     tpm: &mut T,
     resp_buffer: &'a mut [u8],
 ) -> Result<C::Response<'a>, ClientError<T::Error>> {
     let mut cmd_buffer = [0u8; CMD_BUFFER_SIZE];
-    let written = marshal_command(cmd, &cmd_sessions, &mut cmd_buffer);
+    let written = marshal_command(cmd, names, cmd_sessions, &mut cmd_buffer)?;
 
     let resp_buffer = tpm
         .transact(&cmd_buffer[..written], resp_buffer)
         .map_err(ClientError::Connection)?;
 
-    unmarshal_response(&cmd_sessions, resp_buffer)
+    unmarshal_response(C::CMD_CODE, cmd_sessions, resp_buffer)
 }
 
 #[cfg(test)]

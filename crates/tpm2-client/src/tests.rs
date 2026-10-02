@@ -1,5 +1,5 @@
 use super::*;
-use crate::sessions::{PasswordSession, Session};
+use crate::sessions::{PasswordSession, ResponseData, Session};
 use tpm2::*;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -216,10 +216,10 @@ impl Command for TestSessionsCommand {
 fn test_response_missing_sessions() {
     let mut fake_tpm = FakeTpm::default();
     let cmd = TestSessionsCommand();
-    let session = PasswordSession::default();
+    let mut session = PasswordSession::default();
     let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
-        run_command_with_sessions(&cmd, session, &mut fake_tpm, &mut resp_buffer),
+        run_command_with_sessions(&cmd, &[], &mut session, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::UnexpectedTag)
     );
 }
@@ -233,15 +233,43 @@ fn test_response_session_fails_validation() {
         session_attributes: TpmaSession(0xf),
         ..Default::default()
     };
-    let validation_failure = PasswordSession::default().validate_auth_response(&invalid_auth);
+    let rsp_data = ResponseData {
+        code: TestSessionsCommand::CMD_CODE,
+        params: &[],
+    };
+    let validation_failure =
+        PasswordSession::default().validate_auth_response(&rsp_data, &invalid_auth);
     assert!(validation_failure.is_err());
     fake_tpm.add_to_response(&invalid_auth);
 
     let cmd = TestSessionsCommand();
-    let session = PasswordSession::default();
+    let mut session = PasswordSession::default();
     let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
-        run_command_with_sessions(&cmd, session, &mut fake_tpm, &mut resp_buffer),
+        run_command_with_sessions(&cmd, &[], &mut session, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::Auth(validation_failure.err().unwrap()))
     );
+}
+
+#[test]
+fn test_marshal_command_with_sessions() {
+    let cmd = TestCommand(0x11223344);
+    let mut session = PasswordSession::new("pw").unwrap();
+    let mut buf = [0u8; CMD_BUFFER_SIZE];
+    let written = marshal_command(&cmd, &[], &mut session, &mut buf).unwrap();
+
+    // TPMS_AUTH_COMMAND: handle (4) + nonce (2 + 0) + attributes (1) + hmac (2 + 2)
+    let auth_size = 4 + 2 + 1 + 2 + 2;
+    assert_eq!(written, CommandHeader::MAX_SIZE + 4 + auth_size + 4);
+
+    let mut src = &buf[..written];
+    let header = CommandHeader::unmarshal(&mut src).unwrap();
+    assert_eq!(header.tag, TpmiStCommandTag::Sessions);
+    assert_eq!(header.size as usize, written);
+    assert_eq!(u32::unmarshal(&mut src).unwrap() as usize, auth_size);
+    let auth = TpmsAuthCommand::unmarshal(&mut src).unwrap();
+    assert_eq!(auth.session_handle, Handle::RS_PW);
+    assert_eq!(auth.hmac.as_slice(), b"pw");
+    // The parameters directly follow the authorization area.
+    assert_eq!(src, 0x11223344u32.to_be_bytes());
 }
