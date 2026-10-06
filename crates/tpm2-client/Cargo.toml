@@ -24,9 +24,15 @@ rustcrypto = ["dep:tpm2-rustcrypto"]
 tpm2 = { workspace = true }
 zerocopy = { workspace = true, optional = true }
 tpm2-rustcrypto = { path = "../tpm2-rustcrypto", optional = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[[bin]]
+name = "tpm2-client"
+path = "src/main.rs"
+required-features = ["connection-tcp", "rustcrypto"]
 
 [[test]]
 name = "simulator"
