@@ -319,7 +319,7 @@ impl TpmaCc {
     pub fn set_command_index(&mut self, index: u16) {
         self.0 = set_attribute_field(
             self.0,
-            index as u32,
+            u32::from(index),
             Self::COMMAND_INDEX_MASK,
             Self::COMMAND_INDEX_SHIFT,
         );

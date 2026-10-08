@@ -1214,7 +1214,7 @@ pub struct Handle(pub u32);
 
 impl Handle {
     pub fn handle_type(self) -> Option<TpmHt> {
-        ((self.0 >> 24) as u8).try_into().ok()
+        self.0.to_be_bytes()[0].try_into().ok()
     }
 
     pub const NV_INDEX_FIRST: Handle = Handle(0x01000000);
