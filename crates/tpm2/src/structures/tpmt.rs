@@ -414,6 +414,8 @@ pub enum TpmtSignature<'a> {
     Ecdaa(TpmsSignatureEcc<'a>),
     Sm2(TpmsSignatureEcc<'a>),
     Ecschnorr(TpmsSignatureEcc<'a>),
+    Eddsa(Tpm2bSignatureEddsa<'a>),
+    HashEddsa(Tpm2bSignatureEddsa<'a>),
     Mldsa(Tpm2bSignatureMldsa<'a>),
     HashMldsa(TpmsSignatureHashMldsa<'a>),
 }
@@ -436,6 +438,8 @@ impl<'a> TpmtSignature<'a> {
             Self::Ecdaa(_) => Alg::ECDAA,
             Self::Sm2(_) => Alg::SM2,
             Self::Ecschnorr(_) => Alg::ECSCHNORR,
+            Self::Eddsa(_) => Alg::EDDSA,
+            Self::HashEddsa(_) => Alg::HASH_EDDSA,
             Self::Mldsa(_) => Alg::MLDSA,
             Self::HashMldsa(_) => Alg::HASH_MLDSA,
         }
@@ -448,6 +452,7 @@ impl Marshal for TpmtSignature<'_> {
             TpmtHa::MAX_SIZE,
             TpmsSignatureRsa::MAX_SIZE,
             TpmsSignatureEcc::MAX_SIZE,
+            Tpm2bSignatureEddsa::MAX_SIZE,
             Tpm2bSignatureMldsa::MAX_SIZE,
             TpmsSignatureHashMldsa::MAX_SIZE,
         );
@@ -461,6 +466,7 @@ impl Marshal for TpmtSignature<'_> {
             Self::Ecdsa(x) | Self::Ecdaa(x) | Self::Sm2(x) | Self::Ecschnorr(x) => {
                 marshal_helper(x, dst, count)
             }
+            Self::Eddsa(x) | Self::HashEddsa(x) => marshal_helper(x, dst, count),
             Self::Mldsa(x) => marshal_helper(x, dst, count),
             Self::HashMldsa(x) => marshal_helper(x, dst, count),
         }
@@ -477,6 +483,8 @@ impl<'a> Unmarshal<'a> for TpmtSignature<'a> {
             Alg::ECDAA => Self::Ecdaa(Unmarshal::unmarshal(src)?),
             Alg::SM2 => Self::Sm2(Unmarshal::unmarshal(src)?),
             Alg::ECSCHNORR => Self::Ecschnorr(Unmarshal::unmarshal(src)?),
+            Alg::EDDSA => Self::Eddsa(Unmarshal::unmarshal(src)?),
+            Alg::HASH_EDDSA => Self::HashEddsa(Unmarshal::unmarshal(src)?),
             Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?),
             Alg::HASH_MLDSA => Self::HashMldsa(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
@@ -523,6 +531,8 @@ pub enum TpmtSigScheme {
     Ecdaa(TpmsSchemeEcdaa),
     Sm2(TpmiAlgHash),
     Ecschnorr(TpmiAlgHash),
+    Eddsa,
+    HashEddsa,
     Mldsa,
     HashMldsa,
 }
@@ -538,6 +548,8 @@ impl TpmtSigScheme {
             Self::Ecdaa(_) => Alg::ECDAA,
             Self::Sm2(_) => Alg::SM2,
             Self::Ecschnorr(_) => Alg::ECSCHNORR,
+            Self::Eddsa => Alg::EDDSA,
+            Self::HashEddsa => Alg::HASH_EDDSA,
             Self::Mldsa => Alg::MLDSA,
             Self::HashMldsa => Alg::HASH_MLDSA,
         }
@@ -561,6 +573,7 @@ impl Marshal for Option<TpmtSigScheme> {
             | TpmtSigScheme::Sm2(x)
             | TpmtSigScheme::Ecschnorr(x) => marshal_helper(x, dst, count),
             TpmtSigScheme::Ecdaa(x) => marshal_helper(x, dst, count),
+            TpmtSigScheme::Eddsa | TpmtSigScheme::HashEddsa => count,
             TpmtSigScheme::Mldsa | TpmtSigScheme::HashMldsa => count,
         }
     }
@@ -580,6 +593,8 @@ impl<'a> Unmarshal<'a> for Option<TpmtSigScheme> {
             Alg::ECDAA => TpmtSigScheme::Ecdaa(Unmarshal::unmarshal(src)?),
             Alg::SM2 => TpmtSigScheme::Sm2(Unmarshal::unmarshal(src)?),
             Alg::ECSCHNORR => TpmtSigScheme::Ecschnorr(Unmarshal::unmarshal(src)?),
+            Alg::EDDSA => TpmtSigScheme::Eddsa,
+            Alg::HASH_EDDSA => TpmtSigScheme::HashEddsa,
             Alg::MLDSA => TpmtSigScheme::Mldsa,
             Alg::HASH_MLDSA => TpmtSigScheme::HashMldsa,
             _ => return Err(UnmarshalError),
@@ -718,7 +733,7 @@ impl From<TpmtRsaDecrypt> for TpmtRsaScheme {
 
 /// `TPMT_ECC_SCHEME` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.2.5 (Table 193).
 ///
-/// Tagged ECC scheme structure specifying an ECC scheme (ECDSA, ECDAA, SM2, ECSchnorr, ECDH, ECMQV) and associated parameters.
+/// Tagged ECC scheme structure specifying an ECC scheme (ECDSA, ECDAA, SM2, ECSchnorr, ECDH, ECMQV, EdDSA, HashEdDSA) and associated parameters.
 #[doc(alias = "TPMT_ECC_SCHEME")]
 #[doc(alias = "TPMU_ECC_SCHEME")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -729,6 +744,8 @@ pub enum TpmtEccScheme {
     Sm2(TpmiAlgHash),
     Ecschnorr(TpmiAlgHash),
     Ecmqv(TpmiAlgHash),
+    Eddsa,
+    HashEddsa,
 }
 
 impl TpmtEccScheme {
@@ -741,6 +758,8 @@ impl TpmtEccScheme {
             Self::Sm2(_) => Alg::SM2,
             Self::Ecschnorr(_) => Alg::ECSCHNORR,
             Self::Ecmqv(_) => Alg::ECMQV,
+            Self::Eddsa => Alg::EDDSA,
+            Self::HashEddsa => Alg::HASH_EDDSA,
         }
     }
 }
@@ -761,6 +780,7 @@ impl Marshal for Option<TpmtEccScheme> {
             | TpmtEccScheme::Ecschnorr(x)
             | TpmtEccScheme::Ecmqv(x) => marshal_helper(x, dst, count),
             TpmtEccScheme::Ecdaa(x) => marshal_helper(x, dst, count),
+            TpmtEccScheme::Eddsa | TpmtEccScheme::HashEddsa => count,
         }
     }
 }
@@ -778,6 +798,8 @@ impl<'a> Unmarshal<'a> for Option<TpmtEccScheme> {
             Alg::SM2 => TpmtEccScheme::Sm2(Unmarshal::unmarshal(src)?),
             Alg::ECSCHNORR => TpmtEccScheme::Ecschnorr(Unmarshal::unmarshal(src)?),
             Alg::ECMQV => TpmtEccScheme::Ecmqv(Unmarshal::unmarshal(src)?),
+            Alg::EDDSA => TpmtEccScheme::Eddsa,
+            Alg::HASH_EDDSA => TpmtEccScheme::HashEddsa,
             _ => return Err(UnmarshalError),
         }))
     }
@@ -804,6 +826,8 @@ impl TryFrom<TpmtEccScheme> for TpmtSigScheme {
             TpmtEccScheme::Ecdaa(s) => Ok(Self::Ecdaa(s)),
             TpmtEccScheme::Sm2(s) => Ok(Self::Sm2(s)),
             TpmtEccScheme::Ecschnorr(s) => Ok(Self::Ecschnorr(s)),
+            TpmtEccScheme::Eddsa => Ok(Self::Eddsa),
+            TpmtEccScheme::HashEddsa => Ok(Self::HashEddsa),
             _ => Err(()),
         }
     }
