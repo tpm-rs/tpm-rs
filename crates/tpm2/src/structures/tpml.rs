@@ -6,8 +6,7 @@ use crate::{
     *,
 };
 
-pub const TPM2_MAX_CAP_DATA: usize =
-    limits::MAX_CAP_BUFFER - TpmCap::MAX_SIZE - u32::MAX_SIZE;
+pub const TPM2_MAX_CAP_DATA: usize = limits::MAX_CAP_BUFFER - TpmCap::MAX_SIZE - u32::MAX_SIZE;
 pub const TPM2_MAX_CAP_ALGS: usize = TPM2_MAX_CAP_DATA / TpmsAlgProperty::MAX_SIZE;
 pub const TPM2_MAX_CAP_HANDLES: usize = TPM2_MAX_CAP_DATA / Handle::MAX_SIZE;
 pub const TPM2_MAX_CAP_CC: usize = TPM2_MAX_CAP_DATA / TpmCc::MAX_SIZE;

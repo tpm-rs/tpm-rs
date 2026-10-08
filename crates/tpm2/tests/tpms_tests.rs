@@ -43,7 +43,7 @@ fn test_tpms_auth_response_hmac_uses_tpm2b_auth() {
     // MAX_DIGEST_BYTES + 1 and MAX_DIGEST_BYTES + 2 HMAC buffers (would fit in Tpm2bData which allows up to 2 + MAX_DIGEST_BYTES,
     // but must be rejected for Tpm2bAuth which allows up to MAX_DIGEST_BYTES).
     for size in [(max_digest + 1) as u16, (max_digest + 2) as u16] {
-        let mut raw = [0u8; 2 + 0 + 1 + 2 + 66];
+        let mut raw = [0u8; 2 + 1 + 2 + 66];
         // nonce size = 0
         raw[0] = 0x00;
         raw[1] = 0x00;

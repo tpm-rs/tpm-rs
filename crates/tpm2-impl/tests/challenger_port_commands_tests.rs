@@ -592,12 +592,12 @@ fn test_duplicate_import_load_roundtrip() {
     let target_obj = TransientObject {
         handle: target_handle,
         seed: [2u8; 32],
-        name: (target_name).into(),
+        name: target_name,
         auth: (Tpm2bAuth::default()).into(),
         public: (target_public).into(),
         private: [0x33; 1536],
         private_len: 256,
-        qualified_name: (target_name).into(),
+        qualified_name: target_name,
         hierarchy: 0x40000001,
         st_clear: false,
     };

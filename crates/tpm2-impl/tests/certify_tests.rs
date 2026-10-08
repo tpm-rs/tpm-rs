@@ -319,7 +319,7 @@ fn test_aliased_primary_object_hierarchy_synchronization_in_certify() {
         .into(),
         private: [0u8; 1536],
         private_len: 256,
-        qualified_name: (initial_child_qn).into(),
+        qualified_name: (initial_child_qn),
         hierarchy: 0x40000001,
         st_clear: false,
     };
@@ -346,7 +346,7 @@ fn test_aliased_primary_object_hierarchy_synchronization_in_certify() {
         .into(),
         private: [0u8; 1536],
         private_len: 256,
-        qualified_name: (certified_qn).into(),
+        qualified_name: (certified_qn),
         hierarchy: 0x40000001,
         st_clear: false,
     };

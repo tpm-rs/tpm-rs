@@ -306,15 +306,16 @@ where
         hmac_updates.push(session.nonce_tpm.get_buffer());
 
         if i == 0 {
-            if let Some(dec_idx) = decrypt_session_idx {
-                if dec_idx != i {
-                    hmac_updates.push(sessions[dec_idx].nonce_tpm.get_buffer());
-                }
+            if let Some(dec_idx) = decrypt_session_idx
+                && dec_idx != i
+            {
+                hmac_updates.push(sessions[dec_idx].nonce_tpm.get_buffer());
             }
-            if let Some(enc_idx) = encrypt_session_idx {
-                if enc_idx != i && Some(enc_idx) != decrypt_session_idx {
-                    hmac_updates.push(sessions[enc_idx].nonce_tpm.get_buffer());
-                }
+            if let Some(enc_idx) = encrypt_session_idx
+                && enc_idx != i
+                && Some(enc_idx) != decrypt_session_idx
+            {
+                hmac_updates.push(sessions[enc_idx].nonce_tpm.get_buffer());
             }
         }
 
@@ -397,54 +398,52 @@ where
 
     // Decrypt parameters if encrypt session is active
     let mut decrypted_param_buf = encrypted_param_buf.to_vec();
-    if let Some(idx) = encrypt_session_idx {
-        if !decrypted_param_buf.is_empty() {
-            let session = &sessions[idx];
-            let nonce_tpm_new = &nonce_tpms_new[idx];
-            let nonce_caller_new = &nonce_callers_new[idx];
+    if let Some(idx) = encrypt_session_idx
+        && !decrypted_param_buf.is_empty()
+    {
+        let session = &sessions[idx];
+        let nonce_tpm_new = &nonce_tpms_new[idx];
+        let nonce_caller_new = &nonce_callers_new[idx];
 
-            let leading_size = 2;
-            let size =
-                u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
+        let leading_size = 2;
+        let size = u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
 
-            let bits = match &session.symmetric {
-                Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-                Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
-                _ => 0,
+        let bits = match &session.symmetric {
+            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
+            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            _ => 0,
+        };
+
+        if bits > 0 {
+            let key = if idx < num_handles {
+                [
+                    session.session_key.as_slice(),
+                    strip_trailing_zeros(entity_auths[idx]),
+                ]
+                .concat()
+            } else {
+                session.session_key.clone()
             };
+            let (derived_key, derived_iv) = derive_key_and_iv_ref(
+                tpm.context.platform.crypto,
+                session.auth_hash,
+                &key,
+                b"CFB",
+                nonce_tpm_new.get_buffer(),
+                nonce_caller_new.get_buffer(),
+                ((bits - 128) / 8) as usize,
+            );
 
-            if bits > 0 {
-                let key = if idx < num_handles {
-                    [
-                        session.session_key.as_slice(),
-                        strip_trailing_zeros(entity_auths[idx]),
-                    ]
-                    .concat()
-                } else {
-                    session.session_key.clone()
-                };
-                let (derived_key, derived_iv) = derive_key_and_iv_ref(
-                    tpm.context.platform.crypto,
-                    session.auth_hash,
-                    &key,
-                    b"CFB",
-                    nonce_tpm_new.get_buffer(),
-                    nonce_caller_new.get_buffer(),
-                    ((bits - 128) / 8) as usize,
-                );
-
-                let mut iv = derived_iv;
-                let sym_alg =
-                    tpm2::TpmtSymDefObject::aes_cfb((derived_key.len() * 8) as u16).unwrap();
-                tpm2::crypto::decrypt(
-                    tpm.context.platform.crypto,
-                    sym_alg,
-                    &derived_key,
-                    &mut iv,
-                    &mut decrypted_param_buf[leading_size..leading_size + size],
-                )
-                .unwrap();
-            }
+            let mut iv = derived_iv;
+            let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((derived_key.len() * 8) as u16).unwrap();
+            tpm2::crypto::decrypt(
+                tpm.context.platform.crypto,
+                sym_alg,
+                &derived_key,
+                &mut iv,
+                &mut decrypted_param_buf[leading_size..leading_size + size],
+            )
+            .unwrap();
         }
     }
 
@@ -652,7 +651,7 @@ fn test_parameter_decryption_no_auth_handle() {
     ));
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
 
@@ -710,7 +709,7 @@ fn test_multiple_decrypt_attributes_fails() {
     ));
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let result = execute_with_hmac_sessions_custom(&mut sim, &cmd, (), &mut sessions, &[&[], &[]]);

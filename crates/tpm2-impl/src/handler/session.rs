@@ -53,16 +53,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Ok(cmd) => cmd,
             Err(e) => {
                 let mut slice = request.remaining_slice();
-                if let Ok(_nonce) = tpm2::Tpm2bNonce::unmarshal(&mut slice) {
-                    if let Ok(_salt) = tpm2::Tpm2bEncryptedSecret::unmarshal(&mut slice) {
-                        if let Ok(_st) = tpm2::TpmSe::unmarshal(&mut slice) {
-                            if slice.len() >= 2 {
-                                let alg = u16::from_be_bytes([slice[0], slice[1]]);
-                                if alg > 0x0080 {
-                                    return Err(TpmRc::VALUE.with(Position::parameter(4)));
-                                }
-                            }
-                        }
+                if let Ok(_nonce) = tpm2::Tpm2bNonce::unmarshal(&mut slice)
+                    && let Ok(_salt) = tpm2::Tpm2bEncryptedSecret::unmarshal(&mut slice)
+                    && let Ok(_st) = tpm2::TpmSe::unmarshal(&mut slice)
+                    && slice.len() >= 2
+                {
+                    let alg = u16::from_be_bytes([slice[0], slice[1]]);
+                    if alg > 0x0080 {
+                        return Err(TpmRc::VALUE.with(Position::parameter(4)));
                     }
                 }
                 return Err(e);
@@ -74,10 +72,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         // Validate symmetric block cipher mode (if not Null, mode must be CFB)
-        if let Some(tpm2::TpmtSymDef::Cipher(sym_obj)) = cmd.symmetric {
-            if sym_obj.mode() != Some(TpmiAlgSymMode::CFB) {
-                return Err(TpmRc::MODE.with(Position::parameter(4)));
-            }
+        if let Some(tpm2::TpmtSymDef::Cipher(sym_obj)) = cmd.symmetric
+            && sym_obj.mode() != Some(TpmiAlgSymMode::CFB)
+        {
+            return Err(TpmRc::MODE.with(Position::parameter(4)));
         }
 
         // Generate nonceTPM

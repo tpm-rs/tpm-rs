@@ -331,7 +331,7 @@ fn test_concurrent_hmac_sequences() {
     global_state.transient_objects[0] = Some(key);
 
     let start_cmd = HmacStart {
-        auth: Tpm2bAuth::default().into(),
+        auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
     let start_handles = HmacStartHandles {
@@ -487,7 +487,7 @@ fn test_hmac_sequence_large_split_chunks() {
     global_state.transient_objects[0] = Some(key);
 
     let start_cmd = HmacStart {
-        auth: Tpm2bAuth::default().into(),
+        auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
     let start_handles = HmacStartHandles {
@@ -757,7 +757,7 @@ fn test_persistent_handle_resolution_all() {
     global_state.transient_objects[1] = None;
 
     let hmac_start_cmd = HmacStart {
-        auth: Tpm2bAuth::default().into(),
+        auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
     let hmac_start_handles = HmacStartHandles {

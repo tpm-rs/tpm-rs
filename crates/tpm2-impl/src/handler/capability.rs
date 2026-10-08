@@ -1172,14 +1172,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 }
 
 fn validate_hash_alg(hash_alg: Option<tpm2::TpmiAlgHash>) -> Result<(), TpmRc> {
-    if let Some(alg) = hash_alg {
-        if alg != tpm2::TpmiAlgHash::Sha1
-            && alg != tpm2::TpmiAlgHash::Sha256
-            && alg != tpm2::TpmiAlgHash::Sha384
-            && alg != tpm2::TpmiAlgHash::Sha512
-        {
-            return Err(TpmRc::HASH.with(Position::parameter(1)));
-        }
+    if let Some(alg) = hash_alg
+        && alg != tpm2::TpmiAlgHash::Sha1
+        && alg != tpm2::TpmiAlgHash::Sha256
+        && alg != tpm2::TpmiAlgHash::Sha384
+        && alg != tpm2::TpmiAlgHash::Sha512
+    {
+        return Err(TpmRc::HASH.with(Position::parameter(1)));
     }
     Ok(())
 }

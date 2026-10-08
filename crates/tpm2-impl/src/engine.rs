@@ -784,13 +784,13 @@ impl GlobalState {
     /// Removes and returns an active session by its handle.
     pub fn remove_session(&mut self, handle: u32) -> Option<SessionState> {
         for slot in &mut self.active_sessions {
-            if let Some(session) = slot {
-                if session.session_handle == handle {
-                    if self.exclusive_audit_session == Some(handle) {
-                        self.exclusive_audit_session = None;
-                    }
-                    return slot.take();
+            if let Some(session) = slot
+                && session.session_handle == handle
+            {
+                if self.exclusive_audit_session == Some(handle) {
+                    self.exclusive_audit_session = None;
                 }
+                return slot.take();
             }
         }
         None
@@ -811,10 +811,10 @@ impl GlobalState {
             .iter()
             .enumerate()
             .find_map(|(i, slot)| {
-                if let Some(obj) = slot {
-                    if obj.handle == handle {
-                        return Some(i);
-                    }
+                if let Some(obj) = slot
+                    && obj.handle == handle
+                {
+                    return Some(i);
                 }
                 None
             })
@@ -839,12 +839,12 @@ impl GlobalState {
     /// Removes a transient object by its handle, returning `Ok(())` if found and removed.
     pub fn remove_transient_object(&mut self, handle: u32) -> Result<(), TpmRc> {
         for (i, slot) in self.transient_objects.iter_mut().enumerate() {
-            if let Some(obj) = slot {
-                if obj.handle == handle {
-                    *slot = None;
-                    self.transient_parents[i] = None;
-                    return Ok(());
-                }
+            if let Some(obj) = slot
+                && obj.handle == handle
+            {
+                *slot = None;
+                self.transient_parents[i] = None;
+                return Ok(());
             }
         }
         Err(TpmRc::HANDLE.to_rc())
@@ -869,11 +869,11 @@ impl GlobalState {
     /// Removes an active sequence by its handle, returning `Ok(())` if found and removed.
     pub fn remove_active_sequence(&mut self, handle: u32) -> Result<(), TpmRc> {
         for slot in &mut self.active_sequences {
-            if let Some(seq) = slot {
-                if seq.handle == handle {
-                    *slot = None;
-                    return Ok(());
-                }
+            if let Some(seq) = slot
+                && seq.handle == handle
+            {
+                *slot = None;
+                return Ok(());
             }
         }
         Err(TpmRc::HANDLE.to_rc())
@@ -969,12 +969,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 if storage_mgr
                     .read_item(handle, 0, &mut read_buf[..read_len])
                     .is_ok()
-                {
-                    if let Ok((_, _, auth, _)) =
+                    && let Ok((_, _, auth, _)) =
                         crate::handler::nv_storage::unmarshal_nv_header(&read_buf[..read_len])
-                    {
-                        return OwnedAuth::from(auth);
-                    }
+                {
+                    return OwnedAuth::from(auth);
                 }
             }
             OwnedAuth::default()
@@ -989,10 +987,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     && read_len > 32
                 {
                     let mut slice = &read_buf[32..read_len];
-                    if Tpm2bName::unmarshal(&mut slice).is_ok() {
-                        if let Ok(auth) = OwnedAuth::unmarshal(&mut slice) {
-                            return auth;
-                        }
+                    if Tpm2bName::unmarshal(&mut slice).is_ok()
+                        && let Ok(auth) = OwnedAuth::unmarshal(&mut slice)
+                    {
+                        return auth;
                     }
                 }
             }
@@ -1042,12 +1040,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 if storage_mgr
                     .read_item(handle, 0, &mut read_buf[..read_len])
                     .is_ok()
-                {
-                    if let Ok((_, nv_public_struct, _, _)) =
+                    && let Ok((_, nv_public_struct, _, _)) =
                         crate::handler::nv_storage::unmarshal_nv_header(&read_buf[..read_len])
-                    {
-                        return Ok(OwnedDigest::from(nv_public_struct.auth_policy));
-                    }
+                {
+                    return Ok(OwnedDigest::from(nv_public_struct.auth_policy));
                 }
             }
             Ok(OwnedDigest::default())
@@ -1101,12 +1097,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 if storage_mgr
                     .read_item(handle, 0, &mut read_buf[..read_len])
                     .is_ok()
-                {
-                    if let Ok((_, nv_public_struct, _, _)) =
+                    && let Ok((_, nv_public_struct, _, _)) =
                         crate::handler::nv_storage::unmarshal_nv_header(&read_buf[..read_len])
-                    {
-                        return !nv_public_struct.attributes.contains(tpm2::TpmaNv::NO_DA);
-                    }
+                {
+                    return !nv_public_struct.attributes.contains(tpm2::TpmaNv::NO_DA);
                 }
             }
             return true;
@@ -1532,56 +1526,56 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         global_state.ph_enable = true;
                     }
                 }
-                if let Ok(marker) = u8::unmarshal(&mut slice) {
-                    if marker == 0xAA {
-                        if let Ok(size) = u16::unmarshal(&mut slice) {
-                            global_state.sp_seed_size = size;
-                        }
-                        if let Ok(seed) = <[u8; 64]>::unmarshal(&mut slice) {
-                            global_state.sp_seed = seed;
-                        }
-                        if let Ok(size) = u16::unmarshal(&mut slice) {
-                            global_state.sh_proof_size = size;
-                        }
-                        if let Ok(proof) = <[u8; 64]>::unmarshal(&mut slice) {
-                            global_state.sh_proof = proof;
-                        }
-                        if let Ok(size) = u16::unmarshal(&mut slice) {
-                            global_state.eh_proof_size = size;
-                        }
-                        if let Ok(proof) = <[u8; 64]>::unmarshal(&mut slice) {
-                            global_state.eh_proof = proof;
-                        }
-                        if let Ok(count) = u32::unmarshal(&mut slice) {
-                            global_state.clear_count = count;
-                        }
-                        if let Ok(size) = u16::unmarshal(&mut slice) {
-                            global_state.pp_seed_size = size;
-                        }
-                        if let Ok(seed) = <[u8; 64]>::unmarshal(&mut slice) {
-                            global_state.pp_seed = seed;
-                        }
-                        if let Ok(size) = u16::unmarshal(&mut slice) {
-                            global_state.ph_proof_size = size;
-                        }
-                        if let Ok(proof) = <[u8; 64]>::unmarshal(&mut slice) {
-                            global_state.ph_proof = proof;
-                        }
-                        if let Ok(size) = u16::unmarshal(&mut slice) {
-                            global_state.ep_seed_size = size;
-                        }
-                        if let Ok(seed) = <[u8; 64]>::unmarshal(&mut slice) {
-                            global_state.ep_seed = seed;
-                        }
-                        if let Ok(alg) = <Option<tpm2::TpmiAlgHash>>::unmarshal(&mut slice) {
-                            global_state.pcr_policy_alg = alg;
-                        }
-                        if let Ok(policy) = OwnedDigest::unmarshal(&mut slice) {
-                            global_state.pcr_policy = policy;
-                        }
-                        if let Ok(auth) = OwnedAuth::unmarshal(&mut slice) {
-                            global_state.pcr_auth_value = auth;
-                        }
+                if let Ok(marker) = u8::unmarshal(&mut slice)
+                    && marker == 0xAA
+                {
+                    if let Ok(size) = u16::unmarshal(&mut slice) {
+                        global_state.sp_seed_size = size;
+                    }
+                    if let Ok(seed) = <[u8; 64]>::unmarshal(&mut slice) {
+                        global_state.sp_seed = seed;
+                    }
+                    if let Ok(size) = u16::unmarshal(&mut slice) {
+                        global_state.sh_proof_size = size;
+                    }
+                    if let Ok(proof) = <[u8; 64]>::unmarshal(&mut slice) {
+                        global_state.sh_proof = proof;
+                    }
+                    if let Ok(size) = u16::unmarshal(&mut slice) {
+                        global_state.eh_proof_size = size;
+                    }
+                    if let Ok(proof) = <[u8; 64]>::unmarshal(&mut slice) {
+                        global_state.eh_proof = proof;
+                    }
+                    if let Ok(count) = u32::unmarshal(&mut slice) {
+                        global_state.clear_count = count;
+                    }
+                    if let Ok(size) = u16::unmarshal(&mut slice) {
+                        global_state.pp_seed_size = size;
+                    }
+                    if let Ok(seed) = <[u8; 64]>::unmarshal(&mut slice) {
+                        global_state.pp_seed = seed;
+                    }
+                    if let Ok(size) = u16::unmarshal(&mut slice) {
+                        global_state.ph_proof_size = size;
+                    }
+                    if let Ok(proof) = <[u8; 64]>::unmarshal(&mut slice) {
+                        global_state.ph_proof = proof;
+                    }
+                    if let Ok(size) = u16::unmarshal(&mut slice) {
+                        global_state.ep_seed_size = size;
+                    }
+                    if let Ok(seed) = <[u8; 64]>::unmarshal(&mut slice) {
+                        global_state.ep_seed = seed;
+                    }
+                    if let Ok(alg) = <Option<tpm2::TpmiAlgHash>>::unmarshal(&mut slice) {
+                        global_state.pcr_policy_alg = alg;
+                    }
+                    if let Ok(policy) = OwnedDigest::unmarshal(&mut slice) {
+                        global_state.pcr_policy = policy;
+                    }
+                    if let Ok(auth) = OwnedAuth::unmarshal(&mut slice) {
+                        global_state.pcr_auth_value = auth;
                     }
                 }
             }
@@ -2173,10 +2167,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             if shadow_res.is_err() {
                 for auth in &cmd.auth_sessions[..cmd.auth_sessions_len] {
                     let session_handle = auth.session_handle.0;
-                    if let Some(session_state) = global_state.session_mut(session_handle) {
-                        if session_state.session_type == tpm2::TpmSe::Policy {
-                            session_state.policy_digest[..session_state.policy_digest_len].fill(0);
-                        }
+                    if let Some(session_state) = global_state.session_mut(session_handle)
+                        && session_state.session_type == tpm2::TpmSe::Policy
+                    {
+                        session_state.policy_digest[..session_state.policy_digest_len].fill(0);
                     }
                 }
             }
@@ -2782,20 +2776,20 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     None
                 };
 
-                if let Some(h) = entity_handle {
-                    if self.has_da_protection(global_state, h) {
-                        self.check_locked_out(global_state, h == 0x4000000A)?;
-                        if !global_state.da_used {
-                            global_state.da_used = true;
-                            if global_state.nv_available {
-                                global_state.orderly_state = 0xFFFE;
-                                let _ = self
-                                    .platform
-                                    .storage
-                                    .write_nv(4, &global_state.orderly_state.to_be_bytes());
-                            } else {
-                                global_state.clear_orderly = true;
-                            }
+                if let Some(h) = entity_handle
+                    && self.has_da_protection(global_state, h)
+                {
+                    self.check_locked_out(global_state, h == 0x4000000A)?;
+                    if !global_state.da_used {
+                        global_state.da_used = true;
+                        if global_state.nv_available {
+                            global_state.orderly_state = 0xFFFE;
+                            let _ = self
+                                .platform
+                                .storage
+                                .write_nv(4, &global_state.orderly_state.to_be_bytes());
+                        } else {
+                            global_state.clear_orderly = true;
                         }
                     }
                 }
@@ -2881,10 +2875,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     }
 
                     if is_policy {
-                        if let Some(pcr_counter) = session_state.pcr_counter {
-                            if pcr_counter != curr_pcr_update_counter {
-                                return Err(TpmRc::PCR_CHANGED);
-                            }
+                        if let Some(pcr_counter) = session_state.pcr_counter
+                            && pcr_counter != curr_pcr_update_counter
+                        {
+                            return Err(TpmRc::PCR_CHANGED);
                         }
                         if session_state.command_locality != 0 {
                             if session_state.command_locality > 31 {
@@ -2931,12 +2925,11 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                             if policy.get_size() == 0 {
                                 return Err(TpmRc::AUTH_UNAVAILABLE);
                             }
-                            if let Some(h) = entity_handle {
-                                if (20..=22).contains(&h)
-                                    && pcr_policy_alg != Some(session_state.auth_hash)
-                                {
-                                    return Err(TpmRc::POLICY_FAIL.with(pos));
-                                }
+                            if let Some(h) = entity_handle
+                                && (20..=22).contains(&h)
+                                && pcr_policy_alg != Some(session_state.auth_hash)
+                            {
+                                return Err(TpmRc::POLICY_FAIL.with(pos));
                             }
                             if policy.get_size() as usize != session_state.policy_digest_len
                                 || policy.get_buffer()
@@ -3061,39 +3054,39 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 };
 
                 if !auth_matches {
-                    if let Some(h) = entity_handle {
-                        if self.has_da_protection(global_state, h) {
-                            if h == 0x4000000A {
-                                global_state.lockout_auth_enabled = false;
-                                global_state.lockout_timer = global_state.tpm_time_ms as i64;
-                                if !global_state.nv_available {
+                    if let Some(h) = entity_handle
+                        && self.has_da_protection(global_state, h)
+                    {
+                        if h == 0x4000000A {
+                            global_state.lockout_auth_enabled = false;
+                            global_state.lockout_timer = global_state.tpm_time_ms as i64;
+                            if !global_state.nv_available {
+                                global_state.da_pending_on_nv = true;
+                            }
+                        } else {
+                            if global_state.recovery_time != 0 {
+                                global_state.failed_tries =
+                                    global_state.failed_tries.saturating_add(1);
+                                if global_state.nv_available {
+                                    let _ = self
+                                        .platform
+                                        .storage
+                                        .write_nv(32, &global_state.failed_tries.to_be_bytes());
+                                } else {
                                     global_state.da_pending_on_nv = true;
                                 }
-                            } else {
-                                if global_state.recovery_time != 0 {
-                                    global_state.failed_tries =
-                                        global_state.failed_tries.saturating_add(1);
-                                    if global_state.nv_available {
-                                        let _ = self
-                                            .platform
-                                            .storage
-                                            .write_nv(32, &global_state.failed_tries.to_be_bytes());
-                                    } else {
-                                        global_state.da_pending_on_nv = true;
-                                    }
-                                }
-                                global_state.self_heal_timer = global_state.tpm_time_ms as i64;
                             }
-                            global_state.da_used = true;
-                            if global_state.nv_available {
-                                global_state.orderly_state = 0xFFFE;
-                                let _ = self
-                                    .platform
-                                    .storage
-                                    .write_nv(4, &global_state.orderly_state.to_be_bytes());
-                            } else {
-                                global_state.clear_orderly = true;
-                            }
+                            global_state.self_heal_timer = global_state.tpm_time_ms as i64;
+                        }
+                        global_state.da_used = true;
+                        if global_state.nv_available {
+                            global_state.orderly_state = 0xFFFE;
+                            let _ = self
+                                .platform
+                                .storage
+                                .write_nv(4, &global_state.orderly_state.to_be_bytes());
+                        } else {
+                            global_state.clear_orderly = true;
                         }
                     }
                     if auth.session_attributes.contains(tpm2::TpmaSession::AUDIT) {
@@ -4458,10 +4451,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                             if obj.auth.get_size() > 0 {
                                 return Err(TpmRc::AUTH_MISSING);
                             }
-                        } else if let Some(seq) = global_state.find_active_sequence(handle) {
-                            if seq.auth.get_size() > 0 {
-                                return Err(TpmRc::AUTH_MISSING);
-                            }
+                        } else if let Some(seq) = global_state.find_active_sequence(handle)
+                            && seq.auth.get_size() > 0
+                        {
+                            return Err(TpmRc::AUTH_MISSING);
                         }
                     } else if (0x81000000..=0x81FFFFFF).contains(&handle) {
                         if let Ok(obj) = self.load_persistent_object(global_state, handle) {
@@ -4480,16 +4473,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                             if storage_mgr
                                 .read_item(handle, 0, &mut read_buf[..read_len])
                                 .is_ok()
-                            {
-                                if let Ok((_, _, auth, _)) =
+                                && let Ok((_, _, auth, _)) =
                                     crate::handler::nv_storage::unmarshal_nv_header(
                                         &read_buf[..read_len],
                                     )
-                                {
-                                    if auth.get_size() > 0 {
-                                        return Err(TpmRc::AUTH_MISSING);
-                                    }
-                                }
+                                && auth.get_size() > 0
+                            {
+                                return Err(TpmRc::AUTH_MISSING);
                             }
                         }
                     } else if handle < 24 {
@@ -4506,10 +4496,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                             0x40000007 => Some(0), // Null hierarchy always empty
                             _ => None,
                         };
-                        if let Some(size) = hierarchy_auth_size {
-                            if size > 0 || cc == TpmCc::EvictControl {
-                                return Err(TpmRc::AUTH_MISSING);
-                            }
+                        if let Some(size) = hierarchy_auth_size
+                            && (size > 0 || cc == TpmCc::EvictControl)
+                        {
+                            return Err(TpmRc::AUTH_MISSING);
                         }
                     }
                 }
@@ -5081,18 +5071,15 @@ fn handle_name<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>(
             if storage_mgr
                 .read_item(handle, 0, &mut read_buf[..read_len])
                 .is_ok()
-            {
-                if let Ok((_, nv_public_struct, _, _, hash_target)) =
+                && let Ok((_, nv_public_struct, _, _, hash_target)) =
                     crate::handler::nv_storage::unmarshal_nv_header_bytes(&read_buf[..read_len])
-                {
-                    if let Ok(nv_name) = compute_nv_name(
-                        &*ctx.platform.crypto,
-                        nv_public_struct.name_alg,
-                        hash_target,
-                    ) {
-                        return nv_name;
-                    }
-                }
+                && let Ok(nv_name) = compute_nv_name(
+                    &*ctx.platform.crypto,
+                    nv_public_struct.name_alg,
+                    hash_target,
+                )
+            {
+                return nv_name;
             }
         }
     } else if (0x81000000..=0x81FFFFFF).contains(&handle) {
@@ -5357,10 +5344,10 @@ fn handle_is_authorized(
     }
     for auth in auth_sessions {
         let session_handle = auth.session_handle.0;
-        if let Some(session_state) = global_state.session(session_handle) {
-            if session_state.bind_entity.0 == handle {
-                return true;
-            }
+        if let Some(session_state) = global_state.session(session_handle)
+            && session_state.bind_entity.0 == handle
+        {
+            return true;
         }
     }
     false

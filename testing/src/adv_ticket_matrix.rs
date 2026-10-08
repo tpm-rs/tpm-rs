@@ -136,7 +136,7 @@ fn test_ticket_creation_matrix() {
         qualifying_data: Tpm2bData::default(),
         creation_hash: owner_rsp.creation_hash,
         in_scheme,
-        creation_ticket: owner_rsp.creation_ticket.clone(),
+        creation_ticket: owner_rsp.creation_ticket,
     };
     let certify_handles = CertifyCreationHandles {
         sign_handle: signer_handle,
@@ -542,7 +542,7 @@ fn test_ticket_hashcheck_matrix() {
     let sign_unrestricted_cmd = Sign {
         digest: hash_null_rsp.out_hash,
         in_scheme: None,
-        validation: hash_null_rsp.validation.clone(),
+        validation: hash_null_rsp.validation,
     };
     let mut resp_buf = [0u8; 4096];
     assert!(
@@ -609,7 +609,7 @@ fn test_ticket_hashcheck_matrix() {
     let sign_restricted_valid = Sign {
         digest: hash_owner_rsp.out_hash,
         in_scheme: None,
-        validation: hash_owner_rsp.validation.clone(),
+        validation: hash_owner_rsp.validation,
     };
     assert!(
         execute_sign(
@@ -846,7 +846,7 @@ fn test_ticket_verified_matrix() {
         approved_policy,
         policy_ref,
         key_sign: owner_signer_name,
-        check_ticket: verify_owner_rsp.validation.clone(),
+        check_ticket: verify_owner_rsp.validation,
     };
     assert!(
         execute_with_password_sessions(

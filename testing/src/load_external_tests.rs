@@ -478,7 +478,7 @@ fn test_load_external_ecc_no_sensitive() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -491,7 +491,7 @@ fn test_load_external_ecc_owner() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_OWNER,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -504,7 +504,7 @@ fn test_load_external_ecc_platform() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_PLATFORM,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -517,7 +517,7 @@ fn test_load_external_ecc_endorsement() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_ENDORSEMENT,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -530,7 +530,7 @@ fn test_load_external_ecc_attributes() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -548,7 +548,7 @@ fn test_load_external_rsa_null() {
     ));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -565,7 +565,7 @@ fn test_load_external_rsa_owner() {
     ));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_OWNER,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -582,7 +582,7 @@ fn test_load_external_rsa_platform() {
     ));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_PLATFORM,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -599,7 +599,7 @@ fn test_load_external_rsa_endorsement() {
     ));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_ENDORSEMENT,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -616,7 +616,7 @@ fn test_load_external_rsa_sha384() {
     ));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -648,7 +648,7 @@ fn test_load_external_keyed_hash_sensitive() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -668,7 +668,7 @@ fn test_load_external_ecc_sensitive() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -692,7 +692,7 @@ fn test_load_external_rsa_sensitive() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -727,7 +727,7 @@ fn test_load_external_sym_sensitive() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -747,7 +747,7 @@ fn test_load_external_sensitive_invalid_hierarchy() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_OWNER,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -762,7 +762,7 @@ fn test_load_external_name_ecc() {
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
 
@@ -793,7 +793,7 @@ fn test_load_external_name_keyed_hash() {
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
 
@@ -824,7 +824,7 @@ fn test_load_external_name_rsa() {
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
 
@@ -854,7 +854,7 @@ fn test_load_external_name_alg_null() {
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
 
@@ -877,7 +877,7 @@ fn test_load_external_name_sensitive_match() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
 
@@ -913,7 +913,7 @@ fn test_load_external_ecc_invalid_curve() {
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -932,7 +932,7 @@ fn test_load_external_ecc_point_not_on_curve() {
     ));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -951,7 +951,7 @@ fn test_load_external_rsa_invalid_exponent() {
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -965,7 +965,7 @@ fn test_load_external_invalid_hierarchy_handle() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle(0x80000000), // completely invalid handle
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1030,7 +1030,7 @@ fn test_load_external_key_size_mismatch() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1051,7 +1051,7 @@ fn test_load_external_type_mismatch() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1082,7 +1082,7 @@ fn test_load_external_weak_sym_key() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1109,7 +1109,7 @@ fn test_load_external_rsa_primes_size_mismatch() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1130,7 +1130,7 @@ fn test_load_external_invalid_private_attributes() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1162,7 +1162,7 @@ fn test_load_external_ecc_sha384_platform() {
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_PLATFORM,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -1175,7 +1175,7 @@ fn test_load_external_rsa_alg_null_owner() {
     let in_public = tpm2::Tpm2b(make_rsa_public_area(RSA_N, None, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -1192,7 +1192,7 @@ fn test_load_external_ecc_alg_null_sensitive() {
 
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -1219,7 +1219,7 @@ fn test_load_external_keyed_hash_auth_policy() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -1240,7 +1240,7 @@ fn test_load_external_verify_signature_ecc() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let sign_load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.clone(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, sign_handles) = sim.execute_with_handles(sign_load_cmd, ()).unwrap();
@@ -1301,7 +1301,7 @@ fn test_load_external_verify_signature_rsa() {
     ));
     let sign_load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.clone(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, sign_handles) = sim.execute_with_handles(sign_load_cmd, ()).unwrap();
@@ -1328,7 +1328,7 @@ fn test_load_external_verify_signature_rsa() {
 
     let load_cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_load_resp, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1359,7 +1359,7 @@ fn test_load_external_sign_ecc() {
 
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_load_resp, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1394,7 +1394,7 @@ fn test_load_external_decrypt_rsa() {
 
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_load_resp, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1433,7 +1433,7 @@ fn test_load_external_hmac_keyed_hash() {
 
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_load_resp, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1459,7 +1459,7 @@ fn adv_load_external_sh_disabled() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_OWNER,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1477,7 +1477,7 @@ fn adv_load_external_eh_disabled() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_ENDORSEMENT,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1500,7 +1500,7 @@ fn adv_load_external_forbidden_attributes_fixed_parent() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1523,7 +1523,7 @@ fn adv_load_external_forbidden_attributes_restricted() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1544,7 +1544,7 @@ fn adv_load_external_ecc_invalid_coords_size() {
     ));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1568,7 +1568,7 @@ fn adv_load_external_ecc_scalar_too_large() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1600,7 +1600,7 @@ fn adv_load_external_keyed_hash_sensitive_too_large() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1618,7 +1618,7 @@ fn adv_load_external_unsupported_name_alg() {
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1636,7 +1636,7 @@ fn adv_load_external_name_alg_sha512() {
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -1663,7 +1663,7 @@ fn adv_load_external_transient_objects_exhaustion() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
 
@@ -1712,7 +1712,7 @@ fn adv_load_external_rsa_p_q_bits_mismatch() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1737,7 +1737,7 @@ fn adv_load_external_sensitive_auth_value_too_large() {
 
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());
@@ -1765,7 +1765,7 @@ fn adv_load_external_sym_public_only() {
 
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
@@ -1790,7 +1790,7 @@ fn adv_load_external_sym_public_only_size_mismatch() {
 
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = sim.execute_with_handles(cmd, ());

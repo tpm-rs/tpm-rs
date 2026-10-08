@@ -70,10 +70,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // Flush loaded objects in endorsement hierarchy
         for slot in self.global_state.transient_objects.iter_mut() {
-            if let Some(obj) = slot {
-                if obj.hierarchy == Handle::RH_ENDORSEMENT.0 {
-                    *slot = None;
-                }
+            if let Some(obj) = slot
+                && obj.hierarchy == Handle::RH_ENDORSEMENT.0
+            {
+                *slot = None;
             }
         }
 

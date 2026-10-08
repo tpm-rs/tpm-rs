@@ -277,7 +277,7 @@ fn test_certify_creation_adversarial() {
         qualifying_data: Tpm2bData::default(),
         creation_hash: create_rsp.creation_hash,
         in_scheme,
-        creation_ticket: create_rsp.creation_ticket.clone(),
+        creation_ticket: create_rsp.creation_ticket,
     };
     let certify_creation_handles = CertifyCreationHandles {
         sign_handle: object_handle,

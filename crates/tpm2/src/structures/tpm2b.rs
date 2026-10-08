@@ -861,5 +861,5 @@ impl_marshal!(Tpm2bSignatureMldsa<'_>);
 
 /// Re-exports of [`crate::limits`] tag types for backwards compatibility.
 pub mod tags {
-    pub use crate::limits::{*, Tag as Tpm2bTag};
+    pub use crate::limits::{Tag as Tpm2bTag, *};
 }

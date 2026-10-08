@@ -396,7 +396,7 @@ fn adv_mac_unsupported_hash_alg() {
     ));
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -439,7 +439,7 @@ fn adv_mac_missing_sign_attribute() {
     ));
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -475,7 +475,7 @@ fn adv_mac_restricted_key() {
     ));
     let load_cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -509,7 +509,7 @@ fn adv_mac_invalid_key_type() {
     ));
     let load_cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -547,7 +547,7 @@ fn adv_mac_public_only_key() {
     ));
     let load_cmd = LoadExternal {
         in_private: None, // Empty sensitive area
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -591,7 +591,7 @@ fn adv_mac_empty_buffer() {
     ));
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -633,7 +633,7 @@ fn adv_mac_max_buffer() {
     ));
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -668,7 +668,7 @@ fn adv_rsa_decrypt_invalid_key_type() {
     ));
     let load_cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -747,7 +747,7 @@ fn adv_sign_unsupported_scheme() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -783,7 +783,7 @@ fn adv_verify_signature_unsupported_scheme() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -822,7 +822,7 @@ fn adv_rsa_decrypt_restricted_key() {
     ));
     let load_cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -855,7 +855,7 @@ fn adv_rsa_decrypt_signing_only() {
     ));
     let load_cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -888,7 +888,7 @@ fn adv_sign_storage_only() {
     ));
     let load_cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -919,7 +919,7 @@ fn adv_verify_signature_missing_sign_attribute() {
     ));
     let load_cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -953,7 +953,7 @@ fn adv_verify_signature_keyed_hash_public_only() {
     ));
     let load_cmd = LoadExternal {
         in_private: None, // public-only
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1007,7 +1007,7 @@ fn adv_mac_xor_key_scheme() {
 
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1054,7 +1054,7 @@ fn adv_mac_mismatched_command() {
 
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1096,7 +1096,7 @@ fn adv_mac_null_scheme_null_command() {
 
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1138,7 +1138,7 @@ fn adv_mac_null_scheme_unsupported_hash() {
 
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1185,7 +1185,7 @@ fn adv_mac_null_scheme_success_multiple_hashes() {
 
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1248,7 +1248,7 @@ fn adv_mac_invalid_key_type_ecc() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let load_cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1289,7 +1289,7 @@ fn adv_mac_invalid_key_type_sym() {
     });
     let load_cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1339,7 +1339,7 @@ fn adv_mac_key_default_scheme_match_cmd_null() {
 
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1390,7 +1390,7 @@ fn adv_mac_key_xor_scheme() {
 
     let load_cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
@@ -1428,7 +1428,7 @@ fn adv_verify_signature_and_policy_signed_reject_tpm_alg_null() {
     ));
     let load_cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();

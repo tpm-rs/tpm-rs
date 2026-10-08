@@ -47,18 +47,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Ok(cmd) => cmd,
             Err(e) => {
                 let mut slice = request.remaining_slice();
-                if let Ok(_enc_key) = tpm2::Tpm2bData::unmarshal(&mut slice) {
-                    if let Ok(_obj_pub) = tpm2::Tpm2bPublic::unmarshal(&mut slice) {
-                        if let Ok(_dup) = tpm2::Tpm2bPrivate::unmarshal(&mut slice) {
-                            if let Ok(_seed) = tpm2::Tpm2bEncryptedSecret::unmarshal(&mut slice) {
-                                if slice.len() >= 2 {
-                                    let alg = u16::from_be_bytes([slice[0], slice[1]]);
-                                    if alg > 0x0080 {
-                                        return Err(TpmRc::VALUE.with(Position::parameter(5)));
-                                    }
-                                }
-                            }
-                        }
+                if let Ok(_enc_key) = tpm2::Tpm2bData::unmarshal(&mut slice)
+                    && let Ok(_obj_pub) = tpm2::Tpm2bPublic::unmarshal(&mut slice)
+                    && let Ok(_dup) = tpm2::Tpm2bPrivate::unmarshal(&mut slice)
+                    && let Ok(_seed) = tpm2::Tpm2bEncryptedSecret::unmarshal(&mut slice)
+                    && slice.len() >= 2
+                {
+                    let alg = u16::from_be_bytes([slice[0], slice[1]]);
+                    if alg > 0x0080 {
+                        return Err(TpmRc::VALUE.with(Position::parameter(5)));
                     }
                 }
                 return Err(e);
@@ -135,12 +132,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
-        if object_public_struct.auth_policy.get_size() != 0 {
-            if let Some(name_alg) = object_public_struct.name_alg {
-                let digest_size = name_alg.digest_size();
-                if object_public_struct.auth_policy.get_size() as usize != digest_size {
-                    return Err(TpmRc::SIZE.with(Position::parameter(2)));
-                }
+        if object_public_struct.auth_policy.get_size() != 0
+            && let Some(name_alg) = object_public_struct.name_alg
+        {
+            let digest_size = name_alg.digest_size();
+            if object_public_struct.auth_policy.get_size() as usize != digest_size {
+                return Err(TpmRc::SIZE.with(Position::parameter(2)));
             }
         }
 

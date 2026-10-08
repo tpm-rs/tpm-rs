@@ -271,7 +271,7 @@ fn test_challenger_policy_signed_invalid_signature() {
         .copy_from_slice(policy_ref.get_buffer());
     offset += policy_ref.get_size() as usize;
 
-    let digest = compute_sha256(&tpm.platform.crypto, &to_be_signed[..offset]);
+    let digest = compute_sha256(tpm.platform.crypto, &to_be_signed[..offset]);
 
     let mut sig_out = [0u8; 256];
     let sig_len = tpm
@@ -370,7 +370,7 @@ fn test_challenger_policy_signed_incorrect_message() {
         .copy_from_slice(policy_ref.get_buffer());
     offset += policy_ref.get_size() as usize;
 
-    let digest = compute_sha256(&tpm.platform.crypto, &to_be_signed[..offset]);
+    let digest = compute_sha256(tpm.platform.crypto, &to_be_signed[..offset]);
 
     let mut sig_out = [0u8; 256];
     let sig_len = tpm
@@ -466,7 +466,7 @@ fn test_challenger_policy_signed_expiration_and_timeout() {
         .copy_from_slice(policy_ref.get_buffer());
     offset += policy_ref.get_size() as usize;
 
-    let digest = compute_sha256(&tpm.platform.crypto, &to_be_signed[..offset]);
+    let digest = compute_sha256(tpm.platform.crypto, &to_be_signed[..offset]);
 
     let mut sig_out = [0u8; 256];
     let sig_len = tpm
@@ -572,7 +572,7 @@ fn test_challenger_policy_signed_ticket_generation() {
         .copy_from_slice(policy_ref.get_buffer());
     offset += policy_ref.get_size() as usize;
 
-    let digest = compute_sha256(&tpm.platform.crypto, &to_be_signed[..offset]);
+    let digest = compute_sha256(tpm.platform.crypto, &to_be_signed[..offset]);
 
     let mut sig_out = [0u8; 256];
     let sig_len = tpm
@@ -880,7 +880,7 @@ fn test_challenger_policy_signed_trial_session_digest_update() {
     update1[36..36 + key_name.get_size() as usize].copy_from_slice(key_name.get_buffer());
 
     let digest1 = compute_sha256(
-        &tpm.platform.crypto,
+        tpm.platform.crypto,
         &update1[..36 + key_name.get_size() as usize],
     );
 
@@ -888,7 +888,7 @@ fn test_challenger_policy_signed_trial_session_digest_update() {
     update2.extend_from_slice(&digest1);
     update2.extend_from_slice(policy_ref.get_buffer());
 
-    let expected_digest = compute_sha256(&tpm.platform.crypto, &update2);
+    let expected_digest = compute_sha256(tpm.platform.crypto, &update2);
 
     assert_eq!(pgd_rsp.policy_digest.get_buffer(), &expected_digest);
 }
@@ -973,13 +973,13 @@ fn test_challenger_policy_authorize_trial_session_digest_update() {
     update1.extend_from_slice(&0x0000016Au32.to_be_bytes()); // TPM_CC_PolicyAuthorize
     update1.extend_from_slice(key_sign.get_buffer());
 
-    let digest1 = compute_sha256(&tpm.platform.crypto, &update1);
+    let digest1 = compute_sha256(tpm.platform.crypto, &update1);
 
     let mut update2 = Vec::new();
     update2.extend_from_slice(&digest1);
     update2.extend_from_slice(policy_ref.get_buffer());
 
-    let expected_digest = compute_sha256(&tpm.platform.crypto, &update2);
+    let expected_digest = compute_sha256(tpm.platform.crypto, &update2);
 
     assert_eq!(pgd_rsp2.policy_digest.get_buffer(), &expected_digest);
 }
@@ -1270,7 +1270,7 @@ fn test_challenger_policy_authorize_success_flow() {
     let mut ahash_input = Vec::new();
     ahash_input.extend_from_slice(&approved_policy);
     ahash_input.extend_from_slice(policy_ref.get_buffer());
-    let ahash_digest = compute_sha256(&tpm.platform.crypto, &ahash_input);
+    let ahash_digest = compute_sha256(tpm.platform.crypto, &ahash_input);
 
     // 2. Sign aHash
     let mut sig_out = [0u8; 256];
@@ -1381,7 +1381,7 @@ fn test_challenger_policy_authorize_forged_ticket_null_hierarchy() {
     let mut ahash_input = Vec::new();
     ahash_input.extend_from_slice(&approved_policy);
     ahash_input.extend_from_slice(policy_ref.get_buffer());
-    let ahash_digest = compute_sha256(&tpm.platform.crypto, &ahash_input);
+    let ahash_digest = compute_sha256(tpm.platform.crypto, &ahash_input);
 
     // Forge the ticket with RHNull (0x40000007) and empty key HMAC
     let mut hmac_input = Vec::new();
@@ -1503,7 +1503,7 @@ fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
         .copy_from_slice(policy_ref.get_buffer());
     offset += policy_ref.get_size() as usize;
 
-    let digest = compute_sha256(&tpm.platform.crypto, &to_be_signed[..offset]);
+    let digest = compute_sha256(tpm.platform.crypto, &to_be_signed[..offset]);
 
     let mut sig_out_ps = [0u8; 256];
     let sig_len_ps = tpm
@@ -1552,7 +1552,7 @@ fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
     let mut ahash_input = Vec::new();
     ahash_input.extend_from_slice(&current_policy_digest[..current_policy_digest_len]);
     ahash_input.extend_from_slice(pa_policy_ref.get_buffer());
-    let ahash_digest = compute_sha256(&tpm.platform.crypto, &ahash_input);
+    let ahash_digest = compute_sha256(tpm.platform.crypto, &ahash_input);
 
     let mut sig_out = [0u8; 256];
     let sig_len = tpm
@@ -1641,7 +1641,7 @@ fn test_ticket_revival_fails_after_restart() {
     let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
 
     let (signing_key, priv_buf, priv_len) = create_signing_key(&mut tpm);
-    let auth_name = signing_key.name.clone();
+    let auth_name = signing_key.name;
     global_state.transient_objects[0] = Some(signing_key);
 
     // 1. Start a policy session
@@ -1685,7 +1685,7 @@ fn test_ticket_revival_fails_after_restart() {
         .copy_from_slice(policy_ref.get_buffer());
     offset += policy_ref.get_size() as usize;
 
-    let digest = compute_sha256(&tpm.platform.crypto, &to_be_signed[..offset]);
+    let digest = compute_sha256(tpm.platform.crypto, &to_be_signed[..offset]);
 
     let mut sig_out = [0u8; 256];
     let sig_len = tpm
@@ -1712,8 +1712,8 @@ fn test_ticket_revival_fails_after_restart() {
     };
     let ps_cmd = PolicySigned {
         nonce_tpm: nonce_tpm.as_tpm2b(),
-        cp_hash_a: cp_hash_a.clone(),
-        policy_ref: policy_ref.clone(),
+        cp_hash_a,
+        policy_ref,
         expiration,
         auth,
     };

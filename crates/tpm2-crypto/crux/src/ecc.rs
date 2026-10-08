@@ -332,21 +332,21 @@ impl EccCurve<32, CryptoError> for CruxEccBnP256 {
         if k == rsa::BigUint::from(0u32) || k >= bn.n {
             return Err(CryptoError::InvalidData);
         }
-        if bn.is_on_curve(&x, &y) {
-            if let Some((rx, ry)) = bn.multiply(&k, (x, y)) {
-                let rx_bytes = rx.to_bytes_be();
-                let ry_bytes = ry.to_bytes_be();
+        if bn.is_on_curve(&x, &y)
+            && let Some((rx, ry)) = bn.multiply(&k, (x, y))
+        {
+            let rx_bytes = rx.to_bytes_be();
+            let ry_bytes = ry.to_bytes_be();
 
-                x_out.fill(0);
-                y_out.fill(0);
-                if rx_bytes.len() <= 32 {
-                    x_out[32 - rx_bytes.len()..].copy_from_slice(&rx_bytes);
-                }
-                if ry_bytes.len() <= 32 {
-                    y_out[32 - ry_bytes.len()..].copy_from_slice(&ry_bytes);
-                }
-                return Ok(());
+            x_out.fill(0);
+            y_out.fill(0);
+            if rx_bytes.len() <= 32 {
+                x_out[32 - rx_bytes.len()..].copy_from_slice(&rx_bytes);
             }
+            if ry_bytes.len() <= 32 {
+                y_out[32 - ry_bytes.len()..].copy_from_slice(&ry_bytes);
+            }
+            return Ok(());
         }
         Err(CryptoError::InvalidData)
     }

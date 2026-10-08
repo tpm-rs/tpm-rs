@@ -885,10 +885,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let auths = &self.global_state.parsed_auths[..self.global_state.parsed_auths_len];
 
-        if let Some(ref signer) = signer_obj_opt {
-            if !self.verify_password_auth(&auths[0], signer.auth.get_buffer()) {
-                return Err(TpmRc::AUTH_FAIL.to_rc());
-            }
+        if let Some(ref signer) = signer_obj_opt
+            && !self.verify_password_auth(&auths[0], signer.auth.get_buffer())
+        {
+            return Err(TpmRc::AUTH_FAIL.to_rc());
         }
 
         let auth_session_idx = if signer_obj_opt.is_some() { 1 } else { 0 };
@@ -1616,27 +1616,24 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     if let Ok(metadata) = storage.get_metadata(h) {
                         let read_len = core::cmp::min(metadata.data_size as usize, 512);
                         let mut read_buf = [0u8; 512];
-                        if storage.read_item(h, 0, &mut read_buf[..read_len]).is_ok() {
-                            if let Ok((_, nv_public, nv_auth, _)) =
+                        if storage.read_item(h, 0, &mut read_buf[..read_len]).is_ok()
+                            && let Ok((_, nv_public, nv_auth, _)) =
                                 unmarshal_nv_header(&read_buf[..read_len])
+                            && nv_public.attributes.contains(TpmaNv::GLOBALLOCK)
+                            && !nv_public.attributes.contains(TpmaNv::WRITELOCKED)
+                        {
+                            let mut updated_public = nv_public;
+                            updated_public.attributes.insert(TpmaNv::WRITELOCKED);
+                            if let Ok(updated_public_info) =
+                                Ok::<_, TpmRc>(updated_public.as_tpm2b())
                             {
-                                if nv_public.attributes.contains(TpmaNv::GLOBALLOCK)
-                                    && !nv_public.attributes.contains(TpmaNv::WRITELOCKED)
-                                {
-                                    let mut updated_public = nv_public;
-                                    updated_public.attributes.insert(TpmaNv::WRITELOCKED);
-                                    if let Ok(updated_public_info) =
-                                        Ok::<_, TpmRc>(updated_public.as_tpm2b())
-                                    {
-                                        let mut write_buf = [0u8; 512];
-                                        if let Ok(offset) = marshal_nv_header(
-                                            &nv_auth,
-                                            &updated_public_info,
-                                            &mut write_buf,
-                                        ) {
-                                            let _ = storage.write_item(h, 0, &write_buf[..offset]);
-                                        }
-                                    }
+                                let mut write_buf = [0u8; 512];
+                                if let Ok(offset) = marshal_nv_header(
+                                    &nv_auth,
+                                    &updated_public_info,
+                                    &mut write_buf,
+                                ) {
+                                    let _ = storage.write_item(h, 0, &write_buf[..offset]);
                                 }
                             }
                         }
@@ -1979,13 +1976,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         if auth_0.session_handle == Handle::RS_PW {
             return Err(TpmRc::AUTH_TYPE);
-        } else if let Some(session_state) = self.global_state.session(auth_0.session_handle.0) {
-            if session_state.session_type == tpm2::TpmSe::Policy
-                && session_state.command_code != 0
-                && session_state.command_code != tpm2::TpmCc::NVChangeAuth.code()
-            {
-                return Err(TpmRc::POLICY_FAIL.with(Position::session(1)));
-            }
+        } else if let Some(session_state) = self.global_state.session(auth_0.session_handle.0)
+            && session_state.session_type == tpm2::TpmSe::Policy
+            && session_state.command_code != 0
+            && session_state.command_code != tpm2::TpmCc::NVChangeAuth.code()
+        {
+            return Err(TpmRc::POLICY_FAIL.with(Position::session(1)));
         }
 
         // 3. Check newAuth size vs digest size of nameAlg

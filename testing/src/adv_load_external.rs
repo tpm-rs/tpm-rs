@@ -118,7 +118,7 @@ fn adv_load_external_auth_value_too_large() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
@@ -146,7 +146,7 @@ fn adv_load_external_rsa_primes_key_size_mismatch() {
     ));
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
@@ -174,7 +174,7 @@ fn adv_load_external_rsa_prime_zero() {
     ));
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
@@ -202,7 +202,7 @@ fn adv_load_external_rsa_prime_unbalanced() {
     ));
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
@@ -224,7 +224,7 @@ fn adv_load_external_ecc_scalar_too_large() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
@@ -252,7 +252,7 @@ fn adv_load_external_keyed_hash_sensitive_too_large() {
     let in_public = tpm2::Tpm2b(pub_area);
     let cmd = LoadExternal {
         in_private: Some(in_private),
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
@@ -272,7 +272,7 @@ fn adv_load_external_rsa_public_modulus_size_mismatch() {
     ));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
@@ -292,7 +292,7 @@ fn adv_load_external_ecc_public_coord_size_mismatch() {
     ));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
@@ -312,7 +312,7 @@ fn adv_load_external_unsupported_name_alg() {
     ));
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
@@ -331,7 +331,7 @@ fn adv_load_external_object_memory_exhaustion() {
     for i in 0..tpm2_impl::MAX_LOADED_OBJECTS {
         let cmd = LoadExternal {
             in_private: None,
-            in_public: in_public.into(),
+            in_public,
             hierarchy: Handle::RH_NULL,
         };
         let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
@@ -341,7 +341,7 @@ fn adv_load_external_object_memory_exhaustion() {
     // Next load should fail with ObjectMemory
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);

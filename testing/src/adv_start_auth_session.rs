@@ -739,7 +739,7 @@ fn load_rsa_public_only_key(sim: &mut Simulator) -> Handle {
 
     let cmd = LoadExternal {
         in_private: None,
-        in_public: in_public.into(),
+        in_public,
         hierarchy: Handle::RH_NULL,
     };
 

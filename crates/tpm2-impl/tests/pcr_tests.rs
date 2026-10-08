@@ -309,8 +309,8 @@ fn test_hcrtm_pre_startup_sequence_and_slot_eviction() {
     global_state.ph_enable = true;
 
     // Fill all 3 sequence/transient slots before starting H-CRTM sequence
-    for i in 0..3 {
-        global_state.active_sequences[i] = Some(tpm2_impl::ActiveSequence::new(
+    for (i, slot) in global_state.active_sequences.iter_mut().enumerate().take(3) {
+        *slot = Some(tpm2_impl::ActiveSequence::new(
             0x8000_0000 | (i as u32),
             tpm2::Tpm2bAuth::default(),
             tpm2_impl::SequenceType::Event,

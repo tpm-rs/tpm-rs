@@ -315,7 +315,7 @@ fn compute_hmac_in_test(
     let mut digest = [0u8; 32];
     hash_state.finalize(&mut digest).unwrap();
 
-    let mut hmac_state = tpm2::crypto::HmacCtx::new(&*crypto, TpmiAlgHash::Sha256, &[]).unwrap();
+    let mut hmac_state = tpm2::crypto::HmacCtx::new(crypto, TpmiAlgHash::Sha256, &[]).unwrap();
     hmac_state.update(&digest).unwrap();
     for data in updates_hmac {
         hmac_state.update(data).unwrap();

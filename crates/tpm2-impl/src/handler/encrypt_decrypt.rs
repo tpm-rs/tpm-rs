@@ -166,10 +166,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let cmd_mode_opt = cmd_mode;
         if key_mode != Alg::NULL {
-            if let Some(mode) = cmd_mode_opt {
-                if Alg::from(Some(mode)) != key_mode {
-                    return Err(TpmRc::MODE.with(mode_pos));
-                }
+            if let Some(mode) = cmd_mode_opt
+                && Alg::from(Some(mode)) != key_mode
+            {
+                return Err(TpmRc::MODE.with(mode_pos));
             }
         } else {
             match cmd_mode_opt {

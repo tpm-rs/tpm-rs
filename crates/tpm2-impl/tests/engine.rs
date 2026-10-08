@@ -161,8 +161,13 @@ fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
     tpmt_public_buf[10] = 0x00;
     tpmt_public_buf[11] = 0x10; // Null scheme
 
-    for i in 0..16 {
-        global_state.transient_objects[i] = Some(TransientObject {
+    for (i, slot) in global_state
+        .transient_objects
+        .iter_mut()
+        .enumerate()
+        .take(16)
+    {
+        *slot = Some(TransientObject {
             handle: 0x80000000 | (i as u32),
             seed: [0u8; 32],
             name: (tpm2::Tpm2bName::default()).into(),

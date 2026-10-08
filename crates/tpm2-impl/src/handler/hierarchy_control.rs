@@ -89,10 +89,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 || enable == Handle::RH_PLATFORM.0)
         {
             for slot in self.global_state.transient_objects.iter_mut() {
-                if let Some(obj) = slot {
-                    if obj.hierarchy == enable {
-                        *slot = None;
-                    }
+                if let Some(obj) = slot
+                    && obj.hierarchy == enable
+                {
+                    *slot = None;
                 }
             }
         }

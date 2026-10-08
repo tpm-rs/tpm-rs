@@ -456,21 +456,21 @@ macro_rules! impl_delegate_hash {
             }
         }
         impl tpm2::crypto::Hash for $t {
-            type Sha1Ctx = <crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha1Ctx;
+            type Sha1Ctx = <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha1Ctx;
             type Sha256Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha256Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha256Ctx;
             type Sha384Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha384Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha384Ctx;
             type Sha512Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha512Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha512Ctx;
             type Sm3_256Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sm3_256Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sm3_256Ctx;
             type Sha3_256Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha3_256Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha3_256Ctx;
             type Sha3_384Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha3_384Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha3_384Ctx;
             type Sha3_512Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha3_512Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha3_512Ctx;
 
             fn sha1(&self) -> Result<Self::Sha1Ctx, Self::Error> {
                 tpm2::crypto::Hash::sha1(&self.$field)
@@ -498,21 +498,21 @@ macro_rules! impl_delegate_hash {
             }
         }
         impl tpm2::crypto::Hmac for $t {
-            type Sha1Ctx = <crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha1Ctx;
+            type Sha1Ctx = <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha1Ctx;
             type Sha256Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha256Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha256Ctx;
             type Sha384Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha384Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha384Ctx;
             type Sha512Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha512Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha512Ctx;
             type Sm3_256Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sm3_256Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sm3_256Ctx;
             type Sha3_256Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha3_256Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha3_256Ctx;
             type Sha3_384Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha3_384Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha3_384Ctx;
             type Sha3_512Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha3_512Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha3_512Ctx;
 
             fn sha1(&self, key: &[u8]) -> Result<Self::Sha1Ctx, Self::Error> {
                 tpm2::crypto::Hmac::sha1(&self.$field, key)
@@ -544,19 +544,19 @@ macro_rules! impl_delegate_hash {
                 CryptoError::InvalidData
             }
             type Aes128Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Aes128Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Aes128Ctx;
             type Aes192Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Aes192Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Aes192Ctx;
             type Aes256Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Aes256Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Aes256Ctx;
             type Sm4_128Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Sm4_128Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Sm4_128Ctx;
             type Camellia128Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Camellia128Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Camellia128Ctx;
             type Camellia192Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Camellia192Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Camellia192Ctx;
             type Camellia256Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Camellia256Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Camellia256Ctx;
 
             fn aes128(&self, key: &[u8; 16]) -> Result<Self::Aes128Ctx, Self::Error> {
                 tpm2::crypto::Cmac::aes128(&self.$field, key)
@@ -582,29 +582,29 @@ macro_rules! impl_delegate_hash {
         }
         impl tpm2::crypto::Ecc for $t {
             type NistP192Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP192Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP192Ctx;
             type NistP224Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP224Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP224Ctx;
             type NistP256Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP256Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP256Ctx;
             type NistP384Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP384Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP384Ctx;
             type NistP521Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP521Ctx;
-            type BnP256Ctx = <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BnP256Ctx;
-            type BnP638Ctx = <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BnP638Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP521Ctx;
+            type BnP256Ctx = <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BnP256Ctx;
+            type BnP638Ctx = <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BnP638Ctx;
             type Sm2P256Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::Sm2P256Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::Sm2P256Ctx;
             type BpP256R1Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BpP256R1Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BpP256R1Ctx;
             type BpP384R1Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BpP384R1Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BpP384R1Ctx;
             type BpP512R1Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BpP512R1Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BpP512R1Ctx;
             type Curve25519Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::Curve25519Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::Curve25519Ctx;
             type Curve448Ctx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::Curve448Ctx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::Curve448Ctx;
 
             fn nist_p192(&self) -> Result<Self::NistP192Ctx, Self::Error> {
                 tpm2::crypto::Ecc::nist_p192(&self.$field)
@@ -654,33 +654,33 @@ macro_rules! impl_delegate_hash {
                 CryptoError::InvalidData
             }
             type Aes128EncryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes128EncryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes128EncryptCtx;
             type Aes128DecryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes128DecryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes128DecryptCtx;
             type Aes192EncryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes192EncryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes192EncryptCtx;
             type Aes192DecryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes192DecryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes192DecryptCtx;
             type Aes256EncryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes256EncryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes256EncryptCtx;
             type Aes256DecryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes256DecryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Aes256DecryptCtx;
             type Sm4_128EncryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Sm4_128EncryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Sm4_128EncryptCtx;
             type Sm4_128DecryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Sm4_128DecryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Sm4_128DecryptCtx;
             type Camellia128EncryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia128EncryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia128EncryptCtx;
             type Camellia128DecryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia128DecryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia128DecryptCtx;
             type Camellia192EncryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia192EncryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia192EncryptCtx;
             type Camellia192DecryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia192DecryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia192DecryptCtx;
             type Camellia256EncryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia256EncryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia256EncryptCtx;
             type Camellia256DecryptCtx =
-                <crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia256DecryptCtx;
+                <$crate::common::TestCryptoProvider as tpm2::crypto::Symmetric>::Camellia256DecryptCtx;
 
             fn aes128_encrypt(
                 &self,

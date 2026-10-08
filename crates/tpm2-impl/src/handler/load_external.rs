@@ -54,12 +54,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 1. Hierarchy and private key combination validation
         self.validate_load_external_hierarchy(cmd.hierarchy.0, in_private_present, &public_struct)?;
 
-        if public_struct.auth_policy.get_size() != 0 {
-            if let Some(name_alg) = public_struct.name_alg {
-                let digest_size = name_alg.digest_size();
-                if public_struct.auth_policy.get_size() as usize != digest_size {
-                    return Err(TpmRc::SIZE.with(Position::parameter(2)));
-                }
+        if public_struct.auth_policy.get_size() != 0
+            && let Some(name_alg) = public_struct.name_alg
+        {
+            let digest_size = name_alg.digest_size();
+            if public_struct.auth_policy.get_size() as usize != digest_size {
+                return Err(TpmRc::SIZE.with(Position::parameter(2)));
             }
         }
 
@@ -85,13 +85,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )?;
 
         // 3. Name validation & computation
-        if let Some(alg) = public_struct.name_alg {
-            if !matches!(
+        if let Some(alg) = public_struct.name_alg
+            && !matches!(
                 alg,
                 TpmiAlgHash::Sha1 | TpmiAlgHash::Sha256 | TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512
-            ) {
-                return Err(TpmRc::HASH.with(Position::parameter(2)));
-            }
+            )
+        {
+            return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
 
         let mut pub_buf = [0u8; tpm2::TpmtPublic::MAX_SIZE];
@@ -535,27 +535,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub(crate) fn validate_public_only(&self, public_struct: &TpmtPublic) -> Result<(), TpmRc> {
         self.validate_public_parameters(public_struct, false)?;
 
-        if let PublicParmsAndId::Ecc(ecc_parms, point) = &public_struct.parms_and_id {
-            if public_struct.name_alg.is_some() {
-                let curve = ecc_parms.curve_id;
-                let param_size = match curve {
-                    tpm2::TpmEccCurve::NistP192 => 24,
-                    tpm2::TpmEccCurve::NistP224 => 28,
-                    tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                    tpm2::TpmEccCurve::NistP384 => 48,
-                    tpm2::TpmEccCurve::NistP521 => 66,
-                    _ => return Err(TpmRc::ECC_POINT.with(Position::parameter(2))),
-                };
-                let mut ecc_pub_key = [0u8; 256];
-                let px = point.x.get_buffer();
-                let py = point.y.get_buffer();
-                ecc_pub_key[param_size - px.len()..param_size].copy_from_slice(px);
-                ecc_pub_key[param_size * 2 - py.len()..param_size * 2].copy_from_slice(py);
+        if let PublicParmsAndId::Ecc(ecc_parms, point) = &public_struct.parms_and_id
+            && public_struct.name_alg.is_some()
+        {
+            let curve = ecc_parms.curve_id;
+            let param_size = match curve {
+                tpm2::TpmEccCurve::NistP192 => 24,
+                tpm2::TpmEccCurve::NistP224 => 28,
+                tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
+                tpm2::TpmEccCurve::NistP384 => 48,
+                tpm2::TpmEccCurve::NistP521 => 66,
+                _ => return Err(TpmRc::ECC_POINT.with(Position::parameter(2))),
+            };
+            let mut ecc_pub_key = [0u8; 256];
+            let px = point.x.get_buffer();
+            let py = point.y.get_buffer();
+            ecc_pub_key[param_size - px.len()..param_size].copy_from_slice(px);
+            ecc_pub_key[param_size * 2 - py.len()..param_size * 2].copy_from_slice(py);
 
-                self.crypto()
-                    .validate_point(curve, &ecc_pub_key[..param_size * 2])
-                    .map_err(|_| TpmRc::ECC_POINT.with(Position::parameter(2)))?;
-            }
+            self.crypto()
+                .validate_point(curve, &ecc_pub_key[..param_size * 2])
+                .map_err(|_| TpmRc::ECC_POINT.with(Position::parameter(2)))?;
         }
         Ok(())
     }

@@ -974,7 +974,7 @@ fn test_tpmt_signature_unmarshal_rejects_null_and_option_handles_attestation() {
     assert_eq!(certify_rsp.signature, None);
     assert_eq!(certify_rsp.certify_info, default_attest);
 
-    let mut s = &attest_rsp_bytes[..];
+    let mut s = attest_rsp_bytes;
     assert_eq!(
         CertifyCreation::unmarshal(&mut s)
             .expect("CertifyCreationRsp")
@@ -982,10 +982,10 @@ fn test_tpmt_signature_unmarshal_rejects_null_and_option_handles_attestation() {
         None
     );
 
-    let mut s = &attest_rsp_bytes[..];
+    let mut s = attest_rsp_bytes;
     assert_eq!(Quote::unmarshal(&mut s).expect("QuoteRsp").signature, None);
 
-    let mut s = &attest_rsp_bytes[..];
+    let mut s = attest_rsp_bytes;
     assert_eq!(
         GetSessionAuditDigest::unmarshal(&mut s)
             .expect("GetSessionAuditDigestRsp")
@@ -993,7 +993,7 @@ fn test_tpmt_signature_unmarshal_rejects_null_and_option_handles_attestation() {
         None
     );
 
-    let mut s = &attest_rsp_bytes[..];
+    let mut s = attest_rsp_bytes;
     assert_eq!(
         GetCommandAuditDigest::unmarshal(&mut s)
             .expect("GetCommandAuditDigestRsp")
@@ -1001,13 +1001,13 @@ fn test_tpmt_signature_unmarshal_rejects_null_and_option_handles_attestation() {
         None
     );
 
-    let mut s = &attest_rsp_bytes[..];
+    let mut s = attest_rsp_bytes;
     assert_eq!(
         GetTime::unmarshal(&mut s).expect("GetTimeRsp").signature,
         None
     );
 
-    let mut s = &attest_rsp_bytes[..];
+    let mut s = attest_rsp_bytes;
     assert_eq!(
         NVCertify::unmarshal(&mut s)
             .expect("NVCertifyRsp")

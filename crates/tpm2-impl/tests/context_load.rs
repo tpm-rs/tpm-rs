@@ -166,7 +166,7 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     global_state.sp_seed = [0xFF; 64];
 
     let req2_cmd = tpm2::commands::ContextLoad {
-        context: rsp1_parsed.context.clone(),
+        context: rsp1_parsed.context,
     };
     let mut req2 = [0u8; 4096];
     marshal_to_slice(&(0x8001u16), &mut req2[0..2]);
@@ -261,7 +261,7 @@ fn test_context_load_fails_on_total_reset_count_and_st_clear_count_changes() {
     assert_eq!(rsp1_parsed.context.saved_handle.0, 0x80000002);
 
     let req2_cmd = tpm2::commands::ContextLoad {
-        context: rsp1_parsed.context.clone(),
+        context: rsp1_parsed.context,
     };
     let mut req2 = [0u8; 4096];
     marshal_to_slice(&(0x8001u16), &mut req2[0..2]);

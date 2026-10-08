@@ -92,7 +92,7 @@ fn test_sign_edge_cases() {
     // 3. Test VerifySignature command (Success)
     let verify_cmd = VerifySignature {
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
-        signature: sign_resp.signature.clone(),
+        signature: sign_resp.signature,
     };
     let verify_handles = VerifySignatureHandles {
         key_handle: object_handle,
@@ -108,7 +108,7 @@ fn test_sign_edge_cases() {
     modified_digest[0] ^= 1;
     let verify_cmd_mod_digest = VerifySignature {
         digest: Tpm2bDigest::from_bytes(&modified_digest).unwrap(),
-        signature: sign_resp.signature.clone(),
+        signature: sign_resp.signature,
     };
     let res_mod_digest =
         execute_with_password_sessions(&mut sim, &verify_cmd_mod_digest, verify_handles, 0, &[]);
@@ -118,7 +118,7 @@ fn test_sign_edge_cases() {
     );
 
     // 5. Test VerifySignature with modified signature
-    let mut modified_sig = sign_resp.signature.clone();
+    let mut modified_sig = sign_resp.signature;
     match &mut modified_sig {
         TpmtSignature::Rsassa(rsassa) => {
             let mut sig_bytes = rsassa.sig.get_buffer().to_vec();
@@ -325,7 +325,7 @@ fn test_verify_with_non_verify_key() {
     // 4. Attempt to verify signature with the decryption-only key
     let verify_cmd = VerifySignature {
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
-        signature: sign_resp.signature.clone(),
+        signature: sign_resp.signature,
     };
     let verify_handles = VerifySignatureHandles {
         key_handle: decrypt_key_handle,
@@ -365,7 +365,7 @@ fn test_verify_with_non_verify_key() {
     assert_eq!(err_mismatched, TpmRc::SIGNATURE.get());
 
     // 6. Attempt to verify with a mismatched hash algorithm in signature (SHA1 vs key's SHA256)
-    let mut signature_mismatched_hash = sign_resp.signature.clone();
+    let mut signature_mismatched_hash = sign_resp.signature;
     match &mut signature_mismatched_hash {
         TpmtSignature::Rsassa(rsassa) => {
             rsassa.hash = TpmiAlgHash::Sha1;

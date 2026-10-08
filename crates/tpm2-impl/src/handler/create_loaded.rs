@@ -726,10 +726,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 }
             }
             PublicParmsAndId::KeyedHash(scheme, _) => {
-                if let Some(TpmtKeyedHashScheme::ExclusiveOr(s)) = scheme {
-                    if s.kdf == Some(tpm2::TpmiAlgKdf::Hkdf) {
-                        return Err(TpmRc::KDF.with(error_pos));
-                    }
+                if let Some(TpmtKeyedHashScheme::ExclusiveOr(s)) = scheme
+                    && s.kdf == Some(tpm2::TpmiAlgKdf::Hkdf)
+                {
+                    return Err(TpmRc::KDF.with(error_pos));
                 }
                 if sign && decrypt && scheme.is_some() {
                     return Err(TpmRc::SCHEME.with(error_pos));
@@ -742,10 +742,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     if !matches!(scheme, Some(TpmtKeyedHashScheme::ExclusiveOr(_)) | None) {
                         return Err(TpmRc::SCHEME.with(error_pos));
                     }
-                    if let Some(TpmtKeyedHashScheme::ExclusiveOr(s)) = scheme {
-                        if restricted && s.kdf != Some(tpm2::TpmiAlgKdf::Kdf1Sp800_108) {
-                            return Err(TpmRc::SCHEME.with(error_pos));
-                        }
+                    if let Some(TpmtKeyedHashScheme::ExclusiveOr(s)) = scheme
+                        && restricted
+                        && s.kdf != Some(tpm2::TpmiAlgKdf::Kdf1Sp800_108)
+                    {
+                        return Err(TpmRc::SCHEME.with(error_pos));
                     }
                 }
             }

@@ -1110,10 +1110,12 @@ fn test_nv_monotonic_counter_anti_rollback_and_persistence() {
     )
     .unwrap();
 
-    let mut fresh_state = tpm2_impl::GlobalState::default();
-    fresh_state.nv_available = true;
-    fresh_state.locality = 0;
-    fresh_state.g_nv_ok = true;
+    let mut fresh_state = tpm2_impl::GlobalState {
+        nv_available: true,
+        locality: 0,
+        g_nv_ok: true,
+        ..Default::default()
+    };
     let startup_request = hex!("8001 0000000c 00000144 0000");
     let mut startup_response = [0u8; 256];
     tpm.execute_command_separate(

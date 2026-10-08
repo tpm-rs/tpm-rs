@@ -1198,14 +1198,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         name_alg,
                         parent_qn.get_buffer(),
                         child_name.get_buffer(),
-                    ) {
-                        if current_qn != new_qn {
-                            if let Some(child_obj) = self.global_state.transient_objects[i].as_mut()
-                            {
-                                child_obj.qualified_name = new_qn;
-                                changed = true;
-                            }
-                        }
+                    ) && current_qn != new_qn
+                        && let Some(child_obj) = self.global_state.transient_objects[i].as_mut()
+                    {
+                        child_obj.qualified_name = new_qn;
+                        changed = true;
                     }
                 }
             }

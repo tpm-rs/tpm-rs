@@ -110,14 +110,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        if let Some(alg) = cmd.hash_alg {
-            if alg != TpmiAlgHash::Sha1
-                && alg != TpmiAlgHash::Sha256
-                && alg != TpmiAlgHash::Sha384
-                && alg != TpmiAlgHash::Sha512
-            {
-                return Err(TpmRc::HASH.to_rc());
-            }
+        if let Some(alg) = cmd.hash_alg
+            && alg != TpmiAlgHash::Sha1
+            && alg != TpmiAlgHash::Sha256
+            && alg != TpmiAlgHash::Sha384
+            && alg != TpmiAlgHash::Sha512
+        {
+            return Err(TpmRc::HASH.to_rc());
         }
 
         let (index, handle) = self.global_state.find_empty_sequence_slot()?;

@@ -401,8 +401,7 @@ fn test_hash_and_sequence_marshalling() {
 #[test]
 fn test_tpml_digest_values_marshalling() {
     let lp =
-        TpmlDigestValues::new(&[TpmtHa::Sha256(&[0xaa; 32]), TpmtHa::Sha256(&[0xbb; 32])])
-            .unwrap();
+        TpmlDigestValues::new(&[TpmtHa::Sha256(&[0xaa; 32]), TpmtHa::Sha256(&[0xbb; 32])]).unwrap();
 
     let mut buf = [0u8; TpmlDigestValues::MAX_SIZE];
     let len = lp.marshal(&mut buf);

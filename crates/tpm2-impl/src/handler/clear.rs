@@ -95,11 +95,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.global_state.sp_seed_size = 64;
 
         for slot in self.global_state.transient_objects.iter_mut() {
-            if let Some(obj) = slot {
-                if obj.hierarchy == Handle::RH_OWNER.0 || obj.hierarchy == Handle::RH_ENDORSEMENT.0
-                {
-                    *slot = None;
-                }
+            if let Some(obj) = slot
+                && (obj.hierarchy == Handle::RH_OWNER.0
+                    || obj.hierarchy == Handle::RH_ENDORSEMENT.0)
+            {
+                *slot = None;
             }
         }
 
@@ -131,11 +131,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 for item in toc.iter() {
                     if item.in_use != 0 && count < 64 {
                         if (item.handle >> 24) == 0x01 {
-                            if let Ok(meta) = storage.get_metadata(item.handle) {
-                                if (meta.attributes & 0x40000000) == 0 {
-                                    to_remove[count] = item.handle;
-                                    count += 1;
-                                }
+                            if let Ok(meta) = storage.get_metadata(item.handle)
+                                && (meta.attributes & 0x40000000) == 0
+                            {
+                                to_remove[count] = item.handle;
+                                count += 1;
                             }
                         } else if (item.handle >> 24) == (tpm2::TpmHt::Persistent as u8) as u32 {
                             to_remove[count] = item.handle;
@@ -144,34 +144,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     }
                 }
                 for handle in &to_remove[..count] {
-                    if (*handle >> 24) == 0x01 {
-                        if let Ok(meta) = storage.get_metadata(*handle) {
-                            let read_len = core::cmp::min(meta.data_size as usize, 1536);
-                            let mut read_buf = [0u8; 1536];
-                            if storage
-                                .read_item(*handle, 0, &mut read_buf[..read_len])
-                                .is_ok()
-                            {
-                                if let Ok((metadata_size, nv_public, _, _)) =
-                                    crate::handler::nv_storage::unmarshal_nv_header(
-                                        &read_buf[..read_len],
-                                    )
-                                {
-                                    if nv_public.attributes.get_index_type()
-                                        == Ok(tpm2::TpmNt::Counter)
-                                        && nv_public.attributes.contains(tpm2::TpmaNv::WRITTEN)
-                                        && read_len >= metadata_size + 8
-                                    {
-                                        let mut val_bytes = [0u8; 8];
-                                        val_bytes.copy_from_slice(
-                                            &read_buf[metadata_size..metadata_size + 8],
-                                        );
-                                        let val = u64::from_be_bytes(val_bytes);
-                                        if val > self.global_state.max_counter {
-                                            self.global_state.max_counter = val;
-                                        }
-                                    }
-                                }
+                    if (*handle >> 24) == 0x01
+                        && let Ok(meta) = storage.get_metadata(*handle)
+                    {
+                        let read_len = core::cmp::min(meta.data_size as usize, 1536);
+                        let mut read_buf = [0u8; 1536];
+                        if storage
+                            .read_item(*handle, 0, &mut read_buf[..read_len])
+                            .is_ok()
+                            && let Ok((metadata_size, nv_public, _, _)) =
+                                crate::handler::nv_storage::unmarshal_nv_header(
+                                    &read_buf[..read_len],
+                                )
+                            && nv_public.attributes.get_index_type() == Ok(tpm2::TpmNt::Counter)
+                            && nv_public.attributes.contains(tpm2::TpmaNv::WRITTEN)
+                            && read_len >= metadata_size + 8
+                        {
+                            let mut val_bytes = [0u8; 8];
+                            val_bytes.copy_from_slice(&read_buf[metadata_size..metadata_size + 8]);
+                            let val = u64::from_be_bytes(val_bytes);
+                            if val > self.global_state.max_counter {
+                                self.global_state.max_counter = val;
                             }
                         }
                     }

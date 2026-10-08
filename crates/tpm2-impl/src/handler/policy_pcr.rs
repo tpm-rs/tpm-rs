@@ -40,14 +40,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Ok(cmd) => cmd,
             Err(e) => {
                 let mut slice = request.remaining_slice();
-                if let Ok(_pcr_digest) = tpm2::Tpm2bDigest::unmarshal(&mut slice) {
-                    if slice.len() >= 4 {
-                        let count = u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]);
-                        if count > 0 && slice.len() >= 6 {
-                            let hash_raw = u16::from_be_bytes([slice[4], slice[5]]);
-                            if TpmiAlgHash::try_from(hash_raw).is_err() {
-                                return Err(TpmRc::HASH.with(Position::parameter(1)));
-                            }
+                if let Ok(_pcr_digest) = tpm2::Tpm2bDigest::unmarshal(&mut slice)
+                    && slice.len() >= 4
+                {
+                    let count = u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]);
+                    if count > 0 && slice.len() >= 6 {
+                        let hash_raw = u16::from_be_bytes([slice[4], slice[5]]);
+                        if TpmiAlgHash::try_from(hash_raw).is_err() {
+                            return Err(TpmRc::HASH.with(Position::parameter(1)));
                         }
                     }
                 }
@@ -92,10 +92,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .ok_or(TpmRc::HANDLE.to_rc())?;
                 session_state.pcr_counter
             };
-            if let Some(session_pcr_counter) = session_pcr_counter {
-                if session_pcr_counter != current_pcr_counter {
-                    return Err(TpmRc::PCR_CHANGED);
-                }
+            if let Some(session_pcr_counter) = session_pcr_counter
+                && session_pcr_counter != current_pcr_counter
+            {
+                return Err(TpmRc::PCR_CHANGED);
             }
             pcr_counter = Some(current_pcr_counter);
         }

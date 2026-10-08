@@ -308,22 +308,24 @@ fn test_hierarchy_auth_handle_transcoding() {
 #[test]
 fn test_live_migration_state_translator_roundtrip() {
     let mut src_storage = RamStorageMock::<16384>::new();
-    let mut src_state = GlobalState::default();
 
     // Populate volatile and non-volatile state in source
-    src_state.tpm_time_ms = 123_456_789;
-    src_state.time_epoch = 99;
-    src_state.reset_count = 7;
-    src_state.total_reset_count = 42;
-    src_state.failed_tries = 2;
-    src_state.self_heal_timer = 5000;
-    src_state.lockout_timer = 10000;
-    src_state.max_counter = 555;
-    src_state.drtm_handle = 0x8000_0001;
-    src_state.update_nv = 1;
-    src_state.clear_orderly = true;
-    src_state.da_pending_on_nv = true;
-    src_state.locality = 3;
+    let mut src_state = GlobalState {
+        tpm_time_ms: 123_456_789,
+        time_epoch: 99,
+        reset_count: 7,
+        total_reset_count: 42,
+        failed_tries: 2,
+        self_heal_timer: 5000,
+        lockout_timer: 10000,
+        max_counter: 555,
+        drtm_handle: 0x8000_0001,
+        update_nv: 1,
+        clear_orderly: true,
+        da_pending_on_nv: true,
+        locality: 3,
+        ..Default::default()
+    };
     src_state.pcrs.sha256[0] = [0xAA; 32];
     src_state.pcrs.sha384[23] = [0xBB; 48];
     src_state.pcrs.update_counter = 15;

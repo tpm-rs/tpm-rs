@@ -23,8 +23,8 @@ fn test_adv_context_save_keystream_reuse() {
     global_state.initialized = true;
     global_state.locality = 0;
     global_state.sp_seed_size = 32;
-    for i in 0..32 {
-        global_state.sp_seed[i] = i as u8;
+    for (i, byte) in global_state.sp_seed.iter_mut().enumerate().take(32) {
+        *byte = i as u8;
     }
 
     let handle: u32 = 0x80000001;
