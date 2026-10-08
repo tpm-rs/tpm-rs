@@ -86,6 +86,9 @@ pub enum TpmuSensitiveComposite<'a> {
     Sym(Tpm2bSymKey<'a>),
     Rsa(Tpm2bPrivateKeyRsa<'a>),
     Ecc(Tpm2bEccParameter<'a>),
+    Mldsa(Tpm2bPrivateKeyMldsa<'a>),
+    HashMldsa(Tpm2bPrivateKeyMldsa<'a>),
+    Mlkem(Tpm2bPrivateKeyMlkem<'a>),
 }
 
 impl TpmuSensitiveComposite<'_> {
@@ -96,6 +99,9 @@ impl TpmuSensitiveComposite<'_> {
             Self::Sym(_) => Alg::SYMCIPHER,
             Self::Rsa(_) => Alg::RSA,
             Self::Ecc(_) => Alg::ECC,
+            Self::Mldsa(_) => Alg::MLDSA,
+            Self::HashMldsa(_) => Alg::HASH_MLDSA,
+            Self::Mlkem(_) => Alg::MLKEM,
         }
     }
 }
@@ -106,6 +112,9 @@ impl<'a> TpmuSensitiveComposite<'a> {
             Alg::SYMCIPHER => Self::Sym(Unmarshal::unmarshal(src)?),
             Alg::RSA => Self::Rsa(Unmarshal::unmarshal(src)?),
             Alg::ECC => Self::Ecc(Unmarshal::unmarshal(src)?),
+            Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?),
+            Alg::HASH_MLDSA => Self::HashMldsa(Unmarshal::unmarshal(src)?),
+            Alg::MLKEM => Self::Mlkem(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
         })
     }
@@ -117,6 +126,8 @@ impl Marshal for TpmuSensitiveComposite<'_> {
         Tpm2bSymKey::MAX_SIZE,
         Tpm2bPrivateKeyRsa::MAX_SIZE,
         Tpm2bEccParameter::MAX_SIZE,
+        Tpm2bPrivateKeyMldsa::MAX_SIZE,
+        Tpm2bPrivateKeyMlkem::MAX_SIZE,
     );
     type MaxBuffer = [u8; TpmuSensitiveComposite::MAX_SIZE];
 
@@ -126,6 +137,8 @@ impl Marshal for TpmuSensitiveComposite<'_> {
             Self::Sym(x) => marshal_helper(x, dst, 0),
             Self::Rsa(x) => marshal_helper(x, dst, 0),
             Self::Ecc(x) => marshal_helper(x, dst, 0),
+            Self::Mldsa(x) | Self::HashMldsa(x) => marshal_helper(x, dst, 0),
+            Self::Mlkem(x) => marshal_helper(x, dst, 0),
         }
     }
 }
