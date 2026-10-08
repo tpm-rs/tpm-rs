@@ -11,7 +11,7 @@ members = [
     "crates/tpm2-crypto/crux",
     "crates/tpm2-crypto/bssl",
     "crates/tpm2-crypto/tests",
-    "crates/testing",
+    "testing",
 ]
 exclude = ["crates/tpm2-crypto/bssl/bssl-sys"]
 
