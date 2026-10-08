@@ -27,6 +27,15 @@
 //!
 //! [TPM2 Specification]: https://trustedcomputinggroup.org/work-groups/trusted-platform-module/
 //!
+//! ## Integer Types
+//!
+//! The TPM specification and C implementation generally do not specify the
+//! specific types for integer constants/values. To avoid confusion, we will
+//! use [`usize`] for lengths or when specifying a number of _bytes_, and
+//! [`u16`] when specifying a number of _bits_. We avoid uses of [`u32`]
+//! (even for [`Tpml`] lengths) to avoid `u32 -> usize` conversions, which
+//! can be lossy depending on the platform.
+//!
 //! ## Algorithm Feature Flags
 //!
 //! Cargo features control which cryptographic algorithms and modes are enabled
@@ -96,6 +105,9 @@
 #![forbid(unreachable_pub)]
 #![allow(clippy::large_enum_variant)]
 
+#[macro_use]
+mod macros;
+
 pub mod commands;
 mod constants;
 pub mod crypto;
@@ -128,4 +140,9 @@ pub trait Connection {
     /// still returns `Ok(...)`. `Err` is only returned when we are unable to
     /// get a response at all.
     fn transact<'a>(&mut self, cmd: &[u8], rsp: &'a mut [u8]) -> Result<&'a mut [u8], Self::Error>;
+}
+
+/// Convert a bit count into a byte count
+pub(crate) const fn bits_to_bytes(bits: u16) -> usize {
+    bits.div_ceil(8) as usize
 }

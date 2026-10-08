@@ -1,4 +1,4 @@
-use crate::{errors::UnmarshalError, marshal::max, *};
+use crate::{errors::UnmarshalError, *};
 
 /// `TPMI_ALG_KDF` interface type defined in TPM 2.0 Part 2: Structures, Section 9.31 (Table 62).
 ///
@@ -184,27 +184,32 @@ pub enum TpmiRsaKeyBits {
 }
 
 impl TpmiRsaKeyBits {
-    pub const MAX_PUB_KEY_BITS: usize = 4096;
-    pub const MAX_PUB_KEY_BYTES: usize = Self::MAX_PUB_KEY_BITS.div_ceil(8);
+    const ALL: &[Self] = &[Self::Rsa1024, Self::Rsa2048, Self::Rsa3072, Self::Rsa4096];
+
+    pub const MAX_PUB_KEY_BITS: u16 = max_by!(Self::ALL, Self::as_u16);
+    pub const MAX_PUB_KEY_BYTES: usize = bits_to_bytes(Self::MAX_PUB_KEY_BITS);
     pub const MAX_PRIV_KEY_BYTES: usize = Self::MAX_PUB_KEY_BYTES.div_ceil(2);
+
+    /// Returns [`None`] if the specified key bit size isn't supported.
+    pub const fn new(bits: u16) -> Option<Self> {
+        find_by!(Self::ALL, |k| k.as_u16() == bits)
+    }
+    /// Convert the typed enum into an integer number of bits.
+    pub const fn as_u16(self) -> u16 {
+        self as u16
+    }
 }
 
 impl TryFrom<u16> for TpmiRsaKeyBits {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
-        Ok(match val {
-            1024 => Self::Rsa1024,
-            2048 => Self::Rsa2048,
-            3072 => Self::Rsa3072,
-            4096 => Self::Rsa4096,
-            _ => return Err(UnmarshalError),
-        })
+        Self::new(val).ok_or(UnmarshalError)
     }
 }
 
 impl From<TpmiRsaKeyBits> for u16 {
     fn from(val: TpmiRsaKeyBits) -> Self {
-        val as u16
+        val.as_u16()
     }
 }
 
@@ -305,100 +310,68 @@ pub enum TpmiAlgHash {
 compile_error!("at least one hash algorithm feature must be enabled");
 
 impl TpmiAlgHash {
-    /// Private helper to define [Self::MAX_DIGEST_BYTES] and [Self::HASH_COUNT]
-    const DIGEST_SIZES: &'static [usize] = &[
+    const ALL: &[Self] = &[
         #[cfg(feature = "sha1")]
-        Self::Sha1.digest_size(),
+        Self::Sha1,
         #[cfg(feature = "sha256")]
-        Self::Sha256.digest_size(),
+        Self::Sha256,
         #[cfg(feature = "sha384")]
-        Self::Sha384.digest_size(),
+        Self::Sha384,
         #[cfg(feature = "sha512")]
-        Self::Sha512.digest_size(),
+        Self::Sha512,
         #[cfg(feature = "sm3_256")]
-        Self::Sm3_256.digest_size(),
+        Self::Sm3_256,
         #[cfg(feature = "sha3_256")]
-        Self::Sha3_256.digest_size(),
+        Self::Sha3_256,
         #[cfg(feature = "sha3_384")]
-        Self::Sha3_384.digest_size(),
+        Self::Sha3_384,
         #[cfg(feature = "sha3_512")]
-        Self::Sha3_512.digest_size(),
+        Self::Sha3_512,
     ];
 
     /// The maximum digest size (in bytes) across all supported TPM2 hash algorithms.
     #[doc(alias = "MAX_DIGEST_SIZE")]
     #[doc(alias = "MAX_HASH_DIGEST_SIZE")]
-    pub const MAX_DIGEST_BYTES: usize = max(Self::DIGEST_SIZES);
+    pub const MAX_DIGEST_BYTES: usize = max_by!(Self::ALL, Self::digest_size);
     /// The maximum number of implemented hash algorithms.
     #[doc(alias = "TPM2_NUM_PCR_BANKS")]
-    pub const HASH_COUNT: usize = Self::DIGEST_SIZES.len();
+    pub const HASH_COUNT: usize = Self::ALL.len();
 
-    /// Returns the digest size (in bytes) of this hash algorithm.
-    pub const fn digest_size(self) -> usize {
+    const fn info(self) -> (usize, usize) {
         match self {
             #[cfg(feature = "sha1")]
-            Self::Sha1 => 20,
+            Self::Sha1 => (20, 64),
             #[cfg(feature = "sha256")]
-            Self::Sha256 => 32,
+            Self::Sha256 => (32, 64),
             #[cfg(feature = "sha384")]
-            Self::Sha384 => 48,
+            Self::Sha384 => (48, 128),
             #[cfg(feature = "sha512")]
-            Self::Sha512 => 64,
+            Self::Sha512 => (64, 128),
             #[cfg(feature = "sm3_256")]
-            Self::Sm3_256 => 32,
+            Self::Sm3_256 => (32, 64),
             #[cfg(feature = "sha3_256")]
-            Self::Sha3_256 => 32,
+            Self::Sha3_256 => (32, 136),
             #[cfg(feature = "sha3_384")]
-            Self::Sha3_384 => 48,
+            Self::Sha3_384 => (48, 104),
             #[cfg(feature = "sha3_512")]
-            Self::Sha3_512 => 64,
+            Self::Sha3_512 => (64, 72),
         }
     }
 
-    pub const fn block_size(self) -> u16 {
-        match self {
-            #[cfg(feature = "sha1")]
-            Self::Sha1 => 64,
-            #[cfg(feature = "sha256")]
-            Self::Sha256 => 64,
-            #[cfg(feature = "sha384")]
-            Self::Sha384 => 128,
-            #[cfg(feature = "sha512")]
-            Self::Sha512 => 128,
-            #[cfg(feature = "sm3_256")]
-            Self::Sm3_256 => 64,
-            #[cfg(feature = "sha3_256")]
-            Self::Sha3_256 => 136,
-            #[cfg(feature = "sha3_384")]
-            Self::Sha3_384 => 104,
-            #[cfg(feature = "sha3_512")]
-            Self::Sha3_512 => 72,
-        }
+    /// Returns the digest size (in bytes) of this hash algorithm.
+    pub const fn digest_size(self) -> usize {
+        self.info().0
+    }
+    /// Returns the block size (in bytes) of this hash algorithm.
+    pub const fn block_size(self) -> usize {
+        self.info().1
     }
 }
 
 impl TryFrom<Alg> for TpmiAlgHash {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<TpmiAlgHash, Self::Error> {
-        match a {
-            #[cfg(feature = "sha1")]
-            Alg::SHA1 => Ok(Self::Sha1),
-            #[cfg(feature = "sha256")]
-            Alg::SHA256 => Ok(Self::Sha256),
-            #[cfg(feature = "sha384")]
-            Alg::SHA384 => Ok(Self::Sha384),
-            #[cfg(feature = "sha512")]
-            Alg::SHA512 => Ok(Self::Sha512),
-            #[cfg(feature = "sm3_256")]
-            Alg::SM3_256 => Ok(Self::Sm3_256),
-            #[cfg(feature = "sha3_256")]
-            Alg::SHA3_256 => Ok(Self::Sha3_256),
-            #[cfg(feature = "sha3_384")]
-            Alg::SHA3_384 => Ok(Self::Sha3_384),
-            #[cfg(feature = "sha3_512")]
-            Alg::SHA3_512 => Ok(Self::Sha3_512),
-            _ => Err(UnmarshalError),
-        }
+        find_by!(Self::ALL, |h| Alg::from(h) == a).ok_or(UnmarshalError)
     }
 }
 impl From<TpmiAlgHash> for Alg {
