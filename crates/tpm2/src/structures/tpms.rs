@@ -664,6 +664,34 @@ impl<'a> Unmarshal<'a> for TpmsSignatureEcc<'a> {
     }
 }
 
+/// `TPMS_SIGNATURE_HASH_MLDSA` structure defined in TPM 2.0 Part 2: Structures
+///
+/// Signature structure for pre-hash ML-DSA (`Hash-ML-DSA`) signatures, containing the pre-hash algorithm and signature buffer.
+#[doc(alias = "TPMS_SIGNATURE_HASH_MLDSA")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TpmsSignatureHashMldsa<'a> {
+    pub hash: TpmiAlgHash,
+    pub signature: Tpm2bSignatureMldsa<'a>,
+}
+impl Marshal for TpmsSignatureHashMldsa<'_> {
+    const MAX_SIZE: usize = TpmiAlgHash::MAX_SIZE + Tpm2bSignatureMldsa::MAX_SIZE;
+    type MaxBuffer = [u8; TpmsSignatureHashMldsa::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut [u8; TpmsSignatureHashMldsa::MAX_SIZE]) -> usize {
+        let count = marshal_helper(&self.hash, dst, 0);
+        marshal_helper(&self.signature, dst, count)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmsSignatureHashMldsa<'a> {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            hash: Unmarshal::unmarshal(src)?,
+            signature: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
 /// `TPMS_SCHEME_ECDAA` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.2.3 (Table 192).
 ///
 /// Parameter structure for ECDAA scheme specifying hash algorithm and commit count.
@@ -769,6 +797,90 @@ impl<'a> Unmarshal<'a> for TpmsEccParms {
             scheme,
             curve_id,
             kdf,
+        })
+    }
+}
+
+/// `TPMS_MLDSA_PARMS` structure defined in TPM 2.0 Part 2: Structures
+///
+/// Parameter structure for ML-DSA objects, specifying parameter set and whether external `mu` is allowed.
+#[doc(alias = "TPMS_MLDSA_PARMS")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TpmsMldsaParms {
+    pub parameter_set: TpmiMldsaParms,
+    pub allow_external_mu: bool,
+}
+impl Marshal for TpmsMldsaParms {
+    const MAX_SIZE: usize = TpmiMldsaParms::MAX_SIZE + bool::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.parameter_set, dst, 0);
+        marshal_helper(&self.allow_external_mu, dst, count)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmsMldsaParms {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            parameter_set: Unmarshal::unmarshal(src)?,
+            allow_external_mu: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+/// `TPMS_HASH_MLDSA_PARMS` structure defined in TPM 2.0 Part 2: Structures
+///
+/// Parameter structure for pre-hash ML-DSA (`Hash-ML-DSA`) objects, specifying parameter set and pre-hash algorithm.
+#[doc(alias = "TPMS_HASH_MLDSA_PARMS")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TpmsHashMldsaParms {
+    pub parameter_set: TpmiMldsaParms,
+    pub hash_alg: TpmiAlgHash,
+}
+impl Marshal for TpmsHashMldsaParms {
+    const MAX_SIZE: usize = TpmiMldsaParms::MAX_SIZE + TpmiAlgHash::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.parameter_set, dst, 0);
+        marshal_helper(&self.hash_alg, dst, count)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmsHashMldsaParms {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            parameter_set: Unmarshal::unmarshal(src)?,
+            hash_alg: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+/// `TPMS_MLKEM_PARMS` structure defined in TPM 2.0 Part 2: Structures
+///
+/// Parameter structure for ML-KEM objects, specifying symmetric cipher (for restricted parent keys) and parameter set.
+#[doc(alias = "TPMS_MLKEM_PARMS")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TpmsMlkemParms {
+    pub symmetric: Option<TpmtSymDefObject>,
+    pub parameter_set: TpmiMlkemParms,
+}
+impl Marshal for TpmsMlkemParms {
+    const MAX_SIZE: usize = <Option<TpmtSymDefObject>>::MAX_SIZE + TpmiMlkemParms::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.symmetric, dst, 0);
+        marshal_helper(&self.parameter_set, dst, count)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmsMlkemParms {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            symmetric: Unmarshal::unmarshal(src)?,
+            parameter_set: Unmarshal::unmarshal(src)?,
         })
     }
 }

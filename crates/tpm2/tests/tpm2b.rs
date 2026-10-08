@@ -178,7 +178,14 @@ fn test_all_tpm2b_simple_marshalling_bounds() {
     impl_stress_test_tpm2b_simple! {Tpm2bData};
     impl_stress_test_tpm2b_simple! {Tpm2bDigest};
     impl_stress_test_tpm2b_simple! {Tpm2bEccParameter};
+    impl_stress_test_tpm2b_simple! {Tpm2bPublicKeyMlkem};
+    impl_stress_test_tpm2b_simple! {Tpm2bPublicKeyMldsa};
+    impl_stress_test_tpm2b_simple! {Tpm2bSignatureMldsa};
     impl_stress_test_tpm2b_simple! {Tpm2bEncryptedSecret};
+    impl_stress_test_tpm2b_simple! {Tpm2bSharedSecret};
+    impl_stress_test_tpm2b_simple! {Tpm2bKemCiphertext};
+    impl_stress_test_tpm2b_simple! {Tpm2bSignatureCtx};
+    impl_stress_test_tpm2b_simple! {Tpm2bSignatureHint};
     impl_stress_test_tpm2b_simple! {Tpm2bEvent};
     impl_stress_test_tpm2b_simple! {Tpm2bIdObject};
     impl_stress_test_tpm2b_simple! {Tpm2bIv};
@@ -190,6 +197,43 @@ fn test_all_tpm2b_simple_marshalling_bounds() {
     impl_stress_test_tpm2b_simple! {Tpm2bSensitiveData};
     impl_stress_test_tpm2b_simple! {Tpm2bSymKey};
     impl_stress_test_tpm2b_simple! {Tpm2bTimeout};
+}
+
+macro_rules! impl_test_tpm2b_exact_size {
+    ($T:ty) => {
+        const N: usize = <$T>::CAP;
+
+        // A buffer of exactly N bytes round-trips.
+        let bytes = [0xAB; N];
+        let struct_val: $T = Tpm2b(&bytes);
+        let mut mbuf = [0u8; <$T>::MAX_SIZE];
+        let res = struct_val.marshal(&mut mbuf);
+        assert_eq!(res, 2 + N);
+        let mut slice = &mbuf[..res];
+        let unmarshaled = <$T>::unmarshal(&mut slice).unwrap();
+        assert_eq!(struct_val, unmarshaled);
+        assert!(slice.is_empty());
+
+        // Any other size is rejected.
+        for size in [0, N - 1, N + 1] {
+            let mut buf = vec![0xAB; 2 + size];
+            u16::try_from(size)
+                .unwrap()
+                .marshal((&mut buf[..2]).try_into().unwrap());
+            let mut slice = &buf[..];
+            assert!(<$T>::unmarshal(&mut slice).is_err());
+        }
+    };
+}
+
+#[test]
+fn test_tpm2b_private_key_mlkem_exact_size() {
+    impl_test_tpm2b_exact_size! {Tpm2bPrivateKeyMlkem};
+}
+
+#[test]
+fn test_tpm2b_private_key_mldsa_exact_size() {
+    impl_test_tpm2b_exact_size! {Tpm2bPrivateKeyMldsa};
 }
 
 #[test]

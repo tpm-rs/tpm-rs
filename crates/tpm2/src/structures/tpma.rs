@@ -507,3 +507,45 @@ impl<'a> Unmarshal<'a> for TpmaAct {
         Unmarshal::unmarshal(src).map(Self)
     }
 }
+
+/// `TPMA_ML_PARAMETER_SET` attribute structure defined in TPM 2.0 Part 2: Structures
+///
+/// Reports the supported ML-KEM and ML-DSA parameter sets, and support for `allowExternalMu`, in
+/// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)` for [`TpmPt::MLParameterSets`].
+#[doc(alias = "TPMA_ML_PARAMETER_SET")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[repr(transparent)]
+pub struct TpmaMlParameterSet(pub u32);
+bitflags! {
+    impl TpmaMlParameterSet : u32 {
+        /// Indicates support for [`TpmiMlkemParms::Mlkem512`].
+        const ML_KEM_512 = 1 << 0;
+        /// Indicates support for [`TpmiMlkemParms::Mlkem768`].
+        const ML_KEM_768 = 1 << 1;
+        /// Indicates support for [`TpmiMlkemParms::Mlkem1024`].
+        const ML_KEM_1024 = 1 << 2;
+        /// Indicates support for [`TpmiMldsaParms::Mldsa44`].
+        const ML_DSA_44 = 1 << 3;
+        /// Indicates support for [`TpmiMldsaParms::Mldsa65`].
+        const ML_DSA_65 = 1 << 4;
+        /// Indicates support for [`TpmiMldsaParms::Mldsa87`].
+        const ML_DSA_87 = 1 << 5;
+        /// Indicates support for `allowExternalMu` for ML-DSA.
+        const EXT_MU = 1 << 6;
+    }
+}
+
+impl Marshal for TpmaMlParameterSet {
+    const MAX_SIZE: usize = u32::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.0.marshal(dst)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmaMlParameterSet {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Unmarshal::unmarshal(src).map(Self)
+    }
+}
