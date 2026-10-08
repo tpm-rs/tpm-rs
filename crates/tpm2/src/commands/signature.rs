@@ -294,3 +294,153 @@ impl<'a> UnmarshalMessage<'a> for VerifySequenceCompleteRsp<'a> {
         })
     }
 }
+
+/// TPM2_SignDigest (Command)
+#[doc(alias = "TPM2_SignDigest")]
+#[doc(alias = "SignDigest_In")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct SignDigest<'a> {
+    pub key_handle: Handle,
+    pub context: Tpm2bSignatureCtx<'a>,
+    pub digest: Tpm2bDigest<'a>,
+    pub validation: TpmtTkHashcheck<'a>,
+}
+/// TPM2_SignDigest (Response)
+#[doc(alias = "SignDigest_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct SignDigestRsp<'a> {
+    pub signature: TpmtSignature<'a>,
+}
+
+impl Command for SignDigest<'_> {
+    const CMD_CODE: TpmCc = TpmCc::SignDigest;
+    type Response<'a> = SignDigestRsp<'a>;
+}
+impl Message for SignDigest<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
+impl Marshal for SignDigest<'_> {
+    const MAX_SIZE: usize =
+        Tpm2bSignatureCtx::MAX_SIZE + Tpm2bDigest::MAX_SIZE + TpmtTkHashcheck::MAX_SIZE;
+    type MaxBuffer = [u8; SignDigest::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.context, dst, 0);
+        let count = marshal_helper(&self.digest, dst, count);
+        marshal_helper(&self.validation, dst, count)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for SignDigest<'a> {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            key_handle,
+            context: Unmarshal::unmarshal(src)?,
+            digest: Unmarshal::unmarshal(src)?,
+            validation: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+impl Message for SignDigestRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl Marshal for SignDigestRsp<'_> {
+    const MAX_SIZE: usize = TpmtSignature::MAX_SIZE;
+    type MaxBuffer = [u8; SignDigestRsp::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.signature.marshal(dst)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for SignDigestRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            signature: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+/// TPM2_VerifyDigestSignature (Command)
+#[doc(alias = "TPM2_VerifyDigestSignature")]
+#[doc(alias = "VerifyDigestSignature_In")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct VerifyDigestSignature<'a> {
+    pub key_handle: Handle,
+    pub context: Tpm2bSignatureCtx<'a>,
+    pub digest: Tpm2bDigest<'a>,
+    pub signature: TpmtSignature<'a>,
+}
+/// TPM2_VerifyDigestSignature (Response)
+#[doc(alias = "VerifyDigestSignature_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct VerifyDigestSignatureRsp<'a> {
+    pub validation: TpmtTkVerified<'a>,
+}
+
+impl Command for VerifyDigestSignature<'_> {
+    const CMD_CODE: TpmCc = TpmCc::VerifyDigestSignature;
+    type Response<'a> = VerifyDigestSignatureRsp<'a>;
+}
+impl Message for VerifyDigestSignature<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
+impl Marshal for VerifyDigestSignature<'_> {
+    const MAX_SIZE: usize =
+        Tpm2bSignatureCtx::MAX_SIZE + Tpm2bDigest::MAX_SIZE + TpmtSignature::MAX_SIZE;
+    type MaxBuffer = [u8; VerifyDigestSignature::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.context, dst, 0);
+        let count = marshal_helper(&self.digest, dst, count);
+        marshal_helper(&self.signature, dst, count)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for VerifyDigestSignature<'a> {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            key_handle,
+            context: Unmarshal::unmarshal(src)?,
+            digest: Unmarshal::unmarshal(src)?,
+            signature: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+impl Message for VerifyDigestSignatureRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl Marshal for VerifyDigestSignatureRsp<'_> {
+    const MAX_SIZE: usize = TpmtTkVerified::MAX_SIZE;
+    type MaxBuffer = [u8; VerifyDigestSignatureRsp::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.validation.marshal(dst)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for VerifyDigestSignatureRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            validation: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
