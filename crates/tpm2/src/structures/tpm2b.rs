@@ -355,6 +355,61 @@ pub type Tpm2bEccPoint<'a> = Tpm2b<TpmsEccPoint<'a>>;
 impl_marshal!(Tpm2bEccPoint<'_>);
 
 // ---------------------------------------------------------------------------
+// Tpm2bPublicKeyMlkem
+// ---------------------------------------------------------------------------
+/// `TPM2B_PUBLIC_KEY_MLKEM` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer holding an encoded ML-KEM encapsulation key, up to
+/// [`TpmiMlkemParms::MAX_PUB_KEY_BYTES`] bytes.
+#[doc(alias = "TPM2B_PUBLIC_KEY_MLKEM")]
+pub type Tpm2bPublicKeyMlkem<'a> = Tpm2bSized<'a, limits::PublicKeyMlkem>;
+impl_marshal!(Tpm2bPublicKeyMlkem<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bPrivateKeyMlkem
+// ---------------------------------------------------------------------------
+/// `TPM2B_PRIVATE_KEY_MLKEM` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer holding the 64-byte `(d || z)` seed of an ML-KEM decapsulation key. The size
+/// must be exactly 64 bytes.
+#[doc(alias = "TPM2B_PRIVATE_KEY_MLKEM")]
+pub type Tpm2bPrivateKeyMlkem<'a> = Tpm2b<&'a [u8; 64]>;
+impl_marshal!(Tpm2bPrivateKeyMlkem<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bPublicKeyMldsa
+// ---------------------------------------------------------------------------
+/// `TPM2B_PUBLIC_KEY_MLDSA` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer holding an encoded ML-DSA public key, up to
+/// [`TpmiMldsaParms::MAX_PUB_KEY_BYTES`] bytes.
+#[doc(alias = "TPM2B_PUBLIC_KEY_MLDSA")]
+pub type Tpm2bPublicKeyMldsa<'a> = Tpm2bSized<'a, limits::PublicKeyMldsa>;
+impl_marshal!(Tpm2bPublicKeyMldsa<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bPrivateKeyMldsa
+// ---------------------------------------------------------------------------
+/// `TPM2B_PRIVATE_KEY_MLDSA` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer holding the 32-byte private seed (`xi`) of an ML-DSA key. The size must be
+/// exactly 32 bytes.
+#[doc(alias = "TPM2B_PRIVATE_KEY_MLDSA")]
+pub type Tpm2bPrivateKeyMldsa<'a> = Tpm2b<&'a [u8; 32]>;
+impl_marshal!(Tpm2bPrivateKeyMldsa<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bSignatureMldsa
+// ---------------------------------------------------------------------------
+/// `TPM2B_SIGNATURE_MLDSA` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer holding an ML-DSA signature, up to
+/// [`TpmiMldsaParms::MAX_SIG_BYTES`] bytes.
+#[doc(alias = "TPM2B_SIGNATURE_MLDSA")]
+pub type Tpm2bSignatureMldsa<'a> = Tpm2bSized<'a, limits::SignatureMldsa>;
+impl_marshal!(Tpm2bSignatureMldsa<'_>);
+
+// ---------------------------------------------------------------------------
 // Tpm2bEncryptedSecret
 // ---------------------------------------------------------------------------
 /// `TPM2B_ENCRYPTED_SECRET` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.4 (Table 197).
@@ -364,6 +419,48 @@ impl_marshal!(Tpm2bEccPoint<'_>);
 #[doc(alias = "TPM2B_ENCRYPTED_SECRET")]
 pub type Tpm2bEncryptedSecret<'a> = Tpm2bSized<'a, limits::EncryptedSecret>;
 impl_marshal!(Tpm2bEncryptedSecret<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bSharedSecret
+// ---------------------------------------------------------------------------
+/// `TPM2B_SHARED_SECRET` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer holding a KEM shared secret returned by `TPM2_Encapsulate` or `TPM2_Decapsulate`.
+#[doc(alias = "TPM2B_SHARED_SECRET")]
+pub type Tpm2bSharedSecret<'a> = Tpm2bSized<'a, limits::SharedSecret>;
+impl_marshal!(Tpm2bSharedSecret<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bKemCiphertext
+// ---------------------------------------------------------------------------
+/// `TPM2B_KEM_CIPHERTEXT` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer holding a KEM ciphertext returned by `TPM2_Encapsulate` or passed to `TPM2_Decapsulate`.
+#[doc(alias = "TPM2B_KEM_CIPHERTEXT")]
+pub type Tpm2bKemCiphertext<'a> = Tpm2bSized<'a, limits::KemCiphertext>;
+impl_marshal!(Tpm2bKemCiphertext<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bSignatureCtx
+// ---------------------------------------------------------------------------
+/// `TPM2B_SIGNATURE_CTX` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer (up to 255 bytes) holding an algorithm-specific context string for signing and verification commands.
+#[doc(alias = "TPM2B_SIGNATURE_CTX")]
+pub type Tpm2bSignatureCtx<'a> = Tpm2bSized<'a, limits::SignatureCtx>;
+impl_marshal!(Tpm2bSignatureCtx<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bSignatureHint
+// ---------------------------------------------------------------------------
+/// `TPM2B_SIGNATURE_HINT` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer holding an algorithm-specific verification hint for `TPM2_VerifySequenceStart`.
+/// For EdDSA, this is the encoded R value from the signature (32 bytes for Ed25519, 57 bytes for
+/// Ed448); it is zero-length for other algorithms.
+#[doc(alias = "TPM2B_SIGNATURE_HINT")]
+pub type Tpm2bSignatureHint<'a> = Tpm2bSized<'a, limits::SignatureHint>;
+impl_marshal!(Tpm2bSignatureHint<'_>);
 
 // ---------------------------------------------------------------------------
 // Tpm2bPublic

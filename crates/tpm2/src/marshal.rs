@@ -51,6 +51,13 @@ impl<const N: usize> Marshal for [u8; N] {
         N
     }
 }
+impl<const N: usize> Marshal for &[u8; N] {
+    const MAX_SIZE: usize = N;
+    type MaxBuffer = [u8; N];
+    fn marshal(&self, dst: &mut [u8; N]) -> usize {
+        (**self).marshal(dst)
+    }
+}
 impl<'a, const N: usize> Unmarshal<'a> for &'a [u8; N] {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let (arr, rest) = src.split_first_chunk().ok_or(UnmarshalError)?;

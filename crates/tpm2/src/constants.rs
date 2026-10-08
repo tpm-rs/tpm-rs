@@ -917,6 +917,9 @@ pub enum TpmPt {
     // the TPM vendor-specific value indicating the maximum value that
     // TPM_PT_FIRMWARE_SVN may take in the future.
     FirmwareMaxSVN = 0x00000130,
+    // a TPMA_ML_PARAMETER_SET indicating the supported parameters sets for
+    // ML-KEM and ML-DSA
+    MLParameterSets = 0x00000131,
     // TPMA_PERMANENT
     Permanent = 0x00000200,
     // TPMA_STARTUP_CLEAR
@@ -1023,6 +1026,7 @@ impl TryFrom<u32> for TpmPt {
             0x0000012E => Ok(Self::MaxCapBuffer),
             0x0000012F => Ok(Self::FirmwareSVN),
             0x00000130 => Ok(Self::FirmwareMaxSVN),
+            0x00000131 => Ok(Self::MLParameterSets),
             0x00000200 => Ok(Self::Permanent),
             0x00000201 => Ok(Self::StartupClear),
             0x00000202 => Ok(Self::HRNVIndex),
