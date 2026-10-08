@@ -48,6 +48,75 @@ impl<'a> UnmarshalMessage<'a> for FieldUpgradeStart<'a> {
     }
 }
 
+/// TPM2_FieldUpgradeData (Command)
+#[doc(alias = "TPM2_FieldUpgradeData")]
+#[doc(alias = "FieldUpgradeData_In")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct FieldUpgradeData<'a> {
+    pub fu_data: Tpm2bMaxBuffer<'a>,
+}
+/// TPM2_FieldUpgradeData (Response)
+#[doc(alias = "FieldUpgradeData_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct FieldUpgradeDataRsp<'a> {
+    pub next_digest: Option<TpmtHa<'a>>,
+    pub first_digest: TpmtHa<'a>,
+}
+
+impl Command for FieldUpgradeData<'_> {
+    const CMD_CODE: TpmCc = TpmCc::FieldUpgradeData;
+    type Response<'a> = FieldUpgradeDataRsp<'a>;
+}
+impl Message for FieldUpgradeData<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl Marshal for FieldUpgradeData<'_> {
+    const MAX_SIZE: usize = Tpm2bMaxBuffer::MAX_SIZE;
+    type MaxBuffer = [u8; FieldUpgradeData::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.fu_data.marshal(dst)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for FieldUpgradeData<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            fu_data: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+impl Message for FieldUpgradeDataRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl Marshal for FieldUpgradeDataRsp<'_> {
+    const MAX_SIZE: usize = <Option<TpmtHa>>::MAX_SIZE + TpmtHa::MAX_SIZE;
+    type MaxBuffer = [u8; FieldUpgradeDataRsp::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.next_digest, dst, 0);
+        marshal_helper(&self.first_digest, dst, count)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for FieldUpgradeDataRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            next_digest: Unmarshal::unmarshal(src)?,
+            first_digest: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
 /// TPM2_FirmwareRead (Command)
 #[doc(alias = "TPM2_FirmwareRead")]
 #[doc(alias = "FirmwareRead_In")]

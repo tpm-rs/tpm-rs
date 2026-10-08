@@ -444,6 +444,17 @@ pub type Tpm2bNvPublic<'a> = Tpm2b<TpmsNvPublic<'a>>;
 impl_marshal!(Tpm2bNvPublic<'_>);
 
 // ---------------------------------------------------------------------------
+// Tpm2bNvPublic2
+// ---------------------------------------------------------------------------
+/// `TPM2B_NV_PUBLIC_2` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer wrapping `TPMT_NV_PUBLIC_2`, defining the public parameters of an NV Index
+/// (including expanded NV attributes) in `TPM2_NV_DefineSpace2` and `TPM2_NV_ReadPublic2`.
+#[doc(alias = "TPM2B_NV_PUBLIC_2")]
+pub type Tpm2bNvPublic2<'a> = Tpm2b<TpmtNvPublic2<'a>>;
+impl_marshal!(Tpm2bNvPublic2<'_>);
+
+// ---------------------------------------------------------------------------
 // Tpm2bContextData
 // ---------------------------------------------------------------------------
 /// `TPM2B_CONTEXT_DATA` structure defined in TPM 2.0 Part 2: Structures, Section 14.3 (Table 235).
