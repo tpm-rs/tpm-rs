@@ -52,9 +52,10 @@ fn test_object_name() {
         auth_policy: Tpm2bDigest::from_bytes(&auth_policy).unwrap(),
         parms_and_id: PublicParmsAndId::Ecc(
             ecc_parms,
+            // go-tpm's ECCEKTemplate uses 32 zero bytes for both X and Y.
             tpm2::TpmsEccPoint {
-                x: tpm2::Tpm2bEccParameter::default(),
-                y: tpm2::Tpm2bEccParameter::default(),
+                x: tpm2::Tpm2bEccParameter::from_bytes(&[0u8; 32]).unwrap(),
+                y: tpm2::Tpm2bEccParameter::from_bytes(&[0u8; 32]).unwrap(),
             },
         ),
     };
@@ -76,10 +77,8 @@ fn test_object_name() {
     };
 
     let (rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 0, &[])
+        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[])
             .expect("could not call TPM2_CreatePrimary");
-
-    flush_context(&mut sim, rsp_handles.object_handle).expect("flush failed");
 
     let public_struct = rsp
         .out_public
@@ -104,6 +103,9 @@ fn test_object_name() {
     let name = Tpm2bName::from_bytes(crate::test_utils::leak_bytes(&name_bytes)).unwrap();
 
     assert_eq!(rsp.name.get_buffer(), name.get_buffer());
+
+    // Deferred FlushContext in Go.
+    let _ = flush_context(&mut sim, rsp_handles.object_handle);
 }
 
 // Original Go test: names_test.go - TestNVName

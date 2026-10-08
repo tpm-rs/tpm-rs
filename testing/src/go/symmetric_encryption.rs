@@ -85,7 +85,7 @@ fn test_aes_encryption() {
         &mut sim,
         &create_primary_cmd,
         create_primary_handles,
-        0,
+        1,
         &[],
     )
     .expect("CreatePrimary failed");
@@ -168,7 +168,7 @@ fn test_aes_encryption_block() {
         &mut sim,
         &create_primary_cmd,
         create_primary_handles,
-        0,
+        1,
         &[],
     )
     .expect("CreatePrimary failed");

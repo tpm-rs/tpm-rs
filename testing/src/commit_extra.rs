@@ -1,3 +1,5 @@
+//! Extra (non-Go-parity) tests for commit, moved out of src/go.
+
 use crate::test_utils::*;
 use tpm2::commands::{Commit, CommitHandles, CreateLoaded, CreateLoadedHandles};
 use tpm2::*;
@@ -5,9 +7,15 @@ use tpm2::{Handle, TpmEccCurve};
 use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
-/// Builds the `CreateLoaded` command used by `TestCommit`: an ECDAA (SHA-256)
-/// signing key on the BN P-256 curve, with `password` as its user auth.
-pub(crate) fn commit_create_loaded(password: &'static [u8]) -> CreateLoaded<'static> {
+/// Previous (non-faithful) version of the `TestCommit` port: uses an ECDAA key
+/// on NIST P-256 with an empty P1, and additionally checks that TPM2_Commit
+/// fails when the signing key is authorized with a wrong password.
+#[test]
+fn test_commit_nist_p256_wrong_password() {
+    let mut sim = create_simulator!();
+
+    let password = b"hello";
+
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::from_bytes(password).unwrap(),
         data: Tpm2bSensitiveData::default(),
@@ -29,7 +37,7 @@ pub(crate) fn commit_create_loaded(password: &'static [u8]) -> CreateLoaded<'sta
                     hash_alg: TpmiAlgHash::Sha256,
                     count: 0,
                 })),
-                curve_id: TpmEccCurve::BNP256,
+                curve_id: TpmEccCurve::NistP256,
                 kdf: None,
             },
             TpmsEccPoint {
@@ -39,34 +47,21 @@ pub(crate) fn commit_create_loaded(password: &'static [u8]) -> CreateLoaded<'sta
         ),
     };
 
-    CreateLoaded {
+    let in_public = crate::test_utils::make_template(&pub_area);
+
+    let create = CreateLoaded {
         in_sensitive,
-        in_public: crate::test_utils::make_template(&pub_area),
-    }
-}
-
-// Original Go test: commit_test.go - TestCommit
-#[test]
-fn test_commit() {
-    let mut sim = create_simulator!();
-
-    let password = b"hello";
-
-    let create = commit_create_loaded(password);
+        in_public,
+    };
     let create_handles = CreateLoadedHandles {
-        parent_handle: Handle::RH_OWNER,
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
     };
 
     let (_rsp_cp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[])
-            .expect("could not create key");
+        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
 
-    // P1 = (1, 2), which lies on the BN P-256 curve (y^2 = x^3 + 3).
     let commit = Commit {
-        p1: tpm2::Tpm2b(TpmsEccPoint {
-            x: Tpm2bEccParameter::from_bytes(&[1]).unwrap(),
-            y: Tpm2bEccParameter::from_bytes(&[2]).unwrap(),
-        }),
+        p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
@@ -74,13 +69,23 @@ fn test_commit() {
         sign_handle: rsp_handles.object_handle,
     };
 
+    let password_wrong = b"wrong";
+    let res = execute_with_password_sessions(
+        &mut sim,
+        &commit,
+        commit_handles.clone(),
+        1,
+        password_wrong,
+    );
+    assert!(res.is_err(), "Wrong password should fail");
+
     let (resp1, _) =
         execute_with_password_sessions(&mut sim, &commit, commit_handles.clone(), 1, password)
-            .expect("could not commit");
+            .unwrap();
     let first_counter = resp1.counter;
 
-    let (resp2, _) = execute_with_password_sessions(&mut sim, &commit, commit_handles, 1, password)
-        .expect("could not commit");
+    let (resp2, _) =
+        execute_with_password_sessions(&mut sim, &commit, commit_handles, 1, password).unwrap();
     let second_counter = resp2.counter;
 
     assert_eq!(
@@ -88,7 +93,4 @@ fn test_commit() {
         second_counter,
         "counter did not increment"
     );
-
-    // Mirrors the deferred FlushContext in the Go test.
-    let _ = flush_context(&mut sim, rsp_handles.object_handle);
 }

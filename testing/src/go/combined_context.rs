@@ -10,11 +10,10 @@ use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 use crate::test_utils::*;
 
-// Original Go test: combined_context_test.go - TestCombinedContext
-#[test]
-fn test_combined_context() {
-    let mut sim = create_simulator!();
-
+/// Builds the `CreatePrimary` command used by `TestCombinedContext`: an
+/// RSA-2048 RSASSA-SHA256 signing key with an empty sensitive area and a
+/// creation PCR selection of SHA-1 PCR 7 (PC-client compatible, 3-byte select).
+pub(crate) fn combined_context_create_primary() -> CreatePrimary<'static> {
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
         data: Tpm2bSensitiveData::default(),
@@ -40,6 +39,7 @@ fn test_combined_context() {
     };
     let in_public = tpm2::Tpm2b(tpmt_public);
 
+    // TPML_PCR_SELECTION { count = 1, { SHA1, sizeofSelect = 3, [0x80, 0, 0] } }
     let mut pcr_buf = [0u8; 100];
     let mut written = 0;
     written += marshal_to_slice(&(1u32), &mut pcr_buf[written..]);
@@ -49,105 +49,56 @@ fn test_combined_context() {
     pcr_buf[written + 1] = 0;
     pcr_buf[written + 2] = 0;
     written += 3;
-    let mut unmarsh = &pcr_buf[..written];
+    let mut unmarsh: &'static [u8] = leak_bytes(&pcr_buf[..written]);
     let creation_pcr = TpmlPcrSelection::unmarshal(&mut unmarsh).unwrap();
 
-    let cp_cmd = CreatePrimary {
+    CreatePrimary {
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr,
-    };
+    }
+}
+
+// Original Go test: combined_context_test.go - TestCombinedContext
+#[test]
+fn test_combined_context() {
+    let mut sim = create_simulator!();
+
+    let cp_cmd = combined_context_create_primary();
     let cp_handles = CreatePrimaryHandles {
-        primary_handle: Handle(0x40000001),
+        primary_handle: Handle::RH_OWNER,
     };
 
-    let (cp_resp, cp_resp_handles) =
-        execute_with_password_sessions(&mut sim, &cp_cmd, cp_handles, 1, &[]).unwrap();
+    let (_cp_resp, cp_resp_handles) =
+        execute_with_password_sessions(&mut sim, &cp_cmd, cp_handles, 1, &[])
+            .expect("could not create key");
     let cp_handle = cp_resp_handles.object_handle;
 
     let save_cmd = ContextSave::default();
     let save_handles = ContextSaveHandles {
         save_handle: cp_handle,
     };
-    let (save_resp, _) =
-        execute_with_password_sessions(&mut sim, &save_cmd, save_handles, 0, &[]).unwrap();
-
-    let cp_name = read_public_name(&mut sim, cp_handle);
-    let _ = flush_context(&mut sim, cp_handle);
-
-    // Stress-test: Load with corrupted context blob
-    let bad_context = save_resp.context;
-    let mut buf = [0u8; 4096];
-    let len = marshal_to_slice(&bad_context, &mut buf);
-    buf[len - 1] ^= 0xFF; // Mutate last byte
-    let mut unmarsh = &buf[..len];
-    if let Ok(bad_ctx) = TpmsContext::unmarshal(&mut unmarsh) {
-        let bad_cmd = ContextLoad { context: bad_ctx };
-        assert!(
-            execute_with_password_sessions(&mut sim, &bad_cmd, (), 0, &[]).is_err(),
-            "Corrupted context should fail to load"
-        );
-    }
-
-    // Stress-test: Save a flushed handle
-    let save_flushed_cmd = ContextSave::default();
-    let save_flushed_handles = ContextSaveHandles {
-        save_handle: cp_handle,
-    };
-    assert!(
-        execute_with_password_sessions(&mut sim, &save_flushed_cmd, save_flushed_handles, 0, &[])
-            .is_err(),
-        "ContextSave on a flushed handle should fail"
-    );
+    let (save_resp, _) = execute_with_password_sessions(&mut sim, &save_cmd, save_handles, 0, &[])
+        .expect("ContextSave failed");
 
     let load_cmd = ContextLoad {
         context: save_resp.context,
     };
-    let (_, load_resp_handles) =
-        execute_with_password_sessions(&mut sim, &load_cmd, (), 0, &[]).unwrap();
+    let (_, load_resp_handles) = execute_with_password_sessions(&mut sim, &load_cmd, (), 0, &[])
+        .expect("ContextLoad failed");
     let cl_handle = load_resp_handles.loaded_handle;
 
     let cl_name = read_public_name(&mut sim, cl_handle);
+    let cp_name = read_public_name(&mut sim, cp_handle);
 
     assert_eq!(
-        cp_name.get_size(),
-        cl_name.get_size(),
-        "Mismatch in name size"
-    );
-    assert_eq!(
-        cp_name.get_buffer()[..cp_name.get_size() as usize],
         cl_name.get_buffer()[..cl_name.get_size() as usize],
-        "Mismatch in name contents"
-    );
-
-    assert_eq!(
-        cp_resp.name.get_size(),
-        cp_name.get_size(),
-        "CreatePrimary name size mismatch"
-    );
-    assert_eq!(
-        cp_resp.name.get_buffer()[..cp_resp.name.get_size() as usize],
         cp_name.get_buffer()[..cp_name.get_size() as usize],
-        "CreatePrimary name content mismatch"
+        "Mismatch between public returned from ContextLoad & CreateLoaded"
     );
 
+    // Mirrors the deferred FlushContext calls in the Go test (LIFO order).
     let _ = flush_context(&mut sim, cl_handle);
-
-    let (_, load_resp_handles2) =
-        execute_with_password_sessions(&mut sim, &load_cmd, (), 0, &[]).unwrap();
-    let cl_handle2 = load_resp_handles2.loaded_handle;
-    assert_eq!(
-        cl_handle, cl_handle2,
-        "Loaded handles should match under slot-based allocation"
-    );
-
-    let cl_name2 = read_public_name(&mut sim, cl_handle2);
-    assert_eq!(cl_name.get_size(), cl_name2.get_size());
-    assert_eq!(
-        cl_name.get_buffer()[..cl_name.get_size() as usize],
-        cl_name2.get_buffer()[..cl_name2.get_size() as usize]
-    );
-
-    let _ = flush_context(&mut sim, cl_handle2);
+    let _ = flush_context(&mut sim, cp_handle);
 }

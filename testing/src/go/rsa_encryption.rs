@@ -9,6 +9,7 @@ use tpm2::*;
 use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
+/// go-tpm's `RSASRKTemplate`.
 fn get_rsa_srk_template() -> TpmtPublic<'static> {
     TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -16,6 +17,7 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
             | TpmaObject::FIXED_PARENT
             | TpmaObject::SENSITIVE_DATA_ORIGIN
             | TpmaObject::USER_WITH_AUTH
+            | TpmaObject::NO_DA
             | TpmaObject::RESTRICTED
             | TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
@@ -26,7 +28,7 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
                 key_bits: TpmiRsaKeyBits(2048),
                 exponent: 0,
             },
-            Tpm2bPublicKeyRsa::default(),
+            Tpm2bPublicKeyRsa::from_bytes(&[0u8; 256]).unwrap(),
         ),
     }
 }
@@ -54,7 +56,7 @@ fn test_rsa_encryption() {
         &mut sim,
         &create_primary_cmd,
         create_primary_handles,
-        0,
+        1,
         &[],
     )
     .expect("CreatePrimary failed");
@@ -78,7 +80,7 @@ fn test_rsa_encryption() {
                 key_bits: TpmiRsaKeyBits(2048),
                 exponent: 0,
             },
-            Tpm2bPublicKeyRsa::default(),
+            Tpm2bPublicKeyRsa::from_bytes(&[0u8; 256]).unwrap(),
         ),
     };
     let create_cmd = Create {

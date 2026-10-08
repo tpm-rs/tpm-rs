@@ -1,25 +1,28 @@
 #![forbid(unsafe_code)]
-use crate::test_utils::marshal_to_slice;
-// Ported from tpm-go/tpm2/test/activate_credential_test.go
+// Ported from go-tpm/tpm2/test/activate_credential_test.go
 
-use crate::test_utils::*;
+use crate::go::audit::{SessionAuth, create_primary_pw, execute_mixed};
+use crate::test_utils::{flush_context, marshal_to_slice, start_auth_session};
 use tpm2::Handle;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, MakeCredential, MakeCredentialHandles};
+use tpm2::commands::{
+    ActivateCredential, ActivateCredentialHandles, CreatePrimary, MakeCredential,
+    MakeCredentialHandles, PolicySecret, PolicySecretHandles,
+};
 use tpm2::crypto::Rng;
 use tpm2::crypto::asymmetric::KeyParams;
 use tpm2::crypto::kdf::kdfa;
 use tpm2::crypto::{Asymmetric, Ecc};
 use tpm2::{
     Alg, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret,
-    Tpm2bIdObject, Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmaObject, TpmiAlgHash, TpmiAlgSymMode,
-    TpmiRsaKeyBits, TpmsEccParms, TpmsEccPoint, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic,
-    TpmtSymDefObject,
+    Tpm2bIdObject, Tpm2bNonce, Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmSe, TpmaObject,
+    TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsEccParms, TpmsEccPoint, TpmsRsaParms,
+    TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2_platform_linux::{LinuxRng, PlatformCryptoProvider};
 use tpm2_simulator::{Simulator, create_simulator};
 
-/// Returns the TPM 2.0 public template for an ECC Endorsement Key (EK)
-/// using the SHA-256 name algorithm and NIST P-256 curve.
+/// Returns go-tpm's `ECCEKTemplate`: the TCG reference ECC-P256 EK template
+/// (SHA-256 name algorithm, PolicyA auth policy, zero-filled 32-byte unique).
 fn get_ecc_ek_template() -> TpmtPublic<'static> {
     TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -44,15 +47,15 @@ fn get_ecc_ek_template() -> TpmtPublic<'static> {
                 kdf: None,
             },
             TpmsEccPoint {
-                x: Tpm2bEccParameter::default(),
-                y: Tpm2bEccParameter::default(),
+                x: Tpm2bEccParameter::from_bytes(&[0u8; 32]).unwrap(),
+                y: Tpm2bEccParameter::from_bytes(&[0u8; 32]).unwrap(),
             },
         ),
     }
 }
 
-/// Returns the TPM 2.0 public template for an ECC Storage Root Key (SRK)
-/// using the SHA-256 name algorithm and NIST P-256 curve.
+/// Returns go-tpm's `ECCSRKTemplate`: the TCG reference ECC-P256 SRK template
+/// (SHA-256 name algorithm, NoDA, zero-filled 32-byte unique).
 fn get_ecc_srk_template() -> TpmtPublic<'static> {
     TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -60,6 +63,7 @@ fn get_ecc_srk_template() -> TpmtPublic<'static> {
             | TpmaObject::FIXED_PARENT
             | TpmaObject::SENSITIVE_DATA_ORIGIN
             | TpmaObject::USER_WITH_AUTH
+            | TpmaObject::NO_DA
             | TpmaObject::RESTRICTED
             | TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
@@ -71,15 +75,15 @@ fn get_ecc_srk_template() -> TpmtPublic<'static> {
                 kdf: None,
             },
             TpmsEccPoint {
-                x: Tpm2bEccParameter::default(),
-                y: Tpm2bEccParameter::default(),
+                x: Tpm2bEccParameter::from_bytes(&[0u8; 32]).unwrap(),
+                y: Tpm2bEccParameter::from_bytes(&[0u8; 32]).unwrap(),
             },
         ),
     }
 }
 
-/// Returns the TPM 2.0 public template for an RSA Storage Root Key (SRK)
-/// using the SHA-256 name algorithm and 2048-bit key size.
+/// Returns go-tpm's `RSASRKTemplate`: the TCG reference RSA-2048 SRK template
+/// (SHA-256 name algorithm, NoDA, zero-filled 256-byte unique).
 fn get_rsa_srk_template() -> TpmtPublic<'static> {
     TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -87,6 +91,7 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
             | TpmaObject::FIXED_PARENT
             | TpmaObject::SENSITIVE_DATA_ORIGIN
             | TpmaObject::USER_WITH_AUTH
+            | TpmaObject::NO_DA
             | TpmaObject::RESTRICTED
             | TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
@@ -97,13 +102,13 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
                 key_bits: TpmiRsaKeyBits(2048),
                 exponent: 0,
             },
-            Tpm2bPublicKeyRsa::default(),
+            Tpm2bPublicKeyRsa::from_bytes(&[0u8; 256]).unwrap(),
         ),
     }
 }
 
-/// Returns the TPM 2.0 public template for an ECC key using the SHA-384
-/// name algorithm and NIST P-384 curve.
+/// Returns the Go test's `p384Template`: an SRK-like ECDH-P384 key with a
+/// SHA-384 name algorithm (different from the other keys in this test).
 fn get_p384_template() -> TpmtPublic<'static> {
     TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha384),
@@ -129,7 +134,11 @@ fn get_p384_template() -> TpmtPublic<'static> {
     }
 }
 
-/// Software implementation for creating a credential challenge.
+/// Software implementation of go-tpm's `CreateCredential` (with
+/// `ImportEncapsulationKey(ek_pub)`): encapsulates a seed to `ek_pub` with the
+/// "IDENTITY" label, encrypts the credential as a TPM2B_DIGEST with the
+/// KDFa("STORAGE") key, and computes the KDFa("INTEGRITY") HMAC over
+/// `encIdentity || subject_name`.
 fn create_credential_software(
     ek_pub: &TpmtPublic,
     subject_name: &[u8],
@@ -316,223 +325,202 @@ fn create_credential_software(
 fn test_activate_tpm_credential() {
     let mut sim = create_simulator!();
 
-    // 1. Create ECC EK under Endorsement Hierarchy
-    let ek_pub = get_ecc_ek_template();
-    let in_public = tpm2::Tpm2b(ek_pub);
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
         data: Tpm2bSensitiveData::default(),
     });
 
-    let create_primary_ek = CreatePrimary {
+    let ek_create = CreatePrimary {
         in_sensitive,
-        in_public,
+        in_public: tpm2::Tpm2b(get_ecc_ek_template()),
         ..Default::default()
     };
-    let create_handles_ek = CreatePrimaryHandles {
-        primary_handle: Handle::RH_ENDORSEMENT,
-    };
-    let (ek_resp, ek_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary_ek, create_handles_ek, 0, &[])
+    let (ek_create_rsp, ek_create_handles) =
+        create_primary_pw(&mut sim, Handle::RH_ENDORSEMENT, &ek_create)
             .expect("could not generate EK");
 
-    // 2. Create ECC SRK under Owner Hierarchy
-    let srk_pub = get_ecc_srk_template();
-    let in_public_srk = tpm2::Tpm2b(srk_pub);
-    let create_primary_srk = CreatePrimary {
+    let srk_create = CreatePrimary {
         in_sensitive,
-        in_public: in_public_srk,
+        in_public: tpm2::Tpm2b(get_ecc_srk_template()),
         ..Default::default()
     };
-    let create_handles_srk = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (srk_resp, srk_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary_srk, create_handles_srk, 0, &[])
-            .expect("could not generate SRK");
+    let (srk_create_rsp, srk_create_handles) =
+        create_primary_pw(&mut sim, Handle::RH_OWNER, &srk_create).expect("could not generate SRK");
 
-    // 3. MakeCredential
     let secret = Tpm2bDigest::from_bytes(b"Secrets!!!").unwrap();
+
     let mc = MakeCredential {
         credential: secret,
-        object_name: srk_resp.name,
+        object_name: srk_create_rsp.name,
     };
-    let mc_handles = MakeCredentialHandles {
-        handle: ek_resp_handles.object_handle,
-    };
-    let (mc_resp, _) = execute_with_password_sessions(&mut sim, &mc, mc_handles, 0, &[])
-        .expect("MakeCredential failed");
+    let (mc_rsp, _) = execute_mixed(
+        &mut sim,
+        &mc,
+        MakeCredentialHandles {
+            handle: ek_create_handles.object_handle,
+        },
+        &[ek_create_rsp.name.get_buffer()],
+        &mut [],
+    )
+    .expect("could not make credential");
 
-    // 4. ActivateCredential
-    // Start policy session to satisfy EK policy
-    let active_session = start_auth_session(
+    // KeyHandle auth: Policy(TPMAlgSHA256, 16, ekPolicy). go-tpm starts a
+    // one-off (no continueSession) unbound, unsalted policy session and runs
+    // ekPolicy = PolicySecret(TPMRHEndorsement, PasswordAuth(nil)) on it.
+    let mut policy_session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
         Handle::RH_NULL,
         &[],
-        tpm2::TpmSe::Policy,
+        TpmSe::Policy,
         None,
         TpmiAlgHash::Sha256,
     )
-    .expect("start policy session failed");
-
-    // PolicySecret targeting the policy session and endorsement hierarchy
-    use tpm2::commands::{PolicySecret, PolicySecretHandles};
-    let policy_secret_cmd = PolicySecret {
-        nonce_tpm: active_session.nonce_tpm,
+    .expect("could not start policy session");
+    let policy_secret = PolicySecret {
+        nonce_tpm: policy_session.nonce_tpm,
         cp_hash_a: Tpm2bDigest::default(),
-        policy_ref: tpm2::Tpm2bNonce::default(),
+        policy_ref: Tpm2bNonce::default(),
         expiration: 0,
     };
-    let policy_secret_handles = PolicySecretHandles {
-        auth_handle: Handle::RH_ENDORSEMENT,
-        policy_session: active_session.session_handle,
-    };
-    let _ =
-        execute_with_password_sessions(&mut sim, &policy_secret_cmd, policy_secret_handles, 1, &[])
-            .expect("PolicySecret failed");
-
-    if let Some(sess) = sim.global_state.session(active_session.session_handle.0) {
-        println!(
-            "DEBUG session policy digest: {:02x?}",
-            &sess.policy_digest[..sess.policy_digest_len]
-        );
-    }
-
-    // Start an HMAC session for the activate_handle (SRK)
-    let hmac_session = start_auth_session(
+    execute_mixed(
         &mut sim,
-        Handle::RH_NULL,
-        Handle::RH_NULL,
-        &[],
-        tpm2::TpmSe::HMAC,
-        None,
-        TpmiAlgHash::Sha256,
+        &policy_secret,
+        PolicySecretHandles {
+            auth_handle: Handle::RH_ENDORSEMENT,
+            policy_session: policy_session.session_handle,
+        },
+        &[
+            &Handle::RH_ENDORSEMENT.0.to_be_bytes(),
+            &policy_session.session_handle.0.to_be_bytes(),
+        ],
+        &mut [SessionAuth::Password(&[])],
     )
-    .expect("start HMAC session failed");
+    .expect("ekPolicy PolicySecret failed");
 
-    use tpm2::commands::{ActivateCredential, ActivateCredentialHandles};
-    let ac_cmd = ActivateCredential {
-        credential_blob: mc_resp.credential_blob,
-        secret: mc_resp.secret,
+    // ActivateHandle is a NamedHandle, so go-tpm authorizes it with
+    // PasswordAuth(nil); KeyHandle uses the policy session.
+    let ac = ActivateCredential {
+        credential_blob: mc_rsp.credential_blob,
+        secret: mc_rsp.secret,
     };
-    let ac_handles = ActivateCredentialHandles {
-        activate_handle: srk_resp_handles.object_handle,
-        key_handle: ek_resp_handles.object_handle,
-    };
-
-    let mut sessions = [hmac_session, active_session];
-    let (ac_resp, _) = execute_with_hmac_sessions(
+    let (ac_rsp, _) = execute_mixed(
         &mut sim,
-        &ac_cmd,
-        ac_handles,
-        &[srk_resp.name.get_buffer(), ek_resp.name.get_buffer()],
-        &mut sessions,
-        &[&[], &[]],
+        &ac,
+        ActivateCredentialHandles {
+            activate_handle: srk_create_handles.object_handle,
+            key_handle: ek_create_handles.object_handle,
+        },
+        &[
+            srk_create_rsp.name.get_buffer(),
+            ek_create_rsp.name.get_buffer(),
+        ],
+        &mut [
+            SessionAuth::Password(&[]),
+            SessionAuth::Session {
+                session: &mut policy_session,
+                auth: &[],
+            },
+        ],
     )
-    .expect("ActivateCredential failed");
+    .expect("could not activate credential");
 
-    assert_eq!(ac_resp.cert_info.get_buffer(), secret.get_buffer());
+    assert_eq!(ac_rsp.cert_info.get_buffer(), secret.get_buffer());
 
-    // Clean up
-    flush_context(&mut sim, ek_resp_handles.object_handle).expect("flush EK failed");
-    flush_context(&mut sim, srk_resp_handles.object_handle).expect("flush SRK failed");
+    // Deferred cleanup (Go runs defers in reverse order): flush the SRK, then
+    // the EK.
+    flush_context(&mut sim, srk_create_handles.object_handle).expect("could not flush SRK");
+    flush_context(&mut sim, ek_create_handles.object_handle).expect("could not flush EK");
 }
 
+/// Shared body of the `TestActivateSWCredential` subtests: `pub_template` is
+/// the storage key that decrypts the credential challenge and `sub_template`
+/// is the credentialed (named) object.
 fn run_activate_sw_credential_test(pub_template: TpmtPublic, sub_template: TpmtPublic) {
     let mut sim = create_simulator!();
 
-    // 1. Create Primary (Storage Key that decrypts the credential challenge)
-    let in_public = tpm2::Tpm2b(pub_template);
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
         data: Tpm2bSensitiveData::default(),
     });
 
-    let create_primary_cmd = CreatePrimary {
-        in_sensitive,
-        in_public,
-        ..Default::default()
-    };
-    let (_primary_resp, primary_resp_handles) = execute_with_password_sessions(
+    // Create the key that is going to decrypt the credential challenge.
+    let (primary, primary_handles) = create_primary_pw(
         &mut sim,
-        &create_primary_cmd,
-        CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
+        Handle::RH_OWNER,
+        &CreatePrimary {
+            in_sensitive,
+            in_public: tpm2::Tpm2b(pub_template),
+            ..Default::default()
         },
-        0,
-        &[],
     )
-    .expect("CreatePrimary failed");
+    .expect("CreatePrimary() failed");
 
-    // 2. Create the key that is going to be named in the challenge (Subject Key)
-    let in_public_sub = tpm2::Tpm2b(sub_template);
-    let create_primary_sub = CreatePrimary {
-        in_sensitive,
-        in_public: in_public_sub,
-        ..Default::default()
-    };
-    let (sub_resp, sub_resp_handles) = execute_with_password_sessions(
+    let public = primary.out_public.0;
+
+    // Create the key that is going to be named in the challenge.
+    let (subject, subject_handles) = create_primary_pw(
         &mut sim,
-        &create_primary_sub,
-        CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
+        Handle::RH_OWNER,
+        &CreatePrimary {
+            in_sensitive,
+            in_public: tpm2::Tpm2b(sub_template),
+            ..Default::default()
         },
-        0,
-        &[],
     )
-    .expect("CreatePrimary subject failed");
+    .expect("CreatePrimary() failed");
 
-    // 3. Create the challenge in software
-    let plaintext = Tpm2bDigest::from_bytes(b"hello, credential").unwrap();
-    let primary_pub = _primary_resp.out_public.0;
-    let (credential_blob, secret) = create_credential_software(
-        &primary_pub,
-        sub_resp.name.get_buffer(),
-        plaintext.get_buffer(),
-    );
+    // Create the challenge.
+    let plaintext: &[u8] = b"hello, credential";
+    let (id_object, enc_secret) =
+        create_credential_software(&public, subject.name.get_buffer(), plaintext);
 
-    // 4. ActivateCredential
-    use tpm2::commands::{ActivateCredential, ActivateCredentialHandles};
-    let ac_cmd = ActivateCredential {
-        credential_blob,
-        secret,
-    };
-    let ac_handles = ActivateCredentialHandles {
-        activate_handle: sub_resp_handles.object_handle,
-        key_handle: primary_resp_handles.object_handle,
-    };
-    let (ac_resp, _) = execute_with_password_sessions(&mut sim, &ac_cmd, ac_handles, 2, &[])
-        .expect("ActivateCredential failed");
+    // Get the challenge decrypted. Both handles are NamedHandles, so go-tpm
+    // authorizes each with PasswordAuth(nil).
+    let (activate, _) = execute_mixed(
+        &mut sim,
+        &ActivateCredential {
+            credential_blob: id_object,
+            secret: enc_secret,
+        },
+        ActivateCredentialHandles {
+            activate_handle: subject_handles.object_handle,
+            key_handle: primary_handles.object_handle,
+        },
+        &[subject.name.get_buffer(), primary.name.get_buffer()],
+        &mut [SessionAuth::Password(&[]), SessionAuth::Password(&[])],
+    )
+    .expect("ActivateCredential() failed");
 
-    assert_eq!(ac_resp.cert_info.get_buffer(), plaintext.get_buffer());
+    assert_eq!(activate.cert_info.get_buffer(), plaintext);
 
-    // Clean up
-    flush_context(&mut sim, primary_resp_handles.object_handle).expect("flush primary failed");
-    flush_context(&mut sim, sub_resp_handles.object_handle).expect("flush subject failed");
+    // Deferred cleanup (Go runs defers in reverse order and ignores errors):
+    // flush the subject, then the primary.
+    let _ = flush_context(&mut sim, subject_handles.object_handle);
+    let _ = flush_context(&mut sim, primary_handles.object_handle);
 }
 
 // Original Go test: activate_credential_test.go - TestActivateSWCredential/ECDH-P256 SRK activating RSA SRK
 #[test]
-fn test_activate_sw_credential_ecdh_p256_activating_rsa_srk() {
+fn test_activate_sw_credential_ecdh_p256_srk_activating_rsa_srk() {
     run_activate_sw_credential_test(get_ecc_srk_template(), get_rsa_srk_template());
 }
 
 // Original Go test: activate_credential_test.go - TestActivateSWCredential/RSA-2048 SRK activating P256 SRK
 #[test]
-fn test_activate_sw_credential_rsa_2048_activating_p256_srk() {
+fn test_activate_sw_credential_rsa_2048_srk_activating_p256_srk() {
     run_activate_sw_credential_test(get_rsa_srk_template(), get_ecc_srk_template());
 }
 
 // Original Go test: activate_credential_test.go - TestActivateSWCredential/ECDH-P256 SRK activating P384 key
 #[test]
-fn test_activate_sw_credential_ecdh_p256_activating_p384_key() {
+fn test_activate_sw_credential_ecdh_p256_srk_activating_p384_key() {
     run_activate_sw_credential_test(get_ecc_srk_template(), get_p384_template());
 }
 
 // Original Go test: activate_credential_test.go - TestActivateSWCredential/RSA-2048 SRK activating P384 key
 #[test]
-fn test_activate_sw_credential_rsa_2048_activating_p384_key() {
+fn test_activate_sw_credential_rsa_2048_srk_activating_p384_key() {
     run_activate_sw_credential_test(get_rsa_srk_template(), get_p384_template());
 }
 

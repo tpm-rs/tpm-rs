@@ -1,8 +1,9 @@
 use tpm2::TpmEccCurve;
 use tpm2::commands::TestParms;
-use tpm2::errors::{Position, TpmRc};
+use tpm2::errors::TpmRc;
 use tpm2::{TpmiRsaKeyBits, TpmsEccParms, TpmsRsaParms, TpmtPublicParms};
 use tpm2_platform_linux::LinuxRng;
+use tpm2_simulator::execute::ExecuteError;
 use tpm2_simulator::{Simulator, create_simulator};
 
 // Original Go test: test_parms_test.go - TestTestParms/p256
@@ -22,7 +23,7 @@ fn test_test_parms_p256() {
 
 // Original Go test: test_parms_test.go - TestTestParms/p364
 #[test]
-fn test_test_parms_p384() {
+fn test_test_parms_p364() {
     let mut sim = create_simulator!();
     let cmd = TestParms {
         parameters: TpmtPublicParms::Ecc(TpmsEccParms {
@@ -67,7 +68,7 @@ fn test_test_parms_rsa2048() {
 
 // Original Go test: test_parms_test.go - TestTestParms/rsa3072 - unsupported
 #[test]
-fn test_test_parms_rsa3072() {
+fn test_test_parms_rsa3072_unsupported() {
     let mut sim = create_simulator!();
     let cmd = TestParms {
         parameters: TpmtPublicParms::Rsa(TpmsRsaParms {
@@ -78,12 +79,17 @@ fn test_test_parms_rsa3072() {
         }),
     };
     let err = sim.execute(cmd).unwrap_err();
-    assert_eq!(err, TpmRc::VALUE.with(Position::parameter(1)));
+    // Go: errors.Is(err, TPMRCValue), which compares the canonical format-one
+    // code and ignores the handle/session/parameter position.
+    let ExecuteError::Tpm(rc) = err else {
+        panic!("expected a TPM error, got {err:?}");
+    };
+    assert_eq!(rc.to_fmt1().map(|(rc, _)| rc), Some(TpmRc::VALUE));
 }
 
 // Original Go test: test_parms_test.go - TestTestParms/rsa4096 - unsupported
 #[test]
-fn test_test_parms_rsa4096() {
+fn test_test_parms_rsa4096_unsupported() {
     let mut sim = create_simulator!();
     let cmd = TestParms {
         parameters: TpmtPublicParms::Rsa(TpmsRsaParms {
@@ -94,5 +100,10 @@ fn test_test_parms_rsa4096() {
         }),
     };
     let err = sim.execute(cmd).unwrap_err();
-    assert_eq!(err, TpmRc::VALUE.with(Position::parameter(1)));
+    // Go: errors.Is(err, TPMRCValue), which compares the canonical format-one
+    // code and ignores the handle/session/parameter position.
+    let ExecuteError::Tpm(rc) = err else {
+        panic!("expected a TPM error, got {err:?}");
+    };
+    assert_eq!(rc.to_fmt1().map(|(rc, _)| rc), Some(TpmRc::VALUE));
 }

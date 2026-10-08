@@ -54,10 +54,10 @@ fn test_sign() {
         &mut sim,
         &create_primary_cmd,
         create_primary_handles,
-        0,
+        1,
         &[],
     )
-    .expect("CreatePrimary failed");
+    .expect("could not create key");
 
     let object_handle = create_primary_resp_handles.object_handle;
 
@@ -107,6 +107,6 @@ fn test_sign() {
         .verify(scheme, &digest, signature_bytes)
         .expect("Signature verification failed");
 
-    // Cleanup key
-    flush_context(&mut sim, object_handle).unwrap();
+    // Cleanup key (deferred in Go; error ignored)
+    let _ = flush_context(&mut sim, object_handle);
 }

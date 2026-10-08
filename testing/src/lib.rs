@@ -180,3 +180,17 @@ mod adv_pcr_custom;
 mod adv_policy_custom;
 #[cfg(test)]
 mod adv_sign_custom;
+
+// Non-Go-parity tests moved out of src/go.
+#[cfg(test)]
+mod combined_context_extra;
+#[cfg(test)]
+mod commit_extra;
+#[cfg(test)]
+mod create_loaded_extra;
+#[cfg(test)]
+mod ek_extra;
+#[cfg(test)]
+mod evict_control_extra;
+#[cfg(test)]
+mod hash_sequence_hash_extra;

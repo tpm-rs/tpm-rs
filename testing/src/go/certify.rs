@@ -2,19 +2,87 @@
 
 use crate::test_utils::*;
 use tpm2::commands::{
-    Certify, CertifyCreation, CertifyCreationHandles, CertifyHandles, CreatePrimary,
+    Certify, CertifyCreation, CertifyCreationHandles, CertifyHandles, Command, CreatePrimary,
     CreatePrimaryHandles, NVCertify, NVCertifyHandles, NVDefineSpace, NVDefineSpaceHandles,
     NVReadPublic, NVReadPublicHandles, NVWrite, NVWriteHandles,
 };
-use tpm2::{Handle, TpmNt};
+use tpm2::{Handle, Marshal, TpmNt, TpmSt, Unmarshal};
 use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bMaxNvBuffer, Tpm2bPublicKeyRsa,
-    Tpm2bSensitiveData, TpmaNv, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmlPcrSelection,
-    TpmsNvPublic, TpmsPcrSelection, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic, TpmtRsaScheme,
-    TpmtSigScheme, TpmtSignature, TpmuAttest,
+    PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bMaxNvBuffer, Tpm2bNonce,
+    Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmaNv, TpmaObject, TpmaSession, TpmiAlgHash,
+    TpmiRsaKeyBits, TpmiStCommandTag, TpmlPcrSelection, TpmsAuthCommand, TpmsNvPublic,
+    TpmsPcrSelection, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic, TpmtRsaScheme, TpmtSigScheme,
+    TpmtSignature, TpmuAttest,
 };
 use tpm2_platform_linux::{LinuxRng, PlatformCryptoProvider};
 use tpm2_simulator::{Simulator, create_simulator};
+
+/// Executes `cmd` with one password session per entry of `auth_values`, in
+/// handle order, mirroring go-tpm's per-handle `PasswordAuth(...)`.
+fn execute_with_password_auths<CmdT: Command>(
+    tpm: &mut Simulator<'_>,
+    cmd: &CmdT,
+    cmd_handles: CmdT::Handles,
+    auth_values: &[&[u8]],
+) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), u32>
+where
+    CmdT::Response<'static>: Unmarshal<'static>,
+    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
+    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
+{
+    let mut cmd_buffer = [0u8; 4096];
+    let mut cmd_header = CmdHeader {
+        tag: if auth_values.is_empty() {
+            TpmiStCommandTag::NoSessions
+        } else {
+            TpmiStCommandTag::Sessions
+        },
+        size: 0,
+        code: CmdT::CMD_CODE,
+    };
+    let mut written = cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
+    written += marshal_to_slice(&cmd_handles, &mut cmd_buffer[written..]);
+
+    let mut auth_buffer = [0u8; 1024];
+    let mut auth_written = 0;
+    for auth_value in auth_values {
+        let auth_cmd = TpmsAuthCommand {
+            session_handle: Handle::RS_PW,
+            nonce: Tpm2bNonce::default(),
+            session_attributes: TpmaSession::CONTINUE_SESSION,
+            hmac: Tpm2bAuth::from_bytes(auth_value).unwrap(),
+        };
+        auth_written += marshal_to_slice(&auth_cmd, &mut auth_buffer[auth_written..]);
+    }
+    if !auth_values.is_empty() {
+        written += marshal_to_slice(&(auth_written as u32), &mut cmd_buffer[written..]);
+        cmd_buffer[written..written + auth_written].copy_from_slice(&auth_buffer[..auth_written]);
+        written += auth_written;
+    }
+    written += marshal_to_slice(cmd, &mut cmd_buffer[written..]);
+
+    cmd_header.size = written as u32;
+    cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
+
+    let mut resp_buffer = [0u8; 4096];
+    tpm.transact(&cmd_buffer[..written], &mut resp_buffer)
+        .unwrap();
+
+    let mut slice = &resp_buffer[..];
+    let resp_header = RespHeader::unmarshal(&mut slice).unwrap();
+    if resp_header.rc != 0 {
+        return Err(resp_header.rc);
+    }
+    let resp_handles = CmdT::RespHandles::unmarshal(&mut slice).unwrap();
+    if resp_header.tag == TpmSt::SESSIONS {
+        let _param_size = u32::unmarshal(&mut slice).unwrap();
+    }
+    let param_start = resp_buffer.len() - slice.len();
+    let mut params: &'static [u8] =
+        leak_bytes(&resp_buffer[param_start..resp_header.size as usize]);
+    let resp = <CmdT::Response<'static>>::unmarshal(&mut params).unwrap();
+    Ok((resp, resp_handles))
+}
 
 // Original Go test: certify_test.go - TestCertify
 #[test]
@@ -65,7 +133,7 @@ fn test_certify() {
         primary_handle: Handle::RH_OWNER,
     };
     let (signer_rsp, signer_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_signer_cmd, create_signer_handles, 0, &[])
+        execute_with_password_sessions(&mut sim, &create_signer_cmd, create_signer_handles, 1, &[])
             .unwrap();
     let signer_handle = signer_rsp_handles.object_handle;
 
@@ -92,7 +160,7 @@ fn test_certify() {
         &mut sim,
         &create_subject_cmd,
         create_subject_handles,
-        0,
+        1,
         &[],
     )
     .unwrap();
@@ -123,7 +191,6 @@ fn test_certify() {
 
     // Verification
     let certify_info = certify_rsp.certify_info.0;
-    assert_eq!(certify_info.extra_data.get_buffer(), original_buffer);
 
     let mut attest_buf = [0u8; 1024];
     let attest_len = marshal_to_slice(&certify_info, &mut attest_buf);
@@ -145,15 +212,8 @@ fn test_certify() {
     let pub_struct = signer_rsp.out_public.0;
     if let PublicParmsAndId::Rsa(_, rsa_unique) = pub_struct.parms_and_id {
         let (sig_alg, sig_bytes) = match &certify_rsp.signature {
-            Some(TpmtSignature::Rsassa(rsa_sig)) => {
-                assert_eq!(rsa_sig.hash, tpm2::TpmiAlgHash::Sha256);
-                (tpm2::Alg::RSASSA, rsa_sig.sig.get_buffer())
-            }
-            Some(TpmtSignature::Rsapss(rsa_sig)) => {
-                assert_eq!(rsa_sig.hash, tpm2::TpmiAlgHash::Sha256);
-                (tpm2::Alg::RSAPSS, rsa_sig.sig.get_buffer())
-            }
-            _ => panic!("Expected RSA signature"),
+            Some(TpmtSignature::Rsassa(rsa_sig)) => (tpm2::Alg::RSASSA, rsa_sig.sig.get_buffer()),
+            _ => panic!("Expected RSASSA signature"),
         };
 
         let verify_res = provider.verify_inner(sig_alg, rsa_unique.get_buffer(), digest, sig_bytes);
@@ -165,10 +225,15 @@ fn test_certify() {
     } else {
         panic!("Expected RSA public parameters");
     }
+    assert_eq!(
+        certify_info.extra_data.get_buffer(),
+        original_buffer,
+        "Attested buffer is different from original buffer"
+    );
 
     // Flush keys
-    flush_context(&mut sim, subject_handle).unwrap();
-    flush_context(&mut sim, signer_handle).unwrap();
+    let _ = flush_context(&mut sim, subject_handle);
+    let _ = flush_context(&mut sim, signer_handle);
 }
 
 // Original Go test: certify_test.go - TestCreateAndCertifyCreation
@@ -219,7 +284,7 @@ fn test_create_and_certify_creation() {
         primary_handle: Handle::RH_ENDORSEMENT,
     };
     let (create_rsp, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
     let object_handle = create_rsp_handles.object_handle;
 
     // Call CertifyCreation
@@ -276,15 +341,8 @@ fn test_create_and_certify_creation() {
     let pub_struct = create_rsp.out_public.0;
     if let PublicParmsAndId::Rsa(_, rsa_unique) = pub_struct.parms_and_id {
         let (sig_alg, sig_bytes) = match &certify_creation_rsp.signature {
-            Some(TpmtSignature::Rsassa(rsa_sig)) => {
-                assert_eq!(rsa_sig.hash, tpm2::TpmiAlgHash::Sha256);
-                (tpm2::Alg::RSASSA, rsa_sig.sig.get_buffer())
-            }
-            Some(TpmtSignature::Rsapss(rsa_sig)) => {
-                assert_eq!(rsa_sig.hash, tpm2::TpmiAlgHash::Sha256);
-                (tpm2::Alg::RSAPSS, rsa_sig.sig.get_buffer())
-            }
-            _ => panic!("Expected RSA signature"),
+            Some(TpmtSignature::Rsassa(rsa_sig)) => (tpm2::Alg::RSASSA, rsa_sig.sig.get_buffer()),
+            _ => panic!("Expected RSASSA signature"),
         };
 
         let verify_res = provider.verify_inner(sig_alg, rsa_unique.get_buffer(), digest, sig_bytes);
@@ -298,13 +356,15 @@ fn test_create_and_certify_creation() {
     }
 
     // Flush key
-    flush_context(&mut sim, object_handle).unwrap();
+    let _ = flush_context(&mut sim, object_handle);
 }
 
 // Original Go test: certify_test.go - TestNVCertify
 #[test]
 fn test_nv_certify() {
     let mut sim = create_simulator!();
+
+    let auth = b"password";
 
     // Setup signer primary template (RSA, SHA256, restricted, sign/encrypt)
     let rsa_parms = TpmsRsaParms {
@@ -327,12 +387,11 @@ fn test_nv_certify() {
     let in_public = tpm2::Tpm2b(pub_area);
 
     let sensitive_create = TpmsSensitiveCreate {
-        user_auth: Tpm2bAuth::default(),
+        user_auth: Tpm2bAuth::from_bytes(auth).unwrap(),
         data: Tpm2bSensitiveData::default(),
     };
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
-    // Use empty password for the signer to allow unified password session executing
     let create_signer_cmd = CreatePrimary {
         in_sensitive,
         in_public,
@@ -342,7 +401,7 @@ fn test_nv_certify() {
         primary_handle: Handle::RH_OWNER,
     };
     let (signer_rsp, signer_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_signer_cmd, create_signer_handles, 0, &[])
+        execute_with_password_sessions(&mut sim, &create_signer_cmd, create_signer_handles, 1, &[])
             .unwrap();
     let signer_handle = signer_rsp_handles.object_handle;
 
@@ -371,19 +430,19 @@ fn test_nv_certify() {
     let nv_define_handles = NVDefineSpaceHandles {
         auth_handle: Handle::RH_OWNER,
     };
-    execute_with_password_sessions(&mut sim, &nv_define_cmd, nv_define_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &nv_define_cmd, nv_define_handles, 1, &[])
+        .expect("Calling TPM2_NV_DefineSpace");
 
-    // Get NV Name
+    // Get NV Name (only needed by go-tpm to bind names to handles; password
+    // sessions do not use it).
     let nv_read_pub_cmd = NVReadPublic {};
     let nv_read_pub_handles = NVReadPublicHandles {
         nv_index: Handle(nv_index_val),
     };
-    let (nv_read_pub_rsp, _) =
-        execute_with_password_sessions(&mut sim, &nv_read_pub_cmd, nv_read_pub_handles, 0, &[])
-            .unwrap();
-    let _nv_name = nv_read_pub_rsp.nv_name;
+    execute_with_password_sessions(&mut sim, &nv_read_pub_cmd, nv_read_pub_handles, 0, &[])
+        .expect("Calling TPM2_NV_ReadPublic");
 
-    // Write to NV Space
+    // Write to NV Space, authorized with the NV index auth (empty password).
     let data_to_write = &[0x01, 0x02, 0x03, 0x04];
     let nv_write_cmd = NVWrite {
         data: Tpm2bMaxNvBuffer::from_bytes(data_to_write).unwrap(),
@@ -393,10 +452,15 @@ fn test_nv_certify() {
         auth_handle: Handle(nv_index_val),
         nv_index: Handle(nv_index_val),
     };
-    // Authorized with NV Index auth (empty)
-    execute_with_password_sessions(&mut sim, &nv_write_cmd, nv_write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &nv_write_cmd, nv_write_handles, 1, &[])
+        .expect("Calling TPM2_NV_Write");
 
-    // Call NVCertify
+    // Re-read the NV public area (its Name changed once NV_WRITTEN was set).
+    execute_with_password_sessions(&mut sim, &nv_read_pub_cmd, nv_read_pub_handles, 0, &[])
+        .expect("Calling TPM2_NV_ReadPublic");
+
+    // Call NVCertify. Handle order is (signHandle, authHandle, nvIndex), so the
+    // sessions are: signer password "password", NV index password (empty).
     let qualifying_data = b"nonce";
     let nv_certify_cmd = NVCertify {
         qualifying_data: Tpm2bData::from_bytes(qualifying_data).unwrap(),
@@ -409,20 +473,12 @@ fn test_nv_certify() {
         auth_handle: Handle(nv_index_val),
         nv_index: Handle(nv_index_val),
     };
-    let mut resp_buffer = [0u8; 4096];
-    let (nv_certify_rsp, _) = execute_nv_certify(
-        &mut sim,
-        &nv_certify_cmd,
-        nv_certify_handles,
-        2,
-        &[],
-        &mut resp_buffer,
-    )
-    .unwrap();
+    let (nv_certify_rsp, _) =
+        execute_with_password_auths(&mut sim, &nv_certify_cmd, nv_certify_handles, &[auth, &[]])
+            .expect("Failed to certify");
 
     // Verification
     let certify_info = nv_certify_rsp.certify_info.0;
-    assert_eq!(certify_info.extra_data.get_buffer(), qualifying_data);
 
     let mut attest_buf = [0u8; 1024];
     let attest_len = marshal_to_slice(&certify_info, &mut attest_buf);
@@ -444,15 +500,8 @@ fn test_nv_certify() {
     let pub_struct = signer_rsp.out_public.0;
     if let PublicParmsAndId::Rsa(_, rsa_unique) = pub_struct.parms_and_id {
         let (sig_alg, sig_bytes) = match &nv_certify_rsp.signature {
-            Some(TpmtSignature::Rsassa(rsa_sig)) => {
-                assert_eq!(rsa_sig.hash, tpm2::TpmiAlgHash::Sha256);
-                (tpm2::Alg::RSASSA, rsa_sig.sig.get_buffer())
-            }
-            Some(TpmtSignature::Rsapss(rsa_sig)) => {
-                assert_eq!(rsa_sig.hash, tpm2::TpmiAlgHash::Sha256);
-                (tpm2::Alg::RSAPSS, rsa_sig.sig.get_buffer())
-            }
-            _ => panic!("Expected RSA signature"),
+            Some(TpmtSignature::Rsassa(rsa_sig)) => (tpm2::Alg::RSASSA, rsa_sig.sig.get_buffer()),
+            _ => panic!("Expected RSASSA signature"),
         };
 
         let verify_res = provider.verify_inner(sig_alg, rsa_unique.get_buffer(), digest, sig_bytes);
@@ -464,7 +513,12 @@ fn test_nv_certify() {
     } else {
         panic!("Expected RSA public parameters");
     }
+    assert_eq!(
+        certify_info.extra_data.get_buffer(),
+        qualifying_data,
+        "Attested buffer is different from original buffer"
+    );
 
     // Flush key
-    flush_context(&mut sim, signer_handle).unwrap();
+    let _ = flush_context(&mut sim, signer_handle);
 }

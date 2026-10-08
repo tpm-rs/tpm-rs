@@ -11,6 +11,5 @@ fn test_get_random() {
         bytes_requested: 16,
     };
 
-    let resp = sim.execute(cmd).unwrap();
-    assert_eq!(resp.random_bytes.as_ref().len(), 16);
+    sim.execute(cmd).expect("GetRandom failed");
 }

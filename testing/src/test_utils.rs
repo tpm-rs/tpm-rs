@@ -692,37 +692,63 @@ pub fn start_auth_session(
     })
 }
 
-fn get_session_hmac_key(
-    tpm: &Simulator<'_>,
-    session: &ActiveSession,
-    entity_auth: &[u8],
-    is_bound: bool,
-) -> Vec<u8> {
-    let (is_policy, is_auth_value_needed, is_password_needed) = {
-        if let Some(state) = tpm.global_state.session(session.session_handle.0) {
-            (
+/// Decides whether the authorized entity's authValue must be appended to the
+/// session key when computing HMAC / parameter-encryption keys for `session`.
+///
+/// The rules (TPM 2.0 Part 1, 19.6 and 21.3) are:
+/// - HMAC sessions include the authValue unless the session is bound to the
+///   entity being authorized.
+/// - Policy sessions include the authValue only if `TPM2_PolicyAuthValue` (or
+///   `TPM2_PolicyPassword`) has been executed on the session.
+///
+/// This reads the TPM's session state, so it MUST be evaluated **before** the
+/// command is transacted: on a successful command with `continueSession` set,
+/// the TPM resets a policy session (clearing `is_auth_value_needed` /
+/// `is_password_needed`) *after* it has computed the response HMAC and
+/// encrypted the response parameters with the authValue included. Reading the
+/// state afterwards would therefore produce the wrong key for response
+/// verification/decryption. If the session is unknown to the TPM, it is
+/// treated as an HMAC session.
+fn session_includes_auth(tpm: &Simulator<'_>, session: &ActiveSession, is_bound: bool) -> bool {
+    let (is_policy, is_auth_value_needed, is_password_needed) =
+        match tpm.global_state.session(session.session_handle.0) {
+            Some(state) => (
                 state.session_type == tpm2::TpmSe::Policy,
                 state.is_auth_value_needed,
                 state.is_password_needed,
-            )
-        } else {
-            (false, false, false)
-        }
-    };
-
-    let include_auth =
-        (!is_policy && !is_bound) || (is_policy && (is_auth_value_needed || is_password_needed));
-
-    println!(
-        "DEBUG get_session_hmac_key: handle={:08X} is_policy={} is_bound={} is_auth_value_needed={} is_password_needed={} include_auth={}",
-        session.session_handle.0,
+            ),
+            None => (false, false, false),
+        };
+    include_auth_for(
         is_policy,
         is_bound,
         is_auth_value_needed,
         is_password_needed,
-        include_auth
-    );
+    )
+}
 
+/// Pure decision logic behind [`session_includes_auth`], split out so it can be
+/// unit tested without a simulator.
+fn include_auth_for(
+    is_policy: bool,
+    is_bound: bool,
+    is_auth_value_needed: bool,
+    is_password_needed: bool,
+) -> bool {
+    if is_policy {
+        is_auth_value_needed || is_password_needed
+    } else {
+        !is_bound
+    }
+}
+
+/// Builds the HMAC / KDF key for a session: `sessionKey || authValue` when
+/// `include_auth` is set (with trailing zeros stripped from the authValue, as
+/// the TPM does), otherwise just `sessionKey`.
+///
+/// `include_auth` should come from [`session_includes_auth`] evaluated before
+/// the command was sent.
+fn session_hmac_key(session: &ActiveSession, entity_auth: &[u8], include_auth: bool) -> Vec<u8> {
     if include_auth {
         [
             session.session_key.as_slice(),
@@ -775,6 +801,20 @@ where
     }
     let (session_to_handle_idx, session_to_handle_idx_len) =
         map_sessions_to_handles(CmdT::CMD_CODE, &handles, sessions.len());
+    // Snapshot, per session, whether the authValue is part of the HMAC / KDF key.
+    // This must happen before transacting: the TPM resets policy-session flags
+    // (e.g. after PolicyAuthValue) once a continueSession command succeeds, but
+    // the response HMAC and response encryption still use the pre-command state.
+    let include_auths: Vec<bool> = sessions
+        .iter()
+        .enumerate()
+        .map(|(i, session)| {
+            let is_bound = session.bind_entity != Handle::RH_NULL
+                && i < session_to_handle_idx_len
+                && session.bind_entity == handles[session_to_handle_idx[i]];
+            session_includes_auth(tpm, session, is_bound)
+        })
+        .collect();
     if !sessions.is_empty() {
         written += 4; // Reserve space for sessionSize
     }
@@ -872,17 +912,6 @@ where
 
         if bits > 0 {
             let mut sym_key_bytes = vec![0u8; (bits / 8) as usize];
-            let is_bound = if session.bind_entity != Handle::RH_NULL {
-                if idx < session_to_handle_idx_len {
-                    let h_idx = session_to_handle_idx[idx];
-                    let h = handles[h_idx];
-                    session.bind_entity == h
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
             let entity_auth = if idx < num_handles
                 || (idx < entity_auths.len() && CmdT::CMD_CODE == tpm2::TpmCc::CreatePrimary)
             {
@@ -890,7 +919,7 @@ where
             } else {
                 &[]
             };
-            let key = get_session_hmac_key(tpm, session, entity_auth, is_bound);
+            let key = session_hmac_key(session, entity_auth, include_auths[idx]);
             kdfa_by_alg(
                 tpm.context.platform.crypto,
                 session.auth_hash,
@@ -941,19 +970,7 @@ where
         } else {
             &[]
         };
-        let is_bound = if session.bind_entity != Handle::RH_NULL {
-            if i < session_to_handle_idx_len {
-                let h_idx = session_to_handle_idx[i];
-                let h = handles[h_idx];
-                session.bind_entity == h
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        let hmac_key = get_session_hmac_key(tpm, session, entity_auth, is_bound);
+        let hmac_key = session_hmac_key(session, entity_auth, include_auths[i]);
 
         let mut hmac_updates = Vec::new();
         hmac_updates.push(cp_hash.as_slice());
@@ -961,15 +978,16 @@ where
         hmac_updates.push(session.nonce_tpm.get_buffer());
 
         if i == 0 {
-            if let Some(dec_idx) = decrypt_session_idx {
-                if dec_idx > 0 {
-                    hmac_updates.push(sessions[dec_idx].nonce_tpm.get_buffer());
-                }
+            if let Some(dec_idx) = decrypt_session_idx
+                && dec_idx > 0
+            {
+                hmac_updates.push(sessions[dec_idx].nonce_tpm.get_buffer());
             }
-            if let Some(enc_idx) = encrypt_session_idx {
-                if enc_idx > 0 && Some(enc_idx) != decrypt_session_idx {
-                    hmac_updates.push(sessions[enc_idx].nonce_tpm.get_buffer());
-                }
+            if let Some(enc_idx) = encrypt_session_idx
+                && enc_idx > 0
+                && Some(enc_idx) != decrypt_session_idx
+            {
+                hmac_updates.push(sessions[enc_idx].nonce_tpm.get_buffer());
             }
         }
 
@@ -1054,64 +1072,52 @@ where
 
     // Decrypt parameters if encrypt session is active
     let mut decrypted_param_buf = encrypted_param_buf.to_vec();
-    if let Some(idx) = encrypt_session_idx {
-        if !decrypted_param_buf.is_empty() {
-            let session = &sessions[idx];
-            let nonce_tpm_new = &nonce_tpms_new[idx];
-            let nonce_caller_new = &nonce_callers_new[idx];
+    if let Some(idx) = encrypt_session_idx
+        && !decrypted_param_buf.is_empty()
+    {
+        let session = &sessions[idx];
+        let nonce_tpm_new = &nonce_tpms_new[idx];
+        let nonce_caller_new = &nonce_callers_new[idx];
 
-            let leading_size = 2;
-            let size =
-                u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
+        let leading_size = 2;
+        let size = u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
 
-            let bits = match &session.symmetric {
-                Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-                Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
-                _ => 0,
+        let bits = match &session.symmetric {
+            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
+            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            _ => 0,
+        };
+
+        if bits > 0 {
+            let mut sym_key_bytes = vec![0u8; (bits / 8) as usize];
+            let entity_auth = if idx < num_handles {
+                entity_auths[idx]
+            } else {
+                &[]
             };
+            let key = session_hmac_key(session, entity_auth, include_auths[idx]);
+            kdfa_by_alg(
+                tpm.context.platform.crypto,
+                session.auth_hash,
+                &key,
+                b"CFB",
+                nonce_tpm_new.get_buffer(),
+                nonce_caller_new.get_buffer(),
+                bits,
+                &mut sym_key_bytes,
+            );
 
-            if bits > 0 {
-                let mut sym_key_bytes = vec![0u8; (bits / 8) as usize];
-                let is_bound = if session.bind_entity != Handle::RH_NULL {
-                    if idx < session_to_handle_idx_len {
-                        let h_idx = session_to_handle_idx[idx];
-                        let h = handles[h_idx];
-                        session.bind_entity == h
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-                let entity_auth = if idx < num_handles {
-                    entity_auths[idx]
-                } else {
-                    &[]
-                };
-                let key = get_session_hmac_key(tpm, session, entity_auth, is_bound);
-                kdfa_by_alg(
-                    tpm.context.platform.crypto,
-                    session.auth_hash,
-                    &key,
-                    b"CFB",
-                    nonce_tpm_new.get_buffer(),
-                    nonce_caller_new.get_buffer(),
-                    bits,
-                    &mut sym_key_bytes,
-                );
-
-                let key_size = (bits - 128) as usize / 8;
-                let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
-                let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
-                tpm2::crypto::decrypt(
-                    tpm.context.platform.crypto,
-                    sym_alg,
-                    &sym_key_bytes[0..key_size],
-                    &mut iv,
-                    &mut decrypted_param_buf[leading_size..leading_size + size],
-                )
-                .unwrap();
-            }
+            let key_size = (bits - 128) as usize / 8;
+            let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
+            let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
+            tpm2::crypto::decrypt(
+                tpm.context.platform.crypto,
+                sym_alg,
+                &sym_key_bytes[0..key_size],
+                &mut iv,
+                &mut decrypted_param_buf[leading_size..leading_size + size],
+            )
+            .unwrap();
         }
     }
 
@@ -1135,19 +1141,9 @@ where
         } else {
             &[]
         };
-        let is_bound = if session.bind_entity != Handle::RH_NULL {
-            if i < session_to_handle_idx_len {
-                let h_idx = session_to_handle_idx[i];
-                let h = handles[h_idx];
-                session.bind_entity == h
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        let hmac_key = get_session_hmac_key(tpm, session, entity_auth, is_bound);
+        // Use the include-auth decision captured before the command was sent;
+        // the TPM may have reset the policy session state since.
+        let hmac_key = session_hmac_key(session, entity_auth, include_auths[i]);
 
         let mut hmac_updates = Vec::new();
         hmac_updates.push(rp_hash.as_slice());
@@ -1452,15 +1448,16 @@ where
         hmac_updates.push(session.nonce_tpm.get_buffer());
 
         if i == 0 {
-            if let Some(dec_idx) = decrypt_session_idx {
-                if dec_idx > 0 {
-                    hmac_updates.push(sessions[dec_idx].nonce_tpm.get_buffer());
-                }
+            if let Some(dec_idx) = decrypt_session_idx
+                && dec_idx > 0
+            {
+                hmac_updates.push(sessions[dec_idx].nonce_tpm.get_buffer());
             }
-            if let Some(enc_idx) = encrypt_session_idx {
-                if enc_idx > 0 && Some(enc_idx) != decrypt_session_idx {
-                    hmac_updates.push(sessions[enc_idx].nonce_tpm.get_buffer());
-                }
+            if let Some(enc_idx) = encrypt_session_idx
+                && enc_idx > 0
+                && Some(enc_idx) != decrypt_session_idx
+            {
+                hmac_updates.push(sessions[enc_idx].nonce_tpm.get_buffer());
             }
         }
 
@@ -1554,56 +1551,55 @@ where
 
     // Decrypt parameters if encrypt session is active
     let mut decrypted_param_buf = encrypted_param_buf.to_vec();
-    if let Some(idx) = encrypt_session_idx {
-        if !decrypted_param_buf.is_empty() {
-            let session = &sessions[idx];
-            let nonce_tpm_new = &nonce_tpms_new[idx];
-            let nonce_caller_new = &nonce_callers_new[idx];
+    if let Some(idx) = encrypt_session_idx
+        && !decrypted_param_buf.is_empty()
+    {
+        let session = &sessions[idx];
+        let nonce_tpm_new = &nonce_tpms_new[idx];
+        let nonce_caller_new = &nonce_callers_new[idx];
 
-            let leading_size = 2;
-            let size =
-                u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
+        let leading_size = 2;
+        let size = u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
 
-            let bits = match &session.symmetric {
-                Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-                Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
-                _ => 0,
+        let bits = match &session.symmetric {
+            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
+            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            _ => 0,
+        };
+
+        if bits > 0 {
+            let mut sym_key_bytes = vec![0u8; (bits / 8) as usize];
+            let key = if idx < num_handles {
+                [
+                    session.session_key.as_slice(),
+                    strip_trailing_zeros(entity_auths[idx]),
+                ]
+                .concat()
+            } else {
+                session.session_key.clone()
             };
+            kdfa_by_alg(
+                tpm.context.platform.crypto,
+                session.auth_hash,
+                &key,
+                b"CFB",
+                nonce_tpm_new.get_buffer(),
+                nonce_caller_new.get_buffer(),
+                bits,
+                &mut sym_key_bytes,
+            );
 
-            if bits > 0 {
-                let mut sym_key_bytes = vec![0u8; (bits / 8) as usize];
-                let key = if idx < num_handles {
-                    [
-                        session.session_key.as_slice(),
-                        strip_trailing_zeros(entity_auths[idx]),
-                    ]
-                    .concat()
-                } else {
-                    session.session_key.clone()
-                };
-                kdfa_by_alg(
-                    tpm.context.platform.crypto,
-                    session.auth_hash,
-                    &key,
-                    b"CFB",
-                    nonce_tpm_new.get_buffer(),
-                    nonce_caller_new.get_buffer(),
-                    bits,
-                    &mut sym_key_bytes,
-                );
-
-                let key_size = (bits - 128) as usize / 8;
-                let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
-                let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
-                tpm2::crypto::decrypt(
-                    tpm.context.platform.crypto,
-                    sym_alg,
-                    &sym_key_bytes[0..key_size],
-                    &mut iv,
-                    &mut decrypted_param_buf[leading_size..leading_size + size],
-                )
-                .unwrap();
-            }
+            let key_size = (bits - 128) as usize / 8;
+            let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
+            let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
+            tpm2::crypto::decrypt(
+                tpm.context.platform.crypto,
+                sym_alg,
+                &sym_key_bytes[0..key_size],
+                &mut iv,
+                &mut decrypted_param_buf[leading_size..leading_size + size],
+            )
+            .unwrap();
         }
     }
 
@@ -1908,15 +1904,16 @@ where
         hmac_updates.push(session.nonce_tpm.get_buffer());
 
         if i == 0 {
-            if let Some(dec_idx) = decrypt_session_idx {
-                if dec_idx > 0 {
-                    hmac_updates.push(sessions[dec_idx].nonce_tpm.get_buffer());
-                }
+            if let Some(dec_idx) = decrypt_session_idx
+                && dec_idx > 0
+            {
+                hmac_updates.push(sessions[dec_idx].nonce_tpm.get_buffer());
             }
-            if let Some(enc_idx) = encrypt_session_idx {
-                if enc_idx > 0 && Some(enc_idx) != decrypt_session_idx {
-                    hmac_updates.push(sessions[enc_idx].nonce_tpm.get_buffer());
-                }
+            if let Some(enc_idx) = encrypt_session_idx
+                && enc_idx > 0
+                && Some(enc_idx) != decrypt_session_idx
+            {
+                hmac_updates.push(sessions[enc_idx].nonce_tpm.get_buffer());
             }
         }
 
@@ -2028,56 +2025,55 @@ where
 
     // Decrypt parameters if encrypt session is active
     let mut decrypted_param_buf = encrypted_param_buf.to_vec();
-    if let Some(idx) = encrypt_session_idx {
-        if !decrypted_param_buf.is_empty() {
-            let session = &sessions[idx];
-            let nonce_tpm_new = &nonce_tpms_new[idx];
-            let nonce_caller_new = &nonce_callers_new[idx];
+    if let Some(idx) = encrypt_session_idx
+        && !decrypted_param_buf.is_empty()
+    {
+        let session = &sessions[idx];
+        let nonce_tpm_new = &nonce_tpms_new[idx];
+        let nonce_caller_new = &nonce_callers_new[idx];
 
-            let leading_size = 2;
-            let size =
-                u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
+        let leading_size = 2;
+        let size = u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
 
-            let bits = match &session.symmetric {
-                Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-                Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
-                _ => 0,
+        let bits = match &session.symmetric {
+            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
+            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            _ => 0,
+        };
+
+        if bits > 0 {
+            let mut sym_key_bytes = vec![0u8; (bits / 8) as usize];
+            let key = if idx < num_handles {
+                [
+                    session.session_key.as_slice(),
+                    strip_trailing_zeros(entity_auths[idx]),
+                ]
+                .concat()
+            } else {
+                session.session_key.clone()
             };
+            kdfa_by_alg(
+                tpm.context.platform.crypto,
+                session.auth_hash,
+                &key,
+                b"CFB",
+                nonce_tpm_new.get_buffer(),
+                nonce_caller_new.get_buffer(),
+                bits,
+                &mut sym_key_bytes,
+            );
 
-            if bits > 0 {
-                let mut sym_key_bytes = vec![0u8; (bits / 8) as usize];
-                let key = if idx < num_handles {
-                    [
-                        session.session_key.as_slice(),
-                        strip_trailing_zeros(entity_auths[idx]),
-                    ]
-                    .concat()
-                } else {
-                    session.session_key.clone()
-                };
-                kdfa_by_alg(
-                    tpm.context.platform.crypto,
-                    session.auth_hash,
-                    &key,
-                    b"CFB",
-                    nonce_tpm_new.get_buffer(),
-                    nonce_caller_new.get_buffer(),
-                    bits,
-                    &mut sym_key_bytes,
-                );
-
-                let key_size = (bits - 128) as usize / 8;
-                let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
-                let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
-                tpm2::crypto::decrypt(
-                    tpm.context.platform.crypto,
-                    sym_alg,
-                    &sym_key_bytes[0..key_size],
-                    &mut iv,
-                    &mut decrypted_param_buf[leading_size..leading_size + size],
-                )
-                .unwrap();
-            }
+            let key_size = (bits - 128) as usize / 8;
+            let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
+            let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
+            tpm2::crypto::decrypt(
+                tpm.context.platform.crypto,
+                sym_alg,
+                &sym_key_bytes[0..key_size],
+                &mut iv,
+                &mut decrypted_param_buf[leading_size..leading_size + size],
+            )
+            .unwrap();
         }
     }
 
@@ -2129,15 +2125,16 @@ where
         hmac_updates.push(nonce_caller_new.get_buffer());
 
         if i == 0 {
-            if let Some(dec_idx) = decrypt_session_idx {
-                if dec_idx > 0 {
-                    hmac_updates.push(nonce_callers_new[dec_idx].get_buffer());
-                }
+            if let Some(dec_idx) = decrypt_session_idx
+                && dec_idx > 0
+            {
+                hmac_updates.push(nonce_callers_new[dec_idx].get_buffer());
             }
-            if let Some(enc_idx) = encrypt_session_idx {
-                if enc_idx > 0 && Some(enc_idx) != decrypt_session_idx {
-                    hmac_updates.push(nonce_callers_new[enc_idx].get_buffer());
-                }
+            if let Some(enc_idx) = encrypt_session_idx
+                && enc_idx > 0
+                && Some(enc_idx) != decrypt_session_idx
+            {
+                hmac_updates.push(nonce_callers_new[enc_idx].get_buffer());
             }
         }
 
@@ -2646,4 +2643,58 @@ pub fn map_sessions_to_handles(
     }
     let len = session_to_handle_idx.len();
     (session_to_handle_idx, len)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_session(session_key: &[u8]) -> ActiveSession {
+        ActiveSession {
+            session_handle: Handle(0x0300_0000),
+            nonce_caller: Tpm2bNonce::default(),
+            nonce_tpm: Tpm2bNonce::default(),
+            session_key: session_key.to_vec(),
+            auth_hash: TpmiAlgHash::Sha256,
+            symmetric: None,
+            attributes: TpmaSession::CONTINUE_SESSION,
+            bind_auth: Vec::new(),
+            bind_entity: Handle::RH_NULL,
+        }
+    }
+
+    #[test]
+    fn include_auth_hmac_session_unbound_includes_auth() {
+        assert!(include_auth_for(false, false, false, false));
+        // Policy flags are irrelevant for HMAC sessions.
+        assert!(include_auth_for(false, false, true, true));
+    }
+
+    #[test]
+    fn include_auth_hmac_session_bound_excludes_auth() {
+        assert!(!include_auth_for(false, true, false, false));
+        assert!(!include_auth_for(false, true, true, true));
+    }
+
+    #[test]
+    fn include_auth_policy_session_follows_policy_flags() {
+        // Binding never matters for policy sessions.
+        for is_bound in [false, true] {
+            assert!(!include_auth_for(true, is_bound, false, false));
+            assert!(include_auth_for(true, is_bound, true, false));
+            assert!(include_auth_for(true, is_bound, false, true));
+            assert!(include_auth_for(true, is_bound, true, true));
+        }
+    }
+
+    #[test]
+    fn session_hmac_key_appends_stripped_auth_only_when_included() {
+        let session = dummy_session(&[1, 2, 3]);
+        assert_eq!(
+            session_hmac_key(&session, b"ab\0\0", true),
+            b"\x01\x02\x03ab"
+        );
+        assert_eq!(session_hmac_key(&session, b"ab", false), [1, 2, 3]);
+        assert_eq!(session_hmac_key(&session, b"", true), [1, 2, 3]);
+    }
 }

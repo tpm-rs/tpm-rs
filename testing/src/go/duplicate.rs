@@ -1,15 +1,16 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
 use tpm2::commands::{
-    CreateLoaded, CreateLoadedHandles, Duplicate, DuplicateHandles, Import, ImportHandles, Load,
-    LoadHandles, PolicyCommandCode, PolicyCommandCodeHandles, PolicyGetDigest,
-    PolicyGetDigestHandles,
+    CreateLoaded, CreateLoadedHandles, CreatePrimary, CreatePrimaryHandles, Duplicate,
+    DuplicateHandles, Import, ImportHandles, Load, LoadHandles, PolicyCommandCode,
+    PolicyCommandCodeHandles, PolicyGetDigest, PolicyGetDigestHandles,
 };
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve, TpmSe};
 use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
+/// go-tpm's `ECCSRKTemplate`.
 fn get_ecc_srk_template() -> TpmtPublic<'static> {
     TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -17,6 +18,7 @@ fn get_ecc_srk_template() -> TpmtPublic<'static> {
             | TpmaObject::FIXED_PARENT
             | TpmaObject::SENSITIVE_DATA_ORIGIN
             | TpmaObject::USER_WITH_AUTH
+            | TpmaObject::NO_DA
             | TpmaObject::RESTRICTED
             | TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
@@ -28,39 +30,38 @@ fn get_ecc_srk_template() -> TpmtPublic<'static> {
                 kdf: None,
             },
             TpmsEccPoint {
-                x: Tpm2bEccParameter::default(),
-                y: Tpm2bEccParameter::default(),
+                x: Tpm2bEccParameter::from_bytes(&[0u8; 32]).unwrap(),
+                y: Tpm2bEccParameter::from_bytes(&[0u8; 32]).unwrap(),
             },
         ),
     }
 }
 
-// Original Go test: duplicate_test.go - TestDuplicate
-#[test]
-fn test_duplicate_and_import() {
-    let mut sim = create_simulator!();
-
-    // 1. Create Owner SRK (ECC)
-    let srk_pub = get_ecc_srk_template();
-    let in_public = crate::test_utils::make_template(&srk_pub);
-    let create_srk_cmd = CreateLoaded {
+/// Creates a primary key from `ECCSRKTemplate` under `hierarchy` using an
+/// empty password session, returning its handle.
+fn create_ecc_srk(sim: &mut Simulator<'_>, hierarchy: Handle) -> Handle {
+    let create_cmd = CreatePrimary {
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
-        in_public,
+        in_public: tpm2::Tpm2b(get_ecc_srk_template()),
+        ..Default::default()
     };
-    let create_srk_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
+    let create_handles = CreatePrimaryHandles {
+        primary_handle: hierarchy,
     };
-    let (_, srk_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_srk_cmd, create_srk_handles, 1, &[])
-            .unwrap();
-    let srk_handle = srk_resp_handles.object_handle;
+    let (_, resp_handles) =
+        execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[])
+            .expect("could not generate SRK");
+    resp_handles.object_handle
+}
 
-    // 2. Get duplication policy digest by running a trial policy session
+/// Port of Go's `dupPolicyDigest`: computes the PolicyCommandCode(Duplicate)
+/// digest with a trial policy session.
+fn dup_policy_digest(sim: &mut Simulator<'_>) -> Tpm2bDigest<'static> {
     let trial_sess = start_auth_session(
-        &mut sim,
+        sim,
         Handle::RH_NULL,
         Handle::RH_NULL,
         &[],
@@ -76,23 +77,36 @@ fn test_duplicate_and_import() {
     let policy_cc_handles = PolicyCommandCodeHandles {
         policy_session: trial_sess.session_handle,
     };
-    let _ = execute_with_password_sessions(&mut sim, &policy_cc_cmd, policy_cc_handles, 0, &[])
-        .unwrap();
+    execute_with_password_sessions(sim, &policy_cc_cmd, policy_cc_handles, 0, &[]).unwrap();
 
     let get_digest_cmd = PolicyGetDigest {};
     let get_digest_handles = PolicyGetDigestHandles {
         policy_session: trial_sess.session_handle,
     };
     let (get_digest_resp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest_cmd, get_digest_handles, 0, &[])
-            .unwrap();
-    let policy_digest = get_digest_resp.policy_digest;
+        execute_with_password_sessions(sim, &get_digest_cmd, get_digest_handles, 0, &[]).unwrap();
 
-    // Flush trial session
-    flush_context(&mut sim, trial_sess.session_handle).unwrap();
+    flush_context(sim, trial_sess.session_handle).unwrap();
+    // The deferred `cleanup()` in Go flushes the session a second time and
+    // ignores the resulting error.
+    let _ = flush_context(sim, trial_sess.session_handle);
 
-    // 3. Create the object to be duplicated (ECC key authorized by the policy)
-    let obj_auth = b"foo";
+    get_digest_resp.policy_digest
+}
+
+// Original Go test: duplicate_test.go - TestDuplicate
+#[test]
+fn test_duplicate() {
+    let mut sim = create_simulator!();
+
+    // ### Create Owner SRK
+    let srk_handle = create_ecc_srk(&mut sim, Handle::RH_OWNER);
+
+    let policy_digest = dup_policy_digest(&mut sim);
+
+    let key_pass = b"foo";
+
+    // ### Create Object to be duplicated
     let obj_pub = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::SENSITIVE_DATA_ORIGIN
@@ -108,54 +122,35 @@ fn test_duplicate_and_import() {
                 kdf: None,
             },
             TpmsEccPoint {
-                x: Tpm2bEccParameter::default(),
-                y: Tpm2bEccParameter::default(),
+                x: Tpm2bEccParameter::from_bytes(&[0u8; 32]).unwrap(),
+                y: Tpm2bEccParameter::from_bytes(&[0u8; 32]).unwrap(),
             },
         ),
     };
-    let obj_in_public = crate::test_utils::make_template(&obj_pub);
     let create_obj_cmd = CreateLoaded {
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
-            user_auth: Tpm2bAuth::from_bytes(obj_auth).unwrap(),
+            user_auth: Tpm2bAuth::from_bytes(key_pass).unwrap(),
             data: Tpm2bSensitiveData::default(),
         }),
-        in_public: obj_in_public,
+        in_public: crate::test_utils::make_template(&obj_pub),
     };
     let create_obj_handles = CreateLoadedHandles {
         parent_handle: srk_handle,
     };
     let (obj_resp, obj_resp_handles) =
         execute_with_password_sessions(&mut sim, &create_obj_cmd, create_obj_handles, 1, &[])
-            .unwrap();
+            .expect("TPM2_CreateLoaded");
     let obj_handle = obj_resp_handles.object_handle;
 
-    // Flush owner SRK handle
-    flush_context(&mut sim, srk_handle).unwrap();
+    // We don't need the owner SRK handle anymore.
+    let _ = flush_context(&mut sim, srk_handle);
 
-    // 4. Create new parent (Endorsement SRK) - ECC
-    let ecc_srk_pub = get_ecc_srk_template();
-    let ecc_in_public = crate::test_utils::make_template(&ecc_srk_pub);
-    let create_ecc_srk_cmd = CreateLoaded {
-        in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
-            user_auth: Tpm2bAuth::default(),
-            data: Tpm2bSensitiveData::default(),
-        }),
-        in_public: ecc_in_public,
-    };
-    let create_ecc_srk_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x4000000B), // TPMRH_ENDORSEMENT
-    };
-    let (_, ecc_srk_resp_handles) = execute_with_password_sessions(
-        &mut sim,
-        &create_ecc_srk_cmd,
-        create_ecc_srk_handles,
-        1,
-        &[],
-    )
-    .unwrap();
-    let new_parent_handle = ecc_srk_resp_handles.object_handle;
+    // ### Create Endorsement SRK (New Parent)
+    let new_parent_handle = create_ecc_srk(&mut sim, Handle::RH_ENDORSEMENT);
 
-    // 5. Start policy session for duplication authorization
+    // ### Duplicate Object
+    // Policy(TPMAlgSHA256, 16, PolicyCallback(PolicyCommandCode(Duplicate))):
+    // a one-off policy session started when the command is executed.
     let policy_sess = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -166,15 +161,14 @@ fn test_duplicate_and_import() {
         TpmiAlgHash::Sha256,
     )
     .unwrap();
-
-    // Execute PolicyCommandCode(Duplicate)
+    let policy_cc_cmd = PolicyCommandCode {
+        code: tpm2::TpmCc::Duplicate,
+    };
     let policy_cc_handles = PolicyCommandCodeHandles {
         policy_session: policy_sess.session_handle,
     };
-    let _ = execute_with_password_sessions(&mut sim, &policy_cc_cmd, policy_cc_handles, 0, &[])
-        .unwrap();
+    execute_with_password_sessions(&mut sim, &policy_cc_cmd, policy_cc_handles, 0, &[]).unwrap();
 
-    // 6. Duplicate the object to the new parent
     let dup_cmd = Duplicate {
         encryption_key_in: Tpm2bData::default(),
         symmetric_alg: None,
@@ -183,44 +177,20 @@ fn test_duplicate_and_import() {
         object_handle: obj_handle,
         new_parent_handle,
     };
+    let (dup_resp, _) = execute_with_hmac_sessions(
+        &mut sim,
+        &dup_cmd,
+        dup_handles,
+        &[],
+        &mut [policy_sess],
+        &[&[]],
+    )
+    .expect("TPM2_Duplicate");
 
-    let mut sessions = [policy_sess];
-    println!(
-        "DEBUG: obj_handle={:#x}, new_parent_handle={:#x}",
-        obj_handle.0, new_parent_handle.0
-    );
-    if let Some(obj) = sim.global_state.find_transient_object(obj_handle.0) {
-        println!(
-            "DEBUG: obj public attributes={:?}",
-            obj.public.object_attributes
-        );
-        println!(
-            "DEBUG: obj auth policy={:?}",
-            obj.public.auth_policy.get_buffer()
-        );
-        println!("DEBUG: obj auth value={:?}", obj.auth.get_buffer());
-    } else {
-        println!("DEBUG: obj not found!");
-    }
-    println!("DEBUG: session handle={:#x}", sessions[0].session_handle.0);
-    if let Some(sess) = sim.global_state.session(sessions[0].session_handle.0) {
-        println!(
-            "DEBUG: session policy_digest={:?}",
-            &sess.policy_digest[..sess.policy_digest_len]
-        );
-        println!("DEBUG: session type={:?}", sess.session_type);
-    } else {
-        println!("DEBUG: session not found in context!");
-    }
+    // We don't need the original object handle anymore.
+    let _ = flush_context(&mut sim, obj_handle);
 
-    let (dup_resp, _) =
-        execute_with_hmac_sessions(&mut sim, &dup_cmd, dup_handles, &[], &mut sessions, &[&[]])
-            .unwrap();
-
-    // Flush duplicated object handle
-    flush_context(&mut sim, obj_handle).unwrap();
-
-    // 7. Import under new parent (Endorsement SRK)
+    // ### Import Object
     let import_cmd = Import {
         encryption_key: Tpm2bData::default(),
         object_public: obj_resp.out_public,
@@ -232,9 +202,10 @@ fn test_duplicate_and_import() {
         parent_handle: new_parent_handle,
     };
     let (import_resp, _) =
-        execute_with_password_sessions(&mut sim, &import_cmd, import_handles, 1, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &import_cmd, import_handles, 1, &[])
+            .expect("TPM2_Import");
 
-    // 8. Load the imported object
+    // ### Load Imported Object
     let load_cmd = Load {
         in_private: import_resp.out_private,
         in_public: obj_resp.out_public,
@@ -243,9 +214,10 @@ fn test_duplicate_and_import() {
         parent_handle: new_parent_handle,
     };
     let (_load_resp, load_resp_handles) =
-        execute_with_password_sessions(&mut sim, &load_cmd, load_handles, 1, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &load_cmd, load_handles, 1, &[])
+            .expect("TPM2_Load");
 
-    // Cleanup
-    flush_context(&mut sim, load_resp_handles.object_handle).unwrap();
-    flush_context(&mut sim, new_parent_handle).unwrap();
+    // Deferred cleanup (LIFO order, errors ignored like in Go).
+    let _ = flush_context(&mut sim, load_resp_handles.object_handle);
+    let _ = flush_context(&mut sim, new_parent_handle);
 }
