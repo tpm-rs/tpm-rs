@@ -50,11 +50,7 @@ pub use tpms::*;
 pub use tpmt::*;
 pub use tpmu::*;
 
-use crate::{
-    Alg, Marshal, Unmarshal,
-    errors::UnmarshalError,
-    marshal::{marshal_helper, max},
-};
+use crate::{Alg, Marshal, Unmarshal, errors::UnmarshalError, marshal::marshal_helper};
 
 /// Internal union representing public object parameters and unique identifier.
 ///
@@ -103,12 +99,12 @@ impl<'a> PublicParmsAndId<'a> {
 }
 
 impl Marshal for PublicParmsAndId<'_> {
-    const MAX_SIZE: usize = max(&[
+    const MAX_SIZE: usize = max!(
         <Option<TpmtKeyedHashScheme>>::MAX_SIZE + Tpm2bDigest::MAX_SIZE,
         TpmtSymDefObject::MAX_SIZE + Tpm2bDigest::MAX_SIZE,
         TpmsRsaParms::MAX_SIZE + Tpm2bPublicKeyRsa::MAX_SIZE,
         TpmsEccParms::MAX_SIZE + TpmsEccPoint::MAX_SIZE,
-    ]);
+    );
     type MaxBuffer = [u8; PublicParmsAndId::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; PublicParmsAndId::MAX_SIZE]) -> usize {

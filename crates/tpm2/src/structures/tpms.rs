@@ -1,8 +1,4 @@
-use crate::{
-    errors::UnmarshalError,
-    marshal::{marshal_helper, max},
-    *,
-};
+use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// `TPMS_CLOCK_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.14 (Table 135).
 ///
@@ -863,7 +859,7 @@ impl<'a> TpmsCapabilityData<'a> {
 
 impl Marshal for TpmsCapabilityData<'_> {
     const MAX_SIZE: usize = TpmCap::MAX_SIZE
-        + max(&[
+        + max!(
             TpmlAlgProperty::MAX_SIZE,
             TpmlHandle::MAX_SIZE,
             TpmlCca::MAX_SIZE,
@@ -873,7 +869,7 @@ impl Marshal for TpmsCapabilityData<'_> {
             TpmlTaggedPcrProperty::MAX_SIZE,
             TpmlEccCurve::MAX_SIZE,
             TpmlTaggedPolicy::MAX_SIZE,
-        ]);
+        );
     type MaxBuffer = [u8; TpmsCapabilityData::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmsCapabilityData::MAX_SIZE]) -> usize {
