@@ -355,6 +355,17 @@ pub type Tpm2bEccPoint<'a> = Tpm2b<TpmsEccPoint<'a>>;
 impl_marshal!(Tpm2bEccPoint<'_>);
 
 // ---------------------------------------------------------------------------
+// Tpm2bSignatureEddsa
+// ---------------------------------------------------------------------------
+/// `TPM2B_SIGNATURE_EDDSA` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer holding an EdDSA or HashEdDSA signature (`R || S`), up to
+/// `2 * TpmEccCurve::MAX_ECC_KEY_BYTES` bytes.
+#[doc(alias = "TPM2B_SIGNATURE_EDDSA")]
+pub type Tpm2bSignatureEddsa<'a> = Tpm2bSized<'a, limits::SignatureEddsa>;
+impl_marshal!(Tpm2bSignatureEddsa<'_>);
+
+// ---------------------------------------------------------------------------
 // Tpm2bPublicKeyMlkem
 // ---------------------------------------------------------------------------
 /// `TPM2B_PUBLIC_KEY_MLKEM` structure defined in TPM 2.0 Part 2: Structures
