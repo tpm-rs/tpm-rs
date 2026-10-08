@@ -62,22 +62,6 @@
 //! [`Option<TpmiAlgHash>`](crate::TpmiAlgHash) (`TPMI_ALG_HASH+`) rather than
 //! the `MAC` command using `TPMI_ALG_MAC_SCHEME+`.
 //!
-//! ### Commands to be added in the future
-//!
-//! We plan on adding the following commands once the necessary prerequisite
-//! types and `impl`s have been added:
-//!
-//! - KEM commands needing `TPM2B_SHARED_SECRET` and `TPM2B_KEM_CIPHERTEXT`
-//!   - [`Encapsulate`](TpmCc::Encapsulate)
-//!   - [`Decapsulate`](TpmCc::Decapsulate)
-//! - Signing commands needing `TPM2B_SIGNATURE_HINT` and `TPM2B_SIGNATURE_CTX`
-//!   - [`SignDigest`](TpmCc::SignDigest)
-//!   - [`VerifyDigestSignature`](TpmCc::VerifyDigestSignature)
-//!   - [`SignSequenceStart`](TpmCc::SignSequenceStart)
-//!   - [`VerifySequenceStart`](TpmCc::VerifySequenceStart)
-//!
-//! This module comment will be updated as we add new commands.
-//!
 //! ## [`Message`] / [`UnmarshalMessage`] implementations
 //!
 //! Currently, these traits are implemented manually (and repetitively) for all
@@ -156,8 +140,8 @@ mod testing;
 
 pub use {
     asymmetric::{
-        ECCDecrypt, ECCEncrypt, ECCParameters, ECDHKeyGen, ECDHZGen, RSADecrypt, RSAEncrypt,
-        ZGen2Phase,
+        Decapsulate, ECCDecrypt, ECCEncrypt, ECCParameters, ECDHKeyGen, ECDHZGen, Encapsulate,
+        RSADecrypt, RSAEncrypt, ZGen2Phase,
     },
     attestation::{
         Certify, CertifyCreation, GetCommandAuditDigest, GetSessionAuditDigest, GetTime, Quote,
@@ -179,6 +163,7 @@ pub use {
     field_upgrade::{FieldUpgradeData, FieldUpgradeStart, FirmwareRead},
     hash_hmac_event::{
         EventSequenceComplete, HMACStart, HashSequenceStart, SequenceComplete, SequenceUpdate,
+        SignSequenceStart, VerifySequenceStart,
     },
     hierarchy::{
         ChangeEPS, ChangePPS, Clear, ClearControl, CreatePrimary, HierarchyChangeAuth,
@@ -197,7 +182,10 @@ pub use {
     pcr::{PCRAllocate, PCREvent, PCRExtend, PCRRead, PCRReset, PCRSetAuthPolicy, PCRSetAuthValue},
     random::{GetRandom, StirRandom},
     session::{PolicyRestart, StartAuthSession},
-    signature::{Sign, SignSequenceComplete, VerifySequenceComplete, VerifySignature},
+    signature::{
+        Sign, SignDigest, SignSequenceComplete, VerifyDigestSignature, VerifySequenceComplete,
+        VerifySignature,
+    },
     startup::{Shutdown, Startup},
     symmetric::{EncryptDecrypt, EncryptDecrypt2, HMAC, Hash},
     testing::{GetTestResult, IncrementalSelfTest, SelfTest},
@@ -205,11 +193,13 @@ pub use {
 
 /// Response [`Message`] types corresponding to commands in [`crate::commands`].
 pub mod responses {
+    pub use super::asymmetric::DecapsulateRsp as Decapsulate;
     pub use super::asymmetric::ECCDecryptRsp as ECCDecrypt;
     pub use super::asymmetric::ECCEncryptRsp as ECCEncrypt;
     pub use super::asymmetric::ECCParametersRsp as ECCParameters;
     pub use super::asymmetric::ECDHKeyGenRsp as ECDHKeyGen;
     pub use super::asymmetric::ECDHZGenRsp as ECDHZGen;
+    pub use super::asymmetric::EncapsulateRsp as Encapsulate;
     pub use super::asymmetric::RSADecryptRsp as RSADecrypt;
     pub use super::asymmetric::RSAEncryptRsp as RSAEncrypt;
     pub use super::asymmetric::ZGen2PhaseRsp as ZGen2Phase;
@@ -237,6 +227,8 @@ pub mod responses {
     pub use super::hash_hmac_event::HMACStartRsp as HMACStart;
     pub use super::hash_hmac_event::HashSequenceStartRsp as HashSequenceStart;
     pub use super::hash_hmac_event::SequenceCompleteRsp as SequenceComplete;
+    pub use super::hash_hmac_event::SignSequenceStartRsp as SignSequenceStart;
+    pub use super::hash_hmac_event::VerifySequenceStartRsp as VerifySequenceStart;
     pub use super::hierarchy::CreatePrimaryRsp as CreatePrimary;
     pub use super::nv_storage::NVCertifyRsp as NVCertify;
     pub use super::nv_storage::NVReadPublic2Rsp as NVReadPublic2;
@@ -255,8 +247,10 @@ pub mod responses {
     pub use super::pcr::PCRReadRsp as PCRRead;
     pub use super::random::GetRandomRsp as GetRandom;
     pub use super::session::StartAuthSessionRsp as StartAuthSession;
+    pub use super::signature::SignDigestRsp as SignDigest;
     pub use super::signature::SignRsp as Sign;
     pub use super::signature::SignSequenceCompleteRsp as SignSequenceComplete;
+    pub use super::signature::VerifyDigestSignatureRsp as VerifyDigestSignature;
     pub use super::signature::VerifySequenceCompleteRsp as VerifySequenceComplete;
     pub use super::signature::VerifySignatureRsp as VerifySignature;
     pub use super::symmetric::EncryptDecrypt2Rsp as EncryptDecrypt2;
