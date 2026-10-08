@@ -240,6 +240,22 @@ impl<'a> TpmlElement for TpmsTaggedPolicy<'a> {
     };
 }
 
+/// `TPML_ACT_DATA` structure defined in TPM 2.0 Part 2: Structures
+///
+/// Holds a count and an array of Authenticated Countdown Timer (ACT) data structures (`TPMS_ACT_DATA`).
+/// Returned in response to `TPM2_GetCapability(TPM_CAP_ACT)`.
+#[doc(alias = "TPML_ACT_DATA")]
+#[doc(alias = "MAX_ACT_DATA")]
+pub type TpmlActData = Tpml<TpmsActData, { MAX_CAP_DATA / TpmsActData::MAX_SIZE }>;
+impl_marshal!(TpmlActData);
+impl TpmlElement for TpmsActData {
+    const DEFAULT: Self = Self {
+        handle: Handle(0),
+        timeout: 0,
+        attributes: TpmaAct(0),
+    };
+}
+
 /// `TPML_DIGEST` structure defined in TPM 2.0 Part 2: Structures, Section 10.5.6 (Table 125).
 ///
 /// Holds a count and an array of digest values (`TPM2B_DIGEST`).
