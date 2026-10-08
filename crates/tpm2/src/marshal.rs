@@ -25,18 +25,6 @@ pub(crate) fn marshal_helper<const N: usize>(
     count + t.marshal(dst[count..].first_chunk_mut().unwrap())
 }
 
-pub(crate) const fn max(vals: &[usize]) -> usize {
-    let mut max_val = 0;
-    let mut i = 0;
-    while i < vals.len() {
-        if vals[i] > max_val {
-            max_val = vals[i];
-        }
-        i += 1;
-    }
-    max_val
-}
-
 /// A type that can be unmarshalled from a source byte buffer.
 pub trait Unmarshal<'a>: Sized {
     /// Unmarshals the structure from the provided byte buffer, modifying the
@@ -119,18 +107,5 @@ impl Marshal for () {
 impl<'a> Unmarshal<'a> for () {
     fn unmarshal(_src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_max() {
-        assert_eq!(max(&[]), 0);
-        assert_eq!(max(&[5]), 5);
-        assert_eq!(max(&[1, 5, 3, 9, 2]), 9);
-        assert_eq!(max(&[10, 20, 30]), 30);
     }
 }
