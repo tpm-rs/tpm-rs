@@ -43,7 +43,7 @@ impl TpmaLocality {
     /// TPM 2.0 Part 2: Structures, Section 8.4, Table 11 (TPMA_LOCALITY) - Bits 5..7 (0xE0) indicate Extended Locality (32..255).
     const EXTENDED_LOCALITY_MASK: u8 = 0xE0;
     /// Returns whether this attribute indicates an extended locality.
-    pub fn is_extended(&self) -> bool {
+    pub fn is_extended(self) -> bool {
         (self.0 & Self::EXTENDED_LOCALITY_MASK) != 0
     }
 }
@@ -118,8 +118,8 @@ bitflags! {
         const PLATFORMCREATE = 1 << 30;
         /// Whether nv_read_lock may be used to set READLOCKED for this index.
         const READ_STCLEAR = 1 << 31;
-        // See multi-bit type field below.
-        const _ = !0;
+        // Mark the multi-bit TPM_NT field as known to bitflags without including reserved bits.
+        const _ = Self::NT_MASK;
     }
 }
 
@@ -139,7 +139,7 @@ impl TpmaNv {
     }
 
     /// Returns the type of the index.
-    pub fn get_index_type(&self) -> Option<TpmNt> {
+    pub fn get_index_type(self) -> Option<TpmNt> {
         TpmNt::try_from(get_attribute_field(self.0, Self::NT_MASK, Self::NT_SHIFT) as u8).ok()
     }
     /// Sets the type of the index.
@@ -274,8 +274,8 @@ bitflags! {
         const R_HANDLE = 1 << 28;
         /// Whether the command is vendor-specific.
         const V = 1 << 29;
-        // See multi-bit fields below.
-        const _ = !0;
+        // Mark the multi-bit commandIndex and cHandles fields as known to bitflags without including reserved bits.
+        const _ = Self::COMMAND_INDEX_MASK | Self::C_HANDLES_MASK;
     }
 }
 
@@ -298,21 +298,21 @@ impl TpmaCc {
         ))
     }
     /// Creates a TpmaCc with the command handles field set to the provided value.
-    pub const fn c_handles(count: u32) -> TpmaCc {
+    pub const fn c_handles(count: u8) -> TpmaCc {
         TpmaCc(new_attribute_field(
-            count,
+            count as u32,
             Self::C_HANDLES_MASK,
             Self::C_HANDLES_SHIFT,
         ))
     }
 
     /// Returns the command being selected.
-    pub fn get_command_index(&self) -> u16 {
+    pub fn get_command_index(self) -> u16 {
         get_attribute_field(self.0, Self::COMMAND_INDEX_MASK, Self::COMMAND_INDEX_SHIFT) as u16
     }
     /// Returns the number of handles in the handle area for this command.
-    pub fn get_c_handles(&self) -> u32 {
-        get_attribute_field(self.0, Self::C_HANDLES_MASK, Self::C_HANDLES_SHIFT)
+    pub fn get_c_handles(self) -> u8 {
+        get_attribute_field(self.0, Self::C_HANDLES_MASK, Self::C_HANDLES_SHIFT) as u8
     }
 
     /// Sets the command being selected.
@@ -325,8 +325,13 @@ impl TpmaCc {
         );
     }
     /// Sets the number of handles in the handle area for this command.
-    pub fn set_c_handles(&mut self, count: u32) {
-        self.0 = set_attribute_field(self.0, count, Self::C_HANDLES_MASK, Self::C_HANDLES_SHIFT);
+    pub fn set_c_handles(&mut self, count: u8) {
+        self.0 = set_attribute_field(
+            self.0,
+            u32::from(count),
+            Self::C_HANDLES_MASK,
+            Self::C_HANDLES_SHIFT,
+        );
     }
 }
 
@@ -345,6 +350,13 @@ impl<'a> Unmarshal<'a> for TpmaCc {
     }
 }
 
+/// `TPMA_OBJECT` attribute structure defined in TPM 2.0 Part 2: Structures
+///
+/// This bitfield indicates an object's use, its authorization types, and its relationship to other objects.
+/// It controls duplication (`fixedTPM`, `fixedParent`, `encryptedDuplication`), hierarchy restrictions
+/// (`firmwareLimited`, `svnLimited`), authorization (`userWithAuth`, `adminWithPolicy`, `noDA`), and key usage
+/// (`restricted`, `decrypt`, `sign`, `x509sign`).
+/// It is set in the `objectAttributes` field of [`TpmtPublic`] when the object is created and is never changed by the TPM.
 #[doc(alias = "TPMA_OBJECT")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[repr(transparent)]
@@ -353,7 +365,7 @@ bitflags! {
     impl TpmaObject : u32 {
         /// Whether the hierarchy of the object may NOT change.
         const FIXED_TPM = 1 << 1;
-        /// Whether saved contexts of this object may NO be loaded after startup(CLEAR).
+        /// Whether saved contexts of this object may NOT be loaded after startup(CLEAR).
         const ST_CLEAR = 1 << 2;
         /// Whether the parent of the object may NOT change.
         const FIXED_PARENT = 1 << 4;
@@ -363,17 +375,25 @@ bitflags! {
         const USER_WITH_AUTH = 1 << 6;
         /// Whether approval of ADMIN role actions with the object may ONLY be done with a policy session.
         const ADMIN_WITH_POLICY = 1 << 7;
+        /// Whether the object exists only within a firmware-limited hierarchy.
+        const FIRMWARE_LIMITED = 1 << 8;
+        /// Whether the object exists only within an SVN-limited hierarchy.
+        const SVN_LIMITED = 1 << 9;
         /// Whether the object is NOT subject to dictionary attack protections.
         const NO_DA = 1 << 10;
         /// Whether, if the object is duplicated, symmetric_alg and new_parent_handle shall not be null.
         const ENCRYPTED_DUPLICATION = 1 << 11;
-        /// Whether key usage is restricated to manipulate structures of known format.
+        /// Whether key usage is restricted to manipulate structures of known format.
         const RESTRICTED = 1 << 16;
         /// Whether the private portion of the key may be used to decrypt.
         const DECRYPT = 1 << 17;
         /// Whether the private portion of the key may be used to encrypt (for symmetric cipher objects) or sign.
         const SIGN_ENCRYPT = 1 << 18;
-        /// Whether this is an asymmetric key that may not be used to sign with sign().
+        /// Whether this is an asymmetric key that may not be used to sign with `TPM2_Sign`,
+        /// `TPM2_SignDigest`, or `TPM2_SignSequenceComplete`.
+        ///
+        /// Note: This attribute is useless without the deprecated `TPM2_CertifyX509` command and
+        /// should not be set.
         const X509_SIGN = 1 << 19;
     }
 }

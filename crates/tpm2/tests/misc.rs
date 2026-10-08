@@ -8,7 +8,7 @@ fn test_attributes_field() {
     assert_eq!(cc.get_command_index(), 0xA0);
 
     // Set a field to a value that is wider than the field.
-    cc.set_c_handles(0xFFFFFFFF);
+    cc.set_c_handles(0xFF);
     assert_eq!(cc.get_c_handles(), 0x7, "Only the field bits should be set");
     assert_eq!(cc.get_command_index(), 0xA0);
     assert!(cc.contains(TpmaCc::NV));
