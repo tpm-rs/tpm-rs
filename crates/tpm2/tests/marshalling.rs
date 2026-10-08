@@ -236,3 +236,30 @@ fn test_tpms_capability_data_marshalling() {
     assert_eq!(unmarshaled, cap_data);
     assert_eq!(unmarshaled.capability(), TpmCap::Algs);
 }
+
+#[test]
+fn test_tpmt_nv_public_2_marshalling() {
+    let public = TpmsNvPublic {
+        nv_index: Handle(0x01000001),
+        name_alg: TpmiAlgHash::Sha256,
+        attributes: TpmaNv::from(TpmNt::Ordinary) | TpmaNv::AUTHWRITE | TpmaNv::AUTHREAD,
+        auth_policy: Tpm2bDigest::default(),
+        data_size: 32,
+    };
+    let nv_public = TpmtNvPublic2::NvIndex(public);
+    assert_eq!(nv_public.handle_type(), TpmHt::NVIndex);
+    assert_eq!(nv_public.nv_index(), public.nv_index);
+
+    let mut buf = [0u8; TpmtNvPublic2::MAX_SIZE];
+    let len = nv_public.marshal(&mut buf);
+    let mut reader = &buf[..len];
+    let unmarshaled = TpmtNvPublic2::unmarshal(&mut reader).unwrap();
+    assert_eq!(unmarshaled, nv_public);
+
+    // Test a handle type that does not match the nvIndex handle fails.
+    let mismatched = TpmtNvPublic2::PermanentNv(public);
+    let len = mismatched.marshal(&mut buf);
+    let mut reader = &buf[..len];
+    let err = TpmtNvPublic2::unmarshal(&mut reader).unwrap_err();
+    assert_eq!(err, tpm2::errors::UnmarshalError);
+}

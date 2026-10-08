@@ -76,6 +76,14 @@ impl<'a> TpmtHa<'a> {
             Sha3_512 => Self::Sha3_512(slice.try_into().ok()?),
         })
     }
+
+    fn unmarshal_digest(alg: TpmiAlgHash, src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        let (digest, rest) = src
+            .split_at_checked(alg.digest_size())
+            .ok_or(UnmarshalError)?;
+        *src = rest;
+        Self::new(alg, digest).ok_or(UnmarshalError)
+    }
 }
 
 impl Marshal for TpmtHa<'_> {
@@ -92,24 +100,29 @@ impl Marshal for TpmtHa<'_> {
 
 impl<'a> Unmarshal<'a> for TpmtHa<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(match TpmiAlgHash::unmarshal(src)? {
-            #[cfg(feature = "sha1")]
-            TpmiAlgHash::Sha1 => Self::Sha1(Unmarshal::unmarshal(src)?),
-            #[cfg(feature = "sha256")]
-            TpmiAlgHash::Sha256 => Self::Sha256(Unmarshal::unmarshal(src)?),
-            #[cfg(feature = "sha384")]
-            TpmiAlgHash::Sha384 => Self::Sha384(Unmarshal::unmarshal(src)?),
-            #[cfg(feature = "sha512")]
-            TpmiAlgHash::Sha512 => Self::Sha512(Unmarshal::unmarshal(src)?),
-            #[cfg(feature = "sm3_256")]
-            TpmiAlgHash::Sm3_256 => Self::Sm3_256(Unmarshal::unmarshal(src)?),
-            #[cfg(feature = "sha3_256")]
-            TpmiAlgHash::Sha3_256 => Self::Sha3_256(Unmarshal::unmarshal(src)?),
-            #[cfg(feature = "sha3_384")]
-            TpmiAlgHash::Sha3_384 => Self::Sha3_384(Unmarshal::unmarshal(src)?),
-            #[cfg(feature = "sha3_512")]
-            TpmiAlgHash::Sha3_512 => Self::Sha3_512(Unmarshal::unmarshal(src)?),
-        })
+        let alg = TpmiAlgHash::unmarshal(src)?;
+        Self::unmarshal_digest(alg, src)
+    }
+}
+
+impl Marshal for Option<TpmtHa<'_>> {
+    const MAX_SIZE: usize = TpmtHa::MAX_SIZE;
+    type MaxBuffer = [u8; TpmtHa::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let Some(h) = self else {
+            return marshal_helper(&Alg::NULL, dst, 0);
+        };
+        h.marshal(dst)
+    }
+}
+
+impl<'a> Unmarshal<'a> for Option<TpmtHa<'a>> {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        match Option::<TpmiAlgHash>::unmarshal(src)? {
+            Some(alg) => TpmtHa::unmarshal_digest(alg, src).map(Some),
+            None => Ok(None),
+        }
     }
 }
 
@@ -552,9 +565,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtSigScheme> {
 ///
 /// Tagged RSA scheme structure specifying an RSA scheme (RSAPSS, RSASSA, OAEP, RSAES) and associated hash algorithm.
 #[doc(alias = "TPMT_RSA_SCHEME")]
-#[doc(alias = "TPMT_RSA_DECRYPT")]
 #[doc(alias = "TPMU_RSA_SCHEME")]
-#[doc(alias = "TPMU_RSA_DECRYPT")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TpmtRsaScheme {
     Rsassa(TpmiAlgHash),
@@ -565,7 +576,6 @@ pub enum TpmtRsaScheme {
 
 impl TpmtRsaScheme {
     #[doc(alias = "TPMI_ALG_RSA_SCHEME")]
-    #[doc(alias = "TPMI_ALG_RSA_DECRYPT")]
     pub const fn scheme(self) -> Alg {
         match self {
             Self::Rsassa(_) => Alg::RSASSA,
@@ -606,6 +616,78 @@ impl<'a> Unmarshal<'a> for Option<TpmtRsaScheme> {
             Alg::OAEP => TpmtRsaScheme::Oaep(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
         }))
+    }
+}
+
+/// `TPMT_RSA_DECRYPT` structure defined in TPM 2.0 Part 2: Structures
+///
+/// Tagged RSA decryption scheme structure specifying an RSA decryption scheme (RSAES or OAEP) and associated hash algorithm.
+#[doc(alias = "TPMT_RSA_DECRYPT")]
+#[doc(alias = "TPMU_RSA_DECRYPT")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TpmtRsaDecrypt {
+    Rsaes,
+    Oaep(TpmiAlgHash),
+}
+
+impl TpmtRsaDecrypt {
+    #[doc(alias = "TPMI_ALG_RSA_DECRYPT")]
+    pub const fn scheme(self) -> Alg {
+        match self {
+            Self::Rsaes => Alg::RSAES,
+            Self::Oaep(_) => Alg::OAEP,
+        }
+    }
+}
+
+impl Marshal for Option<TpmtRsaDecrypt> {
+    const MAX_SIZE: usize = Alg::MAX_SIZE + TpmiAlgHash::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let Some(s) = self else {
+            return marshal_helper(&Alg::NULL, dst, 0);
+        };
+        let count = marshal_helper(&s.scheme(), dst, 0);
+        match s {
+            TpmtRsaDecrypt::Oaep(x) => marshal_helper(x, dst, count),
+            TpmtRsaDecrypt::Rsaes => count,
+        }
+    }
+}
+
+impl<'a> Unmarshal<'a> for Option<TpmtRsaDecrypt> {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        let alg = Alg::unmarshal(src)?;
+        if alg == Alg::NULL {
+            return Ok(None);
+        }
+        Ok(Some(match alg {
+            Alg::RSAES => TpmtRsaDecrypt::Rsaes,
+            Alg::OAEP => TpmtRsaDecrypt::Oaep(Unmarshal::unmarshal(src)?),
+            _ => return Err(UnmarshalError),
+        }))
+    }
+}
+
+impl TryFrom<TpmtRsaScheme> for TpmtRsaDecrypt {
+    type Error = ();
+
+    fn try_from(scheme: TpmtRsaScheme) -> Result<Self, Self::Error> {
+        match scheme {
+            TpmtRsaScheme::Rsaes => Ok(Self::Rsaes),
+            TpmtRsaScheme::Oaep(s) => Ok(Self::Oaep(s)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl From<TpmtRsaDecrypt> for TpmtRsaScheme {
+    fn from(scheme: TpmtRsaDecrypt) -> Self {
+        match scheme {
+            TpmtRsaDecrypt::Rsaes => Self::Rsaes,
+            TpmtRsaDecrypt::Oaep(s) => Self::Oaep(s),
+        }
     }
 }
 
@@ -713,6 +795,7 @@ pub enum TpmtKdfScheme {
     Kdf1Sp800_56a(TpmiAlgHash),
     Kdf2(TpmiAlgHash),
     Kdf1Sp800_108(TpmiAlgHash),
+    Hkdf(TpmiAlgHash),
 }
 
 impl TpmtKdfScheme {
@@ -723,13 +806,18 @@ impl TpmtKdfScheme {
             Self::Kdf1Sp800_56a(_) => TpmiAlgKdf::Kdf1Sp800_56a,
             Self::Kdf2(_) => TpmiAlgKdf::Kdf2,
             Self::Kdf1Sp800_108(_) => TpmiAlgKdf::Kdf1Sp800_108,
+            Self::Hkdf(_) => TpmiAlgKdf::Hkdf,
         }
     }
 
     /// Returns the associated hash algorithm.
     pub const fn hash_alg(self) -> TpmiAlgHash {
         match self {
-            Self::Mgf1(h) | Self::Kdf1Sp800_56a(h) | Self::Kdf2(h) | Self::Kdf1Sp800_108(h) => h,
+            Self::Mgf1(h)
+            | Self::Kdf1Sp800_56a(h)
+            | Self::Kdf2(h)
+            | Self::Kdf1Sp800_108(h)
+            | Self::Hkdf(h) => h,
         }
     }
 }
@@ -747,7 +835,8 @@ impl Marshal for Option<TpmtKdfScheme> {
             TpmtKdfScheme::Mgf1(x)
             | TpmtKdfScheme::Kdf1Sp800_56a(x)
             | TpmtKdfScheme::Kdf2(x)
-            | TpmtKdfScheme::Kdf1Sp800_108(x) => marshal_helper(x, dst, count),
+            | TpmtKdfScheme::Kdf1Sp800_108(x)
+            | TpmtKdfScheme::Hkdf(x) => marshal_helper(x, dst, count),
         }
     }
 }
@@ -762,6 +851,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtKdfScheme> {
             TpmiAlgKdf::Kdf1Sp800_56a => TpmtKdfScheme::Kdf1Sp800_56a(Unmarshal::unmarshal(src)?),
             TpmiAlgKdf::Kdf2 => TpmtKdfScheme::Kdf2(Unmarshal::unmarshal(src)?),
             TpmiAlgKdf::Kdf1Sp800_108 => TpmtKdfScheme::Kdf1Sp800_108(Unmarshal::unmarshal(src)?),
+            TpmiAlgKdf::Hkdf => TpmtKdfScheme::Hkdf(Unmarshal::unmarshal(src)?),
         }))
     }
 }
@@ -1172,5 +1262,67 @@ impl<'a> Unmarshal<'a> for TpmtSensitive<'a> {
             seed_value: Unmarshal::unmarshal(src)?,
             sensitive: TpmuSensitiveComposite::unmarshal_variant(selector, src)?,
         })
+    }
+}
+
+/// `TPMT_NV_PUBLIC_2` structure defined in TPM 2.0 Part 2: Structures
+///
+/// Tagged structure defining the public parameters of an NV Index in `TPM2_NV_DefineSpace2` and `TPM2_NV_ReadPublic2`,
+/// discriminated by its handle type (`TPM_HT_NV_INDEX`, `TPM_HT_EXTERNAL_NV`, or `TPM_HT_PERMANENT_NV`).
+#[doc(alias = "TPMT_NV_PUBLIC_2")]
+#[doc(alias = "TPMU_NV_PUBLIC_2")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TpmtNvPublic2<'a> {
+    NvIndex(TpmsNvPublic<'a>),
+    ExternalNv(TpmsNvPublicExpAttr<'a>),
+    PermanentNv(TpmsNvPublic<'a>),
+}
+
+impl TpmtNvPublic2<'_> {
+    pub const fn handle_type(&self) -> TpmHt {
+        match self {
+            Self::NvIndex(_) => TpmHt::NVIndex,
+            Self::ExternalNv(_) => TpmHt::ExternalNV,
+            Self::PermanentNv(_) => TpmHt::PermanentNV,
+        }
+    }
+
+    /// Returns the handle of the NV Index (`nvIndex`).
+    pub const fn nv_index(&self) -> Handle {
+        match self {
+            Self::NvIndex(x) | Self::PermanentNv(x) => x.nv_index,
+            Self::ExternalNv(x) => x.nv_index,
+        }
+    }
+}
+
+impl Marshal for TpmtNvPublic2<'_> {
+    const MAX_SIZE: usize =
+        TpmHt::MAX_SIZE + max!(TpmsNvPublic::MAX_SIZE, TpmsNvPublicExpAttr::MAX_SIZE);
+    type MaxBuffer = [u8; TpmtNvPublic2::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut [u8; TpmtNvPublic2::MAX_SIZE]) -> usize {
+        let count = marshal_helper(&self.handle_type(), dst, 0);
+        match self {
+            Self::NvIndex(x) | Self::PermanentNv(x) => marshal_helper(x, dst, count),
+            Self::ExternalNv(x) => marshal_helper(x, dst, count),
+        }
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmtNvPublic2<'a> {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        let handle_type = TpmHt::unmarshal(src)?;
+        let public = match handle_type {
+            TpmHt::NVIndex => Self::NvIndex(Unmarshal::unmarshal(src)?),
+            TpmHt::ExternalNV => Self::ExternalNv(Unmarshal::unmarshal(src)?),
+            TpmHt::PermanentNV => Self::PermanentNv(Unmarshal::unmarshal(src)?),
+            _ => return Err(UnmarshalError),
+        };
+        // The selector must match the handle type of nvIndex.
+        if public.nv_index().handle_type() != Some(handle_type) {
+            return Err(UnmarshalError);
+        }
+        Ok(public)
     }
 }

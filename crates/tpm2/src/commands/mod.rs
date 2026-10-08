@@ -67,16 +67,6 @@
 //! We plan on adding the following commands once the necessary prerequisite
 //! types and `impl`s have been added:
 //!
-//! - Needs `TPMT_RSA_DECRYPT+`
-//!   - [`RSAEncrypt`](TpmCc::RSAEncrypt)
-//!   - [`RSADecrypt`](TpmCc::RSADecrypt)
-//! - Needs `TPMI_ECC_KEY_EXCHANGE`
-//!   - [`ZGen2Phase`](TpmCc::ZGen2Phase)
-//! - Needs [`Marshal`]/[`Unmarshal`](crate::Unmarshal) `impl`s for [`Option<TpmtHa<'a>>`](crate::TpmtHa)
-//!   - [`FieldUpgradeData`](TpmCc::FieldUpgradeData)
-//! - NV Expanded Attributes needing `TPM2B_NV_PUBLIC_2` / `TPMT_NV_PUBLIC_2`
-//!   - [`NVDefineSpace2`](TpmCc::NVDefineSpace2)
-//!   - [`NVReadPublic2`](TpmCc::NVReadPublic2)
 //! - KEM commands needing `TPM2B_SHARED_SECRET` and `TPM2B_KEM_CIPHERTEXT`
 //!   - [`Encapsulate`](TpmCc::Encapsulate)
 //!   - [`Decapsulate`](TpmCc::Decapsulate)
@@ -165,7 +155,10 @@ mod symmetric;
 mod testing;
 
 pub use {
-    asymmetric::{ECCDecrypt, ECCEncrypt, ECCParameters, ECDHKeyGen, ECDHZGen},
+    asymmetric::{
+        ECCDecrypt, ECCEncrypt, ECCParameters, ECDHKeyGen, ECDHZGen, RSADecrypt, RSAEncrypt,
+        ZGen2Phase,
+    },
     attestation::{
         Certify, CertifyCreation, GetCommandAuditDigest, GetSessionAuditDigest, GetTime, Quote,
     },
@@ -183,7 +176,7 @@ pub use {
         PolicyTicket, PolicyTransportSPDM,
     },
     ephemeral::{Commit, ECEphemeral},
-    field_upgrade::{FieldUpgradeStart, FirmwareRead},
+    field_upgrade::{FieldUpgradeData, FieldUpgradeStart, FirmwareRead},
     hash_hmac_event::{
         EventSequenceComplete, HMACStart, HashSequenceStart, SequenceComplete, SequenceUpdate,
     },
@@ -193,9 +186,9 @@ pub use {
     },
     miscellaneous::{PPCommands, SetAlgorithmSet},
     nv_storage::{
-        NVCertify, NVChangeAuth, NVDefineSpace, NVExtend, NVGlobalWriteLock, NVIncrement, NVRead,
-        NVReadLock, NVReadPublic, NVSetBits, NVUndefineSpace, NVUndefineSpaceSpecial, NVWrite,
-        NVWriteLock,
+        NVCertify, NVChangeAuth, NVDefineSpace, NVDefineSpace2, NVExtend, NVGlobalWriteLock,
+        NVIncrement, NVRead, NVReadLock, NVReadPublic, NVReadPublic2, NVSetBits, NVUndefineSpace,
+        NVUndefineSpaceSpecial, NVWrite, NVWriteLock,
     },
     object::{
         ActivateCredential, Create, Load, LoadExternal, MakeCredential, ObjectChangeAuth,
@@ -217,6 +210,9 @@ pub mod responses {
     pub use super::asymmetric::ECCParametersRsp as ECCParameters;
     pub use super::asymmetric::ECDHKeyGenRsp as ECDHKeyGen;
     pub use super::asymmetric::ECDHZGenRsp as ECDHZGen;
+    pub use super::asymmetric::RSADecryptRsp as RSADecrypt;
+    pub use super::asymmetric::RSAEncryptRsp as RSAEncrypt;
+    pub use super::asymmetric::ZGen2PhaseRsp as ZGen2Phase;
     pub use super::attestation::CertifyCreationRsp as CertifyCreation;
     pub use super::attestation::CertifyRsp as Certify;
     pub use super::attestation::GetCommandAuditDigestRsp as GetCommandAuditDigest;
@@ -235,6 +231,7 @@ pub mod responses {
     pub use super::enhanced_auth::PolicySignedRsp as PolicySigned;
     pub use super::ephemeral::CommitRsp as Commit;
     pub use super::ephemeral::ECEphemeralRsp as ECEphemeral;
+    pub use super::field_upgrade::FieldUpgradeDataRsp as FieldUpgradeData;
     pub use super::field_upgrade::FirmwareReadRsp as FirmwareRead;
     pub use super::hash_hmac_event::EventSequenceCompleteRsp as EventSequenceComplete;
     pub use super::hash_hmac_event::HMACStartRsp as HMACStart;
@@ -242,6 +239,7 @@ pub mod responses {
     pub use super::hash_hmac_event::SequenceCompleteRsp as SequenceComplete;
     pub use super::hierarchy::CreatePrimaryRsp as CreatePrimary;
     pub use super::nv_storage::NVCertifyRsp as NVCertify;
+    pub use super::nv_storage::NVReadPublic2Rsp as NVReadPublic2;
     pub use super::nv_storage::NVReadPublicRsp as NVReadPublic;
     pub use super::nv_storage::NVReadRsp as NVRead;
     pub use super::object::ActivateCredentialRsp as ActivateCredential;

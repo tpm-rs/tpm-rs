@@ -14,6 +14,7 @@ pub enum TpmuAttest<'a> {
     SessionAudit(TpmsSessionAuditInfo<'a>),
     Time(TpmsTimeAttestInfo),
     Nv(TpmsNvCertifyInfo<'a>),
+    NvDigest(TpmsNvDigestCertifyInfo<'a>),
 }
 
 impl TpmuAttest<'_> {
@@ -27,6 +28,7 @@ impl TpmuAttest<'_> {
             Self::SessionAudit(_) => TpmSt::ATTEST_SESSION_AUDIT,
             Self::Time(_) => TpmSt::ATTEST_TIME,
             Self::Nv(_) => TpmSt::ATTEST_NV,
+            Self::NvDigest(_) => TpmSt::ATTEST_NV_DIGEST,
         }
     }
 }
@@ -40,6 +42,7 @@ impl<'a> TpmuAttest<'a> {
             TpmSt::ATTEST_SESSION_AUDIT => Self::SessionAudit(Unmarshal::unmarshal(src)?),
             TpmSt::ATTEST_TIME => Self::Time(Unmarshal::unmarshal(src)?),
             TpmSt::ATTEST_NV => Self::Nv(Unmarshal::unmarshal(src)?),
+            TpmSt::ATTEST_NV_DIGEST => Self::NvDigest(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
         })
     }
@@ -54,6 +57,7 @@ impl Marshal for TpmuAttest<'_> {
         TpmsSessionAuditInfo::MAX_SIZE,
         TpmsTimeAttestInfo::MAX_SIZE,
         TpmsNvCertifyInfo::MAX_SIZE,
+        TpmsNvDigestCertifyInfo::MAX_SIZE,
     );
     type MaxBuffer = [u8; TpmuAttest::MAX_SIZE];
 
@@ -66,6 +70,7 @@ impl Marshal for TpmuAttest<'_> {
             Self::SessionAudit(x) => marshal_helper(x, dst, 0),
             Self::Time(x) => marshal_helper(x, dst, 0),
             Self::Nv(x) => marshal_helper(x, dst, 0),
+            Self::NvDigest(x) => marshal_helper(x, dst, 0),
         }
     }
 }

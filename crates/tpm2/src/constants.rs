@@ -911,6 +911,12 @@ pub enum TpmPt {
     // the maximum size of a TPMS_CAPABILITY_DATA structure returned in
     // TPM2_GetCapability().
     MaxCapBuffer = 0x0000012E,
+    // the TPM vendor-specific value indicating the SVN of the firmware.
+    // This value shall be less than or equal to UINT16_MAX.
+    FirmwareSVN = 0x0000012F,
+    // the TPM vendor-specific value indicating the maximum value that
+    // TPM_PT_FIRMWARE_SVN may take in the future.
+    FirmwareMaxSVN = 0x00000130,
     // TPMA_PERMANENT
     Permanent = 0x00000200,
     // TPMA_STARTUP_CLEAR
@@ -1015,6 +1021,8 @@ impl TryFrom<u32> for TpmPt {
             0x0000012C => Ok(Self::NVBufferMax),
             0x0000012D => Ok(Self::Modes),
             0x0000012E => Ok(Self::MaxCapBuffer),
+            0x0000012F => Ok(Self::FirmwareSVN),
+            0x00000130 => Ok(Self::FirmwareMaxSVN),
             0x00000200 => Ok(Self::Permanent),
             0x00000201 => Ok(Self::StartupClear),
             0x00000202 => Ok(Self::HRNVIndex),
@@ -1170,6 +1178,8 @@ pub enum TpmHt {
     NVIndex = 0x01,
     HMACSession = 0x02,
     PolicySession = 0x03,
+    ExternalNV = 0x11,
+    PermanentNV = 0x12,
     Permanent = 0x40,
     Transient = 0x80,
     Persistent = 0x81,
@@ -1184,6 +1194,8 @@ impl TryFrom<u8> for TpmHt {
             0x01 => Ok(Self::NVIndex),
             0x02 => Ok(Self::HMACSession),
             0x03 => Ok(Self::PolicySession),
+            0x11 => Ok(Self::ExternalNV),
+            0x12 => Ok(Self::PermanentNV),
             0x40 => Ok(Self::Permanent),
             0x80 => Ok(Self::Transient),
             0x81 => Ok(Self::Persistent),
@@ -1547,6 +1559,8 @@ mod tests {
         assert_eq!(Handle(0x01000001).handle_type(), Some(TpmHt::NVIndex));
         assert_eq!(Handle(0x02000001).handle_type(), Some(TpmHt::HMACSession));
         assert_eq!(Handle(0x03000001).handle_type(), Some(TpmHt::PolicySession));
+        assert_eq!(Handle(0x11000001).handle_type(), Some(TpmHt::ExternalNV));
+        assert_eq!(Handle(0x12000001).handle_type(), Some(TpmHt::PermanentNV));
         assert_eq!(Handle(0x80000001).handle_type(), Some(TpmHt::Transient));
         assert_eq!(Handle(0x81000001).handle_type(), Some(TpmHt::Persistent));
         assert_eq!(Handle(0x90000001).handle_type(), Some(TpmHt::AC));
