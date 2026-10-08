@@ -259,13 +259,13 @@ impl<'a> Unmarshal<'a> for TpmsCertifyInfo<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsCommandAuditInfo<'a> {
     pub audit_counter: u64,
-    pub digest_alg: u16,
+    pub digest_alg: Alg,
     pub audit_digest: Tpm2bDigest<'a>,
     pub command_digest: Tpm2bDigest<'a>,
 }
 impl Marshal for TpmsCommandAuditInfo<'_> {
     const MAX_SIZE: usize =
-        u64::MAX_SIZE + u16::MAX_SIZE + Tpm2bDigest::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
+        u64::MAX_SIZE + Alg::MAX_SIZE + Tpm2bDigest::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
     type MaxBuffer = [u8; TpmsCommandAuditInfo::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmsCommandAuditInfo::MAX_SIZE]) -> usize {
