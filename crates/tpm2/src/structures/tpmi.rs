@@ -2,7 +2,7 @@ use crate::{errors::UnmarshalError, *};
 
 /// `TPMI_ALG_KDF` interface type defined in TPM 2.0 Part 2: Structures, Section 9.31 (Table 62).
 ///
-/// Selects a key derivation function algorithm (MGF1, KDF1_SP800_56A, KDF2, KDF1_SP800_108).
+/// Selects a key derivation function algorithm (MGF1, KDF1_SP800_56A, KDF2, KDF1_SP800_108, HKDF).
 /// Note: `TPM_ALG_NULL` is represented as `Option<TpmiAlgKdf>::None`.
 #[doc(alias = "TPMI_ALG_KDF")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -11,6 +11,7 @@ pub enum TpmiAlgKdf {
     Kdf1Sp800_56a = Alg::KDF1_SP800_56A.tag(),
     Kdf2 = Alg::KDF2.tag(),
     Kdf1Sp800_108 = Alg::KDF1_SP800_108.tag(),
+    Hkdf = Alg::HKDF.tag(),
 }
 
 impl TryFrom<Alg> for Option<TpmiAlgKdf> {
@@ -22,6 +23,7 @@ impl TryFrom<Alg> for Option<TpmiAlgKdf> {
             Alg::KDF1_SP800_56A => Ok(Some(TpmiAlgKdf::Kdf1Sp800_56a)),
             Alg::KDF2 => Ok(Some(TpmiAlgKdf::Kdf2)),
             Alg::KDF1_SP800_108 => Ok(Some(TpmiAlgKdf::Kdf1Sp800_108)),
+            Alg::HKDF => Ok(Some(TpmiAlgKdf::Hkdf)),
             _ => Err(UnmarshalError),
         }
     }
@@ -46,6 +48,50 @@ impl Marshal for Option<TpmiAlgKdf> {
 }
 
 impl<'a> Unmarshal<'a> for Option<TpmiAlgKdf> {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Alg::unmarshal(src)?.try_into()
+    }
+}
+
+/// `TPMI_ECC_KEY_EXCHANGE` interface type defined in TPM 2.0 Part 2: Structures
+///
+/// Selects an ECC key exchange scheme (`TPM_ALG_ECDH`, `TPM_ALG_ECMQV`, or `TPM_ALG_SM2`), used in `TPM2_ZGen_2Phase`.
+#[doc(alias = "TPMI_ECC_KEY_EXCHANGE")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum TpmiEccKeyExchange {
+    Ecdh = Alg::ECDH.tag(),
+    Ecmqv = Alg::ECMQV.tag(),
+    Sm2 = Alg::SM2.tag(),
+}
+
+impl TryFrom<Alg> for TpmiEccKeyExchange {
+    type Error = UnmarshalError;
+    fn try_from(a: Alg) -> Result<Self, Self::Error> {
+        match a {
+            Alg::ECDH => Ok(Self::Ecdh),
+            Alg::ECMQV => Ok(Self::Ecmqv),
+            Alg::SM2 => Ok(Self::Sm2),
+            _ => Err(UnmarshalError),
+        }
+    }
+}
+
+impl From<TpmiEccKeyExchange> for Alg {
+    fn from(scheme: TpmiEccKeyExchange) -> Self {
+        Alg::new(scheme as u16)
+    }
+}
+
+impl Marshal for TpmiEccKeyExchange {
+    const MAX_SIZE: usize = Alg::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        Alg::from(*self).marshal(dst)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmiEccKeyExchange {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Alg::unmarshal(src)?.try_into()
     }
