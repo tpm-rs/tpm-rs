@@ -64,6 +64,13 @@ use tpm2_platform_linux::PlatformCryptoProvider;
 use tpm2_simulator::Simulator;
 pub use tpm2_simulator::execute::{CmdHeader, RespHeader};
 
+/// Crypto provider used by the *client* side of the tests (HMAC/KDF/nonce
+/// generation, parameter encryption, expected-value computation, ...).
+///
+/// Tests treat the simulator as a black box, so they never borrow the TPM's
+/// own crypto provider; instead they use this independent instance.
+pub const CLIENT_CRYPTO: &PlatformCryptoProvider = &PlatformCryptoProvider;
+
 pub fn marshal_to_slice<M: Marshal>(item: &M, buf: &mut [u8]) -> usize
 where
     for<'a> &'a mut M::MaxBuffer: TryFrom<&'a mut [u8]>,
@@ -360,6 +367,53 @@ pub fn execute_get_capability<'a>(
     Ok((resp, handles))
 }
 
+/// Reads a single fixed/variable TPM property with
+/// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES, property, 1)`.
+///
+/// Panics if the TPM does not report the requested property.
+pub fn get_tpm_property(tpm: &mut Simulator<'_>, property: tpm2::TpmPt) -> u32 {
+    let cmd = GetCapability {
+        capability: tpm2::TpmCap::TPMProperties,
+        property: property.0,
+        property_count: 1,
+    };
+    let (resp, _) = tpm
+        .execute_with_handles(cmd, ())
+        .expect("TPM2_GetCapability failed");
+    match resp.capability_data {
+        tpm2::TpmsCapabilityData::TpmProperties(props) => {
+            props
+                .as_ref()
+                .iter()
+                .find(|p| p.property == property)
+                .unwrap_or_else(|| panic!("TPM did not report property {property:?}"))
+                .value
+        }
+        other => panic!("unexpected capability data: {other:?}"),
+    }
+}
+
+/// Number of authorization sessions that can be loaded at the same time, as
+/// reported by the TPM (`TPM_PT_HR_LOADED_MIN`).
+pub fn max_loaded_sessions(tpm: &mut Simulator<'_>) -> usize {
+    get_tpm_property(tpm, tpm2::TpmPt::HR_LOADED_MIN) as usize
+}
+
+/// Enables or disables `hierarchy` (`TPM_RH_OWNER`, `TPM_RH_ENDORSEMENT`,
+/// ...) with `TPM2_HierarchyControl`, authorized by the platform hierarchy
+/// using its (default, empty) password.
+pub fn set_hierarchy_enabled(tpm: &mut Simulator<'_>, hierarchy: Handle, state: bool) {
+    let cmd = tpm2::commands::HierarchyControl {
+        enable: hierarchy,
+        state,
+    };
+    let handles = tpm2::commands::HierarchyControlHandles {
+        auth_handle: Handle::RH_PLATFORM,
+    };
+    execute_with_password_sessions(tpm, &cmd, handles, 1, &[])
+        .unwrap_or_else(|rc| panic!("TPM2_HierarchyControl failed: {rc:#x}"));
+}
+
 pub fn execute_pcr_event<'a>(
     tpm: &mut Simulator<'_>,
     cmd: &tpm2::commands::PCREvent<'_>,
@@ -562,6 +616,10 @@ pub fn create_test_keys() -> (Tpm2bSensitiveCreate<'static>, Tpm2bTemplate<'stat
     (in_sensitive, in_public)
 }
 
+/// Client-side view of an authorization session started on the simulator.
+///
+/// Everything here is tracked by the test client itself (the TPM is treated
+/// as a black box), mirroring what a real TPM software stack has to remember.
 #[derive(Clone, Debug)]
 pub struct ActiveSession {
     pub session_handle: Handle,
@@ -573,6 +631,36 @@ pub struct ActiveSession {
     pub attributes: TpmaSession,
     pub bind_auth: Vec<u8>,
     pub bind_entity: Handle,
+    /// The session type passed to `TPM2_StartAuthSession`.
+    pub session_type: TpmSe,
+    /// Set once `TPM2_PolicyAuthValue` has been executed on this (policy)
+    /// session; see [`ActiveSession::mark_policy_auth_value`].
+    pub policy_auth_value_needed: bool,
+    /// Set once `TPM2_PolicyPassword` has been executed on this (policy)
+    /// session; see [`ActiveSession::mark_policy_password`].
+    pub policy_password_needed: bool,
+}
+
+impl ActiveSession {
+    /// Records that `TPM2_PolicyAuthValue` succeeded on this policy session,
+    /// so the authValue of the authorized entity is included in the session
+    /// HMAC / parameter-encryption keys of the next authorized command.
+    pub fn mark_policy_auth_value(&mut self) {
+        self.policy_auth_value_needed = true;
+    }
+
+    /// Records that `TPM2_PolicyPassword` succeeded on this policy session.
+    pub fn mark_policy_password(&mut self) {
+        self.policy_password_needed = true;
+    }
+
+    /// Clears the policy flags, mirroring the TPM resetting a policy session
+    /// after it has been used successfully for authorization (or after
+    /// `TPM2_PolicyRestart`).
+    pub fn reset_policy_flags(&mut self) {
+        self.policy_auth_value_needed = false;
+        self.policy_password_needed = false;
+    }
 }
 
 fn kdfa_sha256(
@@ -634,11 +722,7 @@ pub fn start_auth_session(
     auth_hash: TpmiAlgHash,
 ) -> Result<ActiveSession, u32> {
     let mut nonce_bytes = [0u8; 16];
-    tpm.context
-        .platform
-        .crypto
-        .get_random(&mut nonce_bytes)
-        .unwrap();
+    CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
     let nonce_caller = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
 
     let cmd = StartAuthSession {
@@ -667,7 +751,7 @@ pub fn start_auth_session(
         let mut derived = vec![0u8; (session_key_bits.div_ceil(8)) as usize];
 
         kdfa_by_alg(
-            tpm.context.platform.crypto,
+            CLIENT_CRYPTO,
             auth_hash,
             &key,
             b"ATH",
@@ -689,7 +773,30 @@ pub fn start_auth_session(
         attributes: TpmaSession::from_bits_retain(0),
         bind_auth: bind_auth.to_vec(),
         bind_entity: bind,
+        session_type,
+        policy_auth_value_needed: false,
+        policy_password_needed: false,
     })
+}
+
+/// Returns the Name of `handle` as used in cpHash/rpHash computations.
+///
+/// For loaded transient objects the Name is queried from the TPM with
+/// `TPM2_ReadPublic` (as a real TSS would). For every other handle — or if
+/// `TPM2_ReadPublic` fails, e.g. for sequence objects — the handle value
+/// itself is used.
+pub fn entity_name(tpm: &mut Simulator<'_>, handle: Handle) -> Vec<u8> {
+    if handle.0 >> 24 == 0x80
+        && let Ok((resp, _)) = tpm.execute_with_handles(
+            ReadPublic {},
+            ReadPublicHandles {
+                object_handle: handle,
+            },
+        )
+    {
+        return resp.name.get_buffer().to_vec();
+    }
+    handle.0.to_be_bytes().to_vec()
 }
 
 /// Decides whether the authorized entity's authValue must be appended to the
@@ -701,29 +808,18 @@ pub fn start_auth_session(
 /// - Policy sessions include the authValue only if `TPM2_PolicyAuthValue` (or
 ///   `TPM2_PolicyPassword`) has been executed on the session.
 ///
-/// This reads the TPM's session state, so it MUST be evaluated **before** the
-/// command is transacted: on a successful command with `continueSession` set,
-/// the TPM resets a policy session (clearing `is_auth_value_needed` /
-/// `is_password_needed`) *after* it has computed the response HMAC and
-/// encrypted the response parameters with the authValue included. Reading the
-/// state afterwards would therefore produce the wrong key for response
-/// verification/decryption. If the session is unknown to the TPM, it is
-/// treated as an HMAC session.
-fn session_includes_auth(tpm: &Simulator<'_>, session: &ActiveSession, is_bound: bool) -> bool {
-    let (is_policy, is_auth_value_needed, is_password_needed) =
-        match tpm.global_state.session(session.session_handle.0) {
-            Some(state) => (
-                state.session_type == tpm2::TpmSe::Policy,
-                state.is_auth_value_needed,
-                state.is_password_needed,
-            ),
-            None => (false, false, false),
-        };
+/// The policy flags are tracked client-side in [`ActiveSession`]. This MUST be
+/// evaluated **before** the command is transacted: on a successful command
+/// with `continueSession` set, the TPM resets a policy session *after* it has
+/// computed the response HMAC and encrypted the response parameters with the
+/// authValue included, and the client mirrors that reset once the response
+/// has been processed.
+fn session_includes_auth(session: &ActiveSession, is_bound: bool) -> bool {
     include_auth_for(
-        is_policy,
+        session.session_type == TpmSe::Policy,
         is_bound,
-        is_auth_value_needed,
-        is_password_needed,
+        session.policy_auth_value_needed,
+        session.policy_password_needed,
     )
 }
 
@@ -812,7 +908,7 @@ where
             let is_bound = session.bind_entity != Handle::RH_NULL
                 && i < session_to_handle_idx_len
                 && session.bind_entity == handles[session_to_handle_idx[i]];
-            session_includes_auth(tpm, session, is_bound)
+            session_includes_auth(session, is_bound)
         })
         .collect();
     if !sessions.is_empty() {
@@ -832,19 +928,7 @@ where
                 cmd_buffer[13 + i * 4],
             ];
             let handle = u32::from_be_bytes(handle_bytes);
-            let mut name = Vec::new();
-            let global_state = &tpm.global_state;
-            let mut found = false;
-            for obj in global_state.transient_objects.iter().flatten() {
-                if obj.handle == handle {
-                    name = obj.name.get_buffer().to_vec();
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                name = handle.to_be_bytes().to_vec();
-            }
+            let name = entity_name(tpm, Handle(handle));
             extracted.push(name);
         }
         extracted
@@ -862,11 +946,7 @@ where
 
     for (i, session) in sessions.iter_mut().enumerate() {
         let mut nonce_bytes = [0u8; 16];
-        tpm.context
-            .platform
-            .crypto
-            .get_random(&mut nonce_bytes)
-            .unwrap();
+        CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
         let nonce_caller_new = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
         nonce_callers_new.push(nonce_caller_new);
 
@@ -921,7 +1001,7 @@ where
             };
             let key = session_hmac_key(session, entity_auth, include_auths[idx]);
             kdfa_by_alg(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -935,7 +1015,7 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
             tpm2::crypto::encrypt(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -960,7 +1040,7 @@ where
         let param_bytes = &param_buf[..param_len];
         cp_hash_updates.push(param_bytes);
 
-        let cp_hash = compute_client_hash(tpm.context.platform.crypto, auth_hash, &cp_hash_updates);
+        let cp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &cp_hash_updates);
 
         let nonce_caller_new = &nonce_callers_new[i];
         let entity_auth = if i < num_handles
@@ -994,12 +1074,7 @@ where
         let attr_byte = [session.attributes.bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(
-            tpm.context.platform.crypto,
-            auth_hash,
-            &hmac_key,
-            &hmac_updates,
-        );
+        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
         let hmac_val = Tpm2bAuth::from_bytes(&hmac_bytes).unwrap();
 
         let auth_cmd = TpmsAuthCommand {
@@ -1097,7 +1172,7 @@ where
             };
             let key = session_hmac_key(session, entity_auth, include_auths[idx]);
             kdfa_by_alg(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -1111,7 +1186,7 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
             tpm2::crypto::decrypt(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -1132,7 +1207,7 @@ where
         rp_hash_updates.push(cmd_code_bytes.as_slice());
         rp_hash_updates.push(encrypted_param_buf);
 
-        let rp_hash = compute_client_hash(tpm.context.platform.crypto, auth_hash, &rp_hash_updates);
+        let rp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &rp_hash_updates);
 
         let nonce_tpm_new = &nonce_tpms_new[i];
         let nonce_caller_new = &nonce_callers_new[i];
@@ -1153,12 +1228,7 @@ where
         let attr_byte = [resp_attributes[i].bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(
-            tpm.context.platform.crypto,
-            auth_hash,
-            &hmac_key,
-            &hmac_updates,
-        );
+        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
         assert_eq!(
             hmac_bytes.as_slice(),
             resp_hmacs[i].get_buffer(),
@@ -1170,6 +1240,11 @@ where
     for (i, session) in sessions.iter_mut().enumerate() {
         session.nonce_caller = nonce_callers_new[i];
         session.nonce_tpm = nonce_tpms_new[i];
+        // A policy session used successfully for authorization is reset by the
+        // TPM (TPM 2.0 Part 1, 19.7.1), clearing PolicyAuthValue/PolicyPassword.
+        if session.session_type == TpmSe::Policy && i < session_to_handle_idx_len {
+            session.reset_policy_flags();
+        }
     }
 
     Ok((decrypted_param_buf[..parameter_size].to_vec(), resp_handles))
@@ -1283,19 +1358,7 @@ where
                 cmd_buffer[13 + i * 4],
             ];
             let handle = u32::from_be_bytes(handle_bytes);
-            let mut name = Vec::new();
-            let global_state = &tpm.global_state;
-            let mut found = false;
-            for obj in global_state.transient_objects.iter().flatten() {
-                if obj.handle == handle {
-                    name = obj.name.get_buffer().to_vec();
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                name = handle.to_be_bytes().to_vec();
-            }
+            let name = entity_name(tpm, Handle(handle));
             extracted.push(name);
         }
         extracted
@@ -1313,11 +1376,7 @@ where
 
     for (i, session) in sessions.iter_mut().enumerate() {
         let mut nonce_bytes = [0u8; 16];
-        tpm.context
-            .platform
-            .crypto
-            .get_random(&mut nonce_bytes)
-            .unwrap();
+        CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
         let nonce_caller_new = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
         nonce_callers_new.push(nonce_caller_new);
 
@@ -1373,7 +1432,7 @@ where
                 session.session_key.clone()
             };
             kdfa_by_alg(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -1387,7 +1446,7 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
             tpm2::crypto::encrypt(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -1412,7 +1471,7 @@ where
         let param_bytes = &param_buf[..param_len];
         cp_hash_updates.push(param_bytes);
 
-        let cp_hash = compute_client_hash(tpm.context.platform.crypto, auth_hash, &cp_hash_updates);
+        let cp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &cp_hash_updates);
 
         let nonce_caller_new = &nonce_callers_new[i];
         let entity_auth = if i < num_handles {
@@ -1464,21 +1523,12 @@ where
         let attr_byte = [session.attributes.bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(
-            tpm.context.platform.crypto,
-            auth_hash,
-            &hmac_key,
-            &hmac_updates,
-        );
+        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
         let hmac_val = Tpm2bAuth::from_bytes(&hmac_bytes).unwrap();
 
         // Mismatch: generate another random 16-byte nonce for wire but keep nonce_caller_new for HMAC
         let mut nonce_bytes_wire = [0u8; 16];
-        tpm.context
-            .platform
-            .crypto
-            .get_random(&mut nonce_bytes_wire)
-            .unwrap();
+        CLIENT_CRYPTO.get_random(&mut nonce_bytes_wire).unwrap();
         let nonce_caller_wire = Tpm2bNonce::from_bytes(&nonce_bytes_wire).unwrap();
 
         let auth_cmd = TpmsAuthCommand {
@@ -1579,7 +1629,7 @@ where
                 session.session_key.clone()
             };
             kdfa_by_alg(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -1593,7 +1643,7 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
             tpm2::crypto::decrypt(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -1614,7 +1664,7 @@ where
         rp_hash_updates.push(cmd_code_bytes.as_slice());
         rp_hash_updates.push(encrypted_param_buf);
 
-        let rp_hash = compute_client_hash(tpm.context.platform.crypto, auth_hash, &rp_hash_updates);
+        let rp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &rp_hash_updates);
 
         let nonce_tpm_new = &nonce_tpms_new[i];
         let nonce_caller_new = &nonce_callers_new[i];
@@ -1653,12 +1703,7 @@ where
         let attr_byte = [resp_attributes[i].bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(
-            tpm.context.platform.crypto,
-            auth_hash,
-            &hmac_key,
-            &hmac_updates,
-        );
+        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
         assert_eq!(
             hmac_bytes.as_slice(),
             resp_hmacs[i].get_buffer(),
@@ -1739,19 +1784,7 @@ where
                 cmd_buffer[13 + i * 4],
             ];
             let handle = u32::from_be_bytes(handle_bytes);
-            let mut name = Vec::new();
-            let global_state = &tpm.global_state;
-            let mut found = false;
-            for obj in global_state.transient_objects.iter().flatten() {
-                if obj.handle == handle {
-                    name = obj.name.get_buffer().to_vec();
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                name = handle.to_be_bytes().to_vec();
-            }
+            let name = entity_name(tpm, Handle(handle));
             extracted.push(name);
         }
         extracted
@@ -1769,11 +1802,7 @@ where
 
     for (i, session) in sessions.iter_mut().enumerate() {
         let mut nonce_bytes = [0u8; 16];
-        tpm.context
-            .platform
-            .crypto
-            .get_random(&mut nonce_bytes)
-            .unwrap();
+        CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
         let nonce_caller_new = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
         nonce_callers_new.push(nonce_caller_new);
 
@@ -1829,7 +1858,7 @@ where
                 session.session_key.clone()
             };
             kdfa_by_alg(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -1843,7 +1872,7 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
             tpm2::crypto::encrypt(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -1868,7 +1897,7 @@ where
         let param_bytes = &param_buf[..param_len];
         cp_hash_updates.push(param_bytes);
 
-        let cp_hash = compute_client_hash(tpm.context.platform.crypto, auth_hash, &cp_hash_updates);
+        let cp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &cp_hash_updates);
 
         let nonce_caller_new = &nonce_callers_new[i];
         let entity_auth = if i < num_handles {
@@ -1920,12 +1949,7 @@ where
         let attr_byte = [session.attributes.bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(
-            tpm.context.platform.crypto,
-            auth_hash,
-            &hmac_key,
-            &hmac_updates,
-        );
+        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
         let hmac_val = Tpm2bAuth::from_bytes(&hmac_bytes).unwrap();
 
         let auth_cmd = TpmsAuthCommand {
@@ -2053,7 +2077,7 @@ where
                 session.session_key.clone()
             };
             kdfa_by_alg(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -2067,7 +2091,7 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
             tpm2::crypto::decrypt(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -2088,7 +2112,7 @@ where
         rp_hash_updates.push(cmd_code_bytes.as_slice());
         rp_hash_updates.push(encrypted_param_buf);
 
-        let rp_hash = compute_client_hash(tpm.context.platform.crypto, auth_hash, &rp_hash_updates);
+        let rp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &rp_hash_updates);
 
         let nonce_tpm_new = &nonce_tpms_new[i];
         let nonce_caller_new = &nonce_callers_new[i];
@@ -2141,12 +2165,7 @@ where
         let attr_byte = [resp_attributes[i].bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(
-            tpm.context.platform.crypto,
-            auth_hash,
-            &hmac_key,
-            &hmac_updates,
-        );
+        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
         assert_eq!(
             hmac_bytes.as_slice(),
             resp_hmacs[i].get_buffer(),
@@ -2660,6 +2679,9 @@ mod tests {
             attributes: TpmaSession::CONTINUE_SESSION,
             bind_auth: Vec::new(),
             bind_entity: Handle::RH_NULL,
+            session_type: TpmSe::HMAC,
+            policy_auth_value_needed: false,
+            policy_password_needed: false,
         }
     }
 

@@ -6,8 +6,7 @@ use tpm2::commands::{
     ContextLoad, ContextSave, ContextSaveHandles, CreatePrimary, CreatePrimaryHandles,
 };
 use tpm2::*;
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 #[test]
 fn test_stress_combined_context() {

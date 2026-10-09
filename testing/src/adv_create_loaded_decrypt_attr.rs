@@ -4,8 +4,7 @@ use tpm2::{
     TpmsRsaParms, TpmtPublic, TpmtRsaScheme,
     commands::{CreateLoaded, CreateLoadedHandles, CreatePrimary, CreatePrimaryHandles},
 };
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 #[test]
 fn test_create_loaded_decrypt_attr() {

@@ -20,7 +20,6 @@ use tpm2::{
     TpmiStCommandTag, TpmsAuthCommand, TpmsEccParms, TpmsEccPoint, TpmsRsaParms,
     TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSigScheme,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 // =========================================================================

@@ -6,7 +6,6 @@ use tpm2::{
     TpmaObject, TpmiAlgHash, TpmiAlgSymMode, TpmsEccParms, TpmsEccPoint, TpmsSensitiveCreate,
     TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 use crate::test_utils::{execute_with_hmac_sessions, start_auth_session};

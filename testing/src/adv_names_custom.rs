@@ -6,7 +6,6 @@ use tpm2::errors::TpmRc;
 
 use tpm2::Handle;
 use tpm2::commands::{CreatePrimary, CreatePrimaryHandles};
-use tpm2_platform_linux::LinuxRng;
 
 use crate::test_utils::*;
 use tpm2::{
@@ -58,7 +57,7 @@ fn test_nv_name_algorithms_adversarial() {
 
         let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
         let digest = tpm2::crypto::hash(
-            sim.context.platform.crypto,
+            CLIENT_CRYPTO,
             TpmiAlgHash::Sha384,
             &pub_buf[..pub_len],
             &mut digest_buf,
@@ -112,7 +111,7 @@ fn test_nv_name_algorithms_adversarial() {
 
         let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
         let digest = tpm2::crypto::hash(
-            sim.context.platform.crypto,
+            CLIENT_CRYPTO,
             TpmiAlgHash::Sha512,
             &pub_buf[..pub_len],
             &mut digest_buf,

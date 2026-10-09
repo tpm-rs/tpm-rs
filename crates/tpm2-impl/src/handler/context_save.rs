@@ -66,41 +66,46 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
 
+        // Plaintext layout: `sequence (8 bytes, fingerprint) || serialized entity`.
+        // The fingerprint is checked by `TPM2_ContextLoad` after decryption
+        // (TPM 2.0 Part 1, "Context Confidentiality Protection").
         let mut sensitive_buf = [0u8; TPM2_MAX_CONTEXT_SIZE as usize];
+        let entity_buf = &mut sensitive_buf[CONTEXT_FINGERPRINT_SIZE..];
         let mut is_session = false;
         let mut _is_sequence = false;
 
-        let (obj_hierarchy, out_saved_handle, offset) =
+        let (obj_hierarchy, out_saved_handle, entity_len) =
             if let Some(obj) = self.global_state.find_transient_object(save_handle) {
                 let obj_hierarchy = obj.hierarchy;
                 let is_st_clear =
                     obj.st_clear || obj.public.object_attributes.contains(TpmaObject::ST_CLEAR);
 
-                let offset = Self::serialize_transient_object(obj, &mut sensitive_buf)?;
+                let len = Self::serialize_transient_object(obj, entity_buf)?;
 
                 let out_saved_handle = if is_st_clear {
                     0x80000002_u32
                 } else {
                     0x80000000_u32
                 };
-                (obj_hierarchy, out_saved_handle, offset)
+                (obj_hierarchy, out_saved_handle, len)
             } else if let Some(sess) = self.global_state.session(save_handle) {
                 is_session = true;
                 let obj_hierarchy = Handle::RH_NULL.0;
 
-                let offset = Self::serialize_session(sess, &mut sensitive_buf)?;
+                let len = Self::serialize_session(sess, entity_buf)?;
 
-                (obj_hierarchy, save_handle, offset)
+                (obj_hierarchy, save_handle, len)
             } else if let Some(seq) = self.global_state.find_active_sequence(save_handle) {
                 _is_sequence = true;
                 let obj_hierarchy = Handle::RH_NULL.0;
 
-                let offset = Self::serialize_sequence(seq, &mut sensitive_buf)?;
+                let len = Self::serialize_sequence(seq, entity_buf)?;
 
-                (obj_hierarchy, 0x80000001_u32, offset)
+                (obj_hierarchy, 0x80000001_u32, len)
             } else {
                 return Err(TpmRc::REFERENCE_H0);
             };
+        let offset = CONTEXT_FINGERPRINT_SIZE + entity_len;
 
         let handle_bytes = out_saved_handle.to_be_bytes();
         let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(obj_hierarchy);
@@ -118,6 +123,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             s
         };
         let sequence_bytes = sequence.to_be_bytes();
+        sensitive_buf[..CONTEXT_FINGERPRINT_SIZE].copy_from_slice(&sequence_bytes);
 
         // 2. Encrypt sensitive serialized data
         self.encrypt_saved_context(
@@ -127,7 +133,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &mut sensitive_buf[..offset],
         )?;
 
-        // 3. Compute HMAC integrity check
+        // 3. Compute HMAC integrity check over everything that follows the
+        // integrity value in the blob: `encrypted.size || encrypted.buffer`.
         let integrity = self.compute_context_integrity_hmac(
             proof,
             &sequence_bytes,
@@ -247,8 +254,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
-    /// Computes a SHA-256 HMAC signature keyed with the hierarchy proof across total_reset_count,
-    /// clear_count (if ST_CLEAR handle 0x80000002), sequence, saved_handle, and encrypted data.
+    /// Computes the context integrity value (TPM 2.0 Part 1, "Context Integrity
+    /// Protection"): a SHA-256 HMAC keyed with the hierarchy proof over
+    /// `totalResetCount || {clearCount} || sequence || savedHandle || encContext`,
+    /// where `clearCount` is only included for ST_CLEAR objects (handle
+    /// 0x80000002) and `encContext` is every byte of the context blob after
+    /// the integrity value, i.e. the marshaled `TPM2B_CONTEXT_SENSITIVE`
+    /// (`size || encrypted`), so that the size field is protected as well.
     fn compute_context_integrity_hmac(
         &self,
         proof: &[u8],
@@ -270,6 +282,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
         mac_ctx.update(sequence_bytes).map_err(|_| TpmRc::FAILURE)?;
         mac_ctx.update(handle_bytes).map_err(|_| TpmRc::FAILURE)?;
+        let encrypted_size = u16::try_from(sensitive_buf.len()).map_err(|_| TpmRc::FAILURE)?;
+        mac_ctx
+            .update(&encrypted_size.to_be_bytes())
+            .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx.update(sensitive_buf).map_err(|_| TpmRc::FAILURE)?;
 
         let mut mac_buf = [0u8; 64];
@@ -469,6 +485,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 }
 
+/// Size of the `sequence` fingerprint prepended to the plaintext of every
+/// saved context and verified by `TPM2_ContextLoad` after decryption.
+pub(crate) const CONTEXT_FINGERPRINT_SIZE: usize = 8;
+
+/// Maximum marshaled size of [`RawContextSaveRsp`].
+const RAW_CONTEXT_SAVE_RSP_MAX_SIZE: usize =
+    8 + 4 + 4 + 2 + (2 + OwnedDigest::MAX_SIZE + 2 + TPM2_MAX_CONTEXT_SIZE as usize);
+
 struct RawContextSaveRsp<'a> {
     sequence: u64,
     saved_handle: u32,
@@ -478,8 +502,8 @@ struct RawContextSaveRsp<'a> {
 }
 
 impl<'a> Marshal for RawContextSaveRsp<'a> {
-    const MAX_SIZE: usize = 8 + 4 + 4 + 2 + (2 + OwnedDigest::MAX_SIZE + 2 + 4096);
-    type MaxBuffer = [u8; 8 + 4 + 4 + 2 + (2 + OwnedDigest::MAX_SIZE + 2 + 4096)];
+    const MAX_SIZE: usize = RAW_CONTEXT_SAVE_RSP_MAX_SIZE;
+    type MaxBuffer = [u8; RAW_CONTEXT_SAVE_RSP_MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let integrity_size = self.integrity.get_size() as usize;

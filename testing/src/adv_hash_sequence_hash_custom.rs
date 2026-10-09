@@ -10,7 +10,6 @@ use tpm2::commands::{
 };
 use tpm2::errors::TpmRc;
 use tpm2::{Tpm2bAuth, Tpm2bMaxBuffer, TpmiAlgHash};
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 #[test]

@@ -7,8 +7,8 @@ use tpm2::TpmiAlgHash;
 use tpm2::commands::{NVDefineSpace, NVDefineSpaceHandles, NVReadPublic, NVReadPublicHandles};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bAuth, TpmaNv, TpmsNvPublic};
-use tpm2_platform_linux::{LinuxRng, PlatformCryptoProvider};
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_platform_linux::PlatformCryptoProvider;
+use tpm2_simulator::create_simulator;
 
 #[test]
 fn test_nv_define_space_and_read_public() {

@@ -5,9 +5,8 @@ use tpm2::commands::{
     ContextLoad, ContextSave, ContextSaveHandles, CreatePrimary, CreatePrimaryHandles,
 };
 use tpm2::*;
-use tpm2_platform_linux::LinuxRng;
 #[rustfmt::skip]
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 use crate::test_utils::*;
 
 /// Builds the `CreatePrimary` command used by `TestCombinedContext`: an

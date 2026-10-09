@@ -10,7 +10,6 @@ use tpm2::{
     TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmiStCommandTag, TpmsAuthCommand, TpmsEccParms,
     TpmsEccPoint, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn create_primary_key(sim: &mut Simulator) -> Handle {
@@ -218,127 +217,48 @@ fn test_param_decrypt_symmetric_null_fails() {
     assert_eq!(err, 2454);
 }
 
+/// Parameter encryption/decryption only supports CFB mode (TPM 2.0 Part 1,
+/// 21.3). A black-box client cannot force a non-CFB mode into a live session,
+/// so verify that the TPM refuses to create such a session in the first place:
+/// `TPM2_StartAuthSession` must reject every symmetric mode other than CFB.
 #[test]
-fn test_param_decrypt_symmetric_mode_invalid_fails() {
+fn test_start_auth_session_rejects_non_cfb_symmetric_mode() {
     let mut sim = create_simulator!();
-    let mut session = start_auth_session(
+    for mode in [
+        TpmiAlgSymMode::CTR,
+        TpmiAlgSymMode::OFB,
+        TpmiAlgSymMode::CBC,
+        TpmiAlgSymMode::ECB,
+    ] {
+        let res = start_auth_session(
+            &mut sim,
+            Handle::RH_NULL,
+            Handle::RH_NULL,
+            &[],
+            TpmSe::HMAC,
+            Some(TpmtSymDefObject::Aes128(Some(mode))),
+            TpmiAlgHash::Sha256,
+        );
+        let err = res.expect_err("StartAuthSession accepted a non-CFB symmetric mode");
+        // Strip the format-1 parameter number (bits 6 and 8..11).
+        assert_eq!(
+            err & 0xBF,
+            tpm2::errors::TpmRc::MODE.get(),
+            "mode {mode:?}: unexpected error {err:#x}"
+        );
+    }
+
+    // CFB is accepted.
+    start_auth_session(
         &mut sim,
         Handle::RH_NULL,
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        None,
+        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
         TpmiAlgHash::Sha256,
     )
-    .unwrap();
-
-    // Mutate the server-side session to have an invalid symmetric mode CTR
-    if let Some(state) = sim.global_state.session_mut(session.session_handle.0) {
-        state.symmetric = Some(tpm2::TpmtSymDef::Cipher(TpmtSymDefObject::Aes128(Some(
-            TpmiAlgSymMode::CTR,
-        ))));
-    } else {
-        panic!("session not found in global state");
-    }
-
-    session.symmetric = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CTR)));
-    session.attributes.insert(TpmaSession::DECRYPT);
-
-    let ecc_parms = TpmsEccParms {
-        symmetric: None,
-        scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),
-        curve_id: TpmEccCurve::NistP256,
-        kdf: None,
-    };
-    let pub_area = TpmtPublic {
-        name_alg: Some(TpmiAlgHash::Sha256),
-        object_attributes: TpmaObject::FIXED_TPM
-            | TpmaObject::FIXED_PARENT
-            | TpmaObject::SENSITIVE_DATA_ORIGIN
-            | TpmaObject::USER_WITH_AUTH
-            | TpmaObject::SIGN_ENCRYPT,
-        auth_policy: Tpm2bDigest::default(),
-        parms_and_id: PublicParmsAndId::Ecc(
-            ecc_parms,
-            TpmsEccPoint {
-                x: Tpm2bEccParameter::default(),
-                y: Tpm2bEccParameter::default(),
-            },
-        ),
-    };
-    let in_public = tpm2::Tpm2b(pub_area);
-    let sensitive_create = TpmsSensitiveCreate {
-        user_auth: Tpm2bAuth::default(),
-        data: Tpm2bSensitiveData::default(),
-    };
-    let in_sensitive = tpm2::Tpm2b(sensitive_create);
-
-    let create_cmd = CreatePrimary {
-        in_sensitive,
-        in_public,
-        ..Default::default()
-    };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
-        Ok(_) => panic!("expected error"),
-        Err(e) => e,
-    };
-    // Expected error code: mode_for(Session, Pos1) -> 2441
-    assert_eq!(err, 2441);
-}
-
-#[test]
-fn test_param_encrypt_symmetric_mode_invalid_fails() {
-    let mut sim = create_simulator!();
-    let object_handle = create_primary_key(&mut sim);
-    let mut session = start_auth_session(
-        &mut sim,
-        Handle::RH_NULL,
-        Handle::RH_NULL,
-        &[],
-        TpmSe::HMAC,
-        None,
-        TpmiAlgHash::Sha256,
-    )
-    .unwrap();
-
-    // Mutate the server-side session to have an invalid symmetric mode CTR
-    if let Some(state) = sim.global_state.session_mut(session.session_handle.0) {
-        state.symmetric = Some(tpm2::TpmtSymDef::Cipher(TpmtSymDefObject::Aes128(Some(
-            TpmiAlgSymMode::CTR,
-        ))));
-    } else {
-        panic!("session not found in global state");
-    }
-
-    session.symmetric = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CTR)));
-    session.attributes.insert(TpmaSession::ENCRYPT);
-
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
-        Ok(_) => panic!("expected error"),
-        Err(e) => e,
-    };
-    // Expected error code: mode_for(Session, Pos1) -> 2441
-    assert_eq!(err, 2441);
+    .expect("StartAuthSession with AES-128-CFB failed");
 }
 
 #[test]

@@ -7,7 +7,6 @@ use tpm2::commands::{
     SequenceUpdateHandles,
 };
 use tpm2::{Tpm2bAuth, Tpm2bMaxBuffer, TpmiAlgHash};
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 /// Port of the `run` closure in `TestHash`: hashes `data` with SHA-256 using

@@ -2,9 +2,8 @@ use tpm2::TpmEccCurve;
 use tpm2::commands::TestParms;
 use tpm2::errors::TpmRc;
 use tpm2::{TpmiRsaKeyBits, TpmsEccParms, TpmsRsaParms, TpmtPublicParms};
-use tpm2_platform_linux::LinuxRng;
+use tpm2_simulator::create_simulator;
 use tpm2_simulator::execute::ExecuteError;
-use tpm2_simulator::{Simulator, create_simulator};
 
 // Original Go test: test_parms_test.go - TestTestParms/p256
 #[test]

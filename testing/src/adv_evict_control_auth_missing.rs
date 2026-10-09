@@ -4,8 +4,7 @@ use tpm2::Handle;
 use tpm2::commands::EvictControl;
 use tpm2::commands::EvictControlHandles;
 use tpm2::errors::TpmRc;
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 #[test]
 fn test_evict_control_auth_missing() {

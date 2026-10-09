@@ -3,6 +3,7 @@ use crate::test_utils::{
     ActiveSession, CmdHeader, RespHeader, execute_with_password_sessions, map_sessions_to_handles,
     start_auth_session, strip_trailing_zeros,
 };
+use crate::test_utils::{CLIENT_CRYPTO, entity_name};
 use sha2::{Digest as _, Sha256};
 use tpm2::commands::{
     CreatePrimary, CreatePrimaryHandles, GetRandom, GetTime, GetTimeHandles, HierarchyChangeAuth,
@@ -16,7 +17,6 @@ use tpm2::{
     TpmiAlgSymMode, TpmiStCommandTag, TpmsAuthCommand, TpmsAuthResponse, TpmsSensitiveCreate,
     TpmtPublic, TpmtSensitive, TpmtSymDefObject, TpmuSensitiveComposite,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn reference_kdfa<H: tpm2::crypto::Hmac>(
@@ -165,19 +165,7 @@ where
             cmd_buffer[13 + i * 4],
         ];
         let handle = u32::from_be_bytes(handle_bytes);
-        let mut name = Vec::new();
-        let global_state = &tpm.global_state;
-        let mut found = false;
-        for obj in global_state.transient_objects.iter().flatten() {
-            if obj.handle == handle {
-                name = obj.name.get_buffer().to_vec();
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            name = handle.to_be_bytes().to_vec();
-        }
+        let name = entity_name(tpm, Handle(handle));
         command_handle_names.push(name);
     }
 
@@ -191,11 +179,7 @@ where
 
     for (i, session) in sessions.iter_mut().enumerate() {
         let mut nonce_bytes = [0u8; 16];
-        tpm.context
-            .platform
-            .crypto
-            .get_random(&mut nonce_bytes)
-            .unwrap();
+        CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
         let nonce_caller_new =
             Tpm2bNonce::from_bytes(crate::test_utils::leak_bytes(&nonce_bytes)).unwrap();
         nonce_callers_new.push(nonce_caller_new);
@@ -233,7 +217,7 @@ where
                 session.session_key.clone()
             };
             let (derived_key, derived_iv) = derive_key_and_iv_ref(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -245,7 +229,7 @@ where
             let mut iv = derived_iv;
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((derived_key.len() * 8) as u16).unwrap();
             tpm2::crypto::encrypt(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 sym_alg,
                 &derived_key,
                 &mut iv,
@@ -270,7 +254,7 @@ where
         let param_bytes = &param_buf[..param_len];
         cp_hash_updates.push(param_bytes);
 
-        let cp_hash = compute_client_hash(tpm.context.platform.crypto, auth_hash, &cp_hash_updates);
+        let cp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &cp_hash_updates);
 
         let nonce_caller_new = &nonce_callers_new[i];
         let entity_auth = if i < num_handles {
@@ -322,12 +306,7 @@ where
         let attr_byte = [session.attributes.bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(
-            tpm.context.platform.crypto,
-            auth_hash,
-            &hmac_key,
-            &hmac_updates,
-        );
+        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
         let hmac_val = Tpm2bAuth::from_bytes(&hmac_bytes).unwrap();
 
         let auth_cmd = TpmsAuthCommand {
@@ -425,7 +404,7 @@ where
                 session.session_key.clone()
             };
             let (derived_key, derived_iv) = derive_key_and_iv_ref(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -437,7 +416,7 @@ where
             let mut iv = derived_iv;
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((derived_key.len() * 8) as u16).unwrap();
             tpm2::crypto::decrypt(
-                tpm.context.platform.crypto,
+                CLIENT_CRYPTO,
                 sym_alg,
                 &derived_key,
                 &mut iv,

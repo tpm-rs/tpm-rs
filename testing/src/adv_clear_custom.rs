@@ -6,7 +6,6 @@ use tpm2::commands::{
     FlushContext,
 };
 use tpm2::errors::TpmRc;
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 #[test]

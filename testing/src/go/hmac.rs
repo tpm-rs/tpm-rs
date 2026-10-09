@@ -15,8 +15,7 @@ use tpm2::{
     TpmaObject, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsRsaParms, TpmsSensitiveCreate,
     TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive, TpmtSymDefObject, TpmuSensitiveComposite,
 };
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 /// Port of go-tpm's `RSASRKTemplate` (TCG reference RSA-2048 SRK template).
 fn get_rsa_srk_template() -> TpmtPublic<'static> {

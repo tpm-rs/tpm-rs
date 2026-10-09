@@ -11,8 +11,7 @@ use tpm2::commands::{
 };
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve, TpmSe};
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 fn get_ecc_srk_template() -> TpmtPublic<'static> {
     get_ecc_srk_template_with_unique(0)

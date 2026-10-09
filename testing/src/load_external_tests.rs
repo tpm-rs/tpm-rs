@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 use tpm2::Alg;
 
+use crate::test_utils::set_hierarchy_enabled;
 use crate::test_utils::{
     execute_sign, execute_with_password_sessions_status, flush_context, marshal_to_slice,
 };
@@ -17,8 +18,8 @@ use tpm2::{
     TpmsRsaParms, TpmtKeyedHashScheme, TpmtPublic, TpmtRsaScheme, TpmtSensitive, TpmtSymDefObject,
     TpmtTkHashcheck, TpmuSensitiveComposite,
 };
-use tpm2_platform_linux::{LinuxRng, PlatformCryptoProvider};
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_platform_linux::PlatformCryptoProvider;
+use tpm2_simulator::create_simulator;
 
 // 2048-bit RSA Modulus N, Prime P, Prime Q, Private Exponent D
 pub const RSA_N: &[u8] = &[
@@ -1454,7 +1455,7 @@ fn test_load_external_hmac_keyed_hash() {
 #[test]
 fn adv_load_external_sh_disabled() {
     let mut sim = create_simulator!();
-    sim.global_state.sh_enable = false;
+    set_hierarchy_enabled(&mut sim, Handle::RH_OWNER, false);
 
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
@@ -1472,7 +1473,7 @@ fn adv_load_external_sh_disabled() {
 #[test]
 fn adv_load_external_eh_disabled() {
     let mut sim = create_simulator!();
-    sim.global_state.eh_enable = false;
+    set_hierarchy_enabled(&mut sim, Handle::RH_ENDORSEMENT, false);
 
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
@@ -1668,7 +1669,7 @@ fn adv_load_external_transient_objects_exhaustion() {
     };
 
     let mut handles = Vec::new();
-    for _ in 0..tpm2_impl::MAX_LOADED_OBJECTS {
+    for _ in 0..tpm2::TPM2_MAX_LOADED_OBJECTS as usize {
         let (_, resp_handles) = sim.execute_with_handles(cmd.clone(), ()).unwrap();
         handles.push(resp_handles.object_handle);
     }

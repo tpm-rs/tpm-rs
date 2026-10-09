@@ -4,8 +4,7 @@ use crate::test_utils::*;
 use tpm2::commands::{Commit, CommitHandles, CreateLoaded, CreateLoadedHandles};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 /// Previous (non-faithful) version of the `TestCommit` port: uses an ECDAA key
 /// on NIST P-256 with an empty P1, and additionally checks that TPM2_Commit

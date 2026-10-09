@@ -20,7 +20,6 @@ use tpm2::{
     TpmsSensitiveCreate, TpmsSignatureEcc, TpmtEccScheme, TpmtPublic, TpmtSignature,
     TpmtTkVerified,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn create_signing_key(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
@@ -450,6 +449,8 @@ fn test_policy_auth_value_and_pcr_combination() {
 
         let mut final_session = active_sess.clone();
         final_session.bind_auth = password.to_vec();
+        // TPM2_PolicyAuthValue was executed on this session above.
+        final_session.mark_policy_auth_value();
 
         let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
         let sign_cmd = tpm2::commands::Sign {
@@ -511,6 +512,8 @@ fn test_policy_auth_value_and_pcr_combination() {
 
         let mut final_session = active_sess.clone();
         final_session.bind_auth = b"wrongpwd".to_vec();
+        // TPM2_PolicyAuthValue was executed on this session above.
+        final_session.mark_policy_auth_value();
 
         let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
         let sign_cmd = tpm2::commands::Sign {
@@ -622,6 +625,8 @@ fn test_policy_auth_value_and_pcr_combination() {
 
         let mut final_session = active_sess.clone();
         final_session.bind_auth = password.to_vec();
+        // TPM2_PolicyAuthValue was executed on this session above.
+        final_session.mark_policy_auth_value();
 
         let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
         let sign_cmd = tpm2::commands::Sign {
@@ -683,6 +688,8 @@ fn test_policy_auth_value_and_pcr_combination() {
 
         let mut final_session = active_sess.clone();
         final_session.bind_auth = password.to_vec();
+        // TPM2_PolicyAuthValue was executed on this session above.
+        final_session.mark_policy_auth_value();
 
         let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
         let sign_cmd = tpm2::commands::Sign {
@@ -711,15 +718,15 @@ fn test_policy_auth_value_and_pcr_combination() {
     }
 }
 
+/// A PCR in the policy selection is extended after `TPM2_PolicyPCR` gated the
+/// session; using the session afterwards must fail with `TPM_RC_PCR_CHANGED`
+/// (the TPM's `pcrUpdateCounter` no longer matches the session's snapshot).
 #[test]
-fn test_policy_pcr_counter_overflow_vulnerability() {
+fn test_policy_pcr_gated_pcr_extended_fails() {
     let mut sim = create_simulator!();
     let password = b"barpassword";
 
-    // 1. Manually set update_counter to u32::MAX
-    sim.global_state.pcrs.update_counter = u32::MAX;
-
-    // 2. Create key with policy PolicyPCR for PCR 0
+    // 1-2. Create key with policy PolicyPCR for PCR 0
     let mut select_bytes = [0u8; 3];
     select_bytes[0] = 0x01; // PCR 0
     let selection =
@@ -814,7 +821,7 @@ fn test_policy_pcr_counter_overflow_vulnerability() {
     )
     .unwrap();
 
-    // 4. Gate using PolicyPCR. This sets session.pcr_counter to Some(u32::MAX)
+    // 4. Gate using PolicyPCR. This snapshots the TPM's pcrUpdateCounter.
     let policy_pcr_real = PolicyPCR {
         pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
         pcrs: selection,
@@ -826,7 +833,7 @@ fn test_policy_pcr_counter_overflow_vulnerability() {
         .execute_with_handles(policy_pcr_real, policy_pcr_real_handles)
         .unwrap();
 
-    // 5. Extend PCR 0, incrementing update_counter to 0 (wrap-around)
+    // 5. Extend PCR 0, incrementing pcrUpdateCounter
     let mut digests = tpm2::TpmlDigestValues::default();
     digests.add(&tpm2::TpmtHa::Sha256(&[0xaa; 32])).unwrap();
     let extend_cmd = tpm2::commands::PCRExtend { digests };
@@ -834,9 +841,6 @@ fn test_policy_pcr_counter_overflow_vulnerability() {
         pcr_handle: Handle(0),
     };
     let _ = execute_with_password_sessions(&mut sim, &extend_cmd, extend_handles, 1, &[]).unwrap();
-
-    // Verify update_counter wrapped around to 0
-    assert_eq!(sim.global_state.pcrs.update_counter, 0);
 
     // 6. Attempt to Sign. It MUST fail with PcrChanged because PCR changed since gating
     let mut final_session = active_sess.clone();
@@ -863,22 +867,22 @@ fn test_policy_pcr_counter_overflow_vulnerability() {
 
     assert!(
         res.is_err(),
-        "Expected Sign to fail with PcrChanged due to wrap-around check!"
+        "Expected Sign to fail with PcrChanged after the gated PCR was extended!"
     );
     assert_eq!(res.err().unwrap(), TpmRc::PCR_CHANGED.get());
 
     let _ = flush_context(&mut sim, active_sess.session_handle);
 }
 
+/// A PCR *outside* the policy selection is extended after `TPM2_PolicyPCR`
+/// gated the session. `pcrUpdateCounter` is global, so the session must still
+/// be rejected with `TPM_RC_PCR_CHANGED` (TPM 2.0 Part 3, TPM2_PolicyPCR).
 #[test]
-fn test_policy_pcr_counter_bypass_on_max() {
+fn test_policy_pcr_other_pcr_extended_fails() {
     let mut sim = create_simulator!();
     let password = b"barpassword";
 
-    // 1. Manually set update_counter to u32::MAX
-    sim.global_state.pcrs.update_counter = u32::MAX;
-
-    // 2. Create key with policy PolicyPCR for PCR 0
+    // 1-2. Create key with policy PolicyPCR for PCR 0
     let mut select_bytes = [0u8; 3];
     select_bytes[0] = 0x01; // PCR 0
     let selection =
@@ -973,7 +977,7 @@ fn test_policy_pcr_counter_bypass_on_max() {
     )
     .unwrap();
 
-    // 4. Gate using PolicyPCR. This sets session.pcr_counter to Some(u32::MAX)
+    // 4. Gate using PolicyPCR. This snapshots the TPM's pcrUpdateCounter.
     let policy_pcr_real = PolicyPCR {
         pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
         pcrs: selection,
@@ -985,10 +989,16 @@ fn test_policy_pcr_counter_bypass_on_max() {
         .execute_with_handles(policy_pcr_real, policy_pcr_real_handles)
         .unwrap();
 
-    // 5. Manually set update_counter to 0 (wrapped around)
-    sim.global_state.pcrs.update_counter = 0;
+    // 5. Extend PCR 1, which is not part of the policy selection.
+    let mut digests = tpm2::TpmlDigestValues::default();
+    digests.add(&tpm2::TpmtHa::Sha256(&[0xbb; 32])).unwrap();
+    let extend_cmd = tpm2::commands::PCRExtend { digests };
+    let extend_handles = tpm2::commands::PCRExtendHandles {
+        pcr_handle: Handle(1),
+    };
+    let _ = execute_with_password_sessions(&mut sim, &extend_cmd, extend_handles, 1, &[]).unwrap();
 
-    // 6. Attempt to Sign. It MUST fail with PcrChanged because PCR changed since gating (from u32::MAX to 0)
+    // 6. Attempt to Sign. It MUST fail with PcrChanged because pcrUpdateCounter changed since gating
     let mut final_session = active_sess.clone();
     final_session.bind_auth = password.to_vec();
     final_session.attributes = tpm2::TpmaSession::from_bits_retain(1);
@@ -1016,7 +1026,7 @@ fn test_policy_pcr_counter_bypass_on_max() {
     // will succeed (or return a different error, e.g. success), instead of returning PcrChanged!
     assert!(
         res.is_err(),
-        "Expected Sign to fail because PCR was changed (update_counter wrapped to 0)!"
+        "Expected Sign to fail because pcrUpdateCounter changed since gating!"
     );
     assert_eq!(res.err().unwrap(), TpmRc::PCR_CHANGED.get());
 
@@ -1491,7 +1501,7 @@ fn test_trial_session_leak_stress() {
 
     // Now verify that if we DON'T flush, we hit the limit on the 65th attempt.
     let mut active_handles = Vec::new();
-    for _ in 0..tpm2_impl::MAX_LOADED_SESSIONS {
+    for _ in 0..max_loaded_sessions(&mut sim) {
         let start_auth = StartAuthSession {
             nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),
@@ -1582,7 +1592,7 @@ fn test_trial_session_cleanup_on_failure() {
 
     // 4. Verify we can start 4 new sessions (meaning the slot was released).
     let mut active_handles = Vec::new();
-    for _ in 0..tpm2_impl::MAX_LOADED_SESSIONS {
+    for _ in 0..max_loaded_sessions(&mut sim) {
         let start_auth = StartAuthSession {
             nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),
@@ -1633,7 +1643,7 @@ fn test_trial_session_creation_failure_no_leak() {
 
     // 2. Verify that we can still start MAX_LOADED_SESSIONS active sessions (i.e. the failed attempt didn't occupy a slot).
     let mut active_handles = Vec::new();
-    for _ in 0..tpm2_impl::MAX_LOADED_SESSIONS {
+    for _ in 0..max_loaded_sessions(&mut sim) {
         let start_auth = StartAuthSession {
             nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),
@@ -1686,7 +1696,7 @@ fn test_trial_session_double_flush() {
 
     // 4. Verify we can still start MAX_LOADED_SESSIONS active sessions.
     let mut active_handles = Vec::new();
-    for _ in 0..tpm2_impl::MAX_LOADED_SESSIONS {
+    for _ in 0..max_loaded_sessions(&mut sim) {
         let start_auth = StartAuthSession {
             nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),

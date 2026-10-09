@@ -10,7 +10,6 @@ use tpm2::{
     Tpm2bSensitiveCreate, Tpm2bSensitiveData, TpmaNv, TpmaObject, TpmiAlgHash, TpmsNvPublic,
     TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn hex_decode(s: &str) -> Vec<u8> {

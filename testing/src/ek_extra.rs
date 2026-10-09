@@ -10,8 +10,7 @@ use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bNonce, Tpm2bSensitiveData,
     TpmaObject, TpmiAlgHash, TpmsSensitiveCreate, TpmtPublic,
 };
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 /// Creates an EK from `ek_template`, checks that its auth policy (via
 /// ReadPublic) and the TPM-computed PolicySecret(RH_ENDORSEMENT) digest

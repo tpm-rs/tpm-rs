@@ -4,8 +4,7 @@ use tpm2::commands::{CreatePrimary, CreatePrimaryHandles};
 use tpm2::commands::{EvictControl, EvictControlHandles};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 fn get_ecc_srk_template() -> TpmtPublic<'static> {
     TpmtPublic {

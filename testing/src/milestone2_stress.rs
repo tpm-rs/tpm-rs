@@ -10,7 +10,6 @@ use tpm2::commands::{
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve, TpmNt, TpmSe};
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn get_ecc_template() -> TpmtPublic<'static> {

@@ -1,4 +1,5 @@
 use crate::test_utils::marshal_to_slice;
+use crate::test_utils::max_loaded_sessions;
 use crate::test_utils::{
     ResponseCorruption, execute_with_hmac_sessions, execute_with_hmac_sessions_corrupt_response,
     execute_with_hmac_sessions_mismatch_nonce, execute_with_password_sessions, flush_context,
@@ -15,7 +16,6 @@ use tpm2::{
     Tpm2bSensitiveCreate, Tpm2bSensitiveData, TpmaObject, TpmaSession, TpmiAlgHash, TpmiAlgSymMode,
     TpmsEccParms, TpmsEccPoint, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn create_primary_key(sim: &mut Simulator) -> Handle {
@@ -1147,7 +1147,7 @@ fn f2_t2_5_nonce_randomness() {
 #[test]
 fn f3_t2_1_max_sessions_boundary() {
     let mut sim = create_simulator!();
-    for _ in 0..tpm2_impl::MAX_LOADED_SESSIONS {
+    for _ in 0..max_loaded_sessions(&mut sim) {
         let _ = start_auth_session(
             &mut sim,
             Handle::RH_NULL,

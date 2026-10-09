@@ -3,7 +3,6 @@ use crate::test_utils::*;
 use tpm2::commands::{CreateLoaded, CreateLoadedHandles};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 /// go-tpm's `ECCEKTemplate`: the TCG default ECC NIST P-256 EK template

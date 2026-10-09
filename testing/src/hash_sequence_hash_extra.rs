@@ -10,7 +10,6 @@ use tpm2::commands::{
     SequenceUpdateHandles,
 };
 use tpm2::{Tpm2bAuth, Tpm2bMaxBuffer, TpmiAlgHash};
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 /// TPM2_Hash with SHA-1/SHA-384/SHA-512, and rejection of an unsupported

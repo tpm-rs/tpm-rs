@@ -3,8 +3,7 @@ use sha2::{Digest, Sha256};
 use tpm2::Handle;
 use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, Sign, SignHandles};
 use tpm2::*;
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 use crate::test_utils::*;
 

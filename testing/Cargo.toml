@@ -13,7 +13,6 @@ categories.workspace = true
 tpm2-simulator = { path = "../crates/tpm2-simulator", default-features = false }
 tpm2-platform-linux = { path = "../crates/tpm2-platforms/linux", default-features = false }
 tpm2 = { workspace = true }
-tpm2-impl = { workspace = true }
 rsa = { version = "0.9.10", features = ["sha2", "sha1", "getrandom"] }
 sha2 = "0.10.9"
 sha1 = "0.10.6"

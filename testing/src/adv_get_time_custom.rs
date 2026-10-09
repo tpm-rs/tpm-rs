@@ -1,7 +1,6 @@
 #![allow(unused_imports, dead_code)]
 use tpm2::Handle;
 use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, GetTime, GetTimeHandles};
-use tpm2_platform_linux::LinuxRng;
 
 use crate::test_utils::*;
 use tpm2::{

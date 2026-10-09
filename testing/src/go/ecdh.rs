@@ -3,8 +3,7 @@ use p256::{PublicKey, SecretKey, elliptic_curve::sec1::ToEncodedPoint};
 use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, ECDHZGen, ECDHZGenHandles};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 // Original Go test: ecdh_test.go - TestECDH
 #[test]

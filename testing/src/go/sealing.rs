@@ -17,6 +17,7 @@
 //! HMAC), this file contains a small go-tpm style session implementation
 //! ([`GoHmacSession`]) and command executor ([`execute_go`]).
 
+use crate::test_utils::CLIENT_CRYPTO;
 use crate::test_utils::{
     CmdHeader, RespHeader, execute_with_password_sessions, flush_context, kdfa_by_alg, leak_bytes,
     marshal_to_slice, strip_trailing_zeros,
@@ -35,7 +36,6 @@ use tpm2::{
     TpmsAuthCommand, TpmsAuthResponse, TpmsEccParms, TpmsEccPoint, TpmsRsaParms,
     TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 // =========================================================================
@@ -258,11 +258,7 @@ impl GoHmacSession {
             return;
         }
         self.nonce_caller = vec![0u8; self.nonce_size];
-        sim.context
-            .platform
-            .crypto
-            .get_random(&mut self.nonce_caller)
-            .unwrap();
+        CLIENT_CRYPTO.get_random(&mut self.nonce_caller).unwrap();
 
         let (tpm_key, encrypted_salt, salt) = match &self.salt {
             Some((handle, public)) => {
@@ -295,7 +291,7 @@ impl GoHmacSession {
             let bits = (digest_size(self.hash) * 8) as u32;
             let mut out = vec![0u8; digest_size(self.hash)];
             kdfa_by_alg(
-                sim.context.platform.crypto,
+                CLIENT_CRYPTO,
                 self.hash,
                 &key,
                 b"ATH",
@@ -311,12 +307,8 @@ impl GoHmacSession {
     }
 
     /// go-tpm `hmacSession.NewNonceCaller`.
-    fn new_nonce_caller(&mut self, sim: &mut Simulator<'_>) {
-        sim.context
-            .platform
-            .crypto
-            .get_random(&mut self.nonce_caller)
-            .unwrap();
+    fn new_nonce_caller(&mut self, _sim: &mut Simulator<'_>) {
+        CLIENT_CRYPTO.get_random(&mut self.nonce_caller).unwrap();
     }
 
     /// HMAC key (Part 1, 19.6): sessionKey || auth, unless this session is
@@ -341,7 +333,7 @@ impl GoHmacSession {
     /// derived from sessionKey || auth with the given nonce order.
     fn param_crypt(
         &self,
-        sim: &Simulator<'_>,
+        _sim: &Simulator<'_>,
         nonce_newer: &[u8],
         nonce_older: &[u8],
         decrypt: bool,
@@ -357,7 +349,7 @@ impl GoHmacSession {
         session_value.extend_from_slice(&self.auth);
         let mut key_iv = vec![0u8; key_bytes + 16];
         kdfa_by_alg(
-            sim.context.platform.crypto,
+            CLIENT_CRYPTO,
             self.hash,
             &session_value,
             b"CFB",
@@ -369,9 +361,9 @@ impl GoHmacSession {
         let (key, iv) = key_iv.split_at_mut(key_bytes);
         let alg = TpmtSymDefObject::aes_cfb((key_bytes * 8) as u16).unwrap();
         if decrypt {
-            tpm2::crypto::decrypt(sim.context.platform.crypto, alg, key, iv, param).unwrap();
+            tpm2::crypto::decrypt(CLIENT_CRYPTO, alg, key, iv, param).unwrap();
         } else {
-            tpm2::crypto::encrypt(sim.context.platform.crypto, alg, key, iv, param).unwrap();
+            tpm2::crypto::encrypt(CLIENT_CRYPTO, alg, key, iv, param).unwrap();
         }
     }
 }
@@ -379,7 +371,7 @@ impl GoHmacSession {
 /// go-tpm `getEncryptedSalt`: RSA-OAEP or ECDH (KDFe) salt encapsulation with
 /// label "SECRET" against the salt key's public area.
 fn encrypted_salt(
-    sim: &mut Simulator<'_>,
+    _sim: &mut Simulator<'_>,
     public: &TpmtPublic<'static>,
 ) -> (Tpm2bEncryptedSecret<'static>, Vec<u8>) {
     let name_alg = public.name_alg.expect("salt key must have a name alg");
@@ -387,12 +379,9 @@ fn encrypted_salt(
         PublicParmsAndId::Rsa(_, pub_key_rsa) => {
             use tpm2::crypto::Asymmetric;
             let mut salt = vec![0u8; digest_size(name_alg)];
-            sim.context.platform.crypto.get_random(&mut salt).unwrap();
+            CLIENT_CRYPTO.get_random(&mut salt).unwrap();
             let mut ciphertext = [0u8; 512];
-            let len = sim
-                .context
-                .platform
-                .crypto
+            let len = CLIENT_CRYPTO
                 .encrypt(
                     tpm2::Alg::OAEP,
                     name_alg.into(),
@@ -431,7 +420,7 @@ fn encrypted_salt(
             padded_tpm_x[32 - tpm_x.len()..].copy_from_slice(tpm_x);
             let mut salt = vec![0u8; 32];
             tpm2::crypto::kdf::kdfe(
-                sim.context.platform.crypto,
+                CLIENT_CRYPTO,
                 TpmiAlgHash::Sha256,
                 z.raw_secret_bytes().as_slice(),
                 b"SECRET",
@@ -458,8 +447,8 @@ fn encrypted_salt(
 }
 
 /// Computes a digest with the simulator's crypto provider.
-fn hash(sim: &Simulator<'_>, alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HashCtx::new(sim.context.platform.crypto, alg).unwrap();
+fn hash(_sim: &Simulator<'_>, alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
+    let mut ctx = tpm2::crypto::HashCtx::new(CLIENT_CRYPTO, alg).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }
@@ -468,8 +457,8 @@ fn hash(sim: &Simulator<'_>, alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
 }
 
 /// Computes an HMAC with the simulator's crypto provider.
-fn hmac(sim: &Simulator<'_>, alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HmacCtx::new(sim.context.platform.crypto, alg, key).unwrap();
+fn hmac(_sim: &Simulator<'_>, alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
+    let mut ctx = tpm2::crypto::HmacCtx::new(CLIENT_CRYPTO, alg, key).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }

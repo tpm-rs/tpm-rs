@@ -15,7 +15,6 @@ use tpm2::{
     TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmsEccParms, TpmsEccPoint, TpmsSensitiveCreate,
     TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn create_ecc_key(sim: &mut Simulator<'_>, auth: &[u8]) -> Handle {

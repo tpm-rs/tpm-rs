@@ -6,8 +6,7 @@ use tpm2::commands::{
     RSADecryptHandles, RSAEncrypt, RSAEncryptHandles,
 };
 use tpm2::*;
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 /// go-tpm's `RSASRKTemplate`.
 fn get_rsa_srk_template() -> TpmtPublic<'static> {

@@ -3,7 +3,6 @@ use tpm2::Handle;
 use tpm2::Tpm2bAuth;
 use tpm2::commands::{HierarchyChangeAuth, HierarchyChangeAuthHandles};
 use tpm2::errors::TpmRc;
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 const AUTH_KEY: &[u8] = b"authkey";

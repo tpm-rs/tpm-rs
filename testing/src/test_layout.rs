@@ -5,7 +5,10 @@ use tpm2::Unmarshal;
 use tpm2::commands::{CreatePrimary, CreatePrimaryHandles};
 use tpm2::*;
 use tpm2::{Handle, TpmCc};
+use tpm2_simulator::create_simulator;
 
+/// Hand-marshals a password-authorized `TPM2_CreatePrimary` command, checks
+/// the auth-area layout, and executes it on the simulator.
 #[test]
 fn test_dump() {
     let tpmt_sensitive = TpmsSensitiveCreate {
@@ -80,8 +83,22 @@ fn test_dump() {
 
     written += marshal_to_slice(&cp_cmd, &mut cmd_buffer[written..]);
 
-    println!("Total written: {}", written);
-    println!("Auth Size value: {}", auth_written);
-    println!("Auth Area starts at: {}", end_of_auth - auth_written);
-    println!("Cmd Parameters start at: {}", end_of_auth);
+    assert_eq!(end_of_auth - auth_written, 10 + 4 + 4);
+
+    // Patch commandSize and send the hand-marshaled command to the simulator.
+    let size = written as u32;
+    cmd_buffer[2..6].copy_from_slice(&size.to_be_bytes());
+    let mut sim = create_simulator!();
+    let mut resp_buffer = [0u8; 4096];
+    let resp = sim
+        .transact(&cmd_buffer[..written], &mut resp_buffer)
+        .expect("transact failed");
+    let mut resp_slice: &[u8] = resp;
+    let resp_header = RespHeader::unmarshal(&mut resp_slice).unwrap();
+    assert_eq!(
+        resp_header.rc, 0,
+        "hand-marshaled CreatePrimary failed with {:#x}",
+        resp_header.rc
+    );
+    assert_eq!(resp_header.size as usize, resp.len());
 }

@@ -4,14 +4,13 @@ use tpm2::Alg;
 
 use tpm2::Handle;
 use tpm2::commands::{CreatePrimary, CreatePrimaryHandles};
-use tpm2_platform_linux::LinuxRng;
 
 use crate::test_utils::*;
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bName, TpmaNv, TpmaObject, TpmiAlgHash,
     TpmiAlgSymMode, TpmsEccParms, TpmsNvPublic, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 // Original Go test: names_test.go - TestHandleName
 #[test]
@@ -90,7 +89,7 @@ fn test_object_name() {
 
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
     let digest = tpm2::crypto::hash(
-        sim.context.platform.crypto,
+        CLIENT_CRYPTO,
         TpmiAlgHash::Sha256,
         &pub_buf[..pub_len],
         &mut digest_buf,
@@ -149,7 +148,7 @@ fn test_nv_name() {
 
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
     let digest = tpm2::crypto::hash(
-        sim.context.platform.crypto,
+        CLIENT_CRYPTO,
         TpmiAlgHash::Sha256,
         &pub_buf[..pub_len],
         &mut digest_buf,

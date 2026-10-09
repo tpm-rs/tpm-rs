@@ -1,15 +1,16 @@
+use crate::test_utils::CLIENT_CRYPTO;
 use crate::test_utils::{execute_with_hmac_sessions, start_auth_session};
 use tpm2::Unmarshal;
 use tpm2::commands::{Clear, ClearHandles, HierarchyChangeAuth, HierarchyChangeAuthHandles};
 use tpm2::{Handle, TpmSe};
 use tpm2::{Tpm2bAuth, TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmtSymDefObject};
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 #[test]
 fn test_cfb_direct() {
-    let sim = create_simulator!();
-    let crypto = &sim.context.platform.crypto;
+    // Client-side sanity check of the CFB primitive used by the session
+    // parameter-encryption helpers; no TPM interaction is needed.
+    let crypto = &CLIENT_CRYPTO;
 
     let key = [0u8; 16];
     let original_iv = [0u8; 16];

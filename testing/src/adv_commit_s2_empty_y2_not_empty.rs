@@ -7,8 +7,7 @@ use tpm2::{
     TpmaObject, TpmiAlgHash, TpmsEccParms, TpmsEccPoint, TpmsSchemeEcdaa, TpmtEccScheme,
     TpmtPublic,
 };
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 #[test]
 fn test_commit_s2_empty_y2_not_empty() {

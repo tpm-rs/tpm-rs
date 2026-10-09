@@ -1195,3 +1195,105 @@ where
     buf[..len].copy_from_slice(&tmp[..len]);
     len
 }
+
+/// A [`tpm2_impl::TpmEngine`] backed by the real test crypto provider and the
+/// fake storage/timer/RNG.
+pub type RealCryptoEngine<'a> =
+    tpm2_impl::TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>;
+
+/// Builds a [`RealCryptoEngine`] plus its [`tpm2_impl::GlobalState`] and runs
+/// `TPM2_Startup(TPM_SU_CLEAR)`, so white-box tests can drive real commands
+/// while still being able to inspect and modify the internal state.
+pub fn setup_real_crypto_tpm<'a>(
+    crypto: &'a mut TestCryptoProvider,
+    storage: &'a mut FakeStorage,
+    timer: &'a mut FakeTimer,
+    rng: &'a FakeRng,
+) -> (RealCryptoEngine<'a>, tpm2_impl::GlobalState) {
+    let platform = tpm2_impl::TpmPlatform::new(crypto, storage, timer, rng);
+    let mut tpm = tpm2_impl::TpmEngine::new(platform).unwrap();
+    let mut global_state = tpm2_impl::GlobalState::default();
+    tpm.init_storage(&mut global_state);
+    global_state.nv_available = true;
+    global_state.locality = 0;
+    global_state.g_nv_ok = true;
+
+    let startup = [0x80, 0x01, 0, 0, 0, 0x0c, 0, 0, 0x01, 0x44, 0, 0];
+    let mut rsp = [0u8; 256];
+    tpm.execute_command_separate(&mut global_state, &startup, &mut rsp);
+    assert_eq!(&rsp[6..10], &[0, 0, 0, 0], "TPM2_Startup failed");
+    (tpm, global_state)
+}
+
+/// Marshals `cmd` with `handles` and the given authorization area, executes it
+/// on `tpm`, and unmarshals the response (ignoring any response auth area).
+///
+/// Returns the raw response code on failure.
+pub fn execute_command<C: tpm2::commands::Command>(
+    tpm: &mut RealCryptoEngine<'_>,
+    global_state: &mut tpm2_impl::GlobalState,
+    handles: &C::Handles,
+    cmd: &C,
+    auths: &[tpm2::TpmsAuthCommand],
+) -> Result<(C::RespHandles, C::Response<'static>), u32>
+where
+    for<'b> &'b mut <C as tpm2::Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
+    for<'b> &'b mut <<C as tpm2::commands::Command>::Handles as tpm2::Marshal>::MaxBuffer:
+        TryFrom<&'b mut [u8]>,
+    C::Response<'static>: tpm2::Unmarshal<'static>,
+{
+    use tpm2::Unmarshal;
+
+    let mut req = Vec::new();
+    req.extend_from_slice(
+        &(if auths.is_empty() {
+            0x8001u16
+        } else {
+            0x8002u16
+        })
+        .to_be_bytes(),
+    );
+    req.extend_from_slice(&[0u8; 4]); // commandSize, patched below
+    req.extend_from_slice(&C::CMD_CODE.code().to_be_bytes());
+    let mut buf = [0u8; 8192];
+    let len = marshal_to_slice(handles, &mut buf);
+    req.extend_from_slice(&buf[..len]);
+    if !auths.is_empty() {
+        let mut area = Vec::new();
+        for auth in auths {
+            let len = marshal_to_slice(auth, &mut buf);
+            area.extend_from_slice(&buf[..len]);
+        }
+        req.extend_from_slice(&(area.len() as u32).to_be_bytes());
+        req.extend_from_slice(&area);
+    }
+    let len = marshal_to_slice(cmd, &mut buf);
+    req.extend_from_slice(&buf[..len]);
+    let size = req.len() as u32;
+    req[2..6].copy_from_slice(&size.to_be_bytes());
+
+    let mut rsp = [0u8; 8192];
+    let rsp_len = tpm.execute_command_separate(global_state, &req, &mut rsp);
+    let rc = u32::from_be_bytes(rsp[6..10].try_into().unwrap());
+    if rc != 0 {
+        return Err(rc);
+    }
+    let body: &'static [u8] = Vec::leak(rsp[10..rsp_len].to_vec());
+    let mut slice = body;
+    let resp_handles = C::RespHandles::unmarshal(&mut slice).expect("response handles");
+    if rsp[0..2] == 0x8002u16.to_be_bytes() {
+        let _param_size = u32::unmarshal(&mut slice).expect("parameterSize");
+    }
+    let resp = <C::Response<'static>>::unmarshal(&mut slice).expect("response parameters");
+    Ok((resp_handles, resp))
+}
+
+/// A password authorization (`TPM_RS_PW`) carrying `auth`.
+pub fn password_auth(auth: &'static [u8]) -> tpm2::TpmsAuthCommand<'static> {
+    tpm2::TpmsAuthCommand {
+        session_handle: Handle::RS_PW,
+        nonce: Tpm2bNonce::default(),
+        session_attributes: tpm2::TpmaSession(0),
+        hmac: tpm2::Tpm2bAuth::from_bytes(auth).unwrap(),
+    }
+}

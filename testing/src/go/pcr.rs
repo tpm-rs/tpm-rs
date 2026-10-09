@@ -7,8 +7,7 @@ use tpm2::commands::{
 use tpm2::{
     Handle, Tpm2bEvent, TpmiAlgHash, TpmlDigestValues, TpmlPcrSelection, TpmsPcrSelection, TpmtHa,
 };
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 /// The TPM requires all PCR selections to be at least big enough to select all
 /// the PCRs in the minimum PC Client PCR allocation.

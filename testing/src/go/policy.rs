@@ -21,7 +21,6 @@ use tpm2::{
     TpmtEccScheme, TpmtPublic, TpmtRsaScheme, TpmtSigScheme, TpmtSignature, TpmtSymDefObject,
     TpmtTkHashcheck, TpmtTkVerified,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 /// Computes `hashAlg(data)` with the platform crypto provider.
@@ -377,7 +376,7 @@ pub(crate) fn get_expected_pcr_digest(
 
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
     tpm2::crypto::hash(
-        sim.context.platform.crypto,
+        CLIENT_CRYPTO,
         TpmiAlgHash::Sha256,
         &expected_val,
         &mut digest_buf,
@@ -797,7 +796,7 @@ fn policy_auth_value(
     let k = k_handles.object_handle;
 
     // create a real policy session and use the password through the authOption
-    let sess2 = policy_session(&mut sim, false);
+    let mut sess2 = policy_session(&mut sim, false);
 
     let policy_auth_value2 = PolicyAuthValue {};
     let policy_auth_value2_handles = PolicyAuthValueHandles {
@@ -811,6 +810,7 @@ fn policy_auth_value(
         &[],
     )
     .expect("executing policyAuthValue");
+    sess2.mark_policy_auth_value();
 
     // sign some data with the key using the session
     let digest = hash_sha256(b"somedata");

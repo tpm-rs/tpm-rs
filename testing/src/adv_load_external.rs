@@ -10,8 +10,7 @@ use tpm2::{
     TpmsEccPoint, TpmsRsaParms, TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive,
     TpmuSensitiveComposite,
 };
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 // 2048-bit RSA Modulus N, Prime P, Prime Q, Private Exponent D
 pub const RSA_N: &[u8] = &[
@@ -328,7 +327,7 @@ fn adv_load_external_object_memory_exhaustion() {
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
 
     // Load MAX_LOADED_OBJECTS objects
-    for i in 0..tpm2_impl::MAX_LOADED_OBJECTS {
+    for i in 0..tpm2::TPM2_MAX_LOADED_OBJECTS as usize {
         let cmd = LoadExternal {
             in_private: None,
             in_public,

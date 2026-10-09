@@ -14,8 +14,7 @@ use tpm2::{
     TpmtSensitive, TpmtSigScheme, TpmtSignature, TpmtSymDefObject, TpmtTkHashcheck,
     TpmuSensitiveComposite,
 };
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 // NIST P-256 ECC Coordinates and Private Scalar (same as in load_external_tests.rs)
 pub const ECC_X: &[u8] = &[

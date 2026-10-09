@@ -1,8 +1,7 @@
 use crate::test_utils::*;
 use tpm2::commands::{Clear, ClearHandles, CreatePrimary, CreatePrimaryHandles};
 use tpm2::*;
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 /// Equivalent of go-tpm's `ECCSRKTemplate`.
 fn ecc_srk_template() -> TpmtPublic<'static> {

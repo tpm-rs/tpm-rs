@@ -148,12 +148,17 @@ impl SimResponse {
     }
 }
 
+/// An in-process TPM simulator.
+///
+/// The engine and its state are private: clients interact with the TPM only
+/// through the command interface ([`Simulator::execute`],
+/// [`Simulator::execute_with_handles`], [`Simulator::transact`]) and platform
+/// signals ([`Simulator::signal_platform`]), exactly like a real TPM.
 pub struct Simulator<'a> {
-    pub context:
-        Box<TpmEngine<'a, PlatformCryptoProvider, RamStorageMock<4096>, LinuxTimer, LinuxRng>>,
-    pub global_state: Box<::tpm2_impl::GlobalState>,
-    pub is_power_on: bool,
-    pub is_nv_on: bool,
+    context: Box<TpmEngine<'a, PlatformCryptoProvider, RamStorageMock<4096>, LinuxTimer, LinuxRng>>,
+    global_state: Box<::tpm2_impl::GlobalState>,
+    is_power_on: bool,
+    is_nv_on: bool,
 }
 
 impl<'a> Simulator<'a> {
@@ -449,19 +454,43 @@ impl<'a> Simulator<'a> {
     }
 }
 
+/// Implementation details used by [`create_simulator!`].
+///
+/// These re-exports let the macro expand in downstream crates without
+/// requiring them to depend on (or import anything from) `tpm2-impl` or
+/// `tpm2-platform-linux`. Not part of the public API.
+#[doc(hidden)]
+pub mod __private {
+    pub use tpm2_impl::storage::ram_storage_mock::RamStorageMock;
+    pub use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider};
+}
+
+/// Creates a fresh, self-contained in-process [`Simulator`] that has been
+/// powered on, had NV enabled, and received `TPM2_Startup(TPM_SU_CLEAR)`.
+///
+/// Every invocation allocates its own crypto provider, RAM-backed NV storage,
+/// timer and platform RNG (leaked to obtain a `'static` lifetime), so
+/// simulators created by different tests — or by repeated calls of the same
+/// helper — never share TPM state.
+///
+/// The expansion only refers to items through `$crate`, so callers need no
+/// imports besides the macro itself.
 #[macro_export]
 macro_rules! create_simulator {
     () => {{
-        static CRYP_RNG: LinuxRng = LinuxRng::new();
-        static PLAT_RNG: LinuxRng = LinuxRng::new();
-        static mut CRYPTO: ::tpm2_platform_linux::PlatformCryptoProvider =
-            ::tpm2_platform_linux::PlatformCryptoProvider;
-        static mut STORAGE: ::tpm2_impl::storage::ram_storage_mock::RamStorageMock<4096> =
-            ::tpm2_impl::storage::ram_storage_mock::RamStorageMock::new();
-        static mut TIMER: ::tpm2_platform_linux::LinuxTimer =
-            ::tpm2_platform_linux::LinuxTimer::new();
-        let mut sim =
-            unsafe { Simulator::new(&mut CRYPTO, &mut STORAGE, &mut TIMER, &PLAT_RNG).unwrap() };
+        let crypto: &'static mut $crate::__private::PlatformCryptoProvider =
+            ::std::boxed::Box::leak(::std::boxed::Box::new(
+                $crate::__private::PlatformCryptoProvider,
+            ));
+        let storage: &'static mut $crate::__private::RamStorageMock<4096> = ::std::boxed::Box::leak(
+            ::std::boxed::Box::new($crate::__private::RamStorageMock::new()),
+        );
+        let timer: &'static mut $crate::__private::LinuxTimer =
+            ::std::boxed::Box::leak(::std::boxed::Box::new($crate::__private::LinuxTimer::new()));
+        let platform_rng: &'static $crate::__private::LinuxRng =
+            ::std::boxed::Box::leak(::std::boxed::Box::new($crate::__private::LinuxRng::new()));
+        let mut sim = $crate::Simulator::new(crypto, storage, timer, platform_rng)
+            .expect("failed to create TPM simulator");
         sim.power_on_start_up();
         sim
     }};

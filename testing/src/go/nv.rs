@@ -9,7 +9,6 @@ use tpm2::commands::{
 use tpm2::errors::TpmRc;
 use tpm2::{Handle, TpmSe};
 use tpm2::{Tpm2bAuth, Tpm2bDigest, TpmaNv, TpmiAlgHash, TpmsNvPublic};
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 /// NV index used by every test in this file (`TPMHandle(0x0180000F)` in Go).

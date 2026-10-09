@@ -16,7 +16,7 @@ use tpm2::commands::{
 use tpm2::crypto::kdf::{kdfa, kdfe};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_platform_linux::{LinuxRng, PlatformCryptoProvider};
+use tpm2_platform_linux::PlatformCryptoProvider;
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn get_ecc_srk_template() -> TpmtPublic<'static> {

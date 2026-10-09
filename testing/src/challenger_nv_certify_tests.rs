@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-use crate::test_utils::marshal_to_slice;
 use tpm2::errors::TpmRc;
 
 use crate::test_utils::{execute_with_password_sessions, execute_with_password_sessions_status};
@@ -8,14 +7,14 @@ use tpm2::TpmiAlgHash;
 use tpm2::Unmarshal;
 use tpm2::commands::{
     CertifyCreation, CertifyCreationHandles, CreatePrimary, CreatePrimaryHandles, NVCertify,
-    NVCertifyHandles, NVDefineSpace, NVDefineSpaceHandles, NVWrite, NVWriteHandles,
+    NVCertifyHandles, NVDefineSpace, NVDefineSpaceHandles, NVReadLock, NVReadLockHandles, NVWrite,
+    NVWriteHandles, NVWriteLock, NVWriteLockHandles,
 };
 use tpm2::{
-    Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bMaxNvBuffer, Tpm2bNvPublic, Tpm2bSensitiveData, TpmaNv,
-    TpmsNvPublic, TpmsSensitiveCreate, TpmtTkCreation,
+    Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bMaxNvBuffer, Tpm2bSensitiveData, TpmaNv, TpmsNvPublic,
+    TpmsSensitiveCreate, TpmtTkCreation,
 };
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 #[test]
 fn test_nv_write_boundaries() {
@@ -445,10 +444,11 @@ fn test_nv_password_auth_write_read() {
 fn test_nv_write_writelocked() {
     let mut sim = create_simulator!();
     let nv_index_val = 0x01500030;
+    // WRITE_STCLEAR allows the index to be write-locked with TPM2_NV_WriteLock.
     let nv_public_struct = TpmsNvPublic {
         nv_index: tpm2::Handle(nv_index_val),
         name_alg: TpmiAlgHash::Sha256,
-        attributes: TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD,
+        attributes: TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD | TpmaNv::WRITE_STCLEAR,
         auth_policy: tpm2::Tpm2bDigest::default(),
         data_size: 64,
     };
@@ -473,62 +473,12 @@ fn test_nv_write_writelocked() {
     };
     execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
 
-    // Modify TOC in storage to add WRITELOCKED
-    use tpm2_impl::storage::NvStorage;
-    use tpm2_impl::storage::manager::{RESERVED_SIZE, TOC_SIZE};
-    use tpm2_impl::storage::types::ItemMetadata;
-    let mut toc_bytes = [0u8; TOC_SIZE];
-    sim.context
-        .platform
-        .storage
-        .read_nv(RESERVED_SIZE, &mut toc_bytes)
-        .unwrap();
-    let mut item_offset = RESERVED_SIZE + TOC_SIZE;
-    let mut found = false;
-    for i in 0..64 {
-        let offset = i * ItemMetadata::SIZE;
-        let mut item = ItemMetadata::from_bytes(&toc_bytes[offset..offset + ItemMetadata::SIZE]);
-        if item.in_use == 0 {
-            break;
-        }
-        if item.handle == nv_index_val {
-            item.attributes |= TpmaNv::WRITELOCKED.bits();
-            toc_bytes[offset..offset + ItemMetadata::SIZE].copy_from_slice(&item.to_bytes());
-            found = true;
-            break;
-        }
-        item_offset += item.data_size as usize;
-    }
-    assert!(found);
-    sim.context
-        .platform
-        .storage
-        .write_nv(RESERVED_SIZE, &toc_bytes)
-        .unwrap();
-
-    // Modify the index data payload attributes
-    let mut payload = [0u8; 128];
-    sim.context
-        .platform
-        .storage
-        .read_nv(item_offset, &mut payload)
-        .unwrap();
-    let mut unmarshal_buf = &payload[..];
-    let nv_auth = Tpm2bAuth::unmarshal(&mut unmarshal_buf).unwrap();
-    let mut public_info = Tpm2bNvPublic::unmarshal(&mut unmarshal_buf).unwrap();
-    let mut public_struct = public_info.0;
-    public_struct.attributes.0 |= TpmaNv::WRITELOCKED.bits();
-    public_info = tpm2::Tpm2b(public_struct);
-
-    let mut write_buf = [0u8; 128];
-    let mut offset = 0;
-    offset += marshal_to_slice(&(nv_auth), &mut write_buf[offset..]);
-    offset += marshal_to_slice(&(public_info), &mut write_buf[offset..]);
-    sim.context
-        .platform
-        .storage
-        .write_nv(item_offset, &write_buf[..offset])
-        .unwrap();
+    // Set TPMA_NV_WRITELOCKED through the TPM interface.
+    let lock_handles = NVWriteLockHandles {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
+    };
+    execute_with_password_sessions(&mut sim, &NVWriteLock {}, lock_handles, 1, &[]).unwrap();
 
     // Try writing again -> should fail with NvLocked (0x14F)
     let res = execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]);
@@ -642,10 +592,11 @@ fn test_nv_write_role_authorization() {
 fn test_nv_certify_readlocked() {
     let mut sim = create_simulator!();
     let nv_index_val = 0x01500033;
+    // READ_STCLEAR allows the index to be read-locked with TPM2_NV_ReadLock.
     let nv_public_struct = TpmsNvPublic {
         nv_index: tpm2::Handle(nv_index_val),
         name_alg: TpmiAlgHash::Sha256,
-        attributes: TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD,
+        attributes: TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD | TpmaNv::READ_STCLEAR,
         auth_policy: tpm2::Tpm2bDigest::default(),
         data_size: 64,
     };
@@ -683,62 +634,12 @@ fn test_nv_certify_readlocked() {
     };
     execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 1, &[]).unwrap();
 
-    // Modify TOC in storage to add READLOCKED
-    use tpm2_impl::storage::NvStorage;
-    use tpm2_impl::storage::manager::{RESERVED_SIZE, TOC_SIZE};
-    use tpm2_impl::storage::types::ItemMetadata;
-    let mut toc_bytes = [0u8; TOC_SIZE];
-    sim.context
-        .platform
-        .storage
-        .read_nv(RESERVED_SIZE, &mut toc_bytes)
-        .unwrap();
-    let mut item_offset = RESERVED_SIZE + TOC_SIZE;
-    let mut found = false;
-    for i in 0..64 {
-        let offset = i * ItemMetadata::SIZE;
-        let mut item = ItemMetadata::from_bytes(&toc_bytes[offset..offset + ItemMetadata::SIZE]);
-        if item.in_use == 0 {
-            break;
-        }
-        if item.handle == nv_index_val {
-            item.attributes |= TpmaNv::READLOCKED.bits();
-            toc_bytes[offset..offset + ItemMetadata::SIZE].copy_from_slice(&item.to_bytes());
-            found = true;
-            break;
-        }
-        item_offset += item.data_size as usize;
-    }
-    assert!(found);
-    sim.context
-        .platform
-        .storage
-        .write_nv(RESERVED_SIZE, &toc_bytes)
-        .unwrap();
-
-    // Modify the index data payload attributes
-    let mut payload = [0u8; 128];
-    sim.context
-        .platform
-        .storage
-        .read_nv(item_offset, &mut payload)
-        .unwrap();
-    let mut unmarshal_buf = &payload[..];
-    let nv_auth = Tpm2bAuth::unmarshal(&mut unmarshal_buf).unwrap();
-    let mut public_info = Tpm2bNvPublic::unmarshal(&mut unmarshal_buf).unwrap();
-    let mut public_struct = public_info.0;
-    public_struct.attributes.0 |= TpmaNv::READLOCKED.bits();
-    public_info = tpm2::Tpm2b(public_struct);
-
-    let mut write_buf = [0u8; 128];
-    let mut offset = 0;
-    offset += marshal_to_slice(&(nv_auth), &mut write_buf[offset..]);
-    offset += marshal_to_slice(&(public_info), &mut write_buf[offset..]);
-    sim.context
-        .platform
-        .storage
-        .write_nv(item_offset, &write_buf[..offset])
-        .unwrap();
+    // Set TPMA_NV_READLOCKED through the TPM interface.
+    let lock_handles = NVReadLockHandles {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
+    };
+    execute_with_password_sessions(&mut sim, &NVReadLock {}, lock_handles, 1, &[]).unwrap();
 
     // Try certifying again -> should fail with NvLocked (0x14F)
     let res =

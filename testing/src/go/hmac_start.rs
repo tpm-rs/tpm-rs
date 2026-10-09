@@ -14,7 +14,6 @@ use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, TpmaObject, TpmaSession, TpmiAlgHash,
     TpmsSensitiveCreate, TpmtKeyedHashScheme, TpmtPublic,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 /// Maximum input buffer size used by the Go test when splitting data into

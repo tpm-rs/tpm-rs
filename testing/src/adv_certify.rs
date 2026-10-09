@@ -13,8 +13,8 @@ use tpm2::{
     TpmsNvPublic, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic, TpmtRsaScheme, TpmtSigScheme,
     TpmtSignature, TpmtTkCreation, TpmuAttest,
 };
-use tpm2_platform_linux::{LinuxRng, PlatformCryptoProvider};
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_platform_linux::PlatformCryptoProvider;
+use tpm2_simulator::create_simulator;
 
 #[test]
 fn test_certify_adversarial_signatures() {

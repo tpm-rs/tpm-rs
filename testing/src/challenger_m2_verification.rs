@@ -8,7 +8,6 @@ use tpm2::commands::{
 };
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve, TpmSe};
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn create_signing_key(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {

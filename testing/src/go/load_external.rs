@@ -7,8 +7,7 @@ use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bSensitiveData, TpmaObject,
     TpmiAlgHash, TpmsEccParms, TpmsEccPoint, TpmtPublic, TpmtSensitive, TpmuSensitiveComposite,
 };
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 // Original Go test: load_external_test.go - TestLoadExternal/ECCNoSensitive
 #[test]

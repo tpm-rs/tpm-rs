@@ -8,8 +8,7 @@ use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bPublicKeyRsa, TpmaObject, TpmiAlgHash,
     TpmiAlgSymMode, TpmiRsaKeyBits, TpmsEccParms, TpmsRsaParms, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 fn default_ecc_public() -> TpmtPublic<'static> {
     let ecc_parms = TpmsEccParms {

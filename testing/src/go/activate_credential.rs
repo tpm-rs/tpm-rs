@@ -19,7 +19,7 @@ use tpm2::{
     TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2_platform_linux::{LinuxRng, PlatformCryptoProvider};
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 /// Returns go-tpm's `ECCEKTemplate`: the TCG reference ECC-P256 EK template
 /// (SHA-256 name algorithm, PolicyA auth policy, zero-filled 32-byte unique).

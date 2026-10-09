@@ -25,6 +25,11 @@ use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt, TpmiAlgSymMode, TpmtSymDefObject};
 use tpm2::{TpmSe, TpmiAlgHash};
 
+use super::context_save::CONTEXT_FINGERPRINT_SIZE;
+
+/// Size of the context integrity HMAC (SHA-256).
+const CONTEXT_INTEGRITY_DIGEST_SIZE: usize = 32;
+
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
@@ -94,25 +99,49 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::HIERARCHY.with(Position::parameter(1)));
         }
 
+        // Context blob layout (see `TPM2_ContextSave`):
+        //   integrity: TPM2B_DIGEST
+        //   encrypted: TPM2B_CONTEXT_SENSITIVE = size || CFB(sequence || entity)
+        //
+        // Malformed input is rejected with TPM_RC_SIZE / TPM_RC_INTEGRITY. Only
+        // inconsistencies detected *after* the integrity HMAC has been verified
+        // (i.e. in a blob the TPM itself produced) are treated as a TPM failure.
         let mut slice = blob;
-        let integrity = tpm2::Tpm2bDigest::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
-        let enc_size = u16::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? as usize;
-        if slice.len() < enc_size {
-            return Err(TpmRc::FAILURE);
+        let integrity = tpm2::Tpm2bDigest::unmarshal(&mut slice)
+            .map_err(|_| TpmRc::SIZE.with(Position::parameter(1)))?;
+        // The integrity value must be exactly one digest of the integrity hash.
+        if integrity.get_size() as usize != CONTEXT_INTEGRITY_DIGEST_SIZE {
+            return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
-        let (enc_slice, _) = slice.split_at(enc_size);
+        // The protected area must at least hold the encrypted size field and
+        // the sequence fingerprint.
+        if slice.len() < 2 + CONTEXT_FINGERPRINT_SIZE {
+            return Err(TpmRc::SIZE.with(Position::parameter(1)));
+        }
+        // Everything after the integrity value is integrity protected.
+        let protected = slice;
 
         let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy.0);
         let proof = &proof_bytes[..proof_len];
 
-        // 1. Verify HMAC integrity signature
+        // 1. Verify HMAC integrity signature before looking at any protected
+        // byte (TPM 2.0 Part 1, "Context Confidentiality Protection").
         self.verify_context_integrity(
             proof,
             sequence,
             saved_handle,
-            enc_slice,
+            protected,
             integrity.get_buffer(),
         )?;
+
+        // From here on the blob is known to have been produced by this TPM, so
+        // any inconsistency indicates a TPM failure rather than bad input.
+        let mut protected_slice = protected;
+        let enc_size = u16::unmarshal(&mut protected_slice).map_err(|_| TpmRc::FAILURE)? as usize;
+        if protected_slice.len() != enc_size {
+            return Err(TpmRc::FAILURE);
+        }
+        let enc_slice = protected_slice;
 
         // 2. Decrypt context sensitive area
         let mut sensitive_buf = [0u8; TPM2_MAX_CONTEXT_SIZE as usize];
@@ -126,6 +155,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             enc_slice,
             &mut sensitive_buf,
         )?;
+
+        // 3. The decrypted fingerprint must match `sequence`; otherwise the TPM
+        // is being attacked or is broken (TPM 2.0 Part 1, "Context
+        // Confidentiality Protection" / Part 3, TPM2_ContextLoad).
+        if sensitive_buf[..CONTEXT_FINGERPRINT_SIZE] != sequence.to_be_bytes() {
+            return Err(TpmRc::FAILURE);
+        }
+        let plaintext = &sensitive_buf[CONTEXT_FINGERPRINT_SIZE..enc_size];
 
         let is_session = matches!(
             Handle(saved_handle.0).handle_type(),
@@ -145,7 +182,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let loaded_handle = if is_session {
             self.nv_clear_orderly()?;
             // 3. Deserialize session context
-            let sess = Self::deserialize_session(&sensitive_buf[..enc_size])?;
+            let sess = Self::deserialize_session(plaintext)?;
             if self.global_state.session(sess.session_handle).is_some() {
                 return Err(TpmRc::HANDLE.to_rc());
             }
@@ -158,15 +195,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.global_state.add_session(sess)?;
             handle
         } else if is_sequence {
-            let mut seq = Self::deserialize_sequence(&sensitive_buf[..enc_size])?;
+            let mut seq = Self::deserialize_sequence(plaintext)?;
             let (slot, handle) = self.global_state.find_empty_sequence_slot()?;
             seq.handle = handle;
             self.global_state.active_sequences[slot] = Some(seq);
             handle
         } else {
             // 3. Unmarshal decrypted buffer into fields
-            let (fields, ancestor_has_st_clear) =
-                Self::unmarshal_decrypted_context(&sensitive_buf[..enc_size])?;
+            let (fields, ancestor_has_st_clear) = Self::unmarshal_decrypted_context(plaintext)?;
 
             // 4. Resolve empty slot and load transient object
             let (slot, handle) = self.global_state.find_empty_transient_slot(true)?;
@@ -198,12 +234,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 
     /// Verifies the integrity of a context blob using SHA-256 HMAC keyed with the hierarchy proof.
+    ///
+    /// `protected_data` is every byte of the context blob after the integrity
+    /// value (`encrypted.size || encrypted.buffer` for well-formed blobs), so
+    /// any modification of the size field or appended bytes is detected.
     fn verify_context_integrity(
         &self,
         proof: &[u8],
         sequence: u64,
         saved_handle: Handle,
-        encrypted_data: &[u8],
+        protected_data: &[u8],
         expected_mac: &[u8],
     ) -> Result<(), TpmRc> {
         let mut mac_ctx = tpm2::crypto::HmacCtx::new(self.crypto(), TpmiAlgHash::Sha256, proof)
@@ -222,7 +262,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         mac_ctx
             .update(&saved_handle.0.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
-        mac_ctx.update(encrypted_data).map_err(|_| TpmRc::FAILURE)?;
+        mac_ctx.update(protected_data).map_err(|_| TpmRc::FAILURE)?;
         let mut mac_buf = [0u8; 64];
         let mac = mac_ctx.finalize(&mut mac_buf).map_err(|_| TpmRc::FAILURE)?;
 

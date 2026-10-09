@@ -7,7 +7,6 @@ use tpm2::{
     Handle, TPM2_PCR_SELECT_MAX, Tpm2bEvent, TpmiAlgHash, TpmlDigestValues, TpmlPcrSelection,
     TpmsPcrSelection, TpmtHa,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn pcr_selection(hash: TpmiAlgHash, pcrs: &[u32]) -> TpmsPcrSelection {

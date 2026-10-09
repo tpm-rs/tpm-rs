@@ -1,39 +1,81 @@
 use crate::test_utils::marshal_to_slice;
 use tpm2::Unmarshal;
 use tpm2::*;
+/// Marshals a `TPMS_DERIVE` into the sensitive data of a sealed data object,
+/// round-trips the `TPM2B_SENSITIVE_CREATE` locally, then creates the object
+/// on the simulator and checks that `TPM2_Unseal` returns the same bytes.
 #[test]
 fn test_tpmt() {
+    use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, Unseal, UnsealHandles};
+    use tpm2_simulator::create_simulator;
+
     let tpms_derive = TpmsDerive {
         label: Tpm2bLabel::from_bytes(b"label").unwrap(),
         context: Tpm2bLabel::from_bytes(b"context").unwrap(),
     };
     let mut derive_buf = [0u8; 1024];
     let derive_len = marshal_to_slice(&tpms_derive, &mut derive_buf);
+    let derive_bytes = &derive_buf[..derive_len];
 
+    let password: &[u8] = b"p@ssw0rd";
     let tpmt_sensitive = TpmsSensitiveCreate {
-        user_auth: Tpm2bAuth::from_bytes(b"p@ssw0rd").unwrap(),
-        data: Tpm2bSensitiveData::from_bytes(&derive_buf[..derive_len]).unwrap(),
+        user_auth: Tpm2bAuth::from_bytes(password).unwrap(),
+        data: Tpm2bSensitiveData::from_bytes(derive_bytes).unwrap(),
     };
     let in_sensitive = tpm2::Tpm2b(tpmt_sensitive);
-    println!(
-        "in_sensitive size: {}",
-        crate::test_utils::marshal_to_vec(&in_sensitive.0).len()
-    );
     let mut serialized = [0u8; 1024];
     let len = marshal_to_slice(&in_sensitive, &mut serialized);
-    println!("Serialized length: {}", len);
 
-    // Test unmarshal
+    // Local unmarshal round trip.
     let mut unmarshal_buf = &serialized[..len];
     let unmarshaled = Tpm2bSensitiveCreate::unmarshal(&mut unmarshal_buf).unwrap();
-    let _ = unmarshaled.0;
+    assert!(unmarshal_buf.is_empty());
+    assert_eq!(unmarshaled.0.user_auth.get_buffer(), password);
+    assert_eq!(unmarshaled.0.data.get_buffer(), derive_bytes);
+
+    // End to end: seal the data under the owner hierarchy and unseal it.
+    let mut sim = create_simulator!();
+    let in_public = tpm2::Tpm2b(TpmtPublic {
+        name_alg: Some(TpmiAlgHash::Sha256),
+        object_attributes: TpmaObject::FIXED_TPM
+            | TpmaObject::FIXED_PARENT
+            | TpmaObject::USER_WITH_AUTH,
+        auth_policy: Tpm2bDigest::default(),
+        parms_and_id: PublicParmsAndId::KeyedHash(None, Tpm2bDigest::default()),
+    });
+    let create = CreatePrimary {
+        in_sensitive: unmarshaled,
+        in_public,
+        ..Default::default()
+    };
+    let (_, create_handles) = crate::test_utils::execute_with_password_sessions(
+        &mut sim,
+        &create,
+        CreatePrimaryHandles {
+            primary_handle: Handle::RH_OWNER,
+        },
+        1,
+        &[],
+    )
+    .expect("CreatePrimary of sealed data object failed");
+
+    let (unseal, _) = crate::test_utils::execute_with_password_sessions(
+        &mut sim,
+        &Unseal {},
+        UnsealHandles {
+            item_handle: create_handles.object_handle,
+        },
+        1,
+        password,
+    )
+    .expect("Unseal failed");
+    assert_eq!(unseal.out_data.get_buffer(), derive_bytes);
 }
 
 #[test]
 fn test_incremental_self_test_reserved_alg_error_codes() {
     use tpm2::errors::{Position, TpmRc};
-    use tpm2_platform_linux::LinuxRng;
-    use tpm2_simulator::{Simulator, create_simulator};
+    use tpm2_simulator::create_simulator;
 
     let mut sim = create_simulator!();
 

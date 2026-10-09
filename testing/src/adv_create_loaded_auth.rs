@@ -2,8 +2,7 @@ use crate::test_utils::*;
 use tpm2::Handle;
 use tpm2::commands::{CreateLoaded, CreateLoadedHandles, CreatePrimary, CreatePrimaryHandles};
 use tpm2::*;
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 #[test]
 fn test_create_loaded_auth_bypass() {

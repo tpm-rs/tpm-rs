@@ -14,7 +14,7 @@ use tpm2::{
     TpmsPcrSelection, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic, TpmtRsaScheme, TpmtSigScheme,
     TpmtSignature, TpmuAttest,
 };
-use tpm2_platform_linux::{LinuxRng, PlatformCryptoProvider};
+use tpm2_platform_linux::PlatformCryptoProvider;
 use tpm2_simulator::{Simulator, create_simulator};
 
 /// Executes `cmd` with one password session per entry of `auth_values`, in

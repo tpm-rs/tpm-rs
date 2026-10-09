@@ -2,7 +2,6 @@
 
 use tpm2::Handle;
 use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, GetTime, GetTimeHandles};
-use tpm2_platform_linux::LinuxRng;
 
 use crate::test_utils::*;
 use tpm2::{
@@ -10,7 +9,7 @@ use tpm2::{
     TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic,
     TpmtRsaScheme,
 };
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 // Original Go test: get_time_test.go - TestGetTime
 #[test]

@@ -2,8 +2,7 @@ use crate::test_utils::*;
 use tpm2::commands::{Commit, CommitHandles, CreateLoaded, CreateLoadedHandles};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 /// Builds the `CreateLoaded` command used by `TestCommit`: an ECDAA (SHA-256)
 /// signing key on the BN P-256 curve, with `password` as its user auth.

@@ -2,8 +2,7 @@ use crate::test_utils::*;
 use tpm2::Handle;
 use tpm2::Tpm2bAuth;
 use tpm2::commands::{HierarchyChangeAuth, HierarchyChangeAuthHandles};
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, SimulatorPlatformSignal, create_simulator};
+use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 #[test]
 fn stress_test_auth_size() {
@@ -23,7 +22,6 @@ fn stress_test_auth_size() {
     // Power cycle
     sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
-    sim.global_state.initialized = false;
     sim.power_on_start_up();
 
     // Check if new owner auth is still valid!

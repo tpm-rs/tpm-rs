@@ -1,13 +1,16 @@
 use crate::test_utils::*;
 use tpm2::Unmarshal;
-use tpm2::commands::{ContextSave, ContextSaveHandles, CreateLoaded, CreateLoadedHandles};
+use tpm2::commands::{
+    ContextLoad, ContextSave, ContextSaveHandles, CreateLoaded, CreateLoadedHandles, ReadPublic,
+    ReadPublicHandles,
+};
+use tpm2::errors::TpmRc;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 #[test]
-fn test_context_save_kdfa_bug() {
+fn test_context_load_rejects_tampered_blob() {
     let mut sim = create_simulator!();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
@@ -60,31 +63,82 @@ fn test_context_save_kdfa_bug() {
     let (save_resp, _) =
         execute_with_password_sessions(&mut sim, &save, save_handles, 0, &[]).unwrap();
 
-    let sequence_bytes = save_resp.context.sequence.to_be_bytes();
-    let proof = &sim.global_state.sh_proof[0..sim.global_state.sh_proof_size as usize];
-
-    let mut unmarshal_blob = save_resp.context.context_blob.get_buffer();
+    // The context integrity HMAC is keyed with a TPM-internal proof value, so
+    // it cannot be recomputed by a black-box client. Instead, verify that the
+    // TPM accepts the untouched blob and rejects any tampering with either the
+    // integrity digest or the encrypted payload that the HMAC covers.
+    let context = save_resp.context;
+    let blob = context.context_blob.get_buffer().to_vec();
+    let mut unmarshal_blob = &blob[..];
     let context_data = tpm2::TpmsContextData::unmarshal(&mut unmarshal_blob).unwrap();
-
-    let mut hash_state =
-        tpm2::crypto::HmacCtx::new(&*sim.context.platform.crypto, TpmiAlgHash::Sha256, proof)
-            .unwrap();
-    hash_state
-        .update(&sim.global_state.total_reset_count.to_be_bytes())
-        .unwrap();
-    hash_state.update(&sequence_bytes).unwrap();
-    hash_state
-        .update(&save_resp.context.saved_handle.0.to_be_bytes())
-        .unwrap();
-    hash_state
-        .update(context_data.encrypted.get_buffer())
-        .unwrap();
-    let mut mac_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let mac = hash_state.finalize(&mut mac_buf).unwrap();
-
     assert_eq!(
-        mac.digest(),
-        context_data.integrity.get_buffer(),
-        "ContextSave HMAC must match TCG spec (proof key + totalResetCount + sequence + savedHandle + encrypted)"
+        context_data.integrity.get_buffer().len(),
+        32,
+        "ContextSave integrity must be a SHA-256 HMAC"
     );
+    assert!(!context_data.encrypted.get_buffer().is_empty());
+
+    flush_context(&mut sim, object_handle).unwrap();
+
+    // Byte offsets inside the marshaled TPMS_CONTEXT_DATA blob:
+    // [integrity.size (2) | integrity (32) | encrypted.size (2) | encrypted ...].
+    let integrity_offset = 2;
+    let size_offset = 2 + context_data.integrity.get_buffer().len();
+    let encrypted_offset = size_offset + 2;
+    let flip = |offset: usize| {
+        let mut b = blob.clone();
+        b[offset] ^= 0x01;
+        b
+    };
+    let mut appended = blob.clone();
+    appended.push(0xEE);
+    let mut truncated = blob.clone();
+    truncated.pop();
+    for (what, tampered) in [
+        ("integrity", flip(integrity_offset)),
+        ("encrypted size (+256)", flip(size_offset)),
+        ("encrypted size (low bit)", flip(size_offset + 1)),
+        ("encrypted (first byte)", flip(encrypted_offset)),
+        ("encrypted (last byte)", flip(blob.len() - 1)),
+        ("appended byte", appended),
+        ("truncated blob", truncated),
+    ] {
+        let mut tampered_context = context;
+        tampered_context.context_blob =
+            Tpm2bContextData::from_bytes(leak_bytes(&tampered)).unwrap();
+        let res = execute_with_password_sessions(
+            &mut sim,
+            &ContextLoad {
+                context: tampered_context,
+            },
+            (),
+            0,
+            &[],
+        );
+        let err = res.expect_err(&format!(
+            "ContextLoad accepted a context with tampered {what}"
+        ));
+        // Strip the format-1 parameter/handle/session number (bits 6 and 8..11).
+        assert_eq!(
+            err & 0xBF,
+            TpmRc::INTEGRITY.get(),
+            "tampered {what}: unexpected error {err:#x}"
+        );
+    }
+
+    // The untouched context must still load and yield a usable object.
+    let (_, load_handles) =
+        execute_with_password_sessions(&mut sim, &ContextLoad { context }, (), 0, &[])
+            .expect("ContextLoad of untouched context failed");
+    let (read_pub, _) = execute_with_password_sessions(
+        &mut sim,
+        &ReadPublic {},
+        ReadPublicHandles {
+            object_handle: load_handles.loaded_handle,
+        },
+        0,
+        &[],
+    )
+    .unwrap();
+    assert!(!read_pub.name.get_buffer().is_empty());
 }

@@ -2,8 +2,7 @@ use crate::test_utils::*;
 use tpm2::Handle;
 use tpm2::Tpm2bAuth;
 use tpm2::commands::{HierarchyChangeAuth, HierarchyChangeAuthHandles};
-use tpm2_platform_linux::LinuxRng;
-use tpm2_simulator::{Simulator, create_simulator};
+use tpm2_simulator::create_simulator;
 
 #[test]
 fn test_hierarchy_change_auth_bounds() {

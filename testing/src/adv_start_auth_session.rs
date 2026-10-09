@@ -12,7 +12,6 @@ use tpm2::{
     Tpm2bSensitiveData, TpmaObject, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsRsaParms,
     TpmsSensitiveCreate, TpmtPublic,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 // Helper to create RSA decrypt key

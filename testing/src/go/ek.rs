@@ -12,7 +12,6 @@ use tpm2::{
     Tpm2bSensitiveData, TpmaNv, TpmaObject, TpmiAlgHash, TpmiAlgSymMode, TpmsNvPublic,
     TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_platform_linux::LinuxRng;
 use tpm2_simulator::{Simulator, create_simulator};
 
 /// Decodes the provided hex strings into a byte vector. Panics on non-hex chars.
@@ -349,11 +348,7 @@ fn start_session(
     use tpm2::crypto::Rng;
 
     let mut nonce_bytes = [0u8; 16];
-    tpm.context
-        .platform
-        .crypto
-        .get_random(&mut nonce_bytes)
-        .unwrap();
+    CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
     let nonce_caller = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
 
     let mut encrypted_salt = tpm2::Tpm2bEncryptedSecret::default();
@@ -366,7 +361,7 @@ fn start_session(
                 PublicParmsAndId::Rsa(rsa_parms, rsa_unique) => {
                     // RSA-OAEP(nameAlg, label "SECRET\0") of a nameAlg-sized salt.
                     let mut salt = [0u8; 32];
-                    tpm.context.platform.crypto.get_random(&mut salt).unwrap();
+                    CLIENT_CRYPTO.get_random(&mut salt).unwrap();
                     let exponent = if rsa_parms.exponent == 0 {
                         65537
                     } else {
@@ -417,7 +412,7 @@ fn start_session(
                     );
                     let mut derived = [0u8; 32];
                     tpm2::crypto::kdf::kdfe(
-                        tpm.context.platform.crypto,
+                        CLIENT_CRYPTO,
                         TpmiAlgHash::Sha256,
                         shared.raw_secret_bytes(),
                         b"SECRET",
@@ -451,7 +446,7 @@ fn start_session(
         let bits = (hash_size_any(auth_hash) * 8) as u32;
         let mut derived = vec![0u8; bits as usize / 8];
         kdfa_by_alg(
-            tpm.context.platform.crypto,
+            CLIENT_CRYPTO,
             auth_hash,
             &salt_value,
             b"ATH",
@@ -475,6 +470,9 @@ fn start_session(
         attributes: TpmaSession::from_bits_retain(0),
         bind_auth: Vec::new(),
         bind_entity: bind,
+        session_type,
+        policy_auth_value_needed: false,
+        policy_password_needed: false,
     }
 }
 
