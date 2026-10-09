@@ -4,11 +4,16 @@ mod ecc;
 mod hash;
 mod hmac;
 mod kdf;
+mod mldsa;
+mod mlkem;
 mod rng;
 mod rsa;
 mod signing;
 mod symmetric;
-pub use {cmac::*, ecc::*, hash::*, hmac::*, kdf::*, rng::*, rsa::*, signing::*, symmetric::*};
+pub use {
+    cmac::*, ecc::*, hash::*, hmac::*, kdf::*, mldsa::*, mlkem::*, rng::*, rsa::*, signing::*,
+    symmetric::*,
+};
 
 /// Common error type for all cryptographic traits.
 ///
