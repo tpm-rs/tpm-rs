@@ -17,6 +17,8 @@
 //! | [`Rsa`](tpm2::crypto::Rsa) | 1024, 2048, 3072, and 4096-bit keys with raw (`TPM_ALG_NULL`), RSAES-PKCS1-v1_5, and OAEP encryption | Key generation with an exponent of 1 or an even exponent |
 //! | [`Ecc`](tpm2::crypto::Ecc) | NIST P-256, NIST P-384, NIST P-521, and SM2 P-256 keys and ECDH | NIST P-192, NIST P-224, BN P-256, BN P-638, Brainpool P-256/P-384/P-512 R1, Curve25519, Curve448 |
 //! | [`Signing`](tpm2::crypto::Signing) | RSASSA-PKCS1-v1_5, RSASSA-PSS, ECDSA, SM2, and ECSchnorr (on all supported curves) | ECDAA |
+//! | [`Mlkem`](tpm2::crypto::Mlkem) | ML-KEM-512, ML-KEM-768, and ML-KEM-1024 | — |
+//! | [`Mldsa`](tpm2::crypto::Mldsa) | ML-DSA-44, ML-DSA-65, and ML-DSA-87 (hedged signing) with pure, pre-hash (HashML-DSA), and external `µ` messages, and streaming `µ` ([`MuContext`]) | — |
 //!
 //! ## Side Channels
 //!
@@ -42,10 +44,14 @@
 
 // The `rsa` crate stores big integers on the heap, returns its results as
 // `Vec<u8>`, and takes the PKCS#1 v1.5 `DigestInfo` prefix as a `Box<[u8]>`.
+// The `ml-kem` and `ml-dsa` crates box their large keys, and this crate boxes
+// ML-DSA signing keys (up to ~100 KiB).
 extern crate alloc;
 
 mod ecc;
 mod hash;
+mod mldsa;
+mod mlkem;
 mod rng;
 mod rsa;
 mod signing;
@@ -53,6 +59,8 @@ mod symmetric;
 
 pub use ecc::{EccPrivateKey, EccPublicKey};
 pub use hash::{HashContext, MacContext};
+pub use mldsa::{MldsaPrivateKey, MldsaPublicKey, MuContext};
+pub use mlkem::{MlkemPrivateKey, MlkemPublicKey};
 pub use rng::ChaChaRng;
 pub use rsa::{RsaPrivateKey, RsaPublicKey};
 
@@ -76,4 +84,13 @@ impl tpm2::crypto::ConstantTimeEq for RustCrypto {
 /// XORs `src` into `dst` (up to the length of the shorter one).
 fn xor(dst: &mut [u8], src: &[u8]) {
     dst.iter_mut().zip(src).for_each(|(d, s)| *d ^= s);
+}
+
+/// Copies `src` to the start of `out` and returns the copied prefix.
+fn copy_prefix<'a>(out: &'a mut [u8], src: &[u8]) -> Result<&'a [u8], tpm2::crypto::CryptoError> {
+    let prefix = out
+        .get_mut(..src.len())
+        .ok_or(tpm2::crypto::CryptoError::Internal)?;
+    prefix.copy_from_slice(src);
+    Ok(prefix)
 }
