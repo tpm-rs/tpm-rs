@@ -48,7 +48,10 @@ fn test_sign_restricted_without_ticket_returns_rc_ticket() {
     };
     let obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -125,7 +128,10 @@ fn test_sequential_sign_under_auth_sessions_executes_cleanly() {
     };
     let obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -206,7 +212,10 @@ fn test_sign_invalid_hash_alg_returns_rc_value() {
     };
     let obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -281,7 +290,10 @@ fn test_sequential_sign_under_policy_auth_session_executes_cleanly() {
     };
     let obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -483,7 +495,10 @@ fn test_sign_ecdaa_invalid_commit_returns_rc_value() {
     };
     let obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -519,7 +534,8 @@ fn test_sign_ecdaa_invalid_commit_returns_rc_value() {
     let rc = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
     assert_eq!(
         rc,
-        TpmRc::VALUE.with(Position::parameter(2)).get(),
+        // C TPM2_Sign returns CryptSign()'s bare TPM_RC_VALUE (TpmEcc_SignEcdaa/CryptGenerateR).
+        TpmRc::VALUE.get(),
         "Expected TPM_RC_VALUE for ECDAA sign with invalid commit status, got {:08x}",
         rc
     );

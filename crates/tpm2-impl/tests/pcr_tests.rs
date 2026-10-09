@@ -11,6 +11,9 @@ use tpm2::{Handle, TpmCc};
 use tpm2::{TpmiAlgHash, TpmlPcrSelection, TpmsPcrSelection};
 use tpm2_impl::{TpmEngine, TpmPlatform};
 
+/// Empty `TPM_RS_PW` authorization area: authSize = 9, then one password session.
+const PW_AREA: [u8; 13] = [0, 0, 0, 9, 0x40, 0, 0, 9, 0, 0, 0, 0, 0];
+
 fn setup_tpm<'a>(
     crypto: &'a mut FakeCrypto,
     storage: &'a mut FakeStorage,
@@ -59,11 +62,15 @@ fn test_pcr_allocate_success() {
 
     let mut req_buf = [0u8; 1024];
     let mut offset = 0;
-    offset += marshal_to_slice(&(0x8001u16), &mut req_buf[offset..]);
+    offset += marshal_to_slice(&(0x8002u16), &mut req_buf[offset..]);
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::PCRAllocate.code()), &mut req_buf[offset..]);
     offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    // authHandle (platform) has the USER auth role; C requires a session even for an empty
+    // authValue (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
+    req_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);
+    offset += PW_AREA.len();
     offset += marshal_to_slice(&cmd, &mut req_buf[offset..]);
 
     let total_len = offset as u32;
@@ -77,13 +84,17 @@ fn test_pcr_allocate_success() {
         "TPM2_PCR_Allocate under Platform hierarchy should succeed"
     );
 
-    let mut resp_slice = &resp_buf[10..];
+    let mut resp_slice = &resp_buf[14..]; // skip the response parameterSize
     let rsp = <PCRAllocate as Command>::Response::unmarshal(&mut resp_slice)
         .expect("unmarshal <PCRAllocate as Command>::Response");
     assert!(rsp.allocation_success);
     assert_eq!(rsp.max_pcr, 24);
-    assert_eq!(rsp.size_needed, 0);
-    assert_eq!(rsp.size_available, 1024);
+    // C PCRAllocate sums the digest sizes of every PCR in the resulting allocation
+    // (PCR.c:939-972): existing SHA1 bank 24 * 20 + new SHA256 bank 24 * 32 = 1248.
+    assert_eq!(rsp.size_needed, 1248);
+    // C reports sizeof(s_pcrs), i.e. room for every implemented bank (PCR.c:981):
+    // 24 * (20 + 32 + 48 + 64) = 3936.
+    assert_eq!(rsp.size_available, 3936);
 }
 
 #[test]
@@ -104,11 +115,15 @@ fn test_pcr_allocate_unauthorized_fails() {
 
     let mut req_buf = [0u8; 1024];
     let mut offset = 0;
-    offset += marshal_to_slice(&(0x8001u16), &mut req_buf[offset..]);
+    offset += marshal_to_slice(&(0x8002u16), &mut req_buf[offset..]);
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::PCRAllocate.code()), &mut req_buf[offset..]);
     offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    // authHandle (platform) has the USER auth role; C requires a session even for an empty
+    // authValue (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
+    req_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);
+    offset += PW_AREA.len();
     offset += marshal_to_slice(&cmd, &mut req_buf[offset..]);
 
     let total_len = offset as u32;
@@ -140,11 +155,15 @@ fn test_pcr_allocate_missing_drtm_fails() {
 
     let mut req_buf = [0u8; 1024];
     let mut offset = 0;
-    offset += marshal_to_slice(&(0x8001u16), &mut req_buf[offset..]);
+    offset += marshal_to_slice(&(0x8002u16), &mut req_buf[offset..]);
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::PCRAllocate.code()), &mut req_buf[offset..]);
     offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    // authHandle (platform) has the USER auth role; C requires a session even for an empty
+    // authValue (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
+    req_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);
+    offset += PW_AREA.len();
     offset += marshal_to_slice(&cmd, &mut req_buf[offset..]);
 
     let total_len = offset as u32;
@@ -178,11 +197,15 @@ fn test_pcr_reconfig_blocks_shutdown_state() {
 
     let mut req_buf = [0u8; 1024];
     let mut offset = 0;
-    offset += marshal_to_slice(&(0x8001u16), &mut req_buf[offset..]);
+    offset += marshal_to_slice(&(0x8002u16), &mut req_buf[offset..]);
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::PCRAllocate.code()), &mut req_buf[offset..]);
     offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    // authHandle (platform) has the USER auth role; C requires a session even for an empty
+    // authValue (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
+    req_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);
+    offset += PW_AREA.len();
     offset += marshal_to_slice(&cmd, &mut req_buf[offset..]);
 
     let total_len = offset as u32;
@@ -374,11 +397,15 @@ fn test_pcr_allocate_persists_across_startup_clear() {
 
     let mut req_buf = [0u8; 1024];
     let mut offset = 0;
-    offset += marshal_to_slice(&(0x8001u16), &mut req_buf[offset..]);
+    offset += marshal_to_slice(&(0x8002u16), &mut req_buf[offset..]);
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::PCRAllocate.code()), &mut req_buf[offset..]);
     offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    // authHandle (platform) has the USER auth role; C requires a session even for an empty
+    // authValue (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
+    req_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);
+    offset += PW_AREA.len();
     offset += marshal_to_slice(&cmd, &mut req_buf[offset..]);
 
     let total_len = offset as u32;
@@ -389,13 +416,15 @@ fn test_pcr_allocate_persists_across_startup_clear() {
     let rc = u32::from_be_bytes(resp_buf[6..10].try_into().unwrap());
     assert_eq!(rc, 0, "TPM2_PCR_Allocate should succeed");
 
-    // Verify allocation in global_state before shutdown: Sha384 was modified to [0xFF, 0xFF, 0xFF]
+    // Verify allocation in global_state before shutdown: like C (PCRAllocate only writes the
+    // new allocation to NV, PCR.c:983-987), the active allocation is unchanged until the next
+    // TPM Reset, so Sha384 is still unallocated.
     let allocated_before_shutdown = global_state.pcrs.pcr_allocation;
     let sha384_selection = allocated_before_shutdown
         .pcr_selections()
         .find(|s| s.hash() == TpmiAlgHash::Sha384)
         .expect("Sha384 selection exists");
-    assert_eq!(sha384_selection.pcr_select(), &[0xFF, 0xFF, 0xFF]);
+    assert_eq!(sha384_selection.pcr_select(), &[0x00, 0x00, 0x00]);
 
     // 2. Shutdown(CLEAR)
     let shutdown_clear_req = [
@@ -408,19 +437,17 @@ fn test_pcr_allocate_persists_across_startup_clear() {
     tpm.execute_command_separate(&mut global_state, &shutdown_clear_req[..], &mut resp[..]);
     assert_eq!(u32::from_be_bytes(resp[6..10].try_into().unwrap()), 0);
 
-    // 3. Platform reset (_TPM_Init) followed by Startup(CLEAR)
-    global_state.initialized = false;
+    // 3. Platform reset (_TPM_Init) followed by Startup(CLEAR). `TpmEngine::reset` is the
+    // _TPM_Init path that reloads the NV copy of the allocation (C: gp.pcrAllocated is
+    // reloaded from NV at _TPM_Init).
+    tpm.reset(&mut global_state);
     let startup_req = [
         0x80, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x01, 0x44, 0x00, 0x00,
     ];
     tpm.execute_command_separate(&mut global_state, &startup_req, &mut resp);
     assert_eq!(u32::from_be_bytes(resp[6..10].try_into().unwrap()), 0);
 
-    // 4. Verify that configured PCR allocation was preserved across Startup(CLEAR)
-    assert_eq!(
-        global_state.pcrs.pcr_allocation, allocated_before_shutdown,
-        "Startup(CLEAR) must not wipe configured PCR allocation"
-    );
+    // 4. Verify that the configured PCR allocation took effect at the TPM Reset
     let sha384_after_startup = global_state
         .pcrs
         .pcr_allocation

@@ -150,7 +150,8 @@ macro_rules! setup {
 }
 
 fn integrity_rc() -> u32 {
-    TpmRc::INTEGRITY.get()
+    // C: TPM_RCS_INTEGRITY + RC_ContextLoad_context (0x1DF), ContextLoad.c:76.
+    TpmRc::INTEGRITY.with(Position::parameter(1)).get()
 }
 
 fn size_rc() -> u32 {
@@ -282,25 +283,23 @@ fn context_load_short_blobs_return_size() {
     setup!(tpm, gs);
     let context = save_object_context(&mut tpm, &mut gs);
     let blob = context.context_blob.get_buffer().to_vec();
-    for (what, len) in [
-        ("empty blob", 0),
-        ("1 byte", 1),
-        ("partial integrity", 10),
-        ("integrity only", ENC_SIZE_OFFSET),
-        ("integrity + size only", ENC_SIZE_OFFSET + 2),
+    // C starts with TPM2B_DIGEST_Unmarshal(&integrity, blob) and returns its result unmodified
+    // (ContextLoad.c:49-51), so a blob too short for the integrity TPM2B gives bare
+    // TPM_RC_INSUFFICIENT; the later size checks return TPM_RCS_SIZE + RC_ContextLoad_context.
+    let insufficient = TpmRc::INSUFFICIENT.get();
+    for (what, len, rc) in [
+        ("empty blob", 0, insufficient),
+        ("1 byte", 1, insufficient),
+        ("partial integrity", 10, insufficient),
+        ("integrity only", ENC_SIZE_OFFSET, size_rc()),
+        ("integrity + size only", ENC_SIZE_OFFSET + 2, size_rc()),
         (
             "no room for fingerprint",
             ENC_SIZE_OFFSET + 2 + FINGERPRINT_SIZE - 1,
+            size_rc(),
         ),
     ] {
-        assert_load_rejected(
-            &mut tpm,
-            &mut gs,
-            context,
-            blob[..len].to_vec(),
-            size_rc(),
-            what,
-        );
+        assert_load_rejected(&mut tpm, &mut gs, context, blob[..len].to_vec(), rc, what);
     }
 }
 

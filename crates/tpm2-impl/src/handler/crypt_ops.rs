@@ -46,260 +46,25 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let handles = request.try_unmarshal::<VerifySignatureHandles>()?;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
         let cmd = request.try_unmarshal::<VerifySignature>()?;
+        if request.remaining_bytes() != 0 {
+            return Err(TpmRc::SIZE.to_rc());
+        }
 
         let _obj = self.resolve_object(handles.key_handle.0, Position::handle(1))?;
 
+        // The object to validate the signature must be a signing key.
         if !_obj
             .public
             .object_attributes
             .contains(TpmaObject::SIGN_ENCRYPT)
         {
-            return Err(TpmRc::ATTRIBUTES.to_rc());
+            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
         }
 
-        if !matches!(
-            _obj.public.parms_and_id,
-            OwnedPublicParmsAndId::Rsa(..)
-                | OwnedPublicParmsAndId::Ecc(..)
-                | OwnedPublicParmsAndId::KeyedHash(..)
-        ) {
-            return Err(TpmRc::TYPE.to_rc());
-        }
-
-        if matches!(
-            _obj.public.parms_and_id,
-            OwnedPublicParmsAndId::KeyedHash(..)
-        ) && _obj.private_len == 0
-        {
-            return Err(TpmRc::HANDLE.to_rc());
-        }
-
-        // Validate scheme and digest consistency against key parameters
-        match &_obj.public.parms_and_id {
-            OwnedPublicParmsAndId::Rsa(parms, _) => match &parms.scheme {
-                Some(TpmtRsaScheme::Rsassa(expected_hash)) => {
-                    let sig_rsa = match &cmd.signature {
-                        TpmtSignature::Rsassa(sig) => sig,
-                        _ => return Err(TpmRc::SIGNATURE.to_rc()),
-                    };
-                    if sig_rsa.hash != *expected_hash {
-                        return Err(TpmRc::SIGNATURE.to_rc());
-                    }
-                }
-                Some(TpmtRsaScheme::Rsapss(expected_hash)) => {
-                    let sig_rsa = match &cmd.signature {
-                        TpmtSignature::Rsapss(sig) => sig,
-                        _ => return Err(TpmRc::SIGNATURE.to_rc()),
-                    };
-                    if sig_rsa.hash != *expected_hash {
-                        return Err(TpmRc::SIGNATURE.to_rc());
-                    }
-                }
-                None => match &cmd.signature {
-                    TpmtSignature::Rsassa(_) | TpmtSignature::Rsapss(_) => {}
-                    _ => return Err(TpmRc::SCHEME.to_rc()),
-                },
-                _ => {
-                    return Err(TpmRc::KEY.with(Position::handle(1)));
-                }
-            },
-            OwnedPublicParmsAndId::Ecc(parms, _) => match &parms.scheme {
-                Some(TpmtEccScheme::Ecdsa(expected_hash)) => {
-                    let sig_ecc = match &cmd.signature {
-                        TpmtSignature::Ecdsa(sig) => sig,
-                        _ => return Err(TpmRc::SIGNATURE.to_rc()),
-                    };
-                    if sig_ecc.hash != *expected_hash {
-                        return Err(TpmRc::SIGNATURE.to_rc());
-                    }
-                }
-                Some(TpmtEccScheme::Ecdaa(s)) => {
-                    let sig_ecc = match &cmd.signature {
-                        TpmtSignature::Ecdaa(sig) => sig,
-                        _ => return Err(TpmRc::SIGNATURE.to_rc()),
-                    };
-                    if sig_ecc.hash != s.hash_alg {
-                        return Err(TpmRc::SIGNATURE.to_rc());
-                    }
-                }
-                None => match &cmd.signature {
-                    TpmtSignature::Ecdsa(_)
-                    | TpmtSignature::Ecdaa(_)
-                    | TpmtSignature::Ecschnorr(_) => {}
-                    _ => return Err(TpmRc::SCHEME.to_rc()),
-                },
-                _ => {
-                    return Err(TpmRc::KEY.with(Position::handle(1)));
-                }
-            },
-            OwnedPublicParmsAndId::KeyedHash(scheme, _) => match scheme {
-                Some(TpmtKeyedHashScheme::Hmac(expected_hash)) => {
-                    let ha = match &cmd.signature {
-                        TpmtSignature::Hmac(h) => h,
-                        _ => return Err(TpmRc::SIGNATURE.to_rc()),
-                    };
-                    if ha.hash_alg() != *expected_hash {
-                        return Err(TpmRc::SIGNATURE.to_rc());
-                    }
-                    let (hmac_bytes, hmac_len) = self.compute_hmac(
-                        ha.hash_alg(),
-                        &_obj.private[.._obj.private_len],
-                        &[cmd.digest.get_buffer()],
-                    )?;
-                    if ha.digest() != &hmac_bytes[..hmac_len] {
-                        return Err(TpmRc::SIGNATURE.to_rc());
-                    }
-                    let hierarchy = if _obj.hierarchy == Handle::RH_NULL.0 {
-                        Handle::RH_NULL
-                    } else {
-                        Handle(_obj.hierarchy)
-                    };
-                    let rsp = responses::VerifySignature {
-                        validation: tpm2::TpmtTkVerified::Verified(hierarchy, cmd.digest),
-                    };
-                    let response = request.into_response();
-                    self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
-                    return Ok(());
-                }
-                None => match &cmd.signature {
-                    TpmtSignature::Hmac(ha) => {
-                        let (hmac_bytes, hmac_len) = self.compute_hmac(
-                            ha.hash_alg(),
-                            &_obj.private[.._obj.private_len],
-                            &[cmd.digest.get_buffer()],
-                        )?;
-                        if ha.digest() != &hmac_bytes[..hmac_len] {
-                            return Err(TpmRc::SIGNATURE.to_rc());
-                        }
-                        let hierarchy = if _obj.hierarchy == Handle::RH_NULL.0 {
-                            Handle::RH_NULL
-                        } else {
-                            Handle(_obj.hierarchy)
-                        };
-                        let rsp = responses::VerifySignature {
-                            validation: tpm2::TpmtTkVerified::Verified(hierarchy, cmd.digest),
-                        };
-                        let response = request.into_response();
-                        self.write_response_rsp(
-                            response,
-                            &rsp,
-                            &session_responses[..num_sessions],
-                        )?;
-                        return Ok(());
-                    }
-                    _ => return Err(TpmRc::SCHEME.to_rc()),
-                },
-                _ => {
-                    return Err(TpmRc::KEY.with(Position::handle(1)));
-                }
-            },
-            _ => return Err(TpmRc::TYPE.to_rc()),
-        }
-
-        // Reconstruct public key bytes based on type
-        let mut rsa_pub_key = [0u8; 512];
-        let mut ecc_pub_key = [0u8; 256];
-        let public_key_bytes = match &_obj.public.parms_and_id {
-            OwnedPublicParmsAndId::Rsa(parms, unique) => {
-                let key_size = (u16::from(parms.key_bits) / 8) as usize;
-                let u_buf = unique.get_buffer();
-                if u_buf.len() > key_size || key_size > rsa_pub_key.len() {
-                    return Err(TpmRc::KEY.to_rc());
-                }
-                let offset = key_size - u_buf.len();
-                rsa_pub_key[offset..key_size].copy_from_slice(u_buf);
-                &rsa_pub_key[..key_size]
-            }
-            OwnedPublicParmsAndId::Ecc(parms, point) => {
-                let curve = parms.curve_id;
-                let param_size = match curve {
-                    TpmEccCurve::NistP224 => 28,
-                    TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => 32,
-                    TpmEccCurve::NistP384 => 48,
-                    TpmEccCurve::NistP521 => 66,
-                    _ => return Err(TpmRc::KEY.to_rc()),
-                };
-                let x_buf = point.x.get_buffer();
-                let y_buf = point.y.get_buffer();
-                if x_buf.len() > param_size || y_buf.len() > param_size {
-                    return Err(TpmRc::KEY.to_rc());
-                }
-                ecc_pub_key[param_size - x_buf.len()..param_size].copy_from_slice(x_buf);
-                ecc_pub_key[param_size * 2 - y_buf.len()..param_size * 2].copy_from_slice(y_buf);
-                &ecc_pub_key[..param_size * 2]
-            }
-            _ => return Err(TpmRc::TYPE.to_rc()),
-        };
-
-        // Extract signature info
-        let mut sig_buf = [0u8; 512];
-        let (sign_alg, hash_alg, sig_len) = match &cmd.signature {
-            TpmtSignature::Rsassa(sig_rsa) => {
-                let bytes = sig_rsa.sig.get_buffer();
-                let key_len = public_key_bytes.len();
-                if bytes.len() > key_len || key_len > sig_buf.len() {
-                    return Err(TpmRc::SIGNATURE.with(Position::handle(2)));
-                }
-                let offset = key_len - bytes.len();
-                sig_buf[offset..key_len].copy_from_slice(bytes);
-                (Alg::RSASSA, Alg::from(sig_rsa.hash), key_len)
-            }
-            TpmtSignature::Rsapss(sig_rsa) => {
-                let bytes = sig_rsa.sig.get_buffer();
-                let key_len = public_key_bytes.len();
-                if bytes.len() > key_len || key_len > sig_buf.len() {
-                    return Err(TpmRc::SIGNATURE.with(Position::handle(2)));
-                }
-                let offset = key_len - bytes.len();
-                sig_buf[offset..key_len].copy_from_slice(bytes);
-                (Alg::RSAPSS, Alg::from(sig_rsa.hash), key_len)
-            }
-            TpmtSignature::Ecdsa(sig_ecc) => {
-                let param_size = if !public_key_bytes.is_empty() {
-                    public_key_bytes.len() / 2
-                } else {
-                    32
-                };
-                let r_bytes = sig_ecc.signature_r.get_buffer();
-                let s_bytes = sig_ecc.signature_s.get_buffer();
-                if r_bytes.len() > param_size || s_bytes.len() > param_size {
-                    return Err(TpmRc::SIGNATURE.with(Position::handle(2)));
-                }
-                sig_buf[param_size - r_bytes.len()..param_size].copy_from_slice(r_bytes);
-                sig_buf[param_size * 2 - s_bytes.len()..param_size * 2].copy_from_slice(s_bytes);
-                (Alg::ECDSA, Alg::from(sig_ecc.hash), param_size * 2)
-            }
-            TpmtSignature::Ecdaa(sig_ecc) => {
-                let param_size = if !public_key_bytes.is_empty() {
-                    public_key_bytes.len() / 2
-                } else {
-                    32
-                };
-                let r_bytes = sig_ecc.signature_r.get_buffer();
-                let s_bytes = sig_ecc.signature_s.get_buffer();
-                if r_bytes.len() > param_size || s_bytes.len() > param_size {
-                    return Err(TpmRc::SIGNATURE.with(Position::handle(2)));
-                }
-                sig_buf[param_size - r_bytes.len()..param_size].copy_from_slice(r_bytes);
-                sig_buf[param_size * 2 - s_bytes.len()..param_size * 2].copy_from_slice(s_bytes);
-                (Alg::ECDSA, Alg::from(sig_ecc.hash), param_size * 2)
-            }
-            _ => {
-                return Err(TpmRc::SCHEME.with(Position::handle(2)));
-            }
-        };
-
-        let mut hash_alg = hash_alg;
-        if hash_alg == Alg::NULL {
-            hash_alg = Alg::from(_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?);
-        }
-
-        let digest_ha = tpm2::TpmtHa::from_alg(hash_alg, cmd.digest.get_buffer())
-            .ok_or_else(|| TpmRc::SIGNATURE.with(Position::handle(2)))?;
-
-        self.crypto()
-            .verify_inner(sign_alg, public_key_bytes, digest_ha, &sig_buf[..sig_len])
-            .map_err(|_| TpmRc::SIGNATURE.with(Position::handle(2)))?;
+        // CryptValidateSignature(): TPM_RC_SCHEME, TPM_RC_HANDLE or TPM_RC_SIGNATURE, all
+        // reported against the `signature` parameter (RcSafeAddToResult).
+        self.validate_signature(&_obj, cmd.digest.get_buffer(), &cmd.signature)
+            .map_err(|rc| rc.with_position(Position::parameter(2)))?;
 
         // If key is in TPM_RH_NULL or nameAlg is TPM_ALG_NULL, return NULL ticket
         let ticket_hmac;
@@ -329,6 +94,132 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
+    /// Verifies `signature` over `digest` with the loaded key `obj`, mirroring
+    /// `CryptValidateSignature` (`CryptUtil.c`) and the per-type validators it dispatches to.
+    ///
+    /// As in C, no consistency between the key's default scheme and the signature scheme is
+    /// required for asymmetric keys (a caller can load any public key with any scheme);
+    /// only keyed-hash keys with a non-NULL scheme restrict the accepted HMAC scheme.
+    ///
+    /// Returns bare (position-less) response codes:
+    /// - `TPM_RC_SCHEME`: the signature algorithm is not supported for the key type
+    ///   (including ECDAA, which can't be verified by the TPM, and the unimplemented
+    ///   `TPM_ALG_SM2` / `TPM_ALG_ECSCHNORR`);
+    /// - `TPM_RC_HANDLE`: a keyed-hash key whose sensitive area is not loaded;
+    /// - `TPM_RC_SIGNATURE`: the signature is malformed or not genuine;
+    /// - `TPM_RC_VALUE`: the key's curve is not supported.
+    fn validate_signature(
+        &self,
+        obj: &super::TransientObject,
+        digest: &[u8],
+        signature: &TpmtSignature<'_>,
+    ) -> Result<(), TpmRc> {
+        let mut pub_key = [0u8; 512];
+        let mut sig_buf = [0u8; 512];
+        let (sign_alg, hash_alg, pub_len, sig_len) = match &obj.public.parms_and_id {
+            OwnedPublicParmsAndId::Rsa(parms, unique) => {
+                // CryptRsaValidateSignature()
+                let (sign_alg, sig_rsa) = match signature {
+                    TpmtSignature::Rsassa(sig) => (Alg::RSASSA, sig),
+                    TpmtSignature::Rsapss(sig) => (Alg::RSAPSS, sig),
+                    _ => return Err(TpmRc::SCHEME.to_rc()),
+                };
+                let modulus = unique.get_buffer();
+                let sig_bytes = sig_rsa.sig.get_buffer();
+                if sig_bytes.len() != modulus.len() {
+                    return Err(TpmRc::SIGNATURE.to_rc());
+                }
+                let key_size = (u16::from(parms.key_bits) / 8) as usize;
+                if modulus.len() > key_size || key_size > pub_key.len() {
+                    return Err(TpmRc::SIGNATURE.to_rc());
+                }
+                let offset = key_size - modulus.len();
+                pub_key[offset..key_size].copy_from_slice(modulus);
+                sig_buf[offset..key_size].copy_from_slice(sig_bytes);
+                (sign_alg, Alg::from(sig_rsa.hash), key_size, key_size)
+            }
+            OwnedPublicParmsAndId::Ecc(parms, point) => {
+                // CryptEccValidateSignature()
+                let order =
+                    super::commit::curve_order(parms.curve_id).ok_or(TpmRc::VALUE.to_rc())?;
+                let param_size = match parms.curve_id {
+                    TpmEccCurve::NistP224 => 28,
+                    TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => 32,
+                    TpmEccCurve::NistP384 => 48,
+                    TpmEccCurve::NistP521 => 66,
+                    _ => return Err(TpmRc::VALUE.to_rc()),
+                };
+                let sig_ecc = match signature {
+                    TpmtSignature::Ecdsa(sig) => sig,
+                    _ => return Err(TpmRc::SCHEME.to_rc()),
+                };
+                let x_buf = point.x.get_buffer();
+                let y_buf = point.y.get_buffer();
+                if x_buf.len() > param_size || y_buf.len() > param_size {
+                    return Err(TpmRc::SIGNATURE.to_rc());
+                }
+                pub_key[param_size - x_buf.len()..param_size].copy_from_slice(x_buf);
+                pub_key[param_size * 2 - y_buf.len()..param_size * 2].copy_from_slice(y_buf);
+
+                // r and s have to be greater than 0 but less than the curve order.
+                for (i, component) in [&sig_ecc.signature_r, &sig_ecc.signature_s]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let bytes = strip_leading_zeros(component.get_buffer());
+                    if bytes.is_empty() || bytes.len() > param_size {
+                        return Err(TpmRc::SIGNATURE.to_rc());
+                    }
+                    let slot = &mut sig_buf[i * param_size..(i + 1) * param_size];
+                    slot[param_size - bytes.len()..].copy_from_slice(bytes);
+                    if *slot >= *order {
+                        return Err(TpmRc::SIGNATURE.to_rc());
+                    }
+                }
+                (
+                    Alg::ECDSA,
+                    Alg::from(sig_ecc.hash),
+                    param_size * 2,
+                    param_size * 2,
+                )
+            }
+            OwnedPublicParmsAndId::KeyedHash(key_scheme, _) => {
+                if obj.private_len == 0 {
+                    return Err(TpmRc::HANDLE.to_rc());
+                }
+                // CryptHMACVerifySignature()
+                let ha = match signature {
+                    TpmtSignature::Hmac(ha) => ha,
+                    _ => return Err(TpmRc::SCHEME.to_rc()),
+                };
+                match key_scheme {
+                    None => {}
+                    Some(TpmtKeyedHashScheme::Hmac(h)) if *h == ha.hash_alg() => {}
+                    Some(_) => return Err(TpmRc::SIGNATURE.to_rc()),
+                }
+                let (hmac_bytes, hmac_len) = self
+                    .compute_hmac(ha.hash_alg(), &obj.private[..obj.private_len], &[digest])
+                    .map_err(|_| TpmRc::SIGNATURE.to_rc())?;
+                if ha.digest() != &hmac_bytes[..hmac_len] {
+                    return Err(TpmRc::SIGNATURE.to_rc());
+                }
+                return Ok(());
+            }
+            _ => return Err(TpmRc::SCHEME.to_rc()),
+        };
+
+        let digest_ha =
+            tpm2::TpmtHa::from_alg(hash_alg, digest).ok_or_else(|| TpmRc::SIGNATURE.to_rc())?;
+        self.crypto()
+            .verify_inner(
+                sign_alg,
+                &pub_key[..pub_len],
+                digest_ha,
+                &sig_buf[..sig_len],
+            )
+            .map_err(|_| TpmRc::SIGNATURE.to_rc())
+    }
+
     /// Handles the [TpmCc::Sign] (`0x15D`) command.
     ///
     /// # Description
@@ -345,129 +236,37 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let handles = request.try_unmarshal::<SignHandles>()?;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
         let cmd = request.try_unmarshal::<Sign>()?;
+        if request.remaining_bytes() != 0 {
+            return Err(TpmRc::SIZE.to_rc());
+        }
 
         let _obj = self.resolve_object(handles.key_handle.0, Position::handle(1))?;
 
+        // IsSigningObject(): the key must have `sign` set and must not be a symmetric cipher.
         if !_obj
             .public
             .object_attributes
             .contains(TpmaObject::SIGN_ENCRYPT)
+            || matches!(_obj.public.parms_and_id, OwnedPublicParmsAndId::Sym(..))
         {
-            return Err(TpmRc::KEY.to_rc());
+            return Err(TpmRc::KEY.with(Position::handle(1)));
         }
 
+        // A key that will be used for x.509 signatures can't be used in TPM2_Sign().
         if _obj
             .public
             .object_attributes
             .contains(TpmaObject::X509_SIGN)
         {
-            return Err(TpmRc::ATTRIBUTES.to_rc());
+            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
         }
 
-        let (object_has_default, object_scheme_id, object_hash_alg) =
-            match &_obj.public.parms_and_id {
-                OwnedPublicParmsAndId::Rsa(parms, _) => match &parms.scheme {
-                    Some(tpm2::TpmtRsaScheme::Rsassa(h)) => (true, Alg::RSASSA, Some(*h)),
-                    Some(tpm2::TpmtRsaScheme::Rsapss(h)) => (true, Alg::RSAPSS, Some(*h)),
-                    None => (false, Alg::NULL, None),
-                    _ => (true, Alg::NULL, None),
-                },
-                OwnedPublicParmsAndId::Ecc(parms, _) => match &parms.scheme {
-                    Some(tpm2::TpmtEccScheme::Ecdsa(h)) => (true, Alg::ECDSA, Some(*h)),
-                    Some(tpm2::TpmtEccScheme::Ecdaa(s)) => (true, Alg::ECDAA, Some(s.hash_alg)),
-                    Some(tpm2::TpmtEccScheme::Ecschnorr(h)) => (true, Alg::ECSCHNORR, Some(*h)),
-                    Some(tpm2::TpmtEccScheme::Sm2(h)) => (true, Alg::SM2, Some(*h)),
-                    None => (false, Alg::NULL, None),
-                    _ => (true, Alg::NULL, None),
-                },
-                OwnedPublicParmsAndId::KeyedHash(scheme, _) => match scheme {
-                    Some(tpm2::TpmtKeyedHashScheme::Hmac(h)) => (true, Alg::HMAC, Some(*h)),
-                    None => (false, Alg::NULL, None),
-                    _ => (true, Alg::NULL, None),
-                },
-                _ => (true, Alg::NULL, None),
-            };
-
-        if let Some(in_scheme) = &cmd.in_scheme {
-            if let Some(h) = in_scheme.hash_alg()
-                && h != TpmiAlgHash::Sha1
-                && h != TpmiAlgHash::Sha256
-                && h != TpmiAlgHash::Sha384
-                && h != TpmiAlgHash::Sha512
-                && h != TpmiAlgHash::Sm3_256
-            {
-                return Err(TpmRc::VALUE.with(Position::parameter(2)));
-            }
-        } else if !object_has_default {
-            return Err(TpmRc::SCHEME.with(Position::parameter(2)));
-        }
-
-        let selected_scheme = if object_has_default {
-            match cmd.in_scheme {
-                None => match &_obj.public.parms_and_id {
-                    OwnedPublicParmsAndId::Rsa(parms, _) => match parms.scheme {
-                        Some(tpm2::TpmtRsaScheme::Rsassa(h)) => TpmtSigScheme::Rsassa(h),
-                        Some(tpm2::TpmtRsaScheme::Rsapss(h)) => TpmtSigScheme::Rsapss(h),
-                        _ => return Err(TpmRc::SCHEME.to_rc()),
-                    },
-                    OwnedPublicParmsAndId::Ecc(parms, _) => match parms.scheme {
-                        Some(tpm2::TpmtEccScheme::Ecdsa(h)) => TpmtSigScheme::Ecdsa(h),
-                        Some(tpm2::TpmtEccScheme::Ecdaa(s)) => TpmtSigScheme::Ecdaa(s),
-                        _ => return Err(TpmRc::SCHEME.to_rc()),
-                    },
-                    OwnedPublicParmsAndId::KeyedHash(
-                        Some(tpm2::TpmtKeyedHashScheme::Hmac(h)),
-                        _,
-                    ) => TpmtSigScheme::Hmac(*h),
-                    _ => return Err(TpmRc::SCHEME.to_rc()),
-                },
-                Some(in_scheme) => {
-                    let in_scheme_id = in_scheme.algorithm();
-                    if in_scheme_id != object_scheme_id {
-                        return Err(TpmRc::SCHEME.to_rc());
-                    }
-                    let in_hash_alg = in_scheme.hash_alg();
-                    if object_hash_alg.is_some() && object_hash_alg != in_hash_alg {
-                        return Err(TpmRc::SCHEME.to_rc());
-                    }
-                    in_scheme
-                }
-            }
-        } else {
-            cmd.in_scheme.ok_or(TpmRc::SCHEME.to_rc())?
-        };
-
-        // Validate selected scheme against key type
-        match &_obj.public.parms_and_id {
-            OwnedPublicParmsAndId::Rsa(..) => match &selected_scheme {
-                TpmtSigScheme::Rsassa(_) | TpmtSigScheme::Rsapss(_) => {}
-                _ => return Err(TpmRc::SCHEME.to_rc()),
-            },
-            OwnedPublicParmsAndId::Ecc(..) => match &selected_scheme {
-                TpmtSigScheme::Ecdsa(_)
-                | TpmtSigScheme::Ecdaa(_)
-                | TpmtSigScheme::Sm2(_)
-                | TpmtSigScheme::Ecschnorr(_) => {}
-                _ => return Err(TpmRc::SCHEME.to_rc()),
-            },
-            OwnedPublicParmsAndId::KeyedHash(..) => match &selected_scheme {
-                TpmtSigScheme::Hmac(_) => {}
-                _ => return Err(TpmRc::VALUE.to_rc()),
-            },
-            _ => return Err(TpmRc::SCHEME.to_rc()),
-        }
-
+        // CryptSelectSignScheme(): any failure is TPM_RC_SCHEME + RC_Sign_inScheme.
+        let selected_scheme = select_sign_scheme(&_obj.public.parms_and_id, cmd.in_scheme)
+            .ok_or_else(|| TpmRc::SCHEME.with(Position::parameter(2)))?;
         let scheme_hash_alg = selected_scheme
             .hash_alg()
-            .ok_or_else(|| TpmRc::SCHEME.to_rc())?;
-        if scheme_hash_alg != TpmiAlgHash::Sha1
-            && scheme_hash_alg != TpmiAlgHash::Sha256
-            && scheme_hash_alg != TpmiAlgHash::Sha384
-            && scheme_hash_alg != TpmiAlgHash::Sha512
-            && scheme_hash_alg != TpmiAlgHash::Sm3_256
-        {
-            return Err(TpmRc::VALUE.with(Position::parameter(2)));
-        }
+            .ok_or_else(|| TpmRc::SCHEME.with(Position::parameter(2)))?;
 
         let is_restricted = _obj
             .public
@@ -483,43 +282,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             if cmd.validation.digest().get_buffer() != ticket_hmac {
                 return Err(TpmRc::TICKET.with(Position::parameter(3)));
             }
-        } else {
-            let expected_digest_len = match scheme_hash_alg {
-                TpmiAlgHash::Sha1 => 20,
-                TpmiAlgHash::Sha256 => 32,
-                TpmiAlgHash::Sha384 => 48,
-                TpmiAlgHash::Sha512 => 64,
-                TpmiAlgHash::Sm3_256 => 32,
-                _ => {
-                    return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                }
-            };
-            if cmd.digest.get_size() as usize != expected_digest_len {
-                return Err(TpmRc::SIZE.with(Position::parameter(1)));
-            }
+        } else if cmd.digest.get_size() as usize != scheme_hash_alg.digest_size() {
+            return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
 
-        let hmac_bytes = if let TpmtSigScheme::Hmac(_) = &selected_scheme {
-            let (computed_hmac, _) = self
-                .compute_hmac(
-                    scheme_hash_alg,
-                    &_obj.private[.._obj.private_len],
-                    &[cmd.digest.get_buffer()],
-                )
-                .map_err(|_| TpmRc::VALUE.with(Position::handle(1)))?;
-            computed_hmac
-        } else {
-            [0u8; 64]
-        };
+        // Defense in depth: a public-only object (e.g. loaded by TPM2_LoadExternal without a
+        // sensitive area) cannot be authorized for USER role in C (`IsAuthValueAvailable` /
+        // `IsAuthPolicyAvailable`), so it never reaches TPM2_Sign. Never sign with an empty key.
+        if _obj.private_len == 0 {
+            return Err(TpmRc::AUTH_UNAVAILABLE);
+        }
 
         let mut sig_r = [0u8; 128];
         let mut sig_s = [0u8; 128];
         let mut sig_buf = [0u8; 512];
+        let hmac_bytes: [u8; 64];
         let signature = if let TpmtSigScheme::Ecdaa(ecdaa_s) = &selected_scheme {
             let hash_alg = ecdaa_s.hash_alg;
-            if ecdaa_s.count != self.global_state.commit_counter || ecdaa_s.count == 0 {
-                return Err(TpmRc::VALUE.with(Position::parameter(2)));
-            }
             let curve = match &_obj.public.parms_and_id {
                 OwnedPublicParmsAndId::Ecc(parms, _) => parms.curve_id,
                 _ => {
@@ -533,28 +312,42 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 TpmEccCurve::NistP521 => 66,
                 _ => return Err(TpmRc::VALUE.to_rc()),
             };
-            let commit_r =
-                self.compute_commit_r(ecdaa_s.count, _obj.name.get_buffer(), param_size)?;
+            // CryptGenerateR(): the count must reference an outstanding commitment
+            // (TPM_RC_VALUE otherwise, as returned by TpmEcc_SignEcdaa()).
+            let (commit_r, r_len) =
+                self.generate_committed_r(ecdaa_s.count, _obj.name.get_buffer(), curve)?;
+            debug_assert_eq!(r_len, param_size);
             self.crypto()
                 .ecdaa_sign(
                     curve,
                     &commit_r[..param_size],
-                    &self.global_state.commit_x[..param_size.min(32)],
-                    &self.global_state.commit_p1[..(param_size * 2).min(64)],
+                    &self.global_state.commit_x[..param_size],
+                    &self.global_state.commit_p1[..param_size * 2],
                     &_obj.private[.._obj.private_len],
                     cmd.digest.get_buffer(),
                     &mut sig_r[..param_size],
                     &mut sig_s[..param_size],
                 )
                 .map_err(|_| TpmRc::VALUE.with(Position::handle(1)))?;
-            TpmtSignature::Ecdaa(TpmsSignatureEcc {
+            let signature = TpmtSignature::Ecdaa(TpmsSignatureEcc {
                 hash: hash_alg,
                 signature_r: Tpm2bEccParameter::from_bytes(&sig_r[..param_size])
                     .map_err(|_| TpmRc::FAILURE)?,
                 signature_s: Tpm2bEccParameter::from_bytes(&sig_s[..param_size])
                     .map_err(|_| TpmRc::FAILURE)?,
-            })
+            });
+            // CryptEndCommit(): the signature succeeded, so the commitment can never be
+            // used again (reusing `r` would reveal the private key).
+            self.end_commit(ecdaa_s.count);
+            signature
         } else if let TpmtSigScheme::Hmac(_) = &selected_scheme {
+            (hmac_bytes, _) = self
+                .compute_hmac(
+                    scheme_hash_alg,
+                    &_obj.private[.._obj.private_len],
+                    &[cmd.digest.get_buffer()],
+                )
+                .map_err(|_| TpmRc::VALUE.with(Position::handle(1)))?;
             let tpmt_ha = tpm2::TpmtHa::new(
                 scheme_hash_alg,
                 &hmac_bytes[..scheme_hash_alg.digest_size()],
@@ -636,6 +429,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
         let cmd = request.try_unmarshal::<RSAEncrypt>()?;
+        if request.remaining_bytes() != 0 {
+            return Err(TpmRc::SIZE.to_rc());
+        }
 
         let obj = self.resolve_object(handles.key_handle.0, Position::handle(1))?;
 
@@ -649,30 +445,28 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         };
 
-        // Validate attributes (RESTRICTED or !DECRYPT return TPM_RC_ATTRIBUTES)
-        if obj
-            .public
-            .object_attributes
-            .contains(TpmaObject::RESTRICTED)
-            || !obj.public.object_attributes.contains(TpmaObject::DECRYPT)
-        {
+        // The key must have the decryption attribute. Only the public portion is used, so
+        // (unlike TPM2_RSA_Decrypt) restricted keys are allowed (`RSA_Encrypt.c`).
+        if !obj.public.object_attributes.contains(TpmaObject::DECRYPT) {
             return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
+        }
+
+        // Check label constraints (must be zero-terminated if not empty)
+        let label_bytes = cmd.label.get_buffer();
+        if !label_bytes.is_empty() && label_bytes.last() != Some(&0) {
+            return Err(TpmRc::VALUE.with(Position::parameter(3)));
         }
 
         // Resolve the padding scheme
         let (resolved_scheme, resolved_hash_alg) =
             self.resolve_rsa_scheme(key_scheme, cmd.in_scheme)?;
 
-        // Check label constraints (must be zero-terminated if not empty)
-        let label_bytes = cmd.label.get_buffer();
-        if !label_bytes.is_empty() && label_bytes.last() != Some(&0) {
-            return Err(TpmRc::VALUE.with(Position::handle(3)));
-        }
-
-        // Call self.crypto().encrypt(...) using resolved scheme/hash alg
+        // Call self.crypto().encrypt(...) using resolved scheme/hash alg. CryptRsaEncrypt()
+        // errors are returned without a position; a message that is too large for the key is
+        // TPM_RC_VALUE.
         let key_size = (u16::from(key_bits) / 8) as usize;
         if cmd.message.get_buffer().len() > key_size {
-            return Err(TpmRc::SIZE.with(Position::handle(1)));
+            return Err(TpmRc::VALUE.to_rc());
         }
         let mut encrypted_data = [0u8; 512];
         let encrypted_len = self
@@ -685,7 +479,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 &mut encrypted_data[..key_size],
                 label_bytes,
             )
-            .map_err(|_| TpmRc::VALUE.with(Position::handle(1)))?;
+            .map_err(|_| TpmRc::VALUE.to_rc())?;
 
         let rsp = responses::RSAEncrypt {
             out_data: Tpm2bPublicKeyRsa::from_bytes(&encrypted_data[..encrypted_len])
@@ -718,33 +512,43 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
         let cmd = request.try_unmarshal::<RSADecrypt>()?;
+        if request.remaining_bytes() != 0 {
+            return Err(TpmRc::SIZE.to_rc());
+        }
 
         let obj = self.resolve_object(handles.key_handle.0, Position::handle(1))?;
 
+        // The selected key must be an RSA key...
+        let (key_bits, key_scheme, modulus_len) = match &obj.public.parms_and_id {
+            OwnedPublicParmsAndId::Rsa(parms, unique) => {
+                (parms.key_bits, parms.scheme, unique.get_buffer().len())
+            }
+            _ => return Err(TpmRc::KEY.with(Position::handle(1))),
+        };
+
+        // ...and an unrestricted decryption key (`RSA_Decrypt.c`).
         if obj
             .public
             .object_attributes
             .contains(TpmaObject::RESTRICTED)
+            || !obj.public.object_attributes.contains(TpmaObject::DECRYPT)
         {
-            return Err(TpmRc::ATTRIBUTES.to_rc());
+            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
         }
-
-        if !obj.public.object_attributes.contains(TpmaObject::DECRYPT) {
-            return Err(TpmRc::KEY.to_rc());
-        }
-
-        let (key_bits, key_scheme) = match &obj.public.parms_and_id {
-            OwnedPublicParmsAndId::Rsa(parms, _) => (parms.key_bits, parms.scheme),
-            _ => return Err(TpmRc::KEY.to_rc()),
-        };
-
-        let (resolved_scheme, resolved_hash_alg) =
-            self.resolve_rsa_scheme(key_scheme, cmd.in_scheme)?;
 
         // Check label constraints (must be zero-terminated if not empty)
         let label_bytes = cmd.label.get_buffer();
         if !label_bytes.is_empty() && label_bytes.last() != Some(&0) {
-            return Err(TpmRc::VALUE.with(Position::handle(3)));
+            return Err(TpmRc::VALUE.with(Position::parameter(3)));
+        }
+
+        let (resolved_scheme, resolved_hash_alg) =
+            self.resolve_rsa_scheme(key_scheme, cmd.in_scheme)?;
+
+        // CryptRsaDecrypt(): the ciphertext must be exactly the size of the modulus. Its
+        // errors are returned without a position.
+        if cmd.cipher_text.get_buffer().len() != modulus_len {
+            return Err(TpmRc::SIZE.to_rc());
         }
 
         let key_size = (u16::from(key_bits) / 8) as usize;
@@ -759,7 +563,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 &mut decrypted_message,
                 label_bytes,
             )
-            .map_err(|_| TpmRc::VALUE.with(Position::handle(1)))?;
+            .map_err(|_| TpmRc::VALUE.to_rc())?;
 
         let mut m_bytes = &decrypted_message[..decrypted_len];
         let mut padded = [0u8; 512];
@@ -789,14 +593,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             (Some(TpmtRsaScheme::Oaep(key_details)), None) => (Alg::OAEP, Alg::from(key_details)),
             (Some(TpmtRsaScheme::Oaep(key_details)), Some(TpmtRsaDecrypt::Oaep(cmd_details))) => {
                 if cmd_details != key_details {
-                    return Err(TpmRc::SCHEME.with(Position::handle(2)));
+                    return Err(TpmRc::SCHEME.with(Position::parameter(2)));
                 }
                 (Alg::OAEP, Alg::from(key_details))
             }
             (Some(TpmtRsaScheme::Rsaes), None)
             | (Some(TpmtRsaScheme::Rsaes), Some(TpmtRsaDecrypt::Rsaes)) => (Alg::RSAES, Alg::NULL),
             _ => {
-                return Err(TpmRc::SCHEME.with(Position::handle(2)));
+                return Err(TpmRc::SCHEME.with(Position::parameter(2)));
             }
         };
 
@@ -830,6 +634,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             _ => return Err(TpmRc::TYPE.with(Position::handle(1))),
         };
 
+        // HMAC.c order: key type, then `restricted`, then `sign`, and only then the hash
+        // algorithm selection.
+        if obj
+            .public
+            .object_attributes
+            .contains(TpmaObject::RESTRICTED)
+        {
+            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
+        }
+        if !obj
+            .public
+            .object_attributes
+            .contains(TpmaObject::SIGN_ENCRYPT)
+        {
+            return Err(TpmRc::KEY.with(Position::handle(1)));
+        }
+
         let key_hash_alg = match scheme {
             Some(TpmtKeyedHashScheme::Hmac(scheme_hash)) => {
                 let key_hash_alg = Alg::from(*scheme_hash);
@@ -849,20 +670,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             _ => return Err(TpmRc::TYPE.with(Position::handle(1))),
         };
 
-        if obj
-            .public
-            .object_attributes
-            .contains(TpmaObject::RESTRICTED)
-        {
-            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
-        }
-        if !obj
-            .public
-            .object_attributes
-            .contains(TpmaObject::SIGN_ENCRYPT)
-        {
-            return Err(TpmRc::KEY.with(Position::handle(1)));
-        }
         if obj.private_len == 0 {
             return Err(TpmRc::KEY.with(Position::handle(1)));
         }
@@ -918,25 +725,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
         let cmd = request.try_unmarshal::<ECDHZGen>()?;
-
-        let obj_holder;
-        let obj = if handles.key_handle.0 >> 24 == 0x80 {
-            self.global_state
-                .find_transient_object(handles.key_handle.0)
-                .ok_or(TpmRc::HANDLE.to_rc())?
-        } else if handles.key_handle.0 >> 24 == 0x81 {
-            obj_holder = self
-                .context
-                .load_persistent_object(self.global_state, handles.key_handle.0)
-                .map_err(|_| TpmRc::HANDLE.to_rc())?;
-            &obj_holder
-        } else {
-            return Err(TpmRc::HANDLE.to_rc());
-        };
-
-        if obj.private_len == 0 {
-            return Err(TpmRc::KEY.with(Position::handle(1)));
+        if request.remaining_bytes() != 0 {
+            return Err(TpmRc::SIZE.to_rc());
         }
+
+        let obj = self.resolve_object(handles.key_handle.0, Position::handle(1))?;
+
+        // ECDH_ZGen.c order: the key must be an ECC key, then an unrestricted decryption key,
+        // then its scheme must be ECDH or NULL.
+        let (curve, scheme) = match &obj.public.parms_and_id {
+            OwnedPublicParmsAndId::Ecc(ecc_parms, _) => (ecc_parms.curve_id, ecc_parms.scheme),
+            _ => return Err(TpmRc::KEY.with(Position::handle(1))),
+        };
 
         if obj
             .public
@@ -947,16 +747,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
         }
 
-        let curve = match &obj.public.parms_and_id {
-            OwnedPublicParmsAndId::Ecc(ecc_parms, _) => {
-                match ecc_parms.scheme {
-                    Some(TpmtEccScheme::Ecdh(_)) | None => {}
-                    _ => return Err(TpmRc::SCHEME.with(Position::handle(1))),
-                }
-                ecc_parms.curve_id
-            }
-            _ => return Err(TpmRc::KEY.with(Position::handle(1))),
-        };
+        match scheme {
+            Some(TpmtEccScheme::Ecdh(_)) | None => {}
+            _ => return Err(TpmRc::SCHEME.with(Position::handle(1))),
+        }
+
+        // Defense in depth: a public-only key cannot be authorized in C (AUTH_UNAVAILABLE), so
+        // it never reaches the point multiplication with the (missing) private scalar.
+        if obj.private_len == 0 {
+            return Err(TpmRc::KEY.with(Position::handle(1)));
+        }
 
         let in_point_struct = cmd
             .in_point
@@ -1011,4 +811,99 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
+}
+
+/// Returns `true` if `hash_alg` is a hash algorithm implemented (and advertised in
+/// `TPM_CAP_ALGS`) by this TPM, i.e. `CryptHashIsValidAlg(hash_alg, FALSE)`.
+fn is_implemented_hash(hash_alg: TpmiAlgHash) -> bool {
+    matches!(
+        hash_alg,
+        TpmiAlgHash::Sha1 | TpmiAlgHash::Sha256 | TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512
+    )
+}
+
+/// Selects the signing scheme for `TPM2_Sign`, mirroring `CryptSelectSignScheme` and
+/// `CryptIsValidSignScheme` (`CryptUtil.c`).
+///
+/// - If the key has no default scheme (`TPM_ALG_NULL`), the input scheme is used and must not
+///   be `TPM_ALG_NULL`.
+/// - If the input scheme is `TPM_ALG_NULL`, the key's default scheme is used, unless it is a
+///   split-signing scheme (ECDAA), which requires caller-provided data (the commit count).
+/// - Otherwise both schemes must have the same algorithm and hash.
+///
+/// The resulting scheme must be a signing scheme valid for the key type, and its hash must be
+/// an implemented hash. Signing schemes that this TPM does not implement (`TPM_ALG_SM2`,
+/// `TPM_ALG_ECSCHNORR`, EdDSA; none are listed in `TPM_CAP_ALGS`) are treated as invalid, as
+/// in a C build without those algorithms.
+///
+/// Returns `None` on any failure; the caller reports `TPM_RC_SCHEME + RC_Sign_inScheme`.
+fn select_sign_scheme(
+    parms: &OwnedPublicParmsAndId,
+    in_scheme: Option<TpmtSigScheme>,
+) -> Option<TpmtSigScheme> {
+    // `Ok(None)`: the key has a NULL scheme. `Err(())`: the key's scheme is not a signing
+    // scheme (e.g. OAEP, ECDH, XOR), so neither copying it nor matching it can succeed.
+    let object_scheme: Result<Option<TpmtSigScheme>, ()> = match parms {
+        OwnedPublicParmsAndId::Rsa(p, _) => match p.scheme {
+            None => Ok(None),
+            Some(TpmtRsaScheme::Rsassa(h)) => Ok(Some(TpmtSigScheme::Rsassa(h))),
+            Some(TpmtRsaScheme::Rsapss(h)) => Ok(Some(TpmtSigScheme::Rsapss(h))),
+            Some(_) => Err(()),
+        },
+        OwnedPublicParmsAndId::Ecc(p, _) => match p.scheme {
+            None => Ok(None),
+            Some(TpmtEccScheme::Ecdsa(h)) => Ok(Some(TpmtSigScheme::Ecdsa(h))),
+            Some(TpmtEccScheme::Ecdaa(s)) => Ok(Some(TpmtSigScheme::Ecdaa(s))),
+            Some(TpmtEccScheme::Sm2(h)) => Ok(Some(TpmtSigScheme::Sm2(h))),
+            Some(TpmtEccScheme::Ecschnorr(h)) => Ok(Some(TpmtSigScheme::Ecschnorr(h))),
+            Some(_) => Err(()),
+        },
+        OwnedPublicParmsAndId::KeyedHash(scheme, _) => match scheme {
+            None => Ok(None),
+            Some(TpmtKeyedHashScheme::Hmac(h)) => Ok(Some(TpmtSigScheme::Hmac(*h))),
+            Some(_) => Err(()),
+        },
+        // Only RSA, ECC and keyed-hash objects can sign.
+        _ => return None,
+    };
+
+    let selected = match (object_scheme.ok()?, in_scheme) {
+        // Input and default can't both be NULL.
+        (None, None) => return None,
+        (None, Some(input)) => input,
+        // ECDAA is a split-signing scheme: the caller must provide the commit count.
+        (Some(TpmtSigScheme::Ecdaa(_)), None) => return None,
+        (Some(default), None) => default,
+        (Some(default), Some(input)) => {
+            if default.algorithm() != input.algorithm() || default.hash_alg() != input.hash_alg() {
+                return None;
+            }
+            // Keep the input scheme: it may carry split-signing data (the ECDAA count).
+            input
+        }
+    };
+
+    let valid_for_key = match parms {
+        OwnedPublicParmsAndId::Rsa(..) => {
+            matches!(
+                selected,
+                TpmtSigScheme::Rsassa(_) | TpmtSigScheme::Rsapss(_)
+            )
+        }
+        OwnedPublicParmsAndId::Ecc(..) => {
+            matches!(selected, TpmtSigScheme::Ecdsa(_) | TpmtSigScheme::Ecdaa(_))
+        }
+        OwnedPublicParmsAndId::KeyedHash(..) => matches!(selected, TpmtSigScheme::Hmac(_)),
+        _ => false,
+    };
+    if !valid_for_key || !selected.hash_alg().is_some_and(is_implemented_hash) {
+        return None;
+    }
+    Some(selected)
+}
+
+/// Returns `bytes` without its leading zero bytes (the magnitude of a big-endian integer).
+fn strip_leading_zeros(bytes: &[u8]) -> &[u8] {
+    let first_non_zero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    &bytes[first_non_zero..]
 }

@@ -382,7 +382,8 @@ fn test_parms_ecc_invalid_scheme() {
     let res = execute_test_parms_corrupted(&mut tpm, &mut global_state, ecc_parms, |buf| {
         buf[4..6].copy_from_slice(&0x0016u16.to_be_bytes());
     });
-    assert_eq!(res, Err(TpmRc::VALUE.with(Position::parameter(1)).get()));
+    // C TPMI_ALG_ECC_SCHEME_Unmarshal: TPM_RC_SCHEME (+ RC_P1).
+    assert_eq!(res, Err(TpmRc::SCHEME.with(Position::parameter(1)).get()));
 }
 
 #[test]
@@ -486,9 +487,13 @@ fn test_parms_sym_invalid_mode() {
     let rng = FakeRng::new();
     let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
 
-    let sym_parms = TpmtPublicParms::Sym(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CBC)));
+    // CBC is an implemented mode and TestParms only unmarshals (C TestParms.c), so use an
+    // undefined mode value instead (C TPMI_ALG_SYM_MODE_Unmarshal -> TPM_RC_MODE).
+    let sym_parms = TpmtPublicParms::Sym(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
 
-    let res = execute_test_parms(&mut tpm, &mut global_state, sym_parms);
+    let res = execute_test_parms_corrupted(&mut tpm, &mut global_state, sym_parms, |buf| {
+        buf[6..8].copy_from_slice(&0x0099u16.to_be_bytes());
+    });
     assert_eq!(res, Err(TpmRc::MODE.with(Position::parameter(1)).get()));
 }
 
@@ -505,7 +510,11 @@ fn test_parms_sym_invalid_type() {
     let res = execute_test_parms_corrupted(&mut tpm, &mut global_state, sym_parms, |buf| {
         buf[2..4].copy_from_slice(&0x0010u16.to_be_bytes());
     });
-    assert_eq!(res, Err(TpmRc::VALUE.with(Position::parameter(1)).get()));
+    // C TPMI_ALG_SYM_OBJECT_Unmarshal (no NULL for SYMCIPHER parms) -> TPM_RC_SYMMETRIC.
+    assert_eq!(
+        res,
+        Err(TpmRc::SYMMETRIC.with(Position::parameter(1)).get())
+    );
 }
 
 #[test]
@@ -589,5 +598,9 @@ fn test_parms_rsa_invalid_symmetric_xor() {
     let res = execute_test_parms_corrupted(&mut tpm, &mut global_state, rsa_parms, |buf| {
         buf[2..4].copy_from_slice(&0x000Au16.to_be_bytes());
     });
-    assert_eq!(res, Err(TpmRc::VALUE.with(Position::parameter(1)).get()));
+    // C TPMI_ALG_SYM_OBJECT_Unmarshal: XOR is not a symmetric object algorithm -> TPM_RC_SYMMETRIC.
+    assert_eq!(
+        res,
+        Err(TpmRc::SYMMETRIC.with(Position::parameter(1)).get())
+    );
 }

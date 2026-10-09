@@ -27,7 +27,9 @@ fn test_commit_on_ecc_key_without_sign_attribute() {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: None,
+                // A restricted decryption (storage) key needs a symmetric algorithm, otherwise
+                // creation fails with TPM_RC_SYMMETRIC (C PublicAttributesValidation).
+                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -67,4 +69,7 @@ fn test_commit_on_ecc_key_without_sign_attribute() {
         res.is_err(),
         "Commit on ECC key without SIGN attribute should fail"
     );
+    // Commit.c: a storage key has a NULL scheme, which is not anonymous ->
+    // TPM_RCS_SCHEME + RC_Commit_signHandle.
+    assert_eq!(res.err(), Some(0x192));
 }

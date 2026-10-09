@@ -177,8 +177,10 @@ fn adv_load_external_rsa_prime_zero() {
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    // C CryptValidateKeys (CryptUtil.c:1724-1726): a prime whose top byte is
+    // below 0x80 is rejected with KEY_SIZE + blameSensitive (P1).
     match res {
-        Err(e) => assert_eq!(e, TpmRc::VALUE.with(Position::parameter(1)).get()),
+        Err(e) => assert_eq!(e, TpmRc::KEY_SIZE.with(Position::parameter(1)).get()),
         Ok(_) => panic!("Expected error, got Ok"),
     }
 }
@@ -205,8 +207,11 @@ fn adv_load_external_rsa_prime_unbalanced() {
         hierarchy: Handle::RH_NULL,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    // C CryptValidateKeys (CryptUtil.c:1724-1726): a prime whose top byte is
+    // below 0x80 is rejected with KEY_SIZE + blameSensitive (P1) before any
+    // binding check.
     match res {
-        Err(e) => assert_eq!(e, TpmRc::BINDING.with(Position::parameter(1)).get()),
+        Err(e) => assert_eq!(e, TpmRc::KEY_SIZE.with(Position::parameter(1)).get()),
         Ok(_) => panic!("Expected error, got Ok"),
     }
 }
@@ -244,7 +249,9 @@ fn adv_load_external_keyed_hash_sensitive_too_large() {
         ),
     };
     let in_private = tpm2::Tpm2b(sensitive_create);
-    let mut pub_area = make_keyed_hash_public_area(&[0x01; 32], TpmaObject::default());
+    // An HMAC scheme is only valid on a sign-only keyedhash object (C SchemeChecks,
+    // Object_spt.c:429-439, else SCHEME+P2), so set SIGN.
+    let mut pub_area = make_keyed_hash_public_area(&[0x01; 32], TpmaObject::SIGN_ENCRYPT);
     if let PublicParmsAndId::KeyedHash(ref mut scheme, _) = pub_area.parms_and_id {
         *scheme = Some(TpmtKeyedHashScheme::Hmac(TpmiAlgHash::Sha256));
     }

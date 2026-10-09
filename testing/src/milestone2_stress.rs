@@ -171,8 +171,12 @@ fn test_create_unsupported_name_alg() {
     };
     let handles = CreateHandles { parent_handle };
     let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
-    // Should fail with Value error
-    assert_eq!(res.err(), Some(TpmRc::VALUE.get()));
+    // C TPMI_ALG_HASH unmarshal of nameAlg in inPublic returns TPM_RC_HASH,
+    // reported as HASH+P2 (0x2C3).
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::HASH.with(tpm2::errors::Position::parameter(2)).get())
+    );
 }
 
 // ==========================================
@@ -273,8 +277,16 @@ fn test_policy_or_policy_session_mismatch() {
         policy_session: active_session.session_handle,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
-    // Should return Value error since current digest is not in list
-    assert_eq!(res.err(), Some(TpmRc::VALUE.get()));
+    // Should return Value error since current digest is not in list:
+    // TPM_RCS_VALUE + RC_PolicyOR_pHashList (VALUE+P1, PolicyOR.c:63).
+    assert_eq!(
+        res.err(),
+        Some(
+            TpmRc::VALUE
+                .with(tpm2::errors::Position::parameter(1))
+                .get()
+        )
+    );
 }
 
 #[test]

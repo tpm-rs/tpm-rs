@@ -192,7 +192,10 @@ fn create_transient_key(
     private[..priv_len].copy_from_slice(&priv_buf[..priv_len]);
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: name.into(),
         auth: Tpm2bAuth::default().into(),
         public: public.into(),
@@ -258,7 +261,10 @@ fn create_transient_ecc_key(
     private[..priv_len].copy_from_slice(&priv_buf[..priv_len]);
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: name.into(),
         auth: Tpm2bAuth::default().into(),
         public: public.into(),
@@ -267,6 +273,33 @@ fn create_transient_ecc_key(
         qualified_name: name.into(),
         hierarchy: 0x40000001,
         st_clear: false,
+    }
+}
+
+/// `TPM2_Duplicate` requires the DUP role, which always needs a policy session whose
+/// `commandCode` is `TPM2_Duplicate` (C `IsPolicySessionRequired()` / `CheckPolicyAuthSession()`).
+/// Installs such a session (its policyDigest equals the object's empty authPolicy) and returns the
+/// authorization that uses it.
+fn dup_policy_auth(global_state: &mut tpm2_impl::GlobalState) -> TpmsAuthCommand<'static> {
+    const SESSION: u32 = 0x0300_0000;
+    let _ = global_state.flush_session(SESSION);
+    let mut session = common::make_test_session_state(
+        SESSION,
+        tpm2::TpmSe::Policy,
+        TpmiAlgHash::Sha256,
+        Default::default(),
+        Default::default(),
+        &[],
+        None,
+        Handle::RH_NULL,
+    );
+    session.command_code = u32::from(tpm2::TpmCc::Duplicate);
+    global_state.add_session(session).unwrap();
+    TpmsAuthCommand {
+        session_handle: Handle(SESSION),
+        nonce: Default::default(),
+        session_attributes: tpm2::TpmaSession(0),
+        hmac: Default::default(),
     }
 }
 
@@ -309,8 +342,48 @@ fn test_exhaustive_combinations_debug() {
         symmetric_alg: sym_alg,
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &dup_handles, &dup_cmd, &[]);
+    let dup_auth = dup_policy_auth(&mut global_state);
+
+    let res = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &dup_handles,
+        &dup_cmd,
+        &[dup_auth],
+    );
     assert!(res.is_ok());
+}
+
+/// Expected `TPM2_Import` response code for an inner-wrapped `duplicate` without an outer
+/// wrapper, following C `DuplicateToSensitive()` / `CheckInnerIntegrity()`: the blob is decrypted
+/// with AES-128-CFB (zero IV), then the leading `TPM2B_DIGEST` integrity is unmarshaled
+/// (TPM_RC_SIZE if its size exceeds a digest, TPM_RC_INSUFFICIENT if the data is too short) and
+/// otherwise compared (TPM_RC_INTEGRITY for these garbage blobs). TPM2_Import reports it against
+/// `duplicate` (+P3).
+fn expected_inner_wrapper_rc(crypto: &TestCryptoProvider, key: &[u8], duplicate: &[u8]) -> u32 {
+    let mut data = duplicate.to_vec();
+    let mut iv = [0u8; 16];
+    tpm2::crypto::decrypt(
+        crypto,
+        TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)),
+        key,
+        &mut iv,
+        &mut data,
+    )
+    .unwrap();
+    let rc = if data.len() < 2 {
+        TpmRc::INSUFFICIENT
+    } else {
+        let size = u16::from_be_bytes([data[0], data[1]]) as usize;
+        if size > 64 {
+            TpmRc::SIZE
+        } else if 2 + size > data.len() {
+            TpmRc::INSUFFICIENT
+        } else {
+            TpmRc::INTEGRITY
+        }
+    };
+    rc.with(tpm2::errors::Position::parameter(3)).get()
 }
 
 #[test]
@@ -347,8 +420,15 @@ fn test_import_malformed_inner_blob_size() {
         encryption_key_in: Tpm2bData::default(),
         symmetric_alg: None,
     };
-    let (_, dup_resp) =
-        execute_tpm_command(&mut tpm, &mut global_state, &dup_handles, &dup_cmd, &[]).unwrap();
+    let dup_auth = dup_policy_auth(&mut global_state);
+    let (_, dup_resp) = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &dup_handles,
+        &dup_cmd,
+        &[dup_auth],
+    )
+    .unwrap();
 
     let mut pub_buf = [0u8; 1024];
     let pub_len = marshal_to_slice(&target.public, &mut pub_buf);
@@ -369,8 +449,24 @@ fn test_import_malformed_inner_blob_size() {
             in_sym_seed: dup_resp.out_sym_seed,
             symmetric_alg: None,
         };
-        let res = execute_tpm_command(&mut tpm, &mut global_state, &imp_handles, &imp_cmd, &[]);
-        assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
+        let res = execute_tpm_command(
+            &mut tpm,
+            &mut global_state,
+            &imp_handles,
+            &imp_cmd,
+            &[common::password_auth(b"")],
+        );
+        // inSymSeed is not empty, so the outer wrapper is removed first: C `UnwrapOuter()` cannot
+        // unmarshal the TPM2B integrity from 1 byte (TPM_RC_INSUFFICIENT), which TPM2_Import
+        // reports against `duplicate` (RcSafeAddToResult(result, RC_Import_duplicate)).
+        assert_eq!(
+            res.err(),
+            Some(
+                tpm2::errors::TpmRc::INSUFFICIENT
+                    .with(tpm2::errors::Position::parameter(3))
+                    .get()
+            )
+        );
     }
 
     // Scenario B: No inner wrapper, 2 + sensitive_size > duplicate_bytes length
@@ -384,8 +480,18 @@ fn test_import_malformed_inner_blob_size() {
             in_sym_seed: dup_resp.out_sym_seed,
             symmetric_alg: None,
         };
-        let res = execute_tpm_command(&mut tpm, &mut global_state, &imp_handles, &imp_cmd, &[]);
-        assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
+        let res = execute_tpm_command(
+            &mut tpm,
+            &mut global_state,
+            &imp_handles,
+            &imp_cmd,
+            &[common::password_auth(b"")],
+        );
+        // C: outer integrity TPM2B size 256 exceeds TPM2B_DIGEST (TPM_RC_SIZE in UnwrapOuter); TPM2_Import adds RC_Import_duplicate (+P3) via RcSafeAddToResult.
+        assert_eq!(
+            res.err(),
+            Some(TpmRc::SIZE.with(tpm2::errors::Position::parameter(3)).get())
+        );
     }
 
     // Scenario C: Inner wrapper active (AES-128 CFB), but decrypted_inner is too short (< 2 bytes)
@@ -404,8 +510,22 @@ fn test_import_malformed_inner_blob_size() {
             in_sym_seed: Tpm2bEncryptedSecret::default(), // Empty seed
             symmetric_alg: sym_alg,
         };
-        let res = execute_tpm_command(&mut tpm, &mut global_state, &imp_handles, &imp_cmd, &[]);
-        assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
+        let res = execute_tpm_command(
+            &mut tpm,
+            &mut global_state,
+            &imp_handles,
+            &imp_cmd,
+            &[common::password_auth(b"")],
+        );
+        // C: the inner integrity TPM2B cannot be unmarshaled from 1 byte (CheckInnerIntegrity); TPM2_Import adds RC_Import_duplicate (+P3) via RcSafeAddToResult.
+        assert_eq!(
+            res.err(),
+            Some(
+                TpmRc::INSUFFICIENT
+                    .with(tpm2::errors::Position::parameter(3))
+                    .get()
+            )
+        );
     }
 
     // Scenario D: Inner wrapper active, decrypted_inner is >= 2, but sensitive_offset + 2 > inner_blob_len
@@ -428,8 +548,16 @@ fn test_import_malformed_inner_blob_size() {
             in_sym_seed: Tpm2bEncryptedSecret::default(),
             symmetric_alg: sym_alg,
         };
-        let res = execute_tpm_command(&mut tpm, &mut global_state, &imp_handles, &imp_cmd, &[]);
-        assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
+        let res = execute_tpm_command(
+            &mut tpm,
+            &mut global_state,
+            &imp_handles,
+            &imp_cmd,
+            &[common::password_auth(b"")],
+        );
+        // C: see `expected_inner_wrapper_rc` (the decrypted integrity size is pseudo-random).
+        let expected = expected_inner_wrapper_rc(tpm.platform.crypto, &[0x55; 16], &plaintext);
+        assert_eq!(res.err(), Some(expected));
     }
 
     // Scenario E: Inner wrapper active, sensitive_offset + 2 <= inner_blob_len, but sensitive_offset + 2 + sensitive_size > inner_blob_len
@@ -456,8 +584,16 @@ fn test_import_malformed_inner_blob_size() {
             in_sym_seed: Tpm2bEncryptedSecret::default(),
             symmetric_alg: sym_alg,
         };
-        let res = execute_tpm_command(&mut tpm, &mut global_state, &imp_handles, &imp_cmd, &[]);
-        assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
+        let res = execute_tpm_command(
+            &mut tpm,
+            &mut global_state,
+            &imp_handles,
+            &imp_cmd,
+            &[common::password_auth(b"")],
+        );
+        // C: see `expected_inner_wrapper_rc` (the decrypted integrity size is pseudo-random).
+        let expected = expected_inner_wrapper_rc(tpm.platform.crypto, &[0xcc; 16], &plaintext);
+        assert_eq!(res.err(), Some(expected));
     }
 
     // Scenario F: Integer overflow check (inner_integrity_len = 65535)
@@ -479,8 +615,16 @@ fn test_import_malformed_inner_blob_size() {
             in_sym_seed: Tpm2bEncryptedSecret::default(),
             symmetric_alg: sym_alg,
         };
-        let res = execute_tpm_command(&mut tpm, &mut global_state, &imp_handles, &imp_cmd, &[]);
-        assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
+        let res = execute_tpm_command(
+            &mut tpm,
+            &mut global_state,
+            &imp_handles,
+            &imp_cmd,
+            &[common::password_auth(b"")],
+        );
+        // C: see `expected_inner_wrapper_rc` (the decrypted integrity size is pseudo-random).
+        let expected = expected_inner_wrapper_rc(tpm.platform.crypto, &[0x11; 16], &plaintext);
+        assert_eq!(res.err(), Some(expected));
     }
 }
 
@@ -530,6 +674,13 @@ fn test_duplicate_invalid_parent_coordinates_zero_size() {
     };
 
     // This should not panic or underflow. It should return Failure because ECDH point multiply fails with invalid coordinates
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &dup_handles, &dup_cmd, &[]);
+    let dup_auth = dup_policy_auth(&mut global_state);
+    let res = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &dup_handles,
+        &dup_cmd,
+        &[dup_auth],
+    );
     assert_eq!(res.err(), Some(TpmRc::FAILURE.get()));
 }

@@ -13,6 +13,96 @@ use tpm2::{
     TpmlTaggedTpmProperty, TpmsAlgProperty, TpmsCapabilityData, TpmsTaggedProperty,
 };
 
+/// Algorithms implemented by this TPM together with their attributes (`s_algorithms` in the C
+/// reference `AlgorithmCap.c`). This single table backs both `TPM2_GetCapability(TPM_CAP_ALGS)`
+/// and the implemented-algorithm check of `TPM2_IncrementalSelfTest` (`g_implementedAlgorithms`).
+pub(crate) const IMPLEMENTED_ALGORITHMS: [(Alg, TpmaAlgorithm); 27] = [
+    (
+        Alg::RSA,
+        TpmaAlgorithm::ASYMMETRIC.union(TpmaAlgorithm::OBJECT),
+    ),
+    (Alg::SHA1, TpmaAlgorithm::HASH),
+    (Alg::HMAC, TpmaAlgorithm::HASH.union(TpmaAlgorithm::SIGNING)),
+    (Alg::AES, TpmaAlgorithm::SYMMETRIC),
+    (Alg::MGF1, TpmaAlgorithm::HASH.union(TpmaAlgorithm::METHOD)),
+    (
+        Alg::KEYEDHASH,
+        TpmaAlgorithm::HASH
+            .union(TpmaAlgorithm::OBJECT)
+            .union(TpmaAlgorithm::SIGNING)
+            .union(TpmaAlgorithm::ENCRYPTING),
+    ),
+    (
+        Alg::XOR,
+        TpmaAlgorithm::SYMMETRIC.union(TpmaAlgorithm::HASH),
+    ),
+    (Alg::SHA256, TpmaAlgorithm::HASH),
+    (Alg::SHA384, TpmaAlgorithm::HASH),
+    (Alg::SHA512, TpmaAlgorithm::HASH),
+    (
+        Alg::RSASSA,
+        TpmaAlgorithm::ASYMMETRIC.union(TpmaAlgorithm::SIGNING),
+    ),
+    (
+        Alg::RSAES,
+        TpmaAlgorithm::ASYMMETRIC.union(TpmaAlgorithm::ENCRYPTING),
+    ),
+    (
+        Alg::RSAPSS,
+        TpmaAlgorithm::ASYMMETRIC.union(TpmaAlgorithm::SIGNING),
+    ),
+    (
+        Alg::OAEP,
+        TpmaAlgorithm::ASYMMETRIC.union(TpmaAlgorithm::ENCRYPTING),
+    ),
+    (
+        Alg::ECDSA,
+        TpmaAlgorithm::ASYMMETRIC.union(TpmaAlgorithm::SIGNING),
+    ),
+    (
+        Alg::ECDH,
+        TpmaAlgorithm::ASYMMETRIC.union(TpmaAlgorithm::METHOD),
+    ),
+    (
+        Alg::ECDAA,
+        TpmaAlgorithm::ASYMMETRIC.union(TpmaAlgorithm::SIGNING),
+    ),
+    (
+        Alg::KDF1_SP800_56A,
+        TpmaAlgorithm::HASH.union(TpmaAlgorithm::METHOD),
+    ),
+    (Alg::KDF2, TpmaAlgorithm::HASH.union(TpmaAlgorithm::METHOD)),
+    (
+        Alg::KDF1_SP800_108,
+        TpmaAlgorithm::HASH.union(TpmaAlgorithm::METHOD),
+    ),
+    (
+        Alg::ECC,
+        TpmaAlgorithm::ASYMMETRIC.union(TpmaAlgorithm::OBJECT),
+    ),
+    (Alg::SYMCIPHER, TpmaAlgorithm::OBJECT),
+    (
+        Alg::CTR,
+        TpmaAlgorithm::SYMMETRIC.union(TpmaAlgorithm::ENCRYPTING),
+    ),
+    (
+        Alg::OFB,
+        TpmaAlgorithm::SYMMETRIC.union(TpmaAlgorithm::ENCRYPTING),
+    ),
+    (
+        Alg::CBC,
+        TpmaAlgorithm::SYMMETRIC.union(TpmaAlgorithm::ENCRYPTING),
+    ),
+    (
+        Alg::CFB,
+        TpmaAlgorithm::SYMMETRIC.union(TpmaAlgorithm::ENCRYPTING),
+    ),
+    (
+        Alg::ECB,
+        TpmaAlgorithm::SYMMETRIC.union(TpmaAlgorithm::ENCRYPTING),
+    ),
+];
+
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
@@ -50,8 +140,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     (self.global_state.active_sessions.iter().flatten().count()
                         + self.global_state.saved_sessions.iter().flatten().count())
                         as u32;
-                let loaded_transient_count =
-                    self.global_state.transient_objects.iter().flatten().count() as u32;
+                // Authorization sessions currently held in TPM RAM (`SessionCapGetLoadedNumber`).
+                let loaded_session_count =
+                    self.global_state.active_sessions.iter().flatten().count() as u32;
+                // Free object slots, shared by transient objects and sequence objects
+                // (`ObjectCapGetTransientAvail`).
+                let transient_avail = (crate::engine::MAX_LOADED_OBJECTS as u32).saturating_sub(
+                    (self.global_state.transient_objects.iter().flatten().count()
+                        + self.global_state.active_sequences.iter().flatten().count())
+                        as u32,
+                );
                 let (persistent_count, nv_index_count) = {
                     let storage = crate::storage::manager::StorageManager::new(
                         &mut *self.context.platform.storage,
@@ -84,13 +182,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 if self.global_state.disable_clear {
                     permanent_attr |= tpm2::TpmaPermanent::DISABLE_CLEAR;
                 }
-                if self.global_state.max_tries > 0
-                    && self.global_state.failed_tries >= self.global_state.max_tries
-                {
+                // `gp.failedTries >= gp.maxTries`: with `maxTries == 0` the TPM is in lockout.
+                if self.global_state.failed_tries >= self.global_state.max_tries {
                     permanent_attr |= tpm2::TpmaPermanent::IN_LOCKOUT;
                 }
+                // In this implementation the EPS is always generated by the TPM.
+                permanent_attr |= tpm2::TpmaPermanent::TPM_GENERATED_EPS;
 
-                let mut startup_clear_attr = tpm2::TpmaStartupClear::ORDERLY;
+                let mut startup_clear_attr = tpm2::TpmaStartupClear::empty();
+                // `orderly` is set iff the previous shutdown was orderly
+                // (`g_prevOrderlyState != SU_NONE_VALUE`).
+                if self.global_state.prev_orderly_state != 0xFFFF {
+                    startup_clear_attr |= tpm2::TpmaStartupClear::ORDERLY;
+                }
                 if self.global_state.ph_enable {
                     startup_clear_attr |= tpm2::TpmaStartupClear::PH_ENABLE;
                 }
@@ -161,20 +265,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     (TpmPt::PERMANENT, permanent_attr.bits()),
                     (TpmPt::STARTUP_CLEAR, startup_clear_attr.bits()),
                     (TpmPt::HR_NV_INDEX, nv_index_count),
-                    (TpmPt::HR_LOADED, loaded_transient_count),
+                    (TpmPt::HR_LOADED, loaded_session_count),
                     (
                         TpmPt::HR_LOADED_AVAIL,
-                        64u32.saturating_sub(loaded_transient_count),
+                        (crate::engine::MAX_LOADED_SESSIONS as u32)
+                            .saturating_sub(loaded_session_count),
                     ),
                     (TpmPt::HR_ACTIVE, active_sessions_count),
                     (
                         TpmPt::HR_ACTIVE_AVAIL,
                         64u32.saturating_sub(active_sessions_count),
                     ),
-                    (
-                        TpmPt::HR_TRANSIENT_AVAIL,
-                        64u32.saturating_sub(loaded_transient_count),
-                    ),
+                    (TpmPt::HR_TRANSIENT_AVAIL, transient_avail),
                     (TpmPt::HR_PERSISTENT, persistent_count),
                     (
                         TpmPt::HR_PERSISTENT_AVAIL,
@@ -182,13 +284,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     ),
                     (TpmPt::NV_COUNTERS, 0),
                     (TpmPt::NV_COUNTERS_AVAIL, 8),
-                    (TpmPt::LOCKOUT_COUNTER, 0),
-                    (TpmPt::MAX_AUTH_FAIL, 10),
-                    (TpmPt::LOCKOUT_INTERVAL, 1000),
-                    (TpmPt::LOCKOUT_RECOVERY, 1000),
+                    (TpmPt::LOCKOUT_COUNTER, self.global_state.failed_tries),
+                    (TpmPt::MAX_AUTH_FAIL, self.global_state.max_tries),
+                    (TpmPt::LOCKOUT_INTERVAL, self.global_state.recovery_time),
+                    (TpmPt::LOCKOUT_RECOVERY, self.global_state.lockout_recovery),
                     (TpmPt::NV_WRITE_RECOVERY, 0),
-                    (TpmPt::AUDIT_COUNTER_0, 0),
-                    (TpmPt::AUDIT_COUNTER_1, 0),
+                    (
+                        TpmPt::AUDIT_COUNTER_0,
+                        (self.global_state.audit_counter >> 32) as u32,
+                    ),
+                    (
+                        TpmPt::AUDIT_COUNTER_1,
+                        self.global_state.audit_counter as u32,
+                    ),
                     (TpmPt::ALGORITHM_SET, 0),
                     (TpmPt::LOADED_CURVES, 4),
                 ];
@@ -234,8 +342,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let mut handles = [tpm2::Handle::default(); tpm2::TPM2_MAX_CAP_HANDLES];
                 let mut count = 0;
 
+                // Unsupported handle types: `TPM_RCS_HANDLE + RC_GetCapability_property`.
                 if !matches!(mso, 0x00 | 0x01 | 0x02 | 0x03 | 0x40 | 0x80 | 0x81) {
-                    return Err(TpmRc::VALUE.with(Position::parameter(2)));
+                    return Err(TpmRc::HANDLE.with(Position::parameter(2)));
                 }
 
                 if mso == 0x80 {
@@ -294,7 +403,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                             }
                         }
                     }
-                    matching[..match_count].sort_unstable();
+                    // Sessions are reported in ascending session-slot order (the low 24 bits),
+                    // regardless of their HMAC/policy type, as `SessionCapGetLoaded` /
+                    // `SessionCapGetSaved` iterate the context array.
+                    matching[..match_count].sort_unstable_by_key(|&h| h & 0x00FF_FFFF);
                     for &item in matching.iter().take(match_count) {
                         if count < cmd.property_count as usize && count < tpm2::TPM2_MAX_CAP_HANDLES
                         {
@@ -339,9 +451,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         }
                     }
                 } else if mso == 0x00 {
-                    if cmd.property > 23 {
-                        return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                    }
+                    // A start handle beyond `PCR_LAST` simply yields an empty list
+                    // (`PCRCapGetHandles`).
                     let pcr_count = self.global_state.pcrs.sha256.len() as u32;
                     let mut item = if cmd.property < pcr_count {
                         cmd.property
@@ -382,7 +493,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         }
                     }
                 } else {
-                    return Err(TpmRc::VALUE.with(Position::parameter(2)));
+                    return Err(TpmRc::HANDLE.with(Position::parameter(2)));
                 }
 
                 TpmsCapabilityData::Handles(
@@ -393,7 +504,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 if cmd.property != 0 {
                     return Err(TpmRc::VALUE.with(Position::parameter(2)));
                 }
-                TpmsCapabilityData::AssignedPcr(self.global_state.pcrs.pcr_allocation)
+                // `PCRCapGetAllocation`: a zero `propertyCount` returns an empty list with
+                // `moreData = YES`.
+                if cmd.property_count == 0 {
+                    more_data = true;
+                    TpmsCapabilityData::AssignedPcr(tpm2::TpmlPcrSelection::default())
+                } else {
+                    TpmsCapabilityData::AssignedPcr(self.global_state.pcrs.pcr_allocation)
+                }
             }
             TpmCap::Commands => {
                 let mut command_attributes = [TpmaCc::default(); tpm2::TPM2_MAX_CAP_CC];
@@ -416,64 +534,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 )
             }
             TpmCap::Algs => {
-                let mut algs = [
-                    (Alg::RSA, TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::OBJECT),
-                    (Alg::SHA1, TpmaAlgorithm::HASH),
-                    (Alg::HMAC, TpmaAlgorithm::HASH | TpmaAlgorithm::SIGNING),
-                    (Alg::AES, TpmaAlgorithm::SYMMETRIC),
-                    (Alg::KEYEDHASH, TpmaAlgorithm::HASH | TpmaAlgorithm::OBJECT),
-                    (Alg::XOR, TpmaAlgorithm::SYMMETRIC | TpmaAlgorithm::HASH),
-                    (Alg::SHA256, TpmaAlgorithm::HASH),
-                    (Alg::SHA384, TpmaAlgorithm::HASH),
-                    (Alg::SHA512, TpmaAlgorithm::HASH),
-                    (
-                        Alg::RSASSA,
-                        TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::SIGNING,
-                    ),
-                    (
-                        Alg::RSAES,
-                        TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::ENCRYPTING,
-                    ),
-                    (
-                        Alg::RSAPSS,
-                        TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::SIGNING,
-                    ),
-                    (
-                        Alg::OAEP,
-                        TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::ENCRYPTING,
-                    ),
-                    (
-                        Alg::ECDSA,
-                        TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::SIGNING,
-                    ),
-                    (Alg::ECDH, TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::METHOD),
-                    (
-                        Alg::ECDAA,
-                        TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::SIGNING,
-                    ),
-                    (Alg::ECC, TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::OBJECT),
-                    (Alg::SYMCIPHER, TpmaAlgorithm::OBJECT),
-                    (
-                        Alg::CTR,
-                        TpmaAlgorithm::SYMMETRIC | TpmaAlgorithm::ENCRYPTING,
-                    ),
-                    (
-                        Alg::OFB,
-                        TpmaAlgorithm::SYMMETRIC | TpmaAlgorithm::ENCRYPTING,
-                    ),
-                    (
-                        Alg::CBC,
-                        TpmaAlgorithm::SYMMETRIC | TpmaAlgorithm::ENCRYPTING,
-                    ),
-                    (
-                        Alg::CFB,
-                        TpmaAlgorithm::SYMMETRIC | TpmaAlgorithm::ENCRYPTING,
-                    ),
-                    (
-                        Alg::ECB,
-                        TpmaAlgorithm::SYMMETRIC | TpmaAlgorithm::ENCRYPTING,
-                    ),
-                ];
+                let mut algs = IMPLEMENTED_ALGORITHMS;
                 algs.sort_unstable_by_key(|&(alg, _)| alg.id() as u32);
                 let mut alg_properties = [TpmsAlgProperty::default(); tpm2::TPM2_MAX_CAP_ALGS];
                 let mut count = 0;
@@ -572,12 +633,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 TpmsCapabilityData::AuthPolicies(tagged_policies)
             }
             TpmCap::ACT => {
-                if (cmd.property >> 24) != 0x40 {
-                    return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                }
-                return Err(TpmRc::VALUE.with(Position::parameter(1)));
+                // ACTs are not implemented (`!ACT_SUPPORT`): always
+                // `TPM_RCS_VALUE + RC_GetCapability_property`.
+                return Err(TpmRc::VALUE.with(Position::parameter(2)));
             }
             TpmCap::PCRProperties => {
+                // Bitmaps derived from the PCR attributes of the C reference platform
+                // (`s_initAttributes` in `PlatformPcr.c`, evaluated by `PCRGetProperty`).
                 let pcr_props = [
                     (tpm2::TpmPtPcr::SAVE, [0xff, 0xff, 0x00]),
                     (tpm2::TpmPtPcr::EXTEND_L0, [0xff, 0xff, 0x81]),
@@ -587,37 +649,42 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     (tpm2::TpmPtPcr::EXTEND_L2, [0xff, 0xff, 0xff]),
                     (tpm2::TpmPtPcr::RESET_L2, [0x00, 0x00, 0xf1]),
                     (tpm2::TpmPtPcr::EXTEND_L3, [0xff, 0xff, 0x9f]),
-                    (tpm2::TpmPtPcr::RESET_L3, [0x00, 0x00, 0xf1]),
+                    (tpm2::TpmPtPcr::RESET_L3, [0x00, 0x00, 0x81]),
                     (tpm2::TpmPtPcr::EXTEND_L4, [0xff, 0xff, 0x87]),
                     (tpm2::TpmPtPcr::RESET_L4, [0x00, 0x00, 0x7e]),
-                    (tpm2::TpmPtPcr::NO_INCREMENT, [0x00, 0x00, 0xe1]),
+                    (tpm2::TpmPtPcr::NO_INCREMENT, [0x00, 0x00, 0x70]),
                     (tpm2::TpmPtPcr::DRTM_RESET, [0x00, 0x00, 0x7e]),
-                    (tpm2::TpmPtPcr::POLICY, [0x00, 0x00, 0x00]),
-                    (tpm2::TpmPtPcr::AUTH, [0x00, 0x00, 0x00]),
+                    (tpm2::TpmPtPcr::POLICY, [0x00, 0x00, 0x70]),
+                    (tpm2::TpmPtPcr::AUTH, [0x00, 0x00, 0x70]),
                 ];
+                /// `TPM_PT_PCR_LAST`: the last PCR property defined by this implementation.
+                const TPM_PT_PCR_LAST: u32 = 0x14;
+                let max = (cmd.property_count as usize).min(tpm2::TPM2_MAX_PCR_PROPERTIES);
                 let mut tagged_props =
                     [tpm2::TpmsTaggedPcrSelect::default(); tpm2::TPM2_MAX_PCR_PROPERTIES];
                 let mut count = 0;
-                for &(tag, select_bytes) in &pcr_props {
-                    if tag.tag() >= cmd.property {
-                        if count < cmd.property_count as usize
-                            && count < tpm2::TPM2_MAX_PCR_PROPERTIES
-                        {
-                            let mut sel = [0u8; tpm2::TPM2_PCR_SELECT_MAX as usize];
-                            sel[..3].copy_from_slice(&select_bytes);
-                            tagged_props[count] = tpm2::TpmsTaggedPcrSelect {
-                                tag,
-                                size_of_select: 3,
-                                pcr_select: sel,
-                            };
-                            count += 1;
-                        } else {
-                            more_data = true;
-                        }
+                // `PCRCapGetProperties`: walk every property value from `property` up to
+                // `TPM_PT_PCR_LAST`; values without a defined property are skipped, and
+                // `moreData` is set as soon as the list is full while values remain.
+                let mut tag_value = cmd.property;
+                while tag_value <= TPM_PT_PCR_LAST {
+                    if count >= max {
+                        more_data = true;
+                        break;
                     }
-                }
-                if count == 0 && cmd.property > 20 {
-                    return Err(TpmRc::VALUE.with(Position::parameter(2)));
+                    if let Some(&(tag, select_bytes)) =
+                        pcr_props.iter().find(|(t, _)| t.tag() == tag_value)
+                    {
+                        let mut sel = [0u8; tpm2::TPM2_PCR_SELECT_MAX as usize];
+                        sel[..3].copy_from_slice(&select_bytes);
+                        tagged_props[count] = tpm2::TpmsTaggedPcrSelect {
+                            tag,
+                            size_of_select: 3,
+                            pcr_select: sel,
+                        };
+                        count += 1;
+                    }
+                    tag_value += 1;
                 }
                 TpmsCapabilityData::PcrProperties(
                     tpm2::TpmlTaggedPcrProperty::from_slice(&tagged_props[..count])
@@ -664,19 +731,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let cmd = match request.try_unmarshal::<TestParms>() {
             Ok(c) => c,
-            Err(_) => {
+            Err(unmarshal_err) => {
                 let buf = request.remaining_slice();
                 let is_valid_hash =
                     |h: u16| h == 0x0004 || h == 0x000B || h == 0x000C || h == 0x000D;
                 let is_valid_kdf =
                     |k: u16| k == 0x0007 || k == 0x0020 || k == 0x0021 || k == 0x0022;
+                // CTR, OFB, CBC, CFB, ECB and TPM_ALG_NULL.
+                let is_valid_mode = |m: u16| matches!(m, 0x0040..=0x0044 | 0x0010);
                 if buf.len() >= 4 {
                     let selector = u16::from_be_bytes([buf[0], buf[1]]);
                     if selector == 0x0025 && buf.len() >= 8 {
                         let sym_alg = u16::from_be_bytes([buf[2], buf[3]]);
                         if sym_alg == 0x0006 {
                             let mode = u16::from_be_bytes([buf[6], buf[7]]);
-                            if mode != 0x0043 {
+                            if !is_valid_mode(mode) {
                                 return Err(TpmRc::MODE.with(Position::parameter(1)));
                             }
                         }
@@ -751,17 +820,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                             validate_symmetric(sym)?;
                         } else if sym_alg == 0x0006 && buf.len() >= 8 {
                             let mode = u16::from_be_bytes([buf[6], buf[7]]);
-                            if mode != 0x0043 {
+                            if !is_valid_mode(mode) {
                                 return Err(TpmRc::MODE.with(Position::parameter(1)));
                             }
                         }
                     }
                 }
-                return Err(TpmRc::VALUE.with(Position::parameter(1)));
+                // Otherwise report the precise unmarshal error (e.g. `TPM_RC_INSUFFICIENT + RC_P1`
+                // for a truncated buffer), as `TPMT_PUBLIC_PARMS_Unmarshal` does.
+                return Err(unmarshal_err);
             }
         };
+        // Leftover parameter bytes: `TPM_RC_SIZE` (`CommandDispatcher`).
         if request.remaining_bytes() != 0 {
-            return Err(TpmRc::VALUE.with(Position::parameter(1)));
+            return Err(TpmRc::SIZE.to_rc());
         }
 
         match cmd.parameters {
@@ -777,7 +849,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     }
                 }
                 validate_symmetric(parms.symmetric)?;
-                if u16::from(parms.key_bits) != 1024 && u16::from(parms.key_bits) != 2048 {
+                // RSA-3072/4096 are enabled in the C reference profile, but this TPM's key
+                // generation does not support them and the go-tpm parity tests
+                // (`TestTestParms/rsa3072|rsa4096 - unsupported`) require `TPM_RC_VALUE`.
+                if !matches!(u16::from(parms.key_bits), 1024 | 2048) {
                     return Err(TpmRc::VALUE.with(Position::parameter(1)));
                 }
                 if parms.exponent != 0 && parms.exponent != 65537 {
@@ -832,7 +907,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         }
                         tpm2::TpmtKeyedHashScheme::ExclusiveOr(scheme) => {
                             validate_hash_alg(Some(scheme.hash_alg))?;
-                            if scheme.kdf.is_none() || scheme.kdf == Some(tpm2::TpmiAlgKdf::Hkdf) {
+                            // `TPMS_SCHEME_XOR.kdf` is `+TPMI_ALG_KDF`: TPM_ALG_NULL is allowed.
+                            if scheme.kdf == Some(tpm2::TpmiAlgKdf::Hkdf) {
                                 return Err(TpmRc::KDF.with(Position::parameter(1)));
                             }
                         }
@@ -869,10 +945,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut request = request_response;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
         let cmd = request.try_unmarshal::<ECCParameters>()?;
-        if request.remaining_bytes() != 0 {
-            return Err(TpmRc::SIZE.to_rc());
-        }
 
+        // An unimplemented curve fails while unmarshaling `TPMI_ECC_CURVE` (`TPM_RC_CURVE + RC_P1`),
+        // i.e. before the dispatcher checks for trailing parameter bytes (`TPM_RC_SIZE`).
         let curve_id = cmd.curve_id;
         let parameters = match curve_id {
             tpm2::TpmEccCurve::NistP224 => {
@@ -882,10 +957,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     0x00, 0x01,
                 ])
                 .map_err(|_| TpmRc::FAILURE)?;
+                // a = p - 3 (FIPS 186-4, D.1.2.2).
                 let curve_a = Tpm2bEccParameter::from_bytes(&[
                     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                    0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                    0x00, 0xfe,
+                    0xff, 0xff, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                    0xff, 0xfe,
                 ])
                 .map_err(|_| TpmRc::FAILURE)?;
                 let curve_b = Tpm2bEccParameter::from_bytes(&[
@@ -906,17 +982,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     0x7e, 0x34,
                 ])
                 .map_err(|_| TpmRc::FAILURE)?;
+                // Group order n (FIPS 186-4, D.1.2.2).
                 let n = Tpm2bEccParameter::from_bytes(&[
                     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                    0xff, 0xff, 0xfe, 0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84,
-                    0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63,
+                    0xff, 0x16, 0xa2, 0xe0, 0xb8, 0xf0, 0x3e, 0x13, 0xdd, 0x29, 0x45, 0x5c, 0x5c,
+                    0x2a, 0x3d,
                 ])
                 .map_err(|_| TpmRc::FAILURE)?;
                 let h = Tpm2bEccParameter::from_bytes(&[0x01]).map_err(|_| TpmRc::FAILURE)?;
                 tpm2::TpmsAlgorithmDetailEcc {
                     curve_id,
                     key_size: 224,
-                    kdf: None,
+                    kdf: Some(tpm2::TpmtKdfScheme::Kdf1Sp800_56a(
+                        tpm2::TpmiAlgHash::Sha256,
+                    )),
                     sign: None,
                     curve_p,
                     curve_a,
@@ -968,7 +1047,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 tpm2::TpmsAlgorithmDetailEcc {
                     curve_id,
                     key_size: 256,
-                    kdf: None,
+                    kdf: Some(tpm2::TpmtKdfScheme::Kdf1Sp800_56a(
+                        tpm2::TpmiAlgHash::Sha256,
+                    )),
                     sign: None,
                     curve_p,
                     curve_a,
@@ -1026,7 +1107,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 tpm2::TpmsAlgorithmDetailEcc {
                     curve_id,
                     key_size: 384,
-                    kdf: None,
+                    kdf: Some(tpm2::TpmtKdfScheme::Kdf1Sp800_56a(
+                        tpm2::TpmiAlgHash::Sha384,
+                    )),
                     sign: None,
                     curve_p,
                     curve_a,
@@ -1096,7 +1179,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 tpm2::TpmsAlgorithmDetailEcc {
                     curve_id,
                     key_size: 521,
-                    kdf: None,
+                    kdf: Some(tpm2::TpmtKdfScheme::Kdf1Sp800_56a(
+                        tpm2::TpmiAlgHash::Sha512,
+                    )),
                     sign: None,
                     curve_p,
                     curve_a,
@@ -1163,6 +1248,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 return Err(TpmRc::CURVE.with(Position::parameter(1)));
             }
         };
+        if request.remaining_bytes() != 0 {
+            return Err(TpmRc::SIZE.to_rc());
+        }
 
         let rsp = responses::ECCParameters { parameters };
         let response = request.into_response();
@@ -1183,10 +1271,14 @@ fn validate_hash_alg(hash_alg: Option<tpm2::TpmiAlgHash>) -> Result<(), TpmRc> {
     Ok(())
 }
 
+/// Validates a symmetric definition of `TPM2_TestParms` the way `TPMT_SYM_DEF_OBJECT_Unmarshal`
+/// does: every implemented block-cipher mode (CTR, OFB, CBC, CFB, ECB) and `TPM_ALG_NULL` is
+/// accepted. The CFB requirement for restricted decryption keys is enforced at object creation,
+/// not here. CMAC is not implemented by this TPM and is rejected with `TPM_RC_MODE`.
 fn validate_symmetric(symmetric: Option<tpm2::TpmtSymDefObject>) -> Result<(), TpmRc> {
     match symmetric {
         Some(tpm2::TpmtSymDefObject::Aes128(mode)) | Some(tpm2::TpmtSymDefObject::Aes256(mode)) => {
-            if mode != Some(tpm2::TpmiAlgSymMode::CFB) {
+            if mode == Some(tpm2::TpmiAlgSymMode::CMAC) {
                 return Err(TpmRc::MODE.with(Position::parameter(1)));
             }
         }

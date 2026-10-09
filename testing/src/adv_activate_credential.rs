@@ -142,7 +142,7 @@ fn test_make_credential_invalid_protector_handle() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate SRK");
@@ -183,7 +183,7 @@ fn test_make_credential_protector_not_decrypt() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate protector key");
@@ -202,7 +202,7 @@ fn test_make_credential_protector_not_decrypt() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate SRK");
@@ -246,7 +246,7 @@ fn test_make_credential_protector_not_restricted() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate protector key");
@@ -265,7 +265,7 @@ fn test_make_credential_protector_not_restricted() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate SRK");
@@ -309,7 +309,7 @@ fn test_make_credential_credential_too_large() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_ENDORSEMENT,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate EK");
@@ -328,7 +328,7 @@ fn test_make_credential_credential_too_large() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate SRK");
@@ -372,7 +372,7 @@ fn test_activate_credential_invalid_key_handle() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate SRK");
@@ -413,7 +413,7 @@ fn test_activate_credential_key_not_decrypt() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate key");
@@ -432,7 +432,7 @@ fn test_activate_credential_key_not_decrypt() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate SRK");
@@ -446,10 +446,12 @@ fn test_activate_credential_key_not_decrypt() {
         activate_handle: srk_resp_handles.object_handle,
         key_handle: p_resp_handles.object_handle, // Sign key as decryption key
     };
-    let res = execute_with_password_sessions(&mut sim, &ac_cmd, ac_handles, 1, &[]);
+    // Both activateHandle (ADMIN) and keyHandle (USER) need a session. C
+    // ActivateCredential.c:41-44 rejects a non-decrypt key with TYPE+H2.
+    let res = execute_with_password_sessions(&mut sim, &ac_cmd, ac_handles, 2, &[]);
     assert_eq!(
         res.err().unwrap(),
-        TpmRc::ATTRIBUTES.with(Position::handle(2)).get()
+        TpmRc::TYPE.with(Position::handle(2)).get()
     );
 }
 
@@ -475,7 +477,7 @@ fn test_activate_credential_integrity_corrupted() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_ENDORSEMENT,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate EK");
@@ -494,7 +496,7 @@ fn test_activate_credential_integrity_corrupted() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .expect("could not generate SRK");
@@ -575,7 +577,12 @@ fn test_activate_credential_integrity_corrupted() {
         &[&[], &[]],
     );
 
-    assert_eq!(res.err().unwrap(), TpmRc::INTEGRITY.get());
+    // C ActivateCredential.c:69-70 adds RC_ActivateCredential_credentialBlob
+    // (P1) to the CredentialToSecret INTEGRITY error.
+    assert_eq!(
+        res.err().unwrap(),
+        TpmRc::INTEGRITY.with(Position::parameter(1)).get()
+    );
 }
 
 #[test]
@@ -593,9 +600,11 @@ fn test_policy_secret_invalid_session() {
         policy_session: Handle(0x020000FF), // Non-existent session
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    // policySession is a TPMI_SH_POLICY: a non-policy (0x02) handle fails handle unmarshaling
+    // with TPM_RCS_VALUE + RC_H2 (C TPMI_SH_POLICY_Unmarshal), before any session processing.
     assert_eq!(
         res.err().unwrap(),
-        TpmRc::HANDLE.with(Position::handle(2)).get()
+        TpmRc::VALUE.with(Position::handle(2)).get()
     );
 }
 
@@ -626,9 +635,11 @@ fn test_policy_secret_invalid_session_type() {
         policy_session: hmac_session.session_handle,
     };
     let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    // policySession is a TPMI_SH_POLICY: a non-policy (0x02) handle fails handle unmarshaling
+    // with TPM_RCS_VALUE + RC_H2 (C TPMI_SH_POLICY_Unmarshal), before any session processing.
     assert_eq!(
         res.err().unwrap(),
-        TpmRc::HANDLE.with(Position::handle(2)).get()
+        TpmRc::VALUE.with(Position::handle(2)).get()
     );
 }
 

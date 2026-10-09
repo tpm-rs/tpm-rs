@@ -8,7 +8,7 @@ use tpm2::commands::responses;
 use tpm2::commands::{PolicySecret, PolicySecretHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Tpm2bDigest, Tpm2bTimeout, TpmSe, TpmtTkAuth};
+use tpm2::{Handle, Tpm2bDigest, Tpm2bTimeout, TpmHt, TpmNt, TpmSe, TpmaNv, TpmtTkAuth};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -129,16 +129,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
-        // 4. Generate policy ticket & response timeout
+        // 4. Generate policy ticket & response timeout. No ticket is produced for a trial session
+        //    or for a PIN Pass NV Index (a ticket would allow replaying the authorization without
+        //    incrementing pinCount), as in C `TPM2_PolicySecret`.
+        let is_pin_pass_index = Handle(auth_handle).handle_type() == Some(TpmHt::NVIndex)
+            && self.read_nv_public(auth_handle).is_some_and(|nv_public| {
+                nv_public.attributes.get_index_type() == Ok(TpmNt::PinPass)
+            });
         let mut hmac_digest_bytes = [0u8; 64];
         let timeout_bytes;
-        let (timeout, policy_ticket) = if cmd.expiration < 0 && session_type == TpmSe::Policy {
-            let key_hierarchy = if auth_handle >> 24 == 0x80 || auth_handle >> 24 == 0x81 {
-                let obj = self.resolve_object(auth_handle, Position::handle(1))?;
-                obj.hierarchy
-            } else {
-                auth_handle
-            };
+        let (timeout, policy_ticket) = if cmd.expiration < 0
+            && session_type == TpmSe::Policy
+            && !is_pin_pass_index
+        {
+            let key_hierarchy = self.entity_get_hierarchy(auth_handle)?;
 
             let (proof_bytes, proof_len, ticket_hierarchy) =
                 self.resolve_hierarchy_proof(key_hierarchy);
@@ -224,5 +228,44 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
+    }
+
+    /// Returns the hierarchy an authorization entity belongs to, as C `EntityGetHierarchy`
+    /// (Entity.c) does; used to select the proof for `TPM2_PolicySecret` tickets.
+    ///
+    /// - `TPM_RH_PLATFORM`, `TPM_RH_ENDORSEMENT` and `TPM_RH_NULL` belong to themselves; every
+    ///   other permanent handle (`TPM_RH_OWNER`, `TPM_RH_LOCKOUT`, ...) and every PCR belongs to
+    ///   `TPM_RH_OWNER`.
+    /// - An NV Index belongs to `TPM_RH_PLATFORM` if `TPMA_NV_PLATFORMCREATE` is set, otherwise to
+    ///   `TPM_RH_OWNER`.
+    /// - An object belongs to its own hierarchy.
+    fn entity_get_hierarchy(&mut self, handle: u32) -> Result<u32, TpmRc> {
+        match Handle(handle).handle_type() {
+            Some(TpmHt::Permanent) => Ok(
+                if handle == Handle::RH_PLATFORM.0
+                    || handle == Handle::RH_ENDORSEMENT.0
+                    || handle == Handle::RH_NULL.0
+                {
+                    handle
+                } else {
+                    Handle::RH_OWNER.0
+                },
+            ),
+            Some(TpmHt::NVIndex) => {
+                let platform_create = self
+                    .read_nv_public(handle)
+                    .is_some_and(|nv_public| nv_public.attributes.contains(TpmaNv::PLATFORMCREATE));
+                Ok(if platform_create {
+                    Handle::RH_PLATFORM.0
+                } else {
+                    Handle::RH_OWNER.0
+                })
+            }
+            Some(TpmHt::Transient) | Some(TpmHt::Persistent) => {
+                Ok(self.resolve_object(handle, Position::handle(1))?.hierarchy)
+            }
+            Some(TpmHt::PCR) => Ok(Handle::RH_OWNER.0),
+            _ => Ok(Handle::RH_NULL.0),
+        }
     }
 }

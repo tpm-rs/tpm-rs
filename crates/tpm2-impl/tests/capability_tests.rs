@@ -118,7 +118,9 @@ fn test_test_parms_error_codes() {
     let expected_rc = TpmRc::SYMMETRIC.with(Position::parameter(1)).get();
     assert_eq!(rc, expected_rc);
 
-    // Test invalid AES mode (CBC instead of CFB)
+    // AES-CBC is a valid symmetric mode for TPM2_TestParms: C only checks it while unmarshaling
+    // `TPMU_SYM_MODE` (`TPMI_ALG_SYM_MODE_Unmarshal` accepts CTR/OFB/CBC/CFB/ECB), so it
+    // succeeds. The CFB restriction applies to restricted decryption keys at object creation.
     let parms_mode = TpmtPublicParms::Sym(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CBC)));
     let cmd_mode = TestParms {
         parameters: parms_mode,
@@ -133,8 +135,7 @@ fn test_test_parms_error_codes() {
 
     tpm.execute_command_separate(&mut global_state, &request[..offset_m], &mut response);
     let rc_m = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
-    let expected_rc_m = TpmRc::MODE.with(Position::parameter(1)).get();
-    assert_eq!(rc_m, expected_rc_m);
+    assert_eq!(rc_m, 0);
 }
 
 #[test]

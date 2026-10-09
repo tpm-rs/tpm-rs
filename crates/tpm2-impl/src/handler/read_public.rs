@@ -40,6 +40,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
+        // C `ReadPublic.c`: a sequence object has no public area (`TPM_RC_SEQUENCE`).
+        if self
+            .global_state
+            .find_active_sequence(object_handle)
+            .is_some()
+        {
+            return Err(TpmRc::SEQUENCE);
+        }
+
         let obj = if (0x80000000..=0x80FFFFFF).contains(&object_handle) {
             self.context
                 .lookup_transient_object(self.global_state, object_handle, Position::handle(1))?
@@ -49,7 +58,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .load_persistent_object(self.global_state, object_handle)
                 .map_err(|_| TpmRc::HANDLE.with(Position::handle(1)))?
         } else {
-            return Err(TpmRc::HANDLE.to_rc());
+            // `objectHandle` is a `TPMI_DH_OBJECT`: anything else is an invalid value.
+            return Err(TpmRc::VALUE.with(Position::handle(1)));
         };
 
         let out_public = obj.public.as_tpm2b();

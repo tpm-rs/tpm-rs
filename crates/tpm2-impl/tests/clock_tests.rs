@@ -126,11 +126,11 @@ fn test_read_clock_after_restart() {
         .expect("unmarshal <ReadClock as Command>::Response");
 
     assert_eq!(rsp2.current_time.clock_info.clock, 1100);
-    assert_eq!(rsp2.current_time.clock_info.reset_count, initial_reset);
-    assert_eq!(
-        rsp2.current_time.clock_info.restart_count,
-        initial_restart + 1
-    );
+    // Shutdown(CLEAR) + Startup(CLEAR) is a TPM Reset (`Startup.c`): resetCount increments and
+    // restartCount is cleared.
+    let _ = initial_restart;
+    assert_eq!(rsp2.current_time.clock_info.reset_count, initial_reset + 1);
+    assert_eq!(rsp2.current_time.clock_info.restart_count, 0);
 }
 
 fn send_clock_set(

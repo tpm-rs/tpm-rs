@@ -2,13 +2,11 @@ use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use tpm2::Alg;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{MakeCredential, MakeCredentialHandles};
-use tpm2::crypto::asymmetric::KeyParams;
 use tpm2::crypto::kdf::kdfa;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
@@ -47,140 +45,53 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // 1. Resolve protector key
+        // 1. Resolve protector key. A sequence object is not an asymmetric key.
+        if self.global_state.find_active_sequence(handle).is_some() {
+            return Err(TpmRc::TYPE.with(Position::handle(1)));
+        }
         let protector_obj = self.resolve_object(handle, Position::handle(1))?;
 
-        // 2. The protector key must be a restricted decryption key
-        if !protector_obj
-            .public
-            .object_attributes
-            .contains(TpmaObject::DECRYPT)
-            || !protector_obj
-                .public
-                .object_attributes
-                .contains(TpmaObject::RESTRICTED)
+        // 2. The protector key must be an asymmetric, restricted decryption key
+        let attrs = protector_obj.public.object_attributes;
+        if !matches!(
+            protector_obj.public.parms_and_id,
+            crate::owned::OwnedPublicParmsAndId::Rsa(_, _)
+                | crate::owned::OwnedPublicParmsAndId::Ecc(_, _)
+        ) || !attrs.contains(TpmaObject::DECRYPT)
+            || !attrs.contains(TpmaObject::RESTRICTED)
         {
             return Err(TpmRc::TYPE.with(Position::handle(1)));
         }
 
-        let name_alg = protector_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+        let name_alg = protector_obj
+            .public
+            .name_alg
+            .ok_or(TpmRc::TYPE.with(Position::handle(1)))?;
         let digest_size = name_alg.digest_size();
 
-        // 3. Generate seed and encrypt it into secret
-        let mut encrypted_seed = [0u8; 512];
-        let mut secret_buf = [0u8; tpm2::TpmsEccPoint::MAX_SIZE];
-        let (seed, secret) = match &protector_obj.public.parms_and_id {
-            crate::owned::OwnedPublicParmsAndId::Rsa(_, pub_key) => {
-                let mut seed = [0u8; 64];
-                // Generate a random seed
-                self.crypto()
-                    .get_random(&mut seed[..digest_size])
-                    .map_err(|_| TpmRc::FAILURE)?;
+        // The credential may not be larger than the digest of the key's nameAlg; C checks
+        // this during input validation, before any secret is generated.
+        let cred_len = cmd.credential.get_size() as usize;
+        if cred_len > digest_size {
+            return Err(TpmRc::SIZE.with(Position::parameter(1)));
+        }
 
-                // RSA encrypt seed
-                let encrypted_seed_len = self
-                    .crypto()
-                    .encrypt(
-                        Alg::OAEP,
-                        Alg::from(name_alg),
-                        pub_key.get_buffer(),
-                        &seed[..digest_size],
-                        &mut encrypted_seed,
-                        b"IDENTITY\0",
-                    )
-                    .map_err(|_| TpmRc::FAILURE)?;
-                let secret =
-                    Tpm2bEncryptedSecret::from_bytes(&encrypted_seed[..encrypted_seed_len])
-                        .unwrap();
-                Ok((seed, secret))
-            }
-            crate::owned::OwnedPublicParmsAndId::Ecc(parms, point) => {
-                let curve = parms.curve_id;
-                let param_size = match curve {
-                    tpm2::TpmEccCurve::NistP192 => 24,
-                    tpm2::TpmEccCurve::NistP224 => 28,
-                    tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                    tpm2::TpmEccCurve::NistP384 => 48,
-                    tpm2::TpmEccCurve::NistP521 => 66,
-                    _ => return Err(TpmRc::VALUE.to_rc()),
-                };
-                if point.x.get_buffer().len() != param_size
-                    || point.y.get_buffer().len() != param_size
-                {
-                    return Err(TpmRc::VALUE.with(Position::handle(1)));
-                }
-                let mut parent_ecc_pub_point = [0u8; 256];
-                parent_ecc_pub_point[0..param_size].copy_from_slice(point.x.get_buffer());
-                parent_ecc_pub_point[param_size..param_size * 2]
-                    .copy_from_slice(point.y.get_buffer());
-
-                // Generate ephemeral ECC key pair
-                let mut eph_pub = [0u8; 256];
-                let mut eph_priv = [0u8; 128];
-                let (_pub_len, priv_len) = self
-                    .crypto()
-                    .generate_key(
-                        Alg::ECDH,
-                        Some(KeyParams::Ecc(curve)),
-                        &mut eph_pub,
-                        &mut eph_priv,
-                        None,
-                    )
-                    .map_err(|_| TpmRc::FAILURE)?;
-
-                // Perform ECDH point multiplication
-                let mut ecdh_point = [0u8; 256];
-                self.crypto()
-                    .point_multiply(
-                        curve,
-                        &eph_priv[..priv_len],
-                        &parent_ecc_pub_point[..param_size * 2],
-                        &mut ecdh_point[..param_size * 2],
-                    )
-                    .map_err(|_| TpmRc::FAILURE)?;
-
-                // Reconstruct ephemeral public point as TpmsEccPoint
-                let mut ex = [0u8; 128];
-                ex[..param_size].copy_from_slice(&eph_pub[0..param_size]);
-                let mut ey = [0u8; 128];
-                ey[..param_size].copy_from_slice(&eph_pub[param_size..param_size * 2]);
-
-                let eph_point = tpm2::TpmsEccPoint {
-                    x: tpm2::Tpm2bEccParameter::from_bytes(&ex[..param_size]).unwrap(),
-                    y: tpm2::Tpm2bEccParameter::from_bytes(&ey[..param_size]).unwrap(),
-                };
-
-                // Marshal ephemeral point as secret
-                let secret_len = eph_point.marshal(&mut secret_buf);
-                let secret = Tpm2bEncryptedSecret::from_bytes(&secret_buf[..secret_len]).unwrap();
-
-                // KDFe to derive seed
-                let mut seed = [0u8; 64];
-                let total_bits = (digest_size * 8) as u32;
-                tpm2::crypto::kdf::kdfe(
-                    self.crypto(),
-                    name_alg,
-                    &ecdh_point[..param_size],
-                    b"IDENTITY",
-                    &eph_pub[..param_size],
-                    &parent_ecc_pub_point[..param_size],
-                    total_bits,
-                    &mut seed,
-                )
-                .map_err(|_| TpmRc::FAILURE)?;
-                Ok((seed, secret))
-            }
-            _ => Err(TpmRc::TYPE.with(Position::handle(1))),
-        }?;
+        // 3. Generate seed and encrypt it into secret (`CryptSecretEncrypt`, returned unmodified)
+        let mut seed = [0u8; 64];
+        let mut secret_buf = [0u8; 512];
+        let (_, secret_len) =
+            self.crypt_secret_encrypt(&protector_obj, b"IDENTITY", &mut seed, &mut secret_buf)?;
+        let secret = Tpm2bEncryptedSecret::from_bytes(&secret_buf[..secret_len])
+            .map_err(|_| TpmRc::FAILURE)?;
 
         // 4. Derive symmetric key and HMAC key using KDFa
         let sym_alg = match &protector_obj.public.parms_and_id {
             crate::owned::OwnedPublicParmsAndId::Rsa(parms, _) => parms
                 .symmetric
-                .ok_or(TpmRc::ATTRIBUTES.with(Position::handle(1)))?,
+                .ok_or(TpmRc::TYPE.with(Position::handle(1)))?,
             crate::owned::OwnedPublicParmsAndId::Ecc(parms, _) => parms
                 .symmetric
-                .ok_or(TpmRc::ATTRIBUTES.with(Position::handle(1)))?,
+                .ok_or(TpmRc::TYPE.with(Position::handle(1)))?,
             _ => return Err(TpmRc::TYPE.with(Position::handle(1))),
         };
         let sym_key_bits = sym_alg.key_bits() as u32;
@@ -215,10 +126,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 5. Marshal credential to encrypt (includes 2-byte size prefix)
         let mut credential_to_encrypt = [0u8; 68];
-        let cred_len = cmd.credential.get_size() as usize;
-        if cred_len > digest_size {
-            return Err(TpmRc::SIZE.with(Position::parameter(1)));
-        }
         credential_to_encrypt[0..2].copy_from_slice(&(cred_len as u16).to_be_bytes());
         credential_to_encrypt[2..2 + cred_len].copy_from_slice(cmd.credential.get_buffer());
         let encrypt_len = 2 + cred_len;

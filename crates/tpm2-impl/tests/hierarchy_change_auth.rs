@@ -461,6 +461,8 @@ fn test_multiple_sessions_error() {
     let _ = tpm.execute_command_separate(&mut global_state, &req_buf[..offset], &mut response[..]);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
 
-    let expected_err = TpmRc::SIZE;
+    // The second password session does not authorize any handle (C ParseSessionBuffer):
+    // TPM_RC_HANDLE + RC_S2.
+    let expected_err = TpmRc::HANDLE.with(Position::session(2));
     assert_eq!(rc, expected_err.get());
 }

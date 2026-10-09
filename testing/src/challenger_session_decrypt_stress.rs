@@ -212,7 +212,10 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
         s1.attributes.insert(TpmaSession::CONTINUE_SESSION);
         s2.attributes
             .insert(TpmaSession::DECRYPT | TpmaSession::CONTINUE_SESSION);
-        s3.attributes.insert(TpmaSession::CONTINUE_SESSION);
+        // Sessions that authorize no handle must be audit/decrypt/encrypt in C
+        // (SessionProcess.c:1709-1712), so give the otherwise unused one a role.
+        s3.attributes
+            .insert(TpmaSession::ENCRYPT | TpmaSession::CONTINUE_SESSION);
 
         let res = execute_with_hmac_sessions(
             &mut sim,
@@ -238,7 +241,10 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
         let mut s2 = start_sess(&mut sim, aes_cfb);
         let mut s3 = start_sess(&mut sim, aes_cfb);
         s1.attributes.insert(TpmaSession::CONTINUE_SESSION);
-        s2.attributes.insert(TpmaSession::CONTINUE_SESSION);
+        // Sessions that authorize no handle must be audit/decrypt/encrypt in C
+        // (SessionProcess.c:1709-1712), so give the otherwise unused one a role.
+        s2.attributes
+            .insert(TpmaSession::ENCRYPT | TpmaSession::CONTINUE_SESSION);
         s3.attributes
             .insert(TpmaSession::DECRYPT | TpmaSession::CONTINUE_SESSION);
 
@@ -267,7 +273,10 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
         let mut s3 = start_sess(&mut sim, aes_cfb);
         s1.attributes
             .insert(TpmaSession::DECRYPT | TpmaSession::CONTINUE_SESSION);
-        s2.attributes.insert(TpmaSession::CONTINUE_SESSION);
+        // Sessions that authorize no handle must be audit/decrypt/encrypt in C
+        // (SessionProcess.c:1709-1712), so give the otherwise unused one a role.
+        s2.attributes
+            .insert(TpmaSession::AUDIT | TpmaSession::CONTINUE_SESSION);
         s3.attributes
             .insert(TpmaSession::ENCRYPT | TpmaSession::CONTINUE_SESSION);
 
@@ -399,7 +408,9 @@ fn test_response_encryption_key_derivation_index_alignment_3_sessions() {
     .unwrap();
     session1.attributes.insert(TpmaSession::CONTINUE_SESSION);
 
-    // Session 2: HMAC session (no encrypt/decrypt)
+    // Session 2: HMAC session (no encrypt/decrypt). It authorizes no handle, so
+    // C requires it to be audit/decrypt/encrypt (SessionProcess.c:1709-1712):
+    // make it the audit session.
     let mut session2 = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -410,7 +421,9 @@ fn test_response_encryption_key_derivation_index_alignment_3_sessions() {
         TpmiAlgHash::Sha256,
     )
     .unwrap();
-    session2.attributes.insert(TpmaSession::CONTINUE_SESSION);
+    session2
+        .attributes
+        .insert(TpmaSession::AUDIT | TpmaSession::CONTINUE_SESSION);
 
     // Session 3: HMAC session (ENCRYPT)
     let mut session3 = start_auth_session(

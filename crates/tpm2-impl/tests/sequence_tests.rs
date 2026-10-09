@@ -18,6 +18,19 @@ use tpm2::{Tpm2bAuth, Tpm2bMaxBuffer, TpmaSession, TpmiAlgHash, TpmsAuthCommand}
 use tpm2_impl::TpmEngine;
 use tpm2_impl::TpmPlatform;
 
+/// An empty-password `TPM_RS_PW` session. Sequence handles (and the PCR handle of
+/// EventSequenceComplete) have the USER auth role, so C requires a session for them even
+/// when the authValue is empty; with no session C returns TPM_RC_AUTH_MISSING
+/// (SessionProcess.c CheckAuthNoSession).
+fn pw() -> TpmsAuthCommand<'static> {
+    TpmsAuthCommand {
+        session_handle: Handle::RS_PW,
+        nonce: tpm2::Tpm2bNonce::default(),
+        session_attributes: TpmaSession(0),
+        hmac: Tpm2bAuth::default(),
+    }
+}
+
 fn compute_sha256(crypto: &TestCryptoProvider, data: &[u8]) -> [u8; 32] {
     use tpm2::crypto::{Finalize as _, Hash as _, Update as _};
     let mut ctx = crypto.sha256().unwrap();
@@ -315,7 +328,7 @@ fn test_sequence_hashing_basic_sha256() {
         &mut global_state,
         &update_handles,
         &update_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
@@ -333,7 +346,7 @@ fn test_sequence_hashing_basic_sha256() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
@@ -378,7 +391,7 @@ fn test_sequence_hashing_algorithms() {
             &mut global_state,
             &complete_handles,
             &complete_cmd,
-            &[],
+            &[pw()],
         )
         .unwrap();
         assert_eq!(complete_resp.result.get_size() as usize, expected_len);
@@ -433,7 +446,7 @@ fn test_sequence_hashing_empty_input() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
@@ -474,12 +487,13 @@ fn test_sequence_hashing_limits() {
             &mut global_state,
             &update_handles,
             &update_cmd,
-            &[],
+            &[pw()],
         )
         .unwrap();
     }
 
-    // Try to update 1 more byte -> should fail with memory error
+    // Update 1 more byte. C streams sequence data into the hash state and has no
+    // buffer limit (SequenceUpdate.c returns only MODE/auth errors), so this succeeds.
     let update_cmd_small = SequenceUpdate {
         buffer: Tpm2bMaxBuffer::from_bytes(&[1]).unwrap(),
     };
@@ -488,11 +502,9 @@ fn test_sequence_hashing_limits() {
         &mut global_state,
         &update_handles,
         &update_cmd_small,
-        &[],
+        &[pw()],
     );
-    assert!(update_res.is_err());
-    let rc = update_res.unwrap_err();
-    assert_eq!(rc & 0xFF, 0x04); // TPM_RC_MEMORY is warning code 0x904 (so lower byte is 0x04)
+    assert!(update_res.is_ok());
 
     // Verify we can still complete the sequence
     let complete_handles = SequenceCompleteHandles {
@@ -507,7 +519,7 @@ fn test_sequence_hashing_limits() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw()],
     );
     assert!(complete_res.is_ok());
 }
@@ -552,7 +564,7 @@ fn test_sequence_hashing_concurrent_slots() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
@@ -874,7 +886,7 @@ fn adv_sequence_handle_validation() {
         &mut global_state,
         &complete_handles_valid,
         &complete_cmd_invalid_hier,
-        &[],
+        &[pw()],
     );
     assert_eq!(
         complete_res2,
@@ -893,7 +905,7 @@ fn adv_sequence_handle_validation() {
         &mut global_state,
         &complete_handles_valid,
         &complete_cmd_valid,
-        &[],
+        &[pw()],
     );
     assert!(complete_res_ok.is_ok());
 
@@ -906,7 +918,7 @@ fn adv_sequence_handle_validation() {
         &mut global_state,
         &update_handles_valid,
         &update_cmd,
-        &[],
+        &[pw()],
     );
     assert_eq!(update_res2, Err(TpmRc::REFERENCE_H0.get()));
 
@@ -916,7 +928,7 @@ fn adv_sequence_handle_validation() {
         &mut global_state,
         &complete_handles_valid,
         &complete_cmd_valid,
-        &[],
+        &[pw()],
     );
     assert_eq!(complete_res_reuse, Err(TpmRc::REFERENCE_H0.get()));
 }
@@ -961,7 +973,11 @@ fn adv_sequence_abort_flush() {
 
     // Double flush should fail with ReferenceH0
     let flush_res_double = execute_tpm_command(&mut tpm, &mut global_state, &(), &flush_cmd, &[]);
-    assert_eq!(flush_res_double, Err(TpmRc::HANDLE.get()));
+    // C: TPM_RCS_HANDLE + RC_FlushContext_flushHandle (0x1CB), FlushContext.c:22.
+    assert_eq!(
+        flush_res_double,
+        Err(TpmRc::HANDLE.with(Position::parameter(1)).get())
+    );
 
     // 2. Slot recycling verification
     let mut handles = Vec::new();
@@ -1028,7 +1044,7 @@ fn adv_sequence_trailing_bytes() {
         &mut global_state,
         &update_handles,
         &update_cmd,
-        &[],
+        &[pw()],
     );
     assert_eq!(res3, Err(TpmRc::SIZE.get()));
 
@@ -1045,7 +1061,7 @@ fn adv_sequence_trailing_bytes() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw()],
     );
     assert_eq!(res4, Err(TpmRc::SIZE.get()));
 
@@ -1070,7 +1086,7 @@ fn adv_sequence_trailing_bytes() {
         &mut global_state,
         &event_complete_handles,
         &event_complete_cmd,
-        &[],
+        &[pw(), pw()],
     );
     assert_eq!(res5, Err(TpmRc::SIZE.get()));
 }
@@ -1105,7 +1121,7 @@ fn test_event_sequence_complete_pcr_extend() {
         &mut global_state,
         &update_handles,
         &update_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
@@ -1119,28 +1135,16 @@ fn test_event_sequence_complete_pcr_extend() {
         buffer: Tpm2bMaxBuffer::from_bytes(final_data).unwrap(),
     };
     let mut complete_response_buf = [0u8; 32768];
-    let mut request_buf = [0u8; 32768];
-    request_buf[0..2].copy_from_slice(&0x8001u16.to_be_bytes());
-    request_buf[6..10].copy_from_slice(&(EventSequenceComplete::CMD_CODE.code()).to_be_bytes());
-    let mut offset = 10;
-    let mut handles_buf = [0u8; EventSequenceCompleteHandles::MAX_SIZE];
-    let handles_len = complete_handles.marshal(&mut handles_buf);
-    request_buf[offset..offset + handles_len].copy_from_slice(&handles_buf.as_ref()[..handles_len]);
-    offset += handles_len;
-    let mut cmd_buf = [0u8; EventSequenceComplete::MAX_SIZE];
-    let cmd_len = complete_cmd.marshal(&mut cmd_buf);
-    request_buf[offset..offset + cmd_len].copy_from_slice(&cmd_buf.as_ref()[..cmd_len]);
-    offset += cmd_len;
-    request_buf[2..6].copy_from_slice(&(offset as u32).to_be_bytes());
-
-    tpm.execute_command_separate(
+    // Both pcrHandle and sequenceHandle need an authorization session in C.
+    let complete_resp = execute_tpm_event_sequence_complete(
+        &mut tpm,
         &mut global_state,
-        &request_buf[..offset],
-        &mut complete_response_buf[..],
-    );
-    let mut param_slice = &complete_response_buf[10..];
-    let complete_resp =
-        <EventSequenceComplete<'static> as Command>::Response::unmarshal(&mut param_slice).unwrap();
+        &complete_handles,
+        &complete_cmd,
+        &[pw(), pw()],
+        &mut complete_response_buf,
+    )
+    .unwrap();
 
     // Assert PCR 0 equals SHA256(00..00 || SHA256(partial_data || final_data))
     let mut combined = Vec::new();
@@ -1154,7 +1158,9 @@ fn test_event_sequence_complete_pcr_extend() {
     let expected_pcr0 = compute_sha256(&TestCryptoProvider, &extend_input);
 
     assert_eq!(global_state.pcrs.sha256[0], expected_pcr0);
-    assert_eq!(complete_resp.results.count(), 3);
+    // C returns one digest per implemented hash (HASH_COUNT = 4: SHA1/256/384/512),
+    // EventSequenceComplete.c:52.
+    assert_eq!(complete_resp.results.count(), 4);
     assert_eq!(
         *complete_resp.results.digests().nth(1).unwrap(),
         tpm2::TpmtHa::Sha256(&event_digest)
@@ -1227,10 +1233,12 @@ fn test_event_sequence_complete_mode_error() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw(), pw()],
         &mut response_buf,
     );
-    assert_eq!(res, Err(TpmRc::MODE.get()));
+    // C: TPM_RCS_MODE + RC_EventSequenceComplete_sequenceHandle (0x289),
+    // EventSequenceComplete.c:28.
+    assert_eq!(res, Err(TpmRc::MODE.with(Position::handle(2)).get()));
 }
 
 #[test]
@@ -1265,7 +1273,7 @@ fn test_sequence_context_save_load_mid_flight_streaming_state() {
         &mut global_state,
         &update_handles,
         &update_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
@@ -1305,7 +1313,7 @@ fn test_sequence_context_save_load_mid_flight_streaming_state() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 

@@ -619,9 +619,13 @@ fn test_policy_authorize_nv_insufficient_size() {
     };
     execute_with_password_sessions(&mut sim, &define_cmd, define_handles, 1, &[]).unwrap();
 
-    // Write some data so it is initialized (written)
+    // Write a truncated TPMT_HA (SHA-256 algorithm ID + 8 digest bytes) so the index is
+    // initialized; C TPMT_HA_Unmarshal then fails with TPM_RC_INSUFFICIENT (an all-zero algorithm
+    // ID would be TPM_RC_HASH instead).
+    let mut truncated_ha = [0u8; 10];
+    truncated_ha[..2].copy_from_slice(&[0x00, 0x0B]);
     let write_cmd = NVWrite {
-        data: Tpm2bMaxNvBuffer::from_bytes(&[0u8; 10]).unwrap(),
+        data: Tpm2bMaxNvBuffer::from_bytes(&truncated_ha).unwrap(),
         offset: 0,
     };
     let write_handles = NVWriteHandles {
@@ -782,9 +786,11 @@ fn test_create_parent_hierarchy() {
     };
 
     let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    // parentHandle is TPMI_DH_OBJECT, so C rejects RH_OWNER at handle unmarshal
+    // with TPM_RC_VALUE + H1 (0x184).
     assert_eq!(
         res.err(),
-        Some(TpmRc::KEY.get()),
+        Some(TpmRc::VALUE.with(tpm2::errors::Position::handle(1)).get()),
         "BUG: Create succeeded (or failed with wrong error) when using RH_OWNER directly as parent!"
     );
 }
@@ -835,10 +841,11 @@ fn test_policy_or_mismatch_sizes() {
         policy_session: policy_session.session_handle,
     };
     let res_policy = execute_with_password_sessions(&mut sim, &cmd, handles_policy, 0, &[]);
+    // TPM_RCS_VALUE + RC_PolicyOR_pHashList (C PolicyOR.c).
     assert_eq!(
         res_policy.err(),
-        Some(0x84),
-        "Policy session should fail with Value when digest sizes are mismatching"
+        Some(0x1C4),
+        "Policy session should fail with Value (+RC_P1) when digest sizes are mismatching"
     );
 }
 
@@ -928,9 +935,11 @@ fn test_create_unsupported_name_alg_sm3256() {
     let handles = CreateHandles { parent_handle };
 
     let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    // C TPMI_ALG_HASH unmarshal of nameAlg in inPublic returns TPM_RC_HASH,
+    // reported as HASH+P2 (0x2C3).
     assert_eq!(
         res.err(),
-        Some(TpmRc::VALUE.get()),
+        Some(TpmRc::HASH.with(tpm2::errors::Position::parameter(2)).get()),
         "BUG: Create succeeded (or failed with wrong error) with unsupported name alg SM3256!"
     );
 }

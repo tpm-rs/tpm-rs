@@ -67,6 +67,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
 
+        // Owner/endorsement/lockout policies are NV-persistent and the platform update clears the
+        // orderly state, so NV must be available for every hierarchy.
+        self.return_if_nv_is_not_available()?;
+
         let policy = crate::owned::OwnedDigest::from(cmd.auth_policy);
         if auth_handle == Handle::RH_OWNER.0 {
             self.global_state.owner_policy = policy;

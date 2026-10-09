@@ -80,7 +80,7 @@ mod read_clock;
 mod read_public;
 mod rewrap;
 mod sequence;
-mod session;
+pub(crate) mod session;
 mod set_primary_policy;
 mod shutdown;
 mod startup;
@@ -107,6 +107,29 @@ use tpm2::{
     TpmsAuthResponse, TpmsEccParms, TpmsRsaParms, TpmtSymDef,
 };
 
+/// The `qualifiedSigner` reported in attestation structures when `signHandle` is `TPM_RH_NULL`.
+const ATTEST_NULL_SIGNER_NAME: [u8; 4] = Handle::RH_NULL.0.to_be_bytes();
+
+/// The plain-text `firmwareVersion` reported in attestation structures:
+/// `(TPM_PT_FIRMWARE_VERSION_1 << 32) | TPM_PT_FIRMWARE_VERSION_2`, which must agree with the
+/// values reported by `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)` (see `capability.rs`:
+/// `FIRMWARE_VERSION_1 = 1`, `FIRMWARE_VERSION_2 = 0`).
+pub(crate) const ATTEST_FIRMWARE_VERSION: u64 = 1u64 << 32;
+
+/// The common header fields of an attestation structure (`TPMS_ATTEST`), as filled in by
+/// `FillInAttestInfo()` in the reference implementation. Produced by
+/// [`CommandHandler::compute_attest_fields`].
+pub struct AttestHeader<'c> {
+    /// `TPMS_ATTEST.qualifiedSigner`.
+    pub qualified_signer: tpm2::Tpm2bName<'c>,
+    /// `TPMS_ATTEST.extraData`.
+    pub extra_data: tpm2::Tpm2bData<'c>,
+    /// `TPMS_ATTEST.clockInfo` (possibly obfuscated).
+    pub clock_info: tpm2::TpmsClockInfo,
+    /// `TPMS_ATTEST.firmwareVersion` (possibly obfuscated).
+    pub firmware_version: u64,
+}
+
 /// Represents an object loaded into the TPM's volatile memory.
 /// This structure holds the state of a transient object, which could be a key or a data object,
 /// that is actively being used by the TPM.
@@ -114,8 +137,21 @@ use tpm2::{
 pub struct TransientObject {
     /// The transient handle assigned to this object (e.g., in the 0x80xxxxxx range).
     pub handle: u32,
-    /// The random seed value associated with this object, used for key generation or derivation.
-    pub seed: [u8; 32],
+    /// The sensitive `seedValue` of the object (`TPMT_SENSITIVE.seedValue`). Only the first
+    /// `seed_len` bytes are meaningful; for SYMCIPHER/KEYEDHASH objects and storage parents this
+    /// is a `nameAlg`-sized value (up to 64 bytes for SHA-512) that is used in full as the key
+    /// for the `STORAGE`/`INTEGRITY` KDFs of children. Non-parent asymmetric keys and public-only
+    /// objects may have an empty seed.
+    pub seed: [u8; 64],
+    /// The number of meaningful bytes in `seed`.
+    pub seed_len: usize,
+    /// Set for objects loaded with `TPM2_LoadExternal` (C `attributes.external`). External
+    /// objects can never act as parents (`ObjectIsParent` is FALSE for them).
+    pub external: bool,
+    /// Set for objects loaded with `TPM2_LoadExternal` without a sensitive area (C
+    /// `attributes.publicOnly`). Such objects have neither an authValue nor an authPolicy
+    /// available (`IsAuthValueAvailable`/`IsAuthPolicyAvailable` return FALSE).
+    pub public_only: bool,
     /// The cryptographically derived name of the object.
     pub name: OwnedName,
     /// The authorization value or policy required to use this object.
@@ -132,6 +168,22 @@ pub struct TransientObject {
     pub hierarchy: u32,
     /// Indicates whether the object has the `stClear` attribute, meaning its state should be cleared upon a TPM restart.
     pub st_clear: bool,
+}
+
+impl TransientObject {
+    /// Returns the meaningful bytes of the object's `seedValue` (`seed[..seed_len]`).
+    pub fn seed_bytes(&self) -> &[u8] {
+        &self.seed[..self.seed_len]
+    }
+
+    /// Builds a `seed`/`seed_len` pair from a `seedValue` byte slice (truncated to 64 bytes,
+    /// the largest supported digest size).
+    pub fn seed_from_bytes(bytes: &[u8]) -> ([u8; 64], usize) {
+        let mut seed = [0u8; 64];
+        let len = core::cmp::min(bytes.len(), seed.len());
+        seed[..len].copy_from_slice(&bytes[..len]);
+        (seed, len)
+    }
 }
 
 /// Represents the state of an active authorization session.
@@ -169,6 +221,12 @@ pub struct SessionState {
     pub nv_written_state: bool,
     pub command_locality: u8,
     pub include_auth: bool,
+    /// The session was started with a DA-protected bind entity (C `isDaBound`: `bind !=
+    /// TPM_RH_NULL && !IsDAExempted(bind)`), for every session type. Use of such a session is
+    /// subject to dictionary-attack protection regardless of the entity it authorizes.
+    pub is_da_bound: bool,
+    /// The session is DA-bound to `TPM_RH_LOCKOUT` (C `isLockoutBound`).
+    pub is_lockout_bound: bool,
 }
 
 /// Resolved parent object or hierarchy information returned by `resolve_parent_object_or_hierarchy`.
@@ -182,6 +240,20 @@ pub struct ResolvedParentInfo {
     pub sym_bits: u32,
     pub attributes: TpmaObject,
     pub is_derivation_parent: bool,
+    /// Scheme-relevant properties of a parent *object* (`None` for hierarchy parents).
+    pub scheme: Option<ParentSchemeInfo>,
+}
+
+/// Properties of a parent object needed by `SchemeChecks`/`PublicAttributesValidation`
+/// when validating a child's public area.
+#[derive(Debug, Clone, Copy)]
+pub struct ParentSchemeInfo {
+    /// The parent's own nameAlg (a non-duplicable storage child must use the same).
+    pub name_alg: Option<TpmiAlgHash>,
+    /// The parent's symmetric definition (RSA/ECC `symmetric`, or the SYMCIPHER definition).
+    pub symmetric: Option<tpm2::TpmtSymDefObject>,
+    /// Whether the parent is a derivation parent (restricted decrypt KEYEDHASH).
+    pub is_derivation: bool,
 }
 
 /// Parameters for key derivation during key generation.
@@ -243,39 +315,36 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context.get_time_info(self.global_state)
     }
 
-    /// Verifies that `auth_handle` is either `TPM_RH_OWNER` or `TPM_RH_PLATFORM`, and checks password session authorization if needed.
+    /// Verifies that `auth_handle` is either `TPM_RH_OWNER` or `TPM_RH_PLATFORM` and that the
+    /// command carried an authorization session for it.
+    ///
+    /// The authorization itself (password / HMAC / policy, including the `TPM_RC_BAD_AUTH`
+    /// reported for these DA-exempt hierarchies) has already been verified by the engine
+    /// (`verify_session_hmacs`) before the handler runs, so it is not re-checked here. A command
+    /// without a session for a handle that requires authorization fails with
+    /// `TPM_RC_AUTH_MISSING` regardless of the authValue (`CheckAuthNoSession`).
     pub fn validate_provision_auth(
         &mut self,
         auth_handle: u32,
         provided_auth: Option<impl Into<OwnedAuthCommand>>,
     ) -> Result<(), TpmRc> {
-        let provided_auth = provided_auth.map(Into::into);
         if auth_handle != Handle::RH_PLATFORM.0 && auth_handle != Handle::RH_OWNER.0 {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
-
-        let expected_auth_struct = self.context.handle_auth(self.global_state, auth_handle);
-        let expected_auth = expected_auth_struct.get_buffer();
-
-        if let Some(auth) = provided_auth {
-            if !self.verify_password_auth(&auth, expected_auth) {
-                return Err(TpmRc::AUTH_FAIL.with(Position::session(1)));
-            }
-            Ok(())
-        } else if !expected_auth.is_empty() {
-            Err(TpmRc::AUTH_MISSING)
-        } else {
-            Ok(())
+        if provided_auth.is_none() {
+            return Err(TpmRc::AUTH_MISSING);
         }
+        Ok(())
     }
 
-    /// Verifies that `auth_handle` is `TPM_RH_PLATFORM`, and checks password session authorization if needed.
+    /// Verifies that `auth_handle` is `TPM_RH_PLATFORM`, that the platform hierarchy is enabled,
+    /// and that the command carried an authorization session for it. See
+    /// [`Self::validate_provision_auth`] for why the authorization is not re-verified here.
     pub fn validate_platform_auth(
         &mut self,
         auth_handle: u32,
         provided_auth: Option<impl Into<OwnedAuthCommand>>,
     ) -> Result<(), TpmRc> {
-        let provided_auth = provided_auth.map(Into::into);
         if auth_handle != Handle::RH_PLATFORM.0 {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
@@ -284,66 +353,33 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::HIERARCHY.with(Position::handle(1)));
         }
 
-        let expected_auth_struct = self.context.handle_auth(self.global_state, auth_handle);
-        let expected_auth = expected_auth_struct.get_buffer();
-
-        if let Some(auth) = provided_auth {
-            if !self.verify_password_auth(&auth, expected_auth) {
-                return Err(TpmRc::AUTH_FAIL.with(Position::session(1)));
-            }
-            Ok(())
-        } else if !expected_auth.is_empty() {
-            Err(TpmRc::AUTH_MISSING)
-        } else {
-            Ok(())
+        if provided_auth.is_none() {
+            return Err(TpmRc::AUTH_MISSING);
         }
+        Ok(())
     }
 
-    /// Verifies that `auth_handle` is `TPM_RH_LOCKOUT`, and checks password session authorization if needed.
+    /// Verifies that `auth_handle` is `TPM_RH_LOCKOUT` and that the command carried an
+    /// authorization session for it.
+    ///
+    /// The dictionary-attack checks for `lockoutAuth` (`CheckLockedOut`: NV availability,
+    /// pending DA writes and `lockOutAuthEnabled`) are performed by the engine during session
+    /// verification and, as in the C reference, only when the session actually uses the
+    /// authValue. They are deliberately not repeated here, so that a `lockoutPolicy` policy
+    /// session without `TPM2_PolicyAuthValue`/`TPM2_PolicyPassword` keeps working while direct
+    /// use of `lockoutAuth` is disabled.
     pub fn validate_lockout_auth(
         &mut self,
         auth_handle: u32,
         provided_auth: Option<impl Into<OwnedAuthCommand>>,
     ) -> Result<(), TpmRc> {
-        let provided_auth = provided_auth.map(Into::into);
         if auth_handle != Handle::RH_LOCKOUT.0 {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
-
-        if !self.global_state.nv_available && self.global_state.orderly_state < 0xFFFE {
-            return Err(TpmRc::NV_UNAVAILABLE);
+        if provided_auth.is_none() {
+            return Err(TpmRc::AUTH_MISSING);
         }
-        if self.global_state.da_pending_on_nv && self.global_state.nv_available {
-            let _ = self
-                .context
-                .platform
-                .storage
-                .write_nv(32, &self.global_state.failed_tries.to_be_bytes());
-            self.global_state.da_pending_on_nv = false;
-        }
-
-        if !self.global_state.lockout_auth_enabled {
-            return Err(TpmRc::LOCKOUT);
-        }
-
-        let expected_auth_struct = self.context.handle_auth(self.global_state, auth_handle);
-        let expected_auth = expected_auth_struct.get_buffer();
-
-        if let Some(auth) = provided_auth {
-            if !self.verify_password_auth(&auth, expected_auth) {
-                self.global_state.lockout_auth_enabled = false;
-                self.global_state.lockout_timer = self.global_state.tpm_time_ms as i64;
-                if !self.global_state.nv_available {
-                    self.global_state.da_pending_on_nv = true;
-                }
-                return Err(TpmRc::AUTH_FAIL.with(Position::session(1)));
-            }
-            Ok(())
-        } else if !expected_auth.is_empty() {
-            Err(TpmRc::AUTH_MISSING)
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
     pub fn parse_and_validate_sessions(
@@ -530,7 +566,39 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok((digest_buf, len))
     }
 
-    /// Computes the PCR digest of the selected PCRs using the specified hash algorithm.
+    /// Filters a PCR selection against the current PCR allocation (C `FilterPcr`).
+    ///
+    /// Bits beyond `sizeofSelect` are dropped, every bit of a selection whose bank is not in
+    /// `pcr_allocation` is cleared, and the remaining bits are AND-ed with the allocated PCR
+    /// mask of the bank. The returned list keeps the caller's hash order and `sizeofSelect`, so
+    /// it can be reported as `pcrSelect` in creation data and quotes.
+    pub fn filter_pcr_selection(&self, pcr_select: &TpmlPcrSelection) -> TpmlPcrSelection {
+        let allocation = &self.global_state.pcrs.pcr_allocation;
+        let mut filtered = TpmlPcrSelection::default();
+        for in_sel in pcr_select.pcr_selections() {
+            let mut bytes = [0u8; tpm2::TPM2_PCR_SELECT_MAX as usize];
+            let requested = in_sel.pcr_select();
+            if let Some(alloc) = allocation
+                .pcr_selections()
+                .find(|a| a.hash() == in_sel.hash())
+            {
+                let alloc_bits = alloc.pcr_select();
+                for (i, byte) in bytes.iter_mut().enumerate().take(requested.len()) {
+                    *byte = requested[i] & alloc_bits.get(i).copied().unwrap_or(0);
+                }
+            }
+            if let Ok(sel) = tpm2::TpmsPcrSelection::new(in_sel.hash(), &bytes[..requested.len()]) {
+                // The filtered list has the same number of entries as the input, which already
+                // fit in a `TPML_PCR_SELECTION`.
+                let _ = filtered.add(&sel);
+            }
+        }
+        filtered
+    }
+
+    /// Computes the PCR digest of the selected PCRs using the specified hash algorithm
+    /// (C `PCRComputeCurrentDigest`). The selection is first filtered against the PCR
+    /// allocation (see [`Self::filter_pcr_selection`]), so unallocated PCRs are never hashed.
     pub fn compute_pcr_digest(
         &self,
         pcr_select: &TpmlPcrSelection,
@@ -539,21 +607,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut state = tpm2::crypto::HashCtx::new(self.crypto(), hash_alg)
             .map_err(|_| TpmRc::VALUE.to_rc())?;
 
-        for in_sel in pcr_select.pcr_selections() {
+        let filtered = self.filter_pcr_selection(pcr_select);
+        for in_sel in filtered.pcr_selections() {
             let select_hash_alg = in_sel.hash();
-            let sizeof_select = in_sel.sizeof_select();
+            let selected = in_sel.pcr_select();
 
             // Iterate over the 24 PCRs in each bank (TPM 2.0 Library Specification Part 4, Section 8.1).
-            for pcr in 0..24 {
-                let byte_idx = (pcr / 8) as usize;
-                let bit_idx = (pcr % 8) as usize;
-                if byte_idx < sizeof_select as usize
-                    && (in_sel.pcr_select()[byte_idx] & (1 << bit_idx)) != 0
-                {
+            for pcr in 0..24usize {
+                let byte_idx = pcr / 8;
+                let bit_idx = pcr % 8;
+                if byte_idx < selected.len() && (selected[byte_idx] & (1 << bit_idx)) != 0 {
+                    let pcrs = &self.global_state.pcrs;
                     let digest_bytes = match select_hash_alg {
-                        TpmiAlgHash::Sha1 => &self.global_state.pcrs.sha1[pcr as usize][..],
-                        TpmiAlgHash::Sha256 => &self.global_state.pcrs.sha256[pcr as usize][..],
-                        TpmiAlgHash::Sha384 => &self.global_state.pcrs.sha384[pcr as usize][..],
+                        TpmiAlgHash::Sha1 => &pcrs.sha1[pcr][..],
+                        TpmiAlgHash::Sha256 => &pcrs.sha256[pcr][..],
+                        TpmiAlgHash::Sha384 => &pcrs.sha384[pcr][..],
+                        TpmiAlgHash::Sha512 => &pcrs.sha512[pcr][..],
+                        TpmiAlgHash::Sm3_256 => &pcrs.sm3_256[pcr][..],
+                        TpmiAlgHash::Sha3_256 => &pcrs.sha3_256[pcr][..],
+                        TpmiAlgHash::Sha3_384 => &pcrs.sha3_384[pcr][..],
+                        TpmiAlgHash::Sha3_512 => &pcrs.sha3_512[pcr][..],
+                        #[allow(unreachable_patterns)]
                         _ => return Err(TpmRc::HASH.to_rc()),
                     };
                     state.update(digest_bytes).map_err(|_| TpmRc::FAILURE)?;
@@ -824,20 +898,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .lookup_transient_object(self.global_state, handle, pos)
                 .cloned()
         } else if handle >> 24 == 0x81 {
-            if (handle & 0x00FF_FFFF) > 0x0080_FFFF {
-                return Err(TpmRc::VALUE.with(pos));
-            }
+            // `ObjectLoadEvict`: an undefined persistent handle, or one whose hierarchy is
+            // disabled, is `TPM_RC_HANDLE` at its position (never `TPM_RC_REFERENCE_Hx`).
             self.context
                 .load_persistent_object(self.global_state, handle)
-                .map_err(|_| {
-                    if pos == Position::handle(1) {
-                        TpmRc::REFERENCE_H0
-                    } else if pos == Position::handle(2) {
-                        TpmRc::REFERENCE_H1
-                    } else {
-                        TpmRc::REFERENCE_H2
-                    }
-                })
+                .map_err(|_| TpmRc::HANDLE.with(pos))
         } else {
             Err(TpmRc::VALUE.with(pos))
         }
@@ -879,6 +944,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         if auth_timeout != 0 {
+            // Time cannot be compared while Clock is stopped (NV unavailable):
+            // `RETURN_IF_NV_IS_NOT_AVAILABLE` in C `PolicyParameterChecks`.
+            self.return_if_nv_is_not_available()?;
             let current_time = self.global_state.tpm_time_ms;
             if auth_timeout < current_time || session.epoch != self.global_state.time_epoch {
                 return Err(TpmRc::EXPIRED.with(blame_expiration));
@@ -903,63 +971,90 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         obj.qualified_name
     }
 
-    /// Computes `qualified_signer` and `extra_data` for attestation structures (`TpmsAttest`)
-    /// per TPM 2.0 Library Specification Part 3 (see `Attest_spt.c`).
-    /// - For a null signer handle (`0x40000007` / `RHNull`), `qualified_signer` is `[0x40, 0x00, 0x00, 0x07]`.
-    /// - For anonymous schemes (`TPM_ALG_ECDAA`), both `qualified_signer` and `extra_data` must be empty buffers (`size = 0`).
-    /// - Otherwise, `qualified_signer` is `self.get_dynamic_qualified_name(signer)` and `extra_data` is `qualifying_data`.
+    /// Computes the common header fields of an attestation structure (`TPMS_ATTEST`), mirroring
+    /// `FillInAttestInfo()` in the reference implementation (`Attest_spt.c`).
+    ///
+    /// - For a null signer handle (`TPM_RH_NULL`), `qualified_signer` is `[0x40, 0x00, 0x00, 0x07]`.
+    /// - For anonymous schemes (`TPM_ALG_ECDAA`), both `qualified_signer` and `extra_data` are
+    ///   empty buffers (`size = 0`).
+    /// - Otherwise, `qualified_signer` is the signer's qualified name and `extra_data` is
+    ///   `qualifying_data`.
+    /// - `clock_info` is the current clock and `firmware_version` is
+    ///   `(TPM_PT_FIRMWARE_VERSION_1 << 32) | TPM_PT_FIRMWARE_VERSION_2`.
+    /// - When the signer is `TPM_RH_NULL` or is not in the Endorsement or Platform hierarchy, the
+    ///   privacy-sensitive `firmware_version`, `reset_count` and `restart_count` are obfuscated
+    ///   (TPM 2.0 Part 1, "Privacy Administrator") by adding a value derived with
+    ///   `KDFa(CONTEXT_INTEGRITY_HASH_ALG, shProof, "OBFUSCATE", qualifiedSigner, NULL, 128)`.
     pub fn compute_attest_fields<'c>(
         &self,
         signer_obj_opt: Option<&'c TransientObject>,
         scheme: &Option<tpm2::TpmtSigScheme>,
         qualifying_data: &tpm2::Tpm2bData<'c>,
-    ) -> Result<(tpm2::Tpm2bName<'c>, tpm2::Tpm2bData<'c>), TpmRc> {
+    ) -> Result<AttestHeader<'c>, TpmRc> {
+        let is_anonymous = matches!(scheme, Some(tpm2::TpmtSigScheme::Ecdaa(_)));
         let qualified_signer = match signer_obj_opt {
-            None => tpm2::Tpm2bName::from_bytes(&[0x40, 0x00, 0x00, 0x07])
-                .map_err(|_| TpmRc::FAILURE)?,
-            Some(signer) => {
-                if matches!(scheme, Some(tpm2::TpmtSigScheme::Ecdaa(_))) {
-                    tpm2::Tpm2bName::from_bytes(&[]).map_err(|_| TpmRc::FAILURE)?
-                } else {
-                    signer.qualified_name.as_tpm2b()
-                }
+            None => {
+                tpm2::Tpm2bName::from_bytes(&ATTEST_NULL_SIGNER_NAME).map_err(|_| TpmRc::FAILURE)?
             }
+            Some(_) if is_anonymous => {
+                tpm2::Tpm2bName::from_bytes(&[]).map_err(|_| TpmRc::FAILURE)?
+            }
+            Some(signer) => signer.qualified_name.as_tpm2b(),
         };
 
-        let extra_data = if matches!(scheme, Some(tpm2::TpmtSigScheme::Ecdaa(_))) {
+        let extra_data = if is_anonymous {
             tpm2::Tpm2bData::from_bytes(&[]).map_err(|_| TpmRc::FAILURE)?
         } else {
             *qualifying_data
         };
 
-        Ok((qualified_signer, extra_data))
-    }
+        let mut clock_info = self.get_clock_info();
+        let mut firmware_version = ATTEST_FIRMWARE_VERSION;
 
-    /// Computes the ephemeral secret scalar `r` for `TPM2_Commit` or ECDAA signing (`BnSignEcdaa`)
-    /// deterministically via KDFa per `CryptGenerateR` in MS-TPM.
-    pub fn compute_commit_r(
-        &self,
-        commit_counter: u16,
-        name: &[u8],
-        param_size: usize,
-    ) -> Result<[u8; 256], TpmRc> {
-        let mut r_buf = [0u8; 256];
-        let mut cntr_bytes = [0u8; 8];
-        cntr_bytes[6..8].copy_from_slice(&commit_counter.to_be_bytes());
-        let mut kdf_out = [0u8; 128];
-        tpm2::crypto::kdf::kdfa(
-            self.crypto(),
-            tpm2::TpmiAlgHash::Sha256,
-            &self.global_state.commit_nonce,
-            b"ECDAA Commit",
-            name,
-            &cntr_bytes,
-            (param_size * 8) as u32,
-            &mut kdf_out[..param_size],
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
-        r_buf[..param_size].copy_from_slice(&kdf_out[..param_size]);
-        Ok(r_buf)
+        // Signers outside the Endorsement and Platform hierarchies (and TPM_RH_NULL) must not
+        // reveal the plain reset/restart counts and firmware version.
+        let needs_obfuscation = match signer_obj_opt {
+            None => true,
+            Some(signer) => {
+                signer.hierarchy != Handle::RH_ENDORSEMENT.0
+                    && signer.hierarchy != Handle::RH_PLATFORM.0
+            }
+        };
+        if needs_obfuscation {
+            let mut obfuscation = [0u8; 16];
+            tpm2::crypto::kdf::kdfa(
+                self.crypto(),
+                // CONTEXT_INTEGRITY_HASH_ALG of the reference build (largest implemented hash).
+                tpm2::TpmiAlgHash::Sha512,
+                &self.global_state.sh_proof[..self.global_state.sh_proof_size as usize],
+                b"OBFUSCATE",
+                qualified_signer.get_buffer(),
+                &[],
+                128,
+                &mut obfuscation,
+            )
+            .map_err(|_| TpmRc::FAILURE)?;
+            // The reference implementation reads the KDF output as two native UINT64 values
+            // (little-endian on its reference platforms).
+            let mut word0 = [0u8; 8];
+            let mut word1 = [0u8; 8];
+            word0.copy_from_slice(&obfuscation[..8]);
+            word1.copy_from_slice(&obfuscation[8..]);
+            let obfuscation0 = u64::from_le_bytes(word0);
+            let obfuscation1 = u64::from_le_bytes(word1);
+            firmware_version = firmware_version.wrapping_add(obfuscation0);
+            clock_info.reset_count = clock_info
+                .reset_count
+                .wrapping_add((obfuscation1 >> 32) as u32);
+            clock_info.restart_count = clock_info.restart_count.wrapping_add(obfuscation1 as u32);
+        }
+
+        Ok(AttestHeader {
+            qualified_signer,
+            extra_data,
+            clock_info,
+            firmware_version,
+        })
     }
 
     pub fn resolve_hierarchy_proof(&self, hierarchy: u32) -> (&[u8], usize, u32) {
@@ -1083,143 +1178,35 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(hmac_bytes)
     }
 
+    /// Validates the `policySession` handle (`TPMI_SH_POLICY`) of a policy command.
+    ///
+    /// Mirrors the C reference: a handle that is not a policy-session handle (`0x03xxxxxx`) fails
+    /// unmarshaling with `TPM_RC_VALUE + pos`; a policy-session handle whose slot is not loaded is
+    /// `TPM_RC_REFERENCE_H0 + index`; a loaded slot that holds an HMAC session is
+    /// `TPM_RC_HANDLE + pos` (`EntityGetLoadStatus()`).
+    ///
+    /// Policy commands do not check the session's timeout or time epoch; expiration is only
+    /// enforced when the policy session is used to authorize a command (C
+    /// `CheckPolicyAuthSession()`).
     pub fn validate_policy_session(
         &mut self,
         session_handle: u32,
         pos: Position,
     ) -> Result<(), TpmRc> {
-        if (session_handle >> 24) != 0x03 && (session_handle >> 24) != 0x02 {
-            return Err(if pos == Position::handle(2) {
-                TpmRc::HANDLE.with(pos)
-            } else {
-                TpmRc::VALUE.with(pos)
-            });
+        if (session_handle >> 24) != 0x03 {
+            return Err(TpmRc::VALUE.with(pos));
         }
-        let current_time = self.global_state.tpm_time_ms;
-        let (is_expired, is_wrong_type) = {
-            let session =
-                self.global_state
-                    .session(session_handle)
-                    .ok_or(if pos == Position::handle(2) {
-                        TpmRc::HANDLE.with(pos)
-                    } else {
-                        TpmRc::VALUE.with(pos)
-                    })?;
-            (
-                session.epoch != self.global_state.time_epoch
-                    || (session.timeout != 0 && session.timeout < current_time),
-                session.session_type != TpmSe::Policy && session.session_type != TpmSe::Trial,
-            )
+        let Some(session) = self.global_state.session_by_slot(session_handle) else {
+            return Err(match pos.handle_num() {
+                Some(2) => TpmRc::REFERENCE_H1,
+                Some(3) => TpmRc::REFERENCE_H2,
+                _ => TpmRc::REFERENCE_H0,
+            });
         };
-
-        if is_expired {
-            return Err(TpmRc::EXPIRED.with(pos));
-        }
-
-        if is_wrong_type {
-            return Err(if pos == Position::handle(2) {
-                TpmRc::HANDLE.with(pos)
-            } else {
-                TpmRc::VALUE.with(pos)
-            });
-        }
-        if is_expired {
-            let _ = self.global_state.flush_session(session_handle);
-            return Err(TpmRc::EXPIRED.with(pos));
+        if session.session_type != TpmSe::Policy && session.session_type != TpmSe::Trial {
+            return Err(TpmRc::HANDLE.with(pos));
         }
         Ok(())
-    }
-
-    pub fn update_aliased_transient_objects(
-        &mut self,
-        new_handle: u32,
-        new_name: &OwnedName,
-        new_qualified_name: &OwnedName,
-    ) {
-        let mut old_handles = [0u32; 16];
-        let mut num_old = 0;
-        for old_obj in self.global_state.transient_objects.iter().flatten() {
-            if old_obj.name == *new_name
-                && old_obj.handle != new_handle
-                && old_obj.qualified_name != *new_qualified_name
-                && num_old < old_handles.len()
-            {
-                old_handles[num_old] = old_obj.handle;
-                num_old += 1;
-            }
-        }
-        if num_old == 0 {
-            return;
-        }
-
-        // First, redirect any children whose transient_parents pointed to one of the old_handles
-        for i in 0..self.global_state.transient_objects.len() {
-            if let Some(parent_h) = self.global_state.transient_parents[i] {
-                for &old_h in &old_handles[..num_old] {
-                    if parent_h == old_h {
-                        self.global_state.transient_parents[i] = Some(new_handle);
-                    }
-                }
-            }
-        }
-
-        // Second, propagate qualified_name recomputation down the tree from new_handle
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for i in 0..self.global_state.transient_objects.len() {
-                if let Some(parent_h) = self.global_state.transient_parents[i] {
-                    let parent_qn = if parent_h == new_handle {
-                        *new_qualified_name
-                    } else if let Some(parent_idx) =
-                        self.global_state.find_transient_index(parent_h)
-                    {
-                        if let Some(p_obj) = &self.global_state.transient_objects[parent_idx] {
-                            p_obj.qualified_name
-                        } else {
-                            continue;
-                        }
-                    } else {
-                        continue;
-                    };
-
-                    let (name_alg, child_name, current_qn) =
-                        if let Some(child_obj) = &self.global_state.transient_objects[i] {
-                            (
-                                child_obj.public.name_alg,
-                                child_obj.name,
-                                child_obj.qualified_name,
-                            )
-                        } else {
-                            continue;
-                        };
-
-                    if let Ok(new_qn) = self.compute_qualified_name(
-                        name_alg,
-                        parent_qn.get_buffer(),
-                        child_name.get_buffer(),
-                    ) && current_qn != new_qn
-                        && let Some(child_obj) = self.global_state.transient_objects[i].as_mut()
-                    {
-                        child_obj.qualified_name = new_qn;
-                        changed = true;
-                    }
-                }
-            }
-        }
-
-        // Third, clear the old aliased transient objects so their handles do not leak or occupy slots
-        for i in 0..self.global_state.transient_objects.len() {
-            if let Some(obj) = &self.global_state.transient_objects[i] {
-                for &old_h in &old_handles[..num_old] {
-                    if obj.handle == old_h {
-                        self.global_state.transient_objects[i] = None;
-                        self.global_state.transient_parents[i] = None;
-                        break;
-                    }
-                }
-            }
-        }
     }
 
     /// Validates the structure of a Tpm2bName.

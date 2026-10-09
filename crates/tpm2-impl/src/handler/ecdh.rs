@@ -8,7 +8,7 @@ use tpm2::commands::responses;
 use tpm2::commands::{ECDHKeyGen, ECDHKeyGenHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Tpm2bEccParameter, TpmaObject, TpmsEccPoint};
+use tpm2::{Tpm2bEccParameter, TpmsEccPoint};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -37,15 +37,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let obj = self.resolve_object(handles.key_handle.0, Position::handle(1))?;
 
-        if obj
-            .public
-            .object_attributes
-            .contains(TpmaObject::RESTRICTED)
-            || !obj.public.object_attributes.contains(TpmaObject::DECRYPT)
-        {
-            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
-        }
-
+        // Only the public point of `keyHandle` is used, so the only requirement is that it is
+        // a loaded ECC key (`ECDH_KeyGen.c`); its attributes are not checked.
         let curve = match &obj.public.parms_and_id {
             OwnedPublicParmsAndId::Ecc(ecc_parms, _) => ecc_parms.curve_id,
             _ => {

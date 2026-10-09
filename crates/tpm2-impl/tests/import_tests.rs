@@ -178,7 +178,7 @@ fn test_import_size_over_attributes_priority() {
         &mut global_state,
         &create_primary_handles,
         &create_primary_cmd,
-        &[],
+        &[common::password_auth(b"")],
     )
     .unwrap();
     let parent_handle = resp_handles.object_handle;
@@ -213,7 +213,7 @@ fn test_import_size_over_attributes_priority() {
         &mut global_state,
         &import_handles,
         &import_cmd,
-        &[],
+        &[common::password_auth(b"")],
     )
     .unwrap_err();
     assert_eq!(rc, TpmRc::SIZE.with(Position::parameter(4)).get());

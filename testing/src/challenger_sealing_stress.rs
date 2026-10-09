@@ -67,7 +67,7 @@ fn create_srk(
     };
 
     let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &create_primary, create_handles, 0, &[])
+        execute_with_password_sessions(sim, &create_primary, create_handles, 1, &[])
             .expect("could not call TPM2_CreatePrimary");
 
     (rsp_handles.object_handle, rsp.name)
@@ -715,31 +715,12 @@ fn test_sealing_payload_boundaries() {
         let create_handles = CreateHandles {
             parent_handle: srk_handle,
         };
-        let (create_rsp, _) =
-            execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, srk_auth)
-                .unwrap();
-
-        // Load
-        let load_cmd = tpm2::commands::Load {
-            in_private: create_rsp.out_private,
-            in_public: create_rsp.out_public,
-        };
-        let load_handles = tpm2::commands::LoadHandles {
-            parent_handle: srk_handle,
-        };
-        let (_, load_rsp_handles) =
-            execute_with_password_sessions(&mut sim, &load_cmd, load_handles, 1, srk_auth).unwrap();
-
-        // Unseal
-        let unseal_cmd = Unseal {};
-        let unseal_handles = UnsealHandles {
-            item_handle: load_rsp_handles.object_handle,
-        };
-        let (unseal_rsp, _) =
-            execute_with_password_sessions(&mut sim, &unseal_cmd, unseal_handles, 1, auth).unwrap();
-        assert_eq!(unseal_rsp.out_data.get_buffer(), data);
-
-        flush_context(&mut sim, load_rsp_handles.object_handle).unwrap();
+        // C CreateChecks (Object_spt.c:343-346): with sensitiveDataOrigin CLEAR
+        // the caller must provide data, so an empty sealed payload is rejected
+        // with TPM_RCS_ATTRIBUTES + RC_Create_inPublic (ATTRIBUTES+P2, 0x2C2).
+        let res =
+            execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, srk_auth);
+        assert_eq!(res.err(), Some(0x2c2));
     }
 
     // Case B: Sealing maximum size payload (128 bytes for TPM2_MAX_SYM_DATA)

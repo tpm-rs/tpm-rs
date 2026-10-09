@@ -696,11 +696,11 @@ fn test_object_change_auth_on_persistent() {
         object_handle: Handle(0x81000000),
         parent_handle: srk_handle,
     };
-    let oca_err =
-        execute_with_password_sessions(&mut sim, &oca_cmd, oca_handles, 1, auth).unwrap_err();
-
-    // Verify it fails with TPM_RC_KEY (Pos1) -> 0x19C
-    assert_eq!(oca_err, 0x19C);
+    // C ObjectChangeAuth.c has no persistent-object restriction: the evict copy
+    // is loaded like any object and a new private area is returned.
+    let (oca_rsp, _) = execute_with_password_sessions(&mut sim, &oca_cmd, oca_handles, 1, auth)
+        .expect("ObjectChangeAuth on a persistent object succeeds in C");
+    assert!(oca_rsp.out_private.get_size() > 0);
 
     // Clean up
     let evict_handles2 = EvictControlHandles {

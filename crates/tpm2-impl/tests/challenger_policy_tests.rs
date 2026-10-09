@@ -183,7 +183,10 @@ fn create_transient_ecc_key(
 
     let obj = TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: name.into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -239,7 +242,10 @@ fn create_transient_rsa_key(
 
     let obj = TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: name.into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -302,6 +308,8 @@ fn test_policy_signed_ecc_correctness() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
@@ -442,6 +450,8 @@ fn test_policy_signed_rsa_correctness() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
@@ -550,6 +560,8 @@ fn test_policy_signed_incorrect_signature_fails() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
@@ -621,6 +633,8 @@ fn test_policy_authorize_rh_null_bypass_vulnerability() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
@@ -785,6 +799,8 @@ fn test_policy_authorize_verify_signature_ticket_mismatch() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
@@ -849,6 +865,8 @@ fn test_policy_duplication_select_name_66_success() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
@@ -919,6 +937,8 @@ fn test_policy_duplication_select_name_67_rejected() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
@@ -1015,6 +1035,8 @@ fn test_policy_duplication_select_name_66_include_object_yes_success() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 

@@ -548,7 +548,10 @@ fn test_certify_errors_and_bounds() {
     // Load certified object
     let certified_obj = TransientObject {
         handle: certified_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::from_bytes(&[0x11, 0x22]).unwrap()).into(),
         public: (TpmtPublic {
@@ -635,7 +638,10 @@ fn test_certify_errors_and_bounds() {
     // 3. Load a signer key that is NOT a signing key (lacks SIGN_ENCRYPT attribute)
     let bad_signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -672,12 +678,16 @@ fn test_certify_errors_and_bounds() {
         &cmd,
         &[certified_auth, signer_auth],
     );
-    assert_eq!(res.err(), Some(TpmRc::KEY.get()));
+    // TPM_RC_KEY + RC_Certify_signHandle (H2).
+    assert_eq!(res.err(), Some(0x29C));
 
     // 4. Load a signer key that has incorrect key type (e.g. Symmetric key instead of Asymmetric key)
     let sym_signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -705,7 +715,8 @@ fn test_certify_errors_and_bounds() {
         &cmd,
         &[certified_auth, signer_auth],
     );
-    assert_eq!(res.err(), Some(TpmRc::KEY.get()));
+    // TPM_RC_KEY + RC_Certify_signHandle (H2).
+    assert_eq!(res.err(), Some(0x29C));
 }
 
 #[test]
@@ -722,7 +733,10 @@ fn test_certify_signature_schemes() {
     // Load certified object
     let certified_obj = TransientObject {
         handle: certified_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -751,7 +765,10 @@ fn test_certify_signature_schemes() {
     // 1. Signer key with fixed scheme RSASSA SHA256
     let signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -824,7 +841,8 @@ fn test_certify_signature_schemes() {
         &cmd,
         &[certified_auth, signer_auth],
     );
-    assert_eq!(res.err(), Some(TpmRc::SCHEME.get()));
+    // TPM_RC_SCHEME + RC_Certify_inScheme (P2).
+    assert_eq!(res.err(), Some(0x2D2));
 
     // 1.3 Requesting RSASSA SHA384 (different hash) should fail -> TpmRc::SCHEME
     let cmd = Certify {
@@ -838,12 +856,16 @@ fn test_certify_signature_schemes() {
         &cmd,
         &[certified_auth, signer_auth],
     );
-    assert_eq!(res.err(), Some(TpmRc::SCHEME.get()));
+    // TPM_RC_SCHEME + RC_Certify_inScheme (P2).
+    assert_eq!(res.err(), Some(0x2D2));
 
     // 2. Restricted signer key
     let restricted_signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -902,7 +924,10 @@ fn test_get_session_audit_digest_errors() {
     // Load signer object with fixed scheme RSASSA SHA256
     let signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -963,6 +988,8 @@ fn test_get_session_audit_digest_errors() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(session).unwrap();
 
@@ -996,10 +1023,9 @@ fn test_get_session_audit_digest_errors() {
         &cmd,
         &[admin_auth, signer_auth],
     );
-    assert_eq!(
-        res.err(),
-        Some(TpmRc::HANDLE.with(Position::handle(3)).get())
-    );
+    // An unloaded session in the handle area is TPM_RC_REFERENCE_H0 + index (here H2) per C
+    // EntityGetLoadStatus (Entity.c), reported before any authorization processing.
+    assert_eq!(res.err(), Some(TpmRc::REFERENCE_H2.get()));
 
     // 2. Sign handle invalid -> should fail with TpmRc::HANDLE
     let handles = GetSessionAuditDigestHandles {
@@ -1069,6 +1095,8 @@ fn test_get_session_audit_digest_errors() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(non_audit_session).unwrap();
 
@@ -1153,6 +1181,8 @@ fn test_challenger_audit_reset_and_format1_errors() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(session).unwrap();
 
@@ -1245,7 +1275,10 @@ fn test_challenger_remediation_stress_cases() {
     // Load some transient objects to populate global state
     let obj1 = TransientObject {
         handle: 0x80000001,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -1319,6 +1352,8 @@ fn test_challenger_remediation_stress_cases() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     let session_2 = tpm2_impl::handler::SessionState {
         session_handle: session_handle_2,
@@ -1353,6 +1388,8 @@ fn test_challenger_remediation_stress_cases() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(session_1).unwrap();
     global_state.add_session(session_2).unwrap();
@@ -1494,6 +1531,8 @@ fn test_challenger_remediation_stress_cases() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(session_1).unwrap();
 
@@ -1564,13 +1603,18 @@ fn test_challenger_remediation_stress_cases() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(session_3).unwrap();
 
     let signer_handle = 0x80000002;
     let signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -1664,6 +1708,8 @@ fn test_challenger_remediation_stress_cases() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(audit_session).unwrap();
 

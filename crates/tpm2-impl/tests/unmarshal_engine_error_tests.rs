@@ -192,7 +192,10 @@ fn test_engine_sign_validation_ticket_parameter_position() {
     };
     global_state.transient_objects[0] = Some(tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: public.into(),
@@ -286,10 +289,14 @@ fn test_engine_context_load_and_get_random_parameter_positions() {
         &req_ctx_load_disabled_hierarchy,
         &mut resp,
     );
+    // C TPM2_ContextLoad parses the (here empty) context blob before it ever looks at the
+    // hierarchy (ContextLoad.c: TPM2B_DIGEST_Unmarshal of the integrity, the HIERARCHY check only
+    // comes after integrity/decryption), so the result is the bare TPM_RC_INSUFFICIENT returned by
+    // that unmarshal.
     assert_eq!(
         response_rc(&resp),
-        TpmRc::HIERARCHY.with(Position::parameter(1)).get(),
-        "ContextLoad with disabled hierarchy in parameter 1 must return TPM_RC_HIERARCHY + P1"
+        TpmRc::INSUFFICIENT.get(),
+        "ContextLoad with an empty context blob must return bare TPM_RC_INSUFFICIENT"
     );
     global_state.sh_enable = true;
 
@@ -531,7 +538,10 @@ fn test_engine_sensitive_rsa_key_bits_and_ecc_point_unmarshalling_errors() {
     };
     global_state.transient_objects[0] = Some(tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: public.into(),
@@ -647,7 +657,10 @@ fn test_engine_sensitive_rsa_key_bits_and_ecc_point_unmarshalling_errors() {
     };
     global_state.transient_objects[1] = Some(tpm2_impl::handler::TransientObject {
         handle: commit_key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: commit_public.into(),
@@ -712,7 +725,8 @@ fn test_non_null_schemes_with_tpm_alg_null_inner_hash_and_kdf_in_commands() {
 
     // 3. TPM2_TestParms (0x018A) with KeyedHash (0x0008), scheme=XOR (0x000A), hash=SHA256 (0x000B), kdf=NULL (0x0010)
     // Total size: 10 + 2 + 2 + 2 + 2 = 18 (0x12)
-    // Per CPCTPM_TC2_0_32_03_08 STEP2, XOR with TPM_ALG_NULL KDF must return TPM_RC_KDF + P1.
+    // The C reference accepts it: TPMS_SCHEME_XOR_Unmarshal reads the KDF as TPMI_ALG_KDF+
+    // (flag = 1, Marshal.c:3439), so TPM_ALG_NULL is allowed and TestParms succeeds.
     let req_test_parms_xor_null_kdf = hex!(
         "8001 00000012 0000018A"
         "0008 000A 000B 0010"
@@ -720,8 +734,8 @@ fn test_non_null_schemes_with_tpm_alg_null_inner_hash_and_kdf_in_commands() {
     tpm.execute_command_separate(&mut global_state, &req_test_parms_xor_null_kdf, &mut resp);
     assert_eq!(
         response_rc(&resp),
-        TpmRc::KDF.with(Position::parameter(1)).get(),
-        "TestParms KeyedHash XOR with TPM_ALG_NULL inner KDF must return TPM_RC_KDF + P1"
+        0,
+        "TestParms KeyedHash XOR with TPM_ALG_NULL inner KDF must succeed (C TPMI_ALG_KDF+)"
     );
 
     // 4. TPM2_TestParms (0x018A) with KeyedHash (0x0008), scheme=XOR (0x000A), hash=NULL (0x0010), kdf=NULL (0x0010)
@@ -782,7 +796,10 @@ fn test_verify_signature_and_policy_signed_reject_null_signature() {
     };
     global_state.transient_objects[0] = Some(tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: public.into(),
@@ -925,7 +942,10 @@ fn test_engine_object_public_null_name_alg_validation() {
     };
     global_state.transient_objects[0] = Some(tpm2_impl::handler::TransientObject {
         handle: 0x80000000,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: parent_public.into(),
@@ -1111,7 +1131,10 @@ fn test_engine_rsa_encrypt_and_decrypt_reject_signature_schemes_on_unmarshal() {
     };
     global_state.transient_objects[0] = Some(tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: public.into(),

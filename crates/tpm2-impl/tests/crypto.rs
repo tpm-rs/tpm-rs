@@ -11,6 +11,22 @@ use tpm2::{
 };
 use tpm2_impl::handler::TransientObject;
 
+/// Converts a `TPM_ST_NO_SESSIONS` request with `num_handles` handles into a `TPM_ST_SESSIONS`
+/// request carrying one empty password session. Commands whose handles have an authorization
+/// role need a session in the C reference (`TPM_RC_AUTH_MISSING` otherwise, CheckAuthNoSession).
+fn with_pw_session(request: &[u8], num_handles: usize) -> Vec<u8> {
+    let split = 10 + 4 * num_handles;
+    // authorizationSize (9) || TPM_RS_PW || empty nonce || continueSession || empty hmac
+    let session: [u8; 13] = [0, 0, 0, 9, 0x40, 0, 0, 9, 0, 0, 0x01, 0, 0];
+    let mut out = Vec::with_capacity(request.len() + session.len());
+    out.extend_from_slice(&[0x80, 0x02]);
+    out.extend_from_slice(&((request.len() + session.len()) as u32).to_be_bytes());
+    out.extend_from_slice(&request[6..split]);
+    out.extend_from_slice(&session);
+    out.extend_from_slice(&request[split..]);
+    out
+}
+
 fn setup_tpm_with_fake_platform<'a>(
     crypto: &'a mut FakeCrypto,
     storage: &'a mut FakeStorage,
@@ -64,7 +80,10 @@ fn test_adv_mac_key_type_confusion() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -123,7 +142,10 @@ fn test_adv_rsa_decrypt_signing_only() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -146,12 +168,17 @@ fn test_adv_rsa_decrypt_signing_only() {
     );
 
     let mut response = [0u8; 256];
-    let _size = tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
+    let _size = tpm.execute_command_separate(
+        &mut global_state,
+        &with_pw_session(&request, 1)[..],
+        &mut response[..],
+    );
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(
-        error_code, 0x0000009C,
-        "Expected TPM_RC_KEY (0x9C), got error_code = 0x{:08X}",
+        error_code,
+        0x00000182, // TPM_RC_ATTRIBUTES + RC_RSA_Decrypt_keyHandle (RSA_Decrypt.c)
+        "Expected TPM_RC_ATTRIBUTES + H1 (0x182), got error_code = 0x{:08X}",
         error_code
     );
 }
@@ -183,7 +210,10 @@ fn test_adv_sign_storage_only() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -206,12 +236,17 @@ fn test_adv_sign_storage_only() {
     );
 
     let mut response = [0u8; 256];
-    let _size = tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
+    let _size = tpm.execute_command_separate(
+        &mut global_state,
+        &with_pw_session(&request, 1)[..],
+        &mut response[..],
+    );
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(
-        error_code, 0x0000009C,
-        "Expected TPM_RC_KEY (0x9C), got error_code = 0x{:08X}",
+        error_code,
+        0x0000019C, // TPM_RC_KEY + RC_Sign_keyHandle (Sign.c)
+        "Expected TPM_RC_KEY + H1 (0x19C), got error_code = 0x{:08X}",
         error_code
     );
 }
@@ -235,7 +270,10 @@ fn test_adv_verify_signature_keyed_hash_success() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -298,7 +336,10 @@ fn test_adv_mac_unsupported_hash() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -320,7 +361,11 @@ fn test_adv_mac_unsupported_hash() {
     );
 
     let mut response = [0u8; 256];
-    let _size = tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
+    let _size = tpm.execute_command_separate(
+        &mut global_state,
+        &with_pw_session(&request, 1)[..],
+        &mut response[..],
+    );
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(
@@ -437,7 +482,10 @@ fn test_adv_rsa_decrypt_restricted_key() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -460,13 +508,17 @@ fn test_adv_rsa_decrypt_restricted_key() {
     );
 
     let mut response = [0u8; 256];
-    let _size = tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
+    let _size = tpm.execute_command_separate(
+        &mut global_state,
+        &with_pw_session(&request, 1)[..],
+        &mut response[..],
+    );
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(
         error_code,
-        0x00000082, // TPM_RC_ATTRIBUTES
-        "Expected TPM_RC_ATTRIBUTES (0x82) for restricted key decrypt! error_code = 0x{:08X}",
+        0x00000182, // TPM_RC_ATTRIBUTES + RC_RSA_Decrypt_keyHandle (RSA_Decrypt.c)
+        "Expected TPM_RC_ATTRIBUTES + H1 (0x182) for restricted key decrypt! error_code = 0x{:08X}",
         error_code
     );
 }
@@ -499,7 +551,10 @@ fn test_adv_verify_signature_missing_sign_attribute() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -527,8 +582,8 @@ fn test_adv_verify_signature_missing_sign_attribute() {
 
     assert_eq!(
         error_code,
-        0x00000082, // TPM_RC_ATTRIBUTES
-        "Expected TPM_RC_ATTRIBUTES (0x82) for verify signature with key lacking SIGN_ENCRYPT! error_code = 0x{:08X}",
+        0x00000182, // TPM_RC_ATTRIBUTES + RC_VerifySignature_keyHandle (VerifySignature.c)
+        "Expected TPM_RC_ATTRIBUTES + H1 (0x182) for verify signature with key lacking SIGN_ENCRYPT! error_code = 0x{:08X}",
         error_code
     );
 }
@@ -553,7 +608,10 @@ fn test_adv_verify_signature_keyed_hash_public_only() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: true,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -581,8 +639,8 @@ fn test_adv_verify_signature_keyed_hash_public_only() {
 
     assert_eq!(
         error_code,
-        0x0000008b, // TPM_RC_HANDLE
-        "Expected TPM_RC_HANDLE (0x8B) for public-only KeyedHash! error_code = 0x{:08X}",
+        0x000002CB, // TPM_RC_HANDLE + RC_VerifySignature_signature (CryptValidateSignature)
+        "Expected TPM_RC_HANDLE + P2 (0x2CB) for public-only KeyedHash! error_code = 0x{:08X}",
         error_code
     );
 }
@@ -617,7 +675,10 @@ fn test_ecdh_zgen_success() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -642,7 +703,11 @@ fn test_ecdh_zgen_success() {
     );
 
     let mut response = [0u8; 256];
-    tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
+    tpm.execute_command_separate(
+        &mut global_state,
+        &with_pw_session(&request, 1)[..],
+        &mut response[..],
+    );
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(
@@ -685,7 +750,10 @@ fn test_ecdh_zgen_key_attributes_error() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -710,7 +778,11 @@ fn test_ecdh_zgen_key_attributes_error() {
     );
 
     let mut response = [0u8; 256];
-    tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
+    tpm.execute_command_separate(
+        &mut global_state,
+        &with_pw_session(&request, 1)[..],
+        &mut response[..],
+    );
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(
@@ -752,7 +824,10 @@ fn test_ecdh_zgen_scheme_error() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -777,7 +852,11 @@ fn test_ecdh_zgen_scheme_error() {
     );
 
     let mut response = [0u8; 256];
-    tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
+    tpm.execute_command_separate(
+        &mut global_state,
+        &with_pw_session(&request, 1)[..],
+        &mut response[..],
+    );
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(
@@ -816,7 +895,10 @@ fn test_ecdh_zgen_key_type_error() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -841,7 +923,11 @@ fn test_ecdh_zgen_key_type_error() {
     );
 
     let mut response = [0u8; 256];
-    tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
+    tpm.execute_command_separate(
+        &mut global_state,
+        &with_pw_session(&request, 1)[..],
+        &mut response[..],
+    );
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(
@@ -883,7 +969,10 @@ fn test_ecdh_zgen_public_only_key_error() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -908,7 +997,11 @@ fn test_ecdh_zgen_public_only_key_error() {
     );
 
     let mut response = [0u8; 256];
-    tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
+    tpm.execute_command_separate(
+        &mut global_state,
+        &with_pw_session(&request, 1)[..],
+        &mut response[..],
+    );
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(

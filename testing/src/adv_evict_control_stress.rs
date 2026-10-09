@@ -115,17 +115,25 @@ fn test_evict_control_stress() {
                 let is_obj_loaded = obj == owner_transient_handle || obj == plat_transient_handle;
                 let is_transient = is_obj_loaded; // only transient ones in this test are loaded
 
-                if !is_obj_loaded {
-                    assert!(res.is_err());
-                    assert_eq!(res.unwrap_err(), TpmRc::REFERENCE_H1.get());
-                    continue;
-                }
-
+                // C unmarshals every handle (ParseHandleBuffer) before checking
+                // whether objects are loaded (EntityGetLoadStatus), so an invalid
+                // TPMI_RH_PROVISION auth handle is reported first.
                 if auth != Handle::RH_OWNER && auth != Handle::RH_PLATFORM {
                     assert!(res.is_err());
                     assert_eq!(
                         res.unwrap_err(),
                         388 // value_for(Position::handle(1))
+                    );
+                    continue;
+                }
+
+                if !is_obj_loaded {
+                    // The unloaded handles here are persistent: C ObjectLoadEvict
+                    // returns TPM_RC_HANDLE, reported as HANDLE+H2 (Entity.c:146-151).
+                    assert!(res.is_err());
+                    assert_eq!(
+                        res.unwrap_err(),
+                        TpmRc::HANDLE.with(Position::handle(2)).get()
                     );
                     continue;
                 }

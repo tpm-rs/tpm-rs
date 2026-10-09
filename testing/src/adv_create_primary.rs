@@ -145,10 +145,9 @@ fn test_create_primary_invalid_session_type() {
     sim.transact(&req_buf, &mut resp_buf).unwrap();
     let response_code = u32::from_be_bytes(resp_buf[6..10].try_into().unwrap());
 
-    assert_eq!(
-        response_code,
-        TpmRc::HANDLE.with(Position::session(1)).get()
-    );
+    // C RetrieveSessionData: an unloaded session handle returns
+    // TPM_RC_REFERENCE_S0 (0x918).
+    assert_eq!(response_code, 0x918);
 }
 
 #[test]
@@ -173,7 +172,9 @@ fn test_create_primary_unsupported_rsa_bits() {
         primary_handle: Handle::RH_OWNER,
     };
 
-    let err = match execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]) {
+    // RH_OWNER needs authorization: with no session C returns AUTH_MISSING
+    // before parameters are checked (SessionProcess.c:1650).
+    let err = match execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]) {
         Ok(_) => panic!("Expected error for 512-bit RSA key"),
         Err(e) => e,
     };
@@ -395,7 +396,7 @@ fn test_create_primary_rsa_1024() {
         ..Default::default()
     };
     let (rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
     let out_public_struct = rsp.out_public.0;
     if let PublicParmsAndId::Rsa(parms, unique) = &out_public_struct.parms_and_id {
         assert_eq!(parms.key_bits.0, 1024);
@@ -458,7 +459,7 @@ fn test_create_primary_rsa_2048() {
         ..Default::default()
     };
     let (rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
     let out_public_struct = rsp.out_public.0;
     if let PublicParmsAndId::Rsa(parms, unique) = &out_public_struct.parms_and_id {
         assert_eq!(parms.key_bits.0, 2048);
@@ -576,7 +577,8 @@ fn test_tpma_reserved_bits_in_commands() {
             in_public,
             ..Default::default()
         };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles.clone(), 0, &[])
+        // One password session: with none, C returns AUTH_MISSING first.
+        let err = execute_with_password_sessions(&mut sim, &cmd, handles.clone(), 1, &[])
             .expect_err("CreatePrimary with reserved TpmaObject bits must fail");
         assert_eq!(
             err,

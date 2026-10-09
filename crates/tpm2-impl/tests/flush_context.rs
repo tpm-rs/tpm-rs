@@ -83,7 +83,8 @@ fn test_flush_context_session() {
         &flush_request[..],
         &mut flush_response2[..],
     );
-    assert_eq!(&flush_response2[6..10], &0x8Bu32.to_be_bytes());
+    // C: TPM_RCS_HANDLE + RC_FlushContext_flushHandle (0x1CB), FlushContext.c:29.
+    assert_eq!(&flush_response2[6..10], &0x1CBu32.to_be_bytes());
 
     // Populate another session (policy session)
     let session_handle_2 = 0x03000006; // Policy session handle
@@ -184,7 +185,10 @@ fn test_flush_context_transient_vs_session() {
 
     let obj = TransientObject {
         handle: transient_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: (public_val).into(),
@@ -308,7 +312,10 @@ fn test_flush_context_exhaustive_prefixes() {
 
         let obj = TransientObject {
             handle: transient_handle,
-            seed: [0u8; 32],
+            seed: [0u8; 64],
+            seed_len: 32,
+            external: false,
+            public_only: false,
             name: (tpm2::Tpm2bName::default()).into(),
             auth: (tpm2::Tpm2bAuth::default()).into(),
             public: (public_val).into(),
@@ -507,7 +514,7 @@ fn test_flush_context_multi_session_isolation() {
         flush_resp_again[8],
         flush_resp_again[9],
     ]);
-    assert_eq!(rc_s2, 0x08B); // TPM_RC_HANDLE
+    assert_eq!(rc_s2, 0x1CB); // C: TPM_RCS_HANDLE + RC_FlushContext_flushHandle (0x1CB), FlushContext.c:29.
 
     // Verify S_1 and S_3 remain active and usable in subsequent commands
     assert!(global_state.session(s1_handle).is_some());

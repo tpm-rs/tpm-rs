@@ -42,16 +42,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // Ported from C reference implementation: TPMCmd/tpm/src/command/Hierarchy/Clear.c (lines 11-87)
-        // if(gp.disableClear) return TPM_RCS_DISABLED + RC_Clear_authHandle;
+        // Ported from C reference implementation: TPMCmd/tpm/src/command/Hierarchy/Clear.c.
+        // The command needs NV update: RETURN_IF_NV_IS_NOT_AVAILABLE runs before the
+        // `disableClear` check.
+        self.return_if_nv_is_not_available()?;
+
+        // if(gp.disableClear) return TPM_RC_DISABLED;
         if self.global_state.disable_clear {
             return Err(TpmRc::DISABLED);
         }
 
         self.nv_clear_orderly()?;
-
-        let response = request.into_response();
-        self.write_response_none(response, &session_responses[..num_sessions])?;
 
         let mut new_sh_proof = [0u8; 64];
         let mut new_eh_proof = [0u8; 64];
@@ -77,10 +78,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.global_state.sh_enable = true;
         self.global_state.eh_enable = true;
 
+        // gp.resetCount = gr.restartCount = gr.clearCount = 0; gp.auditCounter = 0;
         self.global_state.reset_count = 0;
         self.global_state.restart_count = 0;
-        self.global_state.clear_count = self.global_state.clear_count.saturating_add(1);
+        self.global_state.clear_count = 0;
+        self.global_state.audit_counter = 0;
+        // go.clock = 0; go.clockSafe = YES;
         self.global_state.clock_offset = -(self.global_state.tpm_time_ms as i64);
+        self.global_state.clock_safe = true;
         self.global_state.clock_rate_adjust = tpm2::TpmClockAdjust::NoChange;
 
         self.global_state.nv_locked = false;
@@ -94,12 +99,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.global_state.sp_seed.copy_from_slice(&new_sp_seed);
         self.global_state.sp_seed_size = 64;
 
-        for slot in self.global_state.transient_objects.iter_mut() {
+        // Flush loaded objects in the storage and endorsement hierarchies.
+        for (i, slot) in self.global_state.transient_objects.iter_mut().enumerate() {
             if let Some(obj) = slot
                 && (obj.hierarchy == Handle::RH_OWNER.0
                     || obj.hierarchy == Handle::RH_ENDORSEMENT.0)
             {
                 *slot = None;
+                self.global_state.transient_parents[i] = None;
             }
         }
 
@@ -112,70 +119,123 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.global_state.owner_alg = None;
         self.global_state.endorsement_alg = None;
         self.global_state.lockout_alg = None;
-        self.global_state.pcr_auth_value = crate::owned::OwnedAuth::default();
 
+        // Flush owner and endorsement evict objects and owner NV indices (`NvFlushHierarchy`).
+        self.nv_flush_hierarchy(Handle::RH_OWNER.0)?;
+        self.nv_flush_hierarchy(Handle::RH_ENDORSEMENT.0)?;
+
+        // Initialize dictionary attack parameters (`DAPreInstall_Init`).
         self.global_state.failed_tries = 0;
         self.global_state.max_tries = 3;
         self.global_state.recovery_time = 1000;
         self.global_state.lockout_recovery = 1000;
         self.global_state.lockout_auth_enabled = true;
         self.global_state.da_pending_on_nv = false;
-        let _ = self.nv_sync_persistent_failed_tries();
+        self.nv_sync_persistent_failed_tries()?;
 
-        {
-            let mut storage =
-                crate::storage::manager::StorageManager::new(&mut *self.context.platform.storage);
-            if let Ok(toc) = storage.read_toc() {
-                let mut to_remove = [0u32; 64];
-                let mut count = 0;
-                for item in toc.iter() {
-                    if item.in_use != 0 && count < 64 {
-                        if (item.handle >> 24) == 0x01 {
-                            if let Ok(meta) = storage.get_metadata(item.handle)
-                                && (meta.attributes & 0x40000000) == 0
-                            {
-                                to_remove[count] = item.handle;
-                                count += 1;
-                            }
-                        } else if (item.handle >> 24) == (tpm2::TpmHt::Persistent as u8) as u32 {
-                            to_remove[count] = item.handle;
-                            count += 1;
-                        }
-                    }
-                }
-                for handle in &to_remove[..count] {
-                    if (*handle >> 24) == 0x01
-                        && let Ok(meta) = storage.get_metadata(*handle)
-                    {
-                        let read_len = core::cmp::min(meta.data_size as usize, 1536);
-                        let mut read_buf = [0u8; 1536];
-                        if storage
-                            .read_item(*handle, 0, &mut read_buf[..read_len])
-                            .is_ok()
-                            && let Ok((metadata_size, nv_public, _, _)) =
-                                crate::handler::nv_storage::unmarshal_nv_header(
-                                    &read_buf[..read_len],
-                                )
-                            && nv_public.attributes.get_index_type() == Ok(tpm2::TpmNt::Counter)
-                            && nv_public.attributes.contains(tpm2::TpmaNv::WRITTEN)
-                            && read_len >= metadata_size + 8
-                        {
-                            let mut val_bytes = [0u8; 8];
-                            val_bytes.copy_from_slice(&read_buf[metadata_size..metadata_size + 8]);
-                            let val = u64::from_be_bytes(val_bytes);
-                            if val > self.global_state.max_counter {
-                                self.global_state.max_counter = val;
-                            }
-                        }
-                    }
-                    let _ = storage.undefine_space(*handle);
-                }
-            }
-        }
-
+        // Save persistent data changes to NV.
+        self.nv_sync_persistent_reset_count()?;
         self.nv_sync_persistent_max_counter()?;
+
+        // Reset the PCR authValues (`PCR_ClearAuth`) and bump the PCR counter (`PCRChanged(0)`).
+        self.global_state.pcr_auth_value = crate::owned::OwnedAuth::default();
+        self.global_state.pcrs.update_counter =
+            self.global_state.pcrs.update_counter.wrapping_add(1);
+
         self.context.save_hierarchy_auths(self.global_state);
 
+        // Only report success once every state and NV update has been performed.
+        let response = request.into_response();
+        self.write_response_none(response, &session_responses[..num_sessions])?;
         Ok(())
+    }
+
+    /// Deletes the NV entities that belong to `hierarchy` (`NvFlushHierarchy` in `NvDynamic.c`).
+    ///
+    /// - Evict (persistent) objects are deleted when their stored hierarchy equals `hierarchy`.
+    /// - NV indices are only deleted when flushing [`Handle::RH_OWNER`], and only those that were
+    ///   not created by the platform (`TPMA_NV_PLATFORMCREATE` clear). Flushing the endorsement or
+    ///   platform hierarchy never deletes NV indices.
+    ///
+    /// There is no limit on the number of deleted entities. Before deleting a written NV counter
+    /// index, its value is folded into `max_counter` so that a later counter index can never
+    /// reuse a smaller value.
+    pub(crate) fn nv_flush_hierarchy(&mut self, hierarchy: u32) -> Result<(), TpmRc> {
+        /// `TPMA_NV_PLATFORMCREATE`.
+        const PLATFORMCREATE: u32 = 0x4000_0000;
+        loop {
+            // Find the next entity to delete, re-reading the TOC after every deletion (like the
+            // C code re-iterates from the beginning after `NvDelete`).
+            let toc = {
+                let storage = crate::storage::manager::StorageManager::new(
+                    &mut *self.context.platform.storage,
+                );
+                storage.read_toc().map_err(|_| TpmRc::FAILURE)?
+            };
+            let mut victim = None;
+            for item in toc.iter().filter(|item| item.in_use != 0) {
+                let handle_type = item.handle >> 24;
+                if handle_type == tpm2::TpmHt::NVIndex as u32 {
+                    if hierarchy != Handle::RH_OWNER.0 {
+                        continue;
+                    }
+                    let storage = crate::storage::manager::StorageManager::new(
+                        &mut *self.context.platform.storage,
+                    );
+                    if let Ok(meta) = storage.get_metadata(item.handle)
+                        && (meta.attributes & PLATFORMCREATE) == 0
+                    {
+                        victim = Some(item.handle);
+                        break;
+                    }
+                } else if handle_type == tpm2::TpmHt::Persistent as u32 {
+                    // Only the stored hierarchy matters (`ppsHierarchy`/`spsHierarchy`/
+                    // `epsHierarchy`); unlike loading an evict object, the hierarchy enables are
+                    // not consulted.
+                    if let Ok(obj) = self.context.read_persistent_object(item.handle)
+                        && obj.hierarchy == hierarchy
+                    {
+                        victim = Some(item.handle);
+                        break;
+                    }
+                }
+            }
+            let Some(handle) = victim else {
+                return Ok(());
+            };
+            if (handle >> 24) == tpm2::TpmHt::NVIndex as u32 {
+                self.fold_nv_counter_into_max_counter(handle);
+            }
+            let mut storage =
+                crate::storage::manager::StorageManager::new(&mut *self.context.platform.storage);
+            storage.undefine_space(handle).map_err(|_| TpmRc::FAILURE)?;
+        }
+    }
+
+    /// If `handle` is a written NV counter index, raises `max_counter` to its current value.
+    fn fold_nv_counter_into_max_counter(&mut self, handle: u32) {
+        let storage =
+            crate::storage::manager::StorageManager::new(&mut *self.context.platform.storage);
+        let Ok(meta) = storage.get_metadata(handle) else {
+            return;
+        };
+        let read_len = core::cmp::min(meta.data_size as usize, 1536);
+        let mut read_buf = [0u8; 1536];
+        if storage
+            .read_item(handle, 0, &mut read_buf[..read_len])
+            .is_ok()
+            && let Ok((metadata_size, nv_public, _, _)) =
+                crate::handler::nv_storage::unmarshal_nv_header(&read_buf[..read_len])
+            && nv_public.attributes.get_index_type() == Ok(tpm2::TpmNt::Counter)
+            && nv_public.attributes.contains(tpm2::TpmaNv::WRITTEN)
+            && read_len >= metadata_size + 8
+        {
+            let mut val_bytes = [0u8; 8];
+            val_bytes.copy_from_slice(&read_buf[metadata_size..metadata_size + 8]);
+            let val = u64::from_be_bytes(val_bytes);
+            if val > self.global_state.max_counter {
+                self.global_state.max_counter = val;
+            }
+        }
     }
 }

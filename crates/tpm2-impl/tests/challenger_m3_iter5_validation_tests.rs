@@ -225,6 +225,8 @@ fn test_policy_duplication_select_invalid_inputs() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
@@ -268,12 +270,12 @@ fn test_policy_duplication_select_invalid_inputs() {
         &cmd_malformed_object_name,
         &[],
     );
-    let err_val = res.err().unwrap();
-    println!("Malformed object_name returned error: 0x{:08X}", err_val);
+    // C does not validate the structure of the names (TPM2B_NAME_Unmarshal only bounds the
+    // size, and PolicyDuplicationSelect.c just hashes them), so this succeeds.
     assert!(
-        err_val == 0x01C4 || err_val == 0x01D5 || err_val == 0x01C3,
-        "Unexpected error code for malformed object_name: 0x{:08X}",
-        err_val
+        res.is_ok(),
+        "Malformed object_name must be accepted like C, got {:?}",
+        res.err()
     );
 
     // 3. Malformed new_parent_name (size 3) -> Expects 0x02C4 or 0x02D5?
@@ -289,16 +291,9 @@ fn test_policy_duplication_select_invalid_inputs() {
         &cmd_malformed_parent_name,
         &[],
     );
-    let err_val = res.err().unwrap();
-    println!(
-        "Malformed new_parent_name returned error: 0x{:08X}",
-        err_val
-    );
-    assert!(
-        err_val == 0x02C4 || err_val == 0x02D5 || err_val == 0x02C3,
-        "Unexpected error code for malformed new_parent_name: 0x{:08X}",
-        err_val
-    );
+    // The names are not validated (see above), but case 2 already set the session's nameHash,
+    // so C returns bare TPM_RC_CPHASH (PolicyDuplicationSelect.c: `nameHash.t.size != 0`).
+    assert_eq!(res.err(), Some(TpmRc::CPHASH.get()));
 }
 
 fn compute_hmac_in_test(
@@ -368,6 +363,8 @@ fn test_policy_cp_hash_self_authorization() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
@@ -403,7 +400,9 @@ fn test_policy_cp_hash_self_authorization() {
         hmac: Tpm2bAuth::from_bytes(&hmac_val).unwrap(),
     }];
 
-    // This should trigger the self-authorization check and return 0x098B (session 1 error).
+    // C has no "self-authorization" check; the session does not authorize any handle and has
+    // none of audit/encrypt/decrypt set, so C ParseSessionBuffer returns
+    // TPM_RC_ATTRIBUTES + RC_S1 (0x0982).
     let res = execute_tpm_command_with_auths::<PolicyCpHash>(
         &mut tpm,
         &mut global_state,
@@ -416,7 +415,7 @@ fn test_policy_cp_hash_self_authorization() {
         "PolicyCpHash self-authorization returned error: 0x{:08X}",
         err_val
     );
-    assert_eq!(err_val, 0x98B);
+    assert_eq!(err_val, 0x982);
 }
 
 #[test]
@@ -461,6 +460,8 @@ fn test_policy_authorize_invalid_hierarchy() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
@@ -509,7 +510,14 @@ fn test_encrypt_decrypt_invalid_decrypt_value() {
     let key_handle = 0x80000001;
     let transient_obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [1u8; 32],
+        seed: {
+            let mut s = [0u8; 64];
+            s[..32].copy_from_slice(&[1u8; 32]);
+            s
+        },
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::from_bytes(b"password").unwrap()).into(),
         public: (TpmtPublic {
@@ -572,7 +580,14 @@ fn test_encrypt_decrypt2_invalid_decrypt_value() {
     let key_handle = 0x80000001;
     let transient_obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [1u8; 32],
+        seed: {
+            let mut s = [0u8; 64];
+            s[..32].copy_from_slice(&[1u8; 32]);
+            s
+        },
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::from_bytes(b"password").unwrap()).into(),
         public: (TpmtPublic {
@@ -635,7 +650,14 @@ fn test_encrypt_decrypt_cmac_key_and_mode_rejection() {
     let key_handle = 0x80000001;
     let transient_obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [1u8; 32],
+        seed: {
+            let mut s = [0u8; 64];
+            s[..32].copy_from_slice(&[1u8; 32]);
+            s
+        },
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::from_bytes(b"password").unwrap()).into(),
         public: (TpmtPublic {
@@ -773,6 +795,8 @@ fn test_policy_duplication_select_name_size_limits() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session_1).unwrap();
 
@@ -839,6 +863,8 @@ fn test_policy_duplication_select_name_size_limits() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session_2).unwrap();
 

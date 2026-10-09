@@ -41,6 +41,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
+        // Check if NV is available (`RETURN_IF_NV_IS_NOT_AVAILABLE`, `ChangePPS.c`).
+        self.return_if_nv_is_not_available()?;
+
         let mut new_pp_seed = [0u8; 64];
         let mut new_ph_proof = [0u8; 64];
 
@@ -70,13 +73,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.global_state.pcr_policy = crate::owned::OwnedDigest::default();
 
         // Flush loaded objects in platform hierarchy
-        for slot in self.global_state.transient_objects.iter_mut() {
+        for (i, slot) in self.global_state.transient_objects.iter_mut().enumerate() {
             if let Some(obj) = slot
                 && obj.hierarchy == Handle::RH_PLATFORM.0
             {
                 *slot = None;
+                self.global_state.transient_parents[i] = None;
             }
         }
+
+        // Flush platform evict objects stored in NV (`NvFlushHierarchy(TPM_RH_PLATFORM)`; NV
+        // indices are not affected).
+        self.nv_flush_hierarchy(Handle::RH_PLATFORM.0)?;
 
         self.context.save_hierarchy_auths(self.global_state);
 

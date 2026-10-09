@@ -4,7 +4,7 @@ use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::commands::{PolicyDuplicationSelect, PolicyDuplicationSelectHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, TpmCc, TpmSe};
+use tpm2::{TpmCc, TpmSe};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -37,26 +37,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // Validate object_name and new_parent_name structures
-        if cmd.include_object {
-            self.validate_name_structure(&cmd.object_name, Position::parameter(1))?;
-        } else if cmd.object_name.get_size() > 66 {
-            return Err(TpmRc::SIZE.with(Position::parameter(1)));
-        }
-        self.validate_name_structure(&cmd.new_parent_name, Position::parameter(2))?;
+        // `objectName` and `newParentName` are opaque TPM2B_NAME values (their size is bounded by
+        // unmarshaling); C `TPM2_PolicyDuplicationSelect` never inspects their structure.
 
         // Validate session expiration
         self.validate_policy_session(policy_session, Position::handle(1))?;
 
         // 1. Retrieve policy session state details
-        let (
-            auth_hash,
-            policy_digest,
-            policy_digest_len,
-            command_code,
-            policy_hash_len,
-            bind_entity,
-        ) = {
+        let (auth_hash, policy_digest, policy_digest_len, command_code, policy_hash_len) = {
             let session_state = self
                 .global_state
                 .session(policy_session)
@@ -72,15 +60,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 session_state.policy_digest_len,
                 session_state.command_code,
                 session_state.policy_hash_len,
-                session_state.bind_entity,
             )
         };
 
-        if bind_entity != Handle::RH_NULL {
-            return Err(TpmRc::CPHASH);
-        }
-
-        // nameHash in session context must be empty (i.e. policy_hash_len == 0)
+        // nameHash in session context must be empty (i.e. policy_hash_len == 0). Policy sessions
+        // are never bound, so the shared `u1` union can only hold cpHash/nameHash/templateHash.
         if policy_hash_len != 0 {
             return Err(TpmRc::CPHASH);
         }

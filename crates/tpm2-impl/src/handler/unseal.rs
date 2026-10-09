@@ -40,8 +40,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // 1. Retrieve the loaded object
+        // 1. Retrieve the loaded object. A sequence object is not a KEYEDHASH object
+        // (C `Unseal.c`: `TPM_RC_TYPE + RC_Unseal_itemHandle`).
+        if self
+            .global_state
+            .find_active_sequence(item_handle)
+            .is_some()
+        {
+            return Err(TpmRc::TYPE.with(Position::handle(1)));
+        }
         let item_obj = self.resolve_object(item_handle, Position::handle(1))?;
+
+        // A public-only object has no sensitive data and no authValue/authPolicy available;
+        // C rejects it during authorization (`TPM_RC_AUTH_UNAVAILABLE`), so it never reaches
+        // the unseal action. Defense in depth in case authorization did not catch it.
+        if item_obj.public_only {
+            return Err(TpmRc::AUTH_UNAVAILABLE);
+        }
 
         // 2. Verify object type is KeyedHash (Sealed Data Object)
         if !matches!(

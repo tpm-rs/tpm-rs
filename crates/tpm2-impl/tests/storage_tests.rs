@@ -365,6 +365,8 @@ fn test_live_migration_state_translator_roundtrip() {
         nv_written_state: false,
         command_locality: 3,
         include_auth: true,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     src_state.active_sessions[0] = Some(sess);
 

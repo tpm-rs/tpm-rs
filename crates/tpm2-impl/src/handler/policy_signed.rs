@@ -43,6 +43,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
+        // `authObject` (handle 1, `TPMI_DH_OBJECT`) must reference a loaded object for every
+        // session type (C validates it with `EntityGetLoadStatus` before the command runs).
+        let obj = self.resolve_object(auth_object, Position::handle(1))?;
+
         // Validate session expiration
         self.validate_policy_session(policy_session, Position::handle(2))?;
 
@@ -104,23 +108,28 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .copy_from_slice(cmd.policy_ref.get_buffer());
             offset += cmd.policy_ref.get_size() as usize;
 
-            // Resolve public key or HMAC key of authObject
-            let obj = self.resolve_object(auth_object, Position::handle(1))?;
+            // Validate the signature with the public key or HMAC key of authObject
+            // (C `CryptValidateSignature`; errors get `RC_PolicySigned_auth`).
             if let crate::owned::OwnedPublicParmsAndId::KeyedHash(scheme, _) =
                 &obj.public.parms_and_id
             {
+                // An HMAC key whose sensitive area is not loaded cannot verify anything.
+                if obj.public_only {
+                    return Err(TpmRc::HANDLE.with(Position::parameter(5)));
+                }
+                // C `CryptHMACVerifySignature`.
                 let ha = match &cmd.auth {
                     TpmtSignature::Hmac(h) => h,
                     _ => {
                         return Err(TpmRc::SCHEME.with(Position::parameter(5)));
                     }
                 };
-                if let Some(tpm2::TpmtKeyedHashScheme::Hmac(expected_hash)) = scheme {
-                    if ha.hash_alg() != *expected_hash {
-                        return Err(TpmRc::SCHEME.with(Position::parameter(5)));
-                    }
-                } else if scheme.is_some() {
-                    return Err(TpmRc::SCHEME.with(Position::handle(1)));
+                // A key with a non-NULL scheme only validates signatures of that exact scheme.
+                match scheme {
+                    None => {}
+                    Some(tpm2::TpmtKeyedHashScheme::Hmac(expected_hash))
+                        if ha.hash_alg() == *expected_hash => {}
+                    Some(_) => return Err(TpmRc::SIGNATURE.with(Position::parameter(5))),
                 }
                 let (digest_bytes, digest_len) =
                     self.compute_hash(ha.hash_alg(), &[&to_be_signed[..offset]])?;
@@ -177,6 +186,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 // Recompute the digest being signed
                 let mut sig_buf = [0u8; 512];
                 let sig_len;
+
+                // The signature algorithm must belong to the key type
+                // (C `CryptRsaValidateSignature` / `CryptEccValidateSignature`).
+                let is_rsa_key = matches!(
+                    obj.public.parms_and_id,
+                    crate::owned::OwnedPublicParmsAndId::Rsa(..)
+                );
+                let sig_matches_key = match cmd.auth {
+                    TpmtSignature::Rsassa(_) | TpmtSignature::Rsapss(_) => is_rsa_key,
+                    TpmtSignature::Ecdsa(_)
+                    | TpmtSignature::Ecschnorr(_)
+                    | TpmtSignature::Sm2(_) => !is_rsa_key,
+                    _ => false,
+                };
+                if !sig_matches_key {
+                    return Err(TpmRc::SCHEME.with(Position::parameter(5)));
+                }
 
                 let (sign_alg, hash_alg) = match cmd.auth {
                     TpmtSignature::Rsassa(ref sig) => {
@@ -238,8 +264,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
-        // 2. Compute authorization object name
-        let auth_name = self.context.handle_name(self.global_state, auth_object);
+        // 2. Authorization object name (of the loaded object, for trial sessions too)
+        let auth_name = obj.name;
 
         // 3. Compute new policy digest
         // digest1 = hash(policyDigest_old || TPM_CC_PolicySigned || authName)
@@ -284,12 +310,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut hmac_digest_bytes = [0u8; 64];
         let timeout_bytes;
         let (timeout, policy_ticket) = if cmd.expiration < 0 && session_type == TpmSe::Policy {
-            let key_hierarchy = if auth_object >> 24 == 0x80 || auth_object >> 24 == 0x81 {
-                let obj = self.resolve_object(auth_object, Position::handle(1))?;
-                obj.hierarchy
-            } else {
-                auth_object
-            };
+            let key_hierarchy = obj.hierarchy;
 
             let (proof_bytes, proof_len, ticket_hierarchy) =
                 self.resolve_hierarchy_proof(key_hierarchy);

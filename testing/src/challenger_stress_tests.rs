@@ -73,7 +73,12 @@ fn test_decryption_boundaries_hierarchy_change_auth() {
         let result =
             execute_with_hmac_sessions(&mut sim, &cmd, handles, &[], &mut [session], &[&[]]);
 
-        if size <= 32 {
+        if size == 0 {
+            // C CryptParameterDecryption (CryptUtil.c:966-970) rejects an empty
+            // remaining buffer (`bufferSize <= 0`) after the size field, so an
+            // empty newAuth (the only parameter) fails with SIZE+S1 (0x995).
+            assert_eq!(result.err(), Some(0x995), "size 0");
+        } else if size <= 32 {
             assert!(
                 result.is_ok(),
                 "Failed decryption boundary test for size {} with error {:?}",
@@ -130,9 +135,11 @@ fn test_decryption_parameter_size_overflow() {
     req.extend_from_slice(&[0u8; 16]);
     // session attributes: DECRYPT (0x20) | CONTINUE_SESSION (0x01)
     req.push(0x21);
-    // hmac (32 bytes of dummy)
-    req.extend_from_slice(&32u16.to_be_bytes());
-    req.extend_from_slice(&[0u8; 32]);
+    // hmac: empty. A wrong non-empty HMAC would fail authorization (BAD_AUTH+S1)
+    // before decryption in C; an empty HMAC is accepted because the HMAC key
+    // (unbound, unsalted session + empty owner auth) is empty
+    // (SessionProcess.c:937-941).
+    req.extend_from_slice(&0u16.to_be_bytes());
 
     let session_end = req.len();
     let session_size = (session_end - session_start) as u32;
@@ -153,10 +160,11 @@ fn test_decryption_parameter_size_overflow() {
 
     let mut unmarsh: &'static [u8] = crate::test_utils::leak_bytes(resp_bytes);
     let header = crate::test_utils::RespHeader::unmarshal(&mut unmarsh).unwrap();
-    // Expected response code: TPM_RC_SIZE (0x095)
+    // Expected response code: TPM_RC_SIZE plus the decrypt session index, as in
+    // C (SessionProcess.c:1760-1762): SIZE+S1 (0x995).
     assert_eq!(
-        header.rc, 0x095,
-        "Expected TPM_RC_SIZE (0x95), got 0x{:X}",
+        header.rc, 0x995,
+        "Expected TPM_RC_SIZE+S1 (0x995), got 0x{:X}",
         header.rc
     );
 }

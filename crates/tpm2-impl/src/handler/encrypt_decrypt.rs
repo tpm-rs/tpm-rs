@@ -156,6 +156,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
+        // The key must have both its public and private portions loaded
+        // (`EncryptDecrypt_spt.c`: TPM_RC_KEY). A public-only key is normally rejected during
+        // authorization (TPM_RC_AUTH_UNAVAILABLE); never run the cipher with an empty key.
+        if sym_key.private_len == 0 {
+            return Err(TpmRc::KEY.with(Position::handle(1)));
+        }
+
         let key_alg = sym_def.algorithm();
         let mut key_mode = Alg::from(sym_def.mode());
         let _key_bits = sym_def.key_bits();

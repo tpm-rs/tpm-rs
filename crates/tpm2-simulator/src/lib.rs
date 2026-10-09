@@ -380,7 +380,16 @@ impl<'a> Simulator<'a> {
             SimulatorPlatformSignal::NvOn => {
                 if self.is_power_on {
                     self.is_nv_on = true;
+                    // Matches `_plat__SetNvAvail()`: NV becomes available to the TPM again.
+                    self.global_state.nv_available = true;
                 }
+                stream.write_all(&0u32.to_be_bytes())?;
+            }
+            SimulatorPlatformSignal::NvOff => {
+                // Matches `_plat__ClearNvAvail()`: subsequent commands that need NV fail with
+                // `TPM_RC_NV_UNAVAILABLE` (`NvCheckState` / `RETURN_IF_NV_IS_NOT_AVAILABLE`).
+                self.is_nv_on = false;
+                self.global_state.nv_available = false;
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             SimulatorPlatformSignal::SetFirmwareHash | SimulatorPlatformSignal::SetFirmwareSvn => {

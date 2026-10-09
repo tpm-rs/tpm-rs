@@ -142,4 +142,112 @@ impl PcrState {
         }
         self.update_counter = 0;
     }
+
+    /// Hash algorithms for which this build implements a PCR bank, in ascending algorithm-ID
+    /// order (the order of `CryptHashGetAlgByIndex` in the C reference implementation).
+    pub const IMPLEMENTED_BANKS: &'static [crate::TpmiAlgHash] = &[
+        #[cfg(feature = "sha1")]
+        crate::TpmiAlgHash::Sha1,
+        #[cfg(feature = "sha256")]
+        crate::TpmiAlgHash::Sha256,
+        #[cfg(feature = "sha384")]
+        crate::TpmiAlgHash::Sha384,
+        #[cfg(feature = "sha512")]
+        crate::TpmiAlgHash::Sha512,
+        #[cfg(feature = "sm3_256")]
+        crate::TpmiAlgHash::Sm3_256,
+        #[cfg(feature = "sha3_256")]
+        crate::TpmiAlgHash::Sha3_256,
+        #[cfg(feature = "sha3_384")]
+        crate::TpmiAlgHash::Sha3_384,
+        #[cfg(feature = "sha3_512")]
+        crate::TpmiAlgHash::Sha3_512,
+    ];
+
+    /// Returns the raw value of PCR `pcr` in the bank of `alg`, regardless of whether the PCR is
+    /// currently allocated (`GetPcrPointerFromPcrArray` in the C reference). Returns `None` if
+    /// `pcr` is not an implemented PCR index.
+    pub fn value(&self, alg: crate::TpmiAlgHash, pcr: usize) -> Option<&[u8]> {
+        if pcr >= 24 {
+            return None;
+        }
+        Some(match alg {
+            #[cfg(feature = "sha1")]
+            crate::TpmiAlgHash::Sha1 => &self.sha1[pcr][..],
+            #[cfg(feature = "sha256")]
+            crate::TpmiAlgHash::Sha256 => &self.sha256[pcr][..],
+            #[cfg(feature = "sha384")]
+            crate::TpmiAlgHash::Sha384 => &self.sha384[pcr][..],
+            #[cfg(feature = "sha512")]
+            crate::TpmiAlgHash::Sha512 => &self.sha512[pcr][..],
+            #[cfg(feature = "sm3_256")]
+            crate::TpmiAlgHash::Sm3_256 => &self.sm3_256[pcr][..],
+            #[cfg(feature = "sha3_256")]
+            crate::TpmiAlgHash::Sha3_256 => &self.sha3_256[pcr][..],
+            #[cfg(feature = "sha3_384")]
+            crate::TpmiAlgHash::Sha3_384 => &self.sha3_384[pcr][..],
+            #[cfg(feature = "sha3_512")]
+            crate::TpmiAlgHash::Sha3_512 => &self.sha3_512[pcr][..],
+        })
+    }
+
+    /// Mutable variant of [`PcrState::value`].
+    pub fn value_mut(&mut self, alg: crate::TpmiAlgHash, pcr: usize) -> Option<&mut [u8]> {
+        if pcr >= 24 {
+            return None;
+        }
+        Some(match alg {
+            #[cfg(feature = "sha1")]
+            crate::TpmiAlgHash::Sha1 => &mut self.sha1[pcr][..],
+            #[cfg(feature = "sha256")]
+            crate::TpmiAlgHash::Sha256 => &mut self.sha256[pcr][..],
+            #[cfg(feature = "sha384")]
+            crate::TpmiAlgHash::Sha384 => &mut self.sha384[pcr][..],
+            #[cfg(feature = "sha512")]
+            crate::TpmiAlgHash::Sha512 => &mut self.sha512[pcr][..],
+            #[cfg(feature = "sm3_256")]
+            crate::TpmiAlgHash::Sm3_256 => &mut self.sm3_256[pcr][..],
+            #[cfg(feature = "sha3_256")]
+            crate::TpmiAlgHash::Sha3_256 => &mut self.sha3_256[pcr][..],
+            #[cfg(feature = "sha3_384")]
+            crate::TpmiAlgHash::Sha3_384 => &mut self.sha3_384[pcr][..],
+            #[cfg(feature = "sha3_512")]
+            crate::TpmiAlgHash::Sha3_512 => &mut self.sha3_512[pcr][..],
+        })
+    }
+
+    /// Returns `true` if PCR `pcr` of the bank `alg` is allocated in the active allocation
+    /// (`PcrIsAllocated` in the C reference).
+    pub fn is_allocated(&self, alg: crate::TpmiAlgHash, pcr: usize) -> bool {
+        if pcr >= 24 {
+            return false;
+        }
+        self.pcr_allocation
+            .pcr_selections()
+            .find(|sel| sel.hash() == alg)
+            .is_some_and(|sel| {
+                sel.pcr_select()
+                    .get(pcr / 8)
+                    .is_some_and(|b| b & (1 << (pcr % 8)) != 0)
+            })
+    }
+
+    /// Returns `selection` with every PCR bit cleared that is not allocated in the active
+    /// allocation (`FilterPcr` in the C reference). The `sizeofSelect` of the input is kept; a
+    /// bank that is not part of the allocation yields an all-zero selection.
+    pub fn filter_selection(&self, selection: &crate::TpmsPcrSelection) -> crate::TpmsPcrSelection {
+        let allocated = self
+            .pcr_allocation
+            .pcr_selections()
+            .find(|sel| sel.hash() == selection.hash());
+        let mut bits = [0u8; crate::TPM2_PCR_SELECT_MAX as usize];
+        let input = selection.pcr_select();
+        for (i, out) in bits.iter_mut().enumerate().take(input.len()) {
+            let mask = allocated
+                .and_then(|a| a.pcr_select().get(i).copied())
+                .unwrap_or(0);
+            *out = input[i] & mask;
+        }
+        crate::TpmsPcrSelection::new(selection.hash(), &bits[..input.len()]).unwrap_or(*selection)
+    }
 }

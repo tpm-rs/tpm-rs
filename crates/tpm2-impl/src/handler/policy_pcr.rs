@@ -2,11 +2,11 @@ use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
+use tpm2::TpmiAlgHash;
 use tpm2::commands::{PolicyPCR, PolicyPCRHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Alg, TpmiAlgHash};
-use tpm2::{Marshal, TpmsPcrSelection, Unmarshal};
+use tpm2::{Marshal, Unmarshal};
 use tpm2::{TpmCc, TpmSe};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -47,7 +47,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     if count > 0 && slice.len() >= 6 {
                         let hash_raw = u16::from_be_bytes([slice[4], slice[5]]);
                         if TpmiAlgHash::try_from(hash_raw).is_err() {
-                            return Err(TpmRc::HASH.with(Position::parameter(1)));
+                            // `pcrs` is parameter 2 (parameter 1 is `pcrDigest`).
+                            return Err(TpmRc::HASH.with(Position::parameter(2)));
                         }
                     }
                 }
@@ -81,9 +82,31 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             )
         };
 
-        // 2. PCR counter check for non-trial sessions.
+        // 2. Validate the selection and filter it against the allocated PCR banks (C `FilterPcr`,
+        //    applied in place by `PCRComputeCurrentDigest`). The caller's bank order is preserved:
+        //    PCR values are hashed in that order and the filtered selection (in that order) is
+        //    extended into the policy digest for both trial and policy sessions.
+        for in_sel in cmd.pcrs.pcr_selections() {
+            let sizeof_select = in_sel.sizeof_select() as usize;
+            if sizeof_select < tpm2::TPM2_PCR_SELECT_MIN
+                || sizeof_select > (tpm2::TPM2_PCR_SELECT_MAX as usize)
+            {
+                return Err(TpmRc::VALUE.with(Position::parameter(2)));
+            }
+        }
+        let pcrs_selection_out = self.filter_pcr_selection(&cmd.pcrs);
+
+        // 3. Digest of the selected (allocated) PCR values, in the caller's bank order
+        //    (`PCRComputeCurrentDigest`).
+        let current = self.compute_pcr_digest(&pcrs_selection_out, auth_hash)?;
+        let mut digest = [0u8; 64];
+        let len = current.get_buffer().len();
+        digest[..len].copy_from_slice(current.get_buffer());
+
+        // 4. PCR counter check and pcrDigest verification for non-trial sessions; a trial session
+        //    uses the caller's pcrDigest when one is provided.
         let mut pcr_counter = None;
-        if session_type != TpmSe::Trial {
+        let (digest_tpm, digest_tpm_len) = if session_type != TpmSe::Trial {
             let current_pcr_counter = self.global_state.pcrs.update_counter;
             let session_pcr_counter = {
                 let session_state = self
@@ -98,108 +121,25 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 return Err(TpmRc::PCR_CHANGED);
             }
             pcr_counter = Some(current_pcr_counter);
-        }
 
-        // 3. Process PCR selection and read platform PCR values.
-        let mut pcrs_selection_out = tpm2::TpmlPcrSelection::default();
-
-        let count = cmd.pcrs.count();
-        if count > tpm2::TPM2_NUM_PCR_BANKS as usize {
-            return Err(TpmRc::VALUE.with(Position::parameter(1)));
-        }
-        let mut selections = [TpmsPcrSelection::default(); tpm2::TPM2_NUM_PCR_BANKS as usize];
-        for (i, sel) in cmd.pcrs.pcr_selections().enumerate() {
-            selections[i] = *sel;
-        }
-        selections[..count].sort_unstable_by_key(|sel| Alg::from(sel.hash()).id());
-
-        for in_sel in &selections[..count] {
-            let hash_alg = in_sel.hash();
-            if !matches!(
-                hash_alg,
-                TpmiAlgHash::Sha1 | TpmiAlgHash::Sha256 | TpmiAlgHash::Sha384
-            ) {
-                return Err(TpmRc::HASH.with(Position::parameter(1)));
-            }
-            if (in_sel.sizeof_select() as usize) < tpm2::TPM2_PCR_SELECT_MIN
-                || (in_sel.sizeof_select() as usize) > (tpm2::TPM2_PCR_SELECT_MAX as usize)
+            if !cmd.pcr_digest.get_buffer().is_empty()
+                && cmd.pcr_digest.get_buffer() != &digest[..len]
             {
+                // `TPM_RCS_VALUE + RC_PolicyPCR_pcrDigest` (pcrDigest is parameter 1).
                 return Err(TpmRc::VALUE.with(Position::parameter(1)));
             }
-        }
-
-        for i in 1..count {
-            if selections[i].hash() == selections[i - 1].hash() {
-                return Err(TpmRc::VALUE.with(Position::parameter(1)));
-            }
-        }
-
-        // 24 represents the maximum number of PCRs in each bank (TPM 2.0 Library Specification Part 4, Section 8.1).
-        let mut pcr_slices = [&[0u8][..]; tpm2::TPM2_NUM_PCR_BANKS as usize * 24];
-        let mut num_slices = 0;
-
-        for in_sel in &selections[..count] {
-            let hash_alg = in_sel.hash();
-            let sizeof_select = in_sel.sizeof_select();
-            let mut out_pcr_select = [0u8; tpm2::TPM2_PCR_SELECT_MAX as usize];
-            // Iterate over the 24 PCRs in each bank (TPM 2.0 Library Specification Part 4, Section 8.1).
-            for pcr in 0..24 {
-                let byte_idx = (pcr / 8) as usize;
-                let bit_idx = (pcr % 8) as usize;
-                if byte_idx < sizeof_select as usize
-                    && (in_sel.pcr_select()[byte_idx] & (1 << bit_idx)) != 0
-                {
-                    let digest_bytes = match hash_alg {
-                        TpmiAlgHash::Sha1 => &self.global_state.pcrs.sha1[pcr as usize][..],
-                        TpmiAlgHash::Sha256 => &self.global_state.pcrs.sha256[pcr as usize][..],
-                        TpmiAlgHash::Sha384 => &self.global_state.pcrs.sha384[pcr as usize][..],
-                        _ => unreachable!(),
-                    };
-                    if num_slices >= pcr_slices.len() {
-                        return Err(TpmRc::FAILURE);
-                    }
-                    pcr_slices[num_slices] = digest_bytes;
-                    num_slices += 1;
-                    out_pcr_select[byte_idx] |= 1 << bit_idx;
-                }
-            }
-
-            let out_sel =
-                TpmsPcrSelection::new(hash_alg, &out_pcr_select[..sizeof_select as usize])
-                    .map_err(|_| TpmRc::FAILURE)?;
-            pcrs_selection_out.add(&out_sel)?;
-        }
-
-        // 4. Compute/Verify the PCR digest.
-        let (digest_tpm, digest_tpm_len) = {
-            let (digest, len) = self.compute_hash(auth_hash, &pcr_slices[..num_slices])?;
-            if session_type == TpmSe::Trial {
-                if !cmd.pcr_digest.get_buffer().is_empty() {
-                    let mut buf = [0u8; 64];
-                    let pcr_len = cmd.pcr_digest.get_buffer().len();
-                    buf[..pcr_len].copy_from_slice(cmd.pcr_digest.get_buffer());
-                    (buf, pcr_len)
-                } else if auth_hash == TpmiAlgHash::Sha1 {
-                    ([0u8; 64], 0)
-                } else {
-                    (digest, len)
-                }
-            } else {
-                if !cmd.pcr_digest.get_buffer().is_empty()
-                    && cmd.pcr_digest.get_buffer() != &digest[..len]
-                {
-                    return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                }
-                (digest, len)
-            }
-        };
-
-        // 5. Determine PCR selection to extend.
-        let pcrs_to_extend = if session_type == TpmSe::Trial {
-            &cmd.pcrs
+            (digest, len)
+        } else if !cmd.pcr_digest.get_buffer().is_empty() {
+            let mut buf = [0u8; 64];
+            let pcr_len = cmd.pcr_digest.get_buffer().len();
+            buf[..pcr_len].copy_from_slice(cmd.pcr_digest.get_buffer());
+            (buf, pcr_len)
         } else {
-            &pcrs_selection_out
+            (digest, len)
         };
+
+        // 5. The filtered selection is extended into the policy digest.
+        let pcrs_to_extend = &pcrs_selection_out;
 
         let mut pcrs_bytes = [0u8; tpm2::TpmlPcrSelection::MAX_SIZE];
         let pcrs_len = pcrs_to_extend.marshal(&mut pcrs_bytes);

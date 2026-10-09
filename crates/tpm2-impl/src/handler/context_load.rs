@@ -7,7 +7,10 @@ use crate::{
 };
 
 struct TransientObjectFields {
-    seed: [u8; 32],
+    seed: [u8; 64],
+    seed_len: usize,
+    external: bool,
+    public_only: bool,
     name: OwnedName,
     auth: OwnedAuth,
     public: OwnedPublic,
@@ -89,16 +92,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .read_slice(blob_size)
             .ok_or(TpmRc::INSUFFICIENT.with(Position::parameter(1)))?;
 
-        if hierarchy.0 == Handle::RH_OWNER.0 && !self.global_state.sh_enable {
-            return Err(TpmRc::HIERARCHY.with(Position::parameter(1)));
-        }
-        if hierarchy.0 == Handle::RH_ENDORSEMENT.0 && !self.global_state.eh_enable {
-            return Err(TpmRc::HIERARCHY.with(Position::parameter(1)));
-        }
-        if hierarchy.0 == Handle::RH_PLATFORM.0 && !self.global_state.ph_enable {
-            return Err(TpmRc::HIERARCHY.with(Position::parameter(1)));
-        }
-
         // Context blob layout (see `TPM2_ContextSave`):
         //   integrity: TPM2B_DIGEST
         //   encrypted: TPM2B_CONTEXT_SENSITIVE = size || CFB(sequence || entity)
@@ -107,8 +100,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // inconsistencies detected *after* the integrity HMAC has been verified
         // (i.e. in a blob the TPM itself produced) are treated as a TPM failure.
         let mut slice = blob;
-        let integrity = tpm2::Tpm2bDigest::unmarshal(&mut slice)
-            .map_err(|_| TpmRc::SIZE.with(Position::parameter(1)))?;
+        // `TPM2B_DIGEST_Unmarshal` of the integrity value: its result (e.g. a bare
+        // `TPM_RC_INSUFFICIENT` for an empty or truncated blob) is returned unmodified.
+        let integrity = tpm2::Tpm2bDigest::unmarshal(&mut slice).map_err(|e| e.to_rc())?;
         // The integrity value must be exactly one digest of the integrity hash.
         if integrity.get_size() as usize != CONTEXT_INTEGRITY_DIGEST_SIZE {
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
@@ -171,27 +165,57 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let is_sequence = saved_handle.0 == 0x80000001;
         let is_transient = saved_handle.0 == 0x80000000 || saved_handle.0 == 0x80000002;
 
+        // `TPM2_ContextLoad` has no handles: every context error refers to parameter 1
+        // (`RC_ContextLoad_context`).
         if !is_session && !is_sequence && !is_transient {
-            return Err(TpmRc::VALUE.with(Position::handle(1)));
+            return Err(TpmRc::VALUE.with(Position::parameter(1)));
         }
 
         if (is_session || is_sequence) && hierarchy.0 != Handle::RH_NULL.0 {
-            return Err(TpmRc::HIERARCHY.with(Position::handle(1)));
+            return Err(TpmRc::HIERARCHY.with(Position::parameter(1)));
+        }
+
+        // `HierarchyIsEnabled` is checked for object contexts after the integrity check.
+        let hierarchy_disabled = (hierarchy.0 == Handle::RH_OWNER.0
+            && !self.global_state.sh_enable)
+            || (hierarchy.0 == Handle::RH_ENDORSEMENT.0 && !self.global_state.eh_enable)
+            || (hierarchy.0 == Handle::RH_PLATFORM.0 && !self.global_state.ph_enable);
+        if !is_session && hierarchy_disabled {
+            return Err(TpmRc::HIERARCHY.with(Position::parameter(1)));
         }
 
         let loaded_handle = if is_session {
             self.nv_clear_orderly()?;
+            // `SequenceNumberForSavedContextIsValid`: only the latest saved context of a session
+            // that is currently saved (neither loaded nor flushed) can be loaded.
+            if !self
+                .global_state
+                .saved_session_sequence_is_valid(saved_handle.0, sequence)
+            {
+                return Err(TpmRc::HANDLE.with(Position::parameter(1)));
+            }
+            // `SessionContextLoad`: a free session slot is required, and when only one is left
+            // while the context gap is exhausted, only the oldest saved context may use it.
+            let free_slots = self
+                .global_state
+                .active_sessions
+                .iter()
+                .filter(|s| s.is_none())
+                .count();
+            if free_slots == 0 {
+                return Err(TpmRc::SESSION_MEMORY);
+            }
+            let slot = (saved_handle.0 & 0x00FF_FFFF) as usize;
+            if free_slots == 1
+                && self.global_state.context_gap_exhausted()
+                && self.global_state.oldest_saved_session_slot() != Some(slot)
+            {
+                return Err(TpmRc::CONTEXT_GAP);
+            }
             // 3. Deserialize session context
             let sess = Self::deserialize_session(plaintext)?;
-            if self.global_state.session(sess.session_handle).is_some() {
-                return Err(TpmRc::HANDLE.to_rc());
-            }
             let handle = sess.session_handle;
-            for slot in self.global_state.saved_sessions.iter_mut() {
-                if *slot == Some(handle) {
-                    *slot = None;
-                }
-            }
+            self.global_state.remove_saved_session(handle);
             self.global_state.add_session(sess)?;
             handle
         } else if is_sequence {
@@ -211,6 +235,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.global_state.transient_objects[slot] = Some(TransientObject {
                 handle,
                 seed: fields.seed,
+                seed_len: fields.seed_len,
+                external: fields.external,
+                public_only: fields.public_only,
                 name: fields.name,
                 auth: fields.auth,
                 public: fields.public,
@@ -267,7 +294,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mac = mac_ctx.finalize(&mut mac_buf).map_err(|_| TpmRc::FAILURE)?;
 
         if mac.digest() != expected_mac {
-            return Err(TpmRc::INTEGRITY.to_rc());
+            return Err(TpmRc::INTEGRITY.with(Position::parameter(1)));
         }
         Ok(())
     }
@@ -322,12 +349,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut slice = sensitive_buf;
         let _h = u32::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
 
-        if slice.len() < 32 {
+        // seedValue: 1-byte length followed by the seed bytes (see `serialize_transient_object`).
+        let seed_len = u8::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? as usize;
+        if seed_len > 64 || slice.len() < seed_len {
             return Err(TpmRc::FAILURE);
         }
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(&slice[..32]);
-        slice = &slice[32..];
+        let (seed, seed_len) = TransientObject::seed_from_bytes(&slice[..seed_len]);
+        slice = &slice[seed_len..];
 
         let name = OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let auth = OwnedAuth::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
@@ -342,15 +370,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         slice = &slice[priv_len..];
         let qualified_name = OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
 
-        let ancestor_has_st_clear = if !slice.is_empty() {
-            slice[0] != 0
-        } else {
-            false
-        };
+        // Flags byte: bit 0 = ancestor stClear, bit 1 = external, bit 2 = public-only.
+        let flags = slice.first().copied().unwrap_or(0);
+        let ancestor_has_st_clear = flags & 1 != 0;
 
         Ok((
             TransientObjectFields {
                 seed,
+                seed_len,
+                external: flags & 2 != 0,
+                public_only: flags & 4 != 0,
                 name,
                 auth,
                 public,
@@ -447,6 +476,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else {
             0
         };
+        // Session flags byte (see `serialize_session`): bit 0 = `isTemplateHashDefined`,
+        // bit 1 = `isDaBound`, bit 2 = `isLockoutBound`.
+        let session_flags = if !slice.is_empty() {
+            u8::unmarshal(&mut slice).unwrap_or(0)
+        } else {
+            0
+        };
 
         Ok(SessionState {
             session_handle,
@@ -467,7 +503,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             policy_hash_len,
             is_cp_hash_defined,
             is_name_hash_defined,
-            is_template_hash_defined: false,
+            is_template_hash_defined: session_flags & 1 != 0,
             policy_digest,
             policy_digest_len,
             command_code,
@@ -481,6 +517,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             nv_written_state,
             command_locality,
             include_auth: false,
+            is_da_bound: session_flags & 0b010 != 0,
+            is_lockout_bound: session_flags & 0b100 != 0,
         })
     }
 

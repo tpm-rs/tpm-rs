@@ -8,12 +8,9 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, CreatePrimaryRespHandles};
-use tpm2::crypto::kdf::kdfa;
 use tpm2::crypto::{CryptoProvider, Rng};
-use tpm2::errors::TpmRc;
-use tpm2::{
-    Alg, Tpm2bDigest, Tpm2bName, TpmaLocality, TpmiAlgHash, TpmsCreationData, TpmtTkCreation,
-};
+use tpm2::errors::{Position, TpmRc};
+use tpm2::{Alg, Tpm2bDigest, Tpm2bName, TpmaLocality, TpmsCreationData, TpmtTkCreation};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -57,7 +54,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        self.nv_clear_orderly()?;
+        // C `CreatePrimary.c`: `FindEmptyObjectSlot` is the first check of the action code
+        // (`TPM_RC_OBJECT_MEMORY` takes precedence over template/attribute errors). The
+        // command never touches NV, so it does not clear the orderly state.
+        let (index, handle) = self.global_state.find_empty_transient_slot(true)?;
 
         let in_sensitive_struct = cmd
             .in_sensitive
@@ -76,6 +76,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             primary_handle.0,
             None,
             false,
+            None,
         )?;
 
         // 1. Resolve parent seed value and length
@@ -83,52 +84,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let parent_seed_len =
             self.resolve_primary_parent_seed(primary_handle, &mut parent_seed_val);
 
-        // Copy unique buffer contents to avoid mutable borrow conflicts
-        let mut unique_copy = [0u8; tpm2::TpmuPublicId::MAX_SIZE];
-        let unique_len = match &_in_public_struct.parms_and_id {
-            crate::owned::OwnedPublicParmsAndId::KeyedHash(_, unique) => {
-                let b = unique.get_buffer();
-                unique_copy[..b.len()].copy_from_slice(b);
-                b.len()
-            }
-            crate::owned::OwnedPublicParmsAndId::Sym(_, unique) => {
-                let b = unique.get_buffer();
-                unique_copy[..b.len()].copy_from_slice(b);
-                b.len()
-            }
-            crate::owned::OwnedPublicParmsAndId::Rsa(_, unique) => {
-                let b = unique.get_buffer();
-                unique_copy[..b.len()].copy_from_slice(b);
-                b.len()
-            }
-            crate::owned::OwnedPublicParmsAndId::Ecc(_, point) => {
-                let x = point.x.get_buffer();
-                let y = point.y.get_buffer();
-                unique_copy[..x.len()].copy_from_slice(x);
-                unique_copy[x.len()..x.len() + y.len()].copy_from_slice(y);
-                x.len() + y.len()
-            }
-            crate::owned::OwnedPublicParmsAndId::Mldsa(_, unique)
-            | crate::owned::OwnedPublicParmsAndId::HashMldsa(_, unique) => {
-                let b = unique.get_buffer();
-                unique_copy[..b.len()].copy_from_slice(b);
-                b.len()
-            }
-            crate::owned::OwnedPublicParmsAndId::Mlkem(_, unique) => {
-                let b = unique.get_buffer();
-                unique_copy[..b.len()].copy_from_slice(b);
-                b.len()
-            }
-        };
-
-        let name_alg = _in_public_struct.name_alg.ok_or(TpmRc::HASH.to_rc())?;
-        if name_alg != TpmiAlgHash::Sha1
-            && name_alg != TpmiAlgHash::Sha256
-            && name_alg != TpmiAlgHash::Sha384
-            && name_alg != TpmiAlgHash::Sha512
-        {
-            return Err(TpmRc::VALUE.to_rc());
-        }
+        let name_alg = _in_public_struct
+            .name_alg
+            .ok_or(TpmRc::HASH.with(Position::parameter(2)))?;
 
         // 2. Derive object seed, private key, and update public key template unique area
         let fallback_sensitive_data = if (_in_public_struct.object_attributes.0
@@ -140,23 +98,36 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             None
         };
         let mut obj_seed = [0u8; 64];
+        let obj_seed_len = if parent_seed_len > 0 {
+            self.derive_primary_object_seed(
+                &parent_seed_val[..parent_seed_len],
+                &_in_public_struct.as_tpmt(),
+                in_sensitive_struct.data.get_buffer(),
+                &mut obj_seed,
+            )?
+        } else {
+            0
+        };
+        let gen_seed_arg = (obj_seed_len > 0).then_some(&obj_seed[..obj_seed_len]);
         let mut actual_private_key = [0u8; 1536];
-        let (actual_private_key_len, stored_seed) = self.derive_primary_key(
+        let actual_private_key_len = self.generate_key_and_unique(
             name_alg,
-            &parent_seed_val[..parent_seed_len],
-            &unique_copy[..unique_len],
             &mut _in_public_struct.parms_and_id,
-            fallback_sensitive_data,
-            &mut obj_seed,
+            KeyDerivationArgs {
+                gen_seed: gen_seed_arg,
+                obj_seed: gen_seed_arg.unwrap_or(&[]),
+                get_random_fallback: fallback_sensitive_data.is_none(),
+                fallback_sensitive_data,
+            },
             &mut actual_private_key,
         )?;
+        let (stored_seed, stored_seed_len) = TransientObject::seed_from_bytes(
+            Self::object_seed_value(&_in_public_struct.as_tpmt(), &obj_seed[..obj_seed_len]),
+        );
 
         let mut pub_buf = [0u8; tpm2::TpmtPublic::MAX_SIZE];
         let pub_len = _in_public_struct.marshal(&mut pub_buf);
         let name = self.compute_name(_in_public_struct.name_alg, &pub_buf[..pub_len])?;
-
-        // Allocate transient object slot
-        let (index, handle) = self.global_state.find_empty_transient_slot(true)?;
 
         let out_public = _in_public_struct.as_tpm2b();
 
@@ -174,7 +145,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )?;
 
         let creation_data_struct = TpmsCreationData {
-            pcr_select: cmd.creation_pcr,
+            // C `FillInCreationData`: the reported selection is the filtered one.
+            pcr_select: self.filter_pcr_selection(&cmd.creation_pcr),
             pcr_digest: pcr_digest.as_tpm2b(),
             locality: TpmaLocality(if self.global_state.locality <= 4 {
                 1 << self.global_state.locality
@@ -234,6 +206,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.global_state.transient_objects[index] = Some(TransientObject {
             handle,
             seed: stored_seed,
+            seed_len: stored_seed_len,
+            external: false,
+            public_only: false,
             name,
             auth: crate::owned::OwnedAuth::from(in_sensitive_struct.user_auth),
             public: _in_public_struct,
@@ -243,8 +218,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             hierarchy: primary_handle.0,
             st_clear: false,
         });
-
-        self.update_aliased_transient_objects(handle, &name, &qualified_name);
 
         Ok(())
     }
@@ -274,53 +247,5 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else {
             0
         }
-    }
-
-    /// Derives object seeds using KDFA and generates cryptographic key/unique properties.
-    #[allow(clippy::too_many_arguments)]
-    fn derive_primary_key(
-        &self,
-        name_alg: TpmiAlgHash,
-        parent_seed_val: &[u8],
-        unique_buf: &[u8],
-        parms_and_id: &mut crate::owned::OwnedPublicParmsAndId,
-        fallback_sensitive_data: Option<&[u8]>,
-        obj_seed: &mut [u8; 64],
-        actual_private_key: &mut [u8; 1536],
-    ) -> Result<(usize, [u8; 32]), TpmRc> {
-        let parent_seed_len = parent_seed_val.len();
-        let gen_seed_arg = if parent_seed_len > 0 {
-            kdfa(
-                self.crypto(),
-                TpmiAlgHash::Sha256,
-                parent_seed_val,
-                b"Primary Object Creation",
-                unique_buf,
-                &[],
-                256,
-                obj_seed,
-            )
-            .map_err(|_| TpmRc::FAILURE)?;
-            Some(&obj_seed[..32])
-        } else {
-            None
-        };
-
-        let actual_private_key_len = self.generate_key_and_unique(
-            name_alg,
-            parms_and_id,
-            KeyDerivationArgs {
-                gen_seed: gen_seed_arg,
-                obj_seed: gen_seed_arg.unwrap_or(&[]),
-                get_random_fallback: fallback_sensitive_data.is_none(),
-                fallback_sensitive_data,
-            },
-            actual_private_key,
-        )?;
-
-        let mut stored_seed = [0u8; 32];
-        stored_seed.copy_from_slice(&obj_seed[..32]);
-
-        Ok((actual_private_key_len, stored_seed))
     }
 }

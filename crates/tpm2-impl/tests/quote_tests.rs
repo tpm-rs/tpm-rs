@@ -117,7 +117,10 @@ fn test_quote_rsa_success() {
     let signer_handle = Handle(0x80000002);
     let signer_obj = TransientObject {
         handle: signer_handle.0,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -223,7 +226,10 @@ fn test_quote_unsupported_scheme_fails() {
     let decrypt_handle = Handle(0x80000003);
     let decrypt_obj = TransientObject {
         handle: decrypt_handle.0,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[7, 8, 9]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -303,7 +309,10 @@ fn test_quote_qualified_signer_exact_accumulation() {
     let signer_qn = Tpm2bName::from_bytes(&[30, 31, 32, 33]).unwrap();
     let signer_obj = TransientObject {
         handle: signer_handle.0,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {

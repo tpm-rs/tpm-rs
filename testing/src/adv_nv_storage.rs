@@ -89,7 +89,8 @@ fn test_nv_read_public_undefined() {
     let err = sim
         .execute_with_handles(read_cmd, read_handles)
         .unwrap_err();
-    assert_eq!(err.get(), TpmRc::HANDLE.get());
+    // C `NvIndexIsAccessible` during handle unmarshaling: TPM_RC_HANDLE + RC_H1.
+    assert_eq!(err.get(), TpmRc::HANDLE.with(Position::handle(1)).get());
 }
 
 #[test]
@@ -223,7 +224,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::ATTRIBUTES.get());
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
     // 4. Size check for counter, bits, pin_fail, pin_pass (must be 8)
@@ -253,7 +254,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::SIZE.get());
+        assert_eq!(err, TpmRc::SIZE.with(Position::parameter(2)).get());
     }
 
     // 5. Size check for extend (must be digest size of name_alg)
@@ -275,7 +276,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::SIZE.get());
+        assert_eq!(err, TpmRc::SIZE.with(Position::parameter(2)).get());
     }
 
     // 6. Read/write attribute consistency check
@@ -296,7 +297,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::ATTRIBUTES.get());
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
     // No write attributes (only OWNERREAD)
     {
@@ -315,7 +316,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::ATTRIBUTES.get());
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
     // 7. CLEAR_STCLEAR & Counter attribute check
@@ -337,7 +338,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::ATTRIBUTES.get());
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
     // 8. PLATFORMCREATE consistency check
@@ -358,7 +359,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_PLATFORM,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::ATTRIBUTES.get());
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::handle(1)).get());
     }
     // auth_handle is RHOwner but PLATFORMCREATE is set
     {
@@ -377,7 +378,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::ATTRIBUTES.get());
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::handle(1)).get());
     }
 
     // 9. POLICY_DELETE consistency check: POLICY_DELETE is set but auth_handle is RHOwner (not RHPlatform)
@@ -397,7 +398,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::ATTRIBUTES.get());
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
     // 10. PinFail NO_DA check: PinFail index type without NO_DA attribute
@@ -419,7 +420,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::ATTRIBUTES.get());
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
     // 11. PinFail/PinPass write attributes checks
@@ -443,7 +444,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::ATTRIBUTES.get());
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
     // Case B: contains AUTHWRITE
     {
@@ -464,7 +465,7 @@ fn test_nv_define_space_adversarial() {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::ATTRIBUTES.get());
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
     // 12. Auth value size check (cmd.auth.get_size() > name_alg digest size)
@@ -477,14 +478,15 @@ fn test_nv_define_space_adversarial() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
-            auth: Tpm2bAuth::from_bytes(&[0u8; 33]).unwrap(), // size 33 > 32
+            // 33 significant bytes > 32 (trailing zeros would be removed before the check).
+            auth: Tpm2bAuth::from_bytes(&[0x5au8; 33]).unwrap(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
         let handles = NVDefineSpaceHandles {
             auth_handle: Handle::RH_OWNER,
         };
         let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
-        assert_eq!(err, TpmRc::SIZE.get());
+        assert_eq!(err, TpmRc::SIZE.with(Position::parameter(1)).get());
     }
 
     // 13. MAX_NV_BUFFER_SIZE check (data_size > 2048 and WRITEALL is set)
@@ -513,7 +515,6 @@ fn test_nv_define_space_invalid_attribute_combos() {
     let mut sim = create_simulator!();
 
     // 1. CLEAR_STCLEAR and WRITEDEFINE set on the same NV index must fail (according to spec / C implementation).
-    // Gaps identified: implementation does NOT validate this combination.
     {
         let nv_public_struct = TpmsNvPublic {
             nv_index: tpm2::Handle(0x01500020),
@@ -532,16 +533,12 @@ fn test_nv_define_space_invalid_attribute_combos() {
         let handles = NVDefineSpaceHandles {
             auth_handle: Handle::RH_OWNER,
         };
-        let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
-        // Gaps: It should be an Err, but currently succeeds.
-        assert!(
-            res.is_ok(),
-            "Expected success due to lack of validation in current implementation"
-        );
+        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        // C `NvDefineSpace` rejects this combination with TPM_RC_ATTRIBUTES + RC_P2.
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
     // 2. PinPass with GLOBALLOCK set must fail.
-    // Gaps identified: implementation does NOT validate GLOBALLOCK for PinPass.
     {
         let mut attributes = TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD | TpmaNv::GLOBALLOCK;
         attributes.set_type(tpm2::TpmNt::PinPass);
@@ -559,16 +556,12 @@ fn test_nv_define_space_invalid_attribute_combos() {
         let handles = NVDefineSpaceHandles {
             auth_handle: Handle::RH_OWNER,
         };
-        let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
-        // Gaps: It should be an Err, but currently succeeds.
-        assert!(
-            res.is_ok(),
-            "Expected success due to lack of validation in current implementation"
-        );
+        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        // C `NvDefineSpace` rejects this combination with TPM_RC_ATTRIBUTES + RC_P2.
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
     // 3. PinPass with WRITEDEFINE set must fail.
-    // Gaps identified: implementation does NOT validate WRITEDEFINE for PinPass.
     {
         let mut attributes = TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD | TpmaNv::WRITEDEFINE;
         attributes.set_type(tpm2::TpmNt::PinPass);
@@ -586,12 +579,9 @@ fn test_nv_define_space_invalid_attribute_combos() {
         let handles = NVDefineSpaceHandles {
             auth_handle: Handle::RH_OWNER,
         };
-        let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
-        // Gaps: It should be an Err, but currently succeeds.
-        assert!(
-            res.is_ok(),
-            "Expected success due to lack of validation in current implementation"
-        );
+        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        // C `NvDefineSpace` rejects this combination with TPM_RC_ATTRIBUTES + RC_P2.
+        assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
     // 4. Totally unrecognized name_alg (like TpmiAlgHash::try_from(0x1234).unwrap()).

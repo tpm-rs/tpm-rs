@@ -19,11 +19,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .map_err(|_| InternalError::HardwareError)
     }
 
-    fn get_random_or_failure_mode(&mut self, buffer: &mut [u8]) {
-        if self.try_get_random(buffer).is_err() {
-            todo!() // goto failure mode
-        }
-    }
     /// Handles the [TpmCc::GetRandom] (`0x17B`) command.
     ///
     /// # Description
@@ -47,14 +42,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let requested_bytes = cmd.bytes_requested as usize;
         let returned_bytes = core::cmp::min(requested_bytes, tpm2::Tpm2bDigest::MAX_BUFFER_SIZE);
 
+        // Generate the random bytes before building the response so that an entropy-source
+        // failure fails the command with TPM_RC_FAILURE (the C reference enters failure mode via
+        // `FAIL()`) instead of aborting the TPM.
+        let mut random_bytes = [0u8; tpm2::Tpm2bDigest::MAX_BUFFER_SIZE];
+        self.try_get_random(&mut random_bytes[..returned_bytes])
+            .map_err(|_| TpmRc::FAILURE)?;
+
         let mut response = request.into_response();
         response
             .write(&(returned_bytes as u16).to_be_bytes())
             .map_err(|_| TpmRc::MEMORY)?;
         response
-            .write_callback(returned_bytes, |buffer| {
-                self.get_random_or_failure_mode(buffer)
-            })
+            .write(&random_bytes[..returned_bytes])
             .map_err(|_| TpmRc::MEMORY)?;
         Ok(())
     }

@@ -367,7 +367,10 @@ fn insert_keyed_hash_key(
 
     let obj = tpm2_impl::handler::TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: name.into(),
         auth: (Tpm2bAuth::from_bytes(auth).unwrap()).into(),
         public: public.into(),
@@ -654,6 +657,15 @@ fn test_hmac_sequence_memory_limit() {
     .unwrap();
     let seq_handle = resp_handles.sequence_handle;
 
+    // The sequence has an empty authValue; SequenceUpdate/SequenceComplete require USER
+    // authorization of the sequence handle (C: TPM_RC_AUTH_MISSING without a session).
+    let seq_auths = [TpmsAuthCommand {
+        session_handle: Handle::RS_PW,
+        nonce: Tpm2bNonce::default(),
+        session_attributes: TpmaSession(1),
+        hmac: Tpm2bAuth::default(),
+    }];
+
     // Send 4 chunks of 1024 bytes (total 4096 bytes)
     let chunk_1024 = vec![0u8; 1024];
     let update_handles = SequenceUpdateHandles {
@@ -668,24 +680,24 @@ fn test_hmac_sequence_memory_limit() {
             &mut global_state,
             &update_handles,
             &update_cmd,
-            &[],
+            &seq_auths,
         )
         .unwrap();
     }
 
-    // Now try to update 1 more byte - should fail with Memory (0x903)
-    let update_cmd_err = SequenceUpdate {
+    // C has no limit on the total length of a sequence (the data is consumed by the running
+    // hash), so going past 4096 bytes must still succeed (no TPM_RC_MEMORY).
+    let update_cmd_more = SequenceUpdate {
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(&[0]).unwrap(),
     };
-    let res = execute_tpm_command(
+    execute_tpm_command(
         &mut tpm,
         &mut global_state,
         &update_handles,
-        &update_cmd_err,
-        &[],
-    );
-    assert!(res.is_err());
-    assert_eq!(res.err().unwrap(), TpmRc::MEMORY.get());
+        &update_cmd_more,
+        &seq_auths,
+    )
+    .unwrap();
 
     let complete_handles = SequenceCompleteHandles {
         sequence_handle: seq_handle,
@@ -699,7 +711,7 @@ fn test_hmac_sequence_memory_limit() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &seq_auths,
     )
     .unwrap();
 }
@@ -788,7 +800,8 @@ fn test_hmac_sequence_auth_and_unauthorized_commands() {
     let rp_cmd = ReadPublic {};
     let res = execute_tpm_command(&mut tpm, &mut global_state, &rp_handles, &rp_cmd, &[]);
     assert!(res.is_err());
-    assert_eq!(res.err().unwrap(), TpmRc::REFERENCE_H0.get());
+    // C: ReadPublic of a sequence object returns bare TPM_RC_SEQUENCE (0x103), ReadPublic.c:22.
+    assert_eq!(res.err().unwrap(), TpmRc::SEQUENCE.get());
 
     let mac_handles = LocalMacHandles { handle: seq_handle };
     let mac_cmd = LocalMacCmd {
@@ -992,7 +1005,12 @@ fn test_persistent_handle_resolution() {
         &mut response_buf,
     );
     assert!(res.is_err());
-    assert_eq!(res.err().unwrap(), TpmRc::VALUE.get());
+    // CryptSelectSignScheme: an ECDSA inScheme doesn't match the key's HMAC scheme ->
+    // TPM_RCS_SCHEME + RC_Sign_inScheme (Sign.c).
+    assert_eq!(
+        res.err().unwrap(),
+        TpmRc::SCHEME.with(Position::parameter(2)).get()
+    );
 
     let evict_handles_p = EvictControlHandles {
         auth: Handle::RH_OWNER,

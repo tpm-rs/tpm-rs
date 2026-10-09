@@ -314,11 +314,10 @@ fn test_policy_command_code_success_and_errors() {
     let handles = PolicyCommandCodeHandles {
         policy_session: Handle(0x03000009),
     };
+    // 0x03000009 is a valid TPMI_SH_POLICY value that is not loaded: C EntityGetLoadStatus
+    // returns TPM_RC_REFERENCE_H0.
     let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
-    assert_eq!(
-        res.err(),
-        Some(TpmRc::VALUE.with(Position::handle(1)).get())
-    );
+    assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
 
     // 2. Create an HMAC session instead of Policy session and check handle error
     let hmac_session = tpm2_impl::handler::SessionState {
@@ -354,6 +353,8 @@ fn test_policy_command_code_success_and_errors() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(hmac_session).unwrap();
 
@@ -366,9 +367,10 @@ fn test_policy_command_code_success_and_errors() {
         Some(TpmRc::VALUE.with(Position::handle(1)).get())
     );
 
-    // 3. Create a valid Policy session
+    // 3. Create a valid Policy session. Session handles share one slot space across session
+    //    types (the low bits are the slot), so it cannot reuse slot 1 of the HMAC session.
     let policy_session = tpm2_impl::handler::SessionState {
-        session_handle: 0x03000001,
+        session_handle: 0x03000002,
         session_type: tpm2::TpmSe::Policy,
         auth_hash: TpmiAlgHash::Sha256,
         nonce_tpm: (Tpm2bNonce::default()).into(),
@@ -400,6 +402,8 @@ fn test_policy_command_code_success_and_errors() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
@@ -408,7 +412,7 @@ fn test_policy_command_code_success_and_errors() {
         code: TpmCc::PPCommands,
     };
     let handles = PolicyCommandCodeHandles {
-        policy_session: Handle(0x03000001),
+        policy_session: Handle(0x03000002),
     };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
@@ -417,7 +421,11 @@ fn test_policy_command_code_success_and_errors() {
         &cmd_unsupported,
         &[],
     );
-    assert_eq!(res.err(), Some(TpmRc::POLICY_CC.get()));
+    // C TPM2_PolicyCommandCode: TPM_RCS_POLICY_CC + RC_PolicyCommandCode_code (+P1).
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::POLICY_CC.with(Position::parameter(1)).get())
+    );
 
     // 5. Valid command code (e.g. TpmCc::Duplicate) -> returns Ok(())
     let cmd = PolicyCommandCode {
@@ -428,7 +436,7 @@ fn test_policy_command_code_success_and_errors() {
 
     // Verify policy_digest updated and command_code set
     {
-        let session = global_state.session(0x03000001).unwrap();
+        let session = global_state.session(0x03000002).unwrap();
         assert_eq!(session.command_code, (TpmCc::Duplicate.code()));
         assert_ne!(
             session.policy_digest[..session.policy_digest_len],
@@ -442,7 +450,11 @@ fn test_policy_command_code_success_and_errors() {
     };
     let res =
         execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd_different, &[]);
-    assert_eq!(res.err(), Some(TpmRc::VALUE.get()));
+    // C TPM2_PolicyCommandCode: TPM_RCS_VALUE + RC_PolicyCommandCode_code (+P1).
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::VALUE.with(Position::parameter(1)).get())
+    );
 }
 
 #[test]
@@ -458,11 +470,10 @@ fn test_policy_get_digest() {
     let handles = PolicyGetDigestHandles {
         policy_session: Handle(0x03000009),
     };
+    // 0x03000009 is a valid TPMI_SH_POLICY value that is not loaded: C EntityGetLoadStatus
+    // returns TPM_RC_REFERENCE_H0.
     let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
-    assert_eq!(
-        res.err(),
-        Some(TpmRc::VALUE.with(Position::handle(1)).get())
-    );
+    assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
 
     // 2. Create an HMAC session instead of Policy session and check handle error
     let hmac_session = tpm2_impl::handler::SessionState {
@@ -498,6 +509,8 @@ fn test_policy_get_digest() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(hmac_session).unwrap();
 
@@ -514,7 +527,7 @@ fn test_policy_get_digest() {
     let mut mock_digest = [0u8; 64];
     mock_digest[..32].copy_from_slice(&[0xa5; 32]);
     let policy_session = tpm2_impl::handler::SessionState {
-        session_handle: 0x03000001,
+        session_handle: 0x03000002,
         session_type: tpm2::TpmSe::Policy,
         auth_hash: TpmiAlgHash::Sha256,
         nonce_tpm: (Tpm2bNonce::default()).into(),
@@ -546,16 +559,45 @@ fn test_policy_get_digest() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(policy_session).unwrap();
 
     let handles = PolicyGetDigestHandles {
-        policy_session: Handle(0x03000001),
+        policy_session: Handle(0x03000002),
     };
     let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
     assert!(res.is_ok());
     let resp = res.unwrap();
     assert_eq!(resp.policy_digest.get_buffer(), &[0xa5; 32]);
+}
+
+/// `TPM2_Duplicate` requires the DUP role, which always needs a policy session whose
+/// `commandCode` is `TPM2_Duplicate` (C `IsPolicySessionRequired()` / `CheckPolicyAuthSession()`).
+/// Installs such a session (its policyDigest equals the object's empty authPolicy) and returns the
+/// authorization that uses it.
+fn dup_policy_auth(global_state: &mut tpm2_impl::GlobalState) -> TpmsAuthCommand<'static> {
+    const SESSION: u32 = 0x0300_0000;
+    let _ = global_state.flush_session(SESSION);
+    let mut session = common::make_test_session_state(
+        SESSION,
+        tpm2::TpmSe::Policy,
+        TpmiAlgHash::Sha256,
+        Default::default(),
+        Default::default(),
+        &[],
+        None,
+        Handle::RH_NULL,
+    );
+    session.command_code = u32::from(tpm2::TpmCc::Duplicate);
+    global_state.add_session(session).unwrap();
+    TpmsAuthCommand {
+        session_handle: Handle(SESSION),
+        nonce: Default::default(),
+        session_attributes: tpm2::TpmaSession(0),
+        hmac: Default::default(),
+    }
 }
 
 #[test]
@@ -579,7 +621,8 @@ fn test_duplicate_import_load_roundtrip() {
                 key_bits: tpm2::TpmiRsaKeyBits(2048),
                 exponent: 0,
             },
-            Tpm2bPublicKeyRsa::from_bytes(&[0x11; 256]).unwrap(),
+            // The modulus MSB must be set for a valid RSA public key (C `CryptValidateKeys()`).
+            Tpm2bPublicKeyRsa::from_bytes(&[0x91; 256]).unwrap(),
         ),
     };
     let mut pub_buf = [0u8; 1024];
@@ -591,11 +634,20 @@ fn test_duplicate_import_load_roundtrip() {
 
     let target_obj = TransientObject {
         handle: target_handle,
-        seed: [2u8; 32],
+        seed: {
+            let mut s = [0u8; 64];
+            s[..32].copy_from_slice(&[2u8; 32]);
+            s
+        },
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: target_name,
         auth: (Tpm2bAuth::default()).into(),
         public: (target_public).into(),
-        private: [0x33; 1536],
+        // The prime derived from this fake private key must have its MSB set (C
+        // `CryptValidateKeys()`), or loading the imported object fails with TPM_RC_KEY_SIZE.
+        private: [0xb3; 1536],
         private_len: 256,
         qualified_name: target_name,
         hierarchy: 0x40000001,
@@ -607,7 +659,14 @@ fn test_duplicate_import_load_roundtrip() {
     let parent_handle = 0x80000002;
     let parent_obj = TransientObject {
         handle: parent_handle,
-        seed: [3u8; 32],
+        seed: {
+            let mut s = [0u8; 64];
+            s[..32].copy_from_slice(&[3u8; 32]);
+            s
+        },
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -666,8 +725,14 @@ fn test_duplicate_import_load_roundtrip() {
         object_handle: Handle(target_handle),
         new_parent_handle: Handle(parent_handle),
     };
-    let res =
-        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_handles, &dup_cmd, &[]);
+    let dup_auth = dup_policy_auth(&mut global_state);
+    let res = execute_tpm_command_with_auths(
+        &mut tpm,
+        &mut global_state,
+        &dup_handles,
+        &dup_cmd,
+        &[dup_auth],
+    );
     assert_eq!(
         res.err(),
         Some(TpmRc::ATTRIBUTES.with(Position::handle(1)).get())
@@ -697,7 +762,10 @@ fn test_duplicate_import_load_roundtrip() {
     // D. New parent is not asymmetric -> returns TpmRc::TYPE.with(Position::handle(2))
     let bad_parent_obj = TransientObject {
         handle: 0x80000003,
-        seed: [0; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -721,12 +789,13 @@ fn test_duplicate_import_load_roundtrip() {
         object_handle: Handle(target_handle),
         new_parent_handle: Handle(0x80000003),
     };
+    let dup_auth = dup_policy_auth(&mut global_state);
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
         &dup_handles_bad_type,
         &dup_cmd,
-        &[],
+        &[dup_auth],
     );
     assert_eq!(res.err(), Some(TpmRc::TYPE.with(Position::handle(2)).get()));
     global_state.transient_objects[2] = None;
@@ -737,12 +806,13 @@ fn test_duplicate_import_load_roundtrip() {
         encryption_key_in: Tpm2bData::default(), // TPM should generate one
         symmetric_alg: Some(sym_alg),
     };
+    let dup_auth = dup_policy_auth(&mut global_state);
     let dup_resp = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
         &dup_handles,
         &dup_cmd_sym,
-        &[],
+        &[dup_auth],
     )
     .expect("Duplicate failed");
     assert!(dup_resp.encryption_key_out.get_size() > 0);
@@ -772,7 +842,7 @@ fn test_duplicate_import_load_roundtrip() {
         &mut global_state,
         &import_handles,
         &import_cmd_bad,
-        &[],
+        &[common::password_auth(b"")],
     );
     assert_eq!(
         res.err(),
@@ -792,7 +862,7 @@ fn test_duplicate_import_load_roundtrip() {
         &mut global_state,
         &import_handles,
         &import_cmd_bad_key,
-        &[],
+        &[common::password_auth(b"")],
     );
     assert_eq!(
         res.err(),
@@ -816,9 +886,14 @@ fn test_duplicate_import_load_roundtrip() {
         &mut global_state,
         &import_handles,
         &import_cmd_bad_hmac,
-        &[],
+        &[common::password_auth(b"")],
     );
-    assert_eq!(res.err(), Some(TpmRc::INTEGRITY.get()));
+    // C TPM2_Import: DuplicateToSensitive's TPM_RC_INTEGRITY is reported against `duplicate`
+    // (RcSafeAddToResult(result, RC_Import_duplicate), +P3).
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::INTEGRITY.with(Position::parameter(3)).get())
+    );
 
     // 6. Success Import
     let import_cmd = tpm2::commands::Import {
@@ -833,7 +908,7 @@ fn test_duplicate_import_load_roundtrip() {
         &mut global_state,
         &import_handles,
         &import_cmd,
-        &[],
+        &[common::password_auth(b"")],
     )
     .expect("Import failed");
     assert!(import_resp.out_private.get_size() > 0);
@@ -852,7 +927,7 @@ fn test_duplicate_import_load_roundtrip() {
         &mut global_state,
         &load_handles_bad,
         &load_cmd,
-        &[],
+        &[common::password_auth(b"")],
     );
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
 
@@ -867,8 +942,13 @@ fn test_duplicate_import_load_roundtrip() {
     let load_handles = tpm2::commands::LoadHandles {
         parent_handle: Handle(parent_handle),
     };
-    let res =
-        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &load_handles, &load_cmd, &[]);
+    let res = execute_tpm_command_with_auths(
+        &mut tpm,
+        &mut global_state,
+        &load_handles,
+        &load_cmd,
+        &[common::password_auth(b"")],
+    );
     assert_eq!(res.err(), Some(TpmRc::TYPE.with(Position::handle(1)).get()));
     // restore attributes
     global_state.transient_objects[1]
@@ -892,9 +972,14 @@ fn test_duplicate_import_load_roundtrip() {
         &mut global_state,
         &load_handles,
         &load_cmd_bad_hmac,
-        &[],
+        &[common::password_auth(b"")],
     );
-    assert_eq!(res.err(), Some(TpmRc::INTEGRITY.get()));
+    // C TPM2_Load: PrivateToSensitive's TPM_RC_INTEGRITY is reported against `inPrivate`
+    // (RcSafeAddToResult(result, RC_Load_inPrivate), +P1).
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::INTEGRITY.with(Position::parameter(1)).get())
+    );
 
     // D. Name alg is invalid (neither SHA256 nor SHA384 nor SHA1) -> returns TpmRc::VALUE
     let mut bad_name_alg_public = target_public;
@@ -909,14 +994,24 @@ fn test_duplicate_import_load_roundtrip() {
         &mut global_state,
         &load_handles,
         &load_cmd_bad_alg,
-        &[],
+        &[common::password_auth(b"")],
     );
-    assert_eq!(res.err(), Some(TpmRc::VALUE.get()));
+    // SM3_256 is not implemented: TPMT_PUBLIC unmarshal of nameAlg fails with TPM_RC_HASH,
+    // reported against inPublic (+P2).
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::HASH.with(Position::parameter(2)).get())
+    );
 
     // 8. Success Load
-    let load_resp =
-        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &load_handles, &load_cmd, &[])
-            .expect("Load failed");
+    let load_resp = execute_tpm_command_with_auths(
+        &mut tpm,
+        &mut global_state,
+        &load_handles,
+        &load_cmd,
+        &[common::password_auth(b"")],
+    )
+    .expect("Load failed");
     assert!(load_resp.name.get_size() > 0);
 
     // Verify loaded object is now in transient storage and matches target

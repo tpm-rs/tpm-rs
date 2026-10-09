@@ -273,6 +273,8 @@ fn test_adv_audit_first_use_becomes_exclusive() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s).unwrap();
 
@@ -345,6 +347,8 @@ fn test_adv_exclusive_session_used_without_exclusive_retains_exclusivity() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s).unwrap();
     global_state.exclusive_audit_session = Some(session_handle);
@@ -418,6 +422,8 @@ fn test_adv_policy_session_cannot_be_audit_session() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s).unwrap();
 
@@ -486,6 +492,8 @@ fn test_flush_exclusive_audit_session_clears_exclusivity() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s).unwrap();
     global_state.exclusive_audit_session = Some(session_handle);
@@ -547,6 +555,8 @@ fn test_get_session_audit_digest_on_policy_session() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s).unwrap();
 

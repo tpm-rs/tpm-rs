@@ -260,6 +260,18 @@ fn test_policy_digest_reset_on_format1_failure() {
         execute_with_password_sessions(&mut sim, &policy_secret_cmd, policy_secret_handles, 1, &[])
             .unwrap();
 
+    // Policy digest after PolicySecret, before the failing command.
+    let (digest_before, _) = execute_with_password_sessions(
+        &mut sim,
+        &PolicyGetDigest {},
+        PolicyGetDigestHandles {
+            policy_session: session.session_handle,
+        },
+        0,
+        &[],
+    )
+    .unwrap();
+
     // Create an invalid command that will fail validation in the handler (Format 1 error: TPM_RC_ATTRIBUTES)
     let create_cmd = Create {
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
@@ -308,11 +320,13 @@ fn test_policy_digest_reset_on_format1_failure() {
     )
     .unwrap();
 
-    let zero_digest = vec![0u8; 32];
+    // C only resets policy data when the nonce rolls in a successful response
+    // (SessionProcess.c UpdateInternalSession, called from BuildResponseSession);
+    // a failed command leaves the policy session untouched.
     assert_eq!(
         get_digest_rsp2.policy_digest.get_buffer(),
-        zero_digest.as_slice(),
-        "Policy digest should be reset to zero on Format-1 command failure"
+        digest_before.policy_digest.get_buffer(),
+        "Policy digest must be unchanged after a Format-1 command failure"
     );
 
     flush_context(&mut sim, ek_handle).unwrap();

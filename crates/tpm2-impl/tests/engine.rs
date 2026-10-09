@@ -44,7 +44,10 @@ fn get_random_in_place() {
         "00000018" // size
         "00000000" // successful response
         "000c"     // 2B size prefix
-        "c1c2c3c4c5c6c7c8c9cacbcc" // random bytes starting from index 193 (after null_proof, null_seed, and drbg_state instantiation)
+        // Random bytes after 256 FakeRng draws at Startup (null_proof, null_seed, drbg_state
+        // instantiation, plus the 64-byte commit nonce drawn at TPM Reset, as in C
+        // TPM_Reset -> CryptStartup/commitNonce); FakeRng's u8 counter wraps back to 0x01.
+        "0102030405060708090a0b0c"
     );
 
     let mut response = request.to_vec();
@@ -90,7 +93,10 @@ fn get_random_separate() {
         "00000018" // size
         "00000000" // successful response
         "000c"     // 2B size prefix
-        "c1c2c3c4c5c6c7c8c9cacbcc" // random bytes starting from index 193 (after null_proof, null_seed, and drbg_state instantiation)
+        // Random bytes after 256 FakeRng draws at Startup (null_proof, null_seed, drbg_state
+        // instantiation, plus the 64-byte commit nonce drawn at TPM Reset, as in C
+        // TPM_Reset -> CryptStartup/commitNonce); FakeRng's u8 counter wraps back to 0x01.
+        "0102030405060708090a0b0c"
     );
 
     let mut response = [0u8; 256];
@@ -169,7 +175,10 @@ fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
     {
         *slot = Some(TransientObject {
             handle: 0x80000000 | (i as u32),
-            seed: [0u8; 32],
+            seed: [0u8; 64],
+            seed_len: 32,
+            external: false,
+            public_only: false,
             name: (tpm2::Tpm2bName::default()).into(),
             auth: (tpm2::Tpm2bAuth::default()).into(),
             public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),

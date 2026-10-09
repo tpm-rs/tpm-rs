@@ -386,6 +386,8 @@ fn test_response_session_attributes_audit_and_exclusivity() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s1).unwrap();
 
@@ -423,6 +425,8 @@ fn test_response_session_attributes_audit_and_exclusivity() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s2).unwrap();
 
@@ -554,6 +558,8 @@ fn test_get_session_audit_digest_field_verification() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s).unwrap();
 
@@ -608,7 +614,9 @@ fn test_get_session_audit_digest_field_verification() {
         &mut global_state,
         &get_audit_handles,
         &get_audit_cmd,
-        &[admin_auth],
+        // signHandle (TPM_RH_NULL) also has the USER auth role, so C needs a second session
+        // (SessionProcess.c:1641-1651, otherwise TPM_RC_AUTH_MISSING).
+        &[admin_auth, admin_auth],
         &mut response_buf,
     )
     .unwrap();
@@ -649,7 +657,10 @@ fn test_persistent_object_handle_name_mismatch() {
     let real_name = Tpm2bName::from_bytes(&[1, 2, 3, 4, 5]).unwrap();
     let transient_obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (real_name).into(),
         auth: (Tpm2bAuth::from_bytes(&[0x11, 0x22]).unwrap()).into(),
         public: (TpmtPublic {
@@ -740,6 +751,8 @@ fn test_persistent_object_handle_name_mismatch() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s).unwrap();
 
@@ -834,7 +847,9 @@ fn test_persistent_object_handle_name_mismatch() {
         &mut global_state,
         &certify_handles,
         &certify_cmd,
-        &[real_auth],
+        // signHandle (TPM_RH_NULL) has the USER auth role, so C needs a second session
+        // (SessionProcess.c:1641-1651, otherwise TPM_RC_AUTH_MISSING).
+        &[real_auth, common::password_auth(b"")],
     );
     assert!(
         res_real.is_ok(),
@@ -867,7 +882,7 @@ fn test_persistent_object_handle_name_mismatch() {
         &mut global_state,
         &certify_handles,
         &certify_cmd,
-        &[wrong_auth],
+        &[wrong_auth, common::password_auth(b"")],
     );
     assert_eq!(
         res_wrong.err(),

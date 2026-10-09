@@ -80,7 +80,10 @@ fn create_transient_ecc_key(
 
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: Tpm2bName::default().into(),
         auth: Tpm2bAuth::default().into(),
         public: public.into(),
@@ -200,7 +203,13 @@ fn test_ecc_parameters_p256() {
     let rsp = <ECCParameters as Command>::Response::unmarshal(&mut buf)
         .expect("Should unmarshal <ECCParameters as Command>::Response");
     assert_eq!(rsp.parameters.key_size, 256);
-    assert_eq!(rsp.parameters.kdf, None);
+    // C CryptEccData.c: NIST P-256 carries {TPM_ALG_KDF1_SP800_56A, SHA256} as its KDF.
+    assert_eq!(
+        rsp.parameters.kdf,
+        Some(tpm2::TpmtKdfScheme::Kdf1Sp800_56a(
+            tpm2::TpmiAlgHash::Sha256
+        ))
+    );
     assert_eq!(rsp.parameters.sign, None);
     assert_eq!(rsp.parameters.curve_id, TpmEccCurve::NistP256);
 }

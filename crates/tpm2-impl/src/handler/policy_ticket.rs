@@ -61,8 +61,44 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             )
         };
 
+        // A trial policy session cannot use a ticket
+        // (`TPM_RCS_ATTRIBUTES + RC_PolicyTicket_policySession`).
+        if session_type == TpmSe::Trial {
+            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
+        }
+
         if cmd.ticket.tag() != 0x8023 && cmd.ticket.tag() != 0x8025 {
             return Err(TpmRc::VALUE.with(Position::parameter(5)));
+        }
+
+        // The timeout buffer must hold exactly a UINT64 (`TPM_RCS_SIZE + RC_PolicyTicket_timeout`).
+        if cmd.timeout.get_size() != 8 {
+            return Err(TpmRc::SIZE.with(Position::parameter(1)));
+        }
+        let mut timeout_buf = [0u8; 8];
+        timeout_buf.copy_from_slice(cmd.timeout.get_buffer());
+        let timeout_val = u64::from_be_bytes(timeout_buf);
+        let expires_on_reset = (timeout_val & (1u64 << 63)) != 0;
+        let auth_timeout_masked = timeout_val & !(1u64 << 63);
+
+        // The normal cpHashA/timeout checks (C `PolicyParameterChecks`) run before the ticket is
+        // validated: NV availability, expiration (including a time epoch change), and cpHashA.
+        {
+            let session_state = self
+                .global_state
+                .session(policy_session)
+                .ok_or(TpmRc::REFERENCE_H1)?;
+            self.policy_parameter_checks(
+                session_state,
+                auth_timeout_masked,
+                &cmd.cp_hash_a,
+                &tpm2::Tpm2bNonce::default(),
+                (
+                    Position::parameter(1),
+                    Position::parameter(2),
+                    Position::parameter(1),
+                ),
+            )?;
         }
 
         let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(cmd.ticket.hierarchy().0);
@@ -88,18 +124,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let auth_name_len = cmd.auth_name.get_size() as usize;
         hmac_input[offset..offset + auth_name_len].copy_from_slice(cmd.auth_name.get_buffer());
         offset += auth_name_len;
-
-        let mut timeout_val = 0u64;
-        if cmd.timeout.get_size() != 0 {
-            if cmd.timeout.get_size() != 8 {
-                return Err(TpmRc::VALUE.with(Position::parameter(1)));
-            }
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(cmd.timeout.get_buffer());
-            timeout_val = u64::from_be_bytes(buf);
-        }
-        let expires_on_reset = (timeout_val & (1u64 << 63)) != 0;
-        let auth_timeout_masked = timeout_val & !(1u64 << 63);
 
         // 5. timeout (8 bytes, big endian auth_timeout_masked)
         hmac_input[offset..offset + 8].copy_from_slice(&auth_timeout_masked.to_be_bytes());
@@ -133,29 +157,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         if cmd.ticket.digest().get_buffer() != hmac_digest.digest() {
             return Err(TpmRc::TICKET.with(Position::parameter(5)));
-        }
-
-        if session_type == TpmSe::Policy && auth_timeout_masked != 0 {
-            let current_time = self.global_state.tpm_time_ms;
-            if auth_timeout_masked < current_time {
-                return Err(TpmRc::EXPIRED.with(Position::parameter(1)));
-            }
-        }
-
-        if !cmd.cp_hash_a.get_buffer().is_empty() {
-            if cmd.cp_hash_a.get_size() as usize != policy_digest_len {
-                return Err(TpmRc::SIZE.with(Position::parameter(2)));
-            }
-            let session_state = self
-                .global_state
-                .session(policy_session)
-                .ok_or(TpmRc::REFERENCE_H1)?;
-            if session_state.policy_hash_len != 0
-                && cmd.cp_hash_a.get_buffer()
-                    != &session_state.policy_hash[..session_state.policy_hash_len]
-            {
-                return Err(TpmRc::CPHASH);
-            }
         }
 
         let cc_val: u32 = if cmd.ticket.tag() == 0x8025 {

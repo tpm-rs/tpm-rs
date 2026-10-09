@@ -799,7 +799,10 @@ fn test_import_adversarial_challenges() {
             err
         );
 
-        // Challenge 5: Inner wrapper AES-128 CFB (derived inner key) - Success
+        // Challenge 5: Inner wrapper AES-128 CFB with no encryptionKey (inner key
+        // "derived" from the seed). C has no such derivation: with a non-NULL
+        // symmetricAlg, encryptionKey must be exactly keyBits/8 bytes, else
+        // TPM_RCS_SIZE + RC_Import_encryptionKey (SIZE+P1, Import.c:99-103).
         let inner_sym_def = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
         let (dup_bytes, enc_seed) = create_duplicate_challenged(
             &mut rng,
@@ -821,7 +824,7 @@ fn test_import_adversarial_challenges() {
             in_sym_seed: Tpm2bEncryptedSecret::from_bytes(&enc_seed).unwrap(),
             symmetric_alg: inner_sym_def,
         };
-        let import_resp = execute_with_password_sessions(
+        let res = execute_with_password_sessions(
             &mut sim,
             &import_cmd,
             ImportHandles {
@@ -829,35 +832,16 @@ fn test_import_adversarial_challenges() {
             },
             1,
             &[],
-        )
-        .unwrap();
-        let load_cmd = Load {
-            in_private: import_resp.0.out_private,
-            in_public: tpm2::Tpm2b(sealed_pub),
-        };
-        let (_, load_resp_handles) = execute_with_password_sessions(
-            &mut sim,
-            &load_cmd,
-            LoadHandles {
-                parent_handle: srk_handle,
-            },
-            1,
-            &[],
-        )
-        .unwrap();
-        let loaded_handle = load_resp_handles.object_handle;
-        let (unseal_resp, _) = execute_with_password_sessions(
-            &mut sim,
-            &Unseal {},
-            UnsealHandles {
-                item_handle: loaded_handle,
-            },
-            1,
-            &[],
-        )
-        .unwrap();
-        assert_eq!(unseal_resp.out_data.get_buffer(), plaintext);
-        flush_context(&mut sim, loaded_handle).unwrap();
+        );
+        assert_eq!(
+            res.err(),
+            Some(
+                tpm2::errors::TpmRc::SIZE
+                    .with(tpm2::errors::Position::parameter(1))
+                    .get()
+            ),
+            "Import with an inner wrapper but no encryptionKey must fail"
+        );
 
         // Challenge 6: Inner wrapper AES-128 CFB (explicit inner key) - Success
         let explicit_inner_key = b"0123456789abcdef"; // 16 bytes
@@ -926,7 +910,9 @@ fn test_import_adversarial_challenges() {
             sealed_name.get_buffer(),
             &sealed_priv,
             inner_sym_def,
-            None,
+            // C needs the inner key in encryptionKey (no seed derivation,
+            // Import.c:99-103), so use the explicit key from challenge 6.
+            Some(explicit_inner_key),
             false,
             false,
             false,
@@ -934,7 +920,7 @@ fn test_import_adversarial_challenges() {
             true, // tamper inner hmac
         );
         let import_cmd = Import {
-            encryption_key: Tpm2bData::default(),
+            encryption_key: Tpm2bData::from_bytes(explicit_inner_key).unwrap(),
             object_public: tpm2::Tpm2b(sealed_pub),
             duplicate: Tpm2bPrivate::from_bytes(&dup_bytes).unwrap(),
             in_sym_seed: Tpm2bEncryptedSecret::from_bytes(&enc_seed).unwrap(),
@@ -1033,9 +1019,11 @@ fn test_import_adversarial_challenges() {
             "Expected Import to fail with parent lacking DECRYPT/RESTRICTED"
         );
         let err = res.unwrap_err();
+        // C Import.c: a parent that is not a storage parent is rejected with
+        // TPM_RCS_TYPE + RC_Import_parentHandle (TYPE+H1, 0x18A).
         assert_eq!(
-            err, 0x182,
-            "Expected Attributes error for Handle 1 (0x182), got 0x{:03X}",
+            err, 0x18a,
+            "Expected Type error for Handle 1 (0x18A), got 0x{:03X}",
             err
         );
 

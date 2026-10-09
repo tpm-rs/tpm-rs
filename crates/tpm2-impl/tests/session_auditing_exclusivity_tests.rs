@@ -287,6 +287,8 @@ fn test_audit_reset_handover_with_existing_exclusive_session() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s1).unwrap();
     global_state.exclusive_audit_session = Some(session_handle_1);
@@ -325,6 +327,8 @@ fn test_audit_reset_handover_with_existing_exclusive_session() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s2).unwrap();
 
@@ -404,6 +408,8 @@ fn test_exclusivity_loss_when_using_non_exclusive_session() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s1).unwrap();
 
@@ -441,6 +447,8 @@ fn test_exclusivity_loss_when_using_non_exclusive_session() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s2).unwrap();
     global_state.exclusive_audit_session = Some(session_handle_2);
@@ -513,6 +521,8 @@ fn test_exclusivity_gating() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s1).unwrap();
 
@@ -550,6 +560,8 @@ fn test_exclusivity_gating() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s2).unwrap();
     global_state.exclusive_audit_session = Some(session_handle_2);
@@ -635,6 +647,8 @@ fn test_exclusivity_loss_when_using_non_audit_session() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s1).unwrap();
 
@@ -672,26 +686,27 @@ fn test_exclusivity_loss_when_using_non_audit_session() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s2).unwrap();
     global_state.exclusive_audit_session = Some(session_handle_2);
 
-    // Command with Session 1, standard HMAC (attribute 0x01)
-    let cmd = GetCapability {
-        capability: TpmCap::TPMProperties,
-        property: u32::from(TpmPt::FAMILY_INDICATOR),
-        property_count: 1,
+    // Command with a non-audit authorization session. In C a session that authorizes no handle
+    // must be an audit/encrypt/decrypt session (TPM_RC_ATTRIBUTES + S1 otherwise,
+    // SessionProcess.c:1705-1712), so a plain HMAC session can't be sent with GetCapability.
+    // Use HierarchyChangeAuth(RH_OWNER, unchanged empty auth) authorized by a password session
+    // instead: the command carries sessions but no audit session, which clears the exclusive
+    // audit session (C UpdateAuditSessionStatus, SessionProcess.c:1993-1996).
+    let cmd = tpm2::commands::HierarchyChangeAuth {
+        new_auth: Tpm2bAuth::default(),
     };
-    let nonce_tpm_1 = global_state.session(session_handle_1).unwrap().nonce_tpm;
-    let hmac = compute_mock_hmac(0x01, nonce_tpm_1.get_buffer());
-    let auth = TpmsAuthCommand {
-        session_handle: tpm2::Handle(session_handle_1),
-        nonce: tpm2::Tpm2bNonce::default(),
-        session_attributes: TpmaSession(0x01),
-        hmac,
+    let handles = tpm2::commands::HierarchyChangeAuthHandles {
+        auth_handle: tpm2::Handle::RH_OWNER,
     };
+    let auth = common::password_auth(b"");
 
-    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &(), &cmd, &[auth])
+    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[auth])
         .expect("Command failed");
 
     // Verify exclusivity is lost (cleared to None)

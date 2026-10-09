@@ -621,10 +621,17 @@ impl TpmStateTranslator {
         offset += 4;
         slot[offset..offset + 4].copy_from_slice(&obj.hierarchy.to_be_bytes());
         offset += 4;
-        slot[offset] = obj.st_clear as u8;
+        // Flags byte: bit 0 = stClear ancestor, bit 1 = external, bit 2 = public-only.
+        slot[offset] = u8::from(obj.st_clear)
+            | (u8::from(obj.external) << 1)
+            | (u8::from(obj.public_only) << 2);
         offset += 1;
-        slot[offset..offset + 32].copy_from_slice(&obj.seed);
-        offset += 32;
+        // seedValue: 1-byte length followed by the seed bytes (up to 64).
+        let seed = obj.seed_bytes();
+        slot[offset] = seed.len() as u8;
+        offset += 1;
+        slot[offset..offset + seed.len()].copy_from_slice(seed);
+        offset += seed.len();
 
         offset += obj.name.marshal(
             (&mut slot[offset..offset + Tpm2bName::MAX_SIZE])
@@ -663,14 +670,15 @@ impl TpmStateTranslator {
         let mut slice = &slot[1..];
         let handle = u32::unmarshal(&mut slice).map_err(|_| StorageError::OutOfBounds)?;
         let hierarchy = u32::unmarshal(&mut slice).map_err(|_| StorageError::OutOfBounds)?;
-        let st_clear = u8::unmarshal(&mut slice).map_err(|_| StorageError::OutOfBounds)? != 0;
+        let flags = u8::unmarshal(&mut slice).map_err(|_| StorageError::OutOfBounds)?;
+        let st_clear = flags & 1 != 0;
 
-        if slice.len() < 32 {
+        let seed_len = u8::unmarshal(&mut slice).map_err(|_| StorageError::OutOfBounds)? as usize;
+        if seed_len > 64 || slice.len() < seed_len {
             return Err(StorageError::OutOfBounds);
         }
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(&slice[..32]);
-        slice = &slice[32..];
+        let (seed, seed_len) = TransientObject::seed_from_bytes(&slice[..seed_len]);
+        slice = &slice[seed_len..];
 
         let name: OwnedName = Tpm2bName::unmarshal(&mut slice)
             .map_err(|_| StorageError::OutOfBounds)?
@@ -695,6 +703,9 @@ impl TpmStateTranslator {
         Ok(TransientObject {
             handle,
             seed,
+            seed_len,
+            external: flags & 2 != 0,
+            public_only: flags & 4 != 0,
             name,
             auth,
             public,
@@ -903,6 +914,12 @@ impl TpmStateTranslator {
         if sess.include_auth {
             flags |= 1 << 7;
         }
+        if sess.is_da_bound {
+            flags |= 1 << 8;
+        }
+        if sess.is_lockout_bound {
+            flags |= 1 << 9;
+        }
         slot[offset..offset + 2].copy_from_slice(&flags.to_be_bytes());
         offset += 2;
         slot[offset] = sess.command_locality;
@@ -1006,6 +1023,8 @@ impl TpmStateTranslator {
             nv_written_state: (flags & (1 << 6)) != 0,
             command_locality,
             include_auth: (flags & (1 << 7)) != 0,
+            is_da_bound: (flags & (1 << 8)) != 0,
+            is_lockout_bound: (flags & (1 << 9)) != 0,
         })
     }
 }

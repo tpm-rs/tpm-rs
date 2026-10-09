@@ -1,5 +1,4 @@
 use common::marshal_to_slice;
-use tpm2::errors::TpmRc;
 
 use tpm2::Unmarshal;
 mod common;
@@ -59,14 +58,24 @@ where
     Cmd::Response<'static>: Unmarshal<'static>,
 {
     let mut req_buf = [0u8; 32768];
-    let tag = 0x8001u16;
     let cc = Cmd::CMD_CODE.code();
 
-    req_buf[0..2].copy_from_slice(&tag.to_be_bytes());
     req_buf[6..10].copy_from_slice(&cc.to_be_bytes());
 
     let mut offset = 10;
-    offset += marshal_to_slice(handles, &mut req_buf[offset..]);
+    let handles_len = marshal_to_slice(handles, &mut req_buf[offset..]);
+    offset += handles_len;
+    // Every handle passed to this helper is a sequence handle, which has the USER auth role:
+    // C requires a session even for an empty authValue (TPM_RC_AUTH_MISSING otherwise,
+    // SessionProcess.c CheckAuthNoSession), so send an empty TPM_RS_PW session.
+    let with_session = handles_len > 0;
+    let tag = if with_session { 0x8002u16 } else { 0x8001u16 };
+    req_buf[0..2].copy_from_slice(&tag.to_be_bytes());
+    if with_session {
+        let pw_area = [0, 0, 0, 9, 0x40, 0, 0, 9, 0, 0, 0, 0, 0];
+        req_buf[offset..offset + pw_area.len()].copy_from_slice(&pw_area);
+        offset += pw_area.len();
+    }
     offset += marshal_to_slice(cmd, &mut req_buf[offset..]);
 
     req_buf[2..6].copy_from_slice(&(offset as u32).to_be_bytes());
@@ -83,6 +92,9 @@ where
     let mut cursor: &'static [u8] = std::vec::Vec::leak(resp_buf[10..resp_size].to_vec());
 
     let resp_handles = Cmd::RespHandles::unmarshal(&mut cursor).map_err(|_| 0xFFFFFFFFu32)?;
+    if with_session {
+        let _param_size = u32::unmarshal(&mut cursor).map_err(|_| 0xFFFFFFFFu32)?;
+    }
     let resp_t = <Cmd::Response<'static>>::unmarshal(&mut cursor).map_err(|_| 0xFFFFFFFFu32)?;
 
     Ok((resp_handles, resp_t))
@@ -103,9 +115,8 @@ fn run_differential_case(
     let (start_resp_handles, _) = execute_tpm_command(tpm, global_state, &(), &start_cmd).unwrap();
     let handle = start_resp_handles.sequence_handle;
 
-    // 2. Perform updates
-    let mut total_accumulated = 0;
-    let mut hit_limit = false;
+    // 2. Perform updates. C streams sequence data into the hash state and has no length
+    // limit (SequenceUpdate.c has no TPM_RC_MEMORY path), so every update must succeed.
     for chunk in chunks {
         let update_handles = SequenceUpdateHandles {
             sequence_handle: handle,
@@ -114,29 +125,7 @@ fn run_differential_case(
             buffer: tpm2::Tpm2bMaxBuffer::from_bytes(chunk).unwrap(),
         };
 
-        let res = execute_tpm_command(tpm, global_state, &update_handles, &update_cmd);
-        total_accumulated += chunk.len();
-        if total_accumulated > 4096 {
-            assert!(res.is_err());
-            assert_eq!(res.unwrap_err() & 0xFF, TpmRc::MEMORY.get() & 0xFF);
-            hit_limit = true;
-            break;
-        } else {
-            res.unwrap();
-        }
-    }
-
-    if hit_limit {
-        // Cleanup by completing with empty buffer (even if it's over limit, the TPM allows completion)
-        let complete_handles = SequenceCompleteHandles {
-            sequence_handle: handle,
-        };
-        let complete_cmd = SequenceComplete {
-            buffer: tpm2::Tpm2bMaxBuffer::default(),
-            hierarchy: Handle::RH_NULL,
-        };
-        let _ = execute_tpm_command(tpm, global_state, &complete_handles, &complete_cmd);
-        return;
+        execute_tpm_command(tpm, global_state, &update_handles, &update_cmd).unwrap();
     }
 
     // 3. Complete sequence

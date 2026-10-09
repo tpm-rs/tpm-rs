@@ -10,9 +10,25 @@ use tpm2_simulator::*;
 fn test_evict_control_auth_precedence() {
     let mut sim = create_simulator!();
 
+    // objectHandle must be a loaded object: C rejects RH_OWNER at handle
+    // unmarshal (VALUE+H2) before the AUTH_MISSING check.
+    let (in_sensitive, in_public) = create_test_keys();
+    let (_, created) = execute_with_password_sessions(
+        &mut sim,
+        &CreateLoaded {
+            in_sensitive,
+            in_public,
+        },
+        CreateLoadedHandles {
+            parent_handle: Handle::RH_OWNER,
+        },
+        1,
+        &[],
+    )
+    .unwrap();
     let evict_handles = EvictControlHandles {
         auth: Handle::RH_OWNER,
-        object_handle: Handle::RH_OWNER,
+        object_handle: created.object_handle,
     };
 
     let evict_cmd = EvictControl {

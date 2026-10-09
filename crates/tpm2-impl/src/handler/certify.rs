@@ -1,10 +1,6 @@
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use crate::{
-    handler::CommandHandler,
-    owned::{OwnedName, OwnedPublicParmsAndId},
-    req_resp::RequestThenResponse,
-};
+use crate::{handler::CommandHandler, owned::OwnedName, req_resp::RequestThenResponse};
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
@@ -52,16 +48,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let signer_obj_opt = if sign_handle.0 == 0x40000007 {
             None
         } else {
-            let obj = self.resolve_object(sign_handle.0, Position::handle(2))?;
-            if !obj
-                .public
-                .object_attributes
-                .contains(tpm2::TpmaObject::SIGN_ENCRYPT)
-                || matches!(obj.public.parms_and_id, OwnedPublicParmsAndId::Sym(..))
-            {
-                return Err(TpmRc::KEY.to_rc());
-            }
-            Some(obj)
+            Some(self.resolve_object(sign_handle.0, Position::handle(2))?)
         };
 
         let _auths = &self.global_state.parsed_auths[..self.global_state.parsed_auths_len];
@@ -72,15 +59,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::AUTH_MISSING);
         }
 
-        // 4. Construct attestation structure
-        let clock_info = self.get_clock_info();
-
-        // 5. Resolve signature scheme and verify consistency with public attributes
+        // 4. IsSigningObject() (TPM_RC_KEY + RC_Certify_signHandle) and CryptSelectSignScheme()
+        //    (TPM_RC_SCHEME + RC_Certify_inScheme).
         let public_opt = signer_obj_opt.as_ref().map(|s| &s.public);
-        let actual_in_scheme =
-            self.resolve_attest_scheme(sign_handle, public_opt, cmd.in_scheme)?;
+        let actual_in_scheme = self.resolve_attest_scheme(
+            public_opt,
+            cmd.in_scheme,
+            Position::handle(2),
+            Position::parameter(2),
+        )?;
 
-        let (qualified_signer, extra_data) = self.compute_attest_fields(
+        // 5. Construct attestation structure
+        let header = self.compute_attest_fields(
             signer_obj_opt.as_ref(),
             &actual_in_scheme,
             &cmd.qualifying_data,
@@ -89,10 +79,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let dynamic_q_name = self.get_dynamic_qualified_name(&certified_obj);
         let attest = TpmsAttest {
             magic: TpmGenerated,
-            qualified_signer,
-            extra_data,
-            clock_info,
-            firmware_version: 0x00010001,
+            qualified_signer: header.qualified_signer,
+            extra_data: header.extra_data,
+            clock_info: header.clock_info,
+            firmware_version: header.firmware_version,
             attested: TpmuAttest::Certify(TpmsCertifyInfo {
                 name: certified_obj.name.as_tpm2b(),
                 qualified_name: if matches!(actual_in_scheme, Some(TpmtSigScheme::Ecdaa(_))) {
@@ -107,7 +97,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let attest_len = attest.marshal(&mut attest_buf);
 
         // 6. Sign the attestation payload
-        let priv_key_opt = signer_obj_opt.as_ref().map(|s| (s.private, s.private_len));
         if let Some(TpmtSigScheme::Ecdaa(ecdaa_s)) = actual_in_scheme
             && let Ok((digest_buf, digest_len)) =
                 self.compute_hash(ecdaa_s.hash_alg, &[&attest_buf[..attest_len]])
@@ -121,8 +110,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.global_state.debug_provided_auth_len = dlen;
         }
         let owned_sig = self.sign_attestation_block(
-            sign_handle,
-            priv_key_opt.as_ref(),
+            signer_obj_opt.as_ref(),
             actual_in_scheme,
             &attest_buf[..attest_len],
             cmd.qualifying_data.get_buffer(),
@@ -205,51 +193,42 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let signer_obj_opt = if sign_handle.0 == 0x40000007 {
             None
         } else {
-            let obj = self.resolve_object(sign_handle.0, Position::handle(1))?;
-            if !obj
-                .public
-                .object_attributes
-                .contains(tpm2::TpmaObject::SIGN_ENCRYPT)
-                || matches!(obj.public.parms_and_id, OwnedPublicParmsAndId::Sym(..))
-            {
-                return Err(TpmRc::KEY.to_rc());
-            }
-            Some(obj)
+            Some(self.resolve_object(sign_handle.0, Position::handle(1))?)
         };
-
-        // 3. Verify ticket tag, hierarchy, and digest
-        if cmd.creation_ticket.tag() != 0x8021 {
-            return Err(TpmRc::TICKET.to_rc());
-        }
-        if cmd.creation_ticket.hierarchy().0 != certified_obj.hierarchy {
-            return Err(TpmRc::TICKET.to_rc());
-        }
-        let expected_digest = self.compute_creation_ticket(
-            certified_obj.hierarchy,
-            &certified_obj.name,
-            &cmd.creation_hash,
-        )?;
-        if cmd.creation_ticket.digest().get_buffer() != expected_digest {
-            return Err(TpmRc::TICKET.to_rc());
-        }
 
         let _auths = &self.global_state.parsed_auths[..self.global_state.parsed_auths_len];
 
-        // 4. Verify authorizations
+        // 3. Verify authorizations
         let expected_sessions = if sign_handle.0 == 0x40000007 { 0 } else { 1 };
         if num_sessions < expected_sessions {
             return Err(TpmRc::AUTH_MISSING);
         }
 
-        // 5. Construct attestation structure
-        let clock_info = self.get_clock_info();
-
-        // 6. Resolve signature scheme and verify consistency with public attributes
+        // 4. IsSigningObject() (TPM_RC_KEY + RC_CertifyCreation_signHandle) and
+        //    CryptSelectSignScheme() (TPM_RC_SCHEME + RC_CertifyCreation_inScheme), which the
+        //    reference implementation checks before the creation ticket.
         let public_opt = signer_obj_opt.as_ref().map(|s| &s.public);
-        let actual_in_scheme =
-            self.resolve_attest_scheme(sign_handle, public_opt, cmd.in_scheme)?;
+        let actual_in_scheme = self.resolve_attest_scheme(
+            public_opt,
+            cmd.in_scheme,
+            Position::handle(1),
+            Position::parameter(3),
+        )?;
 
-        let (qualified_signer, extra_data) = self.compute_attest_fields(
+        // 5. Verify the creation ticket (`TicketComputeCreation`). The ticket is recomputed for the
+        //    hierarchy named in the ticket itself; its tag and hierarchy value were already
+        //    validated when unmarshaling `TPMT_TK_CREATION`.
+        let expected_digest = self.compute_creation_ticket(
+            cmd.creation_ticket.hierarchy().0,
+            &certified_obj.name,
+            &cmd.creation_hash,
+        )?;
+        if cmd.creation_ticket.digest().get_buffer() != expected_digest {
+            return Err(TpmRc::TICKET.with(Position::parameter(4)));
+        }
+
+        // 6. Construct attestation structure
+        let header = self.compute_attest_fields(
             signer_obj_opt.as_ref(),
             &actual_in_scheme,
             &cmd.qualifying_data,
@@ -257,10 +236,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let attest = TpmsAttest {
             magic: TpmGenerated,
-            qualified_signer,
-            extra_data,
-            clock_info,
-            firmware_version: 0x00010001,
+            qualified_signer: header.qualified_signer,
+            extra_data: header.extra_data,
+            clock_info: header.clock_info,
+            firmware_version: header.firmware_version,
             attested: TpmuAttest::Creation(TpmsCreationInfo {
                 object_name: certified_obj.name.as_tpm2b(),
                 creation_hash: cmd.creation_hash,
@@ -271,7 +250,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let attest_len = attest.marshal(&mut attest_buf);
 
         // 7. Sign the attestation payload
-        let priv_key_opt = signer_obj_opt.as_ref().map(|s| (s.private, s.private_len));
         if let Some(TpmtSigScheme::Ecdaa(ecdaa_s)) = actual_in_scheme
             && let Ok((digest_buf, digest_len)) =
                 self.compute_hash(ecdaa_s.hash_alg, &[&attest_buf[..attest_len]])
@@ -285,8 +263,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.global_state.debug_provided_auth_len = dlen;
         }
         let owned_sig = self.sign_attestation_block(
-            sign_handle,
-            priv_key_opt.as_ref(),
+            signer_obj_opt.as_ref(),
             actual_in_scheme,
             &attest_buf[..attest_len],
             cmd.qualifying_data.get_buffer(),

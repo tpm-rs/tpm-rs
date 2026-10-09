@@ -65,7 +65,9 @@ fn test_start_auth_session_dispatch() {
     assert_eq!(&response[10..14], &0x03000000u32.to_be_bytes());
     assert_eq!(&response[14..16], &16u16.to_be_bytes());
     let expected_nonce_bytes = [
-        193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208,
+        // Startup draws 256 FakeRng bytes (incl. the 64-byte commit nonce at TPM Reset), so
+        // the u8 counter has wrapped back to 1.
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
     ];
     assert_eq!(&response[16..32], &expected_nonce_bytes);
 }
@@ -121,7 +123,10 @@ fn test_start_auth_session_public_only_key_fails() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -586,11 +591,19 @@ fn test_session_handle_prefixes_adversarial() {
             flush_response[9],
         ]);
 
-        let expected_code = if prefix == 0x03 {
-            0x0000008B // Handle (fails inside handler)
-        } else {
-            0x000001C4 // TPM_RC_VALUE with Position::parameter(1)
-        };
+        if prefix == 0x03 {
+            // C: FlushContext only checks SessionIsLoaded(), which masks the handle with
+            // HR_HANDLE_MASK and ignores the HMAC/policy type (Session.c:208,
+            // FlushContext.c:29), so 0x03000005 flushes the HMAC session in slot 5.
+            assert_eq!(
+                resp_code, 0,
+                "Flush of 0x{:08X} should succeed like C, but got 0x{:08X}",
+                flush_handle, resp_code
+            );
+            assert!(global_state.session(base_handle).is_none());
+            continue;
+        }
+        let expected_code = 0x000001C4; // TPM_RC_VALUE with Position::parameter(1)
         assert_eq!(
             resp_code, expected_code,
             "Flush should have failed for handle 0x{:08X} with expected error, but got 0x{:08X}",
@@ -646,10 +659,10 @@ fn test_session_handle_prefixes_adversarial() {
             flush_response[8],
             flush_response[9],
         ]);
-        // 0x0000008B is TPM_RC_HANDLE
+        // C: TPM_RCS_HANDLE + RC_FlushContext_flushHandle (0x1CB), FlushContext.c:22.
         assert_eq!(
-            resp_code, 0x0000008B,
-            "Flush should have failed for handle 0x{:08X} with Handle (0x8B), but got 0x{:08X}",
+            resp_code, 0x000001CB,
+            "Flush should have failed for handle 0x{:08X} with HANDLE+P1 (0x1CB), but got 0x{:08X}",
             flush_handle, resp_code
         );
 
@@ -919,8 +932,8 @@ fn test_session_handle_variations_stress() {
 
         assert_eq!(
             resp_code,
-            0x0000008B, // Handle
-            "Expected Handle (0x8B) when flushing session with handle 0x{:08X}, but got 0x{:08X}",
+            0x000001CB, // C: TPM_RCS_HANDLE + RC_FlushContext_flushHandle (0x1CB), FlushContext.c:29.
+            "Expected HANDLE+P1 (0x1CB) when flushing session with handle 0x{:08X}, but got 0x{:08X}",
             flush_handle,
             resp_code
         );

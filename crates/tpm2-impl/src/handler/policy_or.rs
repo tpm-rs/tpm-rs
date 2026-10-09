@@ -1,7 +1,6 @@
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::TpmiAlgHash;
 use tpm2::commands::{PolicyOR, PolicyORHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
@@ -78,19 +77,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 }
             }
             if !found {
-                return Err(TpmRc::VALUE.to_rc());
+                return Err(TpmRc::VALUE.with(Position::parameter(1)));
             }
         }
 
         // 3. Compute new policy digest
         // policyDigest_new = hash(0_size || TPM_CC_PolicyOR || pHashList)
-        let digest_size = match auth_hash {
-            TpmiAlgHash::Sha1 => 20,
-            TpmiAlgHash::Sha256 => 32,
-            TpmiAlgHash::Sha384 => 48,
-            TpmiAlgHash::Sha512 => 64,
-            _ => return Err(TpmRc::VALUE.to_rc()),
-        };
+        let digest_size = auth_hash.digest_size();
         let zero_digest = [0u8; 64];
         let zero_slice = &zero_digest[..digest_size];
 

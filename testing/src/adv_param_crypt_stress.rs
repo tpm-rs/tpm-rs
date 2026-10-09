@@ -52,7 +52,7 @@ fn create_primary_key(sim: &mut Simulator) -> Handle {
         primary_handle: Handle::RH_OWNER,
     };
     let (_, create_rsp_handles) =
-        execute_with_password_sessions(sim, &create_cmd, create_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[]).unwrap();
     create_rsp_handles.object_handle
 }
 
@@ -323,8 +323,11 @@ fn test_param_decrypt_size_too_small() {
     use crate::test_utils::RespHeader;
     let resp_header = RespHeader::unmarshal(&mut unmarsh).unwrap();
 
-    // Expected error code: TPM_RC_SIZE (149 or 0x095)
-    assert_eq!(resp_header.rc, 149);
+    // C CryptParameterDecryption (CryptUtil.c:961-964): fewer than 2 bytes for
+    // the size field is TPM_RC_INSUFFICIENT, plus the decrypt session index
+    // (SessionProcess.c:1760-1762): INSUFFICIENT+S1 (0x99A). The empty HMAC is
+    // accepted because the HMAC key is empty (SessionProcess.c:937-941).
+    assert_eq!(resp_header.rc, 0x99a);
 }
 
 #[test]
@@ -392,6 +395,8 @@ fn test_param_decrypt_size_mismatch() {
     use crate::test_utils::RespHeader;
     let resp_header = RespHeader::unmarshal(&mut unmarsh).unwrap();
 
-    // Expected error code: TPM_RC_SIZE (149 or 0x095)
-    assert_eq!(resp_header.rc, 149);
+    // C CryptParameterDecryption (CryptUtil.c:966-970): ciphertext larger than
+    // the remaining buffer is TPM_RC_SIZE, plus the decrypt session index
+    // (SessionProcess.c:1760-1762): SIZE+S1 (0x995).
+    assert_eq!(resp_header.rc, 0x995);
 }

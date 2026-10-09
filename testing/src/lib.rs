@@ -193,4 +193,22 @@ mod ek_extra;
 #[cfg(test)]
 mod evict_control_extra;
 #[cfg(test)]
+mod findings_attest;
+#[cfg(test)]
+mod findings_auth;
+#[cfg(test)]
+mod findings_capctx;
+#[cfg(test)]
+mod findings_crypto;
+#[cfg(test)]
+mod findings_lifecycle;
+#[cfg(test)]
+mod findings_nv;
+#[cfg(test)]
+mod findings_objects;
+#[cfg(test)]
+mod findings_policy;
+#[cfg(test)]
+mod findings_sessions;
+#[cfg(test)]
 mod hash_sequence_hash_extra;

@@ -39,6 +39,16 @@ fn setup_tpm<'a>(
     (tpm, global_state)
 }
 
+/// An empty-password authorization session (`TPM_RS_PW`).
+fn pw_session() -> TpmsAuthCommand<'static> {
+    TpmsAuthCommand {
+        session_handle: Handle::RS_PW,
+        nonce: Default::default(),
+        session_attributes: tpm2::TpmaSession::CONTINUE_SESSION,
+        hmac: Default::default(),
+    }
+}
+
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
@@ -147,7 +157,9 @@ fn test_change_pps_success() {
         auth_handle: Handle::RH_PLATFORM,
     };
     let cmd = ChangePPS {};
-    execute_tpm_command::<ChangePPS>(&mut tpm, &mut global_state, &handles, &cmd, &[])
+    // TPM_RH_PLATFORM requires authorization (C `CheckAuthNoSession` -> TPM_RC_AUTH_MISSING
+    // without a session), so use an empty password session.
+    execute_tpm_command::<ChangePPS>(&mut tpm, &mut global_state, &handles, &cmd, &[pw_session()])
         .expect("ChangePPS failed");
 
     assert_ne!(global_state.pp_seed, initial_pp_seed);
@@ -189,7 +201,9 @@ fn test_change_eps_success() {
         auth_handle: Handle::RH_PLATFORM,
     };
     let cmd = ChangeEPS {};
-    execute_tpm_command::<ChangeEPS>(&mut tpm, &mut global_state, &handles, &cmd, &[])
+    // TPM_RH_PLATFORM requires authorization (C `CheckAuthNoSession` -> TPM_RC_AUTH_MISSING
+    // without a session), so use an empty password session.
+    execute_tpm_command::<ChangeEPS>(&mut tpm, &mut global_state, &handles, &cmd, &[pw_session()])
         .expect("ChangeEPS failed");
 
     assert_ne!(global_state.ep_seed, initial_ep_seed);

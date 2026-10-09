@@ -337,6 +337,8 @@ fn test_audit_digest_accumulation_multiple_commands() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s).unwrap();
 
@@ -432,6 +434,8 @@ fn test_attributes_error_audit_exclusive_without_audit() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s).unwrap();
 
@@ -508,6 +512,8 @@ fn test_get_session_audit_digest_invalid_privacy_admin() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s).unwrap();
 
@@ -576,6 +582,8 @@ fn test_get_session_audit_digest_on_non_audit_session() {
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     };
     global_state.add_session(s).unwrap();
 

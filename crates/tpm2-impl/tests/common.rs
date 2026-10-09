@@ -87,6 +87,8 @@ pub fn make_test_session_state(
         nv_written_state: false,
         command_locality: 0,
         include_auth: false,
+        is_da_bound: false,
+        is_lockout_bound: false,
     }
 }
 

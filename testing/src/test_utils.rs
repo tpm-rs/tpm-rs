@@ -781,12 +781,12 @@ pub fn start_auth_session(
 
 /// Returns the Name of `handle` as used in cpHash/rpHash computations.
 ///
-/// For loaded transient objects the Name is queried from the TPM with
-/// `TPM2_ReadPublic` (as a real TSS would). For every other handle — or if
-/// `TPM2_ReadPublic` fails, e.g. for sequence objects — the handle value
-/// itself is used.
+/// For loaded transient and persistent objects the Name is queried from the TPM with
+/// `TPM2_ReadPublic` (as a real TSS would), and NV Indices with `TPM2_NV_ReadPublic`. For every
+/// other handle — or if the query fails, e.g. for sequence objects — the handle value itself is
+/// used.
 pub fn entity_name(tpm: &mut Simulator<'_>, handle: Handle) -> Vec<u8> {
-    if handle.0 >> 24 == 0x80
+    if (handle.0 >> 24 == 0x80 || handle.0 >> 24 == 0x81)
         && let Ok((resp, _)) = tpm.execute_with_handles(
             ReadPublic {},
             ReadPublicHandles {
@@ -795,6 +795,15 @@ pub fn entity_name(tpm: &mut Simulator<'_>, handle: Handle) -> Vec<u8> {
         )
     {
         return resp.name.get_buffer().to_vec();
+    }
+    // NV Indices are named by nameAlg || H(nvPublic), as reported by TPM2_NV_ReadPublic.
+    if handle.0 >> 24 == 0x01
+        && let Ok((resp, _)) = tpm.execute_with_handles(
+            tpm2::commands::NVReadPublic {},
+            tpm2::commands::NVReadPublicHandles { nv_index: handle },
+        )
+    {
+        return resp.nv_name.get_buffer().to_vec();
     }
     handle.0.to_be_bytes().to_vec()
 }

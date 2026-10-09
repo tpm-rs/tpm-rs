@@ -54,7 +54,11 @@ fn test_create_loaded_data_size() {
     };
 
     let res = execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]);
-    if res.is_ok() {
-        panic!("CreateLoaded with sensitive data larger than digest size should fail");
-    }
+    // C accepts this: the "data must be empty when sensitiveDataOrigin is SET"
+    // rule only applies to ordinary objects (Object_spt.c CreateChecks), and for
+    // a primary object the provided data is discarded (CryptUtil.c:1092-1093).
+    assert!(
+        res.is_ok(),
+        "CreateLoaded of a primary with sensitiveDataOrigin ignores inSensitive.data: {res:?}"
+    );
 }

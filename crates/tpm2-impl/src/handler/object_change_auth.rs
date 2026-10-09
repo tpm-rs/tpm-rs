@@ -26,8 +26,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// TCG TPM 2.0 Library Specification, Part 3: Commands, Section 12.8 (TPM2_ObjectChangeAuth).
     ///
     /// # Relationships
-    /// - The target object (`object_handle`) must be a transient object.
-    /// - The parent key (`parent_handle`) must be the loaded parent of the target object.
+    /// - The target object (`object_handle`) may be a transient or persistent object
+    ///   (`TPMI_DH_OBJECT`), but not a sequence object (`TPM_RC_TYPE + RC_H1`).
+    /// - The parent key (`parent_handle`) must be the loaded parent of the target object; this is
+    ///   verified, as in the C reference, only by recomputing the object's qualified name from
+    ///   the parent (`TPM_RC_TYPE + RC_H2` on mismatch).
     /// - The output `out_private` must be loaded using [TpmCc::Load](load.rs)
     ///   for the new authorization value to take effect.
     pub fn object_change_auth(
@@ -47,59 +50,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // Enforce that target object handle is transient
-        if (object_handle >> 24) == 0x81 {
-            return Err(TpmRc::KEY.with(Position::handle(1)));
-        }
-        if (object_handle >> 24) != 0x80 {
-            return Err(TpmRc::TYPE.with(Position::handle(1)));
-        }
-
-        // Ensure target object is not an active sequence
+        // Can not change authorization on a sequence object (ObjectChangeAuth.c).
         if self.state().find_active_sequence(object_handle).is_some() {
             return Err(TpmRc::TYPE.with(Position::handle(1)));
         }
 
-        // Resolve target object
+        // Resolve the target object (transient or persistent).
         let object = self.resolve_object(object_handle, Position::handle(1))?;
 
-        // Resolve parent object or hierarchy seed and parameters
-        let mut parent_seed_val = [0u8; 64];
-        let mut parent_qn_buf = [0u8; 66];
-        let parent_info = self
-            .resolve_parent_object_or_hierarchy(
-                parent_handle,
-                &mut parent_seed_val,
-                &mut parent_qn_buf,
-                true, // expect_type_error
-            )
-            .map_err(|err| {
-                if err == TpmRc::ATTRIBUTES.with(Position::handle(1)) {
-                    TpmRc::ATTRIBUTES.with(Position::handle(2))
-                } else {
-                    err
-                }
-            })?;
-
-        // Validate that parent is the correct parent by QN comparison
-        let qn_compare = self.compute_qualified_name(
-            object.public.name_alg,
-            &parent_qn_buf[..parent_info.qn_len],
-            object.name.get_buffer(),
-        )?;
-        let obj_dyn_qn = self.get_dynamic_qualified_name(&object);
-        if qn_compare.get_buffer() != obj_dyn_qn.get_buffer() {
-            return Err(TpmRc::TYPE.with(Position::handle(2)));
-        }
-
-        // Adjust authorization secret size
-        let digest_size = object
-            .public
-            .name_alg
-            .ok_or(TpmRc::HASH.to_rc())?
-            .digest_size();
-        let new_auth_slice = cmd.new_auth.get_buffer();
-        let stripped = crate::util::strip_trailing_zeros(new_auth_slice);
+        // AdjustAuthSize: the new authValue (without trailing zeros) must fit in the nameAlg
+        // digest (or `sizeof(TPMU_HA)` for a NULL nameAlg); it is then zero-padded to that size.
+        // C checks this before the parent qualified-name comparison.
+        let digest_size = object.public.name_alg.map_or(64, |alg| alg.digest_size()); // 64 == sizeof(TPMU_HA)
+        let stripped = crate::util::strip_trailing_zeros(cmd.new_auth.get_buffer());
         if stripped.len() > digest_size {
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
@@ -108,6 +71,29 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let new_auth_padded =
             Tpm2bAuth::from_bytes(&adjusted_auth[..digest_size]).map_err(|_| TpmRc::FAILURE)?;
 
+        // Resolve the claimed parent. Sequence objects can never be the parent, so the QN
+        // comparison below would fail for them.
+        if self.state().find_active_sequence(parent_handle).is_some() {
+            return Err(TpmRc::TYPE.with(Position::handle(2)));
+        }
+        let parent_obj = self.resolve_object(parent_handle, Position::handle(2))?;
+        let mut parent_seed_val = [0u8; 64];
+        let mut parent_qn_buf = [0u8; 66];
+        let parent_info =
+            self.parent_info_from_object(&parent_obj, &mut parent_seed_val, &mut parent_qn_buf);
+
+        // Validate that parent is the correct parent by QN comparison.
+        let qn_compare = self
+            .compute_qualified_name(
+                object.public.name_alg,
+                &parent_qn_buf[..parent_info.qn_len],
+                object.name.get_buffer(),
+            )
+            .map_err(|_| TpmRc::TYPE.with(Position::handle(2)))?;
+        let obj_dyn_qn = self.get_dynamic_qualified_name(&object);
+        if qn_compare.get_buffer() != obj_dyn_qn.get_buffer() {
+            return Err(TpmRc::TYPE.with(Position::handle(2)));
+        }
         // Construct new TpmtSensitive
         let mut prime_p = [0u8; 256];
         let sensitive_comp = match &object.public.parms_and_id {
@@ -153,7 +139,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let tpmt_sensitive = TpmtSensitive {
             auth_value: new_auth_padded,
-            seed_value: Tpm2bDigest::from_bytes(&object.seed).map_err(|_| TpmRc::FAILURE)?,
+            seed_value: Tpm2bDigest::from_bytes(object.seed_bytes()).map_err(|_| TpmRc::FAILURE)?,
             sensitive: sensitive_comp,
         };
 

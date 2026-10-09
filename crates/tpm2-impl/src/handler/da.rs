@@ -46,6 +46,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
+        // The command needs NV update (`RETURN_IF_NV_IS_NOT_AVAILABLE`).
+        self.return_if_nv_is_not_available()?;
+
         self.global_state.failed_tries = 0;
         self.nv_sync_persistent_failed_tries()?;
         self.global_state.da_pending_on_nv = false;
@@ -89,14 +92,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
+        // The command needs NV update (`RETURN_IF_NV_IS_NOT_AVAILABLE`).
+        self.return_if_nv_is_not_available()?;
+
         self.global_state.max_tries = cmd.new_max_tries;
         self.global_state.recovery_time = cmd.new_recovery_time;
         self.global_state.lockout_recovery = cmd.lockout_recovery;
         if cmd.new_recovery_time == 0 {
             self.global_state.failed_tries = 0;
-            self.nv_sync_persistent_failed_tries()?;
-            self.global_state.da_pending_on_nv = false;
         }
+
+        // Record the changes to NV (`NV_SYNC_PERSISTENT` of failedTries, maxTries, recoveryTime
+        // and lockoutRecovery); the DA parameters live in the persistent hierarchy data.
+        self.nv_sync_persistent_failed_tries()?;
+        self.global_state.da_pending_on_nv = false;
+        self.context.save_hierarchy_auths(self.global_state);
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;

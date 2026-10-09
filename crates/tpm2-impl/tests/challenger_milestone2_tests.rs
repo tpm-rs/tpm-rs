@@ -205,7 +205,10 @@ fn create_signing_key(
     private[..priv_len].copy_from_slice(&priv_buf[..priv_len]);
     let signing_key = TransientObject {
         handle: 0x80000001,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: name.into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -512,10 +515,13 @@ fn test_challenger_policy_signed_expiration_and_timeout() {
     // 3. Advance clock to 10001 ms (exceeding 10000 ms timeout)
     shared_time.store(10001, Ordering::SeqCst);
 
+    // The policy session itself never expires for policy commands (C only checks the session
+    // timeout when the session authorizes a command); the new authorization's own expiration
+    // is what has passed: TPM_RC_EXPIRED + RC_P4 (`expiration`, C PolicyParameterChecks).
     let res2 = execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]);
     assert_eq!(
         res2.err(),
-        Some(TpmRc::EXPIRED.with(Position::handle(2)).get())
+        Some(TpmRc::EXPIRED.with(Position::parameter(4)).get())
     );
 }
 
@@ -1119,7 +1125,10 @@ fn test_challenger_policy_signed_invalid_key_type() {
     let name = compute_key_name(tpm.platform.crypto, &public);
     let sym_key = TransientObject {
         handle: 0x80000002,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: name.into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -1241,10 +1250,11 @@ fn test_challenger_policy_signed_scheme_mismatch() {
     };
 
     let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]);
-    // Should fail with signature_for because verify_inner fails when trying to verify ECDSA signature with RSA key
+    // C CryptRsaValidateSignature rejects a non-RSA sigAlg with TPM_RC_SCHEME (CryptRsa.c:1200),
+    // which PolicySigned blames on `auth` (PolicySigned.c:96): SCHEME + P5.
     assert_eq!(
         res.err(),
-        Some(TpmRc::SIGNATURE.with(Position::parameter(5)).get())
+        Some(TpmRc::SCHEME.with(Position::parameter(5)).get())
     );
 }
 
@@ -1624,11 +1634,13 @@ fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
         check_ticket: ticket,
     };
 
+    // As in C, policy commands never check the session timeout (only CheckPolicyAuthSession does
+    // when the session authorizes a command), so PolicyAuthorize succeeds. It must not clear the
+    // timeout either, so the expired session still cannot authorize anything.
     let res2 = execute_tpm_command(&mut tpm, &mut global_state, &pa_handles, &pa_cmd, &[]);
-    assert_eq!(
-        res2.err(),
-        Some(TpmRc::EXPIRED.with(Position::handle(1)).get())
-    );
+    assert!(res2.is_ok(), "PolicyAuthorize failed: {:?}", res2.err());
+    let session = global_state.session(policy_session_handle.0).unwrap();
+    assert_eq!(session.timeout, 10000);
 }
 
 #[test]

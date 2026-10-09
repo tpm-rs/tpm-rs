@@ -39,7 +39,10 @@ fn test_adv_context_save_keystream_reuse() {
 
     global_state.transient_objects[0] = Some(TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),
@@ -150,6 +153,8 @@ fn test_context_save_session_success() {
             nv_written_state: false,
             command_locality: 0,
             include_auth: false,
+            is_da_bound: false,
+            is_lockout_bound: false,
         })
         .unwrap();
 

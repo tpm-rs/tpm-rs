@@ -136,10 +136,11 @@ fn test_da_lock_reset_success() {
     global_state.failed_tries = 3;
     assert_eq!(global_state.failed_tries, 3);
 
-    // Authorize with TPM_RH_LOCKOUT (0x4000000A) and send TPM2_DictionaryAttackLockReset (without session 0x8001 and with PW session 0x8002)
+    // Without a session, the lockout handle (USER role) is not authorized: C
+    // `CheckAuthNoSession` returns TPM_RC_AUTH_MISSING regardless of the (empty) lockoutAuth.
     let rc = send_da_lock_reset(&mut tpm, &mut global_state, 0x4000000A, 0x8001);
-    assert_eq!(rc, 0);
-    assert_eq!(global_state.failed_tries, 0);
+    assert_eq!(rc, 0x125); // TPM_RC_AUTH_MISSING
+    assert_eq!(global_state.failed_tries, 3);
 
     global_state.failed_tries = 5;
     let rc2 = send_da_lock_reset(&mut tpm, &mut global_state, 0x4000000A, 0x8002);
@@ -159,7 +160,7 @@ fn test_da_parameters_update() {
         5,
         100,
         1000,
-        0x8001,
+        0x8002,
     );
     assert_eq!(rc, 0);
     assert_eq!(global_state.max_tries, 5);
@@ -189,7 +190,7 @@ fn test_da_parameters_recovery_time_zero_disables_da() {
     global_state.failed_tries = 3;
 
     // Setting recoveryTime to 0 disables DA and resets failedTries to 0
-    let rc = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 0, 1000, 0x8001);
+    let rc = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 0, 1000, 0x8002);
     assert_eq!(rc, 0);
     assert_eq!(global_state.recovery_time, 0);
     assert_eq!(global_state.failed_tries, 0);
@@ -208,7 +209,7 @@ fn test_da_used_unorderly_crash_increments_and_persists_failed_tries() {
         5,
         100,
         1000,
-        0x8001,
+        0x8002,
     );
     assert_eq!(rc, 0);
     assert_eq!(global_state.failed_tries, 0);
@@ -248,7 +249,7 @@ fn test_da_self_heal_and_host_migration_monotonic_clock_discontinuity() {
     tpm.platform.timer.set_time(2_500_000_000); // Simulate Host A with 30 days uptime
 
     // Configure DA: maxTries=5, recoveryTime=100s, lockoutRecovery=200s
-    let rc = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 100, 200, 0x8001);
+    let rc = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 100, 200, 0x8002);
     assert_eq!(rc, 0);
 
     // Simulate 3 failed tries registered at current tpm_time_ms
@@ -285,7 +286,7 @@ fn test_lockout_auth_recovery_timer() {
     tpm.platform.timer.set_time(1_000_000);
 
     // Set lockoutRecovery = 200 seconds
-    let rc = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 100, 200, 0x8001);
+    let rc = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 100, 200, 0x8002);
     assert_eq!(rc, 0);
 
     // Set non-empty lockout_auth
@@ -314,7 +315,7 @@ fn test_da_timers_preserved_across_orderly_shutdown_and_startup() {
     tpm.platform.timer.set_time(10_000);
 
     // Configure DA: recoveryTime = 100s
-    let rc = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 100, 200, 0x8001);
+    let rc = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 100, 200, 0x8002);
     assert_eq!(rc, 0);
 
     global_state.failed_tries = 2;

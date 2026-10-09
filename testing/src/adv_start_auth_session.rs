@@ -48,7 +48,7 @@ fn create_rsa_decrypt_key(sim: &mut Simulator) -> Handle {
         primary_handle: Handle::RH_OWNER,
     };
     let (_, create_rsp_handles) =
-        execute_with_password_sessions(sim, &create_cmd, create_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[]).unwrap();
     create_rsp_handles.object_handle
 }
 
@@ -457,9 +457,14 @@ fn test_invalid_tpm_key_type_keyedhash() {
             | TpmaObject::FIXED_PARENT
             | TpmaObject::SENSITIVE_DATA_ORIGIN
             | TpmaObject::USER_WITH_AUTH
-            | TpmaObject::DECRYPT,
+            | TpmaObject::SIGN_ENCRYPT,
         auth_policy: Tpm2bDigest::default(),
-        parms_and_id: PublicParmsAndId::KeyedHash(None, Tpm2bDigest::default()),
+        // A valid HMAC key (a DECRYPT keyedHash needs an XOR scheme); any KEYEDHASH key is
+        // rejected as tpmKey because it is not asymmetric.
+        parms_and_id: PublicParmsAndId::KeyedHash(
+            Some(tpm2::TpmtKeyedHashScheme::Hmac(TpmiAlgHash::Sha256)),
+            Tpm2bDigest::default(),
+        ),
     };
     let in_public = tpm2::Tpm2b(pub_area);
     let sensitive_create = TpmsSensitiveCreate {
@@ -477,7 +482,7 @@ fn test_invalid_tpm_key_type_keyedhash() {
         primary_handle: Handle::RH_OWNER,
     };
     let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
     let keyedhash_key_handle = create_rsp_handles.object_handle;
 
     // Call StartAuthSession with KeyedHash key as tpm_key
@@ -540,13 +545,15 @@ fn test_invalid_tpm_key_attributes() {
         primary_handle: Handle::RH_OWNER,
     };
     let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
     let rsa_key_handle = create_rsp_handles.object_handle;
 
     // Call StartAuthSession
+    // A non-empty salt: C checks `encryptedSalt.size == 0` (TPM_RCS_VALUE + RC_P2) before the
+    // publicOnly / DECRYPT checks.
     let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
-        encrypted_salt: Tpm2bEncryptedSecret::default(),
+        encrypted_salt: Tpm2bEncryptedSecret::from_bytes(&[0x11; 256]).unwrap(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
@@ -633,7 +640,9 @@ fn test_unsupported_non_password_session_auth() {
     )
     .unwrap();
 
-    session.attributes = tpm2::TpmaSession::CONTINUE_SESSION;
+    // ReadPublic has no authorization handles, so the session is unassociated: C
+    // ParseSessionBuffer requires it to be an audit, encrypt or decrypt session.
+    session.attributes = tpm2::TpmaSession::CONTINUE_SESSION | tpm2::TpmaSession::AUDIT;
 
     // Now try to execute ReadPublic using the HMAC session.
     let read_cmd = ReadPublic {};
@@ -760,9 +769,11 @@ fn test_invalid_tpm_key_type_public_only() {
     let public_key_handle = load_rsa_public_only_key(&mut sim);
 
     // Call StartAuthSession
+    // A non-empty salt: C checks `encryptedSalt.size == 0` (TPM_RCS_VALUE + RC_P2) before the
+    // publicOnly / DECRYPT checks.
     let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
-        encrypted_salt: Tpm2bEncryptedSecret::default(),
+        encrypted_salt: Tpm2bEncryptedSecret::from_bytes(&[0x11; 256]).unwrap(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,

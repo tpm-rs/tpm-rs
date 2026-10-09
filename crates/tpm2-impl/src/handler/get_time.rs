@@ -1,10 +1,9 @@
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{
-    handler::CommandHandler,
+    handler::{CommandHandler, TransientObject},
     owned::{
-        OwnedAuth, OwnedAuthCommand, OwnedEccParameter, OwnedName, OwnedPublic, OwnedPublicKeyRsa,
-        OwnedPublicParmsAndId, OwnedSignature,
+        OwnedEccParameter, OwnedPublic, OwnedPublicKeyRsa, OwnedPublicParmsAndId, OwnedSignature,
     },
     req_resp::RequestThenResponse,
 };
@@ -15,12 +14,32 @@ use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{GetTime, GetTimeHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
-use tpm2::errors::TpmRc;
+use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmGenerated};
 use tpm2::{
     TpmEccCurve, TpmaObject, TpmiAlgHash, TpmsAttest, TpmsTimeAttestInfo, TpmtEccScheme,
-    TpmtRsaScheme, TpmtSigScheme, TpmuAttest,
+    TpmtKeyedHashScheme, TpmtRsaScheme, TpmtSigScheme, TpmuAttest,
 };
+
+/// The default signing scheme of a key, as seen by `CryptSelectSignScheme()`.
+enum KeySignScheme {
+    /// The key has no default scheme (`TPM_ALG_NULL`).
+    Null,
+    /// The key's default scheme is a signing scheme.
+    Sign(TpmtSigScheme),
+    /// The key's default scheme is not a signing scheme (e.g. OAEP, ECDH, XOR), so no signing
+    /// scheme can ever be compatible with it.
+    NonSign,
+}
+
+/// Returns `true` if `hash_alg` is a hash algorithm implemented by this TPM for signing
+/// (`CryptHashIsValidAlg(hashAlg, FALSE)`).
+fn is_implemented_sign_hash(hash_alg: TpmiAlgHash) -> bool {
+    matches!(
+        hash_alg,
+        TpmiAlgHash::Sha1 | TpmiAlgHash::Sha256 | TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512
+    )
+}
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -34,9 +53,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// TCG TPM 2.0 Library Specification, Part 3: Commands, Section 18.6 (TPM2_GetTime).
     ///
     /// # Relationships
-    /// - The `sign_handle` must reference a loaded signing key (created by [TpmCc::Create](create.rs)
-    ///   or [TpmCc::CreatePrimary](create_primary.rs) and loaded).
-    /// - Requires authorization from the Endorsement or Owner hierarchy admin specified by `privacy_admin_handle`.
+    /// - The `sign_handle` must reference a loaded (transient or persistent) signing key, or be
+    ///   `TPM_RH_NULL`.
+    /// - Requires authorization from the privacy administrator: `privacy_admin_handle` is a
+    ///   `TPMI_RH_ENDORSEMENT` and therefore must be `TPM_RH_ENDORSEMENT`.
     pub fn get_time(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
@@ -44,60 +64,66 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let sign_handle = handles.sign_handle;
         let privacy_admin_handle = handles.privacy_admin_handle;
 
+        // TPMI_RH_ENDORSEMENT (no `+`): only TPM_RH_ENDORSEMENT is a valid value.
+        if privacy_admin_handle.0 != Handle::RH_ENDORSEMENT.0 {
+            return Err(TpmRc::VALUE.with(Position::handle(1)));
+        }
+
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let auths = &self.global_state.parsed_auths[..self.global_state.parsed_auths_len];
 
         let cmd = request.try_unmarshal::<GetTime>()?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // 1. Validate Admin and Signer authorization
-        let creds = self.validate_get_time_sessions(
-            sign_handle,
-            privacy_admin_handle,
-            auths,
-            num_sessions,
-        )?;
-        let public_opt = creds.signer_public;
-        let actual_priv_key_opt = creds.signer_private;
-        let _qualified_signer = creds.signer_qualified_name;
-
-        // 2. Read timer and build attest structure
-        let time_info = self.get_time_info();
-        let clock_info = time_info.clock_info;
-
-        let time_attest_info = TpmsTimeAttestInfo {
-            time: time_info,
-            firmware_version: 0x00010001,
-        };
-
-        let actual_in_scheme =
-            self.resolve_attest_scheme(sign_handle, public_opt.as_ref(), cmd.in_scheme)?;
-        let signer_obj_opt = if sign_handle.0 != 0x40000007 {
-            self.global_state.find_transient_object(sign_handle.0)
-        } else {
+        // 1. Resolve the signing key (transient or persistent; TPMI_DH_OBJECT+).
+        let signer_obj_opt = if sign_handle.0 == Handle::RH_NULL.0 {
             None
+        } else {
+            Some(self.resolve_object(sign_handle.0, Position::handle(2))?)
         };
-        let (qualified_signer, extra_data) =
-            self.compute_attest_fields(signer_obj_opt, &actual_in_scheme, &cmd.qualifying_data)?;
+
+        // 2. Both the privacy administrator and a non-NULL signing key need an authorization.
+        let expected_sessions = if signer_obj_opt.is_some() { 2 } else { 1 };
+        if num_sessions < expected_sessions {
+            return Err(TpmRc::AUTH_MISSING);
+        }
+
+        // 3. IsSigningObject() / CryptSelectSignScheme().
+        let actual_in_scheme = self.resolve_attest_scheme(
+            signer_obj_opt.as_ref().map(|s| &s.public),
+            cmd.in_scheme,
+            Position::handle(2),
+            Position::parameter(2),
+        )?;
+
+        // 4. Build the attestation structure. The attested time info carries the plain clock and
+        //    firmware version; only the header copies are obfuscated.
+        let header = self.compute_attest_fields(
+            signer_obj_opt.as_ref(),
+            &actual_in_scheme,
+            &cmd.qualifying_data,
+        )?;
+        let time_attest_info = TpmsTimeAttestInfo {
+            time: self.get_time_info(),
+            firmware_version: super::ATTEST_FIRMWARE_VERSION,
+        };
 
         let attest = TpmsAttest {
             magic: TpmGenerated,
-            qualified_signer,
-            extra_data,
-            clock_info,
-            firmware_version: 0x00010001,
+            qualified_signer: header.qualified_signer,
+            extra_data: header.extra_data,
+            clock_info: header.clock_info,
+            firmware_version: header.firmware_version,
             attested: TpmuAttest::Time(time_attest_info),
         };
 
         let mut attest_buf = [0u8; TpmsAttest::MAX_SIZE];
         let attest_len = attest.marshal(&mut attest_buf);
 
-        // 4. Sign the attestation payload
+        // 5. Sign the attestation payload.
         let owned_sig = self.sign_attestation_block(
-            sign_handle,
-            actual_priv_key_opt.as_ref(),
+            signer_obj_opt.as_ref(),
             actual_in_scheme,
             &attest_buf[..attest_len],
             cmd.qualifying_data.get_buffer(),
@@ -114,205 +140,131 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
-    /// Validates the privacy_admin and sign handles/sessions and returns the resolved
-    /// objects credentials.
-    fn validate_get_time_sessions(
-        &self,
-        sign_handle: Handle,
-        privacy_admin_handle: Handle,
-        _auths: &[OwnedAuthCommand],
-        num_sessions: usize,
-    ) -> Result<SignerCredentials, TpmRc> {
-        if privacy_admin_handle.0 != Handle::RH_ENDORSEMENT.0
-            && privacy_admin_handle.0 != Handle::RH_OWNER.0
-            && privacy_admin_handle.0 != Handle::RH_NULL.0
-        {
-            return Err(TpmRc::VALUE.to_rc());
-        }
-
-        let mut priv_opt = None;
-        let mut actual_priv_key_opt = None;
-        let mut public_opt = None;
-        let mut qualified_signer = OwnedName::default();
-
-        if sign_handle.0 != 0x40000007 {
-            let obj = self
-                .global_state
-                .find_transient_object(sign_handle.0)
-                .ok_or(TpmRc::VALUE.to_rc())?;
-            qualified_signer = obj.qualified_name;
-            priv_opt = Some(obj.auth);
-            public_opt = Some(obj.public);
-            actual_priv_key_opt = Some((obj.private, obj.private_len));
-        }
-
-        let privacy_admin_auth_required = privacy_admin_handle.0 != Handle::RH_NULL.0;
-        let sign_auth_required = sign_handle.0 != 0x40000007;
-
-        let mut expected_sessions = 0;
-        let privacy_admin_session_idx = if privacy_admin_auth_required {
-            let idx = expected_sessions;
-            expected_sessions += 1;
-            Some(idx)
-        } else {
-            None
-        };
-        let sign_session_idx = if sign_auth_required {
-            let idx = expected_sessions;
-            expected_sessions += 1;
-            Some(idx)
-        } else {
-            None
-        };
-
-        if num_sessions < expected_sessions {
-            return Err(TpmRc::AUTH_MISSING);
-        }
-
-        if let Some(_idx) = privacy_admin_session_idx {
-            let _expected_auth = if privacy_admin_handle.0 == Handle::RH_OWNER.0 {
-                self.global_state.owner_auth.get_buffer()
-            } else if privacy_admin_handle.0 == Handle::RH_ENDORSEMENT.0 {
-                self.global_state.endorsement_auth.get_buffer()
-            } else {
-                &[]
-            };
-        }
-
-        if let Some(_idx) = sign_session_idx {
-            let _expected_auth = priv_opt.expect("sign_handle is not null, so auth is populated");
-        }
-
-        Ok(SignerCredentials {
-            privacy_admin_auth: priv_opt,
-            signer_public: public_opt,
-            signer_private: actual_priv_key_opt,
-            signer_qualified_name: qualified_signer,
-        })
-    }
-
-    /// Resolves the signature scheme to use for attestation (either using key-defined scheme
-    /// or mapping the input scheme, and checking cryptographic requirements).
+    /// Validates the signing key and selects the signing scheme for an attestation command,
+    /// mirroring `IsSigningObject()` (`Attest_spt.c`) followed by `CryptSelectSignScheme()`
+    /// (`CryptUtil.c`).
+    ///
+    /// - `signer_public` is `None` when `signHandle` is `TPM_RH_NULL`: the NULL scheme is then
+    ///   selected regardless of `in_scheme` and `Ok(None)` is returned.
+    /// - A key without `sign` set, or a `TPM_ALG_SYMCIPHER` key, fails with
+    ///   `TPM_RC_KEY + sign_pos`.
+    /// - If both `in_scheme` and the key's default scheme are NULL, if `in_scheme` is NULL while the
+    ///   key's default is a split-signing scheme (ECDAA), if both are set but differ in scheme or
+    ///   hash, or if the selected scheme is not valid for the key type (RSA: RSASSA/RSAPSS,
+    ///   ECC: ECDSA/ECDAA, KEYEDHASH: HMAC) or uses an unimplemented hash, the command fails with
+    ///   `TPM_RC_SCHEME + scheme_pos`.
     pub(crate) fn resolve_attest_scheme(
         &self,
-        sign_handle: Handle,
-        public_opt: Option<&OwnedPublic>,
+        signer_public: Option<&OwnedPublic>,
         in_scheme: Option<TpmtSigScheme>,
+        sign_pos: Position,
+        scheme_pos: Position,
     ) -> Result<Option<TpmtSigScheme>, TpmRc> {
-        if sign_handle.0 == 0x40000007 {
-            if in_scheme.is_some() {
-                return Err(TpmRc::SCHEME.to_rc());
-            }
+        let Some(public_area) = signer_public else {
             return Ok(None);
-        }
+        };
 
-        let public_area = public_opt.expect("sign_handle is not null, so public_area is populated");
+        // IsSigningObject()
         if !public_area
             .object_attributes
             .contains(TpmaObject::SIGN_ENCRYPT)
+            || matches!(public_area.parms_and_id, OwnedPublicParmsAndId::Sym(..))
         {
-            return Err(TpmRc::KEY.to_rc());
+            return Err(TpmRc::KEY.with(sign_pos));
         }
 
-        let actual_in_scheme = match &public_area.parms_and_id {
-            OwnedPublicParmsAndId::Rsa(rsa_parms, _) => match in_scheme {
-                None => match rsa_parms.scheme {
-                    Some(TpmtRsaScheme::Rsassa(h)) => Some(TpmtSigScheme::Rsassa(h)),
-                    Some(TpmtRsaScheme::Rsapss(h)) => Some(TpmtSigScheme::Rsapss(h)),
-                    _ => return Err(TpmRc::SCHEME.to_rc()),
-                },
-                Some(in_s) => {
-                    if let Some(key_scheme) = rsa_parms.scheme {
-                        let scheme_match = match (in_s, key_scheme) {
-                            (TpmtSigScheme::Rsassa(s1), TpmtRsaScheme::Rsassa(s2)) => s1 == s2,
-                            (TpmtSigScheme::Rsapss(s1), TpmtRsaScheme::Rsapss(s2)) => s1 == s2,
-                            _ => false,
-                        };
-                        if !scheme_match {
-                            return Err(TpmRc::SCHEME.to_rc());
-                        }
-                    } else {
-                        match in_s {
-                            TpmtSigScheme::Rsassa(_) | TpmtSigScheme::Rsapss(_) => {}
-                            _ => return Err(TpmRc::SCHEME.to_rc()),
-                        }
-                    }
-                    Some(in_s)
-                }
+        let scheme_err = TpmRc::SCHEME.with(scheme_pos);
+        let key_scheme = match &public_area.parms_and_id {
+            OwnedPublicParmsAndId::Rsa(parms, _) => match parms.scheme {
+                None => KeySignScheme::Null,
+                Some(TpmtRsaScheme::Rsassa(h)) => KeySignScheme::Sign(TpmtSigScheme::Rsassa(h)),
+                Some(TpmtRsaScheme::Rsapss(h)) => KeySignScheme::Sign(TpmtSigScheme::Rsapss(h)),
+                Some(_) => KeySignScheme::NonSign,
             },
-            OwnedPublicParmsAndId::Ecc(ecc_parms, _) => match in_scheme {
-                None => match ecc_parms.scheme {
-                    Some(TpmtEccScheme::Ecdsa(h)) => Some(TpmtSigScheme::Ecdsa(h)),
-                    Some(TpmtEccScheme::Ecdaa(s)) => Some(TpmtSigScheme::Ecdaa(s)),
-                    Some(TpmtEccScheme::Sm2(h)) => Some(TpmtSigScheme::Sm2(h)),
-                    Some(TpmtEccScheme::Ecschnorr(h)) => Some(TpmtSigScheme::Ecschnorr(h)),
-                    _ => return Err(TpmRc::SCHEME.to_rc()),
-                },
-                Some(in_s) => {
-                    if let Some(key_scheme) = ecc_parms.scheme {
-                        let scheme_match = match (in_s, key_scheme) {
-                            (TpmtSigScheme::Ecdsa(s1), TpmtEccScheme::Ecdsa(s2)) => s1 == s2,
-                            (TpmtSigScheme::Ecdaa(s1), TpmtEccScheme::Ecdaa(s2)) => {
-                                s1.hash_alg == s2.hash_alg
-                            }
-                            (TpmtSigScheme::Sm2(s1), TpmtEccScheme::Sm2(s2)) => s1 == s2,
-                            (TpmtSigScheme::Ecschnorr(s1), TpmtEccScheme::Ecschnorr(s2)) => {
-                                s1 == s2
-                            }
-                            _ => false,
-                        };
-                        if !scheme_match {
-                            return Err(TpmRc::SCHEME.to_rc());
-                        }
-                    } else {
-                        match in_s {
-                            TpmtSigScheme::Ecdsa(_)
-                            | TpmtSigScheme::Ecdaa(_)
-                            | TpmtSigScheme::Sm2(_)
-                            | TpmtSigScheme::Ecschnorr(_) => {}
-                            _ => return Err(TpmRc::SCHEME.to_rc()),
-                        }
-                    }
-                    Some(in_s)
+            OwnedPublicParmsAndId::Ecc(parms, _) => match parms.scheme {
+                None => KeySignScheme::Null,
+                Some(TpmtEccScheme::Ecdsa(h)) => KeySignScheme::Sign(TpmtSigScheme::Ecdsa(h)),
+                Some(TpmtEccScheme::Ecdaa(s)) => KeySignScheme::Sign(TpmtSigScheme::Ecdaa(s)),
+                Some(TpmtEccScheme::Sm2(h)) => KeySignScheme::Sign(TpmtSigScheme::Sm2(h)),
+                Some(TpmtEccScheme::Ecschnorr(h)) => {
+                    KeySignScheme::Sign(TpmtSigScheme::Ecschnorr(h))
                 }
+                Some(_) => KeySignScheme::NonSign,
             },
-            _ => return Err(TpmRc::KEY.to_rc()),
+            OwnedPublicParmsAndId::KeyedHash(scheme, _) => match scheme {
+                None => KeySignScheme::Null,
+                Some(TpmtKeyedHashScheme::Hmac(h)) => KeySignScheme::Sign(TpmtSigScheme::Hmac(*h)),
+                Some(_) => KeySignScheme::NonSign,
+            },
+            // Only asymmetric keys and keyed hashes can sign.
+            _ => return Err(scheme_err),
         };
 
-        Ok(actual_in_scheme)
+        let selected = match (key_scheme, in_scheme) {
+            // Input and default can't both be NULL.
+            (KeySignScheme::Null, None) => return Err(scheme_err),
+            (KeySignScheme::Null, Some(input)) => input,
+            // A non-signing default can neither be copied nor match a signing input scheme.
+            (KeySignScheme::NonSign, _) => return Err(scheme_err),
+            // A split-signing default requires caller-provided scheme data (the commit count).
+            (KeySignScheme::Sign(TpmtSigScheme::Ecdaa(_)), None) => return Err(scheme_err),
+            (KeySignScheme::Sign(default), None) => default,
+            (KeySignScheme::Sign(default), Some(input)) => {
+                if default.algorithm() != input.algorithm()
+                    || default.hash_alg() != input.hash_alg()
+                {
+                    return Err(scheme_err);
+                }
+                // Keep the input scheme: it may carry split-signing data (ECDAA count).
+                input
+            }
+        };
+
+        // CryptIsValidSignScheme(): scheme compatible with the key type, valid hash algorithm.
+        let valid_for_type = matches!(
+            (&public_area.parms_and_id, selected),
+            (
+                OwnedPublicParmsAndId::Rsa(..),
+                TpmtSigScheme::Rsassa(_) | TpmtSigScheme::Rsapss(_)
+            ) | (
+                OwnedPublicParmsAndId::Ecc(..),
+                TpmtSigScheme::Ecdsa(_) | TpmtSigScheme::Ecdaa(_)
+            ) | (OwnedPublicParmsAndId::KeyedHash(..), TpmtSigScheme::Hmac(_))
+        );
+        let valid_hash = selected.hash_alg().is_some_and(is_implemented_sign_hash);
+        if !valid_for_type || !valid_hash {
+            return Err(scheme_err);
+        }
+
+        Ok(Some(selected))
     }
 
-    /// Sign the attestation structure if a signer handle was provided, returning
-    /// the serialized signature object.
+    /// Signs a marshaled attestation structure, mirroring `SignAttestInfo()` (`Attest_spt.c`).
+    ///
+    /// - When `signer` is `None` (`signHandle == TPM_RH_NULL`), no signature is produced and
+    ///   `Ok(None)` is returned (the response carries a `TPM_ALG_NULL` signature).
+    /// - Otherwise the digest `H(attest_bytes)` is signed with `scheme` (RSASSA, RSAPSS, ECDSA,
+    ///   ECDAA or HMAC). Errors from the signing operation are returned without a position, as in
+    ///   the reference implementation.
+    /// - Because a signed attestation reveals the current clock, a successful signature clears
+    ///   the NV orderly state (`NvClearOrderly()`), which fails with `TPM_RC_NV_UNAVAILABLE` when
+    ///   the TPM is orderly and NV is unavailable.
     pub(crate) fn sign_attestation_block(
-        &self,
-        sign_handle: Handle,
-        actual_priv_key_opt: Option<&([u8; 1536], usize)>,
-        actual_in_scheme: Option<TpmtSigScheme>,
+        &mut self,
+        signer: Option<&TransientObject>,
+        scheme: Option<TpmtSigScheme>,
         attest_bytes: &[u8],
         qualifying_data: &[u8],
     ) -> Result<Option<OwnedSignature>, TpmRc> {
-        let actual_in_scheme = match actual_in_scheme {
-            None => {
-                if sign_handle.0 != 0x40000007 {
-                    return Err(TpmRc::SCHEME.to_rc());
-                }
-                return Ok(None);
-            }
-            Some(s) => s,
+        let Some(signer) = signer else {
+            return Ok(None);
         };
+        let scheme = scheme.ok_or_else(|| TpmRc::SCHEME.to_rc())?;
+        let priv_key = &signer.private[..signer.private_len];
 
-        if sign_handle.0 == 0x40000007 {
-            return Err(TpmRc::SCHEME.to_rc());
-        }
-
-        let signature = if let TpmtSigScheme::Ecdaa(ecdaa_s) = actual_in_scheme {
+        let signature = if let TpmtSigScheme::Ecdaa(ecdaa_s) = scheme {
             let hash_alg = ecdaa_s.hash_alg;
-            let obj = self
-                .global_state
-                .find_transient_object(sign_handle.0)
-                .ok_or(TpmRc::HANDLE.to_rc())?;
-            let curve = match &obj.public.parms_and_id {
+            let curve = match &signer.public.parms_and_id {
                 OwnedPublicParmsAndId::Ecc(parms, _) => parms.curve_id,
                 _ => return Err(TpmRc::KEY.to_rc()),
             };
@@ -323,53 +275,63 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 TpmEccCurve::NistP521 => 66,
                 _ => return Err(TpmRc::VALUE.to_rc()),
             };
-            let commit_r =
-                self.compute_commit_r(ecdaa_s.count, obj.name.get_buffer(), param_size)?;
-            let (digest_buf, digest_len) = self.compute_hash(hash_alg, &[attest_bytes])?;
-            let mut ecdaa_digest = [0u8; 128];
-            let q_len = qualifying_data.len().min(64);
-            ecdaa_digest[..q_len].copy_from_slice(&qualifying_data[..q_len]);
-            ecdaa_digest[q_len..q_len + digest_len].copy_from_slice(&digest_buf[..digest_len]);
-            let total_digest_len = q_len + digest_len;
+            // CryptGenerateR(): the count must reference an outstanding commitment
+            // (bare TPM_RC_VALUE otherwise, as returned by TpmEcc_SignEcdaa()).
+            let (commit_r, r_len) =
+                self.generate_committed_r(ecdaa_s.count, signer.name.get_buffer(), curve)?;
+            // For the anonymous scheme FillInAttestInfo() keeps qualifyingData out of the
+            // attestation, so SignAttestInfo() signs H(qualifyingData || H(attest)) when
+            // qualifyingData is non-empty, and H(attest) otherwise.
+            let (mut digest_buf, mut digest_len) = self.compute_hash(hash_alg, &[attest_bytes])?;
+            if !qualifying_data.is_empty() {
+                (digest_buf, digest_len) =
+                    self.compute_hash(hash_alg, &[qualifying_data, &digest_buf[..digest_len]])?;
+            }
             let mut sig_r = [0u8; 128];
             let mut sig_s = [0u8; 128];
-            let priv_buf = &actual_priv_key_opt
-                .expect("sign_handle is not null, so priv_key is populated")
-                .0;
-            let priv_len = actual_priv_key_opt
-                .expect("sign_handle is not null, so priv_key is populated")
-                .1;
             self.crypto()
                 .ecdaa_sign(
                     curve,
-                    &commit_r[..param_size],
-                    &self.global_state.commit_x[..param_size.min(32)],
-                    &self.global_state.commit_p1[..(param_size * 2).min(64)],
-                    &priv_buf[..priv_len],
-                    &ecdaa_digest[..total_digest_len],
+                    &commit_r[..r_len],
+                    &self.global_state.commit_x[..param_size],
+                    &self.global_state.commit_p1[..param_size * 2],
+                    priv_key,
+                    &digest_buf[..digest_len],
                     &mut sig_r[..param_size],
                     &mut sig_s[..param_size],
                 )
                 .map_err(|_| TpmRc::FAILURE)?;
-            OwnedSignature::Ecdaa {
+            let signature = OwnedSignature::Ecdaa {
                 hash: hash_alg,
                 signature_r: OwnedEccParameter::from_bytes(&sig_r[..param_size])
                     .map_err(|_| TpmRc::FAILURE)?,
                 signature_s: OwnedEccParameter::from_bytes(&sig_s[..param_size])
                     .map_err(|_| TpmRc::FAILURE)?,
+            };
+            // CryptEndCommit(): a commitment can only be used for one signature (reusing `r`
+            // for two different digests reveals the private key).
+            self.end_commit(ecdaa_s.count);
+            signature
+        } else if let TpmtSigScheme::Hmac(hash_alg) = scheme {
+            // CryptHmacSign(): an HMAC (keyed with the sensitive bits) over the digest.
+            if !is_implemented_sign_hash(hash_alg) {
+                return Err(TpmRc::HASH.to_rc());
+            }
+            let (digest_buf, digest_len) = self.compute_hash(hash_alg, &[attest_bytes])?;
+            let (hmac, _) = self.compute_hmac(hash_alg, priv_key, &[&digest_buf[..digest_len]])?;
+            OwnedSignature::Hmac {
+                hash: hash_alg,
+                digest: hmac,
             }
         } else {
-            let (hash_alg, sig_alg) = match actual_in_scheme {
+            let (hash_alg, sig_alg) = match scheme {
                 TpmtSigScheme::Rsassa(h) => (h, Alg::RSASSA),
                 TpmtSigScheme::Rsapss(h) => (h, Alg::RSAPSS),
                 TpmtSigScheme::Ecdsa(h) => (h, Alg::ECDSA),
                 _ => return Err(TpmRc::SCHEME.to_rc()),
             };
 
-            if !matches!(
-                hash_alg,
-                TpmiAlgHash::Sha1 | TpmiAlgHash::Sha256 | TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512
-            ) {
+            if !is_implemented_sign_hash(hash_alg) {
                 return Err(TpmRc::HASH.to_rc());
             }
 
@@ -380,19 +342,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut sig_bytes = [0u8; 512];
             let sig_len = self
                 .crypto()
-                .sign_inner(
-                    sig_alg,
-                    &actual_priv_key_opt
-                        .expect("sign_handle is not null, so priv_key is populated")
-                        .0[..actual_priv_key_opt
-                        .expect("sign_handle is not null, so priv_key is populated")
-                        .1],
-                    digest_ha,
-                    &mut sig_bytes,
-                )
+                .sign_inner(sig_alg, priv_key, digest_ha, &mut sig_bytes)
                 .map_err(|_| TpmRc::FAILURE)?;
 
-            match actual_in_scheme {
+            match scheme {
                 TpmtSigScheme::Rsassa(_) => {
                     let sig_buf = OwnedPublicKeyRsa::from_bytes(&sig_bytes[..sig_len])
                         .map_err(|_| TpmRc::FAILURE)?;
@@ -428,13 +381,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 _ => return Err(TpmRc::SCHEME.to_rc()),
             }
         };
+
+        // The attestation exposes the current clock, so NV is no longer orderly with respect to
+        // the RAM state.
+        self.nv_clear_orderly()?;
+
         Ok(Some(signature))
     }
-}
-
-struct SignerCredentials {
-    privacy_admin_auth: Option<OwnedAuth>,
-    signer_public: Option<OwnedPublic>,
-    signer_private: Option<([u8; 1536], usize)>,
-    signer_qualified_name: OwnedName,
 }

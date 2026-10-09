@@ -114,14 +114,14 @@ fn test_rh_null_sign_handle() {
         sign_handle: Handle::RH_NULL,
     };
 
-    // Since sign_handle is RHNull, it doesn't require an auth session.
-    // The privacy_admin_handle (RH_ENDORSEMENT) requires an auth session. So only 1 session is expected.
+    // signHandle has the USER auth role even when it is TPM_RH_NULL, so C
+    // requires a session for it too (SessionProcess.c:1641-1651): 2 sessions.
     let mut resp_buffer = [0u8; 4096];
     let (resp, _) = execute_get_time(
         &mut sim,
         &get_time_cmd,
         get_time_handles,
-        1,
+        2,
         &[],
         &mut resp_buffer,
     )

@@ -371,7 +371,9 @@ fn test_get_session_audit_digest_non_existent_session() {
 
     let resp =
         execute_with_password_sessions_status(&mut sim, &get_audit_cmd, get_audit_handles, 2, &[]);
-    assert_eq!(resp.err(), Some(0x38b));
+    // C EntityGetLoadStatus: an unloaded HMAC session handle yields
+    // TPM_RC_REFERENCE_H0 + 2 (0x912) for the third handle (Entity.c:146-149).
+    assert_eq!(resp.err(), Some(0x912));
 
     flush_context(&mut sim, ak_handle).unwrap();
 }
@@ -539,7 +541,8 @@ fn test_certify_scheme_mismatch_ecc_with_rsa_scheme() {
         execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 2, &[]);
     assert!(resp.is_err());
     let err = resp.err().unwrap();
-    assert!(err == 0x92 || (err & 0xFF) == 0x12);
+    // TPM_RC_SCHEME + RC_Certify_inScheme (P2).
+    assert_eq!(err, 0x2D2);
 
     flush_context(&mut sim, obj_handle).unwrap();
     flush_context(&mut sim, ak_handle).unwrap();
@@ -889,8 +892,8 @@ fn test_get_session_audit_digest_scheme_mismatch() {
     assert!(resp.is_err());
     let err = resp.err().unwrap();
     // Signer key scheme mismatch.
-    // The implementation currently returns 0x92 (TpmRc::SCHEME) instead of 0x2d2 (scheme_for Pos2).
-    assert_eq!(err, 0x92);
+    // TPM_RC_SCHEME + RC_GetSessionAuditDigest_inScheme (P2).
+    assert_eq!(err, 0x2D2);
 
     flush_context(&mut sim, ak_handle).unwrap();
 }

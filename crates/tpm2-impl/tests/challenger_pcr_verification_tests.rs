@@ -46,6 +46,11 @@ fn setup_tpm<'a>(
     (tpm, global_state)
 }
 
+/// Empty `TPM_RS_PW` authorization area (authSize = 9 + one session). Every PCR handle used
+/// with these helpers has the USER auth role, and C requires a session even for an empty
+/// authValue (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
+const PW_AREA: [u8; 13] = [0, 0, 0, 9, 0x40, 0, 0, 9, 0, 0, 0, 0, 0];
+
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
@@ -60,10 +65,19 @@ where
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
 
-    request_buf[0..2].copy_from_slice(&0x8001u16.to_be_bytes());
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    offset += marshal_to_slice(handles, &mut request_buf[offset..]);
+    let handles_len = marshal_to_slice(handles, &mut request_buf[offset..]);
+    offset += handles_len;
+    // Commands with a (PCR) handle need an authorization session.
+    let with_session = handles_len > 0;
+    if with_session {
+        request_buf[0..2].copy_from_slice(&0x8002u16.to_be_bytes());
+        request_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);
+        offset += PW_AREA.len();
+    } else {
+        request_buf[0..2].copy_from_slice(&0x8001u16.to_be_bytes());
+    }
     offset += marshal_to_slice(cmd, &mut request_buf[offset..]);
     request_buf[2..6].copy_from_slice(&(offset as u32).to_be_bytes());
 
@@ -84,6 +98,9 @@ where
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
+    if with_session {
+        resp_offset += 4; // Skip parameterSize
+    }
 
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
@@ -103,10 +120,12 @@ fn execute_tpm_event<'a>(
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
 
-    request_buf[0..2].copy_from_slice(&0x8001u16.to_be_bytes());
+    request_buf[0..2].copy_from_slice(&0x8002u16.to_be_bytes());
     request_buf[6..10].copy_from_slice(&(PCREvent::CMD_CODE.code()).to_be_bytes());
 
     offset += marshal_to_slice(handles, &mut request_buf[offset..]);
+    request_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);
+    offset += PW_AREA.len();
     offset += marshal_to_slice(cmd, &mut request_buf[offset..]);
     request_buf[2..6].copy_from_slice(&(offset as u32).to_be_bytes());
 
@@ -117,7 +136,8 @@ fn execute_tpm_event<'a>(
         return Err(rc);
     }
 
-    let mut params_slice = &response_buf[10..];
+    // Skip the parameterSize field of the TPM_ST_SESSIONS response.
+    let mut params_slice = &response_buf[14..];
     Unmarshal::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())
 }
 
@@ -346,11 +366,15 @@ fn test_pcr_extend_correctness() {
     };
     let (_, read_resp) = execute_tpm_command(&mut tpm, &mut global_state, &(), &read_cmd).unwrap();
 
-    assert_eq!(read_resp.pcr_values.count(), 3);
+    // The default PCR allocation is SHA1+SHA256; like C (PCRExtend only extends allocated
+    // banks, PCRRead/FilterPcr drops unallocated ones, PCR.c), SHA384 is neither extended
+    // nor read back.
+    assert_eq!(read_resp.pcr_values.count(), 2);
 
     let expected_sha1 = expected_extend_sha1(&sha1_init, &sha1_ext);
     let expected_sha256 = expected_extend_sha256(&sha256_init, &sha256_ext);
-    let expected_sha384 = expected_extend_sha384(&sha384_init, &sha384_ext);
+    let _ = expected_extend_sha384(&sha384_init, &sha384_ext);
+    assert_eq!(global_state.pcrs.sha384[0], sha384_init);
 
     assert_eq!(
         read_resp.pcr_values.digests()[0].get_buffer(),
@@ -359,10 +383,6 @@ fn test_pcr_extend_correctness() {
     assert_eq!(
         read_resp.pcr_values.digests()[1].get_buffer(),
         &expected_sha256
-    );
-    assert_eq!(
-        read_resp.pcr_values.digests()[2].get_buffer(),
-        &expected_sha384
     );
 }
 
@@ -398,7 +418,8 @@ fn test_pcr_event_correctness() {
     let expected_sha256_hash = hash_bytes::<32>(TpmiAlgHash::Sha256, event_data);
     let expected_sha384_hash = hash_bytes::<48>(TpmiAlgHash::Sha384, event_data);
 
-    assert_eq!(evt_resp.digests.count(), 3);
+    // C PCR_Event returns one digest per implemented hash (SHA1/256/384/512), PCR_Event.c.
+    assert_eq!(evt_resp.digests.count(), 4);
     assert_eq!(
         get_digest_bytes(evt_resp.digests.digests().next().unwrap()),
         &expected_sha1_hash[..]
@@ -431,7 +452,12 @@ fn test_pcr_event_correctness() {
 
     let expected_sha1_val = expected_extend_sha1(&[0u8; 20], &expected_sha1_hash);
     let expected_sha256_val = expected_extend_sha256(&[0u8; 32], &expected_sha256_hash);
-    let expected_sha384_val = expected_extend_sha384(&[0u8; 48], &expected_sha384_hash);
+    let _ = expected_extend_sha384(&[0u8; 48], &expected_sha384_hash);
+    // The default PCR allocation is SHA1+SHA256; like C (PCRExtend only extends allocated
+    // banks, PCRRead/FilterPcr drops unallocated ones, PCR.c), SHA384 is neither extended
+    // nor read back.
+    assert_eq!(read_resp.pcr_values.count(), 2);
+    assert_eq!(global_state.pcrs.sha384[1], [0u8; 48]);
 
     assert_eq!(
         read_resp.pcr_values.digests()[0].get_buffer(),
@@ -440,10 +466,6 @@ fn test_pcr_event_correctness() {
     assert_eq!(
         read_resp.pcr_values.digests()[1].get_buffer(),
         &expected_sha256_val
-    );
-    assert_eq!(
-        read_resp.pcr_values.digests()[2].get_buffer(),
-        &expected_sha384_val
     );
 
     // 2. PCR_Event with RHNull
@@ -460,7 +482,7 @@ fn test_pcr_event_correctness() {
     )
     .unwrap();
 
-    assert_eq!(null_resp.digests.count(), 3);
+    assert_eq!(null_resp.digests.count(), 4);
     assert_eq!(
         get_digest_bytes(null_resp.digests.digests().next().unwrap()),
         &expected_sha1_hash[..]

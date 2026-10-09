@@ -292,7 +292,15 @@ fn test_nv_extend_missing_attribute_fails() {
         &extend_cmd,
         core::slice::from_ref(&auth_session),
     );
-    assert_eq!(res.err(), Some(TpmRc::ATTRIBUTES.get()));
+    // TPM_RC_ATTRIBUTES + RC_NV_Extend_nvIndex (H2).
+    assert_eq!(
+        res.err(),
+        Some(
+            TpmRc::ATTRIBUTES
+                .with(tpm2::errors::Position::handle(2))
+                .get()
+        )
+    );
 }
 
 #[test]
@@ -859,7 +867,8 @@ fn test_nv_extend_and_setbits_locked_error_precedence() {
         &ext_cmd,
         core::slice::from_ref(&auth_session),
     );
-    assert_eq!(res_ext.unwrap_err() & 0xfff, TpmRc::AUTH_UNAVAILABLE.get());
+    // C `NvWriteAccessChecks` reports WRITELOCKED before the OWNERWRITE check.
+    assert_eq!(res_ext.unwrap_err() & 0xfff, TpmRc::NV_LOCKED.get());
 
     // 2. Test NV_SetBits error precedence
     let nv_idx_bits = Handle(0x01000052);
@@ -915,7 +924,8 @@ fn test_nv_extend_and_setbits_locked_error_precedence() {
         &bits_cmd,
         core::slice::from_ref(&auth_session),
     );
-    assert_eq!(res_bits.unwrap_err() & 0xfff, TpmRc::AUTH_UNAVAILABLE.get());
+    // C `NvWriteAccessChecks` reports WRITELOCKED before the OWNERWRITE check.
+    assert_eq!(res_bits.unwrap_err() & 0xfff, TpmRc::NV_LOCKED.get());
 }
 
 #[test]
@@ -1053,7 +1063,8 @@ fn test_nv_monotonic_counter_anti_rollback_and_persistence() {
         let val = u64::from_be_bytes(resp.data.get_buffer().try_into().unwrap());
         assert_eq!(val, expected);
     }
-    assert_eq!(global_state.max_counter, 3);
+    // Like C `s_maxCounter`, the maximum is only updated when a counter is deleted.
+    assert_eq!(global_state.max_counter, 0);
 
     // 2. Delete the counter index and recreate it
     let undef_handles = NVUndefineSpaceHandles {
@@ -1098,7 +1109,7 @@ fn test_nv_monotonic_counter_anti_rollback_and_persistence() {
     .unwrap();
     let val = u64::from_be_bytes(resp.data.get_buffer().try_into().unwrap());
     assert_eq!(val, 4);
-    assert_eq!(global_state.max_counter, 4);
+    assert_eq!(global_state.max_counter, 3);
 
     // 4. Delete again, simulate cold reboot (new GlobalState::default() + Startup(CLEAR)), and verify persistence
     execute_tpm_command_with_auths(

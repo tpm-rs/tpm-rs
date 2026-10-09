@@ -8,7 +8,7 @@ use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
 use tpm2::commands::{Command, LoadExternal};
-use tpm2::errors::{Position, TpmRc};
+use tpm2::errors::TpmRc;
 use tpm2::{
     PublicParmsAndId, Tpm2bDigest, Tpm2bSymKey, TpmaObject, TpmiAlgHash, TpmiAlgSymMode,
     TpmsAuthCommand, TpmtPublic, TpmtSensitive, TpmtSymDefObject, TpmuSensitiveComposite,
@@ -154,7 +154,9 @@ fn test_load_external_binding_error() {
 
     let tpmt_sensitive = TpmtSensitive {
         auth_value: tpm2::Tpm2bAuth::default(),
-        seed_value: Tpm2bDigest::default(),
+        // A nameAlg-sized seedValue, so that the binding (not the seed size, TPM_RC_KEY_SIZE)
+        // is what fails (C `CryptValidateKeys()`).
+        seed_value: Tpm2bDigest::from_bytes(&[0xCC; 20]).unwrap(),
         sensitive: TpmuSensitiveComposite::Sym(Tpm2bSymKey::from_bytes(&sym_key_bytes).unwrap()),
     };
 
@@ -172,5 +174,7 @@ fn test_load_external_binding_error() {
         Err(rc) => rc,
         Ok(_) => panic!("expected error from execute_tpm_command"),
     };
-    assert_eq!(rc, TpmRc::BINDING.with(Position::parameter(1)).get());
+    // C `CryptValidateKeys()` returns a bare TPM_RC_BINDING for a SYMCIPHER/KEYEDHASH binding
+    // mismatch (no parameter position).
+    assert_eq!(rc, TpmRc::BINDING.get());
 }

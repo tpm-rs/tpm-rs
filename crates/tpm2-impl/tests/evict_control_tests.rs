@@ -58,7 +58,12 @@ fn get_test_template(st_clear: bool) -> TpmtPublic<'static> {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: attrs,
         auth_policy: Default::default(),
-        parms_and_id: PublicParmsAndId::KeyedHash(None, tpm2::Tpm2bDigest::default()),
+        // A restricted decrypt KEYEDHASH object would need an XOR scheme (C `SchemeChecks()`);
+        // use a symmetric storage key instead.
+        parms_and_id: PublicParmsAndId::Sym(
+            tpm2::TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)),
+            tpm2::Tpm2bDigest::default(),
+        ),
     }
 }
 

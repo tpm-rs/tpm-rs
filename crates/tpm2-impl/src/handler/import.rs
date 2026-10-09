@@ -77,7 +77,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             parent_handle,
             &mut parent_seed_val,
             &mut parent_qn_buf,
-            false, // expect_type_error
+            false, // allow_derivation_parent
         )?;
 
         let parent_obj = if parent_handle >> 24 == 0x80 {
@@ -123,10 +123,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 ) {
                     return Err(TpmRc::MODE.with(Position::parameter(5)));
                 }
+                // The inner wrapper key must always be supplied and match the algorithm
+                // key size (C `Import.c`); it is never derived from `inSymSeed`.
                 let inner_key_len = (bits / 8) as usize;
-                if cmd.encryption_key.get_size() > 0
-                    && cmd.encryption_key.get_size() as usize != inner_key_len
-                {
+                if cmd.encryption_key.get_size() as usize != inner_key_len {
                     return Err(TpmRc::SIZE.with(Position::parameter(1)));
                 }
             }
@@ -158,8 +158,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     tpm2::TpmEccCurve::NistP521 => 66,
                     _ => 32,
                 };
-                if (point.x.get_size() > 0 && point.x.get_size() as usize != param_size)
-                    || (point.y.get_size() > 0 && point.y.get_size() as usize != param_size)
+                // Coordinates may have leading zero bytes stripped; only oversized
+                // coordinates are invalid (C `CryptValidateKeys`).
+                if point.x.get_size() as usize > param_size
+                    || point.y.get_size() as usize > param_size
                 {
                     return Err(TpmRc::SIZE.with(Position::parameter(2)));
                 }
@@ -193,8 +195,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         tpm2::TpmEccCurve::NistP521 => 66,
                         _ => return Err(TpmRc::ECC_POINT.with(Position::parameter(4))),
                     };
-                    if eph_point.x.get_size() as usize != param_size
-                        || eph_point.y.get_size() as usize != param_size
+                    // Leading zero bytes may be stripped; the point is left-padded below.
+                    if eph_point.x.get_size() as usize > param_size
+                        || eph_point.y.get_size() as usize > param_size
                     {
                         return Err(TpmRc::ECC_POINT.with(Position::parameter(4)));
                     }
@@ -234,14 +237,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let duplicate_bytes = cmd.duplicate.get_buffer();
         let mut seed = [0u8; 64];
-        let mut seed_len = 0;
 
         if cmd.in_sym_seed.get_size() > 0 {
             if parent_symmetric_is_null {
                 return Err(TpmRc::SIZE.with(Position::parameter(1)));
             }
             // Decrypt seed using parent private key
-            seed_len = match &parent_obj.public.parms_and_id {
+            let seed_len = match &parent_obj.public.parms_and_id {
                 OwnedPublicParmsAndId::Rsa(_, _) => self
                     .crypto()
                     .decrypt(
@@ -330,12 +332,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 _ => return Err(TpmRc::TYPE.with(Position::handle(1))),
             };
 
+            // UnwrapOuter errors are returned with `RC_Import_duplicate` (parameter 3).
             if duplicate_bytes.len() < 2 {
-                return Err(TpmRc::SIZE.to_rc());
+                return Err(TpmRc::INSUFFICIENT.with(Position::parameter(3)));
             }
             let mac_len = u16::from_be_bytes([duplicate_bytes[0], duplicate_bytes[1]]) as usize;
+            if mac_len > 64 {
+                return Err(TpmRc::SIZE.with(Position::parameter(3)));
+            }
             if duplicate_bytes.len() < 2 + mac_len {
-                return Err(TpmRc::SIZE.to_rc());
+                return Err(TpmRc::INSUFFICIENT.with(Position::parameter(3)));
             }
             let mac_bytes = &duplicate_bytes[2..2 + mac_len];
             let encrypted_blob = &duplicate_bytes[2 + mac_len..];
@@ -359,7 +365,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut integrity_key = [0u8; 64];
             let mut computed_mac_bytes = [0u8; 64];
 
-            let obj_name_alg = object_public_struct.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+            // The outer wrapper uses the parent's nameAlg (`outerHash` in
+            // `DuplicateToSensitive`), not the imported object's.
+            let obj_name_alg = parent_info.name_alg;
             let obj_digest_size = obj_name_alg.digest_size();
             let obj_bits = (obj_digest_size * 8) as u32;
             kdfa(
@@ -403,7 +411,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let computed_mac_len = hmac_res.digest().len();
 
             if computed_mac_bytes[..computed_mac_len] != *mac_bytes {
-                return Err(TpmRc::INTEGRITY.to_rc());
+                return Err(TpmRc::INTEGRITY.with(Position::parameter(3)));
             }
 
             let mut outer_key = [0u8; 32];
@@ -446,31 +454,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut inner_key = [0u8; 32];
             let inner_key_len = sym_def.key_bits() as usize / 8;
 
-            if cmd.encryption_key.get_size() > 0 {
-                if cmd.encryption_key.get_size() as usize != inner_key_len {
-                    return Err(TpmRc::SIZE.with(Position::parameter(1)));
-                }
-                inner_key[..inner_key_len].copy_from_slice(cmd.encryption_key.get_buffer());
-            } else {
-                // Derive inner symmetric wrapper key from the decrypted seed
-                if cmd.in_sym_seed.get_size() == 0 {
-                    return Err(TpmRc::SIZE.with(Position::parameter(4)));
-                }
-                let total_bits = (inner_key_len * 8) as u32;
-
-                let name_alg = object_public_struct.name_alg.ok_or(TpmRc::HASH.to_rc())?;
-                kdfa(
-                    self.crypto(),
-                    name_alg,
-                    &seed[..seed_len],
-                    b"STORAGE",
-                    object_name.get_buffer(),
-                    &[],
-                    total_bits,
-                    &mut inner_key,
-                )
-                .map_err(|_| TpmRc::FAILURE)?;
+            // The size was validated against the algorithm above.
+            if cmd.encryption_key.get_size() as usize != inner_key_len {
+                return Err(TpmRc::SIZE.with(Position::parameter(1)));
             }
+            inner_key[..inner_key_len].copy_from_slice(cmd.encryption_key.get_buffer());
 
             decrypted_inner[..inner_blob_len].copy_from_slice(&inner_blob[..inner_blob_len]);
 
@@ -486,65 +474,70 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             )
             .map_err(|_| TpmRc::FAILURE)?;
 
+            // DuplicateToSensitive errors are returned with `RC_Import_duplicate`.
+            // CheckInnerIntegrity: unmarshal the inner integrity TPM2B_DIGEST, then compare it
+            // with H_nameAlg(rest || name) before anything else is parsed.
             if inner_blob_len < 2 {
-                return Err(TpmRc::SIZE.to_rc());
+                return Err(TpmRc::INSUFFICIENT.with(Position::parameter(3)));
             }
             let inner_integrity_len =
                 u16::from_be_bytes([decrypted_inner[0], decrypted_inner[1]]) as usize;
+            if inner_integrity_len > 64 {
+                return Err(TpmRc::SIZE.with(Position::parameter(3)));
+            }
             let sensitive_offset = 2 + inner_integrity_len;
+            if sensitive_offset > inner_blob_len {
+                return Err(TpmRc::INSUFFICIENT.with(Position::parameter(3)));
+            }
+            let name_alg = object_public_struct.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+            let (hash_bytes, computed_inner_mac_len) = self.compute_hash(
+                name_alg,
+                &[
+                    &decrypted_inner[sensitive_offset..inner_blob_len],
+                    object_name.get_buffer(),
+                ],
+            )?;
+            if computed_inner_mac_len != inner_integrity_len
+                || hash_bytes[..computed_inner_mac_len] != decrypted_inner[2..sensitive_offset]
+            {
+                return Err(TpmRc::INTEGRITY.with(Position::parameter(3)));
+            }
+
+            // Then the TPM2B_SENSITIVE: its size must cover exactly the rest of the data.
             if sensitive_offset + 2 > inner_blob_len {
-                return Err(TpmRc::SIZE.to_rc());
+                return Err(TpmRc::INSUFFICIENT.with(Position::parameter(3)));
             }
             let sensitive_size = u16::from_be_bytes([
                 decrypted_inner[sensitive_offset],
                 decrypted_inner[sensitive_offset + 1],
             ]) as usize;
-            if sensitive_offset + 2 + sensitive_size > inner_blob_len {
-                return Err(TpmRc::SIZE.to_rc());
-            }
-
-            if inner_integrity_len > 0 {
-                let mut computed_inner_mac = [0u8; 64];
-                let integrity_data_slice = &decrypted_inner
-                    [2 + inner_integrity_len..2 + inner_integrity_len + 2 + sensitive_size];
-
-                let name_alg = object_public_struct.name_alg.ok_or(TpmRc::HASH.to_rc())?;
-                let (hash_bytes, computed_inner_mac_len) =
-                    self.compute_hash(name_alg, &[integrity_data_slice, object_name.get_buffer()])?;
-                computed_inner_mac[..computed_inner_mac_len]
-                    .copy_from_slice(&hash_bytes[..computed_inner_mac_len]);
-
-                if computed_inner_mac_len != inner_integrity_len
-                    || computed_inner_mac[..computed_inner_mac_len]
-                        != decrypted_inner[2..2 + inner_integrity_len]
-                {
-                    return Err(TpmRc::INTEGRITY.to_rc());
-                }
+            if sensitive_offset + 2 + sensitive_size != inner_blob_len {
+                return Err(TpmRc::SIZE.with(Position::parameter(3)));
             }
 
             let sensitive_bytes =
                 &decrypted_inner[sensitive_offset + 2..sensitive_offset + 2 + sensitive_size];
             let mut slice = sensitive_bytes;
             let sensitive_struct =
-                TpmtSensitive::unmarshal(&mut slice).map_err(|_| TpmRc::VALUE.to_rc())?;
+                TpmtSensitive::unmarshal(&mut slice).map_err(|e| e.in_parameter(3).to_rc())?;
             if !slice.is_empty() {
-                return Err(TpmRc::SIZE.to_rc());
+                return Err(TpmRc::SIZE.with(Position::parameter(3)));
             }
             sensitive_struct
         } else {
             // No inner wrapper, sensitive area was marshalled inside TPM2B_PRIVATE (with a 2-byte size prefix)
             if inner_blob_len < 2 {
-                return Err(TpmRc::SIZE.to_rc());
+                return Err(TpmRc::INSUFFICIENT.with(Position::parameter(3)));
             }
             let sensitive_size = u16::from_be_bytes([inner_blob[0], inner_blob[1]]) as usize;
-            if 2 + sensitive_size > inner_blob_len {
-                return Err(TpmRc::SIZE.to_rc());
+            if 2 + sensitive_size != inner_blob_len {
+                return Err(TpmRc::SIZE.with(Position::parameter(3)));
             }
             let mut slice = &inner_blob[2..2 + sensitive_size];
             let sensitive_struct =
-                TpmtSensitive::unmarshal(&mut slice).map_err(|_| TpmRc::VALUE.to_rc())?;
+                TpmtSensitive::unmarshal(&mut slice).map_err(|e| e.in_parameter(3).to_rc())?;
             if !slice.is_empty() {
-                return Err(TpmRc::SIZE.to_rc());
+                return Err(TpmRc::SIZE.with(Position::parameter(3)));
             }
             sensitive_struct
         };
@@ -562,6 +555,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 true,  // is_import
                 false, // allow_null_name_alg
                 Position::parameter(2),
+                parent_info.scheme,
             )?;
             self.validate_public_parameters(&object_public_struct, true)?;
         }

@@ -84,6 +84,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         if session_type != TpmSe::Trial {
+            // `time` and `clockInfo.clock` are the first two UINT64 fields of TPMS_TIME_INFO;
+            // Clock does not run while NV is unavailable, so comparisons against them need NV
+            // (`RETURN_IF_NV_IS_NOT_AVAILABLE` in C `TPM2_PolicyCounterTimer`).
+            if (cmd.offset as usize) < 2 * core::mem::size_of::<u64>() {
+                self.return_if_nv_is_not_available()?;
+            }
             let operand_a =
                 &time_info_buf[cmd.offset as usize..(cmd.offset as usize + operand_b_len)];
             let operand_b = cmd.operand_b.get_buffer();

@@ -333,7 +333,8 @@ fn test_adv_nv_uninitialized_check() {
     let mut response = [0u8; 256];
     tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
-    assert_eq!(rc, TpmRc::NV_UNINITIALIZED.get());
+    // C `TPM2_Startup` uses RETURN_IF_NV_IS_NOT_AVAILABLE -> TPM_RC_NV_UNAVAILABLE.
+    assert_eq!(rc, TpmRc::NV_UNAVAILABLE.get());
 }
 
 #[test]
@@ -359,7 +360,9 @@ fn test_adv_startup_locality_4_drtm() {
     let mut response = [0u8; 256];
     tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
-    assert_eq!(rc, 0);
+    // C `TPM2_Startup` checks `locality != 0 && locality != 3` before the H-CRTM override
+    // (`Startup.c`), so a Startup at locality 4 is rejected even after an H-CRTM sequence.
+    assert_eq!(rc, TpmRc::LOCALITY.get());
 }
 
 #[test]
@@ -387,9 +390,10 @@ fn test_orderly_clear() {
     tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
     assert_eq!(rc, 0);
-    assert_eq!(global_state.clear_count, 1);
-    assert_eq!(global_state.restart_count, 1);
-    assert_eq!(global_state.reset_count, 0);
+    // Shutdown(CLEAR) + Startup(CLEAR) is a TPM Reset (`Startup.c`), not a TPM Restart.
+    assert_eq!(global_state.clear_count, 0);
+    assert_eq!(global_state.restart_count, 0);
+    assert_eq!(global_state.reset_count, 1);
 }
 
 #[test]
@@ -442,7 +446,10 @@ fn test_startup_state_clears_transient_objects_and_sequences() {
     // Populate transient RAM state from an earlier session before Startup(SU_STATE)
     global_state.transient_objects[0] = Some(TransientObject {
         handle: 0x80000000,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),

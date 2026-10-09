@@ -69,5 +69,7 @@ fn test_commit_decrypt_attr() {
         "Expected TPM2_Commit to fail on handle WITH decrypt attr"
     );
     let err = res.err().unwrap();
-    assert_eq!(err, 0x182, "Expected Attributes error (0x182), got {}", err);
+    // Commit.c checks CryptIsSchemeAnonymous before anything attribute related: a sign+decrypt
+    // ECC key must have a NULL scheme, so it fails with TPM_RCS_SCHEME + RC_Commit_signHandle.
+    assert_eq!(err, 0x192, "Expected Scheme error (0x192), got {}", err);
 }

@@ -46,6 +46,18 @@ fn setup_tpm<'a>(
     (tpm, global_state)
 }
 
+/// An empty-password `TPM_RS_PW` session. In C every handle with an authorization role
+/// needs a session even if its authValue is empty; with no session C returns
+/// TPM_RC_AUTH_MISSING (SessionProcess.c CheckAuthNoSession).
+fn pw() -> tpm2::TpmsAuthCommand<'static> {
+    tpm2::TpmsAuthCommand {
+        session_handle: tpm2::Handle::RS_PW,
+        nonce: tpm2::Tpm2bNonce::default(),
+        session_attributes: tpm2::TpmaSession(0),
+        hmac: tpm2::Tpm2bAuth::default(),
+    }
+}
+
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
@@ -204,7 +216,7 @@ fn adv_pcr_extend_rh_null() {
         &mut global_state,
         &extend_handles,
         &extend_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
@@ -220,7 +232,7 @@ fn execute_tpm_event<'a>(
     response_buf: &'a mut [u8],
 ) -> Result<<PCREvent<'static> as Command>::Response<'a>, u32> {
     let mut request_buf = [0u8; 16384];
-    request_buf[0..2].copy_from_slice(&0x8001u16.to_be_bytes());
+    request_buf[0..2].copy_from_slice(&0x8002u16.to_be_bytes());
     request_buf[6..10].copy_from_slice(&(PCREvent::CMD_CODE.code()).to_be_bytes());
 
     let mut offset = 10;
@@ -228,6 +240,13 @@ fn execute_tpm_event<'a>(
     let handles_len = handles.marshal(&mut handles_buf);
     request_buf[offset..offset + handles_len].copy_from_slice(&handles_buf.as_ref()[..handles_len]);
     offset += handles_len;
+
+    // pcrHandle has the USER auth role, so C requires a session even for an empty authValue
+    // (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession). authSize = 9,
+    // then an empty TPM_RS_PW session.
+    let pw_area = [0, 0, 0, 9, 0x40, 0, 0, 9, 0, 0, 0, 0, 0];
+    request_buf[offset..offset + pw_area.len()].copy_from_slice(&pw_area);
+    offset += pw_area.len();
 
     let mut cmd_buf = [0u8; PCREvent::MAX_SIZE];
     let cmd_len = cmd.marshal(&mut cmd_buf);
@@ -242,7 +261,8 @@ fn execute_tpm_event<'a>(
         return Err(rc);
     }
 
-    let mut param_slice: &'static [u8] = std::vec::Vec::leak(response_buf[10..].to_vec());
+    // Skip the parameterSize field of the TPM_ST_SESSIONS response.
+    let mut param_slice: &'static [u8] = std::vec::Vec::leak(response_buf[14..].to_vec());
     Unmarshal::unmarshal(&mut param_slice).map_err(|_| TpmRc::FAILURE.get())
 }
 
@@ -341,7 +361,10 @@ fn adv_pcr_event_empty_data() {
 
     assert_eq!(global_state.pcrs.sha1[pcr_idx], expected_sha1[..20]);
     assert_eq!(global_state.pcrs.sha256[pcr_idx], expected_sha256[..32]);
-    assert_eq!(global_state.pcrs.sha384[pcr_idx], expected_sha384[..48]);
+    // The default PCR allocation is SHA1+SHA256 only; like C PCRExtend (PCR.c), the
+    // unallocated SHA384 bank is not extended.
+    let _ = expected_sha384;
+    assert_eq!(global_state.pcrs.sha384[pcr_idx], initial_sha384);
 }
 
 #[test]
@@ -384,7 +407,7 @@ fn test_pcr_locality_enforcement() {
         &mut global_state,
         &extend_handles,
         &extend_cmd,
-        &[],
+        &[pw()],
     );
     assert_eq!(res, Err(TpmRc::LOCALITY.get()));
 
@@ -395,7 +418,7 @@ fn test_pcr_locality_enforcement() {
         &mut global_state,
         &extend_handles,
         &extend_cmd,
-        &[],
+        &[pw()],
     );
     assert!(res.is_ok());
 
@@ -405,12 +428,24 @@ fn test_pcr_locality_enforcement() {
         pcr_handle: Handle(16),
     };
     let reset_cmd = PCRReset {};
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &reset_handles, &reset_cmd, &[]);
+    let res = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &reset_handles,
+        &reset_cmd,
+        &[pw()],
+    );
     assert_eq!(res, Err(TpmRc::LOCALITY.get()));
 
     // 4. Reset PCR 16 at locality 0 (should succeed)
     global_state.locality = 0;
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &reset_handles, &reset_cmd, &[]);
+    let res = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &reset_handles,
+        &reset_cmd,
+        &[pw()],
+    );
     assert!(res.is_ok());
 }
 
@@ -500,7 +535,7 @@ fn test_pcr_update_counter() {
         &mut global_state,
         &extend_handles,
         &extend_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
@@ -514,7 +549,14 @@ fn test_pcr_update_counter() {
         pcr_handle: Handle(16),
     };
     let reset_cmd = PCRReset {};
-    execute_tpm_command(&mut tpm, &mut global_state, &reset_handles, &reset_cmd, &[]).unwrap();
+    execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &reset_handles,
+        &reset_cmd,
+        &[pw()],
+    )
+    .unwrap();
 
     // Read counter again
     let (_, resp) = execute_tpm_command(&mut tpm, &mut global_state, &(), &read_cmd, &[]).unwrap();
@@ -551,7 +593,7 @@ fn test_pcr_update_counter_wrap_around() {
         &mut global_state,
         &extend_handles,
         &extend_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
@@ -586,13 +628,13 @@ fn test_pcr_read_sort_order() {
     // Total returned digests must be exactly 8 (the limit)
     assert_eq!(resp.pcr_values.count(), 8);
 
-    // Since SHA1 (alg 0x0004) has lower ID than SHA256 (0x000B), it must be sorted first.
-    // Therefore, the first 6 digests should be SHA1 (size 20), and the remaining 2 should be SHA256 (size 32).
+    // C PCRRead (PCR.c:827) walks the selections in the caller's order without sorting, so
+    // the first 6 digests are SHA256 (size 32) and the remaining 2 are SHA1 (size 20).
     let digests = resp.pcr_values.digests();
     for (i, digest) in digests.iter().enumerate().take(6) {
-        assert_eq!(digest.get_size(), 20, "Digest {} should be SHA1", i);
+        assert_eq!(digest.get_size(), 32, "Digest {} should be SHA256", i);
     }
     for (i, digest) in digests.iter().enumerate().take(8).skip(6) {
-        assert_eq!(digest.get_size(), 32, "Digest {} should be SHA256", i);
+        assert_eq!(digest.get_size(), 20, "Digest {} should be SHA1", i);
     }
 }

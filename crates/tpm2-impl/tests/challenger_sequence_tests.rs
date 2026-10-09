@@ -67,14 +67,24 @@ where
     Cmd::Response<'static>: Unmarshal<'static>,
 {
     let mut req_buf = [0u8; 20000];
-    let tag = 0x8001u16;
     let cc = Cmd::CMD_CODE.code();
 
-    req_buf[0..2].copy_from_slice(&tag.to_be_bytes());
     req_buf[6..10].copy_from_slice(&cc.to_be_bytes());
 
     let mut offset = 10;
-    offset += marshal_to_slice(handles, &mut req_buf[offset..]);
+    let handles_len = marshal_to_slice(handles, &mut req_buf[offset..]);
+    offset += handles_len;
+    // Every handle passed to this helper is a sequence handle, which has the USER auth role:
+    // C requires a session even for an empty authValue (TPM_RC_AUTH_MISSING otherwise,
+    // SessionProcess.c CheckAuthNoSession), so send an empty TPM_RS_PW session.
+    let with_session = handles_len > 0;
+    let tag = if with_session { 0x8002u16 } else { 0x8001u16 };
+    req_buf[0..2].copy_from_slice(&tag.to_be_bytes());
+    if with_session {
+        let pw_area = [0, 0, 0, 9, 0x40, 0, 0, 9, 0, 0, 0, 0, 0];
+        req_buf[offset..offset + pw_area.len()].copy_from_slice(&pw_area);
+        offset += pw_area.len();
+    }
     offset += marshal_to_slice(cmd, &mut req_buf[offset..]);
 
     req_buf[2..6].copy_from_slice(&(offset as u32).to_be_bytes());
@@ -91,6 +101,9 @@ where
     let mut cursor: &'static [u8] = std::vec::Vec::leak(resp_buf[10..resp_size].to_vec());
 
     let resp_handles = Cmd::RespHandles::unmarshal(&mut cursor).map_err(|_| 0xFFFFFFFFu32)?;
+    if with_session {
+        let _param_size = u32::unmarshal(&mut cursor).map_err(|_| 0xFFFFFFFFu32)?;
+    }
     let resp_t = <Cmd::Response<'static>>::unmarshal(&mut cursor).map_err(|_| 0xFFFFFFFFu32)?;
 
     Ok((resp_handles, resp_t))
@@ -306,7 +319,12 @@ fn test_sequence_invalid_algorithm() {
         hash_alg: Some(TpmiAlgHash::Sm3_256),
     };
     let res = execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd);
-    assert_eq!(res.err(), Some(TpmRc::HASH.get()));
+    // C: an unimplemented hashAlg fails TPMI_ALG_HASH+ unmarshaling of parameter 2
+    // (TPM_RC_HASH + RC_HashSequenceStart_hashAlg = 0x2C3).
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::HASH.with(tpm2::errors::Position::parameter(2)).get())
+    );
 }
 
 #[test]
@@ -458,7 +476,8 @@ fn test_sequence_boundary_buffer_size() {
         execute_tpm_command(&mut tpm, &mut global_state, &update_handles, &update_cmd).unwrap();
     }
 
-    // Try to update one more byte -> total 4097. Expect TpmRc::MEMORY.
+    // Update one more byte -> total 4097. C streams sequence data into the hash state and has
+    // no length limit (SequenceUpdate.c has no TPM_RC_MEMORY path), so this succeeds.
     let update_handles = SequenceUpdateHandles {
         sequence_handle: handle,
     };
@@ -466,7 +485,7 @@ fn test_sequence_boundary_buffer_size() {
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(&[0xBB]).unwrap(),
     };
     let res = execute_tpm_command(&mut tpm, &mut global_state, &update_handles, &update_cmd);
-    assert_eq!(res.err(), Some(TpmRc::MEMORY.get()));
+    assert_eq!(res.err(), None);
 }
 
 #[test]

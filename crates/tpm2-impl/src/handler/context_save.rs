@@ -42,8 +42,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        self.nv_clear_orderly()?;
-
         let _cmd = request.try_unmarshal::<ContextSave>()?;
 
         if request.remaining_bytes() != 0 {
@@ -65,6 +63,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
+
+        // `RETURN_IF_ORDERLY` is the first statement of the command action, i.e. it runs only
+        // after the handle and parameter checks of the dispatcher.
+        self.nv_clear_orderly()?;
 
         // Plaintext layout: `sequence (8 bytes, fingerprint) || serialized entity`.
         // The fingerprint is checked by `TPM2_ContextLoad` after decryption
@@ -114,13 +116,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let proof = &proof_buf[..proof_len];
 
         let sequence = if is_session {
-            let s = self.global_state.context_counter;
-            self.global_state.context_counter += 1;
-            s
+            // `SessionContextSave`: assigns the context ID (checking the context gap) and moves
+            // the session from RAM to the saved-session table. Its exclusive-audit status is
+            // kept.
+            self.global_state.save_session_context(save_handle)?
         } else {
-            let s = self.global_state.object_context_counter;
-            self.global_state.object_context_counter += 1;
-            s
+            // `gr.objectContextID` is incremented before it is used, so object context
+            // sequence numbers start at 1.
+            self.global_state.object_context_counter = self
+                .global_state
+                .object_context_counter
+                .checked_add(1)
+                .ok_or(TpmRc::FAILURE)?;
+            self.global_state.object_context_counter
         };
         let sequence_bytes = sequence.to_be_bytes();
         sensitive_buf[..CONTEXT_FINGERPRINT_SIZE].copy_from_slice(&sequence_bytes);
@@ -154,16 +162,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let response = request.into_response();
         self.write_response_rsp(response, &raw_rsp, &session_responses[..num_sessions])?;
 
-        if is_session {
-            for slot in self.global_state.saved_sessions.iter_mut() {
-                if slot.is_none() {
-                    *slot = Some(save_handle);
-                    break;
-                }
-            }
-            self.global_state.remove_session(save_handle);
-        }
-
         Ok(())
     }
 
@@ -178,8 +176,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         buf[offset..offset + 4].copy_from_slice(&obj.handle.to_be_bytes());
         offset += 4;
 
-        buf[offset..offset + 32].copy_from_slice(&obj.seed);
-        offset += 32;
+        // seedValue: 1-byte length followed by the meaningful seed bytes (up to 64).
+        let seed = obj.seed_bytes();
+        buf[offset] = seed.len() as u8;
+        offset += 1;
+        buf[offset..offset + seed.len()].copy_from_slice(seed);
+        offset += seed.len();
 
         offset += obj.name.marshal(
             (&mut buf[offset..offset + tpm2::Tpm2bName::MAX_SIZE])
@@ -209,8 +211,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .unwrap(),
         );
 
+        // Flags byte: bit 0 = an ancestor has stClear, bit 1 = external object (LoadExternal),
+        // bit 2 = public-only object (no sensitive area).
         let ancestor_has_st_clear: bool = obj.st_clear;
-        buf[offset] = if ancestor_has_st_clear { 1 } else { 0 };
+        buf[offset] = u8::from(ancestor_has_st_clear)
+            | (u8::from(obj.external) << 1)
+            | (u8::from(obj.public_only) << 2);
         offset += 1;
 
         Ok(offset)
@@ -417,6 +423,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         offset += 1;
 
         buf[offset] = sess.command_locality;
+        offset += 1;
+
+        // Session flags byte: bit 0 = `TPM2_PolicyTemplate` has been asserted
+        // (`isTemplateHashDefined`), so the template restriction survives a save/load cycle;
+        // bit 1 = `isDaBound`, bit 2 = `isLockoutBound`.
+        buf[offset] = u8::from(sess.is_template_hash_defined)
+            | (u8::from(sess.is_da_bound) << 1)
+            | (u8::from(sess.is_lockout_bound) << 2);
         offset += 1;
 
         Ok(offset)

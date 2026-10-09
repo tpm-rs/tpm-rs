@@ -70,7 +70,7 @@ fn create_ecc_signing_key(
     };
 
     let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &create_primary, create_handles, 0, &[])
+        execute_with_password_sessions(sim, &create_primary, create_handles, 1, &[])
             .expect("could not create ECC primary key");
     (rsp_handles.object_handle, rsp.name)
 }
@@ -120,7 +120,7 @@ fn test_ticket_creation_matrix() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .unwrap();
@@ -153,7 +153,7 @@ fn test_ticket_creation_matrix() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_NULL,
         },
-        0,
+        1,
         &[],
     )
     .unwrap();
@@ -208,7 +208,8 @@ fn test_ticket_creation_matrix() {
         &[],
     )
     .expect_err("CertifyCreation must reject NULL ticket");
-    assert_eq!(err, TpmRc::TICKET.get());
+    // TPM_RC_TICKET + RC_CertifyCreation_creationTicket (P4).
+    assert_eq!(err, 0x4E0);
 
     // Case 1D: Corrupted creation ticket must fail
     let mut bad_digest = owner_rsp.creation_ticket.digest().get_buffer().to_vec();
@@ -226,7 +227,8 @@ fn test_ticket_creation_matrix() {
     let err =
         execute_with_password_sessions_status(&mut sim, &certify_bad_cmd, certify_handles, 1, &[])
             .expect_err("CertifyCreation must reject modified digest");
-    assert_eq!(err, TpmRc::TICKET.get());
+    // TPM_RC_TICKET + RC_CertifyCreation_creationTicket (P4).
+    assert_eq!(err, 0x4E0);
 }
 
 // -----------------------------------------------------------------------------
@@ -304,7 +306,9 @@ fn test_ticket_auth_matrix() {
         &[],
     )
     .expect_err("PolicyTicket must reject NULL ticket");
-    assert_eq!(err, TpmRc::TICKET.with(Position::parameter(5)).get());
+    // The NULL ticket comes with an empty timeout, and C checks the timeout size
+    // first: TPM_RCS_SIZE + RC_PolicyTicket_timeout (SIZE+P1, PolicyTicket.c:48-49).
+    assert_eq!(err, TpmRc::SIZE.with(Position::parameter(1)).get());
     flush_session(&mut sim, start_rsp.session_handle);
 
     // Case 2B: Non-NULL Ticket under regular hierarchy (TPM_RH_OWNER) with expiration < 0
@@ -551,7 +555,7 @@ fn test_ticket_hashcheck_matrix() {
             SignHandles {
                 key_handle: unrestricted_key
             },
-            0,
+            1, // Sign keyHandle needs a session (USER role)
             &[],
             &mut resp_buf,
         )
@@ -571,7 +575,7 @@ fn test_ticket_hashcheck_matrix() {
         SignHandles {
             key_handle: restricted_key,
         },
-        0,
+        1, // Sign keyHandle needs a session (USER role)
         &[],
         &mut resp_buf,
     )
@@ -617,7 +621,7 @@ fn test_ticket_hashcheck_matrix() {
             SignHandles {
                 key_handle: restricted_key
             },
-            0,
+            1, // Sign keyHandle needs a session (USER role)
             &[],
             &mut resp_buf,
         )
@@ -643,7 +647,7 @@ fn test_ticket_hashcheck_matrix() {
         SignHandles {
             key_handle: restricted_key,
         },
-        0,
+        1, // Sign keyHandle needs a session (USER role)
         &[],
         &mut resp_buf,
     )
@@ -679,7 +683,7 @@ fn test_ticket_verified_matrix() {
         SignHandles {
             key_handle: null_signer,
         },
-        0,
+        1, // Sign keyHandle needs a session (USER role)
         &[],
         &mut resp_buf,
     )
@@ -803,7 +807,7 @@ fn test_ticket_verified_matrix() {
         SignHandles {
             key_handle: owner_signer,
         },
-        0,
+        1, // Sign keyHandle needs a session (USER role)
         &[],
         &mut resp_buf_auth,
     )

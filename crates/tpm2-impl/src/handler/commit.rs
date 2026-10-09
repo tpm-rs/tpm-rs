@@ -34,14 +34,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        // 1. Lookup signing key and validate attributes
-        let (in_public, actual_private_key, curve, hash_alg, key_name) =
-            self.validate_commit_object_attributes(handles.sign_handle, num_sessions)?;
-
+        // Parameters are unmarshaled before any command-specific validation (as in C, where
+        // `Commit_In_Unmarshal` runs before `TPM2_Commit`).
         let cmd = request.try_unmarshal::<Commit>()?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
+
+        // 1. Lookup signing key and validate attributes
+        let (in_public, actual_private_key, curve, hash_alg, key_name) =
+            self.validate_commit_object_attributes(handles.sign_handle, num_sessions)?;
 
         // 2. Validate input point P1 and parameters S2/Y2
         let param_size = match curve {
@@ -49,7 +51,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => 32,
             TpmEccCurve::NistP384 => 48,
             TpmEccCurve::NistP521 => 66,
-            _ => return Err(TpmRc::VALUE.to_rc()),
+            _ => return Err(TpmRc::KEY.with(Position::handle(1))),
         };
         let mut p1_buf = [0u8; 256];
         let (p1_is_empty, xy2_opt) = self.validate_commit_inputs(
@@ -84,19 +86,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.global_state.commit_x.fill(0);
         self.global_state.commit_p1.fill(0);
         if !p1_is_empty {
-            let len = (param_size * 2).min(64);
+            let len = param_size * 2;
             self.global_state.commit_p1[..len].copy_from_slice(&p1_buf[..len]);
         }
         if !p1_is_empty || xy2_opt.is_none() {
-            let len = param_size.min(32);
-            self.global_state.commit_x[..len].copy_from_slice(&e_buf[..len]);
+            self.global_state.commit_x[..param_size].copy_from_slice(&e_buf[..param_size]);
         } else {
-            let len = param_size.min(32);
-            self.global_state.commit_x[..len].copy_from_slice(&l_buf[..len]);
+            self.global_state.commit_x[..param_size].copy_from_slice(&l_buf[..param_size]);
         }
 
-        // Update state
-        self.global_state.commit_counter = self.global_state.commit_counter.wrapping_add(1);
+        // The commit computation succeeded, so complete the commitment (`CryptCommit`): mark
+        // the counter value as outstanding and advance the counter.
+        let committed = self.crypt_commit();
+        debug_assert_eq!(committed, old_counter);
 
         let mut k_x = Tpm2bEccParameter::default();
         let mut k_y = Tpm2bEccParameter::default();
@@ -135,10 +137,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
-    /// Resolves the signing object and validates its attributes to ensure it is
-    /// an ECC signing-only key.
+    /// Resolves the signing object and validates it for `TPM2_Commit` (`Commit.c`).
+    ///
+    /// Mirrors the C reference order:
+    /// 1. `signHandle` is resolved like any other object handle (transient or persistent).
+    /// 2. The key must be an ECC key (`TPM_RC_KEY + RC_H1`).
+    /// 3. The key's scheme must be an anonymous scheme, i.e. `TPM_ALG_ECDAA`
+    ///    (`CryptIsSchemeAnonymous`, `TPM_RC_SCHEME + RC_H1`).
+    ///
+    /// Authorization (including `userWithAuth` / policy requirements) is enforced by the
+    /// session layer, so no authorization-mode checks are repeated here.
     fn validate_commit_object_attributes(
-        &self,
+        &mut self,
         sign_handle: Handle,
         num_sessions: usize,
     ) -> Result<
@@ -151,10 +161,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         ),
         TpmRc,
     > {
-        let obj = self
-            .global_state
-            .find_transient_object(sign_handle.0)
-            .ok_or(TpmRc::HANDLE.to_rc())?;
+        let obj = self.resolve_object(sign_handle.0, Position::handle(1))?;
         let in_public = obj.public;
         let actual_private_key = obj.private;
         let obj_name = obj.name;
@@ -163,34 +170,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::AUTH_MISSING);
         }
 
-        if (in_public.object_attributes.0 & TpmaObject::USER_WITH_AUTH.0) == 0 {
-            return Err(TpmRc::AUTH_TYPE);
-        }
-
-        if (in_public.object_attributes.0 & TpmaObject::DECRYPT.0) != 0 {
-            let pos = Position::handle(1);
-            return Err(TpmRc::ATTRIBUTES.with(pos));
-        }
-
-        if (in_public.object_attributes.0 & TpmaObject::SIGN_ENCRYPT.0) == 0 {
-            let pos = Position::handle(1);
-            return Err(TpmRc::ATTRIBUTES.with(pos));
-        }
-
         let (curve, hash_alg) = match &in_public.parms_and_id {
             crate::owned::OwnedPublicParmsAndId::Ecc(ecc_parms, _) => {
-                let curve = ecc_parms.curve_id;
                 let hash_alg = match &ecc_parms.scheme {
                     Some(tpm2::TpmtEccScheme::Ecdaa(s)) => s.hash_alg,
-                    _ => in_public.name_alg.ok_or(TpmRc::HASH.to_rc())?,
+                    _ => return Err(TpmRc::SCHEME.with(Position::handle(1))),
                 };
-                (curve, hash_alg)
+                (ecc_parms.curve_id, hash_alg)
             }
-            _ => {
-                let pos = Position::handle(1);
-                return Err(TpmRc::KEY.with(pos));
-            }
+            _ => return Err(TpmRc::KEY.with(Position::handle(1))),
         };
+
+        // An ECDAA scheme can only be attached to a sign-only key, so these checks are not
+        // reachable for objects that passed creation/load validation; they are kept as
+        // defense in depth.
+        if in_public.object_attributes.contains(TpmaObject::DECRYPT)
+            || !in_public
+                .object_attributes
+                .contains(TpmaObject::SIGN_ENCRYPT)
+        {
+            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
+        }
 
         Ok((in_public, actual_private_key, curve, hash_alg, obj_name))
     }
@@ -285,8 +285,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         commit_counter: u16,
         key_name: &[u8],
     ) -> Result<(), TpmRc> {
-        let r_256 = self.compute_commit_r(commit_counter, key_name, param_size)?;
-        let r = &r_256[..param_size];
+        // Commit phase of `CryptGenerateR`: derive `r` from the current counter value. The
+        // counter is only committed (`CryptCommit`) after all multiplications succeed.
+        let (r_buf, r_len) = self
+            .generate_r(commit_counter, key_name, curve)
+            .ok_or(TpmRc::NO_RESULT)?;
+        debug_assert_eq!(r_len, param_size);
+        let r = &r_buf[..param_size];
 
         if let Some(xy2) = xy2_opt {
             self.crypto()
@@ -338,5 +343,175 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .map_err(|_| TpmRc::NO_RESULT)?;
         }
         Ok(())
+    }
+
+    /// Commits the current commit counter value (`CryptCommit`, `CryptEccMain.c`).
+    ///
+    /// Sets the `commit_array` bit associated with the current counter value, increments the
+    /// counter, and returns the (low 16 bits of the) counter value that was committed. This
+    /// value is returned to the caller of `TPM2_Commit` and later passed as
+    /// `inScheme.details.ecdaa.count` to consume the commitment.
+    pub(crate) fn crypt_commit(&mut self) -> u16 {
+        let old_count = self.global_state.commit_counter;
+        self.global_state.commit_counter = old_count.wrapping_add(1);
+        let bit = usize::from(old_count & COMMIT_INDEX_MASK);
+        self.global_state.commit_array[bit / 8] |= 1 << (bit % 8);
+        old_count
+    }
+
+    /// Retires a commitment after it was used for a successful signature (`CryptEndCommit`).
+    ///
+    /// Clears the `commit_array` bit associated with `count` so that the same `r` can never be
+    /// used for a second signature (reusing `r` for two different digests reveals the private
+    /// key). Must only be called once the signing operation has succeeded, because the TPM
+    /// state is not modified by a failing command.
+    pub(crate) fn end_commit(&mut self, count: u16) {
+        let bit = usize::from(count & COMMIT_INDEX_MASK);
+        self.global_state.commit_array[bit / 8] &= !(1 << (bit % 8));
+    }
+
+    /// Recomputes the `r` value of an outstanding commitment for the signing phase of a split
+    /// signing scheme (ECDAA), mirroring `CryptGenerateR` with a non-NULL `c`.
+    ///
+    /// Fails with a bare `TPM_RC_VALUE` (the code returned by `TpmEcc_SignEcdaa`) when:
+    /// - the `commit_array` bit for `count` is not set (never committed or already consumed), or
+    /// - `count` lies outside the window of the current commit counter (its upper bits do not
+    ///   match the counter value that was current when the commitment was made).
+    ///
+    /// On success returns the scalar `r` (big-endian, left-aligned in a 66-byte buffer) and its
+    /// length in bytes (the size of the curve order). The commitment is *not* retired; callers
+    /// must invoke [`Self::end_commit`] after the signature has been produced successfully.
+    pub(crate) fn generate_committed_r(
+        &self,
+        count: u16,
+        name: &[u8],
+        curve: TpmEccCurve,
+    ) -> Result<([u8; MAX_ECC_ORDER_SIZE], usize), TpmRc> {
+        let bit = usize::from(count & COMMIT_INDEX_MASK);
+        if self.global_state.commit_array[bit / 8] & (1 << (bit % 8)) == 0 {
+            return Err(TpmRc::VALUE.to_rc());
+        }
+        // Figure out what the counter value was when the commitment was made. If the low bits
+        // of `count` are greater than or equal to the low bits of the current counter, the
+        // counter has wrapped the window since then.
+        let mut current = self.global_state.commit_counter;
+        if (count & COMMIT_INDEX_MASK) >= (current & COMMIT_INDEX_MASK) {
+            current = current.wrapping_sub(COMMIT_INDEX_MASK + 1);
+        }
+        if (current & !COMMIT_INDEX_MASK) != (count & !COMMIT_INDEX_MASK) {
+            return Err(TpmRc::VALUE.to_rc());
+        }
+        self.generate_r(count, name, curve)
+            .ok_or_else(|| TpmRc::VALUE.to_rc())
+    }
+
+    /// Derives the commit scalar `r` for `count` (the KDF loop of `CryptGenerateR`).
+    ///
+    /// `r = KDFa(CONTEXT_INTEGRITY_HASH_ALG, commitNonce, "ECDAA Commit", name, count, |n|*8)`,
+    /// where the KDF iteration counter continues across attempts (as with C's `counterInOut`),
+    /// and a candidate is accepted only if `r < n` and at least one byte in the upper half of
+    /// `r` is non-zero. Returns `None` if the curve is unsupported or no acceptable value was
+    /// found.
+    pub(crate) fn generate_r(
+        &self,
+        count: u16,
+        name: &[u8],
+        curve: TpmEccCurve,
+    ) -> Option<([u8; MAX_ECC_ORDER_SIZE], usize)> {
+        let n = curve_order(curve)?;
+        let n_len = n.len();
+        let size_in_bits = (n_len as u32) * 8;
+        // C marshals the full (64-bit) commit counter; the upper 48 bits are always zero here
+        // because the counter is 16 bits wide.
+        let cntr = u64::from(count).to_be_bytes();
+        let digest_size = COMMIT_KDF_HASH.digest_size();
+
+        let mut r = [0u8; MAX_ECC_ORDER_SIZE];
+        let mut iterations: u32 = 1;
+        while iterations < 1_000_000 {
+            // One CryptKDFa() call producing `n_len` bytes, continuing the block counter.
+            let mut generated = 0;
+            while generated < n_len {
+                iterations += 1;
+                let mut hmac = tpm2::crypto::HmacCtx::new(
+                    self.crypto(),
+                    COMMIT_KDF_HASH,
+                    &self.global_state.commit_nonce,
+                )
+                .ok()?;
+                hmac.update(&iterations.to_be_bytes()).ok()?;
+                hmac.update(COMMIT_STRING).ok()?;
+                hmac.update(name).ok()?;
+                hmac.update(&cntr).ok()?;
+                hmac.update(&size_in_bits.to_be_bytes()).ok()?;
+                let mut mac_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+                let mac = hmac.finalize(&mut mac_buf).ok()?;
+                let take = digest_size.min(n_len - generated);
+                r[generated..generated + take].copy_from_slice(&mac.digest()[..take]);
+                generated += take;
+            }
+
+            // The "random" value must be less than the curve order...
+            if r[..n_len] >= *n {
+                continue;
+            }
+            // ...and at least one byte in the upper half of the number must be set.
+            if r[..=n_len / 2].iter().any(|&b| b != 0) {
+                return Some((r, n_len));
+            }
+        }
+        None
+    }
+}
+
+/// `COMMIT_INDEX_MASK` (`Global.h`): one less than the number of bits in `commit_array`.
+const COMMIT_INDEX_MASK: u16 = (16 * 8 - 1) as u16;
+
+/// The `COMMIT_STRING` KDF label (`Global.c`), including its terminating NUL.
+const COMMIT_STRING: &[u8] = b"ECDAA Commit\0";
+
+/// The KDF hash used for commit values (`CONTEXT_INTEGRITY_HASH_ALG`, SHA-512 in the reference
+/// profile).
+const COMMIT_KDF_HASH: tpm2::TpmiAlgHash = tpm2::TpmiAlgHash::Sha512;
+
+/// Size in bytes of the largest supported curve order (NIST P-521).
+pub(crate) const MAX_ECC_ORDER_SIZE: usize = 66;
+
+/// Returns the big-endian group order `n` of `curve`, or `None` for unsupported curves.
+pub(crate) fn curve_order(curve: TpmEccCurve) -> Option<&'static [u8]> {
+    const NIST_P224_N: [u8; 28] = [
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x16,
+        0xa2, 0xe0, 0xb8, 0xf0, 0x3e, 0x13, 0xdd, 0x29, 0x45, 0x5c, 0x5c, 0x2a, 0x3d,
+    ];
+    const NIST_P256_N: [u8; 32] = [
+        0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63,
+        0x25, 0x51,
+    ];
+    const BN_P256_N: [u8; 32] = [
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xfc, 0xf0, 0xcd, 0x46, 0xe5, 0xf2, 0x5e, 0xee, 0x71, 0xa4,
+        0x9e, 0x0c, 0xdc, 0x65, 0xfb, 0x12, 0x99, 0x92, 0x1a, 0xf6, 0x2d, 0x53, 0x6c, 0xd1, 0x0b,
+        0x50, 0x0d,
+    ];
+    const NIST_P384_N: [u8; 48] = [
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc7, 0x63, 0x4d, 0x81, 0xf4, 0x37,
+        0x2d, 0xdf, 0x58, 0x1a, 0x0d, 0xb2, 0x48, 0xb0, 0xa7, 0x7a, 0xec, 0xec, 0x19, 0x6a, 0xcc,
+        0xc5, 0x29, 0x73,
+    ];
+    const NIST_P521_N: [u8; 66] = [
+        0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xfa, 0x51, 0x86, 0x87, 0x83, 0xbf, 0x2f, 0x96, 0x6b, 0x7f, 0xcc, 0x01,
+        0x48, 0xf7, 0x09, 0xa5, 0xd0, 0x3b, 0xb5, 0xc9, 0xb8, 0x89, 0x9c, 0x47, 0xae, 0xbb, 0x6f,
+        0xb7, 0x1e, 0x91, 0x38, 0x64, 0x09,
+    ];
+    match curve {
+        TpmEccCurve::NistP224 => Some(&NIST_P224_N),
+        TpmEccCurve::NistP256 => Some(&NIST_P256_N),
+        TpmEccCurve::BNP256 => Some(&BN_P256_N),
+        TpmEccCurve::NistP384 => Some(&NIST_P384_N),
+        TpmEccCurve::NistP521 => Some(&NIST_P521_N),
+        _ => None,
     }
 }

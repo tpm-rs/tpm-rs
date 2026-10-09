@@ -1,5 +1,5 @@
 use common::marshal_to_slice;
-use tpm2::errors::TpmRc;
+use tpm2::errors::{Position, TpmRc};
 
 use tpm2::Unmarshal;
 mod common;
@@ -34,7 +34,10 @@ fn test_adv_context_load_hmac_tampering() {
 
     global_state.transient_objects[0] = Some(TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),
@@ -105,7 +108,12 @@ fn test_adv_context_load_hmac_tampering() {
 
     // Check response error code (offset 6..10)
     let rc = u32::from_be_bytes([rsp2[6], rsp2[7], rsp2[8], rsp2[9]]);
-    assert_eq!(rc, TpmRc::INTEGRITY.get(), "HMAC check should fail!");
+    // C: TPM_RCS_INTEGRITY + RC_ContextLoad_context (0x1DF), ContextLoad.c:76.
+    assert_eq!(
+        rc,
+        TpmRc::INTEGRITY.with(Position::parameter(1)).get(),
+        "HMAC check should fail!"
+    );
 }
 
 #[test]
@@ -134,7 +142,10 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
 
     global_state.transient_objects[0] = Some(TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),
@@ -198,7 +209,8 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     let rc_fail = u32::from_be_bytes([rsp3[6], rsp3[7], rsp3[8], rsp3[9]]);
     assert_eq!(
         rc_fail,
-        TpmRc::INTEGRITY.get(),
+        // C: TPM_RCS_INTEGRITY + RC_ContextLoad_context (0x1DF), ContextLoad.c:76.
+        TpmRc::INTEGRITY.with(Position::parameter(1)).get(),
         "ContextLoad must fail when hierarchy proof changes"
     );
 }
@@ -231,7 +243,10 @@ fn test_context_load_fails_on_total_reset_count_and_st_clear_count_changes() {
 
     global_state.transient_objects[0] = Some(TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),
@@ -281,7 +296,8 @@ fn test_context_load_fails_on_total_reset_count_and_st_clear_count_changes() {
     let rc_clear = u32::from_be_bytes([rsp2[6], rsp2[7], rsp2[8], rsp2[9]]);
     assert_eq!(
         rc_clear,
-        TpmRc::INTEGRITY.get(),
+        // C: TPM_RCS_INTEGRITY + RC_ContextLoad_context (0x1DF), ContextLoad.c:76.
+        TpmRc::INTEGRITY.with(Position::parameter(1)).get(),
         "ST_CLEAR context must fail when clear_count increments"
     );
 
@@ -297,7 +313,8 @@ fn test_context_load_fails_on_total_reset_count_and_st_clear_count_changes() {
     let rc_reset = u32::from_be_bytes([rsp3[6], rsp3[7], rsp3[8], rsp3[9]]);
     assert_eq!(
         rc_reset,
-        TpmRc::INTEGRITY.get(),
+        // C: TPM_RCS_INTEGRITY + RC_ContextLoad_context (0x1DF), ContextLoad.c:76.
+        TpmRc::INTEGRITY.with(Position::parameter(1)).get(),
         "Context must fail when total_reset_count increments"
     );
 }

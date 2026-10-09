@@ -40,6 +40,18 @@ fn setup_tpm<'a>(
     (tpm, global_state)
 }
 
+/// An empty-password `TPM_RS_PW` session. In C every handle with an authorization role
+/// needs a session even if its authValue is empty; with no session C returns
+/// TPM_RC_AUTH_MISSING (SessionProcess.c CheckAuthNoSession).
+fn pw() -> tpm2::TpmsAuthCommand<'static> {
+    tpm2::TpmsAuthCommand {
+        session_handle: tpm2::Handle::RS_PW,
+        nonce: tpm2::Tpm2bNonce::default(),
+        session_attributes: tpm2::TpmaSession(0),
+        hmac: tpm2::Tpm2bAuth::default(),
+    }
+}
+
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
@@ -396,7 +408,7 @@ fn adv_sequence_update_trailing_bytes() {
         &mut global_state,
         &update_handles,
         &update_cmd,
-        &[],
+        &[pw()],
     );
     assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
 }
@@ -429,7 +441,7 @@ fn adv_sequence_complete_trailing_bytes() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw()],
     );
     assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
 }
@@ -462,7 +474,7 @@ fn adv_sequence_complete_invalid_hierarchy_detailed() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw()],
     );
     assert_eq!(
         res.err(),

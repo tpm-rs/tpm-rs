@@ -45,13 +45,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let disable = cmd.disable;
 
+        // The command needs NV update (`RETURN_IF_NV_IS_NOT_AVAILABLE`, `ClearControl.c`).
+        self.return_if_nv_is_not_available()?;
+
+        // LockoutAuth may be used to set disableClear to TRUE but not to FALSE.
         if auth == Handle::RH_LOCKOUT.0 && !disable {
             return Err(TpmRc::AUTH_FAIL.to_rc());
         }
 
+        self.global_state.disable_clear = disable;
+        // NV_SYNC_PERSISTENT(disableClear): `disableClear` is part of the persistent hierarchy
+        // data and survives TPM Reset / power cycles.
+        self.context.save_hierarchy_auths(self.global_state);
+
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;
-        self.global_state.disable_clear = disable;
         Ok(())
     }
 }

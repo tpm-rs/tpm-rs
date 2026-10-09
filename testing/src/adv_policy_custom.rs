@@ -71,7 +71,7 @@ fn create_signing_key_with_unique(
     };
 
     let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &create_primary, create_handles, 0, &[])
+        execute_with_password_sessions(sim, &create_primary, create_handles, 1, &[])
             .expect("could not call TPM2_CreatePrimary");
     (rsp_handles.object_handle, rsp.name)
 }
@@ -193,7 +193,7 @@ fn test_policy_pcr_counter_changed() {
     };
 
     let (_rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 0, &[])
+        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[])
             .expect("could not call TPM2_CreatePrimary");
 
     // Flush trial session
@@ -303,13 +303,14 @@ fn test_policy_pcr_unsupported_hash() {
         policy_session: start_rsp_handles.session_handle,
     };
 
+    // SHA-512 is an implemented hash: C accepts the selection and FilterPcr clears it because
+    // the SHA-512 bank is not allocated by default.
     let res = execute_with_password_sessions(&mut sim, &policy_pcr, policy_pcr_handles, 0, &[]);
     assert!(
-        res.is_err(),
-        "Expected PolicyPCR to fail with SHA512 (unsupported PCR hash alg)"
+        res.is_ok(),
+        "PolicyPCR with an unallocated SHA-512 bank selection succeeds: {:?}",
+        res.err()
     );
-    let err = res.err().unwrap();
-    assert_eq!(err, TpmRc::HASH.with(Position::parameter(1)).get());
 
     let _ = flush_context(&mut sim, start_rsp_handles.session_handle);
 }
@@ -410,7 +411,7 @@ fn test_policy_auth_value_and_pcr_combination() {
     };
 
     let (_rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 0, &[])
+        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[])
             .expect("could not call TPM2_CreatePrimary");
 
     // 3. Sub-tests for verifying various authorization paths
@@ -807,7 +808,7 @@ fn test_policy_pcr_gated_pcr_extended_fails() {
     };
 
     let (_rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[]).unwrap();
 
     // 3. Start a policy session to authorize command
     let active_sess = start_auth_session(
@@ -963,7 +964,7 @@ fn test_policy_pcr_other_pcr_extended_fails() {
     };
 
     let (_rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[]).unwrap();
 
     // 3. Start a policy session to authorize command
     let active_sess = start_auth_session(
@@ -1069,10 +1070,10 @@ fn test_policy_pcr_duplicate_algorithms() {
         policy_session: active_sess.session_handle,
     };
 
+    // C (TPML_PCR_SELECTION_Unmarshal / PCRComputeCurrentDigest) does not reject a repeated
+    // bank: each selection is hashed in order.
     let res = sim.execute_with_handles(policy_pcr, policy_pcr_handles);
-    assert!(res.is_err());
-    let expected_err = TpmRc::VALUE.with(Position::parameter(1));
-    assert_eq!(res.err().unwrap(), expected_err);
+    assert!(res.is_ok(), "duplicate banks are accepted: {:?}", res.err());
 
     let _ = flush_context(&mut sim, active_sess.session_handle);
 }
@@ -1144,9 +1145,10 @@ fn test_policy_pcr_digest_mismatch() {
 
     let res = sim.execute_with_handles(policy_pcr, policy_pcr_handles);
     assert!(res.is_err(), "Expected PolicyPCR with wrong digest to fail");
+    // pcrDigest is parameter 1 (TPM_RCS_VALUE + RC_PolicyPCR_pcrDigest).
     assert_eq!(
         res.err().unwrap(),
-        TpmRc::VALUE.with(Position::parameter(2))
+        TpmRc::VALUE.with(Position::parameter(1))
     );
 
     let _ = flush_context(&mut sim, active_sess.session_handle);
@@ -1327,16 +1329,20 @@ fn test_policy_commands_with_session_tag_0x8002() {
     let session_handle = start_rsp_handles.session_handle;
 
     // 2. Setup a separate active session to use in the command's session area (tag 0x8002).
-    let active_sess = start_auth_session(
+    //    The command has no authorization handles, so the session is unassociated; C
+    //    ParseSessionBuffer requires such a session to be an audit, encrypt or decrypt session
+    //    (TPM_RCS_ATTRIBUTES otherwise), so it is used as an HMAC audit session.
+    let mut active_sess = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
         Handle::RH_NULL,
         &[],
-        TpmSe::Policy,
+        TpmSe::HMAC,
         None,
         TpmiAlgHash::Sha256,
     )
     .unwrap();
+    active_sess.attributes = tpm2::TpmaSession::CONTINUE_SESSION | tpm2::TpmaSession::AUDIT;
 
     // 3. Call PolicyCpHash with tag 0x8002 (num_sessions = 1) using an HMAC session.
     let dummy_cp_hash = [0x55; 32];
@@ -1388,12 +1394,14 @@ fn test_policy_commands_bind_entity_fail() {
     let policy_cp_hash_handles = PolicyCpHashHandles {
         policy_session: session_handle,
     };
+    // C SessionCreate only binds HMAC sessions: a trial/policy session started with a bind
+    // entity is not bound, so its cpHash union is free and PolicyCpHash succeeds.
     let res = sim.execute_with_handles(policy_cp_hash, policy_cp_hash_handles);
     assert!(
-        res.is_err(),
-        "Expected PolicyCpHash to fail for a bound session"
+        res.is_ok(),
+        "PolicyCpHash must succeed (policy sessions are never bound): {:?}",
+        res.err()
     );
-    assert_eq!(res.err().unwrap(), TpmRc::CPHASH);
 
     // 2. PolicyDuplicationSelect should fail because bind_entity != RHNull
     let (_ek, ek_name) = create_signing_key(&mut sim);
@@ -1405,10 +1413,12 @@ fn test_policy_commands_bind_entity_fail() {
     let policy_dup_handles = PolicyDuplicationSelectHandles {
         policy_session: session_handle,
     };
+    // The session is not bound (see above), but PolicyCpHash already set the cpHash union, so
+    // PolicyDuplicationSelect still fails with TPM_RC_CPHASH (nameHash must be empty).
     let res = sim.execute_with_handles(policy_dup, policy_dup_handles);
     assert!(
         res.is_err(),
-        "Expected PolicyDuplicationSelect to fail for a bound session"
+        "Expected PolicyDuplicationSelect to fail once cpHash is set"
     );
     assert_eq!(res.err().unwrap(), TpmRc::CPHASH);
 

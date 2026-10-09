@@ -199,7 +199,11 @@ fn oracle_validate_parms(parms: &TpmtPublicParms) -> Result<(), TpmRc> {
                     TpmtKdfScheme::Kdf1Sp800_108(scheme) => {
                         oracle_validate_hash_alg(scheme)?;
                     }
-                    TpmtKdfScheme::Mgf1(_) | TpmtKdfScheme::Hkdf(_) => {
+                    // C TPMI_ALG_KDF_Unmarshal accepts MGF1 (implemented); HKDF is not.
+                    TpmtKdfScheme::Mgf1(scheme) => {
+                        oracle_validate_hash_alg(scheme)?;
+                    }
+                    TpmtKdfScheme::Hkdf(_) => {
                         return Err(TpmRc::KDF.with(Position::parameter(1)));
                     }
                 }
@@ -219,7 +223,8 @@ fn oracle_validate_parms(parms: &TpmtPublicParms) -> Result<(), TpmRc> {
             }
             Some(TpmtKeyedHashScheme::ExclusiveOr(scheme)) => {
                 oracle_validate_hash_alg(scheme.hash_alg)?;
-                if scheme.kdf.is_none() || scheme.kdf == Some(TpmiAlgKdf::Hkdf) {
+                // C TPMS_SCHEME_XOR_Unmarshal: TPMI_ALG_KDF+ (NULL allowed); HKDF unimplemented.
+                if scheme.kdf == Some(TpmiAlgKdf::Hkdf) {
                     return Err(TpmRc::KDF.with(Position::parameter(1)));
                 }
             }
@@ -249,7 +254,19 @@ fn oracle_validate_hash_alg(hash_alg: TpmiAlgHash) -> Result<(), TpmRc> {
 fn oracle_validate_symmetric(symmetric: Option<TpmtSymDefObject>) -> Result<(), TpmRc> {
     match symmetric {
         Some(TpmtSymDefObject::Aes128(mode)) | Some(TpmtSymDefObject::Aes256(mode)) => {
-            if mode != Some(TpmiAlgSymMode::CFB) {
+            // TPM2_TestParms only unmarshals (C TestParms.c): TPMI_ALG_SYM_MODE+ accepts every
+            // implemented mode (CTR, OFB, CBC, CFB, ECB) and TPM_ALG_NULL. The CFB requirement
+            // only applies when an object is created (PublicAttributesValidation).
+            if !matches!(
+                mode,
+                None | Some(
+                    TpmiAlgSymMode::CTR
+                        | TpmiAlgSymMode::OFB
+                        | TpmiAlgSymMode::CBC
+                        | TpmiAlgSymMode::CFB
+                        | TpmiAlgSymMode::ECB
+                )
+            ) {
                 return Err(TpmRc::MODE.with(Position::parameter(1)));
             }
         }

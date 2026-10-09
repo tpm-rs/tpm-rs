@@ -116,7 +116,10 @@ fn test_verify_signature_scheme_null_validation() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         public: (public_area).into(),
         private: [0u8; 1536],
         private_len: 256,
@@ -179,7 +182,10 @@ fn test_sign_and_verify_signature_hmac() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         public: (public_area).into(),
         private: [0x42u8; 1536],
         private_len: 32,
@@ -202,12 +208,16 @@ fn test_sign_and_verify_signature_hmac() {
     offset += marshal_to_slice(&in_scheme, &mut param_buf[offset..]);
     offset += marshal_to_slice(&(validation), &mut param_buf[offset..]);
 
-    let cmd_size = 10 + 4 + offset as u32;
+    // keyHandle has the USER role, so an (empty) password session is required (C returns
+    // TPM_RC_AUTH_MISSING without one).
+    let pw_session = [0u8, 0, 0, 9, 0x40, 0, 0, 9, 0, 0, 0x01, 0, 0];
+    let cmd_size = 10 + 4 + pw_session.len() as u32 + offset as u32;
     let mut request = Vec::new();
-    request.extend_from_slice(&0x8001u16.to_be_bytes());
+    request.extend_from_slice(&0x8002u16.to_be_bytes());
     request.extend_from_slice(&cmd_size.to_be_bytes());
     request.extend_from_slice(&0x0000015Du32.to_be_bytes()); // cc Sign
     request.extend_from_slice(&0x80000001u32.to_be_bytes()); // key_handle
+    request.extend_from_slice(&pw_session);
     request.extend_from_slice(&param_buf[..offset]);
 
     let mut response = [0u8; 1024];
@@ -215,7 +225,8 @@ fn test_sign_and_verify_signature_hmac() {
     let error_code = u32::from_be_bytes(response[6..10].try_into().unwrap());
     assert_eq!(error_code, 0, "Sign command should succeed");
 
-    let mut unmarshal_buf = &response[10..len];
+    // TPM_ST_SESSIONS response: header || parameterSize || parameters || sessions.
+    let mut unmarshal_buf = &response[14..len];
     let sign_rsp =
         <tpm2::commands::Sign as tpm2::commands::Command>::Response::unmarshal(&mut unmarshal_buf)
             .expect("Should unmarshal <Sign<'static> as Command>::Response");

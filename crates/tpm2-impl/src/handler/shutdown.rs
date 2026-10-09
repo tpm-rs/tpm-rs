@@ -35,16 +35,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn shutdown(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        if !self.global_state.nv_available {
-            return Err(TpmRc::NV_UNINITIALIZED);
-        }
-
+        // Parameters are unmarshaled (and trailing bytes rejected) before the command action runs.
         let cmd = request.try_unmarshal::<Shutdown>()?;
         let shutdown_type = cmd.shutdown_type as u16;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
+
+        // The command needs NV update (`RETURN_IF_NV_IS_NOT_AVAILABLE`, `Shutdown.c`).
+        self.return_if_nv_is_not_available()?;
 
         if shutdown_type != 0x0000 && shutdown_type != 0x0001 {
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
@@ -58,6 +58,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.global_state.orderly_state = shutdown_type;
         self.global_state.da_used = false;
         if shutdown_type == 0x0001 {
+            // Save the STATE_RESET and STATE_CLEAR data for a subsequent TPM Restart / Resume.
+            // If it cannot be saved, the next TPM2_Startup(STATE) reports
+            // TPM_RC_NV_UNINITIALIZED and Startup(CLEAR) performs a TPM Reset.
+            let _ = self.context.save_state_data(self.global_state);
             if self.global_state.drtm_pre_startup {
                 self.global_state.orderly_state = 0x0001 | PRE_STARTUP_FLAG;
             } else if self.global_state.startup_locality_3 {

@@ -463,8 +463,11 @@ fn make_keyed_hash_public_area(unique: &[u8], attrs: TpmaObject) -> TpmtPublic<'
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: attrs | TpmaObject::USER_WITH_AUTH,
         auth_policy: Tpm2bDigest::default(),
+        // C SchemeChecks (Object_spt.c:429-439): a sign-only keyedhash object
+        // needs an HMAC scheme (NULL -> SCHEME+P2).
         parms_and_id: PublicParmsAndId::KeyedHash(
-            None,
+            (attrs.contains(TpmaObject::SIGN_ENCRYPT) && !attrs.contains(TpmaObject::DECRYPT))
+                .then_some(TpmtKeyedHashScheme::Hmac(TpmiAlgHash::Sha256)),
             Tpm2bDigest::from_bytes(crate::test_utils::leak_bytes(&actual_unique)).unwrap(),
         ),
     }
@@ -703,15 +706,17 @@ fn test_load_external_rsa_sensitive() {
 #[test]
 fn test_load_external_sym_sensitive() {
     let mut sim = create_simulator!();
+    // With a nameAlg, C requires a digest-sized seedValue (CryptUtil.c, else
+    // KEY_SIZE+P1) and unique = H(seedValue || key).
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
-        seed_value: Tpm2bDigest::default(),
+        seed_value: Tpm2bDigest::from_bytes(&[0x02; 32]).unwrap(),
         sensitive: TpmuSensitiveComposite::Sym(Tpm2bSymKey::from_bytes(&[0x01; 16]).unwrap()),
     };
     let in_private = tpm2::Tpm2b(sensitive_create);
 
     let mut hasher = Sha256::new();
-    hasher.update([]);
+    hasher.update([0x02; 32]);
     hasher.update([0x01; 16]);
     let sym_unique = hasher.finalize().to_vec();
 
@@ -1593,7 +1598,9 @@ fn adv_load_external_keyed_hash_sensitive_too_large() {
     let in_private = tpm2::Tpm2b(sensitive_create);
 
     let unique_bytes = [0x01; 32];
-    let mut pub_area = make_keyed_hash_public_area(&unique_bytes, TpmaObject::default());
+    // An HMAC scheme is only valid on a sign-only keyedhash object (C SchemeChecks,
+    // Object_spt.c:429-439, else SCHEME+P2), so set SIGN.
+    let mut pub_area = make_keyed_hash_public_area(&unique_bytes, TpmaObject::SIGN_ENCRYPT);
     if let PublicParmsAndId::KeyedHash(ref mut scheme, _) = pub_area.parms_and_id {
         *scheme = Some(TpmtKeyedHashScheme::Hmac(TpmiAlgHash::Sha256));
     }
@@ -1694,7 +1701,9 @@ fn adv_load_external_rsa_p_q_bits_mismatch() {
     p_bytes[127] = 0x01;
 
     let mut n_bytes = [0u8; 256];
-    n_bytes[0] = 0x10;
+    // The modulus must have its top bit set, or C rejects the public area first
+    // with KEY+P2 (CryptUtil.c:1715-1717).
+    n_bytes[0] = 0x90;
     n_bytes[128] = 0xa0;
     n_bytes[255] = 0x01;
 
@@ -1719,8 +1728,9 @@ fn adv_load_external_rsa_p_q_bits_mismatch() {
     let res = sim.execute_with_handles(cmd, ());
     assert!(res.is_err());
     let err = res.err().unwrap();
-    let expected = TpmRc::BINDING.with(Position::parameter(1));
-    assert_eq!(err.get(), expected.get());
+    // C ObjectLoad returns CryptRsaLoadPrivateExponent's TPM_RC_BINDING without
+    // a parameter number (Object.c:381-383, CryptRsa.c:969).
+    assert_eq!(err.get(), TpmRc::BINDING.get());
 }
 
 #[test]

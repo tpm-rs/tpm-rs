@@ -129,19 +129,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &cmd.symmetric,
         )?;
 
+        // Only HMAC sessions are bound to an entity; a policy (or trial) session is never bound
+        // (C `SessionCreate`, Session.c: `bind != TPM_RH_NULL && sessionType == TPM_SE_HMAC`).
+        // The bind entity's authValue still contributes to the session key of every session type.
+        let is_bound_session = handles.bind != Handle::RH_NULL && cmd.session_type == TpmSe::HMAC;
         let mut bound_entity = crate::owned::OwnedName::default();
-        if handles.bind != Handle::RH_NULL {
+        if is_bound_session {
             let bind_name = self.context.handle_name(self.global_state, handles.bind.0);
-
-            let name_bytes = bind_name.get_buffer();
-            let mut name_buf = [0u8; 64];
-            name_buf[..name_bytes.len()].copy_from_slice(name_bytes);
-            for (p_auth, i) in ((64 - bind_auth_stripped.len())..64).enumerate() {
-                name_buf[i] ^= bind_auth_stripped[p_auth];
-            }
-            bound_entity =
-                crate::owned::OwnedName::from_bytes(&name_buf).map_err(|_| TpmRc::FAILURE)?;
+            bound_entity = compute_bound_entity(bind_name.get_buffer(), bind_auth_stripped)?;
         }
+        let bind_entity = if is_bound_session {
+            handles.bind
+        } else {
+            Handle::RH_NULL
+        };
+        // A DA-protected bind entity makes every use of the session subject to DA, for all
+        // session types (C `SessionCreate`: `isDaBound`, `isLockoutBound`).
+        let is_da_bound = handles.bind != Handle::RH_NULL
+            && self
+                .context
+                .has_da_protection(self.global_state, handles.bind.0);
+        let is_lockout_bound = is_da_bound && handles.bind == Handle::RH_LOCKOUT;
 
         // Add to active sessions
         let session_state = SessionState {
@@ -153,7 +161,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             session_key,
             session_key_len,
             symmetric: cmd.symmetric,
-            bind_entity: handles.bind,
+            bind_entity,
             bound_entity,
             audit_digest: None,
             audit_digest_len: 0,
@@ -177,6 +185,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             nv_written_state: false,
             command_locality: 0,
             include_auth: false,
+            is_da_bound,
+            is_lockout_bound,
         };
         self.global_state.add_session(session_state)?;
 
@@ -248,6 +258,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if tpm_key != Handle::RH_NULL {
             let handle_val = tpm_key.0;
             let key_obj = self.resolve_object(handle_val, Position::handle(1))?;
+
+            // Same order as C `TPM2_StartAuthSession`: the key must be asymmetric
+            // (`CryptIsAsymAlgorithm`), the secret must be non-empty, the sensitive area must be
+            // loaded, and the key must be a decryption key.
+            if !matches!(
+                key_obj.public.parms_and_id,
+                crate::owned::OwnedPublicParmsAndId::Rsa(..)
+                    | crate::owned::OwnedPublicParmsAndId::Ecc(..)
+            ) {
+                return Err(TpmRc::KEY.with(Position::handle(1)));
+            }
+            if encrypted_salt.is_empty() {
+                return Err(TpmRc::VALUE.with(Position::parameter(2)));
+            }
 
             let handle_err = TpmRc::HANDLE.with(Position::handle(1));
             if key_obj.private_len == 0 {
@@ -369,32 +393,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         .copy_from_slice(&derived_salt[..derived_salt_len]);
                     Ok(derived_salt_len)
                 }
-                crate::owned::OwnedPublicParmsAndId::Sym(sym_def, _) => {
-                    if encrypted_salt.is_empty() || encrypted_salt.len() > 64 {
-                        return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                    }
-                    let mut iv = [0u8; 16];
-                    let nonce_buf = _nonce_caller.get_buffer();
-                    let iv_len = nonce_buf.len().min(16);
-                    iv[..iv_len].copy_from_slice(&nonce_buf[..iv_len]);
-
-                    let mut plaintext_buf = [0u8; 64];
-                    plaintext_buf[..encrypted_salt.len()].copy_from_slice(encrypted_salt);
-
-                    let sym_alg = sym_def.with_mode(Some(tpm2::TpmiAlgSymMode::CFB));
-                    tpm2::crypto::decrypt(
-                        self.crypto(),
-                        sym_alg,
-                        &key_obj.private[..key_obj.private_len],
-                        &mut iv,
-                        &mut plaintext_buf[..encrypted_salt.len()],
-                    )
-                    .map_err(|_| TpmRc::VALUE.with(Position::parameter(2)))?;
-
-                    decrypted_salt[..encrypted_salt.len()]
-                        .copy_from_slice(&plaintext_buf[..encrypted_salt.len()]);
-                    Ok(encrypted_salt.len())
-                }
+                // Non-asymmetric keys (e.g. TPM_ALG_SYMCIPHER) were rejected above.
                 _ => Err(TpmRc::KEY.with(Position::handle(1))),
             }
         } else {
@@ -405,8 +404,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
     }
 
-    /// Resolves the auth value for the session bind entity (owner, endorsement, platform, lockout,
-    /// or transient objects).
+    /// Resolves the auth value for the session bind entity (permanent handles, PCRs, NV Indices,
+    /// or transient/persistent objects).
+    ///
+    /// Mirrors the `bind` checks of C `TPM2_StartAuthSession`: a transient object whose sensitive
+    /// area is not loaded (public-only) and a `TPM_NT_PIN_PASS` / `TPM_NT_PIN_FAIL` NV Index
+    /// cannot be a bind entity (`TPM_RC_HANDLE + RC_StartAuthSession_bind`). For PCRs, the
+    /// authValue is the PCR's group authValue (`PCRGetAuthValue`, non-empty only for PCRs in an
+    /// auth group).
     fn retrieve_bind_auth(
         &mut self,
         bind: Handle,
@@ -416,12 +421,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let bind_handle = bind.0;
             let handle_err = TpmRc::HANDLE.with(Position::handle(2));
             if (bind_handle >> 24) == 0x80 {
-                if self
-                    .global_state
-                    .find_transient_object(bind_handle)
-                    .is_none()
-                {
-                    return Err(TpmRc::REFERENCE_H1);
+                match self.global_state.find_transient_object(bind_handle) {
+                    None => return Err(TpmRc::REFERENCE_H1),
+                    Some(obj) if obj.public_only => return Err(handle_err),
+                    Some(_) => {}
                 }
             } else if (bind_handle >> 24) == 0x81 {
                 if self
@@ -432,17 +435,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     return Err(TpmRc::REFERENCE_H1);
                 }
             } else if (bind_handle >> 24) == 0x00 {
-                if bind_handle <= 23 {
-                    return Ok(0);
-                } else {
+                if bind_handle > 23 {
                     return Err(handle_err);
                 }
             } else if Handle(bind_handle).handle_type() == Some(tpm2::TpmHt::NVIndex) {
-                let storage_mgr = crate::storage::manager::StorageManager::new(
-                    &mut *self.context.platform.storage,
-                );
-                if storage_mgr.get_metadata(bind_handle).is_err() {
+                let Some(nv_public) = self.read_nv_public(bind_handle) else {
                     return Err(TpmRc::REFERENCE_H1);
+                };
+                if matches!(
+                    nv_public.attributes.get_index_type(),
+                    Ok(tpm2::TpmNt::PinPass | tpm2::TpmNt::PinFail)
+                ) {
+                    return Err(handle_err);
                 }
             } else if bind_handle != Handle::RH_OWNER.0
                 && bind_handle != Handle::RH_ENDORSEMENT.0
@@ -459,6 +463,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else {
             Ok(0)
         }
+    }
+
+    /// Reads the public area of a defined NV Index.
+    ///
+    /// Returns `None` when `nv_index` is not defined (or its stored header cannot be parsed).
+    pub(crate) fn read_nv_public(&mut self, nv_index: u32) -> Option<crate::owned::OwnedNvPublic> {
+        let storage_mgr =
+            crate::storage::manager::StorageManager::new(&mut *self.context.platform.storage);
+        let metadata = storage_mgr.get_metadata(nv_index).ok()?;
+        let mut read_buf = [0u8; 1536];
+        let read_len = core::cmp::min(metadata.data_size as usize, read_buf.len());
+        storage_mgr
+            .read_item(nv_index, 0, &mut read_buf[..read_len])
+            .ok()?;
+        let (_, nv_public, _, _) =
+            crate::handler::nv_storage::unmarshal_nv_header(&read_buf[..read_len]).ok()?;
+        Some(nv_public)
     }
 
     /// Allocates a unique handle for the new session, avoiding conflicts in the global session map.
@@ -568,12 +589,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // 1. Check if the code is supported.
-        if !crate::engine::is_command_supported(cmd.code) {
-            return Err(TpmRc::POLICY_CC.to_rc());
-        }
-
-        // 2. Retrieve session state details.
+        // 1. Retrieve session state details.
         let session_handle = handles.policy_session.0;
         let (auth_hash, policy_digest, policy_digest_len) = {
             let session_state = self
@@ -585,8 +601,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             {
                 return Err(TpmRc::VALUE.with(Position::handle(1)));
             }
+            // 2. A different command code must not already be set
+            //    (`TPM_RCS_VALUE + RC_PolicyCommandCode_code`).
             if session_state.command_code != 0 && session_state.command_code != cmd.code.code() {
-                return Err(TpmRc::VALUE.to_rc());
+                return Err(TpmRc::VALUE.with(Position::parameter(1)));
             }
             (
                 session_state.auth_hash,
@@ -594,6 +612,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 session_state.policy_digest_len,
             )
         };
+
+        // 3. The code must be implemented (`TPM_RCS_POLICY_CC + RC_PolicyCommandCode_code`).
+        //    Checked after the command code conflict, as in C `TPM2_PolicyCommandCode`.
+        if !crate::engine::is_command_supported(cmd.code) {
+            return Err(TpmRc::POLICY_CC.with(Position::parameter(1)));
+        }
 
         // 5. Update policy digest.
         let mut updates = [0u8; 128];
@@ -737,6 +761,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             session_state.is_cp_hash_defined = false;
             session_state.is_name_hash_defined = false;
             session_state.is_template_hash_defined = false;
+            // `u1.cpHash.b.size = 0` and `timeout = 0` in C `SessionResetPolicyData`.
+            session_state.policy_hash = [0u8; 64];
+            session_state.policy_hash_len = 0;
+            session_state.timeout = 0;
             session_state.check_nv_written = false;
             session_state.nv_written_state = false;
             session_state.pcr_counter = None;
@@ -747,6 +775,36 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.write_response_all(response, &(), &(), &session_responses[..num_sessions])?;
         Ok(())
     }
+}
+
+/// Computes the bind value of an entity, as `SessionComputeBoundEntity` does in the C reference
+/// (Session.c).
+///
+/// The entity Name is zero-padded to `sizeof(TPMU_NAME)` ([tpm2::Tpm2bName::CAP], 66 bytes when
+/// SHA-512 is implemented) and the (trailing-zero-stripped) authValue is XORed into the last bytes
+/// of that buffer. The result always has the full buffer size, so Names of every implemented
+/// `nameAlg` (including 66-byte SHA-512 Names) are supported.
+///
+/// Used both when a session is bound in `TPM2_StartAuthSession` and when deciding whether an
+/// authorized entity is the bind entity of an HMAC session (`IsSessionBindEntity`).
+///
+/// # Errors
+/// Returns [TpmRc::FAILURE] if `name` or `auth` is larger than the bind buffer (cannot happen for
+/// well-formed Names and authValues).
+pub(crate) fn compute_bound_entity(
+    name: &[u8],
+    auth: &[u8],
+) -> Result<crate::owned::OwnedName, TpmRc> {
+    const BIND_SIZE: usize = tpm2::Tpm2bName::CAP;
+    if name.len() > BIND_SIZE || auth.len() > BIND_SIZE {
+        return Err(TpmRc::FAILURE);
+    }
+    let mut bind = [0u8; BIND_SIZE];
+    bind[..name.len()].copy_from_slice(name);
+    for (dst, src) in bind[BIND_SIZE - auth.len()..].iter_mut().zip(auth) {
+        *dst ^= *src;
+    }
+    crate::owned::OwnedName::from_bytes(&bind).map_err(|_| TpmRc::FAILURE)
 }
 
 fn compute_hash<C: CryptoProvider>(

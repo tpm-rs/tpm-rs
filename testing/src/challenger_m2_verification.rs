@@ -2,9 +2,8 @@ use crate::test_utils::*;
 use sha2::{Digest, Sha256};
 use tpm2::commands::{
     CreatePrimary, CreatePrimaryHandles, PolicyAuthorize, PolicyAuthorizeHandles, PolicyGetDigest,
-    PolicyGetDigestHandles, PolicyOR, PolicyORHandles, PolicySecret, PolicySecretHandles, Sign,
-    SignHandles, StartAuthSession, StartAuthSessionHandles, VerifySignature,
-    VerifySignatureHandles,
+    PolicyGetDigestHandles, PolicySecret, PolicySecretHandles, Sign, SignHandles, StartAuthSession,
+    StartAuthSessionHandles, VerifySignature, VerifySignatureHandles,
 };
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve, TpmSe};
@@ -46,7 +45,7 @@ fn create_signing_key(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
     };
 
     let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &create_primary, create_handles, 0, &[])
+        execute_with_password_sessions(sim, &create_primary, create_handles, 1, &[])
             .expect("could not call TPM2_CreatePrimary");
     (rsp_handles.object_handle, rsp.name)
 }
@@ -67,7 +66,7 @@ fn test_session_expiration_enforced() {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
     };
-    let (_, start_rsp_handles) =
+    let (start_rsp, start_rsp_handles) =
         execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
     let session_handle = start_rsp_handles.session_handle;
 
@@ -97,15 +96,26 @@ fn test_session_expiration_enforced() {
     // 3. Wait for 1.5 seconds so that the session expires
     std::thread::sleep(std::time::Duration::from_millis(1500));
 
-    // 4. Try to call PolicyOR. It should return an error due to session expiration
-    let digest1 = Tpm2bDigest::from_bytes(&[1u8; 32]).unwrap();
-    let digest2 = Tpm2bDigest::from_bytes(&[2u8; 32]).unwrap();
-    let p_hash_list = TpmlDigest::from_slice(&[digest1, digest2]).unwrap();
-    let policy_or = PolicyOR { p_hash_list };
-    let policy_or_handles = PolicyORHandles {
+    // 4. Repeat PolicySecret with the same 1-second expiration. It should return
+    // an error due to session expiration. (C PolicyOR does not check the
+    // session timeout at all; it would fail with VALUE+P1 because the current
+    // digest is not in the list. PolicySecret's expiration is checked against
+    // the session start time: EXPIRED+P4, Policy_spt.c:36-39.)
+    // With nonceTPM present, C measures the expiration from the session start
+    // time (Policy_spt.c ComputeAuthTimeout); with an empty nonce it would be
+    // relative to the current second and not reliably expired.
+    let policy_secret = PolicySecret {
+        nonce_tpm: start_rsp.nonce_tpm,
+        cp_hash_a: Tpm2bDigest::default(),
+        policy_ref: Tpm2bNonce::default(),
+        expiration: -1,
+    };
+    let policy_secret_handles = PolicySecretHandles {
+        auth_handle: Handle::RH_OWNER,
         policy_session: session_handle,
     };
-    let res = execute_with_password_sessions(&mut sim, &policy_or, policy_or_handles, 0, &[]);
+    let res =
+        execute_with_password_sessions(&mut sim, &policy_secret, policy_secret_handles, 1, &[]);
     assert!(
         res.is_err(),
         "Expected command to fail on expired session, but it succeeded!"

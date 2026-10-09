@@ -172,7 +172,14 @@ fn test_mac_start_dispatch_with_sessions() {
     let key_handle = 0x80000001;
     let transient_obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [1u8; 32],
+        seed: {
+            let mut s = [0u8; 64];
+            s[..32].copy_from_slice(&[1u8; 32]);
+            s
+        },
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::from_bytes(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::from_bytes(b"password").unwrap()).into(),
         public: (tpm2::TpmtPublic {

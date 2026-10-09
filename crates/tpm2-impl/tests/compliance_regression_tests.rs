@@ -241,7 +241,12 @@ fn get_test_template() -> TpmtPublic<'static> {
             | TpmaObject::RESTRICTED
             | TpmaObject::DECRYPT,
         auth_policy: Default::default(),
-        parms_and_id: PublicParmsAndId::KeyedHash(None, tpm2::Tpm2bDigest::default()),
+        // A restricted decrypt KEYEDHASH object would need an XOR scheme (C `SchemeChecks()`);
+        // use a symmetric storage key instead.
+        parms_and_id: PublicParmsAndId::Sym(
+            tpm2::TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)),
+            tpm2::Tpm2bDigest::default(),
+        ),
     }
 }
 
@@ -276,7 +281,13 @@ fn test_transient_object_capacity_boundary() {
 
     // Exactly 16 items (MAX_LOADED_OBJECTS = 16) should be created and stored in RAM without error.
     for i in 0..16 {
-        let res = execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+        let res = execute_tpm_command(
+            &mut tpm,
+            &mut global_state,
+            &handles,
+            &cmd,
+            &[common::password_auth(b"")],
+        );
         assert!(
             res.is_ok(),
             "CreatePrimary at slot {} failed unexpectedly: {:?}",
@@ -286,7 +297,13 @@ fn test_transient_object_capacity_boundary() {
     }
 
     // The 17th load attempt should fail with TPM_RC_OBJECT_MEMORY (0x902), preserving cache limits.
-    let overflow_res = execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let overflow_res = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &handles,
+        &cmd,
+        &[common::password_auth(b"")],
+    );
     assert_eq!(
         overflow_res.err(),
         Some(TpmRc::OBJECT_MEMORY.get()),
@@ -314,10 +331,12 @@ fn test_unmapped_transient_flush_validation() {
     tpm.execute_command_separate(&mut global_state, &flush_request[..], &mut response_buf[..]);
 
     let rc = u32::from_be_bytes(response_buf[6..10].try_into().unwrap());
+    // flushHandle is a parameter: C `TPM2_FlushContext()` returns
+    // TPM_RCS_HANDLE + RC_FlushContext_flushHandle (TPM_RC_HANDLE + RC_P1).
     assert_eq!(
         rc,
-        TpmRc::HANDLE.get(),
-        "Flushing an unmapped transient handle during header validation should return TPM_RC_HANDLE (0x8B)"
+        TpmRc::HANDLE.with(Position::parameter(1)).get(),
+        "Flushing an unloaded transient handle should return TPM_RC_HANDLE + RC_P1"
     );
 }
 
@@ -373,10 +392,12 @@ fn test_persistent_handle_unseal_resolution() {
     tpm.execute_command_separate(&mut global_state, &unseal_req[..], &mut response_buf[..]);
 
     let rc = u32::from_be_bytes(response_buf[6..10].try_into().unwrap());
+    // C `ObjectLoadEvict()` (Object.c): an undefined persistent handle is TPM_RC_HANDLE + RC_H1;
+    // only unloaded transient handles give TPM_RC_REFERENCE_H0.
     assert_eq!(
         rc,
-        TpmRc::REFERENCE_H0.get(),
-        "Expected TPM_RC_REFERENCE_H0 (0x910) when Unseal performs persistent handle resolution on a missing object"
+        TpmRc::HANDLE.with(Position::handle(1)).get(),
+        "Expected TPM_RC_HANDLE + RC_H1 when Unseal references an undefined persistent object"
     );
 }
 
@@ -471,7 +492,8 @@ fn test_regression_tc2_0_32_03_08_keyedhash_schemes() {
         "Expected TPM_RC_KDF (0x01CC) for KeyedHash XOR with invalid KDF"
     );
 
-    // 3. KeyedHash XOR with kdf=TPM_ALG_NULL(0x0010) must return TPM_RC_KDF per CPCTPM_TC2_0_32_03_08 STEP2
+    // 3. KeyedHash XOR with kdf=TPM_ALG_NULL(0x0010) is accepted by the C reference:
+    //    TPMS_SCHEME_XOR_Unmarshal uses TPMI_ALG_KDF_Unmarshal(..., 1) (NULL allowed, Marshal.c).
     let req_xor_null_kdf = hex!(
         "8001"     // NO_SESSIONS
         "00000012" // size: 18 bytes
@@ -488,9 +510,8 @@ fn test_regression_tc2_0_32_03_08_keyedhash_schemes() {
     );
     let rc = u32::from_be_bytes(response_buf[6..10].try_into().unwrap());
     assert_eq!(
-        rc,
-        TpmRc::KDF.with(Position::parameter(1)).get(),
-        "Expected TPM_RC_KDF (0x01CC) for KeyedHash XOR with NULL KDF in TestParms"
+        rc, 0,
+        "Expected TPM_RC_SUCCESS for KeyedHash XOR with NULL KDF in TestParms"
     );
 }
 
@@ -544,10 +565,11 @@ fn test_regression_tc2_1_25_19_02_policy_pcr_invalid_hash() {
         &mut response_buf[..],
     );
     let rc = u32::from_be_bytes(response_buf[6..10].try_into().unwrap());
+    // pcrs is the second parameter of TPM2_PolicyPCR (pcrDigest is the first).
     assert_eq!(
         rc,
-        TpmRc::HASH.with(Position::parameter(1)).get(),
-        "Expected TPM_RC_HASH (0x01C3) for PolicyPCR with invalid hash algorithm in PCR selection"
+        TpmRc::HASH.with(Position::parameter(2)).get(),
+        "Expected TPM_RC_HASH + RC_P2 for PolicyPCR with invalid hash algorithm in PCR selection"
     );
 }
 
@@ -584,7 +606,7 @@ fn test_regression_tc2_2_14_01_06_create_keyedhash_invalid_scheme_hash() {
         &mut global_state,
         &create_handles,
         &create_cmd,
-        &[],
+        &[common::password_auth(b"")],
     )
     .unwrap();
     let primary_obj_handle = primary_resp.object_handle;
@@ -623,7 +645,7 @@ fn test_regression_tc2_2_14_01_06_create_keyedhash_invalid_scheme_hash() {
         &mut global_state,
         &child_create_handles,
         &child_create_cmd,
-        &[],
+        &[common::password_auth(b"")],
         |payload| {
             // Find scheme hashAlg in in_public payload (0x0005 0x000B) and replace 0x000B with TPM_ALG_AES (0x0006)
             for i in 0..payload.len().saturating_sub(3) {
@@ -667,7 +689,7 @@ fn test_regression_tc2_2_14_01_06_create_keyedhash_invalid_scheme_hash() {
         &mut global_state,
         &child_create_handles,
         &decrypt_hmac_cmd,
-        &[],
+        &[common::password_auth(b"")],
     )
     .unwrap_err();
     assert_eq!(
@@ -999,7 +1021,7 @@ fn test_regression_tc2_2_15_03_06_import_validation() {
         &mut global_state,
         &create_handles,
         &create_cmd,
-        &[],
+        &[common::password_auth(b"")],
     )
     .unwrap();
     let parent_handle = primary_resp.object_handle;
@@ -1168,7 +1190,7 @@ fn test_regression_tc2_4_13_01_03_start_auth_session_invalid_symmetric_and_salt(
         &mut global_state,
         &create_handles,
         &create_cmd,
-        &[],
+        &[common::password_auth(b"")],
     )
     .unwrap();
     let rsa_key_handle = primary_resp.object_handle;
@@ -1327,7 +1349,9 @@ fn test_regression_tc2_3_33_03_06_nv_define_space_invalid_attributes() {
     let rc = u32::from_be_bytes(response_buf[6..10].try_into().unwrap());
     assert_eq!(
         rc,
-        TpmRc::ATTRIBUTES.to_rc().get(),
-        "Expected TPM_RC_ATTRIBUTES (0x0082) for NV_DefineSpace with reserved TPM_NT in attributes"
+        TpmRc::ATTRIBUTES
+            .with(tpm2::errors::Position::parameter(2))
+            .get(),
+        "Expected TPM_RC_ATTRIBUTES + RC_P2 (0x02C2, C NvDefineSpace blamePublic) for NV_DefineSpace with reserved TPM_NT in attributes"
     );
 }

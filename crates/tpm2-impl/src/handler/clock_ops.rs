@@ -1,3 +1,6 @@
+use crate::engine::{
+    CLOCK_ADJUST_COARSE, CLOCK_ADJUST_FINE, CLOCK_ADJUST_LIMIT, CLOCK_ADJUST_MEDIUM, CLOCK_NOMINAL,
+};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -44,8 +47,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
         }
 
-        let new_offset = (cmd.new_time as i128 - self.global_state.tpm_time_ms as i128) as i64;
-        self.global_state.clock_offset = new_offset;
+        // The command needs NV update (`RETURN_IF_NV_IS_NOT_AVAILABLE`, `ClockSet.c`).
+        self.return_if_nv_is_not_available()?;
+
+        // `clock_offset` holds `Clock - Time` in two's complement, so every `newTime` up to
+        // `0xFFFF_0000_0000_0000` is represented exactly (see `TpmEngine::get_clock`).
+        self.global_state.clock_offset =
+            cmd.new_time.wrapping_sub(self.global_state.tpm_time_ms) as i64;
+        // `TimeClockUpdate(newTime)`: persists the clock and SETs `clockSafe` when an
+        // `NV_CLOCK_UPDATE_INTERVAL` boundary is crossed.
+        self.context
+            .clock_update(self.global_state, current_clock, cmd.new_time);
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;
@@ -82,6 +94,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         self.global_state.clock_rate_adjust = cmd.rate_adjust;
+        // `TimeSetAdjustRate` / `_plat__ClockRateAdjust`: "slower" increases and "faster"
+        // decreases the cumulative divisor applied to elapsed platform time, clamped to
+        // `CLOCK_NOMINAL ± CLOCK_ADJUST_LIMIT`.
+        let rate = self.global_state.clock_adjust_rate;
+        let rate = match cmd.rate_adjust {
+            tpm2::TpmClockAdjust::CoarseSlower => rate.saturating_add(CLOCK_ADJUST_COARSE),
+            tpm2::TpmClockAdjust::MediumSlower => rate.saturating_add(CLOCK_ADJUST_MEDIUM),
+            tpm2::TpmClockAdjust::FineSlower => rate.saturating_add(CLOCK_ADJUST_FINE),
+            tpm2::TpmClockAdjust::FineFaster => rate.saturating_sub(CLOCK_ADJUST_FINE),
+            tpm2::TpmClockAdjust::MediumFaster => rate.saturating_sub(CLOCK_ADJUST_MEDIUM),
+            tpm2::TpmClockAdjust::CoarseFaster => rate.saturating_sub(CLOCK_ADJUST_COARSE),
+            tpm2::TpmClockAdjust::NoChange => rate,
+        };
+        self.global_state.clock_adjust_rate = rate.clamp(
+            CLOCK_NOMINAL - CLOCK_ADJUST_LIMIT,
+            CLOCK_NOMINAL + CLOCK_ADJUST_LIMIT,
+        );
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;

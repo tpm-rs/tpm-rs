@@ -4,7 +4,7 @@ use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::commands::{PolicyNameHash, PolicyNameHashHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, TpmCc, TpmSe};
+use tpm2::{TpmCc, TpmSe};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -71,15 +71,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .global_state
                 .session(policy_session)
                 .ok_or(TpmRc::HANDLE.with(Position::handle(1)))?;
-            let is_occupied = (session_state.bind_entity != Handle::RH_NULL)
-                || session_state.is_cp_hash_defined
-                || session_state.is_name_hash_defined;
+            // C `IsCpHashUnionOccupied` (policy sessions are never bound). Unlike PolicyCpHash and
+            // PolicyTemplate, PolicyNameHash does not accept a repeat of the same value.
+            let is_occupied = session_state.is_cp_hash_defined
+                || session_state.is_name_hash_defined
+                || session_state.is_template_hash_defined;
 
-            if is_occupied
-                && (!session_state.is_name_hash_defined
-                    || cmd.name_hash.get_buffer()
-                        != &session_state.policy_hash[..session_state.policy_hash_len])
-            {
+            if is_occupied {
                 return Err(TpmRc::CPHASH);
             }
         }

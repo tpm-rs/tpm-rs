@@ -37,13 +37,18 @@ fn test_clear_overflow() {
     // Set clear_count to MAX
     global_state.clear_count = u32::MAX;
 
-    // Clear command: authHandle=0x4000000A (TPM_RH_PLATFORM)
-    // 8001 (tag) 0000000e (size) 00000126 (cc) 4000000a (handle)
+    // Clear command: authHandle=0x4000000A (TPM_RH_LOCKOUT), authorized with an empty password
+    // session (C `CheckAuthNoSession()` returns TPM_RC_AUTH_MISSING without one).
     let clear_request = hex!(
-        "8001" // tag
-        "0000000e" // size
+        "8002" // tag: TPM_ST_SESSIONS
+        "0000001b" // size
         "00000126" // TPM_CC_Clear
-        "4000000a" // TPM_RH_PLATFORM
+        "4000000a" // TPM_RH_LOCKOUT
+        "00000009" // authorizationSize
+        "40000009" // TPM_RS_PW
+        "0000" // nonce
+        "01" // continueSession
+        "0000" // empty password
     );
     let mut clear_response = [0u8; 256];
     tpm.execute_command_separate(
@@ -81,7 +86,12 @@ fn create_test_primary(
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: attrs,
         auth_policy: Default::default(),
-        parms_and_id: PublicParmsAndId::KeyedHash(None, tpm2::Tpm2bDigest::default()),
+        // A restricted decrypt KEYEDHASH object would need an XOR scheme (C `SchemeChecks()`);
+        // use a symmetric storage parent instead.
+        parms_and_id: PublicParmsAndId::Sym(
+            tpm2::TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)),
+            tpm2::Tpm2bDigest::default(),
+        ),
     };
     let in_public = tpm2::Tpm2b(pub_tmpl);
     let cmd = CreatePrimary {

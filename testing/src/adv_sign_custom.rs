@@ -5,7 +5,7 @@ use tpm2::Handle;
 use tpm2::commands::{
     CreatePrimary, CreatePrimaryHandles, Sign, SignHandles, VerifySignature, VerifySignatureHandles,
 };
-use tpm2::errors::TpmRc;
+use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2_simulator::{Simulator, create_simulator};
 
@@ -51,7 +51,7 @@ fn test_sign_edge_cases() {
         &mut sim,
         &create_primary_cmd,
         create_primary_handles,
-        0,
+        1, // CreatePrimary needs authorization of the hierarchy (C: AUTH_MISSING otherwise)
         &[],
     )
     .expect("CreatePrimary failed");
@@ -183,7 +183,7 @@ fn test_sign_with_non_sign_key() {
         &mut sim,
         &create_primary_cmd,
         create_primary_handles,
-        0,
+        1, // CreatePrimary needs authorization of the hierarchy (C: AUTH_MISSING otherwise)
         &[],
     )
     .expect("CreatePrimary failed");
@@ -208,7 +208,8 @@ fn test_sign_with_non_sign_key() {
         "Sign should fail when using a key without SIGN attribute"
     );
     let err = res.err().unwrap();
-    assert_eq!(err, TpmRc::KEY.get());
+    // Sign.c: TPM_RCS_KEY + RC_Sign_keyHandle.
+    assert_eq!(err, TpmRc::KEY.with(Position::handle(1)).get());
 
     // Cleanup key
     flush_context(&mut sim, object_handle).unwrap();
@@ -253,7 +254,7 @@ fn test_verify_with_non_verify_key() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1, // CreatePrimary needs authorization of the hierarchy (C: AUTH_MISSING otherwise)
         &[],
     )
     .expect("CreatePrimary sign key failed");
@@ -294,7 +295,7 @@ fn test_verify_with_non_verify_key() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1, // CreatePrimary needs authorization of the hierarchy (C: AUTH_MISSING otherwise)
         &[],
     )
     .expect("CreatePrimary decrypt key failed");
@@ -335,7 +336,8 @@ fn test_verify_with_non_verify_key() {
         "VerifySignature should fail when key lacks SIGN attribute"
     );
     let err = res.err().unwrap();
-    assert_eq!(err, TpmRc::ATTRIBUTES.get());
+    // VerifySignature.c: TPM_RCS_ATTRIBUTES + RC_VerifySignature_keyHandle.
+    assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::handle(1)).get());
 
     // 5. Attempt to verify with a mismatched signature scheme type (e.g. ECDSA signature)
     let verify_cmd_mismatched = VerifySignature {
@@ -361,7 +363,11 @@ fn test_verify_with_non_verify_key() {
         "VerifySignature should fail with mismatched scheme (ECDSA on RSA key)"
     );
     let err_mismatched = res_mismatched.err().unwrap();
-    assert_eq!(err_mismatched, TpmRc::SIGNATURE.get());
+    // CryptRsaValidateSignature: a non-RSA signature is TPM_RC_SCHEME, + RC_VerifySignature_signature.
+    assert_eq!(
+        err_mismatched,
+        TpmRc::SCHEME.with(Position::parameter(2)).get()
+    );
 
     // 6. Attempt to verify with a mismatched hash algorithm in signature (SHA1 vs key's SHA256)
     let mut signature_mismatched_hash = sign_resp.signature;
@@ -387,10 +393,12 @@ fn test_verify_with_non_verify_key() {
         "VerifySignature should fail with mismatched hash algorithm"
     );
     let err_mismatched_hash = res_mismatched_hash.err().unwrap();
-    // We expect TPM_RC_SCHEME or TPM_RC_SIGNATURE
-    assert!(
-        err_mismatched_hash == TpmRc::SCHEME.get() || err_mismatched_hash == TpmRc::SIGNATURE.get(),
-        "Expected TPM_RC_SCHEME or TPM_RC_SIGNATURE, got {}",
+    // CryptRsaValidateSignature: RSASSA decoding with the wrong hash fails -> TPM_RC_SIGNATURE,
+    // + RC_VerifySignature_signature.
+    assert_eq!(
+        err_mismatched_hash,
+        TpmRc::SIGNATURE.with(Position::parameter(2)).get(),
+        "Expected TPM_RC_SIGNATURE + P2, got {}",
         err_mismatched_hash
     );
 

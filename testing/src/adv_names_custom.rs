@@ -208,8 +208,10 @@ fn test_nv_name_algorithms_adversarial() {
             primary_handle: Handle::RH_ENDORSEMENT,
         };
 
+        // One password session: with none, C returns AUTH_MISSING before the
+        // template is checked (SessionProcess.c:1650).
         let err =
-            match execute_with_password_sessions(&mut sim, &create_primary, create_handles, 0, &[])
+            match execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[])
             {
                 Ok(_) => panic!("expected create_primary to fail"),
                 Err(e) => e,

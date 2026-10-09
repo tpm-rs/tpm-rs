@@ -529,6 +529,9 @@ pub enum OwnedSignature {
         signature_r: OwnedEccParameter,
         signature_s: OwnedEccParameter,
     },
+    /// An HMAC signature (`TPM_ALG_HMAC`) produced by a keyed-hash signing key. Only the first
+    /// `hash.digest_size()` bytes of `digest` are meaningful.
+    Hmac { hash: TpmiAlgHash, digest: [u8; 64] },
 }
 
 impl OwnedSignature {
@@ -578,6 +581,10 @@ impl OwnedSignature {
                 signature_r: signature_r.as_tpm2b(),
                 signature_s: signature_s.as_tpm2b(),
             }),
+            Self::Hmac { hash, digest } => TpmtSignature::Hmac(
+                tpm2::TpmtHa::new(*hash, &digest[..hash.digest_size()])
+                    .expect("HMAC digest length always matches its hash algorithm"),
+            ),
         }
     }
 }

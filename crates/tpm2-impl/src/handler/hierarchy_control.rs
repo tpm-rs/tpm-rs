@@ -45,61 +45,73 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let enable = cmd.enable.0;
         let state = cmd.state;
 
-        if enable == Handle::RH_ENDORSEMENT.0 {
-            if !state {
-                if auth_handle != Handle::RH_PLATFORM.0 && auth_handle != Handle::RH_ENDORSEMENT.0 {
-                    return Err(TpmRc::AUTH_TYPE);
-                }
-            } else if auth_handle != Handle::RH_PLATFORM.0 {
+        // Input validation (`HierarchyControl.c`). Platform authorization is only required to
+        // SET `shEnable`/`ehEnable` when the hierarchy is currently disabled; re-enabling an
+        // already enabled hierarchy with its own authorization is a successful no-op.
+        let current = if enable == Handle::RH_ENDORSEMENT.0 {
+            if auth_handle != Handle::RH_PLATFORM.0 && auth_handle != Handle::RH_ENDORSEMENT.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            self.global_state.eh_enable = state;
+            if !self.global_state.eh_enable && state && auth_handle != Handle::RH_PLATFORM.0 {
+                return Err(TpmRc::AUTH_TYPE);
+            }
+            self.global_state.eh_enable
         } else if enable == Handle::RH_OWNER.0 {
-            if !state {
-                if auth_handle != Handle::RH_OWNER.0 && auth_handle != Handle::RH_PLATFORM.0 {
-                    return Err(TpmRc::AUTH_TYPE);
-                }
-            } else if auth_handle != Handle::RH_PLATFORM.0 {
+            if auth_handle != Handle::RH_PLATFORM.0 && auth_handle != Handle::RH_OWNER.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            self.global_state.sh_enable = state;
+            if !self.global_state.sh_enable && state && auth_handle != Handle::RH_PLATFORM.0 {
+                return Err(TpmRc::AUTH_TYPE);
+            }
+            self.global_state.sh_enable
         } else if enable == Handle::RH_PLATFORM.0 {
+            // Re-enabling `phEnable` is implicitly impossible: platform authorization is
+            // unavailable while `phEnable` is CLEAR.
             if auth_handle != Handle::RH_PLATFORM.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            if state && !self.global_state.ph_enable {
-                return Err(TpmRc::AUTH_TYPE);
-            }
-            self.global_state.ph_enable = state;
+            self.global_state.ph_enable
         } else if enable == Handle::RH_PLATFORM_NV.0 {
+            // `phEnableNV` may be SET again with platform authorization.
             if auth_handle != Handle::RH_PLATFORM.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            if state && !self.global_state.ph_enable_nv {
-                return Err(TpmRc::AUTH_TYPE);
-            }
-            self.global_state.ph_enable_nv = state;
+            self.global_state.ph_enable_nv
         } else {
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
-        }
+        };
 
-        if !state
-            && (enable == Handle::RH_ENDORSEMENT.0
-                || enable == Handle::RH_OWNER.0
-                || enable == Handle::RH_PLATFORM.0)
-        {
-            for slot in self.global_state.transient_objects.iter_mut() {
-                if let Some(obj) = slot
-                    && obj.hierarchy == enable
-                {
-                    *slot = None;
+        // Internal data update: only when the selected flag actually changes. A no-op call
+        // neither needs NV nor clears the orderly state.
+        if current != state {
+            // RETURN_IF_ORDERLY must run before any state is modified.
+            self.nv_clear_orderly()?;
+
+            if enable == Handle::RH_ENDORSEMENT.0 {
+                self.global_state.eh_enable = state;
+            } else if enable == Handle::RH_OWNER.0 {
+                self.global_state.sh_enable = state;
+            } else if enable == Handle::RH_PLATFORM.0 {
+                self.global_state.ph_enable = state;
+            } else {
+                self.global_state.ph_enable_nv = state;
+            }
+
+            // If a hierarchy was just disabled, flush its loaded objects (`ObjectFlushHierarchy`).
+            if !state && enable != Handle::RH_PLATFORM_NV.0 {
+                for (i, slot) in self.global_state.transient_objects.iter_mut().enumerate() {
+                    if let Some(obj) = slot
+                        && obj.hierarchy == enable
+                    {
+                        *slot = None;
+                        self.global_state.transient_parents[i] = None;
+                    }
                 }
             }
-        }
 
-        self.nv_clear_orderly()?;
-        self.global_state.state_saved = false;
-        self.context.save_hierarchy_auths(self.global_state);
+            self.global_state.state_saved = false;
+            self.context.save_hierarchy_auths(self.global_state);
+        }
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;

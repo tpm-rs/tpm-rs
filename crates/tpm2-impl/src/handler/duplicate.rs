@@ -54,11 +54,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // 1. Retrieve the target object to duplicate
-        let target_obj = self
+        // 1. Retrieve the target object to duplicate (transient or persistent). Sequence
+        // objects have a NULL nameAlg in C and are rejected as `TPM_RC_TYPE + RC_H1`.
+        if self
             .global_state
-            .find_transient_object(object_handle)
-            .ok_or(TpmRc::HANDLE.with(Position::handle(1)))?;
+            .find_active_sequence(object_handle)
+            .is_some()
+        {
+            return Err(TpmRc::TYPE.with(Position::handle(1)));
+        }
+        let target_obj = &self.resolve_object(object_handle, Position::handle(1))?;
 
         // 2. Check fixedParent and fixedTPM attributes
         if target_obj
@@ -72,6 +77,38 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         {
             return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
         }
+
+        // Do not duplicate an object with a NULL nameAlg (C `Duplicate.c`).
+        if target_obj.public.name_alg.is_none() {
+            return Err(TpmRc::TYPE.with(Position::handle(1)));
+        }
+
+        // The new parent must be a storage key (`ObjectIsStorage`: restricted, decrypt,
+        // not sign, RSA or ECC) or TPM_RH_NULL; it may be transient or persistent.
+        let new_parent_obj = if new_parent_handle != Handle::RH_NULL.0 {
+            if self
+                .global_state
+                .find_active_sequence(new_parent_handle)
+                .is_some()
+            {
+                return Err(TpmRc::TYPE.with(Position::handle(2)));
+            }
+            let obj = self.resolve_object(new_parent_handle, Position::handle(2))?;
+            let attrs = obj.public.object_attributes;
+            if !attrs.contains(TpmaObject::RESTRICTED)
+                || !attrs.contains(TpmaObject::DECRYPT)
+                || attrs.contains(TpmaObject::SIGN_ENCRYPT)
+                || !matches!(
+                    obj.public.parms_and_id,
+                    OwnedPublicParmsAndId::Rsa(_, _) | OwnedPublicParmsAndId::Ecc(_, _)
+                )
+            {
+                return Err(TpmRc::TYPE.with(Position::handle(2)));
+            }
+            Some(obj)
+        } else {
+            None
+        };
 
         if target_obj
             .public
@@ -95,11 +132,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let mut parent_obj = None;
 
-        if new_parent_handle != Handle::RH_NULL.0 {
-            let obj = self
-                .global_state
-                .find_transient_object(new_parent_handle)
-                .ok_or(TpmRc::HANDLE.with(Position::handle(2)))?;
+        if let Some(obj) = new_parent_obj.as_ref() {
             if !obj
                 .public
                 .object_attributes
@@ -108,6 +141,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .public
                     .object_attributes
                     .contains(tpm2::TpmaObject::RESTRICTED)
+                || obj
+                    .public
+                    .object_attributes
+                    .contains(tpm2::TpmaObject::SIGN_ENCRYPT)
             {
                 return Err(TpmRc::TYPE.with(Position::handle(2)));
             }
@@ -204,9 +241,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .unwrap(),
             ),
         };
+        // MarshalSensitive: zero-pad the authValue to the nameAlg digest size.
+        let target_digest_len = target_obj.public.name_alg.map_or(0, |a| a.digest_size());
+        let auth = crate::util::strip_trailing_zeros(target_obj.auth.get_buffer());
+        let mut padded_auth = [0u8; 64];
+        padded_auth[..auth.len()].copy_from_slice(auth);
+        let auth_len = core::cmp::max(auth.len(), target_digest_len);
         let tpmt_sensitive = TpmtSensitive {
-            auth_value: target_obj.auth.as_tpm2b(),
-            seed_value: Tpm2bDigest::from_bytes(&target_obj.seed).unwrap(),
+            auth_value: tpm2::Tpm2bAuth::from_bytes(&padded_auth[..auth_len])
+                .map_err(|_| TpmRc::FAILURE)?,
+            seed_value: Tpm2bDigest::from_bytes(target_obj.seed_bytes()).unwrap(),
             sensitive: sensitive_comp,
         };
 
@@ -368,9 +412,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .map_err(|_| TpmRc::FAILURE)?;
                 seed_len = digest_size;
             } else {
-                // Generate a random seed
+                // Generate a random seed of the parent's nameAlg digest size
+                // (`CryptSecretEncrypt`).
+                let digest_size = parent_name_alg.digest_size();
                 self.crypto()
-                    .get_random(&mut seed[..32])
+                    .get_random(&mut seed[..digest_size])
                     .map_err(|_| TpmRc::FAILURE)?;
 
                 // RSA seed encryption
@@ -380,7 +426,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         Alg::OAEP,
                         Alg::from(parent_name_alg),
                         &parent_pub_modulus[..parent_pub_modulus_len],
-                        &seed[..32],
+                        &seed[..digest_size],
                         &mut encrypted_seed,
                         b"DUPLICATE\0",
                     )
@@ -388,7 +434,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 out_sym_seed =
                     Tpm2bEncryptedSecret::from_bytes(&encrypted_seed[..encrypted_seed_len])
                         .unwrap();
-                seed_len = 32;
+                seed_len = digest_size;
             }
 
             let mut sym_key_bits = match &parent_obj.as_ref().unwrap().public.parms_and_id {
@@ -410,8 +456,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut integrity_key = [0u8; 64];
             let mut hmac_bytes = [0u8; 64];
 
-            // 1. Compute KDFs
-            let target_name_alg = target_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+            // 1. Compute KDFs. The outer wrapper uses the new parent's nameAlg
+            // (`outerHash` in `SensitiveToDuplicate`), not the duplicated object's.
+            let target_name_alg = parent_name_alg;
             let target_digest_size = target_name_alg.digest_size();
             let target_bits = (target_digest_size * 8) as u32;
             kdfa(

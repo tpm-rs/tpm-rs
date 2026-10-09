@@ -16,6 +16,41 @@ use tpm2::{
 };
 use tpm2_simulator::create_simulator;
 
+/// Runs `TPM2_NV_Certify` with one password session per authorization handle: `sign_auth` for
+/// `signHandle` (empty for `TPM_RH_NULL`) and `nv_auth` for `authHandle`. Every authorization
+/// handle needs a session, including a `TPM_RH_NULL` signHandle (C `ParseSessionBuffer`).
+fn nv_certify_pw(
+    sim: &mut tpm2_simulator::Simulator<'_>,
+    cmd: &NVCertify<'_>,
+    handles: NVCertifyHandles,
+    sign_auth: &[u8],
+    nv_auth: &[u8],
+) -> Result<(), u32> {
+    use crate::test_utils::{RespHeader, marshal_to_vec};
+    let mut auth_area = Vec::new();
+    for auth in [sign_auth, nv_auth] {
+        auth_area.extend_from_slice(&marshal_to_vec(&tpm2::TpmsAuthCommand {
+            session_handle: Handle::RS_PW,
+            nonce: tpm2::Tpm2bNonce::default(),
+            session_attributes: tpm2::TpmaSession(1),
+            hmac: Tpm2bAuth::from_bytes(auth).unwrap(),
+        }));
+    }
+    let mut body = marshal_to_vec(&handles);
+    body.extend_from_slice(&(auth_area.len() as u32).to_be_bytes());
+    body.extend_from_slice(&auth_area);
+    body.extend_from_slice(&marshal_to_vec(cmd));
+    let mut command = Vec::new();
+    command.extend_from_slice(&0x8002u16.to_be_bytes());
+    command.extend_from_slice(&((10 + body.len()) as u32).to_be_bytes());
+    command.extend_from_slice(&tpm2::TpmCc::NVCertify.code().to_be_bytes());
+    command.extend_from_slice(&body);
+    let mut response = [0u8; 4096];
+    sim.transact(&command, &mut response).unwrap();
+    let rc = RespHeader::unmarshal(&mut &response[..]).unwrap().rc;
+    if rc != 0 { Err(rc) } else { Ok(()) }
+}
+
 #[test]
 fn test_nv_write_boundaries() {
     let mut sim = create_simulator!();
@@ -101,7 +136,13 @@ fn test_nv_write_overflow() {
     // This is expected to return TpmRc::SIZE. Instead, it currently panics (in debug) or wraps (in release).
     let res = execute_with_password_sessions(&mut sim, &write_cmd_overflow, write_handles, 1, &[]);
     match res {
-        Err(err) => assert_eq!(err, TpmRc::NV_RANGE.get()),
+        // offset > dataSize: TPM_RC_VALUE + RC_NV_Write_offset (C `TPM2_NV_Write`).
+        Err(err) => assert_eq!(
+            err,
+            TpmRc::VALUE
+                .with(tpm2::errors::Position::parameter(2))
+                .get()
+        ),
         Ok(_) => panic!(
             "SECURITY BUG: nv_write overflow allowed writing to out-of-bounds offset (underflow/metadata overwrite)!"
         ),
@@ -153,7 +194,7 @@ fn test_nv_certify_boundaries() {
     };
 
     // 1. Normal certify (offset = 0, size = 10)
-    execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 1, &[]).unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], &[]).unwrap();
 
     // 2. Normal certify at boundary (offset = 54, size = 10)
     let certify_cmd_boundary = NVCertify {
@@ -162,8 +203,7 @@ fn test_nv_certify_boundaries() {
         size: 10,
         offset: 54,
     };
-    execute_with_password_sessions_status(&mut sim, &certify_cmd_boundary, certify_handles, 1, &[])
-        .unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd_boundary, certify_handles, &[], &[]).unwrap();
 
     // 3. Out of bounds certify (offset = 55, size = 10)
     let certify_cmd_oob = NVCertify {
@@ -172,8 +212,7 @@ fn test_nv_certify_boundaries() {
         size: 10,
         offset: 55,
     };
-    let res =
-        execute_with_password_sessions_status(&mut sim, &certify_cmd_oob, certify_handles, 1, &[]);
+    let res = nv_certify_pw(&mut sim, &certify_cmd_oob, certify_handles, &[], &[]);
     match res {
         Err(err) => assert_eq!(err, TpmRc::NV_RANGE.get()),
         Ok(_) => panic!("Expected Size error, but command succeeded"),
@@ -225,13 +264,7 @@ fn test_nv_certify_overflow() {
     };
 
     // This is expected to return TpmRc::SIZE. Instead, it currently panics (in debug) or wraps (in release).
-    let res = execute_with_password_sessions_status(
-        &mut sim,
-        &certify_cmd_overflow,
-        certify_handles,
-        1,
-        &[],
-    );
+    let res = nv_certify_pw(&mut sim, &certify_cmd_overflow, certify_handles, &[], &[]);
     match res {
         Err(err) => assert_eq!(err, TpmRc::NV_RANGE.get()),
         Ok(_) => {
@@ -287,6 +320,8 @@ fn test_certify_creation_validation() {
         sign_handle: Handle(0x40000007), // TPM_RH_NULL
         object_handle,
     };
+    // signHandle has the USER role, so even TPM_RH_NULL needs a (password) session; C returns
+    // TPM_RC_AUTH_MISSING otherwise (SessionProcess.c ParseSessionBuffer).
 
     // 2. Verify mismatching ticket hierarchy (should fail with Ticket error)
     let bad_hier_ticket = TpmtTkCreation::Creation(Handle::RH_PLATFORM, *ticket.digest());
@@ -296,9 +331,10 @@ fn test_certify_creation_validation() {
         in_scheme: None,
         creation_ticket: bad_hier_ticket,
     };
-    let res = execute_with_password_sessions_status(&mut sim, &cert_cmd_hier, cert_handles, 0, &[]);
+    let res = execute_with_password_sessions_status(&mut sim, &cert_cmd_hier, cert_handles, 1, &[]);
     match res {
-        Err(err) => assert_eq!(err, TpmRc::TICKET.get()),
+        // TPM_RC_TICKET + RC_CertifyCreation_creationTicket (P4).
+        Err(err) => assert_eq!(err, 0x4E0),
         Ok(_) => panic!("Expected Ticket error, but command succeeded"),
     }
 
@@ -315,7 +351,7 @@ fn test_certify_creation_validation() {
         creation_ticket: bad_digest_ticket,
     };
     let res_digest =
-        execute_with_password_sessions_status(&mut sim, &cert_cmd_digest, cert_handles, 0, &[]);
+        execute_with_password_sessions_status(&mut sim, &cert_cmd_digest, cert_handles, 1, &[]);
 
     // We expect this to fail with Ticket error (since the digest is wrong).
     let err_digest = match res_digest {
@@ -324,7 +360,8 @@ fn test_certify_creation_validation() {
             "SECURITY BUG: CertifyCreation accepted a ticket with a mismatching/fabricated digest!"
         ),
     };
-    assert_eq!(err_digest, TpmRc::TICKET.get());
+    // TPM_RC_TICKET + RC_CertifyCreation_creationTicket (P4).
+    assert_eq!(err_digest, 0x4E0);
 }
 
 #[test]
@@ -417,27 +454,14 @@ fn test_nv_password_auth_write_read() {
         auth_handle: Handle(nv_index_val),
         nv_index: Handle(nv_index_val),
     };
-    let res_cert = execute_with_password_sessions_status(
-        &mut sim,
-        &certify_cmd,
-        certify_handles,
-        1,
-        b"wrongpass",
-    );
+    let res_cert = nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], b"wrongpass");
     match res_cert {
-        Err(err) => assert_eq!(err, 0x9A2), // BadAuth for session 1
+        Err(err) => assert_eq!(err, 0xAA2), // BadAuth for session 2 (authHandle)
         Ok(_) => panic!("Expected BadAuth error, but command succeeded"),
     }
 
     // 4. Try certifying with NV Index auth and correct password
-    execute_with_password_sessions_status(
-        &mut sim,
-        &certify_cmd,
-        certify_handles,
-        1,
-        b"nvpassword",
-    )
-    .unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], b"nvpassword").unwrap();
 }
 
 #[test]
@@ -524,7 +548,8 @@ fn test_nv_write_role_authorization() {
     let res_auth =
         execute_with_password_sessions(&mut sim, &write_cmd, write_handles_auth, 1, b"nvpass");
     match res_auth {
-        Err(err) => assert_eq!(err, TpmRc::NV_AUTHORIZATION.get()),
+        // AUTHWRITE is clear: the authValue is unavailable (C IsAuthValueAvailable).
+        Err(err) => assert_eq!(err, TpmRc::AUTH_UNAVAILABLE.get()),
         Ok(_) => panic!("Expected NvAuthorization error for AUTHWRITE, but write succeeded"),
     }
 
@@ -632,7 +657,7 @@ fn test_nv_certify_readlocked() {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
     };
-    execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 1, &[]).unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], &[]).unwrap();
 
     // Set TPMA_NV_READLOCKED through the TPM interface.
     let lock_handles = NVReadLockHandles {
@@ -642,8 +667,7 @@ fn test_nv_certify_readlocked() {
     execute_with_password_sessions(&mut sim, &NVReadLock {}, lock_handles, 1, &[]).unwrap();
 
     // Try certifying again -> should fail with NvLocked (0x14F)
-    let res =
-        execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 1, &[]);
+    let res = nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], &[]);
     match res {
         Err(err) => assert_eq!(err, TpmRc::NV_LOCKED.get()),
         Ok(_) => panic!("Expected NvLocked error, but certify succeeded on READLOCKED index"),
@@ -696,15 +720,10 @@ fn test_nv_certify_role_authorization() {
         auth_handle: Handle(nv_index_val),
         nv_index: Handle(nv_index_val),
     };
-    let res_auth = execute_with_password_sessions_status(
-        &mut sim,
-        &certify_cmd,
-        certify_handles_auth,
-        1,
-        b"nvpass",
-    );
+    let res_auth = nv_certify_pw(&mut sim, &certify_cmd, certify_handles_auth, &[], b"nvpass");
     match res_auth {
-        Err(err) => assert_eq!(err, TpmRc::NV_AUTHORIZATION.get()),
+        // AUTHREAD is clear: the authValue is unavailable (C IsAuthValueAvailable).
+        Err(err) => assert_eq!(err, TpmRc::AUTH_UNAVAILABLE.get()),
         Ok(_) => panic!("Expected NvAuthorization error for AUTHREAD, but certify succeeded"),
     }
 
@@ -714,8 +733,7 @@ fn test_nv_certify_role_authorization() {
         auth_handle: Handle::RH_PLATFORM,
         nv_index: Handle(nv_index_val),
     };
-    let res_pp =
-        execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles_pp, 1, &[]);
+    let res_pp = nv_certify_pw(&mut sim, &certify_cmd, certify_handles_pp, &[], &[]);
     match res_pp {
         Err(err) => assert_eq!(err, TpmRc::NV_AUTHORIZATION.get()),
         Ok(_) => panic!("Expected NvAuthorization error for PPREAD, but certify succeeded"),
@@ -727,8 +745,7 @@ fn test_nv_certify_role_authorization() {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
     };
-    execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles_owner, 1, &[])
-        .unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd, certify_handles_owner, &[], &[]).unwrap();
 
     // 2. Define another index with OWNERWRITE | AUTHREAD only (no OWNERREAD)
     let nv_index_val_2 = 0x01500035;
@@ -762,13 +779,7 @@ fn test_nv_certify_role_authorization() {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val_2),
     };
-    let res_owner_2 = execute_with_password_sessions_status(
-        &mut sim,
-        &certify_cmd,
-        certify_handles_owner_2,
-        1,
-        &[],
-    );
+    let res_owner_2 = nv_certify_pw(&mut sim, &certify_cmd, certify_handles_owner_2, &[], &[]);
     match res_owner_2 {
         Err(err) => assert_eq!(err, TpmRc::NV_AUTHORIZATION.get()),
         Ok(_) => panic!("Expected NvAuthorization error for OWNERREAD, but certify succeeded"),
@@ -780,11 +791,11 @@ fn test_nv_certify_role_authorization() {
         auth_handle: Handle(nv_index_val_2),
         nv_index: Handle(nv_index_val_2),
     };
-    execute_with_password_sessions_status(
+    nv_certify_pw(
         &mut sim,
         &certify_cmd,
         certify_handles_auth_2,
-        1,
+        &[],
         b"nvpass2",
     )
     .unwrap();
@@ -823,9 +834,7 @@ fn test_nv_written_validation() {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
     };
-    let err_cert =
-        execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 1, &[])
-            .unwrap_err();
+    let err_cert = nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], &[]).unwrap_err();
     assert_eq!(err_cert, TpmRc::NV_UNINITIALIZED.get());
 
     // 2. Write data -> should set WRITTEN
@@ -840,7 +849,7 @@ fn test_nv_written_validation() {
     execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
 
     // 3. Certify after writing -> should succeed
-    execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 1, &[]).unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], &[]).unwrap();
 }
 
 #[test]

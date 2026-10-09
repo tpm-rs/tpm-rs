@@ -61,12 +61,10 @@ use tpm2::crypto::kdf::kdfa;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::platform::PcrState;
-use tpm2::{
-    CommandHeader, Handle, ResponseHeader, TPM2_MAX_DIGEST_BUFFER, TpmCc, TpmHt, TpmSe, TpmSt,
-};
+use tpm2::{CommandHeader, Handle, ResponseHeader, TpmCc, TpmHt, TpmSe, TpmSt};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{
-    Tpm2bAuth, Tpm2bName, Tpm2bNonce, TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmiStCommandTag,
+    Tpm2bAuth, Tpm2bNonce, TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmiStCommandTag,
     TpmsAuthCommand, TpmsAuthResponse,
 };
 
@@ -81,15 +79,27 @@ pub struct TpmEngine<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + 
 pub const MAX_LOADED_OBJECTS: usize = tpm2::TPM2_MAX_LOADED_OBJECTS as usize;
 /// Maximum number of active authorization sessions in RAM (aligns with TCG PC Client spec & ms-tpm-20-ref).
 pub const MAX_LOADED_SESSIONS: usize = 3;
+/// Maximum number of active (loaded or saved) authorization sessions (`MAX_ACTIVE_SESSIONS`); the
+/// low 24 bits of a session handle index this many session slots.
+pub const MAX_ACTIVE_SESSIONS: usize = tpm2::TPM2_MAX_ACTIVE_SESSIONS as usize;
+/// `MAX_CONTEXT_GAP` of the C reference with a 16-bit `CONTEXT_SLOT`: the largest permitted
+/// distance between the current session context counter and the sequence number of a saved
+/// session context (also reported as `TPM_PT_CONTEXT_GAP_MAX + 1`).
+pub const MAX_CONTEXT_GAP: u64 = 0x1_0000;
 /// Maximum number of active hash/HMAC sequences in RAM.
 pub const MAX_ACTIVE_SEQUENCES: usize = 3;
 /// Maximum sequence buffer size per active sequence.
 pub const MAX_SEQUENCE_BUFFER: usize = 4096;
 
+/// Largest command accepted by `TpmEngine::execute_command` (`MAX_COMMAND_SIZE`; the value
+/// reported for `TPM_PT_MAX_COMMAND_SIZE`). Larger commands fail with `TPM_RC_COMMAND_SIZE`.
+pub(crate) const MAX_COMMAND_SIZE: usize = 4096;
+
 /// Buffer size for decrypted command parameters.
-/// Sized to accommodate a full `TPM2B_MAX_BUFFER` (`TPM2_MAX_DIGEST_BUFFER` bytes of payload + 2 bytes size)
-/// plus accompanying command parameters (e.g., handles, IVs, algorithm modes).
-const DECRYPT_BUF_SIZE: usize = TPM2_MAX_DIGEST_BUFFER as usize + 128;
+/// The parameter area can never be larger than the whole command, so sizing the buffer to
+/// `MAX_COMMAND_SIZE` lets commands with a decrypt session carry the same parameters as commands
+/// without sessions.
+const DECRYPT_BUF_SIZE: usize = MAX_COMMAND_SIZE;
 type DecryptBuf = [u8; DECRYPT_BUF_SIZE];
 
 /// Magic value (`"DRBG"`) identifying an initialized SP800-90A CTR_DRBG state (`go.drbgState`).
@@ -222,6 +232,10 @@ pub struct GlobalState {
     pub g_nv_ok: bool,
     /// Represents the orderly state of the TPM (e.g., TPM_SU_CLEAR, TPM_SU_STATE).
     pub orderly_state: u16,
+    /// Orderly state of the previous power cycle as seen by the last `TPM2_Startup`, with the
+    /// startup modifier flags removed (`g_prevOrderlyState`); `SU_NONE_VALUE` (0xFFFF) if the
+    /// previous shutdown was not orderly.
+    pub prev_orderly_state: u16,
     /// Flag indicating if NV should be updated at the end of a command (`g_updateNV`: `UT_NONE`, `UT_NV`, `UT_ORDERLY`).
     pub update_nv: u8,
     /// Flag indicating if command execution should cause the orderly state to be cleared (`g_clearOrderly`).
@@ -290,8 +304,14 @@ pub struct GlobalState {
     pub transient_parents: [Option<u32>; MAX_LOADED_OBJECTS],
     /// An array holding the active authorization sessions.
     pub active_sessions: [Option<SessionState>; MAX_LOADED_SESSIONS],
-    /// An array holding session handles that have been saved to context blobs.
-    pub saved_sessions: [Option<u32>; MAX_LOADED_SESSIONS],
+    /// Handles of the sessions whose context has been saved (and that are neither flushed nor
+    /// loaded again), indexed by session slot (`handle & 0x00FF_FFFF`). Together with
+    /// [`GlobalState::saved_session_sequences`] this is the saved part of `gr.contextArray`.
+    pub saved_sessions: [Option<u32>; MAX_ACTIVE_SESSIONS],
+    /// Context sequence number (`TPMS_CONTEXT.sequence`) of the latest `TPM2_ContextSave` of
+    /// the session in each slot of [`GlobalState::saved_sessions`]. Only that context may be
+    /// loaded again (`SequenceNumberForSavedContextIsValid`).
+    pub saved_session_sequences: [u64; MAX_ACTIVE_SESSIONS],
     /// An array holding the active hash sequences.
     pub active_sequences: [Option<ActiveSequence>; MAX_ACTIVE_SEQUENCES],
     /// A counter used to generate the next transient handle index.
@@ -353,12 +373,17 @@ pub struct GlobalState {
     pub max_counter: u64,
     /// A counter tracking the number of times TPM2_Commit has been executed.
     pub commit_counter: u16,
+    /// Bitmap of outstanding commitments (`gr.commitArray`). Bit `count & COMMIT_INDEX_MASK` is
+    /// set by TPM2_Commit and cleared once an ECDAA signature consumes the commitment, so each
+    /// committed `r` can be used for at most one signature.
+    pub commit_array: [u8; 16],
     /// A secret nonce used to derive commit scalars (`r`) deterministically via KDFa per `CryptGenerateR`.
     pub commit_nonce: [u8; 64],
     /// The X coordinate of the point committed during the last TPM2_Commit (`E` if `P1` was present, else `L`).
-    pub commit_x: [u8; 32],
-    /// The P1 point passed to the last TPM2_Commit (`x || y`), if any.
-    pub commit_p1: [u8; 64],
+    /// Sized for the largest supported curve (NIST P-521, 66 bytes).
+    pub commit_x: [u8; 66],
+    /// The P1 point passed to the last TPM2_Commit (`x || y`), if any. Sized for NIST P-521.
+    pub commit_p1: [u8; 132],
     pub debug_expected_auth: [u8; 64],
     pub debug_expected_auth_len: usize,
     pub debug_provided_auth: [u8; 64],
@@ -380,6 +405,17 @@ pub struct GlobalState {
     pub clock_offset: i64,
     /// Current adjustment to the clock update rate (mutated via TPM2_ClockRateAdjust).
     pub clock_rate_adjust: tpm2::TpmClockAdjust,
+    /// Whether the reported `Clock` is known not to have been rolled back (`go.clockSafe`).
+    /// Cleared on a startup after an unorderly shutdown (`TimeStartup`) and set again whenever the
+    /// clock is written to NV (`TimeClockUpdate`), by `TPM2_Clear`, and at manufacture.
+    pub clock_safe: bool,
+    /// Cumulative clock-rate divisor applied to elapsed platform time (`s_adjustRate` in the C
+    /// platform `Clock.c`); [`CLOCK_NOMINAL`] means no adjustment. Changed by
+    /// `TPM2_ClockRateAdjust` within `CLOCK_NOMINAL ± CLOCK_ADJUST_LIMIT`.
+    pub clock_adjust_rate: u32,
+    /// Sub-millisecond remainder (in units of `1 / CLOCK_NOMINAL` ms) carried between rate-adjusted
+    /// time updates so that no time is lost to rounding.
+    pub clock_adjust_remainder: u64,
     /// Platform seeds.
     pub seeds: [u8; 32],
     /// PCR state.
@@ -490,6 +526,27 @@ struct ParsedCommand<'cmd> {
     handle_auths: [OwnedAuth; 3],
 }
 
+/// Inputs to [`TpmEngine::check_policy_auth_session`] describing one policy session that is
+/// used to authorize one handle of the current command.
+struct PolicyAuthCheck<'a> {
+    /// Handle of the policy session (`0x03xxxxxx`).
+    session_handle: u32,
+    /// The entity whose authorization the session provides (C `s_associatedHandles[i]`).
+    entity_handle: u32,
+    /// Index of `entity_handle` in the command's handle area (used for the auth role).
+    handle_index: usize,
+    /// Command code of the command being authorized.
+    command_code: u32,
+    /// Command parameter area as received on the wire (still encrypted, as in the C reference).
+    parameters: &'a [u8],
+    /// cpHash of the command computed with the session's `authHashAlg`.
+    cp_hash: &'a [u8],
+    /// Names of all handles in the command's handle area, in order.
+    handle_names: &'a [OwnedName],
+    /// Response-code position of the session (`TPM_RC_S + index`).
+    pos: Position,
+}
+
 pub(crate) const INITIAL_UNTESTED_ALGORITHMS: [tpm2::Alg; 32] = [
     tpm2::Alg::SHA1,
     tpm2::Alg::AES,
@@ -525,6 +582,40 @@ pub(crate) const INITIAL_UNTESTED_ALGORITHMS: [tpm2::Alg; 32] = [
     tpm2::Alg::NULL,
 ];
 
+/// Nominal clock-rate divisor of the platform timer (`CLOCK_NOMINAL` in the C platform `Clock.c`).
+pub(crate) const CLOCK_NOMINAL: u32 = 30000;
+/// Divisor step for `TPM_CLOCK_COARSE_SLOWER/FASTER` (`CLOCK_ADJUST_COARSE`).
+pub(crate) const CLOCK_ADJUST_COARSE: u32 = 300;
+/// Divisor step for `TPM_CLOCK_MEDIUM_SLOWER/FASTER` (`CLOCK_ADJUST_MEDIUM`).
+pub(crate) const CLOCK_ADJUST_MEDIUM: u32 = 30;
+/// Divisor step for `TPM_CLOCK_FINE_SLOWER/FASTER` (`CLOCK_ADJUST_FINE`).
+pub(crate) const CLOCK_ADJUST_FINE: u32 = 1;
+/// Maximum deviation of the divisor from [`CLOCK_NOMINAL`] (`CLOCK_ADJUST_LIMIT`).
+pub(crate) const CLOCK_ADJUST_LIMIT: u32 = 5000;
+/// `NV_CLOCK_UPDATE_INTERVAL`: `Clock` is written to NV whenever it crosses a multiple of
+/// `2^NV_CLOCK_UPDATE_INTERVAL` ms (`TimeClockUpdate`).
+pub(crate) const NV_CLOCK_UPDATE_INTERVAL: u32 = 22;
+
+/// Marker byte introducing the persistent lifecycle extension of the hierarchy-auth NV blob.
+const PERSISTENT_EXT_MARKER: u8 = 0xBB;
+/// Length of the persistent lifecycle extension (marker + disableClear + lockOutAuthEnabled +
+/// maxTries + recoveryTime + lockoutRecovery + clock + clockSafe).
+const PERSISTENT_EXT_LEN: usize = 1 + 1 + 1 + 4 + 4 + 4 + 8 + 1;
+
+/// Implementation-specific virtual NV handle holding the `TPM2_Shutdown(TPM_SU_STATE)` data
+/// (the equivalent of `NV_STATE_RESET_DATA` / `NV_STATE_CLEAR_DATA`). It only exists between an
+/// orderly `TPM_SU_STATE` shutdown and the next `TPM2_Startup`.
+const STATE_SAVE_HANDLE: u32 = 0x00FF_FFFE;
+/// Marker byte identifying the layout of the saved-state blob.
+const STATE_SAVE_MARKER: u8 = 0x5A;
+/// Upper bound of the saved-state blob size.
+const STATE_SAVE_MAX_LEN: usize = 512 + MAX_ACTIVE_SESSIONS * (1 + 4 + 8);
+/// Implementation-specific virtual NV handle holding the NV copy of the PCR bank allocation
+/// (`NV_WRITE_PERSISTENT(pcrAllocated, ...)` in `PCRAllocate`). `TPM2_PCR_Allocate` only writes
+/// this NV copy; the active (RAM) allocation is replaced by it at the next `_TPM_Init`
+/// ([`TpmEngine::reset`]), so a new allocation takes effect after the next TPM Reset.
+pub(crate) const PCR_ALLOCATION_HANDLE: u32 = 0x00FF_FFFD;
+
 impl Default for GlobalState {
     fn default() -> Self {
         Self {
@@ -539,6 +630,7 @@ impl Default for GlobalState {
             nv_available: true,
             g_nv_ok: false,
             orderly_state: 0,
+            prev_orderly_state: 0xFFFF,
             update_nv: UT_NONE,
             clear_orderly: false,
             total_reset_count: 0,
@@ -573,7 +665,8 @@ impl Default for GlobalState {
             transient_objects: [const { None }; MAX_LOADED_OBJECTS],
             transient_parents: [None; MAX_LOADED_OBJECTS],
             active_sessions: [const { None }; MAX_LOADED_SESSIONS],
-            saved_sessions: [None; MAX_LOADED_SESSIONS],
+            saved_sessions: [None; MAX_ACTIVE_SESSIONS],
+            saved_session_sequences: [0; MAX_ACTIVE_SESSIONS],
             active_sequences: [const { None }; MAX_ACTIVE_SEQUENCES],
             next_transient_index: 0,
             owner_auth: OwnedAuth::default(),
@@ -603,9 +696,10 @@ impl Default for GlobalState {
             da_pending_on_nv: false,
             max_counter: 0,
             commit_counter: 0,
+            commit_array: [0u8; 16],
             commit_nonce: [0x5a; 64],
-            commit_x: [0u8; 32],
-            commit_p1: [0u8; 64],
+            commit_x: [0u8; 66],
+            commit_p1: [0u8; 132],
             debug_expected_auth: [0u8; 64],
             debug_expected_auth_len: 0,
             debug_provided_auth: [0u8; 64],
@@ -623,6 +717,9 @@ impl Default for GlobalState {
             in_shadow_execution: false,
             clock_offset: 0,
             clock_rate_adjust: tpm2::TpmClockAdjust::NoChange,
+            clock_safe: true,
+            clock_adjust_rate: CLOCK_NOMINAL,
+            clock_adjust_remainder: 0,
             seeds: [0; 32],
             pcrs: PcrState::default(),
             pcr_auth_value: OwnedAuth::default(),
@@ -653,7 +750,7 @@ impl GlobalState {
         self.max_tries = 3;
         self.recovery_time = 1000;
         self.lockout_recovery = 1000;
-        self.clock_offset = self.clock_offset.saturating_add(self.tpm_time_ms as i64);
+        self.clock_offset = self.clock_offset.wrapping_add(self.tpm_time_ms as i64);
         self.tpm_time_ms = 0;
         self.last_timer_read_ms = None;
         self.self_heal_timer = 0;
@@ -719,6 +816,7 @@ impl GlobalState {
         for sess in self.saved_sessions.iter_mut() {
             *sess = None;
         }
+        self.saved_session_sequences = [0; MAX_ACTIVE_SESSIONS];
         for seq in self.active_sequences.iter_mut() {
             *seq = None;
         }
@@ -738,6 +836,7 @@ impl GlobalState {
         self.untested_algorithms = INITIAL_UNTESTED_ALGORITHMS;
         self.untested_algorithms_len = 18;
         self.commit_counter = 0;
+        self.commit_array = [0u8; 16];
         self.commit_nonce = [0x5a; 64];
         self.commit_x.fill(0);
         self.commit_p1.fill(0);
@@ -751,6 +850,9 @@ impl GlobalState {
         self.exclusive_audit_session = None;
         self.in_shadow_execution = false;
         self.clock_rate_adjust = tpm2::TpmClockAdjust::NoChange;
+        // The platform clock-rate adjustment is volatile (`_plat__TimerReset`).
+        self.clock_adjust_rate = CLOCK_NOMINAL;
+        self.clock_adjust_remainder = 0;
         self.audit_hash_alg = tpm2::Alg::SHA256.id();
     }
     /// Adds a session to the active sessions array.
@@ -771,6 +873,19 @@ impl GlobalState {
             .iter()
             .flatten()
             .find(|session| session.session_handle == handle)
+    }
+
+    /// Gets the active session occupying the session slot of `handle`, ignoring the handle type
+    /// byte (C `SessionIsLoaded()`/`SessionGet()` index sessions by `handle & 0x00FF_FFFF`).
+    ///
+    /// The returned session's `session_handle` may differ from `handle` in its type byte (an HMAC
+    /// session referenced as a policy session or vice versa); callers report that case as
+    /// `TPM_RC_HANDLE`, and a missing slot as `TPM_RC_REFERENCE_*`.
+    pub fn session_by_slot(&self, handle: u32) -> Option<&SessionState> {
+        self.active_sessions
+            .iter()
+            .flatten()
+            .find(|session| session.session_handle & 0x00FF_FFFF == handle & 0x00FF_FFFF)
     }
 
     /// Gets a mutable reference to an active session by its handle.
@@ -802,6 +917,90 @@ impl GlobalState {
             Err(TpmRc::HANDLE.to_rc())
         } else {
             Ok(())
+        }
+    }
+
+    /// Returns the session slot (`handle & HR_HANDLE_MASK`) of `handle` if that slot holds a
+    /// saved session context (`SessionIsSaved`). The handle type byte is ignored, as in C.
+    pub fn saved_session_slot(&self, handle: u32) -> Option<usize> {
+        let slot = (handle & 0x00FF_FFFF) as usize;
+        (slot < MAX_ACTIVE_SESSIONS && self.saved_sessions[slot].is_some()).then_some(slot)
+    }
+
+    /// Returns the slot of the oldest saved session context (smallest sequence number), if any
+    /// (`s_oldestSavedSession` / `ContextIdSetOldest`).
+    pub fn oldest_saved_session_slot(&self) -> Option<usize> {
+        (0..MAX_ACTIVE_SESSIONS)
+            .filter(|&slot| self.saved_sessions[slot].is_some())
+            .min_by_key(|&slot| self.saved_session_sequences[slot])
+    }
+
+    /// Returns `true` if the context gap is exhausted: the low 16 bits of the session context
+    /// counter (the `CONTEXT_SLOT` value the next save would use) equal those of the oldest
+    /// saved session context, so saving another context would make the oldest ambiguous.
+    pub fn context_gap_exhausted(&self) -> bool {
+        self.oldest_saved_session_slot().is_some_and(|slot| {
+            (self.saved_session_sequences[slot] as u16) == (self.context_counter as u16)
+        })
+    }
+
+    /// Assigns the context sequence number for saving the loaded session `handle` and moves
+    /// it from the loaded to the saved session table (`SessionContextSave`).
+    ///
+    /// Returns `TPM_RC_CONTEXT_GAP` if the gap to the oldest saved session is exhausted and
+    /// `TPM_RC_TOO_MANY_CONTEXTS` if the 64-bit counter would roll over. Saving a session does
+    /// not affect its exclusive-audit status (only a flush or a later command can end that).
+    pub fn save_session_context(&mut self, handle: u32) -> Result<u64, TpmRc> {
+        let slot = (handle & 0x00FF_FFFF) as usize;
+        if slot >= MAX_ACTIVE_SESSIONS || self.session(handle).is_none() {
+            return Err(TpmRc::FAILURE);
+        }
+        // The low counter values 0..=MAX_LOADED_SESSIONS mark loaded sessions in the C
+        // `contextArray` and are never used as context IDs.
+        let low = self.context_counter as u16 as u64;
+        if low <= MAX_LOADED_SESSIONS as u64 {
+            self.context_counter += MAX_LOADED_SESSIONS as u64 + 1 - low;
+        }
+        if self.context_gap_exhausted() {
+            return Err(TpmRc::CONTEXT_GAP);
+        }
+        let sequence = self.context_counter;
+        self.context_counter = self
+            .context_counter
+            .checked_add(1)
+            .ok_or(TpmRc::TOO_MANY_CONTEXTS)?;
+        if (self.context_counter as u16) == 0 {
+            self.context_counter += MAX_LOADED_SESSIONS as u64 + 1;
+        }
+        self.saved_sessions[slot] = Some(handle);
+        self.saved_session_sequences[slot] = sequence;
+        for entry in &mut self.active_sessions {
+            if entry
+                .as_ref()
+                .is_some_and(|session| session.session_handle == handle)
+            {
+                *entry = None;
+            }
+        }
+        Ok(sequence)
+    }
+
+    /// Returns `true` if `sequence` is the context sequence number of the saved session in the
+    /// slot of `handle` and lies within the context gap window
+    /// (`SequenceNumberForSavedContextIsValid`).
+    pub fn saved_session_sequence_is_valid(&self, handle: u32, sequence: u64) -> bool {
+        self.saved_session_slot(handle).is_some_and(|slot| {
+            self.saved_session_sequences[slot] == sequence
+                && sequence <= self.context_counter
+                && self.context_counter - sequence <= MAX_CONTEXT_GAP
+        })
+    }
+
+    /// Removes the saved-session record of the slot of `handle` (on load or flush).
+    pub fn remove_saved_session(&mut self, handle: u32) {
+        if let Some(slot) = self.saved_session_slot(handle) {
+            self.saved_sessions[slot] = None;
+            self.saved_session_sequences[slot] = 0;
         }
     }
 
@@ -924,7 +1123,11 @@ impl GlobalState {
 impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
     /// Returns the current adjusted clock value in milliseconds (`go.clock`).
     pub fn get_clock(&self, global_state: &GlobalState) -> u64 {
-        (global_state.tpm_time_ms as i64 + global_state.clock_offset).max(0) as u64
+        // `clock_offset` is the two's-complement difference `Clock - Time`, so wrapping arithmetic
+        // yields the exact clock for every value up to `0xFFFF_0000_0000_0000` (`TPM2_ClockSet`).
+        global_state
+            .tpm_time_ms
+            .wrapping_add(global_state.clock_offset as u64)
     }
 
     /// Returns the current `TpmsClockInfo` structure.
@@ -933,7 +1136,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             clock: self.get_clock(global_state),
             reset_count: global_state.reset_count,
             restart_count: global_state.restart_count,
-            safe: true,
+            // `TimeFillInfo`: the clock is not "safe" while NV is unavailable (it stops advancing).
+            safe: global_state.nv_available && global_state.clock_safe,
         }
     }
 
@@ -977,24 +1181,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             }
             OwnedAuth::default()
         } else if (0x81000000..=0x81FFFFFF).contains(&handle) {
-            let storage_mgr = StorageManager::new(&mut *self.platform.storage);
-            if let Ok(metadata) = storage_mgr.get_metadata(handle) {
-                let read_len = core::cmp::min(metadata.data_size as usize, 512);
-                let mut read_buf = [0u8; 512];
-                if storage_mgr
-                    .read_item(handle, 0, &mut read_buf[..read_len])
-                    .is_ok()
-                    && read_len > 32
-                {
-                    let mut slice = &read_buf[32..read_len];
-                    if Tpm2bName::unmarshal(&mut slice).is_ok()
-                        && let Ok(auth) = OwnedAuth::unmarshal(&mut slice)
-                    {
-                        return auth;
-                    }
-                }
-            }
-            OwnedAuth::default()
+            // A persistent object of a disabled hierarchy looks undefined (`ObjectLoadEvict`).
+            self.load_persistent_object(global_state, handle)
+                .map(|obj| obj.auth)
+                .unwrap_or_default()
         } else if (20..=22).contains(&handle) {
             global_state.pcr_auth_value
         } else {
@@ -1110,8 +1300,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
     /// Checks whether Dictionary Attack lockout applies (`CheckLockedOut()` in `SessionProcess.c`).
     /// If NV storage is unavailable during an orderly state (`orderly_state < 0xFFFE`), returns `TPM_RC_NV_UNAVAILABLE`.
-    /// If a DA counter update was deferred while NV was unavailable (`da_pending_on_nv`) and NV is now available,
-    /// flushes `failed_tries` to NV storage and clears `da_pending_on_nv`.
+    /// If a DA counter update was deferred while NV was unavailable (`da_pending_on_nv`), returns
+    /// `TPM_RC_NV_UNAVAILABLE` while NV is still unavailable; otherwise flushes `failed_tries` to
+    /// NV storage and clears `da_pending_on_nv`.
+    ///
+    /// The TPM is locked out for `lockoutAuth` when its use is disabled, and for any other
+    /// DA-protected entity when `failedTries >= maxTries` (so `maxTries == 0` always locks out,
+    /// as in the C reference).
     pub(crate) fn check_locked_out(
         &mut self,
         global_state: &mut GlobalState,
@@ -1120,21 +1315,22 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         if !global_state.nv_available && global_state.orderly_state < 0xFFFE {
             return Err(TpmRc::NV_UNAVAILABLE);
         }
-        if global_state.da_pending_on_nv && global_state.nv_available {
+        if global_state.da_pending_on_nv {
+            if !global_state.nv_available {
+                return Err(TpmRc::NV_UNAVAILABLE);
+            }
             let _ = self
                 .platform
                 .storage
                 .write_nv(32, &global_state.failed_tries.to_be_bytes());
+            self.save_hierarchy_auths(global_state);
             global_state.da_pending_on_nv = false;
         }
         if is_lockout_auth {
             if !global_state.lockout_auth_enabled {
                 return Err(TpmRc::LOCKOUT);
             }
-        } else if global_state.recovery_time != 0
-            && global_state.max_tries > 0
-            && global_state.failed_tries >= global_state.max_tries
-        {
+        } else if global_state.failed_tries >= global_state.max_tries {
             return Err(TpmRc::LOCKOUT);
         }
         Ok(())
@@ -1160,11 +1356,37 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         })
     }
 
+    /// Loads the persistent object `handle` for use by a command (`ObjectLoadEvict` without the
+    /// object-slot accounting, which [`Self::validate_command_handles`] performs).
+    ///
+    /// A persistent handle whose hierarchy is disabled looks undefined, as in the C reference:
+    /// platform handles (`0x8180_0000..`) need `phEnable`, all others `shEnable`, and objects of
+    /// the endorsement hierarchy additionally `ehEnable`. Every failure to find or use the object
+    /// is reported as `TPM_RC_HANDLE` (without position); see [`Self::read_persistent_object`]
+    /// for an unchecked read.
     pub fn load_persistent_object(
         &mut self,
         global_state: &GlobalState,
         handle: u32,
     ) -> Result<TransientObject, TpmRc> {
+        let hierarchy_enabled = if handle >= 0x8180_0000 {
+            global_state.ph_enable
+        } else {
+            global_state.sh_enable
+        };
+        if !hierarchy_enabled {
+            return Err(TpmRc::HANDLE.to_rc());
+        }
+        let obj = self.read_persistent_object(handle)?;
+        if obj.hierarchy == tpm2::Handle::RH_ENDORSEMENT.0 && !global_state.eh_enable {
+            return Err(TpmRc::HANDLE.to_rc());
+        }
+        Ok(obj)
+    }
+
+    /// Reads the persistent object `handle` from NV without any hierarchy-enable checks
+    /// (`NvGetEvictObject`). Returns `TPM_RC_HANDLE` if it is not defined.
+    pub(crate) fn read_persistent_object(&mut self, handle: u32) -> Result<TransientObject, TpmRc> {
         let storage = StorageManager::new(&mut *self.platform.storage);
         let metadata = storage
             .get_metadata(handle)
@@ -1176,12 +1398,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
         let mut slice = &buf[..metadata.data_size as usize];
 
-        if slice.len() < 32 {
-            return Err(TpmRc::FAILURE);
-        }
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(&slice[..32]);
-        slice = &slice[32..];
+        // seedValue is stored as a TPM2B (full nameAlg-sized seed, see `persist_transient_object`).
+        let seed_value = tpm2::Tpm2bDigest::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
+        let (seed, seed_len) = TransientObject::seed_from_bytes(seed_value.get_buffer());
 
         let name = OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let auth = OwnedAuth::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
@@ -1198,19 +1417,12 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         let qualified_name = OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let hierarchy = u32::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
 
-        if hierarchy == tpm2::Handle::RH_OWNER.0 && !global_state.sh_enable {
-            return Err(TpmRc::HIERARCHY.to_rc());
-        }
-        if hierarchy == tpm2::Handle::RH_ENDORSEMENT.0 && !global_state.eh_enable {
-            return Err(TpmRc::HIERARCHY.to_rc());
-        }
-        if hierarchy == tpm2::Handle::RH_PLATFORM.0 && !global_state.ph_enable {
-            return Err(TpmRc::HIERARCHY.to_rc());
-        }
-
         Ok(TransientObject {
             handle,
             seed,
+            seed_len,
+            external: false,
+            public_only: false,
             name,
             auth,
             public,
@@ -1234,6 +1446,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         global_state.ep_seed_size = 32;
         let mut storage = StorageManager::new(&mut *self.platform.storage);
         let _ = storage.undefine_space(0x00FFFFFF);
+        let _ = storage.undefine_space(PCR_ALLOCATION_HANDLE);
         self.save_hierarchy_auths(global_state);
     }
 
@@ -1285,6 +1498,31 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         global_state.pp_seed_size = 32;
         global_state.ep_seed_size = 32;
         self.restore_hierarchy_auths(global_state);
+        self.restore_persistent_state(global_state);
+        self.restore_pcr_allocation(global_state);
+    }
+
+    /// Replaces the active PCR allocation with the NV copy written by `TPM2_PCR_Allocate`
+    /// ([`PCR_ALLOCATION_HANDLE`]), if one exists. Called at `_TPM_Init`, mirroring the C
+    /// reference where `gp.pcrAllocated` is (re)loaded from NV on initialization.
+    fn restore_pcr_allocation(&mut self, global_state: &mut GlobalState) {
+        let storage = StorageManager::new(&mut *self.platform.storage);
+        let Ok(meta) = storage.get_metadata(PCR_ALLOCATION_HANDLE) else {
+            return;
+        };
+        let mut buf = [0u8; tpm2::TpmlPcrSelection::MAX_SIZE];
+        let len = meta.data_size as usize;
+        if len > buf.len()
+            || storage
+                .read_item(PCR_ALLOCATION_HANDLE, 0, &mut buf[..len])
+                .is_err()
+        {
+            return;
+        }
+        let mut slice = &buf[..len];
+        if let Ok(allocation) = tpm2::TpmlPcrSelection::unmarshal(&mut slice) {
+            global_state.pcrs.pcr_allocation = allocation;
+        }
     }
 
     pub(crate) fn save_hierarchy_auths(&mut self, global_state: &GlobalState) {
@@ -1434,6 +1672,22 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     .unwrap(),
             );
         }
+        // Persistent lifecycle data appended after a marker (older layouts simply end before it):
+        // `gp.disableClear`, `gp.lockOutAuthEnabled`, `gp.maxTries`, `gp.recoveryTime`,
+        // `gp.lockoutRecovery` (`NV_SYNC_PERSISTENT`) and `go.clock` / `go.clockSafe`.
+        if offset + PERSISTENT_EXT_LEN <= buf.len() {
+            buf[offset] = PERSISTENT_EXT_MARKER;
+            buf[offset + 1] = u8::from(global_state.disable_clear);
+            buf[offset + 2] = u8::from(global_state.lockout_auth_enabled);
+            buf[offset + 3..offset + 7].copy_from_slice(&global_state.max_tries.to_be_bytes());
+            buf[offset + 7..offset + 11].copy_from_slice(&global_state.recovery_time.to_be_bytes());
+            buf[offset + 11..offset + 15]
+                .copy_from_slice(&global_state.lockout_recovery.to_be_bytes());
+            buf[offset + 15..offset + 23]
+                .copy_from_slice(&self.get_clock(global_state).to_be_bytes());
+            buf[offset + 23] = u8::from(global_state.clock_safe);
+            offset += PERSISTENT_EXT_LEN;
+        }
         let mut storage = StorageManager::new(&mut *self.platform.storage);
         if let Ok(meta) = storage.get_metadata(HIERARCHY_AUTH_HANDLE) {
             if (meta.data_size as usize) < offset {
@@ -1577,9 +1831,216 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     if let Ok(auth) = OwnedAuth::unmarshal(&mut slice) {
                         global_state.pcr_auth_value = auth;
                     }
+                    if slice.len() >= PERSISTENT_EXT_LEN && slice[0] == PERSISTENT_EXT_MARKER {
+                        let ext = &slice[..PERSISTENT_EXT_LEN];
+                        let be_u32 = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+                        global_state.disable_clear = ext[1] != 0;
+                        global_state.lockout_auth_enabled = ext[2] != 0;
+                        global_state.max_tries = be_u32(&ext[3..7]);
+                        global_state.recovery_time = be_u32(&ext[7..11]);
+                        global_state.lockout_recovery = be_u32(&ext[11..15]);
+                        let mut clock = [0u8; 8];
+                        clock.copy_from_slice(&ext[15..23]);
+                        // Make `get_clock()` report the persisted `go.clock`.
+                        global_state.clock_offset =
+                            u64::from_be_bytes(clock).wrapping_sub(global_state.tpm_time_ms) as i64;
+                        global_state.clock_safe = ext[23] != 0;
+                    }
                 }
             }
         }
+    }
+
+    /// Loads the persistent counters and orderly state kept in the reserved NV header
+    /// (`NvReadPersistent()` / `NvRead(&go, ...)` in `_TPM_Init`) and, after an orderly
+    /// `TPM2_Shutdown(TPM_SU_STATE)`, the saved `STATE_RESET_DATA` / `STATE_CLEAR_DATA`.
+    ///
+    /// Reserved header layout: `resetCount` (u32 @0), `orderlyState` (u16 @4), `totalResetCount`
+    /// (u64 @8), `timeEpoch` (u64 @24), `failedTries` (u32 @32).
+    ///
+    /// `g_nv_ok` is SET when the persistent data was read; it is CLEAR if the previous shutdown
+    /// was `TPM_SU_STATE` but the saved state could not be recovered (so that
+    /// `TPM2_Startup(TPM_SU_STATE)` fails with `TPM_RC_NV_UNINITIALIZED`).
+    fn restore_persistent_state(&mut self, global_state: &mut GlobalState) {
+        let mut header = [0u8; 36];
+        if self.platform.storage.read_nv(0, &mut header).is_err() {
+            global_state.g_nv_ok = false;
+            return;
+        }
+        let be_u32 = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+        let be_u64 = |b: &[u8]| {
+            let mut v = [0u8; 8];
+            v.copy_from_slice(&b[..8]);
+            u64::from_be_bytes(v)
+        };
+        global_state.reset_count = be_u32(&header[0..4]);
+        global_state.orderly_state = u16::from_be_bytes([header[4], header[5]]);
+        global_state.total_reset_count = be_u64(&header[8..16]);
+        global_state.time_epoch = be_u64(&header[24..32]);
+        global_state.failed_tries = be_u32(&header[32..36]);
+        global_state.g_nv_ok = true;
+
+        // `TPM_SU_STATE` possibly combined with the `PRE_STARTUP_FLAG` / `STARTUP_LOCALITY_3` bits.
+        let orderly = global_state.orderly_state;
+        if orderly < 0xFFFE && (orderly & !(0x8000 | 0x4000)) == 0x0001 {
+            global_state.g_nv_ok = self.restore_state_data(global_state);
+        }
+    }
+
+    /// Persists the state that must survive a `TPM2_Shutdown(TPM_SU_STATE)` for a subsequent
+    /// TPM Restart or TPM Resume (`NV_STATE_RESET_DATA` / `NV_STATE_CLEAR_DATA` in `Shutdown.c`).
+    ///
+    /// `STATE_RESET_DATA` (restored on Restart and Resume): `nullSeed`, `nullProof`,
+    /// `restartCount`, `objectContextID`, the context counters, the saved-session table,
+    /// `commitCounter`, `commitNonce` and `commitArray`. `STATE_CLEAR_DATA` (restored on Resume only): `platformAuth`,
+    /// `platformPolicy`, `platformAlg`, `shEnable`, `ehEnable` and `phEnableNV`.
+    ///
+    /// PCR values and the remaining `GlobalState` fields are not written here; they are kept by
+    /// the platform RAM, which `_TPM_Init` ([`GlobalState::reset_in_place`]) does not clear.
+    pub(crate) fn save_state_data(&mut self, global_state: &GlobalState) -> Result<(), TpmRc> {
+        let mut buf = [0u8; STATE_SAVE_MAX_LEN];
+        let mut w = 0usize;
+        let mut put = |bytes: &[u8], w: &mut usize| {
+            buf[*w..*w + bytes.len()].copy_from_slice(bytes);
+            *w += bytes.len();
+        };
+        put(&[STATE_SAVE_MARKER], &mut w);
+        put(&global_state.null_seed_size.to_be_bytes(), &mut w);
+        put(&global_state.null_seed, &mut w);
+        put(&global_state.null_proof_size.to_be_bytes(), &mut w);
+        put(&global_state.null_proof, &mut w);
+        put(&global_state.restart_count.to_be_bytes(), &mut w);
+        put(&global_state.object_context_id.to_be_bytes(), &mut w);
+        put(&global_state.context_counter.to_be_bytes(), &mut w);
+        put(&global_state.object_context_counter.to_be_bytes(), &mut w);
+        // Saved session contexts, compactly: count, then `slot || handle || sequence` per entry.
+        let saved_count = global_state.saved_sessions.iter().flatten().count();
+        put(&[saved_count as u8], &mut w);
+        for (slot, saved) in global_state.saved_sessions.iter().enumerate() {
+            if let Some(handle) = saved {
+                put(&[slot as u8], &mut w);
+                put(&handle.to_be_bytes(), &mut w);
+                put(
+                    &global_state.saved_session_sequences[slot].to_be_bytes(),
+                    &mut w,
+                );
+            }
+        }
+        put(&global_state.commit_counter.to_be_bytes(), &mut w);
+        put(&global_state.commit_nonce, &mut w);
+        put(&global_state.commit_array, &mut w);
+        put(
+            &[
+                u8::from(global_state.sh_enable),
+                u8::from(global_state.eh_enable),
+                u8::from(global_state.ph_enable_nv),
+            ],
+            &mut w,
+        );
+        w += global_state
+            .platform_auth
+            .marshal((&mut buf[w..w + Tpm2bAuth::MAX_SIZE]).try_into().unwrap());
+        w += global_state.platform_policy.marshal(
+            (&mut buf[w..w + tpm2::Tpm2bDigest::MAX_SIZE])
+                .try_into()
+                .unwrap(),
+        );
+        w += global_state
+            .platform_alg
+            .marshal((&mut buf[w..w + TpmiAlgHash::MAX_SIZE]).try_into().unwrap());
+
+        let mut storage = StorageManager::new(&mut *self.platform.storage);
+        let _ = storage.undefine_space(STATE_SAVE_HANDLE);
+        storage
+            .define_space(STATE_SAVE_HANDLE, w as u16, 0)
+            .map_err(|_| TpmRc::NV_SPACE)?;
+        storage
+            .write_item(STATE_SAVE_HANDLE, 0, &buf[..w])
+            .map_err(|_| TpmRc::FAILURE)?;
+        Ok(())
+    }
+
+    /// Deletes the saved `TPM_SU_STATE` data written by [`Self::save_state_data`] once it has been
+    /// consumed (or invalidated) by `TPM2_Startup`, releasing its NV space.
+    pub(crate) fn delete_state_data(&mut self) {
+        let mut storage = StorageManager::new(&mut *self.platform.storage);
+        let _ = storage.undefine_space(STATE_SAVE_HANDLE);
+    }
+
+    /// Restores the data written by [`Self::save_state_data`]. Returns `false` if it is missing
+    /// or malformed.
+    fn restore_state_data(&mut self, global_state: &mut GlobalState) -> bool {
+        let storage = StorageManager::new(&mut *self.platform.storage);
+        let Ok(meta) = storage.get_metadata(STATE_SAVE_HANDLE) else {
+            return false;
+        };
+        let len = meta.data_size as usize;
+        let mut buf = [0u8; STATE_SAVE_MAX_LEN];
+        if len > buf.len()
+            || storage
+                .read_item(STATE_SAVE_HANDLE, 0, &mut buf[..len])
+                .is_err()
+        {
+            return false;
+        }
+        let mut slice = &buf[..len];
+        let parsed = (|| -> Option<()> {
+            if u8::unmarshal(&mut slice).ok()? != STATE_SAVE_MARKER {
+                return None;
+            }
+            let null_seed_size = u16::unmarshal(&mut slice).ok()?;
+            let null_seed = <[u8; 64]>::unmarshal(&mut slice).ok()?;
+            let null_proof_size = u16::unmarshal(&mut slice).ok()?;
+            let null_proof = <[u8; 64]>::unmarshal(&mut slice).ok()?;
+            let restart_count = u32::unmarshal(&mut slice).ok()?;
+            let object_context_id = u32::unmarshal(&mut slice).ok()?;
+            let context_counter = u64::unmarshal(&mut slice).ok()?;
+            let object_context_counter = u64::unmarshal(&mut slice).ok()?;
+            let mut saved_sessions = [None; MAX_ACTIVE_SESSIONS];
+            let mut saved_session_sequences = [0u64; MAX_ACTIVE_SESSIONS];
+            let saved_count = u8::unmarshal(&mut slice).ok()? as usize;
+            for _ in 0..saved_count {
+                let slot = u8::unmarshal(&mut slice).ok()? as usize;
+                let handle = u32::unmarshal(&mut slice).ok()?;
+                let sequence = u64::unmarshal(&mut slice).ok()?;
+                if slot >= MAX_ACTIVE_SESSIONS {
+                    return None;
+                }
+                saved_sessions[slot] = Some(handle);
+                saved_session_sequences[slot] = sequence;
+            }
+            let commit_counter = u16::unmarshal(&mut slice).ok()?;
+            let commit_nonce = <[u8; 64]>::unmarshal(&mut slice).ok()?;
+            let commit_array = <[u8; 16]>::unmarshal(&mut slice).ok()?;
+            let sh_enable = u8::unmarshal(&mut slice).ok()? != 0;
+            let eh_enable = u8::unmarshal(&mut slice).ok()? != 0;
+            let ph_enable_nv = u8::unmarshal(&mut slice).ok()? != 0;
+            let platform_auth = OwnedAuth::unmarshal(&mut slice).ok()?;
+            let platform_policy = OwnedDigest::unmarshal(&mut slice).ok()?;
+            let platform_alg = <Option<tpm2::TpmiAlgHash>>::unmarshal(&mut slice).ok()?;
+
+            global_state.null_seed_size = null_seed_size;
+            global_state.null_seed = null_seed;
+            global_state.null_proof_size = null_proof_size;
+            global_state.null_proof = null_proof;
+            global_state.restart_count = restart_count;
+            global_state.object_context_id = object_context_id;
+            global_state.context_counter = context_counter;
+            global_state.object_context_counter = object_context_counter;
+            global_state.saved_sessions = saved_sessions;
+            global_state.saved_session_sequences = saved_session_sequences;
+            global_state.commit_counter = commit_counter;
+            global_state.commit_nonce = commit_nonce;
+            global_state.commit_array = commit_array;
+            global_state.sh_enable = sh_enable;
+            global_state.eh_enable = eh_enable;
+            global_state.ph_enable_nv = ph_enable_nv;
+            global_state.platform_auth = platform_auth;
+            global_state.platform_policy = platform_policy;
+            global_state.platform_alg = platform_alg;
+            Some(())
+        })();
+        parsed.is_some()
     }
 
     /// Process a TPM request and writes the response in a separate buffer. Returns the number of
@@ -1790,59 +2251,59 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// Executes a TPM command from the input request buffer and writes the response
     /// into the output response buffer. Decides whether to parse and process sessions
     /// based on the tag in the command header.
-    pub fn execute_command(
-        &mut self,
-        global_state: &mut GlobalState,
-        cmd_buf: &[u8],
-        resp_buf: &mut [u8],
-    ) -> Result<usize, TpmRc> {
-        // Any command through this function unceremoniously ends an active DRTM event sequence
-        // (`ObjectTerminateEvent()` in `ExecCommand.c`).
-        if global_state.drtm_handle != Handle::RH_UNASSIGNED.0 {
-            let old_handle = global_state.drtm_handle;
-            global_state.drtm_handle = Handle::RH_UNASSIGNED.0;
-            let _ = global_state.remove_active_sequence(old_handle);
-        }
-
-        let request_size = cmd_buf.len();
-        if request_size < CommandHeader::MAX_SIZE {
-            return Err(TpmRc::VALUE.to_rc());
-        }
-
-        // Parse command header: tag, size, and command code
-        let mut slice = cmd_buf;
-        let header = match CommandHeader::unmarshal(&mut slice) {
-            Ok(h) => h,
-            Err(_) => {
-                let tag = u16::from_be_bytes([cmd_buf[0], cmd_buf[1]]);
-                if tag != 0x8001 && tag != 0x8002 {
-                    return Err(TpmRc::BAD_TAG);
-                }
-                return Err(TpmRc::VALUE.to_rc());
-            }
-        };
-        let size = header.size as usize;
-        if request_size < size {
-            return Err(TpmRc::SIZE.to_rc());
-        }
-        let cc = header.code;
-        let command_code = cc.code();
-
-        if !is_command_supported(cc) {
-            return Err(TpmRc::COMMAND_CODE);
-        }
-
-        // Update accumulated TPM time (`g_time` in C reference) by relative delta from platform timer.
+    /// Advances `Time` (`tpm_time_ms`) and `Clock` by the platform time elapsed since the last
+    /// update and runs the dictionary-attack self-healing logic (`TimeUpdate()` in `Time.c`).
+    ///
+    /// The elapsed platform time is scaled by the `TPM2_ClockRateAdjust` divisor
+    /// (`_plat__TimerRead()` in the C platform `Clock.c`). When `Clock` crosses a multiple of
+    /// `2^NV_CLOCK_UPDATE_INTERVAL` ms it is written to NV and `clockSafe` is SET
+    /// (`TimeClockUpdate()`).
+    fn time_update(&mut self, global_state: &mut GlobalState) {
         let raw_timer_ms = self.platform.timer.timer_read();
-        let elapsed_ms = if let Some(prev_raw) = global_state.last_timer_read_ms {
+        let elapsed_raw_ms = if let Some(prev_raw) = global_state.last_timer_read_ms {
             raw_timer_ms.saturating_sub(prev_raw)
         } else {
             0
         };
         global_state.last_timer_read_ms = Some(raw_timer_ms);
-        global_state.tpm_time_ms = global_state.tpm_time_ms.saturating_add(elapsed_ms);
 
-        // DASelfHeal() logic:
+        // adjusted = elapsed * CLOCK_NOMINAL / adjustRate, carrying the remainder.
+        let rate = u128::from(global_state.clock_adjust_rate.max(1));
+        let scaled = u128::from(elapsed_raw_ms) * u128::from(CLOCK_NOMINAL)
+            + u128::from(global_state.clock_adjust_remainder);
+        let elapsed_ms = u64::try_from(scaled / rate).unwrap_or(u64::MAX);
+        global_state.clock_adjust_remainder = (scaled % rate) as u64;
+
+        let old_clock = self.get_clock(global_state);
+        global_state.tpm_time_ms = global_state.tpm_time_ms.saturating_add(elapsed_ms);
+        let new_clock = self.get_clock(global_state);
+        self.clock_update(global_state, old_clock, new_clock);
+
+        self.da_self_heal(global_state);
+    }
+
+    /// Records a change of `Clock` from `old_clock` to `new_clock` (`TimeClockUpdate()` in
+    /// `Time.c`): if the new value crosses an `NV_CLOCK_UPDATE_INTERVAL` boundary, `clockSafe`
+    /// is SET and the clock is written to NV. The caller must have checked NV availability.
+    pub(crate) fn clock_update(
+        &mut self,
+        global_state: &mut GlobalState,
+        old_clock: u64,
+        new_clock: u64,
+    ) {
+        const CLOCK_UPDATE_MASK: u64 = (1u64 << NV_CLOCK_UPDATE_INTERVAL) - 1;
+        if (new_clock | CLOCK_UPDATE_MASK) > (old_clock | CLOCK_UPDATE_MASK) {
+            global_state.clock_safe = true;
+            // The clock is persisted with the rest of the persistent hierarchy data.
+            self.save_hierarchy_auths(global_state);
+        }
+    }
+
+    /// Dictionary-attack self-healing (`DASelfHeal()` in `DA.c`): decrements `failedTries` once
+    /// per `recoveryTime` seconds (or clears it when `recoveryTime` is 0) and re-enables
+    /// `lockoutAuth` once `lockoutRecovery` seconds have elapsed since the last lockout failure.
+    /// Every change is synchronized to NV (`NV_SYNC_PERSISTENT`).
+    fn da_self_heal(&mut self, global_state: &mut GlobalState) {
         // 1. Regular authorization self-healing (failedTries decrement every recoveryTime seconds)
         if global_state.failed_tries != 0 {
             if global_state.recovery_time == 0 {
@@ -1881,7 +2342,71 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 && ((elapsed_lockout_ms as u64) / 1000) >= (global_state.lockout_recovery as u64)
             {
                 global_state.lockout_auth_enabled = true;
+                // NV_SYNC_PERSISTENT(lockOutAuthEnabled)
+                self.save_hierarchy_auths(global_state);
             }
+        }
+    }
+
+    pub fn execute_command(
+        &mut self,
+        global_state: &mut GlobalState,
+        cmd_buf: &[u8],
+        resp_buf: &mut [u8],
+    ) -> Result<usize, TpmRc> {
+        // Any command through this function unceremoniously ends an active DRTM event sequence
+        // (`ObjectTerminateEvent()` in `ExecCommand.c`).
+        if global_state.drtm_handle != Handle::RH_UNASSIGNED.0 {
+            let old_handle = global_state.drtm_handle;
+            global_state.drtm_handle = Handle::RH_UNASSIGNED.0;
+            let _ = global_state.remove_active_sequence(old_handle);
+        }
+
+        // Parse the command header field by field, as the C reference `ExecuteCommand()` does:
+        // a truncated field is `TPM_RC_INSUFFICIENT`, an invalid tag is `TPM_RC_BAD_TAG`, and a
+        // `commandSize` that differs from the number of received bytes (or exceeds
+        // `MAX_COMMAND_SIZE`) is `TPM_RC_COMMAND_SIZE`.
+        let request_size = cmd_buf.len();
+        if request_size < 2 {
+            return Err(TpmRc::INSUFFICIENT.to_rc());
+        }
+        let tag = u16::from_be_bytes([cmd_buf[0], cmd_buf[1]]);
+        if tag != u16::from(TpmiStCommandTag::NoSessions)
+            && tag != u16::from(TpmiStCommandTag::Sessions)
+        {
+            return Err(TpmRc::BAD_TAG);
+        }
+        if request_size < 6 {
+            return Err(TpmRc::INSUFFICIENT.to_rc());
+        }
+        let size = u32::from_be_bytes([cmd_buf[2], cmd_buf[3], cmd_buf[4], cmd_buf[5]]) as usize;
+        if size != request_size || size > MAX_COMMAND_SIZE {
+            return Err(TpmRc::COMMAND_SIZE);
+        }
+        if request_size < CommandHeader::MAX_SIZE {
+            return Err(TpmRc::INSUFFICIENT.to_rc());
+        }
+        let mut slice = cmd_buf;
+        let header = CommandHeader::unmarshal(&mut slice).map_err(|_| TpmRc::COMMAND_CODE)?;
+        let cc = header.code;
+        let command_code = cc.code();
+
+        if !is_command_supported(cc) {
+            return Err(TpmRc::COMMAND_CODE);
+        }
+
+        // `TimeUpdateToCurrent()` (`Time.c`): Time/Clock only advance, and `DASelfHeal()` only
+        // runs, once TPM2_Startup has completed and while NV is available. Otherwise the elapsed
+        // platform time is deferred (the last timer sample is kept) until the next update.
+        if global_state.initialized && global_state.nv_available {
+            self.time_update(global_state);
+        }
+
+        // `ExecCommand.c`: only `TPM2_Startup` is accepted before the TPM is started, and it is
+        // not accepted afterwards. This is checked (after
+        // `TimeUpdateToCurrent`) before any handle or session processing.
+        if global_state.initialized == (cc == TpmCc::Startup) {
+            return Err(TpmRc::INITIALIZE);
         }
 
         // Reset per-command state-tracking flags at the beginning of each command
@@ -1894,13 +2419,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             if header.tag == TpmiStCommandTag::Sessions {
                 self.execute_with_sessions(global_state, cmd_buf, resp_buf, cc, command_code, size)
             } else {
-                if !matches!(
-                    cc,
-                    TpmCc::Startup | TpmCc::ContextLoad | TpmCc::ContextSave | TpmCc::FlushContext
-                ) {
-                    global_state.exclusive_audit_session = None;
-                }
-
                 let mut handles = [0u32; 3];
                 let handles_len = command_handles_count(cc);
                 if size < 10 + handles_len * 4 {
@@ -1916,14 +2434,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     ]);
                 }
                 if !global_state.in_shadow_execution {
-                    self.check_unauthorized_handles(
-                        global_state,
-                        cc,
-                        &handles,
-                        handles_len,
-                        &[],
-                        0,
-                    )?;
+                    // As in `ExecCommand.c`, the handles are validated (`ParseHandleBuffer` /
+                    // `EntityGetLoadStatus`) before missing authorizations are reported
+                    // (`CheckAuthNoSession`).
                     let params_len = size.saturating_sub(10 + handles_len * 4);
                     self.validate_command_handles(
                         global_state,
@@ -1932,9 +2445,33 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         handles_len,
                         &cmd_buf[10 + handles_len * 4..10 + handles_len * 4 + params_len],
                     )?;
+                    self.check_unauthorized_handles(
+                        global_state,
+                        cc,
+                        &handles,
+                        handles_len,
+                        &[],
+                        0,
+                    )?;
                 }
 
-                self.execute_without_sessions(global_state, cmd_buf, resp_buf, cc, size)
+                let result =
+                    self.execute_without_sessions(global_state, cmd_buf, resp_buf, cc, size);
+                // A successful command without an audit session ends audit exclusivity. As in the
+                // C reference (`UpdateAuditSessionStatus()` from `BuildResponseSession()`), this
+                // only happens once the command has succeeded; failed commands leave it intact.
+                if result.is_ok()
+                    && !matches!(
+                        cc,
+                        TpmCc::Startup
+                            | TpmCc::ContextLoad
+                            | TpmCc::ContextSave
+                            | TpmCc::FlushContext
+                    )
+                {
+                    global_state.exclusive_audit_session = None;
+                }
+                result
             }
         })();
 
@@ -1972,10 +2509,18 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         command_code: u32,
         request_size: usize,
     ) -> Result<usize, TpmRc> {
+        // Commands with the `NO_SESSIONS` attribute must not carry a session area. As in C, this
+        // is checked after the handles have been validated and the `authorizationSize` passed
+        // its sanity check, but before any session structure is unmarshaled
+        // (`IsSessionAllowed` is the first check of `ParseSessionBuffer`).
+        if !is_session_allowed(cc) {
+            self.reject_sessions_for_no_sessions_command(global_state, cmd_buf, cc, request_size)?;
+        }
         // 1. Parse Handles and Session Area
         let mut cmd =
             self.parse_command_and_sessions(global_state, cmd_buf, cc, command_code, request_size)?;
-        self.validate_session_attributes(&cmd, global_state, command_code, true)?;
+        // Handles are validated before the session area is examined, matching the C reference
+        // (`ParseHandleBuffer`/`EntityGetLoadStatus` run before `ParseSessionBuffer`).
         self.validate_command_handles(
             global_state,
             cc,
@@ -1983,9 +2528,25 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             cmd.handles_len,
             cmd.parameters,
         )?;
+        self.validate_session_attributes(&cmd, global_state, command_code, true)?;
         self.validate_session_attributes(&cmd, global_state, command_code, false)?;
 
-        // 3. Parameter Decryption
+        // 2. Session authorization (HMAC/password/policy) for all sessions. As in the C reference
+        // `ParseSessionBuffer`, missing authorizations are reported first, and authorization
+        // happens before parameter decryption, so a malformed encrypted parameter cannot mask an
+        // authorization failure (or skip the DA accounting). The cpHash is computed over the
+        // still-encrypted wire parameters.
+        self.check_unauthorized_handles(
+            global_state,
+            cc,
+            &cmd.handles,
+            cmd.handles_len,
+            &cmd.session_to_handle_idx,
+            cmd.session_to_handle_idx_len,
+        )?;
+        self.verify_session_hmacs(global_state, &mut cmd, command_code)?;
+
+        // 3. Parameter Decryption (the last step of session processing).
         let has_decrypt_session = cmd.auth_sessions[..cmd.auth_sessions_len]
             .iter()
             .any(|auth| auth.session_attributes.0 & 0x20 != 0);
@@ -1995,6 +2556,45 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         } else {
             self.execute_after_decryption(global_state, &mut cmd, resp_buf, cc, command_code)
         }
+    }
+
+    /// Returns `TPM_RC_AUTH_CONTEXT` for a `NO_SESSIONS` command sent with `TPM_ST_SESSIONS`
+    /// once its handles are valid and its `authorizationSize` is sane. Returns `Ok(())` if the
+    /// handle or authorization-size area is truncated or malformed, so that the regular parser
+    /// reports that error exactly as for any other command.
+    fn reject_sessions_for_no_sessions_command(
+        &mut self,
+        global_state: &mut GlobalState,
+        cmd_buf: &[u8],
+        cc: TpmCc,
+        request_size: usize,
+    ) -> Result<(), TpmRc> {
+        let num_handles = command_handles_count(cc).min(3);
+        let auth_size_offset = 10 + 4 * num_handles;
+        if request_size < auth_size_offset + 4 || cmd_buf.len() < auth_size_offset + 4 {
+            return Ok(());
+        }
+        let mut handles = [0u32; 3];
+        for (i, handle) in handles.iter_mut().take(num_handles).enumerate() {
+            let offset = 10 + 4 * i;
+            *handle = u32::from_be_bytes([
+                cmd_buf[offset],
+                cmd_buf[offset + 1],
+                cmd_buf[offset + 2],
+                cmd_buf[offset + 3],
+            ]);
+        }
+        self.validate_command_handles(global_state, cc, &handles, num_handles, &[])?;
+        let auth_size = u32::from_be_bytes([
+            cmd_buf[auth_size_offset],
+            cmd_buf[auth_size_offset + 1],
+            cmd_buf[auth_size_offset + 2],
+            cmd_buf[auth_size_offset + 3],
+        ]) as usize;
+        if auth_size < 9 || request_size - (auth_size_offset + 4) < auth_size {
+            return Ok(());
+        }
+        Err(TpmRc::AUTH_CONTEXT)
     }
 
     /// Helper to execute a command with session parameter decryption enabled.
@@ -2021,10 +2621,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
     /// Continuation helper to execute a command with authorization sessions after parameter decryption.
     ///
-    /// Performs the remaining execution pipeline for session-authenticated commands:
-    /// 1. Verifies authorization session HMACs and validates handle authorization rules.
-    /// 2. Dispatches command execution to the underlying handler via a session-less shadow buffer.
-    /// 3. Processes the response, including parameter encryption (if `TPMA_SESSION_ENCRYPT` is set),
+    /// Performs the remaining execution pipeline for session-authenticated commands (session
+    /// authorization has already been verified by `execute_with_sessions`):
+    /// 1. Dispatches command execution to the underlying handler via a session-less shadow buffer.
+    /// 2. Processes the response, including parameter encryption (if `TPMA_SESSION_ENCRYPT` is set),
     ///    audit session tracking, nonce generation, and response HMAC computation.
     fn execute_after_decryption(
         &mut self,
@@ -2034,24 +2634,15 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         cc: TpmCc,
         command_code: u32,
     ) -> Result<usize, TpmRc> {
-        // 4. HMAC Verification for all Sessions
-        self.verify_session_hmacs(global_state, cmd, command_code)?;
-        self.check_unauthorized_handles(
-            global_state,
-            cc,
-            &cmd.handles,
-            cmd.handles_len,
-            &cmd.session_to_handle_idx,
-            cmd.session_to_handle_idx_len,
-        )?;
-
-        // 5. Execute Command via a Shadow Buffer
+        // 4. Execute Command via a Shadow Buffer
+        // The shadow request drops the session area, so it is never larger than the original
+        // command (bounded by `MAX_COMMAND_SIZE`).
         let shadow_request_size =
             CommandHeader::MAX_SIZE + (cmd.handles_len * 4) + cmd.parameters.len();
-        if shadow_request_size > 2048 {
+        if shadow_request_size > MAX_COMMAND_SIZE {
             return Err(TpmRc::SIZE.to_rc());
         }
-        let mut shadow_request = [0u8; 2048];
+        let mut shadow_request = [0u8; MAX_COMMAND_SIZE];
         let shadow_header = CommandHeader {
             tag: TpmiStCommandTag::NoSessions,
             size: shadow_request_size as u32,
@@ -2164,16 +2755,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 )
             }
         } else {
-            if shadow_res.is_err() {
-                for auth in &cmd.auth_sessions[..cmd.auth_sessions_len] {
-                    let session_handle = auth.session_handle.0;
-                    if let Some(session_state) = global_state.session_mut(session_handle)
-                        && session_state.session_type == tpm2::TpmSe::Policy
-                    {
-                        session_state.policy_digest[..session_state.policy_digest_len].fill(0);
-                    }
-                }
-            }
+            // On command failure the C reference skips `BuildResponseSession`, so session state
+            // (including policy session digests) is left untouched.
             shadow_res
         }
     }
@@ -2213,7 +2796,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         // 2. Parse Auth Sessions Area
         let auth_size_offset = 10 + handle_bytes_read;
         if request_size < auth_size_offset + 4 {
-            return Err(TpmRc::SIZE.to_rc());
+            return Err(TpmRc::INSUFFICIENT.to_rc());
         }
         let auth_size = u32::from_be_bytes([
             cmd_buf[auth_size_offset],
@@ -2221,20 +2804,15 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             cmd_buf[auth_size_offset + 2],
             cmd_buf[auth_size_offset + 3],
         ]) as usize;
-        if request_size < auth_size_offset + 4 + auth_size {
+        // Sanity check from the C reference `ExecuteCommand()`: the authorization area must be
+        // able to hold at least one minimal session (9 bytes) and must fit in the command.
+        if auth_size < 9 || request_size - (auth_size_offset + 4) < auth_size {
             return Err(TpmRc::SIZE.to_rc());
         }
-        if auth_size > 512 {
-            return Err(TpmRc::SIZE.to_rc());
-        }
-
-        let mut auth_area_bytes = [0u8; 512];
-        auth_area_bytes[..auth_size]
-            .copy_from_slice(&cmd_buf[auth_size_offset + 4..auth_size_offset + 4 + auth_size]);
 
         let mut auth_sessions = [OwnedAuthCommand::default(); 3];
         let mut auth_sessions_len = 0;
-        let mut unmarsh = &auth_area_bytes[..auth_size];
+        let mut unmarsh = &cmd_buf[auth_size_offset + 4..auth_size_offset + 4 + auth_size];
         while !unmarsh.is_empty() {
             if auth_sessions_len >= 3 {
                 return Err(TpmRc::SIZE.with(Position::session(4)));
@@ -2247,38 +2825,21 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             auth_sessions_len += 1;
         }
 
-        // Map sessions to authorizing handles
+        // Map sessions to authorizing handles (C `ParseSessionBuffer()`): the handles that need
+        // authorization always come first, and session `i` authorizes the `i`-th of them
+        // (`TPM_RH_NULL` included). A handle left without a session is reported as
+        // TPM_RC_AUTH_MISSING by `check_unauthorized_handles`.
         let mut session_to_handle_idx = [0usize; 3];
         let mut session_to_handle_idx_len = 0;
-        let mut session_idx = 0;
-        for (h_idx, &h) in handles.iter().enumerate().take(handles_len) {
-            if handle_requires_auth(TpmCc::new(command_code), h_idx) {
-                let is_optional = h == Handle::RH_NULL.0;
-                let should_map = if is_optional {
-                    let remaining_strict = remaining_strict_auth_handles(
-                        command_code,
-                        &handles[..handles_len],
-                        h_idx + 1,
-                        handles_len,
-                    );
-                    let available = auth_sessions_len - session_idx;
-                    if available > remaining_strict {
-                        session_idx += 1;
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    session_idx += 1;
-                    true
-                };
-                if should_map {
-                    if session_to_handle_idx_len >= 3 {
-                        return Err(TpmRc::SIZE.to_rc());
-                    }
-                    session_to_handle_idx[session_to_handle_idx_len] = h_idx;
-                    session_to_handle_idx_len += 1;
+        for h_idx in 0..handles_len {
+            if handle_requires_auth(TpmCc::new(command_code), h_idx)
+                && session_to_handle_idx_len < auth_sessions_len
+            {
+                if session_to_handle_idx_len >= session_to_handle_idx.len() {
+                    return Err(TpmRc::SIZE.to_rc());
                 }
+                session_to_handle_idx[session_to_handle_idx_len] = h_idx;
+                session_to_handle_idx_len += 1;
             }
         }
 
@@ -2331,12 +2892,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             let attrs = auth.session_attributes;
 
             if syntax_only {
-                // Self-authorization check: reject if session being used to authorize
-                // is itself one of the command handles.
-                if cmd.handles[..cmd.handles_len].contains(&session_handle) {
-                    return Err(TpmRc::HANDLE.with(pos));
-                }
-
                 // 2.1 Password Session (PWAP) Validation
                 if session_handle == Handle::RS_PW.0 {
                     if attrs.intersects(
@@ -2348,7 +2903,21 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     ) {
                         return Err(TpmRc::ATTRIBUTES.with(pos));
                     }
+                    // The nonce of a password session must be empty (C `RetrieveSessionData`).
+                    if auth.nonce.get_size() != 0 {
+                        return Err(TpmRc::NONCE.with(pos));
+                    }
                     continue;
+                }
+
+                // A session handle may appear only once in the session area (C
+                // `RetrieveSessionData`). A session that is also named in the handle area is
+                // allowed (e.g. `TPM2_PolicyGetDigest` with the same session encrypting).
+                if cmd.auth_sessions[..i]
+                    .iter()
+                    .any(|prev| prev.session_handle.0 == session_handle)
+                {
+                    return Err(TpmRc::HANDLE.with(pos));
                 }
 
                 // 2.2 Attribute Dependency Check
@@ -2396,9 +2965,23 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 encrypt_session_idx = Some(i);
             }
 
-            let session_state = global_state
-                .session(session_handle)
-                .ok_or(TpmRc::HANDLE.with(pos))?;
+            // An unloaded session slot is `TPM_RC_REFERENCE_S0 + i`; a loaded slot referenced
+            // with the wrong session handle type is `TPM_RC_HANDLE` (C `RetrieveSessionData`).
+            let Some(slot) = global_state.session_by_slot(session_handle) else {
+                return Err(reference_s(i));
+            };
+            if slot.session_handle != session_handle {
+                return Err(TpmRc::HANDLE.with(pos));
+            }
+            let session_state = slot;
+
+            // A decrypt or encrypt session needs a symmetric algorithm (C `RetrieveSessionData`,
+            // which runs for every session before any authorization check).
+            if attrs.intersects(TpmaSession::DECRYPT | TpmaSession::ENCRYPT)
+                && session_state.symmetric.is_none()
+            {
+                return Err(TpmRc::SYMMETRIC.with(pos));
+            }
 
             // 2.4 Policy Session Auditing Restriction
             if attrs.contains(TpmaSession::AUDIT) && session_state.session_type != tpm2::TpmSe::HMAC
@@ -2515,17 +3098,19 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 }
             };
 
+            // Same checks and response codes as the C reference `CryptParameterDecryption()`,
+            // with the decrypt session's position added (`RcSafeAddToResult`): the size field
+            // must be present (`TPM_RC_INSUFFICIENT`), and the ciphertext must fit in the
+            // remaining buffer, which itself must not be empty (`TPM_RC_SIZE`).
             let param_len = cmd.parameters.len();
-            if param_len > 0 {
-                if param_len < 2 {
-                    return Err(TpmRc::SIZE.to_rc());
-                }
-                let param_size =
-                    u16::from_be_bytes([cmd.parameters[0], cmd.parameters[1]]) as usize;
-                if param_len < 2 + param_size {
-                    return Err(TpmRc::SIZE.to_rc());
-                }
-
+            if param_len < 2 {
+                return Err(TpmRc::INSUFFICIENT.with(pos));
+            }
+            let param_size = u16::from_be_bytes([cmd.parameters[0], cmd.parameters[1]]) as usize;
+            if param_len == 2 || param_len < 2 + param_size {
+                return Err(TpmRc::SIZE.with(pos));
+            }
+            {
                 let entity_auth = if idx < cmd.session_to_handle_idx_len {
                     let h_idx = cmd.session_to_handle_idx[idx];
                     self.handle_auth(global_state, cmd.handles[h_idx])
@@ -2586,6 +3171,294 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         Ok(cmd)
     }
 
+    /// Reads the public area of NV Index `handle` together with the storage offset of its data.
+    ///
+    /// Returns `None` if the index is not defined or its header cannot be parsed.
+    fn read_nv_index_public(&mut self, handle: u32) -> Option<(u16, crate::owned::OwnedNvPublic)> {
+        let storage_mgr = StorageManager::new(&mut *self.platform.storage);
+        let metadata = storage_mgr.get_metadata(handle).ok()?;
+        let read_len = core::cmp::min(metadata.data_size as usize, 1536);
+        let mut read_buf = [0u8; 1536];
+        storage_mgr
+            .read_item(handle, 0, &mut read_buf[..read_len])
+            .ok()?;
+        let (metadata_size, nv_public, _, _) =
+            crate::handler::nv_storage::unmarshal_nv_header(&read_buf[..read_len]).ok()?;
+        Some((u16::try_from(metadata_size).ok()?, nv_public))
+    }
+
+    /// Returns the object (transient or persistent) referenced by `handle`, if any.
+    ///
+    /// Sequence objects are not returned.
+    fn authorized_object(
+        &mut self,
+        global_state: &GlobalState,
+        handle: u32,
+    ) -> Option<crate::handler::TransientObject> {
+        if (0x80000000..=0x80FFFFFF).contains(&handle) {
+            global_state.find_transient_object(handle).cloned()
+        } else if (0x81000000..=0x81FFFFFF).contains(&handle) {
+            self.load_persistent_object(global_state, handle).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Returns whether authorizing `handle` (handle `handle_index` of command `cc`) requires a
+    /// policy session (C `IsPolicySessionRequired()`):
+    /// - the DUP role always requires a policy session;
+    /// - the ADMIN role requires one unless the entity is an object with `adminWithPolicy` clear;
+    /// - a PCR in the policy group requires one once `TPM2_PCR_SetAuthPolicy` set a policy
+    ///   algorithm for it.
+    fn is_policy_session_required(
+        &mut self,
+        global_state: &GlobalState,
+        cc: TpmCc,
+        handle_index: usize,
+        handle: u32,
+    ) -> bool {
+        match command_auth_role(cc, handle_index) {
+            AuthRole::Dup => true,
+            AuthRole::Admin => {
+                if global_state.find_active_sequence(handle).is_some() {
+                    // A sequence object is a transient object whose adminWithPolicy is CLEAR.
+                    false
+                } else if (0x80000000..=0x81FFFFFF).contains(&handle) {
+                    self.authorized_object(global_state, handle)
+                        .is_none_or(|obj| {
+                            obj.public
+                                .object_attributes
+                                .contains(tpm2::TpmaObject::ADMIN_WITH_POLICY)
+                        })
+                } else {
+                    true
+                }
+            }
+            AuthRole::User | AuthRole::None => {
+                (20..=22).contains(&handle) && global_state.pcr_policy_alg.is_some()
+            }
+        }
+    }
+
+    /// Returns whether the authValue of `handle` may be used to authorize handle `handle_index`
+    /// of command `cc` with a password or HMAC session (C `IsAuthValueAvailable()`):
+    /// - permanent handles: only the hierarchies, `TPM_RH_LOCKOUT` and `TPM_RH_NULL`;
+    /// - sequence objects: always;
+    /// - other objects: only if the sensitive area is loaded (not public-only) and either
+    ///   `userWithAuth` is SET or the ADMIN role is required and `adminWithPolicy` is CLEAR;
+    /// - NV Indices: `TPMA_NV_AUTHWRITE` for write operations; for read operations PIN indices
+    ///   need `TPMA_NV_WRITTEN` and `pinCount < pinLimit`, other indices `TPMA_NV_AUTHREAD`;
+    /// - PCRs: always.
+    fn is_auth_value_available(
+        &mut self,
+        global_state: &GlobalState,
+        cc: TpmCc,
+        handle_index: usize,
+        handle: u32,
+    ) -> bool {
+        match Handle(handle).handle_type() {
+            Some(TpmHt::Permanent) => matches!(
+                Handle(handle),
+                Handle::RH_OWNER
+                    | Handle::RH_ENDORSEMENT
+                    | Handle::RH_PLATFORM
+                    | Handle::RH_LOCKOUT
+                    | Handle::RH_NULL
+                    | Handle::RH_AUTH_00
+            ),
+            Some(TpmHt::Transient) | Some(TpmHt::Persistent) => {
+                if global_state.find_active_sequence(handle).is_some() {
+                    return true;
+                }
+                let Some(obj) = self.authorized_object(global_state, handle) else {
+                    return false;
+                };
+                let attrs = obj.public.object_attributes;
+                !obj.public_only
+                    && (attrs.contains(tpm2::TpmaObject::USER_WITH_AUTH)
+                        || (command_auth_role(cc, handle_index) == AuthRole::Admin
+                            && !attrs.contains(tpm2::TpmaObject::ADMIN_WITH_POLICY)))
+            }
+            Some(TpmHt::NVIndex) => {
+                let Some((data_offset, nv_public)) = self.read_nv_index_public(handle) else {
+                    return false;
+                };
+                let attrs = nv_public.attributes;
+                if is_nv_write_operation(cc) {
+                    attrs.contains(tpm2::TpmaNv::AUTHWRITE)
+                } else if matches!(
+                    attrs.get_index_type(),
+                    Ok(tpm2::TpmNt::PinFail) | Ok(tpm2::TpmNt::PinPass)
+                ) {
+                    attrs.contains(tpm2::TpmaNv::WRITTEN)
+                        && self
+                            .read_nv_pin(handle, data_offset)
+                            .is_some_and(|(count, limit)| count < limit)
+                } else {
+                    attrs.contains(tpm2::TpmaNv::AUTHREAD)
+                }
+            }
+            Some(TpmHt::PCR) => true,
+            _ => false,
+        }
+    }
+
+    /// Returns whether the entity-specific conditions of C `IsAuthPolicyAvailable()` that are
+    /// not covered by `check_policy_auth_session` hold for `handle`:
+    /// - objects whose sensitive area is not loaded (public-only) never have a policy available;
+    /// - an NV Index with a non-empty `authPolicy` may only be authorized by policy if a policy
+    ///   session is required anyway, or if `TPMA_NV_POLICYWRITE` (write operations) /
+    ///   `TPMA_NV_POLICYREAD` (read operations) is SET.
+    fn is_entity_auth_policy_allowed(
+        &mut self,
+        global_state: &GlobalState,
+        cc: TpmCc,
+        handle_index: usize,
+        handle: u32,
+    ) -> bool {
+        match Handle(handle).handle_type() {
+            Some(TpmHt::Transient) | Some(TpmHt::Persistent) => self
+                .authorized_object(global_state, handle)
+                .is_none_or(|obj| !obj.public_only),
+            Some(TpmHt::NVIndex) => {
+                let Some((_, nv_public)) = self.read_nv_index_public(handle) else {
+                    return false;
+                };
+                // An empty authPolicy is reported by `check_policy_auth_session`.
+                if nv_public.auth_policy.get_size() == 0
+                    || self.is_policy_session_required(global_state, cc, handle_index, handle)
+                {
+                    return true;
+                }
+                nv_public.attributes.contains(if is_nv_write_operation(cc) {
+                    tpm2::TpmaNv::POLICYWRITE
+                } else {
+                    tpm2::TpmaNv::POLICYREAD
+                })
+            }
+            _ => true,
+        }
+    }
+
+    /// Reads `(pinCount, pinLimit)` (`TPMS_NV_PIN_COUNTER_PARAMETERS`) from the data of a PIN
+    /// Index stored at `data_offset`.
+    fn read_nv_pin(&mut self, handle: u32, data_offset: u16) -> Option<(u32, u32)> {
+        let mut pin = [0u8; 8];
+        StorageManager::new(&mut *self.platform.storage)
+            .read_item(handle, data_offset, &mut pin)
+            .ok()?;
+        Some((
+            u32::from_be_bytes([pin[0], pin[1], pin[2], pin[3]]),
+            u32::from_be_bytes([pin[4], pin[5], pin[6], pin[7]]),
+        ))
+    }
+
+    /// Updates the `pinCount` of a written PIN Index whose authValue was used for an
+    /// authorization (the PIN processing at the end of C `CheckAuthSession()`):
+    /// - `TPM_NT_PIN_FAIL`: incremented on failure, reset to 0 on success;
+    /// - `TPM_NT_PIN_PASS`: incremented on success.
+    ///
+    /// Does nothing for any other entity.
+    fn update_nv_pin_count(&mut self, global_state: &mut GlobalState, handle: u32, success: bool) {
+        if Handle(handle).handle_type() != Some(TpmHt::NVIndex) {
+            return;
+        }
+        let Some((data_offset, nv_public)) = self.read_nv_index_public(handle) else {
+            return;
+        };
+        let attrs = nv_public.attributes;
+        if !attrs.contains(tpm2::TpmaNv::WRITTEN) {
+            return;
+        }
+        let Some((count, limit)) = self.read_nv_pin(handle, data_offset) else {
+            return;
+        };
+        let new_count = match attrs.get_index_type() {
+            Ok(tpm2::TpmNt::PinFail) if success => 0,
+            Ok(tpm2::TpmNt::PinFail) => count.wrapping_add(1),
+            Ok(tpm2::TpmNt::PinPass) if success => count.wrapping_add(1),
+            _ => return,
+        };
+        let mut pin = [0u8; 8];
+        pin[..4].copy_from_slice(&new_count.to_be_bytes());
+        pin[4..].copy_from_slice(&limit.to_be_bytes());
+        let mut storage_mgr = StorageManager::new(&mut *self.platform.storage);
+        if storage_mgr.write_item(handle, data_offset, &pin).is_ok() {
+            global_state.update_nv |= if attrs.contains(tpm2::TpmaNv::ORDERLY) {
+                UT_ORDERLY
+            } else {
+                UT_NV
+            };
+        }
+    }
+
+    /// Fails if the TPM is in DA lockout for the authValue about to be used (C
+    /// `CheckLockedOut()`; `lockout_auth` selects the `lockoutAuth` check), and records that DA
+    /// protection was used in this power cycle (`SU_DA_USED_VALUE`).
+    fn check_da_lockout(
+        &mut self,
+        global_state: &mut GlobalState,
+        lockout_auth: bool,
+    ) -> Result<(), TpmRc> {
+        self.check_locked_out(global_state, lockout_auth)?;
+        if !global_state.da_used {
+            global_state.da_used = true;
+            if global_state.nv_available {
+                global_state.orderly_state = 0xFFFE;
+                let _ = self
+                    .platform
+                    .storage
+                    .write_nv(4, &global_state.orderly_state.to_be_bytes());
+            } else {
+                global_state.clear_orderly = true;
+            }
+        }
+        Ok(())
+    }
+
+    /// Registers a DA authorization failure (the side effects of C `IncrementLockout()` when DA
+    /// applies): disables `lockoutAuth` if `lockout_auth`, otherwise increments `failedTries`
+    /// (unless DA is disabled with `recoveryTime == 0`), and restarts the matching self-healing
+    /// timer.
+    fn register_da_failure(&mut self, global_state: &mut GlobalState, lockout_auth: bool) {
+        if lockout_auth {
+            global_state.lockout_auth_enabled = false;
+            global_state.lockout_timer = global_state.tpm_time_ms as i64;
+            // With lockoutRecovery == 0, lockoutAuth is re-enabled at the next startup anyway,
+            // so NV is not updated (C `IncrementLockout()`).
+            if global_state.lockout_recovery != 0 {
+                if global_state.nv_available {
+                    self.save_hierarchy_auths(global_state);
+                } else {
+                    global_state.da_pending_on_nv = true;
+                }
+            }
+        } else {
+            if global_state.recovery_time != 0 {
+                global_state.failed_tries = global_state.failed_tries.saturating_add(1);
+                if global_state.nv_available {
+                    let _ = self
+                        .platform
+                        .storage
+                        .write_nv(32, &global_state.failed_tries.to_be_bytes());
+                } else {
+                    global_state.da_pending_on_nv = true;
+                }
+            }
+            global_state.self_heal_timer = global_state.tpm_time_ms as i64;
+        }
+        global_state.da_used = true;
+        if global_state.nv_available {
+            global_state.orderly_state = 0xFFFE;
+            let _ = self
+                .platform
+                .storage
+                .write_nv(4, &global_state.orderly_state.to_be_bytes());
+        } else {
+            global_state.clear_orderly = true;
+        }
+    }
+
     /// Helper to verify HMACs of authorization sessions.
     fn verify_session_hmacs(
         &mut self,
@@ -2627,61 +3500,38 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             let pos = Position::session((i + 1) as u8);
 
             if session_handle == 0x40000009 {
+                // A password session must authorize a handle (C `ParseSessionBuffer`).
                 if i >= cmd.session_to_handle_idx_len {
-                    return Err(TpmRc::SIZE.to_rc());
+                    return Err(TpmRc::HANDLE.with(pos));
                 }
                 let h_idx = cmd.session_to_handle_idx[i];
                 let handle = cmd.handles[h_idx];
-                let is_admin = is_admin_role_auth(TpmCc::new(command_code), h_idx);
+                let cc = TpmCc::new(command_code);
+                let lockout_auth = handle == Handle::RH_LOCKOUT.0;
+                let da_protected = self.has_da_protection(global_state, handle);
 
-                let user_with_auth = if (0x80000000..=0x80FFFFFF).contains(&handle) {
-                    global_state
-                        .find_transient_object(handle)
-                        .map(|obj| check_auth_type_allowed(obj.public.object_attributes, is_admin))
-                        .unwrap_or(true)
-                } else if (0x81000000..=0x81FFFFFF).contains(&handle) {
-                    self.load_persistent_object(&*global_state, handle)
-                        .map(|obj| check_auth_type_allowed(obj.public.object_attributes, is_admin))
-                        .unwrap_or(true)
-                } else {
-                    true
-                };
-
-                if !user_with_auth {
+                // C `CheckAuthSession()`: a password session always uses the authValue, so DA
+                // lockout is checked first, then whether the authValue may be used at all.
+                if da_protected {
+                    self.check_da_lockout(global_state, lockout_auth)?;
+                }
+                if self.is_policy_session_required(global_state, cc, h_idx, handle) {
                     return Err(TpmRc::AUTH_TYPE);
                 }
-
-                if self.has_da_protection(global_state, handle) {
-                    self.check_locked_out(global_state, handle == 0x4000000A)?;
-                    if !global_state.da_used {
-                        global_state.da_used = true;
-                        if global_state.nv_available {
-                            global_state.orderly_state = 0xFFFE;
-                            let _ = self
-                                .platform
-                                .storage
-                                .write_nv(4, &global_state.orderly_state.to_be_bytes());
-                        } else {
-                            global_state.clear_orderly = true;
-                        }
-                    }
+                if !self.is_auth_value_available(global_state, cc, h_idx, handle) {
+                    return Err(TpmRc::AUTH_UNAVAILABLE);
                 }
 
+                // C `CheckPWAuthSession()`: both values have their trailing zeros removed and
+                // must then be identical (same length and contents).
                 let expected_auth = self.handle_auth(global_state, handle);
-                let provided_hmac = auth.hmac.get_buffer();
-                let provided_stripped = crate::util::strip_trailing_zeros(provided_hmac);
+                let provided_stripped = crate::util::strip_trailing_zeros(auth.hmac.get_buffer());
                 let expected_stripped =
                     crate::util::strip_trailing_zeros(expected_auth.get_buffer());
-                let matches_exact =
+                let auth_matches =
                     crate::util::constant_time_eq(expected_stripped, provided_stripped);
-                let matches_trimmed = !matches_exact
-                    && !provided_stripped.is_empty()
-                    && expected_stripped.len() > provided_stripped.len()
-                    && crate::util::constant_time_eq(
-                        &expected_stripped[..provided_stripped.len()],
-                        provided_stripped,
-                    );
-                if !matches_exact && !matches_trimmed {
+                self.update_nv_pin_count(global_state, handle, auth_matches);
+                if !auth_matches {
                     let elen = expected_stripped.len().min(64);
                     global_state.debug_expected_auth[..elen]
                         .copy_from_slice(&expected_stripped[..elen]);
@@ -2690,46 +3540,43 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     global_state.debug_provided_auth[..plen]
                         .copy_from_slice(&provided_stripped[..plen]);
                     global_state.debug_provided_auth_len = plen;
-                    if self.has_da_protection(global_state, handle) {
-                        if handle == 0x4000000A {
-                            global_state.lockout_auth_enabled = false;
-                            global_state.lockout_timer = global_state.tpm_time_ms as i64;
-                            if !global_state.nv_available {
-                                global_state.da_pending_on_nv = true;
-                            }
-                        } else {
-                            if global_state.recovery_time != 0 {
-                                global_state.failed_tries =
-                                    global_state.failed_tries.saturating_add(1);
-                                if global_state.nv_available {
-                                    let _ = self
-                                        .platform
-                                        .storage
-                                        .write_nv(32, &global_state.failed_tries.to_be_bytes());
-                                } else {
-                                    global_state.da_pending_on_nv = true;
-                                }
-                            }
-                            global_state.self_heal_timer = global_state.tpm_time_ms as i64;
-                        }
-                        global_state.da_used = true;
-                        if global_state.nv_available {
-                            global_state.orderly_state = 0xFFFE;
-                            let _ = self
-                                .platform
-                                .storage
-                                .write_nv(4, &global_state.orderly_state.to_be_bytes());
-                        } else {
-                            global_state.clear_orderly = true;
-                        }
+                    // C `IncrementLockout()`: no DA side effects for a DA-exempt entity.
+                    if da_protected {
+                        self.register_da_failure(global_state, lockout_auth);
                         return Err(TpmRc::AUTH_FAIL.with(pos));
-                    } else {
-                        return Err(TpmRc::BAD_AUTH.with(pos));
                     }
+                    return Err(TpmRc::BAD_AUTH.with(pos));
                 }
             } else {
                 if !(0x02000000..=0x03FFFFFF).contains(&session_handle) {
                     return Err(TpmRc::VALUE.with(pos));
+                }
+
+                // Consistency checks from the C reference `ParseSessionBuffer`: a trial policy
+                // session cannot appear in the session area at all, and a session that does not
+                // authorize a handle must be an audit, encrypt or decrypt session.
+                let session_type = global_state
+                    .session(session_handle)
+                    .ok_or(TpmRc::HANDLE.with(pos))?
+                    .session_type;
+                if session_type == TpmSe::Trial {
+                    return Err(TpmRc::ATTRIBUTES.with(pos));
+                }
+                // A session bound to a DA-protected entity (C `isDaBound`) is subject to DA
+                // lockout however it is used, even if it authorizes nothing or a DA-exempt
+                // entity (C `ParseSessionBuffer()`).
+                let (is_da_bound, is_lockout_bound) = global_state
+                    .session(session_handle)
+                    .map_or((false, false), |s| (s.is_da_bound, s.is_lockout_bound));
+                if is_da_bound {
+                    self.check_da_lockout(global_state, is_lockout_bound)?;
+                }
+                if i >= cmd.session_to_handle_idx_len
+                    && !auth.session_attributes.intersects(
+                        TpmaSession::AUDIT | TpmaSession::ENCRYPT | TpmaSession::DECRYPT,
+                    )
+                {
+                    return Err(TpmRc::ATTRIBUTES.with(pos));
                 }
 
                 let entity_auth = if i < cmd.session_to_handle_idx_len {
@@ -2776,57 +3623,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     None
                 };
 
-                if let Some(h) = entity_handle
-                    && self.has_da_protection(global_state, h)
-                {
-                    self.check_locked_out(global_state, h == 0x4000000A)?;
-                    if !global_state.da_used {
-                        global_state.da_used = true;
-                        if global_state.nv_available {
-                            global_state.orderly_state = 0xFFFE;
-                            let _ = self
-                                .platform
-                                .storage
-                                .write_nv(4, &global_state.orderly_state.to_be_bytes());
-                        } else {
-                            global_state.clear_orderly = true;
-                        }
-                    }
-                }
-
                 // Retrieve attributes first to avoid borrow-check conflicts
                 let h_idx = if i < cmd.session_to_handle_idx_len {
                     cmd.session_to_handle_idx[i]
                 } else {
                     9999
                 };
-                let is_admin = is_admin_role_auth(TpmCc::new(command_code), h_idx);
-
-                let user_with_auth = if let Some(handle) = entity_handle {
-                    if (0x80000000..=0x80FFFFFF).contains(&handle) {
-                        global_state
-                            .find_transient_object(handle)
-                            .map(|obj| {
-                                check_auth_type_allowed(obj.public.object_attributes, is_admin)
-                            })
-                            .unwrap_or(true)
-                    } else if (0x81000000..=0x81FFFFFF).contains(&handle) {
-                        self.load_persistent_object(&*global_state, handle)
-                            .map(|obj| {
-                                check_auth_type_allowed(obj.public.object_attributes, is_admin)
-                            })
-                            .unwrap_or(true)
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                };
-
-                let mut handle_policy = None;
-                if let Some(h) = entity_handle {
-                    handle_policy = Some(self.handle_policy(&*global_state, h)?);
-                }
+                let cc = TpmCc::new(command_code);
 
                 let mut session_key_buf = [0u8; 128];
                 let mut hmac_key = [0u8; 256];
@@ -2840,108 +3643,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     is_auth_value_needed,
                     is_password_needed,
                 ) = {
-                    let current_time = global_state.tpm_time_ms;
-                    let is_expired = {
-                        let session_state = global_state
-                            .session(session_handle)
-                            .ok_or(TpmRc::HANDLE.with(pos))?;
-                        session_state.epoch != global_state.time_epoch
-                            || (session_state.timeout != 0 && session_state.timeout < current_time)
-                    };
-
-                    if is_expired {
-                        let _ = global_state.flush_session(session_handle);
-                        return Err(TpmRc::EXPIRED.with(pos));
-                    }
-
-                    let curr_locality = global_state.locality;
-                    let curr_pcr_update_counter = global_state.pcrs.update_counter;
-                    let pcr_policy_alg = global_state.pcr_policy_alg;
                     let session_state = global_state
-                        .session_mut(session_handle)
+                        .session(session_handle)
                         .ok_or(TpmRc::HANDLE.with(pos))?;
-
-                    if session_state.session_type == TpmSe::Trial {
-                        return Err(TpmRc::AUTH_TYPE);
-                    }
-                    if session_state.command_code != 0 && session_state.command_code != command_code
-                    {
-                        return Err(TpmRc::POLICY_FAIL.with(pos));
-                    }
-
-                    let is_policy = session_state.session_type == TpmSe::Policy;
-                    if !is_policy && !user_with_auth {
-                        return Err(TpmRc::AUTH_TYPE);
-                    }
-
-                    if is_policy {
-                        if let Some(pcr_counter) = session_state.pcr_counter
-                            && pcr_counter != curr_pcr_update_counter
-                        {
-                            return Err(TpmRc::PCR_CHANGED);
-                        }
-                        if session_state.command_locality != 0 {
-                            if session_state.command_locality > 31 {
-                                if curr_locality != session_state.command_locality {
-                                    return Err(TpmRc::LOCALITY);
-                                }
-                            } else if curr_locality > 4
-                                || (session_state.command_locality & (1 << curr_locality)) == 0
-                            {
-                                return Err(TpmRc::LOCALITY);
-                            }
-                        }
-                        if session_state.check_nv_written {
-                            let is_nv_index = if let Some(h) = entity_handle {
-                                Handle(h).handle_type() == Some(TpmHt::NVIndex)
-                            } else {
-                                false
-                            };
-                            if !is_nv_index {
-                                return Err(TpmRc::POLICY_FAIL.to_rc());
-                            }
-                            let h = entity_handle.unwrap();
-                            let storage_mgr = StorageManager::new(&mut *self.platform.storage);
-                            let metadata = storage_mgr
-                                .get_metadata(h)
-                                .map_err(|_| TpmRc::POLICY_FAIL.to_rc())?;
-                            let read_len = core::cmp::min(metadata.data_size as usize, 1536);
-                            let mut read_buf = [0u8; 1536];
-                            storage_mgr
-                                .read_item(h, 0, &mut read_buf[..read_len])
-                                .map_err(|_| TpmRc::POLICY_FAIL.to_rc())?;
-                            let (_, nv_public, _, _) =
-                                crate::handler::nv_storage::unmarshal_nv_header(
-                                    &read_buf[..read_len],
-                                )
-                                .map_err(|_| TpmRc::POLICY_FAIL.to_rc())?;
-                            if nv_public.attributes.contains(tpm2::TpmaNv::WRITTEN)
-                                != session_state.nv_written_state
-                            {
-                                return Err(TpmRc::POLICY_FAIL.to_rc());
-                            }
-                        }
-                        if let Some(ref policy) = handle_policy {
-                            if policy.get_size() == 0 {
-                                return Err(TpmRc::AUTH_UNAVAILABLE);
-                            }
-                            if let Some(h) = entity_handle
-                                && (20..=22).contains(&h)
-                                && pcr_policy_alg != Some(session_state.auth_hash)
-                            {
-                                return Err(TpmRc::POLICY_FAIL.with(pos));
-                            }
-                            if policy.get_size() as usize != session_state.policy_digest_len
-                                || policy.get_buffer()
-                                    != &session_state.policy_digest
-                                        [..session_state.policy_digest_len]
-                            {
-                                return Err(TpmRc::POLICY_FAIL.with(pos));
-                            }
-                        }
-                    }
-
-                    let auth_hash = session_state.auth_hash;
                     let session_key_len = session_state.session_key_len;
 
                     // Copy session key out
@@ -2949,44 +3653,70 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         .copy_from_slice(&session_state.session_key[..session_key_len]);
 
                     (
-                        auth_hash,
+                        session_state.auth_hash,
                         session_state.nonce_tpm,
                         session_key_len,
                         session_state.bind_entity,
                         session_state.bound_entity,
-                        is_policy,
+                        session_state.session_type == TpmSe::Policy,
                         session_state.is_auth_value_needed,
                         session_state.is_password_needed,
                     )
                 };
 
-                let mut is_bound = false;
-                if bind_entity != Handle::RH_NULL && i < cmd.session_to_handle_idx_len {
-                    let h_idx = cmd.session_to_handle_idx[i];
-                    let h = cmd.handles[h_idx];
-                    if bind_entity == Handle(h) {
-                        let entity_auth_stripped =
-                            crate::util::strip_trailing_zeros(entity_auth.get_buffer());
+                // C `IsSessionBindEntity()`: a bound HMAC session is bound to the authorized
+                // entity if the bind value recomputed for that entity (whatever handle it is
+                // referenced by) equals the one recorded by `TPM2_StartAuthSession`.
+                let entity_auth_stripped =
+                    crate::util::strip_trailing_zeros(entity_auth.get_buffer());
+                let is_bound = match entity_handle {
+                    Some(h) if bind_entity != Handle::RH_NULL => {
                         let name = self.handle_name(global_state, h);
-                        let name_bytes = name.get_buffer();
-                        let mut name_buf = [0u8; 64];
-                        name_buf[..name_bytes.len()].copy_from_slice(name_bytes);
-                        for (p_auth, j) in ((64 - entity_auth_stripped.len())..64).enumerate() {
-                            name_buf[j] ^= entity_auth_stripped[p_auth];
+                        crate::handler::session::compute_bound_entity(
+                            name.get_buffer(),
+                            entity_auth_stripped,
+                        )
+                        .is_ok_and(|bind_value| bind_value == bound_entity)
+                    }
+                    _ => false,
+                };
+
+                // C `CheckAuthSession()` (`includeAuth`, which is also `authUsed`): a policy
+                // session uses the authValue only after `TPM2_PolicyAuthValue` or
+                // `TPM2_PolicyPassword`, an HMAC session unless it is bound to the entity. A
+                // session that authorizes no handle never uses an authValue
+                // (`ParseSessionBuffer()`).
+                let include_auth = entity_handle.is_some()
+                    && if is_policy {
+                        is_auth_value_needed || is_password_needed
+                    } else {
+                        !is_bound
+                    };
+                if let Some(s) = global_state.session_mut(session_handle) {
+                    s.include_auth = include_auth;
+                }
+
+                let mut da_protected = false;
+                if let Some(h) = entity_handle {
+                    da_protected = self.has_da_protection(global_state, h);
+                    // DA lockout only matters if the authValue is going to be used.
+                    if include_auth && da_protected {
+                        self.check_da_lockout(global_state, h == Handle::RH_LOCKOUT.0)?;
+                    }
+                    if is_policy {
+                        if !self.is_entity_auth_policy_allowed(global_state, cc, h_idx, h) {
+                            return Err(TpmRc::AUTH_UNAVAILABLE);
                         }
-                        if let Ok(b_name) = Tpm2bName::from_bytes(&name_buf) {
-                            is_bound = bound_entity == b_name;
+                    } else {
+                        if self.is_policy_session_required(global_state, cc, h_idx, h) {
+                            return Err(TpmRc::AUTH_TYPE);
+                        }
+                        if !self.is_auth_value_available(global_state, cc, h_idx, h) {
+                            return Err(TpmRc::AUTH_UNAVAILABLE);
                         }
                     }
                 }
 
-                let entity_auth_stripped =
-                    crate::util::strip_trailing_zeros(entity_auth.get_buffer());
-                let include_auth = (!is_policy && !is_bound)
-                    || (is_policy && (is_auth_value_needed || is_password_needed));
-                if let Some(s) = global_state.session_mut(session_handle) {
-                    s.include_auth = include_auth;
-                }
                 let hmac_key_len = if include_auth {
                     session_key_len + entity_auth_stripped.len()
                 } else {
@@ -3043,137 +3773,68 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     &mut computed_hmac,
                 )?;
 
-                let provided_stripped = crate::util::strip_trailing_zeros(auth.hmac.get_buffer());
-                let auth_matches = if is_policy && is_password_needed {
+                // Policy session checks (C `IsAuthPolicyAvailable` + `CheckPolicyAuthSession`).
+                // These only apply to a policy session that authorizes a handle, and they run
+                // before the HMAC/password check so that a failing policy never consumes a DA
+                // attempt.
+                if is_policy && let Some(h) = entity_handle {
+                    self.check_policy_auth_session(
+                        global_state,
+                        PolicyAuthCheck {
+                            session_handle,
+                            entity_handle: h,
+                            handle_index: h_idx,
+                            command_code,
+                            parameters: cmd.parameters,
+                            cp_hash: &cp_hash[..cp_hash_len],
+                            handle_names: &auth_handle_names[..auth_handle_names_len],
+                            pos,
+                        },
+                    )?;
+                }
+
+                let auth_matches = if is_policy && is_password_needed && entity_handle.is_some() {
+                    // C `CheckPWAuthSession()` (TPM2_PolicyPassword): plaintext authValue
+                    // comparison with trailing zeros removed.
+                    let provided_stripped =
+                        crate::util::strip_trailing_zeros(auth.hmac.get_buffer());
                     crate::util::constant_time_eq(provided_stripped, entity_auth_stripped)
+                } else if hmac_key_len == 0 && auth.hmac.get_size() == 0 {
+                    // C `ComputeCommandHMAC()`: with an empty HMAC key, an empty authHMAC is
+                    // accepted (for any session type).
+                    true
                 } else {
-                    let computed_stripped =
-                        crate::util::strip_trailing_zeros(&computed_hmac[..computed_hmac_len]);
-                    crate::util::constant_time_eq(provided_stripped, computed_stripped)
-                        || (is_policy && hmac_key_len == 0 && provided_stripped.is_empty())
+                    // C `CheckSessionHMAC()`: the HMAC must match exactly (length and value).
+                    crate::util::constant_time_eq(
+                        auth.hmac.get_buffer(),
+                        &computed_hmac[..computed_hmac_len],
+                    )
                 };
 
+                // PIN Index processing (end of C `CheckAuthSession()`), only when the PIN
+                // Index authValue was used.
+                if include_auth && let Some(h) = entity_handle {
+                    self.update_nv_pin_count(global_state, h, auth_matches);
+                }
+
                 if !auth_matches {
-                    if let Some(h) = entity_handle
-                        && self.has_da_protection(global_state, h)
-                    {
-                        if h == 0x4000000A {
-                            global_state.lockout_auth_enabled = false;
-                            global_state.lockout_timer = global_state.tpm_time_ms as i64;
-                            if !global_state.nv_available {
-                                global_state.da_pending_on_nv = true;
-                            }
-                        } else {
-                            if global_state.recovery_time != 0 {
-                                global_state.failed_tries =
-                                    global_state.failed_tries.saturating_add(1);
-                                if global_state.nv_available {
-                                    let _ = self
-                                        .platform
-                                        .storage
-                                        .write_nv(32, &global_state.failed_tries.to_be_bytes());
-                                } else {
-                                    global_state.da_pending_on_nv = true;
-                                }
-                            }
-                            global_state.self_heal_timer = global_state.tpm_time_ms as i64;
-                        }
-                        global_state.da_used = true;
-                        if global_state.nv_available {
-                            global_state.orderly_state = 0xFFFE;
-                            let _ = self
-                                .platform
-                                .storage
-                                .write_nv(4, &global_state.orderly_state.to_be_bytes());
-                        } else {
-                            global_state.clear_orderly = true;
-                        }
-                    }
-                    if auth.session_attributes.contains(tpm2::TpmaSession::AUDIT) {
-                        return Err(TpmRc::BAD_AUTH.with(pos));
-                    } else {
+                    // C `IncrementLockout()`: the failure counts against DA if the session is
+                    // bound to a DA-protected entity (against lockoutAuth if bound to
+                    // TPM_RH_LOCKOUT), or if the authValue of a DA-protected entity was used;
+                    // otherwise it is reported as TPM_RC_BAD_AUTH without side effects.
+                    if is_da_bound || (include_auth && da_protected) {
+                        let lockout_auth =
+                            is_lockout_bound || entity_handle == Some(Handle::RH_LOCKOUT.0);
+                        self.register_da_failure(global_state, lockout_auth);
                         return Err(TpmRc::AUTH_FAIL.with(pos));
                     }
+                    return Err(TpmRc::BAD_AUTH.with(pos));
                 }
 
                 let session_state = global_state
                     .session_mut(session_handle)
                     .ok_or(TpmRc::AUTH_FAIL.with(pos))?;
                 session_state.nonce_caller = auth.nonce;
-
-                if session_state.policy_hash_len > 0 {
-                    if session_state.is_cp_hash_defined
-                        && (session_state.policy_hash_len != cp_hash_len
-                            || session_state.policy_hash[..cp_hash_len] != cp_hash[..cp_hash_len])
-                    {
-                        return Err(TpmRc::POLICY_FAIL.with(pos));
-                    }
-                    if session_state.is_name_hash_defined {
-                        let mut name_hash_input = [0u8; 512];
-                        let mut name_hash_offset = 0;
-                        for name in &auth_handle_names[..auth_handle_names_len] {
-                            let name_buf = name.get_buffer();
-                            name_hash_input[name_hash_offset..name_hash_offset + name_buf.len()]
-                                .copy_from_slice(name_buf);
-                            name_hash_offset += name_buf.len();
-                        }
-                        let mut computed_name_hash = [0u8; 64];
-                        let computed_name_hash_len = compute_hash(
-                            self.platform.crypto,
-                            auth_hash,
-                            &name_hash_input[..name_hash_offset],
-                            &mut computed_name_hash,
-                        )?;
-
-                        if computed_name_hash_len != session_state.policy_hash_len
-                            || computed_name_hash[..computed_name_hash_len]
-                                != session_state.policy_hash[..session_state.policy_hash_len]
-                        {
-                            return Err(TpmRc::POLICY_FAIL.with(pos));
-                        }
-                    }
-                    if session_state.is_template_hash_defined {
-                        if !matches!(
-                            TpmCc::new(command_code),
-                            TpmCc::Create | TpmCc::CreatePrimary | TpmCc::CreateLoaded
-                        ) {
-                            return Err(TpmRc::POLICY_FAIL.with(pos));
-                        }
-                        let mut ok = false;
-                        if cmd.parameters.len() >= 2 {
-                            let in_sensitive_size =
-                                u16::from_be_bytes([cmd.parameters[0], cmd.parameters[1]]) as usize;
-                            let template_offset = 2 + in_sensitive_size;
-                            if cmd.parameters.len() >= template_offset + 2 {
-                                let template_size = u16::from_be_bytes([
-                                    cmd.parameters[template_offset],
-                                    cmd.parameters[template_offset + 1],
-                                ]) as usize;
-                                if cmd.parameters.len() >= template_offset + 2 + template_size {
-                                    let template_bytes = &cmd.parameters
-                                        [template_offset + 2..template_offset + 2 + template_size];
-                                    let mut computed_template_hash = [0u8; 64];
-                                    let computed_template_hash_len = compute_hash(
-                                        self.platform.crypto,
-                                        auth_hash,
-                                        template_bytes,
-                                        &mut computed_template_hash,
-                                    )?;
-                                    if computed_template_hash_len == session_state.policy_hash_len
-                                        && computed_template_hash[..computed_template_hash_len]
-                                            == session_state.policy_hash
-                                                [..session_state.policy_hash_len]
-                                    {
-                                        ok = true;
-                                    }
-                                }
-                            }
-                        }
-                        if !ok {
-                            return Err(TpmRc::POLICY_FAIL.with(pos));
-                        }
-                    }
-                }
 
                 if auth.session_attributes.0 & 0x80 != 0 {
                     session_state.audit_cp_hash[..cp_hash_len]
@@ -3183,6 +3844,254 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             }
         }
         Ok(())
+    }
+
+    /// Returns the hash algorithm associated with `handle`'s `authPolicy` (the return value of the
+    /// C reference `EntityGetAuthPolicy()`), or `None` when the entity has no such algorithm
+    /// (`TPM_ALG_NULL`).
+    ///
+    /// Permanent hierarchies use the algorithm set by `TPM2_SetPrimaryPolicy`, objects and NV
+    /// indices use their `nameAlg`, and the PCR policy group (PCR 20–22) uses the algorithm set
+    /// by `TPM2_PCR_SetAuthPolicy`.
+    fn handle_policy_alg(
+        &mut self,
+        global_state: &GlobalState,
+        handle: u32,
+    ) -> Option<TpmiAlgHash> {
+        if handle == Handle::RH_OWNER.0 {
+            global_state.owner_alg
+        } else if handle == Handle::RH_ENDORSEMENT.0 {
+            global_state.endorsement_alg
+        } else if handle == Handle::RH_PLATFORM.0 {
+            global_state.platform_alg
+        } else if handle == Handle::RH_LOCKOUT.0 {
+            global_state.lockout_alg
+        } else if let Some(obj) = global_state.find_transient_object(handle) {
+            obj.public.name_alg
+        } else if (0x81000000..=0x81FFFFFF).contains(&handle) {
+            self.load_persistent_object(global_state, handle)
+                .ok()
+                .and_then(|obj| obj.public.name_alg)
+        } else if Handle(handle).handle_type() == Some(TpmHt::NVIndex) {
+            let storage_mgr = StorageManager::new(&mut *self.platform.storage);
+            let metadata = storage_mgr.get_metadata(handle).ok()?;
+            let read_len = core::cmp::min(metadata.data_size as usize, 1536);
+            let mut read_buf = [0u8; 1536];
+            storage_mgr
+                .read_item(handle, 0, &mut read_buf[..read_len])
+                .ok()?;
+            let (_, nv_public, _, _) =
+                crate::handler::nv_storage::unmarshal_nv_header(&read_buf[..read_len]).ok()?;
+            Some(nv_public.name_alg)
+        } else if (20..=22).contains(&handle) {
+            global_state.pcr_policy_alg
+        } else {
+            None
+        }
+    }
+
+    /// Validates a policy session used to authorize `check.entity_handle`.
+    ///
+    /// This is the equivalent of the C reference `IsAuthPolicyAvailable()` followed by
+    /// `CheckPolicyAuthSession()` (`SessionProcess.c`), performed in the same order and with the
+    /// same response codes. Format-one codes carry the session position (`RcSafeAddToResult`):
+    /// 1. Empty `authPolicy` on an entity other than an object or a PCR in the policy group:
+    ///    `TPM_RC_AUTH_UNAVAILABLE`.
+    /// 2. `TPM2_PolicySecret` authorized by a session without `PolicyPassword`/`PolicyAuthValue`:
+    ///    `TPM_RC_MODE`.
+    /// 3. PCRs changed since `TPM2_PolicyPCR`: `TPM_RC_PCR_CHANGED`.
+    /// 4. `policyDigest != authPolicy`, then policy hash algorithm mismatch: `TPM_RC_POLICY_FAIL`.
+    /// 5. Session timeout (only when a timeout is set): `TPM_RC_NV_UNAVAILABLE` if NV is not
+    ///    available, else `TPM_RC_EXPIRED` if the timeout passed or the time epoch changed. The
+    ///    session is *not* flushed, so it can still be restarted or flushed by the caller.
+    /// 6. `commandCode` mismatch: `TPM_RC_POLICY_CC`; no `commandCode` for an ADMIN/DUP role
+    ///    authorization: `TPM_RC_POLICY_FAIL`.
+    /// 7. Locality: `TPM_RC_LOCALITY`.
+    /// 8. cpHash / nameHash / templateHash: `TPM_RC_POLICY_FAIL`.
+    /// 9. `TPM2_PolicyNvWritten` state: `TPM_RC_POLICY_FAIL`.
+    fn check_policy_auth_session(
+        &mut self,
+        global_state: &GlobalState,
+        check: PolicyAuthCheck,
+    ) -> Result<(), TpmRc> {
+        let PolicyAuthCheck {
+            session_handle,
+            entity_handle,
+            handle_index,
+            command_code,
+            parameters,
+            cp_hash,
+            handle_names,
+            pos,
+        } = check;
+        let cc = TpmCc::new(command_code);
+
+        let policy = self.handle_policy(global_state, entity_handle)?;
+        let policy_alg = self.handle_policy_alg(global_state, entity_handle);
+        let session = global_state
+            .session(session_handle)
+            .ok_or(TpmRc::HANDLE.with(pos))?;
+
+        // IsAuthPolicyAvailable(): objects (other than sequence objects) and the PCR policy group
+        // always have a policy available, even if it is empty; anything else needs a non-empty
+        // authPolicy.
+        let is_object = (0x80000000..=0x81FFFFFF).contains(&entity_handle)
+            && global_state.find_active_sequence(entity_handle).is_none();
+        let is_policy_pcr = (20..=22).contains(&entity_handle);
+        if policy.get_size() == 0 && !is_object && !is_policy_pcr {
+            return Err(TpmRc::AUTH_UNAVAILABLE);
+        }
+
+        // TPM2_PolicySecret() requires proof of the authValue of authHandle.
+        if cc == TpmCc::PolicySecret && !session.is_password_needed && !session.is_auth_value_needed
+        {
+            return Err(TpmRc::MODE.with(pos));
+        }
+
+        if let Some(pcr_counter) = session.pcr_counter
+            && pcr_counter != global_state.pcrs.update_counter
+        {
+            return Err(TpmRc::PCR_CHANGED);
+        }
+
+        if policy.get_buffer() != &session.policy_digest[..session.policy_digest_len] {
+            return Err(TpmRc::POLICY_FAIL.with(pos));
+        }
+        if policy_alg != Some(session.auth_hash) {
+            return Err(TpmRc::POLICY_FAIL.with(pos));
+        }
+
+        if session.timeout != 0 {
+            if !global_state.nv_available {
+                return Err(TpmRc::NV_UNAVAILABLE);
+            }
+            if session.timeout < global_state.tpm_time_ms
+                || session.epoch != global_state.time_epoch
+            {
+                return Err(TpmRc::EXPIRED.with(pos));
+            }
+        }
+
+        if session.command_code != 0 {
+            if session.command_code != command_code {
+                return Err(TpmRc::POLICY_CC.with(pos));
+            }
+        } else if matches!(
+            command_auth_role(cc, handle_index),
+            AuthRole::Admin | AuthRole::Dup
+        ) {
+            // ADMIN and DUP role authorizations require the policy to bind the command code.
+            return Err(TpmRc::POLICY_FAIL.with(pos));
+        }
+
+        if session.command_locality != 0 {
+            let curr_locality = global_state.locality;
+            if session.command_locality > 31 {
+                if curr_locality != session.command_locality {
+                    return Err(TpmRc::LOCALITY);
+                }
+            } else if curr_locality > 4 || (session.command_locality & (1 << curr_locality)) == 0 {
+                return Err(TpmRc::LOCALITY);
+            }
+        }
+
+        if session.policy_hash_len > 0 {
+            let expected = &session.policy_hash[..session.policy_hash_len];
+            let ok = if session.is_cp_hash_defined {
+                expected == cp_hash
+            } else if session.is_name_hash_defined {
+                let mut name_hash_input = [0u8; 512];
+                let mut name_hash_offset = 0;
+                for name in handle_names {
+                    let name_buf = name.get_buffer();
+                    name_hash_input[name_hash_offset..name_hash_offset + name_buf.len()]
+                        .copy_from_slice(name_buf);
+                    name_hash_offset += name_buf.len();
+                }
+                let mut name_hash = [0u8; 64];
+                let name_hash_len = compute_hash(
+                    self.platform.crypto,
+                    session.auth_hash,
+                    &name_hash_input[..name_hash_offset],
+                    &mut name_hash,
+                )?;
+                expected == &name_hash[..name_hash_len]
+            } else if session.is_template_hash_defined {
+                self.compare_template_hash(session.auth_hash, cc, parameters, expected)?
+            } else {
+                false
+            };
+            if !ok {
+                return Err(TpmRc::POLICY_FAIL.with(pos));
+            }
+        }
+
+        if session.check_nv_written {
+            // The policy only makes sense for an NV index.
+            if Handle(entity_handle).handle_type() != Some(TpmHt::NVIndex) {
+                return Err(TpmRc::POLICY_FAIL.with(pos));
+            }
+            let storage_mgr = StorageManager::new(&mut *self.platform.storage);
+            let metadata = storage_mgr
+                .get_metadata(entity_handle)
+                .map_err(|_| TpmRc::POLICY_FAIL.with(pos))?;
+            let read_len = core::cmp::min(metadata.data_size as usize, 1536);
+            let mut read_buf = [0u8; 1536];
+            storage_mgr
+                .read_item(entity_handle, 0, &mut read_buf[..read_len])
+                .map_err(|_| TpmRc::POLICY_FAIL.with(pos))?;
+            let (_, nv_public, _, _) =
+                crate::handler::nv_storage::unmarshal_nv_header(&read_buf[..read_len])
+                    .map_err(|_| TpmRc::POLICY_FAIL.with(pos))?;
+            if nv_public.attributes.contains(tpm2::TpmaNv::WRITTEN) != session.nv_written_state {
+                return Err(TpmRc::POLICY_FAIL.with(pos));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Compares a policy session's templateHash with the hash of the `inPublic` template of a
+    /// `TPM2_Create`, `TPM2_CreatePrimary` or `TPM2_CreateLoaded` command (C
+    /// `CompareTemplateHash()`). Returns `false` for any other command or malformed parameters.
+    fn compare_template_hash(
+        &self,
+        auth_hash: TpmiAlgHash,
+        cc: TpmCc,
+        parameters: &[u8],
+        expected: &[u8],
+    ) -> Result<bool, TpmRc> {
+        if !matches!(
+            cc,
+            TpmCc::Create | TpmCc::CreatePrimary | TpmCc::CreateLoaded
+        ) {
+            return Ok(false);
+        }
+        // Skip the first TPM2B parameter (inSensitive), then read the template TPM2B.
+        if parameters.len() < 2 {
+            return Ok(false);
+        }
+        let in_sensitive_size = u16::from_be_bytes([parameters[0], parameters[1]]) as usize;
+        let template_offset = 2 + in_sensitive_size;
+        if parameters.len() < template_offset + 2 {
+            return Ok(false);
+        }
+        let template_size =
+            u16::from_be_bytes([parameters[template_offset], parameters[template_offset + 1]])
+                as usize;
+        let Some(template_bytes) =
+            parameters.get(template_offset + 2..template_offset + 2 + template_size)
+        else {
+            return Ok(false);
+        };
+        let mut template_hash = [0u8; 64];
+        let template_hash_len = compute_hash(
+            self.platform.crypto,
+            auth_hash,
+            template_bytes,
+            &mut template_hash,
+        )?;
+        Ok(expected == &template_hash[..template_hash_len])
     }
 
     /// Process response parameters when authorization was validated inside the command handler.
@@ -3405,7 +4314,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             }
 
             let nonce_tpm_new = nonces_tpm_new[i].expect("nonce was generated for session handle");
-            let mut resp_attrs = auth.session_attributes.0 & !0x60;
+            // The response attributes (also hashed into the response HMAC) are copied from the
+            // command, including `decrypt`/`encrypt`; only `auditExclusive` is adjusted.
+            let mut resp_attrs = auth.session_attributes.0;
             if auth.session_attributes.0 & 0x80 != 0 {
                 if global_state.exclusive_audit_session == Some(session_handle) {
                     resp_attrs |= 0x02;
@@ -3416,7 +4327,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
             let mut session_key_buf = [0u8; 128];
             let session_key_len;
-            let (auth_hash, _nonce_caller, include_auth, _is_policy) = {
+            let (auth_hash, _nonce_caller, include_auth, policy_password) = {
                 let session_state = global_state
                     .session(session_handle)
                     .ok_or(TpmRc::HANDLE.with(Position::session((i + 1) as u8)))?;
@@ -3435,7 +4346,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     session_state.auth_hash,
                     session_state.nonce_caller,
                     include_auth,
-                    is_policy,
+                    is_policy && session_state.is_password_needed,
                 )
             };
 
@@ -3481,17 +4392,20 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             updates_hmac_refs[3] = &attr_byte;
 
             let mut hmac_res = [0u8; 64];
-            let hmac_res_len = if hmac_key_len == 0 && auth.hmac.get_size() == 0 {
-                0
-            } else {
-                compute_response_hmac(
-                    self.platform.crypto,
-                    auth_hash,
-                    &hmac_key[..hmac_key_len],
-                    &updates_hmac_refs,
-                    &mut hmac_res,
-                )?
-            };
+            // A policy session with `isPasswordNeeded` returns an empty responseAuth
+            // (C `BuildSingleResponseAuth()`).
+            let hmac_res_len =
+                if policy_password || (hmac_key_len == 0 && auth.hmac.get_size() == 0) {
+                    0
+                } else {
+                    compute_response_hmac(
+                        self.platform.crypto,
+                        auth_hash,
+                        &hmac_key[..hmac_key_len],
+                        &updates_hmac_refs,
+                        &mut hmac_res,
+                    )?
+                };
 
             let session_resp = TpmsAuthResponse {
                 nonce: nonce_tpm_new.as_tpm2b(),
@@ -3511,6 +4425,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             );
 
             let continue_session = (resp_attrs & 1) != 0;
+            let (now_ms, time_epoch) = (global_state.tpm_time_ms, global_state.time_epoch);
             if let Some(session_state) = global_state.session_mut(session_handle) {
                 if session_state.audit_cp_hash_len > 0 {
                     let mut extend_buf = [0u8; 192];
@@ -3544,9 +4459,15 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     session_state.bind_entity = Handle::RH_NULL;
                     session_state.bound_entity = OwnedName::default();
                 }
-                if session_state.session_type == tpm2::TpmSe::Policy
-                    && i < cmd.session_to_handle_idx_len
-                {
+                // The nonce rolls, so a continued policy session is reset and starts a new
+                // timing interval (C `UpdateInternalSession()`: `SessionResetPolicyData()` +
+                // `SessionSetStartTime()`). This applies to every policy session in the session
+                // area, including ones only used for parameter encryption/decryption.
+                if session_state.session_type == tpm2::TpmSe::Policy && continue_session {
+                    session_state.start_time = now_ms;
+                    session_state.epoch = time_epoch;
+                    session_state.timeout = 0;
+                    session_state.include_auth = false;
                     session_state.policy_digest[..session_state.policy_digest_len].fill(0);
                     session_state.command_code = 0;
                     session_state.command_locality = 0;
@@ -3792,7 +4713,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             }
 
             let nonce_tpm_new = nonces_tpm_new[i].expect("nonce was generated for session handle");
-            let mut resp_attrs = auth.session_attributes.0 & !0x60;
+            // The response attributes (also hashed into the response HMAC) are copied from the
+            // command, including `decrypt`/`encrypt`; only `auditExclusive` is adjusted.
+            let mut resp_attrs = auth.session_attributes.0;
             if auth.session_attributes.0 & 0x80 != 0 {
                 if global_state.exclusive_audit_session == Some(session_handle) {
                     resp_attrs |= 0x02;
@@ -3803,7 +4726,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
             let mut session_key_buf = [0u8; 128];
             let session_key_len;
-            let (auth_hash, _nonce_caller, include_auth, _is_policy) = {
+            let (auth_hash, _nonce_caller, include_auth, policy_password) = {
                 let session_state = global_state
                     .session(session_handle)
                     .ok_or(TpmRc::HANDLE.with(Position::session((i + 1) as u8)))?;
@@ -3822,7 +4745,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     session_state.auth_hash,
                     session_state.nonce_caller,
                     include_auth,
-                    is_policy,
+                    is_policy && session_state.is_password_needed,
                 )
             };
 
@@ -3868,17 +4791,20 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             updates_hmac_refs[3] = &attr_byte;
 
             let mut hmac_res = [0u8; 64];
-            let hmac_res_len = if hmac_key_len == 0 && auth.hmac.get_size() == 0 {
-                0
-            } else {
-                compute_response_hmac(
-                    self.platform.crypto,
-                    auth_hash,
-                    &hmac_key[..hmac_key_len],
-                    &updates_hmac_refs,
-                    &mut hmac_res,
-                )?
-            };
+            // A policy session with `isPasswordNeeded` returns an empty responseAuth
+            // (C `BuildSingleResponseAuth()`).
+            let hmac_res_len =
+                if policy_password || (hmac_key_len == 0 && auth.hmac.get_size() == 0) {
+                    0
+                } else {
+                    compute_response_hmac(
+                        self.platform.crypto,
+                        auth_hash,
+                        &hmac_key[..hmac_key_len],
+                        &updates_hmac_refs,
+                        &mut hmac_res,
+                    )?
+                };
 
             let session_resp = TpmsAuthResponse {
                 nonce: nonce_tpm_new.as_tpm2b(),
@@ -3898,6 +4824,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             );
 
             let continue_session = (resp_attrs & 1) != 0;
+            let (now_ms, time_epoch) = (global_state.tpm_time_ms, global_state.time_epoch);
             if let Some(session_state) = global_state.session_mut(session_handle) {
                 if session_state.audit_cp_hash_len > 0 {
                     let mut extend_buf = [0u8; 192];
@@ -3931,9 +4858,15 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     session_state.bind_entity = Handle::RH_NULL;
                     session_state.bound_entity = OwnedName::default();
                 }
-                if session_state.session_type == tpm2::TpmSe::Policy
-                    && i < cmd.session_to_handle_idx_len
-                {
+                // The nonce rolls, so a continued policy session is reset and starts a new
+                // timing interval (C `UpdateInternalSession()`: `SessionResetPolicyData()` +
+                // `SessionSetStartTime()`). This applies to every policy session in the session
+                // area, including ones only used for parameter encryption/decryption.
+                if session_state.session_type == tpm2::TpmSe::Policy && continue_session {
+                    session_state.start_time = now_ms;
+                    session_state.epoch = time_epoch;
+                    session_state.timeout = 0;
+                    session_state.include_auth = false;
                     session_state.policy_digest[..session_state.policy_digest_len].fill(0);
                     session_state.command_code = 0;
                     session_state.command_locality = 0;
@@ -4009,58 +4942,20 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         cc: TpmCc,
         handles: &[u32],
         handles_len: usize,
-        parameters: &[u8],
+        _parameters: &[u8],
     ) -> Result<(), TpmRc> {
         if handles_len >= 1 {
             let auth_handle = handles[0];
 
-            if cc == TpmCc::HierarchyControl {
-                if auth_handle != Handle::RH_OWNER.0
-                    && auth_handle != Handle::RH_PLATFORM.0
-                    && auth_handle != Handle::RH_ENDORSEMENT.0
-                {
-                    return Err(TpmRc::VALUE.with(Position::handle(1)));
-                }
-                if parameters.len() >= 5 {
-                    let enable = u32::from_be_bytes([
-                        parameters[0],
-                        parameters[1],
-                        parameters[2],
-                        parameters[3],
-                    ]);
-                    let state = parameters[4];
-                    if state > 1 {
-                        return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                    }
-                    if enable == Handle::RH_ENDORSEMENT.0 {
-                        if state == 0 {
-                            if auth_handle != Handle::RH_PLATFORM.0
-                                && auth_handle != Handle::RH_ENDORSEMENT.0
-                            {
-                                return Err(TpmRc::AUTH_TYPE);
-                            }
-                        } else if auth_handle != Handle::RH_PLATFORM.0 {
-                            return Err(TpmRc::AUTH_TYPE);
-                        }
-                    } else if enable == Handle::RH_OWNER.0 {
-                        if state == 0 {
-                            if auth_handle != Handle::RH_OWNER.0
-                                && auth_handle != Handle::RH_PLATFORM.0
-                            {
-                                return Err(TpmRc::AUTH_TYPE);
-                            }
-                        } else if auth_handle != Handle::RH_PLATFORM.0 {
-                            return Err(TpmRc::AUTH_TYPE);
-                        }
-                    } else if enable == Handle::RH_PLATFORM.0 || enable == Handle::RH_PLATFORM_NV.0
-                    {
-                        if auth_handle != Handle::RH_PLATFORM.0 {
-                            return Err(TpmRc::AUTH_TYPE);
-                        }
-                    } else {
-                        return Err(TpmRc::VALUE.with(Position::parameter(1)));
-                    }
-                }
+            // `TPM2_HierarchyControl.authHandle` is a `TPMI_RH_HIERARCHY`. Its parameters
+            // (`enable`, `state`) and the `TPM_RC_AUTH_TYPE` checks are evaluated by the handler,
+            // i.e. after authorization, as in the C reference.
+            if cc == TpmCc::HierarchyControl
+                && auth_handle != Handle::RH_OWNER.0
+                && auth_handle != Handle::RH_PLATFORM.0
+                && auth_handle != Handle::RH_ENDORSEMENT.0
+            {
+                return Err(TpmRc::VALUE.with(Position::handle(1)));
             }
 
             if cc == TpmCc::HierarchyChangeAuth
@@ -4072,13 +4967,16 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 return Err(TpmRc::VALUE.with(Position::handle(1)));
             }
 
+            // Handle types of the NV commands (`TPMI_RH_NV_INDEX`, `TPMI_RH_PLATFORM`,
+            // `TPMI_RH_PROVISION`, `TPMI_RH_NV_AUTH`). The accessibility of NV Index handles
+            // (C `NvIndexIsAccessible`) is checked in handle order by the loop below.
             if cc == TpmCc::NVUndefineSpaceSpecial && handles_len >= 2 {
                 let nv_index = handles[0];
                 let platform = handles[1];
                 if Handle(nv_index).handle_type() != Some(TpmHt::NVIndex) {
                     return Err(TpmRc::VALUE.with(Position::handle(1)));
                 }
-                if platform != Handle::RH_PLATFORM.0 && platform != Handle::RH_OWNER.0 {
+                if platform != Handle::RH_PLATFORM.0 {
                     return Err(TpmRc::VALUE.with(Position::handle(2)));
                 }
             } else if matches!(
@@ -4103,78 +5001,54 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 if Handle(nv_index).handle_type() != Some(TpmHt::NVIndex) {
                     return Err(TpmRc::VALUE.with(Position::handle(2)));
                 }
-                if cc != TpmCc::NVUndefineSpace {
-                    let storage =
-                        crate::storage::manager::StorageManager::new(&mut *self.platform.storage);
-                    match storage.get_metadata(nv_index) {
-                        Ok(metadata) => {
-                            let platform_create = tpm2::TpmaNv(metadata.attributes)
-                                .contains(tpm2::TpmaNv::PLATFORMCREATE);
-                            if platform_create {
-                                if !global_state.ph_enable_nv {
-                                    return Err(TpmRc::HANDLE.with(Position::handle(2)));
-                                }
-                            } else if !global_state.sh_enable {
-                                return Err(TpmRc::HANDLE.with(Position::handle(2)));
-                            }
-                        }
-                        Err(_) => {
-                            return Err(TpmRc::HANDLE.with(Position::handle(2)));
-                        }
-                    }
-                }
             } else if cc == TpmCc::NVChangeAuth && handles_len >= 1 {
                 let nv_index = handles[0];
                 if Handle(nv_index).handle_type() != Some(TpmHt::NVIndex) {
                     return Err(TpmRc::VALUE.with(Position::handle(1)));
                 }
-                let storage =
-                    crate::storage::manager::StorageManager::new(&mut *self.platform.storage);
-                match storage.get_metadata(nv_index) {
-                    Ok(metadata) => {
-                        let platform_create = tpm2::TpmaNv(metadata.attributes)
-                            .contains(tpm2::TpmaNv::PLATFORMCREATE);
-                        if platform_create {
-                            if !global_state.ph_enable_nv {
-                                return Err(TpmRc::HANDLE.with(Position::handle(1)));
-                            }
-                        } else if !global_state.sh_enable {
-                            return Err(TpmRc::HANDLE.with(Position::handle(1)));
-                        }
-                    }
-                    Err(_) => {
-                        return Err(TpmRc::HANDLE.with(Position::handle(1)));
-                    }
-                }
             } else if cc == TpmCc::NVCertify && handles_len >= 3 {
+                // `signHandle`: TPMI_DH_OBJECT+, `authHandle`: TPMI_RH_NV_AUTH,
+                // `nvIndex`: TPMI_RH_NV_INDEX.
+                let sign_handle = handles[0];
+                if sign_handle != Handle::RH_NULL.0 && !matches!(sign_handle >> 24, 0x80 | 0x81) {
+                    return Err(TpmRc::VALUE.with(Position::handle(1)));
+                }
+                let nv_auth = handles[1];
+                if nv_auth != Handle::RH_OWNER.0
+                    && nv_auth != Handle::RH_PLATFORM.0
+                    && Handle(nv_auth).handle_type() != Some(TpmHt::NVIndex)
+                {
+                    return Err(TpmRc::VALUE.with(Position::handle(2)));
+                }
                 let nv_index = handles[2];
                 if Handle(nv_index).handle_type() != Some(TpmHt::NVIndex) {
                     return Err(TpmRc::VALUE.with(Position::handle(3)));
                 }
-                let storage =
-                    crate::storage::manager::StorageManager::new(&mut *self.platform.storage);
-                match storage.get_metadata(nv_index) {
-                    Ok(metadata) => {
-                        let platform_create = tpm2::TpmaNv(metadata.attributes)
-                            .contains(tpm2::TpmaNv::PLATFORMCREATE);
-                        if platform_create {
-                            if !global_state.ph_enable_nv {
-                                return Err(TpmRc::HANDLE.with(Position::handle(3)));
-                            }
-                        } else if !global_state.sh_enable {
-                            return Err(TpmRc::HANDLE.with(Position::handle(3)));
-                        }
-                    }
-                    Err(_) => {
-                        return Err(TpmRc::HANDLE.with(Position::handle(3)));
-                    }
-                }
             }
         }
+        // Number of persistent objects already copied into a (temporary) object slot by this
+        // command (`ObjectLoadEvict`).
+        let mut persistent_loaded = 0usize;
         for (h_idx, &handle) in handles.iter().enumerate().take(handles_len) {
             let pos = Position::handle((h_idx + 1) as u8);
+            // C `EntityGetLoadStatus`: every NV Index handle must be accessible
+            // (`NvIndexIsAccessible`), whatever command it is passed to. Positions whose
+            // interface type cannot hold an NV Index (objects, contexts, sessions, permanent
+            // handles) reject it at handle unmarshaling instead (`TPM_RC_VALUE`, below).
+            if Handle(handle).handle_type() == Some(TpmHt::NVIndex)
+                && !expects_object_handle(cc, h_idx)
+                && !is_expected_session_handle(cc, h_idx)
+                && !expects_permanent_handle(cc, h_idx)
+                && !matches!(
+                    (cc, h_idx),
+                    (TpmCc::CreateLoaded, 0) | (TpmCc::StartAuthSession, 0)
+                )
+            {
+                self.check_nv_index_accessible(global_state, handle, pos)?;
+            }
             if expects_object_handle(cc, h_idx) {
                 if handle == Handle::RH_NULL.0 {
+                    // `TPMI_DH_OBJECT+` handles accept `TPM_RH_NULL`.
                     let allows_null = matches!(
                         (cc, h_idx),
                         (TpmCc::CertifyCreation, 0)
@@ -4182,13 +5056,14 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                             | (TpmCc::Certify, 1)
                             | (TpmCc::GetSessionAuditDigest, 1)
                             | (TpmCc::GetCommandAuditDigest, 1)
+                            | (TpmCc::Quote, 0)
+                            | (TpmCc::NVCertify, 0)
+                            | (TpmCc::Rewrap, 0)
+                            | (TpmCc::Rewrap, 1)
+                            | (TpmCc::GetTime, 1)
                     );
                     if !allows_null {
-                        if cc == TpmCc::ReadPublic {
-                            return Err(TpmRc::HANDLE.to_rc());
-                        } else {
-                            return Err(TpmRc::VALUE.with(pos));
-                        }
+                        return Err(TpmRc::VALUE.with(pos));
                     }
                 } else if handle >> 24 == 0x80 {
                     if (handle & 0x00FF_FFFF) > 0x0000_FFFF {
@@ -4209,57 +5084,31 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         });
                     }
                 } else if handle >> 24 == 0x81 {
-                    if (handle & 0x00FF_FFFF) > 0x0080_FFFF {
-                        return Err(TpmRc::VALUE.with(pos));
-                    }
-                    match self.load_persistent_object(global_state, handle) {
-                        Ok(obj) => {
-                            if (obj.hierarchy == 0x40000001 && !global_state.sh_enable)
-                                || (obj.hierarchy == 0x4000000B && !global_state.eh_enable)
-                                || (obj.hierarchy == 0x4000000C && !global_state.ph_enable)
-                            {
-                                return Err(TpmRc::HIERARCHY.with(pos));
-                            }
-                        }
-                        Err(err) if err == TpmRc::HIERARCHY.to_rc() => {
-                            return Err(TpmRc::HIERARCHY.with(pos));
-                        }
-                        Err(_) => {
-                            if cc == TpmCc::ReadPublic {
-                                return Err(TpmRc::HANDLE.with(pos));
-                            }
-                            return Err(match h_idx {
-                                0 => TpmRc::REFERENCE_H0,
-                                1 => TpmRc::REFERENCE_H1,
-                                _ => TpmRc::REFERENCE_H2,
-                            });
-                        }
-                    }
-                } else if (0x40000000..=0x40FFFFFF).contains(&handle) {
-                    if cc == TpmCc::Load || (cc == TpmCc::ObjectChangeAuth && h_idx == 1) {
-                        // Load and ObjectChangeAuth allow primary object parent handles (hierarchy roots)
-                    } else if cc == TpmCc::Create {
-                        return Err(TpmRc::KEY.to_rc());
-                    } else {
-                        return Err(TpmRc::VALUE.with(pos));
-                    }
+                    self.load_evict_status(global_state, cc, handle, pos, &mut persistent_loaded)?;
                 } else {
+                    // `TPMI_DH_OBJECT` accepts only transient and persistent handles
+                    // (`TPMI_DH_OBJECT_Unmarshal`); permanent handles are invalid values,
+                    // including for the parent handles of Create, Load and ObjectChangeAuth.
                     return Err(TpmRc::VALUE.with(pos));
                 }
             } else if cc == TpmCc::CreateLoaded && h_idx == 0 {
                 let mso = handle >> 24;
                 if mso == 0x80 {
-                    if global_state.find_transient_object(handle).is_none() {
+                    // Sequence objects are loaded objects; the handler rejects them as
+                    // non-parents (`TPM_RC_TYPE + RC_H1`).
+                    if global_state.find_transient_object(handle).is_none()
+                        && global_state.find_active_sequence(handle).is_none()
+                    {
                         return Err(TpmRc::REFERENCE_H0);
                     }
                 } else if mso == 0x81 {
-                    if self.load_persistent_object(global_state, handle).is_err() {
-                        return Err(TpmRc::REFERENCE_H0);
-                    }
+                    self.load_evict_status(global_state, cc, handle, pos, &mut persistent_loaded)?;
                 } else if mso != 0x40 {
                     return Err(TpmRc::VALUE.with(pos));
                 }
             } else if expects_context_handle(cc, h_idx) {
+                // `TPMI_DH_CONTEXT` admits only HMAC/policy session and transient handles; every
+                // other handle (persistent, permanent, ...) is `TPM_RC_VALUE` at its position.
                 let mso = handle >> 24;
                 if mso == 0x80 {
                     if (handle & 0x00FF_FFFF) > 0x0000_FFFF {
@@ -4268,49 +5117,37 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     if global_state.find_transient_object(handle).is_none()
                         && global_state.find_active_sequence(handle).is_none()
                     {
-                        return Err(TpmRc::REFERENCE_H0);
-                    }
-                } else if mso == 0x81 {
-                    if (handle & 0x00FF_FFFF) > 0x0080_FFFF {
-                        return Err(TpmRc::VALUE.with(pos));
-                    }
-                    if self.load_persistent_object(global_state, handle).is_err() {
-                        return Err(TpmRc::REFERENCE_H0);
-                    }
-                } else if mso == 0x40 {
-                    let is_valid_entity = matches!(
-                        handle,
-                        0x40000001 | 0x4000000B | 0x4000000C | 0x4000000A | 0x40000007
-                    );
-                    if !is_valid_entity {
-                        return Err(TpmRc::VALUE.to_rc());
+                        return Err(reference_h(h_idx));
                     }
                 } else if mso == 0x02 || mso == 0x03 {
-                    let max_handle = if mso == 0x02 {
-                        0x02000000 + tpm2::TPM2_MAX_ACTIVE_SESSIONS - 1
-                    } else {
-                        0x03000000 + tpm2::TPM2_MAX_ACTIVE_SESSIONS - 1
-                    };
-                    if handle > max_handle {
-                        return Err(TpmRc::VALUE.with(pos));
-                    }
+                    check_session_handle_status(global_state, handle, h_idx, mso == 0x03)?;
                 } else {
                     return Err(TpmRc::VALUE.with(pos));
                 }
             } else if cc == TpmCc::GetSessionAuditDigest && h_idx == 2 {
-                if !(0x02000000..=0x03FFFFFF).contains(&handle) {
+                // `sessionHandle` is a `TPMI_SH_HMAC`.
+                if handle >> 24 != 0x02 {
                     return Err(TpmRc::VALUE.with(pos));
                 }
+                check_session_handle_status(global_state, handle, h_idx, false)?;
             } else if expects_policy_session_handle(cc, h_idx) {
-                if (handle >> 24) != 0x03 || global_state.session(handle).is_none() {
-                    if cc == TpmCc::PolicyRestart && global_state.session(handle).is_none() {
-                        return Err(TpmRc::REFERENCE_H0);
-                    }
-                    return Err(if pos == Position::handle(2) {
-                        TpmRc::HANDLE.with(pos)
-                    } else {
-                        TpmRc::VALUE.with(pos)
-                    });
+                // `TPMI_SH_POLICY`: any other handle type is `TPM_RC_VALUE` at its position.
+                if handle >> 24 != 0x03 {
+                    return Err(TpmRc::VALUE.with(pos));
+                }
+                check_session_handle_status(global_state, handle, h_idx, true)?;
+            } else if matches!(
+                (cc, h_idx),
+                (TpmCc::PCRExtend, 0)
+                    | (TpmCc::PCREvent, 0)
+                    | (TpmCc::PCRReset, 0)
+                    | (TpmCc::PCRSetAuthValue, 0)
+            ) {
+                // `TPMI_DH_PCR` (`+` for Extend/Event): only implemented PCRs, or `TPM_RH_NULL`.
+                let allows_null = matches!(cc, TpmCc::PCRExtend | TpmCc::PCREvent);
+                const PCR_LAST: u32 = 23;
+                if handle > PCR_LAST && !(allows_null && handle == Handle::RH_NULL.0) {
+                    return Err(TpmRc::VALUE.with(pos));
                 }
             } else if cc == TpmCc::StartAuthSession && h_idx == 0 {
                 if handle != Handle::RH_NULL.0 {
@@ -4319,9 +5156,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                             return Err(TpmRc::REFERENCE_H0);
                         }
                     } else if handle >> 24 == 0x81 {
-                        if self.load_persistent_object(global_state, handle).is_err() {
-                            return Err(TpmRc::REFERENCE_H0);
-                        }
+                        self.load_evict_status(
+                            global_state,
+                            cc,
+                            handle,
+                            pos,
+                            &mut persistent_loaded,
+                        )?;
                     } else {
                         return Err(TpmRc::VALUE.with(pos));
                     }
@@ -4350,26 +5191,26 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                             return Err(TpmRc::REFERENCE_H1);
                         }
                     } else if mso == 0x81 {
-                        if self.load_persistent_object(global_state, handle).is_err() {
-                            return Err(TpmRc::REFERENCE_H1);
-                        }
-                    } else if mso == 0x01 {
-                        let storage = crate::storage::manager::StorageManager::new(
-                            &mut *self.platform.storage,
-                        );
-                        if let Ok(toc) = storage.read_toc() {
-                            if !toc.iter().any(|i| i.in_use != 0 && i.handle == handle) {
-                                return Err(TpmRc::REFERENCE_H1);
-                            }
-                        } else {
-                            return Err(TpmRc::REFERENCE_H1);
-                        }
+                        self.load_evict_status(
+                            global_state,
+                            cc,
+                            handle,
+                            pos,
+                            &mut persistent_loaded,
+                        )?;
                     } else if mso == 0x00 && handle > 23 {
                         return Err(TpmRc::VALUE.with(pos));
                     }
                 }
             } else if expects_permanent_handle(cc, h_idx) {
                 if !(0x40000000..=0x40FFFFFF).contains(&handle) {
+                    return Err(TpmRc::VALUE.with(pos));
+                }
+                // The exact `TPMI_RH_*` interface type of the handle (e.g. `TPMI_RH_ENDORSEMENT`,
+                // `TPMI_RH_PROVISION`): any other value fails at handle unmarshaling.
+                if let Some(allowed) = permanent_handle_type(cc, h_idx)
+                    && !allowed.contains(&handle)
+                {
                     return Err(TpmRc::VALUE.with(pos));
                 }
                 let is_valid_hierarchy = matches!(
@@ -4394,17 +5235,28 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     | 0x40000010 // RH_AUTH_00 (VENDOR_PERMANENT)
                 );
                 if !is_valid_hierarchy {
-                    return Err(match h_idx {
-                        0 => TpmRc::VALUE.to_rc(),
-                        1 => TpmRc::VALUE.with(Position::handle(1)),
-                        _ => TpmRc::VALUE.with(Position::handle(2)),
-                    });
+                    return Err(TpmRc::VALUE.with(pos));
                 }
+            } else if handle >> 24 == 0x80 {
+                // Any other transient handle must reference a loaded object (`IsObjectPresent`).
+                if global_state.find_transient_object(handle).is_none()
+                    && global_state.find_active_sequence(handle).is_none()
+                {
+                    return Err(reference_h(h_idx));
+                }
+            } else if handle >> 24 == 0x81 {
+                // Any other persistent handle is loaded like an object handle (`ObjectLoadEvict`).
+                self.load_evict_status(global_state, cc, handle, pos, &mut persistent_loaded)?;
             }
             if (0x40000000..=0x40FFFFFF).contains(&handle)
                 && !(cc == TpmCc::HierarchyControl && h_idx == 1)
                 && cc != TpmCc::Load
             {
+                // `VENDOR_PERMANENT_AUTH_HANDLE` (`TPM_RH_AUTH_00`) is part of the endorsement
+                // hierarchy (`EntityGetLoadStatus`).
+                if handle == Handle::RH_AUTH_00.0 && !global_state.eh_enable {
+                    return Err(TpmRc::HIERARCHY.with(pos));
+                }
                 if handle == 0x40000001 && !global_state.sh_enable {
                     return Err(TpmRc::HIERARCHY.with(pos));
                 }
@@ -4419,90 +5271,99 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         Ok(())
     }
 
-    /// Verifies that any handle requiring authorization but lacking a mapped session is allowed
-    /// to be authorized with an empty password (requires USER_WITH_AUTH == 1 and empty authValue).
-    fn check_unauthorized_handles(
+    /// Loads the persistent object `handle` referenced by the handle area of command `cc` the
+    /// way `ObjectLoadEvict` does, and returns its load status:
+    ///
+    /// 1. A persistent handle of a disabled hierarchy (`phEnable` for platform handles
+    ///    `0x8180_0000..`, `shEnable` otherwise) looks undefined: `TPM_RC_HANDLE` at `pos`.
+    /// 2. A free object slot is needed for the duration of the command (shared with loaded
+    ///    transient and sequence objects and the persistent objects already referenced by this
+    ///    command, counted in `persistent_loaded`): otherwise `TPM_RC_OBJECT_MEMORY`.
+    /// 3. An undefined persistent handle is `TPM_RC_HANDLE` at `pos`.
+    /// 4. An endorsement-hierarchy object while `ehEnable` is clear is `TPM_RC_HANDLE` at `pos`,
+    ///    except for `TPM2_EvictControl`.
+    fn load_evict_status(
         &mut self,
         global_state: &GlobalState,
+        cc: TpmCc,
+        handle: u32,
+        pos: Position,
+        persistent_loaded: &mut usize,
+    ) -> Result<(), TpmRc> {
+        let hierarchy_enabled = if handle >= 0x8180_0000 {
+            global_state.ph_enable
+        } else {
+            global_state.sh_enable
+        };
+        if !hierarchy_enabled {
+            return Err(TpmRc::HANDLE.with(pos));
+        }
+        let used = global_state.transient_objects.iter().flatten().count()
+            + global_state.active_sequences.iter().flatten().count()
+            + *persistent_loaded;
+        if used >= MAX_LOADED_OBJECTS {
+            return Err(TpmRc::OBJECT_MEMORY);
+        }
+        let hierarchy = match self.read_persistent_object(handle) {
+            Ok(obj) => obj.hierarchy,
+            Err(err) if err == TpmRc::HANDLE.to_rc() => return Err(TpmRc::HANDLE.with(pos)),
+            Err(err) => return Err(err),
+        };
+        if hierarchy == Handle::RH_ENDORSEMENT.0
+            && !global_state.eh_enable
+            && cc != TpmCc::EvictControl
+        {
+            return Err(TpmRc::HANDLE.with(pos));
+        }
+        *persistent_loaded += 1;
+        Ok(())
+    }
+
+    /// Checks that NV Index `handle` is accessible (C `NvIndexIsAccessible`): the index must be
+    /// defined, and its hierarchy must be enabled (`phEnableNV` for `TPMA_NV_PLATFORMCREATE`
+    /// indices, `shEnable` otherwise).
+    ///
+    /// Returns `TPM_RC_HANDLE` at `pos` if the index is not accessible.
+    fn check_nv_index_accessible(
+        &mut self,
+        global_state: &GlobalState,
+        handle: u32,
+        pos: Position,
+    ) -> Result<(), TpmRc> {
+        let storage = crate::storage::manager::StorageManager::new(&mut *self.platform.storage);
+        let metadata = storage
+            .get_metadata(handle)
+            .map_err(|_| TpmRc::HANDLE.with(pos))?;
+        let enabled = if tpm2::TpmaNv(metadata.attributes).contains(tpm2::TpmaNv::PLATFORMCREATE) {
+            global_state.ph_enable_nv
+        } else {
+            global_state.sh_enable
+        };
+        if !enabled {
+            return Err(TpmRc::HANDLE.with(pos));
+        }
+        Ok(())
+    }
+
+    /// Fails with `TPM_RC_AUTH_MISSING` if a handle that requires authorization has no session.
+    ///
+    /// This matches the C reference: `CheckAuthNoSession()` for commands without a session area
+    /// and the handle loop of `ParseSessionBuffer()` otherwise. Every handle whose authorization
+    /// role (`CommandAuthRole()`) is not `AUTH_NONE` needs a session, even when the entity's
+    /// authValue is empty (an empty authValue is still proven with a password or HMAC session).
+    fn check_unauthorized_handles(
+        &mut self,
+        _global_state: &GlobalState,
         cc: TpmCc,
         handles: &[u32],
         handles_len: usize,
         session_to_handle_idx: &[usize],
         session_to_handle_idx_len: usize,
     ) -> Result<(), TpmRc> {
-        for (h_idx, &handle) in handles[..handles_len].iter().enumerate() {
-            if handle_requires_auth(cc, h_idx) {
-                // Check if this handle has an associated session
-                let mut has_session = false;
-                for &mapped_h_idx in &session_to_handle_idx[..session_to_handle_idx_len] {
-                    if mapped_h_idx == h_idx {
-                        has_session = true;
-                        break;
-                    }
-                }
-
-                let is_admin = is_admin_role_auth(cc, h_idx);
-                if !has_session {
-                    if (0x80000000..=0x80FFFFFF).contains(&handle) {
-                        if let Some(obj) = global_state.find_transient_object(handle) {
-                            if !check_auth_type_allowed(obj.public.object_attributes, is_admin) {
-                                return Err(TpmRc::AUTH_MISSING);
-                            }
-                            if obj.auth.get_size() > 0 {
-                                return Err(TpmRc::AUTH_MISSING);
-                            }
-                        } else if let Some(seq) = global_state.find_active_sequence(handle)
-                            && seq.auth.get_size() > 0
-                        {
-                            return Err(TpmRc::AUTH_MISSING);
-                        }
-                    } else if (0x81000000..=0x81FFFFFF).contains(&handle) {
-                        if let Ok(obj) = self.load_persistent_object(global_state, handle) {
-                            if !check_auth_type_allowed(obj.public.object_attributes, is_admin) {
-                                return Err(TpmRc::AUTH_MISSING);
-                            }
-                            if obj.auth.get_size() > 0 {
-                                return Err(TpmRc::AUTH_MISSING);
-                            }
-                        }
-                    } else if Handle(handle).handle_type() == Some(TpmHt::NVIndex) {
-                        let storage_mgr = StorageManager::new(&mut *self.platform.storage);
-                        if let Ok(metadata) = storage_mgr.get_metadata(handle) {
-                            let read_len = core::cmp::min(metadata.data_size as usize, 1536);
-                            let mut read_buf = [0u8; 1536];
-                            if storage_mgr
-                                .read_item(handle, 0, &mut read_buf[..read_len])
-                                .is_ok()
-                                && let Ok((_, _, auth, _)) =
-                                    crate::handler::nv_storage::unmarshal_nv_header(
-                                        &read_buf[..read_len],
-                                    )
-                                && auth.get_size() > 0
-                            {
-                                return Err(TpmRc::AUTH_MISSING);
-                            }
-                        }
-                    } else if handle < 24 {
-                        if self.handle_auth(global_state, handle).get_size() > 0 {
-                            return Err(TpmRc::AUTH_MISSING);
-                        }
-                    } else {
-                        // Hierarchy handles
-                        let hierarchy_auth_size = match handle {
-                            0x40000001 => Some(global_state.owner_auth.get_size()),
-                            0x4000000B => Some(global_state.endorsement_auth.get_size()),
-                            0x4000000C => Some(global_state.platform_auth.get_size()),
-                            0x4000000A => Some(global_state.lockout_auth.get_size()),
-                            0x40000007 => Some(0), // Null hierarchy always empty
-                            _ => None,
-                        };
-                        if let Some(size) = hierarchy_auth_size
-                            && (size > 0 || cc == TpmCc::EvictControl)
-                        {
-                            return Err(TpmRc::AUTH_MISSING);
-                        }
-                    }
-                }
+        let mapped = &session_to_handle_idx[..session_to_handle_idx_len];
+        for h_idx in 0..handles_len.min(handles.len()) {
+            if handle_requires_auth(cc, h_idx) && !mapped.contains(&h_idx) {
+                return Err(TpmRc::AUTH_MISSING);
             }
         }
         Ok(())
@@ -4813,22 +5674,33 @@ pub fn get_command_attribute(cc: TpmCc) -> tpm2::TpmaCc {
             | TpmCc::NVReadLock
             | TpmCc::PCRExtend
             | TpmCc::EventSequenceComplete
+            | TpmCc::ChangeEPS
+            | TpmCc::ChangePPS
     ) {
         attr |= tpm2::TpmaCc::NV;
     }
-    if matches!(cc, TpmCc::HierarchyControl | TpmCc::Clear) {
-        attr |= tpm2::TpmaCc::EXTENSIVE;
-    }
+    // `extensive` and `flushed` follow `s_ccAttr` in `CommandAttributeData.h`.
     if matches!(
         cc,
-        TpmCc::SequenceComplete
-            | TpmCc::EventSequenceComplete
-            | TpmCc::NVUndefineSpace
-            | TpmCc::NVUndefineSpaceSpecial
+        TpmCc::HierarchyControl | TpmCc::Clear | TpmCc::ChangeEPS | TpmCc::ChangePPS
     ) {
+        attr |= tpm2::TpmaCc::EXTENSIVE;
+    }
+    if matches!(cc, TpmCc::SequenceComplete | TpmCc::EventSequenceComplete) {
         attr |= tpm2::TpmaCc::FLUSHED;
     }
     attr
+}
+
+/// Returns `false` for the commands that have the `NO_SESSIONS` attribute in
+/// `CommandAttributeData.h` (`IsSessionAllowed`): `TPM2_Startup`, `TPM2_ContextLoad`,
+/// `TPM2_ContextSave` and `TPM2_FlushContext`. Sending them with `TPM_ST_SESSIONS` fails with
+/// `TPM_RC_AUTH_CONTEXT`.
+pub(crate) fn is_session_allowed(cc: TpmCc) -> bool {
+    !matches!(
+        cc,
+        TpmCc::Startup | TpmCc::ContextLoad | TpmCc::ContextSave | TpmCc::FlushContext
+    )
 }
 
 /// List of TPM 2.0 command codes supported by this engine implementation.
@@ -4943,82 +5815,119 @@ pub(crate) fn is_command_supported(cc: TpmCc) -> bool {
     SUPPORTED_COMMANDS.contains(&cc)
 }
 
+/// Returns whether `cc` allows a session with `TPMA_SESSION_DECRYPT` (i.e. its first command
+/// parameter is a `TPM2B` that may be encrypted).
+///
+/// Mirrors the `DECRYPT_2` attribute in the C reference `CommandAttributeData.h`, restricted to
+/// the commands in [`SUPPORTED_COMMANDS`]. Notably `TPM2_EncryptDecrypt` is absent because its
+/// first parameter is a `TPMI_YES_NO`, not a `TPM2B`.
 fn command_supports_decryption(cc: TpmCc) -> bool {
-    cc == TpmCc::CreatePrimary
-        || cc == TpmCc::PCREvent
-        || cc == TpmCc::CreateLoaded
-        || cc == TpmCc::Commit
-        || cc == TpmCc::GetTime
-        || cc == TpmCc::HierarchyChangeAuth
-        || cc == TpmCc::SetPrimaryPolicy
-        || cc == TpmCc::LoadExternal
-        || cc == TpmCc::VerifySignature
-        || cc == TpmCc::Sign
-        || cc == TpmCc::EncryptDecrypt
-        || cc == TpmCc::EncryptDecrypt2
-        || cc == TpmCc::RSADecrypt
-        || cc == TpmCc::RSAEncrypt
-        || cc == TpmCc::ECDHZGen
-        || cc == TpmCc::MAC
-        || cc == TpmCc::NVDefineSpace
-        || cc == TpmCc::Certify
-        || cc == TpmCc::Quote
-        || cc == TpmCc::GetSessionAuditDigest
-        || cc == TpmCc::GetCommandAuditDigest
-        || cc == TpmCc::CertifyCreation
-        || cc == TpmCc::NVWrite
-        || cc == TpmCc::NVExtend
-        || cc == TpmCc::NVChangeAuth
-        || cc == TpmCc::NVCertify
-        || cc == TpmCc::Duplicate
-        || cc == TpmCc::Import
-        || cc == TpmCc::Load
-        || cc == TpmCc::ObjectChangeAuth
-        || cc == TpmCc::ActivateCredential
-        || cc == TpmCc::PolicySecret
-        || cc == TpmCc::PolicySigned
-        || cc == TpmCc::PolicyAuthorize
-        || cc == TpmCc::Create
-        || cc == TpmCc::Hash
-        || cc == TpmCc::SequenceUpdate
-        || cc == TpmCc::SequenceComplete
-        || cc == TpmCc::EventSequenceComplete
-        || cc == TpmCc::StirRandom
+    matches!(
+        cc,
+        TpmCc::ActivateCredential
+            | TpmCc::Certify
+            | TpmCc::CertifyCreation
+            | TpmCc::Commit
+            | TpmCc::Create
+            | TpmCc::CreateLoaded
+            | TpmCc::CreatePrimary
+            | TpmCc::Duplicate
+            | TpmCc::ECDHZGen
+            | TpmCc::EncryptDecrypt2
+            | TpmCc::EventSequenceComplete
+            | TpmCc::GetCommandAuditDigest
+            | TpmCc::GetSessionAuditDigest
+            | TpmCc::GetTime
+            | TpmCc::Hash
+            | TpmCc::HashSequenceStart
+            | TpmCc::HierarchyChangeAuth
+            | TpmCc::Import
+            | TpmCc::Load
+            | TpmCc::LoadExternal
+            | TpmCc::MAC
+            | TpmCc::MACStart
+            | TpmCc::MakeCredential
+            | TpmCc::NVCertify
+            | TpmCc::NVChangeAuth
+            | TpmCc::NVDefineSpace
+            | TpmCc::NVExtend
+            | TpmCc::NVWrite
+            | TpmCc::ObjectChangeAuth
+            | TpmCc::PCREvent
+            | TpmCc::PCRSetAuthPolicy
+            | TpmCc::PCRSetAuthValue
+            | TpmCc::PolicyAuthorize
+            | TpmCc::PolicyCounterTimer
+            | TpmCc::PolicyCpHash
+            | TpmCc::PolicyDuplicationSelect
+            | TpmCc::PolicyNV
+            | TpmCc::PolicyNameHash
+            | TpmCc::PolicyPCR
+            | TpmCc::PolicySecret
+            | TpmCc::PolicySigned
+            | TpmCc::PolicyTemplate
+            | TpmCc::PolicyTicket
+            | TpmCc::Quote
+            | TpmCc::RSADecrypt
+            | TpmCc::RSAEncrypt
+            | TpmCc::Rewrap
+            | TpmCc::SequenceComplete
+            | TpmCc::SequenceUpdate
+            | TpmCc::SetPrimaryPolicy
+            | TpmCc::Sign
+            | TpmCc::StartAuthSession
+            | TpmCc::StirRandom
+            | TpmCc::VerifySignature
+    )
 }
 
+/// Returns whether `cc` allows a session with `TPMA_SESSION_ENCRYPT` (i.e. its first response
+/// parameter is a `TPM2B` that may be encrypted).
+///
+/// Mirrors the `ENCRYPT_2` attribute in the C reference `CommandAttributeData.h`, restricted to
+/// the commands in [`SUPPORTED_COMMANDS`].
 fn command_supports_encryption(cc: TpmCc) -> bool {
-    cc == TpmCc::GetRandom
-        || cc == TpmCc::CreatePrimary
-        || cc == TpmCc::CreateLoaded
-        || cc == TpmCc::GetTime
-        || cc == TpmCc::ReadPublic
-        || cc == TpmCc::LoadExternal
-        || cc == TpmCc::RSADecrypt
-        || cc == TpmCc::ECDHZGen
-        || cc == TpmCc::ECDHKeyGen
-        || cc == TpmCc::EncryptDecrypt
-        || cc == TpmCc::EncryptDecrypt2
-        || cc == TpmCc::MAC
-        || cc == TpmCc::NVReadPublic
-        || cc == TpmCc::NVRead
-        || cc == TpmCc::Certify
-        || cc == TpmCc::Quote
-        || cc == TpmCc::GetSessionAuditDigest
-        || cc == TpmCc::GetCommandAuditDigest
-        || cc == TpmCc::CertifyCreation
-        || cc == TpmCc::NVCertify
-        || cc == TpmCc::Duplicate
-        || cc == TpmCc::Import
-        || cc == TpmCc::Load
-        || cc == TpmCc::Unseal
-        || cc == TpmCc::ObjectChangeAuth
-        || cc == TpmCc::MakeCredential
-        || cc == TpmCc::ActivateCredential
-        || cc == TpmCc::Create
-        || cc == TpmCc::PolicySecret
-        || cc == TpmCc::PolicySigned
-        || cc == TpmCc::Hash
-        || cc == TpmCc::SequenceComplete
+    matches!(
+        cc,
+        TpmCc::ActivateCredential
+            | TpmCc::Certify
+            | TpmCc::CertifyCreation
+            | TpmCc::Commit
+            | TpmCc::Create
+            | TpmCc::CreateLoaded
+            | TpmCc::CreatePrimary
+            | TpmCc::Duplicate
+            | TpmCc::ECDHKeyGen
+            | TpmCc::ECDHZGen
+            | TpmCc::EncryptDecrypt
+            | TpmCc::EncryptDecrypt2
+            | TpmCc::GetCommandAuditDigest
+            | TpmCc::GetRandom
+            | TpmCc::GetSessionAuditDigest
+            | TpmCc::GetTestResult
+            | TpmCc::GetTime
+            | TpmCc::Hash
+            | TpmCc::Import
+            | TpmCc::Load
+            | TpmCc::LoadExternal
+            | TpmCc::MAC
+            | TpmCc::MakeCredential
+            | TpmCc::NVCertify
+            | TpmCc::NVRead
+            | TpmCc::NVReadPublic
+            | TpmCc::ObjectChangeAuth
+            | TpmCc::PolicyGetDigest
+            | TpmCc::PolicySecret
+            | TpmCc::PolicySigned
+            | TpmCc::Quote
+            | TpmCc::RSADecrypt
+            | TpmCc::RSAEncrypt
+            | TpmCc::ReadPublic
+            | TpmCc::Rewrap
+            | TpmCc::SequenceComplete
+            | TpmCc::StartAuthSession
+            | TpmCc::Unseal
+    )
 }
 
 fn command_resp_handles_size(cc: TpmCc) -> usize {
@@ -5083,21 +5992,15 @@ fn handle_name<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>(
             }
         }
     } else if (0x81000000..=0x81FFFFFF).contains(&handle) {
-        let storage_mgr = StorageManager::new(&mut *ctx.platform.storage);
-        if let Ok(metadata) = storage_mgr.get_metadata(handle) {
-            let read_len = core::cmp::min(metadata.data_size as usize, 512);
-            let mut read_buf = [0u8; 512];
-            if storage_mgr
-                .read_item(handle, 0, &mut read_buf[..read_len])
-                .is_ok()
-                && read_len > 32
-            {
-                let mut slice = &read_buf[32..read_len];
-                if let Ok(name) = OwnedName::unmarshal(&mut slice) {
-                    return name;
-                }
-            }
+        // A persistent object of a disabled hierarchy looks undefined (`ObjectLoadEvict`).
+        if let Ok(obj) = ctx.load_persistent_object(global_state, handle) {
+            return obj.name;
         }
+    }
+    // Only permanent, session and PCR handles have the handle value as their Name
+    // (`EntityGetName`); an object or NV Index that is not loaded/defined has no Name.
+    if matches!(handle >> 24, 0x80 | 0x81 | 0x01) {
+        return OwnedName::default();
     }
     let handle_bytes = handle.to_be_bytes();
     OwnedName::from_bytes(&handle_bytes).unwrap_or_default()
@@ -5120,10 +6023,60 @@ fn expects_permanent_handle(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::DictionaryAttackParameters
                 | TpmCc::GetSessionAuditDigest
                 | TpmCc::GetCommandAuditDigest
+                | TpmCc::ClockSet
+                | TpmCc::ClockRateAdjust
+                | TpmCc::PCRAllocate
+                | TpmCc::PCRSetAuthPolicy
+                | TpmCc::GetTime
+                | TpmCc::NVDefineSpace
+                | TpmCc::NVGlobalWriteLock
         )
     } else {
         false
     }
+}
+
+/// Returns the values admitted by the `TPMI_RH_*` interface type of the permanent handle at
+/// `handle_index` of command `cc` (`Part 3` command tables / `Marshal.c`), or `None` if the
+/// position is not checked against an exact type here.
+fn permanent_handle_type(cc: TpmCc, handle_index: usize) -> Option<&'static [u32]> {
+    const OWNER: u32 = Handle::RH_OWNER.0;
+    const ENDORSEMENT: u32 = Handle::RH_ENDORSEMENT.0;
+    const PLATFORM: u32 = Handle::RH_PLATFORM.0;
+    const LOCKOUT: u32 = Handle::RH_LOCKOUT.0;
+    const NULL: u32 = Handle::RH_NULL.0;
+    if handle_index != 0 {
+        return None;
+    }
+    Some(match cc {
+        // TPMI_RH_HIERARCHY+
+        TpmCc::CreatePrimary => &[OWNER, ENDORSEMENT, PLATFORM, NULL],
+        // TPMI_RH_HIERARCHY
+        TpmCc::HierarchyControl => &[OWNER, ENDORSEMENT, PLATFORM],
+        // TPMI_RH_HIERARCHY_AUTH / TPMI_RH_HIERARCHY_POLICY (ACTs are not implemented)
+        TpmCc::HierarchyChangeAuth | TpmCc::SetPrimaryPolicy => {
+            &[OWNER, ENDORSEMENT, PLATFORM, LOCKOUT]
+        }
+        // TPMI_RH_PROVISION
+        TpmCc::EvictControl
+        | TpmCc::ClockSet
+        | TpmCc::ClockRateAdjust
+        | TpmCc::NVDefineSpace
+        | TpmCc::NVGlobalWriteLock => &[OWNER, PLATFORM],
+        // TPMI_RH_CLEAR
+        TpmCc::Clear | TpmCc::ClearControl => &[LOCKOUT, PLATFORM],
+        // TPMI_RH_PLATFORM
+        TpmCc::ChangePPS | TpmCc::ChangeEPS | TpmCc::PCRAllocate | TpmCc::PCRSetAuthPolicy => {
+            &[PLATFORM]
+        }
+        // TPMI_RH_LOCKOUT
+        TpmCc::DictionaryAttackLockReset | TpmCc::DictionaryAttackParameters => &[LOCKOUT],
+        // TPMI_RH_ENDORSEMENT
+        TpmCc::GetTime | TpmCc::GetSessionAuditDigest | TpmCc::GetCommandAuditDigest => {
+            &[ENDORSEMENT]
+        }
+        _ => return None,
+    })
 }
 
 fn expects_object_handle(cc: TpmCc, handle_index: usize) -> bool {
@@ -5137,6 +6090,7 @@ fn expects_object_handle(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::MAC
                 | TpmCc::Certify
                 | TpmCc::Quote
+                | TpmCc::NVCertify
                 | TpmCc::CertifyCreation
                 | TpmCc::ActivateCredential
                 | TpmCc::MakeCredential
@@ -5154,8 +6108,10 @@ fn expects_object_handle(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::MACStart
                 | TpmCc::RSAEncrypt
                 | TpmCc::ECDHKeyGen
-                | TpmCc::ECCParameters
                 | TpmCc::ZGen2Phase
+                | TpmCc::Commit
+                | TpmCc::Rewrap
+                | TpmCc::PolicySigned
         )
     } else if handle_index == 1 {
         matches!(
@@ -5169,10 +6125,46 @@ fn expects_object_handle(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::Duplicate
                 | TpmCc::EvictControl
                 | TpmCc::EventSequenceComplete
+                | TpmCc::Rewrap
+                | TpmCc::GetTime
         )
     } else {
         false
     }
+}
+
+/// Returns `TPM_RC_REFERENCE_H0 + h_idx`, the error for a handle that does not reference a
+/// loaded entity (`EntityGetLoadStatus`).
+fn reference_h(h_idx: usize) -> TpmRc {
+    match h_idx {
+        0 => TpmRc::REFERENCE_H0,
+        1 => TpmRc::REFERENCE_H1,
+        _ => TpmRc::REFERENCE_H2,
+    }
+}
+
+/// Validates a session handle of the handle area (`TPMI_SH_HMAC` / `TPMI_SH_POLICY` /
+/// `TPMI_DH_CONTEXT` unmarshaling followed by `EntityGetLoadStatus`): the handle must lie within
+/// the session handle range (`TPM_RC_VALUE`), its slot must hold a loaded session
+/// (`TPM_RC_REFERENCE_H0 + h_idx`), and that session must be of the type named by the handle
+/// (`TPM_RC_HANDLE`).
+fn check_session_handle_status(
+    global_state: &GlobalState,
+    handle: u32,
+    h_idx: usize,
+    is_policy: bool,
+) -> Result<(), TpmRc> {
+    let pos = Position::handle((h_idx + 1) as u8);
+    if (handle & 0x00FF_FFFF) as usize >= MAX_ACTIVE_SESSIONS {
+        return Err(TpmRc::VALUE.with(pos));
+    }
+    let Some(session) = global_state.session_by_slot(handle) else {
+        return Err(reference_h(h_idx));
+    };
+    if (session.session_handle >> 24 == 0x03) != is_policy {
+        return Err(TpmRc::HANDLE.with(pos));
+    }
+    Ok(())
 }
 
 fn is_expected_session_handle(cc: TpmCc, handle_index: usize) -> bool {
@@ -5209,6 +6201,58 @@ fn expects_policy_session_handle(cc: TpmCc, handle_index: usize) -> bool {
     }
 }
 
+/// The authorization role a command requires for one of its handles (C `AUTH_ROLE`, as encoded
+/// by the `HANDLE_1_*` / `HANDLE_2_*` attributes in `CommandAttributeData.h`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthRole {
+    /// The handle does not require authorization (`AUTH_NONE`).
+    None,
+    /// USER role (`AUTH_USER`).
+    User,
+    /// ADMIN role (`AUTH_ADMIN`): a policy session is required unless the entity is an object
+    /// with `adminWithPolicy` clear.
+    Admin,
+    /// DUP role (`AUTH_DUP`): a policy session is always required.
+    Dup,
+}
+
+/// Returns the authorization role `cc` requires for its handle at `handle_index` (C
+/// `CommandAuthRole()`).
+pub(crate) fn command_auth_role(cc: TpmCc, handle_index: usize) -> AuthRole {
+    if !handle_requires_auth(cc, handle_index) {
+        return AuthRole::None;
+    }
+    match (cc, handle_index) {
+        (TpmCc::Duplicate, 0) => AuthRole::Dup,
+        (
+            TpmCc::Certify
+            | TpmCc::ActivateCredential
+            | TpmCc::ObjectChangeAuth
+            | TpmCc::NVChangeAuth
+            | TpmCc::NVUndefineSpaceSpecial,
+            0,
+        ) => AuthRole::Admin,
+        _ => AuthRole::User,
+    }
+}
+
+/// Returns whether `cc` modifies the NV Index it authorizes (C `IsWriteOperation()`), which
+/// selects `TPMA_NV_AUTHWRITE`/`TPMA_NV_POLICYWRITE` instead of the READ attributes when an NV
+/// Index authorizes itself.
+pub(crate) fn is_nv_write_operation(cc: TpmCc) -> bool {
+    matches!(
+        cc,
+        TpmCc::NVWrite
+            | TpmCc::NVIncrement
+            | TpmCc::NVSetBits
+            | TpmCc::NVExtend
+            | TpmCc::NVWriteLock
+    )
+}
+
+/// Returns whether `cc` requires authorization for its handle at `handle_index` (C
+/// `CommandAuthRole() != AUTH_NONE`, from the `HANDLE_1_*` / `HANDLE_2_*` attributes in
+/// `CommandAttributeData.h`).
 pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {
     if handle_index == 0 {
         matches!(
@@ -5221,6 +6265,7 @@ pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::PCRReset
                 | TpmCc::PCRSetAuthPolicy
                 | TpmCc::PCRSetAuthValue
+                | TpmCc::PCRAllocate
                 | TpmCc::Clear
                 | TpmCc::ClearControl
                 | TpmCc::ChangePPS
@@ -5291,45 +6336,9 @@ pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {
     }
 }
 
+/// Returns whether `cc` requires the ADMIN role for its handle at `handle_index`.
 pub fn is_admin_role_auth(cc: TpmCc, handle_index: usize) -> bool {
-    if handle_index == 0 {
-        matches!(
-            cc,
-            TpmCc::Certify
-                | TpmCc::ActivateCredential
-                | TpmCc::ObjectChangeAuth
-                | TpmCc::NVChangeAuth
-                | TpmCc::HierarchyChangeAuth
-        )
-    } else {
-        false
-    }
-}
-
-fn check_auth_type_allowed(obj_attrs: tpm2::TpmaObject, is_admin: bool) -> bool {
-    if is_admin {
-        !obj_attrs.contains(tpm2::TpmaObject::ADMIN_WITH_POLICY)
-    } else {
-        obj_attrs.contains(tpm2::TpmaObject::USER_WITH_AUTH)
-    }
-}
-
-fn remaining_strict_auth_handles(
-    command_code: u32,
-    handles: &[u32],
-    start_idx: usize,
-    handles_len: usize,
-) -> usize {
-    let mut count = 0;
-    for (h_idx, &h) in handles[..handles_len].iter().enumerate().skip(start_idx) {
-        if handle_requires_auth(TpmCc::new(command_code), h_idx) {
-            let is_optional = h == tpm2::Handle::RH_NULL.0;
-            if !is_optional {
-                count += 1;
-            }
-        }
-    }
-    count
+    command_auth_role(cc, handle_index) == AuthRole::Admin
 }
 
 fn handle_is_authorized(
@@ -5428,6 +6437,16 @@ fn derive_key_and_iv(
     derived_key_out[..key_size_bytes].copy_from_slice(&out_buffer[..key_size_bytes]);
     derived_iv_out.copy_from_slice(&out_buffer[key_size_bytes..total_bytes]);
     Ok(())
+}
+
+/// Returns `TPM_RC_REFERENCE_S0 + session_index`: the session at `session_index` (0-based) in the
+/// session area references a session that is not loaded.
+fn reference_s(session_index: usize) -> TpmRc {
+    match session_index {
+        0 => TpmRc::REFERENCE_S0,
+        1 => TpmRc::REFERENCE_S1,
+        _ => TpmRc::REFERENCE_S2,
+    }
 }
 
 fn xor_obfuscation(

@@ -48,6 +48,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
+        // The command needs NV update for every hierarchy (`RETURN_IF_NV_IS_NOT_AVAILABLE`).
+        self.return_if_nv_is_not_available()?;
+
         let new_auth_slice = cmd.new_auth.get_buffer();
         let new_auth_stripped = crate::util::strip_trailing_zeros(new_auth_slice);
         if new_auth_stripped.len() > TpmiAlgHash::Sha256.digest_size() {

@@ -348,8 +348,11 @@ fn compute_qn(name_alg: TpmiAlgHash, parent_qn: &[u8], object_name: &[u8]) -> Tp
 fn make_parent_object(handle: u32, qn: Tpm2bName) -> TransientObject {
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
+        // fixedTPM: children of a fixedTPM parent were produced by this TPM, so C `ObjectLoad()`
+        // skips `CryptValidateKeys()` for them (the fake child keys below are not valid keys).
         object_attributes: TpmaObject::DECRYPT
             | TpmaObject::RESTRICTED
+            | TpmaObject::FIXED_TPM
             | TpmaObject::USER_WITH_AUTH,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Rsa(
@@ -365,7 +368,14 @@ fn make_parent_object(handle: u32, qn: Tpm2bName) -> TransientObject {
 
     TransientObject {
         handle,
-        seed: [1u8; 32],
+        seed: {
+            let mut s = [0u8; 64];
+            s[..32].copy_from_slice(&[1u8; 32]);
+            s
+        },
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: qn.into(),
         auth: Tpm2bAuth::default().into(),
         public: public.into(),
@@ -401,7 +411,10 @@ fn make_transient_object(
 
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: digest_bytes.into(),
         auth: Tpm2bAuth::from_bytes(auth_val).unwrap().into(),
         public: public.into(),
@@ -444,7 +457,10 @@ fn make_transient_rsa_object(
 
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: digest_bytes.into(),
         auth: Tpm2bAuth::from_bytes(auth_val).unwrap().into(),
         public: public.into(),
@@ -524,8 +540,14 @@ fn test_object_change_auth_success() {
         in_public,
     };
 
-    let (load_resp_handles, load_rsp) =
-        execute_tpm_command(&mut tpm, &mut global_state, &load_handles, &load_cmd, &[]).unwrap();
+    let (load_resp_handles, load_rsp) = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &load_handles,
+        &load_cmd,
+        &[common::password_auth(b"")],
+    )
+    .unwrap();
 
     assert_eq!(load_rsp.name, obj_name);
 
@@ -724,7 +746,13 @@ fn test_object_change_auth_active_sequence() {
         new_auth: Tpm2bAuth::from_bytes(b"newauth").unwrap(),
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &handles,
+        &cmd,
+        &[common::password_auth(b"")],
+    );
     assert!(res.is_err());
     let err_code = res.err().unwrap();
     assert_eq!(err_code, TpmRc::TYPE.with(Position::handle(1)).get());

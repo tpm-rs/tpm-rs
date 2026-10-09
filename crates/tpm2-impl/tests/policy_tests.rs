@@ -392,8 +392,16 @@ fn test_policy_password_enforcement() {
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let (cp_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &cp_handles, &cp_cmd, &[]).unwrap();
+    // CreatePrimary/Create/Load need a session for their auth-role handle even with an empty
+    // authValue (C: TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
+    let (cp_resp, _) = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &cp_handles,
+        &cp_cmd,
+        &[common::password_auth(b"")],
+    )
+    .unwrap();
     let parent_handle = cp_resp.object_handle;
 
     // 2. Create a KeyedHash sealed data object under parent_handle
@@ -424,7 +432,7 @@ fn test_policy_password_enforcement() {
         &mut global_state,
         &create_handles,
         &create_cmd,
-        &[],
+        &[common::password_auth(b"")],
     )
     .unwrap();
 
@@ -434,8 +442,14 @@ fn test_policy_password_enforcement() {
         in_private: create_resp.out_private,
         in_public: create_resp.out_public,
     };
-    let (load_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &load_handles, &load_cmd, &[]).unwrap();
+    let (load_resp, _) = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &load_handles,
+        &load_cmd,
+        &[common::password_auth(b"")],
+    )
+    .unwrap();
     let item_handle = load_resp.object_handle;
 
     // Start a policy session
@@ -486,9 +500,11 @@ fn test_policy_password_enforcement() {
         &unseal_cmd,
         &[bad_auth],
     );
+    // The sealed object is NO_DA (DA-exempt), so C IncrementLockout returns
+    // TPM_RC_BAD_AUTH + S1 rather than AUTH_FAIL (SessionProcess.c:105-118).
     assert_eq!(
         res.err(),
-        Some(TpmRc::AUTH_FAIL.with(Position::session(1)).get())
+        Some(TpmRc::BAD_AUTH.with(Position::session(1)).get())
     );
 
     // Now provide valid password auth along with policy session and verify success
@@ -587,7 +603,9 @@ fn test_policy_pcr_trial_empty_sha1() {
     let rng = FakeRng::new();
     let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
 
-    // 1. Test SHA1 trial session with empty pcr_digest (must use exact 0-length buffer without digestTPM substitution per CPCTPM_TC2_2_25_07_02)
+    // 1. Test SHA1 trial session with empty pcr_digest. Like C (PolicyPCR.c: the trial branch
+    // only overrides pcrDigest when one is provided), the digest of the current PCR values
+    // (PCRComputeCurrentDigest) is used.
     let start_auth_cmd_sha1 = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 20]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
@@ -638,19 +656,22 @@ fn test_policy_pcr_trial_empty_sha1() {
     )
     .expect("PolicyGetDigest SHA1 should succeed");
 
-    // Expected for SHA1: H_SHA1(zeros_20 || TPM_CC_PolicyPCR || pcrs || "")
+    // Expected for SHA1: H_SHA1(zeros_20 || TPM_CC_PolicyPCR || pcrs || digestTPM), where
+    // digestTPM = H_SHA1(PCR16 in the SHA1 bank, which is all zeros after Startup).
+    let digest_tpm_sha1 = hash_bytes::<20>(TpmiAlgHash::Sha1, &[0u8; 20]);
     let mut data_to_hash_sha1 = Vec::new();
     data_to_hash_sha1.extend_from_slice(&[0u8; 20]);
     data_to_hash_sha1.extend_from_slice(&(TpmCc::PolicyPCR.code()).to_be_bytes());
     let mut pcr_sel_buf_sha1 = [0u8; 64];
     let pcr_sel_len_sha1 = marshal_to_slice(&(pcr_selection_sha1), &mut pcr_sel_buf_sha1[..]);
     data_to_hash_sha1.extend_from_slice(&pcr_sel_buf_sha1[..pcr_sel_len_sha1]);
+    data_to_hash_sha1.extend_from_slice(&digest_tpm_sha1[..]);
     let expected_digest_sha1 = hash_bytes::<20>(TpmiAlgHash::Sha1, &data_to_hash_sha1);
 
     assert_eq!(
         pgd_rsp_sha1.policy_digest.get_buffer(),
         &expected_digest_sha1[..],
-        "SHA1 trial session with empty pcr_digest must not substitute digestTPM"
+        "SHA1 trial session with empty pcr_digest must substitute digestTPM"
     );
 }
 

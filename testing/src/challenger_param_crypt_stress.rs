@@ -537,15 +537,22 @@ fn test_param_crypt_stress_differential() {
                 &[&[]],
             );
 
-            assert!(
-                result.is_ok(),
-                "HierarchyChangeAuth failed for hash {:?} aes_bits {} size {} with error {:?}",
-                hash_alg,
-                aes_bits,
-                size,
-                result.err()
-            );
-            let (_, _) = result.unwrap();
+            if size == 0 {
+                // C CryptParameterDecryption (CryptUtil.c:966-970) rejects an
+                // empty remaining buffer after the size field, so an empty
+                // newAuth (the only parameter) fails with SIZE+S1 (0x995).
+                assert_eq!(result.err(), Some(0x995), "size 0");
+            } else {
+                assert!(
+                    result.is_ok(),
+                    "HierarchyChangeAuth failed for hash {:?} aes_bits {} size {} with error {:?}",
+                    hash_alg,
+                    aes_bits,
+                    size,
+                    result.err()
+                );
+                let (_, _) = result.unwrap();
+            }
 
             // 2. Stress Test Response Encryption via GetRandom
             // session has updated nonces internally
@@ -579,11 +586,17 @@ fn test_param_crypt_stress_differential() {
 }
 
 // Helper to create a keyed hash public area
+/// seedValue of the keyedhash sensitives loaded below. With a nameAlg, C
+/// requires a digest-sized seedValue (CryptValidateKeys, else KEY_SIZE+P1).
+const KEYED_HASH_SEED: [u8; 32] = [0x33; 32];
+
 fn make_keyed_hash_public_area_local(unique: &[u8], attrs: TpmaObject) -> TpmtPublic<'static> {
     let mut actual_unique = unique.to_vec();
     if unique == [0x11; 32] {
+        // unique = H(seedValue || data) for the KEYED_HASH_SEED / empty data
+        // sensitive used by the LoadExternal tests below.
         let mut hasher = Sha256::new();
-        hasher.update([]);
+        hasher.update(KEYED_HASH_SEED);
         hasher.update([]);
         actual_unique = hasher.finalize().to_vec();
     }
@@ -591,8 +604,12 @@ fn make_keyed_hash_public_area_local(unique: &[u8], attrs: TpmaObject) -> TpmtPu
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: attrs,
         auth_policy: Tpm2bDigest::default(),
+        // C SchemeChecks (Object_spt.c:437-439): a sign-only keyedhash object
+        // needs an HMAC scheme (NULL -> SCHEME).
         parms_and_id: tpm2::PublicParmsAndId::KeyedHash(
-            None,
+            attrs
+                .contains(TpmaObject::SIGN_ENCRYPT)
+                .then_some(tpm2::TpmtKeyedHashScheme::Hmac(TpmiAlgHash::Sha256)),
             Tpm2bDigest::from_bytes(crate::test_utils::leak_bytes(&actual_unique)).unwrap(),
         ),
     }
@@ -620,7 +637,7 @@ fn test_parameter_decryption_no_auth_handle() {
     // Prepare LoadExternal which has NO handles
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
-        seed_value: Tpm2bDigest::default(),
+        seed_value: Tpm2bDigest::from_bytes(&KEYED_HASH_SEED).unwrap(),
         sensitive: TpmuSensitiveComposite::KeyedHash(Tpm2bSensitiveData::default()),
     };
     let in_private = tpm2::Tpm2b(sensitive_create);
@@ -678,7 +695,7 @@ fn test_multiple_decrypt_attributes_fails() {
 
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
-        seed_value: Tpm2bDigest::default(),
+        seed_value: Tpm2bDigest::from_bytes(&KEYED_HASH_SEED).unwrap(),
         sensitive: TpmuSensitiveComposite::KeyedHash(Tpm2bSensitiveData::default()),
     };
     let in_private = tpm2::Tpm2b(sensitive_create);
@@ -801,7 +818,7 @@ fn test_encrypt_on_third_session_of_multi_session_command() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        None,
+        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -818,22 +835,32 @@ fn test_encrypt_on_third_session_of_multi_session_command() {
     .unwrap();
 
     let mut sessions = [sess1, sess2, sess3];
-    // Session 3 has ENCRYPT
-    sessions[0].attributes = TpmaSession::CONTINUE_SESSION;
-    sessions[1].attributes = TpmaSession::CONTINUE_SESSION;
+    // Session 3 has ENCRYPT. None of the sessions authorizes a handle, so C
+    // requires each to be audit, decrypt or encrypt (SessionProcess.c:1709-1712),
+    // with at most one of each. GetRandom has no TPM2B command parameter, so use
+    // TPM2_Hash (TPM2B data in, TPM2B digest out): audit, decrypt, encrypt.
+    sessions[0].attributes = TpmaSession::AUDIT | TpmaSession::CONTINUE_SESSION;
+    sessions[1].attributes = TpmaSession::DECRYPT | TpmaSession::CONTINUE_SESSION;
     sessions[2].attributes = TpmaSession::ENCRYPT | TpmaSession::CONTINUE_SESSION;
 
-    let cmd = GetRandom { bytes_requested: 8 };
+    let cmd = tpm2::commands::Hash {
+        data: tpm2::Tpm2bMaxBuffer::from_bytes(b"third session").unwrap(),
+        hash_alg: TpmiAlgHash::Sha256,
+        hierarchy: Handle::RH_NULL,
+    };
     let result =
         execute_with_hmac_sessions_custom(&mut sim, &cmd, (), &mut sessions, &[&[], &[], &[]]);
 
     assert!(
         result.is_ok(),
-        "GetRandom with encrypt on 3rd session failed: {:?}",
+        "Hash with encrypt on 3rd session failed: {:?}",
         result.err()
     );
     let (resp, _) = result.unwrap();
-    assert_eq!(resp.random_bytes.as_ref().len(), 8);
+    assert_eq!(
+        resp.out_hash.as_ref(),
+        Sha256::digest(b"third session").as_slice()
+    );
 }
 
 #[test]
@@ -874,7 +901,7 @@ fn test_response_encrypt_index_alignment_get_time() {
         primary_handle: Handle::RH_OWNER,
     };
     let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
     let sign_handle = create_rsp_handles.object_handle;
 
     // 2. Start an unbound session for RH_ENDORSEMENT and a session bound to the signing key

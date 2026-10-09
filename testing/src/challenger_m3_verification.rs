@@ -611,10 +611,13 @@ fn test_policy_cphash_on_bound_session() {
         policy_session: sess.session_handle,
     };
     let res = execute_with_password_sessions(&mut sim, &cp_hash_cmd, cp_hash_handles, 0, &[]);
-    assert_eq!(
-        res.err(),
-        Some(0x151),
-        "PolicyCpHash on bound session should fail with TPM_RC_CPHASH (0x151)"
+    // C SessionCreate (Session.c) only binds HMAC sessions ("Policy session is not bound to an
+    // entity"), so the cpHash union of a policy/trial session started with a bind entity is
+    // free and the command succeeds.
+    assert!(
+        res.is_ok(),
+        "PolicyCpHash on bound session must succeed (policy sessions are never bound): {:?}",
+        res.err()
     );
 
     // Clean up
@@ -673,10 +676,13 @@ fn test_policy_duplication_select_on_bound_session() {
         policy_session: sess.session_handle,
     };
     let res = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
-    assert_eq!(
-        res.err(),
-        Some(0x151),
-        "PolicyDuplicationSelect on bound session should fail with TPM_RC_CPHASH (0x151)"
+    // C SessionCreate (Session.c) only binds HMAC sessions ("Policy session is not bound to an
+    // entity"), so the cpHash union of a policy/trial session started with a bind entity is
+    // free and the command succeeds.
+    assert!(
+        res.is_ok(),
+        "PolicyDuplicationSelect on bound session must succeed (policy sessions are never bound): {:?}",
+        res.err()
     );
 
     // Clean up
@@ -724,10 +730,13 @@ fn test_policy_cphash_on_bound_trial_session() {
         policy_session: sess.session_handle,
     };
     let res = execute_with_password_sessions(&mut sim, &cp_hash_cmd, cp_hash_handles, 0, &[]);
-    assert_eq!(
-        res.err(),
-        Some(0x151),
-        "PolicyCpHash on bound trial session should fail with TPM_RC_CPHASH (0x151)"
+    // C SessionCreate (Session.c) only binds HMAC sessions ("Policy session is not bound to an
+    // entity"), so the cpHash union of a policy/trial session started with a bind entity is
+    // free and the command succeeds.
+    assert!(
+        res.is_ok(),
+        "PolicyCpHash on bound trial session must succeed (policy sessions are never bound): {:?}",
+        res.err()
     );
 
     // Clean up
@@ -786,10 +795,13 @@ fn test_policy_duplication_select_on_bound_trial_session() {
         policy_session: sess.session_handle,
     };
     let res = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
-    assert_eq!(
-        res.err(),
-        Some(0x151),
-        "PolicyDuplicationSelect on bound trial session should fail with TPM_RC_CPHASH (0x151)"
+    // C SessionCreate (Session.c) only binds HMAC sessions ("Policy session is not bound to an
+    // entity"), so the cpHash union of a policy/trial session started with a bind entity is
+    // free and the command succeeds.
+    assert!(
+        res.is_ok(),
+        "PolicyDuplicationSelect on bound trial session must succeed (policy sessions are never bound): {:?}",
+        res.err()
     );
 
     // Clean up
@@ -829,7 +841,10 @@ fn test_policy_cphash_with_session() {
         policy_session: sess.session_handle,
     };
 
+    // The command has no authorization handles, so the session is unassociated: C
+    // ParseSessionBuffer requires it to be an audit, encrypt or decrypt session.
     let mut sessions = [hmac_sess.clone()];
+    sessions[0].attributes = tpm2::TpmaSession::CONTINUE_SESSION | tpm2::TpmaSession::AUDIT;
     let res = execute_with_hmac_sessions(
         &mut sim,
         &cp_hash_cmd,
@@ -888,7 +903,10 @@ fn test_policy_duplication_select_with_session_tag_0x8002() {
         policy_session: sess.session_handle,
     };
 
+    // The command has no authorization handles, so the session is unassociated: C
+    // ParseSessionBuffer requires it to be an audit, encrypt or decrypt session.
     let mut sessions = [hmac_sess.clone()];
+    sessions[0].attributes = tpm2::TpmaSession::CONTINUE_SESSION | tpm2::TpmaSession::AUDIT;
     let res =
         execute_with_hmac_sessions(&mut sim, &dup_cmd, dup_handles, &[], &mut sessions, &[&[]]);
     assert!(
@@ -1020,10 +1038,12 @@ fn test_policy_duplication_select_invalid_name_structure() {
     };
 
     let res = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
-    // According to TPM spec, size check of the name should fail
+    // Names are opaque TPM2B_NAME values: C TPM2_PolicyDuplicationSelect only bounds their size
+    // (unmarshaling) and hashes them, so a Name with an unexpected internal structure is accepted.
     assert!(
-        res.is_err(),
-        "PolicyDuplicationSelect with invalid name structure should fail"
+        res.is_ok(),
+        "PolicyDuplicationSelect accepts any TPM2B_NAME: {:?}",
+        res.err()
     );
 }
 
@@ -1099,7 +1119,7 @@ fn test_encrypt_decrypt_invalid_yes_no() {
         primary_handle: Handle::RH_OWNER,
     };
     let (_, cp_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary_cmd, cp_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &create_primary_cmd, cp_handles, 1, &[]).unwrap();
     let key_handle = cp_resp_handles.object_handle;
 
     let cmd = EncryptDecrypt {
@@ -1156,7 +1176,7 @@ fn test_encrypt_decrypt_2_invalid_yes_no() {
         primary_handle: Handle::RH_OWNER,
     };
     let (_, cp_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary_cmd, cp_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &create_primary_cmd, cp_handles, 1, &[]).unwrap();
     let key_handle = cp_resp_handles.object_handle;
 
     let cmd = EncryptDecrypt2 {
@@ -1390,7 +1410,7 @@ fn test_encrypt_decrypt_rejects_cmac_mode() {
         primary_handle: Handle::RH_OWNER,
     };
     let (_, cp_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary_cmd, cp_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &create_primary_cmd, cp_handles, 1, &[]).unwrap();
     let key_handle = cp_resp_handles.object_handle;
 
     // 1. EncryptDecrypt with mode corrupted to TPM_ALG_CMAC (0x003F)

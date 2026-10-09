@@ -41,6 +41,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
+        // The command needs NV update (`RETURN_IF_NV_IS_NOT_AVAILABLE`, `ChangeEPS.c`).
+        self.return_if_nv_is_not_available()?;
+
         let mut new_ep_seed = [0u8; 64];
         let mut new_eh_proof = [0u8; 64];
 
@@ -67,15 +70,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.global_state.eh_enable = true;
         self.global_state.endorsement_auth = crate::owned::OwnedAuth::default();
         self.global_state.endorsement_policy = crate::owned::OwnedDigest::default();
+        self.global_state.endorsement_alg = None;
 
         // Flush loaded objects in endorsement hierarchy
-        for slot in self.global_state.transient_objects.iter_mut() {
+        for (i, slot) in self.global_state.transient_objects.iter_mut().enumerate() {
             if let Some(obj) = slot
                 && obj.hierarchy == Handle::RH_ENDORSEMENT.0
             {
                 *slot = None;
+                self.global_state.transient_parents[i] = None;
             }
         }
+
+        // Flush evict objects of the endorsement hierarchy stored in NV (`NvFlushHierarchy`).
+        self.nv_flush_hierarchy(Handle::RH_ENDORSEMENT.0)?;
 
         self.context.save_hierarchy_auths(self.global_state);
 

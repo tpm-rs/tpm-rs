@@ -62,46 +62,41 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             )
         };
 
-        if cmd.operand_b.get_size() as usize > auth_hash.digest_size() {
-            return Err(TpmRc::SIZE.with(Position::parameter(1)));
+        // `nvIndex` (handle 2) must reference a defined NV Index for every session type (C checks
+        // the handle with `EntityGetLoadStatus` before the command runs); otherwise the trial
+        // policy digest would be extended with a Name no NV Index has.
+        if Handle(nv_index.0).handle_type() != Some(tpm2::TpmHt::NVIndex) {
+            return Err(TpmRc::VALUE.with(Position::handle(2)));
         }
+        let mut read_buf = [0u8; 1536];
+        let (metadata_size, nv_public) = {
+            let storage = StorageManager::new(&mut *self.context.platform.storage);
+            let metadata = storage
+                .get_metadata(nv_index.0)
+                .map_err(|_| TpmRc::HANDLE.with(Position::handle(2)))?;
+
+            let read_len = core::cmp::min(metadata.data_size as usize, 1536);
+            storage
+                .read_item(nv_index.0, 0, &mut read_buf[..read_len])
+                .map_err(|_| TpmRc::FAILURE)?;
+            let (metadata_size, nv_public, _, _) =
+                crate::handler::nv_storage::unmarshal_nv_header(&read_buf[..read_len])?;
+            (metadata_size as u16, nv_public)
+        };
 
         if session_type != TpmSe::Trial {
-            if Handle(nv_index.0).handle_type() != Some(tpm2::TpmHt::NVIndex) {
-                return Err(TpmRc::VALUE.with(Position::handle(1)));
-            }
-            // Read metadata from storage
-            let mut read_buf = [0u8; 1536];
-            let (metadata_size, nv_public) = {
-                let storage = StorageManager::new(&mut *self.context.platform.storage);
-                let metadata = storage
-                    .get_metadata(nv_index.0)
-                    .map_err(|_| TpmRc::HANDLE.with(Position::handle(1)))?;
+            // Common read access checks (C `NvReadAccessChecks`): READLOCKED, then whether
+            // `authHandle` may read the index, then WRITTEN.
+            nv_read_access_checks(handles.auth_handle.0, nv_index.0, nv_public.attributes)?;
 
-                let read_len = core::cmp::min(metadata.data_size as usize, 1536);
-                storage
-                    .read_item(nv_index.0, 0, &mut read_buf[..read_len])
-                    .map_err(|_| TpmRc::FAILURE)?;
-                let (metadata_size, nv_public, _, _) =
-                    crate::handler::nv_storage::unmarshal_nv_header(&read_buf[..read_len])?;
-                (metadata_size as u16, nv_public)
-            };
-
-            // Validate written and readlocked attributes
-            if !nv_public.attributes.contains(TpmaNv::WRITTEN) {
-                return Err(TpmRc::NV_UNINITIALIZED);
+            // Make sure that offset is within range (`TPM_RCS_VALUE + RC_PolicyNV_offset`), and
+            // that the NV data starting at offset is at least as large as operandB
+            // (`TPM_RCS_SIZE + RC_PolicyNV_operandB`).
+            if cmd.offset > nv_public.data_size {
+                return Err(TpmRc::VALUE.with(Position::parameter(2)));
             }
-            if nv_public.attributes.contains(TpmaNv::READLOCKED) {
-                return Err(TpmRc::NV_LOCKED);
-            }
-
-            // Verify read size/bounds
             let operand_b_len = cmd.operand_b.get_size() as usize;
-            let end_offset = cmd
-                .offset
-                .checked_add(operand_b_len as u16)
-                .ok_or(TpmRc::SIZE.to_rc())?;
-            if end_offset > nv_public.data_size || cmd.offset > nv_public.data_size {
+            if ((nv_public.data_size - cmd.offset) as usize) < operand_b_len {
                 return Err(TpmRc::SIZE.with(Position::parameter(1)));
             }
 
@@ -251,4 +246,36 @@ fn signed_compare(a: &[u8], b: &[u8]) -> core::cmp::Ordering {
     } else {
         unsigned_compare(a, b)
     }
+}
+
+/// Common read access checks for an NV Index, as C `NvReadAccessChecks` (NV_spt.c).
+///
+/// - A read-locked index cannot be read (`TPM_RC_NV_LOCKED`).
+/// - `TPM_RH_OWNER` requires `TPMA_NV_OWNERREAD` and `TPM_RH_PLATFORM` requires `TPMA_NV_PPREAD`;
+///   any other `auth_handle` must be the index itself (whose `AUTHREAD`/`POLICYREAD` requirement
+///   was enforced during session authorization), otherwise `TPM_RC_NV_AUTHORIZATION`.
+/// - An index that has not been written cannot be read (`TPM_RC_NV_UNINITIALIZED`); checked last.
+pub(crate) fn nv_read_access_checks(
+    auth_handle: u32,
+    nv_index: u32,
+    attributes: TpmaNv,
+) -> Result<(), TpmRc> {
+    if attributes.contains(TpmaNv::READLOCKED) {
+        return Err(TpmRc::NV_LOCKED);
+    }
+    if auth_handle == Handle::RH_OWNER.0 {
+        if !attributes.contains(TpmaNv::OWNERREAD) {
+            return Err(TpmRc::NV_AUTHORIZATION);
+        }
+    } else if auth_handle == Handle::RH_PLATFORM.0 {
+        if !attributes.contains(TpmaNv::PPREAD) {
+            return Err(TpmRc::NV_AUTHORIZATION);
+        }
+    } else if auth_handle != nv_index {
+        return Err(TpmRc::NV_AUTHORIZATION);
+    }
+    if !attributes.contains(TpmaNv::WRITTEN) {
+        return Err(TpmRc::NV_UNINITIALIZED);
+    }
+    Ok(())
 }

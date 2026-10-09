@@ -60,7 +60,7 @@ fn test_certify_adversarial_signatures() {
         primary_handle: Handle::RH_OWNER,
     };
     let (signer_rsp, signer_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_signer_cmd, create_signer_handles, 0, &[])
+        execute_with_password_sessions(&mut sim, &create_signer_cmd, create_signer_handles, 1, &[])
             .unwrap();
     let signer_handle = signer_rsp_handles.object_handle;
 
@@ -87,7 +87,7 @@ fn test_certify_adversarial_signatures() {
         CreatePrimaryHandles {
             primary_handle: Handle::RH_OWNER,
         },
-        0,
+        1,
         &[],
     )
     .unwrap();
@@ -114,7 +114,7 @@ fn test_certify_adversarial_signatures() {
         &mut sim,
         &create_subject_cmd,
         create_subject_handles,
-        0,
+        1,
         &[],
     )
     .unwrap();
@@ -267,7 +267,7 @@ fn test_certify_creation_adversarial() {
         primary_handle: Handle::RH_ENDORSEMENT,
     };
     let (create_rsp, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 0, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
     let object_handle = create_rsp_handles.object_handle;
 
     let in_scheme = Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256));
@@ -292,9 +292,11 @@ fn test_certify_creation_adversarial() {
     );
     assert!(res.is_ok());
 
-    // 3. Bad ticket hierarchy (e.g. Owner instead of Endorsement) should fail with TPM_RC_TICKET
+    // 3. Bad ticket hierarchy should fail with TPM_RC_TICKET: the ticket is recomputed with the
+    //    proof of the hierarchy named in the ticket (C TicketComputeCreation). Platform is used
+    //    because the owner and endorsement proofs are not yet randomized on a fresh simulator.
     let bad_hierarchy_ticket =
-        TpmtTkCreation::Creation(Handle::RH_OWNER, *create_rsp.creation_ticket.digest());
+        TpmtTkCreation::Creation(Handle::RH_PLATFORM, *create_rsp.creation_ticket.digest());
     let certify_creation_cmd_bad_hierarchy = CertifyCreation {
         creation_ticket: bad_hierarchy_ticket,
         ..certify_creation_cmd.clone()
@@ -306,7 +308,8 @@ fn test_certify_creation_adversarial() {
         1,
         &[],
     );
-    assert_eq!(res_bad_hierarchy.err(), Some(0x0a0));
+    // TPM_RC_TICKET + RC_CertifyCreation_creationTicket (P4).
+    assert_eq!(res_bad_hierarchy.err(), Some(0x4E0));
 
     // 4. Bad ticket digest should fail with TPM_RC_TICKET
     let mut bad_digest = create_rsp.creation_ticket.digest().get_buffer().to_vec();
@@ -328,7 +331,8 @@ fn test_certify_creation_adversarial() {
         1,
         &[],
     );
-    assert_eq!(res_bad_digest.err(), Some(0x0a0));
+    // TPM_RC_TICKET + RC_CertifyCreation_creationTicket (P4).
+    assert_eq!(res_bad_digest.err(), Some(0x4E0));
 
     flush_context(&mut sim, object_handle).unwrap();
 }
@@ -372,7 +376,7 @@ fn test_nv_certify_adversarial() {
         primary_handle: Handle::RH_OWNER,
     };
     let (_signer_rsp, signer_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_signer_cmd, create_signer_handles, 0, &[])
+        execute_with_password_sessions(&mut sim, &create_signer_cmd, create_signer_handles, 1, &[])
             .unwrap();
     let signer_handle = signer_rsp_handles.object_handle;
 

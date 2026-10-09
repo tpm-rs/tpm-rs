@@ -1,4 +1,4 @@
-use super::{KeyDerivationArgs, ResolvedParentInfo, TransientObject};
+use super::{KeyDerivationArgs, ParentSchemeInfo, ResolvedParentInfo, TransientObject};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -16,8 +16,8 @@ use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     PublicParmsAndId, Tpm2bDigest, Tpm2bEccParameter, Tpm2bPrivate, Tpm2bPrivateKeyRsa,
     Tpm2bSensitiveData, Tpm2bSymKey, Tpm2bTemplate, TpmaObject, TpmiAlgHash, TpmiAlgSymMode,
-    TpmsDerive, TpmsSensitiveCreate, TpmtEccScheme, TpmtKeyedHashScheme, TpmtPublic, TpmtRsaScheme,
-    TpmtSensitive, TpmuSensitiveComposite,
+    TpmsDerive, TpmsSensitiveCreate, TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive,
+    TpmuSensitiveComposite,
 };
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -56,7 +56,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             parent_handle,
             &mut parent_seed_val,
             &mut parent_qn_buf,
-            false, // expect_type_error
+            true, // allow_derivation_parent
         )?;
 
         // Ensure we actually have an empty slot in the transient object table
@@ -77,6 +77,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             parent_info.hierarchy_val,
             Some(parent_info.attributes),
             parent_info.is_derivation_parent,
+            parent_info.scheme,
         )?;
 
         // 4. Derive/Generate the new object seed
@@ -111,13 +112,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else {
             None
         };
-        let name_alg = in_public_struct.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+        // A NULL or unimplemented nameAlg is rejected as `TPM_RC_HASH + RC_CreateLoaded_inPublic`.
+        let name_alg = in_public_struct
+            .name_alg
+            .ok_or(TpmRc::HASH.with(Position::parameter(2)))?;
         if name_alg != TpmiAlgHash::Sha1
             && name_alg != TpmiAlgHash::Sha256
             && name_alg != TpmiAlgHash::Sha384
             && name_alg != TpmiAlgHash::Sha512
         {
-            return Err(TpmRc::VALUE.to_rc());
+            return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
 
         let actual_private_key_len = self.generate_key_and_unique(
@@ -183,7 +187,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.store_transient_object(
             index,
             handle,
-            &obj_seed[..obj_seed_len],
+            Self::object_seed_value(&in_public_struct.as_tpmt(), &obj_seed[..obj_seed_len]),
             object_name,
             crate::owned::OwnedAuth::from(in_sensitive_struct.user_auth),
             in_public_struct,
@@ -238,58 +242,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         parent_name_alg: TpmiAlgHash,
         obj_seed: &mut [u8; 64],
     ) -> Result<usize, TpmRc> {
-        let digest_size = parent_name_alg.digest_size();
+        // The object's seedValue is sized to the object's own nameAlg (C `CryptCreateObject`);
+        // the parent's nameAlg (or the derivation parent's XOR hash) only keys the KDF.
+        let digest_size = in_public_struct
+            .name_alg
+            .ok_or(TpmRc::HASH.with(Position::parameter(2)))?
+            .digest_size();
         let total_bits = (digest_size * 8) as u32;
 
         if is_primary {
-            let mut unique_buf = [0u8; tpm2::TpmuPublicId::MAX_SIZE];
-            let unique_len = match &in_public_struct.parms_and_id {
-                PublicParmsAndId::KeyedHash(_, unique) => {
-                    let b = unique.get_buffer();
-                    unique_buf[..b.len()].copy_from_slice(b);
-                    b.len()
-                }
-                PublicParmsAndId::Sym(_, unique) => {
-                    let b = unique.get_buffer();
-                    unique_buf[..b.len()].copy_from_slice(b);
-                    b.len()
-                }
-                PublicParmsAndId::Rsa(_, unique) => {
-                    let b = unique.get_buffer();
-                    unique_buf[..b.len()].copy_from_slice(b);
-                    b.len()
-                }
-                PublicParmsAndId::Ecc(_, point) => {
-                    let x = point.x.get_buffer();
-                    let y = point.y.get_buffer();
-                    unique_buf[..x.len()].copy_from_slice(x);
-                    unique_buf[x.len()..x.len() + y.len()].copy_from_slice(y);
-                    x.len() + y.len()
-                }
-                PublicParmsAndId::Mldsa(_, unique) | PublicParmsAndId::HashMldsa(_, unique) => {
-                    let b = unique.get_buffer();
-                    unique_buf[..b.len()].copy_from_slice(b);
-                    b.len()
-                }
-                PublicParmsAndId::Mlkem(_, unique) => {
-                    let b = unique.get_buffer();
-                    unique_buf[..b.len()].copy_from_slice(b);
-                    b.len()
-                }
-            };
-            let unique_slice = &unique_buf[..unique_len];
-            kdfa(
-                self.crypto(),
-                parent_name_alg,
+            self.derive_primary_object_seed(
                 &parent_seed_val[..parent_seed_len],
-                b"Primary Object Creation",
-                unique_slice,
-                &[],
-                total_bits,
+                in_public_struct,
+                in_sensitive_struct.data.get_buffer(),
                 obj_seed,
             )
-            .map_err(|_| TpmRc::FAILURE)?;
-            Ok(digest_size)
         } else if is_derived {
             let mut label_context = template_derive.ok_or(TpmRc::FAILURE)?;
             let data_buf = in_sensitive_struct.data.get_buffer();
@@ -324,6 +291,63 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
     }
 
+    /// Derives the seed from which a Primary Object's key material and `seedValue` are
+    /// generated.
+    ///
+    /// Mirrors C `CreatePrimary.c` / `CreateLoaded.c`, which seed the creation DRBG with the
+    /// hierarchy primary seed, the label `"Primary Object Creation"`, the Name of the input
+    /// template (`PublicMarshalAndComputeName(publicArea)`, binding nameAlg, attributes,
+    /// authPolicy, parameters and unique) and `inSensitive.data`. Two templates that differ in
+    /// any field therefore yield unrelated keys. Returns the seed length (the nameAlg digest
+    /// size).
+    pub(crate) fn derive_primary_object_seed(
+        &self,
+        primary_seed: &[u8],
+        template: &TpmtPublic,
+        sensitive_data: &[u8],
+        obj_seed: &mut [u8; 64],
+    ) -> Result<usize, TpmRc> {
+        let name_alg = template
+            .name_alg
+            .ok_or(TpmRc::HASH.with(Position::parameter(2)))?;
+        let mut pub_buf = [0u8; TpmtPublic::MAX_SIZE];
+        let pub_len = template.marshal(&mut pub_buf);
+        let template_name = self.compute_name(Some(name_alg), &pub_buf[..pub_len])?;
+        let digest_size = name_alg.digest_size();
+        kdfa(
+            self.crypto(),
+            name_alg,
+            primary_seed,
+            b"Primary Object Creation",
+            template_name.get_buffer(),
+            sensitive_data,
+            (digest_size * 8) as u32,
+            obj_seed,
+        )
+        .map_err(|_| TpmRc::FAILURE)?;
+        Ok(digest_size)
+    }
+
+    /// Returns the `seedValue` that is kept in an object's sensitive area.
+    ///
+    /// C `CryptCreateObject` generates a nameAlg-sized `seedValue` for every object but
+    /// discards it again for asymmetric keys that are not parents (`sign` SET or `restricted`
+    /// CLEAR), so such keys carry an empty `seedValue`.
+    pub(crate) fn object_seed_value<'s>(public: &TpmtPublic, seed: &'s [u8]) -> &'s [u8] {
+        let attrs = public.object_attributes;
+        let asymmetric = matches!(
+            public.parms_and_id,
+            PublicParmsAndId::Rsa(_, _) | PublicParmsAndId::Ecc(_, _)
+        );
+        if asymmetric
+            && (attrs.contains(TpmaObject::SIGN_ENCRYPT) || !attrs.contains(TpmaObject::RESTRICTED))
+        {
+            &[]
+        } else {
+            seed
+        }
+    }
+
     /// Helper function to format and store the transient object into the global state table.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn store_transient_object(
@@ -341,16 +365,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         hierarchy: u32,
         st_clear: bool,
     ) {
-        let mut stored_seed = [0u8; 32];
-        let copy_len = core::cmp::min(32, obj_seed.len());
-        if copy_len > 0 {
-            stored_seed[..copy_len].copy_from_slice(&obj_seed[..copy_len]);
-        }
+        let (stored_seed, seed_len) = TransientObject::seed_from_bytes(obj_seed);
 
         self.global_state.transient_parents[index] = parent_handle;
         self.global_state.transient_objects[index] = Some(TransientObject {
             handle,
             seed: stored_seed,
+            seed_len,
+            external: false,
+            public_only: false,
             name,
             auth: user_auth,
             public: public_struct,
@@ -360,18 +383,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             hierarchy,
             st_clear,
         });
-
-        self.update_aliased_transient_objects(handle, &name, &qualified_name);
     }
 
     /// Resolves the parent object seed, hierarchy, qualified name, and auth requirement
     /// from the parent_handle argument.
+    ///
+    /// For object parents this mirrors C `ObjectIsParent` / `attributes.derivation`
+    /// (`ObjectSetLoadedAttributes`): an object is an ordinary parent iff it is `restricted`,
+    /// `decrypt`, has a sensitive area (not public-only), is not external, has a non-NULL
+    /// `nameAlg` and is not a KEYEDHASH; restricted-decrypt KEYEDHASH objects are derivation
+    /// parents. Sequence objects, non-parents and (unless `allow_derivation_parent`, used by
+    /// `TPM2_CreateLoaded`) derivation parents are rejected with `TPM_RC_TYPE + RC_H1`.
     pub(crate) fn resolve_parent_object_or_hierarchy(
         &mut self,
         parent_handle: u32,
         parent_seed_val: &mut [u8; 64],
         parent_qn_buf: &mut [u8; 66],
-        expect_type_error: bool,
+        allow_derivation_parent: bool,
     ) -> Result<ResolvedParentInfo, TpmRc> {
         if parent_handle == 0x40000001 {
             // TPM_RH_OWNER
@@ -388,6 +416,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 sym_bits: 128,
                 attributes: TpmaObject(0),
                 is_derivation_parent: false,
+                scheme: None,
             })
         } else if parent_handle == 0x40000007 {
             // TPM_RH_NULL
@@ -402,6 +431,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 sym_bits: 128,
                 attributes: TpmaObject(0),
                 is_derivation_parent: false,
+                scheme: None,
             })
         } else if parent_handle == 0x4000000C {
             // TPM_RH_PLATFORM
@@ -418,6 +448,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 sym_bits: 128,
                 attributes: TpmaObject(0),
                 is_derivation_parent: false,
+                scheme: None,
             })
         } else if parent_handle == 0x4000000B {
             // TPM_RH_ENDORSEMENT
@@ -434,8 +465,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 sym_bits: 128,
                 attributes: TpmaObject(0),
                 is_derivation_parent: false,
+                scheme: None,
             })
         } else if parent_handle >> 24 == 0x80 || parent_handle >> 24 == 0x81 {
+            // Sequence objects are never parents (C: `ObjectIsParent()` is FALSE).
+            if parent_handle >> 24 == 0x80
+                && self
+                    .global_state
+                    .find_active_sequence(parent_handle)
+                    .is_some()
+            {
+                return Err(TpmRc::TYPE.with(Position::handle(1)));
+            }
             let obj = if parent_handle >> 24 == 0x80 {
                 self.global_state
                     .find_transient_object(parent_handle)
@@ -446,67 +487,104 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .load_persistent_object(self.global_state, parent_handle)
                     .map_err(|_| TpmRc::REFERENCE_H0)?
             };
-            let parent_has_st_clear =
-                obj.st_clear || obj.public.object_attributes.contains(TpmaObject::ST_CLEAR);
-            if (obj.public.object_attributes.0 & TpmaObject::DECRYPT.0) == 0
-                || (obj.public.object_attributes.0 & TpmaObject::RESTRICTED.0) == 0
+            let attrs = obj.public.object_attributes;
+            // C `ObjectSetLoadedAttributes`: only non-external objects with a sensitive area,
+            // `restricted` and `decrypt` SET and a non-NULL nameAlg get `isParent` (or
+            // `derivation` for KEYEDHASH).
+            if !attrs.contains(TpmaObject::DECRYPT)
+                || !attrs.contains(TpmaObject::RESTRICTED)
+                || obj.external
+                || obj.public_only
+                || obj.public.name_alg.is_none()
             {
-                return Err(if expect_type_error {
-                    TpmRc::TYPE.with(Position::handle(1))
-                } else {
-                    TpmRc::ATTRIBUTES.with(Position::handle(1))
-                });
+                return Err(TpmRc::TYPE.with(Position::handle(1)));
             }
             let is_derivation_parent = matches!(
                 &obj.public.parms_and_id,
-                crate::owned::OwnedPublicParmsAndId::KeyedHash(
-                    Some(TpmtKeyedHashScheme::ExclusiveOr(_)),
-                    _
-                )
+                crate::owned::OwnedPublicParmsAndId::KeyedHash(_, _)
             );
-            if expect_type_error && is_derivation_parent {
+            if !allow_derivation_parent && is_derivation_parent {
                 return Err(TpmRc::TYPE.with(Position::handle(1)));
             }
-            let parent_req_auth =
-                (obj.public.object_attributes.0 & TpmaObject::USER_WITH_AUTH.0) != 0;
-            let dyn_qn = self.get_dynamic_qualified_name(&obj);
-            let qn_buf = dyn_qn.get_buffer();
-            let qn_len = qn_buf.len();
-            parent_qn_buf[..qn_len].copy_from_slice(qn_buf);
-            parent_seed_val[..32].copy_from_slice(&obj.seed);
-            let mut sym_bits = match &obj.public.parms_and_id {
-                crate::owned::OwnedPublicParmsAndId::Rsa(parms, _) => {
-                    parms.symmetric.map(|s| s.key_bits() as u32).unwrap_or(128)
-                }
-                crate::owned::OwnedPublicParmsAndId::Ecc(parms, _) => {
-                    parms.symmetric.map(|s| s.key_bits() as u32).unwrap_or(128)
-                }
-                _ => 128,
-            };
-            if sym_bits == 0 {
-                sym_bits = 128;
-            }
-            let name_alg = obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
-            let mut actual_seed_len = core::cmp::min(obj.seed.len(), name_alg.digest_size());
-            while actual_seed_len > 0 && obj.seed[actual_seed_len - 1] == 0 {
-                actual_seed_len -= 1;
-            }
-            if actual_seed_len == 0 {
-                actual_seed_len = core::cmp::min(obj.seed.len(), name_alg.digest_size());
-            }
-            Ok(ResolvedParentInfo {
-                req_auth: parent_req_auth,
-                seed_len: actual_seed_len,
-                qn_len,
-                hierarchy_val: obj.hierarchy,
-                has_st_clear: parent_has_st_clear,
-                name_alg,
-                sym_bits,
-                attributes: obj.public.object_attributes,
-                is_derivation_parent,
-            })
+            Ok(self.parent_info_from_object(&obj, parent_seed_val, parent_qn_buf))
         } else {
             Err(TpmRc::HANDLE.to_rc())
+        }
+    }
+
+    /// Builds the [`ResolvedParentInfo`] (protection seed, qualified name, nameAlg and
+    /// symmetric key size) of a loaded parent object without any type checks.
+    ///
+    /// The protection seed is the parent's full `seedValue` (C `ComputeProtectionKeyParms`
+    /// uses `protector->sensitive.seedValue` unmodified). For a derivation parent (KEYEDHASH)
+    /// the derivation secret is the parent's `sensitive.bits` and the KDF hash is
+    /// `scheme.details.xor.hashAlg` (C `CreateLoaded.c` `DRBG_InstantiateSeededKdf`).
+    pub(crate) fn parent_info_from_object(
+        &self,
+        obj: &TransientObject,
+        parent_seed_val: &mut [u8; 64],
+        parent_qn_buf: &mut [u8; 66],
+    ) -> ResolvedParentInfo {
+        let attrs = obj.public.object_attributes;
+        let parent_has_st_clear = obj.st_clear || attrs.contains(TpmaObject::ST_CLEAR);
+        let dyn_qn = self.get_dynamic_qualified_name(obj);
+        let qn_buf = dyn_qn.get_buffer();
+        let qn_len = qn_buf.len();
+        parent_qn_buf[..qn_len].copy_from_slice(qn_buf);
+        let mut sym_bits = match &obj.public.parms_and_id {
+            crate::owned::OwnedPublicParmsAndId::Rsa(parms, _) => {
+                parms.symmetric.map(|s| s.key_bits() as u32).unwrap_or(128)
+            }
+            crate::owned::OwnedPublicParmsAndId::Ecc(parms, _) => {
+                parms.symmetric.map(|s| s.key_bits() as u32).unwrap_or(128)
+            }
+            _ => 128,
+        };
+        if sym_bits == 0 {
+            sym_bits = 128;
+        }
+        let mut name_alg = obj.public.name_alg.unwrap_or(TpmiAlgHash::Sha256);
+        let is_derivation_parent = matches!(
+            &obj.public.parms_and_id,
+            crate::owned::OwnedPublicParmsAndId::KeyedHash(_, _)
+        ) && attrs.contains(TpmaObject::RESTRICTED)
+            && attrs.contains(TpmaObject::DECRYPT);
+        let seed_len = if is_derivation_parent {
+            if let crate::owned::OwnedPublicParmsAndId::KeyedHash(
+                Some(TpmtKeyedHashScheme::ExclusiveOr(xor)),
+                _,
+            ) = &obj.public.parms_and_id
+            {
+                name_alg = xor.hash_alg;
+            }
+            let len = core::cmp::min(obj.private_len, parent_seed_val.len());
+            parent_seed_val[..len].copy_from_slice(&obj.private[..len]);
+            len
+        } else {
+            let seed = obj.seed_bytes();
+            parent_seed_val[..seed.len()].copy_from_slice(seed);
+            seed.len()
+        };
+        ResolvedParentInfo {
+            req_auth: attrs.contains(TpmaObject::USER_WITH_AUTH),
+            seed_len,
+            qn_len,
+            hierarchy_val: obj.hierarchy,
+            has_st_clear: parent_has_st_clear,
+            name_alg,
+            sym_bits,
+            attributes: attrs,
+            is_derivation_parent,
+            scheme: Some(ParentSchemeInfo {
+                name_alg: obj.public.name_alg,
+                symmetric: match &obj.public.parms_and_id {
+                    crate::owned::OwnedPublicParmsAndId::Rsa(parms, _) => parms.symmetric,
+                    crate::owned::OwnedPublicParmsAndId::Ecc(parms, _) => parms.symmetric,
+                    crate::owned::OwnedPublicParmsAndId::Sym(sym, _) => Some(*sym),
+                    _ => None,
+                },
+                is_derivation: is_derivation_parent,
+            }),
         }
     }
 
@@ -522,6 +600,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         is_import: bool,
         allow_null_name_alg: bool,
         error_pos: Position,
+        parent_scheme: Option<ParentSchemeInfo>,
     ) -> Result<(), TpmRc> {
         let name_alg_opt = public_struct.name_alg;
         if !allow_null_name_alg && name_alg_opt.is_none() {
@@ -643,121 +722,62 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
-        // 5. Scheme checks per key type
-        match &public_struct.parms_and_id {
-            PublicParmsAndId::Rsa(parms, _) => {
-                if !restricted && !decrypt && parms.symmetric.is_some() {
-                    return Err(TpmRc::SYMMETRIC.with(error_pos));
-                }
-                if sign && !decrypt {
-                    match &parms.scheme {
-                        Some(TpmtRsaScheme::Rsapss(_)) | Some(TpmtRsaScheme::Rsassa(_)) => {}
-                        None => {
-                            if restricted {
-                                return Err(TpmRc::SCHEME.with(error_pos));
-                            }
-                        }
-                        _ => {
-                            return Err(TpmRc::SCHEME.with(error_pos));
-                        }
-                    }
-                }
-                if decrypt && !sign {
-                    if restricted && parms.scheme.is_some() {
-                        return Err(TpmRc::SCHEME.with(error_pos));
-                    }
-                    if !restricted
-                        && matches!(
-                            parms.scheme,
-                            Some(TpmtRsaScheme::Rsassa(_)) | Some(TpmtRsaScheme::Rsapss(_))
-                        )
-                    {
-                        return Err(TpmRc::SCHEME.with(error_pos));
-                    }
-                }
-                if parms.key_bits.0 != 1024
-                    && parms.key_bits.0 != 2048
-                    && parms.key_bits.0 != 3072
-                    && parms.key_bits.0 != 4096
-                {
-                    return Err(TpmRc::VALUE.with(error_pos));
-                }
-                if parms.exponent != 0 && parms.exponent != 65537 {
-                    return Err(TpmRc::VALUE.with(error_pos));
-                }
+        // 5. Special checks for objects derived from a derivation parent.
+        if let Some(parent) = parent_scheme
+            && parent.is_derivation
+        {
+            let parent_fixed_tpm = parent_attributes
+                .map(|a| a.contains(TpmaObject::FIXED_TPM))
+                .unwrap_or(false);
+            // A derived object has the same fixedTPM setting as its parent and must be
+            // fixedParent.
+            if fixed_tpm != parent_fixed_tpm || !fixed_parent {
+                return Err(TpmRc::ATTRIBUTES.with(error_pos));
             }
-            PublicParmsAndId::Ecc(parms, _) => {
-                if !restricted && !decrypt && parms.symmetric.is_some() {
-                    return Err(TpmRc::SYMMETRIC.with(error_pos));
-                }
-                if parms.kdf.is_some() {
-                    return Err(TpmRc::KDF.with(error_pos));
-                }
-                if sign && !decrypt {
-                    match &parms.scheme {
-                        Some(TpmtEccScheme::Ecdsa(_))
-                        | Some(TpmtEccScheme::Ecdaa(_))
-                        | Some(TpmtEccScheme::Sm2(_))
-                        | Some(TpmtEccScheme::Ecschnorr(_)) => {}
-                        None => {
-                            if restricted {
-                                return Err(TpmRc::SCHEME.with(error_pos));
-                            }
-                        }
-                        _ => {
-                            return Err(TpmRc::SCHEME.with(error_pos));
-                        }
-                    }
-                }
-                if decrypt && !sign {
-                    if restricted && parms.scheme.is_some() {
-                        return Err(TpmRc::SCHEME.with(error_pos));
-                    }
-                    if !restricted
-                        && matches!(
-                            parms.scheme,
-                            Some(TpmtEccScheme::Ecdsa(_))
-                                | Some(TpmtEccScheme::Ecdaa(_))
-                                | Some(TpmtEccScheme::Ecschnorr(_))
-                        )
-                    {
-                        return Err(TpmRc::SCHEME.with(error_pos));
-                    }
-                }
+        }
+
+        // RSA key size and exponent sanity (unmarshal-time / `CryptValidateKeys` checks).
+        if let PublicParmsAndId::Rsa(parms, _) = &public_struct.parms_and_id {
+            if !matches!(parms.key_bits.0, 1024 | 2048 | 3072 | 4096) {
+                return Err(TpmRc::VALUE.with(error_pos));
             }
-            PublicParmsAndId::KeyedHash(scheme, _) => {
-                if let Some(TpmtKeyedHashScheme::ExclusiveOr(s)) = scheme
-                    && s.kdf == Some(tpm2::TpmiAlgKdf::Hkdf)
-                {
-                    return Err(TpmRc::KDF.with(error_pos));
-                }
-                if sign && decrypt && scheme.is_some() {
-                    return Err(TpmRc::SCHEME.with(error_pos));
-                }
-                if sign && !decrypt && !matches!(scheme, Some(TpmtKeyedHashScheme::Hmac(_)) | None)
-                {
-                    return Err(TpmRc::SCHEME.with(error_pos));
-                }
-                if decrypt && !sign {
-                    if !matches!(scheme, Some(TpmtKeyedHashScheme::ExclusiveOr(_)) | None) {
-                        return Err(TpmRc::SCHEME.with(error_pos));
-                    }
-                    if let Some(TpmtKeyedHashScheme::ExclusiveOr(s)) = scheme
-                        && restricted
-                        && s.kdf != Some(tpm2::TpmiAlgKdf::Kdf1Sp800_108)
-                    {
-                        return Err(TpmRc::SCHEME.with(error_pos));
-                    }
-                }
+            if parms.exponent != 0 && parms.exponent != 65537 {
+                return Err(TpmRc::VALUE.with(error_pos));
             }
+        }
+
+        // 6. Scheme checks per key type (C `SchemeChecks`).
+        Self::scheme_checks(public_struct, parent_scheme).map_err(|e| e.with_position(error_pos))
+    }
+
+    /// Validates the schemes in a public area (C `SchemeChecks`), returning unpositioned
+    /// errors (callers add the public-area parameter position).
+    ///
+    /// - SYMCIPHER: a decryption key must use a block cipher mode or `TPM_ALG_NULL`; a signing
+    ///   key may use any mode that unmarshaled.
+    /// - KEYEDHASH: `sign == decrypt` (incl. sealed data) requires a NULL scheme, a signing key
+    ///   requires HMAC, a decryption key requires XOR (with SP800-108 and a hash for
+    ///   derivation parents).
+    /// - RSA/ECC: dual-use keys need a NULL scheme; signing keys need a signing scheme (or NULL
+    ///   if unrestricted); restricted decryption keys need a NULL scheme and unrestricted ones a
+    ///   decryption scheme or NULL; non-parents must have a NULL symmetric; ECC KDF must be NULL.
+    /// - Storage parents (`restricted` and `decrypt`) need a symmetric algorithm and, when
+    ///   `fixedParent` is SET under a parent object, the parent's nameAlg and symmetric.
+    pub(crate) fn scheme_checks(
+        public_struct: &TpmtPublic,
+        parent_scheme: Option<ParentSchemeInfo>,
+    ) -> Result<(), TpmRc> {
+        let attrs = public_struct.object_attributes;
+        let restricted = attrs.contains(TpmaObject::RESTRICTED);
+        let sign = attrs.contains(TpmaObject::SIGN_ENCRYPT);
+        let decrypt = attrs.contains(TpmaObject::DECRYPT);
+        // `None` = this type has no symmetric definition (KEYEDHASH); `Some(sym)` otherwise.
+        let sym_algs: Option<Option<tpm2::TpmtSymDefObject>> = match &public_struct.parms_and_id {
             PublicParmsAndId::Sym(sym, _) => {
-                if sign && !decrypt {
-                    return Err(TpmRc::ATTRIBUTES.with(error_pos));
-                }
                 if decrypt
                     && !matches!(
                         sym.mode(),
-                        Some(
+                        None | Some(
                             TpmiAlgSymMode::CTR
                                 | TpmiAlgSymMode::OFB
                                 | TpmiAlgSymMode::CBC
@@ -766,19 +786,134 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         )
                     )
                 {
-                    return Err(TpmRc::SCHEME.with(error_pos));
+                    return Err(TpmRc::SCHEME.to_rc());
                 }
+                Some(Some(*sym))
+            }
+            PublicParmsAndId::KeyedHash(scheme, _) => {
+                if let Some(TpmtKeyedHashScheme::ExclusiveOr(s)) = scheme
+                    && s.kdf == Some(tpm2::TpmiAlgKdf::Hkdf)
+                {
+                    return Err(TpmRc::KDF.to_rc());
+                }
+                if sign == decrypt {
+                    if scheme.is_some() {
+                        return Err(TpmRc::SCHEME.to_rc());
+                    }
+                } else if sign {
+                    if !matches!(scheme, Some(TpmtKeyedHashScheme::Hmac(_))) {
+                        return Err(TpmRc::SCHEME.to_rc());
+                    }
+                } else {
+                    match scheme {
+                        Some(TpmtKeyedHashScheme::ExclusiveOr(s)) => {
+                            if restricted && s.kdf != Some(tpm2::TpmiAlgKdf::Kdf1Sp800_108) {
+                                return Err(TpmRc::SCHEME.to_rc());
+                            }
+                        }
+                        _ => return Err(TpmRc::SCHEME.to_rc()),
+                    }
+                }
+                None
+            }
+            PublicParmsAndId::Rsa(parms, _) => {
+                let scheme = parms.scheme.map(|s| s.scheme());
+                let is_sign_scheme = matches!(scheme, Some(Alg::RSASSA) | Some(Alg::RSAPSS));
+                let is_decrypt_scheme = matches!(scheme, Some(Alg::RSAES) | Some(Alg::OAEP));
+                Self::asym_scheme_checks(
+                    attrs,
+                    scheme.is_some(),
+                    is_sign_scheme,
+                    is_decrypt_scheme,
+                    parms.symmetric.is_some(),
+                )?;
+                Some(parms.symmetric)
+            }
+            PublicParmsAndId::Ecc(parms, _) => {
+                let scheme = parms.scheme.map(|s| s.scheme());
+                let is_sign_scheme = matches!(
+                    scheme,
+                    Some(Alg::ECDSA) | Some(Alg::ECDAA) | Some(Alg::ECSCHNORR) | Some(Alg::SM2)
+                );
+                let is_decrypt_scheme =
+                    matches!(scheme, Some(Alg::ECDH) | Some(Alg::SM2) | Some(Alg::ECMQV));
+                Self::asym_scheme_checks(
+                    attrs,
+                    scheme.is_some(),
+                    is_sign_scheme,
+                    is_decrypt_scheme,
+                    parms.symmetric.is_some(),
+                )?;
+                if parms.kdf.is_some() {
+                    return Err(TpmRc::KDF.to_rc());
+                }
+                Some(parms.symmetric)
             }
             PublicParmsAndId::Mldsa(_, _)
             | PublicParmsAndId::HashMldsa(_, _)
-            | PublicParmsAndId::Mlkem(_, _) => {}
-        }
+            | PublicParmsAndId::Mlkem(_, _) => return Ok(()),
+        };
 
+        // A restricted decryption key with symmetric algorithms is an ordinary parent: it needs
+        // a symmetric algorithm and, if it is not duplicable, the parent's algorithms.
+        if let Some(sym) = sym_algs
+            && restricted
+            && decrypt
+        {
+            let sym = sym.ok_or(TpmRc::SYMMETRIC.to_rc())?;
+            if attrs.contains(TpmaObject::FIXED_PARENT)
+                && let Some(parent) = parent_scheme
+            {
+                if public_struct.name_alg != parent.name_alg {
+                    return Err(TpmRc::HASH.to_rc());
+                }
+                if parent.symmetric != Some(sym) {
+                    return Err(TpmRc::SYMMETRIC.to_rc());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Asymmetric (RSA/ECC) part of [`Self::scheme_checks`].
+    fn asym_scheme_checks(
+        attrs: TpmaObject,
+        has_scheme: bool,
+        is_sign_scheme: bool,
+        is_decrypt_scheme: bool,
+        has_symmetric: bool,
+    ) -> Result<(), TpmRc> {
+        let restricted = attrs.contains(TpmaObject::RESTRICTED);
+        let sign = attrs.contains(TpmaObject::SIGN_ENCRYPT);
+        let decrypt = attrs.contains(TpmaObject::DECRYPT);
+        if sign == decrypt {
+            // There is no way to specify both a sign and a decrypt scheme.
+            if has_scheme {
+                return Err(TpmRc::SCHEME.to_rc());
+            }
+        } else if sign {
+            // A signing key without a signing scheme is only OK if unrestricted and NULL.
+            if !is_sign_scheme && (restricted || has_scheme) {
+                return Err(TpmRc::SCHEME.to_rc());
+            }
+        } else if restricted {
+            // A restricted decryption key (a parent) must have a NULL scheme.
+            if has_scheme {
+                return Err(TpmRc::SCHEME.to_rc());
+            }
+        } else if has_scheme && !is_decrypt_scheme {
+            return Err(TpmRc::SCHEME.to_rc());
+        }
+        // An asymmetric key that is not a parent must have a NULL symmetric algorithm.
+        if (!restricted || !decrypt) && has_symmetric {
+            return Err(TpmRc::SYMMETRIC.to_rc());
+        }
         Ok(())
     }
 
     /// Performs validation checks on the public and sensitive area parameters of the target object
     /// template to ensure cryptographic attributes consistency and spec requirements alignment.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn validate_create_loaded_parameters(
         &self,
         in_public_struct: &TpmtPublic,
@@ -787,16 +922,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         parent_hierarchy_val: u32,
         parent_attributes: Option<TpmaObject>,
         is_derived: bool,
+        parent_scheme: Option<ParentSchemeInfo>,
     ) -> Result<(bool, bool), TpmRc> {
         let is_primary = parent_handle == 0x40000001
             || parent_handle == 0x40000007
             || parent_handle == 0x4000000C
             || parent_handle == 0x4000000B;
 
-        let alg = in_public_struct.name_alg.ok_or(TpmRc::HASH.to_rc())?;
-        let digest_size = alg.digest_size();
+        // AdjustAuthSize: a NULL nameAlg allows `sizeof(TPMU_HA)` (64) bytes; the NULL nameAlg
+        // itself is then rejected with `TPM_RC_HASH + RC_P2` by `validate_object_attributes`.
+        let digest_size = in_public_struct
+            .name_alg
+            .map_or(64, |alg| alg.digest_size());
 
-        if in_sensitive_struct.user_auth.get_size() as usize > digest_size {
+        if crate::util::strip_trailing_zeros(in_sensitive_struct.user_auth.get_buffer()).len()
+            > digest_size
+        {
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
 
@@ -812,6 +953,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
+        if !is_derived {
+            self.create_checks(in_public_struct, in_sensitive_struct, is_primary)
+                .map_err(|e| e.with_position(Position::parameter(2)))?;
+        }
+
         self.validate_object_attributes(
             in_public_struct,
             parent_handle,
@@ -820,25 +966,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             false, // is_import
             false, // allow_null_name_alg
             Position::parameter(2),
+            parent_scheme,
         )?;
 
         if !is_derived {
             if let PublicParmsAndId::Sym(sym, _) = &in_public_struct.parms_and_id {
-                if sensitive_data_origin && in_sensitive_struct.data.get_size() != 0 {
-                    return Err(TpmRc::ATTRIBUTES.with(Position::parameter(2)));
-                }
                 if !sensitive_data_origin {
                     let key_bytes = (sym.key_bits() as usize) / 8;
                     if key_bytes > 0 && in_sensitive_struct.data.get_size() as usize != key_bytes {
                         return Err(TpmRc::KEY_SIZE.with(Position::parameter(1)));
                     }
                 }
-            } else if (sensitive_data_origin && in_sensitive_struct.data.get_size() != 0)
-                || (!sensitive_data_origin
-                    && (matches!(in_public_struct.parms_and_id, PublicParmsAndId::Rsa(_, _))
-                        || matches!(in_public_struct.parms_and_id, PublicParmsAndId::Ecc(_, _))))
-            {
-                return Err(TpmRc::ATTRIBUTES.with(Position::parameter(2)));
             } else if in_sensitive_struct.data.get_size() as usize
                 > tpm2::TPM2_MAX_SYM_DATA as usize
             {
@@ -847,6 +985,58 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         Ok((is_primary, is_derived))
+    }
+
+    /// Attribute checks that are unique to object creation (C `CreateChecks`), returning
+    /// unpositioned errors (callers add `RC_..._inPublic`):
+    /// - if the caller supplies the sensitive data (`sensitiveDataOrigin` CLEAR) it must not be
+    ///   empty, and an ordinary object may not get data when `sensitiveDataOrigin` is SET
+    ///   (primary objects may: the data is extra KDF input);
+    /// - a KEYEDHASH data object (`sign` and `decrypt` CLEAR) can not have
+    ///   `sensitiveDataOrigin` SET;
+    /// - a restricted SYMCIPHER/KEYEDHASH key needs `sensitiveDataOrigin` SET unless both
+    ///   `fixedParent` and `fixedTPM` are CLEAR;
+    /// - asymmetric keys can not have their sensitive part provided.
+    pub(crate) fn create_checks(
+        &self,
+        in_public_struct: &TpmtPublic,
+        in_sensitive_struct: &TpmsSensitiveCreate,
+        is_primary: bool,
+    ) -> Result<(), TpmRc> {
+        let attrs = in_public_struct.object_attributes;
+        let sdo = attrs.contains(TpmaObject::SENSITIVE_DATA_ORIGIN);
+        let data_size = in_sensitive_struct.data.get_size();
+        if !sdo && data_size == 0 {
+            return Err(TpmRc::ATTRIBUTES.to_rc());
+        }
+        if !is_primary && sdo && data_size != 0 {
+            return Err(TpmRc::ATTRIBUTES.to_rc());
+        }
+        let restricted_symmetric_without_sdo = attrs.contains(TpmaObject::RESTRICTED)
+            && !sdo
+            && (attrs.contains(TpmaObject::FIXED_PARENT) || attrs.contains(TpmaObject::FIXED_TPM));
+        match &in_public_struct.parms_and_id {
+            PublicParmsAndId::KeyedHash(_, _) => {
+                if (!attrs.contains(TpmaObject::SIGN_ENCRYPT)
+                    && !attrs.contains(TpmaObject::DECRYPT)
+                    && sdo)
+                    || restricted_symmetric_without_sdo
+                {
+                    return Err(TpmRc::ATTRIBUTES.to_rc());
+                }
+            }
+            PublicParmsAndId::Sym(_, _) => {
+                if restricted_symmetric_without_sdo {
+                    return Err(TpmRc::ATTRIBUTES.to_rc());
+                }
+            }
+            _ => {
+                if !sdo {
+                    return Err(TpmRc::ATTRIBUTES.to_rc());
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Encrypts the sensitive area of the target object using storage seed and CFB mode,
@@ -868,15 +1058,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         );
         tpm2b_sensitive_buf[0..2].copy_from_slice(&(sensitive_len as u16).to_be_bytes());
 
-        // Inner integrity (empty)
-        let inner_integrity_len = 2; // Tpm2bDigest size bytes (0)
-        let inner_integrity_buf = [0u8; 2];
-
+        // C `MarshalSensitive`: the encrypted payload of an ordinary `TPM2B_PRIVATE` is a
+        // `TPM2B_SENSITIVE`, i.e. the 2-byte size of the `TPMT_SENSITIVE` followed by it (there is
+        // no inner wrapper outside of duplication blobs).
         let mut unencrypted_blob = [0u8; 2048];
-        unencrypted_blob[0..inner_integrity_len].copy_from_slice(&inner_integrity_buf);
-        unencrypted_blob[inner_integrity_len..inner_integrity_len + sensitive_len]
-            .copy_from_slice(&tpm2b_sensitive_buf[2..2 + sensitive_len]);
-        let unencrypted_len = inner_integrity_len + sensitive_len;
+        let unencrypted_len = 2 + sensitive_len;
+        unencrypted_blob[..unencrypted_len]
+            .copy_from_slice(&tpm2b_sensitive_buf[..unencrypted_len]);
 
         let digest_size = parent_name_alg.digest_size();
         let total_bits = (digest_size * 8) as u32;
@@ -1017,10 +1205,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             ),
         };
 
+        // MarshalSensitive: the authValue is zero-padded to the nameAlg digest size so that the
+        // ciphertext length does not leak its length.
+        let digest_size = in_public_struct.name_alg.map_or(0, |alg| alg.digest_size());
+        let auth = crate::util::strip_trailing_zeros(in_sensitive_struct.user_auth.get_buffer());
+        let mut padded_auth = [0u8; 64];
+        padded_auth[..auth.len()].copy_from_slice(auth);
+        let auth_len = core::cmp::max(auth.len(), digest_size);
         let tpmt_sensitive = TpmtSensitive {
-            auth_value: in_sensitive_struct.user_auth,
-            seed_value: Tpm2bDigest::from_bytes(obj_seed)
-                .expect("generated object seed has valid size"),
+            auth_value: tpm2::Tpm2bAuth::from_bytes(&padded_auth[..auth_len])
+                .map_err(|_| TpmRc::FAILURE)?,
+            seed_value: Tpm2bDigest::from_bytes(Self::object_seed_value(
+                in_public_struct,
+                obj_seed,
+            ))
+            .expect("generated object seed has valid size"),
             sensitive: sensitive_comp,
         };
 

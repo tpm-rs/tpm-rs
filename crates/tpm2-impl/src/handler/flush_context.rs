@@ -55,33 +55,44 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .global_state
                     .find_active_sequence(flush_handle)
                     .is_some());
-
-        let is_saved_session = is_session
-            && self
-                .global_state
-                .saved_sessions
-                .contains(&Some(flush_handle));
-
-        if is_session && self.global_state.session(flush_handle).is_none() && !is_saved_session {
-            return Err(TpmRc::HANDLE.to_rc());
-        }
         if is_transient && !is_valid_transient {
-            return Err(TpmRc::HANDLE.to_rc());
+            return Err(TpmRc::HANDLE.with(Position::parameter(1)));
+        }
+
+        // Sessions are identified by their slot: "when flushing a session, the upper byte of the
+        // handle is ignored" (`SessionIsLoaded` / `SessionIsSaved` mask with `HR_HANDLE_MASK`).
+        let loaded_session = if is_session {
+            self.global_state
+                .session_by_slot(flush_handle)
+                .map(|s| s.session_handle)
+        } else {
+            None
+        };
+        let is_saved_session =
+            is_session && self.global_state.saved_session_slot(flush_handle).is_some();
+        if is_session && loaded_session.is_none() && !is_saved_session {
+            return Err(TpmRc::HANDLE.with(Position::parameter(1)));
         }
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;
 
         if is_session {
-            for slot in self.global_state.saved_sessions.iter_mut() {
-                if *slot == Some(flush_handle) {
-                    *slot = None;
-                }
-            }
-            if self.global_state.exclusive_audit_session == Some(flush_handle) {
+            // C compares `flushHandle == g_exclusiveAuditSession` exactly. The slot is compared
+            // here so that flushing the exclusive session through its other-type alias (which
+            // frees the slot, see above) cannot leave a stale exclusive marker that a new
+            // session in the same slot would inherit; for the real handle both are identical.
+            if self
+                .global_state
+                .exclusive_audit_session
+                .is_some_and(|h| h & 0x00FF_FFFF == flush_handle & 0x00FF_FFFF)
+            {
                 self.global_state.exclusive_audit_session = None;
             }
-            let _ = self.global_state.flush_session(flush_handle);
+            self.global_state.remove_saved_session(flush_handle);
+            if let Some(handle) = loaded_session {
+                let _ = self.global_state.flush_session(handle);
+            }
         } else if is_transient {
             if self
                 .global_state

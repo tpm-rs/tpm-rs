@@ -40,7 +40,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let parent_handle = handles.parent_handle.0;
 
         if (0x40000000..=0x40FFFFFF).contains(&parent_handle) {
-            return Err(TpmRc::KEY.to_rc());
+            // `parentHandle` is a `TPMI_DH_OBJECT`: permanent handles are invalid values.
+            return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
@@ -151,7 +152,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             parent_handle,
             &mut parent_seed_val,
             &mut parent_qn_buf,
-            true, // expect_type_error
+            false, // allow_derivation_parent
         )?;
 
         // 2. Validate template properties and attributes
@@ -162,6 +163,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             parent_info.hierarchy_val,
             Some(parent_info.attributes),
             false,
+            parent_info.scheme,
         )?;
 
         // 3. Derive/Generate the new object seed
@@ -196,13 +198,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else {
             None
         };
-        let name_alg = in_public_struct.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+        let name_alg = in_public_struct
+            .name_alg
+            .ok_or(TpmRc::HASH.with(Position::parameter(2)))?;
         if name_alg != TpmiAlgHash::Sha1
             && name_alg != TpmiAlgHash::Sha256
             && name_alg != TpmiAlgHash::Sha384
             && name_alg != TpmiAlgHash::Sha512
         {
-            return Err(TpmRc::VALUE.to_rc());
+            return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
 
         let actual_private_key_len = self.generate_key_and_unique(
@@ -260,7 +264,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )?;
 
         let creation_data_struct = TpmsCreationData {
-            pcr_select: cmd.creation_pcr,
+            // C `FillInCreationData`: the reported selection is the filtered one.
+            pcr_select: self.filter_pcr_selection(&cmd.creation_pcr),
             pcr_digest: pcr_digest.as_tpm2b(),
             locality: TpmaLocality(if self.global_state.locality <= 4 {
                 1 << self.global_state.locality

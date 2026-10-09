@@ -26,6 +26,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let privacy_admin_handle = handles.privacy_admin_handle;
         let sign_handle = handles.sign_handle;
 
+        // TPMI_RH_ENDORSEMENT (no `+`): only TPM_RH_ENDORSEMENT is a valid value.
+        if privacy_admin_handle.0 != Handle::RH_ENDORSEMENT.0 {
+            return Err(TpmRc::VALUE.with(Position::handle(1)));
+        }
+
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
         let cmd = request.try_unmarshal::<GetCommandAuditDigest>()?;
@@ -40,29 +45,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Some(self.resolve_object(sign_handle.0, Position::handle(2))?)
         };
 
-        // Validate privacy_admin matches administrative hierarchy handles
-        if privacy_admin_handle.0 != Handle::RH_ENDORSEMENT.0
-            && privacy_admin_handle.0 != Handle::RH_OWNER.0
-            && privacy_admin_handle.0 != Handle::RH_PLATFORM.0
-            && privacy_admin_handle.0 != Handle::RH_NULL.0
-        {
-            return Err(TpmRc::VALUE.with(Position::handle(1)));
-        }
-
         // 2. Verify authorizations
         let expected_sessions = if sign_handle.0 == 0x40000007 { 1 } else { 2 };
         if num_sessions < expected_sessions {
             return Err(TpmRc::AUTH_MISSING);
         }
 
-        let clock_info = self.get_clock_info();
-
-        // 3. Resolve signature scheme and verify consistency with public attributes
+        // 3. IsSigningObject() (TPM_RC_KEY + RC_GetCommandAuditDigest_signHandle) and
+        //    CryptSelectSignScheme() (TPM_RC_SCHEME + RC_GetCommandAuditDigest_inScheme).
         let public_opt = signer_obj_opt.as_ref().map(|s| &s.public);
-        let actual_in_scheme =
-            self.resolve_attest_scheme(sign_handle, public_opt, cmd.in_scheme)?;
+        let actual_in_scheme = self.resolve_attest_scheme(
+            public_opt,
+            cmd.in_scheme,
+            Position::handle(2),
+            Position::parameter(2),
+        )?;
 
-        let (qualified_signer, extra_data) = self.compute_attest_fields(
+        let header = self.compute_attest_fields(
             signer_obj_opt.as_ref(),
             &actual_in_scheme,
             &cmd.qualifying_data,
@@ -87,10 +86,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let attest = TpmsAttest {
             magic: TpmGenerated,
-            qualified_signer,
-            extra_data,
-            clock_info,
-            firmware_version: 0x00010001,
+            qualified_signer: header.qualified_signer,
+            extra_data: header.extra_data,
+            clock_info: header.clock_info,
+            firmware_version: header.firmware_version,
             attested: TpmuAttest::CommandAudit(command_audit_info),
         };
 
@@ -98,10 +97,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let attest_len = attest.marshal(&mut attest_buf);
 
         // 4. Sign the attestation payload
-        let priv_key_opt = signer_obj_opt.as_ref().map(|s| (s.private, s.private_len));
         let owned_sig = self.sign_attestation_block(
-            sign_handle,
-            priv_key_opt.as_ref(),
+            signer_obj_opt.as_ref(),
             actual_in_scheme,
             &attest_buf[..attest_len],
             cmd.qualifying_data.get_buffer(),

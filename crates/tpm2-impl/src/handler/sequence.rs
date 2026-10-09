@@ -116,7 +116,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             && alg != TpmiAlgHash::Sha384
             && alg != TpmiAlgHash::Sha512
         {
-            return Err(TpmRc::HASH.to_rc());
+            // C rejects unimplemented hashes while unmarshaling `hashAlg`
+            // (`TPM_RC_HASH + RC_HashSequenceStart_hashAlg`).
+            return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
 
         let (index, handle) = self.global_state.find_empty_sequence_slot()?;
@@ -190,22 +192,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .find_active_sequence_mut(sequence_handle)
             .unwrap();
 
-        if seq_obj.first_bytes_len < 4 {
-            let needed = 4 - seq_obj.first_bytes_len;
-            let take = needed.min(data.len());
-            seq_obj.first_bytes[seq_obj.first_bytes_len..seq_obj.first_bytes_len + take]
-                .copy_from_slice(&data[..take]);
-            seq_obj.first_bytes_len += take;
+        // For hash sequences, only the first data block decides whether a ticket may be
+        // produced (`TicketIsSafe` on the first block in `SequenceUpdate.c`).
+        if matches!(seq_obj.sequence_type, crate::SequenceType::Hash { .. }) {
+            record_first_block(seq_obj, data);
         }
 
-        let new_len = seq_obj.sequence_len + data.len();
-        if new_len > seq_obj.sequence_buffer.len() {
-            return Err(TpmRc::MEMORY);
-        }
-
-        let offset = seq_obj.sequence_len;
-        seq_obj.sequence_buffer[offset..new_len].copy_from_slice(data);
-        seq_obj.sequence_len = new_len;
+        // The data is consumed by the streaming hash states, so there is no limit on the total
+        // length of a sequence (C has none either).
         seq_obj.update_hash_states(data);
 
         let response = request.into_response();
@@ -273,24 +267,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             state.update(final_chunk);
 
             match &seq_obj.sequence_type {
-                crate::SequenceType::Event => return Err(TpmRc::MODE.to_rc()),
+                crate::SequenceType::Event => {
+                    return Err(TpmRc::MODE.with(Position::handle(1)));
+                }
                 crate::SequenceType::Hash { alg } => {
                     let (digest_bytes, digest_len) = state.finalize();
 
-                    let is_tpm_generated = if seq_obj.first_bytes_len >= 4 {
-                        seq_obj.first_bytes == [0xFF, b'T', b'C', b'G']
-                    } else if seq_obj.first_bytes_len + final_chunk.len() >= 4 {
-                        let mut first4 = [0u8; 4];
-                        first4[..seq_obj.first_bytes_len]
-                            .copy_from_slice(&seq_obj.first_bytes[..seq_obj.first_bytes_len]);
-                        first4[seq_obj.first_bytes_len..]
-                            .copy_from_slice(&final_chunk[..4 - seq_obj.first_bytes_len]);
-                        first4 == [0xFF, b'T', b'C', b'G']
+                    // If no data block was received yet, the final chunk is the first block.
+                    let ticket_safe = if seq_obj.first_bytes_len == 0 {
+                        ticket_is_safe(final_chunk)
                     } else {
-                        false
+                        first_block_was_safe(seq_obj)
                     };
 
-                    let validation = if hierarchy.0 == Handle::RH_NULL.0 || is_tpm_generated {
+                    let validation = if hierarchy.0 == Handle::RH_NULL.0 || !ticket_safe {
                         tpm2::TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default())
                     } else {
                         ticket_hmac = self.compute_hashcheck_ticket(
@@ -360,90 +350,63 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        if pcr_handle != Handle::RH_NULL.0 {
-            // The TPM 2.0 specification defines 24 PCRs for PC Client profiles
-            // (TPM 2.0 Library Specification Part 4: Support Structures, Section 8.1).
-            if pcr_handle >= 24 {
-                return Err(TpmRc::VALUE.to_rc());
-            }
-            let locality = self.global_state.locality;
-            if locality > 4 {
-                return Err(TpmRc::LOCALITY);
-            }
-            let extend_mask = crate::handler::pcr::PCR_EXTEND_LOCALITY[pcr_handle as usize];
-            if (extend_mask & (1 << locality)) == 0 {
-                return Err(TpmRc::LOCALITY);
-            }
-            if pcr_handle < 16 {
-                self.nv_clear_orderly()?;
-            }
-        }
-
-        let (sha1_d, sha256_d, sha384_d) = {
+        // EventSequenceComplete.c order: `sequenceHandle` (Handle 2) must reference an event
+        // sequence before the PCR locality / orderly checks are made.
+        let final_chunk = cmd.buffer.get_buffer();
+        let mut digests = [(TpmiAlgHash::Sha1, [0u8; 64], 0usize); 4];
+        {
             let seq_obj = match self.global_state.find_active_sequence(sequence_handle) {
                 Some(seq) => seq,
                 None => {
                     if self
-                        .resolve_object(sequence_handle, Position::handle(1))
+                        .resolve_object(sequence_handle, Position::handle(2))
                         .is_ok()
                     {
-                        return Err(TpmRc::MODE.with(Position::handle(1)));
+                        return Err(TpmRc::MODE.with(Position::handle(2)));
                     } else {
-                        return Err(TpmRc::HANDLE.with(Position::handle(1)));
+                        return Err(TpmRc::HANDLE.with(Position::handle(2)));
                     }
                 }
             };
 
             if seq_obj.sequence_type != crate::SequenceType::Event {
-                return Err(TpmRc::MODE.to_rc());
+                return Err(TpmRc::MODE.with(Position::handle(2)));
             }
 
-            let final_chunk = cmd.buffer.get_buffer();
-
-            let mut sha1_state = seq_obj.hash_states[0];
-            let mut sha256_state = seq_obj.hash_states[1];
-            let mut sha384_state = seq_obj.hash_states[2];
-            sha1_state.update(final_chunk);
-            sha256_state.update(final_chunk);
-            sha384_state.update(final_chunk);
-
-            let (sha1_d, _) = sha1_state.finalize();
-            let (sha256_d, _) = sha256_state.finalize();
-            let (sha384_d, _) = sha384_state.finalize();
-
-            (sha1_d, sha256_d, sha384_d)
-        };
-
-        let mut results = TpmlDigestValues::default();
-        let mut d_sha1 = [0u8; 20];
-        d_sha1.copy_from_slice(&sha1_d[..20]);
-        results.add(&TpmtHa::Sha1(&d_sha1))?;
-
-        let mut d_sha256 = [0u8; 32];
-        d_sha256.copy_from_slice(&sha256_d[..32]);
-        results.add(&TpmtHa::Sha256(&d_sha256))?;
-
-        let mut d_sha384 = [0u8; 48];
-        d_sha384.copy_from_slice(&sha384_d[..48]);
-        results.add(&TpmtHa::Sha384(&d_sha384))?;
+            // Event sequences track every implemented hash (SHA-1, SHA-256, SHA-384, SHA-512).
+            for (digest, state) in digests.iter_mut().zip(seq_obj.hash_states.iter()) {
+                let mut state = *state;
+                state.update(final_chunk);
+                let (bytes, len) = state.finalize();
+                digest.0 = state.alg;
+                digest.1[..len].copy_from_slice(&bytes[..len]);
+                digest.2 = len;
+            }
+        }
 
         if pcr_handle != Handle::RH_NULL.0 {
-            let old_sha1 = &self.global_state.pcrs.sha1[pcr_handle as usize];
-            let (new_sha1, _) = self.compute_hash(TpmiAlgHash::Sha1, &[old_sha1, &d_sha1])?;
-            self.global_state.pcrs.sha1[pcr_handle as usize].copy_from_slice(&new_sha1[..20]);
+            // The TPM 2.0 specification defines 24 PCRs for PC Client profiles
+            // (TPM 2.0 Library Specification Part 4: Support Structures, Section 8.1).
+            if pcr_handle >= 24 {
+                return Err(TpmRc::VALUE.with(Position::handle(1)));
+            }
+            if !self.pcr_is_extend_allowed(pcr_handle) {
+                return Err(TpmRc::LOCALITY);
+            }
+            if crate::handler::pcr::pcr_is_state_saved(pcr_handle) {
+                self.nv_clear_orderly()?;
+            }
+        }
 
-            let old_sha256 = &self.global_state.pcrs.sha256[pcr_handle as usize];
-            let (new_sha256, _) =
-                self.compute_hash(TpmiAlgHash::Sha256, &[old_sha256, &d_sha256])?;
-            self.global_state.pcrs.sha256[pcr_handle as usize].copy_from_slice(&new_sha256[..32]);
-
-            let old_sha384 = &self.global_state.pcrs.sha384[pcr_handle as usize];
-            let (new_sha384, _) =
-                self.compute_hash(TpmiAlgHash::Sha384, &[old_sha384, &d_sha384])?;
-            self.global_state.pcrs.sha384[pcr_handle as usize].copy_from_slice(&new_sha384[..48]);
-
-            self.global_state.pcrs.update_counter =
-                self.global_state.pcrs.update_counter.wrapping_add(1);
+        let mut results = TpmlDigestValues::default();
+        for (alg, bytes, len) in digests.iter() {
+            let ha = TpmtHa::new(*alg, &bytes[..*len]).ok_or(TpmRc::FAILURE)?;
+            results.add(&ha)?;
+            // PCRExtend(): only allocated banks are extended, and changes to the TCB group
+            // (PCRs 20-22) do not increment the PCR update counter.
+            if pcr_handle != Handle::RH_NULL.0 {
+                self.pcr_extend_bank(pcr_handle, *alg, &bytes[..*len])?;
+            }
         }
 
         self.global_state.remove_active_sequence(sequence_handle)?;
@@ -487,39 +450,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             _ => return Err(TpmRc::TYPE.with(Position::handle(1))),
         };
 
-        if !key_obj
-            .public
-            .object_attributes
-            .contains(TpmaObject::SIGN_ENCRYPT)
-        {
-            return Err(TpmRc::KEY.with(Position::handle(1)));
-        }
-        if key_obj
-            .public
-            .object_attributes
-            .contains(TpmaObject::RESTRICTED)
-        {
-            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
-        }
-        if key_obj.private_len == 0 {
-            return Err(TpmRc::KEY.with(Position::handle(1)));
-        }
-
         let cmd_hash_alg = match cmd.hash_alg {
             Some(alg) => Alg::from(alg),
             None => Alg::NULL,
         };
 
+        // CryptSelectMac(): a non-NULL key scheme provides the MAC algorithm. For an XOR key
+        // this is its hash (C reads `details.hmac.hashAlg`, which aliases the XOR hash); such
+        // keys can't sign and are rejected by the attribute checks below.
         let key_hash_alg = match scheme {
-            Some(TpmtKeyedHashScheme::Hmac(hash_alg)) => {
+            Some(TpmtKeyedHashScheme::Hmac(hash_alg))
+            | Some(TpmtKeyedHashScheme::ExclusiveOr(tpm2::TpmsSchemeXor { hash_alg, .. })) => {
                 let key_hash_alg = Alg::from(*hash_alg);
                 if cmd_hash_alg != Alg::NULL && cmd_hash_alg != key_hash_alg {
                     return Err(TpmRc::VALUE.with(Position::parameter(2)));
                 }
                 key_hash_alg
-            }
-            Some(TpmtKeyedHashScheme::ExclusiveOr(..)) => {
-                return Err(TpmRc::TYPE.with(Position::handle(1)));
             }
             None => {
                 if cmd_hash_alg == Alg::NULL {
@@ -538,6 +484,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
         let key_hash_alg = TpmiAlgHash::try_from(key_hash_alg)
             .map_err(|_| TpmRc::HASH.with(Position::parameter(2)))?;
+
+        // MAC_Start.c order: the MAC scheme selection (`CryptSelectMac`, above) comes first,
+        // then the key must be unrestricted, and only then must it be a signing key.
+        if key_obj
+            .public
+            .object_attributes
+            .contains(TpmaObject::RESTRICTED)
+        {
+            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
+        }
+        if !key_obj
+            .public
+            .object_attributes
+            .contains(TpmaObject::SIGN_ENCRYPT)
+        {
+            return Err(TpmRc::KEY.with(Position::handle(1)));
+        }
+        // Defense in depth: a public-only key cannot be authorized in C (AUTH_UNAVAILABLE).
+        if key_obj.private_len == 0 {
+            return Err(TpmRc::KEY.with(Position::handle(1)));
+        }
 
         let (index, handle) = self.global_state.find_empty_sequence_slot()?;
 
@@ -582,4 +549,38 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let len = digest.digest().len();
         Ok((digest_buf, len))
     }
+}
+
+/// The value that begins every TPM-generated structure (`TPM_GENERATED_VALUE`).
+const TPM_GENERATED_VALUE: [u8; 4] = [0xFF, b'T', b'C', b'G'];
+
+/// `TicketIsSafe` (`Ticket.c`): a hash ticket may only be produced if the first data block is at
+/// least 4 bytes long and does not start with `TPM_GENERATED_VALUE`, so that a ticket can never
+/// vouch for a digest over data that could be mistaken for a TPM-generated structure.
+fn ticket_is_safe(first_block: &[u8]) -> bool {
+    first_block.len() >= 4 && first_block[..4] != TPM_GENERATED_VALUE
+}
+
+/// Records the first data block of a hash sequence (`firstBlock` / `ticketSafe` attributes).
+///
+/// The persisted `first_bytes` / `first_bytes_len` fields encode the result:
+/// - `first_bytes_len == 0`: no data block has been received yet;
+/// - `1..=3`: the first block was shorter than 4 bytes (including an empty block), so a ticket
+///   is not safe;
+/// - `4`: `first_bytes` holds the first 4 bytes of the first block.
+///
+/// Later blocks do not change the decision.
+fn record_first_block(seq: &mut crate::ActiveSequence, data: &[u8]) {
+    if seq.first_bytes_len != 0 {
+        return;
+    }
+    let take = data.len().min(4);
+    seq.first_bytes = [0u8; 4];
+    seq.first_bytes[..take].copy_from_slice(&data[..take]);
+    seq.first_bytes_len = take.max(1);
+}
+
+/// Returns whether the first block recorded by [`record_first_block`] makes a ticket safe.
+fn first_block_was_safe(seq: &crate::ActiveSequence) -> bool {
+    seq.first_bytes_len == 4 && seq.first_bytes != TPM_GENERATED_VALUE
 }

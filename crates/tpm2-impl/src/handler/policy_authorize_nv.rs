@@ -2,12 +2,11 @@ use crate::storage::manager::StorageManager;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::Alg;
+use tpm2::TpmiAlgHash;
 use tpm2::commands::{PolicyAuthorizeNV, PolicyAuthorizeNVHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, TpmCc, TpmSe};
-use tpm2::{TpmaNv, TpmiAlgHash};
+use tpm2::{TpmCc, TpmSe};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -69,26 +68,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 2. Resolve NV Index metadata from storage
         let mut read_buf = [0u8; 1536];
-        let (metadata_size, nv_public, nv_auth, public_bytes, metadata) = {
+        let (metadata_size, nv_public, public_bytes) = {
             let storage = StorageManager::new(&mut *self.context.platform.storage);
             let metadata = storage
                 .get_metadata(nv_index)
-                .map_err(|_| TpmRc::HANDLE.to_rc())?;
+                .map_err(|_| TpmRc::HANDLE.with(Position::handle(2)))?;
 
             // Metadata header is usually up to 512 bytes
             let read_len = core::cmp::min(metadata.data_size as usize, 1536);
             storage
                 .read_item(nv_index, 0, &mut read_buf[..read_len])
                 .map_err(|_| TpmRc::FAILURE)?;
-            let (metadata_size, nv_public, nv_auth, _public_info, public_bytes) =
+            let (metadata_size, nv_public, _nv_auth, _public_info, public_bytes) =
                 crate::handler::nv_storage::unmarshal_nv_header_bytes(&read_buf[..read_len])?;
-            (
-                metadata_size as u16,
-                nv_public,
-                nv_auth,
-                public_bytes,
-                metadata,
-            )
+            (metadata_size as u16, nv_public, public_bytes)
         };
 
         // 3. Compute NV Index Name
@@ -96,86 +89,40 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 4. If not Trial session, perform checks and authorizations
         if session_type == TpmSe::Policy {
-            // Check WRITTEN attribute
-            if !nv_public.attributes.contains(TpmaNv::WRITTEN) {
-                return Err(TpmRc::NV_UNINITIALIZED);
-            }
+            // Common read access checks (C `NvReadAccessChecks`): READLOCKED, then whether
+            // `authHandle` may read the index, then WRITTEN. The authorization itself (password,
+            // HMAC or policy) was already verified by the engine for `authHandle`.
+            super::policy_nv::nv_read_access_checks(auth_handle.0, nv_index, nv_public.attributes)?;
 
-            // Check READLOCKED attribute
-            if nv_public.attributes.contains(TpmaNv::READLOCKED) {
-                return Err(TpmRc::NV_LOCKED);
-            }
-
-            // Perform read authorization checks
-            let is_owner_or_platform =
-                auth_handle.0 == Handle::RH_OWNER.0 || auth_handle.0 == Handle::RH_PLATFORM.0;
-            let expected_auth_opt = if is_owner_or_platform {
-                Some(self.context.handle_auth(self.global_state, auth_handle.0))
-            } else {
-                None
-            };
-
-            let auths = &self.global_state.parsed_auths[..self.global_state.parsed_auths_len];
-            if auths.is_empty() {
-                return Err(TpmRc::AUTH_MISSING);
-            }
-
-            if auth_handle.0 == nv_index {
-                if !nv_public.attributes.contains(TpmaNv::AUTHREAD) {
-                    return Err(TpmRc::NV_AUTHORIZATION);
-                }
-                if !self.verify_password_auth(&auths[0], nv_auth.get_buffer()) {
-                    return Err(TpmRc::AUTH_FAIL.to_rc());
-                }
-            } else if auth_handle.0 == Handle::RH_OWNER.0 {
-                if !nv_public.attributes.contains(TpmaNv::OWNERREAD) {
-                    return Err(TpmRc::NV_AUTHORIZATION);
-                }
-                let expected_auth = expected_auth_opt.unwrap();
-                if !self.verify_password_auth(&auths[0], expected_auth.get_buffer()) {
-                    return Err(TpmRc::AUTH_FAIL.to_rc());
-                }
-            } else if auth_handle.0 == Handle::RH_PLATFORM.0 {
-                if !nv_public.attributes.contains(TpmaNv::PPREAD) {
-                    return Err(TpmRc::NV_AUTHORIZATION);
-                }
-                let expected_auth = expected_auth_opt.unwrap();
-                if !self.verify_password_auth(&auths[0], expected_auth.get_buffer()) {
-                    return Err(TpmRc::AUTH_FAIL.to_rc());
-                }
-            } else {
-                return Err(TpmRc::HANDLE.to_rc());
-            }
-
-            // Read TPMT_HA (2 bytes alg + digest) from the NV Index
-            let digest_size = match auth_hash {
-                TpmiAlgHash::Sha1 => 20,
-                TpmiAlgHash::Sha256 => 32,
-                TpmiAlgHash::Sha384 => 48,
-                TpmiAlgHash::Sha512 => 64,
-                _ => return Err(TpmRc::VALUE.to_rc()),
-            };
-
-            if (metadata.data_size as usize) < (metadata_size as usize + 2 + digest_size) {
-                return Err(TpmRc::INSUFFICIENT.to_rc());
-            }
-
-            let mut val_buf = [0u8; 128];
-            let read_data_len = 2 + digest_size;
+            // Read `MIN(dataSize, sizeof(TPMT_HA))` bytes and unmarshal them as a TPMT_HA (C
+            // `TPMT_HA_Unmarshal`): the hash algorithm first (`TPM_RC_HASH` if it is not a valid
+            // hash), then its digest (`TPM_RC_INSUFFICIENT` if the data is too short).
+            let mut val_buf = [0u8; 2 + tpm2::TpmtHa::MAX_DIGEST_SIZE];
+            let read_data_len = core::cmp::min(nv_public.data_size as usize, val_buf.len());
             {
                 let storage = StorageManager::new(&mut *self.context.platform.storage);
                 storage
                     .read_item(nv_index, metadata_size, &mut val_buf[..read_data_len])
                     .map_err(|_| TpmRc::FAILURE)?;
             }
+            let val = &val_buf[..read_data_len];
+            if val.len() < 2 {
+                return Err(TpmRc::INSUFFICIENT.to_rc());
+            }
+            let nv_hash_alg = TpmiAlgHash::try_from(u16::from_be_bytes([val[0], val[1]]))
+                .map_err(|_| TpmRc::HASH.to_rc())?;
+            let nv_digest_size = nv_hash_alg.digest_size();
+            if val.len() < 2 + nv_digest_size {
+                return Err(TpmRc::INSUFFICIENT.to_rc());
+            }
 
-            let alg_id = u16::from_be_bytes([val_buf[0], val_buf[1]]);
-            if alg_id != Alg::from(auth_hash).id() {
+            // The stored policy must use the session's hash algorithm.
+            if nv_hash_alg != auth_hash {
                 return Err(TpmRc::HASH.to_rc());
             }
 
             // Compare policyDigest to the contents of the NV Index (after the TPM_ALG_ID)
-            let nv_digest = &val_buf[2..2 + digest_size];
+            let nv_digest = &val[2..2 + nv_digest_size];
             if nv_digest != &policy_digest[..policy_digest_len] {
                 return Err(TpmRc::VALUE.to_rc());
             }
@@ -194,13 +141,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Let's check:
         // H_policyAlg(ZeroDigest || TPM_CC_PolicyAuthorizeNV || nvIndex->Name)
         // Yes, this is correct!
-        let digest_size = match auth_hash {
-            TpmiAlgHash::Sha1 => 20,
-            TpmiAlgHash::Sha256 => 32,
-            TpmiAlgHash::Sha384 => 48,
-            TpmiAlgHash::Sha512 => 64,
-            _ => return Err(TpmRc::VALUE.to_rc()),
-        };
+        let digest_size = auth_hash.digest_size();
         let zero_digest = [0u8; 64];
         let zero_slice = &zero_digest[..digest_size];
 

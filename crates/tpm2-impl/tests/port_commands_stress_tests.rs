@@ -13,7 +13,7 @@ use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmCc, TpmSe};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bName,
-    Tpm2bNonce, Tpm2bPrivate, Tpm2bPublic, Tpm2bPublicKeyRsa, TpmaObject, TpmiAlgHash,
+    Tpm2bNonce, Tpm2bPrivate, Tpm2bPublic, Tpm2bPublicKeyRsa, TpmaObject, TpmaSession, TpmiAlgHash,
     TpmsAuthCommand, TpmsRsaParms, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2_impl::TpmEngine;
@@ -52,7 +52,104 @@ fn setup_tpm<'a>(
     (tpm, global_state)
 }
 
+/// `TPM2_PolicyCommandCode(TPM_CC_Duplicate)` policy digest (SHA-256), used as the authPolicy of
+/// the test objects: the DUP role of `TPM2_Duplicate` always requires a policy session in the C
+/// reference (`IsPolicySessionRequired`), so the objects must carry a satisfiable policy.
+const DUP_POLICY_DIGEST: [u8; 32] =
+    hex!("bef56b8c1cc84e11edd717528d2cd99356bd2bbf8f015209c3f84aeeaba8e8a2");
+
+/// The same policy digest computed with SHA-1, for objects whose nameAlg is SHA-1 (the policy
+/// session's hash must match the object's nameAlg).
+const DUP_POLICY_DIGEST_SHA1: [u8; 20] = hex!("95c1ee7fc5a82c31f673eac2e21cbd408a23cb4a");
+
+/// Executes `cmd`. When `auths` is empty, the authorizations the C reference requires for the
+/// command's authorization handles are supplied automatically (it returns
+/// `TPM_RC_AUTH_MISSING` otherwise): empty password sessions for USER/ADMIN handles, and for
+/// `TPM2_Duplicate` a policy session that satisfied `PolicyCommandCode(TPM_CC_Duplicate)`.
 fn execute_tpm_command<C: Command>(
+    tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
+    global_state: &mut tpm2_impl::GlobalState,
+    handles: &C::Handles,
+    cmd: &C,
+    auths: &[TpmsAuthCommand],
+) -> Result<(C::RespHandles, C::Response<'static>), u32>
+where
+    for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
+    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
+    C::Response<'static>: Unmarshal<'static>,
+{
+    if !auths.is_empty() {
+        return execute_tpm_command_raw(tpm, global_state, handles, cmd, auths);
+    }
+    let password = TpmsAuthCommand {
+        session_handle: Handle::RS_PW,
+        nonce: Tpm2bNonce::default(),
+        session_attributes: TpmaSession(1),
+        hmac: Tpm2bAuth::default(),
+    };
+    match C::CMD_CODE {
+        TpmCc::Duplicate => {
+            // The policy session's hash must be the object's nameAlg (objectHandle comes first).
+            let mut handle_bytes = [0u8; 64];
+            marshal_to_slice(handles, &mut handle_bytes);
+            let object_handle = u32::from_be_bytes(handle_bytes[..4].try_into().unwrap());
+            let auth_hash = global_state
+                .transient_objects
+                .iter()
+                .flatten()
+                .find(|o| o.handle == object_handle)
+                .and_then(|o| o.public.name_alg)
+                .unwrap_or(TpmiAlgHash::Sha256);
+            use tpm2::commands::{
+                PolicyCommandCode, PolicyCommandCodeHandles, StartAuthSession,
+                StartAuthSessionHandles,
+            };
+            let (session, _) = execute_tpm_command_raw(
+                tpm,
+                global_state,
+                &StartAuthSessionHandles {
+                    tpm_key: Handle::RH_NULL,
+                    bind: Handle::RH_NULL,
+                },
+                &StartAuthSession {
+                    nonce_caller: Tpm2bNonce::from_bytes(&[0x5A; 16]).unwrap(),
+                    encrypted_salt: Tpm2bEncryptedSecret::default(),
+                    session_type: TpmSe::Policy,
+                    symmetric: None,
+                    auth_hash,
+                },
+                &[],
+            )?;
+            execute_tpm_command_raw(
+                tpm,
+                global_state,
+                &PolicyCommandCodeHandles {
+                    policy_session: session.session_handle,
+                },
+                &PolicyCommandCode {
+                    code: TpmCc::Duplicate,
+                },
+                &[],
+            )?;
+            let policy = TpmsAuthCommand {
+                session_handle: session.session_handle,
+                nonce: Tpm2bNonce::from_bytes(&[0xA5; 16]).unwrap(),
+                session_attributes: TpmaSession(0),
+                hmac: Tpm2bAuth::default(),
+            };
+            execute_tpm_command_raw(tpm, global_state, handles, cmd, &[policy])
+        }
+        TpmCc::ActivateCredential => {
+            execute_tpm_command_raw(tpm, global_state, handles, cmd, &[password, password])
+        }
+        TpmCc::Load | TpmCc::Import | TpmCc::Create | TpmCc::CreatePrimary => {
+            execute_tpm_command_raw(tpm, global_state, handles, cmd, &[password])
+        }
+        _ => execute_tpm_command_raw(tpm, global_state, handles, cmd, &[]),
+    }
+}
+
+fn execute_tpm_command_raw<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
     handles: &C::Handles,
@@ -182,7 +279,7 @@ fn create_transient_key(
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: attrs,
-        auth_policy: Tpm2bDigest::default(),
+        auth_policy: Tpm2bDigest::from_bytes(&DUP_POLICY_DIGEST).unwrap(),
         parms_and_id: PublicParmsAndId::Rsa(
             TpmsRsaParms {
                 symmetric: None,
@@ -198,7 +295,10 @@ fn create_transient_key(
     private[..priv_len].copy_from_slice(&priv_buf[..priv_len]);
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name,
         auth: Tpm2bAuth::default().into(),
         public: public.into(),
@@ -326,8 +426,11 @@ fn test_policy_command_code_failures() {
         &policy_cmd,
         &[],
     );
-    // Should fail with PolicyCc (164)
-    assert_eq!(res.err(), Some(TpmRc::POLICY_CC.get()));
+    // C PolicyCommandCode.c: TPM_RCS_POLICY_CC + RC_PolicyCommandCode_code (P1).
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::POLICY_CC.with(Position::parameter(1)).get())
+    );
 
     // 2. Call PolicyCommandCode with supported code (TpmCc::Load) -> should succeed
     policy_cmd.code = TpmCc::Load;
@@ -349,7 +452,11 @@ fn test_policy_command_code_failures() {
         &policy_cmd,
         &[],
     );
-    assert_eq!(res.err(), Some(TpmRc::VALUE.get()));
+    // C PolicyCommandCode.c: TPM_RCS_VALUE + RC_PolicyCommandCode_code (P1).
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::VALUE.with(Position::parameter(1)).get())
+    );
 }
 
 #[test]
@@ -402,7 +509,8 @@ fn test_policy_command_code_trial_session_mismatch() {
     );
     assert!(res.is_ok());
 
-    // 4. Try to use the trial session to authorize a Duplicate command (should fail with AuthType)
+    // 4. Try to use the trial session to authorize a Duplicate command. A trial session can never
+    //    appear in the session area (C ParseSessionBuffer): TPM_RC_ATTRIBUTES + RC_S1.
     use tpm2::commands::{Duplicate, DuplicateHandles};
     let dup_handles = DuplicateHandles {
         object_handle: Handle(0x80000002),
@@ -419,7 +527,10 @@ fn test_policy_command_code_trial_session_mismatch() {
         hmac: tpm2::Tpm2bAuth::default(),
     };
     let res = execute_tpm_command(&mut tpm, &mut global_state, &dup_handles, &dup_cmd, &[auth]);
-    assert_eq!(res.err(), Some(TpmRc::AUTH_TYPE.get()));
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::ATTRIBUTES.with(Position::session(1)).get())
+    );
 }
 
 #[test]
@@ -694,9 +805,12 @@ fn test_load_unsupported_name_alg() {
         in_public,
     };
     let res = execute_tpm_command(&mut tpm, &mut global_state, &load_handles, &load_cmd, &[]);
+    // SHA-1 is an implemented nameAlg in the C reference, so the public area is accepted; the
+    // malformed 3-byte inPrivate then fails in UnwrapOuter's TPM2B_DIGEST_Unmarshal (size 0x0102
+    // exceeds the digest buffer -> TPM_RC_SIZE), reported as RC_Load_inPrivate (P1).
     assert_eq!(
         res.err(),
-        Some(TpmRc::KEY.with(Position::parameter(2)).get())
+        Some(TpmRc::SIZE.with(Position::parameter(1)).get())
     );
 }
 
@@ -834,6 +948,12 @@ fn test_duplicate_import_load_exhaustive_algos() {
                     // 2. Create target signing key (handle 0x80000002) with target_hash
                     let mut target = target_base.clone();
                     target.public.name_alg = Some(target_hash);
+                    if target_hash == TpmiAlgHash::Sha1 {
+                        target.public.auth_policy =
+                            Tpm2bDigest::from_bytes(&DUP_POLICY_DIGEST_SHA1)
+                                .unwrap()
+                                .into();
+                    }
                     target.name = compute_key_name(tpm.platform.crypto, &target.public.as_tpmt());
                     target.qualified_name = target.name;
                     global_state.transient_objects[1] = Some(target.clone());
@@ -954,7 +1074,7 @@ fn create_transient_keyed_hash(
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: attrs,
-        auth_policy: Tpm2bDigest::default(),
+        auth_policy: Tpm2bDigest::from_bytes(&DUP_POLICY_DIGEST).unwrap(),
         parms_and_id: PublicParmsAndId::KeyedHash(
             None,
             Tpm2bDigest::from_bytes(unique_digest).unwrap(),
@@ -965,7 +1085,10 @@ fn create_transient_keyed_hash(
     private[..secret.len()].copy_from_slice(secret);
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name,
         auth: Tpm2bAuth::default().into(),
         public: public.into(),
@@ -1110,7 +1233,7 @@ fn create_transient_ecc_key(
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: attrs,
-        auth_policy: Tpm2bDigest::default(),
+        auth_policy: Tpm2bDigest::from_bytes(&DUP_POLICY_DIGEST).unwrap(),
         parms_and_id: PublicParmsAndId::Ecc(
             tpm2::TpmsEccParms {
                 symmetric: None,
@@ -1126,7 +1249,10 @@ fn create_transient_ecc_key(
     private[..priv_len].copy_from_slice(&priv_buf[..priv_len]);
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name,
         auth: Tpm2bAuth::default().into(),
         public: public.into(),
@@ -1725,12 +1851,10 @@ fn test_make_credential_panic_vulnerability_oversized_ecc_point() {
         object_name: Tpm2bName::from_bytes(&[1, 2, 3]).unwrap(),
     };
 
-    // This should NOT panic. It should return a Value error because the public key parameters are invalid
+    // This should NOT panic. C CryptSecretEncrypt returns a bare TPM_RC_KEY when the ECDH point
+    // multiplication with the (invalid) protector public key fails (CryptUtil.c).
     let res = execute_tpm_command(&mut tpm, &mut global_state, &mc_handles, &mc_cmd, &[]);
-    assert_eq!(
-        res.err(),
-        Some(TpmRc::VALUE.with(Position::handle(1)).get())
-    );
+    assert_eq!(res.err(), Some(TpmRc::KEY.get()));
 }
 
 fn create_transient_sym_key(handle: u32, attrs: TpmaObject) -> TransientObject {
@@ -1746,7 +1870,10 @@ fn create_transient_sym_key(handle: u32, attrs: TpmaObject) -> TransientObject {
     };
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name,
         auth: Tpm2bAuth::default().into(),
         public: public.into(),

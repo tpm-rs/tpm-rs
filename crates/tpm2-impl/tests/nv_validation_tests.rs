@@ -577,7 +577,8 @@ fn test_certify_unwritten_index_fails() {
         &mut global_state,
         &certify_handles,
         &certify_cmd,
-        core::slice::from_ref(&auth_session),
+        // One session per authorization handle, incl. the TPM_RH_NULL signHandle.
+        &[auth_session, auth_session],
         &mut response_buf,
     );
     assert_eq!(res.err(), Some(TpmRc::NV_UNINITIALIZED.get()));
@@ -684,7 +685,8 @@ fn test_written_attribute_and_certify_success() {
         &mut global_state,
         &certify_handles,
         &certify_cmd,
-        core::slice::from_ref(&auth_session),
+        // One session per authorization handle, incl. the TPM_RH_NULL signHandle.
+        &[auth_session, auth_session],
         &mut response_buf,
     )
     .expect("NV Certify failed after writing data");
@@ -1052,7 +1054,15 @@ fn test_nv_write_lock() {
         &lock_cmd,
         core::slice::from_ref(&auth_session),
     );
-    assert_eq!(res_no_lock.err(), Some(TpmRc::ATTRIBUTES.get()));
+    // TPM_RC_ATTRIBUTES + RC_NV_WriteLock_nvIndex (H2).
+    assert_eq!(
+        res_no_lock.err(),
+        Some(
+            TpmRc::ATTRIBUTES
+                .with(tpm2::errors::Position::handle(2))
+                .get()
+        )
+    );
 }
 
 #[test]
@@ -1341,7 +1351,11 @@ fn test_nv_undefine_space() {
         &undef_cmd,
         core::slice::from_ref(&auth_session),
     );
-    assert_eq!(res.err(), Some(TpmRc::HANDLE.get()));
+    // C `NvIndexIsAccessible`: TPM_RC_HANDLE + RC_H2 for nvIndex.
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::HANDLE.with(tpm2::errors::Position::handle(2)).get())
+    );
 
     // Re-enable storage hierarchy
     global_state.sh_enable = true;

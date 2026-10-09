@@ -1,6 +1,6 @@
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use crate::{handler::CommandHandler, owned::OwnedDigest, req_resp::RequestThenResponse};
+use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
@@ -49,52 +49,40 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::AUTH_MISSING);
         }
 
-        // 3. Resolve signature scheme and verify consistency with public attributes
+        // 3. IsSigningObject() (TPM_RC_KEY + RC_Quote_signHandle) and CryptSelectSignScheme()
+        //    (TPM_RC_SCHEME + RC_Quote_inScheme).
         let public_opt = signer_obj_opt.as_ref().map(|s| &s.public);
-        let actual_in_scheme =
-            self.resolve_attest_scheme(sign_handle, public_opt, cmd.in_scheme)?;
+        let actual_in_scheme = self.resolve_attest_scheme(
+            public_opt,
+            cmd.in_scheme,
+            Position::handle(1),
+            Position::parameter(2),
+        )?;
 
-        // 4. Compute PCR digest across pcr_select using the hash algorithm from actual_in_scheme
-        let hash_alg = match actual_in_scheme {
-            Some(tpm2::TpmtSigScheme::Rsassa(h))
-            | Some(tpm2::TpmtSigScheme::Rsapss(h))
-            | Some(tpm2::TpmtSigScheme::Ecdsa(h)) => Some(h),
-            Some(tpm2::TpmtSigScheme::Ecdaa(s)) => Some(s.hash_alg),
-            None => {
-                if sign_handle.0 != 0x40000007 {
-                    return Err(TpmRc::SCHEME.to_rc());
-                }
-                None
-            }
-            _ => return Err(TpmRc::SCHEME.to_rc()),
-        };
-
-        let pcr_digest = if let Some(hash_alg) = hash_alg {
-            self.compute_pcr_digest(&cmd.pcr_select, hash_alg)?
-        } else {
-            if sign_handle.0 != 0x40000007 {
-                return Err(TpmRc::SCHEME.to_rc());
-            }
-            OwnedDigest::default()
-        };
-
-        // 5. Construct attestation structure
-        let clock_info = self.get_clock_info();
-
-        let (qualified_signer, extra_data) = self.compute_attest_fields(
+        // 4. Construct the attestation header (FillInAttestInfo).
+        let header = self.compute_attest_fields(
             signer_obj_opt.as_ref(),
             &actual_in_scheme,
             &cmd.qualifying_data,
         )?;
 
+        // 5. The PCR digest uses the hash algorithm of the selected scheme. A NULL selected scheme
+        //    (always the case for TPM_RH_NULL) has no hash: TPM_RC_SCHEME + RC_Quote_inScheme.
+        let hash_alg = actual_in_scheme
+            .and_then(|s| s.hash_alg())
+            .ok_or_else(|| TpmRc::SCHEME.with(Position::parameter(2)))?;
+        let pcr_digest = self.compute_pcr_digest(&cmd.pcr_select, hash_alg)?;
+
         let attest = TpmsAttest {
             magic: TpmGenerated,
-            qualified_signer,
-            extra_data,
-            clock_info,
-            firmware_version: 0x00010001,
+            qualified_signer: header.qualified_signer,
+            extra_data: header.extra_data,
+            clock_info: header.clock_info,
+            firmware_version: header.firmware_version,
             attested: TpmuAttest::Quote(TpmsQuoteInfo {
-                pcr_select: cmd.pcr_select,
+                // C PCRComputeCurrentDigest() filters `PCRselect` in place (FilterPcr), so the
+                // reported selection omits unallocated banks/PCRs.
+                pcr_select: self.filter_pcr_selection(&cmd.pcr_select),
                 pcr_digest: pcr_digest.as_tpm2b(),
             }),
         };
@@ -103,7 +91,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let attest_len = attest.marshal(&mut attest_buf);
 
         // 6. Sign the attestation payload
-        let priv_key_opt = signer_obj_opt.as_ref().map(|s| (s.private, s.private_len));
         if let Some(TpmtSigScheme::Ecdaa(ecdaa_s)) = actual_in_scheme
             && let Ok((digest_buf, digest_len)) =
                 self.compute_hash(ecdaa_s.hash_alg, &[&attest_buf[..attest_len]])
@@ -117,8 +104,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.global_state.debug_provided_auth_len = dlen;
         }
         let owned_sig = self.sign_attestation_block(
-            sign_handle,
-            priv_key_opt.as_ref(),
+            signer_obj_opt.as_ref(),
             actual_in_scheme,
             &attest_buf[..attest_len],
             cmd.qualifying_data.get_buffer(),

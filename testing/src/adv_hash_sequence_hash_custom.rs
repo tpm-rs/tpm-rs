@@ -20,5 +20,9 @@ fn test_hash_sequence_unsupported_alg() {
         hash_alg: Some(TpmiAlgHash::Sm3_256),
     };
     let err = sim.execute_with_handles(cmd_start, ()).unwrap_err();
-    assert_eq!(err.get(), TpmRc::HASH.get());
+    // C rejects an unimplemented hashAlg while unmarshaling: TPM_RC_HASH + RC_HashSequenceStart_hashAlg.
+    assert_eq!(
+        err.get(),
+        TpmRc::HASH.with(tpm2::errors::Position::parameter(2)).get()
+    );
 }

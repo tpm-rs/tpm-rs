@@ -49,80 +49,51 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        if cmd.to_test.count() > 0 {
-            for &alg in cmd.to_test.algorithms() {
-                if !matches!(
-                    alg,
-                    Alg::RSA
-                        | Alg::SHA1
-                        | Alg::HMAC
-                        | Alg::AES
-                        | Alg::KEYEDHASH
-                        | Alg::SHA256
-                        | Alg::SHA384
-                        | Alg::SHA512
-                        | Alg::NULL
-                        | Alg::RSASSA
-                        | Alg::RSAES
-                        | Alg::RSAPSS
-                        | Alg::OAEP
-                        | Alg::ECDSA
-                        | Alg::ECDH
-                        | Alg::ECDAA
-                        | Alg::SM2
-                        | Alg::ECSCHNORR
-                        | Alg::ECC
-                        | Alg::SYMCIPHER
-                        | Alg::CAMELLIA
-                        | Alg::CFB
-                        | Alg::ECB
-                        | Alg::CBC
-                        | Alg::CTR
-                        | Alg::OFB
-                        | Alg::MGF1
-                        | Alg::KDF1_SP800_56A
-                        | Alg::KDF2
-                        | Alg::KDF1_SP800_108
-                ) {
-                    return Err(TpmRc::VALUE.with(Position::parameter(1)));
-                }
-
-                let mut new_untested = [Alg::NULL; 32];
-                let mut new_len = 0;
-                for &existing in self
-                    .global_state
-                    .untested_algorithms
-                    .iter()
-                    .take(self.global_state.untested_algorithms_len)
-                {
-                    let mut remove = existing == alg;
-                    if alg == Alg::RSA
-                        && matches!(
-                            existing,
-                            Alg::RSA | Alg::RSASSA | Alg::RSAES | Alg::RSAPSS | Alg::OAEP
-                        )
-                    {
-                        remove = true;
-                    }
-                    if alg == Alg::AES && matches!(existing, Alg::AES | Alg::CFB) {
-                        remove = true;
-                    }
-                    if alg == Alg::ECC
-                        && matches!(
-                            existing,
-                            Alg::ECC | Alg::ECDSA | Alg::ECDAA | Alg::ECSCHNORR
-                        )
-                    {
-                        remove = true;
-                    }
-                    if !remove {
-                        new_untested[new_len] = existing;
-                        new_len += 1;
-                    }
-                }
-                self.global_state.untested_algorithms = new_untested;
-                self.global_state.untested_algorithms_len = new_len;
+        // `CryptIncrementalSelfTest`: the whole `toTest` list is validated before any test runs.
+        // Every entry must be an implemented algorithm (`g_implementedAlgorithms`, built from the
+        // same table as `TPM_CAP_ALGS`); `TPM_ALG_NULL` is never implemented.
+        for &alg in cmd.to_test.algorithms() {
+            if !is_implemented_algorithm(alg) {
+                return Err(TpmRc::VALUE.with(Position::parameter(1)));
             }
+        }
+
+        for &alg in cmd.to_test.algorithms() {
+            let mut new_untested = [Alg::NULL; 32];
+            let mut new_len = 0;
+            for &existing in self
+                .global_state
+                .untested_algorithms
+                .iter()
+                .take(self.global_state.untested_algorithms_len)
+            {
+                let mut remove = existing == alg;
+                if alg == Alg::RSA
+                    && matches!(
+                        existing,
+                        Alg::RSA | Alg::RSASSA | Alg::RSAES | Alg::RSAPSS | Alg::OAEP
+                    )
+                {
+                    remove = true;
+                }
+                if alg == Alg::AES && matches!(existing, Alg::AES | Alg::CFB) {
+                    remove = true;
+                }
+                if alg == Alg::ECC
+                    && matches!(
+                        existing,
+                        Alg::ECC | Alg::ECDSA | Alg::ECDAA | Alg::ECSCHNORR
+                    )
+                {
+                    remove = true;
+                }
+                if !remove {
+                    new_untested[new_len] = existing;
+                    new_len += 1;
+                }
+            }
+            self.global_state.untested_algorithms = new_untested;
+            self.global_state.untested_algorithms_len = new_len;
         }
 
         let to_do_list = TpmlAlg::from_slice(
@@ -158,4 +129,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
+}
+
+/// Returns whether `alg` is implemented by this TPM (`TEST_BIT(alg, g_implementedAlgorithms)`):
+/// it is advertised in `TPM_CAP_ALGS` or is one of the self-testable algorithms tracked in the
+/// to-do list. `TPM_ALG_NULL` is never implemented.
+fn is_implemented_algorithm(alg: Alg) -> bool {
+    alg != Alg::NULL
+        && (crate::handler::capability::IMPLEMENTED_ALGORITHMS
+            .iter()
+            .any(|&(implemented, _)| implemented == alg)
+            || crate::engine::INITIAL_UNTESTED_ALGORITHMS.contains(&alg))
 }

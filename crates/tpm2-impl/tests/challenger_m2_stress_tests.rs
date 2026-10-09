@@ -50,6 +50,18 @@ impl AsymmetricSign for ChallengerCrypto {
     }
 }
 
+/// An empty-password `TPM_RS_PW` session. In C every handle with an authorization role
+/// needs a session even if its authValue is empty; with no session C returns
+/// TPM_RC_AUTH_MISSING (SessionProcess.c CheckAuthNoSession).
+fn pw() -> tpm2::TpmsAuthCommand<'static> {
+    tpm2::TpmsAuthCommand {
+        session_handle: tpm2::Handle::RS_PW,
+        nonce: tpm2::Tpm2bNonce::default(),
+        session_attributes: tpm2::TpmaSession(0),
+        hmac: tpm2::Tpm2bAuth::default(),
+    }
+}
+
 impl Asymmetric for ChallengerCrypto {
     fn verify_inner(
         &self,
@@ -303,7 +315,10 @@ fn make_keyed_hash_key(handle: u32, key_bytes: &[u8]) -> TransientObject {
     private[..key_bytes.len()].copy_from_slice(key_bytes);
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: Tpm2bName::from_bytes(&[1, 2, 3]).unwrap().into(),
         auth: Tpm2bAuth::default().into(),
         public: public.into(),
@@ -341,15 +356,25 @@ fn test_concurrent_hmac_sequences() {
     let mut handles = Vec::new();
     // Start up to MAX_ACTIVE_SEQUENCES concurrent HMAC sequences
     for _ in 0..tpm2_impl::MAX_ACTIVE_SEQUENCES {
-        let (resp_h, _) =
-            execute_tpm_command(&mut tpm, &mut global_state, &start_handles, &start_cmd, &[])
-                .unwrap();
+        let (resp_h, _) = execute_tpm_command(
+            &mut tpm,
+            &mut global_state,
+            &start_handles,
+            &start_cmd,
+            &[pw()],
+        )
+        .unwrap();
         handles.push(resp_h.sequence_handle);
     }
 
     // Try starting one more, should fail with TPM_RC_OBJECT_MEMORY (0x902)
-    let start_res =
-        execute_tpm_command(&mut tpm, &mut global_state, &start_handles, &start_cmd, &[]);
+    let start_res = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &start_handles,
+        &start_cmd,
+        &[pw()],
+    );
     assert!(start_res.is_err());
     let rc = start_res.unwrap_err();
     assert_eq!(rc & 0xFF, 0x02);
@@ -367,13 +392,18 @@ fn test_concurrent_hmac_sequences() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
     // Now starting a 5th should succeed
-    let start_res_ok =
-        execute_tpm_command(&mut tpm, &mut global_state, &start_handles, &start_cmd, &[]);
+    let start_res_ok = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &start_handles,
+        &start_cmd,
+        &[pw()],
+    );
     assert!(start_res_ok.is_ok());
 }
 
@@ -400,8 +430,14 @@ fn test_hmac_sequence_auth_failures() {
     let start_handles = HmacStartHandles {
         handle: Handle(key_handle),
     };
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &start_handles, &start_cmd, &[]).unwrap();
+    let (start_resp_handles, _) = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &start_handles,
+        &start_cmd,
+        &[pw()],
+    )
+    .unwrap();
     let seq_handle = start_resp_handles.sequence_handle;
 
     // Try updating sequence with WRONG password session
@@ -493,8 +529,14 @@ fn test_hmac_sequence_large_split_chunks() {
     let start_handles = HmacStartHandles {
         handle: Handle(key_handle),
     };
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &start_handles, &start_cmd, &[]).unwrap();
+    let (start_resp_handles, _) = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &start_handles,
+        &start_cmd,
+        &[pw()],
+    )
+    .unwrap();
     let seq_handle = start_resp_handles.sequence_handle;
 
     let update_handles = SequenceUpdateHandles {
@@ -512,7 +554,7 @@ fn test_hmac_sequence_large_split_chunks() {
             &mut global_state,
             &update_handles,
             &update_cmd,
-            &[],
+            &[pw()],
         )
         .unwrap();
     }
@@ -530,7 +572,7 @@ fn test_hmac_sequence_large_split_chunks() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
@@ -548,8 +590,14 @@ fn test_hmac_sequence_large_split_chunks() {
     assert_eq!(complete_resp.result.get_buffer(), expected_digest.digest());
 
     // Test buffer limits: ActiveSequence buffer is 4096 bytes.
-    let (start_resp_handles_2, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &start_handles, &start_cmd, &[]).unwrap();
+    let (start_resp_handles_2, _) = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &start_handles,
+        &start_cmd,
+        &[pw()],
+    )
+    .unwrap();
     let seq_handle_2 = start_resp_handles_2.sequence_handle;
     let update_handles_2 = SequenceUpdateHandles {
         sequence_handle: seq_handle_2,
@@ -566,12 +614,13 @@ fn test_hmac_sequence_large_split_chunks() {
             &mut global_state,
             &update_handles_2,
             &update_cmd_large,
-            &[],
+            &[pw()],
         )
         .unwrap();
     }
 
-    // Try updating 1 more byte -> should fail with TPM_RC_MEMORY (0x904)
+    // Update 1 more byte. C streams sequence data into the hash state with no length limit
+    // (SequenceUpdate.c has no TPM_RC_MEMORY path), so this succeeds.
     let update_cmd_one = SequenceUpdate {
         buffer: Tpm2bMaxBuffer::from_bytes(&[1]).unwrap(),
     };
@@ -580,11 +629,9 @@ fn test_hmac_sequence_large_split_chunks() {
         &mut global_state,
         &update_handles_2,
         &update_cmd_one,
-        &[],
+        &[pw()],
     );
-    assert!(update_res.is_err());
-    let rc = update_res.unwrap_err();
-    assert_eq!(rc & 0xFF, 0x04);
+    assert!(update_res.is_ok());
 
     // Clean up sequence 2 to avoid memory leaks
     let complete_handles_2 = SequenceCompleteHandles {
@@ -595,7 +642,7 @@ fn test_hmac_sequence_large_split_chunks() {
         &mut global_state,
         &complete_handles_2,
         &complete_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 }
@@ -618,7 +665,10 @@ fn test_persistent_handle_resolution_all() {
     let name = Tpm2bName::from_bytes(&[1, 2, 3, 4, 5]).unwrap();
     let transient_key = TransientObject {
         handle: transient_key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: name.into(),
         auth: (Tpm2bAuth::from_bytes(&[0x11, 0x22]).unwrap()).into(),
         public: (TpmtPublic {
@@ -768,7 +818,7 @@ fn test_persistent_handle_resolution_all() {
         &mut global_state,
         &hmac_start_handles,
         &hmac_start_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
     let seq_handle = hmac_start_resp_handles.sequence_handle;
@@ -785,7 +835,7 @@ fn test_persistent_handle_resolution_all() {
         &mut global_state,
         &update_handles,
         &update_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 
@@ -801,7 +851,7 @@ fn test_persistent_handle_resolution_all() {
         &mut global_state,
         &complete_handles,
         &complete_cmd,
-        &[],
+        &[pw()],
     )
     .unwrap();
 

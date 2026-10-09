@@ -148,8 +148,14 @@ fn test_rewrap_null_parents() {
         in_sym_seed: Tpm2bEncryptedSecret::default(),
     };
 
-    let (_, resp) = execute_tpm_command::<Rewrap>(&mut tpm, &mut global_state, &handles, &cmd, &[])
-        .expect("Rewrap with null parents failed");
+    let (_, resp) = execute_tpm_command::<Rewrap>(
+        &mut tpm,
+        &mut global_state,
+        &handles,
+        &cmd,
+        &[common::password_auth(b"")],
+    )
+    .expect("Rewrap with null parents failed");
 
     assert_eq!(resp.out_duplicate.get_buffer(), &test_blob);
     assert_eq!(resp.out_sym_seed.get_size(), 0);
@@ -174,8 +180,14 @@ fn test_rewrap_seed_handle_mismatch() {
         in_sym_seed: Tpm2bEncryptedSecret::from_bytes(&[1u8; 16]).unwrap(),
     };
 
-    let err = execute_tpm_command::<Rewrap>(&mut tpm, &mut global_state, &handles, &cmd, &[])
-        .expect_err("Rewrap should fail when in_sym_seed is non-empty for null old_parent");
+    let err = execute_tpm_command::<Rewrap>(
+        &mut tpm,
+        &mut global_state,
+        &handles,
+        &cmd,
+        &[common::password_auth(b"")],
+    )
+    .expect_err("Rewrap should fail when in_sym_seed is non-empty for null old_parent");
 
     assert_ne!(err, 0);
 }

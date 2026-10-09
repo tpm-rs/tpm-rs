@@ -178,8 +178,14 @@ fn test_create_sign_and_decrypt_mutual_exclusivity() {
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let (cp_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &cp_handles, &cp_cmd, &[]).unwrap();
+    let (cp_resp, _) = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &cp_handles,
+        &cp_cmd,
+        &[common::password_auth(b"")],
+    )
+    .unwrap();
 
     // 2. Create child key under parent with both SIGN_ENCRYPT and DECRYPT set on RSA (scheme=TPM_ALG_NULL)
     let child_pub = TpmtPublic {
@@ -215,7 +221,7 @@ fn test_create_sign_and_decrypt_mutual_exclusivity() {
         &mut global_state,
         &create_handles,
         &create_cmd,
-        &[],
+        &[common::password_auth(b"")],
     );
     assert_eq!(
         res.err(),
@@ -266,8 +272,14 @@ fn test_import_invalid_attributes() {
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let (cp_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &cp_handles, &cp_cmd, &[]).unwrap();
+    let (cp_resp, _) = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &cp_handles,
+        &cp_cmd,
+        &[common::password_auth(b"")],
+    )
+    .unwrap();
 
     // 2. Test Import with invalid encryption key size
     let child_pub = TpmtPublic {
@@ -299,7 +311,7 @@ fn test_import_invalid_attributes() {
         &mut global_state,
         &import_handles,
         &import_cmd_bad_size,
-        &[],
+        &[common::password_auth(b"")],
     );
     assert_eq!(
         res_size.err(),
@@ -336,7 +348,7 @@ fn test_import_invalid_attributes() {
         &mut global_state,
         &import_handles,
         &import_cmd_bad_attrs,
-        &[],
+        &[common::password_auth(b"")],
     );
     assert_eq!(
         res_attrs.err(),
@@ -382,7 +394,7 @@ fn test_create_primary_sealed_data_unseal() {
         &mut global_state,
         &primary_handles,
         &primary_cmd,
-        &[],
+        &[common::password_auth(b"")],
     )
     .expect("CreatePrimary sealed data failed");
 
@@ -398,7 +410,7 @@ fn test_create_primary_sealed_data_unseal() {
         &mut global_state,
         &unseal_handles,
         &unseal_cmd,
-        &[],
+        &[common::password_auth(b"")],
     )
     .expect("Unseal failed");
 
@@ -445,8 +457,14 @@ fn test_create_invalid_public_type() {
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let (cp_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &primary_handles, &cp_cmd, &[]).unwrap();
+    let (cp_resp, _) = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &primary_handles,
+        &cp_cmd,
+        &[common::password_auth(b"")],
+    )
+    .unwrap();
 
     let parent_handle = cp_resp.object_handle;
     // Build TPM2_Create request
@@ -554,8 +572,14 @@ fn test_tpma_reserved_bits_and_firmware_svn_limited() {
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let (cp_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &primary_handles, &cp_cmd, &[]).unwrap();
+    let (cp_resp, _) = execute_tpm_command(
+        &mut tpm,
+        &mut global_state,
+        &primary_handles,
+        &cp_cmd,
+        &[common::password_auth(b"")],
+    )
+    .unwrap();
     let parent_handle = cp_resp.object_handle;
 
     // 1. Test reserved bit in TPMA_OBJECT (bit 0 = 1) returns TPM_RC_RESERVED_BITS at parameter 2
@@ -573,7 +597,7 @@ fn test_tpma_reserved_bits_and_firmware_svn_limited() {
         &mut global_state,
         &create_handles,
         &create_cmd_bad_obj_attr,
-        &[],
+        &[common::password_auth(b"")],
     )
     .unwrap_err();
     assert_eq!(err, TpmRc::RESERVED_BITS.with(Position::parameter(2)).get());
@@ -621,7 +645,7 @@ fn test_tpma_reserved_bits_and_firmware_svn_limited() {
             &mut global_state,
             &create_handles,
             &create_cmd_lim,
-            &[],
+            &[common::password_auth(b"")],
         )
         .unwrap_err();
         assert_eq!(

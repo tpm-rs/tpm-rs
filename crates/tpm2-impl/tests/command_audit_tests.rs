@@ -130,12 +130,15 @@ fn test_get_command_audit_digest() {
         in_scheme: None,
     };
 
-    let auths = [TpmsAuthCommand {
+    // Both privacyAdminHandle and signHandle (TPM_RH_NULL) have the USER auth role, so C
+    // needs two sessions (SessionProcess.c:1641-1651, otherwise TPM_RC_AUTH_MISSING).
+    let pw = TpmsAuthCommand {
         session_handle: Handle(0x40000009),
         nonce: Tpm2bNonce::default(),
         session_attributes: TpmaSession::default(),
         hmac: Tpm2bAuth::default(),
-    }];
+    };
+    let auths = [pw, pw];
 
     let mut response_buf = [0u8; 16384];
     let resp = execute_tpm_get_command_audit_digest(
@@ -194,7 +197,10 @@ fn test_get_command_audit_digest_with_rsa_signing_key() {
     };
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -283,7 +289,10 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
     };
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: [0u8; 64],
+        seed_len: 32,
+        external: false,
+        public_only: false,
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),

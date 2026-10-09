@@ -78,5 +78,7 @@ fn test_create_loaded_decrypt_attr() {
         "Expected TPM2_CreateLoaded to fail on parent without decrypt attr"
     );
     let err = res.err().unwrap();
-    assert_eq!(err, 0x182, "Expected Attributes error (0x182), got {}", err);
+    // C CreateLoaded.c:69-70: a parent object that is not a storage parent is
+    // rejected with TPM_RCS_TYPE + RC_CreateLoaded_parentHandle (TYPE+H1, 0x18A).
+    assert_eq!(err, 0x18a, "Expected Type error (0x18A), got {:#x}", err);
 }
