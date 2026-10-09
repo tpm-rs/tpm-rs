@@ -1,0 +1,37 @@
+[package]
+name = "tpm2-libcrux"
+description = "TPM 2.0 cryptography backend using libcrux (with RustCrypto fallbacks)"
+
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tpm2 = { workspace = true }
+aes = { workspace = true }
+cmac = { workspace = true }
+getrandom = { workspace = true }
+hmac = { workspace = true }
+# `acvp` exposes the internal sign/verify functions over a prepared message, which HashML-DSA with
+# SHA-2 pre-hashes needs: the public pre-hash API only supports SHAKE128. Drop the feature once
+# libcrux has a public API for this.
+libcrux-ml-dsa = { workspace = true, features = ["mldsa44", "mldsa65", "mldsa87", "acvp"] }
+libcrux-ml-kem = { workspace = true, features = ["mlkem512", "mlkem768", "mlkem1024"] }
+libcrux-p256 = { workspace = true, features = ["expose-hacl"] }
+libcrux-sha2 = { workspace = true }
+p384 = { workspace = true, features = ["ecdsa"] }
+p521 = { workspace = true, features = ["ecdsa"] }
+rand_chacha = { workspace = true }
+rsa = { workspace = true, features = ["sha1", "sha2", "hazmat", "u64_digit"] }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+
+[dev-dependencies]
+hex-literal = { workspace = true }

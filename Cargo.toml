@@ -5,6 +5,7 @@ members = [
     "crates/tpm2",
     "crates/tpm2-client",
     "crates/tpm2-impl",
+    "crates/tpm2-libcrux",
     "crates/tpm2-rustcrypto",
 ]
 
@@ -33,7 +34,7 @@ tempfile = "3.25.0"
 trybuild = { version = "1.0.89", features = ["diff"] }
 zerocopy = { version = "0.8.33", features = ["derive"] }
 
-# RustCrypto dependencies (for tpm2-rustcrypto)
+# RustCrypto dependencies (for tpm2-rustcrypto and tpm2-libcrux)
 aes = "0.8"
 camellia = "0.1"
 cipher = "0.4"
@@ -57,10 +58,17 @@ sm3 = { version = "0.4", default-features = false }
 sm4 = "0.5"
 subtle = { version = "2.6", default-features = false }
 
+# libcrux dependencies (for tpm2-libcrux)
+libcrux-ml-dsa = { version = "0.0.9", default-features = false }
+libcrux-ml-kem = { version = "0.0.9", default-features = false }
+libcrux-p256 = "0.0.7"
+libcrux-sha2 = "0.0.7"
+
 # Common workspace crates
 tpm2 = { path = "crates/tpm2" }
 tpm2-client = { path = "crates/tpm2-client" }
 tpm2-impl = { path = "crates/tpm2-impl" }
+tpm2-libcrux = { path = "crates/tpm2-libcrux" }
 tpm2-rustcrypto = { path = "crates/tpm2-rustcrypto" }
 
 [profile.release]
