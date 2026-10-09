@@ -1,5 +1,6 @@
 use super::*;
 use crate::sessions::{PasswordSession, Session};
+use tpm2::errors::Position;
 use tpm2::*;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -38,11 +39,8 @@ impl Marshal for TestCommand {
     }
 }
 impl<'a> UnmarshalMessage<'a> for TestCommand {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
-        let val = u32::unmarshal(src)?;
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
+        let val = u32::unmarshal(src).map_err(|err| err.fmt1().with(Position::parameter(1)))?;
         Ok(Self(val))
     }
 }
@@ -188,6 +186,21 @@ impl FakeTpm {
     }
 }
 
+#[test]
+fn test_malformed_response_parameters() {
+    let mut fake_tpm = FakeTpm::default();
+    // TestCommand's response parameter is a u32, but only 2 bytes are sent.
+    fake_tpm.add_to_response(&0u16);
+
+    let cmd = TestCommand(0);
+    let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
+    let rc = TpmRc::INSUFFICIENT.with(Position::parameter(1));
+    let result = run_command(&cmd, &mut fake_tpm, &mut resp_buffer);
+    assert_eq!(result, Err(ClientError::MalformedResponse(rc)));
+    // The response code was not returned by the TPM.
+    assert_ne!(result.unwrap_err(), rc);
+}
+
 struct TestSessionsCommand();
 impl Message for TestSessionsCommand {
     type Handles = [Handle; 0];
@@ -203,7 +216,7 @@ impl Marshal for TestSessionsCommand {
     }
 }
 impl<'a> UnmarshalMessage<'a> for TestSessionsCommand {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self())
     }
 }

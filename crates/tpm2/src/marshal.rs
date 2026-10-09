@@ -60,7 +60,9 @@ impl<const N: usize> Marshal for &[u8; N] {
 }
 impl<'a, const N: usize> Unmarshal<'a> for &'a [u8; N] {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        let (arr, rest) = src.split_first_chunk().ok_or(UnmarshalError)?;
+        let (arr, rest) = src
+            .split_first_chunk()
+            .ok_or(UnmarshalError::Insufficient)?;
         *src = rest;
         Ok(arr)
     }
@@ -99,7 +101,9 @@ impl Marshal for bool {
 }
 impl<'a> Unmarshal<'a> for bool {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        u8::unmarshal(src)?.try_into().map_err(|_| UnmarshalError)
+        u8::unmarshal(src)?
+            .try_into()
+            .map_err(|_| UnmarshalError::Value)
     }
 }
 

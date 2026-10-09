@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Signing and Signature Verification" commands defined in
 //! **Section 20** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_VerifySignature (Command)
 #[doc(alias = "TPM2_VerifySignature")]
@@ -45,11 +45,11 @@ impl<'a> UnmarshalMessage<'a> for VerifySignature<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            digest: Unmarshal::unmarshal(src)?,
-            signature: Unmarshal::unmarshal(src)?,
+            digest: param(src, 1)?,
+            signature: param(src, 2)?,
         })
     }
 }
@@ -68,12 +68,9 @@ impl Marshal for VerifySignatureRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for VerifySignatureRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            validation: Unmarshal::unmarshal(src)?,
+            validation: param(src, 1)?,
         })
     }
 }
@@ -121,12 +118,12 @@ impl<'a> UnmarshalMessage<'a> for Sign<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            digest: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
-            validation: Unmarshal::unmarshal(src)?,
+            digest: param(src, 1)?,
+            in_scheme: param(src, 2)?,
+            validation: param(src, 3)?,
         })
     }
 }
@@ -145,12 +142,9 @@ impl Marshal for SignRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for SignRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            signature: Unmarshal::unmarshal(src)?,
+            signature: param(src, 1)?,
         })
     }
 }
@@ -192,11 +186,11 @@ impl<'a> UnmarshalMessage<'a> for SignSequenceComplete<'a> {
     fn unmarshal_with_handles(
         [sequence_handle, key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             sequence_handle,
             key_handle,
-            buffer: Unmarshal::unmarshal(src)?,
+            buffer: param(src, 1)?,
         })
     }
 }
@@ -215,12 +209,9 @@ impl Marshal for SignSequenceCompleteRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for SignSequenceCompleteRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            signature: Unmarshal::unmarshal(src)?,
+            signature: param(src, 1)?,
         })
     }
 }
@@ -262,11 +253,11 @@ impl<'a> UnmarshalMessage<'a> for VerifySequenceComplete<'a> {
     fn unmarshal_with_handles(
         [sequence_handle, key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             sequence_handle,
             key_handle,
-            signature: Unmarshal::unmarshal(src)?,
+            signature: param(src, 1)?,
         })
     }
 }
@@ -285,12 +276,9 @@ impl Marshal for VerifySequenceCompleteRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for VerifySequenceCompleteRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            validation: Unmarshal::unmarshal(src)?,
+            validation: param(src, 1)?,
         })
     }
 }
@@ -336,12 +324,12 @@ impl<'a> UnmarshalMessage<'a> for SignDigest<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            context: Unmarshal::unmarshal(src)?,
-            digest: Unmarshal::unmarshal(src)?,
-            validation: Unmarshal::unmarshal(src)?,
+            context: param(src, 1)?,
+            digest: param(src, 2)?,
+            validation: param(src, 3)?,
         })
     }
 }
@@ -360,12 +348,9 @@ impl Marshal for SignDigestRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for SignDigestRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            signature: Unmarshal::unmarshal(src)?,
+            signature: param(src, 1)?,
         })
     }
 }
@@ -411,12 +396,12 @@ impl<'a> UnmarshalMessage<'a> for VerifyDigestSignature<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            context: Unmarshal::unmarshal(src)?,
-            digest: Unmarshal::unmarshal(src)?,
-            signature: Unmarshal::unmarshal(src)?,
+            context: param(src, 1)?,
+            digest: param(src, 2)?,
+            signature: param(src, 3)?,
         })
     }
 }
@@ -435,12 +420,9 @@ impl Marshal for VerifyDigestSignatureRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for VerifyDigestSignatureRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            validation: Unmarshal::unmarshal(src)?,
+            validation: param(src, 1)?,
         })
     }
 }

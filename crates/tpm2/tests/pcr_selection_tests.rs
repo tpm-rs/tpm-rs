@@ -71,7 +71,7 @@ fn test_pcr_selection_invalid_bounds() {
         buf[2] = invalid_len;
         let mut reader = &buf[..3 + invalid_len as usize];
         let err = TpmsPcrSelection::unmarshal(&mut reader).unwrap_err();
-        assert_eq!(err, tpm2::errors::UnmarshalError);
+        assert_eq!(err, tpm2::errors::UnmarshalError::Value);
     }
 }
 
@@ -86,15 +86,14 @@ fn test_pcr_selection_truncated_buffers() {
     for k in 0..TpmsPcrSelect::MIN {
         let mut reader = &buf[..3 + k];
         let err = TpmsPcrSelection::unmarshal(&mut reader).unwrap_err();
-        assert_eq!(err, tpm2::errors::UnmarshalError);
+        assert_eq!(err, tpm2::errors::UnmarshalError::Insufficient);
     }
 
-    // Too small buffers for header
-    let buf = [0u8; 10];
+    // Too small buffers for header (prefixes of the valid header above)
     for short_len in 0..3 {
         let mut reader = &buf[..short_len];
         let err = TpmsPcrSelection::unmarshal(&mut reader).unwrap_err();
-        assert_eq!(err, tpm2::errors::UnmarshalError);
+        assert_eq!(err, tpm2::errors::UnmarshalError::Insufficient);
     }
 }
 

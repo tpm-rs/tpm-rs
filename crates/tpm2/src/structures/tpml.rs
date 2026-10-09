@@ -101,7 +101,7 @@ impl<'a, T: TpmlElement + Unmarshal<'a>, const CAP: usize> Unmarshal<'a> for Tpm
         let count = u32::unmarshal(src)?;
         const { assert!(CAP <= 0xFFFF_FFFF) };
         if count > (CAP as u32) {
-            return Err(UnmarshalError);
+            return Err(UnmarshalError::Size);
         }
 
         let mut array = [T::DEFAULT; CAP];

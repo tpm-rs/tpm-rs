@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Duplication Commands" commands defined in
 //! **Section 13** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_Duplicate (Command)
 #[doc(alias = "TPM2_Duplicate")]
@@ -46,12 +46,12 @@ impl<'a> UnmarshalMessage<'a> for Duplicate<'a> {
     fn unmarshal_with_handles(
         [object_handle, new_parent_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             object_handle,
             new_parent_handle,
-            encryption_key_in: Unmarshal::unmarshal(src)?,
-            symmetric_alg: Unmarshal::unmarshal(src)?,
+            encryption_key_in: param(src, 1)?,
+            symmetric_alg: param(src, 2)?,
         })
     }
 }
@@ -73,14 +73,11 @@ impl Marshal for DuplicateRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for DuplicateRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            encryption_key_out: Unmarshal::unmarshal(src)?,
-            duplicate: Unmarshal::unmarshal(src)?,
-            out_sym_seed: Unmarshal::unmarshal(src)?,
+            encryption_key_out: param(src, 1)?,
+            duplicate: param(src, 2)?,
+            out_sym_seed: param(src, 3)?,
         })
     }
 }
@@ -128,13 +125,13 @@ impl<'a> UnmarshalMessage<'a> for Rewrap<'a> {
     fn unmarshal_with_handles(
         [old_parent, new_parent]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             old_parent,
             new_parent,
-            in_duplicate: Unmarshal::unmarshal(src)?,
-            name: Unmarshal::unmarshal(src)?,
-            in_sym_seed: Unmarshal::unmarshal(src)?,
+            in_duplicate: param(src, 1)?,
+            name: param(src, 2)?,
+            in_sym_seed: param(src, 3)?,
         })
     }
 }
@@ -154,13 +151,10 @@ impl Marshal for RewrapRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for RewrapRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            out_duplicate: Unmarshal::unmarshal(src)?,
-            out_sym_seed: Unmarshal::unmarshal(src)?,
+            out_duplicate: param(src, 1)?,
+            out_sym_seed: param(src, 2)?,
         })
     }
 }
@@ -213,14 +207,14 @@ impl<'a> UnmarshalMessage<'a> for Import<'a> {
     fn unmarshal_with_handles(
         [parent_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             parent_handle,
-            encryption_key: Unmarshal::unmarshal(src)?,
-            object_public: Unmarshal::unmarshal(src)?,
-            duplicate: Unmarshal::unmarshal(src)?,
-            in_sym_seed: Unmarshal::unmarshal(src)?,
-            symmetric_alg: Unmarshal::unmarshal(src)?,
+            encryption_key: param(src, 1)?,
+            object_public: param(src, 2)?,
+            duplicate: param(src, 3)?,
+            in_sym_seed: param(src, 4)?,
+            symmetric_alg: param(src, 5)?,
         })
     }
 }
@@ -239,12 +233,9 @@ impl Marshal for ImportRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ImportRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            out_private: Unmarshal::unmarshal(src)?,
+            out_private: param(src, 1)?,
         })
     }
 }

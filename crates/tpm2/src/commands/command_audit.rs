@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Command Audit" commands defined in
 //! **Section 21** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_SetCommandCodeAuditStatus (Command)
 #[doc(alias = "TPM2_SetCommandCodeAuditStatus")]
@@ -36,15 +36,12 @@ impl Marshal for SetCommandCodeAuditStatus {
     }
 }
 impl<'a> UnmarshalMessage<'a> for SetCommandCodeAuditStatus {
-    fn unmarshal_with_handles(
-        [auth]: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([auth]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
             auth,
-            audit_alg: Unmarshal::unmarshal(src)?,
-            set_list: Unmarshal::unmarshal(src)?,
-            clear_list: Unmarshal::unmarshal(src)?,
+            audit_alg: param(src, 1)?,
+            set_list: param(src, 2)?,
+            clear_list: param(src, 3)?,
         })
     }
 }

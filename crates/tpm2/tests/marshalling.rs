@@ -84,11 +84,11 @@ fn test_marshal_tpmt_public() {
     assert_eq!(remarsh_buffer[..marsh], buffer[..marsh]);
 
     // Test invalid selector value.
-    let mut alg_buf = [0u8; Alg::MAX_SIZE];
-    assert!(Alg::SHA256.marshal(&mut alg_buf) > 0);
-    let mut alg_slice = &alg_buf[..];
+    let mut alg_buf = buffer;
+    assert!(Alg::SHA256.marshal(alg_buf.first_chunk_mut().unwrap()) > 0);
+    let mut alg_slice = &alg_buf[..marsh];
     unmarsh = TpmtPublic::unmarshal(&mut alg_slice);
-    assert_eq!(unmarsh.err(), Some(tpm2::errors::UnmarshalError));
+    assert_eq!(unmarsh.err(), Some(tpm2::errors::UnmarshalError::Type));
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn test_tpml_digest_values_marshalling() {
 
     let mut reader = &invalid_buf[..offset];
     let err = TpmlDigestValues::unmarshal(&mut reader).unwrap_err();
-    assert_eq!(err, tpm2::errors::UnmarshalError);
+    assert_eq!(err, tpm2::errors::UnmarshalError::Size);
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn test_tpml_pcr_selection_marshalling() {
 
     let mut reader = &invalid_buf[..offset];
     let err = TpmlPcrSelection::unmarshal(&mut reader).unwrap_err();
-    assert_eq!(err, tpm2::errors::UnmarshalError);
+    assert_eq!(err, tpm2::errors::UnmarshalError::Size);
 
     // Verifying constructing TpmsPcrSelect with invalid bounds (length > MAX or < MIN) fails
     assert!(TpmsPcrSelect::new(&[0xF; TpmsPcrSelect::MAX + 1]).is_none());
@@ -185,7 +185,7 @@ fn test_tpml_pcr_selection_marshalling() {
 
     let mut reader = &invalid_select_buf[..3 + TpmsPcrSelect::MAX + 1];
     let err = TpmsPcrSelection::unmarshal(&mut reader).unwrap_err();
-    assert_eq!(err, tpm2::errors::UnmarshalError);
+    assert_eq!(err, tpm2::errors::UnmarshalError::Value);
 }
 
 #[test]
@@ -275,5 +275,5 @@ fn test_tpmt_nv_public_2_marshalling() {
     let len = mismatched.marshal(&mut buf);
     let mut reader = &buf[..len];
     let err = TpmtNvPublic2::unmarshal(&mut reader).unwrap_err();
-    assert_eq!(err, tpm2::errors::UnmarshalError);
+    assert_eq!(err, tpm2::errors::UnmarshalError::Value);
 }

@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Capability Commands" commands defined in
 //! **Section 30** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_GetCapability (Command)
 #[doc(alias = "TPM2_GetCapability")]
@@ -42,14 +42,11 @@ impl Marshal for GetCapability {
     }
 }
 impl<'a> UnmarshalMessage<'a> for GetCapability {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            capability: Unmarshal::unmarshal(src)?,
-            property: Unmarshal::unmarshal(src)?,
-            property_count: Unmarshal::unmarshal(src)?,
+            capability: param(src, 1)?,
+            property: param(src, 2)?,
+            property_count: param(src, 3)?,
         })
     }
 }
@@ -69,13 +66,10 @@ impl Marshal for GetCapabilityRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for GetCapabilityRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            more_data: Unmarshal::unmarshal(src)?,
-            capability_data: Unmarshal::unmarshal(src)?,
+            more_data: param(src, 1)?,
+            capability_data: param(src, 2)?,
         })
     }
 }
@@ -106,12 +100,9 @@ impl Marshal for TestParms {
     }
 }
 impl<'a> UnmarshalMessage<'a> for TestParms {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            parameters: Unmarshal::unmarshal(src)?,
+            parameters: param(src, 1)?,
         })
     }
 }

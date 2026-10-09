@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Attestation Commands" commands defined in
 //! **Section 18** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_Certify (Command)
 #[doc(alias = "TPM2_Certify")]
@@ -45,12 +45,12 @@ impl<'a> UnmarshalMessage<'a> for Certify<'a> {
     fn unmarshal_with_handles(
         [object_handle, sign_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             object_handle,
             sign_handle,
-            qualifying_data: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
+            qualifying_data: param(src, 1)?,
+            in_scheme: param(src, 2)?,
         })
     }
 }
@@ -70,13 +70,10 @@ impl Marshal for CertifyRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for CertifyRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            certify_info: Unmarshal::unmarshal(src)?,
-            signature: Unmarshal::unmarshal(src)?,
+            certify_info: param(src, 1)?,
+            signature: param(src, 2)?,
         })
     }
 }
@@ -128,14 +125,14 @@ impl<'a> UnmarshalMessage<'a> for CertifyCreation<'a> {
     fn unmarshal_with_handles(
         [sign_handle, object_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             sign_handle,
             object_handle,
-            qualifying_data: Unmarshal::unmarshal(src)?,
-            creation_hash: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
-            creation_ticket: Unmarshal::unmarshal(src)?,
+            qualifying_data: param(src, 1)?,
+            creation_hash: param(src, 2)?,
+            in_scheme: param(src, 3)?,
+            creation_ticket: param(src, 4)?,
         })
     }
 }
@@ -155,13 +152,10 @@ impl Marshal for CertifyCreationRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for CertifyCreationRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            certify_info: Unmarshal::unmarshal(src)?,
-            signature: Unmarshal::unmarshal(src)?,
+            certify_info: param(src, 1)?,
+            signature: param(src, 2)?,
         })
     }
 }
@@ -208,12 +202,12 @@ impl<'a> UnmarshalMessage<'a> for Quote<'a> {
     fn unmarshal_with_handles(
         [sign_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             sign_handle,
-            qualifying_data: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
-            pcr_select: Unmarshal::unmarshal(src)?,
+            qualifying_data: param(src, 1)?,
+            in_scheme: param(src, 2)?,
+            pcr_select: param(src, 3)?,
         })
     }
 }
@@ -233,13 +227,10 @@ impl Marshal for QuoteRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for QuoteRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            quoted: Unmarshal::unmarshal(src)?,
-            signature: Unmarshal::unmarshal(src)?,
+            quoted: param(src, 1)?,
+            signature: param(src, 2)?,
         })
     }
 }
@@ -289,13 +280,13 @@ impl<'a> UnmarshalMessage<'a> for GetSessionAuditDigest<'a> {
     fn unmarshal_with_handles(
         [privacy_admin_handle, sign_handle, session_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             privacy_admin_handle,
             sign_handle,
             session_handle,
-            qualifying_data: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
+            qualifying_data: param(src, 1)?,
+            in_scheme: param(src, 2)?,
         })
     }
 }
@@ -315,13 +306,10 @@ impl Marshal for GetSessionAuditDigestRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for GetSessionAuditDigestRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            audit_info: Unmarshal::unmarshal(src)?,
-            signature: Unmarshal::unmarshal(src)?,
+            audit_info: param(src, 1)?,
+            signature: param(src, 2)?,
         })
     }
 }
@@ -366,12 +354,12 @@ impl<'a> UnmarshalMessage<'a> for GetCommandAuditDigest<'a> {
     fn unmarshal_with_handles(
         [privacy_handle, sign_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             privacy_handle,
             sign_handle,
-            qualifying_data: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
+            qualifying_data: param(src, 1)?,
+            in_scheme: param(src, 2)?,
         })
     }
 }
@@ -391,13 +379,10 @@ impl Marshal for GetCommandAuditDigestRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for GetCommandAuditDigestRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            audit_info: Unmarshal::unmarshal(src)?,
-            signature: Unmarshal::unmarshal(src)?,
+            audit_info: param(src, 1)?,
+            signature: param(src, 2)?,
         })
     }
 }
@@ -442,12 +427,12 @@ impl<'a> UnmarshalMessage<'a> for GetTime<'a> {
     fn unmarshal_with_handles(
         [privacy_admin_handle, sign_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             privacy_admin_handle,
             sign_handle,
-            qualifying_data: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
+            qualifying_data: param(src, 1)?,
+            in_scheme: param(src, 2)?,
         })
     }
 }
@@ -467,13 +452,10 @@ impl Marshal for GetTimeRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for GetTimeRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            time_info: Unmarshal::unmarshal(src)?,
-            signature: Unmarshal::unmarshal(src)?,
+            time_info: param(src, 1)?,
+            signature: param(src, 2)?,
         })
     }
 }

@@ -276,7 +276,7 @@ impl TpmEccCurve {
 impl TryFrom<u16> for TpmEccCurve {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
-        find_by!(Self::ALL, |c| u16::from(c) == val).ok_or(UnmarshalError)
+        find_by!(Self::ALL, |c| u16::from(c) == val).ok_or(UnmarshalError::Curve)
     }
 }
 
@@ -530,7 +530,7 @@ impl TryFrom<u16> for TpmEo {
             0x0009 => Ok(Self::UnsignedLE),
             0x000A => Ok(Self::BitSet),
             0x000B => Ok(Self::BitClear),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Value),
         }
     }
 }
@@ -660,7 +660,7 @@ impl TryFrom<u16> for TpmSu {
         match val {
             0x0000 => Ok(Self::Clear),
             0x0001 => Ok(Self::State),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Value),
         }
     }
 }
@@ -708,7 +708,7 @@ impl TryFrom<u8> for TpmSe {
             0x00 => Ok(Self::HMAC),
             0x01 => Ok(Self::Policy),
             0x03 => Ok(Self::Trial),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Value),
         }
     }
 }
@@ -772,7 +772,7 @@ impl TryFrom<u32> for TpmCap {
             0x0000000A => Ok(Self::ACT),
             0x0000000B => Ok(Self::PubKeys),
             0x0000000C => Ok(Self::SpdmSessionInfo),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Value),
         }
     }
 }
@@ -1048,7 +1048,7 @@ impl TryFrom<u32> for TpmPt {
             0x00000212 => Ok(Self::NVWriteRecovery),
             0x00000213 => Ok(Self::AuditCounter0),
             0x00000214 => Ok(Self::AuditCounter1),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Value),
         }
     }
 }
@@ -1146,7 +1146,7 @@ impl TryFrom<u32> for TpmPtPcr {
             0x00000012 => Ok(Self::DRTMReset),
             0x00000013 => Ok(Self::Policy),
             0x00000014 => Ok(Self::Auth),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Value),
         }
     }
 }
@@ -1204,7 +1204,7 @@ impl TryFrom<u8> for TpmHt {
             0x80 => Ok(Self::Transient),
             0x81 => Ok(Self::Persistent),
             0x90 => Ok(Self::AC),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Value),
         }
     }
 }
@@ -1341,7 +1341,7 @@ impl TryFrom<u8> for TpmNt {
             0x4 => Ok(Self::Extend),
             0x8 => Ok(Self::PinFail),
             0x9 => Ok(Self::PinPass),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Value),
         }
     }
 }
@@ -1400,7 +1400,7 @@ impl TryFrom<i8> for TpmClockAdjust {
             1 => Ok(Self::FineFaster),
             2 => Ok(Self::MediumFaster),
             3 => Ok(Self::CoarseFaster),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Value),
         }
     }
 }
@@ -1447,7 +1447,7 @@ impl<'a> Unmarshal<'a> for TpmGenerated {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         match Unmarshal::unmarshal(src)? {
             Self::VALUE => Ok(Self),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Value),
         }
     }
 }

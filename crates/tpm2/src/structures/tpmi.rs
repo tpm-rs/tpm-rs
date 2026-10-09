@@ -24,7 +24,7 @@ impl TryFrom<Alg> for Option<TpmiAlgKdf> {
             Alg::KDF2 => Ok(Some(TpmiAlgKdf::Kdf2)),
             Alg::KDF1_SP800_108 => Ok(Some(TpmiAlgKdf::Kdf1Sp800_108)),
             Alg::HKDF => Ok(Some(TpmiAlgKdf::Hkdf)),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Kdf),
         }
     }
 }
@@ -71,7 +71,7 @@ impl TryFrom<Alg> for TpmiEccKeyExchange {
             Alg::ECDH => Ok(Self::Ecdh),
             Alg::ECMQV => Ok(Self::Ecmqv),
             Alg::SM2 => Ok(Self::Sm2),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Scheme),
         }
     }
 }
@@ -130,7 +130,7 @@ impl TryFrom<Alg> for Option<TpmiAlgCipherMode> {
             Alg::CFB => Ok(Some(TpmiAlgCipherMode::Cfb)),
             #[cfg(feature = "ecb")]
             Alg::ECB => Ok(Some(TpmiAlgCipherMode::Ecb)),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Mode),
         }
     }
 }
@@ -252,7 +252,7 @@ impl TpmiRsaKeyBits {
 impl TryFrom<u16> for TpmiRsaKeyBits {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
-        Self::new(val).ok_or(UnmarshalError)
+        Self::new(val).ok_or(UnmarshalError::Value)
     }
 }
 
@@ -317,7 +317,7 @@ impl TpmiMlkemParms {
 impl TryFrom<u16> for TpmiMlkemParms {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
-        find_by!(Self::ALL, |p| u16::from(p) == val).ok_or(UnmarshalError)
+        find_by!(Self::ALL, |p| u16::from(p) == val).ok_or(UnmarshalError::Parms)
     }
 }
 
@@ -382,7 +382,7 @@ impl TpmiMldsaParms {
 impl TryFrom<u16> for TpmiMldsaParms {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
-        find_by!(Self::ALL, |p| u16::from(p) == val).ok_or(UnmarshalError)
+        find_by!(Self::ALL, |p| u16::from(p) == val).ok_or(UnmarshalError::Parms)
     }
 }
 
@@ -425,7 +425,9 @@ impl TryFrom<TpmSt> for TpmiStCommandTag {
         Ok(match value {
             TpmSt::NO_SESSIONS => Self::NoSessions,
             TpmSt::SESSIONS => Self::Sessions,
-            _ => return Err(UnmarshalError),
+            // The specification returns TPM_RC_BAD_TAG here, but that is a
+            // Format-Zero code, so report the closest Format-One code instead.
+            _ => return Err(UnmarshalError::Tag),
         })
     }
 }
@@ -552,7 +554,7 @@ impl TpmiAlgHash {
 impl TryFrom<Alg> for TpmiAlgHash {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<TpmiAlgHash, Self::Error> {
-        find_by!(Self::ALL, |h| Alg::from(h) == a).ok_or(UnmarshalError)
+        find_by!(Self::ALL, |h| Alg::from(h) == a).ok_or(UnmarshalError::Hash)
     }
 }
 impl From<TpmiAlgHash> for Alg {

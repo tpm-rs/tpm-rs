@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Hierarchy Commands" commands defined in
 //! **Section 24** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_CreatePrimary (Command)
 #[doc(alias = "TPM2_CreatePrimary")]
@@ -55,13 +55,13 @@ impl<'a> UnmarshalMessage<'a> for CreatePrimary<'a> {
     fn unmarshal_with_handles(
         [primary_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             primary_handle,
-            in_sensitive: Unmarshal::unmarshal(src)?,
-            in_public: Unmarshal::unmarshal(src)?,
-            outside_info: Unmarshal::unmarshal(src)?,
-            creation_pcr: Unmarshal::unmarshal(src)?,
+            in_sensitive: param(src, 1)?,
+            in_public: param(src, 2)?,
+            outside_info: param(src, 3)?,
+            creation_pcr: param(src, 4)?,
         })
     }
 }
@@ -91,14 +91,14 @@ impl<'a> UnmarshalMessage<'a> for CreatePrimaryRsp<'a> {
     fn unmarshal_with_handles(
         [object_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             object_handle,
-            out_public: Unmarshal::unmarshal(src)?,
-            creation_data: Unmarshal::unmarshal(src)?,
-            creation_hash: Unmarshal::unmarshal(src)?,
-            creation_ticket: Unmarshal::unmarshal(src)?,
-            name: Unmarshal::unmarshal(src)?,
+            out_public: param(src, 1)?,
+            creation_data: param(src, 2)?,
+            creation_hash: param(src, 3)?,
+            creation_ticket: param(src, 4)?,
+            name: param(src, 5)?,
         })
     }
 }
@@ -135,11 +135,11 @@ impl<'a> UnmarshalMessage<'a> for HierarchyControl {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
-            enable: Unmarshal::unmarshal(src)?,
-            state: Unmarshal::unmarshal(src)?,
+            enable: param(src, 1)?,
+            state: param(src, 2)?,
         })
     }
 }
@@ -176,11 +176,11 @@ impl<'a> UnmarshalMessage<'a> for SetPrimaryPolicy<'a> {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
-            auth_policy: Unmarshal::unmarshal(src)?,
-            hash_alg: Unmarshal::unmarshal(src)?,
+            auth_policy: param(src, 1)?,
+            hash_alg: param(src, 2)?,
         })
     }
 }
@@ -214,7 +214,7 @@ impl<'a> UnmarshalMessage<'a> for ChangePPS {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { auth_handle })
     }
 }
@@ -248,7 +248,7 @@ impl<'a> UnmarshalMessage<'a> for ChangeEPS {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { auth_handle })
     }
 }
@@ -282,7 +282,7 @@ impl<'a> UnmarshalMessage<'a> for Clear {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { auth_handle })
     }
 }
@@ -314,13 +314,10 @@ impl Marshal for ClearControl {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ClearControl {
-    fn unmarshal_with_handles(
-        [auth]: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([auth]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
             auth,
-            disable: Unmarshal::unmarshal(src)?,
+            disable: param(src, 1)?,
         })
     }
 }
@@ -355,10 +352,10 @@ impl<'a> UnmarshalMessage<'a> for HierarchyChangeAuth<'a> {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
-            new_auth: Unmarshal::unmarshal(src)?,
+            new_auth: param(src, 1)?,
         })
     }
 }
@@ -393,10 +390,10 @@ impl<'a> UnmarshalMessage<'a> for ReadOnlyControl {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
-            state: Unmarshal::unmarshal(src)?,
+            state: param(src, 1)?,
         })
     }
 }

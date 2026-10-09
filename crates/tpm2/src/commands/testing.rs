@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Testing" commands defined in
 //! **Section 10** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_SelfTest (Command)
 #[doc(alias = "TPM2_SelfTest")]
@@ -31,12 +31,9 @@ impl Marshal for SelfTest {
     }
 }
 impl<'a> UnmarshalMessage<'a> for SelfTest {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            full_test: Unmarshal::unmarshal(src)?,
+            full_test: param(src, 1)?,
         })
     }
 }
@@ -73,12 +70,9 @@ impl Marshal for IncrementalSelfTest {
     }
 }
 impl<'a> UnmarshalMessage<'a> for IncrementalSelfTest {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            to_test: Unmarshal::unmarshal(src)?,
+            to_test: param(src, 1)?,
         })
     }
 }
@@ -97,12 +91,9 @@ impl Marshal for IncrementalSelfTestRsp {
     }
 }
 impl<'a> UnmarshalMessage<'a> for IncrementalSelfTestRsp {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            to_do_list: Unmarshal::unmarshal(src)?,
+            to_do_list: param(src, 1)?,
         })
     }
 }
@@ -138,7 +129,7 @@ impl Marshal for GetTestResult {
     }
 }
 impl<'a> UnmarshalMessage<'a> for GetTestResult {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self)
     }
 }
@@ -158,13 +149,10 @@ impl Marshal for GetTestResultRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for GetTestResultRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            out_data: Unmarshal::unmarshal(src)?,
-            test_result: Unmarshal::unmarshal(src)?,
+            out_data: param(src, 1)?,
+            test_result: param(src, 2)?,
         })
     }
 }

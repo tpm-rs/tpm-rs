@@ -8,8 +8,8 @@
 //!
 //! Each command includes its corresponding request parameters, handle list,
 //! response parameters, and [`Command`] trait implementation.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, *};
 
 /// TPM2_GetRandom (Command)
 #[doc(alias = "TPM2_GetRandom")]
@@ -43,12 +43,9 @@ impl Marshal for GetRandom {
     }
 }
 impl<'a> UnmarshalMessage<'a> for GetRandom {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            bytes_requested: Unmarshal::unmarshal(src)?,
+            bytes_requested: param(src, 1)?,
         })
     }
 }
@@ -67,12 +64,9 @@ impl Marshal for GetRandomRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for GetRandomRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            random_bytes: Unmarshal::unmarshal(src)?,
+            random_bytes: param(src, 1)?,
         })
     }
 }
@@ -103,12 +97,9 @@ impl Marshal for StirRandom<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for StirRandom<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            in_data: Unmarshal::unmarshal(src)?,
+            in_data: param(src, 1)?,
         })
     }
 }

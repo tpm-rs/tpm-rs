@@ -9,8 +9,8 @@
 //! Each command includes its corresponding request parameters, handle list,
 //! response parameters, and [`Command`] trait implementation.
 
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, *};
 
 /// TPM2_Startup (Command)
 #[doc(alias = "TPM2_Startup")]
@@ -37,12 +37,9 @@ impl Marshal for Startup {
     }
 }
 impl<'a> UnmarshalMessage<'a> for Startup {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            startup_type: Unmarshal::unmarshal(src)?,
+            startup_type: param(src, 1)?,
         })
     }
 }
@@ -73,12 +70,9 @@ impl Marshal for Shutdown {
     }
 }
 impl<'a> UnmarshalMessage<'a> for Shutdown {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            shutdown_type: Unmarshal::unmarshal(src)?,
+            shutdown_type: param(src, 1)?,
         })
     }
 }

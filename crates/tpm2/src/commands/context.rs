@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Context Management" commands defined in
 //! **Section 28** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, *};
 
 /// TPM2_ContextSave (Command)
 #[doc(alias = "TPM2_ContextSave")]
@@ -40,7 +40,7 @@ impl<'a> UnmarshalMessage<'a> for ContextSave {
     fn unmarshal_with_handles(
         [save_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { save_handle })
     }
 }
@@ -59,12 +59,9 @@ impl Marshal for ContextSaveRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ContextSaveRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            context: Unmarshal::unmarshal(src)?,
+            context: param(src, 1)?,
         })
     }
 }
@@ -101,12 +98,9 @@ impl Marshal for ContextLoad<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ContextLoad<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            context: Unmarshal::unmarshal(src)?,
+            context: param(src, 1)?,
         })
     }
 }
@@ -128,7 +122,7 @@ impl<'a> UnmarshalMessage<'a> for ContextLoadRsp {
     fn unmarshal_with_handles(
         [loaded_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { loaded_handle })
     }
 }
@@ -159,12 +153,9 @@ impl Marshal for FlushContext {
     }
 }
 impl<'a> UnmarshalMessage<'a> for FlushContext {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            flush_handle: Unmarshal::unmarshal(src)?,
+            flush_handle: param(src, 1)?,
         })
     }
 }
@@ -200,11 +191,11 @@ impl<'a> UnmarshalMessage<'a> for EvictControl {
     fn unmarshal_with_handles(
         [auth, object_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth,
             object_handle,
-            persistent_handle: Unmarshal::unmarshal(src)?,
+            persistent_handle: param(src, 1)?,
         })
     }
 }

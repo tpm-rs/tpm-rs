@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Object Commands" commands defined in
 //! **Section 12** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_Create (Command)
 #[doc(alias = "TPM2_Create")]
@@ -54,13 +54,13 @@ impl<'a> UnmarshalMessage<'a> for Create<'a> {
     fn unmarshal_with_handles(
         [parent_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             parent_handle,
-            in_sensitive: Unmarshal::unmarshal(src)?,
-            in_public: Unmarshal::unmarshal(src)?,
-            outside_info: Unmarshal::unmarshal(src)?,
-            creation_pcr: Unmarshal::unmarshal(src)?,
+            in_sensitive: param(src, 1)?,
+            in_public: param(src, 2)?,
+            outside_info: param(src, 3)?,
+            creation_pcr: param(src, 4)?,
         })
     }
 }
@@ -87,16 +87,13 @@ impl Marshal for CreateRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for CreateRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            out_private: Unmarshal::unmarshal(src)?,
-            out_public: Unmarshal::unmarshal(src)?,
-            creation_data: Unmarshal::unmarshal(src)?,
-            creation_hash: Unmarshal::unmarshal(src)?,
-            creation_ticket: Unmarshal::unmarshal(src)?,
+            out_private: param(src, 1)?,
+            out_public: param(src, 2)?,
+            creation_data: param(src, 3)?,
+            creation_hash: param(src, 4)?,
+            creation_ticket: param(src, 5)?,
         })
     }
 }
@@ -140,11 +137,11 @@ impl<'a> UnmarshalMessage<'a> for Load<'a> {
     fn unmarshal_with_handles(
         [parent_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             parent_handle,
-            in_private: Unmarshal::unmarshal(src)?,
-            in_public: Unmarshal::unmarshal(src)?,
+            in_private: param(src, 1)?,
+            in_public: param(src, 2)?,
         })
     }
 }
@@ -166,10 +163,10 @@ impl<'a> UnmarshalMessage<'a> for LoadRsp<'a> {
     fn unmarshal_with_handles(
         [object_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             object_handle,
-            name: Unmarshal::unmarshal(src)?,
+            name: param(src, 1)?,
         })
     }
 }
@@ -211,7 +208,7 @@ impl<'a> UnmarshalMessage<'a> for ReadPublic {
     fn unmarshal_with_handles(
         [object_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { object_handle })
     }
 }
@@ -232,14 +229,11 @@ impl Marshal for ReadPublicRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ReadPublicRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            out_public: Unmarshal::unmarshal(src)?,
-            name: Unmarshal::unmarshal(src)?,
-            qualified_name: Unmarshal::unmarshal(src)?,
+            out_public: param(src, 1)?,
+            name: param(src, 2)?,
+            qualified_name: param(src, 3)?,
         })
     }
 }
@@ -283,12 +277,12 @@ impl<'a> UnmarshalMessage<'a> for ActivateCredential<'a> {
     fn unmarshal_with_handles(
         [activate_handle, key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             activate_handle,
             key_handle,
-            credential_blob: Unmarshal::unmarshal(src)?,
-            secret: Unmarshal::unmarshal(src)?,
+            credential_blob: param(src, 1)?,
+            secret: param(src, 2)?,
         })
     }
 }
@@ -307,12 +301,9 @@ impl Marshal for ActivateCredentialRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ActivateCredentialRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            cert_info: Unmarshal::unmarshal(src)?,
+            cert_info: param(src, 1)?,
         })
     }
 }
@@ -353,14 +344,11 @@ impl Marshal for MakeCredential<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for MakeCredential<'a> {
-    fn unmarshal_with_handles(
-        [handle]: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([handle]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
             handle,
-            credential: Unmarshal::unmarshal(src)?,
-            object_name: Unmarshal::unmarshal(src)?,
+            credential: param(src, 1)?,
+            object_name: param(src, 2)?,
         })
     }
 }
@@ -380,13 +368,10 @@ impl Marshal for MakeCredentialRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for MakeCredentialRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            credential_blob: Unmarshal::unmarshal(src)?,
-            secret: Unmarshal::unmarshal(src)?,
+            credential_blob: param(src, 1)?,
+            secret: param(src, 2)?,
         })
     }
 }
@@ -426,7 +411,7 @@ impl<'a> UnmarshalMessage<'a> for Unseal {
     fn unmarshal_with_handles(
         [item_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { item_handle })
     }
 }
@@ -445,12 +430,9 @@ impl Marshal for UnsealRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for UnsealRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            out_data: Unmarshal::unmarshal(src)?,
+            out_data: param(src, 1)?,
         })
     }
 }
@@ -492,11 +474,11 @@ impl<'a> UnmarshalMessage<'a> for ObjectChangeAuth<'a> {
     fn unmarshal_with_handles(
         [object_handle, parent_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             object_handle,
             parent_handle,
-            new_auth: Unmarshal::unmarshal(src)?,
+            new_auth: param(src, 1)?,
         })
     }
 }
@@ -515,12 +497,9 @@ impl Marshal for ObjectChangeAuthRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ObjectChangeAuthRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            out_private: Unmarshal::unmarshal(src)?,
+            out_private: param(src, 1)?,
         })
     }
 }
@@ -563,14 +542,11 @@ impl Marshal for LoadExternal<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for LoadExternal<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            in_private: Unmarshal::unmarshal(src)?,
-            in_public: Unmarshal::unmarshal(src)?,
-            hierarchy: Unmarshal::unmarshal(src)?,
+            in_private: param(src, 1)?,
+            in_public: param(src, 2)?,
+            hierarchy: param(src, 3)?,
         })
     }
 }
@@ -592,10 +568,10 @@ impl<'a> UnmarshalMessage<'a> for LoadExternalRsp<'a> {
     fn unmarshal_with_handles(
         [object_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             object_handle,
-            name: Unmarshal::unmarshal(src)?,
+            name: param(src, 1)?,
         })
     }
 }
