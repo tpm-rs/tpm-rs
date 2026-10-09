@@ -250,7 +250,7 @@ fn test_unmarshal_invalid_public_type() {
 
     let mut slice: &[u8] = &buf;
     let res = Tpm2bPublic::unmarshal(&mut slice);
-    assert_eq!(res.unwrap_err(), tpm2::errors::UnmarshalError);
+    assert_eq!(res.unwrap_err(), tpm2::errors::UnmarshalError::Type);
 }
 
 #[test]
@@ -260,7 +260,7 @@ fn test_tpm2b_trailing_bytes_rejected() {
     let mut slice: &[u8] = &[0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0xFF];
     assert_eq!(
         Tpm2bEccPoint::unmarshal(&mut slice),
-        Err(tpm2::errors::UnmarshalError)
+        Err(tpm2::errors::UnmarshalError::Size)
     );
 }
 

@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Hash/HMAC/Event Sequences" commands defined in
 //! **Section 17** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_HMAC_Start (Command)
 #[doc(alias = "TPM2_HMAC_Start")]
@@ -40,14 +40,11 @@ impl Marshal for HMACStart<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for HMACStart<'a> {
-    fn unmarshal_with_handles(
-        [handle]: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([handle]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
             handle,
-            auth: Unmarshal::unmarshal(src)?,
-            hash_alg: Unmarshal::unmarshal(src)?,
+            auth: param(src, 1)?,
+            hash_alg: param(src, 2)?,
         })
     }
 }
@@ -69,7 +66,7 @@ impl<'a> UnmarshalMessage<'a> for HMACStartRsp {
     fn unmarshal_with_handles(
         [sequence_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { sequence_handle })
     }
 }
@@ -108,13 +105,10 @@ impl Marshal for HashSequenceStart<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for HashSequenceStart<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            auth: Unmarshal::unmarshal(src)?,
-            hash_alg: Unmarshal::unmarshal(src)?,
+            auth: param(src, 1)?,
+            hash_alg: param(src, 2)?,
         })
     }
 }
@@ -136,7 +130,7 @@ impl<'a> UnmarshalMessage<'a> for HashSequenceStartRsp {
     fn unmarshal_with_handles(
         [sequence_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { sequence_handle })
     }
 }
@@ -179,11 +173,11 @@ impl<'a> UnmarshalMessage<'a> for SignSequenceStart<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            auth: Unmarshal::unmarshal(src)?,
-            context: Unmarshal::unmarshal(src)?,
+            auth: param(src, 1)?,
+            context: param(src, 2)?,
         })
     }
 }
@@ -205,7 +199,7 @@ impl<'a> UnmarshalMessage<'a> for SignSequenceStartRsp {
     fn unmarshal_with_handles(
         [sequence_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { sequence_handle })
     }
 }
@@ -251,12 +245,12 @@ impl<'a> UnmarshalMessage<'a> for VerifySequenceStart<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            auth: Unmarshal::unmarshal(src)?,
-            hint: Unmarshal::unmarshal(src)?,
-            context: Unmarshal::unmarshal(src)?,
+            auth: param(src, 1)?,
+            hint: param(src, 2)?,
+            context: param(src, 3)?,
         })
     }
 }
@@ -278,7 +272,7 @@ impl<'a> UnmarshalMessage<'a> for VerifySequenceStartRsp {
     fn unmarshal_with_handles(
         [sequence_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { sequence_handle })
     }
 }
@@ -313,10 +307,10 @@ impl<'a> UnmarshalMessage<'a> for SequenceUpdate<'a> {
     fn unmarshal_with_handles(
         [sequence_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             sequence_handle,
-            buffer: Unmarshal::unmarshal(src)?,
+            buffer: param(src, 1)?,
         })
     }
 }
@@ -360,11 +354,11 @@ impl<'a> UnmarshalMessage<'a> for SequenceComplete<'a> {
     fn unmarshal_with_handles(
         [sequence_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             sequence_handle,
-            buffer: Unmarshal::unmarshal(src)?,
-            hierarchy: Unmarshal::unmarshal(src)?,
+            buffer: param(src, 1)?,
+            hierarchy: param(src, 2)?,
         })
     }
 }
@@ -384,13 +378,10 @@ impl Marshal for SequenceCompleteRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for SequenceCompleteRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            result: Unmarshal::unmarshal(src)?,
-            validation: Unmarshal::unmarshal(src)?,
+            result: param(src, 1)?,
+            validation: param(src, 2)?,
         })
     }
 }
@@ -432,11 +423,11 @@ impl<'a> UnmarshalMessage<'a> for EventSequenceComplete<'a> {
     fn unmarshal_with_handles(
         [pcr_handle, sequence_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             pcr_handle,
             sequence_handle,
-            buffer: Unmarshal::unmarshal(src)?,
+            buffer: param(src, 1)?,
         })
     }
 }
@@ -455,12 +446,9 @@ impl Marshal for EventSequenceCompleteRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for EventSequenceCompleteRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            results: Unmarshal::unmarshal(src)?,
+            results: param(src, 1)?,
         })
     }
 }

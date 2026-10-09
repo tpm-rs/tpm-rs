@@ -43,7 +43,7 @@ impl<'a> TpmuAttest<'a> {
             TpmSt::ATTEST_TIME => Self::Time(Unmarshal::unmarshal(src)?),
             TpmSt::ATTEST_NV => Self::Nv(Unmarshal::unmarshal(src)?),
             TpmSt::ATTEST_NV_DIGEST => Self::NvDigest(Unmarshal::unmarshal(src)?),
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Value),
         })
     }
 }
@@ -115,7 +115,7 @@ impl<'a> TpmuSensitiveComposite<'a> {
             Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?),
             Alg::HASH_MLDSA => Self::HashMldsa(Unmarshal::unmarshal(src)?),
             Alg::MLKEM => Self::Mlkem(Unmarshal::unmarshal(src)?),
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Type),
         })
     }
 }

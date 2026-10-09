@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Dictionary Attack Functions" commands defined in
 //! **Section 25** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_DictionaryAttackLockReset (Command)
 #[doc(alias = "TPM2_DictionaryAttackLockReset")]
@@ -34,7 +34,7 @@ impl<'a> UnmarshalMessage<'a> for DictionaryAttackLockReset {
     fn unmarshal_with_handles(
         [lock_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { lock_handle })
     }
 }
@@ -73,12 +73,12 @@ impl<'a> UnmarshalMessage<'a> for DictionaryAttackParameters {
     fn unmarshal_with_handles(
         [lock_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             lock_handle,
-            new_max_tries: Unmarshal::unmarshal(src)?,
-            new_recovery_time: Unmarshal::unmarshal(src)?,
-            lockout_recovery: Unmarshal::unmarshal(src)?,
+            new_max_tries: param(src, 1)?,
+            new_recovery_time: param(src, 2)?,
+            lockout_recovery: param(src, 3)?,
         })
     }
 }

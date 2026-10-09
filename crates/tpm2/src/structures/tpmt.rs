@@ -80,9 +80,9 @@ impl<'a> TpmtHa<'a> {
     fn unmarshal_digest(alg: TpmiAlgHash, src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let (digest, rest) = src
             .split_at_checked(alg.digest_size())
-            .ok_or(UnmarshalError)?;
+            .ok_or(UnmarshalError::Insufficient)?;
         *src = rest;
-        Self::new(alg, digest).ok_or(UnmarshalError)
+        Self::new(alg, digest).ok_or(UnmarshalError::Size)
     }
 }
 
@@ -173,7 +173,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtKeyedHashScheme> {
         Ok(Some(match alg {
             Alg::HMAC => TpmtKeyedHashScheme::Hmac(Unmarshal::unmarshal(src)?),
             Alg::XOR => TpmtKeyedHashScheme::Xor(Unmarshal::unmarshal(src)?),
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Value),
         }))
     }
 }
@@ -288,7 +288,11 @@ impl Marshal for AlgSym {
 
 impl<'a> Unmarshal<'a> for AlgSym {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Self::new(Alg::unmarshal(src)?, u16::unmarshal(src)?).ok_or(UnmarshalError)
+        let alg = Alg::unmarshal(src)?;
+        if find_by!(Self::ALL, |s| s.algorithm() == alg).is_none() {
+            return Err(UnmarshalError::Symmetric);
+        }
+        Self::new(alg, u16::unmarshal(src)?).ok_or(UnmarshalError::Value)
     }
 }
 
@@ -485,7 +489,7 @@ impl<'a> Unmarshal<'a> for TpmtSignature<'a> {
             Alg::HASH_EDDSA => Self::HashEddsa(Unmarshal::unmarshal(src)?),
             Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?),
             Alg::HASH_MLDSA => Self::HashMldsa(Unmarshal::unmarshal(src)?),
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Scheme),
         })
     }
 }
@@ -595,7 +599,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtSigScheme> {
             Alg::HASH_EDDSA => TpmtSigScheme::HashEddsa,
             Alg::MLDSA => TpmtSigScheme::Mldsa,
             Alg::HASH_MLDSA => TpmtSigScheme::HashMldsa,
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Scheme),
         }))
     }
 }
@@ -653,7 +657,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtRsaScheme> {
             Alg::RSAES => TpmtRsaScheme::Rsaes,
             Alg::RSAPSS => TpmtRsaScheme::Rsapss(Unmarshal::unmarshal(src)?),
             Alg::OAEP => TpmtRsaScheme::Oaep(Unmarshal::unmarshal(src)?),
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Value),
         }))
     }
 }
@@ -704,7 +708,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtRsaDecrypt> {
         Ok(Some(match alg {
             Alg::RSAES => TpmtRsaDecrypt::Rsaes,
             Alg::OAEP => TpmtRsaDecrypt::Oaep(Unmarshal::unmarshal(src)?),
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Value),
         }))
     }
 }
@@ -799,7 +803,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtEccScheme> {
             Alg::ECMQV => TpmtEccScheme::Ecmqv(Unmarshal::unmarshal(src)?),
             Alg::EDDSA => TpmtEccScheme::Eddsa,
             Alg::HASH_EDDSA => TpmtEccScheme::HashEddsa,
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Scheme),
         }))
     }
 }
@@ -987,7 +991,7 @@ impl<'a> Unmarshal<'a> for TpmtPublicParms {
             Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?),
             Alg::HASH_MLDSA => Self::HashMldsa(Unmarshal::unmarshal(src)?),
             Alg::MLKEM => Self::Mlkem(Unmarshal::unmarshal(src)?),
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Type),
         })
     }
 }
@@ -1053,7 +1057,7 @@ impl<'a> Unmarshal<'a> for TpmtTkCreation<'a> {
             TpmSt::CREATION => {
                 Self::Creation(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
             }
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Tag),
         })
     }
 }
@@ -1136,7 +1140,7 @@ impl<'a> Unmarshal<'a> for TpmtTkVerified<'a> {
                 Unmarshal::unmarshal(src)?,
                 Unmarshal::unmarshal(src)?,
             ),
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Tag),
         })
     }
 }
@@ -1202,7 +1206,7 @@ impl<'a> Unmarshal<'a> for TpmtTkAuth<'a> {
             TpmSt::AUTH_SECRET => {
                 Self::Secret(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
             }
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Tag),
         })
     }
 }
@@ -1257,7 +1261,7 @@ impl<'a> Unmarshal<'a> for TpmtTkHashcheck<'a> {
             TpmSt::HASHCHECK => {
                 Self::Hashcheck(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
             }
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Tag),
         })
     }
 }
@@ -1410,16 +1414,19 @@ impl Marshal for TpmtNvPublic2<'_> {
 
 impl<'a> Unmarshal<'a> for TpmtNvPublic2<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        let handle_type = TpmHt::unmarshal(src)?;
+        // The selector is a plain byte: undefined handle types are bad selectors, like defined
+        // ones that have no NV public area.
+        let handle_type =
+            TpmHt::try_from(u8::unmarshal(src)?).map_err(|_| UnmarshalError::Selector)?;
         let public = match handle_type {
             TpmHt::NVIndex => Self::NvIndex(Unmarshal::unmarshal(src)?),
             TpmHt::ExternalNV => Self::ExternalNv(Unmarshal::unmarshal(src)?),
             TpmHt::PermanentNV => Self::PermanentNv(Unmarshal::unmarshal(src)?),
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Selector),
         };
         // The selector must match the handle type of nvIndex.
         if public.nv_index().handle_type() != Some(handle_type) {
-            return Err(UnmarshalError);
+            return Err(UnmarshalError::Value);
         }
         Ok(public)
     }

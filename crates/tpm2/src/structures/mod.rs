@@ -104,7 +104,7 @@ impl<'a> PublicParmsAndId<'a> {
                 Self::HashMldsa(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
             }
             Alg::MLKEM => Self::Mlkem(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?),
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Type),
         })
     }
 }

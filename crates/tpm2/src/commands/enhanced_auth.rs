@@ -2,8 +2,12 @@
 //!
 //! This module implements the "Enhanced Authorization (EA) Commands" commands defined in
 //! **Section 23** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{
+    errors::{Position, TpmRc},
+    marshal::marshal_helper,
+    *,
+};
 
 /// TPM2_PolicySigned (Command)
 #[doc(alias = "TPM2_PolicySigned")]
@@ -55,15 +59,15 @@ impl<'a> UnmarshalMessage<'a> for PolicySigned<'a> {
     fn unmarshal_with_handles(
         [auth_object, policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_object,
             policy_session,
-            nonce_tpm: Unmarshal::unmarshal(src)?,
-            cp_hash_a: Unmarshal::unmarshal(src)?,
-            policy_ref: Unmarshal::unmarshal(src)?,
-            expiration: Unmarshal::unmarshal(src)?,
-            auth: Unmarshal::unmarshal(src)?,
+            nonce_tpm: param(src, 1)?,
+            cp_hash_a: param(src, 2)?,
+            policy_ref: param(src, 3)?,
+            expiration: param(src, 4)?,
+            auth: param(src, 5)?,
         })
     }
 }
@@ -83,13 +87,10 @@ impl Marshal for PolicySignedRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for PolicySignedRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            timeout: Unmarshal::unmarshal(src)?,
-            policy_ticket: Unmarshal::unmarshal(src)?,
+            timeout: param(src, 1)?,
+            policy_ticket: param(src, 2)?,
         })
     }
 }
@@ -139,14 +140,14 @@ impl<'a> UnmarshalMessage<'a> for PolicySecret<'a> {
     fn unmarshal_with_handles(
         [auth_handle, policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
             policy_session,
-            nonce_tpm: Unmarshal::unmarshal(src)?,
-            cp_hash_a: Unmarshal::unmarshal(src)?,
-            policy_ref: Unmarshal::unmarshal(src)?,
-            expiration: Unmarshal::unmarshal(src)?,
+            nonce_tpm: param(src, 1)?,
+            cp_hash_a: param(src, 2)?,
+            policy_ref: param(src, 3)?,
+            expiration: param(src, 4)?,
         })
     }
 }
@@ -166,13 +167,10 @@ impl Marshal for PolicySecretRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for PolicySecretRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            timeout: Unmarshal::unmarshal(src)?,
-            policy_ticket: Unmarshal::unmarshal(src)?,
+            timeout: param(src, 1)?,
+            policy_ticket: param(src, 2)?,
         })
     }
 }
@@ -219,14 +217,14 @@ impl<'a> UnmarshalMessage<'a> for PolicyTicket<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            timeout: Unmarshal::unmarshal(src)?,
-            cp_hash_a: Unmarshal::unmarshal(src)?,
-            policy_ref: Unmarshal::unmarshal(src)?,
-            auth_name: Unmarshal::unmarshal(src)?,
-            ticket: Unmarshal::unmarshal(src)?,
+            timeout: param(src, 1)?,
+            cp_hash_a: param(src, 2)?,
+            policy_ref: param(src, 3)?,
+            auth_name: param(src, 4)?,
+            ticket: param(src, 5)?,
         })
     }
 }
@@ -261,11 +259,15 @@ impl<'a> UnmarshalMessage<'a> for PolicyOR<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
-        let p_hash_list = TpmlDigest::unmarshal(src)?;
-        if p_hash_list.as_slice().len() < 2 {
-            return Err(UnmarshalError);
+    ) -> Result<Self, TpmRc> {
+        // Like the reference, check the count (at least 2 for PolicyOR) before reading the list.
+        if src
+            .first_chunk::<4>()
+            .is_some_and(|count| u32::from_be_bytes(*count) < 2)
+        {
+            return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
+        let p_hash_list: TpmlDigest = param(src, 1)?;
         Ok(Self {
             policy_session,
             p_hash_list,
@@ -305,11 +307,11 @@ impl<'a> UnmarshalMessage<'a> for PolicyPCR<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            pcr_digest: Unmarshal::unmarshal(src)?,
-            pcrs: Unmarshal::unmarshal(src)?,
+            pcr_digest: param(src, 1)?,
+            pcrs: param(src, 2)?,
         })
     }
 }
@@ -344,10 +346,10 @@ impl<'a> UnmarshalMessage<'a> for PolicyLocality {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            locality: Unmarshal::unmarshal(src)?,
+            locality: param(src, 1)?,
         })
     }
 }
@@ -388,14 +390,14 @@ impl<'a> UnmarshalMessage<'a> for PolicyNV<'a> {
     fn unmarshal_with_handles(
         [auth_handle, nv_index, policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
             nv_index,
             policy_session,
-            operand_b: Unmarshal::unmarshal(src)?,
-            offset: Unmarshal::unmarshal(src)?,
-            operation: Unmarshal::unmarshal(src)?,
+            operand_b: param(src, 1)?,
+            offset: param(src, 2)?,
+            operation: param(src, 3)?,
         })
     }
 }
@@ -434,12 +436,12 @@ impl<'a> UnmarshalMessage<'a> for PolicyCounterTimer<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            operand_b: Unmarshal::unmarshal(src)?,
-            offset: Unmarshal::unmarshal(src)?,
-            operation: Unmarshal::unmarshal(src)?,
+            operand_b: param(src, 1)?,
+            offset: param(src, 2)?,
+            operation: param(src, 3)?,
         })
     }
 }
@@ -474,10 +476,10 @@ impl<'a> UnmarshalMessage<'a> for PolicyCommandCode {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            code: Unmarshal::unmarshal(src)?,
+            code: param(src, 1)?,
         })
     }
 }
@@ -511,7 +513,7 @@ impl<'a> UnmarshalMessage<'a> for PolicyPhysicalPresence {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { policy_session })
     }
 }
@@ -546,10 +548,10 @@ impl<'a> UnmarshalMessage<'a> for PolicyCpHash<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            cp_hash_a: Unmarshal::unmarshal(src)?,
+            cp_hash_a: param(src, 1)?,
         })
     }
 }
@@ -584,10 +586,10 @@ impl<'a> UnmarshalMessage<'a> for PolicyNameHash<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            name_hash: Unmarshal::unmarshal(src)?,
+            name_hash: param(src, 1)?,
         })
     }
 }
@@ -626,12 +628,12 @@ impl<'a> UnmarshalMessage<'a> for PolicyDuplicationSelect<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            object_name: Unmarshal::unmarshal(src)?,
-            new_parent_name: Unmarshal::unmarshal(src)?,
-            include_object: Unmarshal::unmarshal(src)?,
+            object_name: param(src, 1)?,
+            new_parent_name: param(src, 2)?,
+            include_object: param(src, 3)?,
         })
     }
 }
@@ -675,13 +677,13 @@ impl<'a> UnmarshalMessage<'a> for PolicyAuthorize<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            approved_policy: Unmarshal::unmarshal(src)?,
-            policy_ref: Unmarshal::unmarshal(src)?,
-            key_sign: Unmarshal::unmarshal(src)?,
-            check_ticket: Unmarshal::unmarshal(src)?,
+            approved_policy: param(src, 1)?,
+            policy_ref: param(src, 2)?,
+            key_sign: param(src, 3)?,
+            check_ticket: param(src, 4)?,
         })
     }
 }
@@ -715,7 +717,7 @@ impl<'a> UnmarshalMessage<'a> for PolicyAuthValue {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { policy_session })
     }
 }
@@ -749,7 +751,7 @@ impl<'a> UnmarshalMessage<'a> for PolicyPassword {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { policy_session })
     }
 }
@@ -789,7 +791,7 @@ impl<'a> UnmarshalMessage<'a> for PolicyGetDigest {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { policy_session })
     }
 }
@@ -808,12 +810,9 @@ impl Marshal for PolicyGetDigestRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for PolicyGetDigestRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            policy_digest: Unmarshal::unmarshal(src)?,
+            policy_digest: param(src, 1)?,
         })
     }
 }
@@ -848,10 +847,10 @@ impl<'a> UnmarshalMessage<'a> for PolicyNvWritten {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            written_set: Unmarshal::unmarshal(src)?,
+            written_set: param(src, 1)?,
         })
     }
 }
@@ -886,10 +885,10 @@ impl<'a> UnmarshalMessage<'a> for PolicyTemplate<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            template_hash: Unmarshal::unmarshal(src)?,
+            template_hash: param(src, 1)?,
         })
     }
 }
@@ -925,7 +924,7 @@ impl<'a> UnmarshalMessage<'a> for PolicyAuthorizeNV {
     fn unmarshal_with_handles(
         [auth_handle, nv_index, policy_session]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
             nv_index,
@@ -973,14 +972,14 @@ impl<'a> UnmarshalMessage<'a> for PolicyCapability<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            operand_b: Unmarshal::unmarshal(src)?,
-            offset: Unmarshal::unmarshal(src)?,
-            operation: Unmarshal::unmarshal(src)?,
-            capability: Unmarshal::unmarshal(src)?,
-            property: Unmarshal::unmarshal(src)?,
+            operand_b: param(src, 1)?,
+            offset: param(src, 2)?,
+            operation: param(src, 3)?,
+            capability: param(src, 4)?,
+            property: param(src, 5)?,
         })
     }
 }
@@ -1015,10 +1014,10 @@ impl<'a> UnmarshalMessage<'a> for PolicyParameters<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            p_hash: Unmarshal::unmarshal(src)?,
+            p_hash: param(src, 1)?,
         })
     }
 }
@@ -1055,11 +1054,11 @@ impl<'a> UnmarshalMessage<'a> for PolicyTransportSPDM<'a> {
     fn unmarshal_with_handles(
         [policy_session]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             policy_session,
-            req_key_name: Unmarshal::unmarshal(src)?,
-            tpm_key_name: Unmarshal::unmarshal(src)?,
+            req_key_name: param(src, 1)?,
+            tpm_key_name: param(src, 2)?,
         })
     }
 }

@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Integrity Collection (PCR)" commands defined in
 //! **Section 22** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_PCR_Extend (Command)
 #[doc(alias = "TPM2_PCR_Extend")]
@@ -35,10 +35,10 @@ impl<'a> UnmarshalMessage<'a> for PCRExtend<'a> {
     fn unmarshal_with_handles(
         [pcr_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             pcr_handle,
-            digests: Unmarshal::unmarshal(src)?,
+            digests: param(src, 1)?,
         })
     }
 }
@@ -79,10 +79,10 @@ impl<'a> UnmarshalMessage<'a> for PCREvent<'a> {
     fn unmarshal_with_handles(
         [pcr_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             pcr_handle,
-            event_data: Unmarshal::unmarshal(src)?,
+            event_data: param(src, 1)?,
         })
     }
 }
@@ -101,12 +101,9 @@ impl Marshal for PCREventRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for PCREventRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            digests: Unmarshal::unmarshal(src)?,
+            digests: param(src, 1)?,
         })
     }
 }
@@ -145,12 +142,9 @@ impl Marshal for PCRRead {
     }
 }
 impl<'a> UnmarshalMessage<'a> for PCRRead {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            pcr_selection_in: Unmarshal::unmarshal(src)?,
+            pcr_selection_in: param(src, 1)?,
         })
     }
 }
@@ -171,14 +165,11 @@ impl Marshal for PCRReadRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for PCRReadRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            pcr_update_counter: Unmarshal::unmarshal(src)?,
-            pcr_selection_out: Unmarshal::unmarshal(src)?,
-            pcr_values: Unmarshal::unmarshal(src)?,
+            pcr_update_counter: param(src, 1)?,
+            pcr_selection_out: param(src, 2)?,
+            pcr_values: param(src, 3)?,
         })
     }
 }
@@ -222,10 +213,10 @@ impl<'a> UnmarshalMessage<'a> for PCRAllocate {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
-            pcr_allocation: Unmarshal::unmarshal(src)?,
+            pcr_allocation: param(src, 1)?,
         })
     }
 }
@@ -247,15 +238,12 @@ impl Marshal for PCRAllocateRsp {
     }
 }
 impl<'a> UnmarshalMessage<'a> for PCRAllocateRsp {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            allocation_success: Unmarshal::unmarshal(src)?,
-            max_pcr: Unmarshal::unmarshal(src)?,
-            size_needed: Unmarshal::unmarshal(src)?,
-            size_available: Unmarshal::unmarshal(src)?,
+            allocation_success: param(src, 1)?,
+            max_pcr: param(src, 2)?,
+            size_needed: param(src, 3)?,
+            size_available: param(src, 4)?,
         })
     }
 }
@@ -295,12 +283,12 @@ impl<'a> UnmarshalMessage<'a> for PCRSetAuthPolicy<'a> {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
-            auth_policy: Unmarshal::unmarshal(src)?,
-            hash_alg: Unmarshal::unmarshal(src)?,
-            pcr_num: Unmarshal::unmarshal(src)?,
+            auth_policy: param(src, 1)?,
+            hash_alg: param(src, 2)?,
+            pcr_num: param(src, 3)?,
         })
     }
 }
@@ -335,10 +323,10 @@ impl<'a> UnmarshalMessage<'a> for PCRSetAuthValue<'a> {
     fn unmarshal_with_handles(
         [pcr_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             pcr_handle,
-            auth: Unmarshal::unmarshal(src)?,
+            auth: param(src, 1)?,
         })
     }
 }
@@ -372,7 +360,7 @@ impl<'a> UnmarshalMessage<'a> for PCRReset {
     fn unmarshal_with_handles(
         [pcr_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { pcr_handle })
     }
 }

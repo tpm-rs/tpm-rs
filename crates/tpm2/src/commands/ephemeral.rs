@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Ephemeral EC Keys" commands defined in
 //! **Section 19** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_Commit (Command)
 #[doc(alias = "TPM2_Commit")]
@@ -49,12 +49,12 @@ impl<'a> UnmarshalMessage<'a> for Commit<'a> {
     fn unmarshal_with_handles(
         [sign_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             sign_handle,
-            p1: Unmarshal::unmarshal(src)?,
-            s2: Unmarshal::unmarshal(src)?,
-            y2: Unmarshal::unmarshal(src)?,
+            p1: param(src, 1)?,
+            s2: param(src, 2)?,
+            y2: param(src, 3)?,
         })
     }
 }
@@ -77,15 +77,12 @@ impl Marshal for CommitRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for CommitRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            k: Unmarshal::unmarshal(src)?,
-            l: Unmarshal::unmarshal(src)?,
-            e: Unmarshal::unmarshal(src)?,
-            counter: Unmarshal::unmarshal(src)?,
+            k: param(src, 1)?,
+            l: param(src, 2)?,
+            e: param(src, 3)?,
+            counter: param(src, 4)?,
         })
     }
 }
@@ -123,12 +120,9 @@ impl Marshal for ECEphemeral {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ECEphemeral {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            curve_id: Unmarshal::unmarshal(src)?,
+            curve_id: param(src, 1)?,
         })
     }
 }
@@ -148,13 +142,10 @@ impl Marshal for ECEphemeralRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ECEphemeralRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            q: Unmarshal::unmarshal(src)?,
-            counter: Unmarshal::unmarshal(src)?,
+            q: param(src, 1)?,
+            counter: param(src, 2)?,
         })
     }
 }

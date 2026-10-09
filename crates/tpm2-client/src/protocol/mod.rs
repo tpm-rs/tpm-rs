@@ -148,13 +148,14 @@ pub fn unmarshal_response<'a, R: UnmarshalMessage<'a>, E>(
         let param_size = u32::unmarshal(&mut remaining)? as usize;
         (remaining, sessions) = remaining
             .split_at_checked(param_size)
-            .ok_or(UnmarshalError)?;
+            .ok_or(UnmarshalError::Insufficient)?;
     } else {
         sessions = &[];
     }
 
     // Unmarshal Parameters
-    let resp = R::unmarshal_with_handles(rsp_handles, &mut remaining)?;
+    let resp = R::unmarshal_with_handles(rsp_handles, &mut remaining)
+        .map_err(ClientError::MalformedResponse)?;
     if !remaining.is_empty() {
         return Err(ClientError::TrailingBytes);
     }

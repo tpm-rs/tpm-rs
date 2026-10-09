@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Non-volatile Storage" commands defined in
 //! **Section 31** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_NV_DefineSpace (Command)
 #[doc(alias = "TPM2_NV_DefineSpace")]
@@ -37,11 +37,11 @@ impl<'a> UnmarshalMessage<'a> for NVDefineSpace<'a> {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
-            auth: Unmarshal::unmarshal(src)?,
-            public_info: Unmarshal::unmarshal(src)?,
+            auth: param(src, 1)?,
+            public_info: param(src, 2)?,
         })
     }
 }
@@ -76,7 +76,7 @@ impl<'a> UnmarshalMessage<'a> for NVUndefineSpace {
     fn unmarshal_with_handles(
         [auth_handle, nv_index]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
             nv_index,
@@ -114,7 +114,7 @@ impl<'a> UnmarshalMessage<'a> for NVUndefineSpaceSpecial {
     fn unmarshal_with_handles(
         [nv_index, platform]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { nv_index, platform })
     }
 }
@@ -152,10 +152,7 @@ impl Marshal for NVReadPublic {
     }
 }
 impl<'a> UnmarshalMessage<'a> for NVReadPublic {
-    fn unmarshal_with_handles(
-        [nv_index]: Self::Handles,
-        _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([nv_index]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self { nv_index })
     }
 }
@@ -175,13 +172,10 @@ impl Marshal for NVReadPublicRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for NVReadPublicRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            nv_public: Unmarshal::unmarshal(src)?,
-            nv_name: Unmarshal::unmarshal(src)?,
+            nv_public: param(src, 1)?,
+            nv_name: param(src, 2)?,
         })
     }
 }
@@ -219,12 +213,12 @@ impl<'a> UnmarshalMessage<'a> for NVWrite<'a> {
     fn unmarshal_with_handles(
         [auth_handle, nv_index]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
             nv_index,
-            data: Unmarshal::unmarshal(src)?,
-            offset: Unmarshal::unmarshal(src)?,
+            data: param(src, 1)?,
+            offset: param(src, 2)?,
         })
     }
 }
@@ -259,7 +253,7 @@ impl<'a> UnmarshalMessage<'a> for NVIncrement {
     fn unmarshal_with_handles(
         [auth_handle, nv_index]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
             nv_index,
@@ -298,11 +292,11 @@ impl<'a> UnmarshalMessage<'a> for NVExtend<'a> {
     fn unmarshal_with_handles(
         [auth_handle, nv_index]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
             nv_index,
-            data: Unmarshal::unmarshal(src)?,
+            data: param(src, 1)?,
         })
     }
 }
@@ -338,11 +332,11 @@ impl<'a> UnmarshalMessage<'a> for NVSetBits {
     fn unmarshal_with_handles(
         [auth_handle, nv_index]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
             nv_index,
-            bits: Unmarshal::unmarshal(src)?,
+            bits: param(src, 1)?,
         })
     }
 }
@@ -377,7 +371,7 @@ impl<'a> UnmarshalMessage<'a> for NVWriteLock {
     fn unmarshal_with_handles(
         [auth_handle, nv_index]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
             nv_index,
@@ -414,7 +408,7 @@ impl<'a> UnmarshalMessage<'a> for NVGlobalWriteLock {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { auth_handle })
     }
 }
@@ -458,12 +452,12 @@ impl<'a> UnmarshalMessage<'a> for NVRead {
     fn unmarshal_with_handles(
         [auth_handle, nv_index]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
             nv_index,
-            size: Unmarshal::unmarshal(src)?,
-            offset: Unmarshal::unmarshal(src)?,
+            size: param(src, 1)?,
+            offset: param(src, 2)?,
         })
     }
 }
@@ -482,12 +476,9 @@ impl Marshal for NVReadRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for NVReadRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            data: Unmarshal::unmarshal(src)?,
+            data: param(src, 1)?,
         })
     }
 }
@@ -522,7 +513,7 @@ impl<'a> UnmarshalMessage<'a> for NVReadLock {
     fn unmarshal_with_handles(
         [auth_handle, nv_index]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
             nv_index,
@@ -560,10 +551,10 @@ impl<'a> UnmarshalMessage<'a> for NVChangeAuth<'a> {
     fn unmarshal_with_handles(
         [nv_index]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             nv_index,
-            new_auth: Unmarshal::unmarshal(src)?,
+            new_auth: param(src, 1)?,
         })
     }
 }
@@ -614,15 +605,15 @@ impl<'a> UnmarshalMessage<'a> for NVCertify<'a> {
     fn unmarshal_with_handles(
         [sign_handle, auth_handle, nv_index]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             sign_handle,
             auth_handle,
             nv_index,
-            qualifying_data: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
-            size: Unmarshal::unmarshal(src)?,
-            offset: Unmarshal::unmarshal(src)?,
+            qualifying_data: param(src, 1)?,
+            in_scheme: param(src, 2)?,
+            size: param(src, 3)?,
+            offset: param(src, 4)?,
         })
     }
 }
@@ -642,13 +633,10 @@ impl Marshal for NVCertifyRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for NVCertifyRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            certify_info: Unmarshal::unmarshal(src)?,
-            signature: Unmarshal::unmarshal(src)?,
+            certify_info: param(src, 1)?,
+            signature: param(src, 2)?,
         })
     }
 }
@@ -685,11 +673,11 @@ impl<'a> UnmarshalMessage<'a> for NVDefineSpace2<'a> {
     fn unmarshal_with_handles(
         [auth_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             auth_handle,
-            auth: Unmarshal::unmarshal(src)?,
-            public_info: Unmarshal::unmarshal(src)?,
+            auth: param(src, 1)?,
+            public_info: param(src, 2)?,
         })
     }
 }
@@ -727,10 +715,7 @@ impl Marshal for NVReadPublic2 {
     }
 }
 impl<'a> UnmarshalMessage<'a> for NVReadPublic2 {
-    fn unmarshal_with_handles(
-        [nv_index]: Self::Handles,
-        _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([nv_index]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self { nv_index })
     }
 }
@@ -750,13 +735,10 @@ impl Marshal for NVReadPublic2Rsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for NVReadPublic2Rsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            nv_public: Unmarshal::unmarshal(src)?,
-            nv_name: Unmarshal::unmarshal(src)?,
+            nv_public: param(src, 1)?,
+            nv_name: param(src, 2)?,
         })
     }
 }

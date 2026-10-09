@@ -71,8 +71,17 @@
 //!
 //! - [`PolicyOR::p_hash_list`] is checked to ensure it has at least 2 digests.
 //!
+//! If the `n`-th parameter (1-based, counting only the parameter area) fails to
+//! unmarshal with [`UnmarshalError`] `err`,
+//! [`UnmarshalMessage::unmarshal_with_handles`] returns
+//! `err.fmt1().with(Position::parameter(n))`, i.e. the same Format-One
+//! [`TpmRc`] (with parameter position) that a TPM returns for that command.
+//!
 #![allow(deprecated)] // So we can define now-deprecated Commands / impls.
-use crate::{Handle, Marshal, TpmCc, errors::UnmarshalError};
+use crate::{
+    Handle, Marshal, TpmCc, Unmarshal,
+    errors::{Position, TpmRc, UnmarshalError},
+};
 
 /// Common trait for a TPM 2.0 command [`Message`].
 pub trait Command: Message {
@@ -96,10 +105,16 @@ pub trait Message: Marshal {
 /// Trait for unmarshaling a [`Message`] from its handle area and parameter bytes.
 pub trait UnmarshalMessage<'a>: Message {
     /// Unmarshals the message's parameters from `src` and combines them with `handles`.
-    fn unmarshal_with_handles(
-        handles: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError>;
+    ///
+    /// On failure, returns the [`UnmarshalError`]'s response code with the
+    /// [position](Position::parameter) of the parameter that failed.
+    fn unmarshal_with_handles(handles: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc>;
+}
+
+/// Unmarshals the `n`-th (1-based) parameter of a message's parameter area,
+/// adding the parameter's [`Position`] to any [`UnmarshalError`].
+pub(crate) fn param<'a, T: Unmarshal<'a>>(src: &mut &'a [u8], n: u8) -> Result<T, TpmRc> {
+    T::unmarshal(src).map_err(|err: UnmarshalError| err.fmt1().with(Position::parameter(n)))
 }
 
 impl Message for () {
@@ -109,7 +124,7 @@ impl Message for () {
     }
 }
 impl UnmarshalMessage<'_> for () {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'_ [u8]) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'_ [u8]) -> Result<Self, TpmRc> {
         Ok(())
     }
 }

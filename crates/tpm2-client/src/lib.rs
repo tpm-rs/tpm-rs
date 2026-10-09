@@ -47,6 +47,12 @@ pub enum ClientError<ConnErr = !> {
     Tpm(TpmRc),
     /// Failed to unmarshal TPM data structure.
     Unmarshal(UnmarshalError),
+    /// Failed to unmarshal the response parameters.
+    ///
+    /// The [`TpmRc`] identifies the reason and the failing parameter (as
+    /// returned by [`UnmarshalMessage::unmarshal_with_handles`](tpm2::UnmarshalMessage::unmarshal_with_handles)),
+    /// but was produced locally rather than returned by the TPM.
+    MalformedResponse(TpmRc),
     /// Session authorization validation failed.
     Auth(AuthError),
     /// Response header size does not match the received buffer length.
@@ -63,6 +69,7 @@ impl<E: fmt::Display> fmt::Display for ClientError<E> {
             Self::Connection(e) => write!(f, "connection error: {e}"),
             Self::Tpm(rc) => write!(f, "TPM error: {rc}"),
             Self::Unmarshal(e) => write!(f, "unmarshal error: {e}"),
+            Self::MalformedResponse(rc) => write!(f, "malformed response parameters: {rc}"),
             Self::Auth(e) => write!(f, "auth error: {e}"),
             Self::InvalidResponseSize => {
                 write!(f, "response header size does not match buffer length")
@@ -79,6 +86,7 @@ impl<E: core::error::Error + 'static> core::error::Error for ClientError<E> {
             Self::Connection(e) => Some(e),
             Self::Tpm(rc) => Some(rc),
             Self::Unmarshal(e) => Some(e),
+            Self::MalformedResponse(rc) => Some(rc),
             Self::Auth(e) => Some(e),
             _ => None,
         }

@@ -68,7 +68,7 @@ fn test_tpms_pcr_selection_bounds() {
         buf[2] = invalid_size;
         let mut reader = &buf[..3 + invalid_size as usize];
         let err = TpmsPcrSelection::unmarshal(&mut reader).unwrap_err();
-        assert_eq!(err, tpm2::errors::UnmarshalError);
+        assert_eq!(err, tpm2::errors::UnmarshalError::Value);
     }
 }
 
@@ -131,7 +131,7 @@ fn test_tpml_pcr_selection_bounds() {
         }
         let mut reader = buf.as_slice();
         let err = TpmlPcrSelection::unmarshal(&mut reader).unwrap_err();
-        assert_eq!(err, tpm2::errors::UnmarshalError);
+        assert_eq!(err, tpm2::errors::UnmarshalError::Size);
     }
 }
 
@@ -153,7 +153,7 @@ fn test_tpml_pcr_selection_malformed_elements() {
 
     let mut reader = buf.as_slice();
     let err = TpmlPcrSelection::unmarshal(&mut reader).unwrap_err();
-    assert_eq!(err, tpm2::errors::UnmarshalError);
+    assert_eq!(err, tpm2::errors::UnmarshalError::Value);
 }
 
 #[test]

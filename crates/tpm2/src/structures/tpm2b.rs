@@ -34,12 +34,18 @@ impl<'a, T: Unmarshal<'a>> Unmarshal<'a> for Tpm2b<T> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let len: usize = u16::unmarshal(src)?.into();
         let mut buf: &'a [u8];
-        (buf, *src) = src.split_at_checked(len).ok_or(UnmarshalError)?;
+        (buf, *src) = src
+            .split_at_checked(len)
+            .ok_or(UnmarshalError::Insufficient)?;
 
-        let t = T::unmarshal(&mut buf)?;
+        // Running out of bytes within the buffer means `size` is too small.
+        let t = T::unmarshal(&mut buf).map_err(|err| match err {
+            UnmarshalError::Insufficient => UnmarshalError::Size,
+            err => err,
+        })?;
         match buf.len() {
             0 => Ok(Self(t)),
-            _ => Err(UnmarshalError),
+            _ => Err(UnmarshalError::Size),
         }
     }
 }
@@ -131,10 +137,18 @@ impl<'a, Tag: limits::Tag> Tpm2bSized<'a, Tag> {
 impl<'a, Tag: limits::Tag> Unmarshal<'a> for Tpm2bSized<'a, Tag> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let len: usize = u16::unmarshal(src)?.into();
+        if len > Self::CAP {
+            return Err(UnmarshalError::Size);
+        }
         let buf: &'a [u8];
-        (buf, *src) = src.split_at_checked(len).ok_or(UnmarshalError)?;
+        (buf, *src) = src
+            .split_at_checked(len)
+            .ok_or(UnmarshalError::Insufficient)?;
 
-        Self::new(buf).ok_or(UnmarshalError)
+        Ok(Self {
+            buf,
+            tag: PhantomData,
+        })
     }
 }
 

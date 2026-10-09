@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Session Commands" commands defined in
 //! **Section 11** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_StartAuthSession (Command)
 #[doc(alias = "TPM2_StartAuthSession")]
@@ -55,15 +55,15 @@ impl<'a> UnmarshalMessage<'a> for StartAuthSession<'a> {
     fn unmarshal_with_handles(
         [tpm_key, bind]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             tpm_key,
             bind,
-            nonce_caller: Unmarshal::unmarshal(src)?,
-            encrypted_salt: Unmarshal::unmarshal(src)?,
-            session_type: Unmarshal::unmarshal(src)?,
-            symmetric: Unmarshal::unmarshal(src)?,
-            auth_hash: Unmarshal::unmarshal(src)?,
+            nonce_caller: param(src, 1)?,
+            encrypted_salt: param(src, 2)?,
+            session_type: param(src, 3)?,
+            symmetric: param(src, 4)?,
+            auth_hash: param(src, 5)?,
         })
     }
 }
@@ -85,10 +85,10 @@ impl<'a> UnmarshalMessage<'a> for StartAuthSessionRsp<'a> {
     fn unmarshal_with_handles(
         [session_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             session_handle,
-            nonce_tpm: Unmarshal::unmarshal(src)?,
+            nonce_tpm: param(src, 1)?,
         })
     }
 }
@@ -122,7 +122,7 @@ impl<'a> UnmarshalMessage<'a> for PolicyRestart {
     fn unmarshal_with_handles(
         [session_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { session_handle })
     }
 }

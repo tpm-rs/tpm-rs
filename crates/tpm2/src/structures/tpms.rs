@@ -123,10 +123,12 @@ impl<'a> Unmarshal<'a> for TpmsPcrSelect {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let sizeof_select = u8::unmarshal(src)?;
         let len = sizeof_select as usize;
-        if !(Self::MIN..=Self::MAX).contains(&len) || src.len() < len {
-            return Err(UnmarshalError);
+        if !(Self::MIN..=Self::MAX).contains(&len) {
+            return Err(UnmarshalError::Value);
         }
-        let (slice, rest) = src.split_at(len);
+        let (slice, rest) = src
+            .split_at_checked(len)
+            .ok_or(UnmarshalError::Insufficient)?;
         *src = rest;
         let mut pcr_select = [0u8; Self::MAX];
         pcr_select[..len].copy_from_slice(slice);
@@ -1051,7 +1053,7 @@ impl<'a> Unmarshal<'a> for TpmsCapabilityData<'a> {
             TpmCap::ECCCurves => Self::EccCurves(Unmarshal::unmarshal(src)?),
             TpmCap::AuthPolicies => Self::AuthPolicies(Unmarshal::unmarshal(src)?),
             TpmCap::ACT => Self::ActData(Unmarshal::unmarshal(src)?),
-            _ => return Err(UnmarshalError),
+            _ => return Err(UnmarshalError::Selector),
         })
     }
 }

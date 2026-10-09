@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Field Upgrade" commands defined in
 //! **Section 27** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_FieldUpgradeStart (Command)
 #[doc(alias = "TPM2_FieldUpgradeStart")]
@@ -38,12 +38,12 @@ impl<'a> UnmarshalMessage<'a> for FieldUpgradeStart<'a> {
     fn unmarshal_with_handles(
         [authorization, key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             authorization,
             key_handle,
-            fu_digest: Unmarshal::unmarshal(src)?,
-            manifest_signature: Unmarshal::unmarshal(src)?,
+            fu_digest: param(src, 1)?,
+            manifest_signature: param(src, 2)?,
         })
     }
 }
@@ -81,12 +81,9 @@ impl Marshal for FieldUpgradeData<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for FieldUpgradeData<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            fu_data: Unmarshal::unmarshal(src)?,
+            fu_data: param(src, 1)?,
         })
     }
 }
@@ -106,13 +103,10 @@ impl Marshal for FieldUpgradeDataRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for FieldUpgradeDataRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            next_digest: Unmarshal::unmarshal(src)?,
-            first_digest: Unmarshal::unmarshal(src)?,
+            next_digest: param(src, 1)?,
+            first_digest: param(src, 2)?,
         })
     }
 }
@@ -149,12 +143,9 @@ impl Marshal for FirmwareRead {
     }
 }
 impl<'a> UnmarshalMessage<'a> for FirmwareRead {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            sequence_number: Unmarshal::unmarshal(src)?,
+            sequence_number: param(src, 1)?,
         })
     }
 }
@@ -173,12 +164,9 @@ impl Marshal for FirmwareReadRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for FirmwareReadRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            fu_data: Unmarshal::unmarshal(src)?,
+            fu_data: param(src, 1)?,
         })
     }
 }

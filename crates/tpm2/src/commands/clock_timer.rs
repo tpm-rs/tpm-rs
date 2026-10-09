@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Clocks and Timers" commands defined in
 //! **Section 29** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, *};
 
 /// TPM2_ReadClock (Command)
 #[doc(alias = "TPM2_ReadClock")]
@@ -35,7 +35,7 @@ impl Marshal for ReadClock {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ReadClock {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self)
     }
 }
@@ -54,12 +54,9 @@ impl Marshal for ReadClockRsp {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ReadClockRsp {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            current_time: Unmarshal::unmarshal(src)?,
+            current_time: param(src, 1)?,
         })
     }
 }
@@ -91,13 +88,10 @@ impl Marshal for ClockSet {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ClockSet {
-    fn unmarshal_with_handles(
-        [auth]: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([auth]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
             auth,
-            new_time: Unmarshal::unmarshal(src)?,
+            new_time: param(src, 1)?,
         })
     }
 }
@@ -129,13 +123,10 @@ impl Marshal for ClockRateAdjust {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ClockRateAdjust {
-    fn unmarshal_with_handles(
-        [auth]: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([auth]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
             auth,
-            rate_adjust: Unmarshal::unmarshal(src)?,
+            rate_adjust: param(src, 1)?,
         })
     }
 }
@@ -170,10 +161,10 @@ impl<'a> UnmarshalMessage<'a> for ACTSetTimeout {
     fn unmarshal_with_handles(
         [act_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             act_handle,
-            start_timeout: Unmarshal::unmarshal(src)?,
+            start_timeout: param(src, 1)?,
         })
     }
 }

@@ -2,8 +2,8 @@
 //!
 //! This module implements the "Asymmetric Primitives" commands defined in
 //! **Section 14** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
-use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
+use super::{Command, Message, UnmarshalMessage, param};
+use crate::{errors::TpmRc, marshal::marshal_helper, *};
 
 /// TPM2_RSA_Encrypt (Command)
 #[doc(alias = "TPM2_RSA_Encrypt")]
@@ -46,12 +46,12 @@ impl<'a> UnmarshalMessage<'a> for RSAEncrypt<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            message: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
-            label: Unmarshal::unmarshal(src)?,
+            message: param(src, 1)?,
+            in_scheme: param(src, 2)?,
+            label: param(src, 3)?,
         })
     }
 }
@@ -70,12 +70,9 @@ impl Marshal for RSAEncryptRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for RSAEncryptRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            out_data: Unmarshal::unmarshal(src)?,
+            out_data: param(src, 1)?,
         })
     }
 }
@@ -121,12 +118,12 @@ impl<'a> UnmarshalMessage<'a> for RSADecrypt<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            cipher_text: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
-            label: Unmarshal::unmarshal(src)?,
+            cipher_text: param(src, 1)?,
+            in_scheme: param(src, 2)?,
+            label: param(src, 3)?,
         })
     }
 }
@@ -145,12 +142,9 @@ impl Marshal for RSADecryptRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for RSADecryptRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            message: Unmarshal::unmarshal(src)?,
+            message: param(src, 1)?,
         })
     }
 }
@@ -191,7 +185,7 @@ impl<'a> UnmarshalMessage<'a> for ECDHKeyGen {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { key_handle })
     }
 }
@@ -211,13 +205,10 @@ impl Marshal for ECDHKeyGenRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ECDHKeyGenRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            z_point: Unmarshal::unmarshal(src)?,
-            pub_point: Unmarshal::unmarshal(src)?,
+            z_point: param(src, 1)?,
+            pub_point: param(src, 2)?,
         })
     }
 }
@@ -258,10 +249,10 @@ impl<'a> UnmarshalMessage<'a> for ECDHZGen<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            in_point: Unmarshal::unmarshal(src)?,
+            in_point: param(src, 1)?,
         })
     }
 }
@@ -280,12 +271,9 @@ impl Marshal for ECDHZGenRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ECDHZGenRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            out_point: Unmarshal::unmarshal(src)?,
+            out_point: param(src, 1)?,
         })
     }
 }
@@ -322,12 +310,9 @@ impl Marshal for ECCParameters {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ECCParameters {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            curve_id: Unmarshal::unmarshal(src)?,
+            curve_id: param(src, 1)?,
         })
     }
 }
@@ -346,12 +331,9 @@ impl Marshal for ECCParametersRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ECCParametersRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            parameters: Unmarshal::unmarshal(src)?,
+            parameters: param(src, 1)?,
         })
     }
 }
@@ -399,16 +381,13 @@ impl Marshal for ZGen2Phase<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ZGen2Phase<'a> {
-    fn unmarshal_with_handles(
-        [key_a]: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([key_a]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
             key_a,
-            in_qs_b: Unmarshal::unmarshal(src)?,
-            in_qe_b: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
-            counter: Unmarshal::unmarshal(src)?,
+            in_qs_b: param(src, 1)?,
+            in_qe_b: param(src, 2)?,
+            in_scheme: param(src, 3)?,
+            counter: param(src, 4)?,
         })
     }
 }
@@ -428,13 +407,10 @@ impl Marshal for ZGen2PhaseRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ZGen2PhaseRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            out_z1: Unmarshal::unmarshal(src)?,
-            out_z2: Unmarshal::unmarshal(src)?,
+            out_z1: param(src, 1)?,
+            out_z2: param(src, 2)?,
         })
     }
 }
@@ -479,11 +455,11 @@ impl<'a> UnmarshalMessage<'a> for ECCEncrypt<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            plain_text: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
+            plain_text: param(src, 1)?,
+            in_scheme: param(src, 2)?,
         })
     }
 }
@@ -505,14 +481,11 @@ impl Marshal for ECCEncryptRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ECCEncryptRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            c1: Unmarshal::unmarshal(src)?,
-            c2: Unmarshal::unmarshal(src)?,
-            c3: Unmarshal::unmarshal(src)?,
+            c1: param(src, 1)?,
+            c2: param(src, 2)?,
+            c3: param(src, 3)?,
         })
     }
 }
@@ -562,13 +535,13 @@ impl<'a> UnmarshalMessage<'a> for ECCDecrypt<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            c1: Unmarshal::unmarshal(src)?,
-            c2: Unmarshal::unmarshal(src)?,
-            c3: Unmarshal::unmarshal(src)?,
-            in_scheme: Unmarshal::unmarshal(src)?,
+            c1: param(src, 1)?,
+            c2: param(src, 2)?,
+            c3: param(src, 3)?,
+            in_scheme: param(src, 4)?,
         })
     }
 }
@@ -587,12 +560,9 @@ impl Marshal for ECCDecryptRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ECCDecryptRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            plain_text: Unmarshal::unmarshal(src)?,
+            plain_text: param(src, 1)?,
         })
     }
 }
@@ -633,7 +603,7 @@ impl<'a> UnmarshalMessage<'a> for Encapsulate {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         _: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self { key_handle })
     }
 }
@@ -653,13 +623,10 @@ impl Marshal for EncapsulateRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for EncapsulateRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            shared_secret: Unmarshal::unmarshal(src)?,
-            ciphertext: Unmarshal::unmarshal(src)?,
+            shared_secret: param(src, 1)?,
+            ciphertext: param(src, 2)?,
         })
     }
 }
@@ -700,10 +667,10 @@ impl<'a> UnmarshalMessage<'a> for Decapsulate<'a> {
     fn unmarshal_with_handles(
         [key_handle]: Self::Handles,
         src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    ) -> Result<Self, TpmRc> {
         Ok(Self {
             key_handle,
-            ciphertext: Unmarshal::unmarshal(src)?,
+            ciphertext: param(src, 1)?,
         })
     }
 }
@@ -722,12 +689,9 @@ impl Marshal for DecapsulateRsp<'_> {
     }
 }
 impl<'a> UnmarshalMessage<'a> for DecapsulateRsp<'a> {
-    fn unmarshal_with_handles(
-        []: Self::Handles,
-        src: &mut &'a [u8],
-    ) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles([]: Self::Handles, src: &mut &'a [u8]) -> Result<Self, TpmRc> {
         Ok(Self {
-            shared_secret: Unmarshal::unmarshal(src)?,
+            shared_secret: param(src, 1)?,
         })
     }
 }
