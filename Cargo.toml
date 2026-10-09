@@ -42,6 +42,8 @@ ecdsa = { version = "0.16", default-features = false }
 elliptic-curve = { version = "0.13", default-features = false }
 getrandom = "0.4"
 hmac = "0.12"
+ml-dsa = { version = "0.1", default-features = false }
+ml-kem = { version = "0.3", default-features = false }
 p256 = { version = "0.13", default-features = false }
 p384 = { version = "0.13", default-features = false }
 p521 = { version = "0.13", default-features = false }
