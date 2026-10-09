@@ -1,7 +1,12 @@
 [workspace]
 resolver = "3"
 
-members = ["crates/tpm2", "crates/tpm2-client", "crates/tpm2-impl"]
+members = [
+    "crates/tpm2",
+    "crates/tpm2-client",
+    "crates/tpm2-impl",
+    "crates/tpm2-rustcrypto",
+]
 
 # Package keys that should be used by all packages.
 # We don't set: authors (deprecated), license-file, exclude, include, or publish
@@ -28,10 +33,33 @@ tempfile = "3.25.0"
 trybuild = { version = "1.0.89", features = ["diff"] }
 zerocopy = { version = "0.8.33", features = ["derive"] }
 
+# RustCrypto dependencies (for tpm2-rustcrypto)
+aes = "0.8"
+camellia = "0.1"
+cipher = "0.4"
+cmac = "0.7"
+ecdsa = { version = "0.16", default-features = false }
+elliptic-curve = { version = "0.13", default-features = false }
+getrandom = "0.4"
+hmac = "0.12"
+p256 = { version = "0.13", default-features = false }
+p384 = { version = "0.13", default-features = false }
+p521 = { version = "0.13", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+rsa = { version = "0.9.10", default-features = false }
+sha1 = { version = "0.10", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+sha3 = { version = "0.10", default-features = false }
+sm2 = { version = "0.13", default-features = false }
+sm3 = { version = "0.4", default-features = false }
+sm4 = "0.5"
+subtle = { version = "2.6", default-features = false }
+
 # Common workspace crates
 tpm2 = { path = "crates/tpm2" }
 tpm2-client = { path = "crates/tpm2-client" }
 tpm2-impl = { path = "crates/tpm2-impl" }
+tpm2-rustcrypto = { path = "crates/tpm2-rustcrypto" }
 
 [profile.release]
 lto = true # default is lto = false
