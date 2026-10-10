@@ -1,0 +1,31 @@
+[package]
+name = "tpm2-crypto-tests"
+description = "Shared test suite for implementations of the tpm2 cryptography traits"
+publish = false
+
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["rustcrypto", "libcrux", "boringssl"]
+# Backends to run the suite against. These are not exclusive: every enabled
+# backend gets its own tests, and every enabled pair is checked for agreement.
+rustcrypto = ["dep:tpm2-rustcrypto"]
+libcrux = ["dep:tpm2-libcrux"]
+boringssl = ["dep:tpm2-boringssl"]
+
+[dependencies]
+hex-literal = { workspace = true }
+# Independent SHAKE256 oracle for the ML-DSA message representative `µ`.
+sha3 = { workspace = true }
+tpm2 = { workspace = true }
+tpm2-boringssl = { workspace = true, optional = true }
+tpm2-libcrux = { workspace = true, optional = true }
+tpm2-rustcrypto = { workspace = true, optional = true }
