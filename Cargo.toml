@@ -8,7 +8,9 @@ members = [
     "crates/tpm2-crypto-tests",
     "crates/tpm2-impl",
     "crates/tpm2-libcrux",
+    "crates/tpm2-platforms/linux",
     "crates/tpm2-rustcrypto",
+    "crates/tpm2-simulator",
 ]
 exclude = ["crates/tpm2-boringssl/bssl-sys"]
 
