@@ -1,0 +1,25 @@
+[package]
+name = "tpm2-platform-linux"
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+getrandom = { workspace = true }
+tpm2 = { workspace = true }
+tpm2-impl = { workspace = true }
+tpm2-boringssl = { workspace = true, optional = true }
+tpm2-libcrux = { workspace = true, optional = true }
+tpm2-rustcrypto = { workspace = true, optional = true }
+
+[features]
+default = ["rustcrypto"]
+rustcrypto = ["dep:tpm2-rustcrypto"]
+libcrux = ["dep:tpm2-libcrux"]
+boringssl = ["dep:tpm2-boringssl"]

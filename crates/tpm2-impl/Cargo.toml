@@ -13,3 +13,6 @@ categories.workspace = true
 [dependencies]
 hex-literal = { workspace = true }
 tpm2 = { workspace = true }
+
+[dev-dependencies]
+tpm2-rustcrypto = { workspace = true }
