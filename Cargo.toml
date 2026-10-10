@@ -5,6 +5,7 @@ members = [
     "crates/tpm2",
     "crates/tpm2-boringssl",
     "crates/tpm2-client",
+    "crates/tpm2-crypto-tests",
     "crates/tpm2-impl",
     "crates/tpm2-libcrux",
     "crates/tpm2-rustcrypto",
