@@ -3,11 +3,13 @@ resolver = "3"
 
 members = [
     "crates/tpm2",
+    "crates/tpm2-boringssl",
     "crates/tpm2-client",
     "crates/tpm2-impl",
     "crates/tpm2-libcrux",
     "crates/tpm2-rustcrypto",
 ]
+exclude = ["crates/tpm2-boringssl/bssl-sys"]
 
 # Package keys that should be used by all packages.
 # We don't set: authors (deprecated), license-file, exclude, include, or publish
@@ -64,12 +66,26 @@ libcrux-ml-kem = { version = "0.0.9", default-features = false }
 libcrux-p256 = "0.0.7"
 libcrux-sha2 = "0.0.7"
 
+# BoringSSL dependencies (for tpm2-boringssl)
+# Bump the rev together with BORINGSSL_REV in
+# crates/tpm2-boringssl/bssl-sys/build.rs and the bssl-macros rev in
+# crates/tpm2-boringssl/bssl-sys/Cargo.toml. A prebuilt BORINGSSL_BUILD_DIR or
+# BORINGSSL_SOURCE_DIR must be at the same revision.
+bssl-crypto = { git = "https://boringssl.googlesource.com/boringssl", rev = "81913f592dcbcfb3d636e3183d08fe5264fa1cb7" }
+bssl-sys = { git = "https://boringssl.googlesource.com/boringssl", rev = "81913f592dcbcfb3d636e3183d08fe5264fa1cb7" }
+
 # Common workspace crates
 tpm2 = { path = "crates/tpm2" }
+tpm2-boringssl = { path = "crates/tpm2-boringssl" }
 tpm2-client = { path = "crates/tpm2-client" }
 tpm2-impl = { path = "crates/tpm2-impl" }
 tpm2-libcrux = { path = "crates/tpm2-libcrux" }
 tpm2-rustcrypto = { path = "crates/tpm2-rustcrypto" }
+
+# Replace bssl-sys with the local crate, whose build script fetches and builds
+# BoringSSL (see crates/tpm2-boringssl/bssl-sys/build.rs).
+[patch."https://boringssl.googlesource.com/boringssl"]
+bssl-sys = { path = "crates/tpm2-boringssl/bssl-sys" }
 
 [profile.release]
 lto = true # default is lto = false

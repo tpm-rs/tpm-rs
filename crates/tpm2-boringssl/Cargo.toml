@@ -1,0 +1,22 @@
+[package]
+name = "tpm2-boringssl"
+description = "BoringSSL implementation of the tpm2 cryptography traits"
+
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+bssl-crypto = { workspace = true }
+bssl-sys = { workspace = true }
+rand_chacha = { workspace = true }
+tpm2 = { workspace = true }
+
+[dev-dependencies]
+hex-literal = { workspace = true }
