@@ -1144,10 +1144,10 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
             if !global_state.lockout_auth_enabled {
                 return Err(TpmRc::LOCKOUT);
             }
-        } else if global_state.recovery_time != 0
-            && global_state.max_tries > 0
-            && global_state.failed_tries >= global_state.max_tries
-        {
+        } else if global_state.failed_tries >= global_state.max_tries {
+            // With maxTries == 0 this always holds: the TPM is in lockout (Part 3,
+            // TPM2_DictionaryAttackParameters). recoveryTime == 0 needs no special case here,
+            // because DA self-healing then clears failedTries before every command.
             return Err(TpmRc::LOCKOUT);
         }
         Ok(())
