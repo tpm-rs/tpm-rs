@@ -255,8 +255,11 @@ impl<'a> Simulator<'a> {
                 let mut len_buf = [0u8; 4];
                 stream.read_exact(&mut len_buf)?;
                 let length = usize::try_from(u32::from_be_bytes(len_buf))?;
-                if length > 8192 {
-                    anyhow::bail!("Command length {} exceeds maximum of 8192", length);
+                const MAX_WIRE_COMMAND_SIZE: usize = 64 * 1024;
+                if length > MAX_WIRE_COMMAND_SIZE {
+                    anyhow::bail!(
+                        "Command length {length} exceeds maximum of {MAX_WIRE_COMMAND_SIZE}"
+                    );
                 }
 
                 let mut input_buffer = vec![0u8; length];
@@ -270,7 +273,7 @@ impl<'a> Simulator<'a> {
                 // Execute command
                 let [locality] = loc_buf;
                 self.global_state.locality = locality;
-                let mut output_buffer = vec![0u8; 4096];
+                let mut output_buffer = vec![0u8; tpm2_impl::MAX_MESSAGE_SIZE];
                 let written = self.context.execute_command_separate(
                     &mut self.global_state,
                     &input_buffer[..],
@@ -360,11 +363,12 @@ impl<'a> Simulator<'a> {
             }
             SimulatorPlatformSignal::GetCommandResponseSizes => {
                 // GetCommandResponseSizes
+                let max_size = u32::try_from(tpm2_impl::MAX_MESSAGE_SIZE)?;
                 let mut data = vec![];
                 data.extend_from_slice(&16u32.to_be_bytes()); // length
-                data.extend_from_slice(&4096u32.to_be_bytes()); // largest_command_size
+                data.extend_from_slice(&max_size.to_be_bytes()); // largest_command_size
                 data.extend_from_slice(&0u32.to_be_bytes()); // largest_command
-                data.extend_from_slice(&4096u32.to_be_bytes()); // largest_response_size
+                data.extend_from_slice(&max_size.to_be_bytes()); // largest_response_size
                 data.extend_from_slice(&0u32.to_be_bytes()); // largest_response
 
                 stream.write_all(&data)?;

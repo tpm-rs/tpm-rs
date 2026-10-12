@@ -4,8 +4,8 @@ use tpm2::errors::{TpmRc, UnmarshalError};
 use tpm2::{Handle, Marshal, Message, Unmarshal};
 use tpm2::{TpmCc, TpmSt, TpmiStCommandTag};
 
-const CMD_BUFFER_SIZE: usize = 4096;
-const RESP_BUFFER_SIZE: usize = 4096;
+const CMD_BUFFER_SIZE: usize = tpm2_impl::MAX_MESSAGE_SIZE;
+const RESP_BUFFER_SIZE: usize = tpm2_impl::MAX_MESSAGE_SIZE;
 
 /// Errors that can occur during simulator execution.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

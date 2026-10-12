@@ -61,7 +61,6 @@ use tpm2::crypto::{
     CryptoError, Hash, HashStream, Hmac, HmacStream, ModeIv, Rng, SymmetricKey, kdfa,
 };
 use tpm2::errors::{Position, TpmRc};
-use tpm2::limits::MAX_2B_BUFFER_SIZE;
 use tpm2::{CommandHeader, Handle, ResponseHeader, TpmCc, TpmHt, TpmSe};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{
@@ -98,10 +97,18 @@ pub const MAX_ACTIVE_SEQUENCES: usize = 3;
 /// Maximum sequence buffer size per active sequence.
 pub const MAX_SEQUENCE_BUFFER: usize = 4096;
 
+/// Largest command or response, in bytes, that the engine accepts or produces.
+///
+/// Reported as `TPM_PT_MAX_COMMAND_SIZE` and `TPM_PT_MAX_RESPONSE_SIZE`; it also sizes the buffers
+/// for decrypted parameters, rpHash computation and command execution with sessions. ML-DSA-87
+/// signatures (4627 bytes) do not fit in the common 4096 bytes.
+///
+/// PORTING: exp used 4096 bytes for commands, and 2048 bytes for the parameters of commands and
+/// responses with sessions.
+pub const MAX_MESSAGE_SIZE: usize = 8192;
+
 /// Buffer size for decrypted command parameters.
-/// Sized to accommodate a full `TPM2B_MAX_BUFFER` ([`MAX_2B_BUFFER_SIZE`] bytes of payload + 2 bytes size)
-/// plus accompanying command parameters (e.g., handles, IVs, algorithm modes).
-const DECRYPT_BUF_SIZE: usize = MAX_2B_BUFFER_SIZE + 128;
+const DECRYPT_BUF_SIZE: usize = MAX_MESSAGE_SIZE;
 type DecryptBuf = [u8; DECRYPT_BUF_SIZE];
 
 /// Magic value (`"DRBG"`) identifying an initialized SP800-90A CTR_DRBG state (`go.drbgState`).
@@ -1588,7 +1595,7 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
         in_out: &mut [u8],
         request_size: usize,
     ) -> usize {
-        let mut tmp_request = [0u8; 4096];
+        let mut tmp_request = [0u8; MAX_MESSAGE_SIZE];
         if request_size > tmp_request.len() {
             return self.fill_error(in_out, TpmRc::SIZE.to_rc());
         }
@@ -1807,6 +1814,9 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
         let size = usize::try_from(header.size).map_err(|_| TpmRc::SIZE.to_rc())?;
         if request_size < size {
             return Err(TpmRc::SIZE.to_rc());
+        }
+        if size > MAX_MESSAGE_SIZE {
+            return Err(TpmRc::COMMAND_SIZE);
         }
         let cc = header.code;
         let command_code = cc.code();
@@ -2034,10 +2044,10 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
         // 5. Execute Command via a Shadow Buffer
         let shadow_request_size =
             CommandHeader::MAX_SIZE + (cmd.handles_len * 4) + cmd.parameters.len();
-        if shadow_request_size > 2048 {
+        if shadow_request_size > MAX_MESSAGE_SIZE {
             return Err(TpmRc::SIZE.to_rc());
         }
-        let mut shadow_request = [0u8; 2048];
+        let mut shadow_request = [0u8; MAX_MESSAGE_SIZE];
         let shadow_header = CommandHeader {
             tag: TpmiStCommandTag::NoSessions,
             size: u32::try_from(shadow_request_size).map_err(|_| TpmRc::SIZE.to_rc())?,
@@ -3209,10 +3219,10 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
         let param_size = usize::try_from(u32::from_be_bytes(param_size_bytes))
             .map_err(|_| TpmRc::SIZE.to_rc())?;
 
-        if param_size > 2048 {
+        if param_size > MAX_MESSAGE_SIZE {
             return Err(TpmRc::SIZE.to_rc());
         }
-        let mut resp_params = [0u8; 2048];
+        let mut resp_params = [0u8; MAX_MESSAGE_SIZE];
         if param_size > 0 {
             if resp_buffer.len() < 14 + resp_handles_size + param_size {
                 return Err(TpmRc::MEMORY);
@@ -3368,10 +3378,10 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
         }
 
         let rp_hash_input_len = 4 + 4 + param_size;
-        if rp_hash_input_len > 2048 {
+        if rp_hash_input_len > MAX_MESSAGE_SIZE {
             return Err(TpmRc::SIZE.to_rc());
         }
-        let mut rp_hash_input = [0u8; 2048];
+        let mut rp_hash_input = [0u8; MAX_MESSAGE_SIZE];
         rp_hash_input[0..4].copy_from_slice(&0u32.to_be_bytes());
         rp_hash_input[4..8].copy_from_slice(&command_code.to_be_bytes());
         rp_hash_input[8..rp_hash_input_len].copy_from_slice(&resp_params[..param_size]);
@@ -3614,10 +3624,10 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
         }
 
         let resp_params_size = shadow_len - 10 - resp_handles_size;
-        if resp_params_size > 2048 {
+        if resp_params_size > MAX_MESSAGE_SIZE {
             return Err(TpmRc::SIZE.to_rc());
         }
-        let mut resp_params = [0u8; 2048];
+        let mut resp_params = [0u8; MAX_MESSAGE_SIZE];
         if resp_params_size > 0 {
             if resp_buffer.len() < 10 + resp_handles_size + resp_params_size {
                 return Err(TpmRc::MEMORY);
@@ -3760,10 +3770,10 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
         }
 
         let rp_hash_input_len = 4 + 4 + resp_params_size;
-        if rp_hash_input_len > 2048 {
+        if rp_hash_input_len > MAX_MESSAGE_SIZE {
             return Err(TpmRc::SIZE.to_rc());
         }
-        let mut rp_hash_input = [0u8; 2048];
+        let mut rp_hash_input = [0u8; MAX_MESSAGE_SIZE];
         rp_hash_input[0..4].copy_from_slice(&0u32.to_be_bytes());
         rp_hash_input[4..8].copy_from_slice(&command_code.to_be_bytes());
         rp_hash_input[8..rp_hash_input_len].copy_from_slice(&resp_params[..resp_params_size]);
@@ -5395,7 +5405,7 @@ fn xor_obfuscation(
     if data_len == 0 {
         return Ok(());
     }
-    let mut mask = [0u8; 2048];
+    let mut mask = [0u8; MAX_MESSAGE_SIZE];
     if data_len > mask.len() {
         return Err(TpmRc::SIZE.to_rc());
     }

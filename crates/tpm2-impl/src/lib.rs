@@ -75,8 +75,9 @@ mod engine;
 mod req_resp;
 pub use engine::{
     ActiveSequence, DRBG_MAGIC, DrbgState, GlobalState, MAX_ACTIVE_SEQUENCES, MAX_ACTIVE_SESSIONS,
-    MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS, MAX_SEQUENCE_BUFFER, SequenceType, TpmEngine,
-    command_handles_count, command_returns_handle, get_command_attribute, handle_requires_auth,
+    MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS, MAX_MESSAGE_SIZE, MAX_SEQUENCE_BUFFER, SequenceType,
+    TpmEngine, command_handles_count, command_returns_handle, get_command_attribute,
+    handle_requires_auth,
 };
 pub use error::InternalError;
 pub use hash_state::StreamingHashState;

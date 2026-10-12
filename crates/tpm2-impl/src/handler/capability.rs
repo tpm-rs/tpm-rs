@@ -184,6 +184,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 }
 
                 let supported_commands = count_u32(crate::engine::SUPPORTED_COMMANDS.len());
+                let max_message_size = count_u32(crate::MAX_MESSAGE_SIZE);
                 let all_properties = [
                     (TpmPt::FamilyIndicator, TPM_SPEC_FAMILY), // "2.0\0"
                     (TpmPt::Level, TPM_SPEC_LEVEL),
@@ -215,8 +216,8 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     (TpmPt::ContextSym, u32::from(Alg::AES.id())),
                     (TpmPt::ContextSymSize, 128),
                     (TpmPt::OrderlyCount, 255),
-                    (TpmPt::MaxCommandSize, 4096),
-                    (TpmPt::MaxResponseSize, 4096),
+                    (TpmPt::MaxCommandSize, max_message_size),
+                    (TpmPt::MaxResponseSize, max_message_size),
                     (TpmPt::MaxDigest, 64),
                     (TpmPt::MaxObjectContext, 3072),
                     (TpmPt::MaxSessionContext, 512),
