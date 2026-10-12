@@ -431,6 +431,34 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 let key = OwnedSensitiveData::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
                 SequenceType::Hmac { hash_alg, key }
             }
+            3 => {
+                let associated_name =
+                    OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
+                let scheme = <Option<tpm2::TpmtSigScheme>>::unmarshal(&mut slice)
+                    .map_err(|_| TpmRc::FAILURE)?
+                    .ok_or(TpmRc::FAILURE)?;
+                let context = crate::owned::OwnedSignatureCtx::unmarshal(&mut slice)
+                    .map_err(|_| TpmRc::FAILURE)?;
+                SequenceType::Sign {
+                    associated_name,
+                    scheme,
+                    context,
+                }
+            }
+            4 => {
+                let associated_name =
+                    OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
+                let scheme = <Option<tpm2::TpmtSigScheme>>::unmarshal(&mut slice)
+                    .map_err(|_| TpmRc::FAILURE)?
+                    .ok_or(TpmRc::FAILURE)?;
+                let context = crate::owned::OwnedSignatureCtx::unmarshal(&mut slice)
+                    .map_err(|_| TpmRc::FAILURE)?;
+                SequenceType::Verify {
+                    associated_name,
+                    scheme,
+                    context,
+                }
+            }
             0 => SequenceType::Event,
             _ => return Err(TpmRc::FAILURE),
         };
@@ -455,7 +483,14 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 .ok_or(TpmRc::FAILURE)?;
         }
 
-        let sequence_buffer = [0u8; MAX_SEQUENCE_BUFFER];
+        let mut sequence_buffer = [0u8; MAX_SEQUENCE_BUFFER];
+        if matches!(
+            sequence_type,
+            SequenceType::Sign { .. } | SequenceType::Verify { .. }
+        ) {
+            let data = slice.get(..sequence_len).ok_or(TpmRc::FAILURE)?;
+            sequence_buffer[..sequence_len].copy_from_slice(data);
+        }
         Ok(ActiveSequence {
             handle,
             intermediate_digest: OwnedDigest::default(),

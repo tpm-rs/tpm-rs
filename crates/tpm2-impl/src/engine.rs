@@ -49,6 +49,7 @@ use crate::handler::CommandHandler;
 use crate::handler::{SessionState, TransientObject};
 use crate::owned::{
     OwnedAuth, OwnedAuthCommand, OwnedDigest, OwnedName, OwnedNonce, OwnedSensitiveData,
+    OwnedSignatureCtx,
 };
 use crate::pcr::PcrState;
 use crate::req_resp::RequestResponseCursor;
@@ -61,7 +62,7 @@ use tpm2::crypto::{
     CryptoError, Hash, HashStream, Hmac, HmacStream, ModeIv, Rng, SymmetricKey, kdfa,
 };
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{CommandHeader, Handle, ResponseHeader, TpmCc, TpmHt, TpmSe};
+use tpm2::{CommandHeader, Handle, ResponseHeader, TpmCc, TpmHt, TpmSe, TpmtSigScheme};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{
     Tpm2bAuth, Tpm2bNonce, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
@@ -438,6 +439,22 @@ impl ActiveSequence {
                 hash_states[2] = crate::hash_state::StreamingHashState::new(TpmiAlgHash::Sha384);
                 hash_states[3] = crate::hash_state::StreamingHashState::new(TpmiAlgHash::Sha512);
             }
+            SequenceType::Sign { scheme, .. } | SequenceType::Verify { scheme, .. } => match scheme
+            {
+                TpmtSigScheme::Rsassa(alg)
+                | TpmtSigScheme::Rsapss(alg)
+                | TpmtSigScheme::Ecdsa(alg)
+                | TpmtSigScheme::Ecschnorr(alg)
+                | TpmtSigScheme::Sm2(alg) => {
+                    hash_states[0] = crate::hash_state::StreamingHashState::new(alg);
+                }
+                TpmtSigScheme::Ecdaa(..)
+                | TpmtSigScheme::Hmac(..)
+                | TpmtSigScheme::Eddsa
+                | TpmtSigScheme::HashEddsa
+                | TpmtSigScheme::Mldsa
+                | TpmtSigScheme::HashMldsa => {}
+            },
         }
         Self {
             handle,
@@ -463,6 +480,18 @@ impl ActiveSequence {
                     state.update(data);
                 }
             }
+            SequenceType::Sign { scheme, .. } | SequenceType::Verify { scheme, .. } => {
+                if matches!(
+                    scheme,
+                    TpmtSigScheme::Rsassa(_)
+                        | TpmtSigScheme::Rsapss(_)
+                        | TpmtSigScheme::Ecdsa(_)
+                        | TpmtSigScheme::Ecschnorr(_)
+                        | TpmtSigScheme::Sm2(_)
+                ) {
+                    self.hash_states[0].update(data);
+                }
+            }
         }
     }
 }
@@ -478,6 +507,16 @@ pub enum SequenceType {
         key: OwnedSensitiveData,
     },
     Event,
+    Sign {
+        associated_name: OwnedName,
+        scheme: TpmtSigScheme,
+        context: OwnedSignatureCtx,
+    },
+    Verify {
+        associated_name: OwnedName,
+        scheme: TpmtSigScheme,
+        context: OwnedSignatureCtx,
+    },
 }
 
 /// A parsed representation of an incoming TPM command with authorization sessions (tag 0x8002).
@@ -3263,7 +3302,13 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
 
             let entity_auth = if i < cmd.session_to_handle_idx_len {
                 let h_idx = cmd.session_to_handle_idx[i];
-                if matches!(cc, TpmCc::SequenceComplete | TpmCc::EventSequenceComplete) {
+                if matches!(
+                    cc,
+                    TpmCc::SequenceComplete
+                        | TpmCc::EventSequenceComplete
+                        | TpmCc::SignSequenceComplete
+                        | TpmCc::VerifySequenceComplete
+                ) {
                     cmd.handle_auths[h_idx]
                 } else {
                     self.handle_auth(global_state, cmd.handles[h_idx])
@@ -3415,7 +3460,13 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
 
             let entity_auth = if i < cmd.session_to_handle_idx_len {
                 let h_idx = cmd.session_to_handle_idx[i];
-                if matches!(cc, TpmCc::SequenceComplete | TpmCc::EventSequenceComplete) {
+                if matches!(
+                    cc,
+                    TpmCc::SequenceComplete
+                        | TpmCc::EventSequenceComplete
+                        | TpmCc::SignSequenceComplete
+                        | TpmCc::VerifySequenceComplete
+                ) {
                     cmd.handle_auths[h_idx]
                 } else {
                     self.handle_auth(global_state, cmd.handles[h_idx])
@@ -4204,6 +4255,14 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
             TpmCc::PolicyRestart => handler.policy_restart(request),
             TpmCc::ECDHKeyGen => handler.ecdh_keygen(request),
             TpmCc::ECCParameters => handler.ecc_parameters(request),
+            TpmCc::VerifySequenceComplete => handler.verify_sequence_complete(request),
+            TpmCc::SignSequenceComplete => handler.sign_sequence_complete(request),
+            TpmCc::VerifyDigestSignature => handler.verify_digest_signature(request),
+            TpmCc::SignDigest => handler.sign_digest(request),
+            TpmCc::Encapsulate => handler.encapsulate(request),
+            TpmCc::Decapsulate => handler.decapsulate(request),
+            TpmCc::VerifySequenceStart => handler.verify_sequence_start(request),
+            TpmCc::SignSequenceStart => handler.sign_sequence_start(request),
             _ => Err(TpmRc::COMMAND_CODE),
         }?;
 
@@ -4336,6 +4395,14 @@ pub fn command_handles_count(cc: TpmCc) -> usize {
         TpmCc::IncrementalSelfTest => 0,
         TpmCc::GetTestResult => 0,
         TpmCc::PolicyRestart => 1,
+        TpmCc::VerifySequenceComplete => 2,
+        TpmCc::SignSequenceComplete => 2,
+        TpmCc::VerifyDigestSignature => 1,
+        TpmCc::SignDigest => 1,
+        TpmCc::Encapsulate => 1,
+        TpmCc::Decapsulate => 1,
+        TpmCc::VerifySequenceStart => 1,
+        TpmCc::SignSequenceStart => 1,
         _ => 0,
     }
 }
@@ -4390,7 +4457,13 @@ pub fn get_command_attribute(cc: TpmCc) -> tpm2::TpmaCc {
     ) {
         attr |= tpm2::TpmaCc::EXTENSIVE;
     }
-    if matches!(cc, TpmCc::SequenceComplete | TpmCc::EventSequenceComplete) {
+    if matches!(
+        cc,
+        TpmCc::SequenceComplete
+            | TpmCc::EventSequenceComplete
+            | TpmCc::SignSequenceComplete
+            | TpmCc::VerifySequenceComplete
+    ) {
         attr |= tpm2::TpmaCc::FLUSHED;
     }
     attr
@@ -4398,7 +4471,7 @@ pub fn get_command_attribute(cc: TpmCc) -> tpm2::TpmaCc {
 
 /// List of TPM 2.0 command codes supported by this engine implementation.
 /// The command codes (`TpmCc`) are defined in TCG TPM 2.0 Library Specification Part 3: Commands.
-pub(crate) const SUPPORTED_COMMANDS: [TpmCc; 102] = [
+pub(crate) const SUPPORTED_COMMANDS: [TpmCc; 110] = [
     TpmCc::GetRandom,
     TpmCc::StirRandom,
     TpmCc::Startup,
@@ -4501,6 +4574,14 @@ pub(crate) const SUPPORTED_COMMANDS: [TpmCc; 102] = [
     TpmCc::DictionaryAttackLockReset,
     TpmCc::DictionaryAttackParameters,
     TpmCc::PCRAllocate,
+    TpmCc::VerifySequenceComplete,
+    TpmCc::SignSequenceComplete,
+    TpmCc::VerifyDigestSignature,
+    TpmCc::SignDigest,
+    TpmCc::Encapsulate,
+    TpmCc::Decapsulate,
+    TpmCc::VerifySequenceStart,
+    TpmCc::SignSequenceStart,
 ];
 
 pub(crate) fn is_command_supported(cc: TpmCc) -> bool {
@@ -4547,6 +4628,12 @@ fn command_supports_decryption(cc: TpmCc) -> bool {
         || cc == TpmCc::SequenceComplete
         || cc == TpmCc::EventSequenceComplete
         || cc == TpmCc::StirRandom
+        || cc == TpmCc::SignSequenceComplete
+        || cc == TpmCc::VerifyDigestSignature
+        || cc == TpmCc::SignDigest
+        || cc == TpmCc::Decapsulate
+        || cc == TpmCc::VerifySequenceStart
+        || cc == TpmCc::SignSequenceStart
 }
 
 fn command_supports_encryption(cc: TpmCc) -> bool {
@@ -4581,6 +4668,8 @@ fn command_supports_encryption(cc: TpmCc) -> bool {
         || cc == TpmCc::PolicySigned
         || cc == TpmCc::Hash
         || cc == TpmCc::SequenceComplete
+        || cc == TpmCc::Encapsulate
+        || cc == TpmCc::Decapsulate
 }
 
 fn command_resp_handles_size(cc: TpmCc) -> usize {
@@ -4591,7 +4680,9 @@ fn command_resp_handles_size(cc: TpmCc) -> usize {
         | TpmCc::LoadExternal
         | TpmCc::Load
         | TpmCc::HashSequenceStart
-        | TpmCc::MACStart => 4,
+        | TpmCc::MACStart
+        | TpmCc::VerifySequenceStart
+        | TpmCc::SignSequenceStart => 4,
         _ => 0,
     }
 }
@@ -4712,6 +4803,14 @@ fn expects_object_handle(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::ECDHKeyGen
                 | TpmCc::ECCParameters
                 | TpmCc::ZGen2Phase
+                | TpmCc::VerifySequenceComplete
+                | TpmCc::SignSequenceComplete
+                | TpmCc::VerifyDigestSignature
+                | TpmCc::SignDigest
+                | TpmCc::Encapsulate
+                | TpmCc::Decapsulate
+                | TpmCc::VerifySequenceStart
+                | TpmCc::SignSequenceStart
         )
     } else if handle_index == 1 {
         matches!(
@@ -4725,6 +4824,8 @@ fn expects_object_handle(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::Duplicate
                 | TpmCc::EvictControl
                 | TpmCc::EventSequenceComplete
+                | TpmCc::VerifySequenceComplete
+                | TpmCc::SignSequenceComplete
         )
     } else {
         false
@@ -4822,6 +4923,10 @@ pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::MACStart
                 | TpmCc::DictionaryAttackLockReset
                 | TpmCc::DictionaryAttackParameters
+                | TpmCc::VerifySequenceComplete
+                | TpmCc::SignSequenceComplete
+                | TpmCc::SignDigest
+                | TpmCc::Decapsulate
         )
     } else if handle_index == 1 {
         matches!(
@@ -4834,6 +4939,7 @@ pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::ActivateCredential
                 | TpmCc::EventSequenceComplete
                 | TpmCc::NVUndefineSpaceSpecial
+                | TpmCc::SignSequenceComplete
         )
     } else {
         false
@@ -5029,6 +5135,8 @@ pub fn command_returns_handle(cc: TpmCc) -> bool {
             | TpmCc::LoadExternal
             | TpmCc::HashSequenceStart
             | TpmCc::MACStart
+            | TpmCc::VerifySequenceStart
+            | TpmCc::SignSequenceStart
     )
 }
 
