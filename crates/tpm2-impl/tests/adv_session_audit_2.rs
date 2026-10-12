@@ -342,8 +342,8 @@ fn test_response_session_attributes_audit_and_exclusivity() {
     );
     assert_eq!(
         attrs_1 & 0x04,
-        0x04,
-        "Expected auditReset bit to be set in response because the digest was reset"
+        0,
+        "Expected auditReset bit to be CLEAR in the response (Part 2, TPMA_SESSION)"
     );
 
     // B. Session 2 with AUDIT | AUDIT_RESET (0x85) -> exclusivity hands over to Session 2
