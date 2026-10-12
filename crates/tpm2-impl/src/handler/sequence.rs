@@ -19,7 +19,7 @@ use tpm2::{
 
 /// Returns `true` for the hash algorithms supported by the hash, HMAC and event sequences
 /// (SHA-1, SHA-256, SHA-384 and SHA-512, matching [`crate::hash_state::StreamingHashState`]).
-fn is_sequence_hash(hash_alg: TpmiAlgHash) -> bool {
+pub(super) fn is_sequence_hash(hash_alg: TpmiAlgHash) -> bool {
     matches!(
         hash_alg,
         TpmiAlgHash::Sha1 | TpmiAlgHash::Sha256 | TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512
@@ -296,7 +296,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             state.update(final_chunk);
 
             match &seq_obj.sequence_type {
-                crate::SequenceType::Event => return Err(TpmRc::MODE.to_rc()),
+                crate::SequenceType::Event
+                | crate::SequenceType::Sign { .. }
+                | crate::SequenceType::Verify { .. } => return Err(TpmRc::MODE.to_rc()),
                 crate::SequenceType::Hash { alg } => {
                     let (digest_bytes, digest_len) = state.finalize();
 

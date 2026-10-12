@@ -228,7 +228,7 @@ fn sig_scheme_hash_alg(scheme: &TpmtSigScheme) -> Option<TpmiAlgHash> {
 
 /// Returns `true` for the hash algorithms the signing commands accept
 /// (SHA-1, SHA-256, SHA-384, SHA-512 and SM3-256).
-fn is_signing_hash(hash_alg: TpmiAlgHash) -> bool {
+pub(super) fn is_signing_hash(hash_alg: TpmiAlgHash) -> bool {
     matches!(
         hash_alg,
         TpmiAlgHash::Sha1
@@ -242,7 +242,7 @@ fn is_signing_hash(hash_alg: TpmiAlgHash) -> bool {
 /// Left-pads both components of an ECC signature to `size` bytes.
 ///
 /// PORTING: exp's crypto provider always produced fixed-size `r` / `s` values.
-fn pad_ecc_signature<'s>(
+pub(super) fn pad_ecc_signature<'s>(
     sig: &TpmsSignatureEcc<'_>,
     size: usize,
     r_buf: &'s mut [u8; TpmEccCurve::MAX_ECC_KEY_BYTES],

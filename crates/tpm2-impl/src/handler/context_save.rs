@@ -362,6 +362,26 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             SequenceType::Event => {
                 writer.bytes(&[0])?;
             }
+            SequenceType::Sign {
+                associated_name,
+                scheme,
+                context,
+            } => {
+                writer.bytes(&[3])?;
+                writer.value(associated_name)?;
+                writer.value(&Some(*scheme))?;
+                writer.value(context)?;
+            }
+            SequenceType::Verify {
+                associated_name,
+                scheme,
+                context,
+            } => {
+                writer.bytes(&[4])?;
+                writer.value(associated_name)?;
+                writer.value(&Some(*scheme))?;
+                writer.value(context)?;
+            }
         }
 
         let sequence_len = u32::try_from(seq.sequence_len).map_err(|_| TpmRc::FAILURE)?;
@@ -373,6 +393,17 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
 
         for state in &seq.hash_states {
             state.serialize(writer.reserve(StreamingHashState::SERIALIZED_SIZE)?);
+        }
+
+        if matches!(
+            seq.sequence_type,
+            SequenceType::Sign { .. } | SequenceType::Verify { .. }
+        ) {
+            writer.bytes(
+                seq.sequence_buffer
+                    .get(..seq.sequence_len)
+                    .ok_or(TpmRc::FAILURE)?,
+            )?;
         }
 
         Ok(writer.offset())

@@ -475,7 +475,7 @@ impl TpmStateTranslator {
             }
             let slot =
                 &mut dto.s_objects[slot_idx * OBJECT_SLOT_SIZE..(slot_idx + 1) * OBJECT_SLOT_SIZE];
-            Self::pack_active_sequence(seq, slot);
+            Self::pack_active_sequence(seq, slot)?;
             slot_idx += 1;
         }
 
@@ -713,7 +713,17 @@ impl TpmStateTranslator {
         })
     }
 
-    fn pack_active_sequence(seq: &ActiveSequence, slot: &mut [u8]) {
+    /// Fails with [`StorageError::OutOfBounds`] for a sign or verify sequence that has buffered
+    /// message data: the message does not fit in a slot, and dropping it would make the sequence
+    /// sign or verify a different message.
+    fn pack_active_sequence(seq: &ActiveSequence, slot: &mut [u8]) -> Result<(), StorageError> {
+        if matches!(
+            seq.sequence_type,
+            SequenceType::Sign { .. } | SequenceType::Verify { .. }
+        ) && seq.sequence_len > 0
+        {
+            return Err(StorageError::OutOfBounds);
+        }
         slot[0] = 2; // slot_kind = ActiveSequence
         let mut offset = 1;
         slot[offset..offset + 4].copy_from_slice(&seq.handle.to_be_bytes());
@@ -741,6 +751,48 @@ impl TpmStateTranslator {
                     offset += key.marshal(dst);
                 }
             }
+            SequenceType::Sign {
+                associated_name,
+                scheme,
+                context,
+            } => {
+                slot[offset] = 3;
+                offset += 1;
+                if let Ok(dst) = (&mut slot[offset..offset + Tpm2bName::MAX_SIZE]).try_into() {
+                    offset += associated_name.marshal(dst);
+                }
+                if let Ok(dst) =
+                    (&mut slot[offset..offset + <Option<tpm2::TpmtSigScheme>>::MAX_SIZE]).try_into()
+                {
+                    offset += Some(*scheme).marshal(dst);
+                }
+                if let Ok(dst) =
+                    (&mut slot[offset..offset + tpm2::Tpm2bSignatureCtx::MAX_SIZE]).try_into()
+                {
+                    offset += context.marshal(dst);
+                }
+            }
+            SequenceType::Verify {
+                associated_name,
+                scheme,
+                context,
+            } => {
+                slot[offset] = 4;
+                offset += 1;
+                if let Ok(dst) = (&mut slot[offset..offset + Tpm2bName::MAX_SIZE]).try_into() {
+                    offset += associated_name.marshal(dst);
+                }
+                if let Ok(dst) =
+                    (&mut slot[offset..offset + <Option<tpm2::TpmtSigScheme>>::MAX_SIZE]).try_into()
+                {
+                    offset += Some(*scheme).marshal(dst);
+                }
+                if let Ok(dst) =
+                    (&mut slot[offset..offset + tpm2::Tpm2bSignatureCtx::MAX_SIZE]).try_into()
+                {
+                    offset += context.marshal(dst);
+                }
+            }
             SequenceType::Event => {
                 slot[offset] = 0;
                 offset += 1;
@@ -761,6 +813,7 @@ impl TpmStateTranslator {
                 offset += state.serialize(&mut slot[offset..]);
             }
         }
+        Ok(())
     }
 
     fn unpack_active_sequence(slot: &[u8]) -> Result<ActiveSequence, StorageError> {
@@ -783,6 +836,34 @@ impl TpmStateTranslator {
                     .map_err(|_| StorageError::OutOfBounds)?
                     .into();
                 SequenceType::Hmac { hash_alg, key }
+            }
+            3 => {
+                let associated_name = crate::owned::OwnedName::unmarshal(&mut slice)
+                    .map_err(|_| StorageError::OutOfBounds)?;
+                let scheme = <Option<tpm2::TpmtSigScheme>>::unmarshal(&mut slice)
+                    .map_err(|_| StorageError::OutOfBounds)?
+                    .ok_or(StorageError::OutOfBounds)?;
+                let context = crate::owned::OwnedSignatureCtx::unmarshal(&mut slice)
+                    .map_err(|_| StorageError::OutOfBounds)?;
+                SequenceType::Sign {
+                    associated_name,
+                    scheme,
+                    context,
+                }
+            }
+            4 => {
+                let associated_name = crate::owned::OwnedName::unmarshal(&mut slice)
+                    .map_err(|_| StorageError::OutOfBounds)?;
+                let scheme = <Option<tpm2::TpmtSigScheme>>::unmarshal(&mut slice)
+                    .map_err(|_| StorageError::OutOfBounds)?
+                    .ok_or(StorageError::OutOfBounds)?;
+                let context = crate::owned::OwnedSignatureCtx::unmarshal(&mut slice)
+                    .map_err(|_| StorageError::OutOfBounds)?;
+                SequenceType::Verify {
+                    associated_name,
+                    scheme,
+                    context,
+                }
             }
             _ => SequenceType::Event,
         };
