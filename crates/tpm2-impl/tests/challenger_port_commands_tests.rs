@@ -8,7 +8,8 @@ use alloc::vec::Vec;
 use common::{FakeRng, FakeStorage, FakeTimer, TestCryptoProvider, marshal_to_slice};
 use hex_literal::hex;
 use tpm2::commands::{
-    Command, Duplicate, Import, Load, Message, PolicyCommandCode, PolicyGetDigest, UnmarshalMessage,
+    Command, Duplicate, EvictControl, Import, Load, Message, PolicyCommandCode, PolicyGetDigest,
+    UnmarshalMessage,
 };
 use tpm2::crypto::{Random, Rsa, RsaPrivateKey, RsaPublicKey};
 use tpm2::errors::{Position, TpmRc};
@@ -38,6 +39,10 @@ struct ImportHandles {
 struct LoadHandles {
     pub parent_handle: Handle,
 }
+struct EvictControlHandles {
+    pub auth: Handle,
+    pub object_handle: Handle,
+}
 
 trait TestHandles {
     fn to_vec(&self) -> Vec<Handle>;
@@ -66,6 +71,11 @@ impl TestHandles for ImportHandles {
 impl TestHandles for LoadHandles {
     fn to_vec(&self) -> Vec<Handle> {
         vec![self.parent_handle]
+    }
+}
+impl TestHandles for EvictControlHandles {
+    fn to_vec(&self) -> Vec<Handle> {
+        vec![self.auth, self.object_handle]
     }
 }
 
@@ -852,33 +862,39 @@ fn test_duplicate_import_load_roundtrip() {
     assert_eq!(loaded_obj.sensitive, target_obj.sensitive);
 }
 
-/// The outer duplication wrapper (its integrity HMAC and the keys derived from the seed) uses the
-/// new parent's nameAlg, not the duplicated object's (TPM 2.0 Part 1, "Outer Duplication Wrapper").
-#[test]
-fn test_duplicate_outer_wrapper_uses_new_parent_name_alg() {
-    let crypto = TestCryptoProvider;
-    let mut storage = FakeStorage::default();
-    let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&crypto, &mut storage, &mut timer, &rng);
-
-    // A SHA-384 signing key (with a SHA-384-sized seed) to duplicate.
-    let target_rsa = Rsa::generate_key(
+/// Generates an RSA-2048 key and returns its public modulus and first prime.
+fn rsa_key_parts(
+    tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer>,
+) -> (
+    tpm2_impl::owned::OwnedPublicKeyRsa,
+    tpm2_impl::owned::OwnedPrivateKeyRsa,
+) {
+    let key = Rsa::generate_key(
         tpm.platform.crypto,
         &mut tpm.platform.rng,
         TpmiRsaKeyBits::Rsa2048,
         0,
     )
     .unwrap();
-    let mut target_mod_buf = [0u8; TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
-    let target_modulus = target_rsa
-        .public_key()
-        .modulus(&mut target_mod_buf)
-        .unwrap();
-    let mut target_prime_buf = [0u8; TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES];
-    let target_prime_p = target_rsa.prime_p(&mut target_prime_buf).unwrap();
-    let target_public = TpmtPublic {
-        name_alg: Some(TpmiAlgHash::Sha384),
+    let mut mod_buf = [0u8; TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
+    let mut prime_buf = [0u8; TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES];
+    (
+        key.public_key().modulus(&mut mod_buf).unwrap().into(),
+        key.prime_p(&mut prime_buf).unwrap().into(),
+    )
+}
+
+/// Returns a loadable RSA-2048 signing key with `name_alg` and `seed`, in the Owner hierarchy.
+fn rsa_signing_key(
+    tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer>,
+    global_state: &mut tpm2_impl::GlobalState,
+    handle: u32,
+    name_alg: TpmiAlgHash,
+    seed: &[u8],
+) -> TransientObject {
+    let (modulus, prime) = rsa_key_parts(tpm);
+    let public = TpmtPublic {
+        name_alg: Some(name_alg),
         object_attributes: TpmaObject::SIGN_ENCRYPT | TpmaObject::USER_WITH_AUTH,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Rsa(
@@ -888,52 +904,42 @@ fn test_duplicate_outer_wrapper_uses_new_parent_name_alg() {
                 key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
-            target_modulus,
+            modulus.as_tpm2b(),
         ),
     };
     let mut pub_buf = [0u8; 1024];
-    let pub_len = marshal_to_slice(&target_public, &mut pub_buf);
-    let handler = tpm2_impl::handler::CommandHandler::new(&mut tpm, &mut global_state);
-    let target_name = handler
-        .compute_name(target_public.name_alg, &pub_buf[..pub_len])
+    let pub_len = marshal_to_slice(&public, &mut pub_buf);
+    let name = tpm2_impl::handler::CommandHandler::new(tpm, global_state)
+        .compute_name(public.name_alg, &pub_buf[..pub_len])
         .unwrap();
-    let target_seed = tpm2_impl::owned::OwnedDigest::new(&[7u8; 48]).unwrap();
-    let target_handle = 0x80000001;
-    global_state.transient_objects[0] = Some(TransientObject {
-        handle: target_handle,
-        seed: target_seed,
-        name: target_name,
+    TransientObject {
+        handle,
+        seed: tpm2_impl::owned::OwnedDigest::new(seed).unwrap(),
+        name,
         auth: Tpm2bAuth::default().into(),
-        public: target_public.into(),
-        sensitive: OwnedSensitiveComposite::Rsa(target_prime_p.into()),
-        qualified_name: target_name,
+        public: public.into(),
+        sensitive: OwnedSensitiveComposite::Rsa(prime),
+        qualified_name: name,
         hierarchy: 0x40000001,
         st_clear: false,
-    });
+    }
+}
 
-    // A SHA-256 storage parent.
-    let parent_rsa = Rsa::generate_key(
-        tpm.platform.crypto,
-        &mut tpm.platform.rng,
-        TpmiRsaKeyBits::Rsa2048,
-        0,
-    )
-    .unwrap();
-    let mut parent_mod_buf = [0u8; TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
-    let parent_modulus = parent_rsa
-        .public_key()
-        .modulus(&mut parent_mod_buf)
-        .unwrap();
-    let mut parent_prime_buf = [0u8; TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES];
-    let parent_prime_p = parent_rsa.prime_p(&mut parent_prime_buf).unwrap();
-    let parent_handle = 0x80000002;
-    global_state.transient_objects[1] = Some(TransientObject {
-        handle: parent_handle,
+/// Returns a loadable RSA-2048 storage parent (AES-128-CFB) with `name_alg`, in the Owner
+/// hierarchy.
+fn rsa_storage_parent(
+    tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer>,
+    handle: u32,
+    name_alg: TpmiAlgHash,
+) -> TransientObject {
+    let (modulus, prime) = rsa_key_parts(tpm);
+    TransientObject {
+        handle,
         seed: tpm2_impl::owned::OwnedDigest::new(&[3u8; 32]).unwrap(),
         name: Tpm2bName::new(&[4, 5, 6]).unwrap().into(),
         auth: Tpm2bAuth::default().into(),
         public: TpmtPublic {
-            name_alg: Some(TpmiAlgHash::Sha256),
+            name_alg: Some(name_alg),
             object_attributes: TpmaObject::DECRYPT
                 | TpmaObject::RESTRICTED
                 | TpmaObject::USER_WITH_AUTH,
@@ -948,33 +954,70 @@ fn test_duplicate_outer_wrapper_uses_new_parent_name_alg() {
                     key_bits: TpmiRsaKeyBits::Rsa2048,
                     exponent: 0,
                 },
-                parent_modulus,
+                modulus.as_tpm2b(),
             ),
         }
         .into(),
-        sensitive: OwnedSensitiveComposite::Rsa(parent_prime_p.into()),
+        sensitive: OwnedSensitiveComposite::Rsa(prime),
         qualified_name: Tpm2bName::new(&[4, 5, 6]).unwrap().into(),
         hierarchy: 0x40000001,
         st_clear: false,
-    });
+    }
+}
 
-    // Duplicate with only the outer wrapper: `duplicate` starts with the outer integrity HMAC.
-    let dup_resp = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &DuplicateHandles {
-            object_handle: Handle(target_handle),
-            new_parent_handle: Handle(parent_handle),
+/// `TPM2_Duplicate` with only an outer wrapper and no inner encryption key.
+fn duplicate_outer_only(
+    object_handle: u32,
+    new_parent_handle: u32,
+) -> (DuplicateHandles, Duplicate<'static>) {
+    (
+        DuplicateHandles {
+            object_handle: Handle(object_handle),
+            new_parent_handle: Handle(new_parent_handle),
         },
-        &Duplicate {
-            object_handle: Handle(target_handle),
-            new_parent_handle: Handle(parent_handle),
+        Duplicate {
+            object_handle: Handle(object_handle),
+            new_parent_handle: Handle(new_parent_handle),
             encryption_key_in: Tpm2bData::default(),
             symmetric_alg: None,
         },
-        &[],
     )
-    .expect("Duplicate failed");
+}
+
+/// The outer duplication wrapper (its integrity HMAC and the keys derived from the seed) uses the
+/// new parent's nameAlg, not the duplicated object's (TPM 2.0 Part 1, "Outer Duplication Wrapper").
+#[test]
+fn test_duplicate_outer_wrapper_uses_new_parent_name_alg() {
+    let crypto = TestCryptoProvider;
+    let mut storage = FakeStorage::default();
+    let mut timer = FakeTimer;
+    let rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&crypto, &mut storage, &mut timer, &rng);
+
+    // A SHA-384 signing key (with a SHA-384-sized seed) and a SHA-256 storage parent.
+    let target_handle = 0x80000001;
+    let parent_handle = 0x80000002;
+    let target = rsa_signing_key(
+        &mut tpm,
+        &mut global_state,
+        target_handle,
+        TpmiAlgHash::Sha384,
+        &[7u8; 48],
+    );
+    let target_seed = target.seed;
+    let object_public = target.public.as_tpm2b();
+    global_state.transient_objects[0] = Some(target.clone());
+    global_state.transient_objects[1] = Some(rsa_storage_parent(
+        &mut tpm,
+        parent_handle,
+        TpmiAlgHash::Sha256,
+    ));
+
+    // `duplicate` starts with the outer integrity HMAC.
+    let (dup_handles, dup_cmd) = duplicate_outer_only(target_handle, parent_handle);
+    let dup_resp =
+        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_handles, &dup_cmd, &[])
+            .expect("Duplicate failed");
     let duplicate = dup_resp.duplicate.as_slice();
     assert_eq!(
         usize::from(u16::from_be_bytes([duplicate[0], duplicate[1]])),
@@ -982,7 +1025,6 @@ fn test_duplicate_outer_wrapper_uses_new_parent_name_alg() {
     );
 
     // Import and load it back under the same parent; the full 48-byte seed survives.
-    let object_public = tpm2::Tpm2b(target_public);
     let import_resp = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
@@ -1021,4 +1063,58 @@ fn test_duplicate_outer_wrapper_uses_new_parent_name_alg() {
         .find(|obj| obj.handle == load_resp.object_handle.0)
         .expect("Loaded object not found in transient objects");
     assert_eq!(loaded_obj.seed, target_seed);
+}
+
+/// `TPM2_Duplicate` accepts a persistent new parent.
+#[test]
+fn test_duplicate_to_persistent_parent() {
+    let crypto = TestCryptoProvider;
+    let mut storage = FakeStorage::default();
+    let mut timer = FakeTimer;
+    let rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&crypto, &mut storage, &mut timer, &rng);
+
+    let target_handle = 0x80000001;
+    let parent_handle = 0x80000002;
+    let persistent_parent = 0x81000001;
+    global_state.transient_objects[0] = Some(rsa_signing_key(
+        &mut tpm,
+        &mut global_state,
+        target_handle,
+        TpmiAlgHash::Sha256,
+        &[2u8; 32],
+    ));
+    global_state.transient_objects[1] = Some(rsa_storage_parent(
+        &mut tpm,
+        parent_handle,
+        TpmiAlgHash::Sha256,
+    ));
+
+    let owner_auth = TpmsAuthCommand {
+        session_handle: Handle::RS_PW,
+        nonce: Tpm2bNonce::default(),
+        session_attributes: tpm2::TpmaSession::CONTINUE_SESSION,
+        hmac: Tpm2bAuth::default(),
+    };
+    execute_tpm_command_with_auths(
+        &mut tpm,
+        &mut global_state,
+        &EvictControlHandles {
+            auth: Handle::RH_OWNER,
+            object_handle: Handle(parent_handle),
+        },
+        &EvictControl {
+            auth: Handle::RH_OWNER,
+            object_handle: Handle(parent_handle),
+            persistent_handle: Handle(persistent_parent),
+        },
+        &[owner_auth],
+    )
+    .expect("EvictControl failed");
+
+    let (dup_handles, dup_cmd) = duplicate_outer_only(target_handle, persistent_parent);
+    let dup_resp =
+        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_handles, &dup_cmd, &[])
+            .expect("Duplicate to a persistent parent failed");
+    assert!(!dup_resp.out_sym_seed.as_slice().is_empty());
 }

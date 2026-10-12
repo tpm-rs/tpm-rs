@@ -171,12 +171,10 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // 1. Retrieve the target object to duplicate
-        let target_obj = self
-            .global_state
-            .find_transient_object(object_handle.0)
-            .cloned()
-            .ok_or(TpmRc::HANDLE.with(Position::handle(1)))?;
+        // 1. Retrieve the target object to duplicate (transient or persistent)
+        //
+        // PORTING: exp only looked up transient objects.
+        let target_obj = self.resolve_object(object_handle.0, Position::handle(1))?;
 
         // 2. Check fixedParent and fixedTPM attributes
         if target_obj
@@ -206,11 +204,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         let mut parent_obj = None;
 
         if new_parent_handle != Handle::RH_NULL {
-            let obj = self
-                .global_state
-                .find_transient_object(new_parent_handle.0)
-                .cloned()
-                .ok_or(TpmRc::HANDLE.with(Position::handle(2)))?;
+            let obj = self.resolve_object(new_parent_handle.0, Position::handle(2))?;
             if !obj.public.object_attributes.contains(TpmaObject::DECRYPT)
                 || !obj
                     .public
