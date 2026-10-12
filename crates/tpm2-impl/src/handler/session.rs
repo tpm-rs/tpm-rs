@@ -126,24 +126,13 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             &cmd.symmetric,
         )?;
 
-        let mut bound_entity = OwnedName::default();
-        if bind != Handle::RH_NULL {
+        let bound_entity = if bind == Handle::RH_NULL {
+            OwnedName::default()
+        } else {
             let bind_name = self.context.handle_name(self.global_state, bind.0);
-
-            let name_bytes = bind_name.get_buffer();
-            let mut name_buf = [0u8; 64];
-            // PORTING: exp indexed `name_buf[..name_bytes.len()]` directly, which panicked for
-            // 66-byte (SHA-512 nameAlg) Names; this returns TPM_RC_FAILURE instead.
-            name_buf
-                .get_mut(..name_bytes.len())
+            crate::util::bound_entity(bind_name.get_buffer(), bind_auth_stripped)
                 .ok_or(TpmRc::FAILURE)?
-                .copy_from_slice(name_bytes);
-            let xor_start = name_buf.len() - bind_auth_stripped.len();
-            for (name_byte, auth_byte) in name_buf[xor_start..].iter_mut().zip(bind_auth_stripped) {
-                *name_byte ^= auth_byte;
-            }
-            bound_entity = OwnedName::from_bytes(&name_buf).map_err(|_| TpmRc::FAILURE)?;
-        }
+        };
 
         // Add to active sessions
         let session_state = SessionState {

@@ -64,7 +64,7 @@ use tpm2::errors::{Position, TpmRc};
 use tpm2::{CommandHeader, Handle, ResponseHeader, TpmCc, TpmHt, TpmSe};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{
-    Tpm2bAuth, Tpm2bName, Tpm2bNonce, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
+    Tpm2bAuth, Tpm2bNonce, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
     TpmiStCommandTag, TpmsAuthResponse,
 };
 
@@ -1588,10 +1588,13 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
         request_size: usize,
     ) -> usize {
         let mut tmp_request = [0u8; MAX_MESSAGE_SIZE];
-        if request_size > tmp_request.len() {
+        let (Some(dst), Some(src)) = (
+            tmp_request.get_mut(..request_size),
+            in_out.get(..request_size),
+        ) else {
             return self.fill_error(in_out, TpmRc::SIZE.to_rc());
-        }
-        tmp_request[..request_size].copy_from_slice(&in_out[..request_size]);
+        };
+        dst.copy_from_slice(src);
         match self.execute_command(global_state, &tmp_request[..request_size], in_out) {
             Ok(size) => size,
             Err(err) => self.fill_error(in_out, err),
@@ -2946,18 +2949,10 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
                     let h_idx = cmd.session_to_handle_idx[i];
                     let h = cmd.handles[h_idx];
                     if bind_entity == Handle(h) {
-                        let entity_auth_stripped =
-                            crate::util::strip_trailing_zeros(entity_auth.get_buffer());
                         let name = self.handle_name(global_state, h);
-                        let name_bytes = name.get_buffer();
-                        let mut name_buf = [0u8; 64];
-                        name_buf[..name_bytes.len()].copy_from_slice(name_bytes);
-                        for (p_auth, j) in ((64 - entity_auth_stripped.len())..64).enumerate() {
-                            name_buf[j] ^= entity_auth_stripped[p_auth];
-                        }
-                        if let Some(b_name) = Tpm2bName::new(&name_buf) {
-                            is_bound = bound_entity == b_name;
-                        }
+                        is_bound =
+                            crate::util::bound_entity(name.get_buffer(), entity_auth.get_buffer())
+                                .is_some_and(|b| b == bound_entity);
                     }
                 }
 
