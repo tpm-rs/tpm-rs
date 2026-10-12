@@ -14,7 +14,7 @@ fn test_stir_random_success() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.g_nv_ok = true;
 
@@ -53,7 +53,7 @@ fn test_stir_random_size_exceeded() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.g_nv_ok = true;
 

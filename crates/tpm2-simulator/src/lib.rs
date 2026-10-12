@@ -183,7 +183,9 @@ impl<'a> Simulator<'a> {
             .map_err(|_| InternalError::HardwareError)?;
         let mut context = Box::new(TpmEngine::new(platform)?);
         let mut global_state = Box::new(::tpm2_impl::GlobalState::default());
-        context.init_storage(&mut global_state);
+        context
+            .init_storage(&mut global_state)
+            .map_err(|_| InternalError::HardwareError)?;
         Ok(Self {
             context,
             global_state,

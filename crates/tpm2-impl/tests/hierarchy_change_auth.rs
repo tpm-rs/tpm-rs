@@ -17,7 +17,7 @@ fn test_state_desync_fixed() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.locality = 0;
@@ -72,7 +72,7 @@ fn test_challenger_badauthfor_returned() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.locality = 0;
@@ -126,7 +126,7 @@ fn test_no_direct_nv_write() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.locality = 0;
@@ -176,7 +176,7 @@ fn test_session_tag_validation() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.locality = 0;
@@ -216,7 +216,7 @@ fn test_strip_trailing_zeros_bug() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.locality = 0;
@@ -315,7 +315,7 @@ fn test_no_nv_writes_stress() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.locality = 0;
@@ -366,7 +366,7 @@ fn test_strict_session_tag_validation() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.locality = 0;
@@ -404,7 +404,7 @@ fn test_multiple_sessions_error() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.locality = 0;

@@ -346,7 +346,7 @@ pub fn with_test_engine<R>(f: impl FnOnce(&mut TestEngine<'_>, &mut GlobalState)
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, FakeRng::new());
     let mut tpm = TpmEngine::new(platform).expect("TpmEngine::new failed");
     let mut global_state = GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
     f(&mut tpm, &mut global_state)

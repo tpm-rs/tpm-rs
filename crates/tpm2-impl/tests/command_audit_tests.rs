@@ -355,7 +355,7 @@ fn setup_tpm<'a>(
     let platform = TpmPlatform::new(crypto, storage, timer, FakeRng::new());
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
     global_state.g_nv_ok = true;
@@ -491,7 +491,7 @@ fn test_get_command_audit_digest_with_rsa_signing_key() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup
     let startup_request = hex!("8001 0000000c 00000144 0000");
@@ -565,7 +565,7 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
     global_state.init_zeroed();
     // Intentionally test with audit_hash_alg = 0
     global_state.audit_hash_alg = 0;
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = hex!("8001 0000000c 00000144 0000");
     let mut response = [0u8; 1024];

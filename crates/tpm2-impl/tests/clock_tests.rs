@@ -16,7 +16,7 @@ fn test_read_clock_success() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.g_nv_ok = true;
 
@@ -60,7 +60,7 @@ fn test_read_clock_after_reset() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.g_nv_ok = true;
 
@@ -225,7 +225,7 @@ fn test_clock_set_success() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.g_nv_ok = true;
 
@@ -269,7 +269,7 @@ fn test_clock_set_backward_fails() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.g_nv_ok = true;
 
@@ -299,7 +299,7 @@ fn test_clock_rate_adjust_modes() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.g_nv_ok = true;
 
@@ -341,7 +341,7 @@ fn test_time_epoch_monotonic_persistence_and_resume_preservation() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.g_nv_ok = true;
 
@@ -395,7 +395,7 @@ fn test_read_clock_g_time_vs_clock_separation_and_migration_semantics() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.g_nv_ok = true;
 

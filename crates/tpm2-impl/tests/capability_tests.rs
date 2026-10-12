@@ -21,7 +21,7 @@ fn test_get_capability_commands_parity() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = [
         0x80, 0x01, // tag: TPM_ST_NO_SESSIONS
@@ -78,7 +78,7 @@ fn test_test_parms_error_codes() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = [
         0x80, 0x01, // tag: TPM_ST_NO_SESSIONS
@@ -154,7 +154,7 @@ fn test_get_capability_pcr_extend_l2() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = [
         0x80, 0x01, // tag: TPM_ST_NO_SESSIONS
@@ -217,7 +217,7 @@ fn test_get_capability_pcr_reset_l2() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = [
         0x80, 0x01, // tag: TPM_ST_NO_SESSIONS
@@ -273,7 +273,7 @@ fn test_get_capability_loaded_and_saved_sessions() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = [
         0x80, 0x01, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x01, 0x44, 0x00, 0x00,
@@ -404,7 +404,7 @@ fn test_ecc_parameters_invalid_curves() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = [
         0x80, 0x01, // tag: TPM_ST_NO_SESSIONS
@@ -485,7 +485,7 @@ fn test_get_capability_vendor_string() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = [
         0x80, 0x01, // tag: TPM_ST_NO_SESSIONS
@@ -549,7 +549,7 @@ fn test_get_capability_auth_policies_nullable_and_set_primary_policy() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup CLEAR
     let startup_request = [
@@ -715,7 +715,7 @@ fn test_get_capability_tpm_spec_properties() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = [
         0x80, 0x01, // tag: TPM_ST_NO_SESSIONS

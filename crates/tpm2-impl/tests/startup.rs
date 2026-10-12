@@ -22,7 +22,7 @@ fn test_startup_clear_twice_fails() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -54,7 +54,7 @@ fn test_startup_too_many_bytes() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -81,7 +81,7 @@ fn stress_startup_parameter_bounds() {
         let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
         let mut tpm = TpmEngine::new(platform).unwrap();
         let mut global_state = tpm2_impl::GlobalState::default();
-        tpm.init_storage(&mut global_state);
+        tpm.init_storage(&mut global_state).unwrap();
         global_state.nv_available = true;
         global_state.locality = 0;
         global_state.orderly_state = 0x0001;
@@ -120,7 +120,7 @@ fn test_startup_clear() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -148,7 +148,7 @@ fn test_startup_invalid_su() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -173,7 +173,7 @@ fn test_startup_command_size_error() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -203,7 +203,7 @@ fn test_startup_state() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
     global_state.orderly_state = 0x0001;
@@ -233,7 +233,7 @@ fn test_startup_called_twice() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -268,7 +268,7 @@ fn test_adv_startup_missing_state() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -293,7 +293,7 @@ fn test_adv_total_reset_count_overflow() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
     global_state.total_reset_count = u64::MAX;
@@ -319,7 +319,7 @@ fn test_adv_nv_uninitialized_check() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = false;
     global_state.locality = 0;
 
@@ -344,7 +344,7 @@ fn test_adv_startup_locality_4_drtm() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.drtm_pre_startup = true;
     global_state.locality = 4;
@@ -370,7 +370,7 @@ fn test_orderly_clear() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
     global_state.orderly_state = 0x0000; // TPM_SU_CLEAR
@@ -402,7 +402,7 @@ fn test_adv_nv_storage_failure() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -427,7 +427,7 @@ fn test_startup_state_clears_transient_objects_and_sequences() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -500,7 +500,7 @@ fn test_shutdown_state_invalidated_by_pcr_extend() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -566,7 +566,7 @@ fn test_shutdown_state_invalidated_by_hierarchy_change_auth_platform() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -616,7 +616,7 @@ fn test_startup_populates_platform_unique_details_and_get_capability_returns_rh_
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 
@@ -673,7 +673,7 @@ fn test_startup_preserves_custom_platform_unique_details_and_allows_policy_secre
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.locality = 0;
 

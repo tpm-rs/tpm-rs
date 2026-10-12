@@ -388,8 +388,6 @@ pub struct GlobalState {
     pub clock_offset: i64,
     /// Current adjustment to the clock update rate (mutated via TPM2_ClockRateAdjust).
     pub clock_rate_adjust: tpm2::TpmClockAdjust,
-    /// Platform seeds.
-    pub seeds: [u8; 32],
     /// PCR state.
     pub pcrs: PcrState,
     /// Per-PCR authorization value for the PCR authorization group (PCRs 20-22, matching `gc.pcrAuthValues`).
@@ -626,7 +624,6 @@ impl Default for GlobalState {
             in_shadow_execution: false,
             clock_offset: 0,
             clock_rate_adjust: tpm2::TpmClockAdjust::NoChange,
-            seeds: [0; 32],
             pcrs: PcrState::default(),
             pcr_auth_value: OwnedAuth::default(),
             pcr_policy_alg: None,
@@ -1199,19 +1196,34 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
         Ok(obj)
     }
 
-    pub fn init_storage(&mut self, global_state: &mut GlobalState) {
-        let seeds = global_state.seeds;
-        global_state.sp_seed[..32].copy_from_slice(&seeds);
-        global_state.sp_seed_size = 32;
-        for (i, &s) in seeds.iter().enumerate() {
-            global_state.pp_seed[i] = s ^ 0x50;
-            global_state.ep_seed[i] = s ^ 0x45;
+    /// Manufactures the TPM: generates new primary seeds and hierarchy proofs, and replaces the
+    /// stored hierarchy state with them.
+    ///
+    /// Like `TPM_Manufacture` in the reference implementation, the seeds and proofs are
+    /// independent random values. They come from a freshly seeded backend RNG
+    /// ([`Random::rng`](tpm2::crypto::Random::rng)), not from the platform RNG.
+    pub fn init_storage(&mut self, global_state: &mut GlobalState) -> Result<(), TpmRc> {
+        let mut rng = self.platform.crypto.rng().map_err(|_| TpmRc::FAILURE)?;
+        for secret in [
+            &mut global_state.sp_seed,
+            &mut global_state.pp_seed,
+            &mut global_state.ep_seed,
+            &mut global_state.sh_proof,
+            &mut global_state.eh_proof,
+            &mut global_state.ph_proof,
+        ] {
+            rng.fill_bytes(secret).map_err(|_| TpmRc::FAILURE)?;
         }
-        global_state.pp_seed_size = 32;
-        global_state.ep_seed_size = 32;
+        global_state.sp_seed_size = 64;
+        global_state.pp_seed_size = 64;
+        global_state.ep_seed_size = 64;
+        global_state.sh_proof_size = 64;
+        global_state.eh_proof_size = 64;
+        global_state.ph_proof_size = 64;
         let mut storage = StorageManager::new(&mut *self.platform.storage);
         let _ = storage.undefine_space(0x00FFFFFF);
         self.save_hierarchy_auths(global_state);
+        Ok(())
     }
 
     /// Creates a new [`TpmEngine`] object that processes incoming TPM requests.
@@ -1252,15 +1264,6 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
 
     pub fn reset(&mut self, global_state: &mut GlobalState) {
         global_state.reset_in_place();
-        let seeds = global_state.seeds;
-        global_state.sp_seed[..32].copy_from_slice(&seeds);
-        global_state.sp_seed_size = 32;
-        for (i, &s) in seeds.iter().enumerate() {
-            global_state.pp_seed[i] = s ^ 0x50;
-            global_state.ep_seed[i] = s ^ 0x45;
-        }
-        global_state.pp_seed_size = 32;
-        global_state.ep_seed_size = 32;
         self.restore_hierarchy_auths(global_state);
     }
 

@@ -18,7 +18,7 @@ fn test_adv_context_save_keystream_reuse() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.locality = 0;
@@ -115,7 +115,7 @@ fn test_context_save_session_success() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.sp_seed_size = 32;
