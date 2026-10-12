@@ -1,5 +1,7 @@
 use tpm2::errors::Position;
-use tpm2::{Handle, TpmCc, TpmSu};
+use tpm2::{Handle, Tpm2bName, TpmCc, TpmSu};
+
+use crate::owned::OwnedName;
 
 /// `TPM_RH_UNASSIGNED` (TPM 2.0 Part 2, Section 7.4, Table 30).
 ///
@@ -54,6 +56,23 @@ pub(crate) fn strip_trailing_zeros(slice: &[u8]) -> &[u8] {
         len -= 1;
     }
     &slice[..len]
+}
+
+/// Returns the value a session bound to an entity records to identify it
+/// (`SessionComputeBoundEntity` in the reference implementation): the entity's Name,
+/// zero-padded to the size of a `TPMU_NAME`, with the entity's authValue (without trailing
+/// zeros) XORed into its last bytes.
+///
+/// Returns `None` if `name` or `auth` is longer than a `TPMU_NAME`.
+pub(crate) fn bound_entity(name: &[u8], auth: &[u8]) -> Option<OwnedName> {
+    let mut buf = [0u8; Tpm2bName::CAP];
+    buf.get_mut(..name.len())?.copy_from_slice(name);
+    let auth = strip_trailing_zeros(auth);
+    let start = buf.len().checked_sub(auth.len())?;
+    for (b, a) in buf[start..].iter_mut().zip(auth) {
+        *b ^= a;
+    }
+    OwnedName::from_bytes(&buf).ok()
 }
 
 /// Compares two byte slices for equality in a way that attempts to avoid timing side-channels.
@@ -115,5 +134,25 @@ mod tests {
         assert!(constant_time_eq(&[1, 2, 3], &[1, 2, 3]));
         assert!(!constant_time_eq(&[1, 2, 3], &[1, 2, 4]));
         assert!(!constant_time_eq(&[1, 2], &[1, 2, 3]));
+    }
+
+    #[test]
+    fn bound_entity_pads_name_and_xors_auth() {
+        // A SHA-512 Name (2-byte nameAlg + 64-byte digest) fills the whole buffer.
+        let bound = bound_entity(&[0x11; 66], &[0xFF, 0x00]).unwrap();
+        let bound = bound.get_buffer();
+        assert_eq!(bound.len(), 66);
+        assert_eq!(bound[..65], [0x11; 65]);
+        assert_eq!(bound[65], 0x11 ^ 0xFF);
+
+        // Shorter Names are zero-padded before the authValue is XORed in.
+        let bound = bound_entity(&[0xAA; 34], &[0x01, 0x02]).unwrap();
+        let bound = bound.get_buffer();
+        assert_eq!(bound.len(), 66);
+        assert_eq!(bound[..34], [0xAA; 34]);
+        assert_eq!(bound[34..64], [0; 30]);
+        assert_eq!(bound[64..], [0x01, 0x02]);
+
+        assert!(bound_entity(&[0; 67], &[]).is_none());
     }
 }
