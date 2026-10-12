@@ -235,7 +235,10 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         }
         .map_err(|_| TpmRc::FAILURE)?;
 
-        if mac.get(..mac_len) != Some(expected_mac) {
+        if !mac
+            .get(..mac_len)
+            .is_some_and(|mac| crate::util::constant_time_eq(mac, expected_mac))
+        {
             return Err(TpmRc::INTEGRITY.to_rc());
         }
         Ok(())

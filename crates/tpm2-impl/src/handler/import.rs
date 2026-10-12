@@ -469,7 +469,10 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     self.compute_hash(name_alg, &[integrity_data_slice, object_name.get_buffer()])?;
 
                 if computed_inner_mac_len != inner_integrity_len
-                    || hash_bytes[..computed_inner_mac_len] != *inner_mac_bytes
+                    || !crate::util::constant_time_eq(
+                        &hash_bytes[..computed_inner_mac_len],
+                        inner_mac_bytes,
+                    )
                 {
                     return Err(TpmRc::INTEGRITY.to_rc());
                 }
