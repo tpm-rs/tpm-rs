@@ -533,9 +533,6 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         &mut self,
         request: &mut RequestThenResponse<'_, '_>,
     ) -> Result<([TpmsAuthResponse<'static>; 3], usize), TpmRc> {
-        if !self.state().in_shadow_execution {
-            self.state_mut().sessions_validated_by_handler = true;
-        }
         let mut session_responses = [TpmsAuthResponse::default(); 3];
         let mut num_sessions = 0;
 
