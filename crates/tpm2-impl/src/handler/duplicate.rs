@@ -13,9 +13,8 @@ use tpm2::commands::{Duplicate, responses};
 use tpm2::crypto::{Direction, Ecc, ModeIv, Rsa, RsaEncryptScheme, SymmetricKey, kdfa, kdfe};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    Alg, AlgSym, Tpm2b, Tpm2bData, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bPrivate, Tpm2bSensitive,
-    TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsEccPoint,
-    TpmtSensitive,
+    Alg, AlgSym, Tpm2b, Tpm2bData, Tpm2bEncryptedSecret, Tpm2bPrivate, Tpm2bSensitive, TpmaObject,
+    TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsEccPoint, TpmtSensitive,
 };
 
 use super::crypt_ops::{
@@ -259,7 +258,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         // holds it directly (ML-DSA / ML-KEM: the 32 / 64-byte private seed).
         let tpmt_sensitive = TpmtSensitive {
             auth_value: target_obj.auth.as_tpm2b(),
-            seed_value: Tpm2bDigest::new(&target_obj.seed).ok_or(TpmRc::FAILURE)?,
+            seed_value: target_obj.seed.as_tpm2b(),
             sensitive: target_obj.sensitive.as_tpmu(),
         };
 

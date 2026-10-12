@@ -67,7 +67,7 @@ fn test_adv_mac_key_type_confusion() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -124,7 +124,7 @@ fn test_adv_rsa_decrypt_signing_only() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -182,7 +182,7 @@ fn test_adv_sign_storage_only() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -232,7 +232,7 @@ fn test_adv_verify_signature_keyed_hash_success() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -295,7 +295,7 @@ fn test_adv_mac_unsupported_hash() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -433,7 +433,7 @@ fn test_adv_rsa_decrypt_restricted_key() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -493,7 +493,7 @@ fn test_adv_verify_signature_missing_sign_attribute() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -545,7 +545,7 @@ fn test_adv_verify_signature_keyed_hash_public_only() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -624,7 +624,7 @@ fn test_ecdh_zgen_success() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -690,7 +690,7 @@ fn test_ecdh_zgen_key_attributes_error() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -755,7 +755,7 @@ fn test_ecdh_zgen_scheme_error() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -817,7 +817,7 @@ fn test_ecdh_zgen_key_type_error() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -882,7 +882,7 @@ fn test_ecdh_zgen_public_only_key_error() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),

@@ -196,7 +196,7 @@ fn test_engine_sign_validation_ticket_parameter_position() {
     };
     global_state.transient_objects[0] = Some(tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: public.into(),
@@ -520,7 +520,7 @@ fn test_engine_sensitive_rsa_key_bits_and_ecc_point_unmarshalling_errors() {
     };
     global_state.transient_objects[0] = Some(tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: public.into(),
@@ -597,7 +597,7 @@ fn test_engine_sensitive_rsa_key_bits_and_ecc_point_unmarshalling_errors() {
     };
     global_state.transient_objects[1] = Some(tpm2_impl::handler::TransientObject {
         handle: commit_key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: commit_public.into(),
@@ -733,7 +733,7 @@ fn test_verify_signature_and_policy_signed_reject_null_signature() {
     };
     global_state.transient_objects[0] = Some(tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: public.into(),
@@ -880,7 +880,7 @@ fn test_engine_object_public_null_name_alg_validation() {
     };
     global_state.transient_objects[0] = Some(tpm2_impl::handler::TransientObject {
         handle: 0x80000000,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: parent_public.into(),
@@ -1044,7 +1044,7 @@ fn test_engine_rsa_encrypt_and_decrypt_reject_signature_schemes_on_unmarshal() {
     };
     global_state.transient_objects[0] = Some(tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: tpm2::Tpm2bName::default().into(),
         auth: tpm2::Tpm2bAuth::default().into(),
         public: public.into(),

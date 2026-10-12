@@ -21,7 +21,7 @@ use tpm2::{AlgSym, Handle, Tpm2bContextData, Tpm2bDigest, TpmHt, TpmtSymDef};
 use tpm2::{TpmSe, TpmiAlgHash};
 
 struct TransientObjectFields {
-    seed: [u8; 32],
+    seed: OwnedDigest,
     name: OwnedName,
     auth: OwnedAuth,
     public: OwnedPublic,
@@ -291,8 +291,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         let mut slice = sensitive_buf;
         let _h = u32::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
 
-        let (seed, rest) = slice.split_first_chunk::<32>().ok_or(TpmRc::FAILURE)?;
-        slice = rest;
+        let seed = OwnedDigest::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
 
         let name = OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let auth = OwnedAuth::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
@@ -306,7 +305,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
 
         Ok((
             TransientObjectFields {
-                seed: *seed,
+                seed,
                 name,
                 auth,
                 public,

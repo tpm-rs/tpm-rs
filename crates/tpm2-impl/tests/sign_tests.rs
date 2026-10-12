@@ -52,7 +52,7 @@ fn test_sign_restricted_without_ticket_returns_rc_ticket() {
     };
     let obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -128,7 +128,7 @@ fn test_sequential_sign_under_auth_sessions_executes_cleanly() {
     };
     let obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -210,7 +210,7 @@ fn test_sign_invalid_hash_alg_returns_rc_value() {
     };
     let obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -284,7 +284,7 @@ fn test_sequential_sign_under_policy_auth_session_executes_cleanly() {
     };
     let obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -487,7 +487,7 @@ fn test_sign_ecdaa_invalid_commit_returns_rc_value() {
     };
     let obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: public.into(),

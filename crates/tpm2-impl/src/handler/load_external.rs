@@ -2,8 +2,8 @@ use crate::Crypto;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::{CommandHandler, TransientObject};
 use crate::owned::{
-    OwnedAuth, OwnedEccParameter, OwnedPrivateKeyRsa, OwnedPublic, OwnedSensitiveComposite,
-    OwnedSensitiveData, OwnedSymKey,
+    OwnedAuth, OwnedDigest, OwnedEccParameter, OwnedPrivateKeyRsa, OwnedPublic,
+    OwnedSensitiveComposite, OwnedSensitiveData, OwnedSymKey,
 };
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
@@ -147,11 +147,12 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         // 4. Volatile storage allocation
         let (index, handle) = self.global_state.find_empty_transient_slot(false)?;
 
-        // Compute seed (copy first 32 bytes of name, or zero)
-        let mut seed = [0u8; 32];
-        let name_bytes = name.get_buffer();
-        let copy_len = core::cmp::min(name_bytes.len(), seed.len());
-        seed[..copy_len].copy_from_slice(&name_bytes[..copy_len]);
+        // PORTING: exp used the first 32 bytes of the Name as the seed; the object now keeps
+        // the `seedValue` of `inPrivate` (empty for a public-only load).
+        let seed = match &cmd.in_private {
+            Some(in_private) => OwnedDigest::from(in_private.0.seed_value),
+            None => OwnedDigest::default(),
+        };
 
         let auth_val = match &cmd.in_private {
             Some(in_private) => OwnedAuth::from(in_private.0.auth_value),

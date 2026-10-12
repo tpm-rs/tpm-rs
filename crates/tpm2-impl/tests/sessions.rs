@@ -110,7 +110,7 @@ fn test_start_auth_session_public_only_key_fails() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),

@@ -116,8 +116,9 @@ use tpm2::{
 pub struct TransientObject {
     /// The transient handle assigned to this object (e.g., in the 0x80xxxxxx range).
     pub handle: u32,
-    /// The random seed value associated with this object, used for key generation or derivation.
-    pub seed: [u8; 32],
+    /// The object's `seedValue` (`TPMT_SENSITIVE.seedValue`). For a storage parent, the
+    /// symmetric and integrity keys protecting its children are derived from it.
+    pub seed: OwnedDigest,
     /// The cryptographically derived name of the object.
     pub name: OwnedName,
     /// The authorization value or policy required to use this object.
@@ -139,7 +140,7 @@ pub struct TransientObject {
 
 impl TransientObject {
     /// Maximum size of a record produced by [`TransientObject::marshal_persistent`].
-    pub const MAX_PERSISTENT_SIZE: usize = 32
+    pub const MAX_PERSISTENT_SIZE: usize = OwnedDigest::MAX_SIZE
         + OwnedName::MAX_SIZE
         + OwnedAuth::MAX_SIZE
         + OwnedPublic::MAX_SIZE
@@ -148,11 +149,12 @@ impl TransientObject {
         + u32::MAX_SIZE;
 
     /// Serializes this object into the persistent (`TPM2_EvictControl`) NV record format:
-    /// `seed[32] | name | auth | public | sensitive | qualified_name | hierarchy(u32)`.
+    /// `seed | name | auth | public | sensitive | qualified_name | hierarchy(u32)`.
     ///
-    /// `sensitive` is the `TPM2B`-encoded `TPMU_SENSITIVE_COMPOSITE` member (selected by
-    /// `public.type` on load), so the byte layout matches exp's `u16 len | private[len]`.
-    /// Returns the number of bytes written.
+    /// `seed` is a `TPM2B_DIGEST`. `sensitive` is the `TPM2B`-encoded `TPMU_SENSITIVE_COMPOSITE`
+    /// member (selected by `public.type` on load). Returns the number of bytes written.
+    ///
+    /// PORTING: exp stored a fixed 32-byte seed, truncating SHA-384 and SHA-512 seeds.
     pub fn marshal_persistent(&self, buf: &mut [u8]) -> Result<usize, TpmRc> {
         fn put<const N: usize>(
             t: &impl Marshal<MaxBuffer = [u8; N]>,
@@ -166,10 +168,8 @@ impl TransientObject {
                 .copy_from_slice(&tmp[..len]);
             Ok(offset + len)
         }
-        buf.get_mut(..32)
-            .ok_or(TpmRc::FAILURE)?
-            .copy_from_slice(&self.seed);
-        let offset = put(&self.name, buf, 32)?;
+        let offset = put(&self.seed, buf, 0)?;
+        let offset = put(&self.name, buf, offset)?;
         let offset = put(&self.auth, buf, offset)?;
         let offset = put(&self.public, buf, offset)?;
         let offset = put(&self.sensitive, buf, offset)?;
@@ -182,7 +182,8 @@ impl TransientObject {
     /// The returned object has `handle` set to `handle` and `st_clear == false`. Any malformed
     /// record yields [`TpmRc::FAILURE`].
     pub fn unmarshal_persistent(handle: u32, buf: &[u8]) -> Result<Self, TpmRc> {
-        let (seed, mut slice) = buf.split_first_chunk::<32>().ok_or(TpmRc::FAILURE)?;
+        let mut slice = buf;
+        let seed = OwnedDigest::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let name = OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let auth = OwnedAuth::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let public = OwnedPublic::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
@@ -192,7 +193,7 @@ impl TransientObject {
         let hierarchy = u32::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         Ok(Self {
             handle,
-            seed: *seed,
+            seed,
             name,
             auth,
             public,
@@ -201,6 +202,17 @@ impl TransientObject {
             hierarchy,
             st_clear: false,
         })
+    }
+
+    /// Reads the Name and authValue from the start of a record written by
+    /// [`TransientObject::marshal_persistent`] (they precede the variable-size public area, so
+    /// `buf` may be a prefix of the record).
+    pub fn persistent_name_and_auth(buf: &[u8]) -> Option<(OwnedName, OwnedAuth)> {
+        let mut slice = buf;
+        OwnedDigest::unmarshal(&mut slice).ok()?;
+        let name = OwnedName::unmarshal(&mut slice).ok()?;
+        let auth = OwnedAuth::unmarshal(&mut slice).ok()?;
+        Some((name, auth))
     }
 }
 

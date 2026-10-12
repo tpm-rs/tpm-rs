@@ -207,7 +207,7 @@ fn create_transient_ecc_key(
 
     let obj = TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: name.into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -251,7 +251,7 @@ fn create_transient_rsa_key(
 
     let obj = TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: name.into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),

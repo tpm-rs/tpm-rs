@@ -200,7 +200,7 @@ fn insert_keyed_hash_key(
 
     let obj = tpm2_impl::handler::TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: name.into(),
         auth: (Tpm2bAuth::new(auth).unwrap()).into(),
         public: public.into(),

@@ -185,7 +185,7 @@ fn test_flush_context_transient_vs_session() {
 
     let obj = TransientObject {
         handle: transient_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: (public_val).into(),
@@ -308,7 +308,7 @@ fn test_flush_context_exhaustive_prefixes() {
 
         let obj = TransientObject {
             handle: transient_handle,
-            seed: [0u8; 32],
+            seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
             name: (tpm2::Tpm2bName::default()).into(),
             auth: (tpm2::Tpm2bAuth::default()).into(),
             public: (public_val).into(),

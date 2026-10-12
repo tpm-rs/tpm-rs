@@ -474,7 +474,7 @@ fn test_certify_qualified_name_and_signer_exact_accumulation() {
     let signer_qn = Tpm2bName::new(&[10, 11, 12, 13]).unwrap();
     let signer_obj = TransientObject {
         handle: signer_handle.0,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -504,7 +504,7 @@ fn test_certify_qualified_name_and_signer_exact_accumulation() {
     let certified_qn = Tpm2bName::new(&[20, 21, 22, 23]).unwrap();
     let certified_obj = TransientObject {
         handle: certified_handle.0,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[7, 8, 9]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -608,7 +608,7 @@ fn test_aliased_primary_object_hierarchy_synchronization_in_certify() {
 
     let primary_obj_1 = TransientObject {
         handle: primary_handle_1,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (primary_name).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -639,7 +639,7 @@ fn test_aliased_primary_object_hierarchy_synchronization_in_certify() {
 
     let rsa_child_obj = TransientObject {
         handle: rsa_child_handle.0,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (rsa_child_name).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -667,7 +667,7 @@ fn test_aliased_primary_object_hierarchy_synchronization_in_certify() {
 
     let certified_obj = TransientObject {
         handle: certified_handle.0,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (certified_name).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -711,7 +711,7 @@ fn test_aliased_primary_object_hierarchy_synchronization_in_certify() {
 
     let primary_obj_2 = TransientObject {
         handle: primary_handle_2,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (primary_name).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -811,7 +811,7 @@ fn test_certify_with_ecdaa_scheme() {
     let certified_handle = Handle(0x80000001);
     let certified_obj = TransientObject {
         handle: certified_handle.0,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -830,7 +830,7 @@ fn test_certify_with_ecdaa_scheme() {
     let signer_handle = Handle(0x80000002);
     let signer_obj = TransientObject {
         handle: signer_handle.0,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {

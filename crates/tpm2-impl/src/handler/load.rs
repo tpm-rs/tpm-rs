@@ -2,7 +2,7 @@ use crate::Crypto;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::handler::object_helpers::null_name_alg_error;
-use crate::owned::{OwnedAuth, OwnedName, OwnedPublic};
+use crate::owned::{OwnedAuth, OwnedDigest, OwnedName, OwnedPublic};
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
@@ -156,7 +156,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         self.store_transient_object(
             index,
             handle,
-            sensitive_struct.seed_value.as_slice(),
+            OwnedDigest::from(sensitive_struct.seed_value),
             object_name,
             OwnedAuth::from(sensitive_struct.auth_value),
             OwnedPublic::from(public_struct),

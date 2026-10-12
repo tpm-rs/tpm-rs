@@ -517,7 +517,7 @@ fn test_persistent_object_handle_name_mismatch() {
     let real_name = Tpm2bName::new(&[1, 2, 3, 4, 5]).unwrap();
     let transient_obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: real_name.into(),
         auth: (Tpm2bAuth::new(&[0x11, 0x22]).unwrap()).into(),
         public: (TpmtPublic {
