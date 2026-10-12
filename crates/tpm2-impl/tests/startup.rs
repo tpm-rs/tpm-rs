@@ -386,9 +386,10 @@ fn test_orderly_clear() {
     tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
     assert_eq!(rc, 0);
-    assert_eq!(global_state.clear_count, 1);
-    assert_eq!(global_state.restart_count, 1);
-    assert_eq!(global_state.reset_count, 0);
+    // Startup(CLEAR) after Shutdown(CLEAR) is a TPM Reset (Part 1, "Startup").
+    assert_eq!(global_state.clear_count, 0);
+    assert_eq!(global_state.restart_count, 0);
+    assert_eq!(global_state.reset_count, 1);
 }
 
 #[test]

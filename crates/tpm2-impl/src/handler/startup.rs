@@ -372,6 +372,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             self.nv_sync_persistent_failed_tries()?;
         }
 
+        // Part 1, "Startup": only a preceding Shutdown(STATE) gives a TPM Resume (Startup(STATE))
+        // or TPM Restart (Startup(CLEAR)). Startup(CLEAR) after Shutdown(CLEAR), or with no
+        // orderly shutdown, is a TPM Reset.
         let startup: u8;
         if prev_orderly_state == 0x0001 && self.global_state.g_nv_ok {
             if startup_type == 0x0001 {
@@ -379,8 +382,6 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             } else {
                 startup = 1;
             }
-        } else if prev_orderly_state == 0x0000 && self.global_state.g_nv_ok {
-            startup = 1;
         } else {
             startup = 0;
         }
