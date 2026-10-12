@@ -380,8 +380,6 @@ pub struct GlobalState {
     pub parsed_auths: [OwnedAuthCommand; 3],
     /// The number of parsed authorization sessions.
     pub parsed_auths_len: usize,
-    /// Flag indicating if the authorization sessions have been validated by the command handler.
-    pub sessions_validated_by_handler: bool,
     /// The handle of the session that currently holds the exclusive audit lock, if any.
     pub exclusive_audit_session: Option<u32>,
     /// Indicates whether the TPM is currently executing a shadow command (which bypasses auth checks).
@@ -624,7 +622,6 @@ impl Default for GlobalState {
                 OwnedAuthCommand::default(),
             ],
             parsed_auths_len: 0,
-            sessions_validated_by_handler: false,
             exclusive_audit_session: None,
             in_shadow_execution: false,
             clock_offset: 0,
@@ -755,7 +752,6 @@ impl GlobalState {
             *auth = Default::default();
         }
         self.parsed_auths_len = 0;
-        self.sessions_validated_by_handler = false;
         self.exclusive_audit_session = None;
         self.in_shadow_execution = false;
         self.clock_rate_adjust = tpm2::TpmClockAdjust::NoChange;
@@ -2060,7 +2056,6 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
             .copy_from_slice(cmd.parameters);
 
         // Track validation state and route to execution
-        global_state.sessions_validated_by_handler = false;
         global_state.parsed_auths[..cmd.auth_sessions_len]
             .copy_from_slice(&cmd.auth_sessions[..cmd.auth_sessions_len]);
         global_state.parsed_auths_len = cmd.auth_sessions_len;
@@ -2134,26 +2129,15 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
                 }
             }
 
-            if global_state.sessions_validated_by_handler {
-                self.process_response_parameters_with_handler_validation(
-                    global_state,
-                    cmd,
-                    cc,
-                    command_code,
-                    resp_buffer,
-                    &nonces_tpm_new,
-                )
-            } else {
-                self.process_response_parameters_without_handler_validation(
-                    global_state,
-                    cmd,
-                    cc,
-                    command_code,
-                    shadow_len,
-                    resp_buffer,
-                    &nonces_tpm_new,
-                )
-            }
+            self.process_response_parameters(
+                global_state,
+                cmd,
+                cc,
+                command_code,
+                shadow_len,
+                resp_buffer,
+                &nonces_tpm_new,
+            )
         } else {
             if shadow_res.is_err() {
                 for auth in &cmd.auth_sessions[..cmd.auth_sessions_len] {
@@ -3170,415 +3154,11 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
         Ok(())
     }
 
-    /// Process response parameters when authorization was validated inside the command handler.
-    fn process_response_parameters_with_handler_validation(
-        &mut self,
-        global_state: &mut GlobalState,
-        cmd: &ParsedCommand,
-        cc: TpmCc,
-        command_code: u32,
-        resp_buffer: &mut [u8],
-        nonces_tpm_new: &[Option<OwnedNonce>],
-    ) -> Result<usize, TpmRc> {
-        // Formatting response with sessions (tag 0x8002)
-        if resp_buffer.len() < 2 {
-            return Err(TpmRc::MEMORY);
-        }
-        resp_buffer[0..2].copy_from_slice(&0x8002u16.to_be_bytes());
-
-        let resp_handles_size = command_resp_handles_size(cc);
-
-        let mut param_size_bytes = [0u8; 4];
-        if resp_buffer.len() < 14 + resp_handles_size {
-            return Err(TpmRc::MEMORY);
-        }
-        param_size_bytes
-            .copy_from_slice(&resp_buffer[10 + resp_handles_size..14 + resp_handles_size]);
-        let param_size = usize::try_from(u32::from_be_bytes(param_size_bytes))
-            .map_err(|_| TpmRc::SIZE.to_rc())?;
-
-        if param_size > MAX_MESSAGE_SIZE {
-            return Err(TpmRc::SIZE.to_rc());
-        }
-        let mut resp_params = [0u8; MAX_MESSAGE_SIZE];
-        if param_size > 0 {
-            if resp_buffer.len() < 14 + resp_handles_size + param_size {
-                return Err(TpmRc::MEMORY);
-            }
-            resp_params[..param_size].copy_from_slice(
-                &resp_buffer[14 + resp_handles_size..14 + resp_handles_size + param_size],
-            );
-        }
-
-        // Response parameter encryption
-        if param_size > 0 {
-            let encrypt_session_idx = {
-                let mut idx = None;
-                for (i, auth) in cmd
-                    .auth_sessions
-                    .iter()
-                    .enumerate()
-                    .take(cmd.auth_sessions_len)
-                {
-                    let session_handle = auth.session_handle.0;
-                    if (0x02000000..=0x03FFFFFF).contains(&session_handle)
-                        && auth.session_attributes.0 & 0x40 != 0
-                    {
-                        idx = Some(i);
-                        break;
-                    }
-                }
-                idx
-            };
-
-            if let Some(i) = encrypt_session_idx {
-                let first_auth = &cmd.auth_sessions[i];
-                let session_handle = first_auth.session_handle.0;
-                let mut session_key_buf = [0u8; 128];
-                let session_key_len;
-                let (
-                    symmetric,
-                    auth_hash,
-                    _bind_entity,
-                    _bound_entity,
-                    _is_policy,
-                    _is_auth_value_needed,
-                    _is_password_needed,
-                ) = {
-                    let session_state = global_state
-                        .session(session_handle)
-                        .ok_or(TpmRc::HANDLE.with(crate::util::session_position(i)))?;
-                    session_key_buf[..session_state.session_key_len].copy_from_slice(
-                        &session_state.session_key[..session_state.session_key_len],
-                    );
-                    session_key_len = session_state.session_key_len;
-                    (
-                        session_state.symmetric,
-                        session_state.auth_hash,
-                        session_state.bind_entity,
-                        session_state.bound_entity,
-                        session_state.session_type == TpmSe::Policy,
-                        session_state.is_auth_value_needed,
-                        session_state.is_password_needed,
-                    )
-                };
-
-                let (is_xor, key_bytes, sym_alg) = match symmetric {
-                    Some(tpm2::TpmtSymDef::Obj(sym_obj)) => {
-                        if sym_obj.mode != Some(CFB_MODE) {
-                            return Err(TpmRc::MODE.with(Position::session(1)));
-                        }
-                        (false, sym_obj.alg.key_bytes(), Some(sym_obj.alg))
-                    }
-                    Some(tpm2::TpmtSymDef::Xor(_)) => (true, 0, None),
-                    None => {
-                        return Err(TpmRc::SYMMETRIC.with(Position::session(1)));
-                    }
-                };
-
-                let entity_auth = if i < cmd.session_to_handle_idx_len {
-                    let h_idx = cmd.session_to_handle_idx[i];
-                    if matches!(cc, TpmCc::SequenceComplete | TpmCc::EventSequenceComplete) {
-                        cmd.handle_auths[h_idx]
-                    } else {
-                        self.handle_auth(global_state, cmd.handles[h_idx])
-                    }
-                } else {
-                    OwnedAuth::default()
-                };
-
-                let entity_auth_stripped =
-                    crate::util::strip_trailing_zeros(entity_auth.get_buffer());
-                let mut kdfa_key = [0u8; 256];
-                let kdfa_key_len = session_key_len + entity_auth_stripped.len();
-                if kdfa_key_len > 256 {
-                    return Err(TpmRc::FAILURE);
-                }
-                kdfa_key[..session_key_len].copy_from_slice(&session_key_buf[..session_key_len]);
-                kdfa_key[session_key_len..kdfa_key_len].copy_from_slice(entity_auth_stripped);
-
-                let nonce_tpm_new =
-                    nonces_tpm_new[i].expect("nonce was generated for session handle");
-
-                if param_size < 2 {
-                    return Err(TpmRc::SIZE.to_rc());
-                }
-                let first_param_size =
-                    usize::from(u16::from_be_bytes([resp_params[0], resp_params[1]]));
-                if param_size < 2 + first_param_size {
-                    return Err(TpmRc::SIZE.to_rc());
-                }
-
-                if is_xor {
-                    xor_obfuscation(
-                        self.platform.crypto,
-                        auth_hash,
-                        &kdfa_key[..kdfa_key_len],
-                        nonce_tpm_new.get_buffer(),
-                        first_auth.nonce.get_buffer(),
-                        &mut resp_params[2..2 + first_param_size],
-                    )?;
-                } else {
-                    let sym_alg =
-                        sym_alg.ok_or_else(|| TpmRc::SYMMETRIC.with(Position::session(1)))?;
-                    let mut derived_key = [0u8; 64];
-                    let mut derived_iv = [0u8; 16];
-                    derive_key_and_iv(
-                        self.platform.crypto,
-                        auth_hash,
-                        &kdfa_key[..kdfa_key_len],
-                        c"CFB",
-                        nonce_tpm_new.get_buffer(),
-                        first_auth.nonce.get_buffer(),
-                        key_bytes,
-                        &mut derived_key[..key_bytes],
-                        &mut derived_iv,
-                    )?;
-
-                    let mut iv = derived_iv;
-                    let sym_key = SymmetricKey::new(sym_alg, &derived_key[..key_bytes])
-                        .ok_or_else(|| TpmRc::SYMMETRIC.with(Position::session(1)))?;
-                    tpm2::crypto::encrypt(
-                        self.platform.crypto,
-                        sym_key,
-                        ModeIv::Cfb(&mut iv),
-                        &mut resp_params[2..2 + first_param_size],
-                    )
-                    .map_err(|_| TpmRc::SYMMETRIC.with(Position::session(1)))?;
-                }
-
-                if resp_buffer.len() < 14 + resp_handles_size + param_size {
-                    return Err(TpmRc::MEMORY);
-                }
-                resp_buffer[14 + resp_handles_size..14 + resp_handles_size + param_size]
-                    .copy_from_slice(&resp_params[..param_size]);
-            }
-        }
-
-        let rp_hash_input_len = 4 + 4 + param_size;
-        if rp_hash_input_len > MAX_MESSAGE_SIZE {
-            return Err(TpmRc::SIZE.to_rc());
-        }
-        let mut rp_hash_input = [0u8; MAX_MESSAGE_SIZE];
-        rp_hash_input[0..4].copy_from_slice(&0u32.to_be_bytes());
-        rp_hash_input[4..8].copy_from_slice(&command_code.to_be_bytes());
-        rp_hash_input[8..rp_hash_input_len].copy_from_slice(&resp_params[..param_size]);
-
-        let mut session_responses_buf = [0u8; 1024];
-        let mut session_responses_len = 0;
-        for (i, auth) in cmd.auth_sessions[..cmd.auth_sessions_len]
-            .iter()
-            .enumerate()
-        {
-            let session_handle = auth.session_handle.0;
-            if !(0x02000000..=0x03FFFFFF).contains(&session_handle) {
-                let continue_bit = (auth.session_attributes.0 & 1) | 1;
-                let session_resp = TpmsAuthResponse {
-                    nonce: Tpm2bNonce::default(),
-                    session_attributes: TpmaSession(continue_bit),
-                    hmac: tpm2::Tpm2bData::default(),
-                };
-                if session_responses_len + TpmsAuthResponse::MAX_SIZE > session_responses_buf.len()
-                {
-                    return Err(TpmRc::MEMORY);
-                }
-                session_responses_len += session_resp.marshal(
-                    (&mut session_responses_buf[session_responses_len
-                        ..session_responses_len + TpmsAuthResponse::MAX_SIZE])
-                        .try_into()
-                        .unwrap(),
-                );
-                continue;
-            }
-
-            let nonce_tpm_new = nonces_tpm_new[i].expect("nonce was generated for session handle");
-            let mut resp_attrs = auth.session_attributes.0 & !0x60;
-            if auth.session_attributes.0 & 0x80 != 0 {
-                if global_state.exclusive_audit_session == Some(session_handle) {
-                    resp_attrs |= 0x02;
-                } else {
-                    resp_attrs &= !0x02;
-                }
-            }
-
-            let mut session_key_buf = [0u8; 128];
-            let session_key_len;
-            let (auth_hash, _nonce_caller, include_auth, _is_policy) = {
-                let session_state = global_state
-                    .session(session_handle)
-                    .ok_or(TpmRc::HANDLE.with(crate::util::session_position(i)))?;
-                session_key_buf[..session_state.session_key_len]
-                    .copy_from_slice(&session_state.session_key[..session_state.session_key_len]);
-                session_key_len = session_state.session_key_len;
-                let is_policy = session_state.session_type == tpm2::TpmSe::Policy;
-                let is_bound = session_state.bind_entity != Handle::RH_NULL
-                    || session_state.bound_entity.get_size() > 0;
-                let include_auth = (!is_policy && !is_bound)
-                    || (is_policy
-                        && (session_state.is_auth_value_needed
-                            || session_state.is_password_needed))
-                    || session_state.include_auth;
-                (
-                    session_state.auth_hash,
-                    session_state.nonce_caller,
-                    include_auth,
-                    is_policy,
-                )
-            };
-
-            let mut rp_hash = [0u8; 64];
-            let rp_hash_len = compute_hash(
-                self.platform.crypto,
-                auth_hash,
-                &rp_hash_input[..rp_hash_input_len],
-                &mut rp_hash,
-            )?;
-
-            let entity_auth = if i < cmd.session_to_handle_idx_len {
-                let h_idx = cmd.session_to_handle_idx[i];
-                if matches!(cc, TpmCc::SequenceComplete | TpmCc::EventSequenceComplete) {
-                    cmd.handle_auths[h_idx]
-                } else {
-                    self.handle_auth(global_state, cmd.handles[h_idx])
-                }
-            } else {
-                OwnedAuth::default()
-            };
-
-            let mut hmac_key = [0u8; 256];
-            let entity_auth_stripped = crate::util::strip_trailing_zeros(entity_auth.get_buffer());
-            let hmac_key_len = if include_auth {
-                session_key_len + entity_auth_stripped.len()
-            } else {
-                session_key_len
-            };
-            if hmac_key_len > 256 {
-                return Err(TpmRc::FAILURE);
-            }
-            hmac_key[..session_key_len].copy_from_slice(&session_key_buf[..session_key_len]);
-            if include_auth {
-                hmac_key[session_key_len..hmac_key_len].copy_from_slice(entity_auth_stripped);
-            }
-
-            let mut updates_hmac_refs: [&[u8]; 4] = [&[]; 4];
-            updates_hmac_refs[0] = &rp_hash[..rp_hash_len];
-            updates_hmac_refs[1] = nonce_tpm_new.get_buffer();
-            updates_hmac_refs[2] = auth.nonce.get_buffer();
-            let attr_byte = [resp_attrs];
-            updates_hmac_refs[3] = &attr_byte;
-
-            let mut hmac_res = [0u8; 64];
-            let hmac_res_len = if hmac_key_len == 0 && auth.hmac.get_size() == 0 {
-                0
-            } else {
-                compute_response_hmac(
-                    self.platform.crypto,
-                    auth_hash,
-                    &hmac_key[..hmac_key_len],
-                    &updates_hmac_refs,
-                    &mut hmac_res,
-                )?
-            };
-
-            let session_resp = TpmsAuthResponse {
-                nonce: nonce_tpm_new.as_tpm2b(),
-                session_attributes: TpmaSession(resp_attrs),
-                hmac: tpm2::Tpm2bData::new(&hmac_res[..hmac_res_len]).ok_or(TpmRc::MEMORY)?,
-            };
-
-            if session_responses_len + TpmsAuthResponse::MAX_SIZE > session_responses_buf.len() {
-                return Err(TpmRc::MEMORY);
-            }
-            session_responses_len += session_resp.marshal(
-                (&mut session_responses_buf
-                    [session_responses_len..session_responses_len + TpmsAuthResponse::MAX_SIZE])
-                    .try_into()
-                    .unwrap(),
-            );
-
-            let continue_session = (resp_attrs & 1) != 0;
-            if let Some(session_state) = global_state.session_mut(session_handle) {
-                if session_state.audit_cp_hash_len > 0 {
-                    let mut extend_buf = [0u8; 192];
-                    let d_len = session_state.audit_digest_len;
-                    if let Some(ref d) = session_state.audit_digest {
-                        extend_buf[..d_len].copy_from_slice(&d[..d_len]);
-                    } else {
-                        extend_buf[..d_len].fill(0);
-                    }
-                    let cp_len = session_state.audit_cp_hash_len;
-                    extend_buf[d_len..d_len + cp_len]
-                        .copy_from_slice(&session_state.audit_cp_hash[..cp_len]);
-                    extend_buf[d_len + cp_len..d_len + cp_len + rp_hash_len]
-                        .copy_from_slice(&rp_hash[..rp_hash_len]);
-
-                    let mut new_digest = [0u8; 64];
-                    let new_digest_len = compute_hash(
-                        self.platform.crypto,
-                        auth_hash,
-                        &extend_buf[..d_len + cp_len + rp_hash_len],
-                        &mut new_digest,
-                    )?;
-                    let mut d_array = [0u8; 64];
-                    d_array[..new_digest_len].copy_from_slice(&new_digest[..new_digest_len]);
-                    session_state.audit_digest = Some(d_array);
-                    session_state.audit_digest_len = new_digest_len;
-                    session_state.audit_cp_hash_len = 0;
-                }
-                session_state.nonce_tpm = nonce_tpm_new;
-                if auth.session_attributes.0 & 0x80 != 0 {
-                    session_state.bind_entity = Handle::RH_NULL;
-                    session_state.bound_entity = OwnedName::default();
-                }
-                if session_state.session_type == tpm2::TpmSe::Policy
-                    && i < cmd.session_to_handle_idx_len
-                {
-                    session_state.policy_digest[..session_state.policy_digest_len].fill(0);
-                    session_state.command_code = 0;
-                    session_state.command_locality = 0;
-                    session_state.pcr_counter = None;
-                    session_state.is_cp_hash_defined = false;
-                    session_state.policy_hash[..].fill(0);
-                    session_state.policy_hash_len = 0;
-                    session_state.is_name_hash_defined = false;
-                    session_state.is_template_hash_defined = false;
-                    session_state.is_auth_value_needed = false;
-                    session_state.is_password_needed = false;
-                    session_state.check_nv_written = false;
-                    session_state.nv_written_state = false;
-                }
-            }
-
-            if !continue_session {
-                global_state.remove_session(session_handle);
-            }
-        }
-
-        if session_responses_len > 0 {
-            if resp_buffer.len() < 14 + resp_handles_size + param_size + session_responses_len {
-                return Err(TpmRc::MEMORY);
-            }
-            resp_buffer[14 + resp_handles_size + param_size
-                ..14 + resp_handles_size + param_size + session_responses_len]
-                .copy_from_slice(&session_responses_buf[..session_responses_len]);
-        }
-
-        let new_len = 14 + resp_handles_size + param_size + session_responses_len;
-        if resp_buffer.len() < 6 {
-            return Err(TpmRc::MEMORY);
-        }
-        resp_buffer[2..6].copy_from_slice(
-            &u32::try_from(new_len)
-                .map_err(|_| TpmRc::MEMORY)?
-                .to_be_bytes(),
-        );
-
-        Ok(new_len)
-    }
-
-    /// Process response parameters when authorization was NOT validated inside the command handler.
+    /// Builds the response for a command with sessions: encrypts the first response parameter,
+    /// computes the rpHash and response HMACs, updates audit digests and policy sessions, and
+    /// appends the response sessions.
     #[allow(clippy::too_many_arguments)]
-    fn process_response_parameters_without_handler_validation(
+    fn process_response_parameters(
         &mut self,
         global_state: &mut GlobalState,
         cmd: &ParsedCommand,
