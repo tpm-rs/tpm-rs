@@ -328,14 +328,18 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             let mut sym_key_iv = [0u8; AlgSym::MAX_KEY_BYTES];
             let mut integrity_key = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
 
-            let obj_name_alg = object_public_struct.name_alg.ok_or(TpmRc::HASH.to_rc())?;
-            let obj_digest_size = obj_name_alg.digest_size();
+            // The outer wrapper uses the parent's nameAlg (TPM 2.0 Part 1, "Outer Duplication
+            // Wrapper").
+            //
+            // PORTING: exp used the imported object's nameAlg.
+            let parent_name_alg = parent_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+            let parent_digest_size = parent_name_alg.digest_size();
             let integrity_key = integrity_key
-                .get_mut(..obj_digest_size)
+                .get_mut(..parent_digest_size)
                 .ok_or(TpmRc::FAILURE)?;
             kdfa(
                 crypto,
-                obj_name_alg,
+                parent_name_alg,
                 &seed[..seed_len],
                 c"INTEGRITY",
                 &[],
@@ -346,7 +350,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             let outer_key = sym_key_iv.get_mut(..outer_key_len).ok_or(TpmRc::FAILURE)?;
             kdfa(
                 crypto,
-                obj_name_alg,
+                parent_name_alg,
                 &seed[..seed_len],
                 c"STORAGE",
                 object_name.get_buffer(),
@@ -357,7 +361,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
 
             let (computed_mac_bytes, computed_mac_len) = self
                 .compute_hmac(
-                    obj_name_alg,
+                    parent_name_alg,
                     integrity_key,
                     &[encrypted_blob, object_name.get_buffer()],
                 )

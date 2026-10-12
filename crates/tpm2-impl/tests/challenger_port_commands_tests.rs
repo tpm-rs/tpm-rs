@@ -851,3 +851,174 @@ fn test_duplicate_import_load_roundtrip() {
     assert_eq!(loaded_obj.auth.get_buffer(), target_obj.auth.get_buffer());
     assert_eq!(loaded_obj.sensitive, target_obj.sensitive);
 }
+
+/// The outer duplication wrapper (its integrity HMAC and the keys derived from the seed) uses the
+/// new parent's nameAlg, not the duplicated object's (TPM 2.0 Part 1, "Outer Duplication Wrapper").
+#[test]
+fn test_duplicate_outer_wrapper_uses_new_parent_name_alg() {
+    let crypto = TestCryptoProvider;
+    let mut storage = FakeStorage::default();
+    let mut timer = FakeTimer;
+    let rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&crypto, &mut storage, &mut timer, &rng);
+
+    // A SHA-384 signing key (with a SHA-384-sized seed) to duplicate.
+    let target_rsa = Rsa::generate_key(
+        tpm.platform.crypto,
+        &mut tpm.platform.rng,
+        TpmiRsaKeyBits::Rsa2048,
+        0,
+    )
+    .unwrap();
+    let mut target_mod_buf = [0u8; TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
+    let target_modulus = target_rsa
+        .public_key()
+        .modulus(&mut target_mod_buf)
+        .unwrap();
+    let mut target_prime_buf = [0u8; TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES];
+    let target_prime_p = target_rsa.prime_p(&mut target_prime_buf).unwrap();
+    let target_public = TpmtPublic {
+        name_alg: Some(TpmiAlgHash::Sha384),
+        object_attributes: TpmaObject::SIGN_ENCRYPT | TpmaObject::USER_WITH_AUTH,
+        auth_policy: Tpm2bDigest::default(),
+        parms_and_id: PublicParmsAndId::Rsa(
+            TpmsRsaParms {
+                symmetric: None,
+                scheme: None,
+                key_bits: TpmiRsaKeyBits::Rsa2048,
+                exponent: 0,
+            },
+            target_modulus,
+        ),
+    };
+    let mut pub_buf = [0u8; 1024];
+    let pub_len = marshal_to_slice(&target_public, &mut pub_buf);
+    let handler = tpm2_impl::handler::CommandHandler::new(&mut tpm, &mut global_state);
+    let target_name = handler
+        .compute_name(target_public.name_alg, &pub_buf[..pub_len])
+        .unwrap();
+    let target_seed = tpm2_impl::owned::OwnedDigest::new(&[7u8; 48]).unwrap();
+    let target_handle = 0x80000001;
+    global_state.transient_objects[0] = Some(TransientObject {
+        handle: target_handle,
+        seed: target_seed,
+        name: target_name,
+        auth: Tpm2bAuth::default().into(),
+        public: target_public.into(),
+        sensitive: OwnedSensitiveComposite::Rsa(target_prime_p.into()),
+        qualified_name: target_name,
+        hierarchy: 0x40000001,
+        st_clear: false,
+    });
+
+    // A SHA-256 storage parent.
+    let parent_rsa = Rsa::generate_key(
+        tpm.platform.crypto,
+        &mut tpm.platform.rng,
+        TpmiRsaKeyBits::Rsa2048,
+        0,
+    )
+    .unwrap();
+    let mut parent_mod_buf = [0u8; TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
+    let parent_modulus = parent_rsa
+        .public_key()
+        .modulus(&mut parent_mod_buf)
+        .unwrap();
+    let mut parent_prime_buf = [0u8; TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES];
+    let parent_prime_p = parent_rsa.prime_p(&mut parent_prime_buf).unwrap();
+    let parent_handle = 0x80000002;
+    global_state.transient_objects[1] = Some(TransientObject {
+        handle: parent_handle,
+        seed: tpm2_impl::owned::OwnedDigest::new(&[3u8; 32]).unwrap(),
+        name: Tpm2bName::new(&[4, 5, 6]).unwrap().into(),
+        auth: Tpm2bAuth::default().into(),
+        public: TpmtPublic {
+            name_alg: Some(TpmiAlgHash::Sha256),
+            object_attributes: TpmaObject::DECRYPT
+                | TpmaObject::RESTRICTED
+                | TpmaObject::USER_WITH_AUTH,
+            auth_policy: Tpm2bDigest::default(),
+            parms_and_id: PublicParmsAndId::Rsa(
+                TpmsRsaParms {
+                    symmetric: Some(TpmtSymDefObject {
+                        alg: AlgSym::Aes128,
+                        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                    }),
+                    scheme: None,
+                    key_bits: TpmiRsaKeyBits::Rsa2048,
+                    exponent: 0,
+                },
+                parent_modulus,
+            ),
+        }
+        .into(),
+        sensitive: OwnedSensitiveComposite::Rsa(parent_prime_p.into()),
+        qualified_name: Tpm2bName::new(&[4, 5, 6]).unwrap().into(),
+        hierarchy: 0x40000001,
+        st_clear: false,
+    });
+
+    // Duplicate with only the outer wrapper: `duplicate` starts with the outer integrity HMAC.
+    let dup_resp = execute_tpm_command_with_auths(
+        &mut tpm,
+        &mut global_state,
+        &DuplicateHandles {
+            object_handle: Handle(target_handle),
+            new_parent_handle: Handle(parent_handle),
+        },
+        &Duplicate {
+            object_handle: Handle(target_handle),
+            new_parent_handle: Handle(parent_handle),
+            encryption_key_in: Tpm2bData::default(),
+            symmetric_alg: None,
+        },
+        &[],
+    )
+    .expect("Duplicate failed");
+    let duplicate = dup_resp.duplicate.as_slice();
+    assert_eq!(
+        usize::from(u16::from_be_bytes([duplicate[0], duplicate[1]])),
+        TpmiAlgHash::Sha256.digest_size()
+    );
+
+    // Import and load it back under the same parent; the full 48-byte seed survives.
+    let object_public = tpm2::Tpm2b(target_public);
+    let import_resp = execute_tpm_command_with_auths(
+        &mut tpm,
+        &mut global_state,
+        &ImportHandles {
+            parent_handle: Handle(parent_handle),
+        },
+        &Import {
+            parent_handle: Handle(parent_handle),
+            encryption_key: Tpm2bData::default(),
+            object_public,
+            duplicate: dup_resp.duplicate,
+            in_sym_seed: dup_resp.out_sym_seed,
+            symmetric_alg: None,
+        },
+        &[],
+    )
+    .expect("Import failed");
+    let load_resp = execute_tpm_command_with_auths(
+        &mut tpm,
+        &mut global_state,
+        &LoadHandles {
+            parent_handle: Handle(parent_handle),
+        },
+        &Load {
+            parent_handle: Handle(parent_handle),
+            in_private: import_resp.out_private,
+            in_public: object_public,
+        },
+        &[],
+    )
+    .expect("Load failed");
+    let loaded_obj = global_state
+        .transient_objects
+        .iter()
+        .flatten()
+        .find(|obj| obj.handle == load_resp.object_handle.0)
+        .expect("Loaded object not found in transient objects");
+    assert_eq!(loaded_obj.seed, target_seed);
+}
