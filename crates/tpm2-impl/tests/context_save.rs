@@ -138,10 +138,10 @@ fn test_context_save_session_success() {
             audit_cp_hash: [0u8; 64],
             audit_cp_hash_len: 0,
             policy_hash: [0u8; 64],
-            policy_hash_len: 0,
+            policy_hash_len: 32,
             is_cp_hash_defined: false,
             is_name_hash_defined: false,
-            is_template_hash_defined: false,
+            is_template_hash_defined: true,
             policy_digest: [0u8; 64],
             policy_digest_len: 32,
             command_code: 0,
@@ -182,4 +182,20 @@ fn test_context_save_session_success() {
 
     // Verify session is flushed from active RAM
     assert!(global_state.session(session_handle).is_none());
+
+    // ContextLoad restores the session, including its PolicyTemplate restriction.
+    let mut load_req = [0u8; 4096];
+    let load_len = 10 + marshal_to_slice(&rsp_parsed.context, &mut load_req[10..]);
+    marshal_to_slice(&(0x8001u16), &mut load_req[0..2]);
+    marshal_to_slice(&u32::try_from(load_len).unwrap(), &mut load_req[2..6]);
+    marshal_to_slice(&(0x161u32), &mut load_req[6..10]);
+    let mut load_rsp = [0u8; 4096];
+    tpm.execute_command_separate(&mut global_state, &load_req[..load_len], &mut load_rsp[..]);
+    assert_eq!(
+        u32::from_be_bytes([load_rsp[6], load_rsp[7], load_rsp[8], load_rsp[9]]),
+        0
+    );
+    let restored = global_state.session(session_handle).unwrap();
+    assert!(restored.is_template_hash_defined);
+    assert_eq!(restored.policy_hash_len, 32);
 }

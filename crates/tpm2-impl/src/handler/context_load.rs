@@ -352,6 +352,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
 
         let is_cp_hash_defined = u8::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? != 0;
         let is_name_hash_defined = u8::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? != 0;
+        let is_template_hash_defined = u8::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? != 0;
 
         let mut policy_digest = [0u8; 64];
         let policy_digest_len = read_sized(&mut slice, &mut policy_digest)?;
@@ -398,7 +399,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             policy_hash_len,
             is_cp_hash_defined,
             is_name_hash_defined,
-            is_template_hash_defined: false,
+            is_template_hash_defined,
             policy_digest,
             policy_digest_len,
             command_code,
