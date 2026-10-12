@@ -4384,16 +4384,13 @@ pub fn get_command_attribute(cc: TpmCc) -> tpm2::TpmaCc {
     ) {
         attr |= tpm2::TpmaCc::NV;
     }
-    if matches!(cc, TpmCc::HierarchyControl | TpmCc::Clear) {
-        attr |= tpm2::TpmaCc::EXTENSIVE;
-    }
     if matches!(
         cc,
-        TpmCc::SequenceComplete
-            | TpmCc::EventSequenceComplete
-            | TpmCc::NVUndefineSpace
-            | TpmCc::NVUndefineSpaceSpecial
+        TpmCc::HierarchyControl | TpmCc::Clear | TpmCc::ChangeEPS | TpmCc::ChangePPS
     ) {
+        attr |= tpm2::TpmaCc::EXTENSIVE;
+    }
+    if matches!(cc, TpmCc::SequenceComplete | TpmCc::EventSequenceComplete) {
         attr |= tpm2::TpmaCc::FLUSHED;
     }
     attr
