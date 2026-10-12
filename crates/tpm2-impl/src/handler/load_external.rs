@@ -1,5 +1,6 @@
 use crate::Crypto;
 use crate::handle_checks::{Tpmi, check};
+use crate::handler::object_helpers::check_pqc_key_parameters;
 use crate::handler::{CommandHandler, TransientObject};
 use crate::owned::{
     OwnedAuth, OwnedDigest, OwnedEccParameter, OwnedPrivateKeyRsa, OwnedPublic,
@@ -11,7 +12,7 @@ use crate::timer::TpmTimer;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{LoadExternal, responses};
-use tpm2::crypto::{Ecc, Rsa};
+use tpm2::crypto::{Ecc, Mldsa, Mlkem, Rsa};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, Marshal, PublicParmsAndId, Tpm2b, Tpm2bEccParameter, Tpm2bSensitive,
@@ -121,6 +122,12 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 false, // allow_null_name_alg
                 Position::parameter(2),
             )?;
+        } else {
+            let attr = public_struct.object_attributes;
+            if (attr.0 & 0xfff0_f009) != 0 {
+                return Err(TpmRc::RESERVED_BITS.with(Position::parameter(2)));
+            }
+            check_pqc_key_parameters(&public_struct, Position::parameter(2))?;
         }
         self.validate_public_parameters(&public_struct, false)?;
 
@@ -436,23 +443,71 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             }
             // The ML-DSA / ML-KEM private keys are their seeds (Part 1): 32 bytes for ML-DSA,
             // 64 bytes (`d || z`) for ML-KEM. Their sizes are checked by the unmarshal.
-            PublicParmsAndId::Mldsa(_, _) => {
+            PublicParmsAndId::Mldsa(parms, unique) => {
+                let unique_len = unique.as_slice().len();
+                if (!allow_empty_unique || unique_len > 0)
+                    && unique_len != parms.parameter_set.pub_key_bytes()
+                {
+                    return Err(TpmRc::KEY.with(pos_public));
+                }
                 let TpmuSensitiveComposite::Mldsa(Tpm2b(seed)) = sensitive_struct.sensitive else {
                     return Err(type_err);
                 };
+                if (!allow_empty_unique || unique_len > 0) && public_struct.name_alg.is_some() {
+                    let public = Mldsa::load_public(crypto, parms.parameter_set, *unique)
+                        .ok()
+                        .flatten()
+                        .ok_or(TpmRc::KEY.with(pos_public))?;
+                    Mldsa::load_private(crypto, public, Tpm2b(seed))
+                        .ok()
+                        .flatten()
+                        .ok_or(binding_err)?;
+                }
                 Ok(OwnedSensitiveComposite::Mldsa(*seed))
             }
-            PublicParmsAndId::HashMldsa(_, _) => {
+            PublicParmsAndId::HashMldsa(parms, unique) => {
+                let unique_len = unique.as_slice().len();
+                if (!allow_empty_unique || unique_len > 0)
+                    && unique_len != parms.parameter_set.pub_key_bytes()
+                {
+                    return Err(TpmRc::KEY.with(pos_public));
+                }
                 let TpmuSensitiveComposite::HashMldsa(Tpm2b(seed)) = sensitive_struct.sensitive
                 else {
                     return Err(type_err);
                 };
+                if (!allow_empty_unique || unique_len > 0) && public_struct.name_alg.is_some() {
+                    let public = Mldsa::load_public(crypto, parms.parameter_set, *unique)
+                        .ok()
+                        .flatten()
+                        .ok_or(TpmRc::KEY.with(pos_public))?;
+                    Mldsa::load_private(crypto, public, Tpm2b(seed))
+                        .ok()
+                        .flatten()
+                        .ok_or(binding_err)?;
+                }
                 Ok(OwnedSensitiveComposite::HashMldsa(*seed))
             }
-            PublicParmsAndId::Mlkem(_, _) => {
+            PublicParmsAndId::Mlkem(parms, unique) => {
+                let unique_len = unique.as_slice().len();
+                if (!allow_empty_unique || unique_len > 0)
+                    && unique_len != parms.parameter_set.pub_key_bytes()
+                {
+                    return Err(TpmRc::KEY.with(pos_public));
+                }
                 let TpmuSensitiveComposite::Mlkem(Tpm2b(seed)) = sensitive_struct.sensitive else {
                     return Err(type_err);
                 };
+                if (!allow_empty_unique || unique_len > 0) && public_struct.name_alg.is_some() {
+                    let public = Mlkem::load_public(crypto, parms.parameter_set, *unique)
+                        .ok()
+                        .flatten()
+                        .ok_or(TpmRc::KEY.with(pos_public))?;
+                    Mlkem::load_private(crypto, public, Tpm2b(seed))
+                        .ok()
+                        .flatten()
+                        .ok_or(binding_err)?;
+                }
                 Ok(OwnedSensitiveComposite::Mlkem(*seed))
             }
         }
@@ -550,14 +605,42 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
 
         // `validate_public_parameters` checked that the curve is supported and that both
         // coordinates have the curve size (exp left-padded them to it).
-        if let PublicParmsAndId::Ecc(ecc_parms, point) = &public_struct.parms_and_id
-            && public_struct.name_alg.is_some()
-            && !matches!(
-                Ecc::load_public(self.crypto(), ecc_parms.curve_id, *point),
-                Ok(Some(_))
-            )
-        {
-            return Err(TpmRc::ECC_POINT.with(Position::parameter(2)));
+        if public_struct.name_alg.is_some() {
+            match &public_struct.parms_and_id {
+                PublicParmsAndId::Ecc(ecc_parms, point)
+                    if !matches!(
+                        Ecc::load_public(self.crypto(), ecc_parms.curve_id, *point),
+                        Ok(Some(_))
+                    ) =>
+                {
+                    return Err(TpmRc::ECC_POINT.with(Position::parameter(2)));
+                }
+                PublicParmsAndId::Mldsa(parms, unique)
+                    if !matches!(
+                        Mldsa::load_public(self.crypto(), parms.parameter_set, *unique),
+                        Ok(Some(_))
+                    ) =>
+                {
+                    return Err(TpmRc::KEY.with(Position::parameter(2)));
+                }
+                PublicParmsAndId::HashMldsa(parms, unique)
+                    if !matches!(
+                        Mldsa::load_public(self.crypto(), parms.parameter_set, *unique),
+                        Ok(Some(_))
+                    ) =>
+                {
+                    return Err(TpmRc::KEY.with(Position::parameter(2)));
+                }
+                PublicParmsAndId::Mlkem(parms, unique)
+                    if !matches!(
+                        Mlkem::load_public(self.crypto(), parms.parameter_set, *unique),
+                        Ok(Some(_))
+                    ) =>
+                {
+                    return Err(TpmRc::KEY.with(Position::parameter(2)));
+                }
+                _ => {}
+            }
         }
         Ok(())
     }

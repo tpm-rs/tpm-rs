@@ -66,14 +66,23 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             self.resolve_attest_scheme(sign_handle, public_opt, cmd.in_scheme)?;
 
         // 4. Compute PCR digest across pcr_select using the hash algorithm from actual_in_scheme
-        // TODO(pqc): v185 errata: for signing schemes without a hash algorithm (pure ML-DSA,
-        // EdDSA) the PCR digest uses the signing key's nameAlg, and a TPM_ALG_NULL nameAlg is
-        // TPM_RC_SCHEME. exp (and this port) only supports schemes that carry a hash algorithm.
         let hash_alg = match actual_in_scheme {
             Some(TpmtSigScheme::Rsassa(h))
             | Some(TpmtSigScheme::Rsapss(h))
             | Some(TpmtSigScheme::Ecdsa(h)) => Some(h),
             Some(TpmtSigScheme::Ecdaa(s)) => Some(s.hash_alg),
+            Some(TpmtSigScheme::Mldsa) => Some(
+                signer_obj_opt
+                    .as_ref()
+                    .and_then(|s| s.public.name_alg)
+                    .ok_or(TpmRc::SCHEME.to_rc())?,
+            ),
+            Some(TpmtSigScheme::HashMldsa) => {
+                match signer_obj_opt.as_ref().map(|s| &s.public.parms_and_id) {
+                    Some(crate::owned::OwnedPublicParmsAndId::HashMldsa(p, _)) => Some(p.hash_alg),
+                    _ => return Err(TpmRc::SCHEME.to_rc()),
+                }
+            }
             None => {
                 if sign_handle != Handle::RH_NULL {
                     return Err(TpmRc::SCHEME.to_rc());

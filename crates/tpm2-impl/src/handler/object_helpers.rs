@@ -268,6 +268,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             OwnedPublicParmsAndId::Ecc(parms, _) => {
                 parms.symmetric.map_or(128, |s| s.alg.key_bits())
             }
+            OwnedPublicParmsAndId::Mlkem(parms, _) => {
+                parms.symmetric.map_or(128, |s| s.alg.key_bits())
+            }
             _ => 128,
         };
         if sym_bits == 0 {
@@ -523,9 +526,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     return Err(scheme_err);
                 }
             }
-            PublicParmsAndId::Mldsa(_, _)
-            | PublicParmsAndId::HashMldsa(_, _)
-            | PublicParmsAndId::Mlkem(_, _) => {}
+            PublicParmsAndId::Mldsa(..)
+            | PublicParmsAndId::HashMldsa(..)
+            | PublicParmsAndId::Mlkem(..) => check_pqc_key_parameters(public_struct, error_pos)?,
         }
 
         Ok(())
@@ -584,7 +587,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             || (!sensitive_data_origin
                 && matches!(
                     in_public_struct.parms_and_id,
-                    PublicParmsAndId::Rsa(_, _) | PublicParmsAndId::Ecc(_, _)
+                    PublicParmsAndId::Rsa(_, _)
+                        | PublicParmsAndId::Ecc(_, _)
+                        | PublicParmsAndId::Mldsa(_, _)
+                        | PublicParmsAndId::HashMldsa(_, _)
+                        | PublicParmsAndId::Mlkem(_, _)
                 ))
         {
             return Err(TpmRc::ATTRIBUTES.with(Position::parameter(2)));
@@ -774,4 +781,61 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             .map_err(|_| TpmRc::FAILURE)?;
         <[u8; 32]>::try_from(mac.digest()).map_err(|_| TpmRc::FAILURE)
     }
+}
+
+/// Checks the attributes and parameters that are specific to ML-DSA, HashML-DSA and ML-KEM keys
+/// (Part 2, `TPMS_MLDSA_PARMS`, `TPMS_HASH_MLDSA_PARMS` and `TPMS_MLKEM_PARMS`). Other key types
+/// are accepted.
+pub(crate) fn check_pqc_key_parameters(
+    public_struct: &TpmtPublic<'_>,
+    error_pos: Position,
+) -> Result<(), TpmRc> {
+    let attr = public_struct.object_attributes;
+    let restricted = attr.contains(TpmaObject::RESTRICTED);
+    let sign = attr.contains(TpmaObject::SIGN_ENCRYPT);
+    let decrypt = attr.contains(TpmaObject::DECRYPT);
+    let attr_err = TpmRc::ATTRIBUTES.with(error_pos);
+    match &public_struct.parms_and_id {
+        PublicParmsAndId::Mldsa(parms, _) => {
+            if !sign || decrypt {
+                return Err(attr_err);
+            }
+            // allowExternalMu implies that restricted is CLEAR (Part 3, "Signing overview").
+            if restricted && parms.allow_external_mu {
+                return Err(attr_err);
+            }
+        }
+        PublicParmsAndId::HashMldsa(parms, _) => {
+            if !sign || decrypt {
+                return Err(attr_err);
+            }
+            if !matches!(
+                parms.hash_alg,
+                TpmiAlgHash::Sha1 | TpmiAlgHash::Sha256 | TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512
+            ) {
+                return Err(TpmRc::HASH.with(error_pos));
+            }
+        }
+        PublicParmsAndId::Mlkem(parms, _) => {
+            if !decrypt || sign {
+                return Err(attr_err);
+            }
+            // Like other decryption keys, restricted ML-KEM keys are storage keys and need a
+            // symmetric algorithm (AES-CFB); unrestricted ones must not have one.
+            match (restricted, parms.symmetric) {
+                (false, Some(_)) | (true, None) => return Err(TpmRc::SYMMETRIC.with(error_pos)),
+                (true, Some(sym)) => {
+                    if !matches!(sym.alg, AlgSym::Aes128 | AlgSym::Aes256) {
+                        return Err(TpmRc::SYMMETRIC.with(error_pos));
+                    }
+                    if sym.mode != Some(TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)) {
+                        return Err(TpmRc::MODE.with(error_pos));
+                    }
+                }
+                (false, None) => {}
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }

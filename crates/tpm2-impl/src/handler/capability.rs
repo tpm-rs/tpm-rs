@@ -264,6 +264,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     (TpmPt::AuditCounter1, 0),
                     (TpmPt::AlgorithmSet, 0),
                     (TpmPt::LoadedCurves, 4),
+                    (TpmPt::MLParameterSets, 0x0000_007F),
                 ];
 
                 let mut all_sorted = all_properties;
@@ -535,6 +536,18 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                         Alg::ECB,
                         TpmaAlgorithm::SYMMETRIC | TpmaAlgorithm::ENCRYPTING,
                     ),
+                    (
+                        Alg::MLDSA,
+                        TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::OBJECT | TpmaAlgorithm::SIGNING,
+                    ),
+                    (
+                        Alg::HASH_MLDSA,
+                        TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::OBJECT | TpmaAlgorithm::SIGNING,
+                    ),
+                    (
+                        Alg::MLKEM,
+                        TpmaAlgorithm::ASYMMETRIC | TpmaAlgorithm::OBJECT,
+                    ),
                 ];
                 algs.sort_unstable_by_key(|&(alg, _)| alg.id());
                 let mut alg_properties = [TpmsAlgProperty::default(); TpmlAlgProperty::CAP];
@@ -734,7 +747,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
 
         let cmd = match request.try_unmarshal_command::<TestParms>([]) {
             Ok(c) => c,
-            Err(_) => {
+            Err(rc) => {
                 let buf = request.remaining_slice();
                 let is_valid_hash =
                     |h: u16| h == 0x0004 || h == 0x000B || h == 0x000C || h == 0x000D;
@@ -742,6 +755,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     |k: u16| k == 0x0007 || k == 0x0020 || k == 0x0021 || k == 0x0022;
                 if buf.len() >= 4 {
                     let selector = u16::from_be_bytes([buf[0], buf[1]]);
+                    // The ML-KEM and ML-DSA parameters unmarshal strictly, so their unmarshal
+                    // error is already precise.
+                    if [Alg::MLKEM, Alg::MLDSA, Alg::HASH_MLDSA].contains(&Alg::from(selector)) {
+                        return Err(rc);
+                    }
                     if selector == 0x0025 && buf.len() >= 8 {
                         let sym_alg = u16::from_be_bytes([buf[2], buf[3]]);
                         if sym_alg == 0x0006 {
@@ -912,10 +930,12 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             tpm2::TpmtPublicParms::Sym(parms) => {
                 validate_symmetric(Some(parms))?;
             }
-            tpm2::TpmtPublicParms::Mldsa(_)
-            | tpm2::TpmtPublicParms::HashMldsa(_)
-            | tpm2::TpmtPublicParms::Mlkem(_) => {
-                return Err(TpmRc::VALUE.with(Position::parameter(1)));
+            tpm2::TpmtPublicParms::Mldsa(_) => {}
+            tpm2::TpmtPublicParms::HashMldsa(parms) => {
+                validate_hash_alg(Some(parms.hash_alg))?;
+            }
+            tpm2::TpmtPublicParms::Mlkem(parms) => {
+                validate_symmetric(parms.symmetric)?;
             }
         }
 

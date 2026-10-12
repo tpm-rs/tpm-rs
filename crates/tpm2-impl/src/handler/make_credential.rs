@@ -9,11 +9,11 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{MakeCredential, responses};
-use tpm2::crypto::{Direction, Ecc, Rsa, RsaEncryptScheme, kdfa, kdfe};
+use tpm2::crypto::{Direction, Ecc, Mlkem, Rsa, RsaEncryptScheme, kdfa, kdfe};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     AlgSym, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bIdObject, TpmEccCurve, TpmaObject, TpmiAlgHash,
-    TpmiRsaKeyBits, TpmsEccPoint,
+    TpmiMlkemParms, TpmiRsaKeyBits, TpmsEccPoint,
 };
 
 use super::crypt_ops::{
@@ -87,6 +87,8 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         let seed = seed.get_mut(..digest_size).ok_or(TpmRc::FAILURE)?;
         let mut encrypted_seed = [0u8; TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
         let mut secret_buf = [0u8; TpmsEccPoint::MAX_SIZE];
+        let mut ct_buf = [0u8; TpmiMlkemParms::MAX_CT_BYTES];
+        let mut ss_buf = [0u8; TpmiMlkemParms::SHARED_SECRET_BYTES];
         let secret = match &protector_obj.public.parms_and_id {
             OwnedPublicParmsAndId::Rsa(parms, pub_key) => {
                 // Generate a random seed
@@ -162,6 +164,32 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 .map_err(|_| TpmRc::FAILURE)?;
                 secret
             }
+            OwnedPublicParmsAndId::Mlkem(parms, unique) => {
+                let crypto = self.crypto();
+                let pub_key = Mlkem::load_public(crypto, parms.parameter_set, unique.as_tpm2b())
+                    .ok()
+                    .flatten()
+                    .ok_or(TpmRc::KEY.with(Position::handle(1)))?;
+                let (ct, ss) = Mlkem::encapsulate(
+                    crypto,
+                    &mut self.context.platform.rng,
+                    &pub_key,
+                    &mut ct_buf,
+                    &mut ss_buf,
+                )
+                .map_err(|_| TpmRc::FAILURE)?;
+                kdfa(
+                    crypto,
+                    name_alg,
+                    ss.as_slice(),
+                    c"IDENTITY",
+                    ct.as_slice(),
+                    unique.get_buffer(),
+                    seed,
+                )
+                .map_err(|_| TpmRc::FAILURE)?;
+                Tpm2bEncryptedSecret::new(ct.as_slice()).ok_or(TpmRc::FAILURE)?
+            }
             _ => return Err(TpmRc::TYPE.with(Position::handle(1))),
         };
 
@@ -171,6 +199,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 .symmetric
                 .ok_or(TpmRc::ATTRIBUTES.with(Position::handle(1)))?,
             OwnedPublicParmsAndId::Ecc(parms, _) => parms
+                .symmetric
+                .ok_or(TpmRc::ATTRIBUTES.with(Position::handle(1)))?,
+            OwnedPublicParmsAndId::Mlkem(parms, _) => parms
                 .symmetric
                 .ok_or(TpmRc::ATTRIBUTES.with(Position::handle(1)))?,
             _ => return Err(TpmRc::TYPE.with(Position::handle(1))),

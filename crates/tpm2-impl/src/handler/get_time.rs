@@ -6,7 +6,8 @@ use crate::timer::TpmTimer;
 use crate::{
     handler::{CommandHandler, TransientObject},
     owned::{
-        OwnedEccParameter, OwnedPublic, OwnedPublicKeyRsa, OwnedPublicParmsAndId, OwnedSignature,
+        OwnedEccParameter, OwnedPublic, OwnedPublicKeyRsa, OwnedPublicParmsAndId,
+        OwnedSensitiveComposite, OwnedSignature, OwnedSignatureMldsa,
     },
     req_resp::RequestThenResponse,
 };
@@ -14,12 +15,13 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{GetTime, responses};
-use tpm2::crypto::{self, SignatureBuffer, SigningKey};
+use tpm2::crypto::{self, Mldsa, MldsaMessage, SignatureBuffer, SigningKey};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmGenerated};
 use tpm2::{
-    TpmEccCurve, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmsAttest, TpmsTimeAttestInfo,
-    TpmtEccScheme, TpmtRsaScheme, TpmtSigScheme, TpmtSignature, TpmuAttest,
+    Tpm2b, Tpm2bSignatureCtx, TpmEccCurve, TpmaObject, TpmiAlgHash, TpmiMldsaParms, TpmiRsaKeyBits,
+    TpmsAttest, TpmsTimeAttestInfo, TpmtEccScheme, TpmtHa, TpmtRsaScheme, TpmtSigScheme,
+    TpmtSignature, TpmuAttest,
 };
 
 /// Left-pads an ECC signature component to `size` bytes.
@@ -252,7 +254,14 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     Some(in_s)
                 }
             },
-            // TODO(pqc): ML-DSA / HashML-DSA signing keys are rejected with TPM_RC_KEY, as in exp.
+            OwnedPublicParmsAndId::Mldsa(..) => match in_scheme {
+                None | Some(TpmtSigScheme::Mldsa) => Some(TpmtSigScheme::Mldsa),
+                _ => return Err(TpmRc::SCHEME.to_rc()),
+            },
+            OwnedPublicParmsAndId::HashMldsa(..) => match in_scheme {
+                None | Some(TpmtSigScheme::HashMldsa) => Some(TpmtSigScheme::HashMldsa),
+                _ => return Err(TpmRc::SCHEME.to_rc()),
+            },
             _ => return Err(TpmRc::KEY.to_rc()),
         };
 
@@ -335,6 +344,63 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     .ok_or(TpmRc::FAILURE)?,
                 signature_s: padded_ecc_parameter(sig.signature_s.as_slice(), param_size)
                     .ok_or(TpmRc::FAILURE)?,
+            }
+        } else if actual_in_scheme == TpmtSigScheme::Mldsa {
+            let signer = signer.ok_or(TpmRc::FAILURE)?;
+            let OwnedPublicParmsAndId::Mldsa(parms, _) = &signer.public.parms_and_id else {
+                return Err(TpmRc::FAILURE);
+            };
+            let OwnedSensitiveComposite::Mldsa(seed) = &signer.sensitive else {
+                return Err(TpmRc::FAILURE);
+            };
+            let crypto = self.crypto();
+            let priv_key = Mldsa::derive_key(crypto, parms.parameter_set, Tpm2b(seed))
+                .map_err(|_| TpmRc::FAILURE)?;
+            let mut mldsa_sig_buf = [0u8; TpmiMldsaParms::MAX_SIG_BYTES];
+            let sig = Mldsa::sign(
+                crypto,
+                &mut self.context.platform.rng,
+                &priv_key,
+                MldsaMessage::Pure {
+                    context: Tpm2bSignatureCtx::default(),
+                    message: attest_bytes,
+                },
+                &mut mldsa_sig_buf,
+            )
+            .map_err(|_| TpmRc::FAILURE)?
+            .ok_or(TpmRc::NO_RESULT)?;
+            OwnedSignature::Mldsa(OwnedSignatureMldsa::from(sig))
+        } else if actual_in_scheme == TpmtSigScheme::HashMldsa {
+            let signer = signer.ok_or(TpmRc::FAILURE)?;
+            let OwnedPublicParmsAndId::HashMldsa(parms, _) = &signer.public.parms_and_id else {
+                return Err(TpmRc::FAILURE);
+            };
+            let OwnedSensitiveComposite::HashMldsa(seed) = &signer.sensitive else {
+                return Err(TpmRc::FAILURE);
+            };
+            let hash_alg = parms.hash_alg;
+            let (digest_buf, digest_len) = self.compute_hash(hash_alg, &[attest_bytes])?;
+            let digest = digest_buf.get(..digest_len).ok_or(TpmRc::FAILURE)?;
+            let tpmt_ha = TpmtHa::new(hash_alg, digest).ok_or(TpmRc::FAILURE)?;
+            let crypto = self.crypto();
+            let priv_key = Mldsa::derive_key(crypto, parms.parameter_set, Tpm2b(seed))
+                .map_err(|_| TpmRc::FAILURE)?;
+            let mut mldsa_sig_buf = [0u8; TpmiMldsaParms::MAX_SIG_BYTES];
+            let sig = Mldsa::sign(
+                crypto,
+                &mut self.context.platform.rng,
+                &priv_key,
+                MldsaMessage::PreHash {
+                    context: Tpm2bSignatureCtx::default(),
+                    digest: tpmt_ha,
+                },
+                &mut mldsa_sig_buf,
+            )
+            .map_err(|_| TpmRc::FAILURE)?
+            .ok_or(TpmRc::NO_RESULT)?;
+            OwnedSignature::HashMldsa {
+                hash: hash_alg,
+                sig: OwnedSignatureMldsa::from(sig),
             }
         } else {
             let hash_alg = match actual_in_scheme {

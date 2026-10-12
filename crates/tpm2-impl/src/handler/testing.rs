@@ -76,6 +76,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     | Alg::KDF1_SP800_56A
                     | Alg::KDF2
                     | Alg::KDF1_SP800_108
+                    | Alg::MLDSA
+                    | Alg::HASH_MLDSA
+                    | Alg::MLKEM
             ) {
                 return Err(TpmRc::VALUE.with(Position::parameter(1)));
             }

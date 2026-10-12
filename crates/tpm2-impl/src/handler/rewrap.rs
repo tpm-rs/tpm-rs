@@ -1,7 +1,7 @@
 use crate::Crypto;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::{CommandHandler, TransientObject};
-use crate::owned::OwnedPublicParmsAndId;
+use crate::owned::{OwnedPublicParmsAndId, OwnedSensitiveComposite};
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
@@ -9,11 +9,11 @@ use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{Rewrap, responses};
-use tpm2::crypto::{Direction, Ecc, Rsa, RsaEncryptScheme, kdfa, kdfe};
+use tpm2::crypto::{Direction, Ecc, Mlkem, Rsa, RsaEncryptScheme, kdfa, kdfe};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    AlgSym, Marshal, Tpm2bEncryptedSecret, Tpm2bPrivate, TpmHt, TpmaObject, TpmiAlgHash,
-    TpmiRsaKeyBits, TpmsEccPoint, Unmarshal,
+    AlgSym, Marshal, Tpm2b, Tpm2bEncryptedSecret, Tpm2bKemCiphertext, Tpm2bPrivate, TpmHt,
+    TpmaObject, TpmiAlgHash, TpmiMlkemParms, TpmiRsaKeyBits, TpmsEccPoint, Unmarshal,
 };
 
 use super::crypt_ops::{
@@ -150,6 +150,35 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     .map_err(|_| TpmRc::FAILURE)?;
                     digest_size
                 }
+                OwnedPublicParmsAndId::Mlkem(parms, unique) => {
+                    let value_err = TpmRc::VALUE.with(Position::parameter(3));
+                    let OwnedSensitiveComposite::Mlkem(priv_seed) = &old_parent_obj.sensitive
+                    else {
+                        return Err(value_err);
+                    };
+                    let crypto = self.crypto();
+                    let priv_key = Mlkem::derive_key(crypto, parms.parameter_set, Tpm2b(priv_seed))
+                        .map_err(|_| value_err)?;
+                    let ct = Tpm2bKemCiphertext::new(in_sym_seed).ok_or(value_err)?;
+                    let mut ss_buf = [0u8; TpmiMlkemParms::SHARED_SECRET_BYTES];
+                    let ss = Mlkem::decapsulate(crypto, &priv_key, ct, &mut ss_buf)
+                        .ok()
+                        .flatten()
+                        .ok_or(value_err)?;
+                    let name_alg = old_parent_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+                    let digest_size = name_alg.digest_size();
+                    kdfa(
+                        crypto,
+                        name_alg,
+                        ss.as_slice(),
+                        c"DUPLICATE",
+                        in_sym_seed,
+                        unique.get_buffer(),
+                        seed.get_mut(..digest_size).ok_or(TpmRc::FAILURE)?,
+                    )
+                    .map_err(|_| TpmRc::FAILURE)?;
+                    digest_size
+                }
                 _ => {
                     return Err(TpmRc::TYPE.with(Position::handle(1)));
                 }
@@ -236,6 +265,8 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         // 2. Produce Outer Wrap using newParent (if present)
         let mut encrypted_secret = [0u8; TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
         let mut out_sym_seed_buf = [0u8; TpmsEccPoint::MAX_SIZE];
+        let mut ct_buf = [0u8; TpmiMlkemParms::MAX_CT_BYTES];
+        let mut ss_buf = [0u8; TpmiMlkemParms::SHARED_SECRET_BYTES];
         let mut final_duplicate = [0u8; Tpm2bPrivate::CAP];
         let out_sym_seed;
         let out_duplicate;
@@ -323,6 +354,33 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     Tpm2bEncryptedSecret::new(&out_sym_seed_buf[..out_sym_seed_len])
                         .ok_or(TpmRc::FAILURE)?
                 }
+                OwnedPublicParmsAndId::Mlkem(parms, unique) => {
+                    let crypto = self.crypto();
+                    let pub_key =
+                        Mlkem::load_public(crypto, parms.parameter_set, unique.as_tpm2b())
+                            .ok()
+                            .flatten()
+                            .ok_or(TpmRc::KEY.with(Position::handle(2)))?;
+                    let (ct, ss) = Mlkem::encapsulate(
+                        crypto,
+                        &mut self.context.platform.rng,
+                        &pub_key,
+                        &mut ct_buf,
+                        &mut ss_buf,
+                    )
+                    .map_err(|_| TpmRc::FAILURE)?;
+                    kdfa(
+                        crypto,
+                        new_name_alg,
+                        ss.as_slice(),
+                        c"DUPLICATE",
+                        ct.as_slice(),
+                        unique.get_buffer(),
+                        new_seed,
+                    )
+                    .map_err(|_| TpmRc::FAILURE)?;
+                    Tpm2bEncryptedSecret::new(ct.as_slice()).ok_or(TpmRc::FAILURE)?
+                }
                 _ => {
                     return Err(TpmRc::TYPE.with(Position::handle(2)));
                 }
@@ -398,7 +456,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
     /// Looks up the old or new parent (`handle`, at handle position `pos`) of `TPM2_Rewrap`:
     /// a loaded transient object or a persistent object. Any lookup failure is
     /// `TPM_RC_HANDLE` at `pos`.
-    fn rewrap_parent(&mut self, handle: Handle, pos: Position) -> Result<TransientObject, TpmRc> {
+    pub(super) fn rewrap_parent(
+        &mut self,
+        handle: Handle,
+        pos: Position,
+    ) -> Result<TransientObject, TpmRc> {
         match handle.handle_type() {
             Some(TpmHt::Transient) => self
                 .global_state

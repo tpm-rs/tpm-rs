@@ -8,11 +8,11 @@ use tpm2::{
     Alg, Handle, Marshal, PublicParmsAndId, Tpm2b, Tpm2bAuth, Tpm2bData, Tpm2bDigest,
     Tpm2bEccParameter, Tpm2bLabel, Tpm2bName, Tpm2bNonce, Tpm2bNvPublic, Tpm2bPrivateKeyRsa,
     Tpm2bPublic, Tpm2bPublicKeyMldsa, Tpm2bPublicKeyMlkem, Tpm2bPublicKeyRsa, Tpm2bSensitiveData,
-    Tpm2bSized, Tpm2bSymKey, TpmaNv, TpmaObject, TpmaSession, TpmiAlgHash, TpmsAuthCommand,
-    TpmsDerive, TpmsEccParms, TpmsEccPoint, TpmsHashMldsaParms, TpmsMldsaParms, TpmsMlkemParms,
-    TpmsNvPublic, TpmsRsaParms, TpmsSignatureEcc, TpmsSignatureRsa, TpmtKeyedHashScheme,
-    TpmtPublic, TpmtPublicParms, TpmtSignature, TpmtSymDefObject, TpmuSensitiveComposite,
-    Unmarshal,
+    Tpm2bSignatureCtx, Tpm2bSignatureMldsa, Tpm2bSized, Tpm2bSymKey, TpmaNv, TpmaObject,
+    TpmaSession, TpmiAlgHash, TpmsAuthCommand, TpmsDerive, TpmsEccParms, TpmsEccPoint,
+    TpmsHashMldsaParms, TpmsMldsaParms, TpmsMlkemParms, TpmsNvPublic, TpmsRsaParms,
+    TpmsSignatureEcc, TpmsSignatureHashMldsa, TpmsSignatureRsa, TpmtKeyedHashScheme, TpmtPublic,
+    TpmtPublicParms, TpmtSignature, TpmtSymDefObject, TpmuSensitiveComposite, Unmarshal,
 };
 
 /// A fixed-capacity owned byte buffer mirroring a `TPM2B` structure (`size: u16` + `[u8; CAP]`).
@@ -136,10 +136,12 @@ impl_owned_marshal!(
     66 => 68,
     80 => 82,
     128 => 130,
+    255 => 257,
     256 => 258,
     512 => 514,
     1568 => 1570,
     2592 => 2594,
+    4627 => 4629,
 );
 
 impl<'a, const CAP: usize> Unmarshal<'a> for OwnedTpm2b<CAP> {
@@ -172,6 +174,8 @@ pub type OwnedSensitiveData = OwnedTpm2b<{ Tpm2bSensitiveData::CAP }>;
 pub type OwnedSymKey = OwnedTpm2b<{ Tpm2bSymKey::CAP }>;
 pub type OwnedPublicKeyMldsa = OwnedTpm2b<{ Tpm2bPublicKeyMldsa::CAP }>;
 pub type OwnedPublicKeyMlkem = OwnedTpm2b<{ Tpm2bPublicKeyMlkem::CAP }>;
+pub type OwnedSignatureMldsa = OwnedTpm2b<{ Tpm2bSignatureMldsa::CAP }>;
+pub type OwnedSignatureCtx = OwnedTpm2b<{ Tpm2bSignatureCtx::CAP }>;
 // PORTING: exp's `OwnedPrivateKeyMldsa` / `OwnedPrivateKeyMlkem` are gone: the
 // new `Tpm2bPrivateKeyMldsa` / `Tpm2bPrivateKeyMlkem` are fixed-size seeds
 // (`[u8; 32]` / `[u8; 64]`), stored directly in [`OwnedSensitiveComposite`].
@@ -518,6 +522,7 @@ impl<'a> Unmarshal<'a> for OwnedAuthCommand {
 }
 
 /// Owned equivalent of `TpmtSignature<'a>`.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnedSignature {
     Rsassa {
@@ -547,6 +552,11 @@ pub enum OwnedSignature {
         hash: TpmiAlgHash,
         signature_r: OwnedEccParameter,
         signature_s: OwnedEccParameter,
+    },
+    Mldsa(OwnedSignatureMldsa),
+    HashMldsa {
+        hash: TpmiAlgHash,
+        sig: OwnedSignatureMldsa,
     },
 }
 
@@ -596,6 +606,11 @@ impl OwnedSignature {
                 hash: *hash,
                 signature_r: signature_r.as_tpm2b(),
                 signature_s: signature_s.as_tpm2b(),
+            }),
+            Self::Mldsa(sig) => TpmtSignature::Mldsa(sig.as_tpm2b()),
+            Self::HashMldsa { hash, sig } => TpmtSignature::HashMldsa(TpmsSignatureHashMldsa {
+                hash: *hash,
+                signature: sig.as_tpm2b(),
             }),
         }
     }

@@ -48,11 +48,16 @@ fn create_template_error(params: &[u8]) -> Option<TpmRc> {
 
     if pub_bytes.len() >= 2 {
         let type_alg = read_alg(pub_bytes, 0)?;
-        if type_alg != Alg::RSA
-            && type_alg != Alg::KEYEDHASH
-            && type_alg != Alg::ECC
-            && type_alg != Alg::SYMCIPHER
-        {
+        if !matches!(
+            type_alg,
+            Alg::RSA
+                | Alg::KEYEDHASH
+                | Alg::ECC
+                | Alg::SYMCIPHER
+                | Alg::MLDSA
+                | Alg::HASH_MLDSA
+                | Alg::MLKEM
+        ) {
             return param_err(TpmRc::TYPE);
         }
     }
