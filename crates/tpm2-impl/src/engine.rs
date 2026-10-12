@@ -373,10 +373,6 @@ pub struct GlobalState {
     pub commit_x: [u8; 32],
     /// The P1 point passed to the last TPM2_Commit (`x || y`), if any.
     pub commit_p1: [u8; 64],
-    pub debug_expected_auth: [u8; 64],
-    pub debug_expected_auth_len: usize,
-    pub debug_provided_auth: [u8; 64],
-    pub debug_provided_auth_len: usize,
     /// A sequence number used for generating unique context identifiers for saved objects.
     pub context_counter: u64,
     pub object_context_counter: u64,
@@ -620,10 +616,6 @@ impl Default for GlobalState {
             commit_nonce: [0x5a; 64],
             commit_x: [0u8; 32],
             commit_p1: [0u8; 64],
-            debug_expected_auth: [0u8; 64],
-            debug_expected_auth_len: 0,
-            debug_provided_auth: [0u8; 64],
-            debug_provided_auth_len: 0,
             context_counter: 0,
             object_context_counter: 0,
             parsed_auths: [
@@ -2670,29 +2662,15 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
                     }
                 }
 
+                // The password must equal the entity's authValue once trailing zero octets are
+                // removed from both (`CheckPWAuthSession` in the reference implementation).
+                //
+                // PORTING: exp also accepted any non-empty prefix of the authValue, and copied
+                // the expected authValue into `GlobalState` when the check failed.
                 let expected_auth = self.handle_auth(global_state, handle);
-                let provided_hmac = auth.hmac.get_buffer();
-                let provided_stripped = crate::util::strip_trailing_zeros(provided_hmac);
-                let expected_stripped =
-                    crate::util::strip_trailing_zeros(expected_auth.get_buffer());
-                let matches_exact =
-                    crate::util::constant_time_eq(expected_stripped, provided_stripped);
-                let matches_trimmed = !matches_exact
-                    && !provided_stripped.is_empty()
-                    && expected_stripped.len() > provided_stripped.len()
-                    && crate::util::constant_time_eq(
-                        &expected_stripped[..provided_stripped.len()],
-                        provided_stripped,
-                    );
-                if !matches_exact && !matches_trimmed {
-                    let elen = expected_stripped.len().min(64);
-                    global_state.debug_expected_auth[..elen]
-                        .copy_from_slice(&expected_stripped[..elen]);
-                    global_state.debug_expected_auth_len = elen;
-                    let plen = provided_stripped.len().min(64);
-                    global_state.debug_provided_auth[..plen]
-                        .copy_from_slice(&provided_stripped[..plen]);
-                    global_state.debug_provided_auth_len = plen;
+                let provided = crate::util::strip_trailing_zeros(auth.hmac.get_buffer());
+                let expected = crate::util::strip_trailing_zeros(expected_auth.get_buffer());
+                if !crate::util::constant_time_eq(expected, provided) {
                     if self.has_da_protection(global_state, handle) {
                         if handle == 0x4000000A {
                             global_state.lockout_auth_enabled = false;
