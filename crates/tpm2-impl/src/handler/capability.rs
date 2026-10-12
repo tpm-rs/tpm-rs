@@ -163,9 +163,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 if self.global_state.disable_clear {
                     permanent_attr |= TPMA_PERMANENT_DISABLE_CLEAR;
                 }
-                if self.global_state.max_tries > 0
-                    && self.global_state.failed_tries >= self.global_state.max_tries
-                {
+                if self.global_state.failed_tries >= self.global_state.max_tries {
                     permanent_attr |= TPMA_PERMANENT_IN_LOCKOUT;
                 }
 
