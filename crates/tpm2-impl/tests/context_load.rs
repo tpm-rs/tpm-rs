@@ -35,7 +35,7 @@ fn test_adv_context_load_hmac_tampering() {
 
     global_state.transient_objects[0] = Some(TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),
@@ -126,7 +126,7 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
 
     global_state.transient_objects[0] = Some(TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),
@@ -216,7 +216,7 @@ fn test_context_load_fails_on_total_reset_count_and_st_clear_count_changes() {
 
     global_state.transient_objects[0] = Some(TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),

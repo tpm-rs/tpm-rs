@@ -2,7 +2,9 @@ use super::{KeyDerivationArgs, TransientObject};
 use crate::Crypto;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::object_helpers::{null_name_alg_error, unique_parts};
-use crate::owned::{OwnedAuth, OwnedPublic, OwnedPublicParmsAndId, OwnedSensitiveComposite};
+use crate::owned::{
+    OwnedAuth, OwnedDigest, OwnedPublic, OwnedPublicParmsAndId, OwnedSensitiveComposite,
+};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -184,7 +186,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         self.global_state.transient_parents[index] = Some(primary_handle.0);
         self.global_state.transient_objects[index] = Some(TransientObject {
             handle,
-            seed: stored_seed,
+            seed: OwnedDigest::new(&stored_seed).ok_or(TpmRc::FAILURE)?,
             name,
             auth: OwnedAuth::from(in_sensitive_struct.user_auth),
             public: in_public_struct,

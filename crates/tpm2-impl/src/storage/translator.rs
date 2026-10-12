@@ -636,8 +636,11 @@ impl TpmStateTranslator {
         offset += 4;
         slot[offset] = u8::from(obj.st_clear);
         offset += 1;
-        slot[offset..offset + 32].copy_from_slice(&obj.seed);
-        offset += 32;
+        offset += obj.seed.marshal(
+            (&mut slot[offset..offset + OwnedDigest::MAX_SIZE])
+                .try_into()
+                .map_err(|_| StorageError::OutOfBounds)?,
+        );
 
         offset += obj.name.marshal(
             (&mut slot[offset..offset + Tpm2bName::MAX_SIZE])
@@ -679,12 +682,7 @@ impl TpmStateTranslator {
         let hierarchy = u32::unmarshal(&mut slice).map_err(|_| StorageError::OutOfBounds)?;
         let st_clear = u8::unmarshal(&mut slice).map_err(|_| StorageError::OutOfBounds)? != 0;
 
-        if slice.len() < 32 {
-            return Err(StorageError::OutOfBounds);
-        }
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(&slice[..32]);
-        slice = &slice[32..];
+        let seed = OwnedDigest::unmarshal(&mut slice).map_err(|_| StorageError::OutOfBounds)?;
 
         let name: OwnedName = Tpm2bName::unmarshal(&mut slice)
             .map_err(|_| StorageError::OutOfBounds)?
@@ -1202,17 +1200,17 @@ mod tests {
         });
     }
 
-    #[test]
-    fn object_slot_round_trips_public_only_mlkem_object() {
+    /// A public-only ML-KEM object, as loaded by `TPM2_LoadExternal` without `inPrivate` (no
+    /// ML-KEM seed to store), with a SHA-512-sized object seed.
+    fn public_only_mlkem_object() -> TransientObject {
         fn name(fill: u8) -> OwnedName {
             let mut name = [fill; 34];
             name[..2].copy_from_slice(&0x000Bu16.to_be_bytes());
             OwnedName::new(&name).unwrap()
         }
-        // Loaded by `TPM2_LoadExternal` without `inPrivate`: no ML-KEM seed to store.
-        let obj = TransientObject {
+        TransientObject {
             handle: 0x8000_0000,
-            seed: [0x11; 32],
+            seed: OwnedDigest::new(&[0x11; 64]).unwrap(),
             name: name(0x22),
             auth: OwnedAuth::default(),
             public: OwnedPublic {
@@ -1231,15 +1229,37 @@ mod tests {
             qualified_name: name(0x33),
             hierarchy: Handle::RH_NULL.0,
             st_clear: false,
-        };
+        }
+    }
+
+    #[test]
+    fn object_slot_round_trips_public_only_mlkem_object() {
+        let obj = public_only_mlkem_object();
         let mut slot = [0u8; OBJECT_SLOT_SIZE];
         TpmStateTranslator::pack_transient_object(&obj, &mut slot).unwrap();
         let unpacked = TpmStateTranslator::unpack_transient_object(&slot).unwrap();
         assert_eq!(unpacked.handle, obj.handle);
+        assert_eq!(unpacked.seed, obj.seed);
         assert_eq!(unpacked.name, obj.name);
         assert_eq!(unpacked.qualified_name, obj.qualified_name);
         assert_eq!(unpacked.public, obj.public);
         assert_eq!(unpacked.sensitive, obj.sensitive);
+    }
+
+    #[test]
+    fn persistent_record_round_trips_full_size_seed() {
+        let obj = public_only_mlkem_object();
+        let mut buf = [0u8; TransientObject::MAX_PERSISTENT_SIZE];
+        let len = obj.marshal_persistent(&mut buf).unwrap();
+        let record = &buf[..len];
+        let restored = TransientObject::unmarshal_persistent(0x8100_0001, record).unwrap();
+        assert_eq!(restored.seed, obj.seed);
+        assert_eq!(restored.name, obj.name);
+        assert_eq!(restored.public, obj.public);
+        assert_eq!(
+            TransientObject::persistent_name_and_auth(&record[..200]),
+            Some((obj.name, obj.auth))
+        );
     }
 
     #[test]

@@ -502,7 +502,7 @@ fn test_certify_errors_and_bounds() {
     // Load certified object
     let certified_obj = TransientObject {
         handle: certified_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::new(&[0x11, 0x22]).unwrap()).into(),
         public: (TpmtPublic {
@@ -577,7 +577,7 @@ fn test_certify_errors_and_bounds() {
     // 3. Load a signer key that is NOT a signing key (lacks SIGN_ENCRYPT attribute)
     let bad_signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -619,7 +619,7 @@ fn test_certify_errors_and_bounds() {
     // 4. Load a signer key that has incorrect key type (Symmetric key instead of Asymmetric key)
     let sym_signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -665,7 +665,7 @@ fn test_certify_signature_schemes() {
     // Load certified object
     let certified_obj = TransientObject {
         handle: certified_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -693,7 +693,7 @@ fn test_certify_signature_schemes() {
     // 1. Signer key with fixed scheme RSASSA SHA256
     let signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -780,7 +780,7 @@ fn test_certify_signature_schemes() {
     // 2. Restricted signer key
     let restricted_signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -837,7 +837,7 @@ fn test_get_session_audit_digest_errors() {
     // Load signer object with fixed scheme RSASSA SHA256
     let signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -1166,7 +1166,7 @@ fn test_challenger_remediation_stress_cases() {
     // 1. GetCapability Handles with property_count = 0
     let obj1 = TransientObject {
         handle: 0x80000001,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {
@@ -1475,7 +1475,7 @@ fn test_challenger_remediation_stress_cases() {
     let signer_handle = 0x80000002;
     let signer_obj = TransientObject {
         handle: signer_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[4, 5, 6]).unwrap()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: (TpmtPublic {

@@ -165,8 +165,8 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
     /// Serializes key seed, handle, public and private templates, name, and attributes
     /// of a transient object into a raw buffer for saving.
     ///
-    /// Layout: `handle(u32) | seed[32] | name | auth | public | sensitive | qualified_name |
-    /// st_clear(u8)`.
+    /// Layout: `handle(u32) | seed | name | auth | public | sensitive | qualified_name |
+    /// st_clear(u8)`, where `seed` is a `TPM2B_DIGEST`.
     ///
     /// PORTING: `sensitive` is the `TPM2B`-encoded `TPMU_SENSITIVE_COMPOSITE` member of
     /// [`TransientObject::sensitive`], in place of exp's `u16 len | private[len]` provider blob.
@@ -176,7 +176,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         let mut writer = Writer::new(buf);
 
         writer.bytes(&obj.handle.to_be_bytes())?;
-        writer.bytes(&obj.seed)?;
+        writer.value(&obj.seed)?;
         writer.value(&obj.name)?;
         writer.value(&obj.auth)?;
         writer.value(&obj.public)?;

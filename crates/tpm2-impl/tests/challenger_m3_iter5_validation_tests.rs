@@ -424,7 +424,7 @@ fn test_encrypt_decrypt_invalid_decrypt_value() {
     let key_handle = 0x80000001;
     let transient_obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [1u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[1u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::new(b"password").unwrap()).into(),
         public: (TpmtPublic {
@@ -484,7 +484,7 @@ fn test_encrypt_decrypt2_invalid_decrypt_value() {
     let key_handle = 0x80000001;
     let transient_obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [1u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[1u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::new(b"password").unwrap()).into(),
         public: (TpmtPublic {
@@ -542,7 +542,7 @@ fn test_encrypt_decrypt_cmac_key_and_mode_rejection() {
     let key_handle = 0x80000001;
     let transient_obj = tpm2_impl::handler::TransientObject {
         handle: key_handle,
-        seed: [1u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[1u8; 32]).unwrap(),
         name: (Tpm2bName::new(&[1, 2, 3]).unwrap()).into(),
         auth: (Tpm2bAuth::new(b"password").unwrap()).into(),
         public: (TpmtPublic {

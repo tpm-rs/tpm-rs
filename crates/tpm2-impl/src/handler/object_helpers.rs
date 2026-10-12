@@ -10,7 +10,7 @@
 use super::{CommandHandler, ResolvedParentInfo, TransientObject};
 use crate::Crypto;
 use crate::owned::{
-    OwnedAuth, OwnedName, OwnedPublic, OwnedPublicParmsAndId, OwnedSensitiveComposite,
+    OwnedAuth, OwnedDigest, OwnedName, OwnedPublic, OwnedPublicParmsAndId, OwnedSensitiveComposite,
 };
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
@@ -152,7 +152,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         &mut self,
         index: usize,
         handle: u32,
-        obj_seed: &[u8],
+        seed: OwnedDigest,
         name: OwnedName,
         user_auth: OwnedAuth,
         public_struct: OwnedPublic,
@@ -162,14 +162,10 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         hierarchy: u32,
         st_clear: bool,
     ) {
-        let mut stored_seed = [0u8; 32];
-        let copy_len = core::cmp::min(stored_seed.len(), obj_seed.len());
-        stored_seed[..copy_len].copy_from_slice(&obj_seed[..copy_len]);
-
         self.global_state.transient_parents[index] = parent_handle;
         self.global_state.transient_objects[index] = Some(TransientObject {
             handle,
-            seed: stored_seed,
+            seed,
             name,
             auth: user_auth,
             public: public_struct,
@@ -258,7 +254,15 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             .get_mut(..qn_len)
             .ok_or(TpmRc::FAILURE)?
             .copy_from_slice(qn_buf);
-        parent_seed_val[..obj.seed.len()].copy_from_slice(&obj.seed);
+        let name_alg = obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+        // Primary objects store a 32-byte seed whatever their nameAlg; children are protected
+        // with at most a nameAlg digest of it.
+        let seed = obj.seed.get_buffer();
+        let seed = &seed[..seed.len().min(name_alg.digest_size())];
+        parent_seed_val
+            .get_mut(..seed.len())
+            .ok_or(TpmRc::FAILURE)?
+            .copy_from_slice(seed);
         let mut sym_bits = match &obj.public.parms_and_id {
             OwnedPublicParmsAndId::Rsa(parms, _) => {
                 parms.symmetric.map_or(128, |s| s.alg.key_bits())
@@ -271,18 +275,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         if sym_bits == 0 {
             sym_bits = 128;
         }
-        let name_alg = obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
-        // The stored seed is zero-padded to 32 bytes: strip the padding (but never down to an
-        // empty seed).
-        let max_seed_len = core::cmp::min(obj.seed.len(), name_alg.digest_size());
-        let actual_seed_len =
-            match crate::util::strip_trailing_zeros(&obj.seed[..max_seed_len]).len() {
-                0 => max_seed_len,
-                len => len,
-            };
         Ok(ResolvedParentInfo {
             req_auth: parent_req_auth,
-            seed_len: actual_seed_len,
+            seed_len: seed.len(),
             qn_len,
             hierarchy_val: obj.hierarchy,
             has_st_clear: parent_has_st_clear,

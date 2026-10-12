@@ -2,7 +2,7 @@
 use tpm2::TpmCc;
 use tpm2::commands::{ObjectChangeAuth, responses};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Tpm2bAuth, Tpm2bDigest, Tpm2bName, Tpm2bPrivate, TpmHt, TpmiAlgHash, TpmtSensitive};
+use tpm2::{Tpm2bAuth, Tpm2bName, Tpm2bPrivate, TpmHt, TpmiAlgHash, TpmtSensitive};
 
 use crate::Crypto;
 use crate::handle_checks::{Tpmi, check};
@@ -114,7 +114,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         // key blob (extracting the first RSA prime); the object now stores it directly.
         let tpmt_sensitive = TpmtSensitive {
             auth_value: new_auth_padded,
-            seed_value: Tpm2bDigest::new(&object.seed).ok_or(TpmRc::FAILURE)?,
+            seed_value: object.seed.as_tpm2b(),
             sensitive: object.sensitive.as_tpmu(),
         };
 

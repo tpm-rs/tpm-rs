@@ -186,7 +186,7 @@ fn create_signing_key(crypto: &TestCryptoProvider) -> (TransientObject, RsaPriva
     let name = compute_key_name(crypto, &public);
     let signing_key = TransientObject {
         handle: 0x80000001,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name,
         auth: Tpm2bAuth::default().into(),
         public: public.into(),
@@ -984,7 +984,7 @@ fn test_challenger_policy_signed_invalid_key_type() {
     let name = compute_key_name(&crypto, &public);
     let sym_key = TransientObject {
         handle: 0x80000002,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name,
         auth: Tpm2bAuth::default().into(),
         public: public.into(),

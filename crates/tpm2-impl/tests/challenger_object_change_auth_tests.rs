@@ -241,7 +241,7 @@ fn make_parent_object(handle: u32, qn: Tpm2bName) -> TransientObject {
 
     TransientObject {
         handle,
-        seed: [1u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[1u8; 32]).unwrap(),
         name: qn.into(),
         auth: Tpm2bAuth::default().into(),
         public: public.into(),
@@ -274,7 +274,7 @@ fn make_transient_object(
 
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: digest_bytes.into(),
         auth: Tpm2bAuth::new(auth_val).unwrap().into(),
         public: public.into(),
@@ -321,7 +321,7 @@ fn make_transient_signing_object(
 
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: digest_bytes.into(),
         auth: Tpm2bAuth::new(auth_val).unwrap().into(),
         public: public.into(),

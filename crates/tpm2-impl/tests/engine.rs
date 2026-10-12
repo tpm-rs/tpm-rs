@@ -165,7 +165,7 @@ fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
     for (i, slot) in (0u32..).zip(global_state.transient_objects.iter_mut()) {
         *slot = Some(TransientObject {
             handle: 0x80000000 | i,
-            seed: [0u8; 32],
+            seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
             name: (tpm2::Tpm2bName::default()).into(),
             auth: (tpm2::Tpm2bAuth::default()).into(),
             public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),

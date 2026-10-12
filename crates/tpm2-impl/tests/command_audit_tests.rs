@@ -517,7 +517,7 @@ fn test_get_command_audit_digest_with_rsa_signing_key() {
     };
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
@@ -590,7 +590,7 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
     };
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),

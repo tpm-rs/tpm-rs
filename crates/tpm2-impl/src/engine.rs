@@ -1002,14 +1002,10 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
                 if storage_mgr
                     .read_item(handle, 0, &mut read_buf[..read_len])
                     .is_ok()
-                    && read_len > 32
+                    && let Some((_, auth)) =
+                        TransientObject::persistent_name_and_auth(&read_buf[..read_len])
                 {
-                    let mut slice = &read_buf[32..read_len];
-                    if Tpm2bName::unmarshal(&mut slice).is_ok()
-                        && let Ok(auth) = OwnedAuth::unmarshal(&mut slice)
-                    {
-                        return auth;
-                    }
+                    return auth;
                 }
             }
             OwnedAuth::default()
@@ -5080,12 +5076,10 @@ fn handle_name<C: Crypto, S: NvStorage, T: TpmTimer>(
             if storage_mgr
                 .read_item(handle, 0, &mut read_buf[..read_len])
                 .is_ok()
-                && read_len > 32
+                && let Some((name, _)) =
+                    TransientObject::persistent_name_and_auth(&read_buf[..read_len])
             {
-                let mut slice = &read_buf[32..read_len];
-                if let Ok(name) = OwnedName::unmarshal(&mut slice) {
-                    return name;
-                }
+                return name;
             }
         }
     }

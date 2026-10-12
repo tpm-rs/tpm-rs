@@ -255,7 +255,7 @@ fn make_keyed_hash_key(handle: u32, key_bytes: &[u8]) -> TransientObject {
     };
     TransientObject {
         handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: Tpm2bName::new(&[1, 2, 3]).unwrap().into(),
         auth: Tpm2bAuth::default().into(),
         public: public.into(),
@@ -573,7 +573,7 @@ fn test_persistent_handle_resolution_all() {
     let name = Tpm2bName::new(&[1, 2, 3, 4, 5]).unwrap();
     let transient_key = TransientObject {
         handle: transient_key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: name.into(),
         auth: (Tpm2bAuth::new(&[0x11, 0x22]).unwrap()).into(),
         public: (TpmtPublic {

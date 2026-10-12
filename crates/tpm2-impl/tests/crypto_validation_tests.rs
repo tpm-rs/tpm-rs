@@ -114,7 +114,7 @@ fn test_verify_signature_scheme_null_validation() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         public: public_area.into(),
         sensitive: OwnedSensitiveComposite::Rsa(OwnedPrivateKeyRsa::new(&[0u8; 128]).unwrap()),
         hierarchy: Handle::RH_OWNER.0,
@@ -176,7 +176,7 @@ fn test_sign_and_verify_signature_hmac() {
 
     let obj = TransientObject {
         handle: key_handle,
-        seed: [0u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         public: public_area.into(),
         sensitive: OwnedSensitiveComposite::KeyedHash(
             OwnedSensitiveData::new(&[0x42u8; 32]).unwrap(),

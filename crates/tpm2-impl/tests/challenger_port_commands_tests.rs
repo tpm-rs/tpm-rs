@@ -491,7 +491,7 @@ fn test_duplicate_import_load_roundtrip() {
 
     let target_obj = TransientObject {
         handle: target_handle,
-        seed: [2u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[2u8; 32]).unwrap(),
         name: target_name,
         auth: Tpm2bAuth::default().into(),
         public: target_public.into(),
@@ -526,7 +526,7 @@ fn test_duplicate_import_load_roundtrip() {
     let parent_handle = 0x80000002;
     let parent_obj = TransientObject {
         handle: parent_handle,
-        seed: [3u8; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[3u8; 32]).unwrap(),
         name: Tpm2bName::new(&[4, 5, 6]).unwrap().into(),
         auth: Tpm2bAuth::default().into(),
         public: TpmtPublic {
@@ -616,7 +616,7 @@ fn test_duplicate_import_load_roundtrip() {
     // D. New parent is not asymmetric -> returns TpmRc::TYPE.with(Position::handle(2))
     let bad_parent_obj = TransientObject {
         handle: 0x80000003,
-        seed: [0; 32],
+        seed: tpm2_impl::owned::OwnedDigest::new(&[0u8; 32]).unwrap(),
         name: Tpm2bName::default().into(),
         auth: Tpm2bAuth::default().into(),
         public: TpmtPublic {
