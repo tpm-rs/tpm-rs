@@ -22,12 +22,31 @@ fn test_oversized_tpm_command() {
     let mut storage = RamStorageMock::<4096>::new();
     let mut timer = LinuxTimer::new();
     let mut sim = Simulator::new(&crypto, &mut storage, &mut timer).unwrap();
+    sim.power_on_start_up();
 
-    // TPM_SEND_COMMAND = 8
-    // Payload length = 8193 (oversized)
+    // A command larger than MAX_MESSAGE_SIZE (8192) but within the wire limit returns
+    // TPM_RC_COMMAND_SIZE without dropping the connection.
+    let mut cmd = vec![0u8; 8193];
+    cmd[0..2].copy_from_slice(&0x8001u16.to_be_bytes());
+    cmd[2..6].copy_from_slice(&8193u32.to_be_bytes());
+    cmd[6..10].copy_from_slice(&0x0000_017Bu32.to_be_bytes());
     let mut payload = Vec::new();
     payload.push(0u8); // locality
-    payload.extend_from_slice(&8193u32.to_be_bytes()); // length
+    payload.extend_from_slice(&8193u32.to_be_bytes());
+    payload.extend_from_slice(&cmd);
+    let mut stream = Cursor::new(payload);
+    assert!(!sim.handle_regular_command_raw(8, &mut stream).unwrap());
+    let out = stream.into_inner();
+    let resp = tpm2_simulator::SimResponse::parse(&out[5 + 8193..]).unwrap();
+    assert_eq!(
+        u32::from_be_bytes(resp.response[6..10].try_into().unwrap()),
+        tpm2::errors::TpmRc::COMMAND_SIZE.get()
+    );
+
+    // Payload length = 65537 (exceeds 64 KiB wire limit)
+    let mut payload = Vec::new();
+    payload.push(0u8); // locality
+    payload.extend_from_slice(&65537u32.to_be_bytes()); // length
 
     let mut stream = Cursor::new(payload);
     let res = sim.handle_regular_command_raw(8, &mut stream);
@@ -35,7 +54,7 @@ fn test_oversized_tpm_command() {
     assert!(
         res.unwrap_err()
             .to_string()
-            .contains("exceeds maximum of 8192")
+            .contains("exceeds maximum of 65536")
     );
 }
 
