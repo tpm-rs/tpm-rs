@@ -3364,14 +3364,18 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
             }
 
             let nonce_tpm_new = nonces_tpm_new[i].expect("nonce was generated for session handle");
-            let mut resp_attrs = auth.session_attributes.0 & !0x60;
-            if auth.session_attributes.0 & 0x80 != 0 {
-                if global_state.exclusive_audit_session == Some(session_handle) {
-                    resp_attrs |= 0x02;
-                } else {
-                    resp_attrs &= !0x02;
-                }
+            // Part 2, TPMA_SESSION: decrypt and encrypt are copied from the command, auditReset
+            // is always CLEAR in a response, and auditExclusive is SET only for the exclusive
+            // audit session.
+            let mut resp_attrs = auth.session_attributes;
+            resp_attrs.remove(TpmaSession::AUDIT_RESET);
+            if resp_attrs.contains(TpmaSession::AUDIT) {
+                resp_attrs.set(
+                    TpmaSession::AUDIT_EXCLUSIVE,
+                    global_state.exclusive_audit_session == Some(session_handle),
+                );
             }
+            let resp_attrs = resp_attrs.0;
 
             let mut session_key_buf = [0u8; 128];
             let session_key_len;
