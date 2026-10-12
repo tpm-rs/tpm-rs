@@ -141,7 +141,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         )
         .map_err(|_| TpmRc::FAILURE)?;
 
-        if cmd.ticket.digest().as_slice() != hmac_digest.digest() {
+        if !crate::util::constant_time_eq(cmd.ticket.digest().as_slice(), hmac_digest.digest()) {
             return Err(TpmRc::TICKET.with(Position::parameter(5)));
         }
 

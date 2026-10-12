@@ -211,7 +211,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             .map_err(|_| TpmRc::FAILURE)?;
         let expected_hmac = hmac_bytes.get(..hmac_len).ok_or(TpmRc::FAILURE)?;
 
-        if integrity_hmac.as_slice() != expected_hmac {
+        if !crate::util::constant_time_eq(integrity_hmac.as_slice(), expected_hmac) {
             return Err(TpmRc::INTEGRITY.to_rc());
         }
 

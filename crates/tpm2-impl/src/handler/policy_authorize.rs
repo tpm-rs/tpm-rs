@@ -148,7 +148,10 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 }
             };
 
-            if cmd.check_ticket.digest().as_slice() != expected_hmac.as_slice() {
+            if !crate::util::constant_time_eq(
+                cmd.check_ticket.digest().as_slice(),
+                expected_hmac.as_slice(),
+            ) {
                 return Err(TpmRc::VALUE.with(Position::parameter(4)));
             }
         }
