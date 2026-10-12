@@ -130,6 +130,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     Some(_) => return Err(TpmRc::SCHEME.with(Position::handle(1))),
                     None => {}
                 }
+                // A public-only object has no HMAC key, so anyone could compute the HMAC
+                // (reference CryptValidateSignature returns TPM_RC_HANDLE).
+                if obj.sensitive.as_bytes().is_empty() {
+                    return Err(TpmRc::HANDLE.with(Position::handle(1)));
+                }
                 let (digest_bytes, digest_len) =
                     self.compute_hash(ha.hash_alg(), &[&to_be_signed[..offset]])?;
                 let (hmac_bytes, hmac_len) = self.compute_hmac(
@@ -137,7 +142,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     obj.sensitive.as_bytes(),
                     &[&digest_bytes[..digest_len]],
                 )?;
-                if ha.digest() != &hmac_bytes[..hmac_len] {
+                if !crate::util::constant_time_eq(ha.digest(), &hmac_bytes[..hmac_len]) {
                     return Err(TpmRc::SIGNATURE.with(Position::parameter(5)));
                 }
             } else {
