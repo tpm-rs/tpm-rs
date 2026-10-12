@@ -9,9 +9,9 @@ use common::{FakeRng, FakeStorage, FakeTimer, TestCryptoProvider, marshal_to_sli
 use hex_literal::hex;
 use tpm2::commands::{
     Command, Duplicate, EvictControl, Import, Load, Message, PolicyCommandCode, PolicyGetDigest,
-    UnmarshalMessage,
+    Rewrap, UnmarshalMessage,
 };
-use tpm2::crypto::{Random, Rsa, RsaPrivateKey, RsaPublicKey};
+use tpm2::crypto::{Ecc, EccPrivateKey, EccPublicKey, Random, Rsa, RsaPrivateKey, RsaPublicKey};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     AlgSym, Handle, Marshal, PublicParmsAndId, ResponseHeader, Tpm2bAuth, Tpm2bData, Tpm2bDigest,
@@ -42,6 +42,10 @@ struct LoadHandles {
 struct EvictControlHandles {
     pub auth: Handle,
     pub object_handle: Handle,
+}
+struct RewrapHandles {
+    pub old_parent: Handle,
+    pub new_parent: Handle,
 }
 
 trait TestHandles {
@@ -76,6 +80,11 @@ impl TestHandles for LoadHandles {
 impl TestHandles for EvictControlHandles {
     fn to_vec(&self) -> Vec<Handle> {
         vec![self.auth, self.object_handle]
+    }
+}
+impl TestHandles for RewrapHandles {
+    fn to_vec(&self) -> Vec<Handle> {
+        vec![self.old_parent, self.new_parent]
     }
 }
 
@@ -1117,4 +1126,137 @@ fn test_duplicate_to_persistent_parent() {
         execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_handles, &dup_cmd, &[])
             .expect("Duplicate to a persistent parent failed");
     assert!(!dup_resp.out_sym_seed.as_slice().is_empty());
+}
+
+/// Returns a loadable NIST P-256 storage parent (AES-128-CFB, SHA-256), in the Owner hierarchy.
+fn ecc_storage_parent(
+    tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer>,
+    handle: u32,
+) -> TransientObject {
+    let key = Ecc::generate_key(
+        tpm.platform.crypto,
+        &mut tpm.platform.rng,
+        tpm2::TpmEccCurve::NistP256,
+    )
+    .unwrap();
+    let mut x_buf = [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES];
+    let mut y_buf = [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES];
+    let point = key.public_key().point(&mut x_buf, &mut y_buf).unwrap();
+    let mut d_buf = [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES];
+    let scalar = key.scalar(&mut d_buf).unwrap();
+    TransientObject {
+        handle,
+        seed: tpm2_impl::owned::OwnedDigest::new(&[5u8; 32]).unwrap(),
+        name: Tpm2bName::new(&[7, 8, 9]).unwrap().into(),
+        auth: Tpm2bAuth::default().into(),
+        public: TpmtPublic {
+            name_alg: Some(TpmiAlgHash::Sha256),
+            object_attributes: TpmaObject::DECRYPT
+                | TpmaObject::RESTRICTED
+                | TpmaObject::USER_WITH_AUTH,
+            auth_policy: Tpm2bDigest::default(),
+            parms_and_id: PublicParmsAndId::Ecc(
+                tpm2::TpmsEccParms {
+                    symmetric: Some(TpmtSymDefObject {
+                        alg: AlgSym::Aes128,
+                        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                    }),
+                    scheme: None,
+                    curve_id: tpm2::TpmEccCurve::NistP256,
+                    kdf: None,
+                },
+                point,
+            ),
+        }
+        .into(),
+        sensitive: OwnedSensitiveComposite::Ecc(scalar.into()),
+        qualified_name: Tpm2bName::new(&[7, 8, 9]).unwrap().into(),
+        hierarchy: 0x40000001,
+        st_clear: false,
+    }
+}
+
+/// `TPM2_Rewrap` moves a duplication blob from an ECC parent to an RSA parent, and the result
+/// imports under the RSA parent.
+#[test]
+fn test_rewrap_from_ecc_parent_to_rsa_parent() {
+    let crypto = TestCryptoProvider;
+    let mut storage = FakeStorage::default();
+    let mut timer = FakeTimer;
+    let rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&crypto, &mut storage, &mut timer, &rng);
+
+    let target_handle = 0x80000001;
+    let ecc_parent = 0x80000002;
+    let rsa_parent = 0x80000003;
+    let target = rsa_signing_key(
+        &mut tpm,
+        &mut global_state,
+        target_handle,
+        TpmiAlgHash::Sha256,
+        &[2u8; 32],
+    );
+    let object_public = target.public.as_tpm2b();
+    global_state.transient_objects[0] = Some(target.clone());
+    global_state.transient_objects[1] = Some(ecc_storage_parent(&mut tpm, ecc_parent));
+    global_state.transient_objects[2] = Some(rsa_storage_parent(
+        &mut tpm,
+        rsa_parent,
+        TpmiAlgHash::Sha256,
+    ));
+
+    let (dup_handles, dup_cmd) = duplicate_outer_only(target_handle, ecc_parent);
+    let dup_resp =
+        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_handles, &dup_cmd, &[])
+            .expect("Duplicate failed");
+
+    let rewrap_resp = execute_tpm_command_with_auths(
+        &mut tpm,
+        &mut global_state,
+        &RewrapHandles {
+            old_parent: Handle(ecc_parent),
+            new_parent: Handle(rsa_parent),
+        },
+        &Rewrap {
+            old_parent: Handle(ecc_parent),
+            new_parent: Handle(rsa_parent),
+            in_duplicate: dup_resp.duplicate,
+            name: target.name.as_tpm2b(),
+            in_sym_seed: dup_resp.out_sym_seed,
+        },
+        &[],
+    )
+    .expect("Rewrap failed");
+
+    let import_resp = execute_tpm_command_with_auths(
+        &mut tpm,
+        &mut global_state,
+        &ImportHandles {
+            parent_handle: Handle(rsa_parent),
+        },
+        &Import {
+            parent_handle: Handle(rsa_parent),
+            encryption_key: Tpm2bData::default(),
+            object_public,
+            duplicate: rewrap_resp.out_duplicate,
+            in_sym_seed: rewrap_resp.out_sym_seed,
+            symmetric_alg: None,
+        },
+        &[],
+    )
+    .expect("Import failed");
+    execute_tpm_command_with_auths(
+        &mut tpm,
+        &mut global_state,
+        &LoadHandles {
+            parent_handle: Handle(rsa_parent),
+        },
+        &Load {
+            parent_handle: Handle(rsa_parent),
+            in_private: import_resp.out_private,
+            in_public: object_public,
+        },
+        &[],
+    )
+    .expect("Load failed");
 }

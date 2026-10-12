@@ -9,13 +9,17 @@ use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{Rewrap, responses};
-use tpm2::crypto::{Direction, Rsa, RsaEncryptScheme, kdfa};
+use tpm2::crypto::{Direction, Ecc, Rsa, RsaEncryptScheme, kdfa, kdfe};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    AlgSym, Tpm2bEncryptedSecret, Tpm2bPrivate, TpmHt, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits,
+    AlgSym, Marshal, Tpm2bEncryptedSecret, Tpm2bPrivate, TpmHt, TpmaObject, TpmiAlgHash,
+    TpmiRsaKeyBits, TpmsEccPoint, Unmarshal,
 };
 
-use super::crypt_ops::{load_rsa_private, load_rsa_public};
+use super::crypt_ops::{
+    PaddedEccPoint, ecc_param_size, ecc_point_multiply, ecc_public_point, load_ecc_private,
+    load_ecc_public, load_rsa_private, load_rsa_public,
+};
 use super::duplicate::{DUPLICATE_LABEL, Writer, aes_cfb, outer_sym_key_bits};
 
 impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, T> {
@@ -50,8 +54,6 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             return Err(TpmRc::HANDLE.with(Position::handle(1)));
         }
 
-        let mut seed = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-        let mut seed_len = 0;
         let mut private_blob = [0u8; Tpm2bPrivate::CAP];
         let private_blob_len;
 
@@ -76,8 +78,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             //
             // PORTING: exp passed its opaque private-key blob to `decrypt`; the private key is
             // now loaded from the object's public and sensitive areas first, and a key that
-            // fails to load is reported like a failing `decrypt`.
-            seed_len = match &old_parent_obj.public.parms_and_id {
+            // fails to load is reported like a failing `decrypt`. exp only supported RSA parents.
+            let mut seed = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+            let seed_len = match &old_parent_obj.public.parms_and_id {
                 OwnedPublicParmsAndId::Rsa(parms, modulus) => {
                     let name_alg = old_parent_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
                     let crypto = self.crypto();
@@ -107,6 +110,45 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                         .bytes(plaintext.as_slice())
                         .map_err(|_| TpmRc::VALUE.with(Position::parameter(3)))?;
                     writer.offset()
+                }
+                OwnedPublicParmsAndId::Ecc(parms, unique) => {
+                    let value_err = TpmRc::VALUE.with(Position::parameter(3));
+                    let mut slice = in_sym_seed;
+                    let eph_point = TpmsEccPoint::unmarshal(&mut slice).map_err(|_| value_err)?;
+                    if !slice.is_empty() {
+                        return Err(value_err);
+                    }
+                    let curve = parms.curve_id;
+                    let param_size = ecc_param_size(curve).ok_or(value_err)?;
+                    let eph_pub =
+                        PaddedEccPoint::from_tpms(&eph_point, param_size).ok_or(value_err)?;
+                    let crypto = self.crypto();
+                    let peer = load_ecc_public(crypto, curve, &eph_pub).ok_or(value_err)?;
+                    let key = load_ecc_private(crypto, curve, unique, &old_parent_obj.sensitive)
+                        .ok_or(value_err)?;
+                    let ecdh_point = ecc_point_multiply(crypto, &key, &peer, param_size)
+                        .ok()
+                        .flatten()
+                        .ok_or(value_err)?;
+                    let parent_pub = PaddedEccPoint::new(
+                        unique.x.get_buffer(),
+                        unique.y.get_buffer(),
+                        param_size,
+                    )
+                    .ok_or(value_err)?;
+                    let name_alg = old_parent_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+                    let digest_size = name_alg.digest_size();
+                    kdfe(
+                        crypto,
+                        name_alg,
+                        ecdh_point.x(),
+                        c"DUPLICATE",
+                        eph_pub.x(),
+                        parent_pub.x(),
+                        seed.get_mut(..digest_size).ok_or(TpmRc::FAILURE)?,
+                    )
+                    .map_err(|_| TpmRc::FAILURE)?;
+                    digest_size
                 }
                 _ => {
                     return Err(TpmRc::TYPE.with(Position::handle(1)));
@@ -193,6 +235,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
 
         // 2. Produce Outer Wrap using newParent (if present)
         let mut encrypted_secret = [0u8; TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
+        let mut out_sym_seed_buf = [0u8; TpmsEccPoint::MAX_SIZE];
         let mut final_duplicate = [0u8; Tpm2bPrivate::CAP];
         let out_sym_seed;
         let out_duplicate;
@@ -215,15 +258,22 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
 
             let new_name_alg = new_parent_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
 
-            // Encrypt seed under new_parent public key
+            // Protect a fresh seed to the new parent ("Secret Sharing" in TPM 2.0 Part 1;
+            // `CryptSecretEncrypt` in the reference implementation).
             //
-            // PORTING: a public key that fails to load is reported like a failing `encrypt`.
-            let crypto = self.crypto();
-            let encrypted = match &new_parent_obj.public.parms_and_id {
+            // PORTING: exp re-encrypted the seed recovered from the old parent (an empty seed if
+            // `oldParent` was TPM_RH_NULL) and only supported RSA parents. A public key that fails
+            // to load is reported like a failing `encrypt`.
+            let new_digest_size = new_name_alg.digest_size();
+            let mut new_seed = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+            let new_seed = new_seed.get_mut(..new_digest_size).ok_or(TpmRc::FAILURE)?;
+            out_sym_seed = match &new_parent_obj.public.parms_and_id {
                 OwnedPublicParmsAndId::Rsa(parms, modulus) => {
+                    self.fill_random(new_seed).map_err(|_| TpmRc::FAILURE)?;
+                    let crypto = self.crypto();
                     let key = load_rsa_public(crypto, parms, modulus.get_buffer())
                         .ok_or(TpmRc::FAILURE)?;
-                    Rsa::encrypt(
+                    let encrypted = Rsa::encrypt(
                         crypto,
                         &mut self.context.platform.rng,
                         &key,
@@ -231,18 +281,53 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                             hash: new_name_alg,
                             label: DUPLICATE_LABEL,
                         },
-                        &seed[..seed_len],
+                        new_seed,
                         &mut encrypted_secret,
                     )
                     .ok()
                     .flatten()
-                    .ok_or(TpmRc::FAILURE)?
+                    .ok_or(TpmRc::FAILURE)?;
+                    Tpm2bEncryptedSecret::new(encrypted.as_slice()).ok_or(TpmRc::FAILURE)?
+                }
+                OwnedPublicParmsAndId::Ecc(parms, unique) => {
+                    let crypto = self.crypto();
+                    let curve = parms.curve_id;
+                    let param_size = ecc_param_size(curve).ok_or(TpmRc::VALUE.to_rc())?;
+                    let parent_point = PaddedEccPoint::new(
+                        unique.x.get_buffer(),
+                        unique.y.get_buffer(),
+                        param_size,
+                    )
+                    .ok_or(TpmRc::VALUE.to_rc())?;
+                    let eph_key = Ecc::generate_key(crypto, &mut self.context.platform.rng, curve)
+                        .map_err(|_| TpmRc::FAILURE)?;
+                    let parent_pub =
+                        load_ecc_public(crypto, curve, &parent_point).ok_or(TpmRc::FAILURE)?;
+                    let ecdh_point = ecc_point_multiply(crypto, &eph_key, &parent_pub, param_size)
+                        .ok()
+                        .flatten()
+                        .ok_or(TpmRc::FAILURE)?;
+                    let eph_point =
+                        ecc_public_point::<C>(&eph_key, param_size).ok_or(TpmRc::FAILURE)?;
+                    kdfe(
+                        crypto,
+                        new_name_alg,
+                        ecdh_point.x(),
+                        c"DUPLICATE",
+                        eph_point.x(),
+                        parent_point.x(),
+                        new_seed,
+                    )
+                    .map_err(|_| TpmRc::FAILURE)?;
+                    let out_sym_seed_len = eph_point.as_tpms()?.marshal(&mut out_sym_seed_buf);
+                    Tpm2bEncryptedSecret::new(&out_sym_seed_buf[..out_sym_seed_len])
+                        .ok_or(TpmRc::FAILURE)?
                 }
                 _ => {
                     return Err(TpmRc::TYPE.with(Position::handle(2)));
                 }
             };
-            out_sym_seed = Tpm2bEncryptedSecret::new(encrypted.as_slice()).ok_or(TpmRc::FAILURE)?;
+            let crypto = self.crypto();
 
             // Derive outer symmetric key/IV and integrity key using newParent nameAlg
             let sym_key_bits = outer_sym_key_bits(&new_parent_obj.public.parms_and_id);
@@ -251,12 +336,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             let mut sym_key_iv = [0u8; AlgSym::MAX_KEY_BYTES];
             let mut integrity_key = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
 
-            let new_digest_size = new_name_alg.digest_size();
             let outer_key = sym_key_iv.get_mut(..outer_key_len).ok_or(TpmRc::FAILURE)?;
             kdfa(
                 crypto,
                 new_name_alg,
-                &seed[..seed_len],
+                new_seed,
                 c"STORAGE",
                 cmd.name.as_slice(),
                 &[],
@@ -269,7 +353,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             kdfa(
                 crypto,
                 new_name_alg,
-                &seed[..seed_len],
+                new_seed,
                 c"INTEGRITY",
                 &[],
                 &[],
