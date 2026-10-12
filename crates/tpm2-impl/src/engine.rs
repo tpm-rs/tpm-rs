@@ -3019,14 +3019,19 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer> TpmEngine<'a, C, S, T> {
                     &mut computed_hmac,
                 )?;
 
-                let provided_stripped = crate::util::strip_trailing_zeros(auth.hmac.get_buffer());
+                let provided = auth.hmac.get_buffer();
                 let auth_matches = if is_policy && is_password_needed {
-                    crate::util::constant_time_eq(provided_stripped, entity_auth_stripped)
+                    // PolicyPassword: the HMAC field holds the authValue, which is compared
+                    // without trailing zeros like a password.
+                    crate::util::constant_time_eq(
+                        crate::util::strip_trailing_zeros(provided),
+                        entity_auth_stripped,
+                    )
+                } else if hmac_key_len == 0 && provided.is_empty() {
+                    // "No HMAC Authorization" (Part 1) for both HMAC and policy sessions.
+                    true
                 } else {
-                    let computed_stripped =
-                        crate::util::strip_trailing_zeros(&computed_hmac[..computed_hmac_len]);
-                    crate::util::constant_time_eq(provided_stripped, computed_stripped)
-                        || (is_policy && hmac_key_len == 0 && provided_stripped.is_empty())
+                    crate::util::constant_time_eq(provided, &computed_hmac[..computed_hmac_len])
                 };
 
                 if !auth_matches {
