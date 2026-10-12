@@ -51,7 +51,7 @@ fn test_read_clock_success() {
 }
 
 #[test]
-fn test_read_clock_after_restart() {
+fn test_read_clock_after_reset() {
     let crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
@@ -90,7 +90,7 @@ fn test_read_clock_after_restart() {
     let initial_reset = rsp1.current_time.clock_info.reset_count;
     let initial_restart = rsp1.current_time.clock_info.restart_count;
 
-    // Advance clock and simulate Shutdown(CLEAR) + reset/restart + Startup(CLEAR)
+    // Advance clock, then Shutdown(CLEAR) + Startup(CLEAR)
     tpm.platform.timer.advance(1000);
     let shutdown_request = hex!("8001 0000000c 00000145 0000");
     let mut shutdown_response = [0u8; 256];
@@ -123,12 +123,12 @@ fn test_read_clock_after_restart() {
     let rsp2 = <ReadClock as Command>::Response::unmarshal_with_handles([], &mut resp_slice)
         .expect("unmarshal <ReadClock as Command>::Response");
 
+    // Clock survives the orderly shutdown, and Startup(CLEAR) after Shutdown(CLEAR) is a TPM
+    // Reset (Part 1, "Startup").
     assert_eq!(rsp2.current_time.clock_info.clock, 1100);
-    assert_eq!(rsp2.current_time.clock_info.reset_count, initial_reset);
-    assert_eq!(
-        rsp2.current_time.clock_info.restart_count,
-        initial_restart + 1
-    );
+    assert_eq!(rsp2.current_time.clock_info.reset_count, initial_reset + 1);
+    assert_eq!(rsp2.current_time.clock_info.restart_count, 0);
+    assert_eq!(initial_restart, 0);
 }
 
 fn send_clock_set(
