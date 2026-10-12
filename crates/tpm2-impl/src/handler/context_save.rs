@@ -309,6 +309,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
 
         writer.bytes(&[u8::from(sess.is_cp_hash_defined)])?;
         writer.bytes(&[u8::from(sess.is_name_hash_defined)])?;
+        writer.bytes(&[u8::from(sess.is_template_hash_defined)])?;
 
         writer.sized(
             sess.policy_digest
