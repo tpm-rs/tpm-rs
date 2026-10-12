@@ -8,12 +8,12 @@ use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use tpm2::commands::{PolicySigned, responses};
-use tpm2::crypto::{VerifyingKey, verify};
+use tpm2::crypto::{Mldsa, MldsaMessage, VerifyingKey, verify};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    Handle, Tpm2bDigest, Tpm2bEccParameter, Tpm2bPublicKeyRsa, Tpm2bTimeout, TpmCc, TpmHt, TpmSe,
-    TpmSt, TpmiAlgHash, TpmiRsaKeyBits, TpmsSignatureEcc, TpmsSignatureRsa, TpmtKeyedHashScheme,
-    TpmtSignature, TpmtTkAuth,
+    Handle, Tpm2bDigest, Tpm2bEccParameter, Tpm2bPublicKeyRsa, Tpm2bSignatureCtx, Tpm2bTimeout,
+    TpmCc, TpmHt, TpmSe, TpmSt, TpmiAlgHash, TpmiRsaKeyBits, TpmsSignatureEcc, TpmsSignatureRsa,
+    TpmtHa, TpmtKeyedHashScheme, TpmtSignature, TpmtTkAuth,
 };
 
 impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, T> {
@@ -144,6 +144,59 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 )?;
                 if !crate::util::constant_time_eq(ha.digest(), &hmac_bytes[..hmac_len]) {
                     return Err(TpmRc::SIGNATURE.with(Position::parameter(5)));
+                }
+            } else if let OwnedPublicParmsAndId::Mldsa(parms, unique) = &obj.public.parms_and_id {
+                let TpmtSignature::Mldsa(sig) = cmd.auth else {
+                    return Err(TpmRc::SCHEME.with(Position::parameter(5)));
+                };
+                let sig_err = TpmRc::SIGNATURE.with(Position::parameter(5));
+                let pub_key =
+                    Mldsa::load_public(self.crypto(), parms.parameter_set, unique.as_tpm2b())
+                        .ok()
+                        .flatten()
+                        .ok_or(sig_err)?;
+                let verified = Mldsa::verify(
+                    self.crypto(),
+                    &pub_key,
+                    MldsaMessage::Pure {
+                        context: Tpm2bSignatureCtx::default(),
+                        message: &to_be_signed[..offset],
+                    },
+                    sig,
+                )
+                .unwrap_or(false);
+                if !verified {
+                    return Err(sig_err);
+                }
+            } else if let OwnedPublicParmsAndId::HashMldsa(parms, unique) = &obj.public.parms_and_id
+            {
+                let TpmtSignature::HashMldsa(sig) = cmd.auth else {
+                    return Err(TpmRc::SCHEME.with(Position::parameter(5)));
+                };
+                let sig_err = TpmRc::SIGNATURE.with(Position::parameter(5));
+                if sig.hash != parms.hash_alg {
+                    return Err(sig_err);
+                }
+                let (digest_bytes, digest_len) =
+                    self.compute_hash(sig.hash, &[&to_be_signed[..offset]])?;
+                let tpmt_ha = TpmtHa::new(sig.hash, &digest_bytes[..digest_len]).ok_or(sig_err)?;
+                let pub_key =
+                    Mldsa::load_public(self.crypto(), parms.parameter_set, unique.as_tpm2b())
+                        .ok()
+                        .flatten()
+                        .ok_or(sig_err)?;
+                let verified = Mldsa::verify(
+                    self.crypto(),
+                    &pub_key,
+                    MldsaMessage::PreHash {
+                        context: Tpm2bSignatureCtx::default(),
+                        digest: tpmt_ha,
+                    },
+                    sig.signature,
+                )
+                .unwrap_or(false);
+                if !verified {
+                    return Err(sig_err);
                 }
             } else {
                 // Size of the (left-padded) public key: the RSA modulus, or `x || y`.

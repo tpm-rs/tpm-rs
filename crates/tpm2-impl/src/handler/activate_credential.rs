@@ -1,7 +1,7 @@
 use crate::Crypto;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
-use crate::owned::OwnedPublicParmsAndId;
+use crate::owned::{OwnedPublicParmsAndId, OwnedSensitiveComposite};
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
@@ -9,9 +9,12 @@ use crate::timer::TpmTimer;
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::{ActivateCredential, responses};
-use tpm2::crypto::{Direction, Rsa, RsaEncryptScheme, kdfa, kdfe};
+use tpm2::crypto::{Direction, Mlkem, Rsa, RsaEncryptScheme, kdfa, kdfe};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{AlgSym, Tpm2bDigest, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmsEccPoint};
+use tpm2::{
+    AlgSym, Tpm2b, Tpm2bDigest, Tpm2bKemCiphertext, TpmaObject, TpmiAlgHash, TpmiMlkemParms,
+    TpmiRsaKeyBits, TpmsEccPoint,
+};
 
 use super::crypt_ops::{
     PaddedEccPoint, ecc_param_size, ecc_point_multiply, load_ecc_private, load_ecc_public,
@@ -154,6 +157,31 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 .map_err(|_| TpmRc::FAILURE)?;
                 digest_size
             }
+            OwnedPublicParmsAndId::Mlkem(parms, unique) => {
+                let OwnedSensitiveComposite::Mlkem(priv_seed) = &key_obj.sensitive else {
+                    return Err(TpmRc::FAILURE);
+                };
+                let priv_key = Mlkem::derive_key(crypto, parms.parameter_set, Tpm2b(priv_seed))
+                    .map_err(|_| TpmRc::FAILURE)?;
+                let ct = Tpm2bKemCiphertext::new(cmd.secret.as_slice())
+                    .ok_or(TpmRc::VALUE.with(Position::parameter(2)))?;
+                let mut ss_buf = [0u8; TpmiMlkemParms::SHARED_SECRET_BYTES];
+                let ss = Mlkem::decapsulate(crypto, &priv_key, ct, &mut ss_buf)
+                    .ok()
+                    .flatten()
+                    .ok_or(TpmRc::VALUE.with(Position::parameter(2)))?;
+                kdfa(
+                    crypto,
+                    name_alg,
+                    ss.as_slice(),
+                    c"IDENTITY",
+                    cmd.secret.as_slice(),
+                    unique.get_buffer(),
+                    seed.get_mut(..digest_size).ok_or(TpmRc::FAILURE)?,
+                )
+                .map_err(|_| TpmRc::FAILURE)?;
+                digest_size
+            }
             _ => return Err(TpmRc::TYPE.with(Position::handle(2))),
         };
         let seed = &seed[..seed_len];
@@ -164,6 +192,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 .symmetric
                 .ok_or(TpmRc::ATTRIBUTES.with(Position::handle(2)))?,
             OwnedPublicParmsAndId::Ecc(parms, _) => parms
+                .symmetric
+                .ok_or(TpmRc::ATTRIBUTES.with(Position::handle(2)))?,
+            OwnedPublicParmsAndId::Mlkem(parms, _) => parms
                 .symmetric
                 .ok_or(TpmRc::ATTRIBUTES.with(Position::handle(2)))?,
             _ => return Err(TpmRc::TYPE.with(Position::handle(2))),

@@ -10,11 +10,14 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{Duplicate, responses};
-use tpm2::crypto::{Direction, Ecc, ModeIv, Rsa, RsaEncryptScheme, SymmetricKey, kdfa, kdfe};
+use tpm2::crypto::{
+    Direction, Ecc, Mlkem, ModeIv, Rsa, RsaEncryptScheme, SymmetricKey, kdfa, kdfe,
+};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, AlgSym, Tpm2b, Tpm2bData, Tpm2bEncryptedSecret, Tpm2bPrivate, Tpm2bSensitive, TpmaObject,
-    TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsEccPoint, TpmtSensitive,
+    TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiMlkemParms, TpmiRsaKeyBits, TpmsEccPoint,
+    TpmtSensitive,
 };
 
 use super::crypt_ops::{
@@ -134,6 +137,7 @@ pub(super) fn outer_sym_key_bits(parms_and_id: &OwnedPublicParmsAndId) -> u16 {
     let symmetric = match parms_and_id {
         OwnedPublicParmsAndId::Rsa(parms, _) => parms.symmetric,
         OwnedPublicParmsAndId::Ecc(parms, _) => parms.symmetric,
+        OwnedPublicParmsAndId::Mlkem(parms, _) => parms.symmetric,
         _ => None,
     };
     symmetric.map_or(128, |s| s.alg.key_bits())
@@ -216,7 +220,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
 
             // Parent must be an asymmetric key
             match &obj.public.parms_and_id {
-                OwnedPublicParmsAndId::Rsa(_, _) => {
+                OwnedPublicParmsAndId::Rsa(_, _) | OwnedPublicParmsAndId::Mlkem(_, _) => {
                     parent_name_alg = obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
                 }
                 OwnedPublicParmsAndId::Ecc(parms, unique) => {
@@ -242,6 +246,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         let parent_symmetric_is_null = match parent_parms {
             Some(OwnedPublicParmsAndId::Rsa(parms, _)) => parms.symmetric.is_none(),
             Some(OwnedPublicParmsAndId::Ecc(parms, _)) => parms.symmetric.is_none(),
+            Some(OwnedPublicParmsAndId::Mlkem(parms, _)) => parms.symmetric.is_none(),
             _ => true,
         };
 
@@ -317,6 +322,8 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         let mut duplicate_buf = [0u8; Tpm2bPrivate::CAP];
         let mut out_sym_seed_buf = [0u8; TpmsEccPoint::MAX_SIZE];
         let mut encrypted_seed = [0u8; TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
+        let mut ct_buf = [0u8; TpmiMlkemParms::MAX_CT_BYTES];
+        let mut ss_buf = [0u8; TpmiMlkemParms::SHARED_SECRET_BYTES];
         let mut out_sym_seed = Tpm2bEncryptedSecret::default();
 
         let duplicate_bytes: &[u8] = match (&parent_obj, parent_symmetric_is_null) {
@@ -358,6 +365,36 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                         c"DUPLICATE",
                         eph_point.x(),
                         parent_point.x(),
+                        seed.get_mut(..digest_size).ok_or(TpmRc::FAILURE)?,
+                    )
+                    .map_err(|_| TpmRc::FAILURE)?;
+                    seed_len = digest_size;
+                } else if let OwnedPublicParmsAndId::Mlkem(parms, unique) =
+                    &parent.public.parms_and_id
+                {
+                    let pub_key =
+                        Mlkem::load_public(crypto, parms.parameter_set, unique.as_tpm2b())
+                            .ok()
+                            .flatten()
+                            .ok_or(TpmRc::KEY.with(Position::handle(2)))?;
+                    let (ct, ss) = Mlkem::encapsulate(
+                        crypto,
+                        &mut self.context.platform.rng,
+                        &pub_key,
+                        &mut ct_buf,
+                        &mut ss_buf,
+                    )
+                    .map_err(|_| TpmRc::FAILURE)?;
+                    out_sym_seed =
+                        Tpm2bEncryptedSecret::new(ct.as_slice()).ok_or(TpmRc::FAILURE)?;
+                    let digest_size = parent_name_alg.digest_size();
+                    kdfa(
+                        crypto,
+                        parent_name_alg,
+                        ss.as_slice(),
+                        c"DUPLICATE",
+                        ct.as_slice(),
+                        unique.get_buffer(),
                         seed.get_mut(..digest_size).ok_or(TpmRc::FAILURE)?,
                     )
                     .map_err(|_| TpmRc::FAILURE)?;

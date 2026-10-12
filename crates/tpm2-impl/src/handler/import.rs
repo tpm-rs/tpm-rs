@@ -14,13 +14,13 @@ use crate::timer::TpmTimer;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{Import, responses};
-use tpm2::crypto::{Direction, Rsa, RsaEncryptScheme, kdfa, kdfe};
+use tpm2::crypto::{Direction, Mlkem, Rsa, RsaEncryptScheme, kdfa, kdfe};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    AlgSym, Handle, Marshal, PublicParmsAndId, Tpm2bData, Tpm2bEncryptedSecret, Tpm2bName,
-    Tpm2bPrivate, Tpm2bPublic, Tpm2bSensitiveData, TpmHt, TpmaObject, TpmiAlgCipherMode,
-    TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsEccPoint, TpmsSensitiveCreate, TpmtPublic,
-    TpmtSensitive, Unmarshal,
+    AlgSym, Handle, Marshal, PublicParmsAndId, Tpm2b, Tpm2bData, Tpm2bEncryptedSecret,
+    Tpm2bKemCiphertext, Tpm2bName, Tpm2bPrivate, Tpm2bPublic, Tpm2bSensitiveData, TpmHt,
+    TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiMlkemParms, TpmiRsaKeyBits,
+    TpmsEccPoint, TpmsSensitiveCreate, TpmtPublic, TpmtSensitive, Unmarshal,
 };
 
 impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, T> {
@@ -108,6 +108,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         let parent_symmetric_is_null = match &parent_obj.public.parms_and_id {
             OwnedPublicParmsAndId::Rsa(parms, _) => parms.symmetric.is_none(),
             OwnedPublicParmsAndId::Ecc(parms, _) => parms.symmetric.is_none(),
+            OwnedPublicParmsAndId::Mlkem(parms, _) => parms.symmetric.is_none(),
             _ => true,
         };
 
@@ -168,6 +169,24 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     return Err(TpmRc::SIZE.with(Position::parameter(2)));
                 }
             }
+            PublicParmsAndId::Mldsa(parms, unique) => {
+                let unique_len = unique.as_slice().len();
+                if unique_len > 0 && unique_len != parms.parameter_set.pub_key_bytes() {
+                    return Err(TpmRc::SIZE.with(Position::parameter(2)));
+                }
+            }
+            PublicParmsAndId::HashMldsa(parms, unique) => {
+                let unique_len = unique.as_slice().len();
+                if unique_len > 0 && unique_len != parms.parameter_set.pub_key_bytes() {
+                    return Err(TpmRc::SIZE.with(Position::parameter(2)));
+                }
+            }
+            PublicParmsAndId::Mlkem(parms, unique) => {
+                let unique_len = unique.as_slice().len();
+                if unique_len > 0 && unique_len != parms.parameter_set.pub_key_bytes() {
+                    return Err(TpmRc::SIZE.with(Position::parameter(2)));
+                }
+            }
             _ => {}
         }
 
@@ -196,6 +215,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                         || eph_point.y.as_slice().len() != param_size
                     {
                         return Err(TpmRc::ECC_POINT.with(Position::parameter(4)));
+                    }
+                }
+                OwnedPublicParmsAndId::Mlkem(parms, _) => {
+                    if in_sym_seed_bytes.len() != parms.parameter_set.ct_bytes() {
+                        return Err(TpmRc::SIZE.with(Position::parameter(4)));
                     }
                 }
                 _ => {
@@ -306,6 +330,33 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                         c"DUPLICATE",
                         eph_pub.x(),
                         parent_pub.x(),
+                        seed.get_mut(..digest_size).ok_or(TpmRc::FAILURE)?,
+                    )
+                    .map_err(|_| TpmRc::FAILURE)?;
+                    digest_size
+                }
+                OwnedPublicParmsAndId::Mlkem(parms, unique) => {
+                    let OwnedSensitiveComposite::Mlkem(priv_seed) = &parent_obj.sensitive else {
+                        return Err(TpmRc::FAILURE);
+                    };
+                    let priv_key = Mlkem::derive_key(crypto, parms.parameter_set, Tpm2b(priv_seed))
+                        .map_err(|_| TpmRc::FAILURE)?;
+                    let ct = Tpm2bKemCiphertext::new(in_sym_seed_bytes)
+                        .ok_or(TpmRc::VALUE.with(Position::parameter(4)))?;
+                    let mut ss_buf = [0u8; TpmiMlkemParms::SHARED_SECRET_BYTES];
+                    let ss = Mlkem::decapsulate(crypto, &priv_key, ct, &mut ss_buf)
+                        .ok()
+                        .flatten()
+                        .ok_or(TpmRc::VALUE.with(Position::parameter(4)))?;
+                    let parent_name_alg = parent_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+                    let digest_size = parent_name_alg.digest_size();
+                    kdfa(
+                        crypto,
+                        parent_name_alg,
+                        ss.as_slice(),
+                        c"DUPLICATE",
+                        in_sym_seed_bytes,
+                        unique.get_buffer(),
                         seed.get_mut(..digest_size).ok_or(TpmRc::FAILURE)?,
                     )
                     .map_err(|_| TpmRc::FAILURE)?;

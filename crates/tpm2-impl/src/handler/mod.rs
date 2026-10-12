@@ -89,24 +89,25 @@ mod unseal;
 
 use crate::owned::{
     AuthCommandLike, OwnedAuth, OwnedAuthCommand, OwnedDigest, OwnedEccParameter, OwnedEccPoint,
-    OwnedName, OwnedNonce, OwnedNvPublic, OwnedPrivateKeyRsa, OwnedPublic, OwnedPublicKeyRsa,
-    OwnedPublicParmsAndId, OwnedSensitiveComposite, OwnedSensitiveData, OwnedSymKey,
+    OwnedName, OwnedNonce, OwnedNvPublic, OwnedPrivateKeyRsa, OwnedPublic, OwnedPublicKeyMldsa,
+    OwnedPublicKeyMlkem, OwnedPublicKeyRsa, OwnedPublicParmsAndId, OwnedSensitiveComposite,
+    OwnedSensitiveData, OwnedSymKey,
 };
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{Crypto, GlobalState, TpmEngine};
 use tpm2::crypto::{
-    CryptoError, Ecc, EccPrivateKey, EccPublicKey, HashStream, Rsa, RsaPrivateKey, RsaPublicKey,
-    kdfa,
+    CryptoError, Ecc, EccPrivateKey, EccPublicKey, HashStream, Mldsa, MldsaPrivateKey,
+    MldsaPublicKey, Mlkem, MlkemPrivateKey, MlkemPublicKey, Rsa, RsaPrivateKey, RsaPublicKey, kdfa,
 };
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmSe};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{
     Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bNonce, Tpm2bNvPublic, Tpm2bSymKey, TpmEccCurve,
-    TpmaObject, TpmaSession, TpmiAlgHash, TpmiRsaKeyBits, TpmlPcrSelection, TpmsAuthResponse,
-    TpmsEccParms, TpmsNvPublic, TpmsRsaParms, TpmtSymDef,
+    TpmaObject, TpmaSession, TpmiAlgHash, TpmiMldsaParms, TpmiMlkemParms, TpmiRsaKeyBits,
+    TpmlPcrSelection, TpmsAuthResponse, TpmsEccParms, TpmsNvPublic, TpmsRsaParms, TpmtSymDef,
 };
 
 /// Represents an object loaded into the TPM's volatile memory.
@@ -816,10 +817,76 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             OwnedPublicParmsAndId::Sym(sym_def, unique) => {
                 self.generate_symmetric_key(name_alg, args, sym_def.alg.key_bytes(), unique)
             }
-            OwnedPublicParmsAndId::Mldsa(_, _)
-            | OwnedPublicParmsAndId::HashMldsa(_, _)
-            | OwnedPublicParmsAndId::Mlkem(_, _) => Err(TpmRc::TYPE.to_rc()),
+            OwnedPublicParmsAndId::Mldsa(parms, unique) => self
+                .generate_mldsa_key(parms.parameter_set, unique, args.gen_seed)
+                .map(OwnedSensitiveComposite::Mldsa),
+            OwnedPublicParmsAndId::HashMldsa(parms, unique) => self
+                .generate_mldsa_key(parms.parameter_set, unique, args.gen_seed)
+                .map(OwnedSensitiveComposite::HashMldsa),
+            OwnedPublicParmsAndId::Mlkem(parms, unique) => self
+                .generate_mlkem_key(parms.parameter_set, unique, args.gen_seed)
+                .map(OwnedSensitiveComposite::Mlkem),
         }
+    }
+
+    /// Generates an ML-DSA or HashML-DSA key pair for `parameter_set` and populates the public
+    /// key `unique`. Returns the 32-byte seed `ξ`.
+    fn generate_mldsa_key(
+        &mut self,
+        parameter_set: TpmiMldsaParms,
+        unique: &mut OwnedPublicKeyMldsa,
+        gen_seed_arg: Option<&[u8]>,
+    ) -> Result<[u8; 32], TpmRc> {
+        let crypto = self.crypto();
+        let key = match gen_seed_arg {
+            Some(seed) => {
+                let mut rng = crypto.rng_seeded(seed).map_err(|_| TpmRc::FAILURE)?;
+                Mldsa::generate_key(crypto, &mut rng, parameter_set)
+            }
+            None => Mldsa::generate_key(crypto, &mut self.context.platform.rng, parameter_set),
+        }
+        .map_err(|_| TpmRc::FAILURE)?;
+
+        let mut pk_buf = [0u8; TpmiMldsaParms::MAX_PUB_KEY_BYTES];
+        let pk = key
+            .public_key()
+            .encoded(&mut pk_buf)
+            .map_err(|_| TpmRc::FAILURE)?;
+        *unique = OwnedPublicKeyMldsa::from(pk);
+
+        let mut seed_buf = [0u8; 32];
+        key.seed(&mut seed_buf).map_err(|_| TpmRc::FAILURE)?;
+        Ok(seed_buf)
+    }
+
+    /// Generates an ML-KEM key pair for `parameter_set` and populates the public key `unique`.
+    /// Returns the 64-byte seed `d || z`.
+    fn generate_mlkem_key(
+        &mut self,
+        parameter_set: TpmiMlkemParms,
+        unique: &mut OwnedPublicKeyMlkem,
+        gen_seed_arg: Option<&[u8]>,
+    ) -> Result<[u8; 64], TpmRc> {
+        let crypto = self.crypto();
+        let key = match gen_seed_arg {
+            Some(seed) => {
+                let mut rng = crypto.rng_seeded(seed).map_err(|_| TpmRc::FAILURE)?;
+                Mlkem::generate_key(crypto, &mut rng, parameter_set)
+            }
+            None => Mlkem::generate_key(crypto, &mut self.context.platform.rng, parameter_set),
+        }
+        .map_err(|_| TpmRc::FAILURE)?;
+
+        let mut pk_buf = [0u8; TpmiMlkemParms::MAX_PUB_KEY_BYTES];
+        let pk = key
+            .public_key()
+            .encoded(&mut pk_buf)
+            .map_err(|_| TpmRc::FAILURE)?;
+        *unique = OwnedPublicKeyMlkem::from(pk);
+
+        let mut seed_buf = [0u8; 64];
+        key.seed(&mut seed_buf).map_err(|_| TpmRc::FAILURE)?;
+        Ok(seed_buf)
     }
 
     /// Generates an ECC key pair on the curve of `parms` and populates the public point
@@ -1175,34 +1242,14 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         metadata: &[u8],
     ) -> Result<[u8; 32], TpmRc> {
         let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy);
-
-        let mut hmac_input = [0u8; 512];
-        let mut offset = 0;
-
-        hmac_input[offset..offset + 2].copy_from_slice(&tag.to_be_bytes());
-        offset += 2;
-
-        hmac_input[offset..offset + digest_or_message.len()].copy_from_slice(digest_or_message);
-        offset += digest_or_message.len();
-
-        hmac_input[offset..offset + key_name.len()].copy_from_slice(key_name);
-        offset += key_name.len();
-
-        hmac_input[offset..offset + metadata.len()].copy_from_slice(metadata);
-        offset += metadata.len();
-
-        let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-        let hmac_digest = tpm2::crypto::hmac(
-            self.crypto(),
+        let tag_bytes = tag.to_be_bytes();
+        let (hmac_buf, _) = self.compute_hmac(
             TpmiAlgHash::Sha256,
             &proof_bytes[..proof_len],
-            &hmac_input[..offset],
-            &mut hmac_buf,
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
-
+            &[&tag_bytes, digest_or_message, key_name, metadata],
+        )?;
         let mut hmac_bytes = [0u8; 32];
-        hmac_bytes.copy_from_slice(hmac_digest.digest());
+        hmac_bytes.copy_from_slice(&hmac_buf[..32]);
         Ok(hmac_bytes)
     }
 

@@ -11,12 +11,13 @@ use tpm2::TpmCc;
 use tpm2::commands::{
     PolicyCommandCode, PolicyGetDigest, PolicyRestart, StartAuthSession, responses,
 };
-use tpm2::crypto::{Ecc, ModeIv, Rsa, RsaEncryptScheme, SymmetricKey, kdfa, kdfe};
+use tpm2::crypto::{Ecc, Mlkem, ModeIv, Rsa, RsaEncryptScheme, SymmetricKey, kdfa, kdfe};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    Handle, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bNonce, TpmEccCurve, TpmHt, TpmSe, TpmaObject,
-    TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsAuthCommand,
-    TpmsAuthResponse, TpmsEccPoint, TpmtSymDef, Unmarshal,
+    Handle, Tpm2b, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bKemCiphertext, Tpm2bNonce, TpmEccCurve,
+    TpmHt, TpmSe, TpmaObject, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
+    TpmiMlkemParms, TpmiRsaKeyBits, TpmsAuthCommand, TpmsAuthResponse, TpmsEccPoint, TpmtSymDef,
+    Unmarshal,
 };
 
 impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, T> {
@@ -389,6 +390,34 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     decrypted_salt[..encrypted_salt.len()]
                         .copy_from_slice(&plaintext_buf[..encrypted_salt.len()]);
                     Ok(encrypted_salt.len())
+                }
+                OwnedPublicParmsAndId::Mlkem(parms, unique) => {
+                    let value_err = TpmRc::VALUE.with(Position::parameter(2));
+                    let OwnedSensitiveComposite::Mlkem(seed) = &key_obj.sensitive else {
+                        return Err(value_err);
+                    };
+                    let crypto = self.crypto();
+                    let priv_key = Mlkem::derive_key(crypto, parms.parameter_set, Tpm2b(seed))
+                        .map_err(|_| value_err)?;
+                    let ct = Tpm2bKemCiphertext::new(encrypted_salt).ok_or(value_err)?;
+                    let mut ss_buf = [0u8; TpmiMlkemParms::SHARED_SECRET_BYTES];
+                    let ss = Mlkem::decapsulate(crypto, &priv_key, ct, &mut ss_buf)
+                        .ok()
+                        .flatten()
+                        .ok_or(value_err)?;
+                    let name_alg = key_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+                    let hash_size = name_alg.digest_size();
+                    kdfa(
+                        crypto,
+                        name_alg,
+                        ss.as_slice(),
+                        c"SECRET",
+                        encrypted_salt,
+                        unique.get_buffer(),
+                        &mut decrypted_salt[..hash_size],
+                    )
+                    .map_err(|_| TpmRc::FAILURE)?;
+                    Ok(hash_size)
                 }
                 _ => Err(TpmRc::KEY.with(Position::handle(1))),
             }
