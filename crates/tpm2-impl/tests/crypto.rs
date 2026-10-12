@@ -27,7 +27,7 @@ fn setup_tpm_with_fake_platform<'a>(
     let platform = TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first
     let startup_request = hex!("8001 0000000c 00000144 0000");
@@ -596,7 +596,7 @@ fn test_ecdh_zgen_success() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = hex!("8001 0000000c 00000144 0000");
     let mut startup_response = [0u8; 256];

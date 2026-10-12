@@ -16,7 +16,7 @@ fn test_mac_start_without_sessions_truncated() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first to initialize the TPM state
     let startup_request = hex!(
@@ -56,7 +56,7 @@ fn test_mac_start_without_sessions_success_dispatch() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first to initialize the TPM state
     let startup_request = hex!(
@@ -99,7 +99,7 @@ fn test_mac_start_with_sessions_invalid_session() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first to initialize the TPM state
     let startup_request = hex!(

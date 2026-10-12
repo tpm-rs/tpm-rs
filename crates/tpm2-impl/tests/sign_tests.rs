@@ -21,7 +21,7 @@ fn test_sign_restricted_without_ticket_returns_rc_ticket() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup
     let startup_request = hex!(
@@ -104,7 +104,7 @@ fn test_sequential_sign_under_auth_sessions_executes_cleanly() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup
     let startup_request = hex!(
@@ -181,7 +181,7 @@ fn test_sign_invalid_hash_alg_returns_rc_value() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup
     let startup_request = hex!(
@@ -260,7 +260,7 @@ fn test_sequential_sign_under_policy_auth_session_executes_cleanly() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup
     let startup_request = hex!(
@@ -407,7 +407,7 @@ fn test_verify_signature_unloaded_handle_returns_reference_h0() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup
     let startup_request = hex!(
@@ -456,7 +456,7 @@ fn test_sign_ecdaa_invalid_commit_returns_rc_value() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup
     let startup_request = hex!(

@@ -17,7 +17,7 @@ fn test_flush_context_session() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first to initialize the TPM state
     let startup_request = hex!(
@@ -137,7 +137,7 @@ fn test_flush_context_transient_vs_session() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first
     let startup_request = hex!(
@@ -251,7 +251,7 @@ fn test_flush_context_exhaustive_prefixes() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first
     let startup_request = hex!(
@@ -411,7 +411,7 @@ fn test_flush_context_multi_session_isolation() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first
     let startup_request = hex!(
@@ -539,7 +539,7 @@ fn test_policy_session_handle_persistence() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first
     let startup_request = hex!(
@@ -639,7 +639,7 @@ fn test_flush_context_parameter_framing_and_attributes() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = hex!("8001" "0000000c" "00000144" "0000");
     let mut resp = [0u8; 256];

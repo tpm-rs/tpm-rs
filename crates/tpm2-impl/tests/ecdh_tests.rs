@@ -23,7 +23,7 @@ fn setup_tpm<'a>(
     let platform = TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first
     let startup_request = hex!("8001 0000000c 00000144 0000");

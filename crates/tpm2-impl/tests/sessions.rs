@@ -15,7 +15,7 @@ fn test_start_auth_session_dispatch() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first to initialize the TPM state
     let startup_request = hex!(
@@ -68,7 +68,7 @@ fn test_start_auth_session_public_only_key_fails() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first to initialize the TPM state
     let startup_request = hex!(
@@ -156,7 +156,7 @@ fn test_start_auth_session_nonce_caller_too_small_fails() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first
     let startup_request = hex!(
@@ -206,7 +206,7 @@ fn test_start_auth_session_session_type_invalid_fails() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first
     let startup_request = hex!(
@@ -256,7 +256,7 @@ fn test_start_auth_session_symmetric_mode_invalid_fails() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first
     let startup_request = hex!(
@@ -395,7 +395,7 @@ fn test_session_handle_prefixes_adversarial() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first to initialize the TPM state
     let startup_request = hex!(
@@ -624,7 +624,7 @@ fn test_session_storage_limits_and_leaks() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first to initialize the TPM state
     let startup_request = hex!(
@@ -753,7 +753,7 @@ fn test_session_handle_variations_stress() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first to initialize the TPM state
     let startup_request = hex!(
@@ -895,7 +895,7 @@ fn test_start_auth_session_xor_symmetric_success() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup CLEAR
     let startup_request = hex!(
@@ -944,7 +944,7 @@ fn test_start_auth_session_xor_symmetric_null_hash_fails() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup CLEAR
     let startup_request = hex!(

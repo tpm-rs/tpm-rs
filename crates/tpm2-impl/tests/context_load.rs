@@ -19,7 +19,7 @@ fn test_adv_context_load_hmac_tampering() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.sp_seed_size = 32;
@@ -109,7 +109,7 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.sh_proof = [0x42; 64];
@@ -197,7 +197,7 @@ fn test_context_load_fails_on_total_reset_count_and_st_clear_count_changes() {
     let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.nv_available = true;
     global_state.initialized = true;
     global_state.total_reset_count = 10;

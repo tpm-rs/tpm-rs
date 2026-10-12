@@ -19,7 +19,7 @@ fn get_random_in_place() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = hex!(
         "8001" // tag
@@ -65,7 +65,7 @@ fn get_random_separate() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let startup_request = hex!(
         "8001" // tag
@@ -110,7 +110,7 @@ fn test_unmapped_command_code_returns_error() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     // Startup first to initialize the TPM state
     let startup_request = hex!(
@@ -197,7 +197,7 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.g_nv_ok = true;
 
     // 1. Initial Startup (SU_CLEAR) instantiates a fresh DRBG state with magic = DRBG_MAGIC
@@ -259,7 +259,7 @@ fn test_pcr_set_auth_value_and_extend_authorization() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.g_nv_ok = true;
 
     // Startup(CLEAR)
@@ -376,7 +376,7 @@ fn test_pcr_set_auth_policy_and_change_pps() {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
     global_state.g_nv_ok = true;
 
     // Startup(CLEAR)
@@ -481,7 +481,35 @@ fn test_platform_construction_with_generic_rng() {
     let _platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
     let global_state = GlobalState::default();
 
-    assert_eq!(global_state.seeds, [0u8; 32]);
+    assert_eq!(global_state.sp_seed_size, 0);
+}
+
+#[test]
+fn test_manufacture_generates_independent_secrets() {
+    use tpm2::crypto::Random;
+
+    let crypto = TestCryptoProvider;
+    let mut storage = FakeStorage::default();
+    let mut timer = FakeTimer;
+    let rng = crypto.rng().unwrap();
+    let platform = TpmPlatform::new(&crypto, &mut storage, &mut timer, rng);
+    let mut tpm = TpmEngine::new(platform).unwrap();
+    let mut global_state = tpm2_impl::GlobalState::default();
+    tpm.init_storage(&mut global_state).unwrap();
+
+    let secrets = [
+        global_state.sp_seed,
+        global_state.pp_seed,
+        global_state.ep_seed,
+        global_state.sh_proof,
+        global_state.eh_proof,
+        global_state.ph_proof,
+    ];
+    for (i, secret) in secrets.iter().enumerate() {
+        assert_ne!(*secret, [0u8; 64]);
+        assert!(secrets[i + 1..].iter().all(|other| other != secret));
+    }
+    assert_eq!(global_state.sp_seed_size, 64);
 }
 
 /// Runs `TPM2_Startup(SU_CLEAR)`, then `TPM2_StirRandom(stir)` if given, then
@@ -498,7 +526,7 @@ fn test_crypto_provider_random(seed: &[u8], stir: Option<&[u8]>) -> Vec<u8> {
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage(&mut global_state).unwrap();
 
     let mut resp = [0u8; 256];
     let startup_clear = hex!("8001" "0000000c" "00000144" "0000");
