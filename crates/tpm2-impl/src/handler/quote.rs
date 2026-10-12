@@ -118,11 +118,6 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         let attest_bytes = attest_buf.get(..attest_len).ok_or(TpmRc::FAILURE)?;
 
         // 6. Sign the attestation payload
-        self.record_ecdaa_debug_digest(
-            actual_in_scheme,
-            attest_bytes,
-            cmd.qualifying_data.as_slice(),
-        );
         let owned_sig = self.sign_attestation_block(
             sign_handle,
             signer_obj_opt.as_ref(),

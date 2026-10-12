@@ -103,11 +103,6 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         let attest_bytes = attest_buf.get(..attest_len).ok_or(TpmRc::FAILURE)?;
 
         // 6. Sign the attestation payload
-        self.record_ecdaa_debug_digest(
-            actual_in_scheme,
-            attest_bytes,
-            cmd.qualifying_data.as_slice(),
-        );
         let owned_sig = self.sign_attestation_block(
             sign_handle,
             signer_obj_opt.as_ref(),
@@ -238,11 +233,6 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         let attest_bytes = attest_buf.get(..attest_len).ok_or(TpmRc::FAILURE)?;
 
         // 7. Sign the attestation payload
-        self.record_ecdaa_debug_digest(
-            actual_in_scheme,
-            attest_bytes,
-            cmd.qualifying_data.as_slice(),
-        );
         let owned_sig = self.sign_attestation_block(
             sign_handle,
             signer_obj_opt.as_ref(),
@@ -260,34 +250,5 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
-    }
-
-    /// For an ECDAA `scheme`, records `qualifyingData || H(attestation)` (truncated to 64
-    /// bytes) in `GlobalState::debug_provided_auth`.
-    ///
-    /// PORTING: factored out of exp's `certify`, `certify_creation` and `quote`, which each
-    /// inlined this debug hook before signing. This is exp's ECDAA signing input; the digest that
-    /// is signed is now `H(qualifyingData || H(attestation))` (see `sign_attestation_block`).
-    pub(super) fn record_ecdaa_debug_digest(
-        &mut self,
-        scheme: Option<TpmtSigScheme>,
-        attest_bytes: &[u8],
-        qualifying_data: &[u8],
-    ) {
-        let Some(TpmtSigScheme::Ecdaa(ecdaa_s)) = scheme else {
-            return;
-        };
-        let Ok((digest_buf, digest_len)) = self.compute_hash(ecdaa_s.hash_alg, &[attest_bytes])
-        else {
-            return;
-        };
-        let digest = digest_buf.get(..digest_len).unwrap_or_default();
-        let src = qualifying_data.iter().take(64).chain(digest);
-        let mut len = 0;
-        for (dst, byte) in self.global_state.debug_provided_auth.iter_mut().zip(src) {
-            *dst = *byte;
-            len += 1;
-        }
-        self.global_state.debug_provided_auth_len = len;
     }
 }
