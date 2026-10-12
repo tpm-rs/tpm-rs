@@ -369,8 +369,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     .map_err(|_| TpmRc::FAILURE)?;
                     seed_len = digest_size;
                 } else {
-                    // Generate a random seed
-                    self.fill_random(&mut seed[..32])
+                    // Generate a random seed of the new parent's nameAlg digest size
+                    let digest_size = parent_name_alg.digest_size();
+                    self.fill_random(seed.get_mut(..digest_size).ok_or(TpmRc::FAILURE)?)
                         .map_err(|_| TpmRc::FAILURE)?;
 
                     // RSA seed encryption
@@ -392,7 +393,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                             hash: parent_name_alg,
                             label: DUPLICATE_LABEL,
                         },
-                        &seed[..32],
+                        &seed[..digest_size],
                         &mut encrypted_seed,
                     )
                     .ok()
@@ -400,7 +401,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                     .ok_or(TpmRc::FAILURE)?;
                     out_sym_seed =
                         Tpm2bEncryptedSecret::new(encrypted.as_slice()).ok_or(TpmRc::FAILURE)?;
-                    seed_len = 32;
+                    seed_len = digest_size;
                 }
                 let seed = &seed[..seed_len];
 
@@ -410,13 +411,15 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 let mut sym_key_iv = [0u8; AlgSym::MAX_KEY_BYTES];
                 let mut integrity_key = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
 
-                // 1. Compute KDFs
-                let target_name_alg = target_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
-                let target_digest_size = target_name_alg.digest_size();
+                // 1. Compute KDFs. The outer wrapper uses the new parent's nameAlg (TPM 2.0
+                //    Part 1, "Outer Duplication Wrapper").
+                //
+                // PORTING: exp used the duplicated object's nameAlg.
+                let parent_digest_size = parent_name_alg.digest_size();
                 let outer_key = sym_key_iv.get_mut(..outer_key_len).ok_or(TpmRc::FAILURE)?;
                 kdfa(
                     crypto,
-                    target_name_alg,
+                    parent_name_alg,
                     seed,
                     c"STORAGE",
                     target_obj.name.get_buffer(),
@@ -425,11 +428,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 )
                 .map_err(|_| TpmRc::FAILURE)?;
                 let integrity_key = integrity_key
-                    .get_mut(..target_digest_size)
+                    .get_mut(..parent_digest_size)
                     .ok_or(TpmRc::FAILURE)?;
                 kdfa(
                     crypto,
-                    target_name_alg,
+                    parent_name_alg,
                     seed,
                     c"INTEGRITY",
                     &[],
@@ -446,7 +449,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 // 3. Compute outer HMAC dynamically over the ENCRYPTED inner_blob ciphertext
                 let (hmac_bytes, hmac_len) = self
                     .compute_hmac(
-                        target_name_alg,
+                        parent_name_alg,
                         integrity_key,
                         &[inner_blob, target_obj.name.get_buffer()],
                     )
