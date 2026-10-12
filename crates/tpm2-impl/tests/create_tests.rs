@@ -8,7 +8,8 @@ use tpm2::{
     AlgSym, Handle, Marshal, PublicParmsAndId, Tpm2b, Tpm2bAuth, Tpm2bData, Tpm2bDigest,
     Tpm2bEncryptedSecret, Tpm2bPrivate, Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmaObject,
     TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmlPcrSelection,
-    TpmsAuthCommand, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject, Unmarshal,
+    TpmsAuthCommand, TpmsRsaParms, TpmsSensitiveCreate, TpmtKeyedHashScheme, TpmtPublic,
+    TpmtSymDefObject, Unmarshal,
 };
 use tpm2_impl::{TpmEngine, TpmPlatform};
 
@@ -361,6 +362,57 @@ fn test_create_primary_sealed_data_unseal() {
         .expect("Unseal failed");
 
     assert_eq!(unseal_resp.out_data.as_slice(), secret_message);
+}
+
+/// Creates an HMAC primary key in the owner hierarchy and returns its public `unique` field,
+/// which the TPM derives from the object's seed.
+fn create_hmac_primary_unique(
+    tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer>,
+    global_state: &mut tpm2_impl::GlobalState,
+    auth_policy: &[u8],
+) -> Vec<u8> {
+    let cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
+        in_sensitive: Tpm2b(TpmsSensitiveCreate::default()),
+        in_public: Tpm2b(TpmtPublic {
+            name_alg: Some(TpmiAlgHash::Sha256),
+            object_attributes: TpmaObject::SIGN_ENCRYPT
+                | TpmaObject::FIXED_TPM
+                | TpmaObject::FIXED_PARENT
+                | TpmaObject::SENSITIVE_DATA_ORIGIN
+                | TpmaObject::USER_WITH_AUTH,
+            auth_policy: Tpm2bDigest::new(auth_policy).unwrap(),
+            parms_and_id: PublicParmsAndId::KeyedHash(
+                Some(TpmtKeyedHashScheme::Hmac(TpmiAlgHash::Sha256)),
+                Tpm2bDigest::default(),
+            ),
+        }),
+        outside_info: Tpm2bData::default(),
+        creation_pcr: TpmlPcrSelection::default(),
+    };
+    let rsp = execute_tpm_command::<CreatePrimary>(tpm, global_state, &cmd, &[]).unwrap();
+    match rsp.out_public.0.parms_and_id {
+        PublicParmsAndId::KeyedHash(_, unique) => unique.as_slice().to_vec(),
+        _ => panic!("unexpected public area type"),
+    }
+}
+
+#[test]
+fn test_create_primary_key_depends_on_whole_template() {
+    let crypto = TestCryptoProvider;
+    let mut storage = FakeStorage::default();
+    let mut timer = FakeTimer::new();
+    let rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&crypto, &mut storage, &mut timer, rng);
+
+    let a1 = create_hmac_primary_unique(&mut tpm, &mut global_state, &[]);
+    let a2 = create_hmac_primary_unique(&mut tpm, &mut global_state, &[]);
+    let b = create_hmac_primary_unique(&mut tpm, &mut global_state, &[0x11; 32]);
+
+    // The same template gives the same key; a template that differs only in its authPolicy
+    // (not in `unique`) gives a different key.
+    assert_eq!(a1, a2);
+    assert_ne!(a1, b);
 }
 
 #[test]
