@@ -412,20 +412,21 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             let handle_err = TpmRc::HANDLE.with(Position::handle(2));
             let handle_type = bind.handle_type();
             if handle_type == Some(TpmHt::Transient) {
-                if self
-                    .global_state
-                    .find_transient_object(bind_handle)
-                    .is_none()
-                {
+                let Some(obj) = self.global_state.find_transient_object(bind_handle) else {
                     return Err(TpmRc::REFERENCE_H1);
+                };
+                if obj.sensitive.as_bytes().is_empty() {
+                    return Err(handle_err);
                 }
             } else if handle_type == Some(TpmHt::Persistent) {
-                if self
+                let Ok(obj) = self
                     .context
                     .load_persistent_object(self.global_state, bind_handle)
-                    .is_err()
-                {
+                else {
                     return Err(TpmRc::REFERENCE_H1);
+                };
+                if obj.sensitive.as_bytes().is_empty() {
+                    return Err(handle_err);
                 }
             } else if handle_type == Some(TpmHt::PCR) {
                 if bind_handle <= 23 {

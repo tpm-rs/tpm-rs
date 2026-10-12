@@ -22,7 +22,10 @@ use tpm2::{Ticket, crypto};
 
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
+use crate::{
+    handler::{CommandHandler, TransientObject},
+    req_resp::RequestThenResponse,
+};
 
 /// Returns the coordinate / scalar size (in bytes) of the ECC curves supported by the crypto
 /// handlers (`TPM_ECC_NIST_P224`, `TPM_ECC_NIST_P256`, `TPM_ECC_BN_P256`, `TPM_ECC_NIST_P384`
@@ -395,6 +398,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                         return Err(TpmRc::KEY.with(Position::handle(1)));
                     }
                 };
+                // A public-only object has no HMAC key, so anyone could compute the HMAC
+                // (reference CryptValidateSignature returns TPM_RC_HANDLE).
+                if obj.sensitive.as_bytes().is_empty() {
+                    return Err(TpmRc::HANDLE.with(Position::handle(1)));
+                }
                 let (hmac_bytes, hmac_len) = self.compute_hmac(
                     ha.hash_alg(),
                     obj.sensitive.as_bytes(),
@@ -406,13 +414,13 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
                 {
                     return Err(TpmRc::SIGNATURE.to_rc());
                 }
-                let hierarchy = if obj.hierarchy == Handle::RH_NULL.0 {
-                    Handle::RH_NULL
-                } else {
-                    Handle(obj.hierarchy)
-                };
+                let mut ticket_hmac = [0u8; 32];
                 let rsp = responses::VerifySignature {
-                    validation: TpmtTkVerified::Verified(hierarchy, cmd.digest),
+                    validation: self.verified_ticket(
+                        &obj,
+                        cmd.digest.as_slice(),
+                        &mut ticket_hmac,
+                    )?,
                 };
                 let response = request.into_response();
                 self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
@@ -490,32 +498,42 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             return Err(TpmRc::SIGNATURE.with(Position::handle(2)));
         }
 
-        // If key is in TPM_RH_NULL or nameAlg is TPM_ALG_NULL, return NULL ticket
-        let ticket_hmac;
-        let (hierarchy, digest) = match Handle(obj.hierarchy) {
-            Handle::RH_OWNER | Handle::RH_PLATFORM | Handle::RH_ENDORSEMENT
-                if obj.public.name_alg.is_some() =>
-            {
-                ticket_hmac = self.compute_verified_ticket(
-                    obj.hierarchy,
-                    cmd.digest.as_slice(),
-                    obj.name.get_buffer(),
-                )?;
-                (
-                    Handle(obj.hierarchy),
-                    Tpm2bDigest::new(&ticket_hmac).ok_or(TpmRc::FAILURE)?,
-                )
-            }
-            _ => (Handle::RH_NULL, Tpm2bDigest::default()),
-        };
-
+        let mut ticket_hmac = [0u8; 32];
         let rsp = responses::VerifySignature {
-            validation: TpmtTkVerified::Verified(hierarchy, digest),
+            validation: self.verified_ticket(&obj, cmd.digest.as_slice(), &mut ticket_hmac)?,
         };
 
         let response = request.into_response();
         self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
+    }
+
+    /// Returns the `TPM_ST_VERIFIED` ticket for a signature over `digest` that was verified with
+    /// `obj`, using `hmac` as storage for the ticket HMAC.
+    ///
+    /// The ticket is a NULL ticket if `obj` is in the NULL hierarchy or has a NULL nameAlg.
+    fn verified_ticket<'h>(
+        &self,
+        obj: &TransientObject,
+        digest: &[u8],
+        hmac: &'h mut [u8; 32],
+    ) -> Result<TpmtTkVerified<'h>, TpmRc> {
+        match Handle(obj.hierarchy) {
+            Handle::RH_OWNER | Handle::RH_PLATFORM | Handle::RH_ENDORSEMENT
+                if obj.public.name_alg.is_some() =>
+            {
+                *hmac =
+                    self.compute_verified_ticket(obj.hierarchy, digest, obj.name.get_buffer())?;
+                Ok(TpmtTkVerified::Verified(
+                    Handle(obj.hierarchy),
+                    Tpm2bDigest::new(hmac).ok_or(TpmRc::FAILURE)?,
+                ))
+            }
+            _ => Ok(TpmtTkVerified::Verified(
+                Handle::RH_NULL,
+                Tpm2bDigest::default(),
+            )),
+        }
     }
 
     /// Handles the [TpmCc::Sign] (`0x15D`) command.
