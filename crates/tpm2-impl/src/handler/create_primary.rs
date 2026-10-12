@@ -1,7 +1,7 @@
 use super::{KeyDerivationArgs, TransientObject};
 use crate::Crypto;
 use crate::handle_checks::{Tpmi, check};
-use crate::handler::object_helpers::{null_name_alg_error, unique_parts};
+use crate::handler::object_helpers::null_name_alg_error;
 use crate::owned::{
     OwnedAuth, OwnedDigest, OwnedPublic, OwnedPublicParmsAndId, OwnedSensitiveComposite,
 };
@@ -101,10 +101,21 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         } else {
             Some(in_sensitive_struct.data.as_slice())
         };
+        // The key depends on the whole template (through its Name) and on the sensitive data,
+        // as in the reference CreatePrimary, so templates that differ in anything other than
+        // `unique` (e.g. attributes or authPolicy) give different keys.
+        let mut template_buf = [0u8; TpmtPublic::MAX_SIZE];
+        let template_len = in_public_struct.marshal(&mut template_buf);
+        let template_name =
+            self.compute_name(in_public_struct.name_alg, &template_buf[..template_len])?;
         let mut obj_seed = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let (sensitive, stored_seed) = self.derive_primary_key(
             name_alg,
             &parent_seed_val[..parent_seed_len],
+            PrimaryKdfContext {
+                template_name: template_name.get_buffer(),
+                sensitive_data: in_sensitive_struct.data.as_slice(),
+            },
             &mut in_public_struct.parms_and_id,
             fallback_sensitive_data,
             &mut obj_seed,
@@ -196,8 +207,6 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             st_clear: false,
         });
 
-        self.update_aliased_transient_objects(handle, &name, &qualified_name);
-
         Ok(())
     }
 
@@ -225,31 +234,32 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
         Ok(seed_len)
     }
 
-    /// Derives object seeds using KDFA and generates cryptographic key/unique properties.
+    /// Derives the object seed with KDFa from the hierarchy's primary seed and `context`, and
+    /// generates the key and the `unique` field from it.
     ///
     /// Returns the sensitive area of the new object and the seed to store with it.
     ///
-    /// PORTING: exp copied the template's `unique` field into a buffer first (KDFa now
-    /// reads it from `parms_and_id`, see `unique_parts`) and wrote the private key into an
-    /// out-buffer; takes `&mut self` (key generation may use the global RNG).
+    /// PORTING: exp used only the template's `unique` field as the KDFa context, so templates
+    /// with the same `unique` gave the same key. It also wrote the private key into an
+    /// out-buffer; this takes `&mut self` (key generation may use the global RNG).
     fn derive_primary_key(
         &mut self,
         name_alg: TpmiAlgHash,
         parent_seed_val: &[u8],
+        context: PrimaryKdfContext<'_>,
         parms_and_id: &mut OwnedPublicParmsAndId,
         fallback_sensitive_data: Option<&[u8]>,
         obj_seed: &mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
     ) -> Result<(OwnedSensitiveComposite, [u8; PRIMARY_SEED_BYTES]), TpmRc> {
         let derived_seed = !parent_seed_val.is_empty();
         if derived_seed {
-            let (unique_u, unique_v) = unique_parts(parms_and_id.as_borrowed());
             kdfa(
                 self.crypto(),
                 TpmiAlgHash::Sha256,
                 parent_seed_val,
                 c"Primary Object Creation",
-                unique_u,
-                unique_v,
+                context.template_name,
+                context.sensitive_data,
                 &mut obj_seed[..PRIMARY_SEED_BYTES],
             )
             .map_err(|_| TpmRc::FAILURE)?;
@@ -272,4 +282,12 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
 
         Ok((sensitive, *stored_seed))
     }
+}
+
+/// The KDFa context for deriving a primary object's seed.
+struct PrimaryKdfContext<'a> {
+    /// The Name of the template, as received.
+    template_name: &'a [u8],
+    /// `inSensitive.data`.
+    sensitive_data: &'a [u8],
 }

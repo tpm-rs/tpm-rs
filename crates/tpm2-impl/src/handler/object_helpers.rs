@@ -174,8 +174,6 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer> CommandHandler<'a, 'b, C, S, 
             hierarchy,
             st_clear,
         });
-
-        self.update_aliased_transient_objects(handle, &name, &qualified_name);
     }
 
     /// Resolves the parent object seed, hierarchy, qualified name, and auth requirement
