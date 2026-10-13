@@ -364,6 +364,15 @@ impl<C> HmacSession<C> {
     pub fn nonce_caller(&self) -> Tpm2bNonce<'_> {
         Tpm2bNonce::new(self.nonce_caller.as_slice()).unwrap()
     }
+
+    /// Updates the length of nonceCaller.
+    // FIXME/ATTN: This is only meant for testing (e.g. that the TPM tolerates
+    // nonceCaller changing size, or rejects one longer than nonceTPM), so it
+    // should only be compiled with a testing feature. It panics (via a slice
+    // bounds check) on the next command if `len` exceeds `MAX_DIGEST`.
+    pub fn set_new_nonce_caller_length(&mut self, len: usize) {
+        self.nonce_caller.len = len;
+    }
 }
 
 impl<C: Crypto> Session for HmacSession<C> {
