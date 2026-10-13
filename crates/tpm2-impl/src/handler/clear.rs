@@ -51,7 +51,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.return_if_nv_is_not_available()?;
 
         // if(gp.disableClear) return TPM_RC_DISABLED;
-        if self.global_state.disable_clear {
+        if self.context.state.disable_clear {
             return Err(TpmRc::DISABLED);
         }
 
@@ -78,62 +78,62 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .map_err(|_| TpmRc::FAILURE)?;
 
         // All random generated successfully, now mutate state
-        self.global_state.sh_enable = true;
-        self.global_state.eh_enable = true;
+        self.context.state.sh_enable = true;
+        self.context.state.eh_enable = true;
 
         // gp.resetCount = gr.restartCount = gr.clearCount = 0; gp.auditCounter = 0;
-        self.global_state.reset_count = 0;
-        self.global_state.restart_count = 0;
-        self.global_state.clear_count = 0;
-        self.global_state.audit_counter = 0;
+        self.context.state.reset_count = 0;
+        self.context.state.restart_count = 0;
+        self.context.state.clear_count = 0;
+        self.context.state.audit_counter = 0;
         // go.clock = 0; go.clockSafe = YES;
-        self.global_state.clock_offset = -(self.global_state.tpm_time_ms as i64);
-        self.global_state.clock_safe = true;
-        self.global_state.clock_rate_adjust = tpm2::TpmClockAdjust::NoChange;
+        self.context.state.clock_offset = -(self.context.state.tpm_time_ms as i64);
+        self.context.state.clock_safe = true;
+        self.context.state.clock_rate_adjust = tpm2::TpmClockAdjust::NoChange;
 
-        self.global_state.nv_locked = false;
+        self.context.state.nv_locked = false;
 
-        self.global_state.sh_proof.copy_from_slice(&new_sh_proof);
-        self.global_state.sh_proof_size = 64;
+        self.context.state.sh_proof.copy_from_slice(&new_sh_proof);
+        self.context.state.sh_proof_size = 64;
 
-        self.global_state.eh_proof.copy_from_slice(&new_eh_proof);
-        self.global_state.eh_proof_size = 64;
+        self.context.state.eh_proof.copy_from_slice(&new_eh_proof);
+        self.context.state.eh_proof_size = 64;
 
-        self.global_state.sp_seed.copy_from_slice(&new_sp_seed);
-        self.global_state.sp_seed_size = 64;
+        self.context.state.sp_seed.copy_from_slice(&new_sp_seed);
+        self.context.state.sp_seed_size = 64;
 
         // Flush loaded objects in the storage and endorsement hierarchies.
-        for (i, slot) in self.global_state.transient_objects.iter_mut().enumerate() {
+        for (i, slot) in self.context.state.transient_objects.iter_mut().enumerate() {
             if let Some(obj) = slot
                 && (obj.hierarchy == Handle::RH_OWNER.0
                     || obj.hierarchy == Handle::RH_ENDORSEMENT.0)
             {
                 *slot = None;
-                self.global_state.transient_parents[i] = None;
+                self.context.state.transient_parents[i] = None;
             }
         }
 
-        self.global_state.owner_auth = crate::owned::OwnedAuth::default();
-        self.global_state.endorsement_auth = crate::owned::OwnedAuth::default();
-        self.global_state.lockout_auth = crate::owned::OwnedAuth::default();
-        self.global_state.owner_policy = crate::owned::OwnedDigest::default();
-        self.global_state.endorsement_policy = crate::owned::OwnedDigest::default();
-        self.global_state.lockout_policy = crate::owned::OwnedDigest::default();
-        self.global_state.owner_alg = None;
-        self.global_state.endorsement_alg = None;
-        self.global_state.lockout_alg = None;
+        self.context.state.owner_auth = crate::owned::OwnedAuth::default();
+        self.context.state.endorsement_auth = crate::owned::OwnedAuth::default();
+        self.context.state.lockout_auth = crate::owned::OwnedAuth::default();
+        self.context.state.owner_policy = crate::owned::OwnedDigest::default();
+        self.context.state.endorsement_policy = crate::owned::OwnedDigest::default();
+        self.context.state.lockout_policy = crate::owned::OwnedDigest::default();
+        self.context.state.owner_alg = None;
+        self.context.state.endorsement_alg = None;
+        self.context.state.lockout_alg = None;
 
         // Flush owner and endorsement evict objects and owner NV indices (`NvFlushHierarchy`).
         self.nv_flush_hierarchy(Handle::RH_OWNER.0)?;
         self.nv_flush_hierarchy(Handle::RH_ENDORSEMENT.0)?;
 
         // Initialize dictionary attack parameters (`DAPreInstall_Init`).
-        self.global_state.failed_tries = 0;
-        self.global_state.max_tries = 3;
-        self.global_state.recovery_time = 1000;
-        self.global_state.lockout_recovery = 1000;
-        self.global_state.lockout_auth_enabled = true;
-        self.global_state.da_pending_on_nv = false;
+        self.context.state.failed_tries = 0;
+        self.context.state.max_tries = 3;
+        self.context.state.recovery_time = 1000;
+        self.context.state.lockout_recovery = 1000;
+        self.context.state.lockout_auth_enabled = true;
+        self.context.state.da_pending_on_nv = false;
         self.nv_sync_persistent_failed_tries()?;
 
         // Save persistent data changes to NV.
@@ -141,11 +141,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.nv_sync_persistent_max_counter()?;
 
         // Reset the PCR authValues (`PCR_ClearAuth`) and bump the PCR counter (`PCRChanged(0)`).
-        self.global_state.pcr_auth_value = crate::owned::OwnedAuth::default();
-        self.global_state.pcrs.update_counter =
-            self.global_state.pcrs.update_counter.wrapping_add(1);
+        self.context.state.pcr_auth_value = crate::owned::OwnedAuth::default();
+        self.context.state.pcrs.update_counter =
+            self.context.state.pcrs.update_counter.wrapping_add(1);
 
-        self.context.save_hierarchy_auths(self.global_state);
+        self.context.save_hierarchy_auths();
 
         // Only report success once every state and NV update has been performed.
         let response = request.into_response();
@@ -236,8 +236,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut val_bytes = [0u8; 8];
             val_bytes.copy_from_slice(&read_buf[metadata_size..metadata_size + 8]);
             let val = u64::from_be_bytes(val_bytes);
-            if val > self.global_state.max_counter {
-                self.global_state.max_counter = val;
+            if val > self.context.state.max_counter {
+                self.context.state.max_counter = val;
             }
         }
     }

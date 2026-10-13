@@ -28,27 +28,19 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> (
-    TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
-    tpm2_impl::GlobalState,
-) {
+) -> TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng> {
     let platform = TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.locality = 0;
-    global_state.g_nv_ok = true;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.locality = 0;
+    tpm.state.g_nv_ok = true;
 
     // Startup
     let startup_request = hex!("8001 0000000c 00000144 0000");
     let mut startup_response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &startup_request[..],
-        &mut startup_response[..],
-    );
-    (tpm, global_state)
+    tpm.execute_command_separate(&startup_request[..], &mut startup_response[..]);
+    tpm
 }
 
 /// `TPM2_PolicyCommandCode(TPM_CC_Duplicate)` policy digest (SHA-256), used as the authPolicy of
@@ -64,13 +56,11 @@ const DUP_POLICY_DIGEST: [u8; 32] =
 /// [`execute_tpm_command`] do not interfere with resolving the bounds for these commands.
 fn start_duplicate_policy_session(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
-    global_state: &mut tpm2_impl::GlobalState,
     auth_hash: TpmiAlgHash,
 ) -> Result<TpmsAuthCommand<'static>, u32> {
     use tpm2::commands::{PolicyCommandCode, StartAuthSession};
     let session = execute_tpm_command_raw(
         tpm,
-        global_state,
         &StartAuthSession {
             tpm_key: Handle::RH_NULL,
             bind: Handle::RH_NULL,
@@ -84,7 +74,6 @@ fn start_duplicate_policy_session(
     )?;
     execute_tpm_command_raw(
         tpm,
-        global_state,
         &PolicyCommandCode {
             policy_session: session.session_handle,
             code: TpmCc::Duplicate,
@@ -105,7 +94,6 @@ fn start_duplicate_policy_session(
 /// `TPM2_Duplicate` a policy session that satisfied `PolicyCommandCode(TPM_CC_Duplicate)`.
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
-    global_state: &mut tpm2_impl::GlobalState,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -113,7 +101,7 @@ where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     if !auths.is_empty() {
-        return execute_tpm_command_raw(tpm, global_state, cmd, auths);
+        return execute_tpm_command_raw(tpm, cmd, auths);
     }
     let password = TpmsAuthCommand {
         session_handle: Handle::RS_PW,
@@ -125,29 +113,27 @@ where
         TpmCc::Duplicate => {
             // The policy session's hash must be the object's nameAlg (objectHandle comes first).
             let object_handle = cmd.handles().as_ref()[0].0;
-            let auth_hash = global_state
+            let auth_hash = tpm
+                .state
                 .transient_objects
                 .iter()
                 .flatten()
                 .find(|o| o.handle == object_handle)
                 .and_then(|o| o.public.name_alg)
                 .unwrap_or(TpmiAlgHash::Sha256);
-            let policy = start_duplicate_policy_session(tpm, global_state, auth_hash)?;
-            execute_tpm_command_raw(tpm, global_state, cmd, &[policy])
+            let policy = start_duplicate_policy_session(tpm, auth_hash)?;
+            execute_tpm_command_raw(tpm, cmd, &[policy])
         }
-        TpmCc::ActivateCredential => {
-            execute_tpm_command_raw(tpm, global_state, cmd, &[password, password])
-        }
+        TpmCc::ActivateCredential => execute_tpm_command_raw(tpm, cmd, &[password, password]),
         TpmCc::Load | TpmCc::Import | TpmCc::Create | TpmCc::CreatePrimary => {
-            execute_tpm_command_raw(tpm, global_state, cmd, &[password])
+            execute_tpm_command_raw(tpm, cmd, &[password])
         }
-        _ => execute_tpm_command_raw(tpm, global_state, cmd, &[]),
+        _ => execute_tpm_command_raw(tpm, cmd, &[]),
     }
 }
 
 fn execute_tpm_command_raw<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
-    global_state: &mut tpm2_impl::GlobalState,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -197,8 +183,7 @@ where
     request_buf[2..6].copy_from_slice(&(offset as u32).to_be_bytes());
 
     let mut response_buf = [0u8; 16384];
-    let resp_size =
-        tpm.execute_command_separate(global_state, &request_buf[..offset], &mut response_buf[..]);
+    let resp_size = tpm.execute_command_separate(&request_buf[..offset], &mut response_buf[..]);
 
     let rc = u32::from_be_bytes(response_buf[6..10].try_into().unwrap());
     if rc != 0 {
@@ -377,7 +362,7 @@ fn test_duplicate_unsupported_curve() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Create parent key with an unsupported curve (e.g. 999)
     let mut parent = create_transient_ecc_key(
@@ -394,7 +379,7 @@ fn test_duplicate_unsupported_curve() {
     // Update name
     parent.name = compute_key_name(tpm.platform.crypto, &parent.public.as_tpmt());
     parent.qualified_name = parent.name;
-    global_state.transient_objects[0] = Some(parent);
+    tpm.state.transient_objects[0] = Some(parent);
 
     // 2. Create target signing key
     let target = create_transient_key(
@@ -402,7 +387,7 @@ fn test_duplicate_unsupported_curve() {
         0x80000002,
         TpmaObject::SIGN_ENCRYPT | TpmaObject::USER_WITH_AUTH,
     );
-    global_state.transient_objects[1] = Some(target.clone());
+    tpm.state.transient_objects[1] = Some(target.clone());
 
     // 3. Execute Duplicate on target under parent -> should fail with Value error (132)
     use tpm2::commands::Duplicate;
@@ -413,7 +398,7 @@ fn test_duplicate_unsupported_curve() {
         symmetric_alg: None,
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &dup_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &dup_cmd, &[]);
     assert_eq!(res.as_ref().err().copied(), Some(TpmRc::VALUE.get()));
     println!("Duplicate with unsupported curve result: {:?}", res);
 }
@@ -424,7 +409,7 @@ fn test_make_credential_panic_vulnerability_oversized_ecc_point() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Create a protector ECC key at 0x80000001
     let mut protector = create_transient_ecc_key(
@@ -448,7 +433,7 @@ fn test_make_credential_panic_vulnerability_oversized_ecc_point() {
     {
         point.x = tpm2_impl::owned::OwnedTpm2b::new(&[0u8; 33]).unwrap();
     }
-    global_state.transient_objects[0] = Some(protector);
+    tpm.state.transient_objects[0] = Some(protector);
 
     // 2. MakeCredential
     use tpm2::commands::MakeCredential;
@@ -460,7 +445,7 @@ fn test_make_credential_panic_vulnerability_oversized_ecc_point() {
 
     // This should NOT panic. C CryptSecretEncrypt returns a bare TPM_RC_KEY when the ECDH point
     // multiplication with the (invalid) protector public key fails (CryptUtil.c).
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &mc_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mc_cmd, &[]);
     assert_eq!(res.err(), Some(TpmRc::KEY.get()));
 }
 
@@ -471,7 +456,7 @@ fn test_cpc_2_14_01_01_create_sym_under_null_parent() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Create parent RSA key with symmetric: Null
     let mut parent = create_transient_key(
@@ -486,7 +471,7 @@ fn test_cpc_2_14_01_01_create_sym_under_null_parent() {
     }
     parent.name = compute_key_name(tpm.platform.crypto, &parent.public.as_tpmt());
     parent.qualified_name = parent.name;
-    global_state.transient_objects[0] = Some(parent);
+    tpm.state.transient_objects[0] = Some(parent);
 
     // 2. Execute Create for a SymCipher object with SHA1 name_alg
     use tpm2::commands::Create;
@@ -514,6 +499,6 @@ fn test_cpc_2_14_01_01_create_sym_under_null_parent() {
         creation_pcr: tpm2::TpmlPcrSelection::default(),
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &cmd, &[]);
     assert!(res.is_ok(), "Create failed: {:?}", res.err());
 }

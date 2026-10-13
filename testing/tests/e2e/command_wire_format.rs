@@ -1,5 +1,6 @@
 //! Raw command wire format: hand-marshalled commands and trailing parameter bytes.
 
+use crate::_common::Connection;
 use crate::_common::{
     CmdHeader, RespHeader, base_attrs, create_primary_with_auth_in, ecc_template, marshal_to_slice,
     rc_bare, send_with_trailing,

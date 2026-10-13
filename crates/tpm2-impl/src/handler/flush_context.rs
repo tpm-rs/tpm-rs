@@ -61,11 +61,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let is_valid_transient = is_transient
             && (self
-                .global_state
+                .context
+                .state
                 .find_transient_object(flush_handle)
                 .is_some()
                 || self
-                    .global_state
+                    .context
+                    .state
                     .find_active_sequence(flush_handle)
                     .is_some());
         if is_transient && !is_valid_transient {
@@ -75,14 +77,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Sessions are identified by their slot: "when flushing a session, the upper byte of the
         // handle is ignored" (`SessionIsLoaded` / `SessionIsSaved` mask with `HR_HANDLE_MASK`).
         let loaded_session = if is_session {
-            self.global_state
+            self.context
+                .state
                 .session_by_slot(flush_handle)
                 .map(|s| s.session_handle)
         } else {
             None
         };
-        let is_saved_session =
-            is_session && self.global_state.saved_session_slot(flush_handle).is_some();
+        let is_saved_session = is_session
+            && self
+                .context
+                .state
+                .saved_session_slot(flush_handle)
+                .is_some();
         if is_session && loaded_session.is_none() && !is_saved_session {
             return Err(TpmRc::HANDLE.with(Position::parameter(1)));
         }
@@ -96,25 +103,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // frees the slot, see above) cannot leave a stale exclusive marker that a new
             // session in the same slot would inherit; for the real handle both are identical.
             if self
-                .global_state
+                .context
+                .state
                 .exclusive_audit_session
                 .is_some_and(|h| h & 0x00FF_FFFF == flush_handle & 0x00FF_FFFF)
             {
-                self.global_state.exclusive_audit_session = None;
+                self.context.state.exclusive_audit_session = None;
             }
-            self.global_state.remove_saved_session(flush_handle);
+            self.context.state.remove_saved_session(flush_handle);
             if let Some(handle) = loaded_session {
-                let _ = self.global_state.flush_session(handle);
+                let _ = self.context.state.flush_session(handle);
             }
         } else if is_transient {
             if self
-                .global_state
+                .context
+                .state
                 .find_transient_object(flush_handle)
                 .is_some()
             {
-                self.global_state.remove_transient_object(flush_handle)?;
+                self.context.state.remove_transient_object(flush_handle)?;
             } else {
-                self.global_state.remove_active_sequence(flush_handle)?;
+                self.context.state.remove_active_sequence(flush_handle)?;
             }
         }
         Ok(())

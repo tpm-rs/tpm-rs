@@ -51,29 +51,29 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         // If PCR bank has been reconfigured, a CLEAR state save is required
-        if self.global_state.pcr_reconfig && shutdown_type == 0x0001 {
+        if self.context.state.pcr_reconfig && shutdown_type == 0x0001 {
             return Err(TpmRc::TYPE.with(Position::parameter(1))); // TPM_RCS_TYPE + RC_Shutdown_shutdownType equivalent
         }
 
-        self.global_state.orderly_state = shutdown_type;
-        self.global_state.da_used = false;
+        self.context.state.orderly_state = shutdown_type;
+        self.context.state.da_used = false;
         if shutdown_type == 0x0001 {
             // Save the STATE_RESET and STATE_CLEAR data for a subsequent TPM Restart / Resume.
             // If it cannot be saved, the next TPM2_Startup(STATE) reports
             // TPM_RC_NV_UNINITIALIZED and Startup(CLEAR) performs a TPM Reset.
-            let _ = self.context.save_state_data(self.global_state);
-            if self.global_state.drtm_pre_startup {
-                self.global_state.orderly_state = 0x0001 | PRE_STARTUP_FLAG;
-            } else if self.global_state.startup_locality_3 {
-                self.global_state.orderly_state = 0x0001 | STARTUP_LOCALITY_3;
+            let _ = self.context.save_state_data();
+            if self.context.state.drtm_pre_startup {
+                self.context.state.orderly_state = 0x0001 | PRE_STARTUP_FLAG;
+            } else if self.context.state.startup_locality_3 {
+                self.context.state.orderly_state = 0x0001 | STARTUP_LOCALITY_3;
             }
         }
 
         self.nv_sync_persistent_orderly_state()?;
         self.nv_sync_persistent_drbg_state()?;
         self.nv_sync_persistent_da_timers()?;
-        self.context.save_hierarchy_auths(self.global_state);
-        self.global_state.state_saved = true;
+        self.context.save_hierarchy_auths();
+        self.context.state.state_saved = true;
 
         let _response = request.into_response();
         Ok(())

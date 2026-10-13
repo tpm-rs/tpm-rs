@@ -17,6 +17,7 @@
 //! HMAC), this file contains a small go-tpm style session implementation
 //! ([`GoHmacSession`]) and command executor ([`execute_go`]).
 
+use crate::_common::Connection;
 use crate::test_utils::CLIENT_CRYPTO;
 use crate::test_utils::{
     CmdHeader, RespHandles, RespHeader, execute_with_password_sessions, flush_context, kdfa_by_alg,

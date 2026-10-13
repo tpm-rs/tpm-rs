@@ -17,12 +17,11 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     let mut rng = FakeRng::new();
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.initialized = true;
-    global_state.sh_proof = [0x42; 64];
-    global_state.sh_proof_size = 64;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.initialized = true;
+    tpm.state.sh_proof = [0x42; 64];
+    tpm.state.sh_proof_size = 64;
 
     let handle: u32 = 0x80000001;
     let mut tpmt_public_buf = [0u8; 1024];
@@ -33,7 +32,7 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     tpmt_public_buf[10] = 0x00;
     tpmt_public_buf[11] = 0x10;
 
-    global_state.transient_objects[0] = Some(TransientObject {
+    tpm.state.transient_objects[0] = Some(TransientObject {
         handle,
         seed: [0u8; 64],
         seed_len: 32,
@@ -56,7 +55,7 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     marshal_to_slice(&(handle), &mut req1[10..14]);
 
     let mut rsp1 = [0u8; 4096];
-    let rsp1_len = tpm.execute_command_separate(&mut global_state, &req1[..], &mut rsp1[..]);
+    let rsp1_len = tpm.execute_command_separate(&req1[..], &mut rsp1[..]);
     assert_eq!(u32::from_be_bytes([rsp1[6], rsp1[7], rsp1[8], rsp1[9]]), 0);
 
     let mut unmarshal_buf = &rsp1[10..rsp1_len];
@@ -68,7 +67,7 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
         .unwrap();
 
     // Mutate sp_seed completely: ContextLoad should still succeed since proof is used instead of sp_seed
-    global_state.sp_seed = [0xFF; 64];
+    tpm.state.sp_seed = [0xFF; 64];
 
     let req2_cmd = tpm2::commands::ContextLoad {
         context: rsp1_parsed.context,
@@ -81,11 +80,7 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     marshal_to_slice(&(total_len2), &mut req2[2..6]);
 
     let mut rsp2 = [0u8; 4096];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &req2[..total_len2 as usize],
-        &mut rsp2[..],
-    );
+    tpm.execute_command_separate(&req2[..total_len2 as usize], &mut rsp2[..]);
     let rc_success = u32::from_be_bytes([rsp2[6], rsp2[7], rsp2[8], rsp2[9]]);
     assert_eq!(
         rc_success, 0,
@@ -93,13 +88,9 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     );
 
     // Mutate sh_proof: ContextLoad should fail with INTEGRITY
-    global_state.sh_proof[0] ^= 0x01;
+    tpm.state.sh_proof[0] ^= 0x01;
     let mut rsp3 = [0u8; 4096];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &req2[..total_len2 as usize],
-        &mut rsp3[..],
-    );
+    tpm.execute_command_separate(&req2[..total_len2 as usize], &mut rsp3[..]);
     let rc_fail = u32::from_be_bytes([rsp3[6], rsp3[7], rsp3[8], rsp3[9]]);
     assert_eq!(
         rc_fail,

@@ -1,5 +1,6 @@
 //! Command parameter decryption with DECRYPT sessions (AES-CFB): key derivation, sizes and errors.
 
+use crate::_common::Connection;
 use crate::_common::{
     AES128_CFB, AES256_CFB, ATTR_CONT, ATTR_DECRYPT, CC_HIERARCHY_CHANGE_AUTH, KEYED_HASH_SEED,
     RC_BAD_AUTH, RC_INSUFFICIENT, RC_SIZE, RH_OWNER, SessUse,

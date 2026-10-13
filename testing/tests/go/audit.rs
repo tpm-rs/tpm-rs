@@ -1,5 +1,6 @@
 // Ported from go-tpm/tpm2/test/audit_test.go
 
+use crate::_common::Connection;
 use crate::test_utils::CLIENT_CRYPTO;
 use crate::test_utils::{
     ActiveSession, CmdHeader, RespHandles, RespHeader, flush_context, leak_bytes,

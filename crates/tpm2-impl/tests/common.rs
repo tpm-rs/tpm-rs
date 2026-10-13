@@ -1132,20 +1132,19 @@ pub fn setup_real_crypto_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> (RealCryptoEngine<'a>, tpm2_impl::GlobalState) {
+) -> RealCryptoEngine<'a> {
     let platform = tpm2_impl::TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = tpm2_impl::TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.locality = 0;
-    global_state.g_nv_ok = true;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.locality = 0;
+    tpm.state.g_nv_ok = true;
 
     let startup = [0x80, 0x01, 0, 0, 0, 0x0c, 0, 0, 0x01, 0x44, 0, 0];
     let mut rsp = [0u8; 256];
-    tpm.execute_command_separate(&mut global_state, &startup, &mut rsp);
+    tpm.execute_command_separate(&startup, &mut rsp);
     assert_eq!(&rsp[6..10], &[0, 0, 0, 0], "TPM2_Startup failed");
-    (tpm, global_state)
+    tpm
 }
 
 /// Marshals `auths` back to back (the authorization area, without its size).
@@ -1173,7 +1172,6 @@ fn marshal_auth_area(auths: &[tpm2::TpmsAuthCommand]) -> Vec<u8> {
 /// Returns the raw response code on failure.
 pub fn execute_command<C: tpm2::commands::Command>(
     tpm: &mut RealCryptoEngine<'_>,
-    global_state: &mut tpm2_impl::GlobalState,
     cmd: &C,
     auths: &[tpm2::TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -1209,7 +1207,7 @@ where
     req[2..6].copy_from_slice(&size.to_be_bytes());
 
     let mut rsp = [0u8; 8192];
-    let rsp_len = tpm.execute_command_separate(global_state, &req, &mut rsp);
+    let rsp_len = tpm.execute_command_separate(&req, &mut rsp);
     let rc = u32::from_be_bytes(rsp[6..10].try_into().unwrap());
     if rc != 0 {
         return Err(rc);

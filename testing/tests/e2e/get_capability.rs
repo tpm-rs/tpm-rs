@@ -1,6 +1,7 @@
 //! TPM2_GetCapability: algorithms, commands, handles, PCRs, properties and policies reported by
 //! each capability.
 
+use crate::_common::Connection;
 use crate::_common::{
     CAP_ACT, CAP_ALGS, CAP_PCRS, CmdHeader, TPMA_CC_EXTENSIVE, TPMA_CC_FLUSHED, TPMA_CC_NV,
     cap_handles, cap_pcr_properties, command_attributes, create_storage_primary_in,

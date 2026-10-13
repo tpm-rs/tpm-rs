@@ -7,7 +7,7 @@ use clap::Parser;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Mutex;
 use std::thread;
-use tpm2_simulator::{Args, Simulator};
+use tpm2_simulator::{Args, PlatformConnection, Simulator, SimulatorPlatformSignal};
 
 use tpm2_platform_linux::LinuxRng;
 
@@ -22,7 +22,7 @@ pub fn handle_client(simulator: &Mutex<Simulator>, mut stream: TcpStream) {
         let command = u32::from_be_bytes(cmd_buf);
 
         let mut sim = simulator.lock().unwrap();
-        match sim.handle_regular_command_raw(command, &mut stream) {
+        match sim.transact_platform(command, &mut stream) {
             Ok(should_break) => {
                 if should_break {
                     break;
@@ -48,7 +48,11 @@ pub fn handle_platform_client(simulator: &Mutex<Simulator>, mut stream: TcpStrea
 
         let mut sim = simulator.lock().unwrap();
 
-        match sim.handle_platform_command_raw(command, &mut stream) {
+        let Ok(signal) = SimulatorPlatformSignal::try_from(command) else {
+            eprintln!("Invalid platform signal: {command}. Disconnecting client.");
+            break;
+        };
+        match sim.signal_platform(signal, Some(&mut stream)) {
             Ok(should_break) => {
                 if should_break {
                     break;

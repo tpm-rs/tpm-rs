@@ -17,13 +17,12 @@ fn test_no_direct_nv_write() {
     let mut rng = FakeRng::new();
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.initialized = true;
-    global_state.locality = 0;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.initialized = true;
+    tpm.state.locality = 0;
 
-    global_state.platform_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
+    tpm.state.platform_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
 
     let request_auth = tpm2::TpmsAuthCommand {
         session_handle: tpm2::Handle::RS_PW,
@@ -54,7 +53,7 @@ fn test_no_direct_nv_write() {
     req_buf[auth_len_offset..auth_len_offset + 4].copy_from_slice(&auth_len.to_be_bytes());
 
     let mut response = [0u8; 1024];
-    let _ = tpm.execute_command_separate(&mut global_state, &req_buf[..offset], &mut response[..]);
+    let _ = tpm.execute_command_separate(&req_buf[..offset], &mut response[..]);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
     assert_eq!(rc, 0); // Success
 }
@@ -109,13 +108,12 @@ fn test_no_nv_writes_stress() {
     let mut rng = FakeRng::new();
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.initialized = true;
-    global_state.locality = 0;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.initialized = true;
+    tpm.state.locality = 0;
 
-    global_state.owner_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
+    tpm.state.owner_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
 
     let request_auth = tpm2::TpmsAuthCommand {
         session_handle: tpm2::Handle::RS_PW,
@@ -146,7 +144,7 @@ fn test_no_nv_writes_stress() {
     req_buf[auth_len_offset..auth_len_offset + 4].copy_from_slice(&auth_len.to_be_bytes());
 
     let mut response = [0u8; 1024];
-    let _ = tpm.execute_command_separate(&mut global_state, &req_buf[..offset], &mut response[..]);
+    let _ = tpm.execute_command_separate(&req_buf[..offset], &mut response[..]);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
     assert_eq!(rc, 0);
     assert_eq!(storage.writes, 66);

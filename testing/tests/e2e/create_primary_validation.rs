@@ -1,6 +1,7 @@
 //! TPM2_CreatePrimary validation: hierarchy handle, hierarchy auth, session handles, key sizes and
 //! object memory.
 
+use crate::_common::{Connection, NO_STREAM, PlatformConnection};
 use crate::_common::{
     create, default_ecc_public, ecc_sign_template, execute_with_password_sessions, flush_context,
     load, load_external, marshal_to_slice, owner_srk, rc0, rsa_public_bits, sealed_template,
@@ -187,7 +188,8 @@ fn rsa_512_bits_rejected() {
 fn works_without_nv_and_object_memory_checked_first() {
     let mut sim = create_simulator!();
     // CreatePrimary does not need NV.
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
     let (h, _) = try_create_primary_in(
         &mut sim,
         Handle::RH_OWNER,
@@ -198,7 +200,8 @@ fn works_without_nv_and_object_memory_checked_first() {
         &[],
     )
     .expect("CreatePrimary with NV unavailable");
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     flush_context(&mut sim, h).unwrap();
 
     // Fill every transient slot.

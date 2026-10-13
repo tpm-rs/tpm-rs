@@ -1,6 +1,7 @@
 //! TPM2_TestParms parsing and cross-checks: unknown selectors, truncation, NULL hashes and
 //! randomized comparison with a reference oracle.
 
+use crate::_common::Connection;
 use crate::_common::{
     CC_ECC_PARAMETERS, ST_NO_SESSIONS, SimpleRng, build_raw_cmd, gen_random_parms, hex,
     mssim_rc_of, oracle_validate_parms, rc_p, symcipher_parms, test_parms, transact_rc_of,

@@ -41,10 +41,7 @@ const FINGERPRINT_SIZE: usize = 8;
 
 /// Creates an ECDSA primary key under the owner hierarchy, saves its context
 /// and flushes it. Returns the saved context.
-fn save_object_context(
-    tpm: &mut RealCryptoEngine<'_>,
-    gs: &mut tpm2_impl::GlobalState,
-) -> TpmsContext<'static> {
+fn save_object_context(tpm: &mut RealCryptoEngine<'_>) -> TpmsContext<'static> {
     let create = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
@@ -72,24 +69,22 @@ fn save_object_context(
         ..Default::default()
     };
     let created =
-        execute_command(tpm, gs, &create, &[password_auth(b"")]).expect("CreatePrimary failed");
+        execute_command(tpm, &create, &[password_auth(b"")]).expect("CreatePrimary failed");
     let save = execute_command(
         tpm,
-        gs,
         &ContextSave {
             save_handle: created.object_handle,
         },
         &[],
     )
     .expect("ContextSave failed");
-    flush(tpm, gs, created.object_handle);
+    flush(tpm, created.object_handle);
     save.context
 }
 
-fn flush(tpm: &mut RealCryptoEngine<'_>, gs: &mut tpm2_impl::GlobalState, handle: Handle) {
+fn flush(tpm: &mut RealCryptoEngine<'_>, handle: Handle) {
     execute_command(
         tpm,
-        gs,
         &FlushContext {
             flush_handle: handle,
         },
@@ -98,12 +93,8 @@ fn flush(tpm: &mut RealCryptoEngine<'_>, gs: &mut tpm2_impl::GlobalState, handle
     .expect("FlushContext failed");
 }
 
-fn load(
-    tpm: &mut RealCryptoEngine<'_>,
-    gs: &mut tpm2_impl::GlobalState,
-    context: TpmsContext<'static>,
-) -> Result<Handle, u32> {
-    execute_command(tpm, gs, &ContextLoad { context }, &[]).map(|rsp| rsp.loaded_handle)
+fn load(tpm: &mut RealCryptoEngine<'_>, context: TpmsContext<'static>) -> Result<Handle, u32> {
+    execute_command(tpm, &ContextLoad { context }, &[]).map(|rsp| rsp.loaded_handle)
 }
 
 /// Returns `context` with its blob replaced by `blob`.
@@ -114,13 +105,12 @@ fn with_blob(context: TpmsContext<'static>, blob: Vec<u8>) -> TpmsContext<'stati
 }
 
 macro_rules! setup {
-    ($tpm:ident, $gs:ident) => {
+    ($tpm:ident) => {
         let mut crypto = TestCryptoProvider;
         let mut storage = FakeStorage::default();
         let mut timer = FakeTimer;
         let mut rng = FakeRng::new();
-        let (mut $tpm, mut $gs) =
-            setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+        let mut $tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
     };
 }
 
@@ -193,15 +183,15 @@ fn context_cfb(
 /// produce such a blob, this is a TPM failure.
 #[test]
 fn context_load_size_mismatch_behind_valid_integrity_is_failure() {
-    setup!(tpm, gs);
-    let context = save_object_context(&mut tpm, &mut gs);
+    setup!(tpm);
+    let context = save_object_context(&mut tpm);
     let blob = context.context_blob.get_buffer();
     let mut enc_context = blob[ENC_SIZE_OFFSET..].to_vec();
     let size = u16::from_be_bytes([enc_context[0], enc_context[1]]);
     enc_context[..2].copy_from_slice(&(size - 1).to_be_bytes());
-    let forged = forge_blob(&gs, &context, &enc_context);
+    let forged = forge_blob(&tpm.state, &context, &enc_context);
     assert_eq!(
-        load(&mut tpm, &mut gs, with_blob(context, forged)),
+        load(&mut tpm, with_blob(context, forged)),
         Err(TpmRc::FAILURE.get())
     );
 }
@@ -211,25 +201,25 @@ fn context_load_size_mismatch_behind_valid_integrity_is_failure() {
 /// (Part 1, "Context Confidentiality Protection").
 #[test]
 fn context_load_fingerprint_mismatch_is_failure() {
-    setup!(tpm, gs);
-    let context = save_object_context(&mut tpm, &mut gs);
+    setup!(tpm);
+    let context = save_object_context(&mut tpm);
     let blob = context.context_blob.get_buffer();
     let mut enc_context = blob[ENC_SIZE_OFFSET..].to_vec();
 
     let mut plaintext = enc_context[2..].to_vec();
-    context_cfb(&gs, &context, &mut plaintext, false);
+    context_cfb(&tpm.state, &context, &mut plaintext, false);
     assert_eq!(
         plaintext[..FINGERPRINT_SIZE],
         context.sequence.to_be_bytes(),
         "ContextSave must prepend the sequence fingerprint"
     );
     plaintext[FINGERPRINT_SIZE - 1] ^= 0x01;
-    context_cfb(&gs, &context, &mut plaintext, true);
+    context_cfb(&tpm.state, &context, &mut plaintext, true);
     enc_context[2..].copy_from_slice(&plaintext);
 
-    let forged = forge_blob(&gs, &context, &enc_context);
+    let forged = forge_blob(&tpm.state, &context, &enc_context);
     assert_eq!(
-        load(&mut tpm, &mut gs, with_blob(context, forged)),
+        load(&mut tpm, with_blob(context, forged)),
         Err(TpmRc::FAILURE.get())
     );
 }
@@ -238,10 +228,10 @@ fn context_load_fingerprint_mismatch_is_failure() {
 /// the original blob, which loads.
 #[test]
 fn context_load_forged_unmodified_blob_loads() {
-    setup!(tpm, gs);
-    let context = save_object_context(&mut tpm, &mut gs);
+    setup!(tpm);
+    let context = save_object_context(&mut tpm);
     let blob = context.context_blob.get_buffer().to_vec();
-    let forged = forge_blob(&gs, &context, &blob[ENC_SIZE_OFFSET..]);
+    let forged = forge_blob(&tpm.state, &context, &blob[ENC_SIZE_OFFSET..]);
     assert_eq!(forged, blob);
-    load(&mut tpm, &mut gs, with_blob(context, forged)).expect("ContextLoad failed");
+    load(&mut tpm, with_blob(context, forged)).expect("ContextLoad failed");
 }

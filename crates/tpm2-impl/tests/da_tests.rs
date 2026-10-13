@@ -6,10 +6,7 @@ use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2_impl::{TpmEngine, TpmPlatform};
 
-fn setup_tpm() -> (
-    TpmEngine<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
-    tpm2_impl::GlobalState,
-) {
+fn setup_tpm() -> TpmEngine<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng> {
     // Create static references or owned items that match the test common setup
     // We can allocate them on the heap or leak box for tests or follow random_tests structure
     let crypto = FakeCrypto;
@@ -24,26 +21,20 @@ fn setup_tpm() -> (
     );
 
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.g_nv_ok = true;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.g_nv_ok = true;
 
     // Startup(CLEAR)
     let startup_request = hex!("8001 0000000c 00000144 0000");
     let mut startup_response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &startup_request[..],
-        &mut startup_response[..],
-    );
+    tpm.execute_command_separate(&startup_request[..], &mut startup_response[..]);
     assert_eq!(&startup_response[6..10], &[0, 0, 0, 0]);
-    (tpm, global_state)
+    tpm
 }
 
 fn send_da_lock_reset(
     tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
-    global_state: &mut tpm2_impl::GlobalState,
     auth_handle: u32,
     tag: u16,
 ) -> u32 {
@@ -76,13 +67,12 @@ fn send_da_lock_reset(
     req[2..6].copy_from_slice(&size.to_be_bytes());
 
     let mut resp = [0u8; 256];
-    tpm.execute_command_separate(global_state, &req[..offset], &mut resp[..]);
+    tpm.execute_command_separate(&req[..offset], &mut resp[..]);
     u32::from_be_bytes(resp[6..10].try_into().unwrap())
 }
 
 fn send_da_parameters(
     tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
-    global_state: &mut tpm2_impl::GlobalState,
     auth_handle: u32,
     new_max_tries: u32,
     new_recovery_time: u32,
@@ -124,120 +114,120 @@ fn send_da_parameters(
     req[2..6].copy_from_slice(&size.to_be_bytes());
 
     let mut resp = [0u8; 256];
-    tpm.execute_command_separate(global_state, &req[..offset], &mut resp[..]);
+    tpm.execute_command_separate(&req[..offset], &mut resp[..]);
     u32::from_be_bytes(resp[6..10].try_into().unwrap())
 }
 
 #[test]
 fn test_da_self_heal_and_host_migration_monotonic_clock_discontinuity() {
-    let (mut tpm, mut global_state) = setup_tpm();
+    let mut tpm = setup_tpm();
     tpm.platform.timer.set_time(2_500_000_000); // Simulate Host A with 30 days uptime
 
     // Configure DA: maxTries=5, recoveryTime=100s, lockoutRecovery=200s
-    let rc = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 100, 200, 0x8002);
+    let rc = send_da_parameters(&mut tpm, 0x4000000A, 5, 100, 200, 0x8002);
     assert_eq!(rc, 0);
 
     // Simulate 3 failed tries registered at current tpm_time_ms
-    global_state.failed_tries = 3;
-    global_state.self_heal_timer = global_state.tpm_time_ms as i64;
+    tpm.state.failed_tries = 3;
+    tpm.state.self_heal_timer = tpm.state.tpm_time_ms as i64;
 
     // Simulate live migration from Host A (2,500,000,000 ms) to Host B (600,000 ms / 10 min uptime)
     tpm.platform.timer.set_time(600_000);
-    global_state.last_timer_read_ms = None; // Transient host timer snapshot cleared on restore
+    tpm.state.last_timer_read_ms = None; // Transient host timer snapshot cleared on restore
 
     // Execute a command on Host B immediately after migration
     let read_clock_req = hex!("8001 0000000a 00000181");
     let mut resp = [0u8; 256];
-    tpm.execute_command_separate(&mut global_state, &read_clock_req[..], &mut resp[..]);
+    tpm.execute_command_separate(&read_clock_req[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
 
     // Verify failed_tries did NOT underflow or instantly decay due to host clock discontinuity
-    assert_eq!(global_state.failed_tries, 3);
+    assert_eq!(tpm.state.failed_tries, 3);
 
     // Advance Host B timer by 100 seconds (1 recovery_time interval)
     tpm.platform.timer.advance(100_000);
-    tpm.execute_command_separate(&mut global_state, &read_clock_req[..], &mut resp[..]);
-    assert_eq!(global_state.failed_tries, 2);
+    tpm.execute_command_separate(&read_clock_req[..], &mut resp[..]);
+    assert_eq!(tpm.state.failed_tries, 2);
 
     // Advance Host B timer by 200 seconds (2 recovery_time intervals)
     tpm.platform.timer.advance(200_000);
-    tpm.execute_command_separate(&mut global_state, &read_clock_req[..], &mut resp[..]);
-    assert_eq!(global_state.failed_tries, 0);
+    tpm.execute_command_separate(&read_clock_req[..], &mut resp[..]);
+    assert_eq!(tpm.state.failed_tries, 0);
 }
 
 #[test]
 fn test_lockout_auth_recovery_timer() {
-    let (mut tpm, mut global_state) = setup_tpm();
+    let mut tpm = setup_tpm();
     tpm.platform.timer.set_time(1_000_000);
 
     // Set lockoutRecovery = 200 seconds
-    let rc = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 100, 200, 0x8002);
+    let rc = send_da_parameters(&mut tpm, 0x4000000A, 5, 100, 200, 0x8002);
     assert_eq!(rc, 0);
 
     // Set non-empty lockout_auth
-    global_state.lockout_auth = tpm2::Tpm2bAuth::from_bytes(b"secret").unwrap().into();
+    tpm.state.lockout_auth = tpm2::Tpm2bAuth::from_bytes(b"secret").unwrap().into();
 
     // Attempt DictionaryAttackLockReset with wrong password (empty auth) on TPM_RH_LOCKOUT
-    let rc_fail = send_da_lock_reset(&mut tpm, &mut global_state, 0x4000000A, 0x8002);
+    let rc_fail = send_da_lock_reset(&mut tpm, 0x4000000A, 0x8002);
     assert_eq!(rc_fail, 0x0000098E); // TPM_RC_AUTH_FAIL (session 1)
-    assert!(!global_state.lockout_auth_enabled);
+    assert!(!tpm.state.lockout_auth_enabled);
 
     // Clear lockout_auth to empty so password matches, but lockout_auth_enabled is still false
-    global_state.lockout_auth = tpm2::Tpm2bAuth::default().into();
-    let rc_locked = send_da_lock_reset(&mut tpm, &mut global_state, 0x4000000A, 0x8002);
+    tpm.state.lockout_auth = tpm2::Tpm2bAuth::default().into();
+    let rc_locked = send_da_lock_reset(&mut tpm, 0x4000000A, 0x8002);
     assert_eq!(rc_locked, 0x00000921); // TPM_RC_LOCKOUT
 
     // Advance timer by 200 seconds (lockout_recovery)
     tpm.platform.timer.advance(200_000);
-    let rc_recovered = send_da_lock_reset(&mut tpm, &mut global_state, 0x4000000A, 0x8002);
+    let rc_recovered = send_da_lock_reset(&mut tpm, 0x4000000A, 0x8002);
     assert_eq!(rc_recovered, 0);
-    assert!(global_state.lockout_auth_enabled);
+    assert!(tpm.state.lockout_auth_enabled);
 }
 
 #[test]
 fn test_da_timers_preserved_across_orderly_shutdown_and_startup() {
-    let (mut tpm, mut global_state) = setup_tpm();
+    let mut tpm = setup_tpm();
     tpm.platform.timer.set_time(10_000);
 
     // Configure DA: recoveryTime = 100s
-    let rc = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 100, 200, 0x8002);
+    let rc = send_da_parameters(&mut tpm, 0x4000000A, 5, 100, 200, 0x8002);
     assert_eq!(rc, 0);
 
-    global_state.failed_tries = 2;
-    global_state.self_heal_timer = global_state.tpm_time_ms as i64;
+    tpm.state.failed_tries = 2;
+    tpm.state.self_heal_timer = tpm.state.tpm_time_ms as i64;
 
     // Advance timer by 60 seconds (60% of recoveryTime)
     tpm.platform.timer.advance(60_000);
     let read_clock_req = hex!("8001 0000000a 00000181");
     let mut resp = [0u8; 256];
-    tpm.execute_command_separate(&mut global_state, &read_clock_req[..], &mut resp[..]);
-    assert_eq!(global_state.failed_tries, 2);
+    tpm.execute_command_separate(&read_clock_req[..], &mut resp[..]);
+    assert_eq!(tpm.state.failed_tries, 2);
 
     // Orderly Shutdown(SU_STATE)
     let shutdown_req = hex!("8001 0000000c 00000145 0001");
-    tpm.execute_command_separate(&mut global_state, &shutdown_req[..], &mut resp[..]);
+    tpm.execute_command_separate(&shutdown_req[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
 
     // Simulate power cycle and Startup(SU_STATE)
-    global_state.initialized = false;
+    tpm.state.initialized = false;
     let startup_req = hex!("8001 0000000c 00000144 0001");
-    tpm.execute_command_separate(&mut global_state, &startup_req[..], &mut resp[..]);
+    tpm.execute_command_separate(&startup_req[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
 
     // Verify self_heal_timer was adjusted negatively by the 60,000 ms accumulated prior to shutdown
-    assert_eq!(global_state.self_heal_timer, -60_000);
-    assert_eq!(global_state.tpm_time_ms, 0);
+    assert_eq!(tpm.state.self_heal_timer, -60_000);
+    assert_eq!(tpm.state.tpm_time_ms, 0);
 
     // Advance timer by remaining 40 seconds (total 60s + 40s = 100s = 1 recoveryTime)
     tpm.platform.timer.advance(40_000);
-    tpm.execute_command_separate(&mut global_state, &read_clock_req[..], &mut resp[..]);
-    assert_eq!(global_state.failed_tries, 1);
+    tpm.execute_command_separate(&read_clock_req[..], &mut resp[..]);
+    assert_eq!(tpm.state.failed_tries, 1);
 }
 
 #[test]
 fn test_da_pending_on_nv_deferred_and_flushed_when_nv_becomes_available() {
     use tpm2::platform::NvStorage;
-    let (mut tpm, mut global_state) = setup_tpm();
+    let mut tpm = setup_tpm();
 
     // Ensure NV offset 32 (failed_tries) starts at 0
     let mut nv_buf = [0u8; 4];
@@ -245,34 +235,34 @@ fn test_da_pending_on_nv_deferred_and_flushed_when_nv_becomes_available() {
     assert_eq!(u32::from_be_bytes(nv_buf), 0);
 
     // Transition to unorderly state (0xFFFF) and make NV temporarily unavailable
-    global_state.orderly_state = 0xFFFF;
-    global_state.nv_available = false;
+    tpm.state.orderly_state = 0xFFFF;
+    tpm.state.nv_available = false;
 
     // Set lockout auth so password verification fails
-    global_state.lockout_auth = tpm2::Tpm2bAuth::from_bytes(b"secret").unwrap().into();
-    let rc_fail = send_da_lock_reset(&mut tpm, &mut global_state, 0x4000000A, 0x8002);
+    tpm.state.lockout_auth = tpm2::Tpm2bAuth::from_bytes(b"secret").unwrap().into();
+    let rc_fail = send_da_lock_reset(&mut tpm, 0x4000000A, 0x8002);
     assert_eq!(rc_fail, 0x0000098E); // TPM_RC_AUTH_FAIL (session 1)
-    assert!(!global_state.lockout_auth_enabled);
-    assert!(global_state.da_pending_on_nv);
+    assert!(!tpm.state.lockout_auth_enabled);
+    assert!(tpm.state.da_pending_on_nv);
 
     // Also simulate a non-lockout DA failure (failed_tries increment while NV unavailable)
-    global_state.failed_tries = 2;
+    tpm.state.failed_tries = 2;
 
     // Verify NV offset 32 was NOT written while nv_available == false
     tpm.platform.storage.read_nv(32, &mut nv_buf).unwrap();
     assert_eq!(u32::from_be_bytes(nv_buf), 0);
 
     // Restore NV availability
-    global_state.nv_available = true;
-    global_state.lockout_auth_enabled = true;
-    global_state.lockout_auth = tpm2::Tpm2bAuth::default().into();
+    tpm.state.nv_available = true;
+    tpm.state.lockout_auth_enabled = true;
+    tpm.state.lockout_auth = tpm2::Tpm2bAuth::default().into();
 
     // Trigger check_locked_out (via send_da_parameters with wrong password or any lockout check)
-    let rc_check = send_da_parameters(&mut tpm, &mut global_state, 0x4000000A, 5, 100, 200, 0x8002);
+    let rc_check = send_da_parameters(&mut tpm, 0x4000000A, 5, 100, 200, 0x8002);
     assert_eq!(rc_check, 0);
 
     // Verify da_pending_on_nv was cleared and failed_tries (2) was flushed to NV offset 32
-    assert!(!global_state.da_pending_on_nv);
+    assert!(!tpm.state.da_pending_on_nv);
     tpm.platform.storage.read_nv(32, &mut nv_buf).unwrap();
     assert_eq!(u32::from_be_bytes(nv_buf), 2);
 }

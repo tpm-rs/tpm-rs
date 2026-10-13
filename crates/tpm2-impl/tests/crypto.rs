@@ -31,24 +31,16 @@ fn setup_tpm_with_fake_platform<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> (
-    TpmEngine<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
-    tpm2_impl::GlobalState,
-) {
+) -> TpmEngine<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng> {
     let platform = TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage();
 
     // Startup first
     let startup_request = hex!("8001 0000000c 00000144 0000");
     let mut startup_response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &startup_request[..],
-        &mut startup_response[..],
-    );
-    (tpm, global_state)
+    tpm.execute_command_separate(&startup_request[..], &mut startup_response[..]);
+    tpm
 }
 
 #[test]
@@ -57,8 +49,7 @@ fn test_adv_mac_unsupported_hash() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     let public = TpmtPublic {
@@ -83,7 +74,7 @@ fn test_adv_mac_unsupported_hash() {
         hierarchy: 0x40000001,
         st_clear: false,
     };
-    global_state.transient_objects[0] = Some(obj);
+    tpm.state.transient_objects[0] = Some(obj);
 
     let request = hex!(
         "8001"
@@ -95,11 +86,7 @@ fn test_adv_mac_unsupported_hash() {
     );
 
     let mut response = [0u8; 256];
-    let _size = tpm.execute_command_separate(
-        &mut global_state,
-        &with_pw_session(&request, 1)[..],
-        &mut response[..],
-    );
+    let _size = tpm.execute_command_separate(&with_pw_session(&request, 1)[..], &mut response[..]);
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(
@@ -115,8 +102,7 @@ fn test_ecdh_zgen_scheme_error() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     // Key with ECDSA scheme (invalid for ECDH_ZGen)
@@ -153,7 +139,7 @@ fn test_ecdh_zgen_scheme_error() {
         hierarchy: 0x40000001,
         st_clear: false,
     };
-    global_state.transient_objects[0] = Some(obj);
+    tpm.state.transient_objects[0] = Some(obj);
 
     let request = hex!(
         "8001"
@@ -168,11 +154,7 @@ fn test_ecdh_zgen_scheme_error() {
     );
 
     let mut response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &with_pw_session(&request, 1)[..],
-        &mut response[..],
-    );
+    tpm.execute_command_separate(&with_pw_session(&request, 1)[..], &mut response[..]);
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(
@@ -189,8 +171,7 @@ fn test_ecdh_zgen_public_only_key_error() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     // ECC key but private_len = 0
@@ -227,7 +208,7 @@ fn test_ecdh_zgen_public_only_key_error() {
         hierarchy: 0x40000001,
         st_clear: false,
     };
-    global_state.transient_objects[0] = Some(obj);
+    tpm.state.transient_objects[0] = Some(obj);
 
     let request = hex!(
         "8001"
@@ -242,11 +223,7 @@ fn test_ecdh_zgen_public_only_key_error() {
     );
 
     let mut response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &with_pw_session(&request, 1)[..],
-        &mut response[..],
-    );
+    tpm.execute_command_separate(&with_pw_session(&request, 1)[..], &mut response[..]);
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
     assert_eq!(

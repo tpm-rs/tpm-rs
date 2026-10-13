@@ -113,8 +113,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// the PCR belongs to the TCB group (PCRs 20-22).
     pub(crate) fn pcr_changed(&mut self, pcr: u32) {
         if pcr == 0 || !pcr_belongs_tcb_group(pcr) {
-            self.global_state.pcrs.update_counter =
-                self.global_state.pcrs.update_counter.wrapping_add(1);
+            self.context.state.pcrs.update_counter =
+                self.context.state.pcrs.update_counter.wrapping_add(1);
         }
     }
 
@@ -128,19 +128,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         alg: TpmiAlgHash,
         data: &[u8],
     ) -> Result<(), TpmRc> {
-        if !self.global_state.pcrs.is_allocated(alg, pcr as usize) {
+        if !self.context.state.pcrs.is_allocated(alg, pcr as usize) {
             return Ok(());
         }
         let size = alg.digest_size();
         let mut old = [0u8; 64];
         old[..size].copy_from_slice(
-            self.global_state
+            self.context
+                .state
                 .pcrs
                 .value(alg, pcr as usize)
                 .ok_or(TpmRc::FAILURE)?,
         );
         let (new_hash, _) = self.compute_hash(alg, &[&old[..size], data])?;
-        self.global_state
+        self.context
+            .state
             .pcrs
             .value_mut(alg, pcr as usize)
             .ok_or(TpmRc::FAILURE)?
@@ -151,7 +153,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
     /// Checks that the current locality may extend `pcr` (`PCRIsExtendAllowed`).
     pub(crate) fn pcr_is_extend_allowed(&self, pcr: u32) -> bool {
-        let locality = self.global_state.locality;
+        let locality = self.context.state.locality;
         locality <= 4 && (PCR_EXTEND_LOCALITY[pcr as usize] & (1 << locality)) != 0
     }
 
@@ -189,7 +191,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         for in_sel in cmd.pcr_selection_in.pcr_selections() {
             let hash_alg = in_sel.hash();
-            let filtered = self.global_state.pcrs.filter_selection(in_sel);
+            let filtered = self.context.state.pcrs.filter_selection(in_sel);
             let sizeof_select = filtered.sizeof_select() as usize;
             let mut out_bits = [0u8; tpm2::TPM2_PCR_SELECT_MAX as usize];
             if !full {
@@ -212,7 +214,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         break;
                     }
                     let value = self
-                        .global_state
+                        .context
+                        .state
                         .pcrs
                         .value(hash_alg, pcr)
                         .ok_or(TpmRc::FAILURE)?;
@@ -227,7 +230,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let rsp = responses::PCRRead {
-            pcr_update_counter: self.global_state.pcrs.update_counter,
+            pcr_update_counter: self.context.state.pcrs.update_counter,
             pcr_selection_out,
             pcr_values,
         };
@@ -410,7 +413,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         // `PCRIsResetAllowed`: a TPM that implements DRTM never allows a reset from locality 4.
-        let locality = self.global_state.locality;
+        let locality = self.context.state.locality;
         if locality >= 4 || (PCR_RESET_LOCALITY[pcr_handle as usize] & (1 << locality)) == 0 {
             return Err(TpmRc::LOCALITY);
         }
@@ -422,10 +425,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // `PCRSetValue(pcrHandle, 0)`: zero the PCR in every bank in which it is allocated.
         for alg in implemented_hashes() {
             if self
-                .global_state
+                .context
+                .state
                 .pcrs
                 .is_allocated(alg, pcr_handle as usize)
-                && let Some(value) = self.global_state.pcrs.value_mut(alg, pcr_handle as usize)
+                && let Some(value) = self.context.state.pcrs.value_mut(alg, pcr_handle as usize)
             {
                 value.fill(0);
             }
@@ -462,7 +466,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let auth_handle = auth.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let provided_auth = self.global_state.parsed_auths[..self.global_state.parsed_auths_len]
+        let provided_auth = self.context.state.parsed_auths[..self.context.state.parsed_auths_len]
             .first()
             .cloned();
 
@@ -477,9 +481,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.return_if_nv_is_not_available()?;
 
         let mut selections = [TpmsPcrSelection::default(); tpm2::TPM2_NUM_PCR_BANKS as usize];
-        let count = self.global_state.pcrs.pcr_allocation.count();
+        let count = self.context.state.pcrs.pcr_allocation.count();
         for (i, sel) in self
-            .global_state
+            .context
+            .state
             .pcrs
             .pcr_allocation
             .pcr_selections()
@@ -519,8 +524,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let new_allocation =
             TpmlPcrSelection::from_slice(&selections[..count]).ok_or(TpmRc::FAILURE)?;
         self.write_nv_pcr_allocation(&new_allocation)?;
-        self.global_state.pcr_reconfig = true;
-        self.global_state.state_saved = false;
+        self.context.state.pcr_reconfig = true;
+        self.context.state.state_saved = false;
 
         let resp = responses::PCRAllocate {
             allocation_success: true,
@@ -592,11 +597,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.nv_clear_orderly()?;
 
         let stripped = crate::util::strip_trailing_zeros(cmd.auth.get_buffer());
-        self.global_state.pcr_auth_value =
+        self.context.state.pcr_auth_value =
             crate::owned::OwnedAuth::from_bytes(stripped).map_err(|_| TpmRc::SIZE.to_rc())?;
 
-        self.global_state.state_saved = false;
-        self.context.save_hierarchy_auths(self.global_state);
+        self.context.state.state_saved = false;
+        self.context.save_hierarchy_auths();
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;
@@ -625,7 +630,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let auth_handle = auth.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let provided_auth = self.global_state.parsed_auths[..self.global_state.parsed_auths_len]
+        let provided_auth = self.context.state.parsed_auths[..self.context.state.parsed_auths_len]
             .first()
             .cloned();
         self.validate_platform_auth(auth_handle, provided_auth)?;
@@ -651,9 +656,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.with(Position::parameter(3)));
         }
 
-        self.global_state.pcr_policy_alg = cmd.hash_alg;
-        self.global_state.pcr_policy = crate::owned::OwnedDigest::from(cmd.auth_policy);
-        self.context.save_hierarchy_auths(self.global_state);
+        self.context.state.pcr_policy_alg = cmd.hash_alg;
+        self.context.state.pcr_policy = crate::owned::OwnedDigest::from(cmd.auth_policy);
+        self.context.save_hierarchy_auths();
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;

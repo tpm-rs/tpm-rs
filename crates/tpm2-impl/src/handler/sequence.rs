@@ -120,14 +120,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
 
-        let (index, handle) = self.global_state.find_empty_sequence_slot()?;
+        let (index, handle) = self.context.state.find_empty_sequence_slot()?;
 
         let sequence_type = match cmd.hash_alg {
             None => crate::SequenceType::Event,
             Some(alg) => crate::SequenceType::Hash { alg },
         };
 
-        self.global_state.active_sequences[index] = Some(crate::ActiveSequence::new(
+        self.context.state.active_sequences[index] = Some(crate::ActiveSequence::new(
             handle,
             crate::owned::OwnedAuth::from(cmd.auth),
             sequence_type,
@@ -172,7 +172,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         if self
-            .global_state
+            .context
+            .state
             .find_active_sequence(sequence_handle)
             .is_none()
         {
@@ -189,7 +190,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let data = cmd.buffer.get_buffer();
 
         let seq_obj = self
-            .global_state
+            .context
+            .state
             .find_active_sequence_mut(sequence_handle)
             .unwrap();
 
@@ -252,7 +254,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let ticket_hmac;
         let (digest_bytes, digest_len, validation) = {
-            let seq_obj = match self.global_state.find_active_sequence(sequence_handle) {
+            let seq_obj = match self.context.state.find_active_sequence(sequence_handle) {
                 Some(seq) => seq,
                 None => {
                     if self
@@ -317,7 +319,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             validation,
         };
 
-        self.global_state.remove_active_sequence(sequence_handle)?;
+        self.context.state.remove_active_sequence(sequence_handle)?;
 
         let response = request.into_response();
         self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
@@ -361,7 +363,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let final_chunk = cmd.buffer.get_buffer();
         let mut digests = [(TpmiAlgHash::Sha1, [0u8; 64], 0usize); 4];
         {
-            let seq_obj = match self.global_state.find_active_sequence(sequence_handle) {
+            let seq_obj = match self.context.state.find_active_sequence(sequence_handle) {
                 Some(seq) => seq,
                 None => {
                     if self
@@ -415,7 +417,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
-        self.global_state.remove_active_sequence(sequence_handle)?;
+        self.context.state.remove_active_sequence(sequence_handle)?;
 
         let rsp = responses::EventSequenceComplete { results };
         let response = request.into_response();
@@ -517,13 +519,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::KEY.with(Position::handle(1)));
         }
 
-        let (index, handle) = self.global_state.find_empty_sequence_slot()?;
+        let (index, handle) = self.context.state.find_empty_sequence_slot()?;
 
         let key_data =
             crate::owned::OwnedSensitiveData::from_bytes(&key_obj.private[..key_obj.private_len])
                 .map_err(|_| TpmRc::FAILURE)?;
 
-        self.global_state.active_sequences[index] = Some(crate::ActiveSequence::new(
+        self.context.state.active_sequences[index] = Some(crate::ActiveSequence::new(
             handle,
             crate::owned::OwnedAuth::from(cmd.auth),
             crate::SequenceType::Hmac {

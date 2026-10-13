@@ -1,6 +1,7 @@
 //! TPM2_Certify: handle and signer checks, signing schemes (incl. ECDAA and HMAC) and qualified-
 //! name reporting.
 
+use crate::_common::Connection;
 use crate::_common::{
     AES128_CFB, CmdHeader, RespHeader, base_attributes, certify, create_non_signing_key_rsa,
     create_primary, create_primary_full, create_primary_in, create_primary_with_auth,

@@ -46,7 +46,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 1. Retrieve the loaded object. A sequence object is not a KEYEDHASH object
         // (C `Unseal.c`: `TPM_RC_TYPE + RC_Unseal_itemHandle`).
         if self
-            .global_state
+            .context
+            .state
             .find_active_sequence(item_handle)
             .is_some()
         {

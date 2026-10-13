@@ -20,15 +20,14 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    global_state.init_zeroed();
+    tpm.state.init_zeroed();
     // Intentionally test with audit_hash_alg = 0
-    global_state.audit_hash_alg = 0;
-    tpm.init_storage(&mut global_state);
+    tpm.state.audit_hash_alg = 0;
+    tpm.init_storage();
 
     let startup_request = hex!("8001 0000000c 00000144 0000");
     let mut response = [0u8; 1024];
-    tpm.execute_command_separate(&mut global_state, &startup_request[..], &mut response[..]);
+    tpm.execute_command_separate(&startup_request[..], &mut response[..]);
 
     let key_handle = 0x80000001;
     let public = TpmtPublic {
@@ -62,7 +61,7 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
         hierarchy: 0x40000001,
         st_clear: false,
     };
-    global_state.transient_objects[0] = Some(obj);
+    tpm.state.transient_objects[0] = Some(obj);
 
     let mut req = Vec::new();
     req.extend_from_slice(&hex!("8002"));
@@ -80,7 +79,7 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
     req[2..6].copy_from_slice(&req_len.to_be_bytes());
 
     let mut response_buf = [0u8; 16384];
-    tpm.execute_command_separate(&mut global_state, &req[..], &mut response_buf[..]);
+    tpm.execute_command_separate(&req[..], &mut response_buf[..]);
 
     let rc = u32::from_be_bytes(response_buf[6..10].try_into().unwrap());
     assert_eq!(
@@ -115,11 +114,10 @@ fn set_command_code_audit_status_cmd(
 /// Executes `request` and returns the response code.
 fn execute_rc(
     tpm: &mut TpmEngine<'_, common::FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
-    global_state: &mut tpm2_impl::GlobalState,
     request: &[u8],
 ) -> u32 {
     let mut response = [0u8; 4096];
-    tpm.execute_command_separate(global_state, request, &mut response);
+    tpm.execute_command_separate(request, &mut response);
     u32::from_be_bytes(response[6..10].try_into().unwrap())
 }
 
@@ -135,44 +133,43 @@ fn command_audit_state_persists_across_tpm_init() {
     let mut rng = FakeRng::new();
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    global_state.init_zeroed();
-    tpm.init_storage(&mut global_state);
+    tpm.state.init_zeroed();
+    tpm.init_storage();
     let startup = hex!("8001 0000000c 00000144 0000");
-    assert_eq!(execute_rc(&mut tpm, &mut global_state, &startup), 0);
+    assert_eq!(execute_rc(&mut tpm, &startup), 0);
 
     // Manufacture default.
-    let audited: Vec<TpmCc> = global_state.audit_commands.iter().collect();
+    let audited: Vec<TpmCc> = tpm.state.audit_commands.iter().collect();
     assert_eq!(audited, [TpmCc::SetCommandCodeAuditStatus]);
-    assert_eq!(global_state.audit_counter, 0);
+    assert_eq!(tpm.state.audit_counter, 0);
 
     // Add TPM2_GetRandom; the command itself is audited and starts a log.
     let cmd = set_command_code_audit_status_cmd(0x0010, &[0x17B], &[]);
-    assert_eq!(execute_rc(&mut tpm, &mut global_state, &cmd), 0);
-    assert!(global_state.audit_commands.is_audited(TpmCc::GetRandom));
-    assert_eq!(global_state.audit_counter, 1);
-    assert_eq!(global_state.command_audit_digest.get_size(), 64);
+    assert_eq!(execute_rc(&mut tpm, &cmd), 0);
+    assert!(tpm.state.audit_commands.is_audited(TpmCc::GetRandom));
+    assert_eq!(tpm.state.audit_counter, 1);
+    assert_eq!(tpm.state.command_audit_digest.get_size(), 64);
 
     // Change the algorithm: the digest is cleared and the counter unchanged.
     let cmd = set_command_code_audit_status_cmd(0x000B, &[], &[]);
-    assert_eq!(execute_rc(&mut tpm, &mut global_state, &cmd), 0);
-    assert_eq!(global_state.audit_hash_alg, 0x000B);
-    assert_eq!(global_state.command_audit_digest.get_size(), 0);
-    assert_eq!(global_state.audit_counter, 1);
+    assert_eq!(execute_rc(&mut tpm, &cmd), 0);
+    assert_eq!(tpm.state.audit_hash_alg, 0x000B);
+    assert_eq!(tpm.state.command_audit_digest.get_size(), 0);
+    assert_eq!(tpm.state.audit_counter, 1);
 
     // An audited command starts a SHA-256 log.
     let get_random = hex!("8001 0000000c 0000017b 0008");
-    assert_eq!(execute_rc(&mut tpm, &mut global_state, &get_random), 0);
-    assert_eq!(global_state.audit_counter, 2);
-    assert_eq!(global_state.command_audit_digest.get_size(), 32);
+    assert_eq!(execute_rc(&mut tpm, &get_random), 0);
+    assert_eq!(tpm.state.audit_counter, 2);
+    assert_eq!(tpm.state.command_audit_digest.get_size(), 32);
 
     // `_TPM_Init` without an orderly shutdown, then TPM Reset.
-    tpm.reset(&mut global_state);
-    assert!(global_state.audit_commands.is_audited(TpmCc::GetRandom));
-    assert_eq!(global_state.audit_hash_alg, 0x000B);
-    assert_eq!(global_state.audit_counter, 2);
-    assert_eq!(execute_rc(&mut tpm, &mut global_state, &startup), 0);
-    assert_eq!(global_state.command_audit_digest.get_size(), 0);
+    tpm.reset();
+    assert!(tpm.state.audit_commands.is_audited(TpmCc::GetRandom));
+    assert_eq!(tpm.state.audit_hash_alg, 0x000B);
+    assert_eq!(tpm.state.audit_counter, 2);
+    assert_eq!(execute_rc(&mut tpm, &startup), 0);
+    assert_eq!(tpm.state.command_audit_digest.get_size(), 0);
 }
 
 /// An algorithm change combined with a command list is `TPM_RC_VALUE + P1` and changes
@@ -187,28 +184,27 @@ fn rejected_commands_leave_command_audit_state_unchanged() {
     let mut rng = FakeRng::new();
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    global_state.init_zeroed();
-    tpm.init_storage(&mut global_state);
+    tpm.state.init_zeroed();
+    tpm.init_storage();
     let startup = hex!("8001 0000000c 00000144 0000");
-    assert_eq!(execute_rc(&mut tpm, &mut global_state, &startup), 0);
+    assert_eq!(execute_rc(&mut tpm, &startup), 0);
 
     let cmd = set_command_code_audit_status_cmd(0x000B, &[0x17B], &[]);
-    assert_eq!(execute_rc(&mut tpm, &mut global_state, &cmd), 0x1C4);
-    assert!(!global_state.audit_commands.is_audited(TpmCc::GetRandom));
-    assert_eq!(global_state.audit_hash_alg, 0x000D);
-    assert_eq!(global_state.audit_counter, 0);
-    assert_eq!(global_state.command_audit_digest.get_size(), 0);
+    assert_eq!(execute_rc(&mut tpm, &cmd), 0x1C4);
+    assert!(!tpm.state.audit_commands.is_audited(TpmCc::GetRandom));
+    assert_eq!(tpm.state.audit_hash_alg, 0x000D);
+    assert_eq!(tpm.state.audit_counter, 0);
+    assert_eq!(tpm.state.command_audit_digest.get_size(), 0);
 
     // GetRandom with an oversized request still succeeds (it is clamped), so use a malformed
     // one: a trailing byte is TPM_RC_SIZE and must not be audited.
     let cmd = set_command_code_audit_status_cmd(0x0010, &[0x17B], &[]);
-    assert_eq!(execute_rc(&mut tpm, &mut global_state, &cmd), 0);
-    let digest = global_state.command_audit_digest;
+    assert_eq!(execute_rc(&mut tpm, &cmd), 0);
+    let digest = tpm.state.command_audit_digest;
     let bad_get_random = hex!("8001 0000000d 0000017b 0008 00");
-    assert_ne!(execute_rc(&mut tpm, &mut global_state, &bad_get_random), 0);
-    assert_eq!(global_state.command_audit_digest, digest);
-    assert_eq!(global_state.audit_counter, 1);
+    assert_ne!(execute_rc(&mut tpm, &bad_get_random), 0);
+    assert_eq!(tpm.state.command_audit_digest, digest);
+    assert_eq!(tpm.state.audit_counter, 1);
 }
 
 /// The persistent audit data is carried through the `s_NV` image (`gp` offset 758..792).
@@ -225,12 +221,11 @@ fn command_audit_state_round_trips_through_s_nv_image() {
     let mut rng = FakeRng::new();
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    global_state.init_zeroed();
-    global_state.audit_hash_alg = 0x000C;
-    global_state.audit_counter = 0x0102_0304_0506_0708;
-    global_state.audit_commands.set(TpmCc::PCRRead);
-    tpm.init_storage(&mut global_state);
+    tpm.state.init_zeroed();
+    tpm.state.audit_hash_alg = 0x000C;
+    tpm.state.audit_counter = 0x0102_0304_0506_0708;
+    tpm.state.audit_commands.set(TpmCc::PCRRead);
+    tpm.init_storage();
 
     let mut s_nv = [0u8; NV_MEMORY_SIZE];
     transcode_storage_to_s_nv(&mut *tpm.platform.storage, &mut s_nv).unwrap();
@@ -241,9 +236,10 @@ fn command_audit_state_round_trips_through_s_nv_image() {
     );
 
     transcode_s_nv_to_storage(&s_nv, &mut *tpm.platform.storage).unwrap();
-    let mut restored = tpm2_impl::GlobalState::default();
-    tpm.restore_hierarchy_auths(&mut restored);
-    assert_eq!(restored.audit_hash_alg, 0x000C);
-    assert_eq!(restored.audit_counter, 0x0102_0304_0506_0708);
-    assert_eq!(restored.audit_commands, global_state.audit_commands);
+    let audit_commands = tpm.state.audit_commands;
+    tpm.state = tpm2_impl::GlobalState::default();
+    tpm.restore_hierarchy_auths();
+    assert_eq!(tpm.state.audit_hash_alg, 0x000C);
+    assert_eq!(tpm.state.audit_counter, 0x0102_0304_0506_0708);
+    assert_eq!(tpm.state.audit_commands, audit_commands);
 }

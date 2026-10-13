@@ -1,6 +1,7 @@
 //! Rejected parameter encryption/decryption setups: wrong session attributes, sizes and corrupted
 //! ciphertext.
 
+use crate::_common::Connection;
 use crate::_common::{
     AES128_CFB, create_primary_key, create_srk_with_template as create_srk,
     execute_with_hmac_sessions, execute_with_hmac_sessions_corrupt_ciphertext,

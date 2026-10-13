@@ -175,32 +175,23 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> (
-    TpmEngine<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
-    tpm2_impl::GlobalState,
-) {
+) -> TpmEngine<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng> {
     let platform = TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.locality = 0;
-    global_state.g_nv_ok = true;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.locality = 0;
+    tpm.state.g_nv_ok = true;
 
     // Startup
     let startup_request = hex!("8001 0000000c 00000144 0000");
     let mut startup_response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &startup_request[..],
-        &mut startup_response[..],
-    );
-    (tpm, global_state)
+    tpm.execute_command_separate(&startup_request[..], &mut startup_response[..]);
+    tpm
 }
 
 fn execute_tpm_command_with_auths<C: Command>(
     tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
-    global_state: &mut tpm2_impl::GlobalState,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -259,8 +250,7 @@ where
     request_buf[2..6].copy_from_slice(&(offset as u32).to_be_bytes());
 
     let mut response_buf = [0u8; 16384];
-    let resp_size =
-        tpm.execute_command_separate(global_state, &request_buf[..offset], &mut response_buf[..]);
+    let resp_size = tpm.execute_command_separate(&request_buf[..offset], &mut response_buf[..]);
     let rc = u32::from_be_bytes(response_buf[6..10].try_into().unwrap());
     if rc != 0 {
         return Err(rc);
@@ -316,7 +306,7 @@ fn test_duplicate_import_load_roundtrip() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Setup target object (the key to duplicate)
     let target_handle = 0x80000001;
@@ -337,7 +327,7 @@ fn test_duplicate_import_load_roundtrip() {
     };
     let mut pub_buf = [0u8; 1024];
     let pub_len = marshal_to_slice(&target_public, &mut pub_buf);
-    let handler = tpm2_impl::handler::CommandHandler::new(&mut tpm, &mut global_state);
+    let handler = tpm2_impl::handler::CommandHandler::new(&mut tpm);
     let target_name = handler
         .compute_name(target_public.name_alg, &pub_buf[..pub_len])
         .unwrap();
@@ -363,7 +353,7 @@ fn test_duplicate_import_load_roundtrip() {
         hierarchy: 0x40000001,
         st_clear: false,
     };
-    global_state.transient_objects[0] = Some(target_obj.clone());
+    tpm.state.transient_objects[0] = Some(target_obj.clone());
 
     // 2. Setup parent key P
     let parent_handle = 0x80000002;
@@ -406,7 +396,7 @@ fn test_duplicate_import_load_roundtrip() {
         hierarchy: 0x40000001,
         st_clear: false,
     };
-    global_state.transient_objects[1] = Some(parent_obj);
+    tpm.state.transient_objects[1] = Some(parent_obj);
 
     // 3. Test Duplicate Edge Cases:
     // A. Invalid target object handle -> returns TpmRc::HANDLE.with(Position::handle(1))
@@ -420,24 +410,24 @@ fn test_duplicate_import_load_roundtrip() {
         object_handle: Handle(0x80000009),
         ..dup_cmd
     };
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_cmd_bad, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &dup_cmd_bad, &[]);
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
 
     // B. Target object has fixedParent attribute -> returns TpmRc::ATTRIBUTES.with(Position::handle(1))
-    global_state.transient_objects[0]
+    tpm.state.transient_objects[0]
         .as_mut()
         .unwrap()
         .public
         .object_attributes
         .insert(TpmaObject::FIXED_PARENT);
-    let dup_auth = dup_policy_auth(&mut global_state);
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_cmd, &[dup_auth]);
+    let dup_auth = dup_policy_auth(&mut tpm.state);
+    let res = execute_tpm_command_with_auths(&mut tpm, &dup_cmd, &[dup_auth]);
     assert_eq!(
         res.err(),
         Some(TpmRc::ATTRIBUTES.with(Position::handle(1)).get())
     );
     // restore FIXED_PARENT
-    global_state.transient_objects[0]
+    tpm.state.transient_objects[0]
         .as_mut()
         .unwrap()
         .public
@@ -449,7 +439,7 @@ fn test_duplicate_import_load_roundtrip() {
         new_parent_handle: Handle(0x80000009),
         ..dup_cmd
     };
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_cmd_bad_parent, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &dup_cmd_bad_parent, &[]);
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H1.get()));
 
     // D. New parent is not asymmetric -> returns TpmRc::TYPE.with(Position::handle(2))
@@ -480,16 +470,15 @@ fn test_duplicate_import_load_roundtrip() {
         hierarchy: 0x40000001,
         st_clear: false,
     };
-    global_state.transient_objects[2] = Some(bad_parent_obj);
+    tpm.state.transient_objects[2] = Some(bad_parent_obj);
     let dup_cmd_bad_type = tpm2::commands::Duplicate {
         new_parent_handle: Handle(0x80000003),
         ..dup_cmd
     };
-    let dup_auth = dup_policy_auth(&mut global_state);
-    let res =
-        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_cmd_bad_type, &[dup_auth]);
+    let dup_auth = dup_policy_auth(&mut tpm.state);
+    let res = execute_tpm_command_with_auths(&mut tpm, &dup_cmd_bad_type, &[dup_auth]);
     assert_eq!(res.err(), Some(TpmRc::TYPE.with(Position::handle(2)).get()));
-    global_state.transient_objects[2] = None;
+    tpm.state.transient_objects[2] = None;
 
     // 4. Success Duplicate with inner wrapper (AES-128 CFB)
     let sym_alg = TpmtSymDefObject {
@@ -502,10 +491,9 @@ fn test_duplicate_import_load_roundtrip() {
         encryption_key_in: Tpm2bData::default(), // TPM should generate one
         symmetric_alg: Some(sym_alg),
     };
-    let dup_auth = dup_policy_auth(&mut global_state);
-    let dup_resp =
-        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_cmd_sym, &[dup_auth])
-            .expect("Duplicate failed");
+    let dup_auth = dup_policy_auth(&mut tpm.state);
+    let dup_resp = execute_tpm_command_with_auths(&mut tpm, &dup_cmd_sym, &[dup_auth])
+        .expect("Duplicate failed");
     assert!(dup_resp.encryption_key_out.get_size() > 0);
     assert!(dup_resp.duplicate.get_size() > 0);
     assert!(dup_resp.out_sym_seed.get_size() > 0);
@@ -526,12 +514,8 @@ fn test_duplicate_import_load_roundtrip() {
         in_sym_seed: dup_resp.out_sym_seed,
         symmetric_alg: Some(sym_alg),
     };
-    let res = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &import_cmd_bad,
-        &[common::password_auth(b"")],
-    );
+    let res =
+        execute_tpm_command_with_auths(&mut tpm, &import_cmd_bad, &[common::password_auth(b"")]);
     assert_eq!(
         res.err(),
         Some(TpmRc::ATTRIBUTES.with(Position::parameter(2)).get())
@@ -548,7 +532,6 @@ fn test_duplicate_import_load_roundtrip() {
     };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
-        &mut global_state,
         &import_cmd_bad_key,
         &[common::password_auth(b"")],
     );
@@ -572,7 +555,6 @@ fn test_duplicate_import_load_roundtrip() {
     };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
-        &mut global_state,
         &import_cmd_bad_hmac,
         &[common::password_auth(b"")],
     );
@@ -592,13 +574,9 @@ fn test_duplicate_import_load_roundtrip() {
         in_sym_seed: dup_resp.out_sym_seed,
         symmetric_alg: Some(sym_alg),
     };
-    let import_resp = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &import_cmd,
-        &[common::password_auth(b"")],
-    )
-    .expect("Import failed");
+    let import_resp =
+        execute_tpm_command_with_auths(&mut tpm, &import_cmd, &[common::password_auth(b"")])
+            .expect("Import failed");
     assert!(import_resp.out_private.get_size() > 0);
 
     // 7. Test Load Edge Cases:
@@ -612,31 +590,22 @@ fn test_duplicate_import_load_roundtrip() {
         parent_handle: Handle(0x80000009),
         ..load_cmd
     };
-    let res = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &load_cmd_bad,
-        &[common::password_auth(b"")],
-    );
+    let res =
+        execute_tpm_command_with_auths(&mut tpm, &load_cmd_bad, &[common::password_auth(b"")]);
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
 
     // B. Parent key does not have DECRYPT and RESTRICTED -> returns TpmRc::TYPE.with(Position::handle(1))
     // Modify parent's attributes to remove RESTRICTED
-    global_state.transient_objects[1]
+    tpm.state.transient_objects[1]
         .as_mut()
         .unwrap()
         .public
         .object_attributes
         .remove(TpmaObject::RESTRICTED);
-    let res = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &load_cmd,
-        &[common::password_auth(b"")],
-    );
+    let res = execute_tpm_command_with_auths(&mut tpm, &load_cmd, &[common::password_auth(b"")]);
     assert_eq!(res.err(), Some(TpmRc::TYPE.with(Position::handle(1)).get()));
     // restore attributes
-    global_state.transient_objects[1]
+    tpm.state.transient_objects[1]
         .as_mut()
         .unwrap()
         .public
@@ -653,12 +622,8 @@ fn test_duplicate_import_load_roundtrip() {
         in_private: tampered_private,
         in_public: object_public_2b,
     };
-    let res = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &load_cmd_bad_hmac,
-        &[common::password_auth(b"")],
-    );
+    let res =
+        execute_tpm_command_with_auths(&mut tpm, &load_cmd_bad_hmac, &[common::password_auth(b"")]);
     // C TPM2_Load: PrivateToSensitive's TPM_RC_INTEGRITY is reported against `inPrivate`
     // (RcSafeAddToResult(result, RC_Load_inPrivate), +P1).
     assert_eq!(
@@ -675,12 +640,8 @@ fn test_duplicate_import_load_roundtrip() {
         in_private: import_resp.out_private,
         in_public: bad_name_alg_public_2b,
     };
-    let res = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &load_cmd_bad_alg,
-        &[common::password_auth(b"")],
-    );
+    let res =
+        execute_tpm_command_with_auths(&mut tpm, &load_cmd_bad_alg, &[common::password_auth(b"")]);
     // SM3_256 is not implemented: TPMT_PUBLIC unmarshal of nameAlg fails with TPM_RC_HASH,
     // reported against inPublic (+P2).
     assert_eq!(
@@ -689,17 +650,14 @@ fn test_duplicate_import_load_roundtrip() {
     );
 
     // 8. Success Load
-    let load_resp = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &load_cmd,
-        &[common::password_auth(b"")],
-    )
-    .expect("Load failed");
+    let load_resp =
+        execute_tpm_command_with_auths(&mut tpm, &load_cmd, &[common::password_auth(b"")])
+            .expect("Load failed");
     assert!(load_resp.name.get_size() > 0);
 
     // Verify loaded object is now in transient storage and matches target
-    let loaded_obj = global_state
+    let loaded_obj = tpm
+        .state
         .transient_objects
         .iter()
         .flatten()

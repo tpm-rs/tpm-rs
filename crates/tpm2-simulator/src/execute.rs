@@ -266,7 +266,7 @@ where
     );
 
     let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
-    tpm.transact(&cmd_buffer[..written], &mut resp_buffer)?;
+    tpm2::Connection::transact(tpm, &cmd_buffer[..written], &mut resp_buffer)?;
 
     let (resp_header, read) = read_response_header(&resp_buffer)?;
     let resp_size = resp_header.size as usize;

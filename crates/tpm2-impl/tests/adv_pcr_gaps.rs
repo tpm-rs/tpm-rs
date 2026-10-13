@@ -16,27 +16,19 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> (
-    TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
-    tpm2_impl::GlobalState,
-) {
+) -> TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng> {
     let platform = TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.locality = 0;
-    global_state.g_nv_ok = true;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.locality = 0;
+    tpm.state.g_nv_ok = true;
 
     // Startup
     let startup_request = hex!("8001 0000000c 00000144 0000");
     let mut startup_response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &startup_request[..],
-        &mut startup_response[..],
-    );
-    (tpm, global_state)
+    tpm.execute_command_separate(&startup_request[..], &mut startup_response[..]);
+    tpm
 }
 
 /// An empty-password `TPM_RS_PW` session. In C every handle with an authorization role
@@ -53,7 +45,6 @@ fn pw() -> tpm2::TpmsAuthCommand<'static> {
 
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
-    global_state: &mut tpm2_impl::GlobalState,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -108,8 +99,7 @@ where
     request_buf[2..6].copy_from_slice(&(offset as u32).to_be_bytes());
 
     let mut response_buf = [0u8; 16384];
-    let resp_size =
-        tpm.execute_command_separate(global_state, &request_buf[..offset], &mut response_buf[..]);
+    let resp_size = tpm.execute_command_separate(&request_buf[..offset], &mut response_buf[..]);
 
     let rc = u32::from_be_bytes(response_buf[6..10].try_into().unwrap());
     if rc != 0 {
@@ -149,15 +139,15 @@ fn test_pcr_update_counter_wrap_around() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
-    global_state.pcrs.update_counter = u32::MAX; // set to maximum value AFTER startup
+    tpm.state.pcrs.update_counter = u32::MAX; // set to maximum value AFTER startup
 
     // Read counter
     let read_cmd = PCRRead {
         pcr_selection_in: TpmlPcrSelection::default(),
     };
-    let resp = execute_tpm_command(&mut tpm, &mut global_state, &read_cmd, &[]).unwrap();
+    let resp = execute_tpm_command(&mut tpm, &read_cmd, &[]).unwrap();
     assert_eq!(resp.pcr_update_counter, u32::MAX);
 
     // Extend PCR 16 to trigger update_counter increment
@@ -167,9 +157,9 @@ fn test_pcr_update_counter_wrap_around() {
         pcr_handle: Handle(16),
         digests,
     };
-    execute_tpm_command(&mut tpm, &mut global_state, &extend_cmd, &[pw()]).unwrap();
+    execute_tpm_command(&mut tpm, &extend_cmd, &[pw()]).unwrap();
 
     // Read counter again
-    let resp = execute_tpm_command(&mut tpm, &mut global_state, &read_cmd, &[]).unwrap();
+    let resp = execute_tpm_command(&mut tpm, &read_cmd, &[]).unwrap();
     assert_eq!(resp.pcr_update_counter, 0);
 }

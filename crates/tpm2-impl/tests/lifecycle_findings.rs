@@ -50,11 +50,10 @@ fn plain_command(cc: u32, params: &[u8]) -> Vec<u8> {
 /// Executes `cmd` and returns the response code.
 fn run<R: Rng + Sync>(
     tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, R>,
-    gs: &mut GlobalState,
     cmd: &[u8],
 ) -> u32 {
     let mut rsp = [0u8; 4096];
-    let n = tpm.execute_command_separate(gs, cmd, &mut rsp);
+    let n = tpm.execute_command_separate(cmd, &mut rsp);
     assert!(n >= 10);
     u32::from_be_bytes(rsp[6..10].try_into().unwrap())
 }
@@ -68,12 +67,9 @@ const TPM_RH_LOCKOUT: u32 = 0x4000_000A;
 const TPM_RH_PLATFORM: u32 = 0x4000_000C;
 
 /// Powers on (`_TPM_Init`) with `gs` and runs `TPM2_Startup(CLEAR)`.
-fn power_on_startup<R: Rng + Sync>(
-    tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, R>,
-    gs: &mut GlobalState,
-) {
-    tpm.reset(gs);
-    assert_eq!(run(tpm, gs, &plain_command(TPM_CC_STARTUP, &[0, 0])), 0);
+fn power_on_startup<R: Rng + Sync>(tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, R>) {
+    tpm.reset();
+    assert_eq!(run(tpm, &plain_command(TPM_CC_STARTUP, &[0, 0])), 0);
 }
 
 /// Persistent data (`gp`) must be reloaded from NV at `_TPM_Init`: DA parameters,
@@ -89,12 +85,11 @@ fn tpm2_startup_missing_nv_loads_for_orderly_counters_and_lockout() {
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
 
-    let mut gs = GlobalState::default();
-    tpm.init_storage(&mut gs);
-    power_on_startup(&mut tpm, &mut gs);
-    power_on_startup(&mut tpm, &mut gs);
-    let reset_count = gs.reset_count;
-    let total_reset_count = gs.total_reset_count;
+    tpm.init_storage();
+    power_on_startup(&mut tpm);
+    power_on_startup(&mut tpm);
+    let reset_count = tpm.state.reset_count;
+    let total_reset_count = tpm.state.total_reset_count;
     assert!(reset_count >= 2);
 
     // DictionaryAttackParameters(maxTries = 7, recoveryTime = 0, lockoutRecovery = 55).
@@ -103,46 +98,39 @@ fn tpm2_startup_missing_nv_loads_for_orderly_counters_and_lockout() {
     params.extend_from_slice(&0u32.to_be_bytes());
     params.extend_from_slice(&55u32.to_be_bytes());
     let cmd = pw_command(TPM_CC_DA_PARAMETERS, &[TPM_RH_LOCKOUT], &params);
-    assert_eq!(run(&mut tpm, &mut gs, &cmd), 0);
+    assert_eq!(run(&mut tpm, &cmd), 0);
 
     // Model a lockoutAuth failure and the disableClear state, persisted by the next
     // ClearControl (which itself must persist disableClear).
-    gs.lockout_auth_enabled = false;
+    tpm.state.lockout_auth_enabled = false;
     let cmd = pw_command(TPM_CC_CLEAR_CONTROL, &[TPM_RH_PLATFORM], &[1]);
-    assert_eq!(run(&mut tpm, &mut gs, &cmd), 0);
+    assert_eq!(run(&mut tpm, &cmd), 0);
     // Shutdown(CLEAR) so that the next boot is orderly.
-    assert_eq!(
-        run(&mut tpm, &mut gs, &plain_command(TPM_CC_SHUTDOWN, &[0, 0])),
-        0
-    );
+    assert_eq!(run(&mut tpm, &plain_command(TPM_CC_SHUTDOWN, &[0, 0])), 0);
 
     // Real reboot: RAM is lost, only NV survives.
-    let mut fresh = GlobalState::default();
-    tpm.reset(&mut fresh);
-    assert_eq!(fresh.max_tries, 7);
-    assert_eq!(fresh.recovery_time, 0);
-    assert_eq!(fresh.lockout_recovery, 55);
-    assert!(fresh.disable_clear, "disableClear not reloaded from NV");
+    tpm.state = GlobalState::default();
+    tpm.reset();
+    assert_eq!(tpm.state.max_tries, 7);
+    assert_eq!(tpm.state.recovery_time, 0);
+    assert_eq!(tpm.state.lockout_recovery, 55);
+    assert!(tpm.state.disable_clear, "disableClear not reloaded from NV");
     assert!(
-        !fresh.lockout_auth_enabled,
+        !tpm.state.lockout_auth_enabled,
         "lockOutAuthEnabled not reloaded from NV (lockoutRecovery bypass)"
     );
-    assert_eq!(fresh.reset_count, reset_count);
-    assert_eq!(fresh.total_reset_count, total_reset_count);
-    assert_eq!(fresh.orderly_state, 0x0000, "orderly state not reloaded");
-    assert!(fresh.g_nv_ok);
+    assert_eq!(tpm.state.reset_count, reset_count);
+    assert_eq!(tpm.state.total_reset_count, total_reset_count);
+    assert_eq!(
+        tpm.state.orderly_state, 0x0000,
+        "orderly state not reloaded"
+    );
+    assert!(tpm.state.g_nv_ok);
 
     // lockoutRecovery != 0, so Startup must not re-enable lockoutAuth.
-    assert_eq!(
-        run(
-            &mut tpm,
-            &mut fresh,
-            &plain_command(TPM_CC_STARTUP, &[0, 0])
-        ),
-        0
-    );
-    assert!(!fresh.lockout_auth_enabled);
-    assert_eq!(fresh.reset_count, reset_count + 1);
+    assert_eq!(run(&mut tpm, &plain_command(TPM_CC_STARTUP, &[0, 0])), 0);
+    assert!(!tpm.state.lockout_auth_enabled);
+    assert_eq!(tpm.state.reset_count, reset_count + 1);
 }
 
 /// A platform RNG that can be switched into a failing state.
@@ -184,16 +172,15 @@ fn tpm2_getrandom_stirrandom_unmarshal_panic_and_size_bugs() {
     };
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut gs = GlobalState::default();
-    tpm.init_storage(&mut gs);
-    power_on_startup(&mut tpm, &mut gs);
+    tpm.init_storage();
+    power_on_startup(&mut tpm);
 
     let get_random = plain_command(TPM_CC_GET_RANDOM, &16u16.to_be_bytes());
-    assert_eq!(run(&mut tpm, &mut gs, &get_random), 0);
+    assert_eq!(run(&mut tpm, &get_random), 0);
     fail.store(true, Ordering::SeqCst);
-    assert_eq!(run(&mut tpm, &mut gs, &get_random), 0x101); // TPM_RC_FAILURE
+    assert_eq!(run(&mut tpm, &get_random), 0x101); // TPM_RC_FAILURE
     fail.store(false, Ordering::SeqCst);
-    assert_eq!(run(&mut tpm, &mut gs, &get_random), 0);
+    assert_eq!(run(&mut tpm, &get_random), 0);
 }
 
 /// Primary Seeds and hierarchy proofs the platform RNG cannot produce at manufacture stay
@@ -212,32 +199,31 @@ fn rng_failure_at_manufacture_leaves_seeds_and_proofs_unprovisioned() {
     };
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut gs = GlobalState::default();
-    tpm.init_storage(&mut gs);
+    tpm.init_storage();
     for size in [
-        gs.ep_seed_size,
-        gs.sp_seed_size,
-        gs.pp_seed_size,
-        gs.ph_proof_size,
-        gs.sh_proof_size,
-        gs.eh_proof_size,
+        tpm.state.ep_seed_size,
+        tpm.state.sp_seed_size,
+        tpm.state.pp_seed_size,
+        tpm.state.ph_proof_size,
+        tpm.state.sh_proof_size,
+        tpm.state.eh_proof_size,
     ] {
         assert_eq!(size, 0);
     }
     assert_eq!(
         [
-            gs.ep_seed,
-            gs.sp_seed,
-            gs.pp_seed,
-            gs.ph_proof,
-            gs.sh_proof,
-            gs.eh_proof
+            tpm.state.ep_seed,
+            tpm.state.sp_seed,
+            tpm.state.pp_seed,
+            tpm.state.ph_proof,
+            tpm.state.sh_proof,
+            tpm.state.eh_proof
         ],
         [[0u8; 64]; 6]
     );
 
     fail.store(false, Ordering::SeqCst);
-    power_on_startup(&mut tpm, &mut gs);
+    power_on_startup(&mut tpm);
 
     // inSensitive (empty) and a KEYEDHASH HMAC-SHA256 signing template.
     let mut params = Vec::new();
@@ -257,12 +243,8 @@ fn rng_failure_at_manufacture_leaves_seeds_and_proofs_unprovisioned() {
     const TPM_CC_CREATE_PRIMARY: u32 = 0x131;
     for hierarchy in [0x4000_0001, 0x4000_000B, TPM_RH_PLATFORM] {
         let cmd = pw_command(TPM_CC_CREATE_PRIMARY, &[hierarchy], &params);
-        assert_eq!(
-            run(&mut tpm, &mut gs, &cmd),
-            0x101,
-            "hierarchy {hierarchy:#x}"
-        );
+        assert_eq!(run(&mut tpm, &cmd), 0x101, "hierarchy {hierarchy:#x}");
     }
     let cmd = pw_command(TPM_CC_CREATE_PRIMARY, &[0x4000_0007], &params);
-    assert_ne!(run(&mut tpm, &mut gs, &cmd), 0x101, "null hierarchy");
+    assert_ne!(run(&mut tpm, &cmd), 0x101, "null hierarchy");
 }

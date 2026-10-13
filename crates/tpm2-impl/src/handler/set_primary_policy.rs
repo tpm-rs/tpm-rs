@@ -37,15 +37,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let auth_handle = auth_handle.0;
 
         if auth_handle == Handle::RH_OWNER.0 {
-            if !self.global_state.sh_enable {
+            if !self.context.state.sh_enable {
                 return Err(TpmRc::HIERARCHY.with(Position::handle(1)));
             }
         } else if auth_handle == Handle::RH_ENDORSEMENT.0 {
-            if !self.global_state.eh_enable {
+            if !self.context.state.eh_enable {
                 return Err(TpmRc::HIERARCHY.with(Position::handle(1)));
             }
         } else if auth_handle == Handle::RH_PLATFORM.0 {
-            if !self.global_state.ph_enable {
+            if !self.context.state.ph_enable {
                 return Err(TpmRc::HIERARCHY.with(Position::handle(1)));
             }
         } else if auth_handle != Handle::RH_LOCKOUT.0 {
@@ -76,22 +76,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let policy = crate::owned::OwnedDigest::from(cmd.auth_policy);
         if auth_handle == Handle::RH_OWNER.0 {
-            self.global_state.owner_policy = policy;
-            self.global_state.owner_alg = cmd.hash_alg;
+            self.context.state.owner_policy = policy;
+            self.context.state.owner_alg = cmd.hash_alg;
         } else if auth_handle == Handle::RH_ENDORSEMENT.0 {
-            self.global_state.endorsement_policy = policy;
-            self.global_state.endorsement_alg = cmd.hash_alg;
+            self.context.state.endorsement_policy = policy;
+            self.context.state.endorsement_alg = cmd.hash_alg;
         } else if auth_handle == Handle::RH_PLATFORM.0 {
             self.nv_clear_orderly()?;
-            self.global_state.platform_policy = policy;
-            self.global_state.platform_alg = cmd.hash_alg;
+            self.context.state.platform_policy = policy;
+            self.context.state.platform_alg = cmd.hash_alg;
         } else if auth_handle == Handle::RH_LOCKOUT.0 {
-            self.global_state.lockout_policy = policy;
-            self.global_state.lockout_alg = cmd.hash_alg;
+            self.context.state.lockout_policy = policy;
+            self.context.state.lockout_alg = cmd.hash_alg;
         }
 
-        self.global_state.state_saved = false;
-        self.context.save_hierarchy_auths(self.global_state);
+        self.context.state.state_saved = false;
+        self.context.save_hierarchy_auths();
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;

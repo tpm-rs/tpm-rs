@@ -59,7 +59,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // C `CreatePrimary.c`: `FindEmptyObjectSlot` is the first check of the action code
         // (`TPM_RC_OBJECT_MEMORY` takes precedence over template/attribute errors). The
         // command never touches NV, so it does not clear the orderly state.
-        let (index, handle) = self.global_state.find_empty_transient_slot(true)?;
+        let (index, handle) = self.context.state.find_empty_transient_slot(true)?;
 
         let in_sensitive_struct = cmd
             .in_sensitive
@@ -147,10 +147,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // C `FillInCreationData`: the reported selection is the filtered one.
             pcr_select: self.filter_pcr_selection(&cmd.creation_pcr),
             pcr_digest: pcr_digest.as_tpm2b(),
-            locality: TpmaLocality(if self.global_state.locality <= 4 {
-                1 << self.global_state.locality
+            locality: TpmaLocality(if self.context.state.locality <= 4 {
+                1 << self.context.state.locality
             } else {
-                self.global_state.locality
+                self.context.state.locality
             }),
             parent_name_alg: Alg::NULL,
             parent_name,
@@ -197,8 +197,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             name.get_buffer(),
         )?;
 
-        self.global_state.transient_parents[index] = Some(primary_handle.0);
-        self.global_state.transient_objects[index] = Some(TransientObject {
+        self.context.state.transient_parents[index] = Some(primary_handle.0);
+        self.context.state.transient_objects[index] = Some(TransientObject {
             handle,
             seed: stored_seed,
             seed_len: stored_seed_len,
@@ -225,23 +225,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<usize, TpmRc> {
         if primary_handle.0 == Handle::RH_PLATFORM.0 {
             let seed =
-                provisioned_secret(&self.global_state.pp_seed, self.global_state.pp_seed_size)?;
+                provisioned_secret(&self.context.state.pp_seed, self.context.state.pp_seed_size)?;
             parent_seed_val[..seed.len()].copy_from_slice(seed);
             Ok(seed.len())
         } else if primary_handle.0 == Handle::RH_OWNER.0 {
             let seed =
-                provisioned_secret(&self.global_state.sp_seed, self.global_state.sp_seed_size)?;
+                provisioned_secret(&self.context.state.sp_seed, self.context.state.sp_seed_size)?;
             parent_seed_val[..seed.len()].copy_from_slice(seed);
             Ok(seed.len())
         } else if primary_handle.0 == Handle::RH_ENDORSEMENT.0 {
             let seed =
-                provisioned_secret(&self.global_state.ep_seed, self.global_state.ep_seed_size)?;
+                provisioned_secret(&self.context.state.ep_seed, self.context.state.ep_seed_size)?;
             parent_seed_val[..seed.len()].copy_from_slice(seed);
             Ok(seed.len())
         } else if primary_handle.0 == Handle::RH_NULL.0 {
             let seed = provisioned_secret(
-                &self.global_state.null_seed,
-                self.global_state.null_seed_size,
+                &self.context.state.null_seed,
+                self.context.state.null_seed_size,
             )?;
             parent_seed_val[..seed.len()].copy_from_slice(seed);
             Ok(seed.len())

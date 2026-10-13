@@ -35,13 +35,9 @@ fn pcr0_selection() -> TpmlPcrSelection {
 
 /// Computes the PolicyPCR `pcrDigest` (SHA-256 over the selected PCR values)
 /// from the current PCR contents.
-fn current_pcr_digest(
-    tpm: &mut RealCryptoEngine<'_>,
-    global_state: &mut tpm2_impl::GlobalState,
-) -> Vec<u8> {
+fn current_pcr_digest(tpm: &mut RealCryptoEngine<'_>) -> Vec<u8> {
     let read = execute_command(
         tpm,
-        global_state,
         &PCRRead {
             pcr_selection_in: pcr0_selection(),
         },
@@ -58,11 +54,7 @@ fn current_pcr_digest(
 }
 
 /// Starts an unbound, unsalted session of `session_type` and returns its handle.
-fn start_session(
-    tpm: &mut RealCryptoEngine<'_>,
-    global_state: &mut tpm2_impl::GlobalState,
-    session_type: TpmSe,
-) -> Handle {
+fn start_session(tpm: &mut RealCryptoEngine<'_>, session_type: TpmSe) -> Handle {
     let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
@@ -72,39 +64,30 @@ fn start_session(
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let rsp = execute_command(tpm, global_state, &cmd, &[]).expect("StartAuthSession failed");
+    let rsp = execute_command(tpm, &cmd, &[]).expect("StartAuthSession failed");
     rsp.session_handle
 }
 
 /// Executes `TPM2_PolicyPCR(pcrDigest, PCR0)` on `session`.
-fn policy_pcr(
-    tpm: &mut RealCryptoEngine<'_>,
-    global_state: &mut tpm2_impl::GlobalState,
-    session: Handle,
-    pcr_digest: &[u8],
-) {
+fn policy_pcr(tpm: &mut RealCryptoEngine<'_>, session: Handle, pcr_digest: &[u8]) {
     let cmd = PolicyPCR {
         policy_session: session,
         pcr_digest: Tpm2bDigest::from_bytes(pcr_digest).unwrap(),
         pcrs: pcr0_selection(),
     };
-    execute_command(tpm, global_state, &cmd, &[]).expect("PolicyPCR failed");
+    execute_command(tpm, &cmd, &[]).expect("PolicyPCR failed");
 }
 
 /// Creates an ECDSA signing primary key whose authPolicy is
 /// `PolicyPCR(PCR0 = current value)`, and returns `(key handle, pcrDigest)`.
-fn create_pcr_gated_key(
-    tpm: &mut RealCryptoEngine<'_>,
-    global_state: &mut tpm2_impl::GlobalState,
-) -> (Handle, Vec<u8>) {
-    let pcr_digest = current_pcr_digest(tpm, global_state);
+fn create_pcr_gated_key(tpm: &mut RealCryptoEngine<'_>) -> (Handle, Vec<u8>) {
+    let pcr_digest = current_pcr_digest(tpm);
 
     // Compute the policy digest with a trial session.
-    let trial = start_session(tpm, global_state, TpmSe::Trial);
-    policy_pcr(tpm, global_state, trial, &pcr_digest);
+    let trial = start_session(tpm, TpmSe::Trial);
+    policy_pcr(tpm, trial, &pcr_digest);
     let digest = execute_command(
         tpm,
-        global_state,
         &PolicyGetDigest {
             policy_session: trial,
         },
@@ -138,15 +121,13 @@ fn create_pcr_gated_key(
         }),
         ..Default::default()
     };
-    let rsp = execute_command(tpm, global_state, &create, &[password_auth(b"")])
-        .expect("CreatePrimary failed");
+    let rsp = execute_command(tpm, &create, &[password_auth(b"")]).expect("CreatePrimary failed");
     (rsp.object_handle, pcr_digest)
 }
 
 /// Signs a fixed digest with `key`, authorized by the policy `session`.
 fn sign_with_policy_session(
     tpm: &mut RealCryptoEngine<'_>,
-    global_state: &mut tpm2_impl::GlobalState,
     key: Handle,
     session: Handle,
 ) -> Result<(), u32> {
@@ -163,7 +144,7 @@ fn sign_with_policy_session(
         in_scheme: None,
         validation: TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default()),
     };
-    execute_command(tpm, global_state, &cmd, &[auth]).map(|_| ())
+    execute_command(tpm, &cmd, &[auth]).map(|_| ())
 }
 
 /// `pcrUpdateCounter` is `u32::MAX` when `TPM2_PolicyPCR` gates the session;
@@ -175,19 +156,18 @@ fn test_policy_pcr_counter_overflow_vulnerability() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut gs) = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
-    gs.pcrs.update_counter = u32::MAX;
-    let (key, pcr_digest) = create_pcr_gated_key(&mut tpm, &mut gs);
+    tpm.state.pcrs.update_counter = u32::MAX;
+    let (key, pcr_digest) = create_pcr_gated_key(&mut tpm);
 
-    let session = start_session(&mut tpm, &mut gs, TpmSe::Policy);
-    policy_pcr(&mut tpm, &mut gs, session, &pcr_digest);
+    let session = start_session(&mut tpm, TpmSe::Policy);
+    policy_pcr(&mut tpm, session, &pcr_digest);
 
     let mut digests = TpmlDigestValues::default();
     digests.add(&TpmtHa::Sha256(&[0xaa; 32])).unwrap();
     execute_command(
         &mut tpm,
-        &mut gs,
         &PCRExtend {
             pcr_handle: Handle(0),
             digests,
@@ -195,10 +175,13 @@ fn test_policy_pcr_counter_overflow_vulnerability() {
         &[password_auth(b"")],
     )
     .expect("PCR_Extend failed");
-    assert_eq!(gs.pcrs.update_counter, 0, "pcrUpdateCounter must wrap to 0");
+    assert_eq!(
+        tpm.state.pcrs.update_counter, 0,
+        "pcrUpdateCounter must wrap to 0"
+    );
 
     assert_eq!(
-        sign_with_policy_session(&mut tpm, &mut gs, key, session),
+        sign_with_policy_session(&mut tpm, key, session),
         Err(TpmRc::PCR_CHANGED.get()),
         "Sign must fail with TPM_RC_PCR_CHANGED after the counter wrapped"
     );
@@ -213,18 +196,18 @@ fn test_policy_pcr_counter_bypass_on_max() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut gs) = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
-    gs.pcrs.update_counter = u32::MAX;
-    let (key, pcr_digest) = create_pcr_gated_key(&mut tpm, &mut gs);
+    tpm.state.pcrs.update_counter = u32::MAX;
+    let (key, pcr_digest) = create_pcr_gated_key(&mut tpm);
 
-    let session = start_session(&mut tpm, &mut gs, TpmSe::Policy);
-    policy_pcr(&mut tpm, &mut gs, session, &pcr_digest);
+    let session = start_session(&mut tpm, TpmSe::Policy);
+    policy_pcr(&mut tpm, session, &pcr_digest);
 
-    gs.pcrs.update_counter = 0;
+    tpm.state.pcrs.update_counter = 0;
 
     assert_eq!(
-        sign_with_policy_session(&mut tpm, &mut gs, key, session),
+        sign_with_policy_session(&mut tpm, key, session),
         Err(TpmRc::PCR_CHANGED.get()),
         "Sign must fail with TPM_RC_PCR_CHANGED when the counter changed from u32::MAX to 0"
     );
@@ -238,14 +221,14 @@ fn test_policy_pcr_counter_unchanged_succeeds() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut gs) = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
-    gs.pcrs.update_counter = u32::MAX;
-    let (key, pcr_digest) = create_pcr_gated_key(&mut tpm, &mut gs);
+    tpm.state.pcrs.update_counter = u32::MAX;
+    let (key, pcr_digest) = create_pcr_gated_key(&mut tpm);
 
-    let session = start_session(&mut tpm, &mut gs, TpmSe::Policy);
-    policy_pcr(&mut tpm, &mut gs, session, &pcr_digest);
+    let session = start_session(&mut tpm, TpmSe::Policy);
+    policy_pcr(&mut tpm, session, &pcr_digest);
 
-    sign_with_policy_session(&mut tpm, &mut gs, key, session)
+    sign_with_policy_session(&mut tpm, key, session)
         .expect("Sign with an unchanged pcrUpdateCounter must succeed");
 }

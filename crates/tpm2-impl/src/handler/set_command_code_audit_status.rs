@@ -74,29 +74,29 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let new_alg = cmd.audit_alg.map(|alg| Alg::from(alg).id());
         match new_alg {
-            Some(alg) if alg != self.global_state.audit_hash_alg => {
+            Some(alg) if alg != self.context.state.audit_hash_alg => {
                 // Can't change the algorithm and the command list at the same time.
                 if cmd.set_list.count() != 0 || cmd.clear_list.count() != 0 {
                     return Err(TpmRc::VALUE.with(Position::parameter(1)));
                 }
-                self.global_state.audit_hash_alg = alg;
+                self.context.state.audit_hash_alg = alg;
                 // The digest is cleared and this execution is not audited.
-                self.global_state.command_audit_digest = OwnedDigest::default();
-                self.global_state.command_audit_alg_changed = true;
+                self.context.state.command_audit_digest = OwnedDigest::default();
+                self.context.state.command_audit_alg_changed = true;
                 // NV_SYNC_PERSISTENT(auditHashAlg)
-                self.context.save_hierarchy_auths(self.global_state);
+                self.context.save_hierarchy_auths();
             }
             _ => {
                 let mut changed = false;
                 for &cc in cmd.set_list.as_slice() {
-                    changed |= self.global_state.audit_commands.set(cc);
+                    changed |= self.context.state.audit_commands.set(cc);
                 }
                 for &cc in cmd.clear_list.as_slice() {
-                    changed |= self.global_state.audit_commands.clear(cc);
+                    changed |= self.context.state.audit_commands.clear(cc);
                 }
                 if changed {
                     // NV_SYNC_PERSISTENT(auditCommands)
-                    self.context.save_hierarchy_auths(self.global_state);
+                    self.context.save_hierarchy_auths();
                 }
             }
         }

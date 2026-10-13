@@ -1,6 +1,7 @@
 //! Verification, creation, hashcheck and auth tickets: which hierarchies produce accepted tickets
 //! and forged ticket rejection.
 
+use crate::_common::{NO_STREAM, PlatformConnection};
 use crate::_common::{
     create_ecc_signing_key, create_signing_key_name_bytes, execute_sign,
     execute_with_password_sessions, execute_with_password_sessions_status, flush_session,
@@ -484,11 +485,12 @@ fn policy_ticket_rejects_ticket_from_before_reset() {
     let timeout = ps_rsp.timeout;
 
     // 3. TPM Reset (power cycle + Startup(CLEAR)) -> epoch changes
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     sim.execute(Startup {
         startup_type: TpmSu::Clear,
     })

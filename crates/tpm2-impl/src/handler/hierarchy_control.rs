@@ -55,31 +55,31 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             if auth_handle != Handle::RH_PLATFORM.0 && auth_handle != Handle::RH_ENDORSEMENT.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            if !self.global_state.eh_enable && state && auth_handle != Handle::RH_PLATFORM.0 {
+            if !self.context.state.eh_enable && state && auth_handle != Handle::RH_PLATFORM.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            self.global_state.eh_enable
+            self.context.state.eh_enable
         } else if enable == Handle::RH_OWNER.0 {
             if auth_handle != Handle::RH_PLATFORM.0 && auth_handle != Handle::RH_OWNER.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            if !self.global_state.sh_enable && state && auth_handle != Handle::RH_PLATFORM.0 {
+            if !self.context.state.sh_enable && state && auth_handle != Handle::RH_PLATFORM.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            self.global_state.sh_enable
+            self.context.state.sh_enable
         } else if enable == Handle::RH_PLATFORM.0 {
             // Re-enabling `phEnable` is implicitly impossible: platform authorization is
             // unavailable while `phEnable` is CLEAR.
             if auth_handle != Handle::RH_PLATFORM.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            self.global_state.ph_enable
+            self.context.state.ph_enable
         } else if enable == Handle::RH_PLATFORM_NV.0 {
             // `phEnableNV` may be SET again with platform authorization.
             if auth_handle != Handle::RH_PLATFORM.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            self.global_state.ph_enable_nv
+            self.context.state.ph_enable_nv
         } else {
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
         };
@@ -91,29 +91,29 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.nv_clear_orderly()?;
 
             if enable == Handle::RH_ENDORSEMENT.0 {
-                self.global_state.eh_enable = state;
+                self.context.state.eh_enable = state;
             } else if enable == Handle::RH_OWNER.0 {
-                self.global_state.sh_enable = state;
+                self.context.state.sh_enable = state;
             } else if enable == Handle::RH_PLATFORM.0 {
-                self.global_state.ph_enable = state;
+                self.context.state.ph_enable = state;
             } else {
-                self.global_state.ph_enable_nv = state;
+                self.context.state.ph_enable_nv = state;
             }
 
             // If a hierarchy was just disabled, flush its loaded objects (`ObjectFlushHierarchy`).
             if !state && enable != Handle::RH_PLATFORM_NV.0 {
-                for (i, slot) in self.global_state.transient_objects.iter_mut().enumerate() {
+                for (i, slot) in self.context.state.transient_objects.iter_mut().enumerate() {
                     if let Some(obj) = slot
                         && obj.hierarchy == enable
                     {
                         *slot = None;
-                        self.global_state.transient_parents[i] = None;
+                        self.context.state.transient_parents[i] = None;
                     }
                 }
             }
 
-            self.global_state.state_saved = false;
-            self.context.save_hierarchy_auths(self.global_state);
+            self.context.state.state_saved = false;
+            self.context.save_hierarchy_auths();
         }
 
         let response = request.into_response();

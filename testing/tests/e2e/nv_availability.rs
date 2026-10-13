@@ -55,7 +55,8 @@ fn change_auth_needs_nv_only_when_auth_changes() {
     let index = 0x0150_0703;
     define_change_auth_index(&mut sim, index, 8);
     let name = nv_index_name(&mut sim, index);
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
 
     // Same (empty) authValue: nothing to write.
     let mut session = start_session(&mut sim, TpmSe::Policy);
@@ -118,7 +119,8 @@ fn define_write_undefine_fail_when_nv_off() {
     define(&mut sim, index, OWNER_RW, 8, &[]);
     owner_write(&mut sim, index, 0, &[1; 8]).unwrap();
 
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
     let rc = try_define(
         &mut sim,
         Handle::RH_OWNER,
@@ -143,7 +145,8 @@ fn define_write_undefine_fail_when_nv_off() {
         .unwrap_err(),
         TpmRc::NV_UNAVAILABLE.get()
     );
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
 
     // Nothing was changed while NV was unavailable.
     assert_eq!(

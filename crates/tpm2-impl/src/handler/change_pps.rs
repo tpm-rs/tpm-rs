@@ -64,24 +64,24 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.nv_clear_orderly()?;
 
         // Update state
-        self.global_state.pp_seed.copy_from_slice(&new_pp_seed);
-        self.global_state.pp_seed_size = 64;
+        self.context.state.pp_seed.copy_from_slice(&new_pp_seed);
+        self.context.state.pp_seed_size = 64;
 
-        self.global_state.ph_proof.copy_from_slice(&new_ph_proof);
-        self.global_state.ph_proof_size = 64;
+        self.context.state.ph_proof.copy_from_slice(&new_ph_proof);
+        self.context.state.ph_proof_size = 64;
 
-        self.global_state.platform_policy = crate::owned::OwnedDigest::default();
-        self.global_state.platform_alg = None;
-        self.global_state.pcr_policy_alg = None;
-        self.global_state.pcr_policy = crate::owned::OwnedDigest::default();
+        self.context.state.platform_policy = crate::owned::OwnedDigest::default();
+        self.context.state.platform_alg = None;
+        self.context.state.pcr_policy_alg = None;
+        self.context.state.pcr_policy = crate::owned::OwnedDigest::default();
 
         // Flush loaded objects in platform hierarchy
-        for (i, slot) in self.global_state.transient_objects.iter_mut().enumerate() {
+        for (i, slot) in self.context.state.transient_objects.iter_mut().enumerate() {
             if let Some(obj) = slot
                 && obj.hierarchy == Handle::RH_PLATFORM.0
             {
                 *slot = None;
-                self.global_state.transient_parents[i] = None;
+                self.context.state.transient_parents[i] = None;
             }
         }
 
@@ -89,7 +89,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // indices are not affected).
         self.nv_flush_hierarchy(Handle::RH_PLATFORM.0)?;
 
-        self.context.save_hierarchy_auths(self.global_state);
+        self.context.save_hierarchy_auths();
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;

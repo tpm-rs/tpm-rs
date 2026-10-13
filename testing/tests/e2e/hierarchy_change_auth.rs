@@ -3,8 +3,9 @@
 
 use crate::_common::{
     CC_HIERARCHY_CHANGE_AUTH, build_pw_cmd, change_auth_command, execute_with_password_sessions,
-    mssim_rc_of, send_rc, set_hierarchy_auth, su_command,
+    mssim_rc_of, power_on_start_up, send_rc, set_hierarchy_auth, su_command,
 };
+use crate::_common::{NO_STREAM, PlatformConnection};
 use tpm2::commands::HierarchyChangeAuth;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bAuth};
@@ -99,9 +100,9 @@ fn owner_auth_persists_across_power_cycle() {
     assert!(resp.is_ok());
 
     // Power cycle
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.power_on_start_up();
+    power_on_start_up(&mut sim);
 
     // Check if new owner auth is still valid!
     let hca_cmd2 = HierarchyChangeAuth {
@@ -136,11 +137,12 @@ fn platform_auth_change_invalidates_saved_state() {
     assert_eq!(send_rc(&mut sim, &cmd), 0);
 
     // The orderly state is no longer TPM_SU_STATE: Startup(STATE) is rejected.
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     assert_eq!(
         su_command(&mut sim, 0x144, 0x0001),
         TpmRc::VALUE.with(Position::parameter(1)).get()

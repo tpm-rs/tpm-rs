@@ -11,7 +11,7 @@ categories.workspace = true
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-tpm2-impl = { workspace = true }
+tpm2-impl = { workspace = true, features = ["std"] }
 tpm2 = { workspace = true }
 tpm2-platform-linux = { path = "../tpm2-platforms/linux", default-features = false }
 anyhow = { version = "1.0.102", features = ["backtrace"] }

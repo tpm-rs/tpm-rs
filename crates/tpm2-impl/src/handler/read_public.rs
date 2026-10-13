@@ -45,7 +45,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // C `ReadPublic.c`: a sequence object has no public area (`TPM_RC_SEQUENCE`).
         if self
-            .global_state
+            .context
+            .state
             .find_active_sequence(object_handle)
             .is_some()
         {
@@ -54,11 +55,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let obj = if (0x80000000..=0x80FFFFFF).contains(&object_handle) {
             self.context
-                .lookup_transient_object(self.global_state, object_handle, Position::handle(1))?
+                .lookup_transient_object(object_handle, Position::handle(1))?
                 .clone()
         } else if object_handle >> 24 == 0x81 {
             self.context
-                .load_persistent_object(self.global_state, object_handle)
+                .load_persistent_object(object_handle)
                 .map_err(|_| TpmRc::HANDLE.with(Position::handle(1)))?
         } else {
             // `objectHandle` is a `TPMI_DH_OBJECT`: anything else is an invalid value.

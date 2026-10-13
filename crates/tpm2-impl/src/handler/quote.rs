@@ -43,7 +43,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Some(self.resolve_object(sign_handle.0, Position::handle(1))?)
         };
 
-        let _auths = &self.global_state.parsed_auths[..self.global_state.parsed_auths_len];
+        let _auths = &self.context.state.parsed_auths[..self.context.state.parsed_auths_len];
 
         // 2. Verify authorizations
         let expected_sessions = if sign_handle.0 == 0x40000007 { 0 } else { 1 };
@@ -102,8 +102,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             ecdaa_digest[..q_len].copy_from_slice(&cmd.qualifying_data.get_buffer()[..q_len]);
             ecdaa_digest[q_len..q_len + digest_len].copy_from_slice(&digest_buf[..digest_len]);
             let dlen = (q_len + digest_len).min(64);
-            self.global_state.debug_provided_auth[..dlen].copy_from_slice(&ecdaa_digest[..dlen]);
-            self.global_state.debug_provided_auth_len = dlen;
+            self.context.state.debug_provided_auth[..dlen].copy_from_slice(&ecdaa_digest[..dlen]);
+            self.context.state.debug_provided_auth_len = dlen;
         }
         let owned_sig = self.sign_attestation_block(
             signer_obj_opt.as_ref(),

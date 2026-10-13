@@ -70,17 +70,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         // Verify privacy_admin authorization (session 0)
-        let _expected_admin_auth = self
-            .context
-            .handle_auth(self.global_state, privacy_admin_handle.0);
+        let _expected_admin_auth = self.context.handle_auth(privacy_admin_handle.0);
 
-        let _auths = &self.global_state.parsed_auths[..self.global_state.parsed_auths_len];
+        let _auths = &self.context.state.parsed_auths[..self.context.state.parsed_auths_len];
 
         // Verify sign_handle authorization (session 1, if present)
 
         // 3. Look up target audit session
         let audit_session = self
-            .global_state
+            .context
+            .state
             .session(session_handle.0)
             .ok_or(TpmRc::HANDLE.with(Position::handle(3)))?;
         let audit_digest = audit_session.audit_digest;
@@ -110,7 +109,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let session_digest = Tpm2bDigest::from_bytes(&digest_bytes[..audit_digest_len])
             .map_err(|_| TpmRc::FAILURE)?;
 
-        let exclusive_session = self.global_state.exclusive_audit_session == Some(session_handle.0);
+        let exclusive_session =
+            self.context.state.exclusive_audit_session == Some(session_handle.0);
 
         let session_audit_info = TpmsSessionAuditInfo {
             exclusive_session,

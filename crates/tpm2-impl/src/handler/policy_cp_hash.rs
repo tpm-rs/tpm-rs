@@ -47,7 +47,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 1. Retrieve policy session state details
         let (auth_hash, policy_digest, policy_digest_len, _session_type) = {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session(policy_session)
                 .ok_or(TpmRc::HANDLE.with(Position::handle(1)))?;
             if session_state.session_type != TpmSe::Policy
@@ -72,7 +73,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 2. Occupied Union Check
         {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session(policy_session)
                 .ok_or(TpmRc::HANDLE.with(Position::handle(1)))?;
             // C `IsCpHashUnionOccupied`: isBound || isCpHashDefined || isNameHashDefined ||
@@ -105,7 +107,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 4. Update session state
         {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session_mut(policy_session)
                 .ok_or(TpmRc::HANDLE.with(Position::handle(1)))?;
             session_state.policy_digest[..new_digest_len]

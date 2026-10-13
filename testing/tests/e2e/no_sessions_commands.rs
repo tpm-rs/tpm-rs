@@ -93,9 +93,9 @@ fn session_area_rejected_and_flush_handle_aliases() {
 #[test]
 fn startup_with_sessions_not_executed() {
     let mut sim = create_simulator!();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
         .unwrap();
     nv_on(&mut sim);
     let cmd = build_cmd(ST_SESSIONS, CC_STARTUP, &[], Some(&PW_SESSION), &[0, 0]);

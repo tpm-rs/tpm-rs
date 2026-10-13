@@ -12,6 +12,7 @@ use crate::_common::{
     set_da_parameters, sleep, start_auth_session, start_session_of_type, tpm2b_params,
     unseal_with_auth_entry,
 };
+use crate::_common::{NO_STREAM, PlatformConnection};
 use tpm2::commands::{
     Create, DictionaryAttackLockReset, PolicyCommandCode, SetPrimaryPolicy, Shutdown, Startup,
 };
@@ -255,7 +256,8 @@ fn da_pending_nv_update_blocks_da_protected_auth() {
         RC_SUCCESS
     );
 
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
     // The failure cannot be recorded in NV: it becomes pending.
     assert_eq!(
         unseal_with_auth_entry(&mut sim, item, AuthEntry::pw(b"x")),
@@ -267,7 +269,8 @@ fn da_pending_nv_update_blocks_da_protected_auth() {
         RC_NV_UNAVAILABLE
     );
 
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     assert_eq!(
         unseal_with_auth_entry(&mut sim, item, AuthEntry::pw(b"a")),
         RC_SUCCESS
@@ -426,7 +429,8 @@ fn orderly_state_with_nv_off_is_nv_unavailable() {
         shutdown_type: TpmSu::Clear,
     })
     .expect("Shutdown(CLEAR) failed");
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
 
     let rc = send_da_lock_reset(&mut sim, true);
     assert_eq!(rc, TpmRc::NV_UNAVAILABLE.get()); // 0x923
@@ -536,11 +540,12 @@ fn unorderly_reset_counts_failure() {
     let mut sim = create_simulator!();
     let unorderly_reset = |sim: &mut Simulator<'_>| {
         // An unorderly VM crash/reset (no Shutdown command) followed by Startup(CLEAR).
-        sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+        sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
             .unwrap();
-        sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+        sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
             .unwrap();
-        sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+        sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+            .unwrap();
         sim.execute(Startup {
             startup_type: TpmSu::Clear,
         })
@@ -575,11 +580,12 @@ fn unorderly_reset_counts_failure() {
         shutdown_type: TpmSu::Clear,
     })
     .expect("Shutdown(CLEAR) failed");
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     sim.execute(Startup {
         startup_type: TpmSu::Clear,
     })

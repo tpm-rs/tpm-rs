@@ -45,7 +45,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let auth_handle = auth.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let provided_auth = self.global_state.parsed_auths[..self.global_state.parsed_auths_len]
+        let provided_auth = self.context.state.parsed_auths[..self.context.state.parsed_auths_len]
             .first()
             .cloned();
 
@@ -62,7 +62,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Sequence objects are `temporary` in C and can not be made persistent
         // (`TPM_RC_ATTRIBUTES + RC_EvictControl_objectHandle`).
         if self
-            .global_state
+            .context
+            .state
             .find_active_sequence(object_handle)
             .is_some()
         {
@@ -77,7 +78,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         if is_transient_range {
             let obj = self
-                .global_state
+                .context
+                .state
                 .find_transient_object(object_handle)
                 .cloned()
                 .ok_or(TpmRc::REFERENCE_H1)?;
@@ -133,7 +135,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .map_err(|_| TpmRc::HANDLE.with(Position::handle(2)))?;
         }
 
-        self.global_state.update_nv |= crate::engine::UT_NV;
+        self.context.state.update_nv |= crate::engine::UT_NV;
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;
@@ -151,7 +153,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
 
-        let expected_auth_struct = self.context.handle_auth(self.global_state, auth_handle);
+        let expected_auth_struct = self.context.handle_auth(auth_handle);
         let expected_auth = expected_auth_struct.get_buffer();
 
         if let Some(auth) = provided_auth {

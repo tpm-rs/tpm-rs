@@ -24,32 +24,23 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> (
-    TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
-    tpm2_impl::GlobalState,
-) {
+) -> TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng> {
     let platform = TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.locality = 0;
-    global_state.g_nv_ok = true;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.locality = 0;
+    tpm.state.g_nv_ok = true;
 
     // Startup
     let startup_request = hex!("8001 0000000c 00000144 0000");
     let mut startup_response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &startup_request[..],
-        &mut startup_response[..],
-    );
-    (tpm, global_state)
+    tpm.execute_command_separate(&startup_request[..], &mut startup_response[..]);
+    tpm
 }
 
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
-    global_state: &mut tpm2_impl::GlobalState,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -104,8 +95,7 @@ where
     request_buf[2..6].copy_from_slice(&(offset as u32).to_be_bytes());
 
     let mut response_buf = [0u8; 16384];
-    let resp_size =
-        tpm.execute_command_separate(global_state, &request_buf[..offset], &mut response_buf[..]);
+    let resp_size = tpm.execute_command_separate(&request_buf[..offset], &mut response_buf[..]);
 
     let rc = u32::from_be_bytes(response_buf[6..10].try_into().unwrap());
     if rc != 0 {
@@ -312,7 +302,7 @@ fn test_duplicate_invalid_parent_coordinates_zero_size() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Create a parent ECC storage key at 0x80000001
     let mut parent = create_transient_ecc_key(
@@ -333,7 +323,7 @@ fn test_duplicate_invalid_parent_coordinates_zero_size() {
         point.y = tpm2::Tpm2bEccParameter::default(); // 0 size!
     }
     parent.public = pub_t.into();
-    global_state.transient_objects[0] = Some(parent.clone());
+    tpm.state.transient_objects[0] = Some(parent.clone());
 
     // 2. Create target signing key (handle 0x80000002)
     let target = create_transient_key(
@@ -341,7 +331,7 @@ fn test_duplicate_invalid_parent_coordinates_zero_size() {
         0x80000002,
         TpmaObject::SIGN_ENCRYPT | TpmaObject::USER_WITH_AUTH,
     );
-    global_state.transient_objects[1] = Some(target.clone());
+    tpm.state.transient_objects[1] = Some(target.clone());
 
     // 3. Call Duplicate on target under the tampered parent key
     use tpm2::commands::Duplicate;
@@ -353,7 +343,7 @@ fn test_duplicate_invalid_parent_coordinates_zero_size() {
     };
 
     // This should not panic or underflow. It should return Failure because ECDH point multiply fails with invalid coordinates
-    let dup_auth = dup_policy_auth(&mut global_state);
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &dup_cmd, &[dup_auth]);
+    let dup_auth = dup_policy_auth(&mut tpm.state);
+    let res = execute_tpm_command(&mut tpm, &dup_cmd, &[dup_auth]);
     assert_eq!(res.err(), Some(TpmRc::FAILURE.get()));
 }

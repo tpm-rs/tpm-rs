@@ -129,32 +129,23 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> (
-    TpmEngine<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
-    tpm2_impl::GlobalState,
-) {
+) -> TpmEngine<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng> {
     let platform = TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.locality = 0;
-    global_state.g_nv_ok = true;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.locality = 0;
+    tpm.state.g_nv_ok = true;
 
     // Startup
     let startup_request = hex_literal::hex!("8001 0000000c 00000144 0000");
     let mut startup_response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &startup_request[..],
-        &mut startup_response[..],
-    );
-    (tpm, global_state)
+    tpm.execute_command_separate(&startup_request[..], &mut startup_response[..]);
+    tpm
 }
 
 fn execute_tpm_command_with_auths<C: Command>(
     tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
-    global_state: &mut tpm2_impl::GlobalState,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<(), u32>
@@ -201,7 +192,7 @@ where
     request_buf[2..6].copy_from_slice(&(offset as u32).to_be_bytes());
 
     let mut response_buf = [0u8; 16384];
-    tpm.execute_command_separate(global_state, &request_buf[..offset], &mut response_buf[..]);
+    tpm.execute_command_separate(&request_buf[..offset], &mut response_buf[..]);
 
     let rc = u32::from_be_bytes(response_buf[6..10].try_into().unwrap());
     if rc != 0 {
@@ -218,7 +209,7 @@ fn test_flush_exclusive_audit_session_clears_exclusivity() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x02000001;
 
@@ -247,7 +238,7 @@ fn test_flush_exclusive_audit_session_clears_exclusivity() {
         command_code: 0,
         start_time: 0,
         timeout: 0,
-        epoch: global_state.time_epoch,
+        epoch: tpm.state.time_epoch,
         is_auth_value_needed: false,
         is_password_needed: false,
         pcr_counter: None,
@@ -258,18 +249,17 @@ fn test_flush_exclusive_audit_session_clears_exclusivity() {
         is_da_bound: false,
         is_lockout_bound: false,
     };
-    global_state.add_session(s).unwrap();
-    global_state.exclusive_audit_session = Some(session_handle);
+    tpm.state.add_session(s).unwrap();
+    tpm.state.exclusive_audit_session = Some(session_handle);
 
     let flush_cmd = FlushContext {
         flush_handle: Handle(session_handle),
     };
 
-    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &flush_cmd, &[])
-        .expect("Flush failed");
+    execute_tpm_command_with_auths(&mut tpm, &flush_cmd, &[]).expect("Flush failed");
 
     assert_eq!(
-        global_state.exclusive_audit_session, None,
+        tpm.state.exclusive_audit_session, None,
         "Exclusivity state should be cleared after flushing the session."
     );
 }

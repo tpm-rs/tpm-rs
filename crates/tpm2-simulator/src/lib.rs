@@ -16,9 +16,10 @@ pub struct Args {
     pub pick_ports: bool,
 }
 
-use tpm2::TpmSu;
-use tpm2::commands::{Command, Startup};
+use tpm2::Connection;
+use tpm2::commands::Command;
 use tpm2_impl::{InternalError, TpmEngine};
+pub use tpm2_impl::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
 use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform};
 
 /// Commands for the command server.
@@ -30,80 +31,6 @@ const TPM_REMOTE_HANDSHAKE: u32 = 15;
 const TPM_SET_ALTERNATIVE_RESULT: u32 = 16;
 const TPM_SESSION_END: u32 = 20;
 const TPM_STOP: u32 = 21;
-
-/// A signal that can be sent to the Platform port of the TPM simulator
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum SimulatorPlatformSignal {
-    /// Signal that power is applied to the TPM.
-    PowerOn = 1,
-    /// Signal that power is removed from the TPM.
-    PowerOff = 2,
-    /// Signal that physical presence is asserted.
-    PhysicalPresenceOn = 3,
-    /// Signal that physical presence is removed.
-    PhysicalPresenceOff = 4,
-    /// Signal that the indication to cancel commands is asserted.
-    CancelOn = 9,
-    /// Signal that the indication to cancel commands is removed.
-    CancelOff = 10,
-    /// Signal that NV memory is available to the TPM.
-    NvOn = 11,
-    /// Signal that NV memory is no longer available to the TPM.
-    NvOff = 12,
-    /// Enable the use of the RSA key cache in the TPM simulator.
-    KeyCacheOn = 13,
-    /// Disable the use of the RSA key cache in the TPM simulator.
-    KeyCacheOff = 14,
-    /// Perform a TPM Reset (i.e. platorm reboot / power on).
-    Reset = 17,
-    /// Perform a TPM Restart (i.e. restore from hibernation).
-    Restart = 18,
-    /// End the current session with the TPM simulator. The simulator will
-    /// listen for new incoming connections.
-    SessionEnd = 20,
-    /// Stop the TPM simulator.
-    Stop = 21,
-    /// Get the largest command/response sizes that the TPM simulator observed.
-    GetCommandResponseSizes = 25,
-    /// Get whether an ACT was signaled.
-    ActGetSignaled = 26,
-    /// Force the TPM into failure mode.
-    TestFailureMode = 30,
-    /// Set the TPM firmware hash.
-    SetFirmwareHash = 35,
-    /// Set the TPM firmware SVN.
-    SetFirmwareSvn = 36,
-}
-
-impl TryFrom<u32> for SimulatorPlatformSignal {
-    type Error = ();
-
-    fn try_from(v: u32) -> core::result::Result<Self, Self::Error> {
-        match v {
-            1 => Ok(Self::PowerOn),
-            2 => Ok(Self::PowerOff),
-            3 => Ok(Self::PhysicalPresenceOn),
-            4 => Ok(Self::PhysicalPresenceOff),
-            9 => Ok(Self::CancelOn),
-            10 => Ok(Self::CancelOff),
-            11 => Ok(Self::NvOn),
-            12 => Ok(Self::NvOff),
-            13 => Ok(Self::KeyCacheOn),
-            14 => Ok(Self::KeyCacheOff),
-            17 => Ok(Self::Reset),
-            18 => Ok(Self::Restart),
-            20 => Ok(Self::SessionEnd),
-            21 => Ok(Self::Stop),
-            25 => Ok(Self::GetCommandResponseSizes),
-            26 => Ok(Self::ActGetSignaled),
-            30 => Ok(Self::TestFailureMode),
-            35 => Ok(Self::SetFirmwareHash),
-            36 => Ok(Self::SetFirmwareSvn),
-            _ => Err(()),
-        }
-    }
-}
 
 pub struct SimCommand<'a> {
     pub command_code: u32,
@@ -151,12 +78,11 @@ impl SimResponse {
 /// An in-process TPM simulator.
 ///
 /// The engine and its state are private: clients interact with the TPM only
-/// through the command interface ([`Simulator::execute`],
-/// [`Simulator::transact`]) and platform signals
-/// ([`Simulator::signal_platform`]), exactly like a real TPM.
+/// through the command interface ([`Simulator::execute`] and
+/// [`Connection::transact`]) and platform signals
+/// ([`PlatformConnection::signal_platform`]), exactly like a real TPM.
 pub struct Simulator<'a> {
     context: Box<TpmEngine<'a, PlatformCryptoProvider, RamStorageMock<4096>, LinuxTimer, LinuxRng>>,
-    global_state: Box<::tpm2_impl::GlobalState>,
     is_power_on: bool,
     is_nv_on: bool,
 }
@@ -169,48 +95,24 @@ impl<'a> Simulator<'a> {
         platform_rng: &'a mut LinuxRng,
     ) -> Result<Self, InternalError> {
         let platform = create_linux_platform(crypto, storage, timer, platform_rng);
-        let mut context = Box::new(TpmEngine::new(platform).unwrap());
-        let mut global_state = Box::new(::tpm2_impl::GlobalState::default());
-        context.init_storage(&mut global_state);
+        let mut context = Box::new(TpmEngine::new(platform)?);
+        context.init_storage();
         Ok(Self {
             context,
-            global_state,
             is_power_on: false,
             is_nv_on: false,
         })
     }
 
-    pub fn power_on_start_up(&mut self) {
-        self.signal_platform(SimulatorPlatformSignal::PowerOn)
-            .unwrap();
-        self.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
-        let startup = Startup {
-            startup_type: TpmSu::Clear,
-        };
-        self.execute(startup).unwrap();
-    }
-
-    pub fn signal_platform(&mut self, command: SimulatorPlatformSignal) -> anyhow::Result<()> {
-        let mut stream = std::io::Cursor::new(Vec::new());
-        self.handle_platform_command_raw(command as u32, &mut stream)?;
-        let output_data = stream.into_inner();
-        if output_data.len() >= 4 {
-            let result = u32::from_be_bytes(output_data[0..4].try_into().unwrap());
-            if result != 0 {
-                anyhow::bail!("Platform command {} failed with {}", command as u32, result);
-            }
-        }
-        Ok(())
-    }
-
-    pub fn handle_regular_command_raw<S: Read + Write>(
+    /// Handles one command-port transaction (see [`PlatformConnection::transact_platform`]).
+    pub(crate) fn handle_regular_command_raw<S: Read + Write>(
         &mut self,
         command: u32,
         stream: &mut S,
     ) -> anyhow::Result<bool> {
         match command {
             TPM_SIGNAL_HASH_START => {
-                self.context.hash_start(&mut self.global_state);
+                self.context.hash_start();
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             TPM_SIGNAL_HASH_DATA => {
@@ -223,12 +125,11 @@ impl<'a> Simulator<'a> {
                 }
                 let mut input_buffer = vec![0u8; length];
                 stream.read_exact(&mut input_buffer)?;
-                self.context
-                    .hash_data(&mut self.global_state, &input_buffer);
+                self.context.hash_data(&input_buffer);
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             TPM_SIGNAL_HASH_END => {
-                self.context.hash_end(&mut self.global_state);
+                self.context.hash_end();
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             TPM_SEND_COMMAND => {
@@ -252,13 +153,11 @@ impl<'a> Simulator<'a> {
                 }
 
                 // Execute command
-                self.global_state.locality = loc_buf[0];
+                self.context.set_locality(loc_buf[0]);
                 let mut output_buffer = vec![0u8; 4096];
-                let written = self.context.execute_command_separate(
-                    &mut self.global_state,
-                    &input_buffer[..],
-                    &mut output_buffer[..],
-                );
+                let written = self
+                    .context
+                    .execute_command_separate(&input_buffer[..], &mut output_buffer[..]);
 
                 let cmd_code = if input_buffer.len() >= 10 {
                     u32::from_be_bytes(input_buffer[6..10].try_into().unwrap())
@@ -324,14 +223,14 @@ impl<'a> Simulator<'a> {
         Ok(false)
     }
 
-    pub fn handle_platform_command_raw<S: Read + Write>(
+    /// Processes the platform signal `code`, reading its payload from and writing its reply
+    /// (reply data, then a 4-byte result code) to `stream`. Returns `true` if the platform
+    /// session ends.
+    fn handle_platform_signal<S: Read + Write>(
         &mut self,
-        command: u32,
+        code: SimulatorPlatformSignal,
         stream: &mut S,
     ) -> anyhow::Result<bool> {
-        let Ok(code) = SimulatorPlatformSignal::try_from(command) else {
-            anyhow::bail!("Invalid platform signal: {}", command);
-        };
         match code {
             SimulatorPlatformSignal::SessionEnd => {
                 // SessionEnd
@@ -365,7 +264,7 @@ impl<'a> Simulator<'a> {
             }
             SimulatorPlatformSignal::PowerOn => {
                 self.is_power_on = true;
-                self.context.reset(&mut self.global_state);
+                self.context.reset();
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             SimulatorPlatformSignal::PowerOff => {
@@ -374,14 +273,14 @@ impl<'a> Simulator<'a> {
             }
             SimulatorPlatformSignal::Reset => {
                 self.is_power_on = true;
-                self.context.reset(&mut self.global_state);
+                self.context.reset();
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             SimulatorPlatformSignal::NvOn => {
                 if self.is_power_on {
                     self.is_nv_on = true;
                     // Matches `_plat__SetNvAvail()`: NV becomes available to the TPM again.
-                    self.global_state.nv_available = true;
+                    self.context.set_nv_available(true);
                 }
                 stream.write_all(&0u32.to_be_bytes())?;
             }
@@ -389,7 +288,7 @@ impl<'a> Simulator<'a> {
                 // Matches `_plat__ClearNvAvail()`: subsequent commands that need NV fail with
                 // `TPM_RC_NV_UNAVAILABLE` (`NvCheckState` / `RETURN_IF_NV_IS_NOT_AVAILABLE`).
                 self.is_nv_on = false;
-                self.global_state.nv_available = false;
+                self.context.set_nv_available(false);
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             SimulatorPlatformSignal::SetFirmwareHash | SimulatorPlatformSignal::SetFirmwareSvn => {
@@ -424,12 +323,14 @@ impl<'a> Simulator<'a> {
     {
         execute::run_command(&cmd, self)
     }
+}
 
-    pub fn transact<'b>(
-        &mut self,
-        cmd: &[u8],
-        rsp: &'b mut [u8],
-    ) -> Result<&'b mut [u8], ExecuteError> {
+/// Sends commands through the simulator's MSSIM command path at locality 0: while the simulator
+/// is powered off, the response is empty.
+impl Connection for Simulator<'_> {
+    type Error = ExecuteError;
+
+    fn transact<'b>(&mut self, cmd: &[u8], rsp: &'b mut [u8]) -> Result<&'b mut [u8], Self::Error> {
         let mut input_data = Vec::new();
         input_data.push(0u8); // Locality
         input_data.extend_from_slice(&(cmd.len() as u32).to_be_bytes()); // Length
@@ -453,6 +354,37 @@ impl<'a> Simulator<'a> {
     }
 }
 
+impl PlatformConnection for Simulator<'_> {
+    fn signal_platform<S: Read + Write>(
+        &mut self,
+        command: SimulatorPlatformSignal,
+        stream: Option<&mut S>,
+    ) -> anyhow::Result<bool> {
+        if let Some(stream) = stream {
+            return self.handle_platform_signal(command, stream);
+        }
+        // No stream: the signal carries no payload, and the reply is checked here. Every reply
+        // ends with the 4-byte result code.
+        let mut reply = std::io::Cursor::new(Vec::new());
+        let session_end = self.handle_platform_signal(command, &mut reply)?;
+        if let Some(rc) = reply.get_ref().last_chunk::<4>() {
+            let rc = u32::from_be_bytes(*rc);
+            if rc != 0 {
+                anyhow::bail!("Platform command {} failed with {}", command as u32, rc);
+            }
+        }
+        Ok(session_end)
+    }
+
+    fn transact_platform<S: Read + Write>(
+        &mut self,
+        command: u32,
+        stream: &mut S,
+    ) -> anyhow::Result<bool> {
+        self.handle_regular_command_raw(command, stream)
+    }
+}
+
 /// Implementation details used by [`create_simulator!`].
 ///
 /// These re-exports let the macro expand in downstream crates without
@@ -460,6 +392,8 @@ impl<'a> Simulator<'a> {
 /// `tpm2-platform-linux`. Not part of the public API.
 #[doc(hidden)]
 pub mod __private {
+    pub use tpm2::TpmSu;
+    pub use tpm2::commands::Startup;
     pub use tpm2_impl::storage::ram_storage_mock::RamStorageMock;
     pub use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider};
 }
@@ -490,7 +424,22 @@ macro_rules! create_simulator {
             ::std::boxed::Box::leak(::std::boxed::Box::new($crate::__private::LinuxRng::new()));
         let mut sim = $crate::Simulator::new(crypto, storage, timer, platform_rng)
             .expect("failed to create TPM simulator");
-        sim.power_on_start_up();
+        $crate::PlatformConnection::signal_platform(
+            &mut sim,
+            $crate::SimulatorPlatformSignal::PowerOn,
+            $crate::NO_STREAM,
+        )
+        .expect("failed to power on the TPM simulator");
+        $crate::PlatformConnection::signal_platform(
+            &mut sim,
+            $crate::SimulatorPlatformSignal::NvOn,
+            $crate::NO_STREAM,
+        )
+        .expect("failed to enable NV of the TPM simulator");
+        sim.execute($crate::__private::Startup {
+            startup_type: $crate::__private::TpmSu::Clear,
+        })
+        .expect("TPM2_Startup(TPM_SU_CLEAR) failed");
         sim
     }};
 }

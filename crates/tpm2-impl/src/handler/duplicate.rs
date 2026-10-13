@@ -61,7 +61,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 1. Retrieve the target object to duplicate (transient or persistent). Sequence
         // objects have a NULL nameAlg in C and are rejected as `TPM_RC_TYPE + RC_H1`.
         if self
-            .global_state
+            .context
+            .state
             .find_active_sequence(object_handle)
             .is_some()
         {
@@ -91,7 +92,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // not sign, RSA or ECC) or TPM_RH_NULL; it may be transient or persistent.
         let new_parent_obj = if new_parent_handle != Handle::RH_NULL.0 {
             if self
-                .global_state
+                .context
+                .state
                 .find_active_sequence(new_parent_handle)
                 .is_some()
             {

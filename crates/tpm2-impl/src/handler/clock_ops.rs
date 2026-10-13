@@ -33,7 +33,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let auth_handle = auth.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let provided_auth = self.global_state.parsed_auths[..self.global_state.parsed_auths_len]
+        let provided_auth = self.context.state.parsed_auths[..self.context.state.parsed_auths_len]
             .first()
             .cloned();
 
@@ -55,12 +55,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // `clock_offset` holds `Clock - Time` in two's complement, so every `newTime` up to
         // `0xFFFF_0000_0000_0000` is represented exactly (see `TpmEngine::get_clock`).
-        self.global_state.clock_offset =
-            cmd.new_time.wrapping_sub(self.global_state.tpm_time_ms) as i64;
+        self.context.state.clock_offset =
+            cmd.new_time.wrapping_sub(self.context.state.tpm_time_ms) as i64;
         // `TimeClockUpdate(newTime)`: persists the clock and SETs `clockSafe` when an
         // `NV_CLOCK_UPDATE_INTERVAL` boundary is crossed.
-        self.context
-            .clock_update(self.global_state, current_clock, cmd.new_time);
+        self.context.clock_update(current_clock, cmd.new_time);
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;
@@ -86,7 +85,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let auth_handle = auth.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let provided_auth = self.global_state.parsed_auths[..self.global_state.parsed_auths_len]
+        let provided_auth = self.context.state.parsed_auths[..self.context.state.parsed_auths_len]
             .first()
             .cloned();
 
@@ -98,11 +97,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        self.global_state.clock_rate_adjust = cmd.rate_adjust;
+        self.context.state.clock_rate_adjust = cmd.rate_adjust;
         // `TimeSetAdjustRate` / `_plat__ClockRateAdjust`: "slower" increases and "faster"
         // decreases the cumulative divisor applied to elapsed platform time, clamped to
         // `CLOCK_NOMINAL ± CLOCK_ADJUST_LIMIT`.
-        let rate = self.global_state.clock_adjust_rate;
+        let rate = self.context.state.clock_adjust_rate;
         let rate = match cmd.rate_adjust {
             tpm2::TpmClockAdjust::CoarseSlower => rate.saturating_add(CLOCK_ADJUST_COARSE),
             tpm2::TpmClockAdjust::MediumSlower => rate.saturating_add(CLOCK_ADJUST_MEDIUM),
@@ -112,7 +111,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             tpm2::TpmClockAdjust::CoarseFaster => rate.saturating_sub(CLOCK_ADJUST_COARSE),
             tpm2::TpmClockAdjust::NoChange => rate,
         };
-        self.global_state.clock_adjust_rate = rate.clamp(
+        self.context.state.clock_adjust_rate = rate.clamp(
             CLOCK_NOMINAL - CLOCK_ADJUST_LIMIT,
             CLOCK_NOMINAL + CLOCK_ADJUST_LIMIT,
         );

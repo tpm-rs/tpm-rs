@@ -177,9 +177,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // `HierarchyIsEnabled` is checked for object contexts after the integrity check.
         let hierarchy_disabled = (hierarchy.0 == Handle::RH_OWNER.0
-            && !self.global_state.sh_enable)
-            || (hierarchy.0 == Handle::RH_ENDORSEMENT.0 && !self.global_state.eh_enable)
-            || (hierarchy.0 == Handle::RH_PLATFORM.0 && !self.global_state.ph_enable);
+            && !self.context.state.sh_enable)
+            || (hierarchy.0 == Handle::RH_ENDORSEMENT.0 && !self.context.state.eh_enable)
+            || (hierarchy.0 == Handle::RH_PLATFORM.0 && !self.context.state.ph_enable);
         if !is_session && hierarchy_disabled {
             return Err(TpmRc::HIERARCHY.with(Position::parameter(1)));
         }
@@ -189,7 +189,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // `SequenceNumberForSavedContextIsValid`: only the latest saved context of a session
             // that is currently saved (neither loaded nor flushed) can be loaded.
             if !self
-                .global_state
+                .context
+                .state
                 .saved_session_sequence_is_valid(saved_handle.0, sequence)
             {
                 return Err(TpmRc::HANDLE.with(Position::parameter(1)));
@@ -197,7 +198,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // `SessionContextLoad`: a free session slot is required, and when only one is left
             // while the context gap is exhausted, only the oldest saved context may use it.
             let free_slots = self
-                .global_state
+                .context
+                .state
                 .active_sessions
                 .iter()
                 .filter(|s| s.is_none())
@@ -207,32 +209,32 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             let slot = (saved_handle.0 & 0x00FF_FFFF) as usize;
             if free_slots == 1
-                && self.global_state.context_gap_exhausted()
-                && self.global_state.oldest_saved_session_slot() != Some(slot)
+                && self.context.state.context_gap_exhausted()
+                && self.context.state.oldest_saved_session_slot() != Some(slot)
             {
                 return Err(TpmRc::CONTEXT_GAP);
             }
             // 3. Deserialize session context
             let sess = Self::deserialize_session(plaintext)?;
             let handle = sess.session_handle;
-            self.global_state.remove_saved_session(handle);
-            self.global_state.add_session(sess)?;
+            self.context.state.remove_saved_session(handle);
+            self.context.state.add_session(sess)?;
             handle
         } else if is_sequence {
             let mut seq = Self::deserialize_sequence(plaintext)?;
-            let (slot, handle) = self.global_state.find_empty_sequence_slot()?;
+            let (slot, handle) = self.context.state.find_empty_sequence_slot()?;
             seq.handle = handle;
-            self.global_state.active_sequences[slot] = Some(seq);
+            self.context.state.active_sequences[slot] = Some(seq);
             handle
         } else {
             // 3. Unmarshal decrypted buffer into fields
             let (fields, ancestor_has_st_clear) = Self::unmarshal_decrypted_context(plaintext)?;
 
             // 4. Resolve empty slot and load transient object
-            let (slot, handle) = self.global_state.find_empty_transient_slot(true)?;
+            let (slot, handle) = self.context.state.find_empty_transient_slot(true)?;
 
-            self.global_state.transient_parents[slot] = None;
-            self.global_state.transient_objects[slot] = Some(TransientObject {
+            self.context.state.transient_parents[slot] = None;
+            self.context.state.transient_objects[slot] = Some(TransientObject {
                 handle,
                 seed: fields.seed,
                 seed_len: fields.seed_len,
@@ -281,11 +283,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )
         .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx
-            .update(&self.global_state.total_reset_count.to_be_bytes())
+            .update(&self.context.state.total_reset_count.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         if saved_handle.0 == 0x80000002 {
             mac_ctx
-                .update(&self.global_state.clear_count.to_be_bytes())
+                .update(&self.context.state.clear_count.to_be_bytes())
                 .map_err(|_| TpmRc::FAILURE)?;
         }
         mac_ctx

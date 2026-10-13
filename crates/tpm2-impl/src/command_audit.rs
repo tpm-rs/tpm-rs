@@ -199,32 +199,31 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
     ///   [`Self::command_audit`].
     pub(crate) fn check_command_audit(
         &mut self,
-        global_state: &mut GlobalState,
         cc: TpmCc,
         handles: &[u32],
         parameters: &[u8],
     ) -> Result<(), TpmRc> {
-        global_state.command_audit_cp_hash = None;
-        if !global_state.audit_commands.is_audited(cc) {
+        self.state.command_audit_cp_hash = None;
+        if !self.state.audit_commands.is_audited(cc) {
             return Ok(());
         }
-        if (global_state.command_audit_digest.get_size() == 0 || cc == TpmCc::GetCommandAuditDigest)
-            && !global_state.nv_available
+        if (self.state.command_audit_digest.get_size() == 0 || cc == TpmCc::GetCommandAuditDigest)
+            && !self.state.nv_available
         {
             return Err(TpmRc::NV_UNAVAILABLE);
         }
-        let alg = global_state.command_audit_hash_alg();
+        let alg = self.state.command_audit_hash_alg();
         let mut ctx = HashStream::new(&*self.platform.crypto, alg).map_err(|_| TpmRc::FAILURE)?;
         ctx.update(&cc.code().to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         for &handle in handles {
-            let name = self.handle_name(global_state, handle);
+            let name = self.handle_name(handle);
             ctx.update(name.get_buffer()).map_err(|_| TpmRc::FAILURE)?;
         }
         ctx.update(parameters).map_err(|_| TpmRc::FAILURE)?;
         let mut buf = [0u8; TpmtHa::MAX_DIGEST_SIZE];
         let cp_hash = ctx.finalize(&mut buf).map_err(|_| TpmRc::FAILURE)?;
-        global_state.command_audit_cp_hash =
+        self.state.command_audit_cp_hash =
             Some(OwnedDigest::from_bytes(cp_hash.digest()).map_err(|_| TpmRc::FAILURE)?);
         Ok(())
     }
@@ -238,21 +237,16 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
     /// digest stays cleared and this execution is not audited. If the digest register is empty,
     /// a new audit log starts: the register is zeroed and the audit counter is incremented and
     /// written to NV.
-    pub(crate) fn command_audit(
-        &mut self,
-        global_state: &mut GlobalState,
-        cc: TpmCc,
-        response: &[u8],
-    ) -> Result<(), TpmRc> {
-        let Some(cp_hash) = global_state.command_audit_cp_hash.take() else {
+    pub(crate) fn command_audit(&mut self, cc: TpmCc, response: &[u8]) -> Result<(), TpmRc> {
+        let Some(cp_hash) = self.state.command_audit_cp_hash.take() else {
             return Ok(());
         };
-        if core::mem::take(&mut global_state.command_audit_alg_changed) {
-            global_state.command_audit_digest = OwnedDigest::default();
+        if core::mem::take(&mut self.state.command_audit_alg_changed) {
+            self.state.command_audit_digest = OwnedDigest::default();
             return Ok(());
         }
         let rp_params = response_parameters(cc, response).ok_or(TpmRc::FAILURE)?;
-        let alg = global_state.command_audit_hash_alg();
+        let alg = self.state.command_audit_hash_alg();
         let digest_size = alg.digest_size();
 
         let mut ctx = HashStream::new(&*self.platform.crypto, alg).map_err(|_| TpmRc::FAILURE)?;
@@ -264,24 +258,24 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
         let mut rp_buf = [0u8; TpmtHa::MAX_DIGEST_SIZE];
         let rp_hash = ctx.finalize(&mut rp_buf).map_err(|_| TpmRc::FAILURE)?;
 
-        if global_state.command_audit_digest.get_size() == 0 {
+        if self.state.command_audit_digest.get_size() == 0 {
             let zeros = [0u8; TpmtHa::MAX_DIGEST_SIZE];
-            global_state.command_audit_digest =
+            self.state.command_audit_digest =
                 OwnedDigest::from_bytes(&zeros[..digest_size]).map_err(|_| TpmRc::FAILURE)?;
-            global_state.audit_counter = global_state.audit_counter.wrapping_add(1);
+            self.state.audit_counter = self.state.audit_counter.wrapping_add(1);
             // NV_SYNC_PERSISTENT(auditCounter)
-            self.save_hierarchy_auths(global_state);
+            self.save_hierarchy_auths();
         }
 
         let mut ctx = HashStream::new(&*self.platform.crypto, alg).map_err(|_| TpmRc::FAILURE)?;
-        ctx.update(global_state.command_audit_digest.get_buffer())
+        ctx.update(self.state.command_audit_digest.get_buffer())
             .map_err(|_| TpmRc::FAILURE)?;
         ctx.update(cp_hash.get_buffer())
             .map_err(|_| TpmRc::FAILURE)?;
         ctx.update(rp_hash.digest()).map_err(|_| TpmRc::FAILURE)?;
         let mut buf = [0u8; TpmtHa::MAX_DIGEST_SIZE];
         let digest = ctx.finalize(&mut buf).map_err(|_| TpmRc::FAILURE)?;
-        global_state.command_audit_digest =
+        self.state.command_audit_digest =
             OwnedDigest::from_bytes(digest.digest()).map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -290,13 +284,10 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
     /// `TPM2_GetCommandAuditDigest` (`CommandAuditGetDigest()`): the hash, with the audit hash
     /// algorithm, of the concatenated big-endian command codes of all audited commands in
     /// ascending order.
-    pub(crate) fn command_audit_list_digest(
-        &self,
-        global_state: &GlobalState,
-    ) -> Result<OwnedDigest, TpmRc> {
-        let alg = global_state.command_audit_hash_alg();
+    pub(crate) fn command_audit_list_digest(&self) -> Result<OwnedDigest, TpmRc> {
+        let alg = self.state.command_audit_hash_alg();
         let mut ctx = HashStream::new(&*self.platform.crypto, alg).map_err(|_| TpmRc::FAILURE)?;
-        for cc in global_state.audit_commands.iter() {
+        for cc in self.state.audit_commands.iter() {
             ctx.update(&cc.code().to_be_bytes())
                 .map_err(|_| TpmRc::FAILURE)?;
         }

@@ -48,7 +48,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 1. Retrieve session state details.
         let (auth_hash, policy_digest, policy_digest_len) = {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session(policy_session)
                 .ok_or(TpmRc::VALUE.with(Position::handle(1)))?;
             if session_state.session_type != TpmSe::Policy
@@ -76,7 +77,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 3. Mutate the session state.
         {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session_mut(policy_session)
                 .ok_or(TpmRc::HANDLE.to_rc())?;
             session_state.policy_digest[..new_digest_len]

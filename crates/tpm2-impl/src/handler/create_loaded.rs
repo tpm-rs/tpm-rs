@@ -65,7 +65,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )?;
 
         // Ensure we actually have an empty slot in the transient object table
-        let (index, handle) = self.global_state.find_empty_transient_slot(false)?;
+        let (index, handle) = self.context.state.find_empty_transient_slot(false)?;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
@@ -505,8 +505,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) {
         let (stored_seed, seed_len) = TransientObject::seed_from_bytes(obj_seed);
 
-        self.global_state.transient_parents[index] = parent_handle;
-        self.global_state.transient_objects[index] = Some(TransientObject {
+        self.context.state.transient_parents[index] = parent_handle;
+        self.context.state.transient_objects[index] = Some(TransientObject {
             handle,
             seed: stored_seed,
             seed_len,
@@ -543,7 +543,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // TPM_RH_OWNER
             parent_qn_buf[..4].copy_from_slice(&parent_handle.to_be_bytes());
             let seed =
-                provisioned_secret(&self.global_state.sp_seed, self.global_state.sp_seed_size)?;
+                provisioned_secret(&self.context.state.sp_seed, self.context.state.sp_seed_size)?;
             let seed_len = seed.len();
             parent_seed_val[..seed_len].copy_from_slice(seed);
             Ok(ResolvedParentInfo {
@@ -562,8 +562,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // TPM_RH_NULL
             parent_qn_buf[..4].copy_from_slice(&parent_handle.to_be_bytes());
             let seed = provisioned_secret(
-                &self.global_state.null_seed,
-                self.global_state.null_seed_size,
+                &self.context.state.null_seed,
+                self.context.state.null_seed_size,
             )?;
             let seed_len = seed.len();
             parent_seed_val[..seed_len].copy_from_slice(seed);
@@ -583,7 +583,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // TPM_RH_PLATFORM
             parent_qn_buf[..4].copy_from_slice(&parent_handle.to_be_bytes());
             let seed =
-                provisioned_secret(&self.global_state.pp_seed, self.global_state.pp_seed_size)?;
+                provisioned_secret(&self.context.state.pp_seed, self.context.state.pp_seed_size)?;
             let seed_len = seed.len();
             parent_seed_val[..seed_len].copy_from_slice(seed);
             Ok(ResolvedParentInfo {
@@ -602,7 +602,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // TPM_RH_ENDORSEMENT
             parent_qn_buf[..4].copy_from_slice(&parent_handle.to_be_bytes());
             let seed =
-                provisioned_secret(&self.global_state.ep_seed, self.global_state.ep_seed_size)?;
+                provisioned_secret(&self.context.state.ep_seed, self.context.state.ep_seed_size)?;
             let seed_len = seed.len();
             parent_seed_val[..seed_len].copy_from_slice(seed);
             Ok(ResolvedParentInfo {
@@ -621,20 +621,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // Sequence objects are never parents (C: `ObjectIsParent()` is FALSE).
             if parent_handle >> 24 == 0x80
                 && self
-                    .global_state
+                    .context
+                    .state
                     .find_active_sequence(parent_handle)
                     .is_some()
             {
                 return Err(TpmRc::TYPE.with(Position::handle(1)));
             }
             let obj = if parent_handle >> 24 == 0x80 {
-                self.global_state
+                self.context
+                    .state
                     .find_transient_object(parent_handle)
                     .cloned()
                     .ok_or(TpmRc::REFERENCE_H0)?
             } else {
                 self.context
-                    .load_persistent_object(self.global_state, parent_handle)
+                    .load_persistent_object(parent_handle)
                     .map_err(|_| TpmRc::REFERENCE_H0)?
             };
             let attrs = obj.public.object_attributes;

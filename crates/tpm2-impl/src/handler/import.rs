@@ -84,13 +84,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )?;
 
         let parent_obj = if parent_handle >> 24 == 0x80 {
-            self.global_state
+            self.context
+                .state
                 .find_transient_object(parent_handle)
                 .cloned()
                 .ok_or(TpmRc::REFERENCE_H0)?
         } else if parent_handle >> 24 == 0x81 {
             self.context
-                .load_persistent_object(self.global_state, parent_handle)
+                .load_persistent_object(parent_handle)
                 .map_err(|_| TpmRc::REFERENCE_H0)?
         } else {
             return Err(TpmRc::HANDLE.with(Position::handle(1)));

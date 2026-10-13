@@ -1,5 +1,6 @@
 //! TPM2_GetSessionAuditDigest: handle, authorization, signer and privacy-admin validation.
 
+use crate::_common::Connection;
 use crate::_common::{
     CmdHeader, RespHeader, create_non_signing_key_rsa, create_signing_key_ecc,
     execute_with_hmac_sessions_status, execute_with_password_sessions,

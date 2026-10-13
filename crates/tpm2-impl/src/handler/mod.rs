@@ -304,8 +304,8 @@ pub fn sym_encrypt_decrypt(
 /// The context that all command handler functions are given access to in order for them to process
 /// their given command.
 pub struct CommandHandler<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> {
+    /// The engine (platform and TPM state) the command operates on.
     pub context: &'b mut TpmEngine<'a, C, S, T, R>,
-    pub global_state: &'b mut GlobalState,
 }
 
 /// Hash algorithm for context integrity, tickets and the other proof-keyed HMACs
@@ -338,24 +338,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Creates a new `CommandHandler` object.
-    pub fn new(
-        context: &'b mut TpmEngine<'a, C, S, T, R>,
-        global_state: &'b mut GlobalState,
-    ) -> Self {
-        Self {
-            context,
-            global_state,
-        }
+    pub fn new(context: &'b mut TpmEngine<'a, C, S, T, R>) -> Self {
+        Self { context }
     }
 
     #[inline]
     pub fn state(&self) -> &GlobalState {
-        self.global_state
+        &self.context.state
     }
 
     #[inline]
     pub fn state_mut(&mut self) -> &mut GlobalState {
-        self.global_state
+        &mut self.context.state
     }
 
     #[inline]
@@ -365,17 +359,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
     #[inline]
     pub fn get_clock(&self) -> u64 {
-        self.context.get_clock(self.global_state)
+        self.context.get_clock()
     }
 
     #[inline]
     pub fn get_clock_info(&self) -> tpm2::TpmsClockInfo {
-        self.context.get_clock_info(self.global_state)
+        self.context.get_clock_info()
     }
 
     #[inline]
     pub fn get_time_info(&self) -> tpm2::TpmsTimeInfo {
-        self.context.get_time_info(self.global_state)
+        self.context.get_time_info()
     }
 
     /// Verifies that `auth_handle` is either `TPM_RH_OWNER` or `TPM_RH_PLATFORM` and that the
@@ -412,7 +406,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
 
-        if !self.global_state.ph_enable {
+        if !self.context.state.ph_enable {
             return Err(TpmRc::HIERARCHY.with(Position::handle(1)));
         }
 
@@ -673,7 +667,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// mask of the bank. The returned list keeps the caller's hash order and `sizeofSelect`, so
     /// it can be reported as `pcrSelect` in creation data and quotes.
     pub fn filter_pcr_selection(&self, pcr_select: &TpmlPcrSelection) -> TpmlPcrSelection {
-        let allocation = &self.global_state.pcrs.pcr_allocation;
+        let allocation = &self.context.state.pcrs.pcr_allocation;
         let mut filtered = TpmlPcrSelection::default();
         for in_sel in pcr_select.pcr_selections() {
             let mut bytes = [0u8; tpm2::TPM2_PCR_SELECT_MAX as usize];
@@ -717,7 +711,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let byte_idx = pcr / 8;
                 let bit_idx = pcr % 8;
                 if byte_idx < selected.len() && (selected[byte_idx] & (1 << bit_idx)) != 0 {
-                    let pcrs = &self.global_state.pcrs;
+                    let pcrs = &self.context.state.pcrs;
                     let digest_bytes = match select_hash_alg {
                         TpmiAlgHash::Sha1 => &pcrs.sha1[pcr][..],
                         TpmiAlgHash::Sha256 => &pcrs.sha256[pcr][..],
@@ -985,23 +979,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
     pub fn resolve_object(&mut self, handle: u32, pos: Position) -> Result<TransientObject, TpmRc> {
         if handle >> 24 == 0x80 {
-            if self.global_state.find_active_sequence(handle).is_some() {
+            if self.context.state.find_active_sequence(handle).is_some() {
                 return Err(TpmRc::KEY.with(pos));
             }
-            if let Ok(obj) = self
-                .context
-                .lookup_transient_object(self.global_state, handle, pos)
-            {
+            if let Ok(obj) = self.context.lookup_transient_object(handle, pos) {
                 return Ok(obj.clone());
             }
-            self.context
-                .lookup_transient_object(self.global_state, handle, pos)
-                .cloned()
+            self.context.lookup_transient_object(handle, pos).cloned()
         } else if handle >> 24 == 0x81 {
             // `ObjectLoadEvict`: an undefined persistent handle, or one whose hierarchy is
             // disabled, is `TPM_RC_HANDLE` at its position (never `TPM_RC_REFERENCE_Hx`).
             self.context
-                .load_persistent_object(self.global_state, handle)
+                .load_persistent_object(handle)
                 .map_err(|_| TpmRc::HANDLE.with(pos))
         } else {
             Err(TpmRc::VALUE.with(pos))
@@ -1018,7 +1007,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             0
         } else {
             let expiration_abs = expiration.unsigned_abs() as u64;
-            let clock = self.global_state.tpm_time_ms;
+            let clock = self.context.state.tpm_time_ms;
             if nonce_tpm.get_buffer().is_empty() {
                 expiration_abs * 1000 + (clock % 1000)
             } else {
@@ -1047,8 +1036,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // Time cannot be compared while Clock is stopped (NV unavailable):
             // `RETURN_IF_NV_IS_NOT_AVAILABLE` in C `PolicyParameterChecks`.
             self.return_if_nv_is_not_available()?;
-            let current_time = self.global_state.tpm_time_ms;
-            if auth_timeout < current_time || session.epoch != self.global_state.time_epoch {
+            let current_time = self.context.state.tpm_time_ms;
+            if auth_timeout < current_time || session.epoch != self.context.state.time_epoch {
                 return Err(TpmRc::EXPIRED.with(blame_expiration));
             }
         }
@@ -1125,7 +1114,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             kdfa_bits(
                 self.crypto(),
                 CONTEXT_INTEGRITY_HASH_ALG,
-                provisioned_secret(&self.global_state.sh_proof, self.global_state.sh_proof_size)?,
+                provisioned_secret(
+                    &self.context.state.sh_proof,
+                    self.context.state.sh_proof_size,
+                )?,
                 b"OBFUSCATE",
                 qualified_signer.get_buffer(),
                 &[],
@@ -1162,7 +1154,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// Fails with `TPM_RC_FAILURE` if the proof is not provisioned (see
     /// [`provisioned_secret`]).
     pub fn resolve_hierarchy_proof(&self, hierarchy: u32) -> Result<(&[u8], usize, u32), TpmRc> {
-        let gs = &self.global_state;
+        let gs = &self.context.state;
         let (proof, size, handle) = if hierarchy == 0x40000001 {
             (&gs.sh_proof, gs.sh_proof_size, 0x40000001)
         } else if hierarchy == 0x4000000B {
@@ -1287,7 +1279,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if (session_handle >> 24) != 0x03 {
             return Err(TpmRc::VALUE.with(pos));
         }
-        let Some(session) = self.global_state.session_by_slot(session_handle) else {
+        let Some(session) = self.context.state.session_by_slot(session_handle) else {
             return Err(match pos.handle_num() {
                 Some(2) => TpmRc::REFERENCE_H1,
                 Some(3) => TpmRc::REFERENCE_H2,
@@ -1345,12 +1337,9 @@ mod tests {
         let mut timer = FakeTimer;
         let mut rng = FakeRng::new();
         let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-        let mut engine = TpmEngine::new(platform).unwrap();
-        let mut state = GlobalState {
-            in_shadow_execution,
-            ..GlobalState::default()
-        };
-        let handler = CommandHandler::new(&mut engine, &mut state);
+        let mut engine = crate::TpmEngine::new(platform).unwrap();
+        engine.state.in_shadow_execution = in_shadow_execution;
+        let handler = CommandHandler::new(&mut engine);
         f(&handler)
     }
 

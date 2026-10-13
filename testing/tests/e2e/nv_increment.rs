@@ -257,9 +257,9 @@ fn recreated_counter_never_rolls_back() {
         &auths,
     )
     .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.power_on_start_up();
+    power_on_start_up(&mut sim);
 
     execute_tpm_command_with_auths(&mut sim, &define_cmd, &auths).unwrap();
     execute_tpm_command_with_auths(

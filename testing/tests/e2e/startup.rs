@@ -1,5 +1,6 @@
 //! TPM2_Startup: startup types, TPM Reset/Restart/Resume semantics and state restored at startup.
 
+use crate::_common::{NO_STREAM, PlatformConnection};
 use crate::_common::{
     NV_RW, SU_CLEAR, SU_STATE, create_storage_primary_with_auth, define_nv, ecc_primary_template,
     execute_with_password_sessions, flush_context, hash_end, hash_start, hierarchy_change_auth,
@@ -85,7 +86,8 @@ fn locality_4_rejected_after_hcrtm() {
 #[test]
 fn nv_unavailable_rejected() {
     let mut sim = unstarted_simulator();
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
     // C `TPM2_Startup` uses RETURN_IF_NV_IS_NOT_AVAILABLE -> TPM_RC_NV_UNAVAILABLE.
     assert_eq!(startup(&mut sim, SU_CLEAR), TpmRc::NV_UNAVAILABLE.get());
 }
@@ -405,9 +407,9 @@ fn startup_state_requires_orderly_state_shutdown() {
 #[test]
 fn startup_type_nv_and_locality_checks() {
     let mut sim = create_simulator!();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
         .unwrap();
     nv_off(&mut sim);
     assert_eq!(
@@ -419,9 +421,9 @@ fn startup_type_nv_and_locality_checks() {
     assert_eq!(startup_raw(&mut sim, 3, SU_CLEAR), 0);
     // Shutdown(STATE) after a locality-3 startup; resuming at locality 0 is a LOCALITY error.
     assert_eq!(shutdown_raw(&mut sim, SU_STATE), 0);
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
         .unwrap();
     nv_on(&mut sim);
     assert_eq!(startup_raw(&mut sim, 0, SU_STATE), TpmRc::LOCALITY.get());

@@ -1,5 +1,6 @@
 //! TPM2_Sign: schemes, hash validation, tickets, ECDAA and HMAC signing keys.
 
+use crate::_common::Connection;
 use crate::_common::{
     CC_SIGN, ECC_D, ECC_X, ECC_Y, base_attributes, base_attrs, create_primary_handle,
     create_primary_returning_public, create_primary_with_auth_in, create_primary_with_data_handle,

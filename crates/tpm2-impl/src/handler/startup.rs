@@ -40,7 +40,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(0, &self.global_state.reset_count.to_be_bytes())
+            .write_nv(0, &self.context.state.reset_count.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -48,7 +48,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(8, &self.global_state.total_reset_count.to_be_bytes())
+            .write_nv(8, &self.context.state.total_reset_count.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -56,7 +56,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(4, &self.global_state.orderly_state.to_be_bytes())
+            .write_nv(4, &self.context.state.orderly_state.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -66,7 +66,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(16, &self.global_state.max_counter.to_be_bytes())
+            .write_nv(16, &self.context.state.max_counter.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -76,8 +76,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut buf = [0u8; 8];
         if self.context.platform.storage.read_nv(16, &mut buf).is_ok() {
             let nv_val = u64::from_be_bytes(buf);
-            if nv_val > self.global_state.max_counter {
-                self.global_state.max_counter = nv_val;
+            if nv_val > self.context.state.max_counter {
+                self.context.state.max_counter = nv_val;
             }
         }
         Ok(())
@@ -87,10 +87,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// (`NvClearOrderly()` in `NV_spt.c`). Fails with `TPM_RC_NV_UNAVAILABLE` if the TPM is currently
     /// in an orderly state (`< SU_DA_USED_VALUE`) and NV storage is unavailable.
     pub(crate) fn nv_clear_orderly(&mut self) -> Result<(), TpmRc> {
-        if self.global_state.orderly_state < SU_DA_USED_VALUE && !self.global_state.nv_available {
+        if self.context.state.orderly_state < SU_DA_USED_VALUE && !self.context.state.nv_available {
             return Err(TpmRc::NV_UNAVAILABLE);
         }
-        self.global_state.clear_orderly = true;
+        self.context.state.clear_orderly = true;
         Ok(())
     }
 
@@ -102,7 +102,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// state to NV (hierarchy auths/policies/seeds, DA parameters, `disableClear`, the clock, ...).
     /// It does not modify the orderly state.
     pub(crate) fn return_if_nv_is_not_available(&self) -> Result<(), TpmRc> {
-        if !self.global_state.nv_available {
+        if !self.context.state.nv_available {
             return Err(TpmRc::NV_UNAVAILABLE);
         }
         Ok(())
@@ -117,7 +117,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(24, &self.global_state.time_epoch.to_be_bytes())
+            .write_nv(24, &self.context.state.time_epoch.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -127,7 +127,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(32, &self.global_state.failed_tries.to_be_bytes())
+            .write_nv(32, &self.context.state.failed_tries.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -137,7 +137,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(36, &self.global_state.drbg_state.to_bytes())
+            .write_nv(36, &self.context.state.drbg_state.to_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -146,7 +146,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub(crate) fn nv_load_persistent_drbg_state(&mut self) -> Result<(), TpmRc> {
         let mut buf = [0u8; 76];
         if self.context.platform.storage.read_nv(36, &mut buf).is_ok() {
-            self.global_state.drbg_state = crate::engine::DrbgState::from_bytes(&buf);
+            self.context.state.drbg_state = crate::engine::DrbgState::from_bytes(&buf);
         }
         Ok(())
     }
@@ -154,8 +154,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// Persists the dictionary attack recovery timers (`go.selfHealTimer`, `go.lockoutTimer`, 16 bytes at offset 112) to non-volatile storage.
     pub(crate) fn nv_sync_persistent_da_timers(&mut self) -> Result<(), TpmRc> {
         let mut buf = [0u8; 16];
-        buf[0..8].copy_from_slice(&self.global_state.self_heal_timer.to_be_bytes());
-        buf[8..16].copy_from_slice(&self.global_state.lockout_timer.to_be_bytes());
+        buf[0..8].copy_from_slice(&self.context.state.self_heal_timer.to_be_bytes());
+        buf[8..16].copy_from_slice(&self.context.state.lockout_timer.to_be_bytes());
         self.context
             .platform
             .storage
@@ -172,8 +172,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut lo_bytes = [0u8; 8];
             sh_bytes.copy_from_slice(&buf[0..8]);
             lo_bytes.copy_from_slice(&buf[8..16]);
-            self.global_state.self_heal_timer = i64::from_be_bytes(sh_bytes);
-            self.global_state.lockout_timer = i64::from_be_bytes(lo_bytes);
+            self.context.state.self_heal_timer = i64::from_be_bytes(sh_bytes);
+            self.context.state.lockout_timer = i64::from_be_bytes(lo_bytes);
         }
         Ok(())
     }
@@ -194,7 +194,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// - If `startup_type` is `SU_CLEAR`, volatile state is discarded, and PCRs are reset.
     pub fn startup(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         // A second TPM2_Startup is rejected before its parameters are examined (`ExecCommand.c`).
-        if self.global_state.initialized {
+        if self.context.state.initialized {
             return Err(TpmRc::INITIALIZE);
         }
 
@@ -214,13 +214,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 1. Validate startup rules & handle flags/localities
         let prev_orderly_state = self.validate_startup_state(startup_type)?;
 
-        self.global_state.orderly_state = prev_orderly_state;
-        self.global_state.prev_orderly_state = prev_orderly_state;
+        self.context.state.orderly_state = prev_orderly_state;
+        self.context.state.prev_orderly_state = prev_orderly_state;
 
         // Select the startup kind (`Startup.c`): TPM Restart / Resume require a previous
         // Shutdown(STATE) whose saved state was recovered (`g_nvOk`); Shutdown(CLEAR) followed by
         // Startup(CLEAR), no orderly shutdown, or unrecoverable state data is a TPM Reset.
-        let kind = if prev_orderly_state == TPM_SU_STATE && self.global_state.g_nv_ok {
+        let kind = if prev_orderly_state == TPM_SU_STATE && self.context.state.g_nv_ok {
             if startup_type == TPM_SU_STATE {
                 StartupKind::Resume
             } else {
@@ -244,13 +244,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.nv_load_persistent_drbg_state()?;
         }
         if is_orderly(prev_orderly_state)
-            && self.global_state.drbg_state.magic == crate::engine::DRBG_MAGIC
+            && self.context.state.drbg_state.magic == crate::engine::DRBG_MAGIC
         {
-            self.global_state
+            self.context
+                .state
                 .drbg_state
                 .reseed(self.context.platform.rng)?;
         } else {
-            self.global_state
+            self.context
+                .state
                 .drbg_state
                 .instantiate(self.context.platform.rng)?;
         }
@@ -258,58 +260,58 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // `TimeStartup`: after an unorderly shutdown the clock may have rolled back.
         if !is_orderly(prev_orderly_state) {
-            self.global_state.clock_safe = false;
+            self.context.state.clock_safe = false;
         }
 
-        self.global_state.orderly_state = SU_NONE_VALUE;
+        self.context.state.orderly_state = SU_NONE_VALUE;
         self.nv_sync_persistent_orderly_state()?;
-        self.global_state.power_was_lost = false;
-        self.global_state.pcr_reconfig = false;
+        self.context.state.power_was_lost = false;
+        self.context.state.pcr_reconfig = false;
 
-        self.global_state.initialized = true;
+        self.context.state.initialized = true;
 
         // `HierarchyStartup`: phEnable is SET on any startup. On TPM Reset / Restart the
         // platform authorization is cleared and the other hierarchies are enabled; on TPM Resume
         // the saved `STATE_CLEAR_DATA` values are kept.
-        self.global_state.ph_enable = true;
+        self.context.state.ph_enable = true;
         if kind != StartupKind::Resume {
-            self.global_state.sh_enable = true;
-            self.global_state.eh_enable = true;
-            self.global_state.ph_enable_nv = true;
-            self.global_state.platform_auth = crate::owned::OwnedAuth::default();
-            self.global_state.platform_policy = crate::owned::OwnedDigest::default();
-            self.global_state.platform_alg = None;
+            self.context.state.sh_enable = true;
+            self.context.state.eh_enable = true;
+            self.context.state.ph_enable_nv = true;
+            self.context.state.platform_auth = crate::owned::OwnedAuth::default();
+            self.context.state.platform_policy = crate::owned::OwnedDigest::default();
+            self.context.state.platform_alg = None;
 
             // `PCRStartup`: PCR authValues are only preserved on TPM Resume.
-            self.global_state.pcr_auth_value = crate::owned::OwnedAuth::default();
+            self.context.state.pcr_auth_value = crate::owned::OwnedAuth::default();
         }
         self.pcr_startup(kind);
         // `SessionStartup`: saved session contexts survive TPM Restart and Resume, but not a
         // TPM Reset. Loaded sessions never survive.
         if kind == StartupKind::Reset {
-            for sess in self.global_state.saved_sessions.iter_mut() {
+            for sess in self.context.state.saved_sessions.iter_mut() {
                 *sess = None;
             }
         }
         // `CommandAuditStartup`: the command audit digest survives TPM Restart and Resume (it is
         // part of the saved `STATE_RESET_DATA`) and is cleared on TPM Reset.
         if kind == StartupKind::Reset {
-            self.global_state.command_audit_digest = crate::owned::OwnedDigest::default();
+            self.context.state.command_audit_digest = crate::owned::OwnedDigest::default();
         }
-        for obj in self.global_state.transient_objects.iter_mut() {
+        for obj in self.context.state.transient_objects.iter_mut() {
             *obj = None;
         }
-        for p in self.global_state.transient_parents.iter_mut() {
+        for p in self.context.state.transient_parents.iter_mut() {
             *p = None;
         }
-        self.global_state.next_transient_index = 0;
-        for sess in self.global_state.active_sessions.iter_mut() {
+        self.context.state.next_transient_index = 0;
+        for sess in self.context.state.active_sessions.iter_mut() {
             *sess = None;
         }
-        for seq in self.global_state.active_sequences.iter_mut() {
+        for seq in self.context.state.active_sequences.iter_mut() {
             *seq = None;
         }
-        self.global_state.drtm_handle = tpm2::Handle::RH_UNASSIGNED.0;
+        self.context.state.drtm_handle = tpm2::Handle::RH_UNASSIGNED.0;
 
         // `NvEntityStartup`: clear the per-boot NV index attributes (not on TPM Resume).
         if kind != StartupKind::Resume {
@@ -321,7 +323,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // Read the platform unique value that is used as VENDOR_PERMANENT (`g_platformUniqueDetails`).
         // Matches `_plat__GetUnique(1, sizeof(g_platformUniqueDetails.t.buffer), g_platformUniqueDetails.t.buffer)` in `StartupCommands.c` / `Unique.c`.
-        if self.global_state.platform_unique_details.get_size() == 0 {
+        if self.context.state.platform_unique_details.get_size() == 0 {
             const NOT_REALLY_UNIQUE: &[u8] = b"This is not really a unique value. A real unique value should be generated by the platform.";
             let mut buf = [0u8; 48];
             let mut i = 0;
@@ -330,7 +332,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 i += 1;
             }
             if let Ok(auth) = crate::owned::OwnedAuth::from_bytes(&buf) {
-                self.global_state.platform_unique_details = auth;
+                self.context.state.platform_unique_details = auth;
             }
         }
 
@@ -345,23 +347,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // The command needs NV update (`RETURN_IF_NV_IS_NOT_AVAILABLE`).
         self.return_if_nv_is_not_available()?;
 
-        let mut locality = self.global_state.locality;
+        let mut locality = self.context.state.locality;
 
         if locality != 0 && locality != 3 {
             return Err(TpmRc::LOCALITY);
         }
         // If there was an H-CRTM, treat the startup as being at locality 0.
-        if self.global_state.drtm_pre_startup {
+        if self.context.state.drtm_pre_startup {
             locality = 0;
         }
-        self.global_state.startup_locality_3 = locality == 3;
+        self.context.state.startup_locality_3 = locality == 3;
 
-        self.global_state.da_used = self.global_state.orderly_state == SU_DA_USED_VALUE;
-        if self.global_state.da_used {
-            self.global_state.orderly_state = SU_NONE_VALUE;
+        self.context.state.da_used = self.context.state.orderly_state == SU_DA_USED_VALUE;
+        if self.context.state.da_used {
+            self.context.state.orderly_state = SU_NONE_VALUE;
         }
 
-        let mut prev_orderly_state = self.global_state.orderly_state;
+        let mut prev_orderly_state = self.context.state.orderly_state;
 
         if is_orderly(prev_orderly_state) {
             prev_orderly_state &= !(PRE_STARTUP_FLAG | STARTUP_LOCALITY_3);
@@ -373,17 +375,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 return Err(TpmRc::VALUE.with(Position::parameter(1)));
             }
             // The state saved by TPM2_Shutdown(STATE) must have been recovered.
-            if !self.global_state.g_nv_ok {
+            if !self.context.state.g_nv_ok {
                 return Err(TpmRc::NV_UNINITIALIZED);
             }
             // For Resume, the H-CRTM has to be the same as the previous boot.
-            if self.global_state.drtm_pre_startup
-                != ((self.global_state.orderly_state & PRE_STARTUP_FLAG) != 0)
+            if self.context.state.drtm_pre_startup
+                != ((self.context.state.orderly_state & PRE_STARTUP_FLAG) != 0)
             {
                 return Err(TpmRc::VALUE.with(Position::parameter(1)));
             }
-            if self.global_state.startup_locality_3
-                != ((self.global_state.orderly_state & STARTUP_LOCALITY_3) != 0)
+            if self.context.state.startup_locality_3
+                != ((self.context.state.orderly_state & STARTUP_LOCALITY_3) != 0)
             {
                 return Err(TpmRc::LOCALITY);
             }
@@ -399,52 +401,55 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         prev_orderly_state: u16,
     ) -> Result<(), TpmRc> {
         let current_timer = self.context.platform.timer.timer_read();
-        self.global_state.clock_offset = self
-            .global_state
+        self.context.state.clock_offset = self
+            .context
+            .state
             .clock_offset
-            .wrapping_add(self.global_state.tpm_time_ms as i64);
+            .wrapping_add(self.context.state.tpm_time_ms as i64);
         if !is_orderly(prev_orderly_state) {
-            self.global_state.self_heal_timer = 0;
-            self.global_state.lockout_timer = 0;
-            self.global_state.tpm_time_ms = 0;
-            self.global_state.last_timer_read_ms = Some(current_timer);
+            self.context.state.self_heal_timer = 0;
+            self.context.state.lockout_timer = 0;
+            self.context.state.tpm_time_ms = 0;
+            self.context.state.last_timer_read_ms = Some(current_timer);
         } else {
-            self.global_state.self_heal_timer = self
-                .global_state
+            self.context.state.self_heal_timer = self
+                .context
+                .state
                 .self_heal_timer
-                .saturating_sub(self.global_state.tpm_time_ms as i64);
-            self.global_state.lockout_timer = self
-                .global_state
+                .saturating_sub(self.context.state.tpm_time_ms as i64);
+            self.context.state.lockout_timer = self
+                .context
+                .state
                 .lockout_timer
-                .saturating_sub(self.global_state.tpm_time_ms as i64);
-            self.global_state.tpm_time_ms = 0;
-            self.global_state.last_timer_read_ms = Some(current_timer);
+                .saturating_sub(self.context.state.tpm_time_ms as i64);
+            self.context.state.tpm_time_ms = 0;
+            self.context.state.last_timer_read_ms = Some(current_timer);
         }
 
-        if self.global_state.lockout_recovery == 0 && !self.global_state.lockout_auth_enabled {
-            self.global_state.lockout_auth_enabled = true;
+        if self.context.state.lockout_recovery == 0 && !self.context.state.lockout_auth_enabled {
+            self.context.state.lockout_auth_enabled = true;
             // NV_SYNC_PERSISTENT(lockOutAuthEnabled)
-            self.context.save_hierarchy_auths(self.global_state);
+            self.context.save_hierarchy_auths();
         }
 
-        if self.global_state.recovery_time != 0
-            && self.global_state.failed_tries < self.global_state.max_tries
+        if self.context.state.recovery_time != 0
+            && self.context.state.failed_tries < self.context.state.max_tries
             && !is_orderly(prev_orderly_state)
-            && self.global_state.da_used
+            && self.context.state.da_used
         {
-            self.global_state.failed_tries = self.global_state.failed_tries.saturating_add(1);
-            self.global_state.da_used = false;
+            self.context.state.failed_tries = self.context.state.failed_tries.saturating_add(1);
+            self.context.state.da_used = false;
             self.nv_sync_persistent_failed_tries()?;
         }
 
         match kind {
             StartupKind::Resume => {
-                self.global_state.restart_count += 1;
+                self.context.state.restart_count += 1;
             }
             StartupKind::Restart => {
-                self.global_state.clear_count += 1;
-                self.global_state.restart_count += 1;
-                self.global_state.time_epoch = self.global_state.time_epoch.wrapping_add(1);
+                self.context.state.clear_count += 1;
+                self.context.state.restart_count += 1;
+                self.context.state.time_epoch = self.context.state.time_epoch.wrapping_add(1);
                 self.nv_sync_persistent_time_epoch()?;
             }
             StartupKind::Reset => {
@@ -452,16 +457,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.context
                     .platform
                     .rng
-                    .fill_bytes(&mut self.global_state.null_seed[..64])
+                    .fill_bytes(&mut self.context.state.null_seed[..64])
                     .map_err(|_| TpmRc::FAILURE)?;
-                self.global_state.null_seed_size = 64;
+                self.context.state.null_seed_size = 64;
 
                 self.context
                     .platform
                     .rng
-                    .fill_bytes(&mut self.global_state.null_proof[..64])
+                    .fill_bytes(&mut self.context.state.null_proof[..64])
                     .map_err(|_| TpmRc::FAILURE)?;
-                self.global_state.null_proof_size = 64;
+                self.context.state.null_proof_size = 64;
 
                 // `CryptStartup(SU_RESET)`: a new secret commit nonce is generated and all
                 // outstanding commitments are dropped, so commit values (`r`) are
@@ -469,25 +474,26 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.context
                     .platform
                     .rng
-                    .fill_bytes(&mut self.global_state.commit_nonce)
+                    .fill_bytes(&mut self.context.state.commit_nonce)
                     .map_err(|_| TpmRc::FAILURE)?;
-                self.global_state.commit_counter = 0;
-                self.global_state.commit_array = [0u8; 16];
+                self.context.state.commit_counter = 0;
+                self.context.state.commit_array = [0u8; 16];
 
-                self.global_state.object_context_id = 0;
-                self.global_state.clear_count = 0;
-                self.global_state.reset_count += 1;
+                self.context.state.object_context_id = 0;
+                self.context.state.clear_count = 0;
+                self.context.state.reset_count += 1;
                 self.nv_sync_persistent_reset_count()?;
 
-                self.global_state.total_reset_count = self
-                    .global_state
+                self.context.state.total_reset_count = self
+                    .context
+                    .state
                     .total_reset_count
                     .checked_add(1)
                     .ok_or(TpmRc::FAILURE)?;
                 self.nv_sync_persistent_total_reset_count()?;
-                self.global_state.restart_count = 0;
+                self.context.state.restart_count = 0;
 
-                self.global_state.time_epoch = self.global_state.time_epoch.wrapping_add(1);
+                self.context.state.time_epoch = self.context.state.time_epoch.wrapping_add(1);
                 self.nv_sync_persistent_time_epoch()?;
             }
         }
@@ -511,12 +517,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         use tpm2::platform::PcrState;
 
         if kind == StartupKind::Reset {
-            self.global_state.pcrs.update_counter = 0;
+            self.context.state.pcrs.update_counter = 0;
         }
-        let previous = self.global_state.pcrs;
+        let previous = self.context.state.pcrs;
         // `reset` reinitializes every PCR (and the counter, which is restored below).
-        self.global_state.pcrs.reset();
-        self.global_state.pcrs.update_counter = previous.update_counter;
+        self.context.state.pcrs.reset();
+        self.context.state.pcrs.update_counter = previous.update_counter;
         for pcr in 0..IMPLEMENTATION_PCR {
             let state_saved = kind == StartupKind::Resume && pcr_is_state_saved(pcr);
             if !state_saved {
@@ -524,11 +530,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             let keep_hcrtm = pcr as usize == HCRTM_PCR
                 && kind != StartupKind::Resume
-                && self.global_state.drtm_pre_startup;
+                && self.context.state.drtm_pre_startup;
             if state_saved || keep_hcrtm {
                 for &alg in PcrState::IMPLEMENTED_BANKS {
                     if let (Some(dst), Some(src)) = (
-                        self.global_state.pcrs.value_mut(alg, pcr as usize),
+                        self.context.state.pcrs.value_mut(alg, pcr as usize),
                         previous.value(alg, pcr as usize),
                     ) {
                         dst.copy_from_slice(src);

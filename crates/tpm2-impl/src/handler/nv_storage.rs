@@ -254,9 +254,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<NvIndexHeader, TpmRc> {
         let header = self.nv_read_index_header(nv_index, TpmRc::HANDLE.with(pos))?;
         let enabled = if header.public.attributes.contains(TpmaNv::PLATFORMCREATE) {
-            self.global_state.ph_enable_nv
+            self.context.state.ph_enable_nv
         } else {
-            self.global_state.sh_enable
+            self.context.state.sh_enable
         };
         if !enabled {
             return Err(TpmRc::HANDLE.with(pos));
@@ -283,10 +283,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         header: &NvIndexHeader,
         write: bool,
     ) -> Result<(), TpmRc> {
-        if session_idx >= self.global_state.parsed_auths_len {
+        if session_idx >= self.context.state.parsed_auths_len {
             return Ok(());
         }
-        let session_handle = self.global_state.parsed_auths[session_idx].session_handle.0;
+        let session_handle = self.context.state.parsed_auths[session_idx]
+            .session_handle
+            .0;
         let attributes = header.public.attributes;
         let available = if Handle(session_handle).handle_type() == Some(tpm2::TpmHt::PolicySession)
         {
@@ -360,14 +362,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             if attributes.contains(TpmaNv::ORDERLY)
                 && attributes.get_index_type() == Ok(TpmNt::Counter)
             {
-                self.global_state.update_nv |= crate::engine::UT_ORDERLY;
+                self.context.state.update_nv |= crate::engine::UT_ORDERLY;
             }
         }
         StorageManager::new(&mut *self.context.platform.storage)
             .write_item(nv_index, header.metadata_size + offset, data)
             .map_err(|_| TpmRc::FAILURE)?;
         if !attributes.contains(TpmaNv::ORDERLY) {
-            self.global_state.update_nv |= crate::engine::UT_NV;
+            self.context.state.update_nv |= crate::engine::UT_NV;
         }
         Ok(())
     }
@@ -397,8 +399,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .undefine_space(nv_index)
             .map_err(|_| TpmRc::FAILURE)?;
         if let Some(val) = counter_val {
-            if val > self.global_state.max_counter {
-                self.global_state.max_counter = val;
+            if val > self.context.state.max_counter {
+                self.context.state.max_counter = val;
             }
             self.nv_sync_persistent_max_counter()?;
         }
@@ -433,7 +435,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let provided_auth = self.global_state.parsed_auths[..self.global_state.parsed_auths_len]
+        let provided_auth = self.context.state.parsed_auths[..self.context.state.parsed_auths_len]
             .first()
             .cloned();
 
@@ -458,7 +460,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &nv_public_struct,
             auth_handle_u32,
             cmd.auth.get_buffer(),
-            self.global_state.ph_enable_nv,
+            self.context.state.ph_enable_nv,
         )?;
 
         // C `NvAdd` (`RETURN_IF_NV_IS_NOT_AVAILABLE`).
@@ -594,9 +596,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // `IsPolicySessionRequired`), the index must have an authPolicy
         // (`IsAuthPolicyAvailable`), and the policy must be bound to this command
         // (`CheckPolicyAuthSession`).
-        let auth_0 = self.global_state.parsed_auths[0];
+        let auth_0 = self.context.state.parsed_auths[0];
         let session_state = self
-            .global_state
+            .context
+            .state
             .session(auth_0.session_handle.0)
             .filter(|s| s.session_type == tpm2::TpmSe::Policy)
             .ok_or(TpmRc::AUTH_TYPE)?;
@@ -692,7 +695,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
 
-        let expected_auth_struct = self.context.handle_auth(self.global_state, auth_handle_u32);
+        let expected_auth_struct = self.context.handle_auth(auth_handle_u32);
         let expected_auth = expected_auth_struct.get_buffer();
 
         if let Some(auth) = provided_auth {
@@ -1237,14 +1240,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let counter_val = if attributes.contains(TpmaNv::WRITTEN) {
             self.nv_read_u64_data(nv_index, &header)?
         } else {
-            self.global_state.max_counter
+            self.context.state.max_counter
         };
         let counter_val = counter_val.checked_add(1).ok_or(TpmRc::FAILURE)?;
         self.nv_write_index_data(nv_index, &header, 0, &counter_val.to_be_bytes())?;
 
         // An orderly counter only forces an NV update when the low-order bits roll over.
         if attributes.contains(TpmaNv::ORDERLY) && (counter_val & MAX_ORDERLY_COUNT) == 0 {
-            self.global_state.update_nv |= crate::engine::UT_ORDERLY;
+            self.context.state.update_nv |= crate::engine::UT_ORDERLY;
         }
 
         let response = request.into_response();
@@ -1380,7 +1383,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 locked.insert(TpmaNv::WRITELOCKED);
                 self.nv_write_index_attributes(nv_index, &header, locked)?;
                 if !attributes.contains(TpmaNv::ORDERLY) {
-                    self.global_state.update_nv |= crate::engine::UT_NV;
+                    self.context.state.update_nv |= crate::engine::UT_NV;
                 }
             }
             Err(rc) if rc == TpmRc::NV_AUTHORIZATION => return Err(rc),
@@ -1508,7 +1511,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 locked.insert(TpmaNv::READLOCKED);
                 self.nv_write_index_attributes(nv_index, &header, locked)?;
                 if !attributes.contains(TpmaNv::ORDERLY) {
-                    self.global_state.update_nv |= crate::engine::UT_NV;
+                    self.context.state.update_nv |= crate::engine::UT_NV;
                 }
             }
         }
@@ -1616,9 +1619,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // (C `IsPolicySessionRequired`: password and HMAC sessions fail with
         // `TPM_RC_AUTH_TYPE`), the index must have an authPolicy (`IsAuthPolicyAvailable`), and
         // the policy must have been bound to this command (`CheckPolicyAuthSession`).
-        let auth_0 = self.global_state.parsed_auths[0];
+        let auth_0 = self.context.state.parsed_auths[0];
         let session_state = self
-            .global_state
+            .context
+            .state
             .session(auth_0.session_handle.0)
             .filter(|s| s.session_type == tpm2::TpmSe::Policy)
             .ok_or(TpmRc::AUTH_TYPE)?;

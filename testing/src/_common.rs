@@ -14,7 +14,10 @@
 //! [`client_rng`] / [`CLIENT_CRYPTO`] and sleeps go through [`sleep`].
 
 use std::io::Cursor;
-pub use tpm2_simulator::{Simulator, SimulatorPlatformSignal, create_simulator};
+pub use tpm2::Connection;
+pub use tpm2_simulator::{
+    NO_STREAM, PlatformConnection, Simulator, SimulatorPlatformSignal, create_simulator,
+};
 
 /// MSSIM `TPM_SIGNAL_HASH_START`.
 const TPM_SIGNAL_HASH_START: u32 = 5;
@@ -44,7 +47,7 @@ pub fn send_command(sim: &mut Simulator<'_>, locality: u8, command: &[u8]) -> Ve
     input.extend_from_slice(command);
     let input_len = input.len();
     let mut stream = Cursor::new(input);
-    sim.handle_regular_command_raw(TPM_SEND_COMMAND, &mut stream)
+    sim.transact_platform(TPM_SEND_COMMAND, &mut stream)
         .unwrap_or_else(|e| panic!("TPM transport error: {e}"));
     let output = stream.into_inner();
     let out = &output[input_len..];
@@ -54,7 +57,7 @@ pub fn send_command(sim: &mut Simulator<'_>, locality: u8, command: &[u8]) -> Ve
 
 /// Sends a `_TPM_Hash_*` indication (MSSIM command `code` with `payload`).
 fn hash_indication(sim: &mut Simulator<'_>, code: u32, payload: Vec<u8>) {
-    sim.handle_regular_command_raw(code, &mut Cursor::new(payload))
+    sim.transact_platform(code, &mut Cursor::new(payload))
         .unwrap_or_else(|e| panic!("TPM transport error: {e}"));
 }
 use tpm2::commands::{
@@ -14463,12 +14466,28 @@ pub fn nv_index_name(sim: &mut Simulator<'_>, index: u32) -> Vec<u8> {
 
 /// Makes NV unavailable to the TPM.
 pub fn nv_off(sim: &mut Simulator<'_>) {
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
+}
+
+/// Powers on the TPM (`_TPM_Init`), makes NV available and sends
+/// `TPM2_Startup(TPM_SU_CLEAR)`, as a platform does at boot.
+///
+/// Panics if a signal or the startup command fails.
+pub fn power_on_start_up(sim: &mut Simulator<'_>) {
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+        .unwrap();
+    nv_on(sim);
+    sim.execute(Startup {
+        startup_type: TpmSu::Clear,
+    })
+    .unwrap();
 }
 
 /// Makes NV available to the TPM again.
 pub fn nv_on(sim: &mut Simulator<'_>) {
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
 }
 
 /// `TPM2_NV_Read` authorized by the index itself (empty password).
@@ -14904,11 +14923,12 @@ pub fn lockout_counter(sim: &mut Simulator<'_>) -> u32 {
 
 /// Power-cycles the TPM (`_TPM_Init`) and makes NV available again.
 pub fn power_cycle(sim: &mut Simulator<'_>) {
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
 }
 
 /// Power cycles the TPM, optionally after an orderly `TPM2_Shutdown(TPM_SU_CLEAR)`.
@@ -14917,9 +14937,9 @@ pub fn power_cycle_orderly(sim: &mut Simulator<'_>, orderly: bool) {
         let shutdown = build_raw_cmd(ST_NO_SESSIONS, 0x145, &[], None, &0u16.to_be_bytes());
         assert_eq!(mssim_rc_of(sim, &shutdown), 0);
     }
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.power_on_start_up();
+    power_on_start_up(sim);
 }
 
 /// Optionally sends `TPM2_Shutdown(shutdown)`, power-cycles the TPM (`_TPM_Init`), enables NV
@@ -14928,9 +14948,9 @@ pub fn power_cycle_with(sim: &mut Simulator<'_>, shutdown: Option<u16>, startup:
     if let Some(su) = shutdown {
         assert_eq!(shutdown_raw(sim, su), 0, "TPM2_Shutdown failed");
     }
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
         .unwrap();
     nv_on(sim);
     startup_raw(sim, 0, startup)
@@ -15058,11 +15078,12 @@ pub fn shutdown(sim: &mut Simulator<'_>, shutdown_type: u16) -> u32 {
 /// count changes), with `TPM_SU_CLEAR` a TPM Reset (the total reset count changes).
 pub fn shutdown_and_start_clear(sim: &mut Simulator<'_>, shutdown: u16) {
     assert_eq!(send_u16_param_command(sim, TPM_CC_SHUTDOWN, shutdown), 0);
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     assert_eq!(send_u16_param_command(sim, TPM_CC_STARTUP, TPM_SU_CLEAR), 0);
 }
 
@@ -15747,9 +15768,9 @@ pub fn storage_attrs() -> TpmaObject {
 pub fn tpm_reset(sim: &mut Simulator<'_>) {
     let shutdown = build_raw_cmd(ST_NO_SESSIONS, 0x145, &[], None, &0u16.to_be_bytes());
     assert_eq!(mssim_rc_of(sim, &shutdown), 0, "TPM2_Shutdown failed");
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.power_on_start_up();
+    power_on_start_up(sim);
 }
 
 /// `TPM2_NV_DefineSpace` with a password session (empty hierarchy auth).

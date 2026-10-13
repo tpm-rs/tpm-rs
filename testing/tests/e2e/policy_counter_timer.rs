@@ -71,12 +71,14 @@ fn clock_operands_need_nv() {
         )
         .map(|_| ())
     };
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
     // time (offset 0) and clock (offset 8) need a running Clock.
     assert_eq!(counter_timer(&mut sim, 0), Err(TpmRc::NV_UNAVAILABLE.get()));
     assert_eq!(counter_timer(&mut sim, 8), Err(TpmRc::NV_UNAVAILABLE.get()));
     // resetCount/restartCount (offset >= 16) do not.
     counter_timer(&mut sim, 16).unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     counter_timer(&mut sim, 8).unwrap();
 }

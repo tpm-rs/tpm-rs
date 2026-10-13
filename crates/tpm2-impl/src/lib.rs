@@ -53,6 +53,9 @@
 #[cfg(test)]
 extern crate alloc;
 
+#[cfg(feature = "std")]
+extern crate std;
+
 pub mod command_audit;
 mod error;
 mod handle_checks;
@@ -60,6 +63,7 @@ pub mod handler;
 pub mod hash_state;
 mod modular;
 pub mod owned;
+pub mod platform_connection;
 pub mod storage;
 #[cfg(test)]
 pub mod test_support;
@@ -70,11 +74,14 @@ mod engine;
 mod req_resp;
 pub use engine::{
     ActiveSequence, DRBG_MAGIC, DrbgState, GlobalState, MAX_ACTIVE_SEQUENCES, MAX_LOADED_OBJECTS,
-    MAX_LOADED_SESSIONS, MAX_SEQUENCE_BUFFER, SequenceType, TpmEngine, command_handles_count,
-    command_returns_handle, get_command_attribute, handle_requires_auth,
+    MAX_LOADED_SESSIONS, MAX_SEQUENCE_BUFFER, ResponseBufferTooSmall, SequenceType, TpmEngine,
+    command_handles_count, command_returns_handle, get_command_attribute, handle_requires_auth,
 };
 pub use error::InternalError;
 pub use hash_state::StreamingHashState;
+pub use platform_connection::SimulatorPlatformSignal;
+#[cfg(feature = "std")]
+pub use platform_connection::{NO_STREAM, PlatformConnection};
 pub use storage::translator::{Ibmswtpm2StateDto, TpmStateTranslator};
 
 pub use tpm2::platform::TpmPlatform;

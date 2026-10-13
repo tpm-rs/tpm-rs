@@ -28,8 +28,7 @@ fn test_context_save_kdfa_bug() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let (mut tpm, mut global_state) =
-        setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::from_bytes(b"pass").unwrap(),
@@ -65,12 +64,11 @@ fn test_context_save_kdfa_bug() {
         in_public,
         ..Default::default()
     };
-    let create_resp = execute_command(&mut tpm, &mut global_state, &create, &[password_auth(b"")])
-        .expect("CreatePrimary failed");
+    let create_resp =
+        execute_command(&mut tpm, &create, &[password_auth(b"")]).expect("CreatePrimary failed");
 
     let save_resp = execute_command(
         &mut tpm,
-        &mut global_state,
         &ContextSave {
             save_handle: create_resp.object_handle,
         },
@@ -93,11 +91,12 @@ fn test_context_save_kdfa_bug() {
         "encContext must be size || encrypted"
     );
 
-    let proof = &global_state.sh_proof[..global_state.sh_proof_size as usize];
+    let proof = &tpm.state.sh_proof[..tpm.state.sh_proof_size as usize];
     // CONTEXT_INTEGRITY_HASH_ALG: the strongest implemented hash (Part 1, "Context Integrity
     // Protection").
-    let mut hmac = tpm2::crypto::HmacStream::new(&crypto, TpmiAlgHash::Sha512, proof).unwrap();
-    hmac.update(&global_state.total_reset_count.to_be_bytes())
+    let mut hmac =
+        tpm2::crypto::HmacStream::new(&*tpm.platform.crypto, TpmiAlgHash::Sha512, proof).unwrap();
+    hmac.update(&tpm.state.total_reset_count.to_be_bytes())
         .unwrap();
     hmac.update(&context.sequence.to_be_bytes()).unwrap();
     hmac.update(&context.saved_handle.0.to_be_bytes()).unwrap();

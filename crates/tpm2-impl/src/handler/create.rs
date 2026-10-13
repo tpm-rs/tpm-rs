@@ -248,13 +248,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 7. Compute creation data and creation hash
         let parent_name = if parent_handle >> 24 == 0x80 {
-            self.global_state
+            self.context
+                .state
                 .find_transient_object(parent_handle)
                 .map(|obj| obj.name)
                 .ok_or(TpmRc::REFERENCE_H0)?
         } else {
             self.context
-                .load_persistent_object(self.global_state, parent_handle)
+                .load_persistent_object(parent_handle)
                 .map(|obj| obj.name)
                 .map_err(|_| TpmRc::REFERENCE_H0)?
         };
@@ -270,10 +271,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // C `FillInCreationData`: the reported selection is the filtered one.
             pcr_select: self.filter_pcr_selection(&cmd.creation_pcr),
             pcr_digest: pcr_digest.as_tpm2b(),
-            locality: TpmaLocality(if self.global_state.locality <= 4 {
-                1 << self.global_state.locality
+            locality: TpmaLocality(if self.context.state.locality <= 4 {
+                1 << self.context.state.locality
             } else {
-                self.global_state.locality
+                self.context.state.locality
             }),
             parent_name_alg: Alg::from(parent_info.name_alg),
             parent_name: parent_name.as_tpm2b(),

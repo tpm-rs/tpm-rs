@@ -223,11 +223,12 @@ fn sha384_bank_active_after_startup_clear() {
 
     // 3. Power cycle (_TPM_Init) followed by Startup(CLEAR). C reloads gp.pcrAllocated from NV
     // at _TPM_Init.
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     assert_eq!(rc_of(&send_at(&mut sim, 0, &STARTUP_CLEAR)), 0);
 
     // 4. Verify that the configured PCR allocation took effect at the TPM Reset

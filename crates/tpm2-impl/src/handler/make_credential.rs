@@ -51,7 +51,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         // 1. Resolve protector key. A sequence object is not an asymmetric key.
-        if self.global_state.find_active_sequence(handle).is_some() {
+        if self.context.state.find_active_sequence(handle).is_some() {
             return Err(TpmRc::TYPE.with(Position::handle(1)));
         }
         let protector_obj = self.resolve_object(handle, Position::handle(1))?;

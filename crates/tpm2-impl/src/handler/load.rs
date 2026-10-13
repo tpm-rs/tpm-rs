@@ -55,7 +55,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // C `Load.c` order: free object slot, empty inPrivate, parent type, Name (nameAlg),
         // private-area unwrap, then `ObjectLoad` (public area validation and key checks).
-        let (index, handle) = self.global_state.find_empty_transient_slot(false)?;
+        let (index, handle) = self.context.state.find_empty_transient_slot(false)?;
 
         if (parent_handle >> 24) != 0x80 && (parent_handle >> 24) != 0x81 {
             // `parentHandle` is a `TPMI_DH_OBJECT`: permanent handles are invalid values.

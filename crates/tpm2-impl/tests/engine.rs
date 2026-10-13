@@ -17,8 +17,7 @@ fn get_random_in_place() {
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage();
 
     let startup_request = hex!(
         "8001" // tag
@@ -27,11 +26,7 @@ fn get_random_in_place() {
         "0000" // TPM_SU_CLEAR
     );
     let mut startup_response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &startup_request[..],
-        &mut startup_response[..],
-    );
+    tpm.execute_command_separate(&startup_request[..], &mut startup_response[..]);
 
     let request = hex!(
         "8001" // tag
@@ -53,17 +48,15 @@ fn get_random_in_place() {
 
     let mut response = request.to_vec();
     response.resize(256, 0xFF);
-    let size =
-        tpm.execute_command_in_place(&mut global_state, response.as_mut_slice(), request.len());
+    let size = tpm.execute_command_in_place(response.as_mut_slice(), request.len());
     assert_eq!(&response[..size], expected_response);
 }
 
 #[test]
 fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
-    let mut global_state = tpm2_impl::GlobalState::default();
-
+    let mut state = tpm2_impl::GlobalState::default();
     // 1. When empty, both primary and child allocations assign sequential slots starting at index 0
-    let (slot0, handle0) = global_state.find_empty_transient_slot(true).unwrap();
+    let (slot0, handle0) = state.find_empty_transient_slot(true).unwrap();
     assert_eq!(slot0, 0);
     assert_eq!(handle0, 0x80000000);
 
@@ -76,12 +69,7 @@ fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
     tpmt_public_buf[10] = 0x00;
     tpmt_public_buf[11] = 0x10; // Null scheme
 
-    for (i, slot) in global_state
-        .transient_objects
-        .iter_mut()
-        .enumerate()
-        .take(16)
-    {
+    for (i, slot) in state.transient_objects.iter_mut().enumerate().take(16) {
         *slot = Some(TransientObject {
             handle: 0x80000000 | (i as u32),
             seed: [0u8; 64],
@@ -100,11 +88,11 @@ fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
     }
 
     // 3. Creating a Primary Key when RAM is full MUST return ObjectMemory (0x902) to preserve strict limits
-    let primary_err = global_state.find_empty_transient_slot(true);
+    let primary_err = state.find_empty_transient_slot(true);
     assert_eq!(primary_err, Err(TpmRc::OBJECT_MEMORY));
 
     // 4. Creating a non-primary child key when RAM is full also returns ObjectMemory
-    let child_err = global_state.find_empty_transient_slot(false);
+    let child_err = state.find_empty_transient_slot(false);
     assert_eq!(child_err, Err(TpmRc::OBJECT_MEMORY));
 }
 
@@ -119,9 +107,8 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.g_nv_ok = true;
+    tpm.init_storage();
+    tpm.state.g_nv_ok = true;
 
     // 1. Initial Startup (SU_CLEAR) instantiates a fresh DRBG state with magic = DRBG_MAGIC
     let startup_clear = hex!(
@@ -131,11 +118,11 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
         "0000" // TPM_SU_CLEAR
     );
     let mut resp = [0u8; 256];
-    tpm.execute_command_separate(&mut global_state, &startup_clear[..], &mut resp[..]);
+    tpm.execute_command_separate(&startup_clear[..], &mut resp[..]);
 
-    assert_eq!(global_state.drbg_state.magic, tpm2_impl::DRBG_MAGIC);
-    assert_eq!(global_state.drbg_state.reseed_counter, 1);
-    let seed_after_boot = global_state.drbg_state.seed;
+    assert_eq!(tpm.state.drbg_state.magic, tpm2_impl::DRBG_MAGIC);
+    assert_eq!(tpm.state.drbg_state.reseed_counter, 1);
+    let seed_after_boot = tpm.state.drbg_state.seed;
 
     // 2. Orderly Shutdown (SU_STATE) persists the DRBG state to NV storage (offset 36..112)
     let shutdown_state = hex!(
@@ -144,7 +131,7 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
         "00000145" // TPM2_Shutdown
         "0001" // TPM_SU_STATE
     );
-    tpm.execute_command_separate(&mut global_state, &shutdown_state[..], &mut resp[..]);
+    tpm.execute_command_separate(&shutdown_state[..], &mut resp[..]);
 
     let mut nv_drbg_buf = [0u8; 76];
     tpm.platform.storage.read_nv(36, &mut nv_drbg_buf).unwrap();
@@ -154,27 +141,26 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
 
     // 3. Orderly Startup (SU_STATE) restores the DRBG state from NV and reseeds it (XORing fresh entropy)
     // Simulate _TPM_Init before issuing TPM2_Startup
-    global_state.initialized = false;
+    tpm.state.initialized = false;
     let startup_state = hex!(
         "8001" // tag
         "0000000c" // size
         "00000144" // TPM2_Startup
         "0001" // TPM_SU_STATE
     );
-    tpm.execute_command_separate(&mut global_state, &startup_state[..], &mut resp[..]);
+    tpm.execute_command_separate(&startup_state[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
 
-    assert_eq!(global_state.drbg_state.magic, tpm2_impl::DRBG_MAGIC);
-    assert_eq!(global_state.drbg_state.reseed_counter, 1);
+    assert_eq!(tpm.state.drbg_state.magic, tpm2_impl::DRBG_MAGIC);
+    assert_eq!(tpm.state.drbg_state.reseed_counter, 1);
     assert_ne!(
-        global_state.drbg_state.seed, seed_after_boot,
+        tpm.state.drbg_state.seed, seed_after_boot,
         "Orderly startup must reseed the saved DRBG seed with fresh entropy"
     );
 }
 
 #[test]
 fn test_platform_construction_with_generic_rng() {
-    use tpm2_impl::GlobalState;
     use tpm2_impl::storage::ram_storage_mock::RamStorageMock;
     use tpm2_impl::timer::SoftwareTimer;
 
@@ -182,13 +168,13 @@ fn test_platform_construction_with_generic_rng() {
     let mut storage = RamStorageMock::<128>::new();
     let mut timer = SoftwareTimer { tick: 0 };
     let mut rng = FakeRng::new();
-    let _platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-    let global_state = GlobalState::default();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let tpm = TpmEngine::new(platform).unwrap();
 
     // Before manufacture there are no Primary Seeds.
-    assert_eq!(global_state.sp_seed_size, 0);
-    assert_eq!(global_state.ep_seed_size, 0);
-    assert_eq!(global_state.pp_seed_size, 0);
+    assert_eq!(tpm.state.sp_seed_size, 0);
+    assert_eq!(tpm.state.ep_seed_size, 0);
+    assert_eq!(tpm.state.pp_seed_size, 0);
 }
 
 /// Manufacture (`init_storage`) draws the three Primary Seeds and the three hierarchy proofs as
@@ -200,32 +186,37 @@ fn manufacture_draws_independent_seeds_and_proofs() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = common::FakeRng::new();
-    let (mut tpm, mut gs) =
-        common::setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = common::setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // FakeRng yields 1, 2, 3, ... (mod 256): each value is the next 64 bytes of the stream.
     let expected = |k: usize| -> [u8; 64] { core::array::from_fn(|i| (1 + 64 * k + i) as u8) };
-    assert_eq!(gs.ep_seed, expected(0));
-    assert_eq!(gs.sp_seed, expected(1));
-    assert_eq!(gs.pp_seed, expected(2));
-    assert_eq!(gs.ph_proof, expected(3));
-    assert_eq!(gs.sh_proof, expected(4));
-    assert_eq!(gs.eh_proof, expected(5));
+    assert_eq!(tpm.state.ep_seed, expected(0));
+    assert_eq!(tpm.state.sp_seed, expected(1));
+    assert_eq!(tpm.state.pp_seed, expected(2));
+    assert_eq!(tpm.state.ph_proof, expected(3));
+    assert_eq!(tpm.state.sh_proof, expected(4));
+    assert_eq!(tpm.state.eh_proof, expected(5));
     for size in [
-        gs.ep_seed_size,
-        gs.sp_seed_size,
-        gs.pp_seed_size,
-        gs.ph_proof_size,
-        gs.sh_proof_size,
-        gs.eh_proof_size,
+        tpm.state.ep_seed_size,
+        tpm.state.sp_seed_size,
+        tpm.state.pp_seed_size,
+        tpm.state.ph_proof_size,
+        tpm.state.sh_proof_size,
+        tpm.state.eh_proof_size,
     ] {
         assert_eq!(size, 64);
     }
 
     // `_TPM_Init` reloads them from NV unchanged.
-    let (ep, sp, pp) = (gs.ep_seed, gs.sp_seed, gs.pp_seed);
-    let (ph, sh, eh) = (gs.ph_proof, gs.sh_proof, gs.eh_proof);
-    tpm.reset(&mut gs);
-    assert_eq!((gs.ep_seed, gs.sp_seed, gs.pp_seed), (ep, sp, pp));
-    assert_eq!((gs.ph_proof, gs.sh_proof, gs.eh_proof), (ph, sh, eh));
+    let (ep, sp, pp) = (tpm.state.ep_seed, tpm.state.sp_seed, tpm.state.pp_seed);
+    let (ph, sh, eh) = (tpm.state.ph_proof, tpm.state.sh_proof, tpm.state.eh_proof);
+    tpm.reset();
+    assert_eq!(
+        (tpm.state.ep_seed, tpm.state.sp_seed, tpm.state.pp_seed),
+        (ep, sp, pp)
+    );
+    assert_eq!(
+        (tpm.state.ph_proof, tpm.state.sh_proof, tpm.state.eh_proof),
+        (ph, sh, eh)
+    );
 }

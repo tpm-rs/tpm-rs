@@ -26,7 +26,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        self.global_state.untested_algorithms_len = 0;
+        self.context.state.untested_algorithms_len = 0;
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;
@@ -60,10 +60,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut new_untested = [Alg::NULL; 32];
             let mut new_len = 0;
             for &existing in self
-                .global_state
+                .context
+                .state
                 .untested_algorithms
                 .iter()
-                .take(self.global_state.untested_algorithms_len)
+                .take(self.context.state.untested_algorithms_len)
             {
                 let mut remove = existing == alg;
                 if alg == Alg::RSA
@@ -90,12 +91,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     new_len += 1;
                 }
             }
-            self.global_state.untested_algorithms = new_untested;
-            self.global_state.untested_algorithms_len = new_len;
+            self.context.state.untested_algorithms = new_untested;
+            self.context.state.untested_algorithms_len = new_len;
         }
 
         let to_do_list = TpmlAlg::from_slice(
-            &self.global_state.untested_algorithms[..self.global_state.untested_algorithms_len],
+            &self.context.state.untested_algorithms[..self.context.state.untested_algorithms_len],
         )
         .ok_or(TpmRc::FAILURE)?;
         let rsp = responses::IncrementalSelfTest { to_do_list };

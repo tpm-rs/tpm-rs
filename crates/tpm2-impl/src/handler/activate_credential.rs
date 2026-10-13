@@ -56,7 +56,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 2. Retrieve decryption (protector) object. A sequence object is not an
         // asymmetric key (`TPM_RC_TYPE + RC_ActivateCredential_keyHandle`).
-        if self.global_state.find_active_sequence(key_handle).is_some() {
+        if self
+            .context
+            .state
+            .find_active_sequence(key_handle)
+            .is_some()
+        {
             return Err(TpmRc::TYPE.with(Position::handle(2)));
         }
         let key_obj = self.resolve_object(key_handle, Position::handle(2))?;

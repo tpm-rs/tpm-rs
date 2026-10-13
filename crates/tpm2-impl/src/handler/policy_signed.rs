@@ -58,7 +58,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (auth_hash, policy_digest, policy_digest_len, session_type) = {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session(policy_session)
                 .ok_or(TpmRc::REFERENCE_H1)?;
             if session_state.session_type != TpmSe::Policy
@@ -77,7 +78,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut auth_timeout = 0u64;
         if session_type == TpmSe::Policy {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session(policy_session)
                 .ok_or(TpmRc::REFERENCE_H1)?;
             auth_timeout = self.compute_auth_timeout(session_state, cmd.expiration, &cmd.nonce_tpm);
@@ -296,7 +298,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Update session state in global_state
         {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session_mut(policy_session)
                 .ok_or(TpmRc::HANDLE.to_rc())?;
             session_state.policy_digest[..new_digest_len]
@@ -354,15 +357,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
             // 6. If auth_timeout != 0
             if auth_timeout != 0 {
-                // epoch (8 bytes, big endian self.global_state.time_epoch)
-                let epoch_val = self.global_state.time_epoch;
+                // epoch (8 bytes, big endian self.context.state.time_epoch)
+                let epoch_val = self.context.state.time_epoch;
                 hmac_input[offset..offset + 8].copy_from_slice(&epoch_val.to_be_bytes());
                 offset += 8;
 
                 // If expiresOnReset (i.e. cmd.nonce_tpm.get_buffer().is_empty())
                 if cmd.nonce_tpm.get_buffer().is_empty() {
-                    // resetCount (8 bytes, big endian self.global_state.total_reset_count)
-                    let reset_count_val = self.global_state.total_reset_count;
+                    // resetCount (8 bytes, big endian self.context.state.total_reset_count)
+                    let reset_count_val = self.context.state.total_reset_count;
                     hmac_input[offset..offset + 8].copy_from_slice(&reset_count_val.to_be_bytes());
                     offset += 8;
                 }

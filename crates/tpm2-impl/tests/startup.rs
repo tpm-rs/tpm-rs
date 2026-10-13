@@ -13,11 +13,10 @@ fn test_adv_total_reset_count_overflow() {
     let mut rng = FakeRng::new();
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.locality = 0;
-    global_state.total_reset_count = u64::MAX;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.locality = 0;
+    tpm.state.total_reset_count = u64::MAX;
 
     let request = [
         0x80, 0x01, // tag
@@ -26,7 +25,7 @@ fn test_adv_total_reset_count_overflow() {
         0x00, 0x00, // TpmSu::Clear
     ];
     let mut response = [0u8; 256];
-    tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
+    tpm.execute_command_separate(&request[..], &mut response[..]);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
     assert_eq!(rc, TpmRc::FAILURE.get());
 }
@@ -40,10 +39,9 @@ fn test_adv_nv_storage_failure() {
     let mut rng = FakeRng::new();
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.locality = 0;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.locality = 0;
 
     let request = [
         0x80, 0x01, // tag
@@ -52,7 +50,7 @@ fn test_adv_nv_storage_failure() {
         0x00, 0x00, // TpmSu::Clear
     ];
     let mut response = [0u8; 256];
-    tpm.execute_command_separate(&mut global_state, &request[..], &mut response[..]);
+    tpm.execute_command_separate(&request[..], &mut response[..]);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
     assert_eq!(rc, TpmRc::FAILURE.get());
 }
@@ -65,24 +63,22 @@ fn test_startup_preserves_custom_platform_unique_details_and_allows_policy_secre
     let mut rng = FakeRng::new();
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
-    global_state.nv_available = true;
-    global_state.locality = 0;
+    tpm.init_storage();
+    tpm.state.nv_available = true;
+    tpm.state.locality = 0;
 
     let custom_secret = b"custom_vendor_permanent_secret_0123456789abcdef";
-    global_state.platform_unique_details =
-        tpm2::Tpm2bAuth::from_bytes(custom_secret).unwrap().into();
+    tpm.state.platform_unique_details = tpm2::Tpm2bAuth::from_bytes(custom_secret).unwrap().into();
 
     // Startup(CLEAR) should preserve custom platform_unique_details
     let startup_clear = [
         0x80, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x01, 0x44, 0x00, 0x00,
     ];
     let mut response = [0u8; 512];
-    tpm.execute_command_separate(&mut global_state, &startup_clear, &mut response);
+    tpm.execute_command_separate(&startup_clear, &mut response);
     assert_eq!(u32::from_be_bytes(response[6..10].try_into().unwrap()), 0);
     assert_eq!(
-        global_state.platform_unique_details.get_buffer(),
+        tpm.state.platform_unique_details.get_buffer(),
         custom_secret
     );
 
@@ -101,7 +97,7 @@ fn test_startup_preserves_custom_platform_unique_details_and_allows_policy_secre
         0x00, 0x10, // symmetric: TPM_ALG_NULL
         0x00, 0x0b, // authHash: TPM_ALG_SHA256
     ];
-    tpm.execute_command_separate(&mut global_state, &start_session, &mut response);
+    tpm.execute_command_separate(&start_session, &mut response);
     assert_eq!(u32::from_be_bytes(response[6..10].try_into().unwrap()), 0);
     let session_handle = u32::from_be_bytes(response[10..14].try_into().unwrap());
 
@@ -131,7 +127,7 @@ fn test_startup_preserves_custom_platform_unique_details_and_allows_policy_secre
     let total_size = policy_secret_cmd.len() as u32;
     policy_secret_cmd[2..6].copy_from_slice(&total_size.to_be_bytes());
 
-    tpm.execute_command_separate(&mut global_state, &policy_secret_cmd, &mut response);
+    tpm.execute_command_separate(&policy_secret_cmd, &mut response);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
     assert_eq!(rc, 0, "TPM2_PolicySecret with TPM_RH_AUTH_00 must succeed");
 }

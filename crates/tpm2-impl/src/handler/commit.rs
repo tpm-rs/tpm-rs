@@ -70,7 +70,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut k_buf = [0u8; 256];
         let mut l_buf = [0u8; 256];
         let mut e_buf = [0u8; 256];
-        let old_counter = self.global_state.commit_counter;
+        let old_counter = self.context.state.commit_counter;
         self.execute_commit_multiplications(
             curve,
             &actual_private_key,
@@ -86,16 +86,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )?;
 
         // Store the X coordinate of the committed point (E if P1 present or s2 absent, else L)
-        self.global_state.commit_x.fill(0);
-        self.global_state.commit_p1.fill(0);
+        self.context.state.commit_x.fill(0);
+        self.context.state.commit_p1.fill(0);
         if !p1_is_empty {
             let len = param_size * 2;
-            self.global_state.commit_p1[..len].copy_from_slice(&p1_buf[..len]);
+            self.context.state.commit_p1[..len].copy_from_slice(&p1_buf[..len]);
         }
         if !p1_is_empty || xy2_opt.is_none() {
-            self.global_state.commit_x[..param_size].copy_from_slice(&e_buf[..param_size]);
+            self.context.state.commit_x[..param_size].copy_from_slice(&e_buf[..param_size]);
         } else {
-            self.global_state.commit_x[..param_size].copy_from_slice(&l_buf[..param_size]);
+            self.context.state.commit_x[..param_size].copy_from_slice(&l_buf[..param_size]);
         }
 
         // The commit computation succeeded, so complete the commitment (`CryptCommit`): mark
@@ -374,10 +374,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// value is returned to the caller of `TPM2_Commit` and later passed as
     /// `inScheme.details.ecdaa.count` to consume the commitment.
     pub(crate) fn crypt_commit(&mut self) -> u16 {
-        let old_count = self.global_state.commit_counter;
-        self.global_state.commit_counter = old_count.wrapping_add(1);
+        let old_count = self.context.state.commit_counter;
+        self.context.state.commit_counter = old_count.wrapping_add(1);
         let bit = usize::from(old_count & COMMIT_INDEX_MASK);
-        self.global_state.commit_array[bit / 8] |= 1 << (bit % 8);
+        self.context.state.commit_array[bit / 8] |= 1 << (bit % 8);
         old_count
     }
 
@@ -389,7 +389,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// state is not modified by a failing command.
     pub(crate) fn end_commit(&mut self, count: u16) {
         let bit = usize::from(count & COMMIT_INDEX_MASK);
-        self.global_state.commit_array[bit / 8] &= !(1 << (bit % 8));
+        self.context.state.commit_array[bit / 8] &= !(1 << (bit % 8));
     }
 
     /// Recomputes the `r` value of an outstanding commitment for the signing phase of a split
@@ -410,13 +410,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         curve: TpmEccCurve,
     ) -> Result<([u8; MAX_ECC_ORDER_SIZE], usize), TpmRc> {
         let bit = usize::from(count & COMMIT_INDEX_MASK);
-        if self.global_state.commit_array[bit / 8] & (1 << (bit % 8)) == 0 {
+        if self.context.state.commit_array[bit / 8] & (1 << (bit % 8)) == 0 {
             return Err(TpmRc::VALUE.to_rc());
         }
         // Figure out what the counter value was when the commitment was made. If the low bits
         // of `count` are greater than or equal to the low bits of the current counter, the
         // counter has wrapped the window since then.
-        let mut current = self.global_state.commit_counter;
+        let mut current = self.context.state.commit_counter;
         if (count & COMMIT_INDEX_MASK) >= (current & COMMIT_INDEX_MASK) {
             current = current.wrapping_sub(COMMIT_INDEX_MASK + 1);
         }
@@ -520,7 +520,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let mut hmac = HmacStream::new(
                     self.crypto(),
                     COMMIT_KDF_HASH,
-                    &self.global_state.commit_nonce,
+                    &self.context.state.commit_nonce,
                 )
                 .ok()?;
                 hmac.update(&iterations.to_be_bytes()).ok()?;

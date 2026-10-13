@@ -1,5 +1,6 @@
 //! TPM2_GetCommandAuditDigest: unsigned and signed command audit attestations.
 
+use crate::_common::Connection;
 use crate::_common::execute_with_password_sessions;
 use tpm2::commands::{CreatePrimary, GetCommandAuditDigest};
 use tpm2::{

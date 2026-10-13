@@ -64,31 +64,31 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.nv_clear_orderly()?;
 
         // Update state
-        self.global_state.ep_seed.copy_from_slice(&new_ep_seed);
-        self.global_state.ep_seed_size = 64;
+        self.context.state.ep_seed.copy_from_slice(&new_ep_seed);
+        self.context.state.ep_seed_size = 64;
 
-        self.global_state.eh_proof.copy_from_slice(&new_eh_proof);
-        self.global_state.eh_proof_size = 64;
+        self.context.state.eh_proof.copy_from_slice(&new_eh_proof);
+        self.context.state.eh_proof_size = 64;
 
-        self.global_state.eh_enable = true;
-        self.global_state.endorsement_auth = crate::owned::OwnedAuth::default();
-        self.global_state.endorsement_policy = crate::owned::OwnedDigest::default();
-        self.global_state.endorsement_alg = None;
+        self.context.state.eh_enable = true;
+        self.context.state.endorsement_auth = crate::owned::OwnedAuth::default();
+        self.context.state.endorsement_policy = crate::owned::OwnedDigest::default();
+        self.context.state.endorsement_alg = None;
 
         // Flush loaded objects in endorsement hierarchy
-        for (i, slot) in self.global_state.transient_objects.iter_mut().enumerate() {
+        for (i, slot) in self.context.state.transient_objects.iter_mut().enumerate() {
             if let Some(obj) = slot
                 && obj.hierarchy == Handle::RH_ENDORSEMENT.0
             {
                 *slot = None;
-                self.global_state.transient_parents[i] = None;
+                self.context.state.transient_parents[i] = None;
             }
         }
 
         // Flush evict objects of the endorsement hierarchy stored in NV (`NvFlushHierarchy`).
         self.nv_flush_hierarchy(Handle::RH_ENDORSEMENT.0)?;
 
-        self.context.save_hierarchy_auths(self.global_state);
+        self.context.save_hierarchy_auths();
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;

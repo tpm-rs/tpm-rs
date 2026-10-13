@@ -136,7 +136,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let is_bound_session = bind != Handle::RH_NULL && cmd.session_type == TpmSe::HMAC;
         let mut bound_entity = crate::owned::OwnedName::default();
         if is_bound_session {
-            let bind_name = self.context.handle_name(self.global_state, bind.0);
+            let bind_name = self.context.handle_name(bind.0);
             bound_entity = compute_bound_entity(bind_name.get_buffer(), bind_auth_stripped)?;
         }
         let bind_entity = if is_bound_session {
@@ -146,8 +146,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
         // A DA-protected bind entity makes every use of the session subject to DA, for all
         // session types (C `SessionCreate`: `isDaBound`, `isLockoutBound`).
-        let is_da_bound =
-            bind != Handle::RH_NULL && self.context.has_da_protection(self.global_state, bind.0);
+        let is_da_bound = bind != Handle::RH_NULL && self.context.has_da_protection(bind.0);
         let is_lockout_bound = is_da_bound && bind == Handle::RH_LOCKOUT;
 
         // Add to active sessions
@@ -174,9 +173,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             policy_digest: [0u8; 64],
             policy_digest_len: auth_hash_digest_size,
             command_code: 0,
-            start_time: self.global_state.tpm_time_ms,
+            start_time: self.context.state.tpm_time_ms,
             timeout: 0,
-            epoch: self.global_state.time_epoch,
+            epoch: self.context.state.time_epoch,
             is_auth_value_needed: false,
             is_password_needed: false,
             pcr_counter: None,
@@ -187,7 +186,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             is_da_bound,
             is_lockout_bound,
         };
-        self.global_state.add_session(session_state)?;
+        self.context.state.add_session(session_state)?;
 
         // Write response
         let rsp = responses::StartAuthSession {
@@ -419,17 +418,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let bind_handle = bind.0;
             let handle_err = TpmRc::HANDLE.with(Position::handle(2));
             if (bind_handle >> 24) == 0x80 {
-                match self.global_state.find_transient_object(bind_handle) {
+                match self.context.state.find_transient_object(bind_handle) {
                     None => return Err(TpmRc::REFERENCE_H1),
                     Some(obj) if obj.public_only => return Err(handle_err),
                     Some(_) => {}
                 }
             } else if (bind_handle >> 24) == 0x81 {
-                if self
-                    .context
-                    .load_persistent_object(self.global_state, bind_handle)
-                    .is_err()
-                {
+                if self.context.load_persistent_object(bind_handle).is_err() {
                     return Err(TpmRc::REFERENCE_H1);
                 }
             } else if (bind_handle >> 24) == 0x00 {
@@ -454,7 +449,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             {
                 return Err(handle_err);
             }
-            let auth_buf_struct = self.context.handle_auth(self.global_state, bind_handle);
+            let auth_buf_struct = self.context.handle_auth(bind_handle);
             let auth_buf = auth_buf_struct.get_buffer();
             bind_auth[..auth_buf.len()].copy_from_slice(auth_buf);
             Ok(auth_buf.len())
@@ -491,14 +486,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         for offset in 0..TPM2_MAX_ACTIVE_SESSIONS {
             let hmac_candidate = 0x02000000 | offset;
             let policy_candidate = 0x03000000 | offset;
-            if self.global_state.session(hmac_candidate).is_none()
-                && self.global_state.session(policy_candidate).is_none()
+            if self.context.state.session(hmac_candidate).is_none()
+                && self.context.state.session(policy_candidate).is_none()
                 && !self
-                    .global_state
+                    .context
+                    .state
                     .saved_sessions
                     .contains(&Some(hmac_candidate))
                 && !self
-                    .global_state
+                    .context
+                    .state
                     .saved_sessions
                     .contains(&Some(policy_candidate))
             {
@@ -593,7 +590,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let session_handle = policy_session.0;
         let (auth_hash, policy_digest, policy_digest_len) = {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session(session_handle)
                 .ok_or(TpmRc::HANDLE.with(Position::handle(1)))?;
             if session_state.session_type != TpmSe::Policy
@@ -643,7 +641,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Now mutate the session state.
         {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session_mut(session_handle)
                 .ok_or(TpmRc::HANDLE.with(Position::handle(1)))?;
             session_state.policy_digest[..new_digest_len]
@@ -683,7 +682,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 1. Retrieve session state.
         let session_handle = policy_session.0;
-        let global_state = &self.global_state;
+        let global_state = &self.context.state;
         let session_state = global_state
             .session(session_handle)
             .ok_or(TpmRc::VALUE.with(Position::handle(1)))?;
@@ -737,7 +736,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let auth_hash = {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session(session_handle)
                 .ok_or(TpmRc::REFERENCE_H0)?;
             if session_state.session_type != TpmSe::Policy
@@ -753,7 +753,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Mutate session state to initial state
         {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session_mut(session_handle)
                 .ok_or(TpmRc::HANDLE.with(Position::handle(1)))?;
 

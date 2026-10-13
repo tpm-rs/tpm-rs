@@ -69,7 +69,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (auth_hash, policy_digest, policy_digest_len, session_type) = {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session(policy_session)
                 .ok_or(TpmRc::HANDLE.with(Position::handle(1)))?;
             if session_state.session_type != TpmSe::Policy
@@ -110,10 +111,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         //    uses the caller's pcrDigest when one is provided.
         let mut pcr_counter = None;
         let (digest_tpm, digest_tpm_len) = if session_type != TpmSe::Trial {
-            let current_pcr_counter = self.global_state.pcrs.update_counter;
+            let current_pcr_counter = self.context.state.pcrs.update_counter;
             let session_pcr_counter = {
                 let session_state = self
-                    .global_state
+                    .context
+                    .state
                     .session(policy_session)
                     .ok_or(TpmRc::HANDLE.to_rc())?;
                 session_state.pcr_counter
@@ -162,7 +164,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 7. Mutate session state.
         {
             let session_state = self
-                .global_state
+                .context
+                .state
                 .session_mut(policy_session)
                 .ok_or(TpmRc::HANDLE.to_rc())?;
             session_state.policy_digest[..new_digest_len]

@@ -14,8 +14,7 @@ fn test_clear_overflow() {
     let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
-    let mut global_state = tpm2_impl::GlobalState::default();
-    tpm.init_storage(&mut global_state);
+    tpm.init_storage();
 
     // Startup
     let startup_request = hex!(
@@ -25,14 +24,10 @@ fn test_clear_overflow() {
         "0000" // TPM_SU_CLEAR
     );
     let mut startup_response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &startup_request[..],
-        &mut startup_response[..],
-    );
+    tpm.execute_command_separate(&startup_request[..], &mut startup_response[..]);
 
     // Set clear_count to MAX
-    global_state.clear_count = u32::MAX;
+    tpm.state.clear_count = u32::MAX;
 
     // Clear command: authHandle=0x4000000A (TPM_RH_LOCKOUT), authorized with an empty password
     // session (C `CheckAuthNoSession()` returns TPM_RC_AUTH_MISSING without one).
@@ -48,11 +43,7 @@ fn test_clear_overflow() {
         "0000" // empty password
     );
     let mut clear_response = [0u8; 256];
-    tpm.execute_command_separate(
-        &mut global_state,
-        &clear_request[..],
-        &mut clear_response[..],
-    );
+    tpm.execute_command_separate(&clear_request[..], &mut clear_response[..]);
 
     // Should not panic, should return Success
     assert_eq!(&clear_response[6..10], &[0, 0, 0, 0]);

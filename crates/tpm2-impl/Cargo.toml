@@ -13,6 +13,7 @@ categories.workspace = true
 [dependencies]
 hex-literal = { workspace = true }
 tpm2 = { workspace = true }
+anyhow = { version = "1.0.102", optional = true }
 
 [dev-dependencies]
 tpm2-crypto-rust = { workspace = true }
@@ -24,6 +25,9 @@ default = ["dev_crypto_bssl"]
 dev_crypto_rust = []
 dev_crypto_crux = []
 dev_crypto_bssl = []
+# Enables `PlatformConnection`, which uses `std::io` and `anyhow`. The engine itself stays
+# `no_std` without it.
+std = ["dep:anyhow"]
 
 
 

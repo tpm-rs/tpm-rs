@@ -48,7 +48,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         // C `LoadExternal.c`: `FindEmptyObjectSlot` is the first check of the action code.
-        let (index, handle) = self.global_state.find_empty_transient_slot(false)?;
+        let (index, handle) = self.context.state.find_empty_transient_slot(false)?;
 
         let in_private_present = cmd.in_private.is_some();
         let public_struct = cmd
@@ -147,8 +147,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let qualified_name = name;
 
-        self.global_state.transient_parents[index] = Some(cmd.hierarchy.0);
-        self.global_state.transient_objects[index] = Some(TransientObject {
+        self.context.state.transient_parents[index] = Some(cmd.hierarchy.0);
+        self.context.state.transient_objects[index] = Some(TransientObject {
             handle,
             seed,
             seed_len,
@@ -177,11 +177,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let param_err = TpmRc::HIERARCHY.with(Position::parameter(3));
         if hierarchy == Handle::RH_OWNER.0 {
-            if !self.global_state.sh_enable {
+            if !self.context.state.sh_enable {
                 return Err(param_err);
             }
         } else if hierarchy == Handle::RH_ENDORSEMENT.0 {
-            if !self.global_state.eh_enable {
+            if !self.context.state.eh_enable {
                 return Err(param_err);
             }
         } else if hierarchy == Handle::RH_PLATFORM.0 {

@@ -3,6 +3,7 @@
 
 #![allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream but still implemented.
 
+use crate::_common::{NO_STREAM, PlatformConnection};
 use crate::_common::{
     create_primary_st_clear, evict_control, evict_control_rc, execute_with_password_sessions,
     execute_with_password_sessions_status, fixed_rsa_storage, get_ecc_srk_template,
@@ -556,7 +557,8 @@ fn handle_error_codes_and_validation_order() {
 
     // NV unavailable: no mutation.
     let srk = owner_srk(&mut sim);
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
     assert_eq!(
         evict_control(&mut sim, Handle::RH_OWNER, srk, Handle(0x8100_0104)).unwrap_err(),
         rc0(TpmRc::NV_UNAVAILABLE)
@@ -571,7 +573,8 @@ fn handle_error_codes_and_validation_order() {
         .unwrap_err(),
         rc0(TpmRc::NV_UNAVAILABLE)
     );
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     assert!(read_public(&mut sim, Handle(0x8100_0104)).is_err());
     assert!(read_public(&mut sim, Handle(0x8180_0000)).is_ok());
 }

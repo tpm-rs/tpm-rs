@@ -83,7 +83,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut _is_sequence = false;
 
         let (obj_hierarchy, out_saved_handle, entity_len) =
-            if let Some(obj) = self.global_state.find_transient_object(save_handle) {
+            if let Some(obj) = self.context.state.find_transient_object(save_handle) {
                 let obj_hierarchy = obj.hierarchy;
                 let is_st_clear =
                     obj.st_clear || obj.public.object_attributes.contains(TpmaObject::ST_CLEAR);
@@ -96,14 +96,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     0x80000000_u32
                 };
                 (obj_hierarchy, out_saved_handle, len)
-            } else if let Some(sess) = self.global_state.session(save_handle) {
+            } else if let Some(sess) = self.context.state.session(save_handle) {
                 is_session = true;
                 let obj_hierarchy = Handle::RH_NULL.0;
 
                 let len = Self::serialize_session(sess, entity_buf)?;
 
                 (obj_hierarchy, save_handle, len)
-            } else if let Some(seq) = self.global_state.find_active_sequence(save_handle) {
+            } else if let Some(seq) = self.context.state.find_active_sequence(save_handle) {
                 _is_sequence = true;
                 let obj_hierarchy = Handle::RH_NULL.0;
 
@@ -125,16 +125,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // `SessionContextSave`: assigns the context ID (checking the context gap) and moves
             // the session from RAM to the saved-session table. Its exclusive-audit status is
             // kept.
-            self.global_state.save_session_context(save_handle)?
+            self.context.state.save_session_context(save_handle)?
         } else {
             // `gr.objectContextID` is incremented before it is used, so object context
             // sequence numbers start at 1.
-            self.global_state.object_context_counter = self
-                .global_state
+            self.context.state.object_context_counter = self
+                .context
+                .state
                 .object_context_counter
                 .checked_add(1)
                 .ok_or(TpmRc::FAILURE)?;
-            self.global_state.object_context_counter
+            self.context.state.object_context_counter
         };
         let sequence_bytes = sequence.to_be_bytes();
         sensitive_buf[..CONTEXT_FINGERPRINT_SIZE].copy_from_slice(&sequence_bytes);
@@ -288,11 +289,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )
         .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx
-            .update(&self.global_state.total_reset_count.to_be_bytes())
+            .update(&self.context.state.total_reset_count.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         if saved_handle == 0x80000002 {
             mac_ctx
-                .update(&self.global_state.clear_count.to_be_bytes())
+                .update(&self.context.state.clear_count.to_be_bytes())
                 .map_err(|_| TpmRc::FAILURE)?;
         }
         mac_ctx.update(sequence_bytes).map_err(|_| TpmRc::FAILURE)?;

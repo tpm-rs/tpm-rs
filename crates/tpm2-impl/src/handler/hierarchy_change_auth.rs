@@ -63,18 +63,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .map_err(|_| TpmRc::SIZE.with(Position::parameter(1)))?;
 
         if auth_handle == Handle::RH_OWNER.0 {
-            self.global_state.owner_auth = new_auth;
+            self.context.state.owner_auth = new_auth;
         } else if auth_handle == Handle::RH_ENDORSEMENT.0 {
-            self.global_state.endorsement_auth = new_auth;
+            self.context.state.endorsement_auth = new_auth;
         } else if auth_handle == Handle::RH_PLATFORM.0 {
             self.nv_clear_orderly()?;
-            self.global_state.platform_auth = new_auth;
+            self.context.state.platform_auth = new_auth;
         } else if auth_handle == Handle::RH_LOCKOUT.0 {
-            self.global_state.lockout_auth = new_auth;
+            self.context.state.lockout_auth = new_auth;
         }
 
-        self.global_state.state_saved = false;
-        self.context.save_hierarchy_auths(self.global_state);
+        self.context.state.state_saved = false;
+        self.context.save_hierarchy_auths();
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;

@@ -89,12 +89,14 @@ fn load_under_sequence_parent_and_evict_without_nv() {
         &[],
         &[],
     );
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
     assert_eq!(
         evict_control(&mut sim, Handle::RH_OWNER, obj, Handle(0x8100_0102)).unwrap_err(),
         rc0(TpmRc::NV_UNAVAILABLE)
     );
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     assert!(
         read_public(&mut sim, Handle(0x8100_0102)).is_err(),
         "the object must not have been persisted"

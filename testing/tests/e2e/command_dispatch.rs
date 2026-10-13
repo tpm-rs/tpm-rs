@@ -1,6 +1,7 @@
 //! Command dispatch: unimplemented/unmapped command codes and malformed handle areas before command
 //! execution.
 
+use crate::_common::Connection;
 use crate::_common::{
     CC_MAC, CC_RSA_DECRYPT, CC_SIGN, CC_VERIFY_SIGNATURE, digest12, hx, leak_bytes, mac_params,
     rc_of, rsa_decrypt_params, send_key_command, send_raw, sign_params,

@@ -386,14 +386,16 @@ fn pin_pass_ticket_and_expiration_needs_nv() {
 
     // NV unavailable: an expiration cannot be checked (RETURN_IF_NV_IS_NOT_AVAILABLE).
     let s = start_session_with_hash(&mut sim, TpmSe::Policy, TpmiAlgHash::Sha256);
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
     assert_eq!(
         policy_secret(&mut sim, Handle::RH_OWNER, &s, &[], 100).map(|_| ()),
         Err(TpmRc::NV_UNAVAILABLE.get())
     );
     // Without an expiration NV is not needed.
     policy_secret(&mut sim, Handle::RH_OWNER, &s, &[], 0).unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     policy_secret(&mut sim, Handle::RH_OWNER, &s, &[], 100).unwrap();
 }
 

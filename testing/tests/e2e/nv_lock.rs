@@ -12,7 +12,8 @@ fn nv_unavailable_does_not_lock() {
     let mut sim = create_simulator!();
     let index = 0x0150_0700;
     define_nv_with_policy_unwrap(&mut sim, index, OWNER_RW | TpmaNv::GLOBALLOCK, 8, &[]);
-    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
+        .unwrap();
     assert_eq!(
         pw(
             &mut sim,
@@ -24,7 +25,8 @@ fn nv_unavailable_does_not_lock() {
         .unwrap_err(),
         TpmRc::NV_UNAVAILABLE.get()
     );
-    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .unwrap();
     // The index was not locked.
     owner_write(&mut sim, index, 0, &[1; 8]).unwrap();
     pw(

@@ -262,7 +262,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// storage key (`TPM_RC_TYPE + RC_Hn` otherwise, including for sequence objects).
     fn resolve_storage_parent(&mut self, handle: u32, index: u8) -> Result<TransientObject, TpmRc> {
         let pos = Position::handle(index);
-        if self.global_state.find_active_sequence(handle).is_some() {
+        if self.context.state.find_active_sequence(handle).is_some() {
             return Err(TpmRc::TYPE.with(pos));
         }
         let obj = self.resolve_object(handle, pos)?;
