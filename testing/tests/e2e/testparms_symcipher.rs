@@ -4,16 +4,16 @@ use crate::_common::{
     execute_test_parms_corrupted, no_session_command, rc_of, rsa_parms, run_raw, symcipher_parms,
     test_parms,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::TestParms;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{AlgSym, TpmCc, TpmiAlgCipherMode, TpmiAlgSymMode, TpmtPublicParms, TpmtSymDefObject};
-use tpm2_simulator::create_simulator;
 
 /// `TPM2_TestParms` accepts every implemented block-cipher mode (also as the symmetric
 /// definition of an RSA key). RSA-3072/4096 stay unsupported (see the log: go-tpm parity).
 #[test]
 fn all_block_modes_accepted() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     for mode in [0x0040u16, 0x0041, 0x0042, 0x0043, 0x0044, 0x0010] {
         assert_eq!(
             test_parms(&mut sim, &symcipher_parms(mode)),
@@ -36,7 +36,7 @@ fn all_block_modes_accepted() {
 /// accepts AES-CBC.
 #[test]
 fn invalid_aes_key_size_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Test invalid AES key size (192 bits)
     let parms = TpmtPublicParms::Sym(TpmtSymDefObject {
@@ -65,7 +65,7 @@ fn invalid_aes_key_size_rejected() {
 /// TPM2_TestParms rejects a symcipher with invalid key bits with TPM_RC_VALUE.
 #[test]
 fn rejects_symcipher_key_bits() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sym_parms = TpmtPublicParms::Sym(TpmtSymDefObject {
         alg: AlgSym::Aes128,
@@ -81,7 +81,7 @@ fn rejects_symcipher_key_bits() {
 /// TPM2_TestParms rejects an undefined symcipher mode with TPM_RC_MODE.
 #[test]
 fn rejects_symcipher_mode() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // CBC is an implemented mode and TestParms only unmarshals (C TestParms.c), so use an
     // undefined mode value instead (C TPMI_ALG_SYM_MODE_Unmarshal -> TPM_RC_MODE).
@@ -99,7 +99,7 @@ fn rejects_symcipher_mode() {
 /// TPM2_TestParms rejects a symcipher with TPM_ALG_NULL algorithm with TPM_RC_SYMMETRIC.
 #[test]
 fn rejects_symcipher_null_algorithm() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sym_parms = TpmtPublicParms::Sym(TpmtSymDefObject {
         alg: AlgSym::Aes128,

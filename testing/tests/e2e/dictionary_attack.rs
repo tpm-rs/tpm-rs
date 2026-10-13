@@ -12,7 +12,7 @@ use crate::_common::{
     set_da_parameters, sleep, start_auth_session, start_session_of_type, tpm2b_params,
     unseal_with_auth_entry,
 };
-use crate::_common::{NO_STREAM, PlatformConnection};
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::{
     Create, DictionaryAttackLockReset, PolicyCommandCode, SetPrimaryPolicy, Shutdown, Startup,
 };
@@ -21,7 +21,6 @@ use tpm2::{
     Handle, Tpm2b, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bSensitiveData, TpmCc, TpmPt, TpmSe,
     TpmSu, TpmaObject, TpmaSession, TpmiAlgHash, TpmlPcrSelection, TpmsSensitiveCreate,
 };
-use tpm2_simulator::{Simulator, SimulatorPlatformSignal, create_simulator};
 
 /// Sessions bound to DA-protected entities are lockout-checked and their failures counted (against lockoutAuth for TPM_RH_LOCKOUT binds)
 ///
@@ -36,7 +35,7 @@ fn da_bound_sessions_subject_to_lockout() {
 
     // A failure of a DA-bound session authorizing the (DA-exempt) owner counts as a DA failure.
     {
-        let mut sim = create_simulator!();
+        let mut sim = Tpm::new();
         let item = create_sealed(&mut sim, TpmaObject::USER_WITH_AUTH, b"k", &[]);
         let session = start_auth_session(
             &mut sim,
@@ -64,7 +63,7 @@ fn da_bound_sessions_subject_to_lockout() {
     // In lockout, a DA-bound session cannot be used, even with a correct HMAC for a DA-exempt
     // entity; an unbound session still can.
     {
-        let mut sim = create_simulator!();
+        let mut sim = Tpm::new();
         set_da_parameters(&mut sim, 1, 1000, 1000);
         let item = create_sealed(&mut sim, TpmaObject::USER_WITH_AUTH, b"k", &[]);
         let session = start_auth_session(
@@ -118,7 +117,7 @@ fn da_bound_sessions_subject_to_lockout() {
 
     // A failure of a session bound to TPM_RH_LOCKOUT disables lockoutAuth.
     {
-        let mut sim = create_simulator!();
+        let mut sim = Tpm::new();
         let session = start_auth_session(
             &mut sim,
             Handle::RH_NULL,
@@ -161,7 +160,7 @@ fn da_bound_sessions_subject_to_lockout() {
 fn da_lockout_only_blocks_auth_value_sessions() {
     // 1. A policy session that does not use the authValue still works in lockout.
     {
-        let mut sim = create_simulator!();
+        let mut sim = Tpm::new();
         set_da_parameters(&mut sim, 1, 1000, 1000);
         let item = create_sealed(&mut sim, TpmaObject::USER_WITH_AUTH, b"a", &EMPTY_POLICY);
         assert_eq!(
@@ -183,7 +182,7 @@ fn da_lockout_only_blocks_auth_value_sessions() {
     // 2. A failing policy session that does not include the authValue does not count as a DA
     //    failure.
     {
-        let mut sim = create_simulator!();
+        let mut sim = Tpm::new();
         let item = create_sealed(&mut sim, TpmaObject::USER_WITH_AUTH, b"a", &EMPTY_POLICY);
         let before = lockout_counter(&mut sim);
         let policy = start_session_of_type(&mut sim, TpmSe::Policy);
@@ -198,7 +197,7 @@ fn da_lockout_only_blocks_auth_value_sessions() {
 
     // 3. HMAC failure on a DA-exempt entity: TPM_RC_BAD_AUTH (no audit attribute involved).
     {
-        let mut sim = create_simulator!();
+        let mut sim = Tpm::new();
         let session = start_session_of_type(&mut sim, TpmSe::HMAC);
         let auth = raw_entry(&session, ATTR_CONTINUE, &[0x55; 32]);
         let code = send_rc_with_auth_entries(
@@ -214,7 +213,7 @@ fn da_lockout_only_blocks_auth_value_sessions() {
     // 4. HMAC failure on a DA-protected entity with `audit` set: TPM_RC_AUTH_FAIL, and the
     //    failure is counted.
     {
-        let mut sim = create_simulator!();
+        let mut sim = Tpm::new();
         let item = create_sealed(&mut sim, TpmaObject::USER_WITH_AUTH, b"a", &[]);
         let before = lockout_counter(&mut sim);
         let session = start_session_of_type(&mut sim, TpmSe::HMAC);
@@ -232,7 +231,7 @@ fn da_lockout_only_blocks_auth_value_sessions() {
 /// `maxTries == 0` puts the TPM in lockout (C `CheckLockedOut()`: `failedTries >= maxTries`).
 #[test]
 fn da_max_tries_zero_enters_lockout() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let item = create_sealed(&mut sim, TpmaObject::USER_WITH_AUTH, b"a", &[]);
     set_da_parameters(&mut sim, 0, 1000, 1000);
     assert_eq!(
@@ -248,7 +247,7 @@ fn da_max_tries_zero_enters_lockout() {
 /// `RETURN_IF_NV_IS_NOT_AVAILABLE` while `s_DAPendingOnNV`).
 #[test]
 fn da_pending_nv_update_blocks_da_protected_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let item = create_sealed(&mut sim, TpmaObject::USER_WITH_AUTH, b"a", &[]);
     // A DA-protected authorization with NV available records SU_DA_USED_VALUE.
     assert_eq!(
@@ -256,8 +255,7 @@ fn da_pending_nv_update_blocks_da_protected_auth() {
         RC_SUCCESS
     );
 
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     // The failure cannot be recorded in NV: it becomes pending.
     assert_eq!(
         unseal_with_auth_entry(&mut sim, item, AuthEntry::pw(b"x")),
@@ -269,8 +267,7 @@ fn da_pending_nv_update_blocks_da_protected_auth() {
         RC_NV_UNAVAILABLE
     );
 
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     assert_eq!(
         unseal_with_auth_entry(&mut sim, item, AuthEntry::pw(b"a")),
         RC_SUCCESS
@@ -280,7 +277,7 @@ fn da_pending_nv_update_blocks_da_protected_auth() {
 /// DictionaryAttackLockReset/Parameters fail with NV_UNAVAILABLE and leave maxAuthFail unchanged.
 #[test]
 fn handlers_check_nv_before_mutation() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     nv_off(&mut sim);
     assert_eq!(da_lock_reset(&mut sim), Err(nv_unavailable()));
     assert_eq!(da_parameters(&mut sim, 1, 1, 1), Err(nv_unavailable()));
@@ -291,7 +288,7 @@ fn handlers_check_nv_before_mutation() {
 /// DictionaryAttackLockReset clears failed tries; without a session it is TPM_RC_AUTH_MISSING
 #[test]
 fn lock_reset_clears_failures() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Allow enough failures that the TPM does not enter lockout.
     assert_eq!(send_da_parameters(&mut sim, 10, 1000, 1000), 0);
     let object = create_da_protected_object(&mut sim);
@@ -319,7 +316,7 @@ fn lock_reset_clears_failures() {
 /// lockoutAuth.
 #[test]
 fn lockout_commands_require_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let rc = execute_with_password_sessions(
         &mut sim,
         &DictionaryAttackLockReset {
@@ -340,7 +337,7 @@ fn lockout_commands_require_session() {
 #[test]
 fn lockout_policy_works_while_lockout_auth_locked() {
     use sha2::{Digest, Sha256};
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // lockoutPolicy = PolicyCommandCode(TPM_CC_DictionaryAttackLockReset).
     let mut hasher = Sha256::new();
@@ -362,7 +359,7 @@ fn lockout_policy_works_while_lockout_auth_locked() {
 
     // A wrong lockoutAuth disables direct use of lockoutAuth.
     hierarchy_change_auth(&mut sim, Handle::RH_LOCKOUT, &[], b"lock").unwrap();
-    let lock_reset = |sim: &mut Simulator<'_>, auth: &[u8]| {
+    let lock_reset = |sim: &mut Tpm, auth: &[u8]| {
         execute_with_password_sessions(
             sim,
             &DictionaryAttackLockReset {
@@ -411,7 +408,7 @@ fn lockout_policy_works_while_lockout_auth_locked() {
 /// `newMaxTries == 0` puts the TPM in lockout: `TPM_PT_PERMANENT.inLockout` is reported.
 #[test]
 fn max_tries_zero_enters_lockout() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let permanent = get_tpm_property(&mut sim, TpmPt::PERMANENT);
     assert_eq!(permanent & (1 << 9), 0, "inLockout before");
     da_parameters_unwrap(&mut sim, 0, 1000, 1000);
@@ -422,15 +419,14 @@ fn max_tries_zero_enters_lockout() {
 /// With orderly state and NV unavailable, DA-protected use returns TPM_RC_NV_UNAVAILABLE
 #[test]
 fn orderly_state_with_nv_off_is_nv_unavailable() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Put the TPM in an orderly state (TPM2_Shutdown) and make NV unavailable.
     sim.execute(Shutdown {
         shutdown_type: TpmSu::Clear,
     })
     .expect("Shutdown(CLEAR) failed");
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
 
     let rc = send_da_lock_reset(&mut sim, true);
     assert_eq!(rc, TpmRc::NV_UNAVAILABLE.get()); // 0x923
@@ -439,7 +435,7 @@ fn orderly_state_with_nv_off_is_nv_unavailable() {
 /// DictionaryAttackParameters needs NV and its values persist across a power cycle.
 #[test]
 fn parameters_need_nv_and_persist() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     nv_off(&mut sim);
     assert_eq!(da_parameters(&mut sim, 5, 10, 10), Err(nv_unavailable()));
     nv_on(&mut sim);
@@ -454,7 +450,7 @@ fn parameters_need_nv_and_persist() {
 /// DictionaryAttackParameters updates MAX_AUTH_FAIL, LOCKOUT_INTERVAL and LOCKOUT_RECOVERY
 #[test]
 fn parameters_update_properties() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Send TPM2_DictionaryAttackParameters(maxTries=5, recoveryTime=100, lockoutRecovery=1000)
     let rc = send_da_parameters(&mut sim, 5, 100, 1000);
@@ -474,7 +470,7 @@ fn parameters_update_properties() {
 /// recoveryTime=0 disables DA protection and resets failedTries
 #[test]
 fn recovery_time_zero_disables_protection() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(send_da_parameters(&mut sim, 10, 1000, 1000), 0);
     let object = create_da_protected_object(&mut sim);
     fail_auth(&mut sim, object, 3);
@@ -490,7 +486,7 @@ fn recovery_time_zero_disables_protection() {
 /// DA self-healing does not run while NV is unavailable; DA failures, lock reset and ClearControl NV checks.
 #[test]
 fn self_heal_and_lock_reset_need_nv() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     nv_off(&mut sim);
     assert_eq!(da_lock_reset(&mut sim), Err(nv_unavailable()));
     assert_eq!(
@@ -537,15 +533,14 @@ fn self_heal_and_lock_reset_need_nv() {
 /// it; use of lockoutAuth alone does not count (it is protected by lockoutRecovery)
 #[test]
 fn unorderly_reset_counts_failure() {
-    let mut sim = create_simulator!();
-    let unorderly_reset = |sim: &mut Simulator<'_>| {
+    let mut sim = Tpm::new();
+    let unorderly_reset = |sim: &mut Tpm| {
         // An unorderly VM crash/reset (no Shutdown command) followed by Startup(CLEAR).
-        sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+        sim.signal_platform(SimulatorPlatformSignal::PowerOff)
             .unwrap();
-        sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+        sim.signal_platform(SimulatorPlatformSignal::PowerOn)
             .unwrap();
-        sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-            .unwrap();
+        sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
         sim.execute(Startup {
             startup_type: TpmSu::Clear,
         })
@@ -580,12 +575,11 @@ fn unorderly_reset_counts_failure() {
         shutdown_type: TpmSu::Clear,
     })
     .expect("Shutdown(CLEAR) failed");
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     sim.execute(Startup {
         startup_type: TpmSu::Clear,
     })

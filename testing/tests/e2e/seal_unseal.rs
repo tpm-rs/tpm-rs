@@ -1,13 +1,13 @@
 //! Sealed data objects: creation and TPM2_Unseal with different authorization values.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{Create, CreatePrimary, Unseal};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bSensitiveData, TpmSe,
     TpmaObject, TpmaSession, TpmiAlgHash, TpmlPcrSelection, TpmsSensitiveCreate, TpmtPublic,
     Unmarshal, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// TPMS_DERIVE marshalled as sealed data round-trips locally and through Create/Load/Unseal
 ///
@@ -16,8 +16,8 @@ use tpm2_simulator::create_simulator;
 /// on the simulator and checks that `TPM2_Unseal` returns the same bytes.
 #[test]
 fn derive_structure_round_trips_through_seal() {
+    use testing::tpm::Tpm;
     use tpm2::commands::{CreatePrimary, Unseal};
-    use tpm2_simulator::create_simulator;
 
     let tpms_derive = TpmsDerive {
         label: Tpm2bLabel::from_bytes(b"label").unwrap(),
@@ -44,7 +44,7 @@ fn derive_structure_round_trips_through_seal() {
     assert_eq!(unmarshaled.0.data.get_buffer(), derive_bytes);
 
     // End to end: seal the data under the owner hierarchy and unseal it.
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::FIXED_TPM
@@ -77,7 +77,7 @@ fn derive_structure_round_trips_through_seal() {
 /// A sealed data object created with CreatePrimary unseals to the original data.
 #[test]
 fn primary_sealed_object_unseals() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let secret_message = b"my_secret_data_1234";
 
@@ -124,7 +124,7 @@ fn primary_sealed_object_unseals() {
 /// Sealed objects with empty auth or auth with trailing zeros unseal with password and HMAC sessions using the stripped auth
 #[test]
 fn seal_unseal_auth_value_trailing_zeros() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk_template = get_rsa_srk_template();
     let srk_auth = b"mySRK";
     let (srk_handle, _) = create_srk_with_template(&mut sim, &srk_template, srk_auth);
@@ -298,7 +298,7 @@ fn seal_unseal_auth_value_trailing_zeros() {
 /// Sealing an empty payload fails (ATTRIBUTES + P2), a 128-byte payload round-trips, 129 bytes cannot be built
 #[test]
 fn seal_unseal_payload_size_bounds() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk_template = get_rsa_srk_template();
     let srk_auth = b"mySRK";
     let (srk_handle, _) = create_srk_with_template(&mut sim, &srk_template, srk_auth);

@@ -1,6 +1,7 @@
 //! TPM2_Quote: signing key and scheme checks, HMAC signers and NULL signer.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{PCREvent, PCRRead, Quote, ReadPublic};
 use tpm2::crypto::Asymmetric;
 use tpm2::errors::{Position, TpmRc};
@@ -8,12 +9,11 @@ use tpm2::{
     Alg, Handle, Tpm2bData, Tpm2bEvent, TpmaObject, TpmiAlgHash, TpmlPcrSelection, TpmtHa,
     TpmtSigScheme, TpmtSignature, TpmuAttest,
 };
-use tpm2_simulator::create_simulator;
 
 /// Quote with a decrypt-only (non-signing) key fails with KEY/SCHEME.
 #[test]
 fn decrypt_key_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (decrypt_handle, _) = create_rsa_primary(&mut sim, TpmaObject::DECRYPT, None);
 
     let cmd = Quote {
@@ -41,7 +41,7 @@ fn decrypt_key_rejected() {
 /// Keyed-hash (HMAC) signing keys can sign quotes.
 #[test]
 fn hmac_key_signs_quote() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (_, key) = create_primary_full(
         &mut sim,
         Handle::RH_OWNER,
@@ -58,7 +58,7 @@ fn hmac_key_signs_quote() {
 /// algorithm for the PCR digest: `TPM_RC_SCHEME + RC_Quote_inScheme` (Quote.c), not success.
 #[test]
 fn null_sign_handle_is_scheme_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         quote(&mut sim, Handle::RH_NULL, None).err(),
         Some(RC_SCHEME_P2)
@@ -77,7 +77,7 @@ fn null_sign_handle_is_scheme_error() {
 /// Quote with signHandle TPM_RH_NULL passes handle validation and fails with TPM_RC_SCHEME + RC_P2
 #[test]
 fn null_sign_handle_rejected_by_scheme() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = Quote {
         sign_handle: Handle::RH_NULL,
         qualifying_data: Tpm2bData::default(),
@@ -99,7 +99,7 @@ fn null_sign_handle_rejected_by_scheme() {
 /// `TPM2_ReadPublic`).
 #[test]
 fn qualified_signer_matches_read_public() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (signer_handle, _) = create_restricted_signer(&mut sim);
 
     let rp_cmd = ReadPublic {
@@ -124,7 +124,7 @@ fn qualified_signer_matches_read_public() {
 /// An RSASSA quote attests the expected PCR 0 digest and verifies with the signer's public key.
 #[test]
 fn rsassa_quote_attests_pcr_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (signer_handle, modulus) = create_restricted_signer(&mut sim);
 
     // Extend PCR 0 with a test event and read back its value.

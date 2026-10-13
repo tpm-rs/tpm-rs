@@ -12,6 +12,7 @@ use crate::_common::{
 };
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{Certify, Commit, CreateLoaded, CreatePrimary};
 use tpm2::errors::TpmRc;
@@ -23,12 +24,11 @@ use tpm2::{
     TpmtRsaScheme, TpmtSigScheme, TpmtSignature, TpmuAttest, Unmarshal,
 };
 use tpm2_platform_linux::PlatformCryptoProvider;
-use tpm2_simulator::create_simulator;
 
 /// TPM2_Certify with one instead of two auth sessions fails with TPM_RC_AUTH_MISSING
 #[test]
 fn certify_rejects_missing_authorization() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (obj_handle, _) = create_signing_key_ecc_with_unique(&mut sim, &[], 0);
     let (ak_handle, _) = create_signing_key_ecc_with_unique(&mut sim, &[], 1);
 
@@ -51,7 +51,7 @@ fn certify_rejects_missing_authorization() {
 /// TPM2_Certify with a decrypt-only RSA signHandle fails
 #[test]
 fn certify_rejects_non_signing_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (obj_handle, _) = create_signing_key_ecc(&mut sim, &[]);
     let (non_sign_handle, _) = create_non_signing_key_rsa(&mut sim);
 
@@ -72,7 +72,7 @@ fn certify_rejects_non_signing_key() {
 /// Raw TPM2_Certify with 67-byte qualifyingData fails with TPM_RC_SIZE + P1
 #[test]
 fn certify_rejects_oversized_qualifying_data() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (obj_handle, _) = create_signing_key_ecc_with_unique(&mut sim, &[], 0);
     let (ak_handle, _) = create_signing_key_ecc_with_unique(&mut sim, &[], 1);
 
@@ -136,7 +136,7 @@ fn certify_rejects_oversized_qualifying_data() {
 /// TPM2_Certify with an ECDSA signer and an RSASSA inScheme fails with TPM_RC_SCHEME + P2
 #[test]
 fn certify_rejects_rsassa_scheme_for_ecc_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (obj_handle, _) = create_signing_key_ecc_with_unique(&mut sim, &[], 0);
     let (ak_handle, _) = create_signing_key_ecc_with_unique(&mut sim, &[], 1);
 
@@ -161,7 +161,7 @@ fn certify_rejects_rsassa_scheme_for_ecc_key() {
 /// TPM2_Certify with a non-existent objectHandle fails with TPM_RC_REFERENCE_H0
 #[test]
 fn certify_rejects_unloaded_object() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (ak_handle, _) = create_signing_key_ecc(&mut sim, &[]);
 
     let certify_cmd = Certify {
@@ -183,7 +183,7 @@ fn certify_rejects_unloaded_object() {
 /// TPM2_Certify with a non-existent signHandle fails with TPM_RC_REFERENCE_H1
 #[test]
 fn certify_rejects_unloaded_sign_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (obj_handle, _) = create_signing_key_ecc(&mut sim, &[]);
 
     let certify_cmd = Certify {
@@ -205,7 +205,7 @@ fn certify_rejects_unloaded_sign_key() {
 /// TPM2_Certify attestation signature verifies with the signer key and SHA-256 but not with SHA-1 or another key
 #[test]
 fn certify_signature_verifies_only_with_signer_and_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let auth = b"password";
 
     // Setup primary key template (RSA, SHA256, restricted, sign/encrypt)
@@ -388,7 +388,7 @@ fn certify_signature_verifies_only_with_signer_and_hash() {
 /// attestation: empty qualifiedSigner, extraData and qualifiedName.
 #[test]
 fn ecdaa_certify_is_anonymous() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let (certified_handle, certified_name) = create_primary(&mut sim, ecdsa_template());
 
@@ -467,7 +467,7 @@ fn ecdaa_certify_is_anonymous() {
 /// committed is rejected with a bare `TPM_RC_VALUE`.
 #[test]
 fn ecdaa_commit_consumed_once() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = create_primary_in(
         &mut sim,
         Handle::RH_OWNER,
@@ -515,7 +515,7 @@ fn ecdaa_commit_consumed_once() {
 /// Certify with missing object/sign handles (REFERENCE_H0/H1) or a non-signing/symmetric signer (TPM_RC_KEY + RC_H2)
 #[test]
 fn handle_and_signer_key_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Certified object (password [0x11, 0x22])
     let certified_handle = create_primary_with_auth(
@@ -593,7 +593,7 @@ fn handle_and_signer_key_errors() {
 /// An HMAC key signs `TPM2_Certify` output as `HMAC(key, H(attest))` (`CryptHmacSign`).
 #[test]
 fn hmac_key_signs_certify() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_bits: &'static [u8] = b"0123456789abcdef0123456789abcdef";
     let (_, key) = create_primary_full(&mut sim, Handle::RH_OWNER, hmac_sign_template(), key_bits);
 
@@ -618,7 +618,7 @@ fn hmac_key_signs_certify() {
 #[test]
 #[allow(deprecated)]
 fn qualified_names_accumulate_along_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Restricted RSASSA-SHA256 signing primary key.
     let (signer_handle, signer_name) = create_primary(
@@ -700,7 +700,7 @@ fn qualified_names_accumulate_along_hierarchy() {
 /// Certify resolves NULL scheme to the key scheme, rejects mismatching schemes (TPM_RC_SCHEME + RC_P2), accepts a restricted signer
 #[test]
 fn signer_scheme_selection() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let certified_handle =
         create_primary_with_auth(&mut sim, rsa_template(TpmaObject::SIGN_ENCRYPT, None), &[]);

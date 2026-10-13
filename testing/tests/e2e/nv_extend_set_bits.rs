@@ -1,15 +1,15 @@
 //! TPM2_NV_Extend and TPM2_NV_SetBits on extend and bit-field indices.
 
 use crate::_common::{define_nv_with_policy_unwrap as define, exec_with_empty_passwords as pw, *};
+use testing::tpm::Tpm;
 use tpm2::commands::*;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// NV_Extend of an extend index stores SHA256(zeros || data), verified with NV_Read
 #[test]
 fn extend_hashes_data_into_index() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let auth_session = make_auth_session(&[]);
 
@@ -69,7 +69,7 @@ fn extend_hashes_data_into_index() {
 /// NV_Extend on an ordinary index is TPM_RC_ATTRIBUTES + RC_H2
 #[test]
 fn extend_on_ordinary_index_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let auth_session = make_auth_session(&[]);
 
@@ -111,7 +111,7 @@ fn extend_on_ordinary_index_rejected() {
 /// NV_SetBits ORs successive values into a bit-field index
 #[test]
 fn set_bits_ors_values() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let auth_session = make_auth_session(&[]);
 
@@ -186,7 +186,7 @@ fn set_bits_ors_values() {
 /// NV_SetBits, and type/attribute errors carry the nvIndex handle position.
 #[test]
 fn write_lock_checked_before_index_type() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let ordinary = 0x0150_0420;
     define(&mut sim, ordinary, OWNER_RW | TpmaNv::WRITEDEFINE, 8, &[]);
     pw(
@@ -277,7 +277,7 @@ fn write_lock_checked_before_index_type() {
 /// NV_Extend/NV_SetBits on a locked index report TPM_RC_NV_LOCKED before the OWNERWRITE authorization check
 #[test]
 fn write_lock_precedes_owner_write_check() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let auth_session = make_auth_session(&[]);
 
     // 1. Test NV_Extend error precedence

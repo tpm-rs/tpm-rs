@@ -7,18 +7,18 @@ use crate::_common::{
     make_rsa_public_area_opt_name_alg, make_template, rc0, read_public, sealed_template,
     sensitive_create, try_create_primary_in,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{LoadExternal, *};
 use tpm2::errors::TpmRc;
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bDigest, Tpm2bEccParameter, TpmEccCurve, TpmaObject, TpmiAlgHash,
     TpmsEccParms, TpmsEccPoint, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// Loads a public-only ECC key into the endorsement hierarchy.
 #[test]
 fn ecc_public_only_endorsement_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
@@ -32,7 +32,7 @@ fn ecc_public_only_endorsement_hierarchy() {
 /// Loads a public-only ECC key into the owner hierarchy.
 #[test]
 fn ecc_public_only_owner_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
@@ -46,7 +46,7 @@ fn ecc_public_only_owner_hierarchy() {
 /// Loads a public-only ECC key into the platform hierarchy.
 #[test]
 fn ecc_public_only_platform_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
@@ -60,7 +60,7 @@ fn ecc_public_only_platform_hierarchy() {
 /// Loads a public-only ECC key with SHA-384 nameAlg into the platform hierarchy.
 #[test]
 fn ecc_sha384_name_alg_platform_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let pub_struct = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha384),
         object_attributes: TpmaObject::SIGN_ENCRYPT,
@@ -91,7 +91,7 @@ fn ecc_sha384_name_alg_platform_hierarchy() {
 /// An externally loaded copy of a primary public area (QN == Name) is neither flushed nor modified when the primary is re-created.
 #[test]
 fn external_alias_survives_primary_recreation() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let template = ecc_sign_template(
         TpmiAlgHash::Sha256,
         TpmaObject::FIXED_TPM | TpmaObject::FIXED_PARENT,
@@ -114,7 +114,7 @@ fn external_alias_survives_primary_recreation() {
 /// External objects (public-only restricted storage keys) cannot act as parents: bare AUTH_UNAVAILABLE.
 #[test]
 fn external_storage_key_rejected_as_parent() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let ext = load_external(&mut sim, external_storage_public(), None, Handle::RH_OWNER).unwrap();
     for rc in [
         create(
@@ -151,7 +151,7 @@ fn external_storage_key_rejected_as_parent() {
 /// A public-only external object as Create parent fails with bare AUTH_UNAVAILABLE during authorization.
 #[test]
 fn public_only_object_has_no_auth_and_is_not_parent() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let ext = load_external(&mut sim, external_storage_public(), None, Handle::RH_OWNER).unwrap();
     // A public-only object has no authValue (C: TPM_RC_AUTH_UNAVAILABLE during authorization)
     // and is never a parent (TPM_RC_TYPE + RC_H1 in the action code).
@@ -175,7 +175,7 @@ fn public_only_object_has_no_auth_and_is_not_parent() {
 /// Loads a public-only RSA key into the endorsement hierarchy.
 #[test]
 fn rsa_public_only_endorsement_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_rsa_public_area_opt_name_alg(
         RSA_N,
         Some(TpmiAlgHash::Sha256),
@@ -193,7 +193,7 @@ fn rsa_public_only_endorsement_hierarchy() {
 /// Loads a public-only RSA key into the owner hierarchy.
 #[test]
 fn rsa_public_only_owner_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_rsa_public_area_opt_name_alg(
         RSA_N,
         Some(TpmiAlgHash::Sha256),
@@ -211,7 +211,7 @@ fn rsa_public_only_owner_hierarchy() {
 /// Loads a public-only RSA key into the platform hierarchy.
 #[test]
 fn rsa_public_only_platform_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_rsa_public_area_opt_name_alg(
         RSA_N,
         Some(TpmiAlgHash::Sha256),
@@ -229,7 +229,7 @@ fn rsa_public_only_platform_hierarchy() {
 /// Loads a public-only RSA key whose nameAlg is SHA-384.
 #[test]
 fn rsa_public_only_sha384_name_alg() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_rsa_public_area_opt_name_alg(
         RSA_N,
         Some(TpmiAlgHash::Sha384),
@@ -247,7 +247,7 @@ fn rsa_public_only_sha384_name_alg() {
 /// Loads a public-only symmetric key object.
 #[test]
 fn symcipher_public_only() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sym_unique = [0x01; 32];
     let pub_area = TpmtPublic {
@@ -273,7 +273,7 @@ fn symcipher_public_only() {
 /// Unseal of a public-only KEYEDHASH external object fails with AUTH_UNAVAILABLE.
 #[test]
 fn unseal_public_only_keyedhash_auth_unavailable() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut public = sealed_template(TpmiAlgHash::Sha256, TpmaObject::empty());
     public.parms_and_id =
         PublicParmsAndId::KeyedHash(None, Tpm2bDigest::from_bytes(&[3u8; 32]).unwrap());

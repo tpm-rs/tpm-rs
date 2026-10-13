@@ -4,18 +4,18 @@ use crate::_common::{
     ECC_D, ECC_X, ECC_Y, RSA_N, flush_context, make_ecc_public_area,
     make_keyed_hash_public_area_obfuscated, make_rsa_public_area_opt_name_alg, marshal_to_slice,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::LoadExternal;
 use tpm2::{
     Alg, Handle, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bName, TpmaObject, TpmiAlgHash,
     TpmtSensitive, TpmuSensitiveComposite,
 };
 use tpm2_platform_linux::PlatformCryptoProvider;
-use tpm2_simulator::create_simulator;
 
 /// The returned Name of a loaded ECC key equals nameAlg || H(public area).
 #[test]
 fn ecc_name_matches_public_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let pub_struct = make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT);
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
@@ -46,7 +46,7 @@ fn ecc_name_matches_public_digest() {
 /// The returned Name of a loaded keyedHash object equals nameAlg || H(public area).
 #[test]
 fn keyed_hash_name_matches_public_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let unique_bytes = [0x01; 32];
     let pub_struct = make_keyed_hash_public_area_obfuscated(&unique_bytes, TpmaObject::default());
     let in_public = tpm2::Tpm2b(pub_struct);
@@ -78,7 +78,7 @@ fn keyed_hash_name_matches_public_digest() {
 /// The Name of a key loaded with its sensitive area is still computed from the public area.
 #[test]
 fn name_with_sensitive_matches_public_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -116,7 +116,7 @@ fn name_with_sensitive_matches_public_digest() {
 /// A public area with nameAlg TPM_ALG_NULL loads and yields a handle-only Name.
 #[test]
 fn null_name_alg_name_is_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let pub_struct = make_rsa_public_area_opt_name_alg(RSA_N, None, TpmaObject::SIGN_ENCRYPT);
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
@@ -133,7 +133,7 @@ fn null_name_alg_name_is_handle() {
 /// The returned Name of a loaded RSA key equals nameAlg || H(public area).
 #[test]
 fn rsa_name_matches_public_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let pub_struct = make_rsa_public_area_opt_name_alg(
         RSA_N,
         Some(TpmiAlgHash::Sha256),
@@ -168,7 +168,7 @@ fn rsa_name_matches_public_digest() {
 /// A key with SHA-512 nameAlg loads and its Name is the SHA-512 public digest.
 #[test]
 fn sha512_name_alg_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut pub_struct = make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT);
     pub_struct.name_alg = Some(TpmiAlgHash::Sha512);
     let in_public = tpm2::Tpm2b(pub_struct);

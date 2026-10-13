@@ -24,6 +24,7 @@ use crate::test_utils::{
     leak_bytes, marshal_auth_command, marshal_to_slice, strip_trailing_zeros, sym_decrypt,
     sym_encrypt,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{
     Command, Create, CreatePrimary, Load, StartAuthSession, UnmarshalMessage, Unseal,
 };
@@ -37,7 +38,6 @@ use tpm2::{
     TpmlPcrSelection, TpmsAuthCommand, TpmsAuthResponse, TpmsEccParms, TpmsEccPoint, TpmsRsaParms,
     TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 // =========================================================================
 // Constants from the Go test
@@ -250,7 +250,7 @@ impl GoHmacSession {
     }
 
     /// `tpm2.HMACSession(...)`: marks the session reusable and starts it.
-    fn start(mut self, sim: &mut Simulator<'_>) -> Self {
+    fn start(mut self, sim: &mut Tpm) -> Self {
         self.attrs |= TpmaSession::CONTINUE_SESSION;
         self.init(sim);
         self
@@ -258,12 +258,12 @@ impl GoHmacSession {
 
     /// The `close` function returned by `tpm2.HMACSession`. Go calls it via
     /// `defer cleanup()`, ignoring its error, so the result is ignored here too.
-    fn close(self, sim: &mut Simulator<'_>) {
+    fn close(self, sim: &mut Tpm) {
         let _ = flush_context(sim, self.handle);
     }
 
     /// go-tpm `hmacSession.Init`: starts the session if not yet started.
-    fn init(&mut self, sim: &mut Simulator<'_>) {
+    fn init(&mut self, sim: &mut Tpm) {
         if self.handle != Handle::RH_NULL {
             return;
         }
@@ -318,7 +318,7 @@ impl GoHmacSession {
     }
 
     /// go-tpm `hmacSession.NewNonceCaller`.
-    fn new_nonce_caller(&mut self, _sim: &mut Simulator<'_>) {
+    fn new_nonce_caller(&mut self, _sim: &mut Tpm) {
         CLIENT_CRYPTO.get_random(&mut self.nonce_caller).unwrap();
     }
 
@@ -344,7 +344,7 @@ impl GoHmacSession {
     /// derived from sessionKey || auth with the given nonce order.
     fn param_crypt(
         &self,
-        _sim: &Simulator<'_>,
+        _sim: &Tpm,
         nonce_newer: &[u8],
         nonce_older: &[u8],
         decrypt: bool,
@@ -382,7 +382,7 @@ impl GoHmacSession {
 /// go-tpm `getEncryptedSalt`: RSA-OAEP or ECDH (KDFe) salt encapsulation with
 /// label "SECRET" against the salt key's public area.
 fn encrypted_salt(
-    _sim: &mut Simulator<'_>,
+    _sim: &mut Tpm,
     public: &TpmtPublic<'static>,
 ) -> (Tpm2bEncryptedSecret<'static>, Vec<u8>) {
     let name_alg = public.name_alg.expect("salt key must have a name alg");
@@ -459,7 +459,7 @@ fn encrypted_salt(
 }
 
 /// Computes a digest with the simulator's crypto provider.
-fn hash(_sim: &Simulator<'_>, alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
+fn hash(_sim: &Tpm, alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
     let mut ctx = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, alg).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
@@ -469,7 +469,7 @@ fn hash(_sim: &Simulator<'_>, alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
 }
 
 /// Computes an HMAC with the simulator's crypto provider.
-fn hmac(_sim: &Simulator<'_>, alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
+fn hmac(_sim: &Tpm, alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
     let mut ctx = tpm2::crypto::HmacStream::new(CLIENT_CRYPTO, alg, key).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
@@ -485,7 +485,7 @@ fn hmac(_sim: &Simulator<'_>, alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> 
 /// response, which carries the response handles, or the TPM response code on
 /// failure, after flushing use-once sessions (go-tpm `CleanupFailure`).
 fn execute_go<CmdT: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &CmdT,
     names: &[&[u8]],
     sessions: &mut [&mut GoHmacSession],
@@ -683,7 +683,7 @@ struct Srk {
 }
 
 /// `unsealingTest` prologue: creates the SRK with `srkAuth`.
-fn create_srk(sim: &mut Simulator<'_>, kind: SrkKind) -> Srk {
+fn create_srk(sim: &mut Tpm, kind: SrkKind) -> Srk {
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
@@ -725,7 +725,7 @@ fn create_blob_cmd(parent_handle: Handle) -> Create<'static> {
 }
 
 /// Runs `createBlobCmd` with `PasswordAuth(srkAuth)` on the parent.
-fn create_blob_with_password(sim: &mut Simulator<'_>, srk: &Srk) {
+fn create_blob_with_password(sim: &mut Tpm, srk: &Srk) {
     execute_with_password_sessions(sim, &create_blob_cmd(srk.handle), 1, SRK_AUTH)
         .expect("TPM2_Create failed");
 }
@@ -733,7 +733,7 @@ fn create_blob_with_password(sim: &mut Simulator<'_>, srk: &Srk) {
 /// Runs `createBlobCmd` with the given parent auth session followed by extra
 /// sessions, returning `(OutPrivate, OutPublic)`.
 fn create_blob_with_sessions(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     srk: &Srk,
     sessions: &mut [&mut GoHmacSession],
 ) -> (Tpm2bPrivate<'static>, Tpm2bPublic<'static>) {
@@ -744,8 +744,8 @@ fn create_blob_with_sessions(
 
 /// Runs a `Create*` subtest: creates the SRK, runs `create` and flushes the
 /// SRK (the deferred cleanup in `unsealingTest`).
-fn run_create_subtest(kind: SrkKind, create: impl FnOnce(&mut Simulator<'_>, &Srk)) {
-    let mut sim = create_simulator!();
+fn run_create_subtest(kind: SrkKind, create: impl FnOnce(&mut Tpm, &Srk)) {
+    let mut sim = Tpm::new();
     let srk = create_srk(&mut sim, kind);
     create(&mut sim, &srk);
     flush_context(&mut sim, srk.handle).expect("flushing SRK");
@@ -787,8 +787,8 @@ struct LoadedBlob {
 /// response Go loads), and the blob loaded with
 /// `HMAC(TPMAlgSHA256, 16, Auth(srkAuth))`. Then runs `unseal` and performs the
 /// deferred cleanup (flush blob, then SRK).
-fn run_unseal_subtest(kind: SrkKind, unseal: impl FnOnce(&mut Simulator<'_>, &Srk, &LoadedBlob)) {
-    let mut sim = create_simulator!();
+fn run_unseal_subtest(kind: SrkKind, unseal: impl FnOnce(&mut Tpm, &Srk, &LoadedBlob)) {
+    let mut sim = Tpm::new();
     let srk = create_srk(&mut sim, kind);
 
     let mut parent = GoHmacSession::new(TpmiAlgHash::Sha256, 16).auth(SRK_AUTH);
@@ -823,11 +823,7 @@ fn run_unseal_subtest(kind: SrkKind, unseal: impl FnOnce(&mut Simulator<'_>, &Sr
 
 /// `unsealCmd.Execute(thetpm, extra...)` with the item authorized by `auth`;
 /// asserts the unsealed data equals `data`.
-fn unseal_with_sessions(
-    sim: &mut Simulator<'_>,
-    blob: &LoadedBlob,
-    sessions: &mut [&mut GoHmacSession],
-) {
+fn unseal_with_sessions(sim: &mut Tpm, blob: &LoadedBlob, sessions: &mut [&mut GoHmacSession]) {
     let rsp = execute_go(
         sim,
         &Unseal {

@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 use tpm2::Handle;
 use tpm2::commands::{Create, CreatePrimary, Load, RSADecrypt, RSAEncrypt};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// go-tpm's `RSASRKTemplate`.
 fn get_rsa_srk_template() -> TpmtPublic<'static> {
@@ -35,7 +35,7 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
 // Original Go test: rsa_encryption_test.go - TestRSAEncryption
 #[test]
 fn test_rsa_encryption() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create Primary Key (RSA SRK)
     let srk_pub = get_rsa_srk_template();

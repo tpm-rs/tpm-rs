@@ -7,10 +7,10 @@ use crate::_common::{
     context_sequence, exec, execute_with_password_sessions, flush_rc, loaded_sessions, mssim_rc_of,
     rc_p, session_handles, start_auth_session, start_session, start_session_raw,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::ContextSave;
 use tpm2::errors::TpmRc;
 use tpm2::{Handle, TpmSe, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// After the context counter advances 64K past the oldest saved session, saving fails with TPM_RC_CONTEXT_GAP until the oldest is loaded.
 ///
@@ -19,7 +19,7 @@ use tpm2_simulator::create_simulator;
 /// loading anything but the oldest context into the last free slot fails too.
 #[test]
 fn context_gap_enforced() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let oldest = start_session_raw(&mut sim, 0);
     let oldest_ctx = context_save_raw(&mut sim, oldest).unwrap();
     let b = start_session_raw(&mut sim, 0);
@@ -53,7 +53,7 @@ fn context_gap_enforced() {
 /// `MAX_LOADED_SESSIONS`; `TPM2_FlushContext` reports `TPM_RC_HANDLE + RC_P1`.
 #[test]
 fn exclusive_audit_and_saved_session_tracking() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Exclusive audit survives ContextSave/ContextLoad.
     let mut a = start_session(&mut sim, TpmSe::HMAC, false);
@@ -116,7 +116,7 @@ fn exclusive_audit_and_saved_session_tracking() {
 /// ContextSave of a policy session succeeds and removes it from the loaded-session RAM.
 #[test]
 fn saved_session_leaves_ram() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let session = start_auth_session(
         &mut sim,
@@ -152,7 +152,7 @@ fn saved_session_leaves_ram() {
 /// save/load cycle.
 #[test]
 fn stale_replayed_and_flushed_contexts_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let s = start_session_raw(&mut sim, 0);
 
     let ctx1 = context_save_raw(&mut sim, s).unwrap();

@@ -4,15 +4,15 @@ use crate::_common::{
     execute_with_password_sessions, execute_with_password_sessions_status, hex_checked,
     hierarchy_policy, raw_rc, set_hierarchy_enabled, set_primary_policy,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, GetCapability, SetPrimaryPolicy};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bDigest, TpmCap, TpmiAlgHash, TpmsCapabilityData};
-use tpm2_simulator::create_simulator;
 
 /// SetPrimaryPolicy on a disabled storage hierarchy fails.
 #[test]
 fn disabled_hierarchy_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Disable the storage hierarchy (shEnable = CLEAR).
     set_hierarchy_enabled(&mut sim, Handle::RH_OWNER, false);
@@ -27,7 +27,7 @@ fn disabled_hierarchy_rejected() {
 /// SetPrimaryPolicy works for the endorsement and lockout hierarchies.
 #[test]
 fn endorsement_and_lockout_policies_set() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let rc = set_primary_policy(&mut sim, Handle::RH_ENDORSEMENT, &[0x11; 32]);
     assert_eq!(rc, 0);
@@ -43,7 +43,7 @@ fn endorsement_and_lockout_policies_set() {
 /// must return TPM_RC_SIZE (Parameter 1, 0x01D5).
 #[test]
 fn invalid_hash_and_policy_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Invalid hashAlg TPM_ALG_AES (0x0006) -> TPM_RC_HASH (Pos2, 0x02C3)
     let mut set_policy_invalid_hash = hex_checked(concat!(
@@ -97,7 +97,7 @@ fn invalid_hash_and_policy_size() {
 /// SetPrimaryPolicy(OWNER) is reported by GetCapability(AUTH_POLICIES) and fails with HIERARCHY once shEnable is clear.
 #[test]
 fn owner_policy_reported_and_disabled_hierarchy_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = SetPrimaryPolicy {
         auth_handle: Handle::RH_OWNER,
@@ -141,7 +141,7 @@ fn owner_policy_reported_and_disabled_hierarchy_rejected() {
 /// SetPrimaryPolicy sets a 32-byte owner authPolicy that is reported afterwards.
 #[test]
 fn owner_policy_set() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Authorize under Owner hierarchy and set a 32-byte authPolicy
     let rc = set_primary_policy(&mut sim, Handle::RH_OWNER, &[0x42; 32]);
@@ -164,7 +164,7 @@ fn owner_policy_set() {
 /// SetPrimaryPolicy with a digest size not matching hashAlg fails with SIZE.
 #[test]
 fn policy_size_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let rc = set_primary_policy(&mut sim, Handle::RH_OWNER, &[0x22; 20]);
     assert_eq!(rc, TpmRc::SIZE.with(Position::parameter(1)).get());

@@ -7,18 +7,18 @@ use crate::_common::{
     load_stripped_ecc_storage_key, owner_srk, pw, rc_h, rc_p, read_public, rsa_public, run,
     start_auth_session, storage_attrs, try_create_owner_primary,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{ActivateCredential, CreatePrimary, MakeCredential, PolicySecret};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bIdObject,
     Tpm2bName, Tpm2bSensitiveData, TpmSe, TpmaObject, TpmiAlgHash, TpmsSensitiveCreate, TpmtPublic,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// ActivateCredential of a credential blob with a flipped byte (EK policy session) fails with TPM_RC_INTEGRITY.
 #[test]
 fn corrupted_credential_blob_integrity() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create ECC EK under Endorsement Hierarchy
     let ek_pub = get_ecc_ek_template();
@@ -127,7 +127,7 @@ fn corrupted_credential_blob_integrity() {
 /// ActivateCredential with a non-existent key handle fails with TPM_RC_REFERENCE_H1.
 #[test]
 fn missing_key_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -160,7 +160,7 @@ fn missing_key_handle_rejected() {
 /// ActivateCredential with a sign-only key fails with TPM_RC_TYPE + H2.
 #[test]
 fn sign_only_key_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -210,13 +210,13 @@ fn sign_only_key_rejected() {
 /// Make/ActivateCredential work with an ECC protector whose x has a stripped leading zero; credential size, integrity and key-type errors.
 #[test]
 fn stripped_ecc_protector_and_error_codes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // ECC protector whose public x coordinate has a stripped leading zero byte; it is imported
     // with its private key (d = 379) so that it can be used on both sides.
     let srk = owner_srk(&mut sim);
     let ecc_ek = load_stripped_ecc_storage_key(&mut sim, srk);
     let ek_name = read_public(&mut sim, ecc_ek).unwrap().name;
-    let mc = |sim: &mut Simulator<'_>, handle: Handle, cred: &[u8], name: Tpm2bName<'static>| {
+    let mc = |sim: &mut Tpm, handle: Handle, cred: &[u8], name: Tpm2bName<'static>| {
         run(
             sim,
             &MakeCredential {
@@ -256,7 +256,7 @@ fn stripped_ecc_protector_and_error_codes() {
         &[],
         &[],
     );
-    let ac = |sim: &mut Simulator<'_>, key: Handle, blob: &[u8], secret: &[u8]| {
+    let ac = |sim: &mut Tpm, key: Handle, blob: &[u8], secret: &[u8]| {
         command_rc(
             sim,
             &ActivateCredential {
@@ -310,7 +310,7 @@ fn stripped_ecc_protector_and_error_codes() {
 /// `TPM_RC_TYPE` on `keyHandle`.
 #[test]
 fn symmetric_protector_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Target object (to activate credential)
     let (target, _) = try_create_owner_primary(

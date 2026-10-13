@@ -1,18 +1,18 @@
 //! TPM2_PolicySecret: cpHash, expiration, tickets and authorization handles.
 
 use crate::_common::*;
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::{PolicyGetDigest, PolicySecret, StartAuthSession};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, Tpm2bAuth, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bNonce, TpmSe, TpmaNv, TpmiAlgHash,
     TpmsNvPublic,
 };
-use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 /// A second PolicySecret with a different cpHashA fails with TPM_RC_CPHASH.
 #[test]
 fn conflicting_cp_hash_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start Policy session
     let active_session = start_auth_session(
@@ -56,7 +56,7 @@ fn conflicting_cp_hash_rejected() {
 /// PolicySecret with a cpHashA of the wrong digest size fails with TPM_RC_SIZE.
 #[test]
 fn cp_hash_wrong_size_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start Policy session
     let active_session = start_auth_session(
@@ -91,7 +91,7 @@ fn cp_hash_wrong_size_rejected() {
 /// PolicySecret with expiration -1 sets a 1 s timeout; after sleeping, the policy session fails with TPM_RC_EXPIRED.
 #[test]
 fn expiration_enforced_after_timeout() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start Policy session
     let start_auth = StartAuthSession {
@@ -162,7 +162,7 @@ fn expiration_enforced_after_timeout() {
 /// PolicySecret with a started HMAC session as policySession fails with TPM_RC_VALUE + H2.
 #[test]
 fn hmac_session_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start an HMAC session
     let hmac_session = start_auth_session(
@@ -196,7 +196,7 @@ fn hmac_session_handle_rejected() {
 /// PolicySecret with a negative expiration returns a timeout and an auth ticket.
 #[test]
 fn negative_expiration_returns_ticket() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start Policy session
     let active_session = start_auth_session(
@@ -227,7 +227,7 @@ fn negative_expiration_returns_ticket() {
 /// PolicySecret with a non-policy session handle fails with TPM_RC_VALUE + H2 at unmarshal.
 #[test]
 fn non_policy_session_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = PolicySecret {
         auth_handle: Handle::RH_ENDORSEMENT,
@@ -249,7 +249,7 @@ fn non_policy_session_handle_rejected() {
 /// PolicySecret with a nonceTPM that does not match the session fails with TPM_RC_NONCE.
 #[test]
 fn nonce_tpm_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start Policy session
     let active_session = start_auth_session(
@@ -288,7 +288,7 @@ fn nonce_tpm_mismatch_rejected() {
 /// PolicySecret with an NV index as authHandle succeeds and updates the digest with the NV name
 #[test]
 fn nv_index_as_auth_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Define NV index
     let nv_index_val = 0x01600008;
@@ -359,7 +359,7 @@ fn nv_index_as_auth_handle() {
 #[test]
 fn pin_pass_index_gets_null_ticket() {
     // Part 3 (PIN Pass tickets); parts 1-2 are engine authorization checks (fix-auth).
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0012;
     define_pin_pass(&mut sim, index);
     let s = start_session_with_hash(&mut sim, TpmSe::Policy, TpmiAlgHash::Sha256);
@@ -373,7 +373,7 @@ fn pin_pass_index_gets_null_ticket() {
 /// PIN Pass index gets a null ticket; an expiration needs NV (NV_UNAVAILABLE), no expiration does not.
 #[test]
 fn pin_pass_ticket_and_expiration_needs_nv() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // PIN Pass index: no ticket (null ticket, empty timeout).
     let index = 0x0150_0011;
@@ -386,16 +386,14 @@ fn pin_pass_ticket_and_expiration_needs_nv() {
 
     // NV unavailable: an expiration cannot be checked (RETURN_IF_NV_IS_NOT_AVAILABLE).
     let s = start_session_with_hash(&mut sim, TpmSe::Policy, TpmiAlgHash::Sha256);
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     assert_eq!(
         policy_secret(&mut sim, Handle::RH_OWNER, &s, &[], 100).map(|_| ()),
         Err(TpmRc::NV_UNAVAILABLE.get())
     );
     // Without an expiration NV is not needed.
     policy_secret(&mut sim, Handle::RH_OWNER, &s, &[], 0).unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     policy_secret(&mut sim, Handle::RH_OWNER, &s, &[], 100).unwrap();
 }
 
@@ -406,7 +404,7 @@ fn pin_pass_ticket_and_expiration_needs_nv() {
 /// trial sessions and empty timeouts.
 #[test]
 fn ticket_hierarchy_resolution_and_trial_rejection() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // TPM_RH_LOCKOUT -> TPM_RH_OWNER, and the ticket validates with the owner proof.
     let s = start_session_with_hash(&mut sim, TpmSe::Policy, TpmiAlgHash::Sha256);
@@ -449,7 +447,7 @@ fn ticket_hierarchy_resolution_and_trial_rejection() {
 /// PolicySecret on a trial session succeeds.
 #[test]
 fn trial_session_succeeds() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a Trial session
     let trial_session = start_auth_session(

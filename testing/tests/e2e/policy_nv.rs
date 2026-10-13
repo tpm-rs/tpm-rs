@@ -2,9 +2,9 @@
 //! assertions.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmSe, TpmaNv, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// PolicyNvWritten with writtenSet = 3 fails with TPM_RC_VALUE + P1 (TC2_1_25_20_05).
 ///
@@ -13,7 +13,7 @@ use tpm2_simulator::create_simulator;
 /// must return TPM_RC_VALUE (Parameter 1, 0x0103).
 #[test]
 fn invalid_written_set_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a trial policy session
     let session_handle = start_trial_session(&mut sim);
@@ -69,7 +69,7 @@ fn nv_written_on_non_nv_entity_position() {
 /// PolicyNV operand/offset size checks, owner read access, trial undefined index; PolicyAuthorizeNV SHA-1 TPMT_HA is HASH.
 #[test]
 fn operand_offset_and_read_access_checks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let readable = 0x0150_0020;
     define_nv_empty_policy(&mut sim, readable, nv_attrs(TpmaNv::OWNERREAD), 32);
     write_nv_owner(&mut sim, readable, &[0x11; 32]);

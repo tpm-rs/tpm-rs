@@ -4,17 +4,17 @@ use tpm2::Handle;
 use tpm2::commands::{CreatePrimary, GetTime};
 
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bPublicKeyRsa, Tpm2bSensitiveData,
     TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic,
     TpmtRsaScheme,
 };
-use tpm2_simulator::create_simulator;
 
 // Original Go test: get_time_test.go - TestGetTime
 #[test]
 fn test_get_time() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // RSA-2048 RSASSA-SHA256 signing key in the endorsement hierarchy.
     let public_area = TpmtPublic {

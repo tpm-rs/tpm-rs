@@ -4,17 +4,17 @@ use crate::_common::{
     define_nv_with_policy_unwrap as define, policy_command_code_active as policy_command_code,
     start_session_active as start_session, *,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{NVChangeAuth, NVDefineSpace};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// NV_ChangeAuth with a different authValue size preserves all data of a large index
 ///
 /// NV_ChangeAuth with a different authValue size keeps all data of a large index.
 #[test]
 fn change_auth_keeps_index_data() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0500;
     let size = 1600u16;
     define_change_auth_index(&mut sim, index, size);
@@ -41,7 +41,7 @@ fn change_auth_keeps_index_data() {
 /// NV_ChangeAuth authorized by an HMAC session fails with TPM_RC_AUTH_TYPE (ADMIN role needs a policy session)
 #[test]
 fn hmac_session_rejected_for_admin_role() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0300;
     define_change_auth_index(&mut sim, index, 8);
     let name = nv_index_name(&mut sim, index);
@@ -59,7 +59,7 @@ fn hmac_session_rejected_for_admin_role() {
 /// NV_ChangeAuth authorized with a password session is TPM_RC_AUTH_TYPE
 #[test]
 fn password_session_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Define an NV index with authValue="old_pass" and TPMA_NV_AUTHREAD | TPMA_NV_AUTHWRITE
     let nv_idx = Handle(0x01000030);
@@ -104,7 +104,7 @@ fn password_session_rejected() {
 /// NV_ChangeAuth: HMAC session is TPM_RC_AUTH_TYPE; a policy session without PolicyCommandCode is TPM_RC_POLICY_FAIL
 #[test]
 fn policy_without_command_code_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0301;
     // The authPolicy is the empty policy, so a policy session without
     // TPM2_PolicyCommandCode satisfies the digest but not the ADMIN role.

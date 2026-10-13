@@ -1,6 +1,7 @@
 //! TPM2_PolicyPassword: password-in-HMAC authorization, response HMACs and check order.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{Create, CreatePrimary, Load, PolicyPassword};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -8,7 +9,6 @@ use tpm2::{
     Tpm2bSensitiveData, TpmCc, TpmSe, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmlPcrSelection,
     TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// With PolicyCpHash + PolicyPassword, the cpHash mismatch is reported before the password check.
 ///
@@ -54,7 +54,7 @@ fn password_required_for_sealed_object() {
     to_hash.extend_from_slice(&(TpmCc::PolicyAuthValue.code()).to_be_bytes());
     let expected_policy = hash_bytes(TpmiAlgHash::Sha256, &to_hash);
 
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a primary storage parent under Owner hierarchy
     let parent_pub = TpmtPublic {

@@ -8,12 +8,12 @@ use p256::elliptic_curve::sec1::FromEncodedPoint as _;
 use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 use sha1::Sha1;
 use sha2::{Digest as _, Sha256};
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, Import, Load, Unseal};
 use tpm2::crypto::kdf::{kdfa_bits, kdfe_bits};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_platform_linux::PlatformCryptoProvider;
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// go-tpm's `ECCSRKTemplate`: NIST P-256 restricted decryption storage key
 /// with AES-128-CFB, NoDA, and 32-byte zero-filled unique X/Y coordinates.
@@ -81,7 +81,7 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
 /// an empty creation PCR selection, as go-tpm does for
 /// `CreatePrimary{PrimaryHandle: TPMRHOwner, InPublic: New2B(template)}`.
 fn create_primary_owner(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     template: TpmtPublic<'static>,
 ) -> (tpm2::commands::responses::CreatePrimary<'static>, Handle) {
     let cmd = CreatePrimary {
@@ -396,7 +396,7 @@ fn create_duplicate(
 // Original Go test: import_test.go - TestCleartextImport
 #[test]
 fn test_cleartext_import() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create Owner SRK (go-tpm ECCSRKTemplate) via CreatePrimary.
     let (_, srk_handle) = create_primary_owner(&mut sim, get_ecc_srk_template());
@@ -465,7 +465,7 @@ fn test_cleartext_import() {
 /// from `pub_template`, duplicates a software-made sealed blob to it with
 /// go-tpm's `CreateDuplicate` algorithm, imports and loads it, and checks that
 /// Unseal returns the original plaintext.
-fn run_sw_duplicate_import(sim: &mut Simulator<'_>, pub_template: TpmtPublic<'static>) {
+fn run_sw_duplicate_import(sim: &mut Tpm, pub_template: TpmtPublic<'static>) {
     // 1. Create Primary
     let (primary, primary_handle) = create_primary_owner(sim, pub_template);
 
@@ -525,13 +525,13 @@ fn run_sw_duplicate_import(sim: &mut Simulator<'_>, pub_template: TpmtPublic<'st
 // Original Go test: import_test.go - TestSWDuplicateImport/ECDH-P256
 #[test]
 fn test_sw_duplicate_import_ecdh_p256() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     run_sw_duplicate_import(&mut sim, get_ecc_srk_template());
 }
 
 // Original Go test: import_test.go - TestSWDuplicateImport/RSA-2048
 #[test]
 fn test_sw_duplicate_import_rsa_2048() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     run_sw_duplicate_import(&mut sim, get_rsa_srk_template());
 }

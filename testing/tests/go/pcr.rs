@@ -1,11 +1,11 @@
 //! Rust port of the Go E2E test file `pcr_test.go`.
 
 use crate::test_utils::{execute_with_password_sessions, execute_with_password_sessions_status};
+use testing::tpm::Tpm;
 use tpm2::commands::{PCREvent, PCRExtend, PCRRead, PCRReset};
 use tpm2::{
     Handle, Tpm2bEvent, TpmiAlgHash, TpmlDigestValues, TpmlPcrSelection, TpmsPcrSelection, TpmtHa,
 };
-use tpm2_simulator::create_simulator;
 
 /// The TPM requires all PCR selections to be at least big enough to select all
 /// the PCRs in the minimum PC Client PCR allocation.
@@ -117,7 +117,7 @@ fn extends_tpm2(hash: TpmiAlgHash) -> [TpmtHa<'static>; 3] {
 /// the `hash` bank three times, checks it is non-zero, resets it and checks it
 /// is all zero again.
 fn pcr_reset_case(hash: TpmiAlgHash) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let debug_pcr: u32 = 16;
     let auth_handle = Handle(debug_pcr);
 
@@ -185,7 +185,7 @@ fn test_pcr_reset_sha384() {
 /// `pcr` with TPM2_PCR_Event("hello") and then (as the Go test does) reads
 /// PCR 20 in the `hash` bank, checking that it is not all zero.
 fn pcr_event_case(hash: TpmiAlgHash, pcr: u32) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let pcr_read = PCRRead {
         pcr_selection_in: pcr_selections(hash, &[20]),

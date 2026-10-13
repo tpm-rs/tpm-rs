@@ -1,6 +1,7 @@
 //! Policy session state after failed and successful commands (digest resets, continueSession).
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{
     Create, CreatePrimary, NVWrite, PolicyGetDigest, PolicyRestart, PolicySecret, StartAuthSession,
 };
@@ -9,12 +10,11 @@ use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bNonce,
     Tpm2bSensitiveData, TpmSe, TpmaNv, TpmaObject, TpmiAlgHash, TpmsSensitiveCreate, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// EK policy session digest is not reset when the authorized command fails with a format-1 error
 #[test]
 fn digest_kept_after_failed_command() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let ek_template = rsa_ek_template();
 
     let in_public = tpm2::Tpm2b(ek_template);
@@ -129,7 +129,7 @@ fn digest_kept_after_failed_command() {
 /// EK policy session (PolicySecret endorsement) with continueSession has its digest reset after a successful authorization
 #[test]
 fn digest_reset_after_successful_use() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let ek_template = rsa_ek_template();
 
     let in_public = tpm2::Tpm2b(ek_template);
@@ -323,7 +323,7 @@ fn failed_command_keeps_policy_and_audit_state() {
 /// session handle.
 #[test]
 fn policy_get_digest_on_hmac_session_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let start_rsp = exec_command(
         &mut sim,
@@ -356,7 +356,7 @@ fn policy_get_digest_on_hmac_session_rejected() {
 /// PolicyRestart clears the cpHash union and the PolicySecret timeout so the restarted session does not expire.
 #[test]
 fn policy_restart_clears_cphash_and_timeout() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. PolicyRestart clears the cpHash union (`u1.cpHash.b.size = 0`).
     let s = start_session_with_hash(&mut sim, TpmSe::Policy, TpmiAlgHash::Sha256);
@@ -419,7 +419,7 @@ fn policy_restart_clears_cphash_and_timeout() {
 /// A policy session stays loaded across PolicyCommandCode / PolicyGetDigest / PolicyRestart and PolicyRestart zeroes the digest.
 #[test]
 fn policy_restart_resets_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start active policy session
     let pol_handle = start_session_u32(&mut sim, TpmSe::Policy);

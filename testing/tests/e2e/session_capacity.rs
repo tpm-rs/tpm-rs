@@ -5,15 +5,15 @@ use crate::_common::{
     execute_with_password_sessions, flush_context, flush_session_raw, hex, loaded_sessions,
     max_loaded_sessions, rc_of, send, session_loaded, start_auth_session, start_hmac_session_raw,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{PolicyDuplicationSelect, StartAuthSession};
 use tpm2::errors::TpmRc;
 use tpm2::{Handle, Tpm2bEncryptedSecret, Tpm2bNonce, TpmSe, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// Flushing a trial session twice fails the second time without corrupting session slots.
 #[test]
 fn double_flush_is_harmless() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start a trial session.
     let start_auth = StartAuthSession {
@@ -60,7 +60,7 @@ fn double_flush_is_harmless() {
 /// A trial session whose policy command failed can be flushed and its slot reused.
 #[test]
 fn failed_policy_command_keeps_slot_flushable() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (_sk, sk_name) = create_signing_key_empty_unique(&mut sim);
     let (_ek, ek_name) = create_signing_key_with_unique(&mut sim, b"ek");
 
@@ -123,7 +123,7 @@ fn failed_policy_command_keeps_slot_flushable() {
 /// StartAuthSession with a non-existent tpmKey fails without occupying a session slot.
 #[test]
 fn failed_start_auth_session_takes_no_slot() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Attempt to start a session with a non-existent key handle (e.g. 0x80000000).
     // This should fail to create the session.
@@ -169,7 +169,7 @@ fn failed_start_auth_session_takes_no_slot() {
 /// F3: Session Storage & Lifecycle Boundaries
 #[test]
 fn max_loaded_sessions_start() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     for _ in 0..max_loaded_sessions(&mut sim) {
         let _ = start_auth_session(
             &mut sim,
@@ -187,7 +187,7 @@ fn max_loaded_sessions_start() {
 /// Session slots are limited; flushed slots are reused and no slots leak.
 #[test]
 fn session_memory_limit_and_slot_reuse() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let max_sessions = max_loaded_sessions(&mut sim);
     assert!(max_sessions > 0);
 
@@ -252,7 +252,7 @@ fn session_memory_limit_and_slot_reuse() {
 /// After flushing one of three sessions a new one starts, then the rest flush cleanly.
 #[test]
 fn session_slot_reused_after_flush() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sess1 = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -301,7 +301,7 @@ fn session_slot_reused_after_flush() {
 /// Starting more than the max loaded sessions fails with TPM_RC_SESSION_MEMORY; flushing one frees a slot.
 #[test]
 fn session_slots_exhaust_and_recover_after_flush() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sym_null = None;
 
     // 1. Start max allowed active sessions in GlobalState
@@ -361,7 +361,7 @@ fn session_slots_exhaust_and_recover_after_flush() {
 /// 20 start/flush rounds of trial sessions do not leak slots; without flushing the session limit is reached with TPM_RC_SESSION_MEMORY.
 #[test]
 fn trial_sessions_do_not_leak_slots() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (_sk, sk_name) = create_signing_key_empty_unique(&mut sim);
     let (_ek, ek_name) = create_signing_key_with_unique(&mut sim, b"ek");
 

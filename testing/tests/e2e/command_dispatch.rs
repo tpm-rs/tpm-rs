@@ -6,14 +6,14 @@ use crate::_common::{
     CC_MAC, CC_RSA_DECRYPT, CC_SIGN, CC_VERIFY_SIGNATURE, digest12, hx, leak_bytes, mac_params,
     rc_of, rsa_decrypt_params, send_key_command, send_raw, sign_params,
 };
+use testing::tpm::Tpm;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Unmarshal};
-use tpm2_simulator::create_simulator;
 
 /// Raw HMAC, VerifySignature, Sign and RSA_Decrypt commands without their key handle are rejected
 #[test]
 fn crypto_commands_reject_missing_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let missing_handle = Handle(0x8000000F); // Unloaded transient key handle (TRANSIENT_LAST).
 
     // 1. MAC Command
@@ -65,7 +65,7 @@ fn crypto_commands_reject_missing_handle() {
 /// with a non-existent session still fails with `TPM_RC_VALUE + TPM_RC_H + TPM_RC_1`.
 #[test]
 fn hmac_start_checks_handle_before_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // HmacStart command with sessions: tag = 8002, size = 27, cc = 0000015b
     // Handle: 00000007 (RHNull)
@@ -101,7 +101,7 @@ fn hmac_start_checks_handle_before_session() {
 /// `ParseHandleBuffer`.
 #[test]
 fn hmac_start_rejects_missing_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // HmacStart command: tag = 8001, size = 10, cc = 0000015b
     // Since HmacStart takes 1 handle, a request size of 10 is missing the handle.
@@ -124,7 +124,7 @@ fn hmac_start_rejects_missing_handle() {
 /// handle (`TPM_RC_INSUFFICIENT + H2`), with and without an authorization area tag.
 #[test]
 fn truncated_handle_area_is_insufficient_at_first_incomplete_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // TPM2_HMAC_Start (NO_SESSIONS) with half of its handle.
     let partial = [
@@ -157,7 +157,7 @@ fn truncated_handle_area_is_insufficient_at_first_incomplete_handle() {
 /// `TPM_RC_VALUE + TPM_RC_H + TPM_RC_1`.
 #[test]
 fn hmac_start_rejects_null_key_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // HmacStart command: tag = 8001, size = 18, cc = 0000015b, handle = 00000007 (RHNull)
     // Auth size = 0 (0000), Hash Alg = SHA256 (000b)
@@ -178,7 +178,7 @@ fn hmac_start_rejects_null_key_handle() {
 /// An unmapped command code (0x999) fails with TPM_RC_COMMAND_CODE.
 #[test]
 fn unmapped_command_code_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Send an unmapped command code (0x00000999)
     // tag: 8001
@@ -196,7 +196,7 @@ fn unmapped_command_code_rejected() {
 /// Unimplemented command codes (PP_Commands, FieldUpgrade*, ...) return TPM_RC_COMMAND_CODE
 #[test]
 fn unsupported_command_codes_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Pick multiple other unimplemented command codes and check they return TPM_RC_COMMAND_CODE (0x143)
     let unimplemented_codes: [u32; 3] = [

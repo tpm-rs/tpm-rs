@@ -1,19 +1,18 @@
 //! TPM2_NV_ReadLock, TPM2_NV_WriteLock and TPM2_NV_GlobalWriteLock.
 
 use crate::_common::{define_nv_space as define, exec_with_empty_passwords as pw, *};
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::*;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::{Simulator, SimulatorPlatformSignal, create_simulator};
 
 /// NV_GlobalWriteLock with NV off is TPM_RC_NV_UNAVAILABLE and locks nothing; with NV on it locks GLOBALLOCK indexes
 #[test]
 fn nv_unavailable_does_not_lock() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0700;
     define_nv_with_policy_unwrap(&mut sim, index, OWNER_RW | TpmaNv::GLOBALLOCK, 8, &[]);
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     assert_eq!(
         pw(
             &mut sim,
@@ -25,8 +24,7 @@ fn nv_unavailable_does_not_lock() {
         .unwrap_err(),
         TpmRc::NV_UNAVAILABLE.get()
     );
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     // The index was not locked.
     owner_write(&mut sim, index, 0, &[1; 8]).unwrap();
     pw(
@@ -46,7 +44,7 @@ fn nv_unavailable_does_not_lock() {
 /// NV_ReadLock on a READ_STCLEAR index blocks reads with TPM_RC_NV_LOCKED.
 #[test]
 fn read_lock() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Define Ordinary NV index with READ_STCLEAR attribute
     let nv_index = Handle(0x0100000c);
@@ -87,7 +85,7 @@ fn read_lock() {
 /// NV_WriteLock blocks writes with TPM_RC_NV_LOCKED; locking without WRITEDEFINE/WRITE_STCLEAR fails with ATTRIBUTES + H2.
 #[test]
 fn write_lock() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Define Ordinary NV index with WRITEDEFINE attribute
     let nv_index = Handle(0x0100000a);
@@ -103,7 +101,7 @@ fn write_lock() {
     // Write data initially
     nv_write(&mut sim, nv_index, &[1u8; 16]).expect("Failed to write data");
 
-    let write_lock = |sim: &mut Simulator<'_>, nv_index: Handle| {
+    let write_lock = |sim: &mut Tpm, nv_index: Handle| {
         execute_with_password_sessions(
             sim,
             &NVWriteLock {
@@ -148,7 +146,7 @@ fn write_lock() {
 /// (owner authorization is DA-exempt), not as an unpositioned handler `TPM_RC_AUTH_FAIL`.
 #[test]
 fn wrong_owner_password_is_bad_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let change = HierarchyChangeAuth {
         auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(b"abcd").unwrap(),

@@ -7,17 +7,17 @@ use crate::_common::{
     read_clock, send_clock_rate_adjust, send_clock_set, shutdown_with_type, sleep,
     startup_with_type,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{ClockRateAdjust, ClockSet};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmClockAdjust};
-use tpm2_simulator::create_simulator;
 
 /// clockInfo.safe is NO after unorderly power cycle and while NV is unavailable; Clear makes it safe again.
 ///
 /// `clockInfo.safe` is NO after an unorderly power cycle and while NV is unavailable.
 #[test]
 fn clock_info_safe_flag() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert!(read_clock(&mut sim).clock_info.safe);
 
     // NV unavailable -> clock not safe (`TimeFillInfo`).
@@ -40,7 +40,7 @@ fn clock_info_safe_flag() {
 /// ClockRateAdjust accepts valid adjust values and rejects invalid ones with TPM_RC_VALUE + RC_P1
 #[test]
 fn clock_rate_adjust_values() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     for mode in -3..=3i8 {
         let rc = send_clock_rate_adjust(&mut sim, 0x40000001, mode, 0x8002);
@@ -60,7 +60,7 @@ fn clock_rate_adjust_values() {
 /// ClockSet/ClockRateAdjust without an authorization session fail with AUTH_MISSING even with empty ownerAuth.
 #[test]
 fn clock_set_and_rate_adjust_require_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let now = read_clock(&mut sim).clock_info.clock;
     let rc = execute_with_password_sessions(
         &mut sim,
@@ -89,7 +89,7 @@ fn clock_set_and_rate_adjust_require_session() {
 /// ClockSet to an earlier value is TPM_RC_VALUE + RC_P1
 #[test]
 fn clock_set_backward_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Move the clock to (at least) 1000 ms first.
     assert_eq!(send_clock_set(&mut sim, 0x40000001, 1000, 0x8002), 0);
@@ -101,7 +101,7 @@ fn clock_set_backward_rejected() {
 /// ClockSet to a later value updates the clock
 #[test]
 fn clock_set_forward() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     advance();
     let current = read_clock(&mut sim).clock_info.clock;
@@ -118,7 +118,7 @@ fn clock_set_forward() {
 /// `TPM2_ClockSet` to a value >= 2^63 must not wrap the clock to 0.
 #[test]
 fn clock_set_large_value_does_not_wrap() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let new_time = 0x8000_0000_0000_0000u64;
     execute_with_password_sessions(
         &mut sim,
@@ -154,7 +154,7 @@ fn clock_set_large_value_does_not_wrap() {
 /// `TPM2_ClockSet` returns `TPM_RC_NV_UNAVAILABLE` while NV is unavailable.
 #[test]
 fn clock_set_requires_nv() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let before = read_clock(&mut sim).clock_info.clock;
     nv_off(&mut sim);
     let rc = execute_with_password_sessions(
@@ -178,7 +178,7 @@ fn clock_set_requires_nv() {
 /// no-session ClockSet fails with AUTH_MISSING even with an empty ownerAuth.
 #[test]
 fn clock_set_wrong_owner_password() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     hierarchy_change_auth(&mut sim, Handle::RH_OWNER, &[], b"abc").unwrap();
     let now = read_clock(&mut sim).clock_info.clock;
     let rc = execute_with_password_sessions(
@@ -199,7 +199,7 @@ fn clock_set_wrong_owner_password() {
 /// `TPM2_ClockRateAdjust` actually slows down the advance of Time/Clock.
 #[test]
 fn rate_adjust_slows_clock() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // 17 coarse steps exceed CLOCK_ADJUST_LIMIT: the divisor saturates at 35000 / 30000.
     for _ in 0..17 {
         execute_with_password_sessions(
@@ -236,7 +236,7 @@ fn rate_adjust_slows_clock() {
 /// platform timer (originally: timer set to 42 ms).
 #[test]
 fn read_clock_follows_timer() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     advance();
 
@@ -253,7 +253,7 @@ fn read_clock_follows_timer() {
 /// `Startup(STATE)` `time` restarts for the new power period while `clock` is preserved.
 #[test]
 fn time_and_clock_are_separate() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Advance the timer. Both g_time (time) and go.clock (clock) advance.
     advance();
@@ -307,7 +307,7 @@ fn time_and_clock_are_separate() {
 /// preserved, `resetCount` increments and `restartCount` is cleared.
 #[test]
 fn tpm_reset_preserves_clock() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Check initial ReadClock
     advance();

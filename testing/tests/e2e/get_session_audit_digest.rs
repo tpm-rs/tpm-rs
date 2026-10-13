@@ -7,17 +7,17 @@ use crate::_common::{
     execute_with_password_sessions_status, flush_context, marshal_to_slice, start_auth_session,
     start_session,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{GetCapability, GetSessionAuditDigest};
 use tpm2::{
     Handle, Marshal, Tpm2bAuth, Tpm2bData, Tpm2bNonce, TpmCap, TpmCc, TpmPt, TpmSe, TpmaSession,
     TpmiAlgHash, TpmiStCommandTag, TpmsAuthCommand, TpmtSigScheme, Unmarshal,
 };
-use tpm2_simulator::create_simulator;
 
 /// TPM2_GetSessionAuditDigest with a transient privacyAdminHandle fails with TPM_RC_VALUE + H1
 #[test]
 fn get_session_audit_digest_rejects_invalid_privacy_admin() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (ak_handle, _) = create_signing_key_ecc(&mut sim, &[]);
 
     // Start a session to audit
@@ -51,7 +51,7 @@ fn get_session_audit_digest_rejects_invalid_privacy_admin() {
 /// TPM2_GetSessionAuditDigest with one instead of two auth sessions fails with TPM_RC_AUTH_MISSING
 #[test]
 fn get_session_audit_digest_rejects_missing_authorization() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (ak_handle, _) = create_signing_key_ecc(&mut sim, &[]);
 
     let sess = start_auth_session(
@@ -84,7 +84,7 @@ fn get_session_audit_digest_rejects_missing_authorization() {
 /// TPM2_GetSessionAuditDigest with a decrypt-only RSA signHandle fails
 #[test]
 fn get_session_audit_digest_rejects_non_signing_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Create a key that is NOT a signing key (e.g. DECRYPT only)
     let (non_sign_handle, _) = create_non_signing_key_rsa(&mut sim);
 
@@ -116,7 +116,7 @@ fn get_session_audit_digest_rejects_non_signing_key() {
 /// Raw TPM2_GetSessionAuditDigest with 67-byte qualifyingData fails with TPM_RC_SIZE + P1
 #[test]
 fn get_session_audit_digest_rejects_oversized_qualifying_data() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (ak_handle, _) = create_signing_key_ecc(&mut sim, &[]);
 
     let sess = start_auth_session(
@@ -193,7 +193,7 @@ fn get_session_audit_digest_rejects_oversized_qualifying_data() {
 /// TPM2_GetSessionAuditDigest on a policy session handle fails with TPM_RC_VALUE + H3
 #[test]
 fn get_session_audit_digest_rejects_policy_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let s = start_session(&mut sim, TpmSe::Policy, false);
     assert_eq!(s.handle >> 24, 0x03);
 
@@ -215,7 +215,7 @@ fn get_session_audit_digest_rejects_policy_session() {
 /// TPM2_GetSessionAuditDigest with an ECDSA signer and an RSASSA inScheme fails with TPM_RC_SCHEME + P2
 #[test]
 fn get_session_audit_digest_rejects_rsassa_scheme_for_ecc_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (ak_handle, _) = create_signing_key_ecc(&mut sim, &[]);
 
     let mut sess = start_auth_session(
@@ -262,7 +262,7 @@ fn get_session_audit_digest_rejects_rsassa_scheme_for_ecc_key() {
 /// TPM2_GetSessionAuditDigest with an unloaded session handle fails with TPM_RC_REFERENCE_H2
 #[test]
 fn get_session_audit_digest_rejects_unloaded_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (ak_handle, _) = create_signing_key_ecc(&mut sim, &[]);
 
     let get_audit_cmd = GetSessionAuditDigest {
@@ -285,7 +285,7 @@ fn get_session_audit_digest_rejects_unloaded_session() {
 /// TPM2_GetSessionAuditDigest with a non-existent signHandle fails with TPM_RC_REFERENCE_H1
 #[test]
 fn get_session_audit_digest_rejects_unloaded_sign_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sess = start_auth_session(
         &mut sim,

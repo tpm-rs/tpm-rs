@@ -5,16 +5,16 @@ use crate::_common::{
     context_save_raw as context_save, create_storage_primary_in as create_primary,
     flush_rc as flush, mssim_rc_of as rc_of, start_session_raw as start_session, *,
 };
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::errors::TpmRc;
 use tpm2::*;
-use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 /// TPM_RC_AUTH_CONTEXT is reported before the session area is unmarshaled, including truncated and audit-only sessions.
 ///
 /// `TPM_RC_AUTH_CONTEXT` is reported before the session area is unmarshaled.
 #[test]
 fn auth_context_before_session_unmarshal() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // A truncated TPMS_AUTH_COMMAND (sane authorizationSize) still yields AUTH_CONTEXT.
     let mut bad_session = PW_SESSION.to_vec();
     bad_session[5] = 0x10; // nonce size 0x0010 with no nonce bytes
@@ -46,7 +46,7 @@ fn auth_context_before_session_unmarshal() {
 /// ignores the session type byte; object context sequence numbers start at 1.
 #[test]
 fn session_area_rejected_and_flush_handle_aliases() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let key = create_primary(&mut sim, Handle::RH_OWNER);
     let cmd = build_cmd(
@@ -92,10 +92,10 @@ fn session_area_rejected_and_flush_handle_aliases() {
 /// `TPM2_Startup` with a session area is `TPM_RC_AUTH_CONTEXT` (and is not executed).
 #[test]
 fn startup_with_sessions_not_executed() {
-    let mut sim = create_simulator!();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    let mut sim = Tpm::new();
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
     nv_on(&mut sim);
     let cmd = build_cmd(ST_SESSIONS, CC_STARTUP, &[], Some(&PW_SESSION), &[0, 0]);

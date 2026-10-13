@@ -3,25 +3,24 @@
 
 #![allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream but still implemented.
 
-use crate::_common::{NO_STREAM, PlatformConnection};
 use crate::_common::{
     create_primary_st_clear, evict_control, evict_control_rc, execute_with_password_sessions,
     execute_with_password_sessions_status, fixed_rsa_storage, get_ecc_srk_template,
     get_ecc_srk_template_unique, hash_sequence_start, hierarchy_control_rc, is_accessible,
     owner_srk, rc_h, rc0, read_public, try_create_primary_in,
 };
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::{CreateLoaded, CreatePrimary, EvictControl};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, Tpm2bAuth, Tpm2bData, Tpm2bSensitiveData, TpmaObject, TpmlPcrSelection,
     TpmsSensitiveCreate,
 };
-use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 /// EvictControl over auth/object/persistent handle combinations matches the C error codes and order.
 #[test]
 fn auth_object_and_persistent_handle_matrix() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create a transient object in Owner hierarchy
     let t_sens = TpmsSensitiveCreate {
@@ -191,7 +190,7 @@ fn auth_object_and_persistent_handle_matrix() {
 /// EvictControl of a CreateLoaded child under an stClear primary fails with TPM_RC_ATTRIBUTES
 #[test]
 fn child_of_stclear_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a Primary Key with stClear SET
     let mut primary_public = get_ecc_srk_template();
@@ -257,7 +256,7 @@ fn child_of_stclear_parent_rejected() {
 /// the hierarchy is re-enabled and can then be evicted.
 #[test]
 fn disabled_hierarchy_hides_persistent_object() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create and persist an Owner hierarchy object without stClear
     let primary_handle = create_primary_st_clear(&mut sim, Handle::RH_OWNER, false).unwrap();
@@ -316,7 +315,7 @@ fn disabled_hierarchy_hides_persistent_object() {
 /// TPM2_EvictControl over many handles checks persistent range unmarshal, attributes, hierarchy and range in spec order
 #[test]
 fn evict_control_error_precedence_across_handles() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -449,7 +448,7 @@ fn evict_control_error_precedence_across_handles() {
 /// persistent handle, and finally evicting correctly.
 #[test]
 fn evict_control_occupied_and_mismatched_persistent_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. CreatePrimary
     let t_sens = TpmsSensitiveCreate {
@@ -518,7 +517,7 @@ fn evict_control_occupied_and_mismatched_persistent_handle() {
 /// EvictControl error order: persistent/object handle mismatch before hierarchy, sequence handles, NV unavailable without mutation.
 #[test]
 fn handle_error_codes_and_validation_order() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // A platform persistent object.
     let (primary, _) =
         try_create_primary_in(&mut sim, Handle::RH_PLATFORM, fixed_rsa_storage(), &[]).unwrap();
@@ -557,8 +556,7 @@ fn handle_error_codes_and_validation_order() {
 
     // NV unavailable: no mutation.
     let srk = owner_srk(&mut sim);
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     assert_eq!(
         evict_control(&mut sim, Handle::RH_OWNER, srk, Handle(0x8100_0104)).unwrap_err(),
         rc0(TpmRc::NV_UNAVAILABLE)
@@ -573,8 +571,7 @@ fn handle_error_codes_and_validation_order() {
         .unwrap_err(),
         rc0(TpmRc::NV_UNAVAILABLE)
     );
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     assert!(read_public(&mut sim, Handle(0x8100_0104)).is_err());
     assert!(read_public(&mut sim, Handle(0x8180_0000)).is_ok());
 }
@@ -582,7 +579,7 @@ fn handle_error_codes_and_validation_order() {
 /// EvictControl with an NV-index-typed persistentHandle fails.
 #[test]
 fn non_persistent_handle_type_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. CreatePrimary
     let t_sens = TpmsSensitiveCreate {
@@ -622,7 +619,7 @@ fn non_persistent_handle_type_rejected() {
 /// EvictControl of a TPM_RH_NULL primary fails with TPM_RC_ATTRIBUTES.
 #[test]
 fn null_hierarchy_object_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // CreatePrimary in Null hierarchy
     let t_sens = TpmsSensitiveCreate {
@@ -663,7 +660,7 @@ fn null_hierarchy_object_rejected() {
 /// Persisting a second object at an occupied persistent handle fails with `TPM_RC_NV_DEFINED`.
 #[test]
 fn occupied_persistent_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create a primary object without stClear
     let primary_handle = create_primary_st_clear(&mut sim, Handle::RH_OWNER, false).unwrap();
@@ -687,7 +684,7 @@ fn occupied_persistent_handle_rejected() {
 /// Evicting a persistent object with a different persistentHandle fails with TPM_RC_HANDLE.
 #[test]
 fn persistent_handle_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // CreatePrimary in Platform hierarchy
     let t_sens = TpmsSensitiveCreate {
@@ -737,7 +734,7 @@ fn persistent_handle_mismatch_rejected() {
 /// `TPM_RC_ATTRIBUTES + H2` (TCG Part 3 Section 30.5).
 #[test]
 fn stclear_object_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a primary object with stClear = true
     let primary_handle = create_primary_st_clear(&mut sim, Handle::RH_OWNER, true)
@@ -757,7 +754,7 @@ fn stclear_object_rejected() {
 /// EvictControl sent with four password sessions is rejected
 #[test]
 fn too_many_sessions_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -802,7 +799,7 @@ fn too_many_sessions_rejected() {
 /// EvictControl on a non-existent transient handle fails with TPM_RC_REFERENCE_H1.
 #[test]
 fn unloaded_transient_reference_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Call EvictControl on transient handle 0x80000001 (which does not exist) -> must check
     // range / existence cleanly

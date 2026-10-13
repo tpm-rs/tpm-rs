@@ -7,13 +7,13 @@ use crate::_common::{
     flush_context, get_create_primary_cmd_and_handles, new_sim, rc_s1, start_auth_session,
     start_session,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, GetRandom, HierarchyChangeAuth};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bSensitiveData,
     TpmEccCurve, TpmSe, TpmaObject, TpmaSession, TpmiAlgHash, TpmsEccParms, TpmsEccPoint,
     TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 // parameter-encryption-decryption-command-table-discrepancies
 /// Encrypt/decrypt allowed per command table: PolicyGetDigest encrypt, HashSequenceStart decrypt, EncryptDecrypt no decrypt.
@@ -64,7 +64,7 @@ fn command_table_encrypt_decrypt_support() {
 /// CreatePrimary with non-empty userAuth through a DECRYPT+ENCRYPT session returns a SHA-256 key.
 #[test]
 fn create_primary_with_auth_decrypt_and_encrypt() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -146,7 +146,7 @@ fn decrypt_and_encrypt_across_session_hashes() {
                 "RUNNING: hash={:?} aes={} size={}",
                 hash_alg, aes_bits, size
             );
-            let mut sim = create_simulator!();
+            let mut sim = Tpm::new();
 
             let sym_def = match aes_bits {
                 128 => Some(AES128_CFB),
@@ -233,7 +233,7 @@ fn decrypt_and_encrypt_across_session_hashes() {
 /// CreatePrimary with a decrypt first session and an encrypt second session succeeds.
 #[test]
 fn decrypt_first_session_encrypt_second() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session1 = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -308,7 +308,7 @@ fn response_keeps_encrypt_decrypt_attributes() {
 /// One HMAC session with both DECRYPT and ENCRYPT authorizes CreatePrimary.
 #[test]
 fn single_session_decrypts_and_encrypts() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,

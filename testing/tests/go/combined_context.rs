@@ -4,7 +4,7 @@ use tpm2::Unmarshal;
 use tpm2::commands::{ContextLoad, ContextSave, CreatePrimary};
 use tpm2::*;
 #[rustfmt::skip]
-use tpm2_simulator::create_simulator;
+use testing::tpm::Tpm;
 use crate::test_utils::*;
 
 /// Builds the `CreatePrimary` command used by `TestCombinedContext`: an
@@ -62,7 +62,7 @@ pub(crate) fn combined_context_create_primary() -> CreatePrimary<'static> {
 // Original Go test: combined_context_test.go - TestCombinedContext
 #[test]
 fn test_combined_context() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cp_cmd = combined_context_create_primary();
 

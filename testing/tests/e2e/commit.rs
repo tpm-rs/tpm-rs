@@ -7,6 +7,7 @@ use crate::_common::{
     execute_with_password_sessions_status, leak_bytes, make_template, marshal_to_slice, rc_at,
     rc_bare, sign, start_auth_session,
 };
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{Command, Commit, CreateLoaded, CreatePrimary, EvictControl, Message};
 use tpm2::errors::{Position, TpmRc};
@@ -16,7 +17,6 @@ use tpm2::{
     TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmsEccParms, TpmsEccPoint, TpmsRsaParms,
     TpmsSchemeEcdaa, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSignature,
 };
-use tpm2_simulator::create_simulator;
 
 /// A TPM2_Commit counter signs exactly once; reuse or an uncommitted counter fails with TPM_RC_VALUE.
 ///
@@ -24,7 +24,7 @@ use tpm2_simulator::create_simulator;
 /// `TPM_RC_VALUE` (no ECDAA nonce reuse).
 #[test]
 fn commit_counter_signs_once() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = create_primary_with_auth_in(
         &mut sim,
         Handle::RH_OWNER,
@@ -69,7 +69,7 @@ fn commit_counter_signs_once() {
 /// requires an anonymous (ECDAA) scheme (`TPM_RC_SCHEME + RC_H1`).
 #[test]
 fn commit_key_and_scheme_requirements() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Persistent ECDAA key.
     let key = create_primary_with_auth_in(
@@ -141,7 +141,7 @@ fn commit_key_and_scheme_requirements() {
 #[test]
 #[allow(deprecated)]
 fn commit_rejects_ecc_storage_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let password = b"hello";
 
@@ -207,7 +207,7 @@ fn commit_rejects_ecc_storage_key() {
 #[test]
 #[allow(deprecated)]
 fn commit_rejects_y2_without_p1() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::from_bytes(b"password").unwrap(),
@@ -278,7 +278,7 @@ fn commit_rejects_y2_without_p1() {
 #[test]
 #[allow(deprecated)]
 fn commit_without_session_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let password = b"hello";
 
@@ -339,7 +339,7 @@ fn commit_without_session_rejected() {
 #[test]
 #[allow(deprecated)]
 fn decrypt_key_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = b"password";
 
     let tpmt_sensitive = TpmsSensitiveCreate {
@@ -402,7 +402,7 @@ fn decrypt_key_rejected() {
 #[test]
 #[allow(deprecated)]
 fn ecdaa_counter_increments_and_wrong_password_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let password = b"hello";
 
@@ -475,7 +475,7 @@ fn ecdaa_counter_increments_and_wrong_password_rejected() {
 #[test]
 #[allow(deprecated)]
 fn empty_s2_with_y2_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let auth = b"secret";
 
     let ecc_pub = TpmtPublic {
@@ -555,7 +555,7 @@ fn empty_s2_with_y2_rejected() {
 #[test]
 #[allow(deprecated)]
 fn key_without_sign_encrypt_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = b"password";
 
     let tpmt_sensitive = TpmsSensitiveCreate {
@@ -617,7 +617,7 @@ fn key_without_sign_encrypt_rejected() {
 #[test]
 #[allow(deprecated)]
 fn oversized_s2_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Clear and get Owner auth
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
@@ -688,7 +688,7 @@ fn oversized_s2_rejected() {
 #[test]
 #[allow(deprecated)]
 fn p1_with_trailing_bytes_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = b"hello";
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::from_bytes(password).unwrap(),
@@ -795,7 +795,7 @@ fn p1_with_trailing_bytes_rejected() {
 #[test]
 #[allow(deprecated)]
 fn password_rejected_without_user_with_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let password = b"secret";
 
@@ -859,7 +859,7 @@ fn password_rejected_without_user_with_auth() {
 #[test]
 #[allow(deprecated)]
 fn rsa_key_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let password = b"hello";
 
@@ -912,7 +912,7 @@ fn rsa_key_rejected() {
 /// Commit with a sign+decrypt ECC key fails with TPM_RC_SCHEME + RC_H1 (anonymous scheme check first)
 #[test]
 fn sign_decrypt_key_rejected_by_scheme() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let ecc_parms = TpmsEccParms {
         symmetric: None,
@@ -977,7 +977,7 @@ fn sign_decrypt_key_rejected_by_scheme() {
 #[test]
 #[allow(deprecated)]
 fn trailing_bytes_in_p1_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let password = b"hello";
 
@@ -1090,7 +1090,7 @@ fn trailing_bytes_in_p1_rejected() {
 #[test]
 #[allow(deprecated)]
 fn trailing_zero_auth_value_matches_empty() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let password = b"\x00\x00\x00\x00";
 
@@ -1152,7 +1152,7 @@ fn trailing_zero_auth_value_matches_empty() {
 #[test]
 #[allow(deprecated)]
 fn trailing_zero_key_auth_ignored() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let password = b"\x00\x00\x00";
 
@@ -1214,7 +1214,7 @@ fn trailing_zero_key_auth_ignored() {
 /// Commit with an unloaded transient sign handle fails.
 #[test]
 fn unloaded_sign_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let commit = Commit {
         sign_handle: Handle(0x8000000F),
         p1: Tpm2bEccPoint::default(),
@@ -1235,7 +1235,7 @@ fn unloaded_sign_handle_rejected() {
 /// An unloaded transient `signHandle` is reported as `TPM_RC_REFERENCE_H0`.
 #[test]
 fn unloaded_sign_handle_returns_reference_h0() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         commit(&mut sim, Handle(0x8000_000F), b"").unwrap_err(),
         TpmRc::REFERENCE_H0.get()
@@ -1246,7 +1246,7 @@ fn unloaded_sign_handle_returns_reference_h0() {
 #[test]
 #[allow(deprecated)]
 fn wrong_password_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = b"correct_password";
 
     let tpmt_sensitive = TpmsSensitiveCreate {

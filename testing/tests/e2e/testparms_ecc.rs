@@ -1,17 +1,17 @@
 //! TPM2_TestParms with ECC parameters: KDF, scheme and symmetric definitions.
 
 use crate::_common::{execute_test_parms, execute_test_parms_corrupted, hex_checked, raw_rc};
+use testing::tpm::Tpm;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     AlgSym, TpmEccCurve, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmsEccParms,
     TpmtEccScheme, TpmtKdfScheme, TpmtPublicParms, TpmtSymDefObject,
 };
-use tpm2_simulator::create_simulator;
 
 /// TPM2_TestParms accepts valid ECC parameters.
 #[test]
 fn accepts_valid_ecc() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
         symmetric: None,
@@ -29,7 +29,7 @@ fn accepts_valid_ecc() {
 /// must return TPM_RC_HASH (Parameter 1, 0x01C3).
 #[test]
 fn ecc_kdf_invalid_hash_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // TestParms ECC: sym=Null, scheme=Null, curve=NistP256, kdf=KDF1_SP800_56A with hash=AES(0x0006)
     let req = hex_checked(concat!(
@@ -55,7 +55,7 @@ fn ecc_kdf_invalid_hash_rejected() {
 /// and TestParms reports only unmarshaling errors (an ECC key needs a NULL KDF at creation).
 #[test]
 fn accepts_mgf1_ecc_kdf() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
         symmetric: None,
@@ -73,7 +73,7 @@ fn accepts_mgf1_ecc_kdf() {
 /// implemented schemes.
 #[test]
 fn rejects_unimplemented_ecc_schemes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     for scheme in [
         TpmtEccScheme::Sm2(TpmiAlgHash::Sha256),
         TpmtEccScheme::Ecschnorr(TpmiAlgHash::Sha256),
@@ -96,7 +96,7 @@ fn rejects_unimplemented_ecc_schemes() {
 /// TPM2_TestParms rejects an ECC KDF with an invalid hash with TPM_RC_HASH.
 #[test]
 fn rejects_ecc_kdf_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
         symmetric: None,
@@ -114,7 +114,7 @@ fn rejects_ecc_kdf_hash() {
 /// TPM2_TestParms rejects an ECC scheme with an invalid hash with TPM_RC_HASH.
 #[test]
 fn rejects_ecc_scheme_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
         symmetric: None,
@@ -132,7 +132,7 @@ fn rejects_ecc_scheme_hash() {
 /// TPM2_TestParms rejects ECC parms with invalid symmetric key bits with TPM_RC_VALUE.
 #[test]
 fn rejects_ecc_symmetric_key_bits() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // ECC with invalid symmetric cipher key bits
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
@@ -154,7 +154,7 @@ fn rejects_ecc_symmetric_key_bits() {
 /// TPM2_TestParms rejects ECC parms with an RSAPSS scheme with TPM_RC_SCHEME + P1.
 #[test]
 fn rejects_ecc_with_rsapss_scheme() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // ECC with RSAPSS scheme (invalid for ECC)
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {

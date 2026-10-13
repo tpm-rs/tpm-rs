@@ -5,20 +5,20 @@ use crate::_common::{
     load_rsa_public_only_key,
 };
 use rsa::{Oaep, RsaPublicKey};
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, StartAuthSession};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bNonce,
     Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmSe, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits,
     TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// A non-empty encryptedSalt with tpmKey RH_NULL fails with VALUE; with a decrypt key a valid salt is accepted.
 ///
 /// 2. Encrypted salt presence/absence when tpmKey is RHNull vs. valid decrypt key.
 #[test]
 fn encrypted_salt_requires_tpm_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // When tpmKey is RHNull, encrypted_salt must be empty.
     // If not empty (e.g. 10 bytes), should fail with TPM_RC_VALUE (0x2C4)
@@ -88,7 +88,7 @@ fn encrypted_salt_requires_tpm_key() {
 /// 6. KeyedHash key as tpm_key should fail
 #[test]
 fn keyedhash_tpm_key_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create KeyedHash decrypt key
     let pub_area = TpmtPublic {
@@ -147,7 +147,7 @@ fn keyedhash_tpm_key_rejected() {
 /// 11. Real RSA Decryption Failure (OAEP decryption check fails on malformed encrypted_salt)
 #[test]
 fn malformed_encrypted_salt_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_handle = create_rsa_decrypt_key(&mut sim);
 
     // Provide a random 256-byte buffer (not valid OAEP)
@@ -178,7 +178,7 @@ fn malformed_encrypted_salt_rejected() {
 /// 12. Public-only key as tpm_key should fail with TPM_RC_HANDLE (0x18B)
 #[test]
 fn public_only_tpm_key_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let public_key_handle = load_rsa_public_only_key(&mut sim);
 
     // Call StartAuthSession
@@ -208,7 +208,7 @@ fn public_only_tpm_key_rejected() {
 /// 3. Salt size checks (matching nameAlg digest size boundaries).
 #[test]
 fn salt_size_bounded_by_name_alg() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_handle = create_rsa_decrypt_key(&mut sim);
 
     let read_cmd = tpm2::commands::ReadPublic {
@@ -274,7 +274,7 @@ fn salt_size_bounded_by_name_alg() {
 /// 7. RSA key without DECRYPT attribute should fail
 #[test]
 fn tpm_key_without_decrypt_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create RSA key without DECRYPT attribute (only SIGN_ENCRYPT)
     let rsa_parms = TpmsRsaParms {
@@ -336,7 +336,7 @@ fn tpm_key_without_decrypt_rejected() {
 /// 8. Non-existent tpm_key handle should fail
 #[test]
 fn unloaded_tpm_key_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = StartAuthSession {
         tpm_key: Handle(0x8000000F), // Unloaded transient handle
         bind: Handle::RH_NULL,

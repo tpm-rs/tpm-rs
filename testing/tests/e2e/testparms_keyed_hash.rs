@@ -1,9 +1,9 @@
 //! TPM2_TestParms with keyed-hash parameters: HMAC and XOR schemes.
 
 use crate::_common::{execute_test_parms_corrupted, hex_checked, raw_rc};
+use testing::tpm::Tpm;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmiAlgHash, TpmiAlgKdf, TpmsSchemeXor, TpmtKeyedHashScheme, TpmtPublicParms};
-use tpm2_simulator::create_simulator;
 
 /// Regression test for CPCTPM_TC2_0_32_03_08:
 /// TPM2_TestParms with KeyedHash HMAC specifying an unsupported hash algorithm (TPM_ALG_AES = 0x0006)
@@ -12,7 +12,7 @@ use tpm2_simulator::create_simulator;
 /// must return TPM_RC_KDF (Parameter 1, 0x01CC) per STEP2 of CPCTPM_TC2_0_32_03_08.
 #[test]
 fn keyed_hash_scheme_hash_and_kdf() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. KeyedHash HMAC with hash=AES(0x0006)
     let req_hmac_invalid = hex_checked(concat!(
@@ -68,7 +68,7 @@ fn keyed_hash_scheme_hash_and_kdf() {
 /// TPM2_TestParms rejects a keyed-hash HMAC scheme with SHA3-256 with TPM_RC_HASH.
 #[test]
 fn rejects_hmac_scheme_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // KeyedHash HMAC with invalid hash (SHA3256)
     let kh_parms = TpmtPublicParms::KeyedHash(Some(TpmtKeyedHashScheme::Hmac(TpmiAlgHash::Sha256)));
@@ -82,7 +82,7 @@ fn rejects_hmac_scheme_hash() {
 /// TPM2_TestParms rejects a keyed-hash XOR scheme with SHA3-256 with TPM_RC_HASH.
 #[test]
 fn rejects_xor_scheme_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // KeyedHash XOR with invalid hash (SHA3256)
     let kh_parms =
@@ -100,7 +100,7 @@ fn rejects_xor_scheme_hash() {
 /// TPM2_TestParms rejects a keyed-hash XOR scheme with an invalid KDF with TPM_RC_KDF.
 #[test]
 fn rejects_xor_scheme_kdf() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let kh_parms =
         TpmtPublicParms::KeyedHash(Some(TpmtKeyedHashScheme::ExclusiveOr(TpmsSchemeXor {

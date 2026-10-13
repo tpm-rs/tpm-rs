@@ -3,15 +3,15 @@
 use crate::_common::{
     CC_ECC_PARAMETERS, ST_NO_SESSIONS, build_raw_cmd, rc_of, run_raw, send_with_rc,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::ECCParameters;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmEccCurve, TpmiAlgHash, TpmtKdfScheme};
-use tpm2_simulator::create_simulator;
 
 /// ECC_Parameters(TPM_ECC_BN_P256) returns the exact TCG curve constants.
 #[test]
 fn bn_p256_curve_constants() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Call TPM2_ECC_Parameters(TPM_ECC_BN_P256)
     let rsp = sim
@@ -53,7 +53,7 @@ fn bn_p256_curve_constants() {
 /// Raw ECC_Parameters with TPM_ECC_NONE and unknown curves is TPM_RC_CURVE; implemented curves succeed
 #[test]
 fn invalid_curve_ids_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Test TPM_ECC_NONE (0x0000) -> TPM_RC_CURVE (0x1A6)
     let req_none = [
@@ -100,7 +100,7 @@ fn invalid_curve_ids_rejected() {
 /// curve's KDF (`KDF1_SP800_56A` with SHA-256), as `CryptEccData.c`.
 #[test]
 fn nist_p224_domain_parameters() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let expected_kdf: [(u16, u16); 4] = [
         (0x0002, 0x000B),
         (0x0003, 0x000B),
@@ -166,7 +166,7 @@ fn nist_p224_domain_parameters() {
 /// `TPM2_ECC_Parameters` reports the parameters of BN P-256 and NIST P-256.
 #[test]
 fn p256_curves_parameters() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let rsp = sim
         .execute(ECCParameters {

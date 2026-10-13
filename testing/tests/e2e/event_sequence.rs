@@ -5,15 +5,15 @@ use crate::_common::{
     allocated_banks_for_pcr, compute_sha256, event_sequence_complete, execute_tpm_command_via_send,
     pcr_update_counter, pw, rc_at, start_hash_sequence, start_sequence,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{EventSequenceComplete, PCRRead, SequenceUpdate};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bMaxBuffer, TpmiAlgHash, TpmlPcrSelection, TpmsPcrSelection, TpmtHa};
-use tpm2_simulator::create_simulator;
 
 /// EventSequenceComplete extends the PCR with the event digest and returns one digest per implemented hash.
 #[test]
 fn extends_pcr_with_all_bank_digests() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. HashSequenceStart with Null hash algorithm (Event sequence)
     let seq_handle = start_sequence(&mut sim, None);
@@ -87,7 +87,7 @@ fn extends_pcr_with_all_bank_digests() {
 /// EventSequenceComplete on a hash (non-event) sequence fails with TPM_RC_MODE + H2.
 #[test]
 fn hash_sequence_handle_returns_mode() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. HashSequenceStart with SHA256 (Hash sequence instead of Event sequence)
     let seq_handle = start_sequence(&mut sim, Some(TpmiAlgHash::Sha256));
@@ -111,7 +111,7 @@ fn hash_sequence_handle_returns_mode() {
 /// banks and counts like PCR_Event.
 #[test]
 fn validates_handle_and_extends_allocated_banks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // A hash (non-event) sequence -> TPM_RC_MODE + RC_H2.
     let seq = start_hash_sequence(&mut sim, Some(TpmiAlgHash::Sha256));

@@ -7,6 +7,7 @@ use crate::test_utils::{
     marshal_auth_command, marshal_to_vec, start_auth_session, strip_trailing_zeros,
 };
 use sha2::{Digest as _, Sha256};
+use testing::tpm::Tpm;
 use tpm2::Marshal;
 use tpm2::Unmarshal;
 use tpm2::commands::{
@@ -22,7 +23,6 @@ use tpm2::{
     TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSigScheme,
 };
 use tpm2_platform_linux::PlatformCryptoProvider;
-use tpm2_simulator::{Simulator, create_simulator};
 
 // =========================================================================
 // Mixed-session command execution (mirrors go-tpm session handling)
@@ -78,7 +78,7 @@ fn hmac_parts(alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
 ///
 /// Returns the raw response parameter bytes and the response handles.
 pub(crate) fn execute_with_mixed_sessions<CmdT: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &CmdT,
     handle_names: &[&[u8]],
     auths: &mut [SessionAuth<'_>],
@@ -239,7 +239,7 @@ where
 /// Like [`execute_with_mixed_sessions`], but unmarshals the response
 /// parameters into the response, together with the response handles.
 pub(crate) fn execute_mixed<CmdT: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &CmdT,
     handle_names: &[&[u8]],
     auths: &mut [SessionAuth<'_>],
@@ -259,7 +259,7 @@ where
 /// `cmd.primary_handle` is ignored: the command is sent with
 /// `primary_handle: hierarchy`.
 pub(crate) fn create_primary_pw(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     hierarchy: Handle,
     cmd: &CreatePrimary<'_>,
 ) -> Result<responses::CreatePrimary<'static>, u32> {
@@ -412,7 +412,7 @@ where
 
 /// Creates the ECDSA-P256 restricted signing AK used by both Go tests, under
 /// the owner hierarchy, with the given user auth.
-fn create_ak_ecc(sim: &mut Simulator<'_>, auth: &[u8]) -> (Handle, Tpm2bName<'static>) {
+fn create_ak_ecc(sim: &mut Tpm, auth: &[u8]) -> (Handle, Tpm2bName<'static>) {
     let public_area = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::FIXED_TPM
@@ -452,7 +452,7 @@ fn create_ak_ecc(sim: &mut Simulator<'_>, auth: &[u8]) -> (Handle, Tpm2bName<'st
 
 /// Creates the RSA-2048 sign+decrypt key certified in
 /// `TestAuditSessionWithCertify`.
-fn create_certifiable_key_rsa(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
+fn create_certifiable_key_rsa(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     let public_area = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::FIXED_TPM
@@ -488,7 +488,7 @@ fn create_certifiable_key_rsa(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'st
 
 /// Mirrors go-tpm `HMACSession(tpm, TPMAlgSHA256, 16, Audit())`: an unbound,
 /// unsalted HMAC session with `continueSession` and `audit` set.
-fn start_audit_session(sim: &mut Simulator<'_>) -> ActiveSession {
+fn start_audit_session(sim: &mut Tpm) -> ActiveSession {
     let mut sess = start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -522,7 +522,7 @@ fn session_audit_digest(rsp: &responses::GetSessionAuditDigest<'static>) -> Vec<
 // Original Go test: audit_test.go - TestAuditSession
 #[test]
 fn test_audit_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the audit session
     let mut sess = start_audit_session(&mut sim);
@@ -626,7 +626,7 @@ fn test_audit_session() {
 // Original Go test: audit_test.go - TestAuditSessionWithCertify
 #[test]
 fn test_audit_session_with_certify() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the audit session
     let mut sess = start_audit_session(&mut sim);

@@ -9,8 +9,8 @@ use crate::_common::{
     raw_entry, rc_of, rc_s1, send_rc_with_auth_entries, start_session, start_session_of_type,
     tpm2b_params, transact,
 };
+use testing::tpm::Tpm;
 use tpm2::{Handle, TpmCc, TpmSe, TpmaObject};
-use tpm2_simulator::create_simulator;
 
 /// authorizationSize < 9, password nonce non-empty, handle errors (REFERENCE_H0) before session attribute errors.
 #[test]
@@ -62,7 +62,7 @@ fn auth_size_nonce_and_handle_error_order() {
 /// `TPM2_PCR_Allocate` requires authorization of `TPM_RH_PLATFORM`.
 #[test]
 fn authorization_requires_session_even_with_empty_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // No session area at all, empty ownerAuth.
     let code = send_rc_with_auth_entries(
@@ -211,7 +211,7 @@ fn command_header_and_auth_area_sizes() {
 /// `TPM2_PCR_Allocate` is a `HANDLE_1_USER` command (the duplicate finding owned by fix-capctx).
 #[test]
 fn pcr_allocate_requires_platform_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let allocation = [0u8, 0, 0, 1, 0x00, 0x0B, 3, 0xFF, 0xFF, 0xFF];
 
     // A password session is associated with (and checked against) platformAuth.

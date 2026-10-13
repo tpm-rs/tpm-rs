@@ -8,14 +8,14 @@ use crate::_common::{
     session_handles, session_loaded, start_hmac_session_raw, start_session_raw,
     start_session_raw_attrs, start_session_u32,
 };
+use testing::tpm::Tpm;
 use tpm2::TpmSe;
 use tpm2::errors::{Position, TpmRc};
-use tpm2_simulator::create_simulator;
 
 /// FlushContext is checked for every handle type prefix 0x00..0xFF against loaded sessions and objects.
 #[test]
 fn every_handle_type_prefix() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // We will test every prefix value from 0 to 255.
     for prefix in 0..=255u8 {
@@ -109,7 +109,7 @@ fn every_handle_type_prefix() {
 /// Flushing one of three sessions leaves the others loaded; the flushed handle then fails with TPM_RC_HANDLE.
 #[test]
 fn flush_one_of_several_sessions() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start 3 concurrent sessions (S_1, S_2, S_3)
     let s1_handle = start_session_u32(&mut sim, TpmSe::HMAC);
@@ -153,7 +153,7 @@ fn flush_one_of_several_sessions() {
 /// prefix; other prefixes fail and leave the session loaded.
 #[test]
 fn flush_rejects_invalid_session_prefixes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Flushing through FlushContext with the matching prefix succeeds: an HMAC session with
     // 0x02, a policy session with 0x03.
@@ -246,7 +246,7 @@ fn flush_rejects_invalid_session_prefixes() {
 /// Only valid session prefixes flush a session; prefix 0x80 fails and does not flush.
 #[test]
 fn flush_with_mismatched_prefix_keeps_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Only valid session prefixes should succeed in flushing the session.
     for (session_type, prefix) in [(0x00u8, 0x02u32), (0x01, 0x03)] {
@@ -297,7 +297,7 @@ fn flush_with_mismatched_prefix_keeps_session() {
 /// TPMA_CC of FlushContext has cHandles = 0, and a persistent flushHandle fails with TPM_RC_VALUE + P1.
 #[test]
 fn handle_is_parameter_and_persistent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Query GetCapability(TPM_CAP_COMMANDS = 0x00000002, property = 0x00000165, count = 1)
     let mut get_cap_req = Vec::new();
@@ -332,7 +332,7 @@ fn handle_is_parameter_and_persistent_rejected() {
 /// Flushing an HMAC session unloads it; flushing it again fails with TPM_RC_HANDLE + P1.
 #[test]
 fn hmac_session_flush_and_reflush() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start an HMAC session and verify it is loaded
     let session_handle = start_session_u32(&mut sim, TpmSe::HMAC);
@@ -369,7 +369,7 @@ fn hmac_session_flush_and_reflush() {
 /// Flushing a transient object leaves a session with the same lower 24 handle bits loaded.
 #[test]
 fn transient_does_not_flush_session_with_same_index() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start an HMAC session
     let session_handle = start_session_u32(&mut sim, TpmSe::HMAC);
@@ -408,7 +408,7 @@ fn transient_does_not_flush_session_with_same_index() {
 /// `TPM2_FlushContext`: positioned `TPM_RC_HANDLE`, session type byte ignored, no sessions.
 #[test]
 fn unloaded_transient_and_session_type_byte() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(flush_rc(&mut sim, 0x8000_0001), rc_p(TpmRc::HANDLE, 1));
     assert_eq!(flush_rc(&mut sim, 0x0300_0001), rc_p(TpmRc::HANDLE, 1));
 
@@ -430,7 +430,7 @@ fn unloaded_transient_and_session_type_byte() {
 /// returning TpmRc::HANDLE (0x8B) for unloaded transient handles per Part 3 specification.
 #[test]
 fn unloaded_transient_handle_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let flush_request = hex_checked(concat!(
         "8001",     // tag: NO_SESSIONS
@@ -454,7 +454,7 @@ fn unloaded_transient_handle_error() {
 /// `TPM_RC_HANDLE` check for unloaded entities.
 #[test]
 fn out_of_range_handle_rejected_as_value() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // TRANSIENT_LAST is TRANSIENT_FIRST + MAX_LOADED_OBJECTS - 1 = 0x8000000F.
     assert_eq!(flush_rc(&mut sim, 0x8000_000F), rc_p(TpmRc::HANDLE, 1));
     assert_eq!(flush_rc(&mut sim, 0x8000_0010), rc_p(TpmRc::VALUE, 1));

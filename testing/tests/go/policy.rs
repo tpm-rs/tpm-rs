@@ -1,6 +1,7 @@
 // Ported from tpm-go/tpm2/test/policy_test.go
 
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 #[allow(deprecated)] // `CreateLoaded` and `Sign` are deprecated in v184.
 use tpm2::commands::{CreateLoaded, Sign};
 use tpm2::commands::{
@@ -17,7 +18,6 @@ use tpm2::{
     TpmtEccScheme, TpmtPublic, TpmtRsaScheme, TpmtSigScheme, TpmtSignature, TpmtSymDefObject,
     TpmtTkHashcheck, TpmtTkVerified,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// Computes `hashAlg(data)` with the platform crypto provider.
 fn hash_sha256(data: &[u8]) -> Vec<u8> {
@@ -33,7 +33,7 @@ fn hash_sha256(data: &[u8]) -> Vec<u8> {
 /// starts an unbound, unsalted policy (or trial, if `trial`) session with a
 /// random 16-byte caller nonce, a NULL symmetric algorithm and the
 /// `continueSession` attribute set.
-fn policy_session(sim: &mut Simulator<'_>, trial: bool) -> ActiveSession {
+fn policy_session(sim: &mut Tpm, trial: bool) -> ActiveSession {
     let session_type = if trial { TpmSe::Trial } else { TpmSe::Policy };
     let mut sess = start_auth_session(
         sim,
@@ -50,7 +50,7 @@ fn policy_session(sim: &mut Simulator<'_>, trial: bool) -> ActiveSession {
 }
 
 /// Executes `TPM2_PolicyGetDigest` on `session` and returns the digest.
-fn policy_get_digest(sim: &mut Simulator<'_>, session: Handle) -> Tpm2bDigest<'static> {
+fn policy_get_digest(sim: &mut Tpm, session: Handle) -> Tpm2bDigest<'static> {
     let pgd = PolicyGetDigest {
         policy_session: session,
     };
@@ -61,7 +61,7 @@ fn policy_get_digest(sim: &mut Simulator<'_>, session: Handle) -> Tpm2bDigest<'s
 /// Equivalent of the Go `signingKey` helper: creates an ECDSA-P256-SHA256
 /// signing primary key under the owner hierarchy. Clean up with
 /// [`flush_context`].
-fn signing_key(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
+fn signing_key(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     let public_area = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::FIXED_TPM
@@ -96,7 +96,7 @@ const NV_INDEX: Handle = Handle(0x01800001);
 /// Equivalent of the Go `nvIndex` helper: defines an ordinary NV index
 /// (OwnerWrite | AuthRead, no data) and reads back its Name. Clean up with
 /// [`nv_index_cleanup`].
-fn nv_index(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
+fn nv_index(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     let def_space = NVDefineSpace {
         auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
@@ -118,7 +118,7 @@ fn nv_index(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
 }
 
 /// Cleanup returned by the Go `nvIndex` helper: undefines the NV index.
-fn nv_index_cleanup(sim: &mut Simulator<'_>, nv: Handle) {
+fn nv_index_cleanup(sim: &mut Tpm, nv: Handle) {
     let undefine = NVUndefineSpace {
         auth_handle: Handle::RH_OWNER,
         nv_index: nv,
@@ -173,7 +173,7 @@ fn rsa_ek_template_go() -> TpmtPublic<'static> {
 /// Creates a primary key from `template` under `hierarchy` (empty password
 /// auth) and returns its handle and Name. Clean up with [`flush_context`].
 fn create_primary(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     hierarchy: Handle,
     template: TpmtPublic<'static>,
 ) -> (Handle, Tpm2bName<'static>) {
@@ -188,18 +188,18 @@ fn create_primary(
 }
 
 /// Equivalent of the Go `primaryRSASRK` helper.
-fn primary_rsa_srk(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
+fn primary_rsa_srk(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     create_primary(sim, Handle::RH_OWNER, rsa_srk_template())
 }
 
 /// Equivalent of the Go `primaryRSAEK` helper.
-fn primary_rsa_ek(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
+fn primary_rsa_ek(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     create_primary(sim, Handle::RH_ENDORSEMENT, rsa_ek_template_go())
 }
 
 /// Shared body of the `TestCreatePolicySession` subtests.
 fn create_policy_session(session_type: TpmSe) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sas = StartAuthSession {
         tpm_key: Handle::RH_NULL,
@@ -238,7 +238,7 @@ fn test_create_policy_session_policy() {
 // Original Go test: policy_test.go - TestPolicySignedUpdate
 #[test]
 fn test_policy_signed_update() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (sk, sk_name) = signing_key(&mut sim);
 
     // Use a trial session to calculate this policy
@@ -276,7 +276,7 @@ fn test_policy_signed_update() {
 // Original Go test: policy_test.go - TestPolicySecretUpdate
 #[test]
 fn test_policy_secret_update() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (sk, sk_name) = signing_key(&mut sim);
 
     // Use a trial session to calculate this policy
@@ -309,7 +309,7 @@ fn test_policy_secret_update() {
 // Original Go test: policy_test.go - TestPolicyOrUpdate
 #[test]
 fn test_policy_or_update() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Use a trial session to calculate this policy
     let sess = policy_session(&mut sim, true);
@@ -347,7 +347,7 @@ enum PcrDigestCase {
 
 /// Shared body of the `TestPolicyPCR` subtests (one table entry each).
 fn policy_pcr(trial: bool, pcr_digest_case: PcrDigestCase, call_should_succeed: bool) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // PCRs 0, 1, 2, 3, 7 (PCClientCompatible: 3-byte select)
     let selection = TpmlPcrSelection::from_slice(&[TpmsPcrSelection::new(
@@ -447,7 +447,7 @@ fn test_policy_pcr_real_empty() {
 // Original Go test: policy_test.go - TestPolicyCpHashUpdate
 #[test]
 fn test_policy_cp_hash_update() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Use a trial session to calculate this policy
     let sess = policy_session(&mut sim, true);
@@ -477,7 +477,7 @@ fn test_policy_cp_hash_update() {
 // Original Go test: policy_test.go - TestPolicyAuthorizeUpdate
 #[test]
 fn test_policy_authorize_update() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Use a trial session to calculate this policy
     let sess = policy_session(&mut sim, true);
@@ -514,7 +514,7 @@ fn test_policy_authorize_update() {
 // Original Go test: policy_test.go - TestPolicyNVWrittenUpdate
 #[test]
 fn test_policy_nv_written_update() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Use a trial session to calculate this policy
     let sess = policy_session(&mut sim, true);
@@ -544,7 +544,7 @@ fn test_policy_nv_written_update() {
 // Original Go test: policy_test.go - TestPolicyNVUpdate
 #[test]
 fn test_policy_nv_update() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (nv, nv_name) = nv_index(&mut sim);
 
     // Use a trial session to calculate this policy
@@ -581,7 +581,7 @@ fn test_policy_nv_update() {
 // Original Go test: policy_test.go - TestPolicyAuthorizeNVUpdate
 #[test]
 fn test_policy_authorize_nv_update() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (nv, nv_name) = nv_index(&mut sim);
 
     // Use a trial session to calculate this policy
@@ -614,7 +614,7 @@ fn test_policy_authorize_nv_update() {
 // Original Go test: policy_test.go - TestPolicyCommandCodeUpdate
 #[test]
 fn test_policy_command_code_update() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Use a trial session to calculate this policy
     let sess = policy_session(&mut sim, true);
@@ -655,7 +655,7 @@ fn policy_auth_value(
     auth_option: Option<&'static [u8]>,
     call_should_succeed: bool,
 ) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let (pk, _pk_name) = primary_rsa_srk(&mut sim);
 
@@ -745,7 +745,7 @@ fn policy_auth_value(
     // Go's deferred cleanups run in LIFO order regardless of the outcome:
     // the policy session (error ignored), the key, the trial session and
     // finally the primary key.
-    let cleanup = |sim: &mut Simulator<'_>| {
+    let cleanup = |sim: &mut Tpm| {
         let _ = flush_context(sim, sess2.session_handle);
         flush_context(sim, k).expect("error cleaning up key");
         flush_context(sim, sess.session_handle).expect("cleaning up trial session");
@@ -811,7 +811,7 @@ struct DuplicationSelectSetup {
 /// Shared setup of `TestPolicyDuplicationSelectUpdate`: creates the RSA EK,
 /// the RSA SRK and a duplicable RSA signing key under the SRK.
 #[allow(deprecated)] // `CreateLoaded` is deprecated in v184.
-fn duplication_select_setup(sim: &mut Simulator<'_>) -> DuplicationSelectSetup {
+fn duplication_select_setup(sim: &mut Tpm) -> DuplicationSelectSetup {
     let (ek, ek_name) = primary_rsa_ek(sim);
     let (pk, _pk_name) = primary_rsa_srk(sim);
 
@@ -853,7 +853,7 @@ fn duplication_select_setup(sim: &mut Simulator<'_>) -> DuplicationSelectSetup {
 /// `include_object` selects the table entry: `false` uses an empty object
 /// Name, `true` uses the Name of the created key.
 fn policy_duplication_select_update(include_object: bool) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let setup = duplication_select_setup(&mut sim);
 
     let object_name = if include_object {

@@ -12,6 +12,7 @@ use crate::_common::{
     with_unique,
 };
 use sha2::{Digest as _, Sha256};
+use testing::tpm::Tpm;
 use tpm2::commands::{
     CreatePrimary, LoadExternal, PolicyCommandCode, PolicyGetDigest, PolicyPassword,
 };
@@ -25,12 +26,11 @@ use tpm2::{
     TpmsSensitiveCreate, TpmtKeyedHashScheme, TpmtPublic, TpmtRsaScheme, TpmtSensitive,
     TpmtSigScheme, TpmtSignature, TpmtTkHashcheck, TpmuSensitiveComposite,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// Sign with ECDAA and an unused commit counter is TPM_RC_VALUE.
 #[test]
 fn ecdaa_without_commit_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: base_attributes() | TpmaObject::SIGN_ENCRYPT | TpmaObject::DECRYPT,
@@ -78,7 +78,7 @@ fn ecdaa_without_commit_rejected() {
 #[test]
 #[allow(deprecated)]
 fn hmac_sign_and_verify() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // An HMAC-SHA256 KeyedHash signing key with a fixed HMAC key.
     let key_handle = create_primary_with_data_handle(
@@ -132,7 +132,7 @@ fn hmac_sign_and_verify() {
 /// Sign with a non-hash algorithm in the scheme is TPM_RC_HASH + RC_P2.
 #[test]
 fn invalid_scheme_hash_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_handle =
         create_primary_handle(&mut sim, rsa_signing_template_with(TpmaObject::default())).0;
 
@@ -164,7 +164,7 @@ fn invalid_scheme_hash_rejected() {
 /// Sign with a public-only HMAC key must not produce an HMAC under an empty key.
 #[test]
 fn public_only_hmac_key_returns_auth_unavailable() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = LoadExternal {
         in_private: None,
         in_public: Tpm2b(with_unique(hmac_template(
@@ -184,7 +184,7 @@ fn public_only_hmac_key_returns_auth_unavailable() {
 /// Sign with a restricted key and an empty hashcheck ticket fails with TPM_RC_TICKET.
 #[test]
 fn restricted_key_without_ticket_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_handle =
         create_primary_handle(&mut sim, rsa_signing_template_with(TpmaObject::RESTRICTED)).0;
 
@@ -219,7 +219,7 @@ fn restricted_key_without_ticket_rejected() {
 /// `TPM_RC_SCHEME + RC_P2`; non-signing (symmetric) keys are `TPM_RC_KEY + RC_H1`.
 #[test]
 fn scheme_and_signing_key_validation() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let ecdaa_key = create_primary_with_auth_in(
         &mut sim,
         Handle::RH_OWNER,
@@ -301,7 +301,7 @@ fn scheme_and_signing_key_validation() {
 /// Repeated raw Sign commands with a password session all succeed.
 #[test]
 fn sequential_signs_with_password_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_handle = create_primary_handle(
         &mut sim,
         hmac_key_template_with_policy(Tpm2bDigest::default()),
@@ -339,10 +339,10 @@ fn sequential_signs_with_password_session() {
 /// (`PolicyPassword` + `PolicyCommandCode(TPM_CC_Sign)`), computed with a trial session.
 #[test]
 fn sequential_signs_with_policy_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Runs PolicyPassword + PolicyCommandCode(TPM_CC_Sign) on `session`.
-    let run_policy = |sim: &mut Simulator<'_>, session: Handle, step: usize| {
+    let run_policy = |sim: &mut Tpm, session: Handle, step: usize| {
         let pp_cmd = PolicyPassword {
             policy_session: session,
         };
@@ -434,7 +434,7 @@ fn sequential_signs_with_policy_session() {
 #[test]
 #[allow(deprecated)]
 fn sign_and_verify_signature_round_trip_and_tampering() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -559,7 +559,7 @@ fn sign_and_verify_signature_round_trip_and_tampering() {
 #[test]
 #[allow(deprecated)]
 fn sign_rejects_decrypt_only_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create a key with DECRYPT attribute only (no SIGN_ENCRYPT)
     let in_public = TpmtPublic {
@@ -628,7 +628,7 @@ fn sign_rejects_decrypt_only_key() {
 /// Raw TPM2_Sign with a decrypt-only RSA primary fails with TPM_RC_KEY.
 #[test]
 fn sign_rejects_decrypt_only_key_raw() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, _) = create_primary_returning_public(
         &mut sim,
         rsa_public_with_symmetric(TpmaObject::DECRYPT | sdo_user(), None),
@@ -648,7 +648,7 @@ fn sign_rejects_decrypt_only_key_raw() {
 #[test]
 #[allow(deprecated)]
 fn sign_rejects_key_without_sign() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let object_handle = load_rsa_with_private(&mut sim, TpmaObject::DECRYPT, None);
 
@@ -671,7 +671,7 @@ fn sign_rejects_key_without_sign() {
 #[test]
 #[allow(deprecated)]
 fn sign_rejects_unloaded_key_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sign_cmd = Sign {
         key_handle: Handle(0x8000000E),
         digest: Tpm2bDigest::default(),
@@ -688,7 +688,7 @@ fn sign_rejects_unloaded_key_handle() {
 #[test]
 #[allow(deprecated)]
 fn sign_rejects_unsupported_sm2_scheme() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Load ECC key
     let sensitive_create = TpmtSensitive {
@@ -724,7 +724,7 @@ fn sign_rejects_unsupported_sm2_scheme() {
 /// VerifySignature with an unloaded key handle is TPM_RC_REFERENCE_H0.
 #[test]
 fn verify_signature_unloaded_key_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Send VerifySignature with an unloaded transient handle 0x80000002
     let mut verify_req = Vec::new();

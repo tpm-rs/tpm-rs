@@ -1,6 +1,7 @@
 //! Session attribute validation (AUDIT, DECRYPT, ENCRYPT, continueSession, reserved combinations).
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, FlushContext, ReadPublic};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -8,7 +9,6 @@ use tpm2::{
     TpmEccCurve, TpmSe, TpmaObject, TpmaSession, TpmiAlgHash, TpmsEccParms, TpmsEccPoint,
     TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// An unassociated HMAC session with AUDIT set is accepted on ReadPublic.
 ///
@@ -17,7 +17,7 @@ use tpm2_simulator::{Simulator, create_simulator};
 fn audit_session_on_read_public_succeeds() {
     use tpm2::commands::ReadPublic;
 
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create a key so we have a valid handle to read
     let key_handle = create_rsa_decrypt_key(&mut sim);
@@ -67,7 +67,7 @@ fn audit_session_on_read_public_succeeds() {
 /// A DECRYPT session on ReadPublic (no decryptable parameter) fails with TPM_RC_ATTRIBUTES + S1.
 #[test]
 fn decrypt_on_command_without_parameter_returns_attributes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let mut session = start_auth_session(
         &mut sim,
@@ -91,7 +91,7 @@ fn decrypt_on_command_without_parameter_returns_attributes() {
 /// An ENCRYPT session started without a symmetric algorithm fails with TPM_RC_SYMMETRIC + S1.
 #[test]
 fn encrypt_without_symmetric_returns_symmetric() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let mut session = start_auth_session(
         &mut sim,
@@ -115,7 +115,7 @@ fn encrypt_without_symmetric_returns_symmetric() {
 /// FlushContext with a DECRYPT session fails with TPM_RC_AUTH_CONTEXT.
 #[test]
 fn flush_context_with_decrypt_session_returns_auth_context() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -142,7 +142,7 @@ fn flush_context_with_decrypt_session_returns_auth_context() {
 /// FlushContext with an ENCRYPT session fails with TPM_RC_AUTH_CONTEXT.
 #[test]
 fn flush_context_with_encrypt_session_returns_auth_context() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -169,7 +169,7 @@ fn flush_context_with_encrypt_session_returns_auth_context() {
 /// FlushContext with an HMAC session area fails with TPM_RC_AUTH_CONTEXT.
 #[test]
 fn flush_context_with_session_returns_auth_context() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -195,10 +195,10 @@ fn flush_context_with_session_returns_auth_context() {
 /// DECRYPT/ENCRYPT may sit on any session but only once each and need a symmetric algorithm (ATTRIBUTES/SYMMETRIC errors).
 #[test]
 fn multi_session_decrypt_encrypt_constraints() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start HMAC sessions
-    let start_sess = |sim: &mut Simulator<'_>, sym: Option<TpmtSymDefObject>| {
+    let start_sess = |sim: &mut Tpm, sym: Option<TpmtSymDefObject>| {
         start_auth_session(
             sim,
             Handle::RH_NULL,

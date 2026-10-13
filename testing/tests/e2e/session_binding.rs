@@ -7,6 +7,7 @@ use crate::_common::{
     send_rc_with_auth_entries, start_auth_session, start_bound, start_salted,
     unseal_with_auth_entry,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{
     CreatePrimary, EvictControl, FlushContext, HierarchyChangeAuth, PolicySecret, StartAuthSession,
 };
@@ -14,7 +15,6 @@ use tpm2::{
     Handle, Tpm2bAuth, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bNonce, Tpm2bSensitiveData, TpmCc,
     TpmSe, TpmaObject, TpmiAlgHash, TpmlPcrSelection, TpmsSensitiveCreate, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// A bound HMAC session recognizes its bind entity by its bind value, whatever handle the
 /// entity is referenced by, and SHA-512 Names are supported (C `IsSessionBindEntity()`).
@@ -22,7 +22,7 @@ use tpm2_simulator::create_simulator;
 fn bound_session_matches_entity_by_bind_value() {
     // SHA-512 Name.
     {
-        let mut sim = create_simulator!();
+        let mut sim = Tpm::new();
         let mut public =
             sealed_template_with_policy(TpmaObject::USER_WITH_AUTH | TpmaObject::NO_DA, &[]);
         public.name_alg = Some(TpmiAlgHash::Sha512);
@@ -45,7 +45,7 @@ fn bound_session_matches_entity_by_bind_value() {
 
     // Same entity under another handle (persistent copy of the bind object).
     {
-        let mut sim = create_simulator!();
+        let mut sim = Tpm::new();
         let item = create_sealed(
             &mut sim,
             TpmaObject::USER_WITH_AUTH | TpmaObject::NO_DA,
@@ -83,7 +83,7 @@ fn bound_session_matches_entity_by_bind_value() {
 /// Persist a primary, bind a policy session to it, PolicySecret, evict it and flush the session.
 #[test]
 fn persist_bind_policy_session_and_evict() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. CreatePrimary under Owner hierarchy
     let t_sens = TpmsSensitiveCreate {
@@ -162,7 +162,7 @@ fn persist_bind_policy_session_and_evict() {
 #[test]
 fn salted_session_bound_to_sha512_entity() {
     // StartAuthSession side of the SHA-512 bind panic (the engine side is fix-auth's).
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, _) = create_primary(&mut sim, ecc_signing_template(TpmiAlgHash::Sha512));
     start_salted(&mut sim, Handle::RH_NULL, key, &[]).expect("bind to a SHA-512 object");
 }
@@ -172,7 +172,7 @@ fn salted_session_bound_to_sha512_entity() {
 fn sha512_named_bind_entity() {
     // Part 1 (StartAuthSession side): binding to an entity with a 66-byte SHA-512 Name must not
     // panic. Parts 2-3 are engine-side (fix-auth / fix-sessions).
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, name) = create_primary(&mut sim, ecc_signing_template(TpmiAlgHash::Sha512));
     assert_eq!(name.len(), 66);
     let mut session = start_bound(&mut sim, key, &[], TpmSe::HMAC);

@@ -1,16 +1,16 @@
 //! TPM2_NV_DefineSpace: attribute, size, authPolicy and authValue validation.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{NVDefineSpace, NVReadPublic};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2_platform_linux::PlatformCryptoProvider;
-use tpm2_simulator::create_simulator;
 
 /// NV_DefineSpace attribute/size errors (WRITTEN, oversize, PLATFORMCREATE by owner, WRITEALL > 1024, CLEAR_STCLEAR+WRITEDEFINE) carry correct positions
 #[test]
 fn attribute_and_size_error_positions() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let rc = try_define(
         &mut sim,
         Handle::RH_OWNER,
@@ -68,7 +68,7 @@ fn attribute_and_size_error_positions() {
 /// NV_DefineSpace with authPolicy size not matching nameAlg is TPM_RC_SIZE + RC_P2
 #[test]
 fn auth_policy_size_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let rc = try_define(
         &mut sim,
         Handle::RH_OWNER,
@@ -82,7 +82,7 @@ fn auth_policy_size_mismatch_rejected() {
 /// NV_DefineSpace authValue size limit ignores trailing zeros; 33 significant bytes are TPM_RC_SIZE + RC_P1
 #[test]
 fn auth_value_trailing_zeros_ignored_for_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // 32 significant bytes followed by zeros: fits a SHA-256 nameAlg once zeros are removed.
     let mut auth = vec![0x42u8; 32];
     auth.extend_from_slice(&[0, 0, 0]);
@@ -107,7 +107,7 @@ fn auth_value_trailing_zeros_ignored_for_size() {
 /// CLEAR_STCLEAR+WRITEDEFINE and PIN_PASS+GLOBALLOCK/WRITEDEFINE fail with ATTRIBUTES + P2.
 #[test]
 fn conflicting_attributes_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. CLEAR_STCLEAR and WRITEDEFINE set on the same NV index must fail (according to spec / C implementation).
     {
@@ -201,7 +201,7 @@ fn conflicting_attributes_rejected() {
 /// NV_DefineSpace then NV_ReadPublic returns the public area and correct Name; redefining fails with NV_DEFINED.
 #[test]
 fn define_then_read_public_and_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Construct TpmsNvPublic structure
     let nv_index_val = 0x01500001;
@@ -263,7 +263,7 @@ fn define_then_read_public_and_name() {
 /// NV_DefineSpace rejects bad auth handles, malformed indices and invalid attribute/size combinations.
 #[test]
 fn handle_index_and_attribute_validation() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Invalid auth handles (e.g. transient handle, must fail with Value)
     {
@@ -581,7 +581,7 @@ fn handle_index_and_attribute_validation() {
 /// NV_DefineSpace with external/permanent/non-NV handles in nvIndex fails unmarshalling with TPM_RC_VALUE + RC_P2
 #[test]
 fn non_nv_index_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // `TPMS_NV_PUBLIC.nvIndex` is a `TPMI_RH_NV_LEGACY_INDEX` in the C reference
     // (`TPMS_NV_PUBLIC_Unmarshal`), so external/permanent NV handles fail unmarshaling with
     // `TPM_RC_VALUE` just like any other non-NV handle (the finding's `TPM_RC_HANDLE` claim does
@@ -605,7 +605,7 @@ fn non_nv_index_handle_rejected() {
 /// NV_DefineSpace with dataSize 65535 fails with TPM_RC_SIZE.
 #[test]
 fn oversized_data_size_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let nv_index_val = 0x01500003;
     let nv_public_struct = TpmsNvPublic {
@@ -631,7 +631,7 @@ fn oversized_data_size_rejected() {
 /// With an owner password set, NV_DefineSpace fails with empty or wrong auth (BAD_AUTH + S1) and succeeds with the right one.
 #[test]
 fn owner_auth_required() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let nv_public_struct = TpmsNvPublic {
         nv_index: tpm2::Handle(0x01500024),
@@ -688,7 +688,7 @@ fn owner_auth_required() {
 /// PIN pass/fail indexes reject GLOBALLOCK/WRITEDEFINE with TPM_RC_ATTRIBUTES + RC_P2
 #[test]
 fn pin_index_lock_attributes_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let pin_pass = TpmaNv::from(TpmNt::PinPass) | TpmaNv::OWNERWRITE | TpmaNv::AUTHREAD;
     let rc = try_define(
         &mut sim,
@@ -718,7 +718,7 @@ fn pin_index_lock_attributes_rejected() {
 /// must return TPM_RC_ATTRIBUTES (0x0082), not TPM_RC_VALUE.
 #[test]
 fn reserved_nv_type_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // NV_DefineSpace with authHandle = RH_OWNER, attributes containing reserved NT = 0x05 (bits 4..7 = 0x50)
     // Attributes: OWNERWRITE (0x00020000) | OWNERREAD (0x00040000) | (0x05 << 4 = 0x50) -> 0x00060050

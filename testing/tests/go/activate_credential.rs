@@ -3,6 +3,7 @@
 
 use crate::audit::{SessionAuth, create_primary_pw, execute_mixed};
 use crate::test_utils::{flush_context, marshal_to_slice, start_auth_session, sym_encrypt};
+use testing::tpm::Tpm;
 use tpm2::Handle;
 use tpm2::commands::{ActivateCredential, CreatePrimary, MakeCredential, PolicySecret};
 use tpm2::crypto::Rng;
@@ -16,7 +17,6 @@ use tpm2::{
     TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2_platform_linux::{LinuxRng, PlatformCryptoProvider};
-use tpm2_simulator::create_simulator;
 
 /// Returns go-tpm's `ECCEKTemplate`: the TCG reference ECC-P256 EK template
 /// (SHA-256 name algorithm, PolicyA auth policy, zero-filled 32-byte unique).
@@ -340,7 +340,7 @@ fn create_credential_software(
 // Original Go test: activate_credential_test.go - TestActivateTPMCredential
 #[test]
 fn test_activate_tpm_credential() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -442,7 +442,7 @@ fn test_activate_tpm_credential() {
 /// the storage key that decrypts the credential challenge and `sub_template`
 /// is the credentialed (named) object.
 fn run_activate_sw_credential_test(pub_template: TpmtPublic, sub_template: TpmtPublic) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),

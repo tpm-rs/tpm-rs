@@ -1,18 +1,18 @@
 #![forbid(unsafe_code)]
 
 use crate::test_utils::flush_context;
+use testing::tpm::Tpm;
 use tpm2::commands::LoadExternal;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bSensitiveData, TpmaObject,
     TpmiAlgHash, TpmsEccParms, TpmsEccPoint, TpmtPublic, TpmtSensitive, TpmuSensitiveComposite,
 };
-use tpm2_simulator::create_simulator;
 
 // Original Go test: load_external_test.go - TestLoadExternal/ECCNoSensitive
 #[test]
 fn test_load_external_ecc_no_sensitive() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Ported from ECCNoSensitive in Go's load_external_test.go
     let x_bytes = [
@@ -58,7 +58,7 @@ fn test_load_external_ecc_no_sensitive() {
 // Original Go test: load_external_test.go - TestLoadExternal/KeyedHashSensitive
 #[test]
 fn test_load_external_keyed_hash_sensitive() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Ported from KeyedHashSensitive in Go's load_external_test.go
     let seed_value = Tpm2bDigest::from_bytes(b"obfuscation is my middle name!!!").unwrap();

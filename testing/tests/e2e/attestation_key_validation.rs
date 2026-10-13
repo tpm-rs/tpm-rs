@@ -6,18 +6,18 @@ use crate::_common::{
     ecc_sign_template_with_scheme, execute_with_password_sessions_status, quote,
     rsa_decrypt_template, rsa_sign_template,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::GetCommandAuditDigest;
 use tpm2::{
     Handle, Tpm2bData, TpmiAlgHash, TpmsSchemeEcdaa, TpmtEccScheme, TpmtRsaScheme, TpmtSigScheme,
 };
-use tpm2_simulator::create_simulator;
 
 /// Certify with a non-signing key fails with KEY+H2.
 ///
 /// `TPM2_Certify` with a non-signing key: `TPM_RC_KEY + RC_Certify_signHandle` (H2).
 #[test]
 fn certify_non_signing_key_position() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object = create_primary_in(&mut sim, Handle::RH_OWNER, rsa_sign_template(None));
     let decrypt_key = create_primary_in(&mut sim, Handle::RH_OWNER, rsa_decrypt_template());
     assert_eq!(
@@ -32,7 +32,7 @@ fn certify_non_signing_key_position() {
 /// `inScheme`: `TPM_RC_SCHEME + RC_Certify_inScheme`.
 #[test]
 fn ecdaa_default_scheme_needs_explicit_scheme() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object = create_primary_in(&mut sim, Handle::RH_OWNER, rsa_sign_template(None));
     let ecdaa_key = create_primary_in(
         &mut sim,
@@ -54,7 +54,7 @@ fn ecdaa_default_scheme_needs_explicit_scheme() {
 /// `TPM_RC_SCHEME + RC_Quote_inScheme` (P2).
 #[test]
 fn quote_key_and_scheme_positions() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let decrypt_key = create_primary_in(&mut sim, Handle::RH_OWNER, rsa_decrypt_template());
     let err = quote(&mut sim, decrypt_key, None).err();
     assert_eq!(err, Some(RC_KEY_H1));
@@ -80,7 +80,7 @@ fn quote_key_and_scheme_positions() {
 /// Every attestation command reports the scheme error at its `inScheme` position.
 #[test]
 fn scheme_error_at_in_scheme_position() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = create_primary_in(
         &mut sim,
         Handle::RH_ENDORSEMENT,

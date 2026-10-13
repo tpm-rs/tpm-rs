@@ -12,6 +12,7 @@ use crate::_common::{
     load, make_template, owner_srk, rc_h, rc_p, rsa_storage_template_with, run, run_raw,
     sealed_template, sensitive_create, sym_template_with, try_create_primary_in,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{Create, CreateLoaded, CreatePrimary, ObjectChangeAuth};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -20,12 +21,11 @@ use tpm2::{
     TpmlPcrSelection, TpmsAuthCommand, TpmsPcrSelection, TpmsRsaParms, TpmsSensitiveCreate,
     TpmtEccScheme, TpmtKeyedHashScheme, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// Create of an ECC child under a primary parent succeeds.
 #[test]
 fn create_child_under_primary() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let parent_handle = create_parent_key(&mut sim);
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -48,7 +48,7 @@ fn create_child_under_primary() {
 /// Create with TPM_RH_OWNER as parent fails with VALUE+H1 (permanent handles are not TPMI_DH_OBJECT).
 #[test]
 fn create_rejects_permanent_parent_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let rc = create(
         &mut sim,
         Handle::RH_OWNER,
@@ -63,7 +63,7 @@ fn create_rejects_permanent_parent_handle() {
 /// TPM2_Create with TPM_RH_OWNER as parent fails.
 #[test]
 fn create_with_hierarchy_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create a key under TPM_RH_OWNER using Create (should fail)
     let sealed_sensitive = TpmsSensitiveCreate {
@@ -96,7 +96,7 @@ fn create_with_hierarchy_parent_rejected() {
 /// Create under a non-existent parent fails with REFERENCE_H0.
 #[test]
 fn create_with_unloaded_parent_fails() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let t_sens = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
         data: Tpm2bSensitiveData::default(),
@@ -117,7 +117,7 @@ fn create_with_unloaded_parent_fails() {
 /// Create accepts a SHA-384/SHA-512 creationPCR; unallocated banks are filtered and pcrDigest is the empty hash.
 #[test]
 fn creation_pcr_filters_unallocated_banks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let selection = TpmlPcrSelection::from_slice(&[
         TpmsPcrSelection::new(TpmiAlgHash::Sha384, &[0x01, 0x00, 0x00]).unwrap(),
@@ -149,7 +149,7 @@ fn creation_pcr_filters_unallocated_banks() {
 /// Create with fixedTPM but not fixedParent fails with ATTRIBUTES+P2.
 #[test]
 fn fixed_tpm_without_fixed_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let parent_handle = create_parent_key(&mut sim);
     let t_sens = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -177,7 +177,7 @@ fn fixed_tpm_without_fixed_parent_rejected() {
 /// Create with RH_OWNER as parent is TPM_RC_VALUE + RC_H1 (parentHandle is TPMI_DH_OBJECT)
 #[test]
 fn hierarchy_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -213,7 +213,7 @@ fn hierarchy_parent_rejected() {
 /// must return TPM_RC_SCHEME (Parameter 2, 0x02D9).
 #[test]
 fn keyed_hash_invalid_scheme() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create Primary object under Owner hierarchy first
     let primary_obj_handle = create_owner_primary(&mut sim, get_test_template());
@@ -299,7 +299,7 @@ fn keyed_hash_invalid_scheme() {
 /// Create under a non-existent transient parent handle fails
 #[test]
 fn missing_transient_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -327,7 +327,7 @@ fn missing_transient_parent_rejected() {
 /// Create under a parent that is not a decrypt (storage) key fails
 #[test]
 fn non_decrypt_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a non-decrypt key under Owner
     let t_sens = TpmsSensitiveCreate {
@@ -366,7 +366,7 @@ fn non_decrypt_parent_rejected() {
 /// A raw TPM2_Create with public type TPM_ALG_NULL fails with TPM_RC_TYPE.
 #[test]
 fn null_public_type_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let parent_pub = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -457,7 +457,7 @@ fn null_public_type_rejected() {
 /// Create/CreatePrimary SchemeChecks: sealed scheme, keyedhash NULL scheme, decrypt symmetric, storage symmetric, fixedParent nameAlg, dual-use scheme.
 #[test]
 fn object_attribute_and_scheme_consistency_checks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let p2 = |rc| rc_p(rc, 2);
 
@@ -550,7 +550,7 @@ fn object_attribute_and_scheme_consistency_checks() {
 /// Create/Load/ObjectChangeAuth reject permanent parent handles; a corrupted outer integrity on Load is INTEGRITY+P1.
 #[test]
 fn permanent_parent_and_corrupted_private_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let child = create(
         &mut sim,
@@ -607,7 +607,7 @@ fn permanent_parent_and_corrupted_private_rejected() {
 /// Create of an RSA child with both SIGN_ENCRYPT and DECRYPT (NULL scheme) is checked for TPM_RC_ATTRIBUTES rules.
 #[test]
 fn rsa_sign_and_decrypt_with_null_scheme() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a primary parent key
     let parent_handle = create_parent(&mut sim);
@@ -650,7 +650,7 @@ fn rsa_sign_and_decrypt_with_null_scheme() {
 /// Create with an unsupported nameAlg fails with HASH+P2.
 #[test]
 fn unsupported_ecc_child_name_alg_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let parent_handle = create_parent_key(&mut sim);
     let t_sens = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -678,7 +678,7 @@ fn unsupported_ecc_child_name_alg_rejected() {
 /// Create with nameAlg SM3-256 fails with TPM_RC_HASH + RC_P2
 #[test]
 fn unsupported_name_alg_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let parent_handle = create_ecc_parent_key(&mut sim);
 
     let t_sens = TpmsSensitiveCreate {

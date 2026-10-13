@@ -1,18 +1,18 @@
 //! TPM2_PolicyOR: digest list validation and policy branches.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, NVDefineSpace, PolicyGetDigest, PolicyOR, PolicySecret};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, Tpm2bAuth, Tpm2bDigest, Tpm2bNonce, Tpm2bSensitiveData, TpmCc, TpmSe, TpmaNv,
     TpmiAlgHash, TpmlDigest, TpmlPcrSelection, TpmsNvPublic, TpmsSensitiveCreate, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// ECC-EK salted policy session, PolicySecret with an NV index auth handle, then PolicyOR; digests match expectations.
 #[test]
 fn ecc_salted_session_policy_secret_nv_and_or() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // -------------------------------------------------------------
     // Step 1: Create ECC Endorsement Key (used for ECC KDFe salting)
@@ -155,7 +155,7 @@ fn ecc_salted_session_policy_secret_nv_and_or() {
 /// PolicyOR with an empty pHashList fails
 #[test]
 fn empty_hash_list_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a Trial session
     let trial_session = start_auth_session(
@@ -185,7 +185,7 @@ fn empty_hash_list_rejected() {
 /// PolicyOR with an empty digest list fails with SIZE+P1.
 #[test]
 fn empty_list_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let active_session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -213,7 +213,7 @@ fn empty_list_rejected() {
 /// PolicyOR succeeds when the current digest is in the list and can be chained again
 #[test]
 fn matching_digest_chains_policy_or() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start Policy session
     let policy_session = start_auth_session(
@@ -261,7 +261,7 @@ fn matching_digest_chains_policy_or() {
 /// PolicyOR without a matching digest fails with VALUE+P1; a matching digest is accepted.
 #[test]
 fn mismatch_reports_parameter_one() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let s = start_session_with_hash(&mut sim, TpmSe::Policy, TpmiAlgHash::Sha256).session_handle;
     let err = run_command(
         &mut sim,
@@ -290,7 +290,7 @@ fn mismatch_reports_parameter_one() {
 /// PolicyOR with digests of different sizes is TPM_RC_VALUE + RC_P1 in a policy session
 #[test]
 fn mixed_digest_sizes_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a Trial session
     let trial_session = start_auth_session(
@@ -346,7 +346,7 @@ fn mixed_digest_sizes_rejected() {
 /// PolicyOR in a policy session succeeds when the current digest is in the list.
 #[test]
 fn policy_session_with_matching_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let active_session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -384,7 +384,7 @@ fn policy_session_with_matching_digest() {
 /// PolicyOR in a policy session fails with VALUE+P1 when the current digest is not listed.
 #[test]
 fn policy_session_without_matching_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let active_session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -421,7 +421,7 @@ fn policy_session_without_matching_digest() {
 /// PolicyOR with a single-entry pHashList fails
 #[test]
 fn single_entry_hash_list_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a Trial session
     let trial_session = start_auth_session(
@@ -452,7 +452,7 @@ fn single_entry_hash_list_rejected() {
 /// PolicyOR in a trial session updates the digest to H(0 || TPM_CC_PolicyOR || digests)
 #[test]
 fn trial_digest_update() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a Trial session
     let trial_session = start_auth_session(
@@ -503,7 +503,7 @@ fn trial_digest_update() {
 /// PolicyOR in a trial session succeeds with arbitrary digests.
 #[test]
 fn trial_session_accepts_any_list() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let active_session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -534,7 +534,7 @@ fn trial_session_accepts_any_list() {
 /// PolicyOR on a trial session succeeds even when the current digest is not in the list.
 #[test]
 fn trial_session_skips_digest_match() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a Trial session
     let trial_session = start_auth_session(

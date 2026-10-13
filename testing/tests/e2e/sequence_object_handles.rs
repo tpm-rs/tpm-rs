@@ -1,10 +1,10 @@
 //! Sequence object handles are rejected by commands that need a regular object.
 
 use crate::_common::*;
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::*;
 use tpm2::errors::TpmRc;
 use tpm2::*;
-use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 /// EvictControl (ATTRIBUTES+H2), ObjectChangeAuth and CreateLoaded (TYPE+H1) reject sequence objects.
 ///
@@ -12,7 +12,7 @@ use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 #[test]
 #[allow(deprecated)]
 fn evict_change_auth_create_loaded_reject_sequence_handles() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let seq = hash_sequence_start(&mut sim);
 
@@ -52,7 +52,7 @@ fn evict_change_auth_create_loaded_reject_sequence_handles() {
 /// sequence-object-handle-resolution-and-evictcontrol-external-object-bugs
 #[test]
 fn load_under_sequence_parent_and_evict_without_nv() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let seq = hash_sequence_start(&mut sim);
 
@@ -89,14 +89,12 @@ fn load_under_sequence_parent_and_evict_without_nv() {
         &[],
         &[],
     );
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     assert_eq!(
         evict_control(&mut sim, Handle::RH_OWNER, obj, Handle(0x8100_0102)).unwrap_err(),
         rc0(TpmRc::NV_UNAVAILABLE)
     );
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     assert!(
         read_public(&mut sim, Handle(0x8100_0102)).is_err(),
         "the object must not have been persisted"
@@ -108,7 +106,7 @@ fn load_under_sequence_parent_and_evict_without_nv() {
 /// read-public-and-object-handlers-sequence-handle-error-discrepancies
 #[test]
 fn object_commands_reject_sequence_handles() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let seq = hash_sequence_start(&mut sim);
 
@@ -168,7 +166,7 @@ fn object_commands_reject_sequence_handles() {
 /// tpm2-readpublic-returns-tpm-rc-reference-h0
 #[test]
 fn read_public_rejects_sequence_object() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let seq = hash_sequence_start(&mut sim);
     // C ReadPublic.c: a sequence object has no public area.
     assert_eq!(

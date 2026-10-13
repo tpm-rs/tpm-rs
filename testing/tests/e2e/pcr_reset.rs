@@ -6,10 +6,10 @@ use crate::_common::{
     pcr_extend_at_no_continue as pcr_extend_at, pcr_read_selection as pcr_read,
     pcr_reset_at_no_continue as pcr_reset_at, pw, read_pcr_by_alg_id as read_pcr,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::*;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// PCRs 16 and 23 reset to zero at locality 0 after extend; PCR 0 fails with TPM_RC_LOCALITY
 ///
@@ -17,7 +17,7 @@ use tpm2_simulator::create_simulator;
 /// cannot (`TPM_RC_LOCALITY`).
 #[test]
 fn pcr_reset_resettable_pcrs_at_locality_zero() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     for (pcr, select, fill) in [(16u32, [0u8, 0, 1], 0xaau8), (23, [0, 0, 128], 0xbb)] {
         let digest = [fill; 32];
@@ -72,7 +72,7 @@ fn pcr_reset_resettable_pcrs_at_locality_zero() {
 /// PCR_Reset clears PCR 16/23; PCR 0 and DRTM PCR 17 cannot be reset (LOCALITY).
 #[test]
 fn reset_resettable_pcrs_only() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Extend non-zero values into PCR 16 and PCR 23
     let digests = [(ALG_SHA1, vec![0x55u8; 20])];
@@ -102,7 +102,7 @@ fn reset_resettable_pcrs_only() {
 /// PCR_Reset with TPM_RH_NULL fails with VALUE+H1.
 #[test]
 fn reset_rh_null_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let reset_cmd = PCRReset {
         pcr_handle: Handle::RH_NULL,

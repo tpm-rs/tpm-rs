@@ -1,9 +1,9 @@
 //! privacyAdminHandle validation of TPM2_GetTime and TPM2_GetCommandAuditDigest.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{GetCommandAuditDigest, GetTime};
 use tpm2::{Handle, Tpm2bData, TpmiAlgHash, TpmtRsaScheme};
-use tpm2_simulator::create_simulator;
 
 /// GetCommandAuditDigest rejects TPM_RH_OWNER/TPM_RH_PLATFORM as privacy administrator (VALUE+H1).
 ///
@@ -11,7 +11,7 @@ use tpm2_simulator::create_simulator;
 /// administrator (the handler used to accept them; the engine already rejected them earlier).
 #[test]
 fn command_audit_digest_rejects_owner_and_platform() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     for admin in [Handle::RH_OWNER, Handle::RH_PLATFORM] {
         let cmd = GetCommandAuditDigest {
             privacy_handle: admin,
@@ -30,7 +30,7 @@ fn command_audit_digest_rejects_owner_and_platform() {
 /// GetTime with TPM_RH_NULL/OWNER/PLATFORM as privacyAdminHandle fails with VALUE+H1.
 #[test]
 fn get_time_rejects_null_owner_platform() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let scheme = Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256));
     let key_handle =
         create_test_key_with_options(&mut sim, &[], scheme, false, TpmiAlgHash::Sha256);
@@ -67,7 +67,7 @@ fn get_time_rejects_null_owner_platform() {
 /// handler fix; this test guards the end-to-end behavior.)
 #[test]
 fn get_time_rejects_owner() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         get_time(&mut sim, Handle::RH_OWNER, Handle::RH_NULL, None, 2).err(),
         Some(RC_VALUE_H1)

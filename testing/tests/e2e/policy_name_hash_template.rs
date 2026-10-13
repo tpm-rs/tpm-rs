@@ -1,15 +1,15 @@
 //! TPM2_PolicyNameHash and TPM2_PolicyTemplate digest updates and session checks.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{PolicyGetDigest, PolicyNameHash, PolicyTemplate, StartAuthSession};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bDigest, Tpm2bNonce, TpmCc, TpmSe, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// PolicyNameHash on an HMAC session is rejected
 #[test]
 fn hmac_session_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start an HMAC session via StartAuthSession
     let session_handle =
@@ -33,7 +33,7 @@ fn hmac_session_rejected() {
 /// PolicyNameHash in a trial session updates the digest to H(0 || TPM_CC_PolicyNameHash || nameHash)
 #[test]
 fn name_hash_updates_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a SHA256 trial policy session via StartAuthSession
     let policy_session_handle =
@@ -74,7 +74,7 @@ fn name_hash_updates_digest() {
 /// `H(0[32] || TPM_CC_PolicyTemplate || templateHash)`.
 #[test]
 fn policy_template_extends_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start a policy session
     let session_rsp = execute_with_password_sessions(

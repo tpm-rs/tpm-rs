@@ -1,6 +1,7 @@
 //! TPM2_PolicyAuthorizeNV: policies stored in NV indices and handle/digest validation.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{
     NVDefineSpace, NVWrite, PolicyAuthorizeNV, PolicyCommandCode, PolicyGetDigest,
 };
@@ -8,12 +9,11 @@ use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, Handle, Tpm2bAuth, Tpm2bDigest, TpmCc, TpmNt, TpmSe, TpmaNv, TpmiAlgHash, TpmsNvPublic, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// PolicyAuthorizeNV fails when the NV index holds a SHA-1 digest for a SHA-256 session
 #[test]
 fn digest_hash_alg_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Define NV index
     let nv_index_val = 0x01600002;
@@ -63,7 +63,7 @@ fn digest_hash_alg_mismatch_rejected() {
 /// PolicyAuthorizeNV fails when the stored digest differs from the session's policy digest
 #[test]
 fn digest_value_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Define NV index
     let nv_index_val = 0x01600003;
@@ -113,7 +113,7 @@ fn digest_value_mismatch_rejected() {
 /// PolicyAuthorizeNV with RH_ENDORSEMENT as authHandle is TPM_RC_VALUE
 #[test]
 fn endorsement_auth_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let nv_index_val = 0x01600008;
     let nv_public_struct = TpmsNvPublic {
@@ -172,7 +172,7 @@ fn endorsement_auth_handle_rejected() {
 /// PolicyAuthorizeNV succeeds when the stored digest matches the session's policy digest
 #[test]
 fn matching_digest_succeeds() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Define NV index
     let nv_index_val = 0x01600004;
@@ -225,7 +225,7 @@ fn matching_digest_succeeds() {
 /// PolicyAuthorizeNV succeeds when the index holds the current policy digest as TPMT_HA.
 #[test]
 fn matching_nv_digest_succeeds() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Setup policy session
     let active_session = start_auth_session(
@@ -304,7 +304,7 @@ fn matching_nv_digest_succeeds() {
 /// PolicyAuthorizeNV fails with VALUE when the index holds a different digest.
 #[test]
 fn mismatching_nv_digest_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Setup policy session
     let active_session = start_auth_session(
@@ -369,7 +369,7 @@ fn mismatching_nv_digest_rejected() {
 /// PolicyAuthorizeNV with owner auth on an index without OWNERREAD is TPM_RC_NV_AUTHORIZATION
 #[test]
 fn owner_without_read_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Define NV space with OWNERWRITE but NOT OWNERREAD (i.e. no read privilege for owner)
     let nv_index_val = 0x01600007;
@@ -429,7 +429,7 @@ fn policy_authorized_index_and_bad_owner_auth() {
     // The handler no longer re-verifies authorization (the engine does, with properly positioned
     // errors), so an index authorized by a policy session is no longer rejected for lacking
     // TPMA_NV_AUTHREAD.
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0026;
     define_policy_read_authorize_index(&mut sim, index);
     let target =
@@ -459,7 +459,7 @@ fn policy_authorized_index_and_bad_owner_auth() {
 /// PolicyAuthorizeNV: complete TPMT_HA of wrong hash is HASH, truncated is INSUFFICIENT, wrong authHandle, undefined index HANDLE+H2.
 #[test]
 fn tpmt_ha_unmarshal_and_error_positions() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // A complete SHA-256 TPMT_HA with a SHA-384 session: TPM_RC_HASH, not TPM_RC_INSUFFICIENT.
     let index = 0x0150_0023;
     define_nv_empty_policy(&mut sim, index, nv_attrs(TpmaNv::OWNERREAD), 34);
@@ -505,7 +505,7 @@ fn tpmt_ha_unmarshal_and_error_positions() {
 /// PolicyAuthorizeNV in a trial session succeeds on an unwritten index and updates the digest with the NV name
 #[test]
 fn trial_session_skips_index_check() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Define NV space, but do NOT write to it.
     let nv_index_val = 0x01600005;
@@ -590,7 +590,7 @@ fn trial_session_skips_index_check() {
 /// PolicyAuthorizeNV on an index holding a truncated TPMT_HA fails with TPM_RC_INSUFFICIENT
 #[test]
 fn truncated_stored_digest_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Define NV space with size 10 (less than 34)
     let nv_index_val = 0x01600006;
@@ -648,7 +648,7 @@ fn truncated_stored_digest_rejected() {
 /// PolicyAuthorizeNV on an unwritten NV index fails in a policy session
 #[test]
 fn unwritten_index_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Define NV space, but do NOT write to it.
     let nv_index_val = 0x01600001;

@@ -1,10 +1,10 @@
+use testing::tpm::Tpm;
 use tpm2::commands::GetRandom;
-use tpm2_simulator::create_simulator;
 
 // Original Go test: get_random_test.go - TestGetRandom
 #[test]
 fn test_get_random() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = GetRandom {
         bytes_requested: 16,

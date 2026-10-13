@@ -6,12 +6,12 @@ use tpm2::Handle;
 use tpm2::commands::CreatePrimary;
 
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 use tpm2::{
     AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bName, TpmaNv, TpmaObject,
     TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmsEccParms, TpmsNvPublic, TpmtPublic,
     TpmtSymDefObject,
 };
-use tpm2_simulator::create_simulator;
 
 // Original Go test: names_test.go - TestHandleName
 #[test]
@@ -26,7 +26,7 @@ fn test_handle_name() {
 // Original Go test: names_test.go - TestObjectName
 #[test]
 fn test_object_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let auth_policy = [
         0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xB3, 0xF8, 0x1A, 0x90, 0xCC, 0x8D, 0x46, 0xA5, 0xD7,
@@ -111,7 +111,7 @@ fn test_object_name() {
 // Original Go test: names_test.go - TestNVName
 #[test]
 fn test_nv_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let mut attributes = TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD;
     attributes.set_type(tpm2::TpmNt::Ordinary);

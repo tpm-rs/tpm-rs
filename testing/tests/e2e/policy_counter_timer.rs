@@ -1,15 +1,15 @@
 //! TPM2_PolicyCounterTimer: clock comparisons and NV/clock requirements.
 
 use crate::_common::*;
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::{PolicyCounterTimer, ReadClock};
 use tpm2::errors::TpmRc;
 use tpm2::{Tpm2bOperand, TpmCc, TpmEo, TpmSe, TpmiAlgHash};
-use tpm2_simulator::{Simulator, SimulatorPlatformSignal, create_simulator};
 
 /// PolicyCounterTimer comparing the clock read by ReadClock succeeds and updates the digest
 #[test]
 fn clock_comparison_updates_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start policy session via StartAuthSession
     let policy_session_handle =
@@ -57,9 +57,9 @@ fn clock_comparison_updates_digest() {
 /// PolicyCounterTimer on time/clock offsets needs a running clock (NV_UNAVAILABLE); reset/restart counts do not.
 #[test]
 fn clock_operands_need_nv() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let s = start_session_with_hash(&mut sim, TpmSe::Policy, TpmiAlgHash::Sha256).session_handle;
-    let counter_timer = |sim: &mut Simulator<'_>, offset: u16| {
+    let counter_timer = |sim: &mut Tpm, offset: u16| {
         run_command(
             sim,
             PolicyCounterTimer {
@@ -71,14 +71,12 @@ fn clock_operands_need_nv() {
         )
         .map(|_| ())
     };
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     // time (offset 0) and clock (offset 8) need a running Clock.
     assert_eq!(counter_timer(&mut sim, 0), Err(TpmRc::NV_UNAVAILABLE.get()));
     assert_eq!(counter_timer(&mut sim, 8), Err(TpmRc::NV_UNAVAILABLE.get()));
     // resetCount/restartCount (offset >= 16) do not.
     counter_timer(&mut sim, 16).unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     counter_timer(&mut sim, 8).unwrap();
 }

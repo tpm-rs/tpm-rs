@@ -7,15 +7,15 @@ use crate::_common::{
     create_storage_primary_in, exec, mssim_rc_of, new_sim, policy_secret_default_params, rc_h,
     rc_s1, start_session, start_session_raw,
 };
+use testing::tpm::Tpm;
 use tpm2::errors::TpmRc;
 use tpm2::{Handle, TpmSe};
-use tpm2_simulator::create_simulator;
 
 /// Session handles in the handle area: unloaded slots are `TPM_RC_REFERENCE_H0 + i`, wrong types
 /// `TPM_RC_VALUE` (unmarshal) or `TPM_RC_HANDLE` (session of the other type).
 #[test]
 fn policy_session_handle_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let p = start_session_raw(&mut sim, 1);
     let h = start_session_raw(&mut sim, 0);
     let pslot = p & 0x00FF_FFFF;
@@ -98,7 +98,7 @@ fn policy_session_handle_errors() {
 /// Same mapping for the policy-session handle (`validate_policy_session`-equivalent checks).
 #[test]
 fn policy_signed_auth_object_checked_first() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let h = start_session_raw(&mut sim, 0);
     let cmd = build_raw_cmd(
         ST_NO_SESSIONS,
@@ -200,7 +200,7 @@ fn session_handle_resolution_and_duplicates() {
 /// `TPM_RC_HANDLE`).
 #[test]
 fn session_handle_resolved_by_slot() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let h = start_session_raw(&mut sim, 0);
     let cmd = build_raw_cmd(
         ST_NO_SESSIONS,
@@ -223,7 +223,7 @@ fn session_handle_resolved_by_slot() {
 /// Unloaded policy-session handles return `TPM_RC_REFERENCE_H0 + i`.
 #[test]
 fn unloaded_policy_session_returns_reference_h0() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     for cc in [0x16Cu32, 0x16B, 0x18C, 0x189] {
         let cmd = build_raw_cmd(ST_NO_SESSIONS, cc, &[0x0300_0003], None, &[0, 0, 0, 0]);
         assert_eq!(

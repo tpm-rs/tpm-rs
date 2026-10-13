@@ -2,6 +2,7 @@
 
 use crate::_common::get_expected_pcr_digest;
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{
     CreatePrimary, PolicyAuthValue, PolicyGetDigest, PolicyPCR, StartAuthSession,
 };
@@ -11,12 +12,11 @@ use tpm2::{
     Tpm2bSensitiveData, TpmCc, TpmSe, TpmaObject, TpmiAlgHash, TpmlPcrSelection, TpmsEccParms,
     TpmsPcrSelection, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// PolicyPCR hashes banks in caller order, uses the computed digest in SHA-1 trial sessions and reports pcrDigest as P1.
 #[test]
 fn banks_in_caller_order_and_sha1_trial() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Banks deliberately not in algorithm-ID order: SHA-256 (0x0B) before SHA-1 (0x04).
     let pcrs = [
         pcr_sel(TpmiAlgHash::Sha256, &[1, 0, 0]),
@@ -55,7 +55,7 @@ fn banks_in_caller_order_and_sha1_trial() {
 /// PolicyPCR accepts a selection listing the SHA-256 bank twice (each selection hashed in order, like C)
 #[test]
 fn duplicate_hash_bank_selection_accepted() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a policy session
     let active_sess = start_auth_session(
@@ -98,7 +98,7 @@ fn duplicate_hash_bank_selection_accepted() {
 /// PolicyPCR with an empty PCR selection succeeds on a policy session
 #[test]
 fn empty_pcr_selection_accepted() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let active_sess = start_auth_session(
         &mut sim,
@@ -135,7 +135,7 @@ fn empty_pcr_selection_accepted() {
 /// must return TPM_RC_HASH (Parameter 1, 0x01C3).
 #[test]
 fn invalid_selection_hash_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a trial policy session
     let session_handle = start_trial_session(&mut sim);
@@ -168,7 +168,7 @@ fn invalid_selection_hash_rejected() {
 /// PolicyPCR with a pcrDigest not matching current PCR values fails with TPM_RC_VALUE + RC_P1
 #[test]
 fn pcr_digest_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let active_sess = start_auth_session(
         &mut sim,
@@ -210,7 +210,7 @@ fn pcr_digest_mismatch_rejected() {
 #[test]
 #[allow(deprecated)]
 fn pcr_extend_after_policy_pcr_fails_with_pcr_changed() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = b"foo";
 
     // Step 1: Calculate policy digest of PolicyPCR using trial session
@@ -353,7 +353,7 @@ fn pcr_extend_after_policy_pcr_fails_with_pcr_changed() {
 #[test]
 #[allow(deprecated)]
 fn policy_pcr_combined_with_policy_auth_value() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = b"barpassword";
 
     // 1. Calculate combined policy digest: PolicyPCR followed by PolicyAuthValue
@@ -704,7 +704,7 @@ fn policy_pcr_combined_with_policy_auth_value() {
 #[test]
 #[allow(deprecated)]
 fn selected_pcr_extended_after_gating_fails() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = b"barpassword";
 
     // 1-2. Create key with policy PolicyPCR for PCR 0
@@ -840,7 +840,7 @@ fn selected_pcr_extended_after_gating_fails() {
 /// PolicyPCR in a SHA-1 trial session with empty pcrDigest uses the current PCR digest
 #[test]
 fn trial_empty_digest_uses_current_pcrs_sha1() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Test SHA1 trial session with empty pcr_digest. Like C (PolicyPCR.c: the trial branch
     // only overrides pcrDigest when one is provided), the digest of the current PCR values
@@ -885,7 +885,7 @@ fn trial_empty_digest_uses_current_pcrs_sha1() {
 /// PolicyPCR in a SHA-256 trial session with empty pcrDigest substitutes the current PCR digest
 #[test]
 fn trial_empty_digest_uses_current_pcrs_sha256() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 2. Test SHA256 trial session with empty pcr_digest (must substitute digestTPM)
     let session = start_session_with_nonce(&mut sim, TpmSe::Trial, TpmiAlgHash::Sha256, &[1; 32]);
@@ -928,7 +928,7 @@ fn trial_empty_digest_uses_current_pcrs_sha256() {
 /// PolicyPCR filters unallocated banks and hashes repeated banks in order like the C reference.
 #[test]
 fn unallocated_and_repeated_banks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // The SHA-384 bank is not allocated by default: FilterPcr clears its selection, so both the
     // hashed selection and the PCR digest are those of an empty selection.
     let requested = [pcr_sel(TpmiAlgHash::Sha384, &[0x81, 0, 0])];
@@ -957,7 +957,7 @@ fn unallocated_and_repeated_banks() {
 /// PolicyPCR with an implemented but unallocated SHA-512 bank is accepted (selection filtered) and the trial digest matches
 #[test]
 fn unallocated_sha512_bank_is_filtered() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let start_auth = StartAuthSession {
         tpm_key: Handle::RH_NULL,
@@ -1004,7 +1004,7 @@ fn unallocated_sha512_bank_is_filtered() {
 #[test]
 #[allow(deprecated)]
 fn unselected_pcr_extended_after_gating_fails() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = b"barpassword";
 
     // 1-2. Create key with policy PolicyPCR for PCR 0
@@ -1148,7 +1148,7 @@ fn unselected_pcr_extended_after_gating_fails() {
 /// at `TPM2_Startup` counts as a PCR change (C `PCRStartup` calls `PCRChanged`).
 #[test]
 fn saved_session_detects_pcr_reinit_on_restart() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // PCR 16 is not state-saved, so it is reinitialized by a TPM Restart.
     let pcrs = [pcr_sel(TpmiAlgHash::Sha256, &[0, 0, 1])];
     assert_eq!(

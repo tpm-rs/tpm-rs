@@ -4,7 +4,7 @@
 NVChip
 /client/command.port
 /client/platform.port
-*.patch
+/*.patch
 command.port
 platform.port
 /boringssl-build

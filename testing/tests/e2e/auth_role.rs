@@ -7,8 +7,8 @@ use crate::_common::{
     object_name, raw_entry, send_rc_with_auth_entries, set_owner_auth, start_session_of_type,
     tpm2b_params, unseal_with_auth_entry,
 };
+use testing::tpm::Tpm;
 use tpm2::{Handle, TpmCc, TpmSe, TpmaObject};
-use tpm2_simulator::create_simulator;
 
 /// DUP role, ADMIN role on non-objects and PCRs with an authPolicy require a policy session (TPM_RC_AUTH_TYPE otherwise)
 ///
@@ -16,7 +16,7 @@ use tpm2_simulator::create_simulator;
 /// authPolicy require a policy session (`TPM_RC_AUTH_TYPE` otherwise).
 #[test]
 fn dup_admin_and_pcr_policy_roles_require_policy_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // TPM2_Duplicate (DUP role) with a password session.
     let item = create_sealed(
@@ -106,7 +106,7 @@ fn dup_admin_and_pcr_policy_roles_require_policy_session() {
 /// session: `TPM_RC_AUTH_UNAVAILABLE` (C `IsAuthValueAvailable()`), not `TPM_RC_AUTH_TYPE`.
 #[test]
 fn user_role_without_user_with_auth_is_auth_unavailable() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let item = create_sealed(&mut sim, TpmaObject::NO_DA, b"a", &EMPTY_POLICY);
     assert_eq!(
         unseal_with_auth_entry(&mut sim, item, AuthEntry::pw(b"a")),

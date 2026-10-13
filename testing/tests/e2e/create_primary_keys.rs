@@ -5,18 +5,18 @@ use crate::_common::{
     AES128_CFB, LocalRSADecryptCmd, exec_command, execute_with_password_sessions, flush_context,
     leak_bytes, marshal_to_vec, pw, rsa_decrypt_public, rsa_public, storage_attrs,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, ReadPublic};
 use tpm2::{
     Handle, Message, PublicParmsAndId, Tpm2b, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bEccParameter,
     Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmEccCurve, TpmaObject, TpmiAlgHash, TpmlPcrSelection,
     TpmsEccParms, TpmsEccPoint, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, UnmarshalMessage,
 };
-use tpm2_simulator::create_simulator;
 
 /// ReadPublic of a new ECC primary returns the same public point as CreatePrimary (ported from Go).
 #[test]
 fn matches_create_primary_output() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let ecc_parms = TpmsEccParms {
         symmetric: None,
         scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),
@@ -75,7 +75,7 @@ fn matches_create_primary_output() {
 #[test]
 fn rsa_1024_encrypt_decrypt() {
     use rsa::traits::PublicKeyParts as _;
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sensitive_create = tpm2::TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -131,7 +131,7 @@ fn rsa_1024_encrypt_decrypt() {
 #[test]
 fn rsa_2048_encrypt_decrypt() {
     use rsa::traits::PublicKeyParts as _;
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sensitive_create = tpm2::TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -186,7 +186,7 @@ fn rsa_2048_encrypt_decrypt() {
 /// CreatePrimary of an RSA-3072 decryption key.
 #[test]
 fn rsa_3072_decryption_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sensitive_create = tpm2::TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -211,7 +211,7 @@ fn rsa_3072_decryption_key() {
 /// CreatePrimary of an RSA-4096 decryption key.
 #[test]
 fn rsa_4096_decryption_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sensitive_create = tpm2::TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -238,7 +238,7 @@ fn rsa_4096_decryption_key() {
 /// `TPM2_CreatePrimary` of an RSA storage key succeeds.
 #[test]
 fn rsa_storage_primary() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let primary_pub = rsa_public(TpmiAlgHash::Sha256, storage_attrs(), &[], Some(AES128_CFB));
     let cp_cmd = CreatePrimary {

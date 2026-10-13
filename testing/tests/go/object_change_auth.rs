@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 use tpm2::Handle;
 use tpm2::commands::{Create, CreatePrimary, Load, ObjectChangeAuth, Unseal};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// Data we are sealing.
 const DATA: &[u8] = b"secrets";
@@ -61,7 +61,7 @@ enum Subtest {
 /// Runs `TestObjectChangeAuth` up to and including subtest `last`, including
 /// the setup between subtests and the deferred cleanup at the end.
 fn run_object_change_auth(last: Subtest) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the SRK
     let create_srk_cmd = CreatePrimary {

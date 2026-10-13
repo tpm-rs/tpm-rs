@@ -7,18 +7,18 @@ use crate::_common::{
     execute_with_hmac_sessions, execute_with_hmac_sessions_corrupt_ciphertext,
     execute_with_hmac_sessions_custom, flush_context, get_rsa_srk_template, start_auth_session,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{Clear, Create, GetRandom, ReadPublic};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bSensitiveData, TpmSe,
     TpmaObject, TpmaSession, TpmiAlgHash, TpmlPcrSelection, TpmsSensitiveCreate, TpmtPublic,
     Unmarshal,
 };
-use tpm2_simulator::create_simulator;
 
 /// Corrupted CFB-encrypted TPM2_Create inSensitive is rejected during unmarshalling instead of succeeding or crashing
 #[test]
 fn corrupted_create_ciphertext_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk_template = get_rsa_srk_template();
     let srk_auth = b"mySRK";
     let (srk_handle, _) = create_srk(&mut sim, &srk_template, srk_auth);
@@ -93,7 +93,7 @@ fn corrupted_create_ciphertext_rejected() {
 /// A decrypt session on a command whose first parameter is not a TPM2B is rejected
 #[test]
 fn decrypt_session_without_decryptable_parameter() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -129,7 +129,7 @@ fn decrypt_session_without_decryptable_parameter() {
 /// ReadPublic with ENCRYPT on two sessions fails with ATTRIBUTES+S2.
 #[test]
 fn encrypt_on_both_read_public_sessions_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let mut session1 = start_auth_session(
         &mut sim,
@@ -174,7 +174,7 @@ fn encrypt_on_both_read_public_sessions_rejected() {
 /// An encrypt session on a command whose response has no TPM2B parameter is rejected
 #[test]
 fn encrypt_session_without_encryptable_response() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -202,7 +202,7 @@ fn encrypt_session_without_encryptable_response() {
 /// GetRandom with ENCRYPT on a session started with NULL symmetric fails.
 #[test]
 fn encrypt_with_null_symmetric_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start session with Null symmetric parameters
     let session = start_auth_session(
@@ -235,7 +235,7 @@ fn encrypt_with_null_symmetric_rejected() {
 /// ReadPublic of RH_NULL with an encrypt session returns plain TPM_RC_VALUE + H1.
 #[test]
 fn error_response_skips_encryption() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -268,7 +268,7 @@ fn error_response_skips_encryption() {
 /// Raw HierarchyChangeAuth with a decrypt session whose encrypted parameter size exceeds the buffer fails with TPM_RC_SIZE
 #[test]
 fn rejects_oversized_encrypted_parameter() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -341,7 +341,7 @@ fn rejects_oversized_encrypted_parameter() {
 /// GetRandom with ENCRYPT set on two sessions fails with an ATTRIBUTES error.
 #[test]
 fn two_encrypt_sessions_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sess1 = start_auth_session(
         &mut sim,

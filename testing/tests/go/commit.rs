@@ -1,10 +1,10 @@
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 use tpm2::commands::Commit;
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
 use tpm2::commands::CreateLoaded;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_simulator::create_simulator;
 
 /// Builds the `CreateLoaded` command used by `TestCommit`: an ECDAA (SHA-256)
 /// signing key on the BN P-256 curve under the owner hierarchy, with
@@ -53,7 +53,7 @@ pub(crate) fn commit_create_loaded(password: &'static [u8]) -> CreateLoaded<'sta
 #[test]
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
 fn test_commit() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let password = b"hello";
 

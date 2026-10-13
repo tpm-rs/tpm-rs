@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{
     Certify, CertifyCreation, Command, CreatePrimary, NVCertify, NVDefineSpace, NVReadPublic,
     NVWrite, UnmarshalMessage,
@@ -14,12 +15,11 @@ use tpm2::{
     TpmtSignature, TpmuAttest,
 };
 use tpm2_platform_linux::PlatformCryptoProvider;
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// Executes `cmd` with one password session per entry of `auth_values`, in
 /// handle order, mirroring go-tpm's per-handle `PasswordAuth(...)`.
 fn execute_with_password_auths<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     auth_values: &[&[u8]],
 ) -> Result<CmdT::Response<'static>, u32>
@@ -94,7 +94,7 @@ where
 // Original Go test: certify_test.go - TestCertify
 #[test]
 fn test_certify() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let auth = b"password";
 
@@ -224,7 +224,7 @@ fn test_certify() {
 // Original Go test: certify_test.go - TestCreateAndCertifyCreation
 #[test]
 fn test_create_and_certify_creation() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Setup primary key template (RSA, SHA256, restricted, sign/encrypt)
     let rsa_parms = TpmsRsaParms {
@@ -336,7 +336,7 @@ fn test_create_and_certify_creation() {
 // Original Go test: certify_test.go - TestNVCertify
 #[test]
 fn test_nv_certify() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let auth = b"password";
 

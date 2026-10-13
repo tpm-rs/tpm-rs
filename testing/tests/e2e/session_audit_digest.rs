@@ -11,13 +11,13 @@ use crate::_common::{
     rsassa_signer_template, session_audit_digest, sha256, start_auth_session, start_hmac_session,
     start_session,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{Command, GetCapability, GetSessionAuditDigest};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, Tpm2bData, TpmCap, TpmCc, TpmPt, TpmSe, TpmaSession, TpmiAlgHash, TpmtRsaScheme,
     TpmtSigScheme, TpmtSignature, TpmuAttest,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// The session audit digest accumulates across audited commands after an auditReset.
 ///
@@ -52,7 +52,7 @@ fn accumulates_across_commands() {
 /// command after an audit reset, and the session holds exclusivity.
 #[test]
 fn attested_digest_matches_cp_rp_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let mut session = start_hmac_session(&mut sim);
 
@@ -103,7 +103,7 @@ fn attested_digest_matches_cp_rp_hash() {
 /// auditReset restarts the session audit digest while plain audit extends it; invalid privacyAdminHandle is TPM_RC_VALUE + RC_H1.
 #[test]
 fn audit_reset_and_privacy_handle_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Verify AUDIT_RESET behavior
     let mut audit_session = hmac_session(&mut sim);
@@ -178,7 +178,7 @@ fn exclusive_or_reset_without_audit_rejected() {
 /// GetSessionAuditDigest: missing session (REFERENCE_H2), missing key (REFERENCE_H1), non-audit session (TPM_RC_TYPE + RC_H3).
 #[test]
 fn handle_and_session_type_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Signer object with fixed scheme RSASSA SHA256
     let signer_handle = create_primary_with_auth(&mut sim, rsassa_signer_template(), &[]);
@@ -276,7 +276,7 @@ fn platform_privacy_admin_rejected() {
 /// GetSessionAuditDigest checks the signing key before the session's audit attribute.
 #[test]
 fn session_audit_digest_key_checked_before_audit() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let decrypt_key = create_primary_in(&mut sim, Handle::RH_ENDORSEMENT, rsa_decrypt_template());
     let session = start_auth_session(
         &mut sim,
@@ -289,7 +289,7 @@ fn session_audit_digest_key_checked_before_audit() {
     )
     .expect("StartAuthSession failed");
 
-    let gsad = |sim: &mut Simulator<'_>, sign_handle: Handle| {
+    let gsad = |sim: &mut Tpm, sign_handle: Handle| {
         let cmd = GetSessionAuditDigest {
             privacy_admin_handle: Handle::RH_ENDORSEMENT,
             sign_handle,
@@ -334,7 +334,7 @@ fn session_audit_digest_key_checked_before_audit() {
 /// An audit session extends its digest per command and auditReset restarts it, matching a locally computed digest.
 #[test]
 fn session_audit_reset_attribute_restarts_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the AK for audit signing
     let (ak_handle, _ak_name) = create_signing_key_ecc(&mut sim, &[]);

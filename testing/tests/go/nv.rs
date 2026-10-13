@@ -1,13 +1,13 @@
 // Ported from _agents/skills/go-tests/tests/nv_test.go
 
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{
     NVDefineSpace, NVIncrement, NVRead, NVReadLock, NVReadPublic, NVWrite, NVWriteLock,
 };
 use tpm2::errors::TpmRc;
 use tpm2::{Handle, TpmSe};
 use tpm2::{Tpm2bAuth, Tpm2bDigest, TpmaNv, TpmiAlgHash, TpmsNvPublic};
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// NV index used by every test in this file (`TPMHandle(0x0180000F)` in Go).
 const NV_INDEX: Handle = Handle(0x0180000F);
@@ -16,7 +16,7 @@ const NV_INDEX: Handle = Handle(0x0180000F);
 /// `HMAC(TPMAlgSHA256, 16, Auth([]byte{}))`: unbound, unsalted, no symmetric
 /// cipher, SHA-256, 16-byte caller nonce and `continueSession` clear (so the
 /// TPM flushes it after a single command).
-fn one_shot_hmac_session(sim: &mut Simulator<'_>) -> ActiveSession {
+fn one_shot_hmac_session(sim: &mut Tpm) -> ActiveSession {
     start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -32,7 +32,7 @@ fn one_shot_hmac_session(sim: &mut Simulator<'_>) -> ActiveSession {
 // Original Go test: nv_test.go - TestNVAuthWrite
 #[test]
 fn test_nv_auth_write() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let mut attributes = TpmaNv::OWNERWRITE
         | TpmaNv::OWNERREAD
@@ -98,7 +98,7 @@ fn test_nv_auth_write() {
 // Original Go test: nv_test.go - TestNVAuthIncrement
 #[test]
 fn test_nv_auth_increment() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Define the counter space
     let mut attributes = TpmaNv::OWNERWRITE
@@ -208,7 +208,7 @@ fn test_nv_auth_increment() {
 // Original Go test: nv_test.go - TestNVWriteLock
 #[test]
 fn test_nv_write_lock() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Define the NV space with attributes that allow it to be locked
     let mut attributes = TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD | TpmaNv::WRITE_STCLEAR;
@@ -278,7 +278,7 @@ fn test_nv_write_lock() {
 // Original Go test: nv_test.go - TestNVReadLock
 #[test]
 fn test_nv_read_lock() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Define the NV space with attributes that allow it to be locked for reading
     let mut attributes = TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD | TpmaNv::READ_STCLEAR;

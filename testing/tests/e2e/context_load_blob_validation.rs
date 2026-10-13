@@ -6,6 +6,7 @@ use crate::_common::{
     execute_with_password_sessions, flush_context, integrity_rc, leak_bytes, load_context,
     make_template, save_object_context, size_rc, start_auth_session,
 };
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{ContextLoad, ContextSave, CreateLoaded, ReadPublic};
 use tpm2::errors::TpmRc;
@@ -14,12 +15,11 @@ use tpm2::{
     Tpm2bSensitiveData, TpmEccCurve, TpmSe, TpmaObject, TpmiAlgHash, TpmsEccParms, TpmsEccPoint,
     TpmsSchemeEcdaa, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, Unmarshal,
 };
-use tpm2_simulator::create_simulator;
 
 /// A context blob whose encrypted size is increased fails with TPM_RC_INTEGRITY.
 #[test]
 fn enlarged_encrypted_size_returns_integrity() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let context = save_object_context(&mut sim);
     let mut blob = context.context_blob.get_buffer().to_vec();
     blob[ENC_SIZE_OFFSET] ^= 0x01; // +256: larger than the remaining data
@@ -29,7 +29,7 @@ fn enlarged_encrypted_size_returns_integrity() {
 /// Blobs too short for the integrity TPM2B give INSUFFICIENT; later size checks give SIZE + P1.
 #[test]
 fn short_blobs_return_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let context = save_object_context(&mut sim);
     let blob = context.context_blob.get_buffer().to_vec();
     // C starts with TPM2B_DIGEST_Unmarshal(&integrity, blob) and returns its result unmodified
@@ -55,7 +55,7 @@ fn short_blobs_return_size() {
 /// A context blob whose encrypted size is decreased fails with TPM_RC_INTEGRITY.
 #[test]
 fn shrunken_encrypted_size_returns_integrity() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let context = save_object_context(&mut sim);
     let mut blob = context.context_blob.get_buffer().to_vec();
     let size = u16::from_be_bytes([blob[ENC_SIZE_OFFSET], blob[ENC_SIZE_OFFSET + 1]]);
@@ -66,7 +66,7 @@ fn shrunken_encrypted_size_returns_integrity() {
 /// Tampering with the integrity digest or encrypted payload fails with TPM_RC_INTEGRITY.
 #[test]
 fn tampered_integrity_or_payload_returns_integrity() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let context = save_object_context(&mut sim);
     let blob = context.context_blob.get_buffer().to_vec();
     for (what, offset) in [
@@ -84,7 +84,7 @@ fn tampered_integrity_or_payload_returns_integrity() {
 #[test]
 #[allow(deprecated)]
 fn tampered_object_blob_returns_integrity() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::from_bytes(b"pass").unwrap(),
@@ -211,7 +211,7 @@ fn tampered_object_blob_returns_integrity() {
 /// A context blob with trailing bytes fails with TPM_RC_INTEGRITY.
 #[test]
 fn trailing_bytes_return_integrity() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let context = save_object_context(&mut sim);
     let mut blob = context.context_blob.get_buffer().to_vec();
     blob.push(0xEE);
@@ -221,7 +221,7 @@ fn trailing_bytes_return_integrity() {
 /// A context blob with truncated encrypted data fails with TPM_RC_INTEGRITY.
 #[test]
 fn truncated_encrypted_data_returns_integrity() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let context = save_object_context(&mut sim);
     let mut blob = context.context_blob.get_buffer().to_vec();
     blob.pop();
@@ -231,7 +231,7 @@ fn truncated_encrypted_data_returns_integrity() {
 /// An unmodified object context blob loads back.
 #[test]
 fn untouched_object_context_round_trips() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let context = save_object_context(&mut sim);
     let handle = load_context(&mut sim, context).expect("ContextLoad failed");
     sim.execute(ReadPublic {
@@ -243,7 +243,7 @@ fn untouched_object_context_round_trips() {
 /// An unmodified session context blob loads back.
 #[test]
 fn untouched_session_context_round_trips() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -268,7 +268,7 @@ fn untouched_session_context_round_trips() {
 /// A context blob whose integrity is re-encoded as a 20-byte digest fails with TPM_RC_SIZE.
 #[test]
 fn wrong_integrity_size_returns_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let context = save_object_context(&mut sim);
     let blob = context.context_blob.get_buffer().to_vec();
     // Re-encode the integrity value as a 20-byte digest.

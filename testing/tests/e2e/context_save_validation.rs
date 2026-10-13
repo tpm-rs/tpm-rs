@@ -7,11 +7,11 @@ use crate::_common::{
     create_test_keys, execute_with_password_sessions, flush_context, flush_rc, mssim_rc_of, nv_off,
     nv_on, rc_h, rc_p, shutdown_and_start_clear, start_session_raw,
 };
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{ContextLoad, ContextSave, CreateLoaded};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmaObject, TpmsContextData, Unmarshal};
-use tpm2_simulator::create_simulator;
 
 /// stClear object contexts do not load after TPM Restart and no object context loads after TPM Reset (TPM_RC_INTEGRITY)
 ///
@@ -23,7 +23,7 @@ use tpm2_simulator::create_simulator;
 /// the counters are changed through `TPM2_Shutdown` + power cycle + `TPM2_Startup`.
 #[test]
 fn context_load_rejects_after_restart_or_reset() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let st_clear_handle = create_keyed_hash_object_with_attrs(&mut sim, TpmaObject::ST_CLEAR);
     let st_clear_context = context_save(&mut sim, st_clear_handle);
@@ -58,7 +58,7 @@ fn context_load_rejects_after_restart_or_reset() {
 /// TPM2_ContextLoad of a context with a tampered integrity HMAC fails with TPM_RC_INTEGRITY + P1
 #[test]
 fn context_load_rejects_tampered_integrity() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let handle = create_keyed_hash_object_with_attrs(&mut sim, TpmaObject::default());
 
     let mut tampered_context = context_save(&mut sim, handle);
@@ -76,7 +76,7 @@ fn context_load_rejects_tampered_integrity() {
 #[test]
 #[allow(deprecated)]
 fn context_load_rejects_tampered_sequence_handle_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (in_sensitive, in_public) = create_test_keys();
     let cmd = CreateLoaded {
         parent_handle: tpm2::Handle(0x40000001),
@@ -128,7 +128,7 @@ fn context_load_rejects_tampered_sequence_handle_hierarchy() {
 #[test]
 #[allow(deprecated)]
 fn context_save_uses_fresh_keystream() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (in_sensitive, in_public) = create_test_keys();
     let cmd = CreateLoaded {
         parent_handle: tpm2::Handle(0x40000001),
@@ -170,7 +170,7 @@ fn context_save_uses_fresh_keystream() {
 /// and checks the session type of session handles; `TPM2_FlushContext` positions its errors.
 #[test]
 fn save_handle_type_and_session_type() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     for handle in [0x8100_0099u32, 0x4000_0005, 0x4000_0001, 0x0100_0001] {
         assert_eq!(
             context_save_raw(&mut sim, handle),
@@ -202,7 +202,7 @@ fn save_handle_type_and_session_type() {
 /// ContextSave of a permanent handle (RH_OWNER) fails
 #[test]
 fn save_permanent_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let save_cmd = ContextSave {
         save_handle: Handle(0x40000001), // TPM_RH_OWNER
@@ -217,7 +217,7 @@ fn save_permanent_handle_rejected() {
 /// bytes are `TPM_RC_SIZE` even when NV is unavailable in an orderly state.
 #[test]
 fn trailing_bytes_checked_before_orderly() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = create_storage_primary_in(&mut sim, Handle::RH_OWNER);
     // TPM2_Shutdown(CLEAR) makes the state orderly; the TPM keeps executing commands.
     let shutdown = build_raw_cmd(ST_NO_SESSIONS, 0x145, &[], None, &0u16.to_be_bytes());

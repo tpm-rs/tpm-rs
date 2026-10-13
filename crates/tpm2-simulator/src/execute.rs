@@ -159,7 +159,9 @@ impl<'a> Unmarshal<'a> for RespHeader {
     }
 }
 
-/// Runs a command on the simulator and returns its response.
+/// Runs a command on a TPM (any [`tpm2::Connection`] transport, so wrappers
+/// around [`crate::Simulator`], e.g. a test harness that mirrors every command
+/// to a second TPM, can reuse it) and returns its response.
 ///
 /// The command's handles ([`Message::handles`]) are written to the handle
 /// area. One empty password session (`TPM_RS_PW`) is added for each handle
@@ -178,7 +180,7 @@ impl<'a> Unmarshal<'a> for RespHeader {
 /// - [`ExecuteError::TrailingBytes`] if bytes remain after the response.
 pub fn run_command<CmdT: Command>(
     cmd: &CmdT,
-    tpm: &mut crate::Simulator<'_>,
+    tpm: &mut (impl tpm2::Connection<Error = ExecuteError> + ?Sized),
 ) -> Result<CmdT::Response<'static>, ExecuteError>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,

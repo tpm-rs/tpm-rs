@@ -1,18 +1,18 @@
 //! TPM2_SelfTest, TPM2_IncrementalSelfTest and TPM2_GetTestResult.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::responses::{
     GetTestResult as GetTestResultRsp, IncrementalSelfTest as IncrementalSelfTestRsp,
 };
 use tpm2::commands::*;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Unmarshal, *};
-use tpm2_simulator::create_simulator;
 
 /// IncrementalSelfTest, SelfTest and GetTestResult succeed; a reserved alg fails with VALUE + P1 or SIZE with trailing bytes.
 #[test]
 fn all_commands_execute() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. IncrementalSelfTest
     let inc_cmd = IncrementalSelfTest {
@@ -64,7 +64,7 @@ fn all_commands_execute() {
 /// IncrementalSelfTest with ALG_NULL fails with VALUE+P1 and does not mutate the to-do list.
 #[test]
 fn failed_incremental_run_keeps_todo_list() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let todo = incremental_self_test(&mut sim, &[]).unwrap();
     assert!(todo.contains(&Alg::RSA));
     assert_eq!(
@@ -85,7 +85,7 @@ fn failed_incremental_run_keeps_todo_list() {
 /// must return TPM_RC_VALUE (Parameter 1, 0x0103).
 #[test]
 fn incremental_alg_error_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let inc_test_req = hex_checked(concat!(
         "8001",     // NO_SESSIONS
@@ -110,7 +110,7 @@ fn incremental_alg_error_rejected() {
 /// reserved `TPM_ALG_ID` values (`0x0000`, `0x00C1..=0x00C6`, `0x8000..=0xFFFF`).
 #[test]
 fn incremental_alg_list_framing() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Trailing bytes after a reserved algorithm ID must return TPM_RC_SIZE (not TPM_RC_VALUE)
     for reserved_hex in ["0000", "00C4", "8001", "FFFF"] {
@@ -152,7 +152,7 @@ fn incremental_alg_list_framing() {
 /// IncrementalSelfTest rejects ALG_NULL and unimplemented SM2 without partially testing AES.
 #[test]
 fn incremental_rejects_null_and_sm2_algs() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         incremental_self_test(&mut sim, &[Alg::NULL]),
         Err(TpmRc::VALUE.with(Position::parameter(1)).get())
@@ -171,7 +171,7 @@ fn incremental_rejects_null_and_sm2_algs() {
 /// IncrementalSelfTest with a reserved algorithm: trailing bytes -> SIZE, truncation -> INSUFFICIENT, exact buffer -> VALUE + P1.
 #[test]
 fn incremental_reserved_alg_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     for reserved_id in [0x0000u16, 0x00C1, 0x8000, 0xFFFF] {
         let alg_bytes = reserved_id.to_be_bytes();
@@ -213,10 +213,10 @@ fn incremental_reserved_alg_errors() {
 /// IncrementalSelfTest with a reserved TPM_ALG_ID: trailing bytes TPM_RC_SIZE, exact TPM_RC_VALUE + RC_P1, truncated TPM_RC_INSUFFICIENT
 #[test]
 fn reserved_algorithm_error_codes() {
+    use testing::tpm::Tpm;
     use tpm2::errors::{Position, TpmRc};
-    use tpm2_simulator::create_simulator;
 
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let expected_size = TpmRc::SIZE.get();
     let expected_val_p1 = TpmRc::VALUE.with(Position::parameter(1)).get();

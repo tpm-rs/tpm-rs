@@ -8,6 +8,7 @@ use crate::_common::{
     load_external_ecc_key, rc_at, rc_bare, rsa_public_with_symmetric, sdo_user, send_key_command,
     send_with_trailing,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{ECDHKeyGen, ECDHZGen, HMAC};
 use tpm2::crypto::Ecc;
 use tpm2::errors::{Position, TpmRc};
@@ -15,12 +16,11 @@ use tpm2::{
     Handle, Tpm2b, Tpm2bEccParameter, Tpm2bMaxBuffer, TpmEccCurve, TpmaObject, TpmiAlgHash,
     TpmsEccPoint, TpmtEccScheme, TpmtKeyedHashScheme,
 };
-use tpm2_simulator::create_simulator;
 
 /// TPM2_ECDH_ZGen with a restricted decryption key fails with TPM_RC_ATTRIBUTES
 #[test]
 fn ecdh_zgen_rejects_restricted_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Key with RESTRICTED attribute set (invalid for ECDH_ZGen); a restricted decryption key
     // needs a symmetric algorithm to be creatable.
     let (key, _) = create_primary_returning_public(
@@ -45,7 +45,7 @@ fn ecdh_zgen_rejects_restricted_key() {
 /// TPM2_ECDH_ZGen with an RSA key fails with TPM_RC_KEY
 #[test]
 fn ecdh_zgen_rejects_rsa_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // RSA key instead of ECC key
     let (key, _) = create_primary_returning_public(
         &mut sim,
@@ -65,7 +65,7 @@ fn ecdh_zgen_rejects_rsa_key() {
 /// TPM2_ECDH_ZGen with the key own public point succeeds
 #[test]
 fn ecdh_zgen_with_own_public_point() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, public) = create_primary_returning_public(
         &mut sim,
         ecc_public(TpmaObject::DECRYPT | sdo_user(), None, None),
@@ -87,7 +87,7 @@ fn ecdh_zgen_with_own_public_point() {
 /// `zPoint = [d_s] Q_e`, where `d_s` is the private scalar of the loaded key.
 #[test]
 fn key_gen_shared_point() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let (key_handle, priv_bytes) =
         load_external_ecc_key(&mut sim, TpmaObject::DECRYPT | TpmaObject::USER_WITH_AUTH);
@@ -134,7 +134,7 @@ fn key_gen_shared_point() {
 /// non-ECC key is `TPM_RC_KEY + RC_H1`.
 #[test]
 fn keygen_accepts_signing_and_restricted_keys() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sign_key = create_primary_with_auth_in(
         &mut sim,
         Handle::RH_OWNER,
@@ -166,7 +166,7 @@ fn keygen_accepts_signing_and_restricted_keys() {
 /// A non-ECC key without `decrypt` is `TPM_RC_KEY + RC_H1` (type checked first).
 #[test]
 fn keygen_checks_key_type_first() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let hmac_key = create_primary_with_auth_in(
         &mut sim,
         Handle::RH_OWNER,
@@ -189,7 +189,7 @@ fn keygen_checks_key_type_first() {
 /// ECDH_ZGen checks the key type before its attributes and rejects trailing bytes.
 #[test]
 fn zgen_and_hmac_validation_order() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // A restricted keyed-hash key: type (KEY) is checked before restricted/decrypt.
     let hmac_key = create_primary_with_auth_in(
@@ -231,7 +231,7 @@ fn zgen_and_hmac_validation_order() {
 /// restricted RSA key before its attributes.
 #[test]
 fn zgen_trailing_bytes_return_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let storage = create_primary_with_auth_in(
         &mut sim,
         Handle::RH_OWNER,

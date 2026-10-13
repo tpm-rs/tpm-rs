@@ -8,15 +8,15 @@ use crate::_common::{
 };
 use sha1::Sha1;
 use sha2::{Digest, Sha384, Sha512};
+use testing::tpm::Tpm;
 use tpm2::commands::Hash;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bMaxBuffer, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// TPM2_Hash digests for all banks, rejects an unsupported hash (HASH) and an invalid hierarchy (VALUE).
 #[test]
 fn algorithms_and_hierarchy_validation() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let test_cases = [
         (TpmiAlgHash::Sha1, 20),
@@ -98,7 +98,7 @@ fn algorithms_and_hierarchy_validation() {
 /// TPM2_Hash returns correct digests and tickets for every hash alg and hierarchy
 #[test]
 fn hash_every_alg_and_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let test_data = b"Multialg data check";
 
@@ -135,7 +135,7 @@ fn hash_every_alg_and_hierarchy() {
 /// TPM2_Hash with an invalid hierarchy fails with TPM_RC_VALUE
 #[test]
 fn hash_rejects_invalid_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = Hash {
         data: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
@@ -153,7 +153,7 @@ fn hash_rejects_invalid_hierarchy() {
 /// TPM2_Hash with trailing bytes after its parameters fails with TPM_RC_SIZE
 #[test]
 fn hash_rejects_trailing_bytes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = Hash {
         data: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
@@ -168,7 +168,7 @@ fn hash_rejects_trailing_bytes() {
 /// TPM2_Hash with an unimplemented hashAlg fails with TPM_RC_HASH
 #[test]
 fn hash_rejects_unsupported_alg() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = Hash {
         data: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
@@ -186,7 +186,7 @@ fn hash_rejects_unsupported_alg() {
 /// TPM2_Hash with SHA-256 returns the correct digest and a hashcheck ticket
 #[test]
 fn hash_sha256_returns_digest_and_ticket() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let test_data = b"Hello Adversary Hash!";
     let cmd = Hash {
@@ -210,7 +210,7 @@ fn hash_sha256_returns_digest_and_ticket() {
 /// must return TPM_RC_HASH (Parameter 2, 0x02C3), not TPM_RC_SIZE.
 #[test]
 fn invalid_hash_alg_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // TPM2_Hash request with hashAlg = TPM_ALG_AES (0x0006)
     let rc = raw_rc(&mut sim, &hash_request(0x0006));
@@ -233,7 +233,7 @@ fn invalid_hash_alg_rejected() {
 /// hash algorithm (SM3-256). The Go test only covers SHA-256.
 #[test]
 fn sha1_sha384_sha512_and_unsupported() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let data = b"fiona";
 

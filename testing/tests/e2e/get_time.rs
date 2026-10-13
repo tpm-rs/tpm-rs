@@ -4,14 +4,14 @@ use crate::_common::{
     create_primary_in, create_test_key, execute_get_time, execute_with_password_sessions_status,
     get_time, rsa_sign_template,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{EvictControl, GetTime};
 use tpm2::{Handle, Tpm2bData, TpmiAlgHash, TpmtRsaScheme, TpmtSigScheme, TpmtSignature};
-use tpm2_simulator::create_simulator;
 
 /// GetTime with an explicit RSASSA-SHA256 scheme on a key with NULL scheme succeeds
 #[test]
 fn explicit_scheme_on_null_scheme_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let scheme = None;
     let key_handle = create_test_key(&mut sim, &[], scheme);
 
@@ -36,7 +36,7 @@ fn explicit_scheme_on_null_scheme_key() {
 /// GetTime without sessions is TPM_RC_AUTH_MISSING
 #[test]
 fn missing_sessions_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let scheme = Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256));
     let key_handle = create_test_key(&mut sim, b"secret", scheme);
 
@@ -57,7 +57,7 @@ fn missing_sessions_rejected() {
 /// GetTime with signHandle TPM_RH_NULL (still needs a session) returns a NULL signature.
 #[test]
 fn null_sign_handle_unsigned() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let get_time_cmd = GetTime {
         privacy_admin_handle: Handle::RH_ENDORSEMENT,
@@ -79,7 +79,7 @@ fn null_sign_handle_unsigned() {
 /// key up only among transient objects and fail with `TPM_RC_VALUE`.
 #[test]
 fn persistent_signing_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = create_primary_in(
         &mut sim,
         Handle::RH_OWNER,
@@ -101,7 +101,7 @@ fn persistent_signing_key() {
 /// GetTime keeps working after a failed call with an unsupported scheme
 #[test]
 fn succeeds_after_scheme_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let scheme = Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256));
     let key_handle = create_test_key(&mut sim, &[], scheme);
 
@@ -144,7 +144,7 @@ fn succeeds_after_scheme_error() {
 /// GetTime with a wrong signing-key password fails
 #[test]
 fn wrong_key_auth_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let scheme = Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256));
     let key_handle = create_test_key(&mut sim, b"secret", scheme);
 

@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 use tpm2::commands::CreatePrimary;
 use tpm2::commands::EvictControl;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_simulator::create_simulator;
 
 /// Equivalent of go-tpm's `ECCSRKTemplate`.
 fn ecc_srk_template() -> TpmtPublic<'static> {
@@ -40,7 +40,7 @@ fn ecc_srk_template() -> TpmtPublic<'static> {
 // Original Go test: evict_control_test.go - TestEvictControl
 #[test]
 fn test_evict_control() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let srk_create = CreatePrimary {
         primary_handle: Handle::RH_OWNER,

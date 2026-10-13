@@ -1,7 +1,7 @@
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{Clear, CreatePrimary};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// Equivalent of go-tpm's `ECCSRKTemplate`.
 fn ecc_srk_template() -> TpmtPublic<'static> {
@@ -37,7 +37,7 @@ fn ecc_srk_template() -> TpmtPublic<'static> {
 // Original Go test: clear_test.go - TestClear
 #[test]
 fn test_clear() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let srk_create = CreatePrimary {
         primary_handle: Handle::RH_OWNER,

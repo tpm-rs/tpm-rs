@@ -7,20 +7,20 @@ use crate::_common::{
     AES128_CFB, create_aes_key, execute_with_corrupted_bytes, execute_with_corrupted_bytes_status,
     execute_with_password_sessions, load_public_only_sym_key, try_create_aes_key,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, EncryptDecrypt, EncryptDecrypt2};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bIv, Tpm2bMaxBuffer, Tpm2bSensitiveData,
     TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmsSensitiveCreate, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// CMAC is not implemented: an AES key with CMAC mode is rejected by CreatePrimary
 /// (TPM_RC_MODE + RC_P2) and CMAC as EncryptDecrypt(2) mode parameter fails to unmarshal
 /// (TPM_RC_MODE)
 #[test]
 fn cmac_mode_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // 1. `TPMI_ALG_SYM_MODE` excludes unimplemented modes, so the CMAC key template of
     //    TPM2_CreatePrimary (parameter 2, inPublic) fails with TPM_RC_MODE + TPM_RC_P + TPM_RC_2.
     assert_eq!(
@@ -67,7 +67,7 @@ fn cmac_mode_rejected() {
 /// EncryptDecrypt2 with decrypt byte corrupted to a non-boolean is TPM_RC_VALUE + RC_P2
 #[test]
 fn encrypt_decrypt2_decrypt_flag_value_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_handle = create_aes_key(&mut sim, TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb));
 
     let cmd = EncryptDecrypt2 {
@@ -91,7 +91,7 @@ fn encrypt_decrypt2_decrypt_flag_value_rejected() {
 /// TPM2_EncryptDecrypt2 with a decrypt TPMI_YES_NO value other than 0/1 fails with TPM_RC_VALUE + P2
 #[test]
 fn encrypt_decrypt2_rejects_invalid_decrypt_flag() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create a symmetric key first
     let sym_template = TpmtPublic {
@@ -143,7 +143,7 @@ fn encrypt_decrypt2_rejects_invalid_decrypt_flag() {
 /// EncryptDecrypt with decrypt byte corrupted to a non-boolean is TPM_RC_VALUE + RC_P1
 #[test]
 fn encrypt_decrypt_decrypt_flag_value_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_handle = create_aes_key(&mut sim, TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb));
 
     let cmd = EncryptDecrypt {
@@ -167,7 +167,7 @@ fn encrypt_decrypt_decrypt_flag_value_rejected() {
 /// TPM2_EncryptDecrypt and TPM2_EncryptDecrypt2 with mode TPM_ALG_CMAC fail with TPM_RC_MODE
 #[test]
 fn encrypt_decrypt_rejects_cmac_mode() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create a valid symmetric key
     let sym_template = TpmtPublic {
@@ -241,7 +241,7 @@ fn encrypt_decrypt_rejects_cmac_mode() {
 /// TPM2_EncryptDecrypt with a decrypt TPMI_YES_NO value other than 0/1 fails with TPM_RC_VALUE + P1
 #[test]
 fn encrypt_decrypt_rejects_invalid_decrypt_flag() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create a symmetric key first
     let sym_template = TpmtPublic {
@@ -297,7 +297,7 @@ fn encrypt_decrypt_rejects_invalid_decrypt_flag() {
 /// with `TPM_RC_KEY + RC_H1`) instead of returning `TPM_RC_FAILURE`.
 #[test]
 fn public_only_key_returns_auth_unavailable() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = load_public_only_sym_key(&mut sim);
     let cmd = EncryptDecrypt {
         key_handle: key,

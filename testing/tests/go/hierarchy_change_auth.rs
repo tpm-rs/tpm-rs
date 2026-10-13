@@ -1,9 +1,9 @@
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 use tpm2::Handle;
 use tpm2::Tpm2bAuth;
 use tpm2::commands::HierarchyChangeAuth;
 use tpm2::errors::TpmRc;
-use tpm2_simulator::{Simulator, create_simulator};
 
 const AUTH_KEY: &[u8] = b"authkey";
 const NEW_AUTH_KEY: &[u8] = b"newAuthKey";
@@ -15,7 +15,7 @@ const NEW_AUTH_KEY: &[u8] = b"newAuthKey";
 
 /// Body of `TestHierarchyChangeAuth/HierarchyChangeAuthOwner`: sets the owner
 /// auth to `AUTH_KEY` using an empty password session.
-fn hierarchy_change_auth_owner(sim: &mut Simulator<'_>) {
+fn hierarchy_change_auth_owner(sim: &mut Tpm) {
     let hca = HierarchyChangeAuth {
         auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(AUTH_KEY).unwrap(),
@@ -28,7 +28,7 @@ fn hierarchy_change_auth_owner(sim: &mut Simulator<'_>) {
 /// Body of `TestHierarchyChangeAuth/HierarchyChangeAuthOwnerUnauth`: tries to
 /// change the owner auth with an empty password, which must fail with
 /// `TPM_RC_BAD_AUTH`.
-fn hierarchy_change_auth_owner_unauth(sim: &mut Simulator<'_>) {
+fn hierarchy_change_auth_owner_unauth(sim: &mut Tpm) {
     let hca = HierarchyChangeAuth {
         auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(NEW_AUTH_KEY).unwrap(),
@@ -53,7 +53,7 @@ fn hierarchy_change_auth_owner_unauth(sim: &mut Simulator<'_>) {
 
 /// Body of `TestHierarchyChangeAuth/HierarchyChangeAuthOwnerAuth`: changes
 /// the owner auth to `NEW_AUTH_KEY` using the correct password `AUTH_KEY`.
-fn hierarchy_change_auth_owner_auth(sim: &mut Simulator<'_>) {
+fn hierarchy_change_auth_owner_auth(sim: &mut Tpm) {
     let hca = HierarchyChangeAuth {
         auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(NEW_AUTH_KEY).unwrap(),
@@ -70,14 +70,14 @@ fn hierarchy_change_auth_owner_auth(sim: &mut Simulator<'_>) {
 // Original Go test: hierarchy_change_auth_test.go - TestHierarchyChangeAuth/HierarchyChangeAuthOwner
 #[test]
 fn test_hierarchy_change_auth_hierarchy_change_auth_owner() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     hierarchy_change_auth_owner(&mut sim);
 }
 
 // Original Go test: hierarchy_change_auth_test.go - TestHierarchyChangeAuth/HierarchyChangeAuthOwnerUnauth
 #[test]
 fn test_hierarchy_change_auth_hierarchy_change_auth_owner_unauth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // State left by the preceding subtest.
     hierarchy_change_auth_owner(&mut sim);
 
@@ -87,7 +87,7 @@ fn test_hierarchy_change_auth_hierarchy_change_auth_owner_unauth() {
 // Original Go test: hierarchy_change_auth_test.go - TestHierarchyChangeAuth/HierarchyChangeAuthOwnerAuth
 #[test]
 fn test_hierarchy_change_auth_hierarchy_change_auth_owner_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // State left by the preceding subtests.
     hierarchy_change_auth_owner(&mut sim);
     hierarchy_change_auth_owner_unauth(&mut sim);

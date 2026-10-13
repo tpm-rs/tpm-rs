@@ -1,20 +1,20 @@
 //! TPM2_ObjectChangeAuth: parent/object handle checks, authorization and use of the new auth.
 
 use crate::_common::{command_rc as rc_of, *};
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{
     Certify, Create, CreateLoaded, FlushContext, HashSequenceStart, Load, ObjectChangeAuth, Unseal,
 };
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::{Simulator, create_simulator};
 
 // TC-2.5: Try to change auth on a Primary Object created via CreateLoaded (must fail with TPM_RC_VALUE on handle 2)
 /// ObjectChangeAuth on a primary created by CreateLoaded fails with TPM_RC_VALUE + H2.
 #[test]
 #[allow(deprecated)]
 fn create_loaded_primary_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the SRK (Primary Object) via CreateLoaded
     let srk_pub = get_ecc_srk_template();
@@ -52,7 +52,7 @@ fn create_loaded_primary_rejected() {
 #[test]
 #[allow(deprecated)]
 fn fixed_object_auth_changes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create the SRK (Parent key)
     let srk_pub = get_ecc_srk_template();
@@ -152,7 +152,7 @@ fn fixed_object_auth_changes() {
 /// ObjectChangeAuth with a parent that is not the object parent fails.
 #[test]
 fn mismatched_parent_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let parent_handle = create_storage_parent(&mut sim, Handle::RH_OWNER);
     let object_handle =
         create_and_load_child(&mut sim, parent_handle, keyed_hash_template(), b"oldauth");
@@ -177,7 +177,7 @@ fn mismatched_parent_handle_rejected() {
 #[test]
 #[allow(deprecated)]
 fn new_auth_longer_than_name_alg_digest_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the SRK
     let srk_pub = get_ecc_srk_template();
@@ -247,7 +247,7 @@ fn new_auth_longer_than_name_alg_digest_rejected() {
 /// ObjectChangeAuth: newAuth size is checked before the parent; non-storage parent is TYPE+H2; correct parent works.
 #[test]
 fn new_auth_size_checked_before_parent_type() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let (obj, _) = create_and_load(
         &mut sim,
@@ -263,7 +263,7 @@ fn new_auth_size_checked_before_parent_type() {
         &[],
         &[],
     );
-    let oca = |sim: &mut Simulator<'_>, parent: Handle, auth: &[u8]| {
+    let oca = |sim: &mut Tpm, parent: Handle, auth: &[u8]| {
         rc_of(
             sim,
             &ObjectChangeAuth {
@@ -285,7 +285,7 @@ fn new_auth_size_checked_before_parent_type() {
 /// ObjectChangeAuth returns a new private area that loads with the unchanged public area and same Name.
 #[test]
 fn new_private_keeps_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let parent_handle = create_storage_parent(&mut sim, Handle::RH_OWNER);
 
     let (private, public) =
@@ -334,7 +334,7 @@ fn new_private_keeps_name() {
 /// ObjectChangeAuth with a signing parent is TYPE+H2; a SHA-512 sealed object keeps its 64-byte seed and unseals after reload.
 #[test]
 fn non_storage_parent_and_sha512_seed_preserved() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     // SHA-512 sealed object: the re-encrypted sensitive area must keep the 64-byte seedValue,
     // otherwise the reloaded object fails its binding check.
@@ -352,7 +352,7 @@ fn non_storage_parent_and_sha512_seed_preserved() {
         &[],
         &[],
     );
-    let run_oca = |sim: &mut Simulator<'_>, parent: Handle| {
+    let run_oca = |sim: &mut Tpm, parent: Handle| {
         run(
             sim,
             &ObjectChangeAuth {
@@ -381,7 +381,7 @@ fn non_storage_parent_and_sha512_seed_preserved() {
 /// ObjectChangeAuth with an NV index as objectHandle fails.
 #[test]
 fn nv_index_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let parent_handle = Handle(0x40000001);
     let object_handle = Handle(0x01400001); // NV Index
@@ -402,7 +402,7 @@ fn nv_index_handle_rejected() {
 /// ObjectChangeAuth with a newAuth larger than the nameAlg digest fails.
 #[test]
 fn oversized_new_auth_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let parent_handle = create_storage_parent(&mut sim, Handle::RH_OWNER);
     let object_handle =
         create_and_load_child(&mut sim, parent_handle, keyed_hash_template(), b"oldauth");
@@ -427,7 +427,7 @@ fn oversized_new_auth_rejected() {
 fn persistent_object_allowed() {
     use tpm2::commands::EvictControl;
 
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create the SRK (Parent key)
     let srk_pub = get_ecc_srk_template();
@@ -515,7 +515,7 @@ fn persistent_object_allowed() {
 /// ObjectChangeAuth on a persistent object succeeds with a PolicyCommandCode admin policy; reloaded object unseals with new auth.
 #[test]
 fn persistent_object_with_admin_policy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     // ADMIN role on a persistent object always needs a policy session (C
     // IsPolicySessionRequired), so the object's authPolicy is PolicyCommandCode(ObjectChangeAuth).
@@ -557,7 +557,7 @@ fn persistent_object_with_admin_policy() {
 #[test]
 #[allow(deprecated)]
 fn primary_change_auth_and_load_under_hierarchy_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the SRK (Primary Object) via CreateLoaded with RHOwner
     let mut srk_pub = get_ecc_srk_template();
@@ -610,7 +610,7 @@ fn primary_change_auth_and_load_under_hierarchy_rejected() {
 fn primary_object_rejected() {
     use tpm2::commands::CreatePrimary;
 
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the SRK (Primary Object) via CreatePrimary
     let srk_pub = get_ecc_srk_template();
@@ -649,7 +649,7 @@ fn primary_object_rejected() {
 #[test]
 #[allow(deprecated)]
 fn rotate_from_empty_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the SRK
     let srk_pub = get_ecc_srk_template();
@@ -743,7 +743,7 @@ fn rotate_from_empty_auth() {
 #[test]
 #[allow(deprecated)]
 fn rotate_to_empty_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the SRK
     let srk_pub = get_ecc_srk_template();
@@ -828,7 +828,7 @@ fn rotate_to_empty_auth() {
 /// ObjectChangeAuth on an active hash/HMAC sequence object fails.
 #[test]
 fn sequence_object_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let parent_handle = create_storage_parent(&mut sim, Handle::RH_OWNER);
 
     let start_cmd = HashSequenceStart {
@@ -856,7 +856,7 @@ fn sequence_object_rejected() {
 #[test]
 #[allow(deprecated)]
 fn wrong_object_auth_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the SRK
     let srk_pub = get_ecc_srk_template();
@@ -929,7 +929,7 @@ fn wrong_object_auth_rejected() {
 #[test]
 #[allow(deprecated)]
 fn wrong_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create Parent A (SRK)
     let srk_pub = get_ecc_srk_template();

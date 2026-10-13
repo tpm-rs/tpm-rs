@@ -4,9 +4,9 @@ use crate::_common::{
     PW_AREA, hash_data, hash_end, hash_start, marshal_to_vec, rc_of, read_pcr_value, restart_count,
     send_raw_at, sha256,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::PCRExtend;
 use tpm2::{TpmCc, TpmiAlgHash, TpmlDigestValues, TpmtHa};
-use tpm2_simulator::create_simulator;
 
 /// _TPM_Hash_Start/Data/End resets PCRs 17-22, bumps restartCount and extends PCR 17; a command aborts the sequence.
 ///
@@ -16,7 +16,7 @@ use tpm2_simulator::create_simulator;
 /// sequence, so a later `_TPM_Hash_End` leaves PCR 17 unchanged.
 #[test]
 fn hash_sequence_resets_dynamic_pcrs() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Pre-populate PCR 18 with non-zero data (extend at locality 3) to verify that
     // PCRResetDynamics resets 17..=22.

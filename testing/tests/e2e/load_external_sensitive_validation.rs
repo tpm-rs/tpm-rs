@@ -8,6 +8,7 @@ use crate::_common::{
     make_rsa_public_area_exact_attrs, make_rsa_public_area_opt_name_alg, rc_p, rc1,
     rsa_storage_template_with, sym_template_with,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::LoadExternal;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -15,12 +16,11 @@ use tpm2::{
     Tpm2bPublicKeyRsa, Tpm2bSensitiveData, Tpm2bSymKey, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits,
     TpmsRsaParms, TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive, TpmuSensitiveComposite,
 };
-use tpm2_simulator::create_simulator;
 
 /// LoadExternal with a 33-byte authValue for a SHA-256 key fails with TPM_RC_SIZE.
 #[test]
 fn auth_value_longer_than_digest_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Digest size for SHA256 is 32. We set auth_value to 33 bytes.
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::from_bytes(&[0x01; 33]).unwrap(),
@@ -48,7 +48,7 @@ fn auth_value_longer_than_digest_rejected() {
 /// An ECC private scalar larger than the curve order size fails with TPM_RC_KEY_SIZE.
 #[test]
 fn ecc_oversized_private_scalar_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let bad_d = [0x01; 33];
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
@@ -73,7 +73,7 @@ fn ecc_oversized_private_scalar_rejected() {
 /// LoadExternal with an oversized ECC private scalar fails with TPM_RC_KEY_SIZE.
 #[test]
 fn ecc_scalar_too_large_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -100,7 +100,7 @@ fn ecc_scalar_too_large_rejected() {
 /// A 16-byte private scalar for a P-256 key is rejected.
 #[test]
 fn ecc_short_private_scalar_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // ECC key requires 32-byte scalar D. We provide a 16-byte one.
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
@@ -122,7 +122,7 @@ fn ecc_short_private_scalar_rejected() {
 /// Loading a sensitive area with FIXED_PARENT set fails with TPM_RC_ATTRIBUTES.
 #[test]
 fn fixed_parent_with_sensitive_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -146,7 +146,7 @@ fn fixed_parent_with_sensitive_rejected() {
 /// Loading a sensitive area with FIXED_TPM set is rejected.
 #[test]
 fn fixed_tpm_with_sensitive_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -168,7 +168,7 @@ fn fixed_tpm_with_sensitive_rejected() {
 /// An HMAC keyedHash sensitive key larger than allowed fails with TPM_RC_KEY_SIZE.
 #[test]
 fn keyed_hash_oversized_key_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let bad_sensitive_data = [0x01; 65];
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
@@ -204,7 +204,7 @@ fn keyed_hash_oversized_key_rejected() {
 /// LoadExternal with an oversized keyed-hash sensitive value fails with TPM_RC_KEY_SIZE.
 #[test]
 fn keyedhash_sensitive_too_large_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -235,7 +235,7 @@ fn keyedhash_sensitive_too_large_rejected() {
 /// A sensitive authValue larger than the nameAlg digest fails with TPM_RC_SIZE.
 #[test]
 fn oversized_auth_value_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::from_bytes(&[0x01; 33]).unwrap(),
@@ -261,7 +261,7 @@ fn oversized_auth_value_rejected() {
 /// Loading a sensitive area of a RESTRICTED key fails with TPM_RC_ATTRIBUTES.
 #[test]
 fn restricted_with_sensitive_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -285,7 +285,7 @@ fn restricted_with_sensitive_rejected() {
 /// LoadExternal rejects RSA moduli without MSB, ECC scalars outside (0,n) and reports public/sensitive mismatch as bare BINDING.
 #[test]
 fn rsa_modulus_ecc_scalar_and_binding_checks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // RSA modulus without its most significant bit SET.
     let mut modulus = [0x5au8; 256];
     modulus[0] = 0x01;
@@ -354,7 +354,7 @@ fn rsa_modulus_ecc_scalar_and_binding_checks() {
 /// A random prime that does not factor the RSA modulus is rejected.
 #[test]
 fn rsa_prime_not_matching_modulus_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Provide a random 128-byte prime P that doesn't correspond to modulus RSA_N
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
@@ -382,7 +382,7 @@ fn rsa_prime_not_matching_modulus_rejected() {
 /// An RSA prime of the wrong bit size fails with TPM_RC_BINDING (no parameter number).
 #[test]
 fn rsa_prime_size_mismatch_binding_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let mut p_bytes = [0u8; 128];
     p_bytes[0] = 0x80;
@@ -424,7 +424,7 @@ fn rsa_prime_size_mismatch_binding_error() {
 /// LoadExternal with an RSA prime of the wrong size fails with TPM_RC_KEY_SIZE.
 #[test]
 fn rsa_prime_size_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -453,7 +453,7 @@ fn rsa_prime_size_mismatch_rejected() {
 /// LoadExternal with an RSA prime whose top byte is below 0x80 fails with KEY_SIZE + P1.
 #[test]
 fn rsa_small_prime_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut p_bytes = [0u8; 128];
     p_bytes[127] = 1;
     let sensitive_create = TpmtSensitive {
@@ -485,7 +485,7 @@ fn rsa_small_prime_rejected() {
 /// LoadExternal with an all-zero RSA prime fails with KEY_SIZE + P1.
 #[test]
 fn rsa_zero_prime_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -516,7 +516,7 @@ fn rsa_zero_prime_rejected() {
 /// An ECC public area paired with a symmetric sensitive area is rejected.
 #[test]
 fn sensitive_type_differs_from_public_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Public is ECC, but Sensitive is Sym (symmetric)
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
@@ -538,7 +538,7 @@ fn sensitive_type_differs_from_public_rejected() {
 /// A symmetric key with empty key material is rejected.
 #[test]
 fn symcipher_empty_key_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Symmetric key with empty key material
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
@@ -568,7 +568,7 @@ fn symcipher_empty_key_rejected() {
 /// sensitive key data fails with a bare `TPM_RC_BINDING`.
 #[test]
 fn symcipher_unique_binding_mismatch() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Mismatched unique in inPublic vs sensitive key data in inPrivate
     let sym_key_bytes = [0xAAu8; 16];

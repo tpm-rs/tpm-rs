@@ -4,15 +4,15 @@ use crate::_common::{
     ALG_SHA256, execute_at, pcr_event_at_digests as pcr_event_at,
     pcr_extend_at_no_continue as pcr_extend_at, pcr_reset_at_no_continue as pcr_reset_at, pw,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::*;
 use tpm2::errors::TpmRc;
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// PCR 17 extend only at localities 2-4; PCR 16 reset fails at locality 4 and works at 0.
 #[test]
 fn drtm_extend_and_resettable_reset_localities() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Extend PCR 17 at locality 0 (should fail, 17 expects 2, 3, 4)
     let mut digests = TpmlDigestValues::default();
@@ -44,7 +44,7 @@ fn drtm_extend_and_resettable_reset_localities() {
 /// PCR 21 extend/event only at locality 2 and reset locality checks.
 #[test]
 fn extend_event_reset_locality_masks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Test 1: PCRExtend on PCR 21 (extend locality is 2 only)
     let digests = [(ALG_SHA256, vec![0x22u8; 32])];
@@ -79,7 +79,7 @@ fn extend_event_reset_locality_masks() {
 /// PCR 16 reset at locality 4/5 and PCR 21 extend at locality 3 fail with LOCALITY.
 #[test]
 fn reset_and_extend_from_unauthorized_locality() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // PCR 16 Reset: reset mask allows 0..3, so locality 4 is unauthorized.
     // Locality 5 (unauthorized as locality > 4)

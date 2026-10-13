@@ -1,18 +1,18 @@
 //! TPM2_Load validation: parent handle type, parent attributes and inPrivate size.
 
 use crate::_common::{load_with_name as load, try_create_owner_primary as create_primary, *};
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{CreateLoaded, Load};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 // Adversarial test: loading a primary object via Load command with a hierarchy parent (should fail)
 /// Load with a hierarchy as parentHandle fails with TPM_RC_VALUE + H1.
 #[test]
 #[allow(deprecated)]
 fn load_with_hierarchy_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the SRK (Primary Object) via CreateLoaded with RHOwner
     let mut srk_pub = get_ecc_srk_template();
@@ -56,7 +56,7 @@ fn load_with_hierarchy_parent_rejected() {
 /// fails with `TPM_RC_SIZE` on `inPrivate`.
 #[test]
 fn sha1_object_malformed_private_size_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let parent = create_srk(&mut sim);
 
@@ -89,7 +89,7 @@ fn sha1_object_malformed_private_size_error() {
 /// with `TPM_RC_TYPE` on the parent handle.
 #[test]
 fn unrestricted_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A parent key that is NOT restricted (decrypt only)
     let (parent, _) = create_primary(

@@ -5,16 +5,16 @@ use crate::_common::{
     digest_values, execute_tpm_command_at_locality0 as execute_tpm_command,
     pcr_event_at_digests as pcr_event_at, pw, send_with_rc as send,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::*;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 // 4. Bounds validation for PCR handles
 /// PCR_Extend/Event/Reset on handle 24 fail with VALUE+H1.
 #[test]
 fn pcr_24_rejected_by_extend_event_reset() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let invalid_pcr_handle = 24u32;
     let value_h1 = TpmRc::VALUE.with(Position::handle(1)).get();
@@ -47,7 +47,7 @@ fn pcr_24_rejected_by_extend_event_reset() {
 /// PCR_Extend/Event/Reset on PCR 24 with password sessions fail with VALUE+H1.
 #[test]
 fn pcr_24_rejected_with_sessions() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Extend on PCR 24
     let mut digests = TpmlDigestValues::default();

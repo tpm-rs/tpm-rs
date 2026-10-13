@@ -1,13 +1,13 @@
 //! TPM2_NV_UndefineSpace and TPM2_NV_UndefineSpaceSpecial: authorization and handle checks.
 
 use crate::_common::{define_nv_space as define, exec_with_empty_passwords as pw, *};
+use testing::tpm::Tpm;
 use tpm2::commands::{
     NVDefineSpace, NVRead, NVUndefineSpace, NVUndefineSpaceSpecial, PolicyCommandCode,
     PolicyGetDigest,
 };
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// NV_UndefineSpace(Special) without sessions is TPM_RC_AUTH_MISSING before index attributes are inspected
 ///
@@ -15,7 +15,7 @@ use tpm2_simulator::{Simulator, create_simulator};
 /// command action inspects the index attributes.
 #[test]
 fn auth_missing_before_attribute_checks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0900;
     define_platform(
         &mut sim,
@@ -56,9 +56,9 @@ fn auth_missing_before_attribute_checks() {
 /// NV_UndefineSpace: undefined index -> HANDLE, owner cannot delete platform index, POLICY_DELETE / hierarchy rules.
 #[test]
 fn authorization_and_policy_delete() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
-    let undefine = |sim: &mut Simulator<'_>, auth_handle: Handle, nv_index: Handle| {
+    let undefine = |sim: &mut Tpm, auth_handle: Handle, nv_index: Handle| {
         execute_with_password_sessions(
             sim,
             &NVUndefineSpace {
@@ -159,7 +159,7 @@ fn authorization_and_policy_delete() {
 /// `TPMA_NV_POLICY_DELETE` attribute check.
 #[test]
 fn disabled_platform_nv_reported_before_policy_delete() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0602;
     define_platform(
         &mut sim,
@@ -186,7 +186,7 @@ fn disabled_platform_nv_reported_before_policy_delete() {
 /// Raw NV_UndefineSpace(Special) with invalid NV index handles return TPM_RC_VALUE at the right handle position
 #[test]
 fn invalid_index_handle_return_codes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Helper to construct a raw wire buffer with session (tag 0x8002, empty password session)
     let make_request = |cc: u32, h0: u32, h1: u32| -> [u8; 31] {
@@ -241,7 +241,7 @@ fn invalid_index_handle_return_codes() {
 /// NV_UndefineSpaceSpecial with RH_OWNER as platform handle is TPM_RC_VALUE + RC_H2
 #[test]
 fn special_requires_platform_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_020a;
     define_platform(
         &mut sim,
@@ -265,7 +265,7 @@ fn special_requires_platform_handle() {
 /// NV_UndefineSpaceSpecial deletes a POLICY_DELETE index under platform auth with a PolicyCommandCode policy session
 #[test]
 fn special_with_policy_delete_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Run a Trial session with PolicyCommandCode(NVUndefineSpaceSpecial) to compute required policy digest
     let trial_session = start_auth_session(

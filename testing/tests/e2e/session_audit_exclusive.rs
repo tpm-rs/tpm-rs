@@ -9,20 +9,20 @@ use crate::_common::{
     rc_s1, rsassa_signer_template, session_audit_info, sha256, start_hmac_session, start_session,
     transact,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{GetCapability, GetSessionAuditDigest};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bData, Tpm2bDigest, TpmCap, TpmEccCurve, TpmPt, TpmSe,
     TpmaObject, TpmiAlgHash, TpmsEccParms, TpmsEccPoint, TpmtEccScheme, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// auditExclusive fails with TPM_RC_EXCLUSIVE on a non-exclusive session and succeeds on the exclusive one.
 ///
 /// 3. Exclusivity Gating
 #[test]
 fn audit_exclusive_attribute_gating() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut s1 = hmac_session(&mut sim);
     let mut s2 = hmac_session(&mut sim);
 
@@ -62,7 +62,7 @@ fn audit_exclusive_attribute_gating() {
 /// 1. Audit Reset Handover with Existing Exclusive Session
 #[test]
 fn audit_reset_hands_over_exclusivity() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut s1 = hmac_session(&mut sim);
     let mut s2 = hmac_session(&mut sim);
 
@@ -104,7 +104,7 @@ fn audit_reset_hands_over_exclusivity() {
 /// another audit session, and lost by the first one.
 #[test]
 fn exclusive_bit_handed_over_between_sessions() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let mut s1 = start_hmac_session(&mut sim);
     let mut s2 = start_hmac_session(&mut sim);
@@ -146,7 +146,7 @@ fn exclusive_bit_handed_over_between_sessions() {
 /// Audit exclusivity hand-over/loss across sessions, two audit sessions rejected, non-audit session TPM_RC_TYPE, privacyAdminHandle restricted to endorsement.
 #[test]
 fn exclusivity_tracking_and_privacy_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // ==========================================
     // 1. GetCapability Handles with property_count = 0
@@ -361,7 +361,7 @@ fn kept_on_flush_and_context_save() {
 /// 4. Exclusivity Loss when using a Non-Audit Session
 #[test]
 fn lost_on_command_without_audit_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut s2 = hmac_session(&mut sim);
 
     // Session 2: exclusive, initialized (first-use done)
@@ -425,7 +425,7 @@ fn lost_on_command_without_sessions() {
 /// 2. Exclusivity Loss when using a Non-Exclusive Session
 #[test]
 fn lost_on_other_audit_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut s1 = hmac_session(&mut sim);
     let mut s2 = hmac_session(&mut sim);
 
@@ -457,7 +457,7 @@ fn lost_on_other_audit_session() {
 ///    as an audit session without auditExclusive set, it retains its exclusivity (spec requirement Part 1, 19.3).
 #[test]
 fn session_audit_exclusive_retained_without_audit_exclusive() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut s = start_session(&mut sim, TpmSe::HMAC, false);
 
     // First use: the session becomes the exclusive audit session.
@@ -492,7 +492,7 @@ fn session_audit_exclusive_retained_without_audit_exclusive() {
 ///    the exclusive audit session (spec requirement Part 1, 19.3).
 #[test]
 fn session_audit_first_use_becomes_exclusive() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut s = start_session(&mut sim, TpmSe::HMAC, false);
 
     let r = get_cap_with(&mut sim, &mut s, ATTR_CONT | ATTR_AUDIT);
@@ -518,7 +518,7 @@ fn session_audit_first_use_becomes_exclusive() {
 /// 3. Policy session used with AUDIT attribute must fail with attributes_for error.
 #[test]
 fn session_audit_rejects_policy_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut s = start_session(&mut sim, TpmSe::Policy, false);
 
     let r = get_cap_with(&mut sim, &mut s, ATTR_CONT | ATTR_AUDIT);

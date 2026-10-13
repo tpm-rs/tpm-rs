@@ -1,7 +1,7 @@
 //! Go parity tests: Rust ports of the `tpm-go` TPM 2.0 tests, one file per
-//! Go test file, run against an in-process `tpm-rs` simulator (created with
-//! `tpm2_simulator::create_simulator!()`). Shared helpers come from the
-//! `testing` library (`testing::test_utils`).
+//! Go test file, run against a `testing::tpm::Tpm` (mirrored to the TCG C
+//! reference TPM with the `differential` feature). Shared
+//! helpers come from the `testing` library (`testing::test_utils`).
 
 #![forbid(unsafe_code)]
 #![allow(dead_code)]

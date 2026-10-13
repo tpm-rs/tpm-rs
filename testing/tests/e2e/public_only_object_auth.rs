@@ -2,18 +2,18 @@
 //! operations.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bDigest, TpmCc, TpmSe, TpmaObject, TpmiAlgHash,
     TpmtKeyedHashScheme, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// TPM2_EncryptDecrypt2 with a public-only symmetric key fails without panicking
 ///
 /// `TPM2_EncryptDecrypt2` with a public-only symmetric key.
 #[test]
 fn encrypt_decrypt2_public_only_sym_key_fails() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = public_only_sym_key(&mut sim);
     let mut params = tpm2b_params(&[0x22; 16]); // inData
     params.push(0); // decrypt = NO
@@ -34,7 +34,7 @@ fn encrypt_decrypt2_public_only_sym_key_fails() {
 /// `TPM2_EncryptDecrypt` with a public-only symmetric key.
 #[test]
 fn encrypt_decrypt_public_only_sym_key_fails() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = public_only_sym_key(&mut sim);
     let mut params = Vec::new();
     params.push(0); // decrypt = NO
@@ -58,7 +58,7 @@ fn encrypt_decrypt_public_only_sym_key_fails() {
 /// `IsAuthPolicyAvailable()` require `publicOnly == CLEAR`).
 #[test]
 fn public_only_object_cannot_be_authorized() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let public = sealed_template_with_policy(
         TpmaObject::USER_WITH_AUTH | TpmaObject::NO_DA,
         &EMPTY_POLICY,
@@ -80,7 +80,7 @@ fn public_only_object_cannot_be_authorized() {
 /// `TPM2_Sign` with a public-only HMAC key.
 #[test]
 fn sign_public_only_hmac_key_fails() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::SIGN_ENCRYPT
@@ -113,7 +113,7 @@ fn sign_public_only_hmac_key_fails() {
 /// `TPM2_Unseal` of a public-only sealed-data object.
 #[test]
 fn unseal_public_only_sealed_object_fails() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let public = sealed_template_with_policy(TpmaObject::USER_WITH_AUTH | TpmaObject::NO_DA, &[]);
     let item = load_public_only(&mut sim, &public);
     assert_eq!(

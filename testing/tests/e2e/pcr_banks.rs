@@ -1,9 +1,9 @@
 //! PCR bank handling: bank ordering, unallocated banks and newly allocated banks.
 
 use crate::_common::{mssim_rc_of as rc_of, *};
+use testing::tpm::Tpm;
 use tpm2::errors::TpmRc;
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// PCR_Read keeps bank order and filters unallocated banks; extends skip them; resets follow PC Client localities.
 ///
@@ -12,7 +12,7 @@ use tpm2_simulator::create_simulator;
 /// bump the update counter; `TPM2_PCR_Event` reports every implemented hash (incl. SHA-512).
 #[test]
 fn read_order_unallocated_banks_and_reset_localities() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Input order is preserved (SHA-256 before SHA-1).
     let rsp = pcr_read(&mut sim, &[(ALG_SHA256, bit(0)), (ALG_SHA1, bit(0))]);
@@ -86,7 +86,7 @@ fn read_order_unallocated_banks_and_reset_localities() {
 /// ignores unallocated PCRs.
 #[test]
 fn sha512_bank_readable_after_allocation() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let rsp = pcr_read(&mut sim, &[(ALG_SHA256, bit(3)), (ALG_SHA1, bit(3))]);
     assert_eq!(rsp.selection_out[0].0, ALG_SHA256);
     assert_eq!(rsp.selection_out[1].0, ALG_SHA1);
@@ -116,7 +116,7 @@ fn sha512_bank_readable_after_allocation() {
 /// counter; `TPM2_PCR_SetAuthPolicy` requires NV; the PCR properties match `PlatformPcr.c`.
 #[test]
 fn tcb_pcrs_do_not_bump_update_counter() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // PCR 21/22 are extendable only from locality 2.
     let before = update_counter(&mut sim);

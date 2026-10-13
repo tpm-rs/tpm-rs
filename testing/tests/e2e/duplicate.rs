@@ -8,13 +8,13 @@ use crate::_common::{
     load_with_name, owner_srk, rc_p, read_public, rewrap, rsa_dup_target,
     rsa_storage_template_with, storage_attrs, try_create_owner_primary, try_create_primary_in,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{Duplicate, Import};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bData, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bPrivate,
     TpmaObject, TpmiAlgHash, TpmtKeyedHashScheme, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// Duplicate of an encryptedDuplication object fails without an inner wrapper and with newParentHandle = TPM_RH_NULL.
 ///
@@ -22,7 +22,7 @@ use tpm2_simulator::create_simulator;
 /// inner wrapper and with `newParentHandle = TPM_RH_NULL`.
 #[test]
 fn encrypted_duplication_requires_wrappers() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A parent storage key
     let parent = create_srk(&mut sim);
@@ -80,7 +80,7 @@ fn encrypted_duplication_requires_wrappers() {
 /// on the object handle.
 #[test]
 fn fixed_parent_object_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A parent storage key
     let parent = create_srk(&mut sim);
@@ -123,7 +123,7 @@ fn fixed_parent_object_rejected() {
 /// `TPM2_Duplicate` of a keyedHash (HMAC) key succeeds.
 #[test]
 fn keyed_hash_key_duplicates() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A parent storage key
     let parent = create_srk(&mut sim);
@@ -166,7 +166,7 @@ fn keyed_hash_key_duplicates() {
 /// Duplicate outer wrapper uses the new parent nameAlg (verified via Rewrap/Import); inner wrapper key required for non-NULL symmetricAlg.
 #[test]
 fn outer_wrapper_uses_new_parent_name_alg() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let parent = try_create_primary_in(
         &mut sim,
@@ -232,7 +232,7 @@ fn outer_wrapper_uses_new_parent_name_alg() {
 /// Duplicate works for a persistent object (NULL new parent) and to a persistent new parent; the result imports.
 #[test]
 fn persistent_object_and_persistent_new_parent() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let (obj, obj_rsp) = create_and_load(
         &mut sim,
@@ -265,7 +265,7 @@ fn persistent_object_and_persistent_new_parent() {
 /// RSA storage parent succeeds.
 #[test]
 fn rsa_key_to_sha1_storage_parent() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let parent = create_storage_primary(&mut sim, TpmiAlgHash::Sha1);
     let (target, _) = create_dup_target(&mut sim, parent);
@@ -294,7 +294,7 @@ fn rsa_key_to_sha1_storage_parent() {
 /// used as the non-asymmetric parent instead.
 #[test]
 fn symmetric_new_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A parent key that is NOT asymmetric (symmetric storage key)
     let (parent, _) = try_create_owner_primary(
@@ -341,7 +341,7 @@ fn symmetric_new_parent_rejected() {
 /// `TPM_RC_SIZE` on `encryptionKeyIn`.
 #[test]
 fn wrong_inner_key_size_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A parent storage key
     let parent = create_srk(&mut sim);

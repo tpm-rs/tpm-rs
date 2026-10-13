@@ -1,15 +1,15 @@
 //! TPM2_MakeCredential: protector handle and credential size validation.
 
 use crate::_common::{hex_checked as hex, *};
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, MakeCredential};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bAuth, Tpm2bDigest, Tpm2bSensitiveData, TpmsSensitiveCreate};
-use tpm2_simulator::create_simulator;
 
 /// MakeCredential with a credential larger than the protector nameAlg digest fails with TPM_RC_SIZE.
 #[test]
 fn credential_larger_than_digest_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -59,7 +59,7 @@ fn credential_larger_than_digest_rejected() {
 /// Verifies that TPM2_MakeCredential correctly recognizes its first handle as an object handle during request parsing.
 #[test]
 fn handle_parsed_as_object() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let make_cred_req = hex(concat!(
         "8001",          // tag: NO_SESSIONS
@@ -81,7 +81,7 @@ fn handle_parsed_as_object() {
 /// MakeCredential with a non-existent protector handle fails with TPM_RC_REFERENCE_H0.
 #[test]
 fn missing_protector_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let srk_pub = get_ecc_srk_template();
     let in_public_srk = tpm2::Tpm2b(srk_pub);
@@ -112,7 +112,7 @@ fn missing_protector_handle_rejected() {
 /// MakeCredential with a restricted sign-only protector fails with TPM_RC_TYPE.
 #[test]
 fn sign_only_protector_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -160,7 +160,7 @@ fn sign_only_protector_rejected() {
 /// MakeCredential with an unrestricted decryption protector fails with TPM_RC_TYPE.
 #[test]
 fn unrestricted_protector_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),

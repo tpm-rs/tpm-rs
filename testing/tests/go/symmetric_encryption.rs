@@ -2,6 +2,7 @@
 
 use crate::test_utils::{execute_with_password_sessions, flush_context};
 use rand::RngCore;
+use testing::tpm::Tpm;
 use tpm2::Handle;
 use tpm2::commands::{CreatePrimary, EncryptDecrypt2};
 use tpm2::{
@@ -9,10 +10,9 @@ use tpm2::{
     TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmsSensitiveCreate, TpmtPublic,
     TpmtSymDefObject,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 fn encrypt_decrypt_symmetric(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     key_handle: Handle,
     mut iv: Vec<u8>,
     data: &[u8],
@@ -50,7 +50,7 @@ fn encrypt_decrypt_symmetric(
 // Original Go test: symmetric_encryption_test.go - TestAESEncryption
 #[test]
 fn test_aes_encryption() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create Primary Key (AES)
     let sym_template = TpmtPublic {
@@ -122,7 +122,7 @@ fn test_aes_encryption() {
 // Original Go test: symmetric_encryption_test.go - TestAESEncryptionBlock
 #[test]
 fn test_aes_encryption_block() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create Primary Key (AES)
     let sym_template = TpmtPublic {

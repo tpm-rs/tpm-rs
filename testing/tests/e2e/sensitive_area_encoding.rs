@@ -1,8 +1,8 @@
 //! Encoding of sensitive areas and private blobs: seed sizes and authValue padding.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// TPM2B_PRIVATE layout (encrypted sensitive size and auth padding) round-trips (delegates to crypto_blobs helper).
 ///
@@ -17,7 +17,7 @@ fn private_area_format_round_trip() {
 /// parent-seed-truncation-trailing-zero-strip-and-stclear-omission
 #[test]
 fn sha512_keyedhash_seed_and_auth_padding() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     // A SHA-512 KEYEDHASH object: its 64-byte seedValue must survive creation and loading.
     let mut t = sealed_template(TpmiAlgHash::Sha512, TpmaObject::empty());
@@ -46,7 +46,7 @@ fn sha512_keyedhash_seed_and_auth_padding() {
 /// transient-object-seed-truncation-to-32-bytes-and-zero-stripping
 #[test]
 fn symcipher_seed_kept_and_asymmetric_seed_dropped() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     // SHA-384 SYMCIPHER key: its 48-byte seedValue must be kept in full.
     let mut t = sym_template_with(TpmiAlgHash::Sha384, TpmaObject::empty());

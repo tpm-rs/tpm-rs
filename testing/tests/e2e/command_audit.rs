@@ -2,13 +2,13 @@
 
 use crate::_common::Connection;
 use crate::_common::execute_with_password_sessions;
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, GetCommandAuditDigest};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2b, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bPublicKeyRsa,
     Tpm2bSensitiveData, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmlPcrSelection, TpmsRsaParms,
     TpmsSensitiveCreate, TpmtPublic, TpmtRsaScheme,
 };
-use tpm2_simulator::create_simulator;
 
 /// Raw TPM2_GetCommandAuditDigest signed with a restricted RSASSA/SHA-1 key succeeds
 ///
@@ -16,7 +16,7 @@ use tpm2_simulator::create_simulator;
 /// (RSASSA/SHA-1 scheme) succeeds.
 #[test]
 fn get_command_audit_digest_signed_with_rsa_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -90,7 +90,7 @@ fn get_command_audit_digest_signed_with_rsa_key() {
 /// non-empty (unsigned) attestation.
 #[test]
 fn get_command_audit_digest_unsigned() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let audit_cmd = GetCommandAuditDigest {
         privacy_handle: Handle::RH_ENDORSEMENT,

@@ -7,6 +7,7 @@ use crate::_common::{
     flush_context, hex, load_public_only_hmac_key, rc_of, run_pw, send, start_auth_session,
     start_bound, start_salted, to_digest,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{
     CreatePrimary, HierarchyChangeAuth, LoadExternal, PCRSetAuthValue, StartAuthSession,
 };
@@ -17,12 +18,11 @@ use tpm2::{
     TpmiAlgSymMode, TpmiRsaKeyBits, TpmlPcrSelection, TpmsRsaParms, TpmsSensitiveCreate,
     TpmtPublic, TpmtSymDefObject, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// StartAuthSession with AES-128-CTR fails with MODE on parameter 4.
 #[test]
 fn ctr_symmetric_mode_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Send StartAuthSession with AES-128 and mode CTR (0x0040) instead of CFB (0x0043)
     // symmetric: algorithm AES (0006), keyBits AES-128 (0080), mode CTR (0040)
@@ -52,7 +52,7 @@ fn ctr_symmetric_mode_rejected() {
 /// StartAuthSession with sessionType 0xFF fails with VALUE+P3.
 #[test]
 fn invalid_session_type_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Send StartAuthSession with invalid sessionType (0xFF)
     let request = hex(concat!(
@@ -84,7 +84,7 @@ fn invalid_session_type_rejected() {
 /// 1. Nonce caller size validations (too small, too large, exact boundary).
 #[test]
 fn nonce_caller_size_bounds() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Valid size: 16 (exact lower boundary)
     let cmd = StartAuthSession {
@@ -174,7 +174,7 @@ fn nonce_caller_size_bounds() {
 /// `TPM2_StartAuthSession` must reject every symmetric mode other than CFB.
 #[test]
 fn only_cfb_symmetric_mode_accepted() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     for mode in [
         TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Ctr),
         TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Ofb),
@@ -222,7 +222,7 @@ fn only_cfb_symmetric_mode_accepted() {
 /// `TPM_RC_HANDLE` (C: tpmKey must have its private portion loaded).
 #[test]
 fn public_only_tpm_key_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create an RSA decrypt key and load only its public area.
     let public = TpmtPublic {
@@ -291,7 +291,7 @@ fn public_only_tpm_key_rejected() {
 /// A raw StartAuthSession command (NULL tpmKey/bind) dispatches and succeeds.
 #[test]
 fn raw_unbound_unsalted_hmac_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Send StartAuthSession command (0x00000176)
     // tag: 8001
@@ -332,7 +332,7 @@ fn raw_unbound_unsalted_hmac_session() {
 /// 5. Session lookup prefix validation across different session types.
 #[test]
 fn session_handle_prefix_per_type() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // HMAC Session: prefix should be 0x02xxxxxx
     let cmd = StartAuthSession {
@@ -411,7 +411,7 @@ fn session_handle_prefix_per_type() {
 /// StartAuthSession with a 15-byte nonceCaller fails with SIZE.
 #[test]
 fn short_nonce_caller_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Send StartAuthSession with nonceCaller of size 15 (too small, minimum is 16)
     // tag: 8001
@@ -452,7 +452,7 @@ fn short_nonce_caller_rejected() {
 /// 4. Symmetric block cipher parameter combinations (invalid modes vs. valid CFB).
 #[test]
 fn symmetric_mode_and_xor_hash_validation() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Valid: Aes128 CFB
     let cmd = StartAuthSession {
@@ -551,7 +551,7 @@ fn symmetric_mode_and_xor_hash_validation() {
 /// StartAuthSession rejects symmetric tpmKey, checks empty salt first, rejects PIN/public-only bind entities; PCR bind uses authValue.
 #[test]
 fn tpm_key_salt_and_bind_entity_checks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A symmetric key cannot be tpmKey (TPM_RCS_KEY + RC_StartAuthSession_tpmKey).
     let sym_template = TpmtPublic {
@@ -639,7 +639,7 @@ fn tpm_key_salt_and_bind_entity_checks() {
 /// 9. Non-existent bind handle should fail
 #[test]
 fn unloaded_bind_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle(0x8000000F), // Unloaded transient handle
@@ -660,7 +660,7 @@ fn unloaded_bind_handle_rejected() {
 /// StartAuthSession with XOR/SHA-256 symmetric parameters succeeds.
 #[test]
 fn xor_symmetric_accepted() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start an HMAC auth session with XOR symmetric parameter (TPM_ALG_XOR=0x000a,
     // keyBits/hash=0x000b)
@@ -689,7 +689,7 @@ fn xor_symmetric_accepted() {
 /// StartAuthSession with XOR and a NULL hash fails with HASH.
 #[test]
 fn xor_with_null_hash_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start an HMAC auth session with XOR symmetric parameter but hash=TPM_ALG_NULL (0x0010)
     let request = hex(concat!(

@@ -9,6 +9,7 @@ use crate::_common::{
     flush_context, get_create_primary_cmd_and_handles, make_keyed_hash_public_area_local,
     marshal_to_slice, new_sim, rc_s1, start_auth_session, start_session,
 };
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{CreatePrimary, LoadExternal, ReadPublic, VerifySignature};
 use tpm2::{
@@ -18,12 +19,11 @@ use tpm2::{
     TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSensitive, TpmuSensitiveComposite,
     Unmarshal,
 };
-use tpm2_simulator::create_simulator;
 
 /// CreatePrimary with an AES-128-CFB decrypt session succeeds.
 #[test]
 fn aes128_cfb_create_primary() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -44,7 +44,7 @@ fn aes128_cfb_create_primary() {
 /// CreatePrimary with an AES-256-CFB decrypt session succeeds.
 #[test]
 fn aes256_cfb_create_primary() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -65,7 +65,7 @@ fn aes256_cfb_create_primary() {
 /// ReadPublic (no TPM2B parameter) with DECRYPT on the second session fails with ATTRIBUTES+S2.
 #[test]
 fn decrypt_on_read_public_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let session1 = start_auth_session(
         &mut sim,
@@ -109,7 +109,7 @@ fn decrypt_on_read_public_rejected() {
 /// An encrypted parameter size larger than the remaining buffer fails with SIZE+S1.
 #[test]
 fn decrypt_size_exceeds_buffer() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -181,7 +181,7 @@ fn decrypt_size_exceeds_buffer() {
 /// A 1-byte encrypted parameter area fails with INSUFFICIENT+S1.
 #[test]
 fn decrypt_size_field_truncated() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -251,7 +251,7 @@ fn decrypt_size_field_truncated() {
 /// DECRYPT on a session with NULL symmetric fails with SYMMETRIC+S1.
 #[test]
 fn decrypt_with_null_symmetric_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -313,7 +313,7 @@ fn decrypt_with_null_symmetric_rejected() {
 /// LoadExternal (no handles) with a DECRYPT session derives the key with an empty auth value.
 #[test]
 fn decrypt_without_auth_handles_uses_empty_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start an HMAC session with AES-128-CFB
     let session = start_auth_session(
@@ -361,7 +361,7 @@ fn decrypt_without_auth_handles_uses_empty_auth() {
 /// HierarchyChangeAuth with a DECRYPT HMAC session sets the owner auth (restored afterwards with a password session).
 #[test]
 fn hierarchy_change_auth_new_auth_decrypted() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -436,7 +436,7 @@ fn hmac_verified_before_decryption() {
 /// CreatePrimary whose decrypted inSensitive size overstates its content fails with TPM_RC_SIZE + P1.
 #[test]
 fn oversized_sensitive_size_returns_size_p1() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -556,7 +556,7 @@ fn oversized_sensitive_size_returns_size_p1() {
 /// LoadExternal with DECRYPT set on two sessions fails with an ATTRIBUTES error.
 #[test]
 fn two_decrypt_sessions_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sess1 = start_auth_session(
         &mut sim,
@@ -616,7 +616,7 @@ fn two_decrypt_sessions_rejected() {
 /// CreatePrimary with decrypted userAuth of 7/16/17/32/33 bytes succeeds across AES-CFB block boundaries.
 #[test]
 fn user_auth_sizes_across_cfb_blocks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let ecc_parms = TpmsEccParms {
         symmetric: None,
         scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),
@@ -682,7 +682,7 @@ fn user_auth_sizes_across_cfb_blocks() {
 #[allow(deprecated)]
 #[test]
 fn verify_signature_decrypt_uses_empty_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create an ECC key with non-empty auth
     let key_auth = b"key_secret_auth";
@@ -754,7 +754,7 @@ fn verify_signature_decrypt_uses_empty_auth() {
 /// A decrypt session with a corrupted session key fails CreatePrimary with TPM_RC_BAD_AUTH + S1 (owner is DA-exempt).
 #[test]
 fn wrong_session_key_returns_bad_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,

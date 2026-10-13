@@ -8,15 +8,15 @@ use crate::_common::{
     policy_secret_default_params, rc_h, read_public_rc, send_with_rc, set_hierarchy_enabled,
     start_session_raw,
 };
+use testing::tpm::Tpm;
 use tpm2::errors::TpmRc;
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// A trial `TPM2_PolicySigned` on an unloaded object no longer hashes a 4-byte fallback Name
 /// into the policy digest, and objects of a disabled hierarchy look undefined.
 #[test]
 fn disabled_hierarchy_objects_look_undefined() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = create_storage_primary_in(&mut sim, Handle::RH_OWNER);
     evict(&mut sim, Handle::RH_OWNER, key, 0x8100_0010);
     let p = start_session_raw(&mut sim, 1);
@@ -40,7 +40,7 @@ fn disabled_hierarchy_objects_look_undefined() {
 /// unloaded second handle `TPM_RC_REFERENCE_H1`, before `TPM_RC_AUTH_MISSING`.
 #[test]
 fn handle_errors_precede_auth_missing() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // EvictControl(owner, unloaded transient object): handle 2 is checked first.
     let cmd = build_raw_cmd(
@@ -77,7 +77,7 @@ fn handle_errors_precede_auth_missing() {
 /// validated (with the right position) before authorization.
 #[test]
 fn handle_positions_for_less_common_commands() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = build_raw_cmd(
         ST_NO_SESSIONS,
@@ -135,7 +135,7 @@ fn handle_positions_for_less_common_commands() {
 /// endorsement hierarchy.
 #[test]
 fn permanent_handle_positions_and_auth_00_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let p = start_session_raw(&mut sim, 1);
     let cmd = build_raw_cmd(
         ST_NO_SESSIONS,
@@ -160,7 +160,7 @@ fn permanent_handle_positions_and_auth_00_hierarchy() {
 /// `TPM2_PolicySigned`'s `authObject` is a `TPMI_DH_OBJECT`, also for trial sessions.
 #[test]
 fn policy_signed_auth_object_must_be_object() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let trial = {
         let mut params = Vec::new();
         params.extend_from_slice(&32u16.to_be_bytes());

@@ -7,18 +7,18 @@ use crate::_common::{
     start_auth_session,
 };
 use sha2::{Digest as _, Sha256};
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, GetTime, HierarchyChangeAuth, ReadPublic};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bSensitiveData,
     TpmEccCurve, TpmSe, TpmaObject, TpmaSession, TpmiAlgHash, TpmsEccParms, TpmsEccPoint,
     TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// ReadPublic with an AES-128-CFB response-encryption session succeeds.
 #[test]
 fn aes128_cfb_read_public() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let mut session = start_auth_session(
         &mut sim,
@@ -38,7 +38,7 @@ fn aes128_cfb_read_public() {
 /// ReadPublic with an AES-256-CFB response-encryption session succeeds.
 #[test]
 fn aes256_cfb_read_public() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let mut session = start_auth_session(
         &mut sim,
@@ -58,7 +58,7 @@ fn aes256_cfb_read_public() {
 /// CreatePrimary with an AES-128-CFB encrypt session returns a valid object handle.
 #[test]
 fn create_primary_response_encrypted() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -117,7 +117,7 @@ fn create_primary_response_encrypted() {
 /// ReadPublic with an audit first session and an ENCRYPT second session decrypts correctly.
 #[test]
 fn encrypt_on_second_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
 
     let mut session1 = start_auth_session(
@@ -169,7 +169,7 @@ fn encrypt_on_second_session() {
 /// CreatePrimary authorized by session 1 with owner auth and encrypted by session 2 succeeds.
 #[test]
 fn encrypt_on_second_session_with_owner_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let owner_auth_value = b"owner_auth_password";
 
     // Set owner auth to owner_auth_value
@@ -264,7 +264,7 @@ fn encrypt_on_second_session_with_owner_auth() {
 /// TPM2_Hash with audit, decrypt and encrypt sessions: ENCRYPT on the third session encrypts the response.
 #[test]
 fn encrypt_on_third_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sess1 = start_auth_session(
         &mut sim,
@@ -330,7 +330,7 @@ fn encrypt_on_third_session() {
 /// ReadPublic with an encrypt first session and an audit second session succeeds.
 #[test]
 fn encrypt_session_with_audit_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let mut session1 = start_auth_session(
         &mut sim,
@@ -370,7 +370,7 @@ fn encrypt_session_with_audit_session() {
 /// TPM2_GetRandom with an encrypt session returns an encrypted response that decrypts client-side
 #[test]
 fn get_random_response() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -406,7 +406,7 @@ fn hierarchy_change_auth_sizes() {
 
     for &size in &sizes {
         // Create a fresh simulator for each size to avoid persisting Owner Auth state modifications
-        let mut sim = create_simulator!();
+        let mut sim = Tpm::new();
 
         let mut session = start_auth_session(
             &mut sim,
@@ -456,7 +456,7 @@ fn hierarchy_change_auth_sizes() {
 /// Encrypting ReadPublic of a key with an auth value derives the session key with empty auth.
 #[test]
 fn read_public_of_auth_key_uses_empty_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let auth_value = b"key_auth_password";
     let object_handle = create_primary_key_with_auth(&mut sim, auth_value);
 
@@ -488,7 +488,7 @@ fn read_public_of_auth_key_uses_empty_auth() {
 /// GetTime with ENCRYPT on the second (key-bound) authorization session encrypts the response with the right key.
 #[test]
 fn response_encrypt_on_second_auth_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a primary signing key with non-empty auth
     let rsa_parms = tpm2::TpmsRsaParms {
@@ -571,7 +571,7 @@ fn response_encrypt_on_second_auth_session() {
 /// Response encryption on the third session uses that session's key (with owner auth on session 1).
 #[test]
 fn third_session_encrypt_key_derivation() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let owner_auth_value = b"owner_auth_password";
 
     // Set owner auth

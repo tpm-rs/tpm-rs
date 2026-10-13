@@ -4,15 +4,15 @@ use crate::_common::{
     define_nv_with_policy_unwrap as define, exec_with_empty_passwords as pw,
     start_session_active as start_session, *,
 };
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::{NVDefineSpace, NVIncrement, NVRead, NVUndefineSpace};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::{Simulator, SimulatorPlatformSignal, create_simulator};
 
 /// NV_Increment counts up from 0, and incrementing an ordinary index fails with TPM_RC_ATTRIBUTES.
 #[test]
 fn counter_increments_and_ordinary_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Define Counter index
     let nv_counter = Handle(0x01000008);
@@ -25,7 +25,7 @@ fn counter_increments_and_ordinary_rejected() {
     )
     .expect("Failed to define Counter NV space");
 
-    let increment = |sim: &mut Simulator<'_>, nv_index: Handle| {
+    let increment = |sim: &mut Tpm, nv_index: Handle| {
         execute_with_password_sessions(
             sim,
             &NVIncrement {
@@ -80,10 +80,10 @@ fn counter_increments_and_ordinary_rejected() {
 /// from the value of other live counters.
 #[test]
 fn new_counter_starts_above_deleted_max() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let first = 0x0150_0a02;
     define(&mut sim, first, counter_attrs() | OWNER_RW, 8, &[]);
-    let inc = |sim: &mut Simulator<'_>, index: u32| {
+    let inc = |sim: &mut Tpm, index: u32| {
         pw(
             sim,
             &NVIncrement {
@@ -127,7 +127,7 @@ fn new_counter_starts_above_deleted_max() {
 /// NV_Increment with platform auth on an owner-only counter is TPM_RC_NV_AUTHORIZATION (unpositioned)
 #[test]
 fn platform_auth_without_ppwrite_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0a00;
     define(&mut sim, index, counter_attrs() | OWNER_RW, 8, &[]);
     assert_eq!(
@@ -147,7 +147,7 @@ fn platform_auth_without_ppwrite_rejected() {
 /// NV_Increment of a POLICYWRITE counter succeeds with a satisfied policy session
 #[test]
 fn policywrite_increment_with_policy_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0a01;
     define(
         &mut sim,
@@ -180,7 +180,7 @@ fn policywrite_increment_with_policy_session() {
 /// counter (persistently), and a newly defined counter starts above it.
 #[test]
 fn recreated_counter_never_rolls_back() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let nv_index = Handle(0x01000010);
     let mut attrs = TpmaNv::from(TpmNt::Counter);
@@ -203,7 +203,7 @@ fn recreated_counter_never_rolls_back() {
         size: 8,
         offset: 0,
     };
-    let read_counter = |sim: &mut Simulator<'_>| -> u64 {
+    let read_counter = |sim: &mut Tpm| -> u64 {
         let resp = execute_tpm_command_with_auths(sim, &read_cmd, &auths).unwrap();
         u64::from_be_bytes(resp.data.get_buffer().try_into().unwrap())
     };
@@ -257,7 +257,7 @@ fn recreated_counter_never_rolls_back() {
         &auths,
     )
     .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
     power_on_start_up(&mut sim);
 

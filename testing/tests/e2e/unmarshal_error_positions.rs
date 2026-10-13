@@ -5,14 +5,14 @@ use crate::_common::{
     create_primary_raw_handle, ecc_key, hex, patch_handle, response_rc, rsa_key, rsa_signing_key,
     send, set_hierarchy_enabled, transact_rc_of, unmarshal_response,
 };
+use testing::tpm::Tpm;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// Invalid HierarchyControl / ClockRateAdjust parameters return TPM_RC_VALUE with the correct parameter number.
 #[test]
 fn command_parameter_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. HierarchyControl (0x0121): invalid parameter 1 (enable = RH_NULL = 0x40000007) -> VALUE + P1
     // Total size: 10 (hdr) + 4 (auth handle) + 4 (auth size) + 9 (PW session) + 4 (enable) + 1 (state) = 32 (0x20)
@@ -64,7 +64,7 @@ fn command_parameter_errors() {
 /// Truncated / invalid ContextLoad and GetRandom parameters report TPM_RC_INSUFFICIENT / TPM_RC_VALUE + P1.
 #[test]
 fn context_load_and_get_random_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. TPM2_ContextLoad (0x0161): truncated parameter 1 (only 4 bytes of sequence) -> INSUFFICIENT + P1
     let req_ctx_load_truncated = hex("8001 0000000E 00000161 00000001");
@@ -121,7 +121,7 @@ fn context_load_and_get_random_errors() {
 /// VerifySignature and PolicySigned reject a signature with sigAlg TPM_ALG_NULL (TPM_RC_SCHEME).
 #[test]
 fn null_signature_algorithm_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // A loaded RSASSA signing key.
     let key_handle = create_primary_raw_handle(&mut sim, rsa_signing_key());
@@ -189,7 +189,7 @@ fn null_signature_algorithm_rejected() {
 /// Malformed NV_DefineSpace publicInfo and object command parameters return SIZE / RESERVED_BITS / HASH / VALUE with positions.
 #[test]
 fn nv_define_space_and_object_command_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. TPM2_NV_DefineSpace (0x012A): publicInfo (param 2) with size == 0 -> TPM_RC_SIZE + P2
     // Header: 8002, size = 10 + 4 + 4 + 9 + 2 (auth) + 2 (publicInfo size=0) = 31 (0x1F)
@@ -327,7 +327,7 @@ fn nv_define_space_and_object_command_errors() {
 /// Object commands reject a keyedHash public area with nameAlg TPM_ALG_NULL with TPM_RC_HASH.
 #[test]
 fn object_public_null_name_alg_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // A loaded RSA storage parent so handle resolution and session validation pass.
     let parent_handle = create_primary_raw_handle(
@@ -491,7 +491,7 @@ fn object_public_null_name_alg_rejected() {
 /// RSA_Encrypt / RSA_Decrypt reject signature schemes (VALUE + P2) and OAEP with NULL hash (HASH + P2).
 #[test]
 fn rsa_encrypt_decrypt_signature_scheme_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // A loaded RSA decryption key.
     let key_handle = create_primary_raw_handle(
@@ -598,7 +598,7 @@ fn rsa_encrypt_decrypt_signature_scheme_rejected() {
 /// Empty inSensitive, bad sensitiveType, RSA 512-bit keyBits and malformed ECC points report the right RC + P1.
 #[test]
 fn sensitive_rsa_bits_and_ecc_point_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. TPM2_CreatePrimary (0x0131): inSensitive (param 1) with size == 0 -> TPM_RC_SIZE + P1
     // (Even when inPublic (param 2) also has size == 0, param 1 error takes precedence during unmarshalling)
@@ -769,7 +769,7 @@ fn sensitive_rsa_bits_and_ecc_point_errors() {
 /// Malformed session areas (invalid handle, reserved attribute bits, sizes) return the right RC with session positions.
 #[test]
 fn session_area_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Invalid session handle (0x80000000) in session 1 of TPM2_ClearControl (0x0127)
     // Header: tag = 0x8002 (ST_SESSIONS), size = 28 (0x1C), cmd = 0x00000127 (ClearControl)
@@ -827,7 +827,7 @@ fn session_area_errors() {
 /// A malformed TPM2_Sign validation ticket is reported with the correct parameter position.
 #[test]
 fn sign_validation_ticket_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // A loaded RSASSA signing key.
     let key_handle = create_primary_raw_handle(&mut sim, rsa_signing_key());

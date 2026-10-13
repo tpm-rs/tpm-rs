@@ -5,13 +5,13 @@ use crate::test_utils::{
     start_auth_session,
 };
 use rand::RngCore;
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, HMACStart, SequenceComplete, SequenceUpdate};
 use tpm2::{Handle, TpmSe};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, TpmaObject, TpmaSession, TpmiAlgHash,
     TpmsSensitiveCreate, TpmtKeyedHashScheme, TpmtPublic,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// Maximum input buffer size used by the Go test when splitting data into
 /// `TPM2_SequenceUpdate` chunks.
@@ -20,7 +20,7 @@ const MAX_INPUT_BUFFER: usize = 1024;
 /// Equivalent of go-tpm's `HMACSession(thetpm, TPMAlgSHA256, 16)`: an unbound,
 /// unsalted HMAC session with a NULL symmetric algorithm and `continueSession`
 /// set (no parameter encryption).
-fn start_hmac_session(sim: &mut Simulator<'_>) -> ActiveSession {
+fn start_hmac_session(sim: &mut Tpm) -> ActiveSession {
     let mut session = start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -65,7 +65,7 @@ fn hmac_key_create_primary() -> CreatePrimary<'static> {
 /// `TPM2_SequenceUpdate`) and completes it with `TPM2_SequenceComplete`,
 /// authorizing each command with a password session using `password`.
 fn update_and_complete_sequence(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     sequence_handle: Handle,
     mut data: &[u8],
     password: &[u8],
@@ -94,12 +94,7 @@ fn update_and_complete_sequence(
 /// Port of the `run` closure in `TestHmacStart`: CreatePrimary and HmacStart
 /// are authorized with an HMAC session; the sequence is driven with password
 /// authorization.
-fn run_hmac_start(
-    sim: &mut Simulator<'_>,
-    data: &[u8],
-    password: &[u8],
-    hierarchy: Handle,
-) -> Vec<u8> {
+fn run_hmac_start(sim: &mut Tpm, data: &[u8], password: &[u8], hierarchy: Handle) -> Vec<u8> {
     let mut sas = start_hmac_session(sim);
 
     let create_cmd = CreatePrimary {
@@ -144,7 +139,7 @@ fn run_hmac_start(
 /// Port of the `run` closure in `TestHmacStartNoKeyAuth`: CreatePrimary and
 /// HmacStart are authorized with empty password sessions.
 fn run_hmac_start_no_key_auth(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     data: &[u8],
     password: &[u8],
     hierarchy: Handle,
@@ -184,7 +179,7 @@ fn random_password() -> [u8; 8] {
 /// HMAC key is not exported, so HMAC the same random data twice and confirm
 /// the results match.
 fn hmac_start_subtest(buffer_size: usize, hierarchy: Handle) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = random_password();
     let mut data = vec![0u8; buffer_size];
     crate::test_utils::client_rng().fill_bytes(&mut data);
@@ -196,7 +191,7 @@ fn hmac_start_subtest(buffer_size: usize, hierarchy: Handle) {
 /// Body of the `TestHmacStartNoKeyAuth/<name> hierarchy [bufferSize=1024]`
 /// subtests.
 fn hmac_start_no_key_auth_subtest(hierarchy: Handle) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = random_password();
     let mut data = vec![0u8; 1024];
     crate::test_utils::client_rng().fill_bytes(&mut data);
@@ -280,7 +275,7 @@ fn test_hmac_start_endorsement_hierarchy_buffer_size_4096() {
 // Original Go test: hmac_start_test.go - TestHmacStart/Same key multiple sequences
 #[test]
 fn test_hmac_start_same_key_multiple_sequences() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = random_password();
 
     let mut sas = start_hmac_session(&mut sim);

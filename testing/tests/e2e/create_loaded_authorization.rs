@@ -1,6 +1,7 @@
 //! TPM2_CreateLoaded parent authorization: wrong passwords, userWithAuth and missing sessions.
 
 use crate::_common::{AES128_CFB, execute_with_password_sessions, make_template};
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{CreateLoaded, CreatePrimary};
 use tpm2::{
@@ -9,13 +10,12 @@ use tpm2::{
     TpmlPcrSelection, TpmsEccParms, TpmsEccPoint, TpmsRsaParms, TpmsSchemeEcdaa,
     TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// CreateLoaded under a parent without userWithAuth rejects password authorization.
 #[test]
 #[allow(deprecated)]
 fn parent_without_user_with_auth_rejects_password() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let password = b"parent_secret";
 
@@ -102,7 +102,7 @@ fn parent_without_user_with_auth_rejects_password() {
 #[test]
 #[allow(deprecated)]
 fn wrong_parent_password_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a primary key WITH A PASSWORD
     let parent_password = b"secret_parent_pass";
@@ -160,7 +160,7 @@ fn wrong_parent_password_rejected() {
 #[test]
 #[allow(deprecated)]
 fn zero_sessions_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let password = b"parent_secret";
 

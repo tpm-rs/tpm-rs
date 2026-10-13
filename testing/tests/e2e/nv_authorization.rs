@@ -5,17 +5,17 @@ use crate::_common::{
     send_rc_with_auth_entries as rc, start_session_active as start_session,
     start_session_of_type as start, *,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::*;
 use tpm2::errors::TpmRc;
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// Owner/platform authorization without the matching OWNER*/PP* attribute is TPM_RC_NV_AUTHORIZATION
 ///
 /// Owner/platform authorization without the matching attribute is `TPM_RC_NV_AUTHORIZATION`.
 #[test]
 fn hierarchy_auth_without_attribute_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let ext = 0x0150_0410;
     define(
         &mut sim,
@@ -92,7 +92,7 @@ fn hierarchy_auth_without_attribute_rejected() {
 /// NV_Write/NV_Certify with index auth fail on wrong password and succeed with the correct one
 #[test]
 fn index_password_write_and_certify() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let nv_index_val = 0x01500005;
     let nv_public_struct = TpmsNvPublic {
         nv_index: tpm2::Handle(nv_index_val),
@@ -157,7 +157,7 @@ fn index_password_write_and_certify() {
 /// `IsAuthPolicyAvailable()`).
 #[test]
 fn nv_index_self_auth_requires_matching_attributes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0030;
     // Write-only by authValue; authPolicy set but no POLICYREAD/POLICYWRITE.
     define_nv(
@@ -210,7 +210,7 @@ fn nv_index_self_auth_requires_matching_attributes() {
 /// and the PIN processing in `CheckAuthSession()`).
 #[test]
 fn nv_pin_fail_and_pin_pass_auth_and_counters() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // --- PIN Fail ---
     let pin_fail = 0x0150_0010;
@@ -299,7 +299,7 @@ fn nv_pin_fail_and_pin_pass_auth_and_counters() {
 /// session on an index without AUTHWRITE / AUTHREAD.
 #[test]
 fn policy_session_authorizes_extend_setbits_and_locks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let policy_rw = TpmaNv::POLICYWRITE | TpmaNv::POLICYREAD | TpmaNv::OWNERREAD;
 
     let ext = 0x0150_0400;
@@ -376,7 +376,7 @@ fn policy_session_authorizes_extend_setbits_and_locks() {
 /// NV_Write enforces AUTHWRITE/PPWRITE/OWNERWRITE attributes (NV_AUTHORIZATION / AUTH_UNAVAILABLE)
 #[test]
 fn write_role_attributes_enforced() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let nv_index_val = 0x01500031;
 
     // 1. Index defined with OWNERWRITE | OWNERREAD only (no AUTHWRITE, no PPWRITE)

@@ -1,4 +1,5 @@
 use crate::test_utils::{execute_with_password_sessions, flush_context};
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, ReadPublic};
 use tpm2::{
     AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bName,
@@ -6,7 +7,6 @@ use tpm2::{
     TpmsEccPoint, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_simulator::{Simulator, create_simulator};
 
 use crate::test_utils::{execute_with_hmac_sessions, start_auth_session};
 use tpm2::TpmSe;
@@ -45,7 +45,7 @@ fn ecc_srk_template() -> TpmtPublic<'static> {
 // Original Go test: read_public_test.go - TestReadPublicKey
 #[test]
 fn test_read_public_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create ECC key template
     let ecc_parms = TpmsEccParms {
@@ -116,7 +116,7 @@ fn test_read_public_key() {
 /// Shared setup of the `TestReadPublicWithHMACSession` subtests: creates an
 /// owner primary key from go-tpm's `ECCSRKTemplate` and returns its handle and
 /// name.
-fn read_public_with_hmac_session_setup(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
+fn read_public_with_hmac_session_setup(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     let create_cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
@@ -134,7 +134,7 @@ fn read_public_with_hmac_session_setup(sim: &mut Simulator<'_>) -> (Handle, Tpm2
 // Original Go test: read_public_test.go - TestReadPublicWithHMACSession/ReadPublic with HMAC session
 #[test]
 fn test_read_public_with_hmac_session_read_public_with_hmac_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (object_handle, name) = read_public_with_hmac_session_setup(&mut sim);
 
     // HMAC(TPMAlgSHA256, 16, AESEncryption(128, EncryptOut)): a one-off,
@@ -173,7 +173,7 @@ fn test_read_public_with_hmac_session_read_public_with_hmac_session() {
 // Original Go test: read_public_test.go - TestReadPublicWithHMACSession/ReadPublic without HMAC session
 #[test]
 fn test_read_public_with_hmac_session_read_public_without_hmac_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (object_handle, _name) = read_public_with_hmac_session_setup(&mut sim);
 
     let read_cmd = ReadPublic { object_handle };

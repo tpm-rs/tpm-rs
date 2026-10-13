@@ -6,16 +6,16 @@ use crate::_common::{
     get_tpm_property, hash_ticket_digest, hierarchy_control, object_exists, primary_public,
     pw_session,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{ChangeEPS, ChangePPS, GetCapability, SetPrimaryPolicy};
 use tpm2::{Handle, Tpm2bDigest, TpmCap, TpmPt, TpmiAlgHash, TpmsCapabilityData};
-use tpm2_simulator::create_simulator;
 
 /// ChangeEPS flushes endorsement persistent objects (not storage ones) and resets the endorsement authPolicy alg to NULL.
 ///
 /// ChangeEPS flushes endorsement evict objects (but not storage ones) and resets endorsementAlg.
 #[test]
 fn change_eps_flushes_endorsement_objects() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (ek, _) = create_storage_primary_with_auth(&mut sim, Handle::RH_ENDORSEMENT, &[]);
     evict(&mut sim, Handle::RH_OWNER, ek, 0x8101_0001);
     let (srk, _) = create_storage_primary_with_auth(&mut sim, Handle::RH_OWNER, &[]);
@@ -84,7 +84,7 @@ fn change_eps_flushes_endorsement_objects() {
 /// leaves the endorsement hierarchy enabled.
 #[test]
 fn change_eps_replaces_endorsement_seed() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let initial_ep_primary = primary_public(&mut sim, Handle::RH_ENDORSEMENT);
     let initial_eh_ticket = hash_ticket_digest(&mut sim, Handle::RH_ENDORSEMENT);
@@ -117,7 +117,7 @@ fn change_eps_replaces_endorsement_seed() {
 /// ChangePPS with TPM_RH_OWNER as auth handle fails.
 #[test]
 fn change_pps_rejects_owner_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Send ChangePPS with non-platform handle TPM_RH_OWNER (should fail)
     let cmd = ChangePPS {
@@ -134,7 +134,7 @@ fn change_pps_rejects_owner_handle() {
 /// primary keys and platform tickets change.
 #[test]
 fn change_pps_replaces_platform_seed() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let initial_pp_primary = primary_public(&mut sim, Handle::RH_PLATFORM);
     let initial_ph_ticket = hash_ticket_digest(&mut sim, Handle::RH_PLATFORM);

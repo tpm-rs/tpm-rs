@@ -2,6 +2,7 @@
 //! positions.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{LoadExternal, RSADecrypt, RSAEncrypt};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -9,7 +10,6 @@ use tpm2::{
     Tpm2bSensitiveData, TpmaObject, TpmiAlgHash, TpmtRsaScheme, TpmtSensitive,
     TpmuSensitiveComposite, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// RSA_Encrypt accepts restricted keys; RSA_Decrypt checks type first, ciphertext size and reports label/scheme errors at parameter positions.
 ///
@@ -17,7 +17,7 @@ use tpm2_simulator::create_simulator;
 /// ciphertext size, and reports label / scheme errors at parameter positions.
 #[test]
 fn attribute_type_and_error_position_checks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Restricted RSA storage key: RSA_Encrypt only uses the public part.
     let srk = create_primary_with_auth_in(
@@ -123,7 +123,7 @@ fn attribute_type_and_error_position_checks() {
 /// Test RSADecrypt fails with TPM_RC_KEY if key lacks DECRYPT attribute.
 #[test]
 fn rsa_decrypt_rejects_key_without_decrypt() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let object_handle = load_rsa_with_private(&mut sim, TpmaObject::SIGN_ENCRYPT, None);
 
@@ -149,7 +149,7 @@ fn rsa_decrypt_rejects_key_without_decrypt() {
 /// Expected: TPM_RC_KEY.
 #[test]
 fn rsa_decrypt_rejects_keyed_hash_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_public = tpm2::Tpm2b(make_keyed_hash_public_area(
         &[0x01; 32],
@@ -191,7 +191,7 @@ fn rsa_decrypt_rejects_keyed_hash_key() {
 /// Test RSADecrypt fails on a restricted key handle returning TPM_RC_ATTRIBUTES.
 #[test]
 fn rsa_decrypt_rejects_restricted_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // LoadExternal can't load a restricted key with its sensitive area (and a public-only key
     // fails USER authorization), so let the TPM create a restricted RSA storage key.
@@ -227,7 +227,7 @@ fn rsa_decrypt_rejects_restricted_key() {
 /// Raw TPM2_RSA_Decrypt with a restricted RSA decryption primary fails with TPM_RC_ATTRIBUTES
 #[test]
 fn rsa_decrypt_rejects_restricted_key_raw() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // A restricted decryption key needs a symmetric algorithm to be creatable.
     let (key, _) = create_primary_returning_public(
         &mut sim,
@@ -250,7 +250,7 @@ fn rsa_decrypt_rejects_restricted_key_raw() {
 /// Raw TPM2_RSA_Decrypt with a signing-only RSA primary fails with TPM_RC_ATTRIBUTES
 #[test]
 fn rsa_decrypt_rejects_signing_only_key_raw() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, _) = create_primary_returning_public(
         &mut sim,
         rsa_public_with_symmetric(TpmaObject::SIGN_ENCRYPT | sdo_user(), None),
@@ -273,7 +273,7 @@ fn rsa_decrypt_rejects_signing_only_key_raw() {
 /// Expected: TPM_RC_HANDLE.
 #[test]
 fn rsa_decrypt_rejects_unloaded_key_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let decrypt_cmd = LocalRSADecryptCmd {
         key_handle: Handle(0x8000000E),
         cipher_text: Tpm2bPublicKeyRsa::from_bytes(&[0x01; 256]).unwrap(),

@@ -4,15 +4,15 @@ use crate::_common::{
     create_signing_key_handle as create_signing_key, define_nv_with_policy_unwrap as define,
     handle_name_of as handle_name, start_session_active as start_session, *,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, NVCertify, NVDefineSpace, NVReadLock, NVReadPublic, NVWrite};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// After NV_ReadLock of a READ_STCLEAR index, NV_Certify fails with TPM_RC_NV_LOCKED
 #[test]
 fn certify_after_read_lock_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let nv_index_val = 0x01500033;
     // READ_STCLEAR allows the index to be read-locked with TPM2_NV_ReadLock.
     let nv_public_struct = TpmsNvPublic {
@@ -73,7 +73,7 @@ fn certify_after_read_lock_rejected() {
 /// NV_Certify reports unloaded signHandle first, rejects non-NV-auth authHandle (TPM_RC_VALUE + RC_H2), resolves key before NV
 #[test]
 fn handle_validation_order() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Unloaded signHandle and undefined nvIndex: handle 1 is reported first.
     assert_eq!(
         nv_certify(
@@ -128,7 +128,7 @@ fn handle_validation_order() {
 /// NV_Write out of bounds fails with TPM_RC_SIZE, NV_Certify of a sub-range succeeds and out-of-range fails with TPM_RC_NV_RANGE
 #[test]
 fn nv_certify_rejects_out_of_range_reads() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Setup signer primary template (RSA, SHA256, restricted, sign/encrypt)
     let rsa_parms = TpmsRsaParms {
@@ -252,7 +252,7 @@ fn nv_certify_rejects_out_of_range_reads() {
 /// NV_Certify with offset+size wrapping u16 is rejected (no overflow)
 #[test]
 fn offset_overflow_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let nv_index_val = 0x01500004;
     let nv_public_struct = TpmsNvPublic {
         nv_index: tpm2::Handle(nv_index_val),
@@ -301,7 +301,7 @@ fn offset_overflow_rejected() {
 /// NV_Certify at the end boundary succeeds; one byte past it is TPM_RC_NV_RANGE
 #[test]
 fn offset_plus_size_boundaries() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let nv_index_val = 0x01500003;
     let nv_public_struct = TpmsNvPublic {
         nv_index: tpm2::Handle(nv_index_val),
@@ -375,7 +375,7 @@ fn offset_plus_size_boundaries() {
 /// satisfied policy session.
 #[test]
 fn policyread_index_certified_with_policy_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0102;
     define(
         &mut sim,
@@ -415,7 +415,7 @@ fn policyread_index_certified_with_policy_session() {
 /// NV_Certify enforces AUTHREAD/PPREAD/OWNERREAD attributes (NV_AUTHORIZATION / AUTH_UNAVAILABLE)
 #[test]
 fn read_role_attributes_enforced() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let nv_index_val = 0x01500034;
 
     // 1. Index defined with OWNERWRITE | OWNERREAD only (no AUTHREAD, no PPREAD)
@@ -548,7 +548,7 @@ fn read_role_attributes_enforced() {
 /// unwritten index does not mask it with `TPM_RC_NV_UNINITIALIZED`.
 #[test]
 fn scheme_checked_before_nv_access() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0101;
     define(&mut sim, index, OWNER_RW, 16, &[]);
     let key = create_signing_key(&mut sim);
@@ -572,7 +572,7 @@ fn scheme_checked_before_nv_access() {
 /// `size > MAX_NV_BUFFER_SIZE` is `TPM_RC_VALUE + RC_P3` (checked after the range check).
 #[test]
 fn size_above_max_nv_buffer_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0103;
     define(&mut sim, index, OWNER_RW, 1100, &[]);
     owner_write(&mut sim, index, 0, &[0x11; 1024]).unwrap();
@@ -607,7 +607,7 @@ fn size_above_max_nv_buffer_rejected() {
 /// NV_Certify of an unwritten index fails with TPM_RC_NV_UNINITIALIZED.
 #[test]
 fn unwritten_index_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let nv_index = Handle(0x01000005);
     define_nv_space(
@@ -641,7 +641,7 @@ fn unwritten_index_rejected() {
 /// NV_Certify of an unwritten index is TPM_RC_NV_UNINITIALIZED; succeeds after the first write
 #[test]
 fn unwritten_index_rejected_until_first_write() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let nv_index_val = 0x01500050;
     let nv_public_struct = TpmsNvPublic {
         nv_index: tpm2::Handle(nv_index_val),
@@ -690,7 +690,7 @@ fn unwritten_index_rejected_until_first_write() {
 /// H_schemeHash(whole index data); an unsigned one has an empty digest.
 #[test]
 fn whole_index_produces_nv_digest_attestation() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0100;
     define(&mut sim, index, OWNER_RW, 16, &[]);
     let data = [0x5au8; 16];
@@ -740,7 +740,7 @@ fn whole_index_produces_nv_digest_attestation() {
 /// Writing sets TPMA_NV_WRITTEN and NV_Certify then succeeds with the written data in the attestation.
 #[test]
 fn written_index_certifies_data() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let nv_index = Handle(0x01000006);
     define_nv_space(

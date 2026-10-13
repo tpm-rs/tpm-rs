@@ -85,6 +85,10 @@ pub struct Simulator<'a> {
     context: Box<TpmEngine<'a, PlatformCryptoProvider, RamStorageMock<4096>, LinuxTimer, LinuxRng>>,
     is_power_on: bool,
     is_nv_on: bool,
+    /// Seeded stream used as the crypto provider's randomness while this
+    /// simulator executes commands and signals (see [`Simulator::pin_crypto_rng`]).
+    #[cfg(all(feature = "reproducible", feature = "bssl"))]
+    crypto_rng: Option<tpm2_platform_linux::CryptoReplayRng>,
 }
 
 impl<'a> Simulator<'a> {
@@ -101,11 +105,34 @@ impl<'a> Simulator<'a> {
             context,
             is_power_on: false,
             is_nv_on: false,
+            #[cfg(all(feature = "reproducible", feature = "bssl"))]
+            crypto_rng: None,
         })
+    }
+
+    /// Runs `f` as TPM-side work: with the `reproducible` feature and a pinned crypto
+    /// stream, the crypto provider draws its randomness from that stream while
+    /// `f` runs, and only then.
+    fn in_tpm_scope<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        #[cfg(all(feature = "reproducible", feature = "bssl"))]
+        if let Some(mut rng) = self.crypto_rng.take() {
+            let r = rng.scope(|| f(self));
+            self.crypto_rng = Some(rng);
+            return r;
+        }
+        f(self)
     }
 
     /// Handles one command-port transaction (see [`PlatformConnection::transact_platform`]).
     pub(crate) fn handle_regular_command_raw<S: Read + Write>(
+        &mut self,
+        command: u32,
+        stream: &mut S,
+    ) -> anyhow::Result<bool> {
+        self.in_tpm_scope(|sim| sim.regular_command(command, stream))
+    }
+
+    fn regular_command<S: Read + Write>(
         &mut self,
         command: u32,
         stream: &mut S,
@@ -227,6 +254,16 @@ impl<'a> Simulator<'a> {
     /// (reply data, then a 4-byte result code) to `stream`. Returns `true` if the platform
     /// session ends.
     fn handle_platform_signal<S: Read + Write>(
+        &mut self,
+        code: SimulatorPlatformSignal,
+        stream: &mut S,
+    ) -> anyhow::Result<bool> {
+        self.in_tpm_scope(|sim| sim.platform_signal(code, stream))
+    }
+
+    /// Implementation of [`Simulator::handle_platform_signal`], run inside
+    /// [`Simulator::in_tpm_scope`].
+    fn platform_signal<S: Read + Write>(
         &mut self,
         code: SimulatorPlatformSignal,
         stream: &mut S,
@@ -398,6 +435,39 @@ pub mod __private {
     pub use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider};
 }
 
+/// Powers `sim` on, enables NV and sends `TPM2_Startup(TPM_SU_CLEAR)`.
+///
+/// # Panics
+/// If any of these steps fails.
+fn power_on_start_up(sim: &mut Simulator<'_>) {
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+        .expect("failed to power on the TPM simulator");
+    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
+        .expect("failed to enable NV of the TPM simulator");
+    sim.execute(tpm2::commands::Startup {
+        startup_type: tpm2::TpmSu::Clear,
+    })
+    .expect("TPM2_Startup(TPM_SU_CLEAR) failed");
+}
+
+/// Builds a powered-on, NV-enabled, started simulator from leaked components.
+fn new_started_simulator(timer: LinuxTimer, platform_rng: LinuxRng) -> Simulator<'static> {
+    let crypto: &'static mut PlatformCryptoProvider = Box::leak(Box::new(PlatformCryptoProvider));
+    let storage: &'static mut RamStorageMock<4096> = Box::leak(Box::new(RamStorageMock::new()));
+    let timer: &'static mut LinuxTimer = Box::leak(Box::new(timer));
+    let platform_rng: &'static mut LinuxRng = Box::leak(Box::new(platform_rng));
+    let mut sim = Simulator::new(crypto, storage, timer, platform_rng)
+        .expect("failed to create TPM simulator");
+    power_on_start_up(&mut sim);
+    sim
+}
+
+/// Implementation of [`create_simulator!`]. Not part of the public API.
+#[doc(hidden)]
+pub fn __new_simulator() -> Simulator<'static> {
+    new_started_simulator(LinuxTimer::new(), LinuxRng::new())
+}
+
 /// Creates a fresh, self-contained in-process [`Simulator`] that has been
 /// powered on, had NV enabled, and received `TPM2_Startup(TPM_SU_CLEAR)`.
 ///
@@ -410,36 +480,85 @@ pub mod __private {
 /// imports besides the macro itself.
 #[macro_export]
 macro_rules! create_simulator {
-    () => {{
-        let crypto: &'static mut $crate::__private::PlatformCryptoProvider =
-            ::std::boxed::Box::leak(::std::boxed::Box::new(
-                $crate::__private::PlatformCryptoProvider,
-            ));
-        let storage: &'static mut $crate::__private::RamStorageMock<4096> = ::std::boxed::Box::leak(
-            ::std::boxed::Box::new($crate::__private::RamStorageMock::new()),
-        );
-        let timer: &'static mut $crate::__private::LinuxTimer =
-            ::std::boxed::Box::leak(::std::boxed::Box::new($crate::__private::LinuxTimer::new()));
-        let platform_rng: &'static mut $crate::__private::LinuxRng =
-            ::std::boxed::Box::leak(::std::boxed::Box::new($crate::__private::LinuxRng::new()));
-        let mut sim = $crate::Simulator::new(crypto, storage, timer, platform_rng)
-            .expect("failed to create TPM simulator");
-        $crate::PlatformConnection::signal_platform(
-            &mut sim,
-            $crate::SimulatorPlatformSignal::PowerOn,
-            $crate::NO_STREAM,
-        )
-        .expect("failed to power on the TPM simulator");
-        $crate::PlatformConnection::signal_platform(
-            &mut sim,
-            $crate::SimulatorPlatformSignal::NvOn,
-            $crate::NO_STREAM,
-        )
-        .expect("failed to enable NV of the TPM simulator");
-        sim.execute($crate::__private::Startup {
-            startup_type: $crate::__private::TpmSu::Clear,
-        })
-        .expect("TPM2_Startup(TPM_SU_CLEAR) failed");
-        sim
-    }};
+    () => {
+        $crate::__new_simulator()
+    };
+}
+
+/// Seed used by [`create_replay_simulator!`] when none is given.
+#[cfg(feature = "reproducible")]
+pub const DEFAULT_REPLAY_SEED: u64 = 0x7470_6d2d_7273_0001;
+
+/// XORed into the replay seed to derive the crypto provider's seed, so that the
+/// platform RNG and the crypto RNG produce different streams.
+#[cfg(feature = "reproducible")]
+pub const REPLAY_CRYPTO_SEED_TWEAK: u64 = 0x6372_7970_746f_0000;
+
+#[cfg(feature = "reproducible")]
+impl Simulator<'_> {
+    /// Advances the simulator's virtual clock by `ms` milliseconds.
+    ///
+    /// Returns `false` (and does nothing) if the simulator runs on the wall
+    /// clock, i.e. was not created by [`create_replay_simulator!`].
+    pub fn advance_clock(&mut self, ms: u64) -> bool {
+        self.context.platform.timer.advance(ms)
+    }
+
+    /// Makes the crypto provider's randomness (key generation, ECDSA nonces,
+    /// RSA padding, `get_random`) a stream seeded by `seed` whenever this
+    /// simulator executes a command or signal.
+    ///
+    /// The stream belongs to this simulator: randomness drawn by other code
+    /// (e.g. a test's client-side crypto using the same provider type) or by
+    /// other simulators neither consumes nor perturbs it. Only the BoringSSL
+    /// backend supports this; with other backends it is a no-op returning
+    /// `false`.
+    pub fn pin_crypto_rng(&mut self, seed: u64) -> bool {
+        #[cfg(feature = "bssl")]
+        {
+            self.crypto_rng = Some(tpm2_platform_linux::CryptoReplayRng::new(seed));
+            true
+        }
+        #[cfg(not(feature = "bssl"))]
+        {
+            let _ = seed;
+            false
+        }
+    }
+}
+
+/// Implementation of [`create_replay_simulator!`]. Not part of the public API.
+#[cfg(feature = "reproducible")]
+#[doc(hidden)]
+pub fn __new_replay_simulator(seed: u64) -> Simulator<'static> {
+    let crypto: &'static mut PlatformCryptoProvider = Box::leak(Box::new(PlatformCryptoProvider));
+    let storage: &'static mut RamStorageMock<4096> = Box::leak(Box::new(RamStorageMock::new()));
+    let timer: &'static mut LinuxTimer = Box::leak(Box::new(LinuxTimer::new_virtual()));
+    let platform_rng: &'static mut LinuxRng = Box::leak(Box::new(LinuxRng::seeded(seed)));
+    let mut sim = Simulator::new(crypto, storage, timer, platform_rng)
+        .expect("failed to create TPM simulator");
+    // A distinct stream from the platform RNG, derived from the same seed.
+    sim.pin_crypto_rng(seed ^ REPLAY_CRYPTO_SEED_TWEAK);
+    power_on_start_up(&mut sim);
+    sim
+}
+
+/// Like [`create_simulator!`], but every source of nondeterminism is pinned:
+/// the platform RNG is a ChaCha20 stream seeded with `$seed` (default
+/// [`DEFAULT_REPLAY_SEED`]), the crypto provider's randomness is pinned with
+/// [`Simulator::pin_crypto_rng`] (BoringSSL backend only), and the timer is a
+/// virtual clock starting at 0 ms that only moves via
+/// [`Simulator::advance_clock`].
+///
+/// Two simulators created with the same seed and fed the same inputs produce
+/// byte-identical responses.
+#[cfg(feature = "reproducible")]
+#[macro_export]
+macro_rules! create_replay_simulator {
+    () => {
+        $crate::__new_replay_simulator($crate::DEFAULT_REPLAY_SEED)
+    };
+    ($seed:expr) => {
+        $crate::__new_replay_simulator($seed)
+    };
 }

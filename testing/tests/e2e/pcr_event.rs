@@ -8,15 +8,15 @@ use crate::_common::{
     pcr_event_at_digests as pcr_event_at, pcr_read_selection as pcr_read, pw, read_pcr,
     read_pcr_by_alg_id,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::PCREvent;
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 // 2. Correctness of PCR_Event (calculating event digest and extending it)
 /// PCR_Event returns digests for every implemented hash and extends allocated banks with them.
 #[test]
 fn event_digests_and_extension() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let pcr_idx = 10usize;
     let initial_sha1 = read_pcr_by_alg_id(&mut sim, ALG_SHA1, pcr_idx).unwrap();
@@ -93,7 +93,7 @@ fn event_digests_and_extension() {
 /// PCR_Event with empty data returns empty-data digests and extends allocated banks with them.
 #[test]
 fn event_with_empty_data() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let pcr_idx = 5usize;
     let initial_sha1 = read_pcr(&mut sim, TpmiAlgHash::Sha1, pcr_idx).unwrap();
@@ -165,7 +165,7 @@ fn event_with_empty_data() {
 /// extending anything.
 #[test]
 fn pcr_event_returns_digests_and_extends_banks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let event_data = b"my test event data";
     let evt_cmd = PCREvent {
@@ -246,7 +246,7 @@ fn pcr_event_returns_digests_and_extends_banks() {
 /// PCR_Event measurements into PCRs 0,1,2,4,5 (SRTM boot sequence) succeed
 #[test]
 fn pcr_event_srtm_boot_measurements() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     for &pcr in &[0, 1, 2, 4, 5] {
         let auth_handle = Handle(pcr);
         let cmd = PCREvent {

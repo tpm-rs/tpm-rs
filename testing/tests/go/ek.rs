@@ -4,6 +4,7 @@
 //! TCG EK Credential Profile For TPM Family 2.0; Level 0, Version 2.7
 
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{Create, CreatePrimary, PolicySecret};
 use tpm2::{AlgSym, TpmiAlgCipherMode};
 use tpm2::{Handle, TpmSe, TpmaSession};
@@ -12,7 +13,6 @@ use tpm2::{
     Tpm2bSensitiveData, TpmaNv, TpmaObject, TpmiAlgHash, TpmiAlgSymMode, TpmsNvPublic,
     TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// Decodes the provided hex strings into a byte vector. Panics on non-hex chars.
 fn hex_to_bytes(hex_strings: &[&str]) -> Vec<u8> {
@@ -316,7 +316,7 @@ fn go_ecc_ek_template() -> TpmtPublic<'static> {
 
 /// Port of Go's `ekPolicy` callback: TPM2_PolicySecret(TPM_RH_ENDORSEMENT)
 /// on the given policy session.
-fn ek_policy(sim: &mut Simulator<'_>, handle: Handle, nonce_tpm: Tpm2bNonce<'static>) {
+fn ek_policy(sim: &mut Tpm, handle: Handle, nonce_tpm: Tpm2bNonce<'static>) {
     let cmd = PolicySecret {
         auth_handle: Handle::RH_ENDORSEMENT,
         policy_session: handle,
@@ -336,7 +336,7 @@ fn ek_policy(sim: &mut Simulator<'_>, handle: Handle, nonce_tpm: Tpm2bNonce<'sta
 /// nonceCaller, hash bits)` (Part 1, 19.6), computed only when bound or
 /// salted.
 fn start_session(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     session_type: TpmSe,
     auth_hash: TpmiAlgHash,
     symmetric: Option<TpmtSymDefObject>,
@@ -518,7 +518,7 @@ struct PolicySessionParams<'a> {
 /// On failure, one-shot sessions are flushed (go-tpm's `CleanupFailure`).
 #[allow(clippy::too_many_arguments)]
 fn execute_create_blob(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     create_cmd: &Create<'_>,
     ek_name: &Tpm2bName<'_>,
     case: EkTestCase,
@@ -596,7 +596,7 @@ fn ek_test(ek_template: TpmtPublic<'static>, case: EkTestCase) {
         "AuthPolicy mismatch"
     );
 
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create the EK
     let create_ek_cmd = CreatePrimary {

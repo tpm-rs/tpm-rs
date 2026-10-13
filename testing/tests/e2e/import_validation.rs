@@ -16,6 +16,7 @@ use crate::_common::{
     rsa_public, rsa_storage_template, rsa_storage_template_with, storage_attrs,
     try_create_owner_primary, try_create_primary_in,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{CreateLoaded, CreatePrimary, Import, Load, Unseal, *};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -23,13 +24,12 @@ use tpm2::{
     Tpm2bPrivate, Tpm2bPublic, Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmEccCurve, TpmaObject,
     TpmiAlgHash, TpmiRsaKeyBits, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic, *,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// `TPM2_Import` with an empty `inSymSeed` and empty `duplicate` under a
 /// parent with a symmetric algorithm fails.
 #[test]
 fn empty_seed_and_duplicate_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A parent ECC storage key with symmetric encryption enabled (AES-128 CFB)
     let (parent, _) = try_create_owner_primary(
@@ -75,7 +75,7 @@ fn empty_seed_and_duplicate_rejected() {
 /// key fails with `TPM_RC_ATTRIBUTES` on `encryptionKey`.
 #[test]
 fn encrypted_duplication_without_inner_key_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A parent storage key
     let parent = create_srk(&mut sim);
@@ -110,7 +110,7 @@ fn encrypted_duplication_without_inner_key_rejected() {
 /// Import with a wrong encryption key size fails with TPM_RC_SIZE and with fixedTPM set fails with TPM_RC_ATTRIBUTES.
 #[test]
 fn encryption_key_size_and_fixed_tpm() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a primary parent key
     let parent_handle = create_parent(&mut sim);
@@ -183,7 +183,7 @@ fn encryption_key_size_and_fixed_tpm() {
 /// Import with fixedTPM set on objectPublic fails with TPM_RC_ATTRIBUTES + P2.
 #[test]
 fn fixed_tpm_attribute_precedence() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let parent_handle = create_test_primary(&mut sim);
 
@@ -228,7 +228,7 @@ fn fixed_tpm_attribute_precedence() {
 /// `TPM_RC_ATTRIBUTES` on `objectPublic`.
 #[test]
 fn fixed_tpm_object_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let parent = create_srk(&mut sim);
 
@@ -262,7 +262,7 @@ fn fixed_tpm_object_rejected() {
 /// `objectPublic` (parameter 2).
 #[test]
 fn import_checks_seed_size_before_attributes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create primary RSA storage key
     let primary_pub = TpmtPublic {
@@ -328,7 +328,7 @@ fn import_checks_seed_size_before_attributes() {
 /// Import under a derivation parent or a non-storage signing key fails with TYPE+H1.
 #[test]
 fn import_rejects_derivation_and_signing_parents() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let (deriver, _) = create_and_load(
         &mut sim,
@@ -344,7 +344,7 @@ fn import_rejects_derivation_and_signing_parents() {
         &[],
         &[],
     );
-    let import_rc = |sim: &mut Simulator<'_>, parent: Handle| {
+    let import_rc = |sim: &mut Tpm, parent: Handle| {
         import(
             sim,
             parent,
@@ -364,7 +364,7 @@ fn import_rejects_derivation_and_signing_parents() {
 /// of the integrity size) with the C reference's response codes.
 #[test]
 fn malformed_outer_and_inner_duplicate_blobs() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Parent storage key
     let parent = create_storage_primary(&mut sim, TpmiAlgHash::Sha256);
@@ -386,8 +386,7 @@ fn malformed_outer_and_inner_duplicate_blobs() {
     )
     .unwrap();
 
-    let import =
-        |sim: &mut Simulator<'_>, cmd: Import<'_>| exec_command(sim, &cmd, &[pw()]).map(|_| ());
+    let import = |sim: &mut Tpm, cmd: Import<'_>| exec_command(sim, &cmd, &[pw()]).map(|_| ());
 
     // Scenario A: No inner wrapper, duplicate_bytes length < 2 (only 1 byte)
     let res = import(
@@ -485,7 +484,7 @@ fn malformed_outer_and_inner_duplicate_blobs() {
 /// Import: corrupted outer integrity INTEGRITY+P3, inner integrity size/check order, truncated duplicate INSUFFICIENT+P3.
 #[test]
 fn outer_and_inner_integrity_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let parent = try_create_primary_in(
         &mut sim,
@@ -532,7 +531,7 @@ fn outer_and_inner_integrity_errors() {
     // Inner wrapper: the integrity TPM2B_DIGEST is unmarshaled (size > 64 -> SIZE) and checked
     // (INTEGRITY) before the TPM2B_SENSITIVE is looked at (C CheckInnerIntegrity).
     let key = [0x24u8; 16];
-    let inner_import = |sim: &mut Simulator<'_>, plain: &[u8]| {
+    let inner_import = |sim: &mut Tpm, plain: &[u8]| {
         let mut blob = plain.to_vec();
         crate::_common::aes128_cfb_zero_iv_encrypt(&key, &mut blob);
         command_rc(
@@ -573,7 +572,7 @@ fn outer_and_inner_integrity_errors() {
 /// stripped fails.
 #[test]
 fn outer_wrapped_duplicate_without_seed_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A parent ECC storage key with symmetric encryption enabled (AES-128 CFB)
     let (parent, _) = try_create_owner_primary(
@@ -637,7 +636,7 @@ fn outer_wrapped_duplicate_without_seed_rejected() {
 /// coordinate is oversized fails with `TPM_RC_ECC_POINT` (and does not panic).
 #[test]
 fn oversized_ecc_seed_point_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A parent ECC storage key
     let (parent, _) = try_create_owner_primary(
@@ -692,7 +691,7 @@ fn oversized_ecc_seed_point_rejected() {
 /// 3. inSymSeed with oversized buffer returns TPM_RC_SIZE (Pos4, 0x04D5)
 #[test]
 fn symmetric_attributes_and_seed_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create RSA primary storage parent key under Owner hierarchy
     let parent_handle = create_owner_primary(&mut sim, rsa_storage_template());
@@ -766,7 +765,7 @@ fn symmetric_attributes_and_seed_size() {
 /// Import of duplicates with tampered outer HMAC, seeds, sizes and inner data fails with integrity/size errors (RSA and ECC parents)
 #[test]
 fn tampered_duplicate_blobs_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     fn is_integrity_error(rc: u32) -> bool {
         (rc & 0xBF) == 0x9F

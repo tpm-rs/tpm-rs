@@ -5,16 +5,15 @@ use crate::_common::{
     CC_HIERARCHY_CHANGE_AUTH, build_pw_cmd, change_auth_command, execute_with_password_sessions,
     mssim_rc_of, power_on_start_up, send_rc, set_hierarchy_auth, su_command,
 };
-use crate::_common::{NO_STREAM, PlatformConnection};
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::HierarchyChangeAuth;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bAuth};
-use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 /// TPM2_HierarchyChangeAuth rejects a 65-byte newAuth with TPM_RC_SIZE + P1 and accepts 64 bytes
 #[test]
 fn hierarchy_change_auth_rejects_auth_over_digest_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // The max auth size is the digest size of the context integrity hash (Part 1,
     // "Authorization Size Convention"), which must be the strongest implemented hash (Part 1,
@@ -42,7 +41,7 @@ fn hierarchy_change_auth_rejects_auth_over_digest_size() {
 /// HierarchyChangeAuth with 40- and 64-byte newAuth values (responses are printed, not asserted).
 #[test]
 fn oversized_new_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // CONTEXT_INTEGRITY_HASH_SIZE in most TPMs is SHA256 (32 bytes).
     // Let's see if 40 bytes is accepted.
@@ -69,7 +68,7 @@ fn oversized_new_auth() {
 /// HierarchyChangeAuth of the owner auth succeeds (orderly state handling).
 #[test]
 fn owner_auth_change_succeeds() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Change owner auth
     let hca_cmd = HierarchyChangeAuth {
@@ -88,7 +87,7 @@ fn owner_auth_change_succeeds() {
 /// Owner auth set by HierarchyChangeAuth survives a power cycle
 #[test]
 fn owner_auth_persists_across_power_cycle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Change owner auth
     let new_auth = b"newownerauth";
@@ -100,7 +99,7 @@ fn owner_auth_persists_across_power_cycle() {
     assert!(resp.is_ok());
 
     // Power cycle
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
     power_on_start_up(&mut sim);
 
@@ -120,7 +119,7 @@ fn owner_auth_persists_across_power_cycle() {
 /// with `TPM_RC_AUTH_MISSING`.
 #[test]
 fn owner_without_sessions_auth_missing() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = change_auth_command(Handle::RH_OWNER, None, &[4, 5, 6]);
     assert_eq!(send_rc(&mut sim, &cmd), TpmRc::AUTH_MISSING.get());
 }
@@ -129,7 +128,7 @@ fn owner_without_sessions_auth_missing() {
 /// following `Startup(STATE)` fails.
 #[test]
 fn platform_auth_change_invalidates_saved_state() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     set_hierarchy_auth(&mut sim, Handle::RH_PLATFORM, &[1, 2, 3]);
     assert_eq!(su_command(&mut sim, 0x145, 0x0001), 0); // Shutdown(STATE)
 
@@ -137,12 +136,11 @@ fn platform_auth_change_invalidates_saved_state() {
     assert_eq!(send_rc(&mut sim, &cmd), 0);
 
     // The orderly state is no longer TPM_SU_STATE: Startup(STATE) is rejected.
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     assert_eq!(
         su_command(&mut sim, 0x144, 0x0001),
         TpmRc::VALUE.with(Position::parameter(1)).get()
@@ -153,7 +151,7 @@ fn platform_auth_change_invalidates_saved_state() {
 /// fails with `TPM_RC_AUTH_MISSING`.
 #[test]
 fn platform_without_sessions_auth_missing() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = change_auth_command(Handle::RH_PLATFORM, None, &[4, 5, 6]);
     // Spec says TPM_RC_AUTH_MISSING when a session is required but 0x8001 is provided
     assert_eq!(send_rc(&mut sim, &cmd), TpmRc::AUTH_MISSING.get());
@@ -163,7 +161,7 @@ fn platform_without_sessions_auth_missing() {
 /// `TPM_RC_HANDLE + S2`.
 #[test]
 fn second_password_session_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     set_hierarchy_auth(&mut sim, Handle::RH_OWNER, &[1, 2, 3]);
 
     let cmd = change_auth_command(
@@ -181,7 +179,7 @@ fn second_password_session_rejected() {
 /// satisfied by the password `[1, 2, 3]`.
 #[test]
 fn trailing_zero_auth_bytes_ignored() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Set Owner Auth to [1, 2, 3, 0]
     set_hierarchy_auth(&mut sim, Handle::RH_OWNER, &[1, 2, 3, 0]);
 
@@ -198,7 +196,7 @@ fn trailing_zero_auth_bytes_ignored() {
 /// A wrong password for the owner hierarchy fails with `TPM_RC_BAD_AUTH + S1`.
 #[test]
 fn wrong_owner_password_bad_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     set_hierarchy_auth(&mut sim, Handle::RH_OWNER, &[1, 2, 3]);
 
     // Provide WRONG hmac

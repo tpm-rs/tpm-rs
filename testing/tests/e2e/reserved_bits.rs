@@ -1,18 +1,18 @@
 //! Reserved bits in TPMA_OBJECT, TPMA_NV and TPMA_SESSION are rejected.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{Create, CreatePrimary};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, Tpm2bAuth, Tpm2bData, Tpm2bDigest, TpmaObject, TpmiAlgHash, TpmlPcrSelection,
     TpmsAuthCommand,
 };
-use tpm2_simulator::create_simulator;
 
 /// Reserved bits in TPMA_OBJECT (CreatePrimary), TPMA_NV (NV_DefineSpace) and TPMA_SESSION fail with TPM_RC_RESERVED_BITS.
 #[test]
 fn object_nv_and_session_attributes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sensitive_create = tpm2::TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -113,7 +113,7 @@ fn object_nv_and_session_attributes() {
 /// Reserved TPMA_OBJECT/TPMA_SESSION bits fail with RESERVED_BITS; FIRMWARE_LIMITED/SVN_LIMITED unmarshal but fail ATTRIBUTES + P2 under a normal parent.
 #[test]
 fn object_session_and_firmware_svn_limited() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let parent_handle = create_parent(&mut sim);
 

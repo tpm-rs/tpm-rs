@@ -1,6 +1,7 @@
 //! TPM2_NV_ReadPublic and NV index Names.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, NVDefineSpace, NVReadPublic};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -8,12 +9,11 @@ use tpm2::{
     TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmsEccParms, TpmsNvPublic, TpmtPublic,
     TpmtSymDefObject,
 };
-use tpm2_simulator::create_simulator;
 
 /// An NV index near the top of the NV range is defined and read back.
 #[test]
 fn high_index_value_round_trips() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let nv_index_val = 0x01500004;
     let nv_public_struct = TpmsNvPublic {
@@ -50,7 +50,7 @@ fn high_index_value_round_trips() {
 /// NV index Names for SHA-384/SHA-512/SHA-1 nameAlg match local computation; CreatePrimary with an unsupported nameAlg fails with TPM_RC_VALUE
 #[test]
 fn name_alg_nv_index_names_and_unsupported_primary() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. SHA384 NV Name calculation
     {
@@ -246,7 +246,7 @@ fn name_alg_nv_index_names_and_unsupported_primary() {
 /// NV_ReadPublic of an undefined index fails with TPM_RC_HANDLE + H1.
 #[test]
 fn undefined_index_returns_handle_h1() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Read public area of an undefined index should fail with Handle (0x08B or 0x10B depending on format)
     let read_cmd = NVReadPublic {

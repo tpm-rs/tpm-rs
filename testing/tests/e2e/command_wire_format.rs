@@ -5,6 +5,7 @@ use crate::_common::{
     CmdHeader, RespHeader, base_attrs, create_primary_with_auth_in, ecc_template, marshal_to_slice,
     rc_bare, send_with_trailing,
 };
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{CreatePrimary, RSADecrypt, RSAEncrypt, Sign, VerifySignature};
 use tpm2::errors::TpmRc;
@@ -15,7 +16,6 @@ use tpm2::{
     TpmsSensitiveCreate, TpmsSignatureEcc, TpmtEccScheme, TpmtPublic, TpmtRsaScheme, TpmtSignature,
     TpmtTkHashcheck, Unmarshal,
 };
-use tpm2_simulator::create_simulator;
 
 /// Trailing parameter bytes on VerifySignature/Sign/RSA_Encrypt/RSA_Decrypt return TPM_RC_SIZE before execution errors.
 ///
@@ -23,7 +23,7 @@ use tpm2_simulator::create_simulator;
 #[test]
 #[allow(deprecated)]
 fn crypto_command_trailing_byte_precedes_execution_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = create_primary_with_auth_in(
         &mut sim,
         Handle::RH_OWNER,
@@ -154,7 +154,7 @@ fn hand_marshaled_create_primary() {
     // Patch commandSize and send the hand-marshaled command to the simulator.
     let size = written as u32;
     cmd_buffer[2..6].copy_from_slice(&size.to_be_bytes());
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut resp_buffer = [0u8; 4096];
     let resp = sim
         .transact(&cmd_buffer[..written], &mut resp_buffer)

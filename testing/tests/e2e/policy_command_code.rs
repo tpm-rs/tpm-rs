@@ -1,17 +1,17 @@
 //! TPM2_PolicyCommandCode: digest updates, conflicting codes and session checks.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{PolicyCommandCode, PolicyGetDigest, StartAuthSession, *};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, Tpm2bAuth, Tpm2bEncryptedSecret, Tpm2bNonce, TpmCc, TpmSe, TpmaObject, TpmiAlgHash, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// PolicyCommandCode: unloaded session REFERENCE_H0, HMAC session rejected, digest update, conflicting second code TPM_RC_POLICY_CC
 #[test]
 fn command_code_digest_and_handle_errors() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Session not found -> returns TpmRc::HANDLE (0x80)
     // 0x03000009 is a valid TPMI_SH_POLICY value that is not loaded: C EntityGetLoadStatus
@@ -63,7 +63,7 @@ fn command_code_digest_and_handle_errors() {
 #[test]
 fn conflicting_code_is_value_error() {
     // Part 4 (policy_command_code); parts 1-3 are engine checks handed over to fix-sessions.
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let s = start_session_with_hash(&mut sim, TpmSe::Trial, TpmiAlgHash::Sha256).session_handle;
     policy_command_code(&mut sim, s, TpmCc::NVRead).unwrap();
     assert_eq!(
@@ -75,7 +75,7 @@ fn conflicting_code_is_value_error() {
 /// PolicyCommandCode with a conflicting code reports VALUE+P1 before other errors.
 #[test]
 fn conflicting_code_reported_first() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let unimplemented = TpmCc::new(0x0000_FFFF);
 
     let s = start_session_with_hash(&mut sim, TpmSe::Policy, TpmiAlgHash::Sha256).session_handle;
@@ -102,7 +102,7 @@ fn conflicting_code_reported_first() {
 /// `TPM_CC_PolicyCommandCode || TPM_CC_Load`.
 #[test]
 fn policy_command_code_extends_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start a policy session
     let resp_handles = exec_command(
@@ -158,7 +158,7 @@ fn policy_command_code_extends_digest() {
 /// PolicyGetDigest: unloaded session REFERENCE_H0, HMAC session rejected, returns the PolicyCommandCode digest
 #[test]
 fn policy_get_digest_errors_and_value() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Session not found -> returns TpmRc::HANDLE
     // 0x03000009 is a valid TPMI_SH_POLICY value that is not loaded: C EntityGetLoadStatus
@@ -195,7 +195,7 @@ fn policy_get_digest_errors_and_value() {
 /// never appear in a command's session area (`TPM_RC_ATTRIBUTES` + RC_S1).
 #[test]
 fn trial_session_cannot_authorize() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a transient target key to use for a command
     let srk = create_srk(&mut sim);
@@ -267,7 +267,7 @@ fn trial_session_cannot_authorize() {
 /// (`TPM_RC_VALUE`).
 #[test]
 fn unsupported_or_conflicting_code_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let resp_handles = exec_command(
         &mut sim,

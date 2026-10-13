@@ -5,16 +5,16 @@ use crate::_common::{
     execute_tpm_command_at_locality0 as execute_tpm_command, pcr_read, pcr_read_selection,
     pcr_selection, send_with_rc as send,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::PCRRead;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 // 5. PCR_Read constraints
 /// PCR_Read with empty selection, PCR 0 zeros after startup, and >8 PCRs truncated to 8 digests with updated mask.
 #[test]
 fn empty_small_and_truncated_selections() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // A. Read empty selection (no banks selected)
     let resp_empty = pcr_read(&mut sim, &[]);
@@ -49,7 +49,7 @@ fn empty_small_and_truncated_selections() {
 /// PCR_Read rejects >HASH_COUNT banks and sizeofSelect > 4, and caps digests at 8 across banks.
 #[test]
 fn oversized_bank_count_and_select_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let size_p1 = TpmRc::SIZE.with(Position::parameter(1)).get();
 
@@ -120,7 +120,7 @@ fn oversized_bank_count_and_select_size() {
 /// PCR_Read with an empty selection returns no digests
 #[test]
 fn pcr_read_empty_selection() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = PCRRead {
         pcr_selection_in: TpmlPcrSelection::default(),
     };
@@ -134,7 +134,7 @@ fn pcr_read_empty_selection() {
 /// returned per call, and the output selection reflects what was read.
 #[test]
 fn pcr_read_selection_limits() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Reading empty selection
     let mut empty_selection = TpmlPcrSelection::default();
@@ -188,7 +188,7 @@ fn pcr_read_selection_limits() {
 /// PCR_Read walks selections in caller order (SHA-256 before SHA-1) and caps at 8 digests.
 #[test]
 fn selections_returned_in_caller_order() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Build selection: SHA256 first, then SHA1.
     // Select PCR 0..6 (6 PCRs) for each.
@@ -222,7 +222,7 @@ fn selections_returned_in_caller_order() {
 /// PCR_Read of the unallocated SHA-512 bank returns a cleared selection and no digests.
 #[test]
 fn unallocated_bank_returns_no_digests() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create selection containing unsupported SHA-512 bank
     let mut pcr_selection_in = TpmlPcrSelection::default();

@@ -1,24 +1,23 @@
 //! TPM2_Startup: startup types, TPM Reset/Restart/Resume semantics and state restored at startup.
 
-use crate::_common::{NO_STREAM, PlatformConnection};
 use crate::_common::{
     NV_RW, SU_CLEAR, SU_STATE, create_storage_primary_with_auth, define_nv, ecc_primary_template,
-    execute_with_password_sessions, flush_context, hash_end, hash_start, hierarchy_change_auth,
-    hierarchy_control, hmac_primary_template, nv_off, nv_on, nv_read_status, nv_unavailable,
-    nv_write_index, power_cycle, power_cycle_with, raw_at_checked, raw_mssim, rc_of, read_clock,
+    execute_with_password_sessions, flush_context, hierarchy_change_auth, hierarchy_control,
+    hmac_primary_template, nv_off, nv_on, nv_read_status, nv_unavailable, nv_write_index,
+    power_cycle, power_cycle_with, raw_at_checked, raw_mssim, rc_of, read_clock,
     reset_restart_counts, shutdown, shutdown_raw, start_auth_session, startup, startup_raw,
     u16_param_command, unstarted_simulator,
 };
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::*;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 /// `TPM2_Startup(CLEAR)` on a fresh TPM is a TPM Reset: resetCount 1, restartCount 0, and the
 /// TPM accepts commands afterwards.
 #[test]
 fn clear_is_tpm_reset() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     power_cycle(&mut sim);
     let request = [
         0x80, 0x01, // tag
@@ -45,7 +44,7 @@ fn invalid_startup_type_returns_value_p1() {
 /// `TPM_RC_VALUE + P1`; both valid values succeed after an orderly `Shutdown(STATE)`.
 #[test]
 fn invalid_startup_types_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(shutdown(&mut sim, SU_STATE), 0);
     power_cycle(&mut sim);
     // A rejected Startup leaves the TPM waiting for Startup, so all invalid values can be
@@ -70,8 +69,8 @@ fn invalid_startup_types_rejected() {
 #[test]
 fn locality_4_rejected_after_hcrtm() {
     let mut sim = unstarted_simulator();
-    hash_start(&mut sim);
-    hash_end(&mut sim);
+    sim.hash_start();
+    sim.hash_end();
     let rc = rc_of(&raw_at_checked(
         &mut sim,
         4,
@@ -86,8 +85,7 @@ fn locality_4_rejected_after_hcrtm() {
 #[test]
 fn nv_unavailable_rejected() {
     let mut sim = unstarted_simulator();
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     // C `TPM2_Startup` uses RETURN_IF_NV_IS_NOT_AVAILABLE -> TPM_RC_NV_UNAVAILABLE.
     assert_eq!(startup(&mut sim, SU_CLEAR), TpmRc::NV_UNAVAILABLE.get());
 }
@@ -97,7 +95,7 @@ fn nv_unavailable_rejected() {
 /// lists `TPM_RH_AUTH_00` among the permanent handles.
 #[test]
 fn platform_unique_and_auth_00_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Query TPM2_GetCapability(TPM_CAP_HANDLES, property = 0x40000000, count = 32)
     let get_cap = [
@@ -152,7 +150,7 @@ fn platform_unique_and_auth_00_handle() {
 /// session contexts survive (spec Part 1 Sec 12.2.3).
 #[test]
 fn resume_flushes_transients_keeps_saved_sessions() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // A loaded transient object.
     let cmd = CreatePrimary {
@@ -245,7 +243,7 @@ fn resume_flushes_transients_keeps_saved_sessions() {
 /// and preserves platformAuth and the hierarchy enables.
 #[test]
 fn resume_restart_reset_semantics() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let info = read_clock(&mut sim).clock_info;
     assert_eq!(power_cycle_with(&mut sim, Some(SU_CLEAR), SU_CLEAR), 0);
     let after = read_clock(&mut sim).clock_info;
@@ -307,8 +305,8 @@ fn resume_restart_reset_semantics() {
 /// TPM Reset.
 #[test]
 fn second_clear_returns_initialize() {
-    // `create_simulator!()` already sent the first, successful Startup(CLEAR).
-    let mut sim = create_simulator!();
+    // `Tpm::new()` already sent the first, successful Startup(CLEAR).
+    let mut sim = Tpm::new();
     assert_eq!(startup(&mut sim, SU_CLEAR), TpmRc::INITIALIZE.get());
     assert_eq!(reset_restart_counts(&mut sim).0, 1);
 }
@@ -316,7 +314,7 @@ fn second_clear_returns_initialize() {
 /// `Shutdown(CLEAR)` + `Startup(CLEAR)` is a TPM Reset, not a TPM Restart.
 #[test]
 fn shutdown_clear_then_clear_is_reset() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (reset_before, restart_before) = reset_restart_counts(&mut sim);
     assert_eq!(shutdown(&mut sim, SU_CLEAR), 0);
     power_cycle(&mut sim);
@@ -333,7 +331,7 @@ fn shutdown_clear_then_clear_is_reset() {
 /// become unwritten on TPM Reset / Restart, but nothing changes on TPM Resume.
 #[test]
 fn startup_resets_nv_stclear_locks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let read_locked = 0x0150_0010;
     let write_locked = 0x0150_0011;
     let clear_stclear = 0x0150_0012;
@@ -386,7 +384,7 @@ fn startup_resets_nv_stclear_locks() {
 /// resetCount/orderlyState are loaded from NV at _TPM_Init.
 #[test]
 fn startup_state_requires_orderly_state_shutdown() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let base = read_clock(&mut sim).clock_info.reset_count;
     for i in 1..=3 {
         assert_eq!(power_cycle_with(&mut sim, Some(SU_CLEAR), SU_CLEAR), 0);
@@ -406,10 +404,10 @@ fn startup_state_requires_orderly_state_shutdown() {
 /// is off; LOCALITY when a Resume happens at a different startup locality.
 #[test]
 fn startup_type_nv_and_locality_checks() {
-    let mut sim = create_simulator!();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    let mut sim = Tpm::new();
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
     nv_off(&mut sim);
     assert_eq!(
@@ -421,9 +419,9 @@ fn startup_type_nv_and_locality_checks() {
     assert_eq!(startup_raw(&mut sim, 3, SU_CLEAR), 0);
     // Shutdown(STATE) after a locality-3 startup; resuming at locality 0 is a LOCALITY error.
     assert_eq!(shutdown_raw(&mut sim, SU_STATE), 0);
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
     nv_on(&mut sim);
     assert_eq!(startup_raw(&mut sim, 0, SU_STATE), TpmRc::LOCALITY.get());
@@ -442,7 +440,7 @@ fn state_after_clear_returns_initialize() {
 /// incremented.
 #[test]
 fn state_after_shutdown_state_is_resume() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (reset_before, restart_before) = reset_restart_counts(&mut sim);
     assert_eq!(shutdown(&mut sim, SU_STATE), 0);
     power_cycle(&mut sim);

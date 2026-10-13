@@ -1,23 +1,23 @@
 //! TPM2_CreatePrimary validation: hierarchy handle, hierarchy auth, session handles, key sizes and
 //! object memory.
 
-use crate::_common::{Connection, NO_STREAM, PlatformConnection};
+use crate::_common::Connection;
 use crate::_common::{
     create, default_ecc_public, ecc_sign_template, execute_with_password_sessions, flush_context,
     load, load_external, marshal_to_slice, owner_srk, rc0, rsa_public_bits, sealed_template,
     set_hierarchy_enabled, try_create_primary_in,
 };
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::CreatePrimary;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bPrivate, TpmaObject, TpmiAlgHash,
 };
-use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 /// CreatePrimary with a transient handle as primaryHandle fails with TPM_RC_VALUE.
 #[test]
 fn non_hierarchy_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_public = tpm2::Tpm2b(default_ecc_public());
     let sensitive_create = tpm2::TpmsSensitiveCreate {
@@ -44,7 +44,7 @@ fn non_hierarchy_handle_rejected() {
 /// CreatePrimary authorized by an unloaded non-password session handle fails with TPM_RC_REFERENCE_S0.
 #[test]
 fn non_password_session_handle_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_public = tpm2::Tpm2b(default_ecc_public());
     let sensitive_create = tpm2::TpmsSensitiveCreate {
@@ -106,7 +106,7 @@ fn non_password_session_handle_rejected() {
 /// After changing owner auth, CreatePrimary with empty or wrong auth fails with TPM_RC_BAD_AUTH and succeeds with the right one.
 #[test]
 fn owner_auth_enforced() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_public = tpm2::Tpm2b(default_ecc_public());
     let sensitive_create = tpm2::TpmsSensitiveCreate {
@@ -156,7 +156,7 @@ fn owner_auth_enforced() {
 /// CreatePrimary of a 512-bit RSA key fails with TPM_RC_VALUE.
 #[test]
 fn rsa_512_bits_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sensitive_create = tpm2::TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -186,10 +186,9 @@ fn rsa_512_bits_rejected() {
 /// CreatePrimary needs no NV; with all transient slots full, OBJECT_MEMORY precedes template/inPrivate/hierarchy errors.
 #[test]
 fn works_without_nv_and_object_memory_checked_first() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // CreatePrimary does not need NV.
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     let (h, _) = try_create_primary_in(
         &mut sim,
         Handle::RH_OWNER,
@@ -200,8 +199,7 @@ fn works_without_nv_and_object_memory_checked_first() {
         &[],
     )
     .expect("CreatePrimary with NV unavailable");
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     flush_context(&mut sim, h).unwrap();
 
     // Fill every transient slot.

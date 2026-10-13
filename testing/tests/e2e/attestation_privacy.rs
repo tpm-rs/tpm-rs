@@ -5,8 +5,8 @@ use crate::_common::{
     certify, create_primary_in, get_time, reported_firmware_version, rsa_sign_template,
     time_attest_info,
 };
+use testing::tpm::Tpm;
 use tpm2::{Handle, TpmiAlgHash, TpmtRsaScheme, TpmtSigScheme};
-use tpm2_simulator::create_simulator;
 
 /// Certify by an owner signer obfuscates the header, endorsement signer does not; firmware version layout.
 ///
@@ -14,7 +14,7 @@ use tpm2_simulator::create_simulator;
 /// and the plain firmware version is `TPM_PT_FIRMWARE_VERSION_1 << 32 | _2`.
 #[test]
 fn certify_obfuscation_by_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let plain_firmware = reported_firmware_version(&mut sim);
     let template = rsa_sign_template(Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)));
     let eh_key = create_primary_in(&mut sim, Handle::RH_ENDORSEMENT, template);
@@ -37,7 +37,7 @@ fn certify_obfuscation_by_hierarchy() {
 /// `signHandle == TPM_RH_NULL` ignores a non-NULL `inScheme` (the NULL scheme is used).
 #[test]
 fn null_signer_ignores_in_scheme() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let rsp = get_time(
         &mut sim,
         Handle::RH_ENDORSEMENT,
@@ -55,7 +55,7 @@ fn null_signer_ignores_in_scheme() {
 /// obfuscated, while the attested time info keeps the plain values.
 #[test]
 fn null_signer_obfuscates_header() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let plain_firmware = reported_firmware_version(&mut sim);
     let rsp = get_time(&mut sim, Handle::RH_ENDORSEMENT, Handle::RH_NULL, None, 2)
         .expect("GetTime failed");
@@ -88,7 +88,7 @@ fn null_signer_obfuscates_header() {
 /// firmware version matches `TPM_PT_FIRMWARE_VERSION_1/2`.
 #[test]
 fn owner_signer_obfuscated_endorsement_plain() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let plain_firmware = reported_firmware_version(&mut sim);
     let template = rsa_sign_template(Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)));
     let eh_key = create_primary_in(&mut sim, Handle::RH_ENDORSEMENT, template);

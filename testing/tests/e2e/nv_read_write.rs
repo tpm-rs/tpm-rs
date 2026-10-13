@@ -1,10 +1,10 @@
 //! TPM2_NV_Read / TPM2_NV_Write: access checks, offsets/sizes, partial writes and index types.
 
 use crate::_common::{define_nv_space as define, exec_with_empty_passwords as pw, *};
+use testing::tpm::Tpm;
 use tpm2::commands::{NVDefineSpace, NVUndefineSpace, NVWrite, NVWriteLock};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// NV_Read/NV_Write access checks precede size/offset checks; offset past end is TPM_RC_VALUE + RC_P2
 ///
@@ -12,7 +12,7 @@ use tpm2_simulator::create_simulator;
 /// is `TPM_RC_VALUE + RC_P2`.
 #[test]
 fn access_checked_before_range() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0502;
     define_nv_with_policy_unwrap(&mut sim, index, OWNER_RW | TpmaNv::WRITEDEFINE, 16, &[]);
 
@@ -58,7 +58,7 @@ fn access_checked_before_range() {
 /// NV_Write to counter, bits and extend indexes fails with TPM_RC_ATTRIBUTES.
 #[test]
 fn counter_bits_extend_index_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // A. Define Counter index (NT=0x1, data_size=8)
     let nv_index_counter = Handle(0x01000001);
@@ -114,7 +114,7 @@ fn counter_bits_extend_index_rejected() {
 /// The first partial write of an ordinary index clears the rest of the index.
 #[test]
 fn first_partial_write_clears_rest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0501;
     define_nv_with_policy_unwrap(&mut sim, index, OWNER_RW, 64, &[]);
     owner_write(&mut sim, index, 0, &[0xAA; 64]).unwrap();
@@ -140,7 +140,7 @@ fn first_partial_write_clears_rest() {
 /// NV_Write on counter, bits and extend indexes fails with TPM_RC_ATTRIBUTES
 #[test]
 fn non_ordinary_index_types_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Test Counter index
     {
@@ -233,7 +233,7 @@ fn non_ordinary_index_types_rejected() {
 /// NV_Write with offset+size wrapping u16 or offset > dataSize is rejected (no overflow)
 #[test]
 fn offset_overflow_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let nv_index_val = 0x01500002;
     let nv_public_struct = TpmsNvPublic {
         nv_index: tpm2::Handle(nv_index_val),
@@ -277,7 +277,7 @@ fn offset_overflow_rejected() {
 /// NV_Write at the end boundary succeeds; one byte past it is TPM_RC_NV_RANGE
 #[test]
 fn offset_plus_size_boundaries() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let nv_index_val = 0x01500001;
     let nv_public_struct = TpmsNvPublic {
         nv_index: tpm2::Handle(nv_index_val),
@@ -330,7 +330,7 @@ fn offset_plus_size_boundaries() {
 /// A partial write to a WRITEALL index fails with TPM_RC_NV_RANGE; a full write succeeds.
 #[test]
 fn partial_write_to_writeall_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let nv_index = Handle(0x01000004);
     define(
@@ -355,7 +355,7 @@ fn partial_write_to_writeall_rejected() {
 /// NV_Read: unwritten -> NV_UNINITIALIZED, written data reads back, out-of-bounds -> NV_RANGE.
 #[test]
 fn uninitialized_range_and_success() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Define Ordinary NV index
     let nv_index = Handle(0x01000007);
@@ -392,7 +392,7 @@ fn uninitialized_range_and_success() {
 /// After NV_WriteLock of a WRITE_STCLEAR index, NV_Write fails with TPM_RC_NV_LOCKED
 #[test]
 fn write_after_write_lock_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let nv_index_val = 0x01500030;
     // WRITE_STCLEAR allows the index to be write-locked with TPM2_NV_WriteLock.
     let nv_public_struct = TpmsNvPublic {
@@ -442,7 +442,7 @@ fn write_after_write_lock_rejected() {
 /// NV_Write on a write-locked index reports TPM_RC_NV_LOCKED before range errors
 #[test]
 fn write_lock_precedes_range_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let auth_session = make_auth_session(&[]);
 
     let nv_idx = Handle(0x01000050);
@@ -491,7 +491,7 @@ fn write_lock_precedes_range_error() {
 /// NV_Write on a WRITEALL index requires writing the whole index (partial is TPM_RC_NV_RANGE)
 #[test]
 fn writeall_requires_full_write() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let nv_index_val = 0x01500054;
     let nv_public_struct = TpmsNvPublic {
         nv_index: tpm2::Handle(nv_index_val),

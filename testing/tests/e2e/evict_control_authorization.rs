@@ -4,15 +4,15 @@
 #![allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream but still implemented.
 
 use crate::_common::{create_test_keys, execute_with_password_sessions, get_ecc_srk_template};
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, EvictControl, *};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, *};
-use tpm2_simulator::create_simulator;
 
 /// TPM2_EvictControl without sessions on a loaded object fails with TPM_RC_AUTH_MISSING (handle unmarshal checked first)
 #[test]
 fn evict_control_auth_missing_after_handle_checks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // objectHandle must be a loaded object: C rejects RH_OWNER at handle
     // unmarshal (VALUE+H2) before the AUTH_MISSING check.
@@ -51,7 +51,7 @@ fn evict_control_auth_missing_after_handle_checks() {
 /// EvictControl without an authorization session fails with TPM_RC_AUTH_MISSING.
 #[test]
 fn missing_authorization_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // objectHandle must be a loaded object: C rejects RH_NULL at handle
     // unmarshal (VALUE+H2) and an unloaded transient with REFERENCE_H1, both
@@ -88,7 +88,7 @@ fn missing_authorization_rejected() {
 /// Owner auth cannot evict a platform persistent object (HIERARCHY).
 #[test]
 fn owner_cannot_evict_platform_persistent_object() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // CreatePrimary in Platform hierarchy
     let t_sens = TpmsSensitiveCreate {
@@ -142,7 +142,7 @@ fn owner_cannot_evict_platform_persistent_object() {
 /// Platform auth can evict an owner persistent object.
 #[test]
 fn platform_can_evict_owner_object() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -185,7 +185,7 @@ fn platform_can_evict_owner_object() {
 /// Platform auth cannot persist an endorsement-hierarchy object; owner auth can persist an owner object.
 #[test]
 fn platform_cannot_persist_endorsement_object() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -260,7 +260,7 @@ fn platform_cannot_persist_endorsement_object() {
 /// Platform auth cannot persist an endorsement-hierarchy object (HIERARCHY).
 #[test]
 fn platform_cannot_persist_endorsement_primary() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),

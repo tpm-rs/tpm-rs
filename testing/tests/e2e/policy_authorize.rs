@@ -2,6 +2,7 @@
 
 use crate::_common::*;
 use sha2::{Digest, Sha256};
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{PolicyAuthorize, PolicyGetDigest, Sign, StartAuthSession, VerifySignature};
 use tpm2::errors::{Position, TpmRc};
@@ -9,12 +10,11 @@ use tpm2::{
     Alg, Handle, Tpm2bDigest, Tpm2bName, Tpm2bNonce, TpmSe, TpmiAlgHash, TpmtSigScheme,
     TpmtTkHashcheck, TpmtTkVerified, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// PolicyAuthorize with forged verification tickets (NULL and owner hierarchy) fails.
 #[test]
 fn forged_ticket_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (sk, sk_name) = create_signing_key(&mut sim);
 
     // Start a Policy session
@@ -91,7 +91,7 @@ fn forged_ticket_rejected() {
 /// PolicyAuthorize with a ticket for an invalid hierarchy (RH_PW) is TPM_RC_VALUE + RC_P4
 #[test]
 fn invalid_ticket_hierarchy_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let session = policy_session(&mut sim);
 
     // Use a ticket with an invalid hierarchy (e.g. 0x40000009 - RH_PW)
@@ -118,7 +118,7 @@ fn invalid_ticket_hierarchy_rejected() {
 /// PolicyAuthorize with a forged TPM_RH_NULL verification ticket is rejected with TPM_RC_VALUE
 #[test]
 fn null_hierarchy_ticket_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // The initial policy digest of the session is all zeros.
     let session = start_policy_session(&mut sim);
@@ -183,7 +183,7 @@ fn null_hierarchy_ticket_rejected() {
 /// TPM2_PolicyAuthorize with an empty ticket digest fails with TPM_RC_VALUE + P4
 #[test]
 fn policy_authorize_rejects_empty_ticket_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start a policy session
     let (session, _) = start_policy(&mut sim, TpmSe::Policy);
@@ -210,7 +210,7 @@ fn policy_authorize_rejects_empty_ticket_digest() {
 /// TPM2_PolicyAuthorize rejects a ticket forged for TPM_RH_NULL with an empty-key HMAC (TPM_RC_VALUE)
 #[test]
 fn policy_authorize_rejects_forged_null_hierarchy_ticket() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Let's use a dummy authority key name (it does not even need to exist!)
     let key_name: Vec<u8> = [0u8, 11].into_iter().chain(1..=32).collect();
@@ -260,7 +260,7 @@ fn policy_authorize_rejects_forged_null_hierarchy_ticket() {
 /// TPM2_PolicyAuthorize with a ticket naming an invalid hierarchy fails with TPM_RC_VALUE on checkTicket
 #[test]
 fn policy_authorize_rejects_invalid_ticket_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sess = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -299,7 +299,7 @@ fn policy_authorize_rejects_invalid_ticket_hierarchy() {
 /// TPM2_PolicyAuthorize with keySign naming an unknown hash alg (0xFFFF) fails with TPM_RC_HASH
 #[test]
 fn policy_authorize_rejects_key_sign_unknown_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start a trial session
     let (session, _) = start_policy(&mut sim, TpmSe::Trial);
@@ -324,7 +324,7 @@ fn policy_authorize_rejects_key_sign_unknown_hash() {
 /// TPM2_PolicyAuthorize with a keySign shorter than 2 bytes or with a wrong digest length fails with TPM_RC_SIZE
 #[test]
 fn policy_authorize_rejects_malformed_key_sign_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start a trial session
     let (session, _) = start_policy(&mut sim, TpmSe::Trial);
@@ -364,7 +364,7 @@ fn policy_authorize_rejects_malformed_key_sign_size() {
 /// TPM2_PolicyAuthorize with an approvedPolicy different from the session digest fails with TPM_RC_VALUE + P1
 #[test]
 fn policy_authorize_rejects_mismatched_approved_policy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start a policy session and advance its digest
     let (session, _) = start_policy(&mut sim, TpmSe::Policy);
@@ -391,7 +391,7 @@ fn policy_authorize_rejects_mismatched_approved_policy() {
 /// TPM2_PolicyAuthorize with a tampered ticket HMAC fails with TPM_RC_VALUE + P4
 #[test]
 fn policy_authorize_rejects_tampered_ticket_hmac() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start a policy session and get the current policy digest (all zeros)
     let (session, _) = start_policy(&mut sim, TpmSe::Policy);
@@ -421,7 +421,7 @@ fn policy_authorize_rejects_tampered_ticket_hmac() {
 /// TPM2_PolicyAuthorize succeeds on a session whose PolicySigned timeout has passed (policy commands do not check the timeout)
 #[test]
 fn policy_authorize_succeeds_on_timed_out_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, key_name) = create_signing_key_name_bytes(&mut sim);
 
     // Start policy session
@@ -462,7 +462,7 @@ fn policy_authorize_succeeds_on_timed_out_session() {
 /// TPM2_PolicyAuthorize on a trial session skips the ticket check and resets/extends the digest with keySign and policyRef
 #[test]
 fn policy_authorize_trial_session_updates_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start a trial session and advance its digest
     let (session, _) = start_policy(&mut sim, TpmSe::Trial);
@@ -497,7 +497,7 @@ fn policy_authorize_trial_session_updates_digest() {
 /// TPM2_PolicyAuthorize succeeds with a TPM2_VerifySignature ticket over aHash(approvedPolicy||policyRef)
 #[test]
 fn policy_authorize_with_verify_signature_ticket() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, key_name) = create_signing_key_name_bytes(&mut sim);
 
     // 1. Compute approvedPolicy and policyRef digest (aHash)
@@ -532,7 +532,7 @@ fn policy_authorize_with_verify_signature_ticket() {
 #[allow(deprecated)]
 #[test]
 fn verify_signature_ticket_authorizes_policy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (sk, sk_name) = create_signing_key(&mut sim);
 
     // 1. Start Policy session to get the approved policy digest
@@ -621,7 +621,7 @@ fn verify_signature_ticket_authorizes_policy() {
 #[allow(deprecated)]
 #[test]
 fn verify_signature_ticket_binding() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create a key in Owner hierarchy
     let (key_handle, key_name) = create_ecc_key(&mut sim);

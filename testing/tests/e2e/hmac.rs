@@ -7,6 +7,7 @@ use crate::_common::{
     make_keyed_hash_public_area, make_keyed_hash_public_area_with_sensitive,
     rsa_public_with_symmetric, sdo_user, send_key_command,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::LoadExternal;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -14,14 +15,13 @@ use tpm2::{
     Tpm2bSymKey, TpmaObject, TpmiAlgHash, TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive,
     TpmuSensitiveComposite,
 };
-use tpm2_simulator::create_simulator;
 
 /// 7. Test MAC with an empty input buffer (0 bytes).
 ///
 /// Expected: TPM_RC_SUCCESS.
 #[test]
 fn hmac_accepts_empty_buffer() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
@@ -61,7 +61,7 @@ fn hmac_accepts_empty_buffer() {
 /// Expected: TPM_RC_SUCCESS.
 #[test]
 fn hmac_accepts_max_buffer() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
@@ -103,7 +103,7 @@ fn hmac_accepts_max_buffer() {
 /// Expected: TPM_RC_SUCCESS.
 #[test]
 fn hmac_null_hash_uses_key_scheme_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let scheme = Some(TpmtKeyedHashScheme::Hmac(TpmiAlgHash::Sha256));
     let in_public = tpm2::Tpm2b(TpmtPublic {
@@ -152,7 +152,7 @@ fn hmac_null_scheme_uses_requested_hash() {
     use hmac::{Hmac, Mac};
     use sha2::{Sha256, Sha384};
 
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_bytes = b"my hmac key material";
 
     let sensitive_create = TpmtSensitive {
@@ -215,7 +215,7 @@ fn hmac_null_scheme_uses_requested_hash() {
 /// Expected: TPM_RC_TYPE.
 #[test]
 fn hmac_rejects_ecc_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let object_handle = load_ecc_with_private(&mut sim, TpmaObject::SIGN_ENCRYPT);
 
@@ -240,7 +240,7 @@ fn hmac_rejects_ecc_key() {
 /// Expected: TPM_RC_VALUE.
 #[test]
 fn hmac_rejects_hash_mismatching_key_scheme() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
@@ -285,7 +285,7 @@ fn hmac_rejects_hash_mismatching_key_scheme() {
 /// Expected: TPM_RC_KEY.
 #[test]
 fn hmac_rejects_key_without_sign() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Load a keyed hash key with NO attributes (or DECRYPT only)
     let sensitive_create = TpmtSensitive {
@@ -328,7 +328,7 @@ fn hmac_rejects_key_without_sign() {
 /// Expected: TPM_RC_VALUE.
 #[test]
 fn hmac_rejects_null_scheme_and_null_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
@@ -369,7 +369,7 @@ fn hmac_rejects_null_scheme_and_null_hash() {
 /// Expected: TPM_RC_KEY or TPM_RC_AUTH_UNAVAILABLE.
 #[test]
 fn hmac_rejects_public_only_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Load a public-only keyed hash key (in_private is default/empty)
     let in_public = tpm2::Tpm2b(make_keyed_hash_public_area(
@@ -405,7 +405,7 @@ fn hmac_rejects_public_only_key() {
 /// Expected: TPM_RC_ATTRIBUTES.
 #[test]
 fn hmac_rejects_restricted_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // LoadExternal can't load a restricted key with its sensitive area, and a public-only key
     // fails USER authorization (TPM_RC_AUTH_UNAVAILABLE), so let the TPM create the key.
@@ -439,7 +439,7 @@ fn hmac_rejects_restricted_key() {
 /// Expected: TPM_RC_TYPE.
 #[test]
 fn hmac_rejects_rsa_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Private part loaded so that authorization succeeds and the type check is reached.
     let object_handle = load_rsa_with_private(&mut sim, TpmaObject::SIGN_ENCRYPT, None);
@@ -464,7 +464,7 @@ fn hmac_rejects_rsa_key() {
 /// Raw TPM2_HMAC with an RSA signing primary key is rejected
 #[test]
 fn hmac_rejects_rsa_signing_key_raw() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // An RSA signing key (NOT a KeyedHash or HMAC key).
     let (key, _) = create_primary_returning_public(
@@ -486,7 +486,7 @@ fn hmac_rejects_rsa_signing_key_raw() {
 /// Expected: TPM_RC_TYPE.
 #[test]
 fn hmac_rejects_symcipher_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let key = [0x11u8; 16];
     let public = TpmtPublic {
@@ -528,7 +528,7 @@ fn hmac_rejects_symcipher_key() {
 /// Expected: TPM_RC_HANDLE (Error position Pos1 / Parameter-specific).
 #[test]
 fn hmac_rejects_unloaded_key_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = LocalHmacCmdExplicitNullAlg {
         handle: Handle(0x8000000E), // Arbitrary unused handle
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
@@ -545,7 +545,7 @@ fn hmac_rejects_unloaded_key_handle() {
 /// Expected: TPM_RC_HASH.
 #[test]
 fn hmac_rejects_unsupported_hash_alg() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Load a valid keyed hash key
     let sensitive_create = TpmtSensitive {
@@ -587,7 +587,7 @@ fn hmac_rejects_unsupported_hash_alg() {
 /// Expected: TPM_RC_KEY (the XOR key is a keyed hash but cannot sign).
 #[test]
 fn hmac_rejects_xor_key_kdf2() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let scheme = TpmtKeyedHashScheme::ExclusiveOr(tpm2::TpmsSchemeXor {
         hash_alg: TpmiAlgHash::Sha256,

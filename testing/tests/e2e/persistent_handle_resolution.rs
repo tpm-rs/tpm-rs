@@ -6,10 +6,10 @@ use crate::_common::{
     execute_tpm_command_mapping_parse_errors as execute_tpm_command, hex_checked as hex,
     mssim_rc_of as rc_of, read_public_rc as read_public, send_with_sessions as send, *,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::*;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// HMAC authorization of a persistent object uses the object's Name (not its handle) in cpHash
 ///
@@ -17,7 +17,7 @@ use tpm2_simulator::create_simulator;
 /// authorizing a persistent object uses the object's real Name, not its handle.
 #[test]
 fn persistent_object_uses_real_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let key_auth = [0x11, 0x22];
     let persistent_handle = Handle(0x81000001);
@@ -131,7 +131,7 @@ fn persistent_object_uses_real_name() {
 /// Platform persistent handles above `0x8180_FFFF` are valid.
 #[test]
 fn platform_range_above_8180ffff_valid() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = create_primary(&mut sim, Handle::RH_PLATFORM);
     evict(&mut sim, Handle::RH_PLATFORM, key, 0x8181_0000);
     assert_eq!(read_public(&mut sim, 0x8181_0000), 0);
@@ -146,7 +146,7 @@ fn platform_range_above_8180ffff_valid() {
 /// A persistent key resolves correctly in ReadPublic, Certify (signHandle) and HMAC_Start.
 #[test]
 fn read_public_certify_and_hmac_start() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let persistent_key_handle = Handle(0x81000002);
 
@@ -250,7 +250,7 @@ fn read_public_certify_and_hmac_start() {
 /// persistent handle is checked by its handle range.
 #[test]
 fn requires_free_object_slot() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = create_primary(&mut sim, Handle::RH_OWNER);
     evict(&mut sim, Handle::RH_OWNER, key, 0x8100_0003);
     // Fill every object slot.
@@ -310,7 +310,7 @@ fn requires_free_object_slot() {
 /// `TPM_RC_HANDLE + RC_Hx` (not `TPM_RC_REFERENCE_Hx` / `TPM_RC_HIERARCHY`).
 #[test]
 fn undefined_or_disabled_returns_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = build_pw_cmd(CC_SIGN, &[0x8100_0099], 1, &[]);
     assert_eq!(rc_of(&mut sim, &cmd), rc_h(TpmRc::HANDLE, 1));
     let cmd = build_pw_cmd(CC_EVICT_CONTROL, &[Handle::RH_OWNER.0, 0x8100_0099], 1, &[]);
@@ -331,7 +331,7 @@ fn undefined_or_disabled_returns_handle() {
 /// querying persistent storage rather than failing immediately during transient-only searches.
 #[test]
 fn unseal_undefined_persistent_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let unseal_req = hex(concat!(
         "8002",     // tag: SESSIONS

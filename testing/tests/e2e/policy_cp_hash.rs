@@ -1,6 +1,7 @@
 //! TPM2_PolicyCpHash and cpHash binding of policy sessions.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{
     CreateLoaded, PolicyCpHash, PolicyDuplicationSelect, PolicyOR, StartAuthSession,
@@ -10,12 +11,11 @@ use tpm2::{
     Handle, Tpm2bAuth, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bName, Tpm2bNonce,
     Tpm2bSensitiveData, TpmSe, TpmiAlgHash, TpmlDigest, TpmsSensitiveCreate,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// A trial/policy session started with a bind entity is not bound, so PolicyCpHash succeeds on it
 #[test]
 fn bound_policy_session_accepts_cp_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (sk, sk_name) = create_signing_key_empty_unique(&mut sim);
 
     // Start a trial session bound to 'sk'.
@@ -72,8 +72,8 @@ fn bound_policy_session_accepts_cp_hash() {
 /// binds HMAC sessions), so the cpHash-union commands must not fail with `TPM_RC_CPHASH`.
 #[test]
 fn bound_policy_session_not_cphash_bound() {
-    let mut sim = create_simulator!();
-    let bound = |sim: &mut Simulator<'_>, session_type| {
+    let mut sim = Tpm::new();
+    let bound = |sim: &mut Tpm, session_type| {
         start_bound(sim, Handle::RH_OWNER, &[], session_type).session_handle
     };
     for session_type in [TpmSe::Policy, TpmSe::Trial] {
@@ -92,7 +92,7 @@ fn bound_policy_session_not_cphash_bound() {
 /// PolicyCpHash rejects wrong-size cpHash (TPM_RC_SIZE) and a different second cpHash (TPM_RC_CPHASH); same value is accepted
 #[test]
 fn cp_hash_size_and_redefinition_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Setup a trial session.
     let start_auth = StartAuthSession {
@@ -167,7 +167,7 @@ fn cp_hash_size_and_redefinition_rejected() {
 /// Bound session + PolicyDuplicationSelect works; PolicyTemplate reports occupancy (CPHASH) before size (SIZE+P1).
 #[test]
 fn occupancy_checked_before_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // 1. Bound policy session + PolicyDuplicationSelect.
     let s = start_bound(&mut sim, Handle::RH_OWNER, &[], TpmSe::Policy).session_handle;
     policy_duplication_select(&mut sim, s, &[1, 2, 3], &[4, 5, 6, 7, 8], true).unwrap();
@@ -184,7 +184,7 @@ fn occupancy_checked_before_size() {
 /// Mixing TPM2_PolicyCpHash and TPM2_PolicyDuplicationSelect on one session fails with TPM_RC_CPHASH
 #[test]
 fn policy_cp_hash_conflicts_with_duplication_select() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sess_a = start_auth_session(
         &mut sim,
@@ -267,7 +267,7 @@ fn policy_cp_hash_digest_for_every_hash_alg() {
 #[test]
 #[allow(deprecated)]
 fn policy_cp_hash_on_bound_policy_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a transient key to bind the session to
     let srk_pub = get_ecc_srk_template_unique0();
@@ -320,7 +320,7 @@ fn policy_cp_hash_on_bound_policy_session() {
 #[test]
 #[allow(deprecated)]
 fn policy_cp_hash_on_bound_trial_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a transient key to bind the session to
     let srk_pub = get_ecc_srk_template_unique0();
@@ -372,7 +372,7 @@ fn policy_cp_hash_on_bound_trial_session() {
 /// A second TPM2_PolicyCpHash with a different cpHash fails with TPM_RC_CPHASH; the same cpHash is accepted
 #[test]
 fn policy_cp_hash_rejects_different_second_cp_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sess = start_auth_session(
         &mut sim,
@@ -421,7 +421,7 @@ fn policy_cp_hash_rejects_different_second_cp_hash() {
 /// TPM2_PolicyCpHash with a cpHash of the wrong size (20 or 48 bytes) is rejected
 #[test]
 fn policy_cp_hash_rejects_wrong_digest_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sess = start_auth_session(
         &mut sim,
@@ -462,7 +462,7 @@ fn policy_cp_hash_rejects_wrong_digest_size() {
 /// TPM2_PolicyCpHash with the target policy session itself placed in the sessions area
 #[test]
 fn policy_cp_hash_with_policy_session_in_auth_area() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sess = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -493,7 +493,7 @@ fn policy_cp_hash_with_policy_session_in_auth_area() {
 /// TPM2_PolicyCpHash with an extra unassociated (audit/encrypt/decrypt) HMAC session in the auth area
 #[test]
 fn policy_cp_hash_with_unassociated_hmac_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sess = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -536,7 +536,7 @@ fn policy_cp_hash_with_unassociated_hmac_session() {
 /// After PolicyTemplate, PolicyCpHash and PolicyNameHash fail with CPHASH and leave the digest unchanged.
 #[test]
 fn template_hash_blocks_cphash_and_namehash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let s = start_session_with_hash(&mut sim, TpmSe::Trial, TpmiAlgHash::Sha256).session_handle;
     policy_template(&mut sim, s, &[0x33; 32]).unwrap();
     assert_eq!(
@@ -567,7 +567,7 @@ fn template_hash_blocks_cphash_and_namehash() {
 fn template_occupancy_and_duplication_select_names() {
     // Part 4-5 of this finding (cpHash/nameHash template occupancy, PolicyOR RC_P1,
     // PolicyDuplicationSelect Names).
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let s = start_session_with_hash(&mut sim, TpmSe::Trial, TpmiAlgHash::Sha256).session_handle;
     policy_template(&mut sim, s, &[1; 32]).unwrap();
     assert_eq!(
@@ -581,7 +581,7 @@ fn template_occupancy_and_duplication_select_names() {
 /// PolicyCpHash sent with tag 0x8002 and an unassociated session that must be audit/encrypt/decrypt
 #[test]
 fn unassociated_audit_session_on_policy_command() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Setup a trial session.
     let start_auth = StartAuthSession {
@@ -628,7 +628,7 @@ fn unassociated_audit_session_on_policy_command() {
 /// Covers the same bug as reported in the combined cpHash-union finding (part 5).
 #[test]
 fn union_occupancy_and_policy_or_position() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Part 5: bound policy session (see also `policy_session_bind_entity_cphash_rejection`).
     let s = start_bound(&mut sim, Handle::RH_ENDORSEMENT, &[], TpmSe::Policy).session_handle;
     policy_cp_hash(&mut sim, s, &[0x11; 32]).unwrap();

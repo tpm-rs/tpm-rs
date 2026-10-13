@@ -6,6 +6,7 @@ use crate::_common::{
     make_rsa_public_area_exact_attrs, make_rsa_public_area_opt_name_alg, rc_p, sealed_template,
     sym_template_with,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::LoadExternal;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -13,12 +14,11 @@ use tpm2::{
     TpmEccCurve, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmsRsaParms, TpmtPublic, TpmtSensitive,
     TpmuSensitiveComposite,
 };
-use tpm2_simulator::create_simulator;
 
 /// LoadExternal of an ECC public key with a wrong-size coordinate fails with TPM_RC_KEY.
 #[test]
 fn ecc_coordinate_size_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_ecc_public_area_exact_attrs(
         &[0x01; 31],
         ECC_Y,
@@ -39,7 +39,7 @@ fn ecc_coordinate_size_mismatch_rejected() {
 /// An ECC public point with a wrongly sized coordinate fails with TPM_RC_KEY.
 #[test]
 fn ecc_oversized_coordinate_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let bad_x = [0u8; 31];
     let in_public = tpm2::Tpm2b(make_ecc_public_area(
         &bad_x,
@@ -61,7 +61,7 @@ fn ecc_oversized_coordinate_rejected() {
 /// An ECC public point that is not on the curve is rejected.
 #[test]
 fn ecc_point_not_on_curve_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut bad_y = ECC_Y.to_vec();
     bad_y[0] ^= 0xff; // corrupt coordinate
     let in_public = tpm2::Tpm2b(make_ecc_public_area(
@@ -81,7 +81,7 @@ fn ecc_point_not_on_curve_rejected() {
 /// An ECC public area with an unsupported curve is rejected.
 #[test]
 fn ecc_unsupported_curve_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut pub_struct = make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT);
     if let PublicParmsAndId::Ecc(ref mut parms, _) = pub_struct.parms_and_id {
         parms.curve_id = TpmEccCurve::BNP638;
@@ -99,7 +99,7 @@ fn ecc_unsupported_curve_rejected() {
 /// A raw command whose TPM2B_PUBLIC size disagrees with its contents is rejected.
 #[test]
 fn inconsistent_public_size_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert!(
         Tpm2bPublic::from_bytes(&[0; 10]).is_err(),
         "Client unmarshaler should reject invalid Tpm2bPublic buffer"
@@ -146,7 +146,7 @@ fn inconsistent_public_size_rejected() {
 /// An RSA public area with an invalid public exponent is rejected.
 #[test]
 fn rsa_invalid_exponent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut pub_struct = make_rsa_public_area_opt_name_alg(
         RSA_N,
         Some(TpmiAlgHash::Sha256),
@@ -168,7 +168,7 @@ fn rsa_invalid_exponent_rejected() {
 /// LoadExternal of an RSA public key whose modulus mismatches keyBits fails with TPM_RC_KEY.
 #[test]
 fn rsa_modulus_size_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_rsa_public_area_exact_attrs(
         &[0x01; 255],
         TpmiAlgHash::Sha256,
@@ -189,7 +189,7 @@ fn rsa_modulus_size_mismatch_rejected() {
 /// LoadExternal runs SchemeChecks, digest-sized seed/unique checks and accepts RSA-3072 public keys.
 #[test]
 fn scheme_seed_unique_and_key_size_checks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // 1. SchemeChecks run for public-only keys: a restricted signing key needs a scheme.
     let mut t = ecc_sign_template(TpmiAlgHash::Sha256, TpmaObject::RESTRICTED);
     if let PublicParmsAndId::Ecc(parms, point) = &mut t.parms_and_id {
@@ -252,7 +252,7 @@ fn scheme_seed_unique_and_key_size_checks() {
 /// A public-only symmetric key whose unique size mismatches nameAlg fails with TPM_RC_KEY.
 #[test]
 fn symcipher_unique_size_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sym_unique = [0x01; 16];
     let pub_area = TpmtPublic {
@@ -281,7 +281,7 @@ fn symcipher_unique_size_mismatch_rejected() {
 /// LoadExternal with an unsupported nameAlg fails with TPM_RC_HASH.
 #[test]
 fn unsupported_name_alg_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_rsa_public_area_exact_attrs(
         RSA_N,
         TpmiAlgHash::Sm3_256,
@@ -302,7 +302,7 @@ fn unsupported_name_alg_rejected() {
 /// A public area with an unsupported nameAlg fails with TPM_RC_HASH.
 #[test]
 fn unsupported_name_alg_returns_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut pub_struct = make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT);
     pub_struct.name_alg = Some(TpmiAlgHash::Sm3_256);
     let in_public = tpm2::Tpm2b(pub_struct);

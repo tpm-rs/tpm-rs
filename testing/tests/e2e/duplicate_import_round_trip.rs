@@ -5,9 +5,9 @@ use crate::_common::{
     ecc_public_with_policy, flush_context, load_with_name, rsa_dup_target, rsa_public,
     storage_attrs, try_create_owner_primary,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::responses::Create as CreateRsp;
 use tpm2::{TpmEccCurve, TpmaObject, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// Duplicate -> Import -> Load over parent/target nameAlgs, inner wrappers and parent symmetric algorithms.
 ///
@@ -19,7 +19,7 @@ use tpm2_simulator::create_simulator;
 /// parents are covered instead.
 #[test]
 fn hash_and_symmetric_algorithm_matrix() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = create_srk(&mut sim);
 
     let hash_algos = [
@@ -84,7 +84,7 @@ fn hash_and_symmetric_algorithm_matrix() {
 /// storage parents (with every parent nameAlg) and RSA / ECC targets.
 #[test]
 fn parent_and_target_key_type_matrix() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = create_srk(&mut sim);
 
     #[derive(Clone, Copy, Debug)]
@@ -183,7 +183,7 @@ fn parent_and_target_key_type_matrix() {
 /// storage parent.
 #[test]
 fn rsa_signing_key_round_trip() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A valid storage key (parent)
     let parent = create_srk(&mut sim);

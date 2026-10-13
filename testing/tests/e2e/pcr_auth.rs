@@ -1,9 +1,9 @@
 //! TPM2_PCR_SetAuthPolicy and TPM2_PCR_SetAuthValue: PCR groups and authorization of PCR changes.
 
 use crate::_common::{mssim_rc_of as rc_of, rc_at_locality as rc_at, *};
+use testing::tpm::Tpm;
 use tpm2::errors::TpmRc;
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// PCR_SetAuthPolicy parameter checks; the PCR policy authorizes PCR 20 extends until ChangePPS clears it.
 ///
@@ -16,7 +16,7 @@ use tpm2_simulator::create_simulator;
 /// `TPM2_ChangePPS` clears the policy.
 #[test]
 fn set_auth_policy_cleared_by_change_pps() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Attempt TPM2_PCR_SetAuthPolicy with mismatched digest size -> should fail with TPM_RC_SIZE (P1)
     let set_policy_bad_size = hx(concat!(
@@ -134,7 +134,7 @@ fn set_auth_policy_cleared_by_change_pps() {
 /// above `PCR_LAST` with `TPM_RC_VALUE + RC_H1`.
 #[test]
 fn set_auth_policy_nv_and_set_auth_value_range() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let mut params = 32u16.to_be_bytes().to_vec();
     params.extend_from_slice(&[0x33; 32]);
@@ -159,7 +159,7 @@ fn set_auth_policy_nv_and_set_auth_value_range() {
 /// PCR_SetAuthValue only works on auth-group PCRs and the new auth then controls PCR_Extend.
 #[test]
 fn set_auth_value_controls_extend() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Attempt TPM2_PCR_SetAuthValue on PCR 0 (not in auth group 20-22) -> should fail with TPM_RC_VALUE
     let set_auth_pcr0 = hx(concat!(

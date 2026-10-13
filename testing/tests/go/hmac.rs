@@ -5,6 +5,7 @@ use crate::test_utils::{execute_with_password_sessions, flush_context, read_publ
 use hmac::{Hmac as RustHmac, Mac};
 use rand::RngCore;
 use sha2::{Digest as ShaDigest, Sha256};
+use testing::tpm::Tpm;
 use tpm2::Handle;
 use tpm2::commands::{CreatePrimary, EvictControl, HMAC, Import};
 use tpm2::{
@@ -13,7 +14,6 @@ use tpm2::{
     TpmsRsaParms, TpmsSensitiveCreate, TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive,
     TpmtSymDefObject, TpmuSensitiveComposite,
 };
-use tpm2_simulator::create_simulator;
 
 /// Port of go-tpm's `RSASRKTemplate` (TCG reference RSA-2048 SRK template).
 fn get_rsa_srk_template() -> TpmtPublic<'static> {
@@ -59,7 +59,7 @@ fn create_primary_cmd(pub_area: TpmtPublic<'static>) -> CreatePrimary<'static> {
 // Original Go test: hmac_test.go - TestHMAC
 #[test]
 fn test_hmac() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // create HMAC key
     let hmac_scheme = Some(TpmtKeyedHashScheme::Hmac(TpmiAlgHash::Sha256));
@@ -108,7 +108,7 @@ fn test_imported_hmac_key() {
     let key_sensitive = b"the hmac key";
     let persistent_handle = Handle(0x81000000);
 
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // create primary key
     let create_srk_cmd = create_primary_cmd(get_rsa_srk_template());

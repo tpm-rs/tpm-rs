@@ -6,14 +6,15 @@ use crate::_common::{
     CC_ECC_PARAMETERS, ST_NO_SESSIONS, SimpleRng, build_raw_cmd, gen_random_parms, hex,
     mssim_rc_of, oracle_validate_parms, rc_p, symcipher_parms, test_parms, transact_rc_of,
 };
+use testing::tpm::ExecuteError;
+use testing::tpm::Tpm;
 use tpm2::commands::TestParms;
 use tpm2::errors::{Position, TpmRc};
-use tpm2_simulator::{ExecuteError, create_simulator};
 
 /// Differential fuzzing of `TPM2_TestParms` against a reference oracle with a fixed seed.
 #[test]
 fn differential_fuzz_against_oracle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Use a fixed seed for reproducible fuzzing
     let mut fuzzer_rng = SimpleRng::new(13372026);
@@ -69,7 +70,7 @@ fn differential_fuzz_against_oracle() {
 /// every response code against an oracle of the C reference behaviour.
 #[test]
 fn random_parms_match_reference_oracle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let mut rng = SimpleRng::new(42);
     let mut passed = 0;
@@ -122,7 +123,7 @@ fn random_parms_match_reference_oracle() {
 /// TestParms with a non-NULL RSA/ECC/keyedHash scheme but a NULL hash or KDF fails with TPM_RC_HASH / TPM_RC_KDF.
 #[test]
 fn scheme_with_null_hash_or_kdf_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. TPM2_TestParms (0x018A) with RSA (0x0001), symmetric=NULL (0x0010), scheme=RSASSA (0x0014), hash=NULL (0x0010), keyBits=2048 (0x0800), exponent=0 (0x00000000)
     // Total size: 10 (hdr) + 2 (RSA) + 2 (sym) + 2 (RSASSA) + 2 (hash) + 2 (keyBits) + 4 (exponent) = 24 (0x18)
@@ -177,7 +178,7 @@ fn scheme_with_null_hash_or_kdf_rejected() {
 /// unimplemented curve before checking for trailing bytes.
 #[test]
 fn truncated_input_and_unsupported_curve() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut trailing = symcipher_parms(0x0043);
     trailing.push(0xAA);
     assert_eq!(test_parms(&mut sim, &trailing), TpmRc::SIZE.get());
@@ -205,7 +206,7 @@ fn truncated_input_and_unsupported_curve() {
 /// Malformed `TPM2_TestParms` parameter buffers: unknown selector and truncated parameters.
 #[test]
 fn unknown_selector_and_truncated_parameters() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut response = [0u8; 256];
 
     // 1. Unknown selector in TpmtPublicParms (e.g. 0x0004 which is SHA1, not a valid public parms algorithm)
@@ -236,7 +237,7 @@ fn unknown_selector_and_truncated_parameters() {
 /// `TPM_RC_SIZE`.
 #[test]
 fn xor_null_kdf_and_trailing_bytes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut xor = 0x0008u16.to_be_bytes().to_vec();
     xor.extend_from_slice(&0x000Au16.to_be_bytes()); // XOR
     xor.extend_from_slice(&0x000Bu16.to_be_bytes()); // SHA256

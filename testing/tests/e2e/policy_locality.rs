@@ -1,15 +1,15 @@
 //! TPM2_PolicyLocality: digest updates and conflicting localities.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::{PolicyLocality, PolicyPassword};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmCc, TpmSe, TpmaLocality, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// A trial session's digest after PolicyLocality and PolicyPassword matches the client-computed value.
 #[test]
 fn locality_and_password_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a trial policy session
     let policy_session = start_auth_session(
@@ -56,7 +56,7 @@ fn locality_and_password_digest() {
 /// PolicyLocality with a locality disjoint from an earlier one is TPM_RC_RANGE
 #[test]
 fn locality_mismatch_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let policy_session_handle =
         start_session_with_nonce(&mut sim, TpmSe::Trial, TpmiAlgHash::Sha256, &[1; 32]);
@@ -89,7 +89,7 @@ fn locality_mismatch_rejected() {
 /// PolicyLocality(LOC_ZERO) succeeds and updates the digest (commands are sent at locality 0)
 #[test]
 fn locality_zero_updates_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // The simulator's command interface sends every command at locality 0.
     let policy_session_handle =

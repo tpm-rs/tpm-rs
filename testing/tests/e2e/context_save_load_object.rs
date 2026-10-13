@@ -5,6 +5,7 @@ use crate::_common::{
     create_keyed_hash_object, create_test_keys, execute_with_password_sessions, flush_context,
     make_template, marshal_to_slice, read_public_name,
 };
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{ContextLoad, ContextSave, CreateLoaded, CreatePrimary, ReadPublic};
 use tpm2::{
@@ -14,13 +15,12 @@ use tpm2::{
     TpmsRsaParms, TpmsSchemeEcdaa, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtRsaScheme,
     Unmarshal,
 };
-use tpm2_simulator::create_simulator;
 
 /// TPM2_ContextSave of an object does not evict it
 #[test]
 #[allow(deprecated)]
 fn context_save_keeps_object_loaded() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (in_sensitive, in_public) = create_test_keys();
     let cmd = CreateLoaded {
         parent_handle: tpm2::Handle(0x40000001),
@@ -51,7 +51,7 @@ fn context_save_keeps_object_loaded() {
 #[test]
 #[allow(deprecated)]
 fn context_save_load_preserves_qualified_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (in_sensitive, in_public) = create_test_keys();
     let cmd = CreateLoaded {
         parent_handle: tpm2::Handle(0x40000001), // TPM_RH_OWNER
@@ -101,7 +101,7 @@ fn context_save_load_preserves_qualified_name() {
 /// ContextLoad of an object context with a corrupted blob fails.
 #[test]
 fn corrupted_blob_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -181,7 +181,7 @@ fn corrupted_blob_rejected() {
 /// fail, and that reloading the same context yields the same handle and name.
 #[test]
 fn flush_reload_corrupt_and_flushed_save() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -314,7 +314,7 @@ fn flush_reload_corrupt_and_flushed_save() {
 /// ContextSave, FlushContext then ContextLoad of a primary key restores the same Name
 #[test]
 fn load_after_flush_keeps_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -397,7 +397,7 @@ fn load_after_flush_keeps_name() {
 /// Several objects saved, flushed and reloaded keep their names; blobs survive marshal/unmarshal.
 #[test]
 fn multiple_objects_round_trip() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -485,7 +485,7 @@ fn multiple_objects_round_trip() {
 /// Saving the same object twice increments the sequence and produces different ciphertext.
 #[test]
 fn repeated_saves_use_fresh_keystream() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let handle = create_keyed_hash_object(&mut sim);
 
     // We execute ContextSave command twice
@@ -518,7 +518,7 @@ fn repeated_saves_use_fresh_keystream() {
 #[test]
 #[allow(deprecated)]
 fn saved_context_records_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. CreateLoaded (in Owner hierarchy)
     let tpmt_sensitive = TpmsSensitiveCreate {
@@ -577,7 +577,7 @@ fn saved_context_records_hierarchy() {
 /// A saved RSA primary reloads (twice, to distinct handles) with the same Name after flush.
 #[test]
 fn saved_object_reloads_with_same_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),

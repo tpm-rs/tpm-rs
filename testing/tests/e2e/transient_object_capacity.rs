@@ -7,6 +7,7 @@ use crate::_common::{
     make_ecc_public_area, make_ecc_public_area_exact_attrs, make_template, password_auth, pw,
     start_sequence,
 };
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::CreateLoaded;
 use tpm2::commands::{
@@ -19,13 +20,12 @@ use tpm2::{
     Tpm2bSensitiveData, TpmEccCurve, TpmaObject, TpmiAlgHash, TpmlPcrSelection, TpmsEccParms,
     TpmsEccPoint, TpmsSensitiveCreate, TpmtPublic, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// Calling TPM2_CreateLoaded 65 times (beyond transient object slots) does not panic the TPM.
 #[test]
 #[allow(deprecated)]
 fn create_loaded_exhausting_object_slots_does_not_panic() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -74,7 +74,7 @@ fn create_loaded_exhausting_object_slots_does_not_panic() {
 /// FlushContext aborts a sequence (later use is REFERENCE_H0, double flush HANDLE + P1) and recycles its slot.
 #[test]
 fn flush_aborts_hash_sequence_and_frees_slot() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start a sequence, then abort it via FlushContext
     let start_cmd = HashSequenceStart {
@@ -122,7 +122,7 @@ fn flush_aborts_hash_sequence_and_frees_slot() {
 /// Starting sequences until TPM_RC_OBJECT_MEMORY, then completing one frees a slot for a new sequence.
 #[test]
 fn hash_sequence_slots_recover_after_complete() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
@@ -149,7 +149,7 @@ fn hash_sequence_slots_recover_after_complete() {
 /// Sequences get consecutive transient handles and the next start fails with OBJECT_MEMORY when slots are full.
 #[test]
 fn hash_sequences_share_transient_handles() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start 3 sequences -> handles should be strictly 0x80000000, 0x80000001, 0x80000002
     let start_cmd = HashSequenceStart {
@@ -173,7 +173,7 @@ fn hash_sequences_share_transient_handles() {
 /// its slot (and handle) for the next one.
 #[test]
 fn hmac_sequences_share_object_slots() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_handle = create_keyed_hash_key(&mut sim, b"keyauth", b"my_secret_key_bytes_12345");
 
     let auths = [password_auth(b"keyauth")];
@@ -214,7 +214,7 @@ fn hmac_sequences_share_object_slots() {
 /// Loading external keys until slots run out fails with TPM_RC_OBJECT_MEMORY.
 #[test]
 fn load_external_until_object_memory() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_ecc_public_area_exact_attrs(
         ECC_X,
         ECC_Y,
@@ -248,7 +248,7 @@ fn load_external_until_object_memory() {
 /// Loading external keys until the transient slots are full fails with TPM_RC_OBJECT_MEMORY; a flush frees a slot.
 #[test]
 fn load_external_until_object_memory_then_flush() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT));
     let cmd = LoadExternal {
         in_private: None,
@@ -277,7 +277,7 @@ fn load_external_until_object_memory_then_flush() {
 /// Section 2.14 compliance test sequences without overflowing client cache assumptions in Section 2.22.
 #[test]
 fn seventeenth_object_out_of_memory() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),

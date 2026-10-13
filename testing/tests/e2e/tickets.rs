@@ -1,7 +1,6 @@
 //! Verification, creation, hashcheck and auth tickets: which hierarchies produce accepted tickets
 //! and forged ticket rejection.
 
-use crate::_common::{NO_STREAM, PlatformConnection};
 use crate::_common::{
     create_ecc_signing_key, create_signing_key_name_bytes, execute_sign,
     execute_with_password_sessions, execute_with_password_sessions_status, flush_session,
@@ -9,6 +8,7 @@ use crate::_common::{
     policy_ticket, run_command, sign_pss, start_policy, start_session_with_hash,
 };
 use sha2::{Digest, Sha256};
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::{
     CertifyCreation, CreatePrimary, Hash, PolicyAuthorize, PolicyGetDigest, PolicySecret,
     PolicyTicket, StartAuthSession, Startup,
@@ -22,12 +22,11 @@ use tpm2::{
     TpmsEccParms, TpmsSensitiveCreate, TpmtPublic, TpmtSigScheme, TpmtTkHashcheck, TpmtTkVerified,
     *,
 };
-use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 /// PolicySigned/PolicySecret auth tickets: NULL tickets rejected, owner/NULL-hierarchy tickets accepted or rejected by PolicyTicket as specified.
 #[test]
 fn auth_ticket_policy_ticket() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Case 2A: NULL Ticket on non-negative expiration (expiration >= 0)
     let start_auth = StartAuthSession {
@@ -215,7 +214,7 @@ fn auth_ticket_policy_ticket() {
 /// Creation tickets from owner and NULL hierarchies are accepted by CertifyCreation; forged/mismatched ones fail with TPM_RC_TICKET.
 #[test]
 fn creation_ticket_hierarchies() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (signer_handle, _) = create_ecc_signing_key(&mut sim, Handle::RH_OWNER, false);
     let in_scheme = Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256));
 
@@ -338,7 +337,7 @@ fn creation_ticket_hierarchies() {
 #[test]
 #[allow(deprecated)]
 fn hashcheck_ticket_sign() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (unrestricted_key, _) = create_ecc_signing_key(&mut sim, Handle::RH_OWNER, false);
     let (restricted_key, _) = create_ecc_signing_key(&mut sim, Handle::RH_OWNER, true);
 
@@ -467,7 +466,7 @@ fn hashcheck_ticket_sign() {
 /// A PolicySigned auth ticket from before a TPM Reset fails TPM2_PolicyTicket with TPM_RC_TICKET.
 #[test]
 fn policy_ticket_rejects_ticket_from_before_reset() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, auth_name) = create_signing_key_name_bytes(&mut sim);
 
     // 1. Start a policy session
@@ -485,12 +484,11 @@ fn policy_ticket_rejects_ticket_from_before_reset() {
     let timeout = ps_rsp.timeout;
 
     // 3. TPM Reset (power cycle + Startup(CLEAR)) -> epoch changes
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     sim.execute(Startup {
         startup_type: TpmSu::Clear,
     })
@@ -522,7 +520,7 @@ fn policy_ticket_rejects_ticket_from_before_reset() {
 /// PolicyTicket rejects trial sessions, non-8-byte timeouts, cpHash conflicts before validating the ticket (TICKET+P5).
 #[test]
 fn trial_timeout_and_cphash_checked_before_ticket() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let owner_name = Handle::RH_OWNER.0.to_be_bytes();
 
     // 1. Trial sessions are rejected (TPM_RCS_ATTRIBUTES + RC_PolicyTicket_policySession).
@@ -580,7 +578,7 @@ fn trial_timeout_and_cphash_checked_before_ticket() {
 #[test]
 #[allow(deprecated)]
 fn verified_ticket_policy_authorize() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Setup authority signing keys
     let (null_signer, null_signer_name) = create_ecc_signing_key(&mut sim, Handle::RH_NULL, false);

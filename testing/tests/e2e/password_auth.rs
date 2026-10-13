@@ -1,18 +1,18 @@
 //! Password authorization: empty passwords, prefixes and trailing zeros in authValues.
 
 use crate::_common::{send_rc_with_auth_entries as rc, unseal_with_auth_entry as unseal, *};
+use testing::tpm::Tpm;
 use tpm2::commands::CreatePrimary;
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bSensitiveData, TpmCc,
     TpmEccCurve, TpmaObject, TpmiAlgHash, TpmsEccParms, TpmsEccPoint, TpmsSensitiveCreate,
     TpmtEccScheme, TpmtPublic,
 };
-use tpm2_simulator::create_simulator;
 
 /// CreatePrimary under the owner hierarchy succeeds with an empty password session.
 #[test]
 fn create_primary_with_empty_owner_password() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let ecc_parms = TpmsEccParms {
         symmetric: None,
         scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),
@@ -58,7 +58,7 @@ fn create_primary_with_empty_owner_password() {
 /// (C `CheckPWAuthSession()` compares with `MemoryEqual2B`, i.e. equal length and contents).
 #[test]
 fn password_auth_rejects_auth_value_prefix() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let item = create_sealed(&mut sim, TpmaObject::USER_WITH_AUTH, b"secret", &[]);
     set_owner_auth(&mut sim, b"secret");
 
@@ -101,7 +101,7 @@ fn password_auth_rejects_auth_value_prefix() {
 fn trailing_zero_owner_auth_matches_trimmed() {
     use tpm2::commands::HierarchyChangeAuth;
 
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Change Owner Auth from empty to "hello" (with trailing zeros, e.g. "hello\0\0")
     let cmd1 = HierarchyChangeAuth {

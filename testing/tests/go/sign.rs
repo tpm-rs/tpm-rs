@@ -1,11 +1,11 @@
 use rsa::{BigUint, Pkcs1v15Sign, RsaPublicKey};
 use sha2::{Digest, Sha256};
+use testing::tpm::Tpm;
 use tpm2::Handle;
 use tpm2::commands::CreatePrimary;
 #[allow(deprecated)] // TPM2_Sign is deprecated upstream, but the TPM implements it.
 use tpm2::commands::Sign;
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 use crate::test_utils::*;
 
@@ -13,7 +13,7 @@ use crate::test_utils::*;
 #[test]
 #[allow(deprecated)] // TPM2_Sign is deprecated upstream, but the TPM implements it.
 fn test_sign() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),

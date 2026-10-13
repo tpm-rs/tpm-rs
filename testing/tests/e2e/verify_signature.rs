@@ -11,6 +11,7 @@ use crate::_common::{
     verify_hmac_params, verify_signature,
 };
 use sha2::{Digest as _, Sha256};
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, LoadExternal, PolicyAuthorize};
 #[allow(deprecated)]
 use tpm2::commands::{Sign, VerifySignature};
@@ -21,13 +22,12 @@ use tpm2::{
     TpmlPcrSelection, TpmsRsaParms, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtRsaScheme,
     TpmtSensitive, TpmtSigScheme, TpmtSignature, TpmtTkHashcheck, TpmuSensitiveComposite, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// ECC signature errors: invalid ECDSA values are `TPM_RC_SIGNATURE + RC_P2`, and an ECDAA
 /// signature can't be verified (`TPM_RC_SCHEME + RC_P2`, as in `CryptEccValidateSignature`).
 #[test]
 fn ecc_signature_errors_and_ecdaa_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = create_primary_with_auth_in(
         &mut sim,
         Handle::RH_OWNER,
@@ -72,7 +72,7 @@ fn ecc_signature_errors_and_ecdaa_rejected() {
 /// without `sign` is `TPM_RC_ATTRIBUTES + RC_H1`.
 #[test]
 fn hmac_signature_error_positions() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let digest: &'static [u8] = leak_bytes(&[0x22; 32]);
     let (key, signature) = hmac_key_and_signature(&mut sim, Handle::RH_OWNER, digest);
 
@@ -123,7 +123,7 @@ fn hmac_signature_error_positions() {
 /// `aHash = H(approvedPolicy || policyRef)` is accepted by TPM2_PolicyAuthorize.
 #[test]
 fn hmac_ticket_accepted_by_policy_authorize() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Fresh policy session: policyDigest is all zeros; approve exactly that digest.
     let session = start_auth_session(
@@ -165,7 +165,7 @@ fn hmac_ticket_accepted_by_policy_authorize() {
 /// An HMAC key in the NULL hierarchy yields the NULL ticket (empty digest).
 #[test]
 fn null_hierarchy_hmac_key_yields_null_ticket() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let digest: &'static [u8] = leak_bytes(&[0x11; 32]);
     let (key, signature) = hmac_key_and_signature(&mut sim, Handle::RH_NULL, digest);
     let ticket = verify_signature(&mut sim, key, digest, signature).unwrap();
@@ -181,7 +181,7 @@ fn null_hierarchy_hmac_key_yields_null_ticket() {
 /// VerifySignature with a TPM_ALG_NULL signature fails with SCHEME+P2.
 #[test]
 fn verify_null_signature_scheme_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // An RSASSA signing key.
     let key_handle = create_primary_with_data_handle(
@@ -231,7 +231,7 @@ fn verify_null_signature_scheme_rejected() {
 /// Raw TPM2_VerifySignature with a keyed-hash key accepts a client-computed HMAC signature.
 #[test]
 fn verify_signature_accepts_hmac_signature() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // A KeyedHash signing key whose HMAC key is the (client-chosen) sensitive data.
     let hmac_key = random_key();
@@ -272,7 +272,7 @@ fn verify_signature_and_policy_signed_reject_null_sig_alg() {
     use crate::test_utils::{RespHeader, start_auth_session};
     use tpm2::{TpmSe, Unmarshal};
 
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Load a public signing key for testing VerifySignature and PolicySigned
     let in_public = tpm2::Tpm2b(make_rsa_public_area(
@@ -373,7 +373,7 @@ fn verify_signature_and_policy_signed_reject_null_sig_alg() {
 #[test]
 #[allow(deprecated)]
 fn verify_signature_rejects_decrypt_only_key_and_mismatched_signature() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a sign/verify key
     let in_public_sign = TpmtPublic {
@@ -540,7 +540,7 @@ fn verify_signature_rejects_decrypt_only_key_and_mismatched_signature() {
 /// Raw TPM2_VerifySignature with a decrypt-only RSA primary fails with TPM_RC_ATTRIBUTES.
 #[test]
 fn verify_signature_rejects_decrypt_only_key_raw() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Key has DECRYPT but lacks SIGN_ENCRYPT
     let (key, _) = create_primary_returning_public(
         &mut sim,
@@ -567,7 +567,7 @@ fn verify_signature_rejects_decrypt_only_key_raw() {
 #[test]
 #[allow(deprecated)]
 fn verify_signature_rejects_key_without_sign() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_public = tpm2::Tpm2b(make_rsa_public_area(
         RSA_N,
@@ -602,7 +602,7 @@ fn verify_signature_rejects_key_without_sign() {
 #[test]
 #[allow(deprecated)]
 fn verify_signature_rejects_public_only_hmac_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_public = tpm2::Tpm2b(make_keyed_hash_public_area(
         &[0x01; 32],
@@ -635,7 +635,7 @@ fn verify_signature_rejects_public_only_hmac_key() {
 /// Raw TPM2_VerifySignature with a public-only keyed-hash key from LoadExternal fails with TPM_RC_HANDLE.
 #[test]
 fn verify_signature_rejects_public_only_hmac_key_raw() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // KeyedHash key with SIGN_ENCRYPT loaded without its sensitive area (public-only)
     let key = load_external_public(
@@ -664,7 +664,7 @@ fn verify_signature_rejects_public_only_hmac_key_raw() {
 #[test]
 #[allow(deprecated)]
 fn verify_signature_rejects_unsupported_scheme() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Load ECC key
     let sensitive_create = TpmtSensitive {

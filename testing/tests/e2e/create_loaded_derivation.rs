@@ -6,6 +6,7 @@ use crate::_common::{
     execute_with_password_sessions, flush_context, make_derive_template, make_template,
     marshal_to_slice, owner_srk, run, sensitive_create, try_create_primary_in,
 };
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::CreateLoaded;
 use tpm2::{
@@ -15,13 +16,12 @@ use tpm2::{
     TpmsRsaParms, TpmsSensitiveCreate, TpmtKeyedHashScheme, TpmtPublic, TpmtRsaScheme,
     TpmtSymDefObject,
 };
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// A derived ECC template with an extra appended TPM2B_LABEL (IBM TSS format) fails with SIZE + P2.
 #[test]
 #[allow(deprecated)]
 fn derived_ecc_with_appended_label_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create deriver
     let deriver_pub_area = TpmtPublic {
@@ -153,13 +153,13 @@ fn derived_ecc_with_appended_label_rejected() {
 #[test]
 #[allow(deprecated)]
 fn derived_key_uses_parent_sensitive_bits() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     // Two derivation parents with the same sensitive bits (but different random seeds).
     let parent_t = derivation_parent_template(TpmiAlgHash::Sha256, TpmaObject::empty());
     let (p1, _) = create_and_load(&mut sim, srk, parent_t, &[], &[0x77; 32]);
     let (p2, _) = create_and_load(&mut sim, srk, parent_t, &[], &[0x77; 32]);
-    let derived = |sim: &mut Simulator<'_>, parent: Handle| {
+    let derived = |sim: &mut Tpm, parent: Handle| {
         let child = ecc_sign_template(TpmiAlgHash::Sha256, TpmaObject::FIXED_PARENT);
         let mut child = child;
         child
@@ -193,7 +193,7 @@ fn derived_key_uses_parent_sensitive_bits() {
 #[test]
 #[allow(deprecated)]
 fn derived_keyedhash_label_context_precedence() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create derivation parent (KeyedHash with XOR scheme + KDF1_SP800_108)
     let deriver_pub_area = TpmtPublic {
@@ -390,7 +390,7 @@ fn derived_keyedhash_label_context_precedence() {
 #[test]
 #[allow(deprecated)]
 fn primary_derivation_bound_to_template_and_sensitive() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let plain = ecc_sign_template(
         TpmiAlgHash::Sha256,
         TpmaObject::FIXED_TPM | TpmaObject::FIXED_PARENT,
@@ -401,7 +401,7 @@ fn primary_derivation_bound_to_template_and_sensitive() {
         .remove(TpmaObject::USER_WITH_AUTH);
     with_policy.auth_policy = Tpm2bDigest::from_bytes(&[0x42; 32]).unwrap();
 
-    let key = |sim: &mut Simulator<'_>, t: TpmtPublic<'static>, data: &[u8]| {
+    let key = |sim: &mut Tpm, t: TpmtPublic<'static>, data: &[u8]| {
         let (h, rsp) = try_create_primary_in(sim, Handle::RH_OWNER, t, data).unwrap();
         flush_context(sim, h).unwrap();
         ecc_point(&rsp.out_public.0)

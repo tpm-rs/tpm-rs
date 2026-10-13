@@ -1,14 +1,14 @@
 use crate::test_utils::execute_with_password_sessions;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
+use testing::tpm::Tpm;
 use tpm2::Handle;
 use tpm2::commands::{Hash, HashSequenceStart, SequenceComplete, SequenceUpdate};
 use tpm2::{Tpm2bAuth, Tpm2bMaxBuffer, TpmiAlgHash};
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// Port of the `run` closure in `TestHash`: hashes `data` with SHA-256 using
 /// `TPM2_Hash` in the given hierarchy and checks the digest.
-fn run_hash(sim: &mut Simulator<'_>, data: &[u8], hierarchy: Handle) {
+fn run_hash(sim: &mut Tpm, data: &[u8], hierarchy: Handle) {
     let cmd = Hash {
         data: Tpm2bMaxBuffer::from_bytes(data).unwrap(),
         hash_alg: TpmiAlgHash::Sha256,
@@ -26,21 +26,21 @@ fn run_hash(sim: &mut Simulator<'_>, data: &[u8], hierarchy: Handle) {
 // Original Go test: hash_sequence_hash_test.go - TestHash/Null hierarchy
 #[test]
 fn test_hash_null_hierarchy_subtest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     run_hash(&mut sim, b"fiona", Handle::RH_NULL);
 }
 
 // Original Go test: hash_sequence_hash_test.go - TestHash/Owner hierarchy
 #[test]
 fn test_hash_owner_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     run_hash(&mut sim, b"charlie", Handle::RH_OWNER);
 }
 
 // Original Go test: hash_sequence_hash_test.go - TestHashNullHierarchy
 #[test]
 fn test_hash_null_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // go-tpm marshals the omitted (zero-valued, nullable) Hierarchy as TPM_RH_NULL.
     let data = b"carolyn";
@@ -65,12 +65,7 @@ fn test_hash_null_hierarchy() {
 ///
 /// For `TestHashSequenceNullHierarchy` the Go code omits `Hierarchy`, which
 /// go-tpm marshals as TPM_RH_NULL, so callers pass `Handle::RH_NULL`.
-fn run_hash_sequence(
-    sim: &mut Simulator<'_>,
-    buffer_size: usize,
-    password: &str,
-    hierarchy: Handle,
-) {
+fn run_hash_sequence(sim: &mut Tpm, buffer_size: usize, password: &str, hierarchy: Handle) {
     let max_digest_buffer = 1024;
     let auth = password.as_bytes();
 
@@ -112,7 +107,7 @@ fn run_hash_sequence(
 
 /// Body of the `TestHashSequence/*` and `TestHashSequenceNullHierarchy/*` subtests.
 fn hash_sequence_subtest(buffer_size: usize, hierarchy: Handle) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     run_hash_sequence(&mut sim, buffer_size, "password", hierarchy);
 }
 

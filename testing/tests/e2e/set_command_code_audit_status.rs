@@ -12,8 +12,8 @@ use crate::_common::{
     kdfa_by_alg, nv_off, nv_on, parse_command_audit_report, power_cycle, power_cycle_with,
     send_raw, send_rc, set_command_code_audit_status, start_auth_session,
 };
+use testing::tpm::Tpm;
 use tpm2::{Handle, TpmSe, TpmiAlgHash, TpmtSymDefObject};
-use tpm2_simulator::{Simulator, create_simulator};
 
 const CC_SET_COMMAND_CODE_AUDIT_STATUS: u32 = 0x140;
 const CC_GET_RANDOM: u32 = 0x17B;
@@ -67,7 +67,7 @@ fn extend_audit_digest(
 
 /// Executes `TPM2_GetRandom(8)` without sessions and returns `(command parameters, response
 /// parameters)`.
-fn get_random(sim: &mut Simulator<'_>) -> (Vec<u8>, Vec<u8>) {
+fn get_random(sim: &mut Tpm) -> (Vec<u8>, Vec<u8>) {
     let params = 8u16.to_be_bytes().to_vec();
     let rsp = send_raw(
         sim,
@@ -98,7 +98,7 @@ fn audit_status_params(audit_alg: u16, set_list: &[u32], clear_list: &[u32]) -> 
 /// `0x00000140`.
 #[test]
 fn manufacture_default_audits_only_set_command_code_audit_status() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         audit_commands(&mut sim, 0, 254),
         (false, vec![CC_SET_COMMAND_CODE_AUDIT_STATUS])
@@ -120,7 +120,7 @@ fn manufacture_default_audits_only_set_command_code_audit_status() {
 /// list.
 #[test]
 fn set_list_adds_and_clear_list_removes_commands() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         set_command_code_audit_status(
             &mut sim,
@@ -160,7 +160,7 @@ fn set_list_adds_and_clear_list_removes_commands() {
 /// audited afterwards.
 #[test]
 fn command_in_both_lists_is_not_audited() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         set_command_code_audit_status(
             &mut sim,
@@ -183,7 +183,7 @@ fn command_in_both_lists_is_not_audited() {
 /// command codes in `setList` or `clearList`; they never appear in the audit list.
 #[test]
 fn shutdown_and_unimplemented_commands_are_ignored() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let ignored = [CC_SHUTDOWN, CC_SET_ALGORITHM_SET, 0x1FF, 0x2000_0000];
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &ignored, &ignored),
@@ -206,7 +206,7 @@ fn shutdown_and_unimplemented_commands_are_ignored() {
 /// and changes nothing.
 #[test]
 fn audit_alg_change_with_command_list_is_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_SHA256, &[CC_GET_RANDOM], &[]),
         RC_VALUE_P1
@@ -228,7 +228,7 @@ fn audit_alg_change_with_command_list_is_rejected() {
 /// lists are processed as with `TPM_ALG_NULL`.
 #[test]
 fn current_audit_alg_processes_command_lists() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_SHA512, &[CC_GET_RANDOM], &[]),
         0
@@ -249,7 +249,7 @@ fn current_audit_alg_processes_command_lists() {
 /// a new audit log with the new algorithm and increments the audit counter.
 #[test]
 fn audit_alg_change_clears_digest_without_auditing() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Start an audit log (counter 1) by changing the list.
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &[CC_GET_RANDOM], &[]),
@@ -293,7 +293,7 @@ fn audit_alg_change_clears_digest_without_auditing() {
 /// (`TPM2_PCR_Read`, `TPM2_GetCommandAuditDigest`) leave it unchanged.
 #[test]
 fn audited_commands_extend_audit_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let alg = TpmiAlgHash::Sha512;
     let set_params = audit_status_params(ALG_NULL, &[CC_GET_RANDOM], &[]);
     let rsp = send_raw(
@@ -339,7 +339,7 @@ fn audited_commands_extend_audit_digest() {
 /// covers only the response parameter area (not `parameterSize` or the authorization area).
 #[test]
 fn audited_session_command_hashes_names_and_parameter_areas() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let alg = TpmiAlgHash::Sha512;
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &[CC_PCR_EVENT], &[]),
@@ -372,7 +372,7 @@ fn audited_session_command_hashes_names_and_parameter_areas() {
 /// `TPM_RH_ENDORSEMENT` and `TPM_RH_LOCKOUT` fail with `TPM_RC_VALUE + TPM_RC_H + TPM_RC_1`.
 #[test]
 fn platform_or_owner_authorization_is_required() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         set_command_code_audit_status(&mut sim, PLATFORM, ALG_NULL, &[CC_PCR_READ], &[]),
         0
@@ -397,7 +397,7 @@ fn platform_or_owner_authorization_is_required() {
 /// the audit digest.
 #[test]
 fn missing_or_wrong_authorization_is_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let params = audit_status_params(ALG_NULL, &[CC_GET_RANDOM], &[]);
     let no_session = build_raw_cmd(
         ST_NO_SESSIONS,
@@ -434,7 +434,7 @@ fn missing_or_wrong_authorization_is_rejected() {
 /// progress, audited commands that do not write NV succeed without NV.
 #[test]
 fn audited_commands_require_nv_to_start_an_audit_log() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     nv_off(&mut sim);
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &[CC_GET_RANDOM], &[]),
@@ -474,7 +474,7 @@ fn audited_commands_require_nv_to_start_an_audit_log() {
 /// reports `moreData` when further audited commands follow.
 #[test]
 fn capability_audit_commands_pagination() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         set_command_code_audit_status(
             &mut sim,
@@ -505,7 +505,7 @@ fn capability_audit_commands_pagination() {
 /// 0x140, `nv`, one handle) and the implemented-command counts include it.
 #[test]
 fn capability_commands_lists_set_command_code_audit_status() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut params = 2u32.to_be_bytes().to_vec();
     params.extend_from_slice(&CC_SET_COMMAND_CODE_AUDIT_STATUS.to_be_bytes());
     params.extend_from_slice(&1u32.to_be_bytes());
@@ -528,7 +528,7 @@ fn capability_commands_lists_set_command_code_audit_status() {
 /// Restart; a TPM Reset clears it. The audit list and counter are persistent.
 #[test]
 fn audit_digest_survives_restart_and_clears_on_reset() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &[CC_GET_RANDOM], &[]),
         0
@@ -559,7 +559,7 @@ fn audit_digest_survives_restart_and_clears_on_reset() {
 /// power loss followed by a TPM Reset.
 #[test]
 fn audit_configuration_persists_across_power_loss() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &[CC_PCR_READ], &[]),
         0
@@ -595,7 +595,7 @@ fn audit_configuration_persists_across_power_loss() {
 /// `gp.auditHashAlg` are unchanged; the next audit log then starts at counter 1.
 #[test]
 fn clear_resets_audit_counter_only() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &[CC_GET_RANDOM], &[]),
         0
@@ -631,7 +631,7 @@ fn clear_resets_audit_counter_only() {
 /// zero digest and increments the audit counter.
 #[test]
 fn signed_get_command_audit_digest_ends_audit_log() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, _) = create_primary(&mut sim, get_ecc_signing_key_template());
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &[CC_GET_RANDOM], &[]),
@@ -675,7 +675,7 @@ fn signed_get_command_audit_digest_ends_audit_log() {
 /// digest first, so its own audit starts a new log.
 #[test]
 fn audited_get_command_audit_digest_needs_nv_and_audits_itself() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let alg = TpmiAlgHash::Sha512;
     let (key, key_name) = create_primary(&mut sim, get_ecc_signing_key_template());
     assert_eq!(
@@ -756,7 +756,7 @@ fn audited_get_command_audit_digest_needs_nv_and_audits_itself() {
 /// parameter areas exactly as they appear on the wire.
 #[test]
 fn audited_command_with_parameter_encryption_hashes_ciphertext() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &[CC_HASH], &[]),
         0
@@ -845,7 +845,7 @@ fn audited_command_with_parameter_encryption_hashes_ciphertext() {
 /// changes nothing.
 #[test]
 fn unsupported_audit_alg_is_hash_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     for alg in [0x0001, 0x0012] {
         assert_eq!(
             set_command_code_audit_status(&mut sim, OWNER, alg, &[], &[]),

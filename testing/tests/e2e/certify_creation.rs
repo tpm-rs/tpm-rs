@@ -5,13 +5,13 @@ use crate::_common::{
     create_primary_in, execute_with_password_sessions, execute_with_password_sessions_status,
     flush_context, leak_bytes, rsa_decrypt_template, rsa_sign_template,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{CertifyCreation, CreatePrimary, LoadExternal};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bPublicKeyRsa,
     Tpm2bSensitiveData, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmlPcrSelection, TpmsRsaParms,
     TpmsSensitiveCreate, TpmtPublic, TpmtRsaScheme, TpmtSigScheme, TpmtTkCreation,
 };
-use tpm2_simulator::create_simulator;
 
 /// CertifyCreation: non-signing key KEY+H1, scheme (SCHEME+P3) checked before ticket (TICKET+P4).
 ///
@@ -19,7 +19,7 @@ use tpm2_simulator::create_simulator;
 /// (`TPM_RC_SCHEME + P3`) before a bad ticket; a bad ticket -> `TPM_RC_TICKET + P4`.
 #[test]
 fn certify_creation_check_order() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (created, object) = create_primary_full(
         &mut sim,
         Handle::RH_OWNER,
@@ -89,7 +89,7 @@ fn certify_creation_check_order() {
 /// TPM2_CertifyCreation succeeds with the right creation ticket and fails with TPM_RC_TICKET for wrong hierarchy or digest
 #[test]
 fn certify_creation_rejects_bad_ticket() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Setup primary key template (RSA, SHA256, restricted, sign/encrypt)
     let rsa_parms = TpmsRsaParms {
@@ -189,7 +189,7 @@ fn certify_creation_rejects_bad_ticket() {
 /// object's current hierarchy (here: the same public area reloaded into the NULL hierarchy).
 #[test]
 fn certify_creation_uses_ticket_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut public = rsa_sign_template(Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)));
     public.object_attributes =
         TpmaObject::SIGN_ENCRYPT | TpmaObject::USER_WITH_AUTH | TpmaObject::SENSITIVE_DATA_ORIGIN;
@@ -217,7 +217,7 @@ fn certify_creation_uses_ticket_hierarchy() {
 /// CertifyCreation with a valid ticket succeeds, a tampered ticket is TPM_RC_TICKET, a missing session is TPM_RC_AUTH_MISSING
 #[test]
 fn ticket_and_auth_validation() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create an object (transient key) to certify
     let rsa_parms = tpm2::TpmsRsaParms {

@@ -5,15 +5,15 @@ use crate::_common::{
     ResponseCorruption, create_primary_key, execute_with_hmac_sessions,
     execute_with_hmac_sessions_corrupt_response, sign_cmd_and_handles, start_auth_session,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::ReadPublic;
 use tpm2::{Handle, TpmSe, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// The client detects corrupted response session attributes through the response HMAC (should_panic).
 #[test]
 #[should_panic(expected = "Response HMAC verification failed")]
 fn corrupted_response_attributes_detected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let session = start_auth_session(
         &mut sim,
@@ -44,7 +44,7 @@ fn corrupted_response_attributes_detected() {
 #[test]
 #[should_panic(expected = "Response HMAC verification failed")]
 fn corrupted_response_hmac_detected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let session = start_auth_session(
         &mut sim,
@@ -75,7 +75,7 @@ fn corrupted_response_hmac_detected() {
 #[test]
 #[should_panic(expected = "Response HMAC verification failed")]
 fn corrupted_response_nonce_tpm_detected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let session = start_auth_session(
         &mut sim,
@@ -105,7 +105,7 @@ fn corrupted_response_nonce_tpm_detected() {
 /// ReadPublic of RH_NULL with an HMAC session fails with TPM_RC_VALUE + H1 (error responses carry no HMAC).
 #[test]
 fn null_object_handle_error_omits_response_hmac() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -137,7 +137,7 @@ fn null_object_handle_error_omits_response_hmac() {
 /// The response HMAC of an HMAC-authorized TPM2_Sign verifies on the client.
 #[test]
 fn response_hmac_verifies_for_sign() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let session = start_auth_session(
         &mut sim,
@@ -159,7 +159,7 @@ fn response_hmac_verifies_for_sign() {
 /// The response HMAC of a SHA-384 HMAC session verifies.
 #[test]
 fn sha384_session_response_hmac_verifies() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let session = start_auth_session(
         &mut sim,

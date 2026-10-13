@@ -1,6 +1,6 @@
 [package]
 name = "testing"
-description = "End-to-end tests of the TPM stack"
+description = "E2E tests of the TPM stack, optionally run differentially against C reference TPMs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,10 +9,21 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+build = "build.rs"
+autobins = false
 
 [dependencies]
-tpm2-simulator = { path = "../crates/tpm2-simulator", default-features = false }
-tpm2-platform-linux = { path = "../crates/tpm2-platforms/linux", default-features = false }
+# Tests run against a pinned (seeded RNGs, virtual clock) simulator on the
+# BoringSSL backend, the only backend whose crypto randomness can be pinned, so
+# runs are reproducible and the C reference TPMs can be kept in lockstep.
+tpm2-simulator = { path = "../crates/tpm2-simulator", default-features = false, features = [
+    "bssl",
+    "reproducible",
+] }
+tpm2-platform-linux = { path = "../crates/tpm2-platforms/linux", default-features = false, features = [
+    "bssl",
+    "reproducible",
+] }
 tpm2 = { workspace = true }
 rsa = { version = "0.9.10", features = ["sha2", "sha1", "getrandom"] }
 sha2 = "0.10.9"
@@ -23,11 +34,29 @@ aes = "0.8.4"
 cfb-mode = "0.8.2"
 hmac = "0.12.1"
 
+# The E2E tests currently support only the BoringSSL backend.
+
 [features]
-default = ["bssl"]
-rust = ["tpm2-simulator/rust", "tpm2-platform-linux/rust"]
-crux = ["tpm2-simulator/crux", "tpm2-platform-linux/crux"]
-bssl = ["tpm2-simulator/bssl", "tpm2-platform-linux/bssl"]
+# Clones, patches and builds the C reference TPMs (build.rs) into the
+# `mstpm20` (TCG reference) and `ibmswtpm2` (IBM software TPM) binaries, and
+# runs every test against tpm-rs and every reference TPM (one process per
+# `Tpm` and reference) in lockstep, comparing every response (see
+# `src/differential/`).
+differential = []
+
+# The C reference TPM servers launched by every `Tpm` with `differential`.
+# Each links its own static library (build.rs), so they have no unit tests.
+[[bin]]
+name = "mstpm20"
+path = "src/bin/mstpm20.rs"
+required-features = ["differential"]
+test = false
+
+[[bin]]
+name = "ibmswtpm2"
+path = "src/bin/ibmswtpm2.rs"
+required-features = ["differential"]
+test = false
 
 # Go parity tests (`tests/go/`), one file per Go test file.
 [[test]]
@@ -38,4 +67,3 @@ path = "tests/go/mod.rs"
 [[test]]
 name = "e2e"
 path = "tests/e2e/mod.rs"
-

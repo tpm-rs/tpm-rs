@@ -21,4 +21,9 @@ default = ["bssl"]
 rust = ["tpm2-platform-linux/rust"]
 crux = ["tpm2-platform-linux/crux"]
 bssl = ["tpm2-platform-linux/bssl"]
+# Adds `create_replay_simulator!()` and `Simulator::advance_clock` (seeded
+# platform RNG, seeded BoringSSL randomness, virtual clock) for deterministic,
+# reproducible runs (used by the E2E and differential tests in `testing`).
+# Purely additive: `create_simulator!()` is unchanged.
+reproducible = ["tpm2-platform-linux/reproducible"]
 

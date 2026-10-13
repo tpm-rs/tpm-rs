@@ -2,6 +2,7 @@
 //! slot limits.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::Sign;
 use tpm2::commands::{
@@ -14,14 +15,13 @@ use tpm2::{
     Tpm2bSensitiveData, TpmaObject, TpmiAlgHash, TpmlPcrSelection, TpmsSensitiveCreate,
     TpmtKeyedHashScheme, TpmtPublic, TpmtSigScheme, TpmtTkHashcheck, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// Starting more than the maximum concurrent HMAC sequences fails with TPM_RC_OBJECT_MEMORY until one completes.
 ///
 /// 1. Starting multiple concurrent HMAC sequences.
 #[test]
 fn concurrent_sequences_object_memory() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let key_handle = make_keyed_hash_key(&mut sim, b"hmac_key_bytes");
 
@@ -61,7 +61,7 @@ fn concurrent_sequences_object_memory() {
 /// An HMAC sequence accepts more than 4096 bytes without TPM_RC_MEMORY.
 #[test]
 fn data_beyond_4096_bytes_accepted() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_handle = create_keyed_hash_key(&mut sim, b"keyauth", b"key");
 
     let auths = [password_auth(b"keyauth")];
@@ -109,7 +109,7 @@ fn data_beyond_4096_bytes_accepted() {
 /// fails with `TPM_RC_KEY + H1`.
 #[test]
 fn hmac_start_non_hmac_keyedhash_returns_key_h1() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // A loaded keyed-hash data object (neither sign nor decrypt) with authValue "password".
     let cmd = CreatePrimary {
@@ -148,7 +148,7 @@ fn hmac_start_non_hmac_keyedhash_returns_key_h1() {
 /// Same ordering requirement as above, from the second MAC_Start finding.
 #[test]
 fn hmac_start_restricted_checked_before_sign() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Restricted and non-signing: ATTRIBUTES (restricted) before KEY (sign).
     let key = create_primary_with_auth_in(
         &mut sim,
@@ -182,7 +182,7 @@ fn hmac_start_restricted_checked_before_sign() {
 /// signing key with the same `hashAlg` reports `TPM_RC_VALUE + RC_P2`.
 #[test]
 fn hmac_start_attributes_checked_before_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = create_primary_with_auth_in(
         &mut sim,
         Handle::RH_OWNER,
@@ -225,7 +225,7 @@ fn hmac_start_attributes_checked_before_hash() {
 /// `TPM_RC_REFERENCE_H0`.
 #[test]
 fn hmac_start_unloaded_key_returns_reference_h0() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = HMACStart {
         handle: Handle(0x80000001),
@@ -242,7 +242,7 @@ fn hmac_start_unloaded_key_returns_reference_h0() {
 #[test]
 #[allow(deprecated)]
 fn persistent_hmac_key_starts_sequence() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let persistent_handle = Handle(0x81000003);
     let key_bytes = b"persistent_key_bytes_secret_12";
     let transient_handle = create_keyed_hash_key(&mut sim, b"keyauth", key_bytes);
@@ -325,7 +325,7 @@ fn persistent_hmac_key_starts_sequence() {
 /// HMAC sequence handles need USER auth (AUTH_MISSING/BAD_AUTH), reject ReadPublic (SEQUENCE) and misuse (MODE).
 #[test]
 fn sequence_auth_and_read_public_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_handle = create_keyed_hash_key(&mut sim, b"keyauth", b"key");
 
     let auths = [password_auth(b"keyauth")];
@@ -389,7 +389,7 @@ fn sequence_auth_and_read_public_rejected() {
 /// 3. Performing HMAC update with very large data buffers or split chunks.
 #[test]
 fn split_and_large_updates() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let key_bytes: &'static [u8] = b"hmac_key_bytes";
     let key_handle = make_keyed_hash_key(&mut sim, key_bytes);
@@ -464,7 +464,7 @@ fn split_and_large_updates() {
 /// An HMAC sequence fed in chunks yields the same HMAC as a one-shot client computation.
 #[test]
 fn split_chunks_match_hmac() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key_bytes = b"another_secret_key_bytes_56789";
     let key_handle = create_keyed_hash_key(&mut sim, b"keyauth", key_bytes);
 
@@ -516,7 +516,7 @@ fn split_chunks_match_hmac() {
 /// 2. Using invalid session attributes or unauthorized commands.
 #[test]
 fn wrong_password_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let key_handle = make_keyed_hash_key(&mut sim, b"hmac_key_bytes");
 

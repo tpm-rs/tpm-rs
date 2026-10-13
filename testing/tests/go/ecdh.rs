@@ -1,14 +1,14 @@
 use crate::test_utils::*;
 use p256::{PublicKey, SecretKey, elliptic_curve::sec1::ToEncodedPoint};
+use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, ECDHZGen};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_simulator::create_simulator;
 
 // Original Go test: ecdh_test.go - TestECDH
 #[test]
 fn test_ecdh() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let user_auth = Tpm2bAuth::default();
     let sensitive_create = TpmsSensitiveCreate {

@@ -9,15 +9,15 @@ use crate::_common::{
     execute_with_corrupted_bytes_status, get_cap, get_tpm_property, marshal_to_slice,
     no_session_command, power_cycle_orderly, rc_of, rc_p, run_raw, start_session_raw,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::GetCapability;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Marshal, TpmCap, TpmCc, TpmPt, TpmiStCommandTag, Unmarshal};
-use tpm2_simulator::create_simulator;
 
 /// `TPM_CAP_ACT` reports `TPM_RC_VALUE + RC_P2`, not `RC_P1`.
 #[test]
 fn act_capability_rejected_on_property() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     for property in [0x4000_0110, 0x4000_011F, 0x0000_0000] {
         assert_eq!(
             get_cap(&mut sim, CAP_ACT, property, 1).map(|_| ()),
@@ -30,7 +30,7 @@ fn act_capability_rejected_on_property() {
 /// `TPM_CAP_ALGS` reports MGF1 and the KDFs, and the full `KEYEDHASH` attributes.
 #[test]
 fn algorithms_list_complete_and_sorted() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (_, data) = get_cap(&mut sim, CAP_ALGS, 0, 64).unwrap();
     let n = u32::from_be_bytes(data[0..4].try_into().unwrap()) as usize;
     let algs: Vec<(u16, u32)> = (0..n)
@@ -70,7 +70,7 @@ fn auth_policies_after_set_primary_policy() {
     use tpm2::commands::SetPrimaryPolicy;
     use tpm2::{Handle, Tpm2bDigest, TpmiAlgHash, TpmsAuthCommand, TpmtHa};
 
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Query TPM2_GetCapability(TPM_CAP_AUTH_POLICIES, 0x40000001, 4)
     // Initially, all permanent handles have no policy set.
@@ -179,7 +179,7 @@ fn auth_policies_after_set_primary_policy() {
 /// `NV_UndefineSpace*` commands are not `flushed` (`CommandAttributeData.h`).
 #[test]
 fn command_attributes_match_reference() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     for cc in [0x124, 0x125] {
         let attr = command_attributes(&mut sim, cc);
         assert_eq!(
@@ -202,7 +202,7 @@ fn command_attributes_match_reference() {
 /// GetCapability(TPM_CAP_COMMANDS) starting at TPM_CC_Startup succeeds with data
 #[test]
 fn commands_from_startup() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = GetCapability {
         capability: TpmCap::Commands,
@@ -217,7 +217,7 @@ fn commands_from_startup() {
 /// TPM_PROPERTIES starting at FAMILY_INDICATOR report family, level, revision, errata and year
 #[test]
 fn family_level_revision_properties() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = GetCapability {
         capability: TpmCap::TPMProperties,
@@ -252,7 +252,7 @@ fn family_level_revision_properties() {
 /// TPM2_GetCapability with a huge propertyCount returns properties without panicking
 #[test]
 fn get_capability_property_count_huge() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let get_cmd = GetCapability {
         capability: TpmCap::TPMProperties,
@@ -270,7 +270,7 @@ fn get_capability_property_count_huge() {
 /// TPM2_GetCapability with propertyCount=0 succeeds
 #[test]
 fn get_capability_property_count_zero() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let get_cmd = GetCapability {
         capability: TpmCap::TPMProperties,
@@ -287,7 +287,7 @@ fn get_capability_property_count_zero() {
 /// TPM2_GetCapability with one extra trailing byte fails with TPM_RC_SIZE
 #[test]
 fn get_capability_rejects_trailing_bytes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Marshal GetCapability
     let get_cmd = GetCapability {
@@ -323,7 +323,7 @@ fn get_capability_rejects_trailing_bytes() {
 /// TPM2_GetCapability with an undefined capability (0x9999) fails with TPM_RC_VALUE + P1
 #[test]
 fn get_capability_rejects_unknown_capability() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Use an unsupported capability tag (e.g. 0x9999)
     let get_cmd = GetCapability {
@@ -349,7 +349,7 @@ fn get_capability_rejects_unknown_capability() {
 /// `TPM_CAP_HANDLES` / `TPM_CAP_PCRS` / `TPM_CAP_PCR_PROPERTIES` / `TPM_CAP_ACT` edge cases.
 #[test]
 fn handles_pcrs_and_pcr_properties_edge_cases() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     assert_eq!(
         cap_handles(&mut sim, 0x0400_0000, 8),
@@ -390,7 +390,7 @@ fn handles_pcrs_and_pcr_properties_edge_cases() {
 /// `CommandAttributeData.h`.
 #[test]
 fn live_properties_handles_and_commands() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     da_parameters_unwrap(&mut sim, 7, 11, 13);
     assert_eq!(get_tpm_property(&mut sim, TpmPt::LOCKOUT_COUNTER), 0);
@@ -453,7 +453,7 @@ fn live_properties_handles_and_commands() {
 /// GetCapability lists HMAC/policy sessions as loaded, then as saved after ContextSave
 #[test]
 fn loaded_and_saved_session_handles() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start 1 HMAC session and 1 Policy session
     let start_hmac = [
@@ -537,7 +537,7 @@ fn loaded_and_saved_session_handles() {
 /// pagination does not skip a policy session in a lower slot.
 #[test]
 fn loaded_sessions_paginate_in_slot_order() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let policy = start_session_raw(&mut sim, 1);
     let hmac = start_session_raw(&mut sim, 0);
     assert_eq!(policy & 0x00FF_FFFF, 0);
@@ -562,7 +562,7 @@ fn loaded_sessions_paginate_in_slot_order() {
 /// GetCapability(PCR_PROPERTIES) reports the EXTEND_L2 PCR set
 #[test]
 fn pcr_extend_l2_property() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = GetCapability {
         capability: TpmCap::PCRProperties,
@@ -595,7 +595,7 @@ fn pcr_extend_l2_property() {
 /// GetCapability(PCR_PROPERTIES) reports the RESET_L2 PCR set
 #[test]
 fn pcr_reset_l2_property() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = GetCapability {
         capability: TpmCap::PCRProperties,
@@ -619,7 +619,7 @@ fn pcr_reset_l2_property() {
 /// GetCapability with propertyCount 0 and u32::MAX succeeds; an invalid capability is TPM_RC_VALUE + RC_P1
 #[test]
 fn property_count_bounds() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. property_count = 0 (should succeed with 0 items per TPM (2 as u16) Spec Section 30.1)
     let cmd = GetCapability {
@@ -662,7 +662,7 @@ fn property_count_bounds() {
 /// TPM_PT_VENDOR_STRING_* properties spell "TPM-RUST"
 #[test]
 fn vendor_string_properties() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = GetCapability {
         capability: TpmCap::TPMProperties,

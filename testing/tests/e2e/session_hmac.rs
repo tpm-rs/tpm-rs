@@ -7,13 +7,13 @@ use crate::_common::{
     send_rc_with_auth_entries, set_owner_auth, sign_cmd_and_handles, start_auth_session,
     start_session_of_type, tpm2b_params, unseal_with_auth_entry,
 };
+use testing::tpm::Tpm;
 use tpm2::{Handle, Tpm2bNonce, TpmCc, TpmSe, TpmaObject, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// TPM2_Certify is authorized with one HMAC session per authorization handle.
 #[test]
 fn certify_authorized_by_object_and_sign_sessions() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let sess1 = start_auth_session(
         &mut sim,
@@ -46,7 +46,7 @@ fn certify_authorized_by_object_and_sign_sessions() {
 /// An HMAC computed over a different caller nonce than sent fails with TPM_RC_BAD_AUTH + S1.
 #[test]
 fn mismatched_nonce_caller_returns_bad_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let session = start_auth_session(
         &mut sim,
@@ -71,7 +71,7 @@ fn mismatched_nonce_caller_returns_bad_auth() {
 /// empty HMAC key is accepted (C `CheckSessionHMAC()` uses `MemoryEqual2B`).
 #[test]
 fn session_hmac_compared_exactly() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let item = create_sealed(
         &mut sim,
         TpmaObject::USER_WITH_AUTH | TpmaObject::NO_DA,
@@ -139,7 +139,7 @@ fn session_hmac_compared_exactly() {
 /// verified by its HMAC, not as a password.
 #[test]
 fn session_hmac_empty_accepted_with_empty_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Unbound, unsalted HMAC session authorizing an entity with an empty authValue.
     let session = start_session_of_type(&mut sim, TpmSe::HMAC);
@@ -189,7 +189,7 @@ fn session_hmac_empty_accepted_with_empty_key() {
 /// An HMAC keyed with a wrong entity auth value fails with TPM_RC_BAD_AUTH + S1.
 #[test]
 fn wrong_auth_value_returns_bad_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let session = start_auth_session(
         &mut sim,
@@ -221,7 +221,7 @@ fn wrong_auth_value_returns_bad_auth() {
 /// An HMAC whose cpHash uses a wrong handle name fails with TPM_RC_BAD_AUTH + S1.
 #[test]
 fn wrong_handle_name_in_cphash_returns_bad_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let session = start_auth_session(
         &mut sim,
@@ -253,7 +253,7 @@ fn wrong_handle_name_in_cphash_returns_bad_auth() {
 /// An HMAC computed with an empty TPM nonce fails with TPM_RC_BAD_AUTH + S1.
 #[test]
 fn wrong_nonce_tpm_returns_bad_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let mut session = start_auth_session(
         &mut sim,
@@ -280,7 +280,7 @@ fn wrong_nonce_tpm_returns_bad_auth() {
 /// An HMAC computed with a corrupted session key fails with TPM_RC_BAD_AUTH + S1.
 #[test]
 fn wrong_session_key_returns_bad_auth() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let object_handle = create_primary_key(&mut sim);
     let mut session = start_auth_session(
         &mut sim,

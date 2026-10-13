@@ -6,10 +6,10 @@ use crate::_common::{
     policy_command_code_active as policy_command_code, power_cycle_with as power_cycle,
     start_session_active as start_session, *,
 };
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::*;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 /// HierarchyChangeAuth/ClearControl need NV for every hierarchy without changing state; disableClear survives TPM Reset.
 ///
@@ -17,7 +17,7 @@ use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 /// disableClear persists across TPM Reset.
 #[test]
 fn change_auth_and_clear_control_need_nv_and_persist() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     nv_off(&mut sim);
     for h in [Handle::RH_OWNER, Handle::RH_ENDORSEMENT, Handle::RH_LOCKOUT] {
         assert_eq!(
@@ -51,12 +51,11 @@ fn change_auth_and_clear_control_need_nv_and_persist() {
 /// `NvConditionallyWrite`).
 #[test]
 fn change_auth_needs_nv_only_when_auth_changes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0703;
     define_change_auth_index(&mut sim, index, 8);
     let name = nv_index_name(&mut sim, index);
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
 
     // Same (empty) authValue: nothing to write.
     let mut session = start_session(&mut sim, TpmSe::Policy);
@@ -86,7 +85,7 @@ fn change_auth_needs_nv_only_when_auth_changes() {
 /// ChangeEPS / ChangePPS / Clear check NV availability unconditionally.
 #[test]
 fn change_eps_change_pps_and_clear_need_nv() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     nv_off(&mut sim);
     let rc = execute_with_password_sessions(
         &mut sim,
@@ -114,13 +113,12 @@ fn change_eps_change_pps_and_clear_need_nv() {
 /// NV_DefineSpace/Write/UndefineSpace with NV unavailable fail with TPM_RC_NV_UNAVAILABLE and change nothing
 #[test]
 fn define_write_undefine_fail_when_nv_off() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let index = 0x0150_0701;
     define(&mut sim, index, OWNER_RW, 8, &[]);
     owner_write(&mut sim, index, 0, &[1; 8]).unwrap();
 
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     let rc = try_define(
         &mut sim,
         Handle::RH_OWNER,
@@ -145,8 +143,7 @@ fn define_write_undefine_fail_when_nv_off() {
         .unwrap_err(),
         TpmRc::NV_UNAVAILABLE.get()
     );
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
 
     // Nothing was changed while NV was unavailable.
     assert_eq!(
@@ -161,7 +158,7 @@ fn define_write_undefine_fail_when_nv_off() {
 /// fails even after the orderly state has already been cleared.
 #[test]
 fn hierarchy_change_auth_needs_nv_when_not_orderly() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // The orderly state is SU_NONE after Startup, so RETURN_IF_ORDERLY alone never fails here.
     nv_off(&mut sim);
     assert_eq!(
@@ -185,7 +182,7 @@ fn hierarchy_change_auth_needs_nv_when_not_orderly() {
 /// SetPrimaryPolicy for the endorsement hierarchy needs NV; IncrementalSelfTest rejects ALG_NULL but accepts XOR.
 #[test]
 fn set_primary_policy_endorsement_needs_nv() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     nv_off(&mut sim);
     set_primary_policy_nv_off_check(&mut sim, Handle::RH_ENDORSEMENT);
     nv_on(&mut sim);
@@ -200,7 +197,7 @@ fn set_primary_policy_endorsement_needs_nv() {
 /// SetPrimaryPolicy for TPM_RH_LOCKOUT fails with NV_UNAVAILABLE while NV is off.
 #[test]
 fn set_primary_policy_lockout_needs_nv() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     nv_off(&mut sim);
     set_primary_policy_nv_off_check(&mut sim, Handle::RH_LOCKOUT);
 }
@@ -208,7 +205,7 @@ fn set_primary_policy_lockout_needs_nv() {
 /// SetPrimaryPolicy for TPM_RH_OWNER fails with NV_UNAVAILABLE while NV is off.
 #[test]
 fn set_primary_policy_owner_needs_nv() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     nv_off(&mut sim);
     set_primary_policy_nv_off_check(&mut sim, Handle::RH_OWNER);
 }

@@ -6,16 +6,16 @@ use crate::_common::{
     power_cycle, power_cycle_with, raw_mssim, raw_rc, raw_rc_at, rc_of, shutdown, shutdown_raw,
     start_auth_session, startup, u16_param_command,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::*;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmSe, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// `TPM2_PCR_Extend` of a state-saved PCR after `Shutdown(STATE)` invalidates the saved state,
 /// so a following `Startup(STATE)` fails with `TPM_RC_VALUE + P1`.
 #[test]
 fn pcr_extend_invalidates_saved_state() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(shutdown(&mut sim, SU_STATE), 0);
 
     // Execute PCR_Extend on PCR 0 (state-saved PCR) after Shutdown(STATE)
@@ -51,7 +51,7 @@ fn pcr_extend_invalidates_saved_state() {
 /// fails with `TPM_RC_VALUE + P1`.
 #[test]
 fn platform_auth_change_invalidates_saved_state() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(shutdown(&mut sim, SU_STATE), 0);
 
     // Execute HierarchyChangeAuth on TPM_RH_PLATFORM after Shutdown(STATE)
@@ -82,7 +82,7 @@ fn platform_auth_change_invalidates_saved_state() {
 /// must return TPM_RC_VALUE (Parameter 1, 0x0103).
 #[test]
 fn shutdown_invalid_type_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let shutdown_req = hex_checked(concat!(
         "8001",     // NO_SESSIONS
@@ -101,7 +101,7 @@ fn shutdown_invalid_type_rejected() {
 /// Shutdown: NV_UNAVAILABLE (not NV_UNINITIALIZED), checked after parameter unmarshaling.
 #[test]
 fn shutdown_reports_nv_unavailable() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     nv_off(&mut sim);
     assert_eq!(shutdown_raw(&mut sim, SU_CLEAR), nv_unavailable());
 }
@@ -109,7 +109,7 @@ fn shutdown_reports_nv_unavailable() {
 /// A session context saved before Shutdown(STATE) is still loadable after TPM Resume.
 #[test]
 fn shutdown_state_preserves_context_counter() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // The context counter (STATE_RESET_DATA) survives Shutdown(STATE): a session context saved
     // before the shutdown is still loadable after TPM Resume.
     let session = start_auth_session(
@@ -138,7 +138,7 @@ fn shutdown_state_preserves_context_counter() {
 /// Null proof/seed survive Shutdown(STATE) + Startup(STATE): NULL-hierarchy primary is unchanged.
 #[test]
 fn shutdown_state_preserves_null_seed() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Null proof/seed survive Shutdown(STATE) + Startup(STATE).
     let (_, before) = create_storage_primary_with_auth(&mut sim, Handle::RH_NULL, &[]);
     assert_eq!(power_cycle_with(&mut sim, Some(SU_STATE), SU_STATE), 0);
@@ -151,7 +151,7 @@ fn shutdown_state_preserves_null_seed() {
 /// Shutdown reports bad parameters/trailing bytes before the NV error.
 #[test]
 fn shutdown_trailing_bytes_before_nv_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     nv_off(&mut sim);
     assert_eq!(
         shutdown_raw(&mut sim, 0x0002),

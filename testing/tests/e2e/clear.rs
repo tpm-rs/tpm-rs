@@ -5,15 +5,15 @@ use crate::_common::{
     SU_CLEAR, clear, clear_control, create_storage_primary_with_auth, evict, flush_context, nv_off,
     nv_on, nv_unavailable, object_exists, pcr_update_counter, power_cycle_with, read_clock,
 };
+use testing::tpm::Tpm;
 use tpm2::Handle;
 use tpm2::commands::{Clear, ClearControl, ContextLoad, ContextSave};
 use tpm2::errors::TpmRc;
-use tpm2_simulator::create_simulator;
 
 /// After ClearControl(disable), Clear is TPM_RC_DISABLED and ClearControl(enable) via lockout is TPM_RC_AUTH_FAIL
 #[test]
 fn clear_rejected_when_disabled() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let disable_cmd = ClearControl {
         auth: Handle::RH_LOCKOUT,
@@ -41,7 +41,7 @@ fn clear_rejected_when_disabled() {
 /// Same persistence / NV checks for ClearControl.
 #[test]
 fn disable_clear_survives_power_loss() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     clear_control(&mut sim, Handle::RH_PLATFORM, true).unwrap();
     // Unorderly power loss must not lose disableClear either.
     assert_eq!(power_cycle_with(&mut sim, None, SU_CLEAR), 0);
@@ -62,7 +62,7 @@ fn disable_clear_survives_power_loss() {
 /// and persists the zeroed resetCount.
 #[test]
 fn keeps_platform_objects_and_updates_counters() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (owner_key, _) = create_storage_primary_with_auth(&mut sim, Handle::RH_OWNER, &[]);
     evict(&mut sim, Handle::RH_OWNER, owner_key, 0x8100_0001);
     let (platform_key, _) = create_storage_primary_with_auth(&mut sim, Handle::RH_PLATFORM, &[]);
@@ -105,7 +105,7 @@ fn keeps_platform_objects_and_updates_counters() {
 /// `TPM2_Clear`: NV availability is checked before `disableClear`.
 #[test]
 fn nv_checked_before_disable_clear() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     clear_control(&mut sim, Handle::RH_PLATFORM, true).unwrap();
     nv_off(&mut sim);
     assert_eq!(clear(&mut sim, Handle::RH_LOCKOUT), Err(nv_unavailable()));

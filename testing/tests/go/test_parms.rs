@@ -1,13 +1,14 @@
+use testing::tpm::ExecuteError;
+use testing::tpm::Tpm;
 use tpm2::TpmEccCurve;
 use tpm2::commands::TestParms;
 use tpm2::errors::TpmRc;
 use tpm2::{TpmiRsaKeyBits, TpmsEccParms, TpmsRsaParms, TpmtPublicParms};
-use tpm2_simulator::{ExecuteError, create_simulator};
 
 // Original Go test: test_parms_test.go - TestTestParms/p256
 #[test]
 fn test_test_parms_p256() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = TestParms {
         parameters: TpmtPublicParms::Ecc(TpmsEccParms {
             symmetric: None,
@@ -22,7 +23,7 @@ fn test_test_parms_p256() {
 // Original Go test: test_parms_test.go - TestTestParms/p364
 #[test]
 fn test_test_parms_p364() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = TestParms {
         parameters: TpmtPublicParms::Ecc(TpmsEccParms {
             symmetric: None,
@@ -37,7 +38,7 @@ fn test_test_parms_p364() {
 // Original Go test: test_parms_test.go - TestTestParms/p521
 #[test]
 fn test_test_parms_p521() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = TestParms {
         parameters: TpmtPublicParms::Ecc(TpmsEccParms {
             symmetric: None,
@@ -52,7 +53,7 @@ fn test_test_parms_p521() {
 // Original Go test: test_parms_test.go - TestTestParms/rsa2048
 #[test]
 fn test_test_parms_rsa2048() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = TestParms {
         parameters: TpmtPublicParms::Rsa(TpmsRsaParms {
             symmetric: None,
@@ -67,7 +68,7 @@ fn test_test_parms_rsa2048() {
 // Original Go test: test_parms_test.go - TestTestParms/rsa3072 - unsupported
 #[test]
 fn test_test_parms_rsa3072_unsupported() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = TestParms {
         parameters: TpmtPublicParms::Rsa(TpmsRsaParms {
             symmetric: None,
@@ -88,7 +89,7 @@ fn test_test_parms_rsa3072_unsupported() {
 // Original Go test: test_parms_test.go - TestTestParms/rsa4096 - unsupported
 #[test]
 fn test_test_parms_rsa4096_unsupported() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let cmd = TestParms {
         parameters: TpmtPublicParms::Rsa(TpmsRsaParms {
             symmetric: None,

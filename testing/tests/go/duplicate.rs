@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
 use tpm2::commands::CreateLoaded;
 use tpm2::commands::{CreatePrimary, Duplicate, Import, Load, PolicyCommandCode, PolicyGetDigest};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve, TpmSe};
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// go-tpm's `ECCSRKTemplate`.
 fn get_ecc_srk_template() -> TpmtPublic<'static> {
@@ -39,7 +39,7 @@ fn get_ecc_srk_template() -> TpmtPublic<'static> {
 
 /// Creates a primary key from `ECCSRKTemplate` under `hierarchy` using an
 /// empty password session, returning its handle.
-fn create_ecc_srk(sim: &mut Simulator<'_>, hierarchy: Handle) -> Handle {
+fn create_ecc_srk(sim: &mut Tpm, hierarchy: Handle) -> Handle {
     let create_cmd = CreatePrimary {
         primary_handle: hierarchy,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
@@ -56,7 +56,7 @@ fn create_ecc_srk(sim: &mut Simulator<'_>, hierarchy: Handle) -> Handle {
 
 /// Port of Go's `dupPolicyDigest`: computes the PolicyCommandCode(Duplicate)
 /// digest with a trial policy session.
-fn dup_policy_digest(sim: &mut Simulator<'_>) -> Tpm2bDigest<'static> {
+fn dup_policy_digest(sim: &mut Tpm) -> Tpm2bDigest<'static> {
     let trial_sess = start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -91,7 +91,7 @@ fn dup_policy_digest(sim: &mut Simulator<'_>) -> Tpm2bDigest<'static> {
 #[test]
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
 fn test_duplicate() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // ### Create Owner SRK
     let srk_handle = create_ecc_srk(&mut sim, Handle::RH_OWNER);

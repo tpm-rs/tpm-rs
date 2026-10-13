@@ -6,60 +6,14 @@
 //! templates, reference computations and assorted constants. It is also
 //! re-exported as `testing::test_utils` (used by the Go parity tests in `tests/go/`).
 //!
-//! Tests treat the TPM as a black box: every helper talks to a [`Simulator`]
-//! (created with [`create_simulator!`]) only through its command interface
-//! (typed commands, raw command buffers at any locality via [`send_command`],
-//! platform signals and the `_TPM_Hash_*` indications via [`hash_start`],
-//! [`hash_data`] and [`hash_end`]). Client-side randomness comes from
-//! [`client_rng`] / [`CLIENT_CRYPTO`] and sleeps go through [`sleep`].
+//! Tests treat the TPM as a black box: every helper talks to it only through
+//! the command interface of [`Tpm`] (which, with the `differential` feature,
+//! mirrors every interaction to the C reference TPM). Client-side randomness
+//! must come from [`client_rng`] / [`CLIENT_CRYPTO`] and sleeps must go through
+//! [`sleep`] so that test runs stay reproducible.
 
-use std::io::Cursor;
+pub use crate::tpm::{SimulatorPlatformSignal, Tpm, sleep};
 pub use tpm2::Connection;
-pub use tpm2_simulator::{
-    NO_STREAM, PlatformConnection, Simulator, SimulatorPlatformSignal, create_simulator,
-};
-
-/// MSSIM `TPM_SIGNAL_HASH_START`.
-const TPM_SIGNAL_HASH_START: u32 = 5;
-/// MSSIM `TPM_SIGNAL_HASH_DATA`.
-const TPM_SIGNAL_HASH_DATA: u32 = 6;
-/// MSSIM `TPM_SIGNAL_HASH_END`.
-const TPM_SIGNAL_HASH_END: u32 = 7;
-/// MSSIM `TPM_SEND_COMMAND`.
-const TPM_SEND_COMMAND: u32 = 8;
-
-/// Lets `duration` pass for the simulators (the simulators run on the wall
-/// clock, so this blocks the calling thread).
-pub fn sleep(duration: Duration) {
-    std::thread::sleep(duration);
-}
-
-/// Sends the raw command buffer `command` at `locality` (MSSIM
-/// `TPM_SEND_COMMAND`) and returns the raw response (empty while the TPM is
-/// powered off).
-///
-/// # Panics
-/// If the simulator rejects the command at the transport level (e.g. an
-/// oversized buffer).
-pub fn send_command(sim: &mut Simulator<'_>, locality: u8, command: &[u8]) -> Vec<u8> {
-    let mut input = vec![locality];
-    input.extend_from_slice(&(command.len() as u32).to_be_bytes());
-    input.extend_from_slice(command);
-    let input_len = input.len();
-    let mut stream = Cursor::new(input);
-    sim.transact_platform(TPM_SEND_COMMAND, &mut stream)
-        .unwrap_or_else(|e| panic!("TPM transport error: {e}"));
-    let output = stream.into_inner();
-    let out = &output[input_len..];
-    let len = u32::from_be_bytes(out[..4].try_into().expect("no response length")) as usize;
-    out[4..4 + len].to_vec()
-}
-
-/// Sends a `_TPM_Hash_*` indication (MSSIM command `code` with `payload`).
-fn hash_indication(sim: &mut Simulator<'_>, code: u32, payload: Vec<u8>) {
-    sim.transact_platform(code, &mut Cursor::new(payload))
-        .unwrap_or_else(|e| panic!("TPM transport error: {e}"));
-}
 use tpm2::commands::{
     Command, FlushContext, GetCapability, Message, ReadPublic, StartAuthSession, UnmarshalMessage,
     responses,
@@ -259,6 +213,11 @@ pub const CLIENT_CRYPTO: &PlatformCryptoProvider = &PlatformCryptoProvider;
 
 /// Random number generator for the client side of the tests (nonces, keys,
 /// test data), drawing from [`CLIENT_CRYPTO`].
+///
+/// Once a thread has created a [`Tpm`], the provider's client-side randomness
+/// on that thread is a stream seeded with [`crate::tpm::CLIENT_SEED`], so a
+/// test sends the same commands on every run (and a differential failure
+/// reproduces).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ClientRng;
 
@@ -347,7 +306,7 @@ fn unmarshal_handles<M: Message>(src: &mut &[u8]) -> M::Handles {
 /// Returns the response header; the response itself is left in `resp_buffer`.
 /// A non-success response code is returned as `Err(rc)`.
 fn transact_with_password_sessions<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     num_sessions: usize,
     auth_value: &[u8],
@@ -442,7 +401,7 @@ fn parse_response_handles<M: Message>(
 /// response from `resp_buffer`, so that it borrows `resp_buffer` instead of
 /// leaked memory.
 fn execute_with_password_sessions_into<'a, CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     num_sessions: usize,
     auth_value: &[u8],
@@ -479,7 +438,7 @@ pub fn marshal_auth_command(auth_cmd: &TpmsAuthCommand<'_>, buf: &mut [u8]) -> u
 /// The command's handles (`cmd.handles()`) are sent in the handle area. A
 /// non-success response code is returned as `Err(rc)`.
 pub fn execute_with_password_sessions_raw<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     num_sessions: usize,
     auth_value: &[u8],
@@ -494,7 +453,7 @@ where
 /// Runs `cmd` like [`execute_with_password_sessions`], but only returns the
 /// response handles (or the response code).
 pub fn execute_with_password_sessions_status<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     num_sessions: usize,
     auth_value: &[u8],
@@ -511,7 +470,7 @@ where
 /// carrying `auth_value`) and returns its response, which carries the
 /// response handles. A non-success response code is returned as `Err(rc)`.
 pub fn execute_with_password_sessions<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     num_sessions: usize,
     auth_value: &[u8],
@@ -531,7 +490,7 @@ where
 /// borrows `resp_buffer`.
 #[allow(deprecated)] // TPM2_Sign is deprecated upstream, but the TPM implements it.
 pub fn execute_sign<'a>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &tpm2::commands::Sign<'_>,
     num_sessions: usize,
     auth_value: &[u8],
@@ -543,7 +502,7 @@ pub fn execute_sign<'a>(
 /// Runs `TPM2_Certify` with `num_sessions` password sessions; the response
 /// borrows `resp_buffer`.
 pub fn execute_certify<'a>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &tpm2::commands::Certify<'_>,
     num_sessions: usize,
     auth_value: &[u8],
@@ -555,7 +514,7 @@ pub fn execute_certify<'a>(
 /// Runs `TPM2_NV_Certify` with `num_sessions` password sessions; the response
 /// borrows `resp_buffer`.
 pub fn execute_nv_certify<'a>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &tpm2::commands::NVCertify<'_>,
     num_sessions: usize,
     auth_value: &[u8],
@@ -567,7 +526,7 @@ pub fn execute_nv_certify<'a>(
 /// Runs `TPM2_CertifyCreation` with `num_sessions` password sessions; the
 /// response borrows `resp_buffer`.
 pub fn execute_certify_creation<'a>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &tpm2::commands::CertifyCreation<'_>,
     num_sessions: usize,
     auth_value: &[u8],
@@ -579,7 +538,7 @@ pub fn execute_certify_creation<'a>(
 /// Runs `TPM2_GetTime` with `num_sessions` password sessions; the response
 /// borrows `resp_buffer`.
 pub fn execute_get_time<'a>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &tpm2::commands::GetTime<'_>,
     num_sessions: usize,
     auth_value: &[u8],
@@ -591,7 +550,7 @@ pub fn execute_get_time<'a>(
 /// Runs `TPM2_GetSessionAuditDigest` with `num_sessions` password sessions;
 /// the response borrows `resp_buffer`.
 pub fn execute_get_session_audit_digest<'a>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &tpm2::commands::GetSessionAuditDigest<'_>,
     num_sessions: usize,
     auth_value: &[u8],
@@ -603,7 +562,7 @@ pub fn execute_get_session_audit_digest<'a>(
 /// Runs `TPM2_GetCapability` with `num_sessions` password sessions; the
 /// response borrows `resp_buffer`.
 pub fn execute_get_capability<'a>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &tpm2::commands::GetCapability,
     num_sessions: usize,
     auth_value: &[u8],
@@ -616,7 +575,7 @@ pub fn execute_get_capability<'a>(
 /// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES, property, 1)`.
 ///
 /// Panics if the TPM does not report the requested property.
-pub fn get_tpm_property(tpm: &mut Simulator<'_>, property: tpm2::TpmPt) -> u32 {
+pub fn get_tpm_property(tpm: &mut Tpm, property: tpm2::TpmPt) -> u32 {
     let cmd = GetCapability {
         capability: tpm2::TpmCap::TPMProperties,
         property: property.0,
@@ -638,14 +597,14 @@ pub fn get_tpm_property(tpm: &mut Simulator<'_>, property: tpm2::TpmPt) -> u32 {
 
 /// Number of authorization sessions that can be loaded at the same time, as
 /// reported by the TPM (`TPM_PT_HR_LOADED_MIN`).
-pub fn max_loaded_sessions(tpm: &mut Simulator<'_>) -> usize {
+pub fn max_loaded_sessions(tpm: &mut Tpm) -> usize {
     get_tpm_property(tpm, tpm2::TpmPt::HR_LOADED_MIN) as usize
 }
 
 /// Enables or disables `hierarchy` (`TPM_RH_OWNER`, `TPM_RH_ENDORSEMENT`,
 /// ...) with `TPM2_HierarchyControl`, authorized by the platform hierarchy
 /// using its (default, empty) password.
-pub fn set_hierarchy_enabled(tpm: &mut Simulator<'_>, hierarchy: Handle, state: bool) {
+pub fn set_hierarchy_enabled(tpm: &mut Tpm, hierarchy: Handle, state: bool) {
     let cmd = tpm2::commands::HierarchyControl {
         auth_handle: Handle::RH_PLATFORM,
         enable: hierarchy,
@@ -658,7 +617,7 @@ pub fn set_hierarchy_enabled(tpm: &mut Simulator<'_>, hierarchy: Handle, state: 
 /// Runs `TPM2_PCR_Event` with `num_sessions` password sessions; the response
 /// borrows `resp_buffer`.
 pub fn execute_pcr_event<'a>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &tpm2::commands::PCREvent<'_>,
     num_sessions: usize,
     auth_value: &[u8],
@@ -670,7 +629,7 @@ pub fn execute_pcr_event<'a>(
 /// Like [`execute_with_password_sessions_raw`], but lets `corrupt_fn` modify
 /// the marshalled parameter area before the command is sent.
 pub fn execute_with_corrupted_bytes_raw<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     num_sessions: usize,
     auth_value: &[u8],
@@ -697,7 +656,7 @@ where
 /// Like [`execute_with_password_sessions_status`], but lets `corrupt_fn`
 /// modify the marshalled parameter area before the command is sent.
 pub fn execute_with_corrupted_bytes_status<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     num_sessions: usize,
     auth_value: &[u8],
@@ -721,7 +680,7 @@ where
 /// Like [`execute_with_password_sessions`], but lets `corrupt_fn` modify the
 /// marshalled parameter area before the command is sent.
 pub fn execute_with_corrupted_bytes<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     num_sessions: usize,
     auth_value: &[u8],
@@ -745,14 +704,14 @@ where
 }
 
 /// Flushes `handle` with `TPM2_FlushContext`, returning the TPM response code on failure.
-pub fn flush_context(tpm: &mut Simulator<'_>, handle: Handle) -> Result<(), u32> {
+pub fn flush_context(tpm: &mut Tpm, handle: Handle) -> Result<(), u32> {
     let cmd = FlushContext {
         flush_handle: handle,
     };
     execute_with_password_sessions(tpm, &cmd, 0, &[]).map(|_| ())
 }
 
-pub fn read_public_name(tpm: &mut Simulator<'_>, handle: Handle) -> Tpm2bName<'static> {
+pub fn read_public_name(tpm: &mut Tpm, handle: Handle) -> Tpm2bName<'static> {
     let cmd = ReadPublic {
         object_handle: handle,
     };
@@ -893,7 +852,7 @@ fn compute_client_hmac(
 /// Starts an unsalted authorization session (`TPM2_StartAuthSession`) with a random caller nonce
 /// and returns its client-side state (handle, nonces, session key), or the TPM response code.
 pub fn start_auth_session(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     tpm_key: Handle,
     bind: Handle,
     bind_auth: &[u8],
@@ -966,7 +925,7 @@ pub fn start_auth_session(
 /// `TPM2_ReadPublic` (as a real TSS would), and NV Indices with `TPM2_NV_ReadPublic`. For every
 /// other handle — or if the query fails, e.g. for sequence objects — the handle value itself is
 /// used.
-pub fn entity_name(tpm: &mut Simulator<'_>, handle: Handle) -> Vec<u8> {
+pub fn entity_name(tpm: &mut Tpm, handle: Handle) -> Vec<u8> {
     if (handle.0 >> 24 == 0x80 || handle.0 >> 24 == 0x81)
         && let Ok(resp) = tpm.execute(ReadPublic {
             object_handle: handle,
@@ -1044,7 +1003,7 @@ fn session_hmac_key(session: &ActiveSession, entity_auth: &[u8], include_auth: b
 /// encryption client-side, verifying response HMACs) and returns the decrypted response parameter
 /// bytes and response handles, or the TPM response code.
 pub fn execute_with_hmac_sessions_raw<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     _handle_names: &[&[u8]],
     sessions: &mut [ActiveSession],
@@ -1450,7 +1409,7 @@ where
 /// Like [`execute_with_hmac_sessions`] but only returns the response handles (or the response
 /// code).
 pub fn execute_with_hmac_sessions_status<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     handle_names: &[&[u8]],
     sessions: &mut [ActiveSession],
@@ -1465,7 +1424,7 @@ where
 /// Executes `cmd` with HMAC/policy `sessions` (see [`execute_with_hmac_sessions_raw`]) and returns
 /// the unmarshalled response parameters and handles, or the TPM response code.
 pub fn execute_with_hmac_sessions<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     handle_names: &[&[u8]],
     sessions: &mut [ActiveSession],
@@ -1495,7 +1454,7 @@ pub enum ResponseCorruption {
 /// than the one used to compute the command HMAC, so the TPM is expected to reject the
 /// authorization.
 pub fn execute_with_hmac_sessions_mismatch_nonce<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     _handle_names: &[&[u8]],
     sessions: &mut [ActiveSession],
@@ -1932,7 +1891,7 @@ where
 /// Like [`execute_with_hmac_sessions_raw`] but corrupts the response authorization area as
 /// selected by `corruption` before verifying it client-side (tests HMAC response checking).
 pub fn execute_with_hmac_sessions_corrupt_response<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     _handle_names: &[&[u8]],
     sessions: &mut [ActiveSession],
@@ -3676,7 +3635,7 @@ pub fn certify_cmd_and_handles(key_handle: Handle) -> Certify<'static> {
 }
 
 /// Returns the response code of executing `cmd` (0 on success).
-pub fn command_rc<C: Command>(sim: &mut Simulator<'_>, cmd: &C, sessions: usize) -> u32
+pub fn command_rc<C: Command>(sim: &mut Tpm, cmd: &C, sessions: usize) -> u32
 where
     for<'b> &'b mut C::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
@@ -3793,7 +3752,7 @@ pub fn exec(
 /// Executes `cmd` with the given authorizations; returns the response (which carries the
 /// response handles), or the response code on failure.
 pub fn exec_command<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand<'_>],
 ) -> Result<C::Response<'static>, u32>
@@ -3813,7 +3772,7 @@ where
 /// Executes `cmd` with one empty password session. TPM2_HMAC, TPM2_RSA_Decrypt and TPM2_Sign
 /// require USER authorization of their key handle, so C rejects them without a session
 /// (TPM_RC_AUTH_MISSING); the session makes the command reach the checks under test.
-pub fn exec_pw<C: Command>(sim: &mut Simulator<'_>, cmd: C) -> Result<C::Response<'static>, RawRc>
+pub fn exec_pw<C: Command>(sim: &mut Tpm, cmd: C) -> Result<C::Response<'static>, RawRc>
 where
     for<'b> &'b mut C::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
@@ -3823,7 +3782,7 @@ where
 /// Executes `cmd` with one `TPM_RS_PW` session per entry of `passwords` (in handle order) and
 /// returns the response parameters or the response code.
 pub fn exec_pws<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     passwords: &[&[u8]],
 ) -> Result<C::Response<'static>, u32>
@@ -3864,7 +3823,7 @@ where
 /// Executes `cmd` at `locality` and returns the response (which carries the response
 /// handles), or the response code on failure.
 pub fn execute_at<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     locality: u8,
     cmd: &C,
     auths: &[TpmsAuthCommand<'_>],
@@ -3881,7 +3840,7 @@ where
 }
 
 /// Sends the raw command `cmd_bytes` and returns `Err(rc)` if the response code is non-zero.
-pub fn execute_raw_transact(tpm: &mut Simulator<'_>, cmd_bytes: &[u8]) -> Result<(), u32> {
+pub fn execute_raw_transact(tpm: &mut Tpm, cmd_bytes: &[u8]) -> Result<(), u32> {
     let mut resp_buffer = [0u8; 4096];
     tpm.transact(cmd_bytes, &mut resp_buffer).unwrap();
 
@@ -3894,11 +3853,7 @@ pub fn execute_raw_transact(tpm: &mut Simulator<'_>, cmd_bytes: &[u8]) -> Result
 }
 
 /// Executes `cmd` with the authorization area `auths` and returns the response code.
-pub fn execute_rc<C: Command>(
-    sim: &mut Simulator<'_>,
-    cmd: &C,
-    auths: &[TpmsAuthCommand<'_>],
-) -> u32
+pub fn execute_rc<C: Command>(sim: &mut Tpm, cmd: &C, auths: &[TpmsAuthCommand<'_>]) -> u32
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
@@ -3924,7 +3879,7 @@ where
 /// Executes `cmd` and returns the response (which carries the response handles), or the
 /// response code.
 pub fn execute_tpm_command<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand<'_>],
 ) -> Result<C::Response<'static>, u32>
@@ -3943,7 +3898,7 @@ where
 
 /// Executes `cmd` at locality 0.
 pub fn execute_tpm_command_at_locality0<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand<'_>],
 ) -> Result<C::Response<'static>, u32>
@@ -3956,7 +3911,7 @@ where
 /// Builds and sends `cmd`; when it has handles, adds one empty `TPM_RS_PW`
 /// session. Returns the parsed response or the response code (`0xFFFFFFFF` if parsing fails).
 pub fn execute_tpm_command_auto_pw<Cmd>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &Cmd,
 ) -> Result<Cmd::Response<'static>, u32>
 where
@@ -4000,7 +3955,7 @@ where
 /// SessionProcess.c CheckAuthNoSession), so an empty `TPM_RS_PW` session is sent whenever
 /// the command has handles.
 pub fn execute_tpm_command_auto_pw_unwrap<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
 ) -> Result<C::Response<'static>, u32>
 where
@@ -4036,7 +3991,7 @@ where
 ///
 /// Returns the raw response code on failure.
 pub fn execute_tpm_command_full<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -4072,7 +4027,7 @@ where
 ///
 /// Returns the raw response code on failure.
 pub fn execute_tpm_command_mapping_parse_errors<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -4106,7 +4061,7 @@ where
 /// Executes a typed TPM command with the given authorizations and returns either its
 /// unmarshalled output or the raw response code.
 pub fn execute_tpm_command_offsets<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -4126,7 +4081,7 @@ where
 /// Executes a typed TPM command with the given authorizations and returns either its
 /// unmarshalled output or the raw response code.
 pub fn execute_tpm_command_uncorrupted<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -4138,7 +4093,7 @@ where
 
 /// Executes `cmd` and returns its response (carrying the response handles), or the response code.
 pub fn execute_tpm_command_via_run<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand<'_>],
 ) -> Result<C::Response<'static>, u32>
@@ -4150,7 +4105,7 @@ where
 
 /// Executes `cmd` and returns the response (carrying the response handles), or the response code.
 pub fn execute_tpm_command_via_send<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand<'_>],
 ) -> Result<C::Response<'static>, u32>
@@ -4165,7 +4120,7 @@ where
 /// unmarshalled output or the raw response code. `corrupt_fn` may modify the marshalled
 /// parameter area before it is sent.
 pub fn execute_tpm_command_with_corrupted_bytes<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand],
     corrupt_fn: impl FnOnce(&mut [u8]),
@@ -4187,7 +4142,7 @@ where
 
 /// Executes `cmd` after `corrupt_fn` has modified its marshaled parameter area.
 pub fn execute_tpm_command_with_corrupted_bytes_via_send<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand<'_>],
     corrupt_fn: impl FnOnce(&mut [u8]),
@@ -4202,7 +4157,7 @@ where
 
 /// Like [`execute_tpm_command`], but appends 4 dummy bytes after the parameter area.
 pub fn execute_tpm_command_with_extra_bytes<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand<'_>],
 ) -> Result<C::Response<'static>, u32>
@@ -4215,7 +4170,7 @@ where
 /// Executes `cmd` with one trailing byte (0xFF) appended to the command and returns only
 /// the response code.
 pub fn execute_tpm_command_with_trailing<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand<'_>],
 ) -> Result<(), u32>
@@ -4314,7 +4269,7 @@ pub fn mac_params(scheme: u16) -> Vec<u8> {
 }
 
 /// Sends a raw command at locality 0 and returns only the response code.
-pub fn mssim_rc_of(sim: &mut Simulator<'_>, cmd: &[u8]) -> u32 {
+pub fn mssim_rc_of(sim: &mut Tpm, cmd: &[u8]) -> u32 {
     send_with_rc(sim, cmd).0
 }
 
@@ -4342,7 +4297,7 @@ pub fn put_tpm2b(buf: &mut Vec<u8>, data: &[u8]) {
 }
 
 /// Sends the raw command `cmd` and returns the full response.
-pub fn raw(sim: &mut Simulator<'_>, cmd: &[u8]) -> Vec<u8> {
+pub fn raw(sim: &mut Tpm, cmd: &[u8]) -> Vec<u8> {
     let mut rsp = [0u8; 4096];
     sim.transact(cmd, &mut rsp)
         .expect("transact failed")
@@ -4351,13 +4306,13 @@ pub fn raw(sim: &mut Simulator<'_>, cmd: &[u8]) -> Vec<u8> {
 
 /// Sends the raw command `cmd` at `locality` and
 /// returns the full response.
-pub fn raw_at(sim: &mut Simulator<'_>, locality: u8, cmd: &[u8]) -> Vec<u8> {
-    send_command(sim, locality, cmd)
+pub fn raw_at(sim: &mut Tpm, locality: u8, cmd: &[u8]) -> Vec<u8> {
+    sim.send_command(locality, cmd)
 }
 
 /// Sends a raw command at `locality` and returns the full response.
-pub fn raw_at_checked(sim: &mut Simulator<'_>, locality: u8, cmd: &[u8]) -> Vec<u8> {
-    let rsp = send_command(sim, locality, cmd);
+pub fn raw_at_checked(sim: &mut Tpm, locality: u8, cmd: &[u8]) -> Vec<u8> {
+    let rsp = sim.send_command(locality, cmd);
     assert!(rsp.len() >= 10, "short response");
     rsp
 }
@@ -4375,18 +4330,18 @@ pub fn raw_entry(session: &ActiveSession, attrs: u8, hmac: &[u8]) -> AuthEntry {
 }
 
 /// Sends a raw command at locality 0 and returns the full response.
-pub fn raw_mssim(sim: &mut Simulator<'_>, cmd: &[u8]) -> Vec<u8> {
+pub fn raw_mssim(sim: &mut Tpm, cmd: &[u8]) -> Vec<u8> {
     raw_at_checked(sim, 0, cmd)
 }
 
 /// Sends the raw command `cmd` and returns the response code.
-pub fn raw_rc(sim: &mut Simulator<'_>, cmd: &[u8]) -> u32 {
+pub fn raw_rc(sim: &mut Tpm, cmd: &[u8]) -> u32 {
     let rsp = run_raw(sim, cmd);
     u32::from_be_bytes(rsp[6..10].try_into().unwrap())
 }
 
 /// Sends a raw command at `locality` and returns the response code.
-pub fn raw_rc_at(sim: &mut Simulator<'_>, locality: u8, cmd: &[u8]) -> u32 {
+pub fn raw_rc_at(sim: &mut Tpm, locality: u8, cmd: &[u8]) -> u32 {
     let rsp = raw_at_checked(sim, locality, cmd);
     u32::from_be_bytes(rsp[6..10].try_into().unwrap())
 }
@@ -4407,7 +4362,7 @@ pub fn rc_at(rc: tpm2::errors::Fmt1, pos: Position) -> u32 {
 }
 
 /// Sends the raw command `cmd` at `locality` and returns the response code.
-pub fn rc_at_locality(sim: &mut Simulator<'_>, locality: u8, cmd: &[u8]) -> u32 {
+pub fn rc_at_locality(sim: &mut Tpm, locality: u8, cmd: &[u8]) -> u32 {
     let rsp = raw_at(sim, locality, cmd);
     assert!(rsp.len() >= 10, "short response");
     u32::from_be_bytes(rsp[6..10].try_into().unwrap())
@@ -4457,11 +4412,7 @@ pub fn response_rc(resp: &[u8]) -> u32 {
 }
 
 /// Executes `cmd` with `sessions` empty password sessions (no session area if 0).
-pub fn run<C: Command>(
-    sim: &mut Simulator<'_>,
-    cmd: &C,
-    sessions: usize,
-) -> Result<C::Response<'static>, u32>
+pub fn run<C: Command>(sim: &mut Tpm, cmd: &C, sessions: usize) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut C::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
@@ -4470,7 +4421,7 @@ where
 
 /// Runs a session-less command (policy commands authorize nothing).
 pub fn run_command<C: tpm2::commands::Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: C,
 ) -> Result<C::Response<'static>, u32>
 where
@@ -4482,7 +4433,7 @@ where
 /// Hashes `chunks` + `final_chunk` with a `TPM2_HashSequenceStart`/`SequenceUpdate`/
 /// `SequenceComplete` sequence and checks the result against a client-side hash with `alg`.
 pub fn run_differential_case(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     alg: TpmiAlgHash,
     chunks: &[&[u8]],
     final_chunk: &[u8],
@@ -4535,7 +4486,7 @@ pub fn run_differential_case(
 
 /// Executes a command with one (empty) password session for its first handle.
 pub fn run_pw<C: tpm2::commands::Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: C,
 ) -> Result<C::Response<'static>, u32>
 where
@@ -4545,7 +4496,7 @@ where
 }
 
 /// Sends the raw command `cmd` and returns the complete response bytes.
-pub fn run_raw(sim: &mut Simulator<'_>, cmd: &[u8]) -> Vec<u8> {
+pub fn run_raw(sim: &mut Tpm, cmd: &[u8]) -> Vec<u8> {
     let mut rsp = [0u8; 16384];
     let rsp = sim.transact(cmd, &mut rsp).expect("transact failed");
     assert!(rsp.len() >= 10, "short response");
@@ -4554,7 +4505,7 @@ pub fn run_raw(sim: &mut Simulator<'_>, cmd: &[u8]) -> Vec<u8> {
 
 /// Sends a raw command built by [`build_cmd`] and parses the response.
 pub fn run_with_trailing<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand<'_>],
     trailing: &[u8],
@@ -4573,7 +4524,7 @@ where
 }
 
 /// Sends the raw command `cmd` and returns the full response.
-pub fn send(sim: &mut Simulator<'_>, cmd: &[u8]) -> Vec<u8> {
+pub fn send(sim: &mut Tpm, cmd: &[u8]) -> Vec<u8> {
     let mut resp = vec![0u8; 8192];
     sim.transact(cmd, &mut resp).unwrap().to_vec()
 }
@@ -4581,7 +4532,7 @@ pub fn send(sim: &mut Simulator<'_>, cmd: &[u8]) -> Vec<u8> {
 /// Fixes up the size field of the raw command `req`, sends it and parses the response of
 /// command `C`, or returns the response code on failure.
 pub fn send_and_parse<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     mut req: Vec<u8>,
 ) -> Result<C::Response<'static>, u32> {
     let len = req.len() as u32;
@@ -4596,26 +4547,26 @@ pub fn send_and_parse<C: Command>(
 }
 
 /// Sends a raw command at `locality` and returns the response code and the full response.
-pub fn send_at(sim: &mut Simulator<'_>, locality: u8, cmd: &[u8]) -> (u32, Vec<u8>) {
+pub fn send_at(sim: &mut Tpm, locality: u8, cmd: &[u8]) -> (u32, Vec<u8>) {
     let resp = raw_at_checked(sim, locality, cmd);
     let rc = u32::from_be_bytes(resp[6..10].try_into().unwrap());
     (rc, resp)
 }
 
 /// Sends raw command bytes and returns the raw response.
-pub fn send_raw(sim: &mut Simulator<'_>, cmd: &[u8]) -> Vec<u8> {
+pub fn send_raw(sim: &mut Tpm, cmd: &[u8]) -> Vec<u8> {
     let mut buf = [0u8; 4096];
     sim.transact(cmd, &mut buf).unwrap().to_vec()
 }
 
 /// Sends the raw command `cmd` at `locality` and returns the full response.
-pub fn send_raw_at(sim: &mut Simulator<'_>, locality: u8, cmd: &[u8]) -> Vec<u8> {
+pub fn send_raw_at(sim: &mut Tpm, locality: u8, cmd: &[u8]) -> Vec<u8> {
     raw_at_checked(sim, locality, cmd)
 }
 
 /// Fills in the size field of the raw command `req`, sends it and returns the response
 /// code.
-pub fn send_raw_rc(sim: &mut Simulator<'_>, mut req: Vec<u8>) -> u32 {
+pub fn send_raw_rc(sim: &mut Tpm, mut req: Vec<u8>) -> u32 {
     let len = req.len() as u32;
     req[2..6].copy_from_slice(&len.to_be_bytes());
     let mut rsp = vec![0u8; 4096];
@@ -4624,7 +4575,7 @@ pub fn send_raw_rc(sim: &mut Simulator<'_>, mut req: Vec<u8>) -> u32 {
 }
 
 /// Sends a raw command and returns its response code.
-pub fn send_rc(sim: &mut Simulator<'_>, cmd: &[u8]) -> u32 {
+pub fn send_rc(sim: &mut Tpm, cmd: &[u8]) -> u32 {
     let mut response = [0u8; 1024];
     let rsp = sim.transact(cmd, &mut response).unwrap();
     u32::from_be_bytes(rsp[6..10].try_into().unwrap())
@@ -4632,7 +4583,7 @@ pub fn send_rc(sim: &mut Simulator<'_>, cmd: &[u8]) -> u32 {
 
 /// Sends a `TPM_ST_NO_SESSIONS` command with a single `UINT16` parameter and returns the
 /// response code.
-pub fn send_u16_param_command(sim: &mut Simulator<'_>, cc: u32, param: u16) -> u32 {
+pub fn send_u16_param_command(sim: &mut Tpm, cc: u32, param: u16) -> u32 {
     let mut cmd = Vec::new();
     cmd.extend_from_slice(&0x8001u16.to_be_bytes());
     cmd.extend_from_slice(&12u32.to_be_bytes());
@@ -4644,14 +4595,14 @@ pub fn send_u16_param_command(sim: &mut Simulator<'_>, cc: u32, param: u16) -> u
 }
 
 /// Sends a raw command at locality 0 and returns the response code and the full response.
-pub fn send_with_rc(sim: &mut Simulator<'_>, cmd: &[u8]) -> (u32, Vec<u8>) {
+pub fn send_with_rc(sim: &mut Tpm, cmd: &[u8]) -> (u32, Vec<u8>) {
     send_at(sim, 0, cmd)
 }
 
 /// Sends `cmd` with optional password sessions, appending `trailing` bytes after the
 /// parameters (the command size covers them), and returns the response code.
 pub fn send_with_trailing<CmdT: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &CmdT,
     num_sessions: usize,
     auth: &[u8],
@@ -4701,7 +4652,7 @@ pub fn size_rc() -> u32 {
 }
 
 /// Raw `TPM2_Shutdown`/`TPM2_Startup` with a `UINT16` parameter; returns the response code.
-pub fn su_command(sim: &mut Simulator<'_>, cc: u32, su: u16) -> u32 {
+pub fn su_command(sim: &mut Tpm, cc: u32, su: u16) -> u32 {
     let mut cmd = vec![0x80, 0x01, 0, 0, 0, 12];
     cmd.extend_from_slice(&cc.to_be_bytes());
     cmd.extend_from_slice(&su.to_be_bytes());
@@ -4722,7 +4673,7 @@ pub fn transact(sim: &mut Sim, cmd: &[u8]) -> Vec<u8> {
 }
 
 /// Sends the raw command `cmd` and returns its response code.
-pub fn transact_rc_of(sim: &mut Simulator<'_>, cmd: &[u8]) -> u32 {
+pub fn transact_rc_of(sim: &mut Tpm, cmd: &[u8]) -> u32 {
     response_rc(&send(sim, cmd))
 }
 
@@ -5368,7 +5319,7 @@ pub fn audited_get_cap(sim: &mut Sim, sess: &mut Sess, attrs: u8) -> Resp {
 /// audit session using `attrs`; updates the session's nonceTPM and returns the response
 /// parameters and the response session attributes.
 pub fn audited_get_capability(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     session: &mut ActiveSession,
     attrs: u8,
 ) -> (Vec<u8>, u8) {
@@ -5471,7 +5422,7 @@ pub fn change_auth_command(
 
 /// Creates an ECDSA P-256 signing primary key under the owner hierarchy with authValue `auth` and
 /// returns its handle; panics on failure.
-pub fn create_ecc_key_with_auth(sim: &mut Simulator<'_>, auth: &[u8]) -> Handle {
+pub fn create_ecc_key_with_auth(sim: &mut Tpm, auth: &[u8]) -> Handle {
     let ecc_parms = TpmsEccParms {
         symmetric: None,
         scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),
@@ -5514,7 +5465,7 @@ pub fn create_ecc_key_with_auth(sim: &mut Simulator<'_>, auth: &[u8]) -> Handle 
 
 /// Creates an ECDSA P-256 signing primary key under the owner hierarchy with authValue `auth` and
 /// returns its handle; panics on failure.
-pub fn create_primary_key_with_auth(sim: &mut Simulator<'_>, auth: &[u8]) -> Handle {
+pub fn create_primary_key_with_auth(sim: &mut Tpm, auth: &[u8]) -> Handle {
     let ecc_parms = TpmsEccParms {
         symmetric: None,
         scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),
@@ -5555,11 +5506,7 @@ pub fn create_primary_key_with_auth(sim: &mut Simulator<'_>, auth: &[u8]) -> Han
 }
 
 /// Creates a primary key with authValue `auth` under the owner hierarchy and returns its handle.
-pub fn create_primary_with_auth(
-    sim: &mut Simulator<'_>,
-    public: TpmtPublic<'static>,
-    auth: &[u8],
-) -> Handle {
+pub fn create_primary_with_auth(sim: &mut Tpm, public: TpmtPublic<'static>, auth: &[u8]) -> Handle {
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
@@ -5577,7 +5524,7 @@ pub fn create_primary_with_auth(
 /// Creates a primary object under the owner hierarchy from `public`,
 /// `user_auth` and sensitive `data`; returns its handle and name.
 pub fn create_primary_with_auth_and_data(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     public: TpmtPublic<'static>,
     user_auth: &'static [u8],
     data: &'static [u8],
@@ -5599,7 +5546,7 @@ pub fn create_primary_with_auth_and_data(
 /// Creates a primary object from `public` in `hierarchy` (empty hierarchy auth) and returns its
 /// handle.
 pub fn create_primary_with_auth_in(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     hierarchy: Handle,
     public: TpmtPublic<'static>,
     user_auth: &'static [u8],
@@ -5619,7 +5566,7 @@ pub fn create_primary_with_auth_in(
 
 /// Creates an ECC primary key under `hierarchy` and returns its handle and Name.
 pub fn create_storage_primary_with_auth(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     hierarchy: Handle,
     auth: &[u8],
 ) -> (Handle, Vec<u8>) {
@@ -5640,7 +5587,7 @@ pub fn create_storage_primary_with_auth(
 
 // auth-role-dup-admin-and-policy-commandcode-bypass (NV_ChangeAuth part) and
 /// Defines an index whose authPolicy is `TPM2_PolicyCommandCode(TPM_CC_NV_ChangeAuth)`.
-pub fn define_change_auth_index(sim: &mut Simulator<'_>, index: u32, size: u16) {
+pub fn define_change_auth_index(sim: &mut Tpm, index: u32, size: u16) {
     define_nv_with_policy_unwrap(
         sim,
         index,
@@ -5661,11 +5608,7 @@ pub fn empty_password_auth() -> TpmsAuthCommand<'static> {
 }
 
 /// Runs `cmd` with `n` empty password sessions and returns the response code.
-pub fn exec_with_empty_passwords<C: Command>(
-    sim: &mut Simulator<'_>,
-    cmd: &C,
-    n: usize,
-) -> Result<(), u32>
+pub fn exec_with_empty_passwords<C: Command>(sim: &mut Tpm, cmd: &C, n: usize) -> Result<(), u32>
 where
     for<'b> &'b mut C::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
@@ -5674,7 +5617,7 @@ where
 
 /// Like [`execute_tpm_command_full`], returning only the response parameters.
 pub fn execute_tpm_command_with_auths<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -5694,7 +5637,7 @@ pub fn extend_audit(digest: &[u8], resp_params: &[u8]) -> Vec<u8> {
 }
 
 /// Produces `count` DA authorization failures against `object`.
-pub fn fail_auth(sim: &mut Simulator<'_>, object: Handle, count: u32) {
+pub fn fail_auth(sim: &mut Tpm, object: Handle, count: u32) {
     for _ in 0..count {
         assert_eq!(
             unseal(sim, object, b"wrong"),
@@ -5704,7 +5647,7 @@ pub fn fail_auth(sim: &mut Simulator<'_>, object: Handle, count: u32) {
 }
 
 /// Flushes `handle` with `TPM2_FlushContext`, ignoring any error.
-pub fn flush_session(sim: &mut Simulator<'_>, handle: Handle) {
+pub fn flush_session(sim: &mut Tpm, handle: Handle) {
     let _ = execute_with_password_sessions(
         sim,
         &FlushContext {
@@ -5716,7 +5659,7 @@ pub fn flush_session(sim: &mut Simulator<'_>, handle: Handle) {
 }
 
 /// `TPM2_FlushContext(handle)`; returns the response size and code.
-pub fn flush_session_raw(sim: &mut Simulator<'_>, handle: u32) -> (usize, u32) {
+pub fn flush_session_raw(sim: &mut Tpm, handle: u32) -> (usize, u32) {
     let mut req = hex("8001 0000000e 00000165 00000000");
     req[10..14].copy_from_slice(&handle.to_be_bytes());
     let resp = send(sim, &req);
@@ -5725,7 +5668,7 @@ pub fn flush_session_raw(sim: &mut Simulator<'_>, handle: u32) -> (usize, u32) {
 
 /// Flushes every loaded authorization session except those in `keep` (the TPM only holds a
 /// few sessions at a time).
-pub fn flush_sessions_except(sim: &mut Simulator<'_>, keep: &[Handle]) {
+pub fn flush_sessions_except(sim: &mut Tpm, keep: &[Handle]) {
     for slot in 0..tpm2::TPM2_MAX_ACTIVE_SESSIONS {
         for prefix in [0x0200_0000, 0x0300_0000] {
             let handle = Handle(prefix | slot);
@@ -5739,7 +5682,7 @@ pub fn flush_sessions_except(sim: &mut Simulator<'_>, keep: &[Handle]) {
 /// Changes the authValue of `hierarchy` from `current` to `new_auth` (`TPM2_HierarchyChangeAuth`
 /// with a password session), returning the response code on failure.
 pub fn hierarchy_change_auth(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     hierarchy: Handle,
     current: &[u8],
     new_auth: &[u8],
@@ -5758,7 +5701,7 @@ pub fn hierarchy_change_auth(
 
 /// Returns the handles of all loaded sessions (`TPM2_GetCapability(TPM_CAP_HANDLES,
 /// TPM_HT_LOADED_SESSION)`).
-pub fn loaded_sessions(sim: &mut Simulator<'_>) -> Vec<u32> {
+pub fn loaded_sessions(sim: &mut Tpm) -> Vec<u32> {
     let rsp = sim
         .execute(GetCapability {
             capability: TpmCap::Handles,
@@ -5850,7 +5793,7 @@ pub fn pw_with(auth: &'static [u8]) -> TpmsAuthCommand<'static> {
 }
 
 /// `TPM2_NV_Read` of a PIN index authorized by the index itself with `password`.
-pub fn read_pin_with_password(sim: &mut Simulator<'_>, index: u32, password: &[u8]) -> u32 {
+pub fn read_pin_with_password(sim: &mut Tpm, index: u32, password: &[u8]) -> u32 {
     send_rc_with_auth_entries(
         sim,
         TpmCc::NVRead,
@@ -5862,7 +5805,7 @@ pub fn read_pin_with_password(sim: &mut Simulator<'_>, index: u32, password: &[u
 
 /// Sends a parameter-only (no handles, no sessions) command `cmd` and returns the response
 /// header and the parameter area.
-pub fn send_no_sessions<C: Command>(sim: &mut Simulator<'_>, cmd: &C) -> (ResponseHeader, Vec<u8>)
+pub fn send_no_sessions<C: Command>(sim: &mut Tpm, cmd: &C) -> (ResponseHeader, Vec<u8>)
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
@@ -5881,7 +5824,7 @@ where
 
 /// Sends a command and returns only its response code.
 pub fn send_rc_with_auth_entries(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cc: TpmCc,
     handles: &[u32],
     auths: &[AuthEntry],
@@ -5894,7 +5837,7 @@ pub fn send_rc_with_auth_entries(
 ///
 /// Without `auths` the command is sent with `TPM_ST_NO_SESSIONS`.
 pub fn send_with_auth_entries(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cc: TpmCc,
     handles: &[u32],
     auths: &[AuthEntry],
@@ -5932,7 +5875,7 @@ pub fn send_with_auth_entries(
 /// Sends a `TPM_ST_SESSIONS` command without response handles; returns the response
 /// parameters and the response authorizations, or the response code on failure.
 pub fn send_with_sessions(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cc: TpmCc,
     handles: &[Handle],
     auths: &[TpmsAuthCommand<'_>],
@@ -5989,7 +5932,7 @@ pub fn session_audit_info(sim: &mut Sim, session: u32) -> (bool, Vec<u8>) {
 }
 
 /// Returns the loaded / saved session handles reported by `TPM_CAP_HANDLES`.
-pub fn session_handles(sim: &mut Simulator<'_>, saved: bool) -> Vec<u32> {
+pub fn session_handles(sim: &mut Tpm, saved: bool) -> Vec<u32> {
     let property = if saved { 0x0300_0000 } else { 0x0200_0000 };
     let (_, data) = get_cap(sim, 1, property, 64).unwrap();
     let n = u32::from_be_bytes(data[0..4].try_into().unwrap()) as usize;
@@ -5999,7 +5942,7 @@ pub fn session_handles(sim: &mut Simulator<'_>, saved: bool) -> Vec<u32> {
 }
 
 /// Returns whether the session `handle` is loaded.
-pub fn session_loaded(sim: &mut Simulator<'_>, handle: u32) -> bool {
+pub fn session_loaded(sim: &mut Tpm, handle: u32) -> bool {
     loaded_sessions(sim).contains(&handle)
 }
 
@@ -6012,13 +5955,13 @@ pub fn session_rsp_params(resp: &[u8], resp_handles: usize) -> &[u8] {
 }
 
 /// Sets the authValue of `hierarchy` (currently empty) to `auth`.
-pub fn set_hierarchy_auth(sim: &mut Simulator<'_>, hierarchy: Handle, auth: &[u8]) {
+pub fn set_hierarchy_auth(sim: &mut Tpm, hierarchy: Handle, auth: &[u8]) {
     let cmd = change_auth_command(hierarchy, Some(&[&[]]), auth);
     assert_eq!(send_rc(sim, &cmd), 0);
 }
 
 /// Sets the owner authValue (from an empty one).
-pub fn set_owner_auth(sim: &mut Simulator<'_>, auth: &[u8]) {
+pub fn set_owner_auth(sim: &mut Tpm, auth: &[u8]) {
     let code = send_rc_with_auth_entries(
         sim,
         TpmCc::HierarchyChangeAuth,
@@ -6072,7 +6015,7 @@ pub fn start_session(sim: &mut Sim, session_type: TpmSe, aes: bool) -> Sess {
 }
 
 /// Starts an unbound, unsalted SHA-256 session of type `session_type`.
-pub fn start_session_active(sim: &mut Simulator<'_>, session_type: TpmSe) -> ActiveSession {
+pub fn start_session_active(sim: &mut Tpm, session_type: TpmSe) -> ActiveSession {
     let mut session = start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -6088,7 +6031,7 @@ pub fn start_session_active(sim: &mut Simulator<'_>, session_type: TpmSe) -> Act
 }
 
 /// Starts an unbound, unsalted SHA-256 session of `session_type` and returns its handle.
-pub fn start_session_handle(sim: &mut Simulator<'_>, session_type: TpmSe) -> Handle {
+pub fn start_session_handle(sim: &mut Tpm, session_type: TpmSe) -> Handle {
     let mut nonce = [0u8; 16];
     CLIENT_CRYPTO.get_random(&mut nonce).unwrap();
     let rsp = sim
@@ -6106,7 +6049,7 @@ pub fn start_session_handle(sim: &mut Simulator<'_>, session_type: TpmSe) -> Han
 }
 
 /// Starts an unbound, unsalted SHA-256 session (empty session key).
-pub fn start_session_of_type(sim: &mut Simulator<'_>, session_type: TpmSe) -> ActiveSession {
+pub fn start_session_of_type(sim: &mut Tpm, session_type: TpmSe) -> ActiveSession {
     start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -6121,7 +6064,7 @@ pub fn start_session_of_type(sim: &mut Simulator<'_>, session_type: TpmSe) -> Ac
 
 /// Starts an unbound, unsalted session of `session_type` (`0x00` HMAC, `0x01` policy) with
 /// SHA-256 and returns its handle.
-pub fn start_session_raw(sim: &mut Simulator<'_>, session_type: u8) -> u32 {
+pub fn start_session_raw(sim: &mut Tpm, session_type: u8) -> u32 {
     let mut params = Vec::new();
     params.extend_from_slice(&32u16.to_be_bytes());
     params.extend_from_slice(&[0x11; 32]); // nonceCaller
@@ -6143,7 +6086,7 @@ pub fn start_session_raw(sim: &mut Simulator<'_>, session_type: u8) -> u32 {
 
 /// Starts an unbound, unsalted session of `session_type` (`TPM_SE`) with no symmetric
 /// algorithm and SHA-256 as authHash; returns the session handle.
-pub fn start_session_raw_attrs(sim: &mut Simulator<'_>, session_type: u8) -> u32 {
+pub fn start_session_raw_attrs(sim: &mut Tpm, session_type: u8) -> u32 {
     let mut req = hex(concat!(
         "8001 0000002b 00000176",
         "40000007 40000007",
@@ -6161,7 +6104,7 @@ pub fn start_session_raw_attrs(sim: &mut Simulator<'_>, session_type: u8) -> u32
 }
 
 /// Starts an unbound, unsalted SHA-256 session of `session_type`.
-pub fn start_session_u32(sim: &mut Simulator<'_>, session_type: TpmSe) -> u32 {
+pub fn start_session_u32(sim: &mut Tpm, session_type: TpmSe) -> u32 {
     start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -6178,7 +6121,7 @@ pub fn start_session_u32(sim: &mut Simulator<'_>, session_type: TpmSe) -> u32 {
 
 /// Starts an unbound, unsalted session of `session_type` with a fixed caller nonce.
 pub fn start_session_with_nonce(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     session_type: TpmSe,
     auth_hash: TpmiAlgHash,
     nonce_caller: &'static [u8],
@@ -6202,7 +6145,7 @@ pub fn start_session_with_nonce(
 }
 
 /// Starts an unbound, unsalted SHA-256 trial session and returns its handle.
-pub fn start_trial_session(sim: &mut Simulator<'_>) -> Handle {
+pub fn start_trial_session(sim: &mut Tpm) -> Handle {
     let start_cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
@@ -6217,14 +6160,14 @@ pub fn start_trial_session(sim: &mut Simulator<'_>) -> Handle {
 }
 
 /// `TPM2_Unseal(item)` authorized by `auth`.
-pub fn unseal_with_auth_entry(sim: &mut Simulator<'_>, item: u32, auth: AuthEntry) -> u32 {
+pub fn unseal_with_auth_entry(sim: &mut Tpm, item: u32, auth: AuthEntry) -> u32 {
     send_rc_with_auth_entries(sim, TpmCc::Unseal, &[item], &[auth], &[])
 }
 
 /// Runs `cmd` authorized by the single `session` for an entity named `names` with an empty
 /// authValue.
 pub fn with_session<C: Command>(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &C,
     names: &[&[u8]],
     session: &mut ActiveSession,
@@ -6253,7 +6196,7 @@ pub fn command_code_policy(cc: TpmCc) -> Vec<u8> {
 
 /// A POLICYREAD-only index (no AUTHREAD) whose authHandle is the index itself, authorized by a
 /// policy session, stores a SHA-256 TPMT_HA of the zero policy digest.
-pub fn define_policy_read_authorize_index(sim: &mut Simulator<'_>, index: u32) {
+pub fn define_policy_read_authorize_index(sim: &mut Tpm, index: u32) {
     define_nv_with_policy(
         sim,
         index,
@@ -6297,7 +6240,7 @@ pub fn dup_policy_digest_for(alg: TpmiAlgHash) -> Tpm2bDigest<'static> {
 
 /// Starts a policy session with `auth_hash` and satisfies
 /// `PolicyCommandCode(TPM_CC_Duplicate)` on it; returns its handle.
-pub fn dup_policy_session(sim: &mut Simulator<'_>, auth_hash: TpmiAlgHash) -> Handle {
+pub fn dup_policy_session(sim: &mut Tpm, auth_hash: TpmiAlgHash) -> Handle {
     let h = exec_command(
         sim,
         &StartAuthSession {
@@ -6325,7 +6268,7 @@ pub fn dup_policy_session(sim: &mut Simulator<'_>, auth_hash: TpmiAlgHash) -> Ha
 }
 
 /// Starts an `alg` policy session that satisfies `dup_policy_digest_for(alg)`.
-pub fn dup_policy_session_alg(sim: &mut Simulator<'_>, alg: TpmiAlgHash) -> ActiveSession {
+pub fn dup_policy_session_alg(sim: &mut Tpm, alg: TpmiAlgHash) -> ActiveSession {
     let sess = start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -6361,7 +6304,7 @@ pub fn dup_policy_sha256() -> &'static [u8] {
 
 /// Duplicates `object` to TPM_RH_NULL (no wrappers) with an `alg` policy session.
 pub fn duplicate_with_policy(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     object: Handle,
     alg: TpmiAlgHash,
 ) -> responses::Duplicate<'static> {
@@ -6451,7 +6394,7 @@ pub fn expired_policy_session_scenario(sim: &mut Sim) {
 
 /// Returns the authPolicy digest of `hierarchy` as reported by
 /// `TPM2_GetCapability(TPM_CAP_AUTH_POLICIES)` (empty if no policy is set).
-pub fn hierarchy_policy(sim: &mut Simulator<'_>, hierarchy: Handle) -> Vec<u8> {
+pub fn hierarchy_policy(sim: &mut Tpm, hierarchy: Handle) -> Vec<u8> {
     let rsp = sim
         .execute(GetCapability {
             capability: TpmCap::AuthPolicies,
@@ -6474,7 +6417,7 @@ pub fn hierarchy_policy(sim: &mut Simulator<'_>, hierarchy: Handle) -> Vec<u8> {
 
 /// `TPM2_PolicyAuthorize`.
 pub fn policy_authorize(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     session: Handle,
     approved_policy: &[u8],
     policy_ref: &[u8],
@@ -6526,11 +6469,7 @@ pub fn policy_cmd(sim: &mut Sim, cc: u32, session: u32, params: &[u8]) -> u32 {
 }
 
 /// Executes `TPM2_PolicyCommandCode(code)` on `session`.
-pub fn policy_command_code(
-    sim: &mut Simulator<'_>,
-    session: Handle,
-    code: TpmCc,
-) -> Result<(), u32> {
+pub fn policy_command_code(sim: &mut Tpm, session: Handle, code: TpmCc) -> Result<(), u32> {
     sim.execute(PolicyCommandCode {
         policy_session: session,
         code,
@@ -6540,7 +6479,7 @@ pub fn policy_command_code(
 }
 
 /// Runs `TPM2_PolicyCommandCode(cc)` on `session`.
-pub fn policy_command_code_active(sim: &mut Simulator<'_>, session: &ActiveSession, cc: TpmCc) {
+pub fn policy_command_code_active(sim: &mut Tpm, session: &ActiveSession, cc: TpmCc) {
     sim.execute(PolicyCommandCode {
         policy_session: session.session_handle,
         code: cc,
@@ -6557,7 +6496,7 @@ pub fn policy_command_code_digest(alg: TpmiAlgHash, code: TpmCc) -> Tpm2bDigest<
 }
 
 /// `TPM2_PolicyCommandCode(TPM_CC_GetRandom)`.
-pub fn policy_command_code_get_random(sim: &mut Simulator<'_>, session: Handle) {
+pub fn policy_command_code_get_random(sim: &mut Tpm, session: Handle) {
     run_command(
         sim,
         PolicyCommandCode {
@@ -6574,11 +6513,7 @@ pub fn policy_command_code_raw(sim: &mut Sim, session: u32, code: u32) -> u32 {
 }
 
 /// Starts an `alg` policy session and applies `TPM2_PolicyCommandCode(code)`.
-pub fn policy_command_code_session(
-    sim: &mut Simulator<'_>,
-    alg: TpmiAlgHash,
-    code: TpmCc,
-) -> ActiveSession {
+pub fn policy_command_code_session(sim: &mut Tpm, alg: TpmiAlgHash, code: TpmCc) -> ActiveSession {
     let sess = start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -6617,7 +6552,7 @@ pub fn policy_command_on_expired_session_scenario(sim: &mut Sim) {
 }
 
 /// Runs `TPM2_PolicyCpHash(cp_hash)` on policy `session`, returning the response code on failure.
-pub fn policy_cp_hash(sim: &mut Simulator<'_>, session: Handle, cp_hash: &[u8]) -> Result<(), u32> {
+pub fn policy_cp_hash(sim: &mut Tpm, session: Handle, cp_hash: &[u8]) -> Result<(), u32> {
     run_command(
         sim,
         PolicyCpHash {
@@ -6629,7 +6564,7 @@ pub fn policy_cp_hash(sim: &mut Simulator<'_>, session: Handle, cp_hash: &[u8]) 
 }
 
 /// Returns the current policy digest of `session` (`TPM2_PolicyGetDigest`).
-pub fn policy_digest(sim: &mut Simulator<'_>, session: Handle) -> Vec<u8> {
+pub fn policy_digest(sim: &mut Tpm, session: Handle) -> Vec<u8> {
     let rsp = sim
         .execute(PolicyGetDigest {
             policy_session: session,
@@ -6640,7 +6575,7 @@ pub fn policy_digest(sim: &mut Simulator<'_>, session: Handle) -> Vec<u8> {
 
 /// Runs `TPM2_PolicyDuplicationSelect` on policy `session`, returning the response code on failure.
 pub fn policy_duplication_select(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     session: Handle,
     object_name: &[u8],
     new_parent_name: &[u8],
@@ -6661,7 +6596,7 @@ pub fn policy_duplication_select(
 /// `TPM2_PolicyDuplicationSelect` with a 66-byte (SHA-512) object name and a
 /// 34-byte (SHA-256) new parent name.
 pub fn policy_duplication_select_66(include_object: bool) -> Result<(), u32> {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let session = start_policy_session(&mut sim);
 
     let mut object_name_bytes = [0u8; 66];
@@ -6682,7 +6617,7 @@ pub fn policy_duplication_select_66(include_object: bool) -> Result<(), u32> {
 }
 
 /// `TPM2_PolicyGetDigest`.
-pub fn policy_get_digest(sim: &mut Simulator<'_>, session: Handle) -> Vec<u8> {
+pub fn policy_get_digest(sim: &mut Tpm, session: Handle) -> Vec<u8> {
     run_command(
         sim,
         PolicyGetDigest {
@@ -6696,7 +6631,7 @@ pub fn policy_get_digest(sim: &mut Simulator<'_>, session: Handle) -> Vec<u8> {
 }
 
 /// `TPM2_PolicyGetDigest(session)`.
-pub fn policy_get_digest_checked(sim: &mut Simulator<'_>, policy_session: Handle) -> Vec<u8> {
+pub fn policy_get_digest_checked(sim: &mut Tpm, policy_session: Handle) -> Vec<u8> {
     let resp = execute_with_password_sessions(sim, &PolicyGetDigest { policy_session }, 0, &[])
         .expect("PolicyGetDigest failed");
     resp.policy_digest.get_buffer().to_vec()
@@ -6715,11 +6650,7 @@ pub fn policy_get_digest_raw(sim: &mut Sim, session: u32) -> Vec<u8> {
 
 /// Runs `TPM2_PolicyNameHash(name_hash)` on policy `session`, returning the response code on
 /// failure.
-pub fn policy_name_hash(
-    sim: &mut Simulator<'_>,
-    session: Handle,
-    name_hash: &[u8],
-) -> Result<(), u32> {
+pub fn policy_name_hash(sim: &mut Tpm, session: Handle, name_hash: &[u8]) -> Result<(), u32> {
     run_command(
         sim,
         PolicyNameHash {
@@ -6769,7 +6700,7 @@ pub fn policy_or_go(alg: TpmiAlgHash, digests: &[&[u8]]) -> Vec<u8> {
 }
 
 /// Starts a policy session and runs `TPM2_PolicyPassword` on it.
-pub fn policy_password_session(sim: &mut Simulator<'_>) -> Handle {
+pub fn policy_password_session(sim: &mut Tpm) -> Handle {
     let session = start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -6789,7 +6720,7 @@ pub fn policy_password_session(sim: &mut Simulator<'_>) -> Handle {
 }
 
 /// Raw policy command with a single session handle and `params`.
-pub fn policy_raw(sim: &mut Simulator<'_>, cc: u32, session: u32, params: &[u8]) -> Vec<u8> {
+pub fn policy_raw(sim: &mut Tpm, cc: u32, session: u32, params: &[u8]) -> Vec<u8> {
     let mut cmd = Vec::new();
     cmd.extend_from_slice(&0x8001u16.to_be_bytes());
     cmd.extend_from_slice(&((14 + params.len()) as u32).to_be_bytes());
@@ -6803,7 +6734,7 @@ pub fn policy_raw(sim: &mut Simulator<'_>, cc: u32, session: u32, params: &[u8])
 /// `session`; uses the session's `nonceTPM` only when `expiration` is non-zero. Returns the response
 /// or the response code.
 pub fn policy_secret(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth_handle: Handle,
     session: &ActiveSession,
     cp_hash_a: &[u8],
@@ -6856,13 +6787,13 @@ pub fn policy_secret_raw(sim: &mut Sim, session: u32, nonce_tpm: &[u8], expirati
 }
 
 /// Starts an unbound, unsalted SHA-256 policy session and returns its handle.
-pub fn policy_session(sim: &mut Simulator<'_>) -> Handle {
+pub fn policy_session(sim: &mut Tpm) -> Handle {
     Handle(start_session(sim, TpmSe::Policy, false).handle)
 }
 
 /// `TPM2_PolicySigned` with empty nonce/cpHash/policyRef and expiration 0.
 pub fn policy_signed(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth_object: Handle,
     session: Handle,
     auth: TpmtSignature<'static>,
@@ -6890,7 +6821,7 @@ pub fn policy_signed_digest(nonce_tpm: &[u8], expiration: i32) -> Vec<u8> {
 
 /// `TPM2_PolicySigned` with empty cpHashA and policyRef.
 pub fn policy_signed_with_nonce(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth_object: Handle,
     session: Handle,
     nonce_tpm: Tpm2bNonce<'static>,
@@ -6914,7 +6845,7 @@ pub fn policy_signed_with_nonce(
 /// Runs `TPM2_PolicyTicket` on policy `session` with the given timeout, cpHash, authName and
 /// ticket, returning the response code on failure.
 pub fn policy_ticket(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     session: Handle,
     timeout: &[u8],
     cp_hash_a: &[u8],
@@ -6939,7 +6870,7 @@ pub fn policy_ticket(
 /// `TPM2_PolicyCpHash` accepts/rejects a cpHash of `cp_hash_len` bytes as required for that digest
 /// size.
 pub fn run_policy_cphash_for_alg(alg: TpmiAlgHash, cp_hash_len: usize) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start policy session
     let sess = start_auth_session(
@@ -6989,7 +6920,7 @@ pub fn run_policy_cphash_for_alg(alg: TpmiAlgHash, cp_hash_len: usize) {
 /// Scenario: on a fresh simulator, starts a policy session with `alg` and runs
 /// `TPM2_PolicyDuplicationSelect` (with `include_obj`), checking the resulting policy digest.
 pub fn run_policy_dup_select_for_alg(alg: TpmiAlgHash, include_obj: bool) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start policy session
     let sess = start_auth_session(
@@ -7066,7 +6997,7 @@ pub fn set_owner_policy(sim: &mut Sim, digest: &[u8], owner_password: &[u8]) {
 
 /// `TPM2_SetPrimaryPolicy(auth_handle, policy, SHA-256)` authorized with an empty password
 /// session; returns the response code.
-pub fn set_primary_policy(sim: &mut Simulator<'_>, auth_handle: Handle, policy: &[u8]) -> u32 {
+pub fn set_primary_policy(sim: &mut Tpm, auth_handle: Handle, policy: &[u8]) -> u32 {
     let cmd = SetPrimaryPolicy {
         auth_handle,
         auth_policy: Tpm2bDigest::from_bytes(policy).unwrap(),
@@ -7088,7 +7019,7 @@ pub fn set_primary_policy_params(digest: &[u8]) -> Vec<u8> {
 
 /// Starts an unbound, unsalted SHA-256 session of `session_type`; returns its handle and
 /// nonceTPM.
-pub fn start_policy(sim: &mut Simulator<'_>, session_type: TpmSe) -> (Handle, Tpm2bNonce<'static>) {
+pub fn start_policy(sim: &mut Tpm, session_type: TpmSe) -> (Handle, Tpm2bNonce<'static>) {
     let s = start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -7103,7 +7034,7 @@ pub fn start_policy(sim: &mut Simulator<'_>, session_type: TpmSe) -> (Handle, Tp
 }
 
 /// Starts an unbound, unsalted SHA-256 policy session.
-pub fn start_policy_session(sim: &mut Simulator<'_>) -> ActiveSession {
+pub fn start_policy_session(sim: &mut Tpm) -> ActiveSession {
     start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -7117,7 +7048,7 @@ pub fn start_policy_session(sim: &mut Simulator<'_>) -> ActiveSession {
 }
 
 /// Executes `TPM2_PolicyGetDigest` on `session`.
-pub fn try_policy_get_digest(sim: &mut Simulator<'_>, session: Handle) -> Result<Vec<u8>, u32> {
+pub fn try_policy_get_digest(sim: &mut Tpm, session: Handle) -> Result<Vec<u8>, u32> {
     sim.execute(PolicyGetDigest {
         policy_session: session,
     })
@@ -7154,7 +7085,7 @@ pub fn child_template(parms_and_id: PublicParmsAndId<'static>) -> TpmtPublic<'st
 }
 
 /// Returns the `TPMA_CC` of command `cc` from `TPM_CAP_COMMANDS`.
-pub fn command_attributes(sim: &mut Simulator<'_>, cc: u32) -> u32 {
+pub fn command_attributes(sim: &mut Tpm, cc: u32) -> u32 {
     let (_, data) = get_cap(sim, CAP_COMMANDS, cc, 1).unwrap();
     assert_eq!(u32::from_be_bytes(data[0..4].try_into().unwrap()), 1);
     let attr = u32::from_be_bytes(data[4..8].try_into().unwrap());
@@ -7164,7 +7095,7 @@ pub fn command_attributes(sim: &mut Simulator<'_>, cc: u32) -> u32 {
 
 /// Like [`try_create_primary`], panicking on failure.
 pub fn create_primary_returning_public(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     public: TpmtPublic<'static>,
     data: &'static [u8],
 ) -> (Handle, TpmtPublic<'static>) {
@@ -7175,7 +7106,7 @@ pub fn create_primary_returning_public(
 /// Creates an unrestricted signing primary key (empty authValue, no scheme)
 /// under the owner hierarchy; returns its handle and name.
 pub fn create_signing_key_with_parms(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parms_and_id: PublicParmsAndId<'static>,
 ) -> (Handle, Tpm2bName<'static>) {
     let public = TpmtPublic {
@@ -7200,7 +7131,7 @@ pub fn create_signing_key_with_parms(
 /// Creates a primary storage key from `srk_template` with authValue `srk_auth` under the owner
 /// hierarchy and returns its handle and Name; panics on failure.
 pub fn create_srk_with_template(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     srk_template: &TpmtPublic,
     srk_auth: &[u8],
 ) -> (Handle, Tpm2bName<'static>) {
@@ -7549,14 +7480,14 @@ pub fn empty_sensitive() -> tpm2::Tpm2b<TpmsSensitiveCreate<'static>> {
 }
 
 /// Sends `TPM2_TestParms(parameters)` and returns its response code as a `Result`.
-pub fn execute_test_parms(sim: &mut Simulator<'_>, parameters: TpmtPublicParms) -> Result<(), u32> {
+pub fn execute_test_parms(sim: &mut Tpm, parameters: TpmtPublicParms) -> Result<(), u32> {
     execute_with_password_sessions_status(sim, &TestParms { parameters }, 0, &[]).map(|[]| ())
 }
 
 /// Sends `TPM2_TestParms(parameters)` after `corrupt_fn` has modified the marshaled
 /// parameter area, and returns its response code as a `Result`.
 pub fn execute_test_parms_corrupted(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parameters: TpmtPublicParms,
     corrupt_fn: impl FnOnce(&mut [u8]),
 ) -> Result<(), u32> {
@@ -8231,7 +8162,7 @@ pub fn keyed_hash_template() -> TpmtPublic<'static> {
 }
 
 /// Loads `public` (without a sensitive area) into the NULL hierarchy.
-pub fn load_external_public(sim: &mut Simulator<'_>, public: TpmtPublic<'static>) -> Handle {
+pub fn load_external_public(sim: &mut Tpm, public: TpmtPublic<'static>) -> Handle {
     let rsp = execute_with_password_sessions(
         sim,
         &LoadExternal {
@@ -8619,7 +8550,7 @@ pub fn oracle_validate_symmetric(symmetric: Option<TpmtSymDefObject>) -> Result<
 }
 
 /// Runs `TPM2_PolicyTemplate(hash)` on policy `session`, returning the response code on failure.
-pub fn policy_template(sim: &mut Simulator<'_>, session: Handle, hash: &[u8]) -> Result<(), u32> {
+pub fn policy_template(sim: &mut Tpm, session: Handle, hash: &[u8]) -> Result<(), u32> {
     run_command(
         sim,
         PolicyTemplate {
@@ -8633,7 +8564,7 @@ pub fn policy_template(sim: &mut Simulator<'_>, session: Handle, hash: &[u8]) ->
 /// Creates a primary key from the fixed ECC EK template under `hierarchy`, returns its
 /// marshaled public area and flushes it. The public key is derived from the hierarchy's
 /// primary seed, so it changes exactly when the seed changes.
-pub fn primary_public(sim: &mut Simulator<'_>, hierarchy: Handle) -> Vec<u8> {
+pub fn primary_public(sim: &mut Tpm, hierarchy: Handle) -> Vec<u8> {
     let cmd = CreatePrimary {
         primary_handle: hierarchy,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
@@ -8651,10 +8582,7 @@ pub fn primary_public(sim: &mut Simulator<'_>, hierarchy: Handle) -> Vec<u8> {
 }
 
 /// `TPM2_ReadPublic`.
-pub fn read_public(
-    sim: &mut Simulator<'_>,
-    handle: Handle,
-) -> Result<responses::ReadPublic<'static>, u32> {
+pub fn read_public(sim: &mut Tpm, handle: Handle) -> Result<responses::ReadPublic<'static>, u32> {
     run(
         sim,
         &ReadPublic {
@@ -9016,7 +8944,7 @@ pub fn symcipher_parms(mode: u16) -> Vec<u8> {
 ///
 /// (Formerly an unused helper in `go/ek.rs`; it has no Go counterpart.)
 pub fn test_ek_policy_with_template(ek_template: TpmtPublic) {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let in_public = tpm2::Tpm2b(ek_template);
     let sensitive_create = TpmsSensitiveCreate {
@@ -9109,7 +9037,7 @@ pub fn test_ek_policy_with_template(ek_template: TpmtPublic) {
 }
 
 /// Sends `TPM2_TestParms` with the raw `TPMT_PUBLIC_PARMS` bytes.
-pub fn test_parms(sim: &mut Simulator<'_>, parms: &[u8]) -> u32 {
+pub fn test_parms(sim: &mut Tpm, parms: &[u8]) -> u32 {
     let cmd = build_raw_cmd(ST_NO_SESSIONS, CC_TEST_PARMS, &[], None, parms);
     mssim_rc_of(sim, &cmd)
 }
@@ -9141,7 +9069,7 @@ pub enum EncapsulationKey {
 /// Asserts that a context with `blob` is rejected with `expected`, and that
 /// the TPM keeps working afterwards (the untouched `context` still loads).
 pub fn assert_load_rejected(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     context: TpmsContext<'static>,
     blob: Vec<u8>,
     expected: u32,
@@ -9183,13 +9111,13 @@ pub fn compute_object_name(public: &TpmtPublic) -> Tpm2bName<'static> {
 }
 
 /// Loads `context` with `TPM2_ContextLoad` and returns the loaded handle or the response code.
-pub fn context_load(sim: &mut Simulator<'_>, context: TpmsContext<'static>) -> Result<Handle, u32> {
+pub fn context_load(sim: &mut Tpm, context: TpmsContext<'static>) -> Result<Handle, u32> {
     execute_with_password_sessions(sim, &ContextLoad { context }, 0, &[])
         .map(|rsp| rsp.loaded_handle)
 }
 
 /// `TPM2_ContextLoad(context)`; returns the loaded handle on success.
-pub fn context_load_raw(sim: &mut Simulator<'_>, context: &[u8]) -> Result<u32, u32> {
+pub fn context_load_raw(sim: &mut Tpm, context: &[u8]) -> Result<u32, u32> {
     let cmd = build_raw_cmd(ST_NO_SESSIONS, CC_CONTEXT_LOAD, &[], None, context);
     let (rc, resp) = send_with_rc(sim, &cmd);
     if rc != 0 {
@@ -9199,7 +9127,7 @@ pub fn context_load_raw(sim: &mut Simulator<'_>, context: &[u8]) -> Result<u32, 
 }
 
 /// Saves the context of `handle` with `TPM2_ContextSave`.
-pub fn context_save(sim: &mut Simulator<'_>, handle: Handle) -> TpmsContext<'static> {
+pub fn context_save(sim: &mut Tpm, handle: Handle) -> TpmsContext<'static> {
     let cmd = ContextSave {
         save_handle: handle,
     };
@@ -9209,7 +9137,7 @@ pub fn context_save(sim: &mut Simulator<'_>, handle: Handle) -> TpmsContext<'sta
 }
 
 /// `TPM2_ContextSave(handle)`; returns the marshaled `TPMS_CONTEXT` on success.
-pub fn context_save_raw(sim: &mut Simulator<'_>, handle: u32) -> Result<Vec<u8>, u32> {
+pub fn context_save_raw(sim: &mut Tpm, handle: u32) -> Result<Vec<u8>, u32> {
     let cmd = build_raw_cmd(ST_NO_SESSIONS, CC_CONTEXT_SAVE, &[handle], None, &[]);
     let (rc, resp) = send_with_rc(sim, &cmd);
     if rc != 0 {
@@ -9225,7 +9153,7 @@ pub fn context_sequence(context: &[u8]) -> u64 {
 
 /// `TPM2_Create` under `parent`.
 pub fn create(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parent: Handle,
     template: TpmtPublic<'static>,
     auth: &[u8],
@@ -9242,7 +9170,7 @@ pub fn create(
 
 /// Creates and loads a child of `parent`; returns (handle, create response).
 pub fn create_and_load(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parent: Handle,
     template: TpmtPublic<'static>,
     auth: &[u8],
@@ -9255,7 +9183,7 @@ pub fn create_and_load(
 
 /// Creates and loads a child of `parent` from `template` with authValue `auth`.
 pub fn create_and_load_child(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parent: Handle,
     template: TpmtPublic<'static>,
     auth: &[u8],
@@ -9267,7 +9195,7 @@ pub fn create_and_load_child(
 /// Creates a child of `parent` from `template` with authValue `auth`; returns its private
 /// and public areas.
 pub fn create_child(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parent: Handle,
     template: TpmtPublic<'static>,
     auth: &[u8],
@@ -9288,7 +9216,7 @@ pub fn create_child(
 }
 
 /// Creates a DA-protected (noDA CLEAR) sealed data object with authValue [`OBJECT_AUTH`].
-pub fn create_da_protected_object(sim: &mut Simulator<'_>) -> Handle {
+pub fn create_da_protected_object(sim: &mut Tpm) -> Handle {
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::USER_WITH_AUTH
@@ -9318,10 +9246,7 @@ pub fn create_da_protected_object(sim: &mut Simulator<'_>) -> Handle {
 
 /// Creates and loads a duplicable RSA signing key (SHA-256) under `parent`; returns its handle
 /// and public area.
-pub fn create_dup_target(
-    sim: &mut Simulator<'_>,
-    parent: Handle,
-) -> (Handle, Tpm2bPublic<'static>) {
+pub fn create_dup_target(sim: &mut Tpm, parent: Handle) -> (Handle, Tpm2bPublic<'static>) {
     let public = rsa_public(
         TpmiAlgHash::Sha256,
         TpmaObject::SIGN_ENCRYPT | TpmaObject::USER_WITH_AUTH | TpmaObject::SENSITIVE_DATA_ORIGIN,
@@ -9794,7 +9719,7 @@ pub fn create_duplicate_challenged(
 }
 
 /// Creates a NIST P-256 signing key.
-pub fn create_ecc_key(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
+pub fn create_ecc_key(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     create_signing_key_with_parms(
         sim,
         PublicParmsAndId::Ecc(
@@ -9812,7 +9737,7 @@ pub fn create_ecc_key(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
 /// Creates a primary from [`get_ecc_decrypt_parent_template`] under the owner hierarchy and
 /// returns its handle; panics on failure.
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
-pub fn create_ecc_parent_key(sim: &mut Simulator<'_>) -> Handle {
+pub fn create_ecc_parent_key(sim: &mut Tpm) -> Handle {
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
         data: Tpm2bSensitiveData::default(),
@@ -9831,7 +9756,7 @@ pub fn create_ecc_parent_key(sim: &mut Simulator<'_>) -> Handle {
 }
 
 /// Creates a primary object from `template` under the owner hierarchy and returns its handle.
-pub fn create_owner_primary(sim: &mut Simulator<'_>, template: TpmtPublic<'static>) -> Handle {
+pub fn create_owner_primary(sim: &mut Tpm, template: TpmtPublic<'static>) -> Handle {
     let create_cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
@@ -9848,7 +9773,7 @@ pub fn create_owner_primary(sim: &mut Simulator<'_>, template: TpmtPublic<'stati
 }
 
 /// Creates the RSA storage parent under the owner hierarchy and returns its handle.
-pub fn create_parent(sim: &mut Simulator<'_>) -> Handle {
+pub fn create_parent(sim: &mut Tpm) -> Handle {
     let cp_cmd = CreatePrimary {
         primary_handle: Handle(0x40000001),
         in_sensitive: empty_sensitive(),
@@ -9862,7 +9787,7 @@ pub fn create_parent(sim: &mut Simulator<'_>) -> Handle {
 
 /// Creates an RSA restricted decryption primary key under the owner hierarchy and returns its
 /// handle; panics on failure.
-pub fn create_parent_key(sim: &mut Simulator<'_>) -> Handle {
+pub fn create_parent_key(sim: &mut Tpm) -> Handle {
     let primary_pub = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::DECRYPT
@@ -9903,7 +9828,7 @@ pub fn create_parent_key(sim: &mut Simulator<'_>) -> Handle {
 
 /// Creates a primary key with an empty authValue under the owner hierarchy; returns its handle
 /// and Name.
-pub fn create_primary(sim: &mut Simulator<'_>, public: TpmtPublic<'static>) -> (Handle, Vec<u8>) {
+pub fn create_primary(sim: &mut Tpm, public: TpmtPublic<'static>) -> (Handle, Vec<u8>) {
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
@@ -9935,7 +9860,7 @@ pub fn create_primary_ecc(sim: &mut Sim) -> u32 {
 /// Creates a primary object from `public` (with optional sensitive `data`) in `hierarchy` and
 /// returns the full `TPM2_CreatePrimary` response together with the new handle.
 pub fn create_primary_full(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     hierarchy: Handle,
     public: TpmtPublic<'static>,
     data: &'static [u8],
@@ -9955,7 +9880,7 @@ pub fn create_primary_full(
 }
 
 /// Creates a primary key from `public` under the owner hierarchy and returns its handle.
-pub fn create_primary_handle(sim: &mut Simulator<'_>, public: TpmtPublic<'static>) -> Handle {
+pub fn create_primary_handle(sim: &mut Tpm, public: TpmtPublic<'static>) -> Handle {
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
@@ -9972,17 +9897,13 @@ pub fn create_primary_handle(sim: &mut Simulator<'_>, public: TpmtPublic<'static
 }
 
 /// Creates a primary object and returns only its handle.
-pub fn create_primary_in(
-    sim: &mut Simulator<'_>,
-    hierarchy: Handle,
-    public: TpmtPublic<'static>,
-) -> Handle {
+pub fn create_primary_in(sim: &mut Tpm, hierarchy: Handle, public: TpmtPublic<'static>) -> Handle {
     create_primary_full(sim, hierarchy, public, &[]).1
 }
 
 /// Creates an ECDSA P-256 signing primary key under the owner hierarchy and returns its handle;
 /// panics on failure.
-pub fn create_primary_key(sim: &mut Simulator<'_>) -> Handle {
+pub fn create_primary_key(sim: &mut Tpm) -> Handle {
     let ecc_parms = TpmsEccParms {
         symmetric: None,
         scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),
@@ -10024,7 +9945,7 @@ pub fn create_primary_key(sim: &mut Simulator<'_>) -> Handle {
 }
 
 /// Creates a primary object from `public` in the NULL hierarchy (empty password session).
-pub fn create_primary_null(sim: &mut Simulator<'_>, public: TpmtPublic<'static>) -> Handle {
+pub fn create_primary_null(sim: &mut Tpm, public: TpmtPublic<'static>) -> Handle {
     let cmd = tpm2::commands::CreatePrimary {
         primary_handle: Handle::RH_NULL,
         in_sensitive: tpm2::Tpm2b(tpm2::TpmsSensitiveCreate {
@@ -10041,7 +9962,7 @@ pub fn create_primary_null(sim: &mut Simulator<'_>, public: TpmtPublic<'static>)
 
 /// Creates a primary object in the owner hierarchy with authValue `auth` and sensitive `data`.
 pub fn create_primary_obj(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     public: TpmtPublic<'static>,
     auth: &[u8],
     data: &[u8],
@@ -10096,7 +10017,7 @@ pub fn create_primary_params() -> Vec<u8> {
 
 /// Creates a primary object from `public` under the owner hierarchy (empty auth) and
 /// returns its handle.
-pub fn create_primary_raw_handle(sim: &mut Simulator<'_>, public: TpmtPublic<'static>) -> u32 {
+pub fn create_primary_raw_handle(sim: &mut Tpm, public: TpmtPublic<'static>) -> u32 {
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
@@ -10114,7 +10035,7 @@ pub fn create_primary_raw_handle(sim: &mut Simulator<'_>, public: TpmtPublic<'st
 
 /// Creates a primary object under `hierarchy` (empty auth); returns its handle.
 pub fn create_primary_st_clear(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     hierarchy: Handle,
     st_clear: bool,
 ) -> Result<u32, u32> {
@@ -10134,7 +10055,7 @@ pub fn create_primary_st_clear(
 /// Creates an owner primary from `public` with empty authValue and sensitive `data`, returning its
 /// handle and Name; panics on failure.
 pub fn create_primary_with_data(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     public: TpmtPublic<'static>,
     data: &[u8],
 ) -> (Handle, Vec<u8>) {
@@ -10153,7 +10074,7 @@ pub fn create_primary_with_data(
 
 /// `TPM2_CreatePrimary` under the owner hierarchy with an empty authValue.
 pub fn create_primary_with_data_handle(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     public: TpmtPublic<'static>,
     data: &'static [u8],
 ) -> Handle {
@@ -10177,7 +10098,7 @@ pub fn create_primary_with_data_handle(
 }
 
 /// Creates an RSA-2048 signing key.
-pub fn create_rsa_key(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
+pub fn create_rsa_key(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     create_signing_key_with_parms(
         sim,
         PublicParmsAndId::Rsa(
@@ -10195,7 +10116,7 @@ pub fn create_rsa_key(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
 /// Creates an RSA-2048 primary key with `attributes` and `scheme` under the owner hierarchy
 /// and returns its handle and RSA modulus.
 pub fn create_rsa_primary(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     attributes: TpmaObject,
     scheme: Option<TpmtRsaScheme>,
 ) -> (Handle, Vec<u8>) {
@@ -10235,12 +10156,7 @@ pub fn create_rsa_primary(
 }
 
 /// Creates a sealed-data primary object.
-pub fn create_sealed(
-    sim: &mut Simulator<'_>,
-    attrs: TpmaObject,
-    auth: &[u8],
-    policy: &[u8],
-) -> u32 {
+pub fn create_sealed(sim: &mut Tpm, attrs: TpmaObject, auth: &[u8], policy: &[u8]) -> u32 {
     create_primary_obj(
         sim,
         sealed_template_with_policy(attrs, policy),
@@ -10250,7 +10166,7 @@ pub fn create_sealed(
 }
 
 /// The SRK used as the parent of created objects: RSA-2048 storage key (SHA-256, AES-128-CFB).
-pub fn create_srk(sim: &mut Simulator<'_>) -> Handle {
+pub fn create_srk(sim: &mut Tpm) -> Handle {
     try_create_owner_primary(
         sim,
         rsa_public(TpmiAlgHash::Sha256, storage_attrs(), &[], Some(AES128_CFB)),
@@ -10261,7 +10177,7 @@ pub fn create_srk(sim: &mut Simulator<'_>) -> Handle {
 
 /// Creates an ECC P-256 storage key (restricted decryption key with AES-128-CFB) as a
 /// primary object of `hierarchy` and returns its handle.
-pub fn create_storage_parent(sim: &mut Simulator<'_>, hierarchy: Handle) -> Handle {
+pub fn create_storage_parent(sim: &mut Tpm, hierarchy: Handle) -> Handle {
     let cmd = CreatePrimary {
         primary_handle: hierarchy,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
@@ -10302,7 +10218,7 @@ pub fn create_storage_parent(sim: &mut Simulator<'_>, hierarchy: Handle) -> Hand
 }
 
 /// `TPM2_CreatePrimary` of an RSA storage key with `name_alg` and AES-128-CFB.
-pub fn create_storage_primary(sim: &mut Simulator<'_>, name_alg: TpmiAlgHash) -> Handle {
+pub fn create_storage_primary(sim: &mut Tpm, name_alg: TpmiAlgHash) -> Handle {
     let public = rsa_public(
         name_alg,
         TpmaObject::DECRYPT
@@ -10335,7 +10251,7 @@ pub fn create_storage_primary(sim: &mut Simulator<'_>, name_alg: TpmiAlgHash) ->
 
 /// Creates an ECC primary storage key under `hierarchy` (empty hierarchy password) and returns
 /// its handle.
-pub fn create_storage_primary_in(sim: &mut Simulator<'_>, hierarchy: Handle) -> Handle {
+pub fn create_storage_primary_in(sim: &mut Tpm, hierarchy: Handle) -> Handle {
     let cmd = CreatePrimary {
         primary_handle: hierarchy,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
@@ -10353,11 +10269,7 @@ pub fn create_storage_primary_in(sim: &mut Simulator<'_>, hierarchy: Handle) -> 
 
 /// Creates an RSA-2048 unrestricted signing primary key with authValue `auth` and `scheme`,
 /// returning its handle; panics on failure.
-pub fn create_test_key(
-    sim: &mut Simulator<'_>,
-    auth: &[u8],
-    scheme: Option<TpmtRsaScheme>,
-) -> Handle {
+pub fn create_test_key(sim: &mut Tpm, auth: &[u8], scheme: Option<TpmtRsaScheme>) -> Handle {
     let public_area = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::SIGN_ENCRYPT
@@ -10404,7 +10316,7 @@ pub fn create_test_key(
 
 /// Like [`create_test_key`] but optionally `restricted` and with a custom `name_alg`.
 pub fn create_test_key_with_options(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth: &[u8],
     scheme: Option<TpmtRsaScheme>,
     is_restricted: bool,
@@ -10460,7 +10372,7 @@ pub fn create_test_key_with_options(
 
 /// Creates a symmetric (AES-128-CFB) restricted-decrypt storage primary under the owner
 /// hierarchy and returns its handle.
-pub fn create_test_primary(sim: &mut Simulator<'_>) -> Handle {
+pub fn create_test_primary(sim: &mut Tpm) -> Handle {
     let attrs = TpmaObject::FIXED_TPM
         | TpmaObject::FIXED_PARENT
         | TpmaObject::SENSITIVE_DATA_ORIGIN
@@ -10496,7 +10408,7 @@ pub fn create_test_primary(sim: &mut Simulator<'_>) -> Handle {
 
 /// Creates a keyed-hash (HMAC) primary key under the owner hierarchy and
 /// returns its transient handle.
-pub fn create_transient_object(sim: &mut Simulator<'_>) -> u32 {
+pub fn create_transient_object(sim: &mut Tpm) -> u32 {
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::FIXED_TPM
@@ -10521,7 +10433,7 @@ pub fn create_transient_object(sim: &mut Simulator<'_>) -> u32 {
 
 /// `TPM2_Create` of `public` (with sensitive `data`) under `parent`.
 pub fn create_unwrap(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parent: Handle,
     public: TpmtPublic<'_>,
     data: &[u8],
@@ -10569,7 +10481,7 @@ pub fn derive_key_and_iv_ref<H: tpm2::crypto::Hmac>(
 /// the loaded object has the Name `target_name`.
 #[allow(clippy::too_many_arguments)]
 pub fn dup_import_load(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     target: Handle,
     target_public: Tpm2bPublic<'_>,
     target_name: &[u8],
@@ -10628,7 +10540,7 @@ pub fn dup_import_load(
 
 /// `TPM2_Duplicate` authorized with a SHA-256 `PolicyCommandCode(Duplicate)` policy session.
 pub fn duplicate(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     object: Handle,
     new_parent: Handle,
     symmetric: Option<TpmtSymDefObject>,
@@ -10638,7 +10550,7 @@ pub fn duplicate(
 
 /// `TPM2_Duplicate` authorized with an `alg` `PolicyCommandCode(Duplicate)` policy session.
 pub fn duplicate_alg(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     object: Handle,
     new_parent: Handle,
     symmetric: Option<TpmtSymDefObject>,
@@ -10659,7 +10571,7 @@ pub fn duplicate_alg(
 /// `TPM2_Duplicate` authorized with a SHA-256 policy session that satisfied
 /// `PolicyCommandCode(TPM_CC_Duplicate)`. `object` and `new_parent` replace the handles of `cmd`.
 pub fn duplicate_command(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     object: Handle,
     new_parent: Handle,
     cmd: &Duplicate<'_>,
@@ -10708,7 +10620,7 @@ pub fn duplicate_command(
 /// a policy session that satisfied `PolicyCommandCode(TPM_CC_Duplicate)`. `object` and
 /// `new_parent` replace the handles of `cmd`.
 pub fn duplicate_command_with_name_alg(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     object: Handle,
     new_parent: Handle,
     cmd: &Duplicate<'_>,
@@ -10756,7 +10668,7 @@ pub fn ecc_key(object_attributes: TpmaObject, scheme: TpmtEccScheme) -> TpmtPubl
 }
 
 /// Makes `object` persistent at `persistent`, authorized by `auth` (empty password).
-pub fn evict(sim: &mut Simulator<'_>, auth: Handle, object: Handle, persistent: u32) {
+pub fn evict(sim: &mut Tpm, auth: Handle, object: Handle, persistent: u32) {
     let cmd = EvictControl {
         auth,
         object_handle: object,
@@ -10768,7 +10680,7 @@ pub fn evict(sim: &mut Simulator<'_>, auth: Handle, object: Handle, persistent: 
 
 /// `TPM2_EvictControl` with an empty password for `auth`.
 pub fn evict_control(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth: Handle,
     object: Handle,
     persistent: Handle,
@@ -10783,7 +10695,7 @@ pub fn evict_control(
 
 /// `TPM2_EvictControl` with an empty password for `auth`; returns the response code.
 pub fn evict_control_rc(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth: Handle,
     object_handle: u32,
     persistent_handle: u32,
@@ -10798,7 +10710,7 @@ pub fn evict_control_rc(
 
 /// Makes the transient object `object` persistent at `persistent` (owner
 /// authorization) and flushes the transient copy.
-pub fn evict_owner(sim: &mut Simulator<'_>, object: Handle, persistent: Handle) {
+pub fn evict_owner(sim: &mut Tpm, object: Handle, persistent: Handle) {
     execute_tpm_command_mapping_parse_errors(
         sim,
         &EvictControl {
@@ -10826,12 +10738,12 @@ pub fn flush(sim: &mut Sim, handle: u32) {
 }
 
 /// Flushes `handle`, panicking on failure.
-pub fn flush_handle(sim: &mut Simulator<'_>, handle: Handle) {
+pub fn flush_handle(sim: &mut Tpm, handle: Handle) {
     flush_context(sim, handle).expect("FlushContext failed");
 }
 
 /// Raw `TPM2_FlushContext(flush_handle)`.
-pub fn flush_raw(sim: &mut Simulator<'_>, flush_handle: u32) -> Vec<u8> {
+pub fn flush_raw(sim: &mut Tpm, flush_handle: u32) -> Vec<u8> {
     let mut cmd = Vec::new();
     cmd.extend_from_slice(&0x8001u16.to_be_bytes());
     cmd.extend_from_slice(&14u32.to_be_bytes());
@@ -10841,7 +10753,7 @@ pub fn flush_raw(sim: &mut Simulator<'_>, flush_handle: u32) -> Vec<u8> {
 }
 
 /// `TPM2_FlushContext(handle)`.
-pub fn flush_rc(sim: &mut Simulator<'_>, handle: u32) -> u32 {
+pub fn flush_rc(sim: &mut Tpm, handle: u32) -> u32 {
     let cmd = build_raw_cmd(
         ST_NO_SESSIONS,
         CC_FLUSH_CONTEXT,
@@ -10904,7 +10816,7 @@ pub fn handle_name_of(handle: Handle) -> Vec<u8> {
 
 /// `TPM2_Import` under `parent` (no inner wrapper).
 pub fn import(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parent: Handle,
     public: Tpm2bPublic<'static>,
     duplicate: Tpm2bPrivate<'static>,
@@ -10923,7 +10835,7 @@ pub fn import(
 
 /// Imports a plaintext duplicate of an ECC key (`d`, `seed`) under `srk` and loads it.
 pub fn import_and_load(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     srk: Handle,
     public: TpmtPublic<'static>,
     d: &[u8],
@@ -10952,7 +10864,7 @@ pub fn import_and_load(
 
 /// `TPM2_Import` under `parent` (which replaces `cmd.parent_handle`).
 pub fn import_command(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parent: Handle,
     cmd: &Import<'_>,
 ) -> Result<responses::Import<'static>, u32> {
@@ -11043,7 +10955,7 @@ pub fn import_request(
 /// Loaded sessions of both types (HMAC `0x02xxxxxx` and policy `0x03xxxxxx`)
 /// are reported in the `TPM_HT_LOADED_SESSION` range; `0x03` as a capability
 /// range selects *saved* sessions instead.
-pub fn is_loaded(sim: &mut Simulator<'_>, handle: u32) -> bool {
+pub fn is_loaded(sim: &mut Tpm, handle: u32) -> bool {
     let first = match handle >> 24 {
         0x02 | 0x03 => LOADED_SESSION_FIRST,
         _ => handle & 0xFF00_0000,
@@ -11053,7 +10965,7 @@ pub fn is_loaded(sim: &mut Simulator<'_>, handle: u32) -> bool {
 
 /// `TPM2_Load` under `parent`.
 pub fn load(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parent: Handle,
     private: Tpm2bPrivate<'static>,
     public: Tpm2bPublic<'static>,
@@ -11068,7 +10980,7 @@ pub fn load(
 
 /// Loads a child of `parent`; returns its handle and Name.
 pub fn load_child(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parent: Handle,
     in_private: Tpm2bPrivate<'static>,
     in_public: Tpm2bPublic<'static>,
@@ -11084,12 +10996,12 @@ pub fn load_child(
 }
 
 /// Loads a saved context with `TPM2_ContextLoad`, returning the new handle or the response code.
-pub fn load_context(sim: &mut Simulator<'_>, context: TpmsContext<'static>) -> Result<Handle, u32> {
+pub fn load_context(sim: &mut Tpm, context: TpmsContext<'static>) -> Result<Handle, u32> {
     execute_with_password_sessions(sim, &ContextLoad { context }, 0, &[]).map(|h| h.loaded_handle)
 }
 
 /// Loads the test NIST P-256 key (public and private parts) with `attrs`.
-pub fn load_ecc_with_private(sim: &mut Simulator<'_>, attrs: TpmaObject) -> Handle {
+pub fn load_ecc_with_private(sim: &mut Tpm, attrs: TpmaObject) -> Handle {
     load_with_private(
         sim,
         make_ecc_public_area(ECC_X, ECC_Y, attrs),
@@ -11100,7 +11012,7 @@ pub fn load_ecc_with_private(sim: &mut Simulator<'_>, attrs: TpmaObject) -> Hand
 
 /// `TPM2_LoadExternal` of a public area (and optional sensitive area) into `hierarchy`.
 pub fn load_external(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     public: TpmtPublic<'static>,
     sensitive: Option<TpmtSensitive<'static>>,
     hierarchy: Handle,
@@ -11115,7 +11027,7 @@ pub fn load_external(
 
 /// Loads a NIST P-256 key with a client-generated private scalar through
 /// `TPM2_LoadExternal` and returns `(handle, private scalar)`.
-pub fn load_external_ecc_key(sim: &mut Simulator<'_>, attrs: TpmaObject) -> (Handle, Vec<u8>) {
+pub fn load_external_ecc_key(sim: &mut Tpm, attrs: TpmaObject) -> (Handle, Vec<u8>) {
     let mut pub_buf = [0u8; 512];
     let mut priv_buf = [0u8; 1024];
     let (pub_len, priv_len) = CLIENT_CRYPTO
@@ -11165,7 +11077,7 @@ pub fn load_external_ecc_key(sim: &mut Simulator<'_>, attrs: TpmaObject) -> (Han
 
 /// Imports an ECC P-256 storage key with private scalar 1 and protection seed `seed` under
 /// `srk` (plaintext duplicate) and loads it; returns its handle.
-pub fn load_known_seed_parent(sim: &mut Simulator<'_>, srk: Handle, seed: &[u8]) -> Handle {
+pub fn load_known_seed_parent(sim: &mut Tpm, srk: Handle, seed: &[u8]) -> Handle {
     let mut public = ecc_storage_template_with(TpmiAlgHash::Sha256, TpmaObject::empty());
     if let PublicParmsAndId::Ecc(_, point) = &mut public.parms_and_id {
         *point = p256_generator();
@@ -11179,7 +11091,7 @@ pub fn load_known_seed_parent(sim: &mut Simulator<'_>, srk: Handle, seed: &[u8])
 ///
 /// An empty keyedhash `unique` is replaced by a digest-sized value, as required for any loaded
 /// keyedhash object (C `CryptValidateKeys()`).
-pub fn load_public_only(sim: &mut Simulator<'_>, public: &TpmtPublic<'static>) -> u32 {
+pub fn load_public_only(sim: &mut Tpm, public: &TpmtPublic<'static>) -> u32 {
     let mut public = *public;
     if let PublicParmsAndId::KeyedHash(scheme, unique) = public.parms_and_id
         && unique.get_size() == 0
@@ -11200,7 +11112,7 @@ pub fn load_public_only(sim: &mut Simulator<'_>, public: &TpmtPublic<'static>) -
 }
 
 /// Loads a public-only AES key (no sensitive area) in the NULL hierarchy.
-pub fn load_public_only_sym_key(sim: &mut Simulator<'_>) -> Handle {
+pub fn load_public_only_sym_key(sim: &mut Tpm) -> Handle {
     let cmd = LoadExternal {
         in_private: None,
         in_public: Tpm2b(with_unique(sym_template(
@@ -11214,7 +11126,7 @@ pub fn load_public_only_sym_key(sim: &mut Simulator<'_>) -> Handle {
 
 /// Loads a fixed RSA-2048 public key (no private part) with `TPM2_LoadExternal` into the null
 /// hierarchy and returns its handle; panics on failure.
-pub fn load_rsa_public_only_key(sim: &mut Simulator<'_>) -> Handle {
+pub fn load_rsa_public_only_key(sim: &mut Tpm) -> Handle {
     const RSA_N: &[u8] = &[
         0x9e, 0x67, 0x7c, 0x31, 0xb1, 0xf9, 0x15, 0x8a, 0x41, 0x4d, 0x16, 0xf0, 0x73, 0xbe, 0x59,
         0x66, 0xc0, 0xe3, 0x8d, 0xc3, 0x64, 0x4b, 0x01, 0x3c, 0xce, 0x5c, 0x13, 0x10, 0x41, 0x9f,
@@ -11268,7 +11180,7 @@ pub fn load_rsa_public_only_key(sim: &mut Simulator<'_>) -> Handle {
 
 /// Loads the test RSA-2048 key (public and private parts) with `attrs`.
 pub fn load_rsa_with_private(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     attrs: TpmaObject,
     symmetric: Option<TpmtSymDefObject>,
 ) -> Handle {
@@ -11286,7 +11198,7 @@ pub fn load_rsa_with_private(
 
 /// Imports (plaintext duplicate) and loads under `srk` an ECC P-256 storage key with private
 /// scalar 379 whose public point is [`p256_point_with_stripped_x`] (31-byte x).
-pub fn load_stripped_ecc_storage_key(sim: &mut Simulator<'_>, srk: Handle) -> Handle {
+pub fn load_stripped_ecc_storage_key(sim: &mut Tpm, srk: Handle) -> Handle {
     let mut public = ecc_storage_template_with(TpmiAlgHash::Sha256, TpmaObject::empty());
     if let PublicParmsAndId::Ecc(_, point) = &mut public.parms_and_id {
         *point = p256_point_with_stripped_x();
@@ -11298,7 +11210,7 @@ pub fn load_stripped_ecc_storage_key(sim: &mut Simulator<'_>, srk: Handle) -> Ha
 
 /// `TPM2_Load` of `private`/`public` under `parent`; returns the handle and the Name.
 pub fn load_with_name(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     parent: Handle,
     private: Tpm2bPrivate<'_>,
     public: Tpm2bPublic<'_>,
@@ -11317,7 +11229,7 @@ pub fn load_with_name(
 
 /// Loads `public` with its sensitive area into the NULL hierarchy.
 pub fn load_with_private(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     public: TpmtPublic<'static>,
     sensitive: TpmuSensitiveComposite<'static>,
     seed: &'static [u8],
@@ -11336,7 +11248,7 @@ pub fn load_with_private(
 
 /// Returns the loaded handles of the range starting at `first`
 /// (`TPM2_GetCapability(TPM_CAP_HANDLES)`).
-pub fn loaded_handles(sim: &mut Simulator<'_>, first: u32) -> Vec<u32> {
+pub fn loaded_handles(sim: &mut Tpm, first: u32) -> Vec<u32> {
     let rsp = sim
         .execute(GetCapability {
             capability: TpmCap::Handles,
@@ -11399,7 +11311,7 @@ pub fn make_sealed_blob(
 }
 
 /// Returns whether a persistent/transient object handle is present (`TPM2_ReadPublic`).
-pub fn object_exists(sim: &mut Simulator<'_>, handle: u32) -> bool {
+pub fn object_exists(sim: &mut Tpm, handle: u32) -> bool {
     sim.execute(ReadPublic {
         object_handle: Handle(handle),
     })
@@ -11407,12 +11319,12 @@ pub fn object_exists(sim: &mut Simulator<'_>, handle: u32) -> bool {
 }
 
 /// The Name of a loaded or persistent object.
-pub fn object_name(sim: &mut Simulator<'_>, h: u32) -> Vec<u8> {
+pub fn object_name(sim: &mut Tpm, h: u32) -> Vec<u8> {
     read_public_name(sim, Handle(h)).get_buffer().to_vec()
 }
 
 /// Creates the default fixed RSA storage primary key under the owner hierarchy.
-pub fn owner_srk(sim: &mut Simulator<'_>) -> Handle {
+pub fn owner_srk(sim: &mut Tpm) -> Handle {
     try_create_primary_in(sim, Handle::RH_OWNER, fixed_rsa_storage(), &[])
         .expect("CreatePrimary")
         .0
@@ -11440,7 +11352,7 @@ pub fn public_name(public: &TpmtPublic<'_>) -> Vec<u8> {
 }
 
 /// Symmetric public-only key used by `TPM2_EncryptDecrypt` / `TPM2_EncryptDecrypt2`.
-pub fn public_only_sym_key(sim: &mut Simulator<'_>) -> u32 {
+pub fn public_only_sym_key(sim: &mut Tpm) -> u32 {
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::SIGN_ENCRYPT
@@ -11478,7 +11390,7 @@ pub fn random_key() -> &'static [u8] {
 }
 
 /// `TPM2_ReadPublic(handle)` (no sessions); returns the response code.
-pub fn read_public_rc(sim: &mut Simulator<'_>, handle: u32) -> u32 {
+pub fn read_public_rc(sim: &mut Tpm, handle: u32) -> u32 {
     mssim_rc_of(
         sim,
         &build_raw_cmd(ST_NO_SESSIONS, CC_READ_PUBLIC, &[handle], None, &[]),
@@ -11487,7 +11399,7 @@ pub fn read_public_rc(sim: &mut Simulator<'_>, handle: u32) -> u32 {
 
 /// `TPM2_Rewrap` (oldParent authorized with an empty password).
 pub fn rewrap(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     old_parent: Handle,
     new_parent: Handle,
     in_duplicate: Tpm2bPrivate<'static>,
@@ -11528,7 +11440,7 @@ pub fn rsa_key(
 
 /// Creates an ECDSA primary key under the owner hierarchy, saves its context
 /// and flushes it. Returns the saved context.
-pub fn save_object_context(sim: &mut Simulator<'_>) -> TpmsContext<'static> {
+pub fn save_object_context(sim: &mut Tpm) -> TpmsContext<'static> {
     let create = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
@@ -11568,13 +11480,7 @@ pub fn save_object_context(sim: &mut Simulator<'_>) -> TpmsContext<'static> {
 
 /// Sends a command with one key handle, optionally with an empty password session, and returns
 /// its response code.
-pub fn send_key_command(
-    sim: &mut Simulator<'_>,
-    cc: u32,
-    key: Handle,
-    pw: bool,
-    params: &[u8],
-) -> u32 {
+pub fn send_key_command(sim: &mut Tpm, cc: u32, key: Handle, pw: bool, params: &[u8]) -> u32 {
     let cmd = if pw {
         build(
             ST_SESSIONS,
@@ -11591,7 +11497,7 @@ pub fn send_key_command(
 
 /// `TPM2_CreatePrimary` under the owner hierarchy; returns the object handle and its Name.
 pub fn try_create_owner_primary(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     public: TpmtPublic<'_>,
 ) -> Result<(Handle, Vec<u8>), u32> {
     exec_command(
@@ -11614,7 +11520,7 @@ pub fn try_create_owner_primary(
 /// `TPM2_CreatePrimary` under the owner hierarchy (empty authValue); returns the handle and the
 /// created public area.
 pub fn try_create_primary(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     public: TpmtPublic<'static>,
     data: &'static [u8],
 ) -> Result<(Handle, TpmtPublic<'static>), u32> {
@@ -11638,7 +11544,7 @@ pub fn try_create_primary(
 
 /// `TPM2_CreatePrimary` under `hierarchy`; returns (handle, response).
 pub fn try_create_primary_in(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     hierarchy: Handle,
     template: TpmtPublic<'static>,
     data: &[u8],
@@ -11653,7 +11559,7 @@ pub fn try_create_primary_in(
 }
 
 /// `TPM2_Unseal(object)` with the given password; returns the response code.
-pub fn unseal(sim: &mut Simulator<'_>, object: Handle, password: &[u8]) -> u32 {
+pub fn unseal(sim: &mut Tpm, object: Handle, password: &[u8]) -> u32 {
     execute_with_password_sessions_status(
         sim,
         &Unseal {
@@ -11794,12 +11700,12 @@ pub fn cp_hash(cc: TpmCc, names: &[&[u8]], params: &[u8]) -> Vec<u8> {
 ///
 /// The key is usable for encryption (`sign`) and, unless `mode` is CMAC (which the TPM only
 /// accepts for sign-only keys), for decryption.
-pub fn create_aes_key(sim: &mut Simulator<'_>, mode: TpmiAlgSymMode) -> Handle {
+pub fn create_aes_key(sim: &mut Tpm, mode: TpmiAlgSymMode) -> Handle {
     try_create_aes_key(sim, mode).expect("CreatePrimary(AES) failed")
 }
 
 /// Like [`create_aes_key`], but returns the `TPM2_CreatePrimary` response code on failure.
-pub fn try_create_aes_key(sim: &mut Simulator<'_>, mode: TpmiAlgSymMode) -> Result<Handle, u32> {
+pub fn try_create_aes_key(sim: &mut Tpm, mode: TpmiAlgSymMode) -> Result<Handle, u32> {
     let mut attributes = TpmaObject::USER_WITH_AUTH
         | TpmaObject::SIGN_ENCRYPT
         | TpmaObject::FIXED_TPM
@@ -11836,7 +11742,7 @@ pub fn try_create_aes_key(sim: &mut Simulator<'_>, mode: TpmiAlgSymMode) -> Resu
 /// Creates an ECDSA P-256 signing primary key in `hierarchy` (optionally `restricted`) and returns
 /// its handle and Name; panics on failure.
 pub fn create_ecc_signing_key(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     hierarchy: Handle,
     restricted: bool,
 ) -> (Handle, Tpm2bName<'static>) {
@@ -11884,7 +11790,7 @@ pub fn create_ecc_signing_key(
 
 /// Creates a KeyedHash HMAC-SHA256 signing key with authValue `auth` and HMAC key
 /// `secret_key` as a primary object of the owner hierarchy and returns its handle.
-pub fn create_keyed_hash_key(sim: &mut Simulator<'_>, auth: &[u8], secret_key: &[u8]) -> Handle {
+pub fn create_keyed_hash_key(sim: &mut Tpm, auth: &[u8], secret_key: &[u8]) -> Handle {
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
@@ -11913,7 +11819,7 @@ pub fn create_keyed_hash_key(sim: &mut Simulator<'_>, auth: &[u8], secret_key: &
 
 /// Creates a KeyedHash data object (null scheme, SHA-256 Name) as a primary object of the
 /// owner hierarchy and returns its handle.
-pub fn create_keyed_hash_object(sim: &mut Simulator<'_>) -> Handle {
+pub fn create_keyed_hash_object(sim: &mut Tpm) -> Handle {
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
@@ -11938,10 +11844,7 @@ pub fn create_keyed_hash_object(sim: &mut Simulator<'_>) -> Handle {
 
 /// Creates a KeyedHash data object (null scheme, SHA-256 Name) with the given extra
 /// attributes as a primary object of the owner hierarchy and returns its handle.
-pub fn create_keyed_hash_object_with_attrs(
-    sim: &mut Simulator<'_>,
-    extra_attributes: TpmaObject,
-) -> Handle {
+pub fn create_keyed_hash_object_with_attrs(sim: &mut Tpm, extra_attributes: TpmaObject) -> Handle {
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
@@ -11967,7 +11870,7 @@ pub fn create_keyed_hash_object_with_attrs(
 
 /// Creates an RSA decryption-only (no `sign`) primary key and returns its handle and Name; panics
 /// on failure.
-pub fn create_non_signing_key_rsa(sim: &mut Simulator<'_>) -> (Handle, tpm2::Tpm2bName<'static>) {
+pub fn create_non_signing_key_rsa(sim: &mut Tpm) -> (Handle, tpm2::Tpm2bName<'static>) {
     // A key without SIGN_ENCRYPT, e.g. DECRYPT only
     let public_area = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -12009,7 +11912,7 @@ pub fn create_non_signing_key_rsa(sim: &mut Simulator<'_>) -> (Handle, tpm2::Tpm
 }
 
 /// A restricted RSASSA-SHA256 signing key (attestation key).
-pub fn create_restricted_signer(sim: &mut Simulator<'_>) -> (Handle, Vec<u8>) {
+pub fn create_restricted_signer(sim: &mut Tpm) -> (Handle, Vec<u8>) {
     create_rsa_primary(
         sim,
         TpmaObject::RESTRICTED | TpmaObject::SIGN_ENCRYPT,
@@ -12019,7 +11922,7 @@ pub fn create_restricted_signer(sim: &mut Simulator<'_>) -> (Handle, Vec<u8>) {
 
 /// Creates an RSA-2048 unrestricted decryption primary key under the owner hierarchy and returns
 /// its handle; panics on failure.
-pub fn create_rsa_decrypt_key(sim: &mut Simulator<'_>) -> Handle {
+pub fn create_rsa_decrypt_key(sim: &mut Tpm) -> Handle {
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: None,
@@ -12055,7 +11958,7 @@ pub fn create_rsa_decrypt_key(sim: &mut Simulator<'_>) -> Handle {
 
 /// Creates an ECDSA P-256 unrestricted signing primary key under the owner hierarchy and returns
 /// its handle and Name; panics on failure.
-pub fn create_signing_key(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
+pub fn create_signing_key(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     let ecc_parms = TpmsEccParms {
         symmetric: None,
         scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),
@@ -12095,17 +11998,14 @@ pub fn create_signing_key(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static
 
 /// Creates an ECDSA P-256 signing primary key with authValue `auth` (see
 /// [`create_signing_key_ecc_with_unique`] with `unique = 0`).
-pub fn create_signing_key_ecc(
-    sim: &mut Simulator<'_>,
-    auth: &[u8],
-) -> (Handle, tpm2::Tpm2bName<'static>) {
+pub fn create_signing_key_ecc(sim: &mut Tpm, auth: &[u8]) -> (Handle, tpm2::Tpm2bName<'static>) {
     create_signing_key_ecc_with_unique(sim, auth, 0)
 }
 
 /// Creates an ECDSA P-256 signing primary key (`noDA`) with authValue `auth`, using `unique` to
 /// make the key distinct, and returns its handle and Name; panics on failure.
 pub fn create_signing_key_ecc_with_unique(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth: &[u8],
     unique: u8,
 ) -> (Handle, tpm2::Tpm2bName<'static>) {
@@ -12160,12 +12060,12 @@ pub fn create_signing_key_ecc_with_unique(
 
 /// Creates an ECDSA P-256 signing primary key with an empty `unique` field (see
 /// [`create_signing_key_with_unique`]).
-pub fn create_signing_key_empty_unique(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
+pub fn create_signing_key_empty_unique(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     create_signing_key_with_unique(sim, &[])
 }
 
 /// Creates an ECC NIST P-256 ECDSA/SHA-256 signing primary key in the owner hierarchy.
-pub fn create_signing_key_handle(sim: &mut Simulator<'_>) -> Handle {
+pub fn create_signing_key_handle(sim: &mut Tpm) -> Handle {
     let ecc_parms = TpmsEccParms {
         symmetric: None,
         scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),
@@ -12197,7 +12097,7 @@ pub fn create_signing_key_handle(sim: &mut Simulator<'_>) -> Handle {
 
 /// Creates an unrestricted RSA-2048 signing key without a default scheme; returns its handle
 /// and Name.
-pub fn create_signing_key_name_bytes(sim: &mut Simulator<'_>) -> (Handle, Vec<u8>) {
+pub fn create_signing_key_name_bytes(sim: &mut Tpm) -> (Handle, Vec<u8>) {
     create_primary(
         sim,
         TpmtPublic {
@@ -12224,7 +12124,7 @@ pub fn create_signing_key_name_bytes(sim: &mut Simulator<'_>) -> (Handle, Vec<u8
 /// Creates an ECDSA P-256 signing primary key under the owner hierarchy whose `unique.x` is
 /// `unique_id`, returning its handle and Name; panics on failure.
 pub fn create_signing_key_with_unique(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     unique_id: &[u8],
 ) -> (Handle, Tpm2bName<'static>) {
     let ecc_parms = TpmsEccParms {
@@ -12336,7 +12236,7 @@ pub fn ecc_point_param(public: &TpmtPublic<'_>) -> Vec<u8> {
 /// Like [`execute_with_hmac_sessions_raw`] but flips a byte of the encrypted first parameter after
 /// parameter encryption and before the HMAC is computed, to test decryption/unmarshal failures.
 pub fn execute_with_hmac_sessions_corrupt_ciphertext<CmdT: tpm2::commands::Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
@@ -12598,7 +12498,7 @@ where
 /// Executes `cmd` with HMAC/policy `sessions` via [`execute_with_hmac_sessions_custom_raw`] and
 /// unmarshals the response parameters.
 pub fn execute_with_hmac_sessions_custom<CmdT: tpm2::commands::Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
@@ -12616,7 +12516,7 @@ where
 /// Variant of [`execute_with_hmac_sessions_raw`] (4 KiB command buffer) returning the decrypted
 /// response parameter bytes and response handles, or the response code.
 pub fn execute_with_hmac_sessions_custom_raw<CmdT: tpm2::commands::Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
@@ -12956,7 +12856,7 @@ where
 /// Like [`execute_with_hmac_sessions_custom`] but only returns the response handles (or the
 /// response code).
 pub fn execute_with_hmac_sessions_custom_status<CmdT: tpm2::commands::Command>(
-    tpm: &mut Simulator<'_>,
+    tpm: &mut Tpm,
     cmd: &CmdT,
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
@@ -13049,7 +12949,7 @@ pub fn fixed_zgen_point() -> Vec<u8> {
 
 /// `TPM2_GetSessionAuditDigest` with a NULL signing key; returns the session digest.
 pub fn get_session_audit_digest(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     privacy_admin_handle: Handle,
     session_handle: u32,
 ) -> Result<Vec<u8>, u32> {
@@ -13103,15 +13003,13 @@ pub fn hash_bytes(alg: TpmiAlgHash, data: &[u8]) -> Vec<u8> {
 }
 
 /// Sends `_TPM_Hash_Data(data)`.
-pub fn hash_data(sim: &mut Simulator<'_>, data: &[u8]) {
-    let mut payload = (data.len() as u32).to_be_bytes().to_vec();
-    payload.extend_from_slice(data);
-    hash_indication(sim, TPM_SIGNAL_HASH_DATA, payload);
+pub fn hash_data(sim: &mut Tpm, data: &[u8]) {
+    sim.hash_data(data);
 }
 
 /// Sends `_TPM_Hash_End`.
-pub fn hash_end(sim: &mut Simulator<'_>) {
-    hash_indication(sim, TPM_SIGNAL_HASH_END, Vec::new());
+pub fn hash_end(sim: &mut Tpm) {
+    sim.hash_end();
 }
 
 /// Hashes the concatenation of `parts` with `alg` on the client.
@@ -13138,7 +13036,7 @@ pub fn hash_request(hash_alg: u16) -> Vec<u8> {
 }
 
 /// `TPM2_HashSequenceStart` (SHA-256, empty auth); returns the sequence handle.
-pub fn hash_sequence_start(sim: &mut Simulator<'_>) -> Handle {
+pub fn hash_sequence_start(sim: &mut Tpm) -> Handle {
     let cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
@@ -13149,13 +13047,13 @@ pub fn hash_sequence_start(sim: &mut Simulator<'_>) -> Handle {
 }
 
 /// Sends `_TPM_Hash_Start`.
-pub fn hash_start(sim: &mut Simulator<'_>) {
-    hash_indication(sim, TPM_SIGNAL_HASH_START, Vec::new());
+pub fn hash_start(sim: &mut Tpm) {
+    sim.hash_start();
 }
 
 /// Returns the HMAC of the `TPM2_Hash` ticket produced for `hierarchy`. The ticket is keyed
 /// with the hierarchy's proof value, so it changes exactly when the proof changes.
-pub fn hash_ticket_digest(sim: &mut Simulator<'_>, hierarchy: Handle) -> Vec<u8> {
+pub fn hash_ticket_digest(sim: &mut Tpm, hierarchy: Handle) -> Vec<u8> {
     let cmd = Hash {
         data: Tpm2bMaxBuffer::from_bytes(b"proof probe").unwrap(),
         hash_alg: TpmiAlgHash::Sha256,
@@ -13249,7 +13147,7 @@ pub fn hmac_entry(
 
 /// Signs `digest` with a new HMAC key in `hierarchy` and returns the key and signature.
 pub fn hmac_key_and_signature(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     hierarchy: Handle,
     digest: &'static [u8],
 ) -> (Handle, TpmtSignature<'static>) {
@@ -13313,7 +13211,7 @@ pub fn kdfa256(key: &[u8], label: &[u8], context: &[u8], bits: u32) -> Vec<u8> {
 
 /// Loads a public-only keyed-hash HMAC key (fixed `unique`) with `TPM2_LoadExternal` and returns
 /// its handle; panics on failure.
-pub fn load_public_only_hmac_key(sim: &mut Simulator<'_>) -> Handle {
+pub fn load_public_only_hmac_key(sim: &mut Tpm) -> Handle {
     let mut public = hmac_key_template(TpmiAlgHash::Sha256);
     public.object_attributes = TpmaObject::USER_WITH_AUTH | TpmaObject::SIGN_ENCRYPT;
     if let PublicParmsAndId::KeyedHash(_, ref mut unique) = public.parms_and_id {
@@ -13330,7 +13228,7 @@ pub fn load_public_only_hmac_key(sim: &mut Simulator<'_>) -> Handle {
 }
 
 /// Creates a keyed-hash (HMAC) primary key whose key is `key_bytes`.
-pub fn make_keyed_hash_key(sim: &mut Simulator<'_>, key_bytes: &'static [u8]) -> Handle {
+pub fn make_keyed_hash_key(sim: &mut Tpm, key_bytes: &'static [u8]) -> Handle {
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::FIXED_TPM
@@ -13429,7 +13327,7 @@ pub fn rsa_signing_key() -> TpmtPublic<'static> {
 /// `SequenceComplete` sequence (authValue `password`, ticket hierarchy `hierarchy`) and checks the
 /// digest against a client-side hash.
 pub fn run_hash_sequence(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     buffer_size: usize,
     password: &str,
     hierarchy: Handle,
@@ -13480,7 +13378,7 @@ pub fn run_hash_sequence(
 }
 
 /// Reads the session audit digest of `session` with `TPM2_GetSessionAuditDigest` (unsigned).
-pub fn session_audit_digest(sim: &mut Simulator<'_>, session: u32) -> Vec<u8> {
+pub fn session_audit_digest(sim: &mut Tpm, session: u32) -> Vec<u8> {
     let resp = exec_pws(
         sim,
         &GetSessionAuditDigest {
@@ -13542,7 +13440,7 @@ pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
 /// with `TPM2_SequenceUpdate`, and `data[complete_from..]` is sent with
 /// `TPM2_SequenceComplete`. Returns the resulting digest.
 pub fn sha256_sequence(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     data: &[u8],
     updates: &[(usize, usize)],
     complete_from: usize,
@@ -13583,7 +13481,7 @@ pub fn sha256_single(data: &[u8]) -> Vec<u8> {
 /// Runs TPM2_Sign with one password session.
 #[allow(deprecated)] // `TPM2_Sign` is deprecated upstream.
 pub fn sign(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     key: Handle,
     auth: &[u8],
     digest: &'static [u8],
@@ -13620,7 +13518,7 @@ pub fn sign_params() -> Vec<u8> {
 
 /// Signs `digest` (SHA-256) with `key` using RSASSA-PSS (`TPM2_Sign`).
 #[allow(deprecated)] // `TPM2_Sign` is deprecated upstream.
-pub fn sign_pss(sim: &mut Simulator<'_>, key: Handle, digest: &[u8]) -> TpmtSignature<'static> {
+pub fn sign_pss(sim: &mut Tpm, key: Handle, digest: &[u8]) -> TpmtSignature<'static> {
     let cmd = Sign {
         key_handle: key,
         digest: Tpm2bDigest::from_bytes(leak_bytes(digest)).unwrap(),
@@ -13634,7 +13532,7 @@ pub fn sign_pss(sim: &mut Simulator<'_>, key: Handle, digest: &[u8]) -> TpmtSign
 /// Signs `digest` with `key` using `scheme` (`TPM2_Sign`).
 #[allow(deprecated)] // `TPM2_Sign` is deprecated upstream.
 pub fn sign_unwrap(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     key: Handle,
     digest: &[u8],
     scheme: TpmtSigScheme,
@@ -13650,7 +13548,7 @@ pub fn sign_unwrap(
 }
 
 /// Starts a hash (or event, for `None`) sequence with an empty auth value.
-pub fn start_hash_sequence(sim: &mut Simulator<'_>, alg: Option<TpmiAlgHash>) -> Handle {
+pub fn start_hash_sequence(sim: &mut Tpm, alg: Option<TpmiAlgHash>) -> Handle {
     let cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: alg,
@@ -13660,7 +13558,7 @@ pub fn start_hash_sequence(sim: &mut Simulator<'_>, alg: Option<TpmiAlgHash>) ->
 }
 
 /// Starts an unbound, unsalted SHA-256 HMAC session.
-pub fn start_hmac_session(sim: &mut Simulator<'_>) -> ActiveSession {
+pub fn start_hmac_session(sim: &mut Tpm) -> ActiveSession {
     start_auth_session(
         sim,
         Handle::RH_NULL,
@@ -13674,13 +13572,13 @@ pub fn start_hmac_session(sim: &mut Simulator<'_>) -> ActiveSession {
 }
 
 /// Starts an HMAC session (see [`start_session`]).
-pub fn start_hmac_session_raw(sim: &mut Simulator<'_>) -> u32 {
+pub fn start_hmac_session_raw(sim: &mut Tpm) -> u32 {
     start_session_raw_attrs(sim, 0x00)
 }
 
 /// Starts an unbound, unsalted session of `session_type` (flushing all other sessions).
 pub fn start_session_with_hash(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     session_type: TpmSe,
     hash: TpmiAlgHash,
 ) -> ActiveSession {
@@ -13712,7 +13610,7 @@ pub fn verify_hmac_params(hmac: &[u8; 32]) -> Vec<u8> {
 /// Runs TPM2_VerifySignature (no sessions).
 #[allow(deprecated)] // `TPM2_VerifySignature` is deprecated upstream.
 pub fn verify_signature(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     key: Handle,
     digest: &'static [u8],
     signature: TpmtSignature<'static>,
@@ -13728,7 +13626,7 @@ pub fn verify_signature(
 /// `TPM2_VerifySignature` of an RSASSA-PSS signature over `digest`; returns the ticket.
 #[allow(deprecated)] // `TPM2_VerifySignature` is deprecated upstream.
 pub fn verify_signature_unwrap(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     key: Handle,
     digest: &[u8],
     signature: TpmtSignature<'static>,
@@ -13747,12 +13645,7 @@ pub fn verify_signature_unwrap(
 
 /// Writes `alg || digest` (a `TPMT_HA`) to NV index `nv_index_val` with an owner password session,
 /// as expected by `TPM2_PolicyAuthorizeNV`; panics on failure.
-pub fn write_digest_to_nv(
-    sim: &mut Simulator<'_>,
-    nv_index_val: u32,
-    alg: TpmiAlgHash,
-    digest: &[u8],
-) {
+pub fn write_digest_to_nv(sim: &mut Tpm, nv_index_val: u32, alg: TpmiAlgHash, digest: &[u8]) {
     let mut data = Vec::new();
     data.extend_from_slice(&Alg::from(alg).id().to_be_bytes());
     data.extend_from_slice(digest);
@@ -13780,7 +13673,7 @@ pub struct PcrReadRsp {
 }
 
 /// Returns the number of PCR banks in which `pcr` is allocated (`TPM_CAP_PCRS`).
-pub fn allocated_banks_for_pcr(sim: &mut Simulator<'_>, pcr: usize) -> u32 {
+pub fn allocated_banks_for_pcr(sim: &mut Tpm, pcr: usize) -> u32 {
     let cmd = tpm2::commands::GetCapability {
         capability: TpmCap::PCRs,
         property: 0,
@@ -13803,7 +13696,7 @@ pub fn allocated_banks_for_pcr(sim: &mut Simulator<'_>, pcr: usize) -> u32 {
 
 /// The PCR selection of the `alg` bank in the active allocation (`TPM_CAP_PCRS`); an absent
 /// bank is reported as an empty selection.
-pub fn allocated_pcrs(sim: &mut Simulator<'_>, alg: TpmiAlgHash) -> Vec<u8> {
+pub fn allocated_pcrs(sim: &mut Tpm, alg: TpmiAlgHash) -> Vec<u8> {
     let rsp = sim
         .execute(GetCapability {
             capability: TpmCap::PCRs,
@@ -13822,11 +13715,7 @@ pub fn allocated_pcrs(sim: &mut Simulator<'_>, alg: TpmiAlgHash) -> Vec<u8> {
 }
 
 /// Returns the list of `(tag, pcrSelect)` from `TPM_CAP_PCR_PROPERTIES` and `moreData`.
-pub fn cap_pcr_properties(
-    sim: &mut Simulator<'_>,
-    property: u32,
-    count: u32,
-) -> (Vec<(u32, Vec<u8>)>, bool) {
+pub fn cap_pcr_properties(sim: &mut Tpm, property: u32, count: u32) -> (Vec<(u32, Vec<u8>)>, bool) {
     let (more, data) = get_cap(sim, CAP_PCR_PROPERTIES, property, count)
         .unwrap_or_else(|rc| panic!("GetCapability(PCR_PROPERTIES) failed: {rc:#x}"));
     let n = u32::from_be_bytes(data[0..4].try_into().unwrap()) as usize;
@@ -13842,7 +13731,7 @@ pub fn cap_pcr_properties(
 }
 
 /// Returns the active allocation reported by `TPM2_GetCapability(TPM_CAP_PCRS)`.
-pub fn cap_pcrs(sim: &mut Simulator<'_>) -> Vec<(u16, Vec<u8>)> {
+pub fn cap_pcrs(sim: &mut Tpm) -> Vec<(u16, Vec<u8>)> {
     let mut params = Vec::new();
     params.extend_from_slice(&5u32.to_be_bytes()); // TPM_CAP_PCRS
     params.extend_from_slice(&0u32.to_be_bytes());
@@ -13919,10 +13808,7 @@ pub fn pcr20_extend_with_policy_session(session: Handle) -> Vec<u8> {
 
 /// `TPM2_PCR_Allocate` with platform authorization; returns the response code and the
 /// response parameters (`allocationSuccess`, `maxPCR`, `sizeNeeded`, `sizeAvailable`).
-pub fn pcr_allocate(
-    sim: &mut Simulator<'_>,
-    banks: &[(u16, [u8; 3])],
-) -> (u32, Option<(u8, u32, u32, u32)>) {
+pub fn pcr_allocate(sim: &mut Tpm, banks: &[(u16, [u8; 3])]) -> (u32, Option<(u8, u32, u32, u32)>) {
     let cmd = build_pw_cmd(
         CC_PCR_ALLOCATE,
         &[Handle::RH_PLATFORM.0],
@@ -13961,12 +13847,7 @@ pub fn pcr_allocate_cmd(auth_handle: Handle, selections: &[TpmsPcrSelection]) ->
 }
 
 /// `TPM2_PCR_Event(pcr)` at `locality`; returns the response code and the response.
-pub fn pcr_event_at(
-    sim: &mut Simulator<'_>,
-    locality: u8,
-    pcr: u32,
-    data: &[u8],
-) -> (u32, Vec<u8>) {
+pub fn pcr_event_at(sim: &mut Tpm, locality: u8, pcr: u32, data: &[u8]) -> (u32, Vec<u8>) {
     let mut params = (data.len() as u16).to_be_bytes().to_vec();
     params.extend_from_slice(data);
     let cmd = build_pw_cmd(CC_PCR_EVENT, &[pcr], 1, &params);
@@ -13976,7 +13857,7 @@ pub fn pcr_event_at(
 /// `TPM2_PCR_Event(pcr)` at `locality`, authorized with an empty password; returns the response
 /// code and, on success, the returned digests.
 pub fn pcr_event_at_digests(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     locality: u8,
     pcr: u32,
     data: &[u8],
@@ -14000,19 +13881,14 @@ pub fn pcr_event_at_digests(
 }
 
 /// `TPM2_PCR_Extend(pcr)` at `locality`, authorized with an empty password.
-pub fn pcr_extend_at(
-    sim: &mut Simulator<'_>,
-    locality: u8,
-    pcr: u32,
-    digests: &[(u16, Vec<u8>)],
-) -> u32 {
+pub fn pcr_extend_at(sim: &mut Tpm, locality: u8, pcr: u32, digests: &[(u16, Vec<u8>)]) -> u32 {
     let cmd = build_pw_cmd(CC_PCR_EXTEND, &[pcr], 1, &digest_values(digests));
     send_at(sim, locality, &cmd).0
 }
 
 /// `TPM2_PCR_Extend(pcr)` at `locality`, authorized with an empty password.
 pub fn pcr_extend_at_no_continue(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     locality: u8,
     pcr: u32,
     digests: &[(u16, Vec<u8>)],
@@ -14028,7 +13904,7 @@ pub fn pcr_extend_at_no_continue(
 }
 
 /// Sends `TPM2_PCR_Read` for `banks` and parses the response.
-pub fn pcr_read(sim: &mut Simulator<'_>, banks: &[(u16, [u8; 3])]) -> PcrReadRsp {
+pub fn pcr_read(sim: &mut Tpm, banks: &[(u16, [u8; 3])]) -> PcrReadRsp {
     let cmd = build_raw_cmd(
         ST_NO_SESSIONS,
         CC_PCR_READ,
@@ -14066,7 +13942,7 @@ pub fn pcr_read(sim: &mut Simulator<'_>, banks: &[(u16, [u8; 3])]) -> PcrReadRsp
 
 /// Runs `TPM2_PCR_Read` for `selection`, returning the response or the response code.
 pub fn pcr_read_selection(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     selection: TpmlPcrSelection,
 ) -> Result<responses::PCRRead<'static>, u32> {
     exec_command(
@@ -14079,13 +13955,13 @@ pub fn pcr_read_selection(
 }
 
 /// `TPM2_PCR_Reset(pcr)` at `locality`.
-pub fn pcr_reset_at(sim: &mut Simulator<'_>, locality: u8, pcr: u32) -> u32 {
+pub fn pcr_reset_at(sim: &mut Tpm, locality: u8, pcr: u32) -> u32 {
     let cmd = build_pw_cmd(CC_PCR_RESET, &[pcr], 1, &[]);
     send_at(sim, locality, &cmd).0
 }
 
 /// `TPM2_PCR_Reset(pcr)` at `locality`, authorized with an empty password.
-pub fn pcr_reset_at_no_continue(sim: &mut Simulator<'_>, locality: u8, pcr: u32) -> u32 {
+pub fn pcr_reset_at_no_continue(sim: &mut Tpm, locality: u8, pcr: u32) -> u32 {
     let cmd = build_raw_cmd(ST_SESSIONS, CC_PCR_RESET, &[pcr], Some(&PW_SESSION), &[]);
     send_at(sim, locality, &cmd).0
 }
@@ -14135,7 +14011,7 @@ pub fn pcr_selections(hash: TpmiAlgHash, pcrs: &[u32]) -> TpmlPcrSelection {
 }
 
 /// Reads the PCR update counter.
-pub fn pcr_update_counter(sim: &mut Simulator<'_>) -> u32 {
+pub fn pcr_update_counter(sim: &mut Tpm) -> u32 {
     sim.execute(PCRRead {
         pcr_selection_in: TpmlPcrSelection::default(),
     })
@@ -14145,7 +14021,7 @@ pub fn pcr_update_counter(sim: &mut Simulator<'_>) -> u32 {
 
 /// Runs `TPM2_PolicyPCR` on policy `session`, returning the response code on failure.
 pub fn policy_pcr(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     session: Handle,
     pcr_digest: &[u8],
     pcrs: &[TpmsPcrSelection],
@@ -14163,7 +14039,7 @@ pub fn policy_pcr(
 
 /// Reads PCR `pcr` of the `alg` bank with `TPM2_PCR_Read`. Returns `None` if the TPM
 /// returns no digest for it (e.g. the bank is not allocated).
-pub fn read_pcr(sim: &mut Simulator<'_>, alg: TpmiAlgHash, pcr: usize) -> Option<Vec<u8>> {
+pub fn read_pcr(sim: &mut Tpm, alg: TpmiAlgHash, pcr: usize) -> Option<Vec<u8>> {
     let mut select = [0u8; 3];
     select[pcr / 8] = 1 << (pcr % 8);
     let mut pcr_selection_in = TpmlPcrSelection::default();
@@ -14178,14 +14054,14 @@ pub fn read_pcr(sim: &mut Simulator<'_>, alg: TpmiAlgHash, pcr: usize) -> Option
 }
 
 /// Reads the value of `pcr` in bank `alg`, or `None` if the bank is not allocated.
-pub fn read_pcr_by_alg_id(sim: &mut Simulator<'_>, alg: u16, pcr: usize) -> Option<Vec<u8>> {
+pub fn read_pcr_by_alg_id(sim: &mut Tpm, alg: u16, pcr: usize) -> Option<Vec<u8>> {
     let rsp = pcr_read(sim, &[(alg, bit(pcr))]);
     assert!(rsp.values.len() <= 1);
     rsp.values.into_iter().next()
 }
 
 /// Reads one PCR of one bank with `TPM2_PCR_Read`.
-pub fn read_pcr_value(sim: &mut Simulator<'_>, alg: TpmiAlgHash, pcr: usize) -> Vec<u8> {
+pub fn read_pcr_value(sim: &mut Tpm, alg: TpmiAlgHash, pcr: usize) -> Vec<u8> {
     let mut select = [0u8; 3];
     select[pcr / 8] = 1 << (pcr % 8);
     let mut selection = TpmlPcrSelection::default();
@@ -14230,7 +14106,7 @@ pub fn check_nv_written_on_non_nv_entity(sim: &mut Sim) {
 
 /// Defines a policy-read/write NV index (`0x01800001`) and returns its handle and Name; panics on
 /// failure.
-pub fn create_nv_index(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
+pub fn create_nv_index(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     let nv_public = TpmsNvPublic {
         nv_index: Handle(0x01800001),
         name_alg: TpmiAlgHash::Sha256,
@@ -14261,7 +14137,7 @@ pub fn create_nv_index(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) 
 
 /// Defines owner NV index `index` with empty authValue/policy, `attributes` and `size` bytes;
 /// panics on failure.
-pub fn define_nv(sim: &mut Simulator<'_>, index: u32, attributes: TpmaNv, size: u16) {
+pub fn define_nv(sim: &mut Tpm, index: u32, attributes: TpmaNv, size: u16) {
     let cmd = NVDefineSpace {
         auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
@@ -14278,18 +14154,13 @@ pub fn define_nv(sim: &mut Simulator<'_>, index: u32, attributes: TpmaNv, size: 
 }
 
 /// Defines an owner-created NV Index with an empty authValue.
-pub fn define_nv_empty_policy(
-    sim: &mut Simulator<'_>,
-    index: u32,
-    attributes: TpmaNv,
-    data_size: u16,
-) {
+pub fn define_nv_empty_policy(sim: &mut Tpm, index: u32, attributes: TpmaNv, data_size: u16) {
     define_nv_with_policy(sim, index, attributes, data_size, &[]);
 }
 
 /// Defines an owner NV Index with the given attributes, authValue and authPolicy.
 pub fn define_nv_raw(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     index: u32,
     attributes: u32,
     auth: &[u8],
@@ -14318,7 +14189,7 @@ pub fn define_nv_raw(
 /// Defines an NV index with an empty authValue and policy, authorized by `auth_handle` with an
 /// empty password session.
 pub fn define_nv_space(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth_handle: Handle,
     nv_index: Handle,
     attributes: TpmaNv,
@@ -14346,7 +14217,7 @@ pub fn define_nv_space(
 /// Defines owner NV index `index` with empty authValue and authPolicy `auth_policy`; panics on
 /// failure.
 pub fn define_nv_with_policy(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     index: u32,
     attributes: TpmaNv,
     data_size: u16,
@@ -14372,7 +14243,7 @@ pub fn define_nv_with_policy(
 
 /// Defines an owner index with an empty authValue.
 pub fn define_nv_with_policy_unwrap(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     index: u32,
     attributes: TpmaNv,
     size: u16,
@@ -14396,7 +14267,7 @@ pub fn nv_attrs(extra: TpmaNv) -> TpmaNv {
 /// attestation structure.
 #[allow(clippy::too_many_arguments)]
 pub fn nv_certify(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     sign_handle: Handle,
     auth_handle: Handle,
     nv_index: Handle,
@@ -14421,7 +14292,7 @@ pub fn nv_certify(
 /// `signHandle` (empty for `TPM_RH_NULL`) and `nv_auth` for `authHandle`. Every authorization
 /// handle needs a session, including a `TPM_RH_NULL` signHandle (C `ParseSessionBuffer`).
 pub fn nv_certify_pw(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     cmd: &NVCertify<'_>,
     sign_auth: &[u8],
     nv_auth: &[u8],
@@ -14455,7 +14326,7 @@ pub fn nv_certify_pw(
 }
 
 /// Reads the current Name of an NV Index (it changes when TPMA_NV_WRITTEN is set).
-pub fn nv_index_name(sim: &mut Simulator<'_>, index: u32) -> Vec<u8> {
+pub fn nv_index_name(sim: &mut Tpm, index: u32) -> Vec<u8> {
     let rsp = sim
         .execute(NVReadPublic {
             nv_index: Handle(index),
@@ -14465,17 +14336,16 @@ pub fn nv_index_name(sim: &mut Simulator<'_>, index: u32) -> Vec<u8> {
 }
 
 /// Makes NV unavailable to the TPM.
-pub fn nv_off(sim: &mut Simulator<'_>) {
-    sim.signal_platform(SimulatorPlatformSignal::NvOff, NO_STREAM)
-        .unwrap();
+pub fn nv_off(sim: &mut Tpm) {
+    sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
 }
 
 /// Powers on the TPM (`_TPM_Init`), makes NV available and sends
 /// `TPM2_Startup(TPM_SU_CLEAR)`, as a platform does at boot.
 ///
 /// Panics if a signal or the startup command fails.
-pub fn power_on_start_up(sim: &mut Simulator<'_>) {
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+pub fn power_on_start_up(sim: &mut Tpm) {
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
     nv_on(sim);
     sim.execute(Startup {
@@ -14485,18 +14355,12 @@ pub fn power_on_start_up(sim: &mut Simulator<'_>) {
 }
 
 /// Makes NV available to the TPM again.
-pub fn nv_on(sim: &mut Simulator<'_>) {
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+pub fn nv_on(sim: &mut Tpm) {
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
 }
 
 /// `TPM2_NV_Read` authorized by the index itself (empty password).
-pub fn nv_read(
-    sim: &mut Simulator<'_>,
-    nv_index: Handle,
-    size: u16,
-    offset: u16,
-) -> Result<Vec<u8>, u32> {
+pub fn nv_read(sim: &mut Tpm, nv_index: Handle, size: u16, offset: u16) -> Result<Vec<u8>, u32> {
     execute_with_password_sessions(
         sim,
         &NVRead {
@@ -14520,7 +14384,7 @@ pub fn nv_read_params(size: u16, offset: u16) -> Vec<u8> {
 }
 
 /// The Name of an NV Index (from `TPM2_NV_ReadPublic`).
-pub fn nv_read_public_name(sim: &mut Simulator<'_>, index: u32) -> Vec<u8> {
+pub fn nv_read_public_name(sim: &mut Tpm, index: u32) -> Vec<u8> {
     let (code, out) = send_with_auth_entries(sim, TpmCc::NVReadPublic, &[index], &[], &[]);
     assert_eq!(code, RC_SUCCESS, "NV_ReadPublic");
     let pub_len = u16::from_be_bytes([out[10], out[11]]) as usize;
@@ -14531,7 +14395,7 @@ pub fn nv_read_public_name(sim: &mut Simulator<'_>, index: u32) -> Vec<u8> {
 
 /// Reads `size` bytes of NV index `index` with an owner password session, returning only success
 /// or the response code.
-pub fn nv_read_status(sim: &mut Simulator<'_>, index: u32, size: u16) -> Result<(), u32> {
+pub fn nv_read_status(sim: &mut Tpm, index: u32, size: u16) -> Result<(), u32> {
     execute_with_password_sessions(
         sim,
         &NVRead {
@@ -14552,7 +14416,7 @@ pub fn nv_unavailable() -> u32 {
 }
 
 /// `TPM2_NV_Write` authorized by the index itself (empty password).
-pub fn nv_write(sim: &mut Simulator<'_>, nv_index: Handle, data: &[u8]) -> Result<(), u32> {
+pub fn nv_write(sim: &mut Tpm, nv_index: Handle, data: &[u8]) -> Result<(), u32> {
     execute_with_password_sessions(
         sim,
         &NVWrite {
@@ -14569,7 +14433,7 @@ pub fn nv_write(sim: &mut Simulator<'_>, nv_index: Handle, data: &[u8]) -> Resul
 
 /// Writes `data` at offset 0 of NV index `index` with an owner password session, returning the
 /// response code on failure.
-pub fn nv_write_index(sim: &mut Simulator<'_>, index: u32, data: &[u8]) -> Result<(), u32> {
+pub fn nv_write_index(sim: &mut Tpm, index: u32, data: &[u8]) -> Result<(), u32> {
     execute_with_password_sessions(
         sim,
         &NVWrite {
@@ -14594,7 +14458,7 @@ pub fn nv_write_params(data: &[u8], offset: u16) -> Vec<u8> {
 /// Runs `TPM2_PolicyAuthorizeNV` on policy `session` (NV index authorized by a password session for
 /// `auth_handle`), returning the response code on failure.
 pub fn policy_authorize_nv(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth_handle: Handle,
     nv_index: u32,
     session: Handle,
@@ -14613,7 +14477,7 @@ pub fn policy_authorize_nv(
 /// Authorizes `TPM2_PolicyAuthorizeNV` for `index` (authHandle == nvIndex) with a fresh policy
 /// session whose (zero) policy digest equals the index's authPolicy.
 pub fn policy_authorize_nv_with_policy_auth(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     index: u32,
     target: Handle,
 ) -> Result<(), u32> {
@@ -14636,7 +14500,7 @@ pub fn policy_authorize_nv_with_policy_auth(
 /// Runs `TPM2_PolicyNV` (operation `TPM_EO_EQ`) on policy `session`, returning the response code on
 /// failure.
 pub fn policy_nv(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth_handle: Handle,
     nv_index: u32,
     session: Handle,
@@ -14659,7 +14523,7 @@ pub fn policy_nv(
 
 /// Asserts that `TPM2_SetPrimaryPolicy` on `hierarchy` fails with `TPM_RC_NV_UNAVAILABLE` (to be
 /// called while NV is off).
-pub fn set_primary_policy_nv_off_check(sim: &mut Simulator<'_>, hierarchy: Handle) {
+pub fn set_primary_policy_nv_off_check(sim: &mut Tpm, hierarchy: Handle) {
     let rc = execute_with_password_sessions(
         sim,
         &SetPrimaryPolicy {
@@ -14675,7 +14539,7 @@ pub fn set_primary_policy_nv_off_check(sim: &mut Simulator<'_>, hierarchy: Handl
 }
 
 /// Writes `data` at offset 0 of `index`, authorized by the owner.
-pub fn write_nv_owner(sim: &mut Simulator<'_>, index: u32, data: &[u8]) {
+pub fn write_nv_owner(sim: &mut Tpm, index: u32, data: &[u8]) {
     run_pw(
         sim,
         NVWrite {
@@ -14733,11 +14597,7 @@ impl SimpleRng {
 }
 
 /// Returns the list of handles from `TPM_CAP_HANDLES` and `moreData`.
-pub fn cap_handles(
-    sim: &mut Simulator<'_>,
-    property: u32,
-    count: u32,
-) -> Result<(Vec<u32>, bool), u32> {
+pub fn cap_handles(sim: &mut Tpm, property: u32, count: u32) -> Result<(Vec<u32>, bool), u32> {
     let (more, data) = get_cap(sim, CAP_HANDLES, property, count)?;
     let n = u32::from_be_bytes(data[0..4].try_into().unwrap()) as usize;
     let handles = (0..n)
@@ -14748,18 +14608,18 @@ pub fn cap_handles(
 
 /// Runs `TPM2_Clear` authorized by `auth` with an empty password session, returning the response
 /// code on failure.
-pub fn clear(sim: &mut Simulator<'_>, auth: Handle) -> Result<(), u32> {
+pub fn clear(sim: &mut Tpm, auth: Handle) -> Result<(), u32> {
     execute_with_password_sessions(sim, &Clear { auth_handle: auth }, 1, &[]).map(|_| ())
 }
 
 /// Runs `TPM2_ClearControl(disable)` authorized by `auth`, returning the response code on failure.
-pub fn clear_control(sim: &mut Simulator<'_>, auth: Handle, disable: bool) -> Result<(), u32> {
+pub fn clear_control(sim: &mut Tpm, auth: Handle, disable: bool) -> Result<(), u32> {
     execute_with_password_sessions(sim, &ClearControl { auth, disable }, 1, &[]).map(|_| ())
 }
 
 /// Runs `TPM2_DictionaryAttackLockReset` with an empty lockout password, returning the response code
 /// on failure.
-pub fn da_lock_reset(sim: &mut Simulator<'_>) -> Result<(), u32> {
+pub fn da_lock_reset(sim: &mut Tpm) -> Result<(), u32> {
     execute_with_password_sessions(
         sim,
         &DictionaryAttackLockReset {
@@ -14773,12 +14633,7 @@ pub fn da_lock_reset(sim: &mut Simulator<'_>) -> Result<(), u32> {
 
 /// Runs `TPM2_DictionaryAttackParameters` with an empty lockout password, returning the response
 /// code on failure.
-pub fn da_parameters(
-    sim: &mut Simulator<'_>,
-    max: u32,
-    recovery: u32,
-    lockout: u32,
-) -> Result<(), u32> {
+pub fn da_parameters(sim: &mut Tpm, max: u32, recovery: u32, lockout: u32) -> Result<(), u32> {
     execute_with_password_sessions(
         sim,
         &DictionaryAttackParameters {
@@ -14794,12 +14649,7 @@ pub fn da_parameters(
 }
 
 /// Sets the dictionary-attack parameters with lockout authorization (empty password).
-pub fn da_parameters_unwrap(
-    sim: &mut Simulator<'_>,
-    max_tries: u32,
-    recovery: u32,
-    lockout_recovery: u32,
-) {
+pub fn da_parameters_unwrap(sim: &mut Tpm, max_tries: u32, recovery: u32, lockout_recovery: u32) {
     let mut params = max_tries.to_be_bytes().to_vec();
     params.extend_from_slice(&recovery.to_be_bytes());
     params.extend_from_slice(&lockout_recovery.to_be_bytes());
@@ -14814,7 +14664,7 @@ pub fn da_parameters_unwrap(
 /// Sends `TPM2_GetCapability(capability, property, count)`. On success returns `moreData` and
 /// the capability data that follows the `capability` selector.
 pub fn get_cap(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     capability: u32,
     property: u32,
     count: u32,
@@ -14865,7 +14715,7 @@ pub fn get_cap_with(sim: &mut Sim, sess: &mut Sess, attrs: u8) -> Resp {
 
 /// Runs `TPM2_GetTime` with password sessions; returns the decoded response or the error code.
 pub fn get_time(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     privacy_admin_handle: Handle,
     sign_handle: Handle,
     in_scheme: Option<TpmtSigScheme>,
@@ -14883,7 +14733,7 @@ pub fn get_time(
 /// Runs `TPM2_HierarchyControl(enable, state)` authorized by `auth`, returning the response code on
 /// failure.
 pub fn hierarchy_control(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth: Handle,
     enable: Handle,
     state: bool,
@@ -14902,12 +14752,7 @@ pub fn hierarchy_control(
 }
 
 /// `TPM2_HierarchyControl` with an empty password for `auth`; returns the response code.
-pub fn hierarchy_control_rc(
-    sim: &mut Simulator<'_>,
-    auth: Handle,
-    enable: Handle,
-    state: bool,
-) -> u32 {
+pub fn hierarchy_control_rc(sim: &mut Tpm, auth: Handle, enable: Handle, state: bool) -> u32 {
     let cmd = HierarchyControl {
         auth_handle: auth,
         enable,
@@ -14917,40 +14762,39 @@ pub fn hierarchy_control_rc(
 }
 
 /// Current `TPM_PT_LOCKOUT_COUNTER` value.
-pub fn lockout_counter(sim: &mut Simulator<'_>) -> u32 {
+pub fn lockout_counter(sim: &mut Tpm) -> u32 {
     get_tpm_property(sim, TpmPt::LOCKOUT_COUNTER)
 }
 
 /// Power-cycles the TPM (`_TPM_Init`) and makes NV available again.
-pub fn power_cycle(sim: &mut Simulator<'_>) {
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+pub fn power_cycle(sim: &mut Tpm) {
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
 }
 
 /// Power cycles the TPM, optionally after an orderly `TPM2_Shutdown(TPM_SU_CLEAR)`.
-pub fn power_cycle_orderly(sim: &mut Simulator<'_>, orderly: bool) {
+pub fn power_cycle_orderly(sim: &mut Tpm, orderly: bool) {
     if orderly {
         let shutdown = build_raw_cmd(ST_NO_SESSIONS, 0x145, &[], None, &0u16.to_be_bytes());
         assert_eq!(mssim_rc_of(sim, &shutdown), 0);
     }
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
     power_on_start_up(sim);
 }
 
 /// Optionally sends `TPM2_Shutdown(shutdown)`, power-cycles the TPM (`_TPM_Init`), enables NV
 /// and sends `TPM2_Startup(startup)`. Returns the Startup response code.
-pub fn power_cycle_with(sim: &mut Simulator<'_>, shutdown: Option<u16>, startup: u16) -> u32 {
+pub fn power_cycle_with(sim: &mut Tpm, shutdown: Option<u16>, startup: u16) -> u32 {
     if let Some(su) = shutdown {
         assert_eq!(shutdown_raw(sim, su), 0, "TPM2_Shutdown failed");
     }
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
     nv_on(sim);
     startup_raw(sim, 0, startup)
@@ -14964,20 +14808,20 @@ pub fn random_bytes(len: usize) -> &'static [u8] {
 }
 
 /// Executes `TPM2_ReadClock` and returns the current time info.
-pub fn read_clock(sim: &mut Simulator<'_>) -> TpmsTimeInfo {
+pub fn read_clock(sim: &mut Tpm) -> TpmsTimeInfo {
     sim.execute(ReadClock {})
         .expect("ReadClock failed")
         .current_time
 }
 
 /// Returns `(resetCount, restartCount)` as reported by `TPM2_ReadClock`.
-pub fn reset_restart_counts(sim: &mut Simulator<'_>) -> (u32, u32) {
+pub fn reset_restart_counts(sim: &mut Tpm) -> (u32, u32) {
     let info = sim.execute(ReadClock {}).unwrap().current_time.clock_info;
     (info.reset_count, info.restart_count)
 }
 
 /// The current `restartCount` as reported by `TPM2_ReadClock`.
-pub fn restart_count(sim: &mut Simulator<'_>) -> u32 {
+pub fn restart_count(sim: &mut Tpm) -> u32 {
     sim.execute(ReadClock {})
         .unwrap()
         .current_time
@@ -14987,12 +14831,7 @@ pub fn restart_count(sim: &mut Simulator<'_>) -> u32 {
 
 /// Sends a raw `TPM2_ClockRateAdjust(raw_adjust)` authorized by `auth_handle` with command tag
 /// `tag` and returns the response code.
-pub fn send_clock_rate_adjust(
-    sim: &mut Simulator<'_>,
-    auth_handle: u32,
-    raw_adjust: i8,
-    tag: u16,
-) -> u32 {
+pub fn send_clock_rate_adjust(sim: &mut Tpm, auth_handle: u32, raw_adjust: i8, tag: u16) -> u32 {
     let req = auth_command(
         tpm2::TpmCc::ClockRateAdjust,
         auth_handle,
@@ -15004,7 +14843,7 @@ pub fn send_clock_rate_adjust(
 
 /// Sends a raw `TPM2_ClockSet(new_time)` authorized by `auth_handle` with command tag `tag` and
 /// returns the response code.
-pub fn send_clock_set(sim: &mut Simulator<'_>, auth_handle: u32, new_time: u64, tag: u16) -> u32 {
+pub fn send_clock_set(sim: &mut Tpm, auth_handle: u32, new_time: u64, tag: u16) -> u32 {
     let req = auth_command(
         tpm2::TpmCc::ClockSet,
         auth_handle,
@@ -15016,7 +14855,7 @@ pub fn send_clock_set(sim: &mut Simulator<'_>, auth_handle: u32, new_time: u64, 
 
 /// `TPM2_DictionaryAttackLockReset(TPM_RH_LOCKOUT)`, with an empty password session if
 /// `with_session` is set (otherwise as a `TPM_ST_NO_SESSIONS` command).
-pub fn send_da_lock_reset(sim: &mut Simulator<'_>, with_session: bool) -> u32 {
+pub fn send_da_lock_reset(sim: &mut Tpm, with_session: bool) -> u32 {
     let num_sessions = usize::from(with_session);
     execute_with_password_sessions_status(
         sim,
@@ -15032,7 +14871,7 @@ pub fn send_da_lock_reset(sim: &mut Simulator<'_>, with_session: bool) -> u32 {
 
 /// `TPM2_DictionaryAttackParameters(TPM_RH_LOCKOUT, ...)` with an empty password session.
 pub fn send_da_parameters(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     new_max_tries: u32,
     new_recovery_time: u32,
     lockout_recovery: u32,
@@ -15053,7 +14892,7 @@ pub fn send_da_parameters(
 }
 
 /// Sets the DA parameters with lockoutAuth (empty).
-pub fn set_da_parameters(sim: &mut Simulator<'_>, max_tries: u32, recovery: u32, lockout: u32) {
+pub fn set_da_parameters(sim: &mut Tpm, max_tries: u32, recovery: u32, lockout: u32) {
     let mut params = Vec::new();
     params.extend_from_slice(&max_tries.to_be_bytes());
     params.extend_from_slice(&recovery.to_be_bytes());
@@ -15069,31 +14908,30 @@ pub fn set_da_parameters(sim: &mut Simulator<'_>, max_tries: u32, recovery: u32,
 }
 
 /// Raw `TPM2_Shutdown(shutdown_type)`; returns the response code.
-pub fn shutdown(sim: &mut Simulator<'_>, shutdown_type: u16) -> u32 {
+pub fn shutdown(sim: &mut Tpm, shutdown_type: u16) -> u32 {
     rc_of(&raw_mssim(sim, &u16_param_command(0x145, shutdown_type)))
 }
 
 /// Sends `TPM2_Shutdown(shutdown)`, power-cycles the TPM, enables NV and sends
 /// `TPM2_Startup(TPM_SU_CLEAR)`: with `TPM_SU_STATE` this is a TPM Restart (the clear
 /// count changes), with `TPM_SU_CLEAR` a TPM Reset (the total reset count changes).
-pub fn shutdown_and_start_clear(sim: &mut Simulator<'_>, shutdown: u16) {
+pub fn shutdown_and_start_clear(sim: &mut Tpm, shutdown: u16) {
     assert_eq!(send_u16_param_command(sim, TPM_CC_SHUTDOWN, shutdown), 0);
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     assert_eq!(send_u16_param_command(sim, TPM_CC_STARTUP, TPM_SU_CLEAR), 0);
 }
 
 /// Raw `TPM2_Shutdown(shutdown_type)`.
-pub fn shutdown_raw(sim: &mut Simulator<'_>, shutdown_type: u16) -> u32 {
+pub fn shutdown_raw(sim: &mut Tpm, shutdown_type: u16) -> u32 {
     raw_rc_at(sim, 0, &u16_param_command(0x145, shutdown_type))
 }
 
 /// Raw `TPM2_Shutdown(shutdown_type)`.
-pub fn shutdown_with_type(sim: &mut Simulator<'_>, shutdown_type: u8) -> u32 {
+pub fn shutdown_with_type(sim: &mut Tpm, shutdown_type: u8) -> u32 {
     raw_rc(
         sim,
         &[
@@ -15114,17 +14952,17 @@ pub fn shutdown_with_type(sim: &mut Simulator<'_>, shutdown_type: u8) -> u32 {
 }
 
 /// Raw `TPM2_Startup(startup_type)` at locality 0; returns the response code.
-pub fn startup(sim: &mut Simulator<'_>, startup_type: u16) -> u32 {
+pub fn startup(sim: &mut Tpm, startup_type: u16) -> u32 {
     rc_of(&raw_mssim(sim, &u16_param_command(0x144, startup_type)))
 }
 
 /// Raw `TPM2_Startup(startup_type)` at `locality`.
-pub fn startup_raw(sim: &mut Simulator<'_>, locality: u8, startup_type: u16) -> u32 {
+pub fn startup_raw(sim: &mut Tpm, locality: u8, startup_type: u16) -> u32 {
     raw_rc_at(sim, locality, &u16_param_command(0x144, startup_type))
 }
 
 /// Raw `TPM2_Startup(startup_type)`.
-pub fn startup_with_type(sim: &mut Simulator<'_>, startup_type: u8) -> u32 {
+pub fn startup_with_type(sim: &mut Tpm, startup_type: u8) -> u32 {
     raw_rc(
         sim,
         &[0x80, 0x01, 0, 0, 0, 0x0c, 0, 0, 0x01, 0x44, 0, startup_type],
@@ -15158,7 +14996,7 @@ pub struct Resp {
 }
 
 /// The simulator type used by the raw-session helpers.
-pub type Sim<'a> = Simulator<'a>;
+pub type Sim = Tpm;
 
 /// Helper to build `TpmiRsaKeyBits` values from integers (`TpmiCode::from(2048)`).
 pub struct TpmiCode;
@@ -15191,7 +15029,7 @@ pub fn bit(pcr: usize) -> [u8; 3] {
 
 /// Runs `TPM2_Certify` with password sessions.
 pub fn certify(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     object_handle: Handle,
     sign_handle: Handle,
     in_scheme: Option<TpmtSigScheme>,
@@ -15210,7 +15048,7 @@ pub fn certify(
 
 /// Runs `TPM2_CertifyCreation` with password sessions.
 pub fn certify_creation(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     sign_handle: Handle,
     object_handle: Handle,
     creation_hash: Tpm2bDigest<'static>,
@@ -15231,7 +15069,7 @@ pub fn certify_creation(
 }
 
 /// Runs TPM2_Commit without P1/P2 and returns the commit counter.
-pub fn commit(sim: &mut Simulator<'_>, key: Handle, auth: &[u8]) -> Result<u16, u32> {
+pub fn commit(sim: &mut Tpm, key: Handle, auth: &[u8]) -> Result<u16, u32> {
     let cmd = Commit {
         sign_handle: key,
         p1: Tpm2bEccPoint::default(),
@@ -15248,7 +15086,7 @@ pub fn counter_attrs() -> TpmaNv {
 
 /// Defines a PIN-pass NV index `index` (owner write, auth read, `noDA`) and initializes it with
 /// `pinCount = 0`, `pinLimit = 10`.
-pub fn define_pin_pass(sim: &mut Simulator<'_>, index: u32) {
+pub fn define_pin_pass(sim: &mut Tpm, index: u32) {
     let mut attributes = TpmaNv::OWNERWRITE | TpmaNv::AUTHREAD | TpmaNv::NO_DA;
     attributes.set_type(TpmNt::PinPass);
     define_nv_empty_policy(sim, index, attributes, 8);
@@ -15257,13 +15095,7 @@ pub fn define_pin_pass(sim: &mut Simulator<'_>, index: u32) {
 }
 
 /// Defines a platform index with an empty authValue.
-pub fn define_platform(
-    sim: &mut Simulator<'_>,
-    index: u32,
-    attributes: TpmaNv,
-    size: u16,
-    policy: &[u8],
-) {
+pub fn define_platform(sim: &mut Tpm, index: u32, attributes: TpmaNv, size: u16, policy: &[u8]) {
     try_define(
         sim,
         Handle::RH_PLATFORM,
@@ -15284,7 +15116,7 @@ pub fn ecdsa_dummy_sig() -> TpmtSignature<'static> {
 
 /// Completes an event sequence, extending `pcr` (or `TPM_RH_NULL`).
 pub fn event_sequence_complete(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     pcr: Handle,
     seq: Handle,
     data: &'static [u8],
@@ -15300,7 +15132,7 @@ pub fn event_sequence_complete(
 /// Starts SHA-256 sequences until the TPM runs out of object memory and returns the
 /// handles of the started sequences, asserting that the failing start returns
 /// `TPM_RC_OBJECT_MEMORY`.
-pub fn fill_sequence_slots(sim: &mut Simulator<'_>) -> Vec<Handle> {
+pub fn fill_sequence_slots(sim: &mut Tpm) -> Vec<Handle> {
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
@@ -15357,7 +15189,7 @@ pub fn hx(s: &str) -> Vec<u8> {
 }
 
 /// Runs `TPM2_IncrementalSelfTest(algs)` and returns the `toDoList`, or the response code.
-pub fn incremental_self_test(sim: &mut Simulator<'_>, algs: &[Alg]) -> Result<Vec<Alg>, u32> {
+pub fn incremental_self_test(sim: &mut Tpm, algs: &[Alg]) -> Result<Vec<Alg>, u32> {
     let cmd = IncrementalSelfTest {
         to_test: TpmlAlg::from_slice(algs).unwrap(),
     };
@@ -15367,7 +15199,7 @@ pub fn incremental_self_test(sim: &mut Simulator<'_>, algs: &[Alg]) -> Result<Ve
 }
 
 /// Whether `TPM2_ReadPublic` of `handle` succeeds.
-pub fn is_accessible(sim: &mut Simulator<'_>, handle: u32) -> bool {
+pub fn is_accessible(sim: &mut Tpm, handle: u32) -> bool {
     let cmd = ReadPublic {
         object_handle: Handle(handle),
     };
@@ -15401,8 +15233,8 @@ pub fn make_exclusive(sim: &mut Sim, sess: &mut Sess) {
 }
 
 /// Creates a powered-on, started simulator.
-pub fn new_sim() -> Sim<'static> {
-    create_simulator!()
+pub fn new_sim() -> Sim {
+    Tpm::new()
 }
 
 /// A `TPM2_PolicySecret` ticket for the owner hierarchy with an all-zero digest (a NULL-like
@@ -15412,12 +15244,7 @@ pub fn null_secret_ticket() -> TpmtTkAuth<'static> {
 }
 
 /// `TPM2_NV_Write` of `data` at `offset`, authorized by `TPM_RH_OWNER`.
-pub fn owner_write(
-    sim: &mut Simulator<'_>,
-    index: u32,
-    offset: u16,
-    data: &[u8],
-) -> Result<(), u32> {
+pub fn owner_write(sim: &mut Tpm, index: u32, offset: u16, data: &[u8]) -> Result<(), u32> {
     let cmd = NVWrite {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(index),
@@ -15464,7 +15291,7 @@ pub fn platform_attrs(nt: TpmNt, extra: TpmaNv) -> TpmaNv {
 ///   TPMT_SENSITIVE` with the authValue padded to the nameAlg digest size;
 /// - a C-format blob built by the client loads with `TPM2_Load` and unseals.
 pub fn private_area_format_round_trip() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let parent_seed = [0xa5u8; 32];
     let parent = load_known_seed_parent(&mut sim, srk, &parent_seed);
@@ -15569,7 +15396,7 @@ pub fn public_of(public: &Tpm2bPublic<'static>) -> TpmtPublic<'static> {
 
 /// Runs `TPM2_Quote` (empty PCR selection) with password sessions.
 pub fn quote(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     sign_handle: Handle,
     in_scheme: Option<TpmtSigScheme>,
 ) -> Result<tpm2::commands::responses::Quote<'static>, u32> {
@@ -15594,7 +15421,7 @@ pub fn read_2b(buf: &[u8], off: &mut usize) -> Vec<u8> {
 
 /// `TPM2_NV_Read`, authorized by `auth_handle` with an empty password.
 pub fn read_as(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth_handle: Handle,
     index: u32,
     offset: u16,
@@ -15610,7 +15437,7 @@ pub fn read_as(
 }
 
 /// Reads `pinCount` of a PIN index with ownerAuth.
-pub fn read_pin_count(sim: &mut Simulator<'_>, index: u32) -> u32 {
+pub fn read_pin_count(sim: &mut Tpm, index: u32) -> u32 {
     let (code, out) = send_with_auth_entries(
         sim,
         TpmCc::NVRead,
@@ -15624,7 +15451,7 @@ pub fn read_pin_count(sim: &mut Simulator<'_>, index: u32) -> u32 {
 }
 
 /// The plain-text firmware version reported by `TPM_PT_FIRMWARE_VERSION_1/2`.
-pub fn reported_firmware_version(sim: &mut Simulator<'_>) -> u64 {
+pub fn reported_firmware_version(sim: &mut Tpm) -> u64 {
     let v1 = get_tpm_property(sim, TpmPt::FIRMWARE_VERSION_1) as u64;
     let v2 = get_tpm_property(sim, TpmPt::FIRMWARE_VERSION_2) as u64;
     (v1 << 32) | v2
@@ -15642,7 +15469,7 @@ pub fn sdo_user() -> TpmaObject {
 
 /// Completes a hash sequence for `hierarchy`.
 pub fn sequence_complete(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     seq: Handle,
     data: &'static [u8],
     hierarchy: Handle,
@@ -15656,11 +15483,7 @@ pub fn sequence_complete(
 }
 
 /// Feeds `data` into a sequence.
-pub fn sequence_update(
-    sim: &mut Simulator<'_>,
-    seq: Handle,
-    data: &'static [u8],
-) -> Result<(), u32> {
+pub fn sequence_update(sim: &mut Tpm, seq: Handle, data: &'static [u8]) -> Result<(), u32> {
     let cmd = SequenceUpdate {
         sequence_handle: seq,
         buffer: Tpm2bMaxBuffer::from_bytes(data).unwrap(),
@@ -15670,7 +15493,7 @@ pub fn sequence_update(
 
 /// Starts a SHA-256 session bound to `bind` (flushing all other sessions).
 pub fn start_bound(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     bind: Handle,
     bind_auth: &[u8],
     session_type: TpmSe,
@@ -15691,7 +15514,7 @@ pub fn start_bound(
 /// Starts an unbound, unsalted session of `session_type`, keeping the sessions in `keep` loaded
 /// and flushing all others.
 pub fn start_keep(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     session_type: TpmSe,
     hash: TpmiAlgHash,
     keep: &[Handle],
@@ -15711,12 +15534,7 @@ pub fn start_keep(
 
 /// Starts a salted HMAC session with `tpm_key`, `bind` and the encrypted `salt`, returning the
 /// response code on failure.
-pub fn start_salted(
-    sim: &mut Simulator<'_>,
-    tpm_key: Handle,
-    bind: Handle,
-    salt: &[u8],
-) -> Result<(), u32> {
+pub fn start_salted(sim: &mut Tpm, tpm_key: Handle, bind: Handle, salt: &[u8]) -> Result<(), u32> {
     run_command(
         sim,
         StartAuthSession {
@@ -15733,7 +15551,7 @@ pub fn start_salted(
 }
 
 /// Starts a hash (or, with `hash_alg == None`, event) sequence with an empty authValue.
-pub fn start_sequence(sim: &mut Simulator<'_>, hash_alg: Option<TpmiAlgHash>) -> Handle {
+pub fn start_sequence(sim: &mut Tpm, hash_alg: Option<TpmiAlgHash>) -> Handle {
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg,
@@ -15743,7 +15561,7 @@ pub fn start_sequence(sim: &mut Simulator<'_>, hash_alg: Option<TpmiAlgHash>) ->
 }
 
 /// Starts a hash sequence for `alg` and returns its handle.
-pub fn start_sequence_alg(sim: &mut Simulator<'_>, alg: TpmiAlgHash) -> Handle {
+pub fn start_sequence_alg(sim: &mut Tpm, alg: TpmiAlgHash) -> Handle {
     let start_cmd = HashSequenceStart {
         auth: Default::default(),
         hash_alg: Some(alg),
@@ -15765,17 +15583,17 @@ pub fn storage_attrs() -> TpmaObject {
 
 /// Performs `TPM2_Shutdown(TPM_SU_CLEAR)`, a power cycle and `TPM2_Startup(TPM_SU_CLEAR)`
 /// (a TPM Reset).
-pub fn tpm_reset(sim: &mut Simulator<'_>) {
+pub fn tpm_reset(sim: &mut Tpm) {
     let shutdown = build_raw_cmd(ST_NO_SESSIONS, 0x145, &[], None, &0u16.to_be_bytes());
     assert_eq!(mssim_rc_of(sim, &shutdown), 0, "TPM2_Shutdown failed");
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
     power_on_start_up(sim);
 }
 
 /// `TPM2_NV_DefineSpace` with a password session (empty hierarchy auth).
 pub fn try_define(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth_handle: Handle,
     auth: &[u8],
     public: TpmsNvPublic<'static>,
@@ -15790,14 +15608,14 @@ pub fn try_define(
 
 /// Returns a simulator that has been powered on with NV available but has not yet received
 /// `TPM2_Startup`, and that has never been shut down orderly (so only `TPM_SU_CLEAR` is valid).
-pub fn unstarted_simulator() -> Simulator<'static> {
-    let mut sim = create_simulator!();
+pub fn unstarted_simulator() -> Tpm {
+    let mut sim = Tpm::new();
     power_cycle(&mut sim);
     sim
 }
 
 /// Current `pcrUpdateCounter` as reported by `TPM2_PCR_Read`.
-pub fn update_counter(sim: &mut Simulator<'_>) -> u32 {
+pub fn update_counter(sim: &mut Tpm) -> u32 {
     pcr_read(sim, &[(ALG_SHA256, [0, 0, 0])]).update_counter
 }
 
@@ -15820,7 +15638,7 @@ pub fn with_unique(mut public: TpmtPublic<'static>) -> TpmtPublic<'static> {
 }
 
 /// Writes `pinCount || pinLimit` to a PIN index with ownerAuth.
-pub fn write_pin(sim: &mut Simulator<'_>, index: u32, count: u32, limit: u32) {
+pub fn write_pin(sim: &mut Tpm, index: u32, count: u32, limit: u32) {
     let data = [count.to_be_bytes(), limit.to_be_bytes()].concat();
     let code = send_rc_with_auth_entries(
         sim,
@@ -15834,7 +15652,7 @@ pub fn write_pin(sim: &mut Simulator<'_>, index: u32, count: u32, limit: u32) {
 
 /// Equivalent of the Go `getExpectedPCRDigest` helper: reads the selected
 /// PCRs and returns the SHA-256 digest of their concatenated values.
-pub fn get_expected_pcr_digest(sim: &mut Simulator<'_>, selection: &TpmlPcrSelection) -> Vec<u8> {
+pub fn get_expected_pcr_digest(sim: &mut Tpm, selection: &TpmlPcrSelection) -> Vec<u8> {
     let read_cmd = tpm2::commands::PCRRead {
         pcr_selection_in: *selection,
     };
@@ -15859,7 +15677,7 @@ pub fn get_expected_pcr_digest(sim: &mut Simulator<'_>, selection: &TpmlPcrSelec
 /// Sends `TPM2_SetCommandCodeAuditStatus(auth, auditAlg, setList, clearList)` with an
 /// empty-password session for `auth` and returns the response code.
 pub fn set_command_code_audit_status(
-    sim: &mut Simulator<'_>,
+    sim: &mut Tpm,
     auth: u32,
     audit_alg: u16,
     set_list: &[u32],
@@ -15878,7 +15696,7 @@ pub fn set_command_code_audit_status(
 
 /// Returns `(moreData, commandCodes)` of
 /// `TPM2_GetCapability(TPM_CAP_AUDIT_COMMANDS, property, propertyCount)`.
-pub fn audit_commands(sim: &mut Simulator<'_>, property: u32, count: u32) -> (bool, Vec<u32>) {
+pub fn audit_commands(sim: &mut Tpm, property: u32, count: u32) -> (bool, Vec<u32>) {
     let mut params = 4u32.to_be_bytes().to_vec();
     params.extend_from_slice(&property.to_be_bytes());
     params.extend_from_slice(&count.to_be_bytes());
@@ -15915,7 +15733,7 @@ pub struct CommandAuditReport {
 /// Executes `TPM2_GetCommandAuditDigest(TPM_RH_ENDORSEMENT, TPM_RH_NULL)` with empty-password
 /// sessions (an unsigned report, which leaves the audit digest unchanged) and returns its
 /// command audit information.
-pub fn command_audit_report(sim: &mut Simulator<'_>) -> CommandAuditReport {
+pub fn command_audit_report(sim: &mut Tpm) -> CommandAuditReport {
     // qualifyingData = empty, inScheme = TPM_ALG_NULL.
     let cmd = build_pw_cmd(
         0x133,

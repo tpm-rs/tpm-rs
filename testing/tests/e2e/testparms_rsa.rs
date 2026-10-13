@@ -1,17 +1,17 @@
 //! TPM2_TestParms with RSA parameters: key sizes, exponent, schemes and symmetric definitions.
 
 use crate::_common::{execute_test_parms, execute_test_parms_corrupted};
+use testing::tpm::Tpm;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     AlgSym, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsRsaParms,
     TpmtPublicParms, TpmtRsaScheme, TpmtSymDefObject,
 };
-use tpm2_simulator::create_simulator;
 
 /// TPM2_TestParms accepts valid RSA parameters.
 #[test]
 fn accepts_valid_rsa() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Valid RSA parameters
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
@@ -29,7 +29,7 @@ fn accepts_valid_rsa() {
 /// only unmarshaling errors (Part 3, TPM2_TestParms).
 #[test]
 fn accepts_any_rsa_exponent() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,
@@ -45,7 +45,7 @@ fn accepts_any_rsa_exponent() {
 /// TPM2_TestParms rejects unsupported RSA key bits with TPM_RC_VALUE.
 #[test]
 fn rejects_rsa_key_bits() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Invalid RSA key bits
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
@@ -62,7 +62,7 @@ fn rejects_rsa_key_bits() {
 /// TPM2_TestParms rejects an RSA scheme with an invalid hash with TPM_RC_HASH.
 #[test]
 fn rejects_rsa_scheme_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,
@@ -80,7 +80,7 @@ fn rejects_rsa_scheme_hash() {
 /// TPM2_TestParms rejects RSA parms with 999-bit symmetric key with TPM_RC_VALUE.
 #[test]
 fn rejects_rsa_symmetric_key_bits() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // RSA with invalid symmetric block cipher key bits (999)
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
@@ -102,7 +102,7 @@ fn rejects_rsa_symmetric_key_bits() {
 /// TPM2_TestParms rejects RSA parms with an ECDSA scheme with TPM_RC_VALUE.
 #[test]
 fn rejects_rsa_with_ecdsa_scheme() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // RSA with ECDSA scheme (invalid for RSA)
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
@@ -121,7 +121,7 @@ fn rejects_rsa_with_ecdsa_scheme() {
 /// TPM2_TestParms rejects RSA parms with XOR as symmetric algorithm with TPM_RC_SYMMETRIC.
 #[test]
 fn rejects_rsa_xor_symmetric() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,

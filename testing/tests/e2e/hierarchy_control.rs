@@ -5,15 +5,15 @@ use crate::_common::{
     create_storage_primary_with_auth, evict, execute_with_password_sessions, hierarchy_control,
     mssim_rc_of, nv_off, nv_on, nv_unavailable, object_exists, rc_p, shutdown_raw,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::*;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 /// HierarchyControl runs RETURN_IF_ORDERLY before changing state, and a no-op call needs no NV.
 #[test]
 fn orderly_check_before_state_change() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Make the TPM orderly again so that RETURN_IF_ORDERLY needs NV.
     assert_eq!(shutdown_raw(&mut sim, SU_CLEAR), 0);
     nv_off(&mut sim);
@@ -32,7 +32,7 @@ fn orderly_check_before_state_change() {
 /// Same ordering through the engine path (owner re-enable no-op is not AUTH_TYPE).
 #[test]
 fn owner_noop_and_failed_disable_keep_state() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     assert_eq!(
         hierarchy_control(
             &mut sim,
@@ -61,7 +61,7 @@ fn owner_noop_and_failed_disable_keep_state() {
 /// Same evict-object behavior through the generic hierarchy finding.
 #[test]
 fn owner_reenable_rules_and_change_pps_flush() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Owner may "enable" the already enabled storage hierarchy (no-op success).
     hierarchy_control(&mut sim, Handle::RH_OWNER, Handle::RH_OWNER, true).unwrap();
     hierarchy_control(
@@ -105,7 +105,7 @@ fn owner_reenable_rules_and_change_pps_flush() {
 /// parameter order.
 #[test]
 fn parameters_validated_after_auth_in_order() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Both parameters invalid: `enable` (parameter 1) is reported.
     let mut params = 0x4000_0005u32.to_be_bytes().to_vec();
     params.push(2);
@@ -125,7 +125,7 @@ fn parameters_validated_after_auth_in_order() {
 /// HierarchyControl: phEnableNV can be SET again, and owner may no-op enable.
 #[test]
 fn ph_enable_nv_reenable_and_owner_noop() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     hierarchy_control(&mut sim, Handle::RH_PLATFORM, Handle::RH_PLATFORM_NV, false).unwrap();
     hierarchy_control(&mut sim, Handle::RH_PLATFORM, Handle::RH_PLATFORM_NV, true)
         .expect("phEnableNV could not be re-enabled");

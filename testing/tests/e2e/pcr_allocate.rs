@@ -1,10 +1,10 @@
 //! TPM2_PCR_Allocate: allocation rules, required PCRs, NV requirements and activation on reset.
 
 use crate::_common::{send_raw_at as send_at, *};
+use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::responses;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 /// PCR_Allocate changes only the NV allocation, active after the next TPM Reset and kept across resets.
 ///
@@ -12,7 +12,7 @@ use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 /// Reset, and kept across it); `TPM2_PCR_SetAuthPolicy` requires NV.
 #[test]
 fn allocation_takes_effect_after_reset() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let before = cap_pcrs(&mut sim);
     let sha1_before = before
         .iter()
@@ -51,7 +51,7 @@ fn allocation_takes_effect_after_reset() {
 /// allocated in any bank fails with `TPM_RC_PCR`.
 #[test]
 fn allocation_without_crtm_or_drtm_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sha1_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha1, &[0x00, 0x00, 0x00]).unwrap();
     let sha256_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0x00, 0x00, 0x00]).unwrap();
@@ -74,7 +74,7 @@ fn allocation_without_crtm_or_drtm_rejected() {
 /// `sizeAvailable`, and checks NV availability unconditionally.
 #[test]
 fn drtm_pcr_required_and_size_reporting() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Removing PCR 17 from every bank while keeping PCR 18 is rejected.
     let no17 = [0xFF, 0xFF, 0xFD];
@@ -110,7 +110,7 @@ fn drtm_pcr_required_and_size_reporting() {
 /// `TPM2_PCR_Allocate` under the owner hierarchy fails.
 #[test]
 fn owner_allocate_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sha256_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0xFF, 0xFF, 0xFF]).unwrap();
     let rsp = send_at(
@@ -131,7 +131,7 @@ fn owner_allocate_rejected() {
 /// with `TPM_RC_TYPE` while `TPM2_Shutdown(CLEAR)` succeeds.
 #[test]
 fn pending_allocation_blocks_shutdown_state() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Reallocate PCRs
     let sha256_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0xFF, 0xFF, 0xFF]).unwrap();
@@ -165,7 +165,7 @@ fn pending_allocation_blocks_shutdown_state() {
 /// C reference's `maxPCR`, `sizeNeeded` and `sizeAvailable`.
 #[test]
 fn platform_allocate_reports_sizes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sha256_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0xFF, 0xFF, 0xFF]).unwrap();
     let rsp = send_at(
@@ -199,7 +199,7 @@ fn platform_allocate_reports_sizes() {
 /// and Startup(CLEAR) the new SHA-384 bank is allocated.
 #[test]
 fn sha384_bank_active_after_startup_clear() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Allocate PCRs: enable sha256 and sha384 with [0xFF, 0xFF, 0xFF]
     let sha256_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0xFF, 0xFF, 0xFF]).unwrap();
@@ -223,12 +223,11 @@ fn sha384_bank_active_after_startup_clear() {
 
     // 3. Power cycle (_TPM_Init) followed by Startup(CLEAR). C reloads gp.pcrAllocated from NV
     // at _TPM_Init.
-    sim.signal_platform(SimulatorPlatformSignal::PowerOff, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
-    sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
-        .unwrap();
+    sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     assert_eq!(rc_of(&send_at(&mut sim, 0, &STARTUP_CLEAR)), 0);
 
     // 4. Verify that the configured PCR allocation took effect at the TPM Reset

@@ -7,6 +7,7 @@ use crate::_common::{
     command_rc, execute_with_password_sessions, execute_with_password_sessions_status,
     make_template, marshal_to_slice, owner_srk, rc_p, sealed_template, sensitive_create,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{CreateLoaded, CreatePrimary};
 use tpm2::errors::TpmRc;
 use tpm2::{
@@ -15,12 +16,11 @@ use tpm2::{
     TpmCc, TpmEccCurve, TpmaObject, TpmiAlgHash, TpmsEccParms, TpmsEccPoint, TpmsRsaParms,
     TpmsSchemeEcdaa, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtRsaScheme,
 };
-use tpm2_simulator::create_simulator;
 
 /// CreateLoaded with a 40-byte userAuth for a SHA-256 key fails with TPM_RC_SIZE.
 #[test]
 fn auth_longer_than_name_alg_digest_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = [0x41u8; 40]; // 40 bytes, > SHA256 (32 bytes)
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::from_bytes(&password).unwrap(),
@@ -78,7 +78,7 @@ fn auth_longer_than_name_alg_digest_rejected() {
 /// TPM2_CreateLoaded of a primary on TPM_RH_OWNER with large sensitive data and sensitiveDataOrigin set is accepted
 #[test]
 fn create_loaded_primary_discards_large_sensitive_data() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Large sensitive data
     let large_data = [0u8; 128];
@@ -136,7 +136,7 @@ fn create_loaded_primary_discards_large_sensitive_data() {
 /// CreateLoaded with parent 0xFFFFFFFF fails.
 #[test]
 fn invalid_permanent_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -184,7 +184,7 @@ fn invalid_permanent_parent_rejected() {
 /// CreateLoaded under a parent without DECRYPT is TPM_RC_TYPE + RC_H1
 #[test]
 fn non_storage_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
@@ -259,7 +259,7 @@ fn non_storage_parent_rejected() {
 /// CreateLoaded with parentHandle = TPM_RH_NULL creates a primary-like object successfully.
 #[test]
 fn null_hierarchy_parent_succeeds() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -311,7 +311,7 @@ fn null_hierarchy_parent_succeeds() {
 /// CreateLoaded with a NULL nameAlg in the template fails with HASH+P2.
 #[test]
 fn null_name_alg_rejected_as_hash_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let mut t = sealed_template(TpmiAlgHash::Sha256, TpmaObject::empty());
     t.name_alg = None;
@@ -330,7 +330,7 @@ fn null_name_alg_rejected_as_hash_error() {
 /// CreateLoaded with trailing garbage after the public template fails.
 #[test]
 fn trailing_bytes_in_public_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::from_bytes(b"pass").unwrap(),
@@ -389,7 +389,7 @@ fn trailing_bytes_in_public_rejected() {
 /// CreateLoaded with trailing garbage inside inSensitive is rejected.
 #[test]
 fn trailing_bytes_in_sensitive_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::from_bytes(b"pass").unwrap(),
@@ -485,7 +485,7 @@ fn trailing_bytes_in_sensitive_rejected() {
 /// CreateLoaded with an unloaded transient parent handle fails.
 #[test]
 fn unloaded_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let tpmt_sensitive = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::from_bytes(b"pass").unwrap(),

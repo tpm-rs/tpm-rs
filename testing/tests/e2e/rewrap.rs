@@ -1,17 +1,17 @@
 //! TPM2_Rewrap: re-wrapping duplication blobs between parents and blob validation.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::Rewrap;
 use tpm2::errors::TpmRc;
 use tpm2::{Handle, Tpm2bEncryptedSecret, Tpm2bName, Tpm2bPrivate, *};
-use tpm2_simulator::create_simulator;
 
 /// Rewrap to an ECC/NULL parent produces a fresh seed that imports and loads; max-size unwrapped duplicate is VALUE+P1.
 ///
 /// tpm2-rewrap-reuses-old-protection-seed-instead
 #[test]
 fn fresh_seed_for_new_parent() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let ecc_parent = try_create_primary_in(
         &mut sim,
@@ -85,7 +85,7 @@ fn fresh_seed_for_new_parent() {
 /// tpm2-rewrap-unwrap-outer-and-overflow-missing-rc-p1-error-positions
 #[test]
 fn malformed_duplicate_error_positions() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let parent = try_create_primary_in(
         &mut sim,
@@ -152,7 +152,7 @@ fn malformed_duplicate_error_positions() {
 /// Rewrap with NULL old and new parents returns the input blob and an empty seed.
 #[test]
 fn null_parents_pass_blob_through() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let test_blob = [1, 2, 3, 4, 5, 6, 7, 8];
     let cmd = Rewrap {
@@ -173,7 +173,7 @@ fn null_parents_pass_blob_through() {
 /// Rewrap with a non-empty inSymSeed and NULL oldParent fails.
 #[test]
 fn seed_with_null_old_parent_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Non-empty in_sym_seed with RHNull old_parent must return handle error
     let cmd = Rewrap {

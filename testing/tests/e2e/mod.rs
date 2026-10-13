@@ -1,7 +1,8 @@
 //! End-to-end tests of the full TPM stack, one file per command or feature
-//! area. Every test talks to an in-process `tpm-rs` simulator (created with
-//! `tpm2_simulator::create_simulator!()`) through its command interface only;
-//! shared helpers live in the `testing` library (`testing::_common`).
+//! area. Every test talks to a `testing::tpm::Tpm` (an in-process `tpm-rs`
+//! simulator, mirrored to the TCG C reference TPM with the `differential`
+//! feature) through its command interface only; shared helpers live in the
+//! `testing` library (`testing::_common`).
 
 #![forbid(unsafe_code)]
 #![allow(dead_code)]

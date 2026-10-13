@@ -1,18 +1,18 @@
 //! TPM2_PolicySigned: signature verification, digest updates and handle/key validation.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 use tpm2::commands::PolicySigned;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bDigest, Tpm2bNonce, Tpm2bPublicKeyRsa, TpmCc, TpmSe, TpmaObject,
     TpmiAlgHash, TpmsSignatureEcc, TpmtHa, TpmtPublic, TpmtSigScheme, TpmtSignature,
 };
-use tpm2_simulator::create_simulator;
 
 /// PolicySigned with an ECDSA signature updates the policy digest as specified (including policyRef)
 #[test]
 fn ecc_signature_updates_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let (key_handle, auth_name) = create_ecc_key(&mut sim);
     let session = start_policy_session(&mut sim);
@@ -74,7 +74,7 @@ fn ecc_signature_updates_digest() {
 /// PolicySigned rejects unloaded/non-object handles in trial sessions and validates the handle before nonce checks.
 #[test]
 fn handle_validated_before_parameter_checks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sig = TpmtSignature::Hmac(TpmtHa::new(TpmiAlgHash::Sha256, &[0; 32]).unwrap());
     // Trial session: unloaded transient and non-object handles are rejected.
     let trial = start_session_with_hash(&mut sim, TpmSe::Trial, TpmiAlgHash::Sha256).session_handle;
@@ -109,7 +109,7 @@ fn handle_validated_before_parameter_checks() {
 /// PolicySigned rejects public-only KEYEDHASH keys and HMAC hash mismatches (SIGNATURE+P5); a correct HMAC verifies.
 #[test]
 fn hmac_public_only_key_and_scheme_mismatch() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // 1. A public-only KEYEDHASH key cannot verify (forgeable with an empty HMAC key).
     let key = load_public_only_hmac_key(&mut sim);
     let policy =
@@ -146,7 +146,7 @@ fn hmac_public_only_key_and_scheme_mismatch() {
 /// PolicySigned with an invalid signature fails
 #[test]
 fn incorrect_signature_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let (key_handle, _) = create_ecc_key(&mut sim);
     let session = start_policy_session(&mut sim);
@@ -178,7 +178,7 @@ fn incorrect_signature_rejected() {
 /// TPM2_PolicySigned with a negative expiration returns a TPM_ST_AUTH_SIGNED ticket
 #[test]
 fn policy_signed_negative_expiration_returns_ticket() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, _) = create_signing_key_name_bytes(&mut sim);
 
     // 1. Start a policy session
@@ -201,7 +201,7 @@ fn policy_signed_negative_expiration_returns_ticket() {
 /// TPM2_PolicySigned with expiration=1s succeeds, then after 1s fails with TPM_RC_EXPIRED + P4
 #[test]
 fn policy_signed_rejects_after_expiration_passes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, _) = create_signing_key_name_bytes(&mut sim);
 
     // 1. Start a policy session
@@ -232,7 +232,7 @@ fn policy_signed_rejects_after_expiration_passes() {
 /// TPM2_PolicySigned with an ECDSA signature for an RSA key fails with TPM_RC_SCHEME + P5
 #[test]
 fn policy_signed_rejects_ecdsa_signature_for_rsa_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, _) = create_signing_key_name_bytes(&mut sim); // This creates an RSA key
 
     // 1. Start a policy session
@@ -256,7 +256,7 @@ fn policy_signed_rejects_ecdsa_signature_for_rsa_key() {
 /// TPM2_PolicySigned with a signature over a wrong nonceTPM fails with TPM_RC_SIGNATURE
 #[test]
 fn policy_signed_rejects_signature_over_wrong_nonce() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, _) = create_signing_key_name_bytes(&mut sim);
 
     // 1. Start a policy session
@@ -278,7 +278,7 @@ fn policy_signed_rejects_signature_over_wrong_nonce() {
 /// TPM2_PolicySigned with a symmetric key as authObject fails with TPM_RC_KEY
 #[test]
 fn policy_signed_rejects_symmetric_auth_object() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a symmetric key and load it
     let (sym_key, _) = create_primary(
@@ -313,7 +313,7 @@ fn policy_signed_rejects_symmetric_auth_object() {
 /// TPM2_PolicySigned with a tampered RSA-PSS signature fails with TPM_RC_SIGNATURE + P5
 #[test]
 fn policy_signed_rejects_tampered_signature() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, _) = create_signing_key_name_bytes(&mut sim);
 
     // 1. Start a policy session
@@ -348,7 +348,7 @@ fn policy_signed_rejects_tampered_signature() {
 /// TPM2_PolicySigned on a trial session skips the signature check and extends the digest with keyName and policyRef
 #[test]
 fn policy_signed_trial_session_updates_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (key, key_name) = create_signing_key_name_bytes(&mut sim);
 
     // 1. Start a trial session
@@ -386,7 +386,7 @@ fn policy_signed_trial_session_updates_digest() {
 #[test]
 fn public_only_hmac_and_unloaded_trial_handle() {
     // Parts 1-3 (part 4, LoadExternal phEnable, is handed over to fix-objects).
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let key = load_public_only_hmac_key(&mut sim);
     let policy =
         start_session_with_hash(&mut sim, TpmSe::Policy, TpmiAlgHash::Sha256).session_handle;
@@ -409,7 +409,7 @@ fn public_only_hmac_and_unloaded_trial_handle() {
 /// PolicySigned with an RSA signature on an ECC key fails with SCHEME; trial with unloaded authObject fails.
 #[test]
 fn rsa_signature_on_ecc_key_is_scheme_error() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (ecc_key, _) = create_primary(&mut sim, ecc_signing_template(TpmiAlgHash::Sha256));
     let policy =
         start_session_with_hash(&mut sim, TpmSe::Policy, TpmiAlgHash::Sha256).session_handle;
@@ -429,7 +429,7 @@ fn rsa_signature_on_ecc_key_is_scheme_error() {
 /// PolicySigned with an RSA signature updates the digest and returns no ticket for expiration 0
 #[test]
 fn rsa_signature_updates_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let (key_handle, _) = create_rsa_key(&mut sim);
     let session = start_policy_session(&mut sim);
@@ -473,7 +473,7 @@ fn rsa_signature_updates_digest() {
 /// PolicySigned in a trial session uses the loaded object Name and rejects unloaded handles (REFERENCE_H0).
 #[test]
 fn trial_requires_loaded_object() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let trial = start_session_with_hash(&mut sim, TpmSe::Trial, TpmiAlgHash::Sha256).session_handle;
     let sig = TpmtSignature::Hmac(TpmtHa::new(TpmiAlgHash::Sha256, &[0; 32]).unwrap());
     assert_eq!(

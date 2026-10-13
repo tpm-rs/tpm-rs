@@ -6,18 +6,18 @@ use crate::_common::{
     execute_with_password_sessions_status, flush_context, make_ecc_public_area,
     make_keyed_hash_public_area_obfuscated, make_rsa_public_area_opt_name_alg,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{LoadExternal, Sign, VerifySignature};
 use tpm2::{
     Handle, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bLabel, Tpm2bMaxBuffer,
     Tpm2bPrivateKeyRsa, Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmaObject, TpmiAlgHash,
     TpmtSensitive, TpmtTkHashcheck, TpmuSensitiveComposite,
 };
-use tpm2_simulator::create_simulator;
 
 /// An externally loaded ECC private key can be used with TPM2_Sign.
 #[test]
 fn ecc_external_key_signs() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -47,7 +47,7 @@ fn ecc_external_key_signs() {
 /// A loaded external ECC public key verifies a signature produced by the TPM.
 #[test]
 fn ecc_public_key_verifies_tpm_signature() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -92,7 +92,7 @@ fn ecc_public_key_verifies_tpm_signature() {
 /// An externally loaded keyedHash key computes a TPM2_HMAC.
 #[test]
 fn keyed_hash_external_key_computes_hmac() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let seed_value = Tpm2bDigest::from_bytes(b"obfuscation is my middle name!!!").unwrap();
     let sensitive_data = Tpm2bSensitiveData::from_bytes(b"secrets").unwrap();
     let sensitive_create = TpmtSensitive {
@@ -127,7 +127,7 @@ fn keyed_hash_external_key_computes_hmac() {
 /// An externally loaded RSA private key decrypts with TPM2_RSA_Decrypt.
 #[test]
 fn rsa_external_key_decrypts() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -160,7 +160,7 @@ fn rsa_external_key_decrypts() {
 /// A loaded external RSA public key verifies a signature produced by the TPM.
 #[test]
 fn rsa_public_key_verifies_tpm_signature() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),

@@ -5,16 +5,16 @@ use crate::_common::{
     create_owner_primary, raw_rc, rsa_storage_template, start_auth_session,
     start_auth_session_request,
 };
+use testing::tpm::Tpm;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmSe, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// Regression test for CPCTPM_TC2_4_13_01_03:
 /// TPM2_StartAuthSession with symmetric = TPMT_SYM_DEF(AES, 0, NULL) and wrong salt sizes
 /// must return TPM_RC_VALUE (Pos4, 0x0403 or Pos2, 0x0203).
 #[test]
 fn invalid_symmetric_and_salt_size_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Create RSA primary key
     let rsa_key_handle = create_owner_primary(&mut sim, rsa_storage_template());
@@ -41,7 +41,7 @@ fn invalid_symmetric_and_salt_size_rejected() {
 /// Two HMAC sessions receive different TPM nonces.
 #[test]
 fn nonce_tpm_differs_between_sessions() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sess1 = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -68,7 +68,7 @@ fn nonce_tpm_differs_between_sessions() {
 /// An HMAC session with SHA-1 authHash starts.
 #[test]
 fn sha1_session_starts() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let _sess = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -84,7 +84,7 @@ fn sha1_session_starts() {
 /// An HMAC session with SHA-384 authHash starts.
 #[test]
 fn sha384_session_starts() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let _sess = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -100,7 +100,7 @@ fn sha384_session_starts() {
 /// An unbound, unsalted HMAC session has an empty session key.
 #[test]
 fn unbound_unsalted_session_key_is_empty() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sess = start_auth_session(
         &mut sim,
         Handle::RH_NULL,

@@ -1,6 +1,7 @@
 //! TPM2_PolicyDuplicationSelect: includeObject, name sizes and digest updates.
 
 use crate::_common::*;
+use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{
     CreateLoaded, Duplicate, PolicyCommandCode, PolicyCpHash, PolicyDuplicationSelect,
@@ -12,12 +13,11 @@ use tpm2::{
     Tpm2bName, Tpm2bNonce, Tpm2bSensitiveData, TpmCc, TpmEccCurve, TpmSe, TpmaObject, TpmiAlgHash,
     TpmsEccParms, TpmsEccPoint, TpmsSensitiveCreate, TpmtPublic, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// PolicyDuplicationSelect: includeObject=2 is TPM_RC_VALUE + RC_P3, malformed names accepted, repeat is TPM_RC_CPHASH
 #[test]
 fn invalid_include_object_and_name_inputs() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let session = policy_session(&mut sim);
 
     // 1. Invalid include_object (e.g. 2) -> TPM_RC_VALUE + P3
@@ -67,7 +67,7 @@ fn invalid_include_object_and_name_inputs() {
 /// PolicyDuplicationSelect with includeObject corrupted to 2 fails unmarshalling
 #[test]
 fn invalid_include_object_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (_sk, sk_name) = create_signing_key_empty_unique(&mut sim);
     let (_ek, ek_name) = create_signing_key_empty_unique(&mut sim);
 
@@ -107,7 +107,7 @@ fn invalid_include_object_rejected() {
 /// PolicyDuplicationSelect with 66- and 65-byte names and includeObject=NO succeeds
 #[test]
 fn name_size_limits_without_include_object() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. A 66-byte name (SHA512 Name) when include_object is NO should succeed.
     let session_1 = policy_session(&mut sim);
@@ -151,7 +151,7 @@ fn name_size_limits_without_include_object() {
 /// Names are opaque TPM2B_NAME values: no algorithm-prefix/length validation.
 #[test]
 fn names_are_opaque() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let s = start_session_with_hash(&mut sim, TpmSe::Trial, TpmiAlgHash::Sha256).session_handle;
     // 0xFFFF is not a hash algorithm; the length matches no digest.
     let object_name = [0xFF, 0xFF, 1, 2, 3];
@@ -175,7 +175,7 @@ fn names_are_opaque() {
 /// Raw PolicyDuplicationSelect with a 67-byte name fails unmarshalling with TPM_RC_SIZE + RC_P1
 #[test]
 fn oversized_name_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let session_handle = start_policy_session(&mut sim).session_handle;
 
     // Construct raw byte stream for the command.
@@ -229,7 +229,7 @@ fn oversized_name_rejected() {
 /// TPM2_PolicyDuplicationSelect treats Names as opaque: a truncated SHA-256 Name is accepted
 #[test]
 fn policy_duplication_select_accepts_opaque_short_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sess = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -271,7 +271,7 @@ fn policy_duplication_select_accepts_opaque_short_name() {
 /// TPM2_PolicyDuplicationSelect accepts a maximum-size 66-byte SHA-512 Name with includeObject=NO
 #[test]
 fn policy_duplication_select_accepts_sha512_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start policy session
     let sess = start_auth_session(
@@ -314,7 +314,7 @@ fn policy_duplication_select_accepts_sha512_name() {
 #[test]
 #[allow(deprecated)]
 fn policy_duplication_select_authorizes_duplicate() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create ECC Owner SRK (to load our object under)
     let srk_pub = get_ecc_srk_template_unique0();
@@ -486,7 +486,7 @@ fn policy_duplication_select_digest_for_every_hash_alg() {
 #[test]
 #[allow(deprecated)]
 fn policy_duplication_select_on_bound_policy_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a transient key to bind the session to
     let srk_pub = get_ecc_srk_template_unique0();
@@ -548,7 +548,7 @@ fn policy_duplication_select_on_bound_policy_session() {
 #[test]
 #[allow(deprecated)]
 fn policy_duplication_select_on_bound_trial_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Create a transient key to bind the session to
     let srk_pub = get_ecc_srk_template_unique0();
@@ -609,7 +609,7 @@ fn policy_duplication_select_on_bound_trial_session() {
 /// TPM2_PolicyDuplicationSelect after TPM2_PolicyCommandCode fails with TPM_RC_COMMAND_CODE
 #[test]
 fn policy_duplication_select_rejects_after_policy_command_code() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sess = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -655,7 +655,7 @@ fn policy_duplication_select_rejects_after_policy_command_code() {
 /// TPM2_PolicyDuplicationSelect with a 67-byte Name fails with TPM_RC_SIZE + P1
 #[test]
 fn policy_duplication_select_rejects_oversized_name() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start policy session
     let sess = start_auth_session(
@@ -704,7 +704,7 @@ fn policy_duplication_select_rejects_oversized_name() {
 /// A second TPM2_PolicyDuplicationSelect on the same session fails with TPM_RC_CPHASH
 #[test]
 fn policy_duplication_select_rejects_second_call() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sess = start_auth_session(
         &mut sim,
@@ -749,7 +749,7 @@ fn policy_duplication_select_rejects_second_call() {
 /// TPM2_PolicyDuplicationSelect sent with TPM_ST_SESSIONS and an unassociated HMAC session
 #[test]
 fn policy_duplication_select_with_unassociated_hmac_session() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sess = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -803,7 +803,7 @@ fn policy_duplication_select_with_unassociated_hmac_session() {
 /// A second PolicyDuplicationSelect, or PolicyCpHash after it, fails with TPM_RC_CPHASH since the name hash is already set
 #[test]
 fn repeat_and_cp_hash_after_select_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let (_sk, sk_name) = create_signing_key_empty_unique(&mut sim);
     let (_ek, ek_name) = create_signing_key_empty_unique(&mut sim);
 
@@ -879,7 +879,7 @@ fn sha512_object_name_with_include_object() {
 /// A SHA-256-prefixed name with a truncated digest is accepted (no SIZE+P2).
 #[test]
 fn truncated_digest_name_accepted() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let s = start_session_with_hash(&mut sim, TpmSe::Policy, TpmiAlgHash::Sha256).session_handle;
     // A 2-byte SHA-256 prefix with a truncated digest was rejected with TPM_RC_SIZE + RC_P2.
     policy_duplication_select(&mut sim, s, &[], &[0x00, 0x0B, 1, 2], false).unwrap();

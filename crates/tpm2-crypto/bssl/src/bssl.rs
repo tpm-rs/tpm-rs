@@ -880,6 +880,10 @@ pub fn rsa_sign_pss(
     if signature_out.len() < key_size {
         return Err(BsslError::BufferTooSmall);
     }
+    #[cfg(feature = "reproducible")]
+    if crate::replay::is_active() {
+        return replay_padding::rsa_sign_pss(&rsa, md, digest, signature_out);
+    }
 
     let mut sig_len: usize = 0;
     // SAFETY:
@@ -967,6 +971,11 @@ pub fn rsa_encrypt_pkcs1v15(
     if ciphertext_out.len() < key_size {
         return Err(BsslError::BufferTooSmall);
     }
+    #[cfg(feature = "reproducible")]
+    if crate::replay::is_active() {
+        let em = replay_padding::pkcs1v15_type2(key_size, data)?;
+        return rsa_encrypt_null(public_key_be, &em, ciphertext_out);
+    }
 
     let mut out_len: usize = 0;
     // SAFETY:
@@ -1039,6 +1048,11 @@ pub fn rsa_encrypt_oaep(
     let key_size = rsa.size();
     if ciphertext_out.len() < key_size {
         return Err(BsslError::BufferTooSmall);
+    }
+    #[cfg(feature = "reproducible")]
+    if crate::replay::is_active() {
+        let em = replay_padding::oaep(md, key_size, data, label)?;
+        return rsa_encrypt_null(public_key_be, &em, ciphertext_out);
     }
 
     let pkey = EvpPkey::from_rsa(&rsa)?;
@@ -1485,6 +1499,21 @@ pub fn rsa_generate_key(
     }
 
     let e = Bignum::from_u32(65537)?;
+
+    // Under replay, draw the key-generation seed from the replay stream so the
+    // key is reproducible.
+    #[cfg(feature = "reproducible")]
+    let replay_seed;
+    #[cfg(feature = "reproducible")]
+    let seed = match seed {
+        None if crate::replay::is_active() => {
+            let mut s = [0u8; 32];
+            crate::rand_bytes(&mut s);
+            replay_seed = s;
+            Some(&replay_seed[..])
+        }
+        other => other,
+    };
 
     match seed {
         None => {
@@ -1957,6 +1986,10 @@ pub fn ecdsa_sign(
         return Err(BsslError::BufferTooSmall);
     }
     let key = EcKey::from_private_scalar(group, &group_handle, private_key)?;
+    #[cfg(feature = "reproducible")]
+    if crate::replay::is_active() {
+        return ecdsa_sign_replay(group, &key, digest, &mut signature_out[..sig_size]);
+    }
     let mut out_len: usize = 0;
     // SAFETY:
     // - `digest.as_ptr()` is valid for `digest.len()` bytes.
@@ -1976,6 +2009,60 @@ pub fn ecdsa_sign(
         return Err(BsslError::Internal);
     }
     Ok(out_len)
+}
+
+/// ECDSA signing with a nonce drawn from the thread's replay generator.
+///
+/// Uses BoringSSL's `ECDSA_sign_with_nonce_and_leak_private_key_for_testing`;
+/// nonces that are zero or not below the group order are redrawn.
+#[cfg(feature = "reproducible")]
+fn ecdsa_sign_replay(
+    group: EcGroup,
+    key: &EcKey,
+    digest: &[u8],
+    signature_out: &mut [u8],
+) -> Result<usize, BsslError> {
+    let coord_len = group.coord_len();
+    let mut nonce = [0u8; 66];
+    for _ in 0..100 {
+        crate::rand_bytes(&mut nonce[..coord_len]);
+        if group == EcGroup::P521 {
+            // The P-521 order has 521 bits; keep candidates within 66 bytes' top bit.
+            nonce[0] &= 0x01;
+        }
+        // SAFETY:
+        // - `digest` and `nonce[..coord_len]` are valid for their lengths.
+        // - `key.as_ptr()` is a valid private `EC_KEY`.
+        let sig = unsafe {
+            bssl_sys::ECDSA_sign_with_nonce_and_leak_private_key_for_testing(
+                digest.as_ptr(),
+                digest.len(),
+                key.as_ptr(),
+                nonce.as_ptr(),
+                coord_len,
+            )
+        };
+        if sig.is_null() {
+            continue;
+        }
+        let (r_out, s_out) = signature_out.split_at_mut(coord_len);
+        // SAFETY: `sig` is a valid `ECDSA_SIG` owned here; `r`/`s` are borrowed from it and
+        // fit in `coord_len` bytes (both are below the group order). `sig` is freed once.
+        let ok = unsafe {
+            let r = bssl_sys::ECDSA_SIG_get0_r(sig);
+            let s = bssl_sys::ECDSA_SIG_get0_s(sig);
+            let ok = bssl_sys::BN_bn2bin_padded(r_out.as_mut_ptr(), coord_len, r) == 1
+                && bssl_sys::BN_bn2bin_padded(s_out.as_mut_ptr(), coord_len, s) == 1;
+            bssl_sys::ECDSA_SIG_free(sig);
+            ok
+        };
+        return if ok {
+            Ok(2 * coord_len)
+        } else {
+            Err(BsslError::Internal)
+        };
+    }
+    Err(BsslError::Internal)
 }
 
 /// Verifies a fixed-width IEEE P1363 `(r || s)` ECDSA signature against a pre-hashed digest.
@@ -2044,4 +2131,234 @@ pub fn ec_generate_key(
         }
     }
     Err(BsslError::Internal)
+}
+
+/// RSA encoding with randomness drawn from the thread's replay generator
+/// (RFC 8017), used instead of BoringSSL's internal padding when a
+/// `replay::ReplayRng` scope is active.
+#[cfg(feature = "reproducible")]
+mod replay_padding {
+    use super::*;
+    use std::vec::Vec;
+
+    /// `Hash(parts[0] || parts[1] || ...)` with `md`.
+    fn digest(md: *const bssl_sys::EVP_MD, parts: &[&[u8]]) -> Result<Vec<u8>, BsslError> {
+        let input = parts.concat();
+        let mut out = [0u8; 64];
+        let mut len: c_uint = 0;
+        // SAFETY: `input` is valid for its length, `out` holds the largest digest
+        // (64 bytes) and `md` is a valid `EVP_MD`.
+        let ok = unsafe {
+            bssl_sys::EVP_Digest(
+                input.as_ptr() as *const c_void,
+                input.len(),
+                out.as_mut_ptr(),
+                &mut len,
+                md,
+                ptr::null_mut(),
+            )
+        };
+        if ok != 1 {
+            return Err(BsslError::Internal);
+        }
+        Ok(out[..len as usize].to_vec())
+    }
+
+    /// MGF1 (RFC 8017 B.2.1) mask of `len` bytes.
+    fn mgf1(md: *const bssl_sys::EVP_MD, seed: &[u8], len: usize) -> Result<Vec<u8>, BsslError> {
+        let mut mask = Vec::with_capacity(len + 64);
+        let mut counter: u32 = 0;
+        while mask.len() < len {
+            mask.extend(digest(md, &[seed, &counter.to_be_bytes()])?);
+            counter += 1;
+        }
+        mask.truncate(len);
+        Ok(mask)
+    }
+
+    fn random(len: usize) -> Vec<u8> {
+        let mut v = std::vec![0u8; len];
+        crate::rand_bytes(&mut v);
+        v
+    }
+
+    /// EME-OAEP encoding (RFC 8017 7.1.1) to `k` bytes; MGF1 uses the same hash.
+    pub(super) fn oaep(
+        md: *const bssl_sys::EVP_MD,
+        k: usize,
+        message: &[u8],
+        label: &[u8],
+    ) -> Result<Vec<u8>, BsslError> {
+        let l_hash = digest(md, &[label])?;
+        let h_len = l_hash.len();
+        if k < 2 * h_len + 2 || message.len() > k - 2 * h_len - 2 {
+            return Err(BsslError::InvalidData);
+        }
+        let mut db = l_hash;
+        db.resize(k - message.len() - h_len - 2, 0);
+        db.push(0x01);
+        db.extend_from_slice(message);
+        let seed = random(h_len);
+        let db_mask = mgf1(md, &seed, db.len())?;
+        let masked_db: Vec<u8> = db.iter().zip(&db_mask).map(|(a, b)| a ^ b).collect();
+        let seed_mask = mgf1(md, &masked_db, h_len)?;
+        let mut em = std::vec![0u8];
+        em.extend(seed.iter().zip(&seed_mask).map(|(a, b)| a ^ b));
+        em.extend(masked_db);
+        Ok(em)
+    }
+
+    /// EME-PKCS1-v1_5 encoding (RFC 8017 7.2.1) to `k` bytes.
+    pub(super) fn pkcs1v15_type2(k: usize, message: &[u8]) -> Result<Vec<u8>, BsslError> {
+        if k < 11 || message.len() > k - 11 {
+            return Err(BsslError::InvalidData);
+        }
+        let mut em = std::vec![0x00, 0x02];
+        let mut byte = [0u8; 1];
+        while em.len() < k - message.len() - 1 {
+            crate::rand_bytes(&mut byte);
+            if byte[0] != 0 {
+                em.push(byte[0]);
+            }
+        }
+        em.push(0x00);
+        em.extend_from_slice(message);
+        Ok(em)
+    }
+
+    /// RSASSA-PSS signature (RFC 8017 8.1.1) with salt length = digest length
+    /// and MGF1 with the same hash, matching `RSA_PSS_SALTLEN_DIGEST`.
+    pub(super) fn rsa_sign_pss(
+        rsa: &RsaKey,
+        md: *const bssl_sys::EVP_MD,
+        m_hash: &[u8],
+        signature_out: &mut [u8],
+    ) -> Result<usize, BsslError> {
+        let k = rsa.size();
+        // SAFETY: `rsa` holds a valid key with a modulus.
+        let mod_bits =
+            unsafe { bssl_sys::BN_num_bits(bssl_sys::RSA_get0_n(rsa.as_ptr())) } as usize;
+        let em_bits = mod_bits - 1;
+        let em_len = em_bits.div_ceil(8);
+        let h_len = m_hash.len();
+        if em_len < 2 * h_len + 2 {
+            return Err(BsslError::InvalidData);
+        }
+        let salt = random(h_len);
+        let h = digest(md, &[&[0u8; 8], m_hash, &salt])?;
+        let mut db = std::vec![0u8; em_len - 2 * h_len - 2];
+        db.push(0x01);
+        db.extend_from_slice(&salt);
+        let db_mask = mgf1(md, &h, db.len())?;
+        let mut masked_db: Vec<u8> = db.iter().zip(&db_mask).map(|(a, b)| a ^ b).collect();
+        masked_db[0] &= 0xFF >> (8 * em_len - em_bits);
+        // The private-key input is the k-byte big-endian encoding of EM.
+        let mut input = std::vec![0u8; k - em_len];
+        input.extend(masked_db);
+        input.extend(h);
+        input.push(0xBC);
+
+        let mut out_len: usize = 0;
+        // SAFETY: `signature_out` holds at least `k` bytes (checked by the caller) and
+        // `input` is exactly `k` bytes, as `RSA_NO_PADDING` requires.
+        let res = unsafe {
+            bssl_sys::RSA_sign_raw(
+                rsa.as_ptr(),
+                &mut out_len,
+                signature_out.as_mut_ptr(),
+                signature_out.len(),
+                input.as_ptr(),
+                input.len(),
+                bssl_sys::RSA_NO_PADDING as c_int,
+            )
+        };
+        if res != 1 {
+            return Err(BsslError::Internal);
+        }
+        Ok(out_len)
+    }
+}
+
+#[cfg(all(test, feature = "reproducible"))]
+mod replay_tests {
+    use super::*;
+    use crate::replay::ReplayRng;
+
+    /// Runs `f` twice, each time in a fresh replay scope with the same seed.
+    fn twice<T>(f: impl Fn() -> T) -> (T, T) {
+        (ReplayRng::new(42).scope(&f), ReplayRng::new(42).scope(&f))
+    }
+
+    fn rsa_key() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
+        let (mut public, mut private) = ([0u8; 256], [0u8; 2048]);
+        let (n, p) = rsa_generate_key(2048, &mut public, &mut private, None).unwrap();
+        (public[..n].to_vec(), private[..p].to_vec())
+    }
+
+    #[test]
+    fn rsa_keygen_is_reproducible() {
+        let (a, b) = twice(rsa_key);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn rsa_padding_is_reproducible_and_valid() {
+        let (public, private) = ReplayRng::new(1).scope(rsa_key);
+        let digest = [0x5Au8; 32];
+        let mut out = [0u8; 256];
+
+        let (s1, s2) = twice(|| {
+            let mut sig = [0u8; 256];
+            let n = rsa_sign_pss(&private, TpmiAlgHash::Sha256, &digest, &mut sig).unwrap();
+            sig[..n].to_vec()
+        });
+        assert_eq!(s1, s2);
+        rsa_verify_pss(&public, TpmiAlgHash::Sha256, &digest, &s1).unwrap();
+
+        let (c1, c2) = twice(|| {
+            let mut ct = [0u8; 256];
+            let n = rsa_encrypt_oaep(
+                TpmiAlgHash::Sha256,
+                &public,
+                b"secret",
+                b"IDENTITY\0",
+                &mut ct,
+            )
+            .unwrap();
+            ct[..n].to_vec()
+        });
+        assert_eq!(c1, c2);
+        let n =
+            rsa_decrypt_oaep(TpmiAlgHash::Sha256, &private, &c1, b"IDENTITY\0", &mut out).unwrap();
+        assert_eq!(&out[..n], b"secret");
+
+        let (c1, c2) = twice(|| {
+            let mut ct = [0u8; 256];
+            let n = rsa_encrypt_pkcs1v15(&public, b"secret", &mut ct).unwrap();
+            ct[..n].to_vec()
+        });
+        assert_eq!(c1, c2);
+        let n = rsa_decrypt_pkcs1v15(&private, &c1, &mut out).unwrap();
+        assert_eq!(&out[..n], b"secret");
+    }
+
+    #[test]
+    fn ecdsa_is_reproducible_and_valid() {
+        for group in [EcGroup::P256, EcGroup::P384, EcGroup::P521] {
+            let len = group.coord_len();
+            let (key, _) = twice(|| {
+                let (mut public, mut private) = ([0u8; 132], [0u8; 66]);
+                ec_generate_key(group, &mut crate::BsslRng, &mut public, &mut private).unwrap();
+                (public[..2 * len].to_vec(), private[..len].to_vec())
+            });
+            let digest = [0x11u8; 32];
+            let (s1, s2) = twice(|| {
+                let mut sig = [0u8; 132];
+                let n = ecdsa_sign(group, &key.1, &digest, &mut sig).unwrap();
+                sig[..n].to_vec()
+            });
+            assert_eq!(s1, s2);
+            ecdsa_verify(group, &key.0, &digest, &s1).unwrap();
+        }
+    }
 }

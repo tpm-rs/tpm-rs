@@ -1,7 +1,7 @@
 //! TPM2_GetRandom and TPM2_StirRandom.
 
 use crate::_common::*;
-use tpm2_simulator::create_simulator;
+use testing::tpm::Tpm;
 
 /// GetRandom returns a well-formed response with exactly the requested number of bytes.
 ///
@@ -9,7 +9,7 @@ use tpm2_simulator::create_simulator;
 /// well-formed response with exactly the requested number of bytes.
 #[test]
 fn get_random_returns_requested_bytes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let request = hx(concat!(
         "8001",     // tag
@@ -34,7 +34,7 @@ fn get_random_returns_requested_bytes() {
 /// StirRandom with 32 bytes of input succeeds.
 #[test]
 fn stir_random_accepts_32_bytes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // TPM2_StirRandom request: tag=8001, size=0000002C (44), cc=00000146, inData.size=0020 (32 bytes), 32 bytes data
     let mut stir_request = [0u8; 44];
@@ -52,7 +52,7 @@ fn stir_random_accepts_32_bytes() {
 /// StirRandom with 129 bytes (over MAX_STIR_RANDOM_SIZE) fails.
 #[test]
 fn stir_random_oversized_input_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // TPM2_StirRandom request with inData.size = 129 (exceeding MAX_STIR_RANDOM_SIZE = 128)
     let total_size = 10 + 2 + 129;

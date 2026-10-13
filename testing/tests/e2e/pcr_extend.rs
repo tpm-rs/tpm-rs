@@ -8,16 +8,16 @@ use crate::_common::{
     pcr_extend_at_no_continue as pcr_extend_at, pcr_read_selection as pcr_read, pw, raw_rc,
     read_pcr, read_pcr_by_alg_id, send_with_rc as send, update_counter,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{PCREvent, PCRExtend, PCRRead, PCRReset};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_simulator::create_simulator;
 
 // 1. Correctness of PCR_Extend (matching SHA-1, SHA-256, SHA-384 mathematical output)
 /// PCR_Extend updates allocated SHA-1/SHA-256 banks correctly, skips unallocated SHA-384 and bumps the update counter.
 #[test]
 fn extend_matches_reference_digests() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let pcr_idx = 5usize;
     let initial_sha1 = read_pcr_by_alg_id(&mut sim, ALG_SHA1, pcr_idx).unwrap();
@@ -68,7 +68,7 @@ fn extend_matches_reference_digests() {
 /// PCR_Extend with TPM_RH_NULL succeeds without changing any PCR.
 #[test]
 fn extend_rh_null_is_noop() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Keep track of some baseline PCR values (e.g. PCR 5)
     let pcr_idx = 5usize;
@@ -99,7 +99,7 @@ fn extend_rh_null_is_noop() {
 /// must return TPM_RC_HASH (Parameter 1, 0x01C3).
 #[test]
 fn invalid_digest_hash_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let mut pcr_extend_req = hex(concat!(
         "8002",                             // SESSIONS
@@ -129,7 +129,7 @@ fn invalid_digest_hash_rejected() {
 /// PCR_Extend with hash algorithm 0xFFFF fails with HASH (after auth checks).
 #[test]
 fn invalid_hash_alg_rejected() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Send invalid hash algorithm ID 0xFFFF
     // C checks authorization (CheckAuthNoSession -> AUTH_MISSING) before unmarshaling the
@@ -152,7 +152,7 @@ fn invalid_hash_alg_rejected() {
 /// `TPM_RC_VALUE` on the PCR handle.
 #[test]
 fn pcr_extend_event_reset_reject_pcr_above_23() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. PCR_Extend beyond 23
     let res = exec(
@@ -199,7 +199,7 @@ fn pcr_extend_event_reset_reject_pcr_above_23() {
 /// PCR_Extend of PCR 16 with a SHA-256 digest succeeds
 #[test]
 fn pcr_extend_sha256_bank() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let auth_handle = Handle(16);
     let mut digests = TpmlDigestValues::default();
     digests.add(&TpmtHa::Sha256(&[0xaa; 32])).unwrap();
@@ -216,7 +216,7 @@ fn pcr_extend_sha256_bank() {
 /// unallocated SHA-384 bank is neither extended nor read back.
 #[test]
 fn pcr_extend_updates_allocated_banks() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let sha1_init = [0u8; 20];
     let sha256_init = [0u8; 32];
@@ -268,7 +268,7 @@ fn pcr_extend_updates_allocated_banks() {
 /// PCR_Extend with an unallocated SHA-512 digest succeeds and still extends SHA-256.
 #[test]
 fn unallocated_bank_ignored() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let pcr_idx = 5usize;
     let initial_sha256 = read_pcr_by_alg_id(&mut sim, ALG_SHA256, pcr_idx).unwrap();
@@ -300,7 +300,7 @@ fn unallocated_bank_ignored() {
 /// pcrUpdateCounter increments on PCR_Extend and PCR_Reset.
 #[test]
 fn update_counter_tracks_extend_and_reset() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Read baseline update counter
     let read_cmd = PCRRead {

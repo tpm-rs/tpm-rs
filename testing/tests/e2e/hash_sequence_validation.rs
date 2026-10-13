@@ -9,6 +9,7 @@ use crate::_common::{
     pw, rc_at, sequence_complete, sequence_update, start_hash_sequence, start_sequence,
     start_sequence_alg,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{
     EventSequenceComplete, HMACStart, Hash, HashSequenceStart, SequenceComplete, SequenceUpdate,
 };
@@ -17,12 +18,11 @@ use tpm2::{
     Handle, Tpm2bAuth, Tpm2bMaxBuffer, Tpm2bNonce, TpmaSession, TpmiAlgHash, TpmsAuthCommand,
     Unmarshal, *,
 };
-use tpm2_simulator::create_simulator;
 
 /// TPM2_SequenceComplete with an invalid hierarchy fails with exactly TPM_RC_VALUE on the hierarchy parameter
 #[test]
 fn complete_invalid_hierarchy_response_code() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
@@ -46,7 +46,7 @@ fn complete_invalid_hierarchy_response_code() {
 /// TPM2_SequenceComplete with hierarchy 0x00000000 fails
 #[test]
 fn complete_rejects_invalid_hierarchy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start sequence
     let handle = start_sequence_alg(&mut sim, TpmiAlgHash::Sha256);
@@ -64,7 +64,7 @@ fn complete_rejects_invalid_hierarchy() {
 /// TPM2_SequenceComplete with trailing bytes fails with TPM_RC_SIZE
 #[test]
 fn complete_rejects_trailing_bytes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
@@ -85,7 +85,7 @@ fn complete_rejects_trailing_bytes() {
 /// SequenceUpdate/Complete with invalid sequence handles or an invalid hierarchy fail with the right codes.
 #[test]
 fn invalid_sequence_and_hierarchy_handles() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start a valid sequence to have a reference handle
     let seq_handle = start_sequence(&mut sim, Some(TpmiAlgHash::Sha256));
@@ -146,7 +146,7 @@ fn invalid_sequence_and_hierarchy_handles() {
 /// HMAC_Start checks `restricted` before `sign`, and HashSequenceStart reports RC_P2.
 #[test]
 fn long_data_event_banks_and_start_error_order() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // > 4096 bytes across SequenceUpdate calls.
     let chunk: &'static [u8] = leak_bytes(&[0x5a; 1024]);
@@ -190,7 +190,7 @@ fn long_data_event_banks_and_start_error_order() {
 /// SequenceUpdate/SequenceComplete on a non-existent sequence handle fail with TPM_RC_REFERENCE_H0
 #[test]
 fn rejects_unloaded_sequence_handle() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let invalid_handle = Handle(0x8000000F);
 
@@ -215,7 +215,7 @@ fn rejects_unloaded_sequence_handle() {
 /// SequenceUpdate/SequenceComplete on a completed sequence fail with TPM_RC_REFERENCE_H0
 #[test]
 fn rejects_use_after_complete() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let handle = start_sequence_alg(&mut sim, TpmiAlgHash::Sha256);
 
@@ -242,7 +242,7 @@ fn rejects_use_after_complete() {
 /// SequenceUpdate/SequenceComplete reject a wrong password (BAD_AUTH + S1) and accept the right one.
 #[test]
 fn sequence_auth_value_enforced() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. HashSequenceStart with a non-empty authorization value.
     let sequence_auth = b"SecretAuthPassword123";
@@ -300,7 +300,7 @@ fn sequence_auth_value_enforced() {
 /// HashSequenceStart with an unimplemented hash (SM3-256) is `TPM_RC_HASH + RC_P2`.
 #[test]
 fn sm3_hash_alg_returns_hash_p2() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // Raw parameters: auth (empty TPM2B) || hashAlg = TPM_ALG_SM3_256 (0x0012).
     let mut buf = Vec::new();
     buf.extend_from_slice(&0x8001u16.to_be_bytes()); // TPM_ST_NO_SESSIONS
@@ -319,7 +319,7 @@ fn sm3_hash_alg_returns_hash_p2() {
 /// `TPM2_HashSequenceStart` fails with `TPM_RC_OBJECT_MEMORY` until a sequence completes.
 #[test]
 fn start_object_memory_limit() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start sequences until the TPM runs out of sequence slots.
     let start_cmd = HashSequenceStart {
@@ -357,7 +357,7 @@ fn start_object_memory_limit() {
 /// TPM2_HashSequenceStart with trailing bytes fails with TPM_RC_SIZE
 #[test]
 fn start_rejects_trailing_bytes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
@@ -371,7 +371,7 @@ fn start_rejects_trailing_bytes() {
 /// Hash sequences work for SHA-1/256/384/512 and an invalid hashAlg fails with TPM_RC_HASH + P2.
 #[test]
 fn supported_algorithms_and_invalid_hash() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let test_cases = [
         (TpmiAlgHash::Sha1, 20),
@@ -414,7 +414,7 @@ fn supported_algorithms_and_invalid_hash() {
 /// Hash, HashSequenceStart, SequenceUpdate, SequenceComplete and EventSequenceComplete reject trailing bytes with TPM_RC_SIZE.
 #[test]
 fn trailing_bytes_return_size() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Hash command with trailing bytes
     let hash_cmd = Hash {
@@ -467,7 +467,7 @@ fn trailing_bytes_return_size() {
 /// TPM2_SequenceUpdate with trailing bytes fails with TPM_RC_SIZE
 #[test]
 fn update_rejects_trailing_bytes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),

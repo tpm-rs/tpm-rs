@@ -5,18 +5,18 @@ use crate::_common::{
     make_keyed_hash_public_area_obfuscated, make_rsa_public_area_opt_name_alg,
 };
 use sha2::{Digest as _, Sha256};
+use testing::tpm::Tpm;
 use tpm2::commands::LoadExternal;
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bName, Tpm2bPrivateKeyRsa,
     Tpm2bSensitiveData, Tpm2bSymKey, TpmaObject, TpmiAlgHash, TpmtPublic, TpmtSensitive,
     TpmuSensitiveComposite,
 };
-use tpm2_simulator::create_simulator;
 
 /// Loads an ECC key with nameAlg TPM_ALG_NULL (no sensitive area).
 #[test]
 fn ecc_null_name_alg_public_only() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let mut pub_struct = make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT);
     pub_struct.name_alg = None;
     let in_public = tpm2::Tpm2b(pub_struct);
@@ -34,7 +34,7 @@ fn ecc_null_name_alg_public_only() {
 /// Loads a keyedHash object (with sensitive) whose public area carries an authPolicy.
 #[test]
 fn keyed_hash_with_auth_policy() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let seed_value = Tpm2bDigest::from_bytes(b"obfuscation is my middle name!!!").unwrap();
     let sensitive_data = Tpm2bSensitiveData::from_bytes(b"secrets").unwrap();
     let sensitive_create = TpmtSensitive {
@@ -62,7 +62,7 @@ fn keyed_hash_with_auth_policy() {
 /// Loads a keyedHash object with its sensitive area (public + private).
 #[test]
 fn keyed_hash_with_sensitive() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let seed_value = Tpm2bDigest::from_bytes(b"obfuscation is my middle name!!!").unwrap();
     let sensitive_data = Tpm2bSensitiveData::from_bytes(b"secrets").unwrap();
     let sensitive_create = TpmtSensitive {
@@ -94,7 +94,7 @@ fn keyed_hash_with_sensitive() {
 /// Loads an RSA key together with its private prime.
 #[test]
 fn rsa_with_private_prime() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
@@ -119,7 +119,7 @@ fn rsa_with_private_prime() {
 /// Loads a symmetric key with digest-sized seedValue and unique = H(seed || key).
 #[test]
 fn symcipher_with_seed_and_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     // With a nameAlg, C requires a digest-sized seedValue (CryptUtil.c, else
     // KEY_SIZE+P1) and unique = H(seedValue || key).
     let sensitive_create = TpmtSensitive {

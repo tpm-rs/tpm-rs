@@ -8,15 +8,15 @@ use crate::_common::{
     run_hash_sequence, sequence_complete, sequence_update, sha256_sequence, start_hash_sequence,
     start_sequence, start_sequence_alg,
 };
+use testing::tpm::Tpm;
 use tpm2::commands::{ContextLoad, ContextSave, FlushContext, SequenceComplete, SequenceUpdate};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bMaxBuffer, TpmiAlgHash};
-use tpm2_simulator::create_simulator;
 
 /// Hash sequences over empty/single/many/large chunk sets match a reference digest.
 #[test]
 fn chunked_inputs_match_reference() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let algs = [
         TpmiAlgHash::Sha1,
@@ -62,7 +62,7 @@ fn chunked_inputs_match_reference() {
 /// TPM2_SequenceComplete with a maximum-size final buffer produces the correct digest
 #[test]
 fn complete_with_max_buffer() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let handle = start_sequence_alg(&mut sim, TpmiAlgHash::Sha256);
 
@@ -93,7 +93,7 @@ fn complete_with_max_buffer() {
 /// Completing a sequence with no data returns the digest of the empty string.
 #[test]
 fn complete_without_update_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let seq_handle = start_sequence(&mut sim, Some(TpmiAlgHash::Sha256));
 
@@ -111,7 +111,7 @@ fn complete_without_update_digest() {
 /// A hash sequence saved, flushed and reloaded mid-stream completes with the correct digest.
 #[test]
 fn context_save_load_preserves_state() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start a SHA-256 hash sequence
     let seq_handle = start_sequence(&mut sim, Some(TpmiAlgHash::Sha256));
@@ -167,7 +167,7 @@ fn context_save_load_preserves_state() {
 /// A hash sequence accepts more than 4096 bytes and still completes.
 #[test]
 fn data_beyond_4096_bytes_accepted() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Feed 4096 bytes into a sequence.
     let seq_handle = start_sequence(&mut sim, Some(TpmiAlgHash::Sha256));
@@ -205,7 +205,7 @@ fn data_beyond_4096_bytes_accepted() {
 /// Hash sequences produce correct digests for every supported hash alg
 #[test]
 fn digest_for_every_hash_alg() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let test_data =
         b"Verify multiple hash algorithms supported by TPM (2 as u16) sequence hashing.";
@@ -233,7 +233,7 @@ fn digest_for_every_hash_alg() {
 /// A hash sequence with empty update and complete buffers yields the hash of the empty string
 #[test]
 fn empty_update_and_complete_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start sequence
     let handle = start_sequence_alg(&mut sim, TpmiAlgHash::Sha256);
@@ -261,7 +261,7 @@ fn empty_update_and_complete_digest() {
 /// Interleaved SHA-256 and SHA-512 sequences produce independent correct digests
 #[test]
 fn interleaved_sequences() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Start Sequence A (SHA256)
     let handle_a = start_sequence_alg(&mut sim, TpmiAlgHash::Sha256);
@@ -323,7 +323,7 @@ fn interleaved_sequences() {
 /// Randomized chunk counts/sizes (incl. oversized) match the reference or are rejected like C.
 #[test]
 fn random_chunks_match_reference() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let algs = [
         TpmiAlgHash::Sha1,
@@ -376,7 +376,7 @@ fn random_chunks_match_reference() {
 /// Seeded random payloads split randomly across updates and complete match a local reference hash
 #[test]
 fn random_splits_match_reference() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let algs = [
         (TpmiAlgHash::Sha1, 20),
@@ -465,7 +465,7 @@ fn random_splits_match_reference() {
 /// hierarchies. The Go tests only cover SHA-256.
 #[test]
 fn sha1_sha384_sha512_sequences() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let password = "password";
     let buffer_sizes = [512, 1024, 2048, 4096];
     let hash_algs = [TpmiAlgHash::Sha1, TpmiAlgHash::Sha384, TpmiAlgHash::Sha512];
@@ -481,7 +481,7 @@ fn sha1_sha384_sha512_sequences() {
 /// HashSequenceStart/SequenceUpdate/SequenceComplete with SHA-256 produces the correct digest
 #[test]
 fn sha256_digest() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. Start sequence
     let handle = start_sequence_alg(&mut sim, TpmiAlgHash::Sha256);
@@ -523,7 +523,7 @@ fn sha256_digest() {
 /// HashSequenceStart/SequenceUpdate/SequenceComplete produce the SHA-256 digest of the data.
 #[test]
 fn sha256_digest_matches() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // 1. HashSequenceStart
     let seq_handle = start_sequence(&mut sim, Some(TpmiAlgHash::Sha256));
@@ -554,7 +554,7 @@ fn sha256_digest_matches() {
 /// total) yields the NULL ticket; a safe first block yields a real ticket.
 #[test]
 fn ticket_safety_from_first_block() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // First block shorter than 4 bytes.
     let seq = start_hash_sequence(&mut sim, Some(TpmiAlgHash::Sha256));
@@ -597,7 +597,7 @@ fn ticket_safety_from_first_block() {
 /// SequenceUpdate data beyond 4096 accumulated bytes is accepted (no TPM_RC_MEMORY limit)
 #[test]
 fn update_beyond_4096_bytes() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     let handle = start_sequence_alg(&mut sim, TpmiAlgHash::Sha256);
 
@@ -623,7 +623,7 @@ fn update_beyond_4096_bytes() {
 /// Splitting 5000 bytes between SequenceUpdate and SequenceComplete yields the same SHA-256 digest.
 #[test]
 fn update_complete_split_equivalence() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
 
     // Verify that passing data in updates vs passing data in complete behaves identically.
     // Case A: 4KB updated, 1KB completed.

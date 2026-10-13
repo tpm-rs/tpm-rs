@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
+use testing::tpm::Tpm;
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
 use tpm2::commands::CreateLoaded;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_simulator::{Simulator, create_simulator};
 
 /// go-tpm's `ECCEKTemplate`: the TCG default ECC NIST P-256 EK template
 /// (AES-128-CFB restricted decryption key, PolicySecret(RH_ENDORSEMENT)
@@ -47,7 +47,7 @@ fn get_ecc_ek_template() -> TpmtPublic<'static> {
 /// restricted-decrypt KeyedHash derivation parent using the XOR scheme with
 /// SHA-256 and KDF1_SP800_108, and returns its handle.
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
-fn get_deriver(sim: &mut Simulator<'_>) -> Handle {
+fn get_deriver(sim: &mut Tpm) -> Handle {
     let deriver_pub_area = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: TpmaObject::SENSITIVE_DATA_ORIGIN
@@ -80,7 +80,7 @@ fn get_deriver(sim: &mut Simulator<'_>) -> Handle {
 /// `parent_handle` (empty password auth, as go-tpm does for plain handles)
 /// and flushes the resulting object.
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
-fn run_create_loaded(sim: &mut Simulator<'_>, cmd: &CreateLoaded<'_>) {
+fn run_create_loaded(sim: &mut Tpm, cmd: &CreateLoaded<'_>) {
     let rsp = execute_with_password_sessions(sim, cmd, 1, &[]).expect("error from CreateLoaded");
     flush_context(sim, rsp.object_handle).expect("error from FlushContext");
 }
@@ -89,7 +89,7 @@ fn run_create_loaded(sim: &mut Simulator<'_>, cmd: &CreateLoaded<'_>) {
 #[test]
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
 fn test_create_loaded_primary_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let _deriver = get_deriver(&mut sim);
 
     let cmd = CreateLoaded {
@@ -107,7 +107,7 @@ fn test_create_loaded_primary_key() {
 #[test]
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
 fn test_create_loaded_no_parent_primary_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let _deriver = get_deriver(&mut sim);
 
     // go-tpm marshals an omitted (nil) parent handle as TPM_RH_NULL.
@@ -126,7 +126,7 @@ fn test_create_loaded_no_parent_primary_key() {
 #[test]
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
 fn test_create_loaded_ordinary_key() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let _deriver = get_deriver(&mut sim);
 
     let pub_area = TpmtPublic {
@@ -163,7 +163,7 @@ fn test_create_loaded_ordinary_key() {
 #[test]
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
 fn test_create_loaded_data_blob() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let _deriver = get_deriver(&mut sim);
 
     let pub_area = TpmtPublic {
@@ -187,7 +187,7 @@ fn test_create_loaded_data_blob() {
 #[test]
 #[allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
 fn test_create_loaded_derived() {
-    let mut sim = create_simulator!();
+    let mut sim = Tpm::new();
     let deriver = get_deriver(&mut sim);
 
     // go-tpm's `NewTPMUSensitiveCreate(&derive)` places the marshaled
