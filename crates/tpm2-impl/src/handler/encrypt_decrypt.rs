@@ -260,6 +260,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )
         .map_err(|_| TpmRc::FAILURE)?;
 
+        if key_mode == Alg::CFB && !data_len.is_multiple_of(block_size) {
+            let pad_bytes = block_size - (data_len % block_size);
+            iv_buf[iv_len - pad_bytes..iv_len].fill(0);
+        }
+
         let out_data =
             Tpm2bMaxBuffer::from_bytes(&out_data_buf[..data_len]).map_err(|_| TpmRc::FAILURE)?;
         let iv_out = Tpm2bIv::from_bytes(&iv_buf[..iv_len]).map_err(|_| TpmRc::FAILURE)?;

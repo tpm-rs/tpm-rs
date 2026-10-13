@@ -216,6 +216,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
+        let s2_buf = cmd.s2.get_buffer();
+        let y2_buf = cmd.y2.get_buffer();
+
+        // C `Commit.c`: `if((in->s2.t.size == 0) != (in->y2.t.size == 0)) return TPM_RCS_SIZE + RC_Commit_y2;`
+        // precedes the `in->s2.t.size > digestSize` check.
+        if s2_buf.is_empty() != y2_buf.is_empty() {
+            return Err(TpmRc::SIZE.with(Position::parameter(3)));
+        }
+
         if cmd.s2.get_size() as usize > digest_size {
             return Err(TpmRc::SIZE.with(Position::parameter(2)));
         }
@@ -240,13 +249,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .validate_point(curve, &p1_buf[..param_size * 2]),
                 TpmRc::ECC_POINT.with(Position::parameter(1)),
             )?;
-        }
-
-        let s2_buf = cmd.s2.get_buffer();
-        let y2_buf = cmd.y2.get_buffer();
-
-        if s2_buf.is_empty() != y2_buf.is_empty() {
-            return Err(TpmRc::SIZE.with(Position::parameter(3)));
         }
 
         let xy2_opt = if !s2_buf.is_empty() && !y2_buf.is_empty() {
@@ -425,6 +427,68 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .ok_or_else(|| TpmRc::VALUE.to_rc())
     }
 
+    /// Computes an ECDAA signature (TPM 2.0 Part 1, "ECDAA Sign Operation"; C
+    /// `TpmEcc_SignEcdaa`) over the value to sign `p` with the private key `d` and the
+    /// committed `r` (from [`Self::generate_committed_r`]):
+    ///
+    /// 1. `k` is random with `0 < k < n` (FIPS 186-5 extra random bits, C
+    ///    `TpmEcc_GenPrivateScalar`);
+    /// 2. `T := H_hashAlg(k || p) mod n` (`k` in minimal big-endian form, as C hashes it);
+    /// 3. `s := (r + T·d) mod n`; a zero `T mod n` or `s` restarts with a new `k`.
+    ///
+    /// Writes `k` (minimal length, the signature's R field) and `s` (padded to the order size)
+    /// and returns their lengths.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn ecdaa_sign(
+        &self,
+        curve: TpmEccCurve,
+        hash_alg: tpm2::TpmiAlgHash,
+        r: &[u8],
+        d: &[u8],
+        p: &[u8],
+        k_out: &mut [u8],
+        s_out: &mut [u8],
+    ) -> Result<(usize, usize), TpmRc> {
+        let n = curve_order(curve).ok_or(TpmRc::VALUE.to_rc())?;
+        let n_len = n.len();
+        if r.len() > n_len || d.len() > n_len || k_out.len() < n_len || s_out.len() < n_len {
+            return Err(TpmRc::FAILURE);
+        }
+        let mut r_buf = [0u8; MAX_ECC_ORDER_SIZE];
+        r_buf[n_len - r.len()..n_len].copy_from_slice(r);
+        let mut d_buf = [0u8; MAX_ECC_ORDER_SIZE];
+        d_buf[n_len - d.len()..n_len].copy_from_slice(d);
+
+        for _ in 0..1000 {
+            let mut c = [0u8; MAX_ECC_ORDER_SIZE + 8];
+            self.crypto()
+                .get_random(&mut c[..n_len + 8])
+                .map_err(|_| TpmRc::FAILURE)?;
+            let mut k = [0u8; MAX_ECC_ORDER_SIZE];
+            crate::modular::ecc_scalar_from_extra_bits(&c[..n_len + 8], n, &mut k[..n_len]);
+            let skip = k[..n_len].iter().take_while(|&&b| b == 0).count();
+            let k_min = &k[skip..n_len];
+
+            let (t_digest, t_len) = self.compute_hash(hash_alg, &[k_min, p])?;
+            let mut t = [0u8; MAX_ECC_ORDER_SIZE];
+            crate::modular::reduce(&t_digest[..t_len], n, &mut t[..n_len]);
+            if crate::modular::is_zero(&t[..n_len]) {
+                continue;
+            }
+            let mut td = [0u8; MAX_ECC_ORDER_SIZE];
+            crate::modular::mul_mod(&t[..n_len], &d_buf[..n_len], n, &mut td[..n_len]);
+            let mut s = [0u8; MAX_ECC_ORDER_SIZE];
+            crate::modular::add_mod(&td[..n_len], &r_buf[..n_len], n, &mut s[..n_len]);
+            if crate::modular::is_zero(&s[..n_len]) {
+                continue;
+            }
+            k_out[..k_min.len()].copy_from_slice(k_min);
+            s_out[..n_len].copy_from_slice(&s[..n_len]);
+            return Ok((k_min.len(), n_len));
+        }
+        Err(TpmRc::NO_RESULT)
+    }
+
     /// Derives the commit scalar `r` for `count` (the KDF loop of `CryptGenerateR`).
     ///
     /// `r = KDFa(CONTEXT_INTEGRITY_HASH_ALG, commitNonce, "ECDAA Commit", name, count, |n|*8)`,
@@ -492,7 +556,7 @@ const COMMIT_STRING: &[u8] = b"ECDAA Commit\0";
 
 /// The KDF hash used for commit values (`CONTEXT_INTEGRITY_HASH_ALG`, SHA-512 in the reference
 /// profile).
-const COMMIT_KDF_HASH: tpm2::TpmiAlgHash = tpm2::TpmiAlgHash::Sha512;
+const COMMIT_KDF_HASH: tpm2::TpmiAlgHash = crate::handler::CONTEXT_INTEGRITY_HASH_ALG;
 
 /// Size in bytes of the largest supported curve order (NIST P-521).
 pub(crate) const MAX_ECC_ORDER_SIZE: usize = 66;

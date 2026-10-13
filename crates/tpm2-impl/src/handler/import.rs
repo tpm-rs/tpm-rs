@@ -178,7 +178,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 OwnedPublicParmsAndId::Ecc(parms, _) => {
                     let mut slice = cmd.in_sym_seed.get_buffer();
                     let eph_point = tpm2::TpmsEccPoint::unmarshal(&mut slice)
-                        .map_err(|_| TpmRc::ECC_POINT.with(Position::parameter(4)))?;
+                        .map_err(|e| e.in_parameter(4).to_rc())?;
                     if !slice.is_empty() {
                         return Err(TpmRc::SIZE.with(Position::parameter(4)));
                     }
@@ -248,13 +248,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         &mut seed,
                         b"DUPLICATE\0",
                     ),
-                    TpmRc::FAILURE,
+                    TpmRc::VALUE.with(Position::parameter(4)),
                 )?,
                 OwnedPublicParmsAndId::Ecc(parms, unique) => {
                     // 1. Unmarshal the ephemeral public key from in_sym_seed
                     let mut slice = cmd.in_sym_seed.get_buffer();
                     let eph_point = tpm2::TpmsEccPoint::unmarshal(&mut slice)
-                        .map_err(|_| TpmRc::ECC_POINT.with(Position::parameter(4)))?;
+                        .map_err(|e| e.in_parameter(4).to_rc())?;
 
                     let curve = parms.curve_id;
                     let param_size = match curve {
@@ -294,16 +294,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         TpmRc::ECC_POINT.with(Position::parameter(4)),
                     )?;
 
-                    // 3. Reconstruct parent's public point
-                    let mut parent_pub_point = [0u8; 256];
+                    // 3. Validate parent's public point coordinates
                     let px_buf = unique.x.get_buffer();
                     let py_buf = unique.y.get_buffer();
                     if px_buf.len() > param_size || py_buf.len() > param_size {
                         return Err(TpmRc::VALUE.to_rc());
                     }
-                    parent_pub_point[param_size - px_buf.len()..param_size].copy_from_slice(px_buf);
-                    parent_pub_point[param_size * 2 - py_buf.len()..param_size * 2]
-                        .copy_from_slice(py_buf);
 
                     // 4. KDFe to recover seed
                     let parent_name_alg = parent_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
@@ -315,8 +311,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         parent_name_alg,
                         &ecdh_point[..param_size],
                         b"DUPLICATE",
-                        &eph_pub_point[..param_size],
-                        &parent_pub_point[..param_size],
+                        ex_buf,
+                        px_buf,
                         total_bits,
                         &mut seed,
                     )

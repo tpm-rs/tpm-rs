@@ -322,26 +322,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let (commit_r, r_len) =
                 self.generate_committed_r(ecdaa_s.count, _obj.name.get_buffer(), curve)?;
             debug_assert_eq!(r_len, param_size);
-            if !matches!(
-                self.crypto().ecdaa_sign(
-                    curve,
-                    &commit_r[..param_size],
-                    &self.global_state.commit_x[..param_size],
-                    &self.global_state.commit_p1[..param_size * 2],
-                    &_obj.private[.._obj.private_len],
-                    cmd.digest.get_buffer(),
-                    &mut sig_r[..param_size],
-                    &mut sig_s[..param_size],
-                ),
-                Ok(Some(_))
-            ) {
-                return Err(TpmRc::VALUE.with(Position::handle(1)));
-            }
+            let (k_len, s_len) = self.ecdaa_sign(
+                curve,
+                hash_alg,
+                &commit_r[..param_size],
+                &_obj.private[.._obj.private_len],
+                cmd.digest.get_buffer(),
+                &mut sig_r[..param_size],
+                &mut sig_s[..param_size],
+            )?;
             let signature = TpmtSignature::Ecdaa(TpmsSignatureEcc {
                 hash: hash_alg,
-                signature_r: Tpm2bEccParameter::from_bytes(&sig_r[..param_size])
+                signature_r: Tpm2bEccParameter::from_bytes(&sig_r[..k_len])
                     .map_err(|_| TpmRc::FAILURE)?,
-                signature_s: Tpm2bEccParameter::from_bytes(&sig_s[..param_size])
+                signature_s: Tpm2bEccParameter::from_bytes(&sig_s[..s_len])
                     .map_err(|_| TpmRc::FAILURE)?,
             });
             // CryptEndCommit(): the signature succeeded, so the commitment can never be

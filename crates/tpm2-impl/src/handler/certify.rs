@@ -129,23 +129,26 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
-    /// Computes the HMAC-SHA256 creation ticket digest.
+    /// Computes the creation ticket digest (an HMAC with `CONTEXT_INTEGRITY_HASH_ALG`).
     pub fn compute_creation_ticket(
         &self,
         hierarchy: u32,
         name: &OwnedName,
         creation_hash: &tpm2::Tpm2bDigest,
-    ) -> Result<[u8; 32], TpmRc> {
-        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy);
+    ) -> Result<[u8; crate::handler::TICKET_DIGEST_SIZE], TpmRc> {
+        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy)?;
         let proof = &proof_bytes[..proof_len];
 
         let tag_bytes = 0x8021u16.to_be_bytes();
         let name_bytes = name.get_buffer();
         let hash_bytes = creation_hash.get_buffer();
 
-        let mut hmac_ctx =
-            tpm2::crypto::HmacStream::new(self.crypto(), tpm2::TpmiAlgHash::Sha256, proof)
-                .map_err(|_| TpmRc::FAILURE)?;
+        let mut hmac_ctx = tpm2::crypto::HmacStream::new(
+            self.crypto(),
+            crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
+            proof,
+        )
+        .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(&tag_bytes).map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(name_bytes).map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(hash_bytes).map_err(|_| TpmRc::FAILURE)?;
@@ -154,7 +157,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mac = hmac_ctx
             .finalize(&mut mac_buf)
             .map_err(|_| TpmRc::FAILURE)?;
-        let mut out = [0u8; 32];
+        let mut out = [0u8; crate::handler::TICKET_DIGEST_SIZE];
         out.copy_from_slice(mac.digest());
         Ok(out)
     }

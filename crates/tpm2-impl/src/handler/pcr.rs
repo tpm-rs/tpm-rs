@@ -29,7 +29,7 @@ const DRTM_PCR: usize = 17;
 
 /// The H-CRTM PCR (`HCRTM_PCR` in `TpmProfile_Misc.h`). `TPM2_PCR_Allocate` requires that at
 /// least one bank keeps it allocated.
-const HCRTM_PCR: usize = 0;
+pub(crate) const HCRTM_PCR: usize = 0;
 
 /// Allowed localities mask for PCR Extend operations.
 /// Each index corresponds to a PCR index, and the value is a bitmask of localities (0-4) allowed

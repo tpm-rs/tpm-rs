@@ -195,3 +195,74 @@ fn tpm2_getrandom_stirrandom_unmarshal_panic_and_size_bugs() {
     fail.store(false, Ordering::SeqCst);
     assert_eq!(run(&mut tpm, &mut gs, &get_random), 0);
 }
+
+/// Primary Seeds and hierarchy proofs the platform RNG cannot produce at manufacture stay
+/// unprovisioned (size 0) and are never used as key material: `TPM2_CreatePrimary` under the
+/// owner, endorsement and platform hierarchies then fails with `TPM_RC_FAILURE`, while the
+/// null hierarchy (whose seed is drawn at TPM Reset) is unaffected.
+#[test]
+fn rng_failure_at_manufacture_leaves_seeds_and_proofs_unprovisioned() {
+    let mut crypto = FakeCrypto;
+    let mut storage = FakeStorage::default();
+    let mut timer = FakeTimer::new();
+    let fail = AtomicBool::new(true);
+    let mut rng = FlakyRng {
+        inner: FakeRng::new(),
+        fail: &fail,
+    };
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = TpmEngine::new(platform).unwrap();
+    let mut gs = GlobalState::default();
+    tpm.init_storage(&mut gs);
+    for size in [
+        gs.ep_seed_size,
+        gs.sp_seed_size,
+        gs.pp_seed_size,
+        gs.ph_proof_size,
+        gs.sh_proof_size,
+        gs.eh_proof_size,
+    ] {
+        assert_eq!(size, 0);
+    }
+    assert_eq!(
+        [
+            gs.ep_seed,
+            gs.sp_seed,
+            gs.pp_seed,
+            gs.ph_proof,
+            gs.sh_proof,
+            gs.eh_proof
+        ],
+        [[0u8; 64]; 6]
+    );
+
+    fail.store(false, Ordering::SeqCst);
+    power_on_startup(&mut tpm, &mut gs);
+
+    // inSensitive (empty) and a KEYEDHASH HMAC-SHA256 signing template.
+    let mut params = Vec::new();
+    params.extend_from_slice(&[0x00, 0x04, 0x00, 0x00, 0x00, 0x00]);
+    let public = [
+        0x00, 0x08, // type: TPM_ALG_KEYEDHASH
+        0x00, 0x0B, // nameAlg: SHA256
+        0x00, 0x04, 0x00, 0x72, // fixedTPM|fixedParent|sensitiveDataOrigin|userWithAuth|sign
+        0x00, 0x00, // authPolicy
+        0x00, 0x05, 0x00, 0x0B, // scheme: HMAC(SHA256)
+        0x00, 0x00, // unique
+    ];
+    params.extend_from_slice(&(public.len() as u16).to_be_bytes());
+    params.extend_from_slice(&public);
+    params.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // outsideInfo, creationPCR
+
+    const TPM_CC_CREATE_PRIMARY: u32 = 0x131;
+    for hierarchy in [0x4000_0001, 0x4000_000B, TPM_RH_PLATFORM] {
+        let cmd = pw_command(TPM_CC_CREATE_PRIMARY, &[hierarchy], &params);
+        assert_eq!(
+            run(&mut tpm, &mut gs, &cmd),
+            0x101,
+            "hierarchy {hierarchy:#x}"
+        );
+    }
+    let cmd = pw_command(TPM_CC_CREATE_PRIMARY, &[0x4000_0007], &params);
+    assert_ne!(run(&mut tpm, &mut gs, &cmd), 0x101, "null hierarchy");
+}

@@ -30,8 +30,8 @@ use tpm2::{TpmSe, TpmiAlgHash};
 
 use super::context_save::{CONTEXT_ENCRYPTION_ALG, CONTEXT_FINGERPRINT_SIZE};
 
-/// Size of the context integrity HMAC (SHA-256).
-const CONTEXT_INTEGRITY_DIGEST_SIZE: usize = 32;
+/// Size of the context integrity HMAC (`CONTEXT_INTEGRITY_HASH_ALG`).
+const CONTEXT_INTEGRITY_DIGEST_SIZE: usize = crate::handler::TICKET_DIGEST_SIZE;
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -115,7 +115,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Everything after the integrity value is integrity protected.
         let protected = slice;
 
-        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy.0);
+        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy.0)?;
         let proof = &proof_bytes[..proof_len];
 
         // 1. Verify HMAC integrity signature before looking at any protected
@@ -260,7 +260,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
-    /// Verifies the integrity of a context blob using SHA-256 HMAC keyed with the hierarchy proof.
+    /// Verifies the integrity of a context blob: an HMAC with `CONTEXT_INTEGRITY_HASH_ALG` keyed with
+    /// the hierarchy proof.
     ///
     /// `protected_data` is every byte of the context blob after the integrity
     /// value (`encrypted.size || encrypted.buffer` for well-formed blobs), so
@@ -273,8 +274,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         protected_data: &[u8],
         expected_mac: &[u8],
     ) -> Result<(), TpmRc> {
-        let mut mac_ctx = HmacStream::new(self.crypto(), TpmiAlgHash::Sha256, proof)
-            .map_err(|_| TpmRc::FAILURE)?;
+        let mut mac_ctx = HmacStream::new(
+            self.crypto(),
+            crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
+            proof,
+        )
+        .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx
             .update(&self.global_state.total_reset_count.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
@@ -313,7 +318,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut sym_key_iv = [0u8; 32];
         kdfa_bits(
             self.crypto(),
-            TpmiAlgHash::Sha256,
+            crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
             proof,
             b"CONTEXT",
             &sequence_bytes,

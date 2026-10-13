@@ -877,3 +877,13 @@ fn test_tpms_id_object_and_tpm2b_id_object_encrypted_ciphertext() {
     let raw_2b = Tpm2bIdObject::new(&oversized_enc_buf).unwrap();
     assert_eq!(raw_2b.to_struct(), Err(errors::UnmarshalError::SIZE));
 }
+
+/// Test MAC buffer creation with too large input.
+///
+/// Expected: Tpm2bMaxBuffer::from_bytes returns error.
+#[test]
+fn hmac_buffer_over_max_size_unconstructible() {
+    let large_data = [0xaa; 1025];
+    let res = Tpm2bMaxBuffer::from_bytes(&large_data);
+    assert!(res.is_err());
+}

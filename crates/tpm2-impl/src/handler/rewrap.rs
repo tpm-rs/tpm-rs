@@ -404,20 +404,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     ),
                     TpmRc::ECC_POINT.to_rc(),
                 )?;
-                let mut parent_x = [0u8; 66];
-                pad_coordinate(
-                    unique.x.get_buffer(),
-                    param_size,
-                    &mut parent_x[..param_size],
-                )?;
                 let digest_size = name_alg.digest_size();
                 tpm2::crypto::kdf::kdfe_bits(
                     self.crypto(),
                     name_alg,
                     &z[..param_size],
                     label,
-                    &eph[..param_size],
-                    &parent_x[..param_size],
+                    eph_point.x.get_buffer(),
+                    unique.x.get_buffer(),
                     (digest_size * 8) as u32,
                     seed,
                 )
@@ -507,7 +501,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     &z[..param_size],
                     label,
                     &eph_pub[..param_size],
-                    &parent_point[..param_size],
+                    unique.x.get_buffer(),
                     (digest_size * 8) as u32,
                     seed,
                 )

@@ -11,7 +11,7 @@ use crate::{handler::CommandHandler, owned::OwnedDigest, req_resp::RequestThenRe
 use tpm2::commands::GetCommandAuditDigest;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::{Alg, Handle, TpmGenerated};
-use tpm2::{Tpm2bDigest, TpmiAlgHash, TpmsAttest, TpmsCommandAuditInfo, TpmuAttest};
+use tpm2::{TpmsAttest, TpmsCommandAuditInfo, TpmuAttest};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -69,21 +69,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &cmd.qualifying_data,
         )?;
 
-        // Compute command audit digest for audited commands (default: TPM_CC_SetCommandCodeAuditStatus = 0x00000140)
-        let audit_hash_alg =
-            TpmiAlgHash::try_from(self.global_state.audit_hash_alg).unwrap_or(TpmiAlgHash::Sha256);
-        let command_code_bytes = (tpm2::TpmCc::SetCommandCodeAuditStatus.code()).to_be_bytes();
-        let (command_digest_buf, command_digest_len) =
-            self.compute_hash(audit_hash_alg, &[&command_code_bytes])?;
-        let command_digest = Tpm2bDigest::from_bytes(&command_digest_buf[..command_digest_len])
-            .map_err(|_| TpmRc::FAILURE)?;
+        // `commandDigest`: digest of the list of audited commands (`CommandAuditGetDigest`).
+        let audit_hash_alg = self.global_state.command_audit_hash_alg();
+        let command_digest = self.context.command_audit_list_digest(self.global_state)?;
 
         let saved_audit_digest = self.global_state.command_audit_digest;
         let command_audit_info = TpmsCommandAuditInfo {
             audit_counter: self.global_state.audit_counter,
             digest_alg: Alg::from(audit_hash_alg),
             audit_digest: saved_audit_digest.as_tpm2b(),
-            command_digest,
+            command_digest: command_digest.as_tpm2b(),
         };
 
         let attest = TpmsAttest {

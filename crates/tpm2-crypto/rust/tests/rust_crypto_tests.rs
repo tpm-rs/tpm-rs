@@ -668,6 +668,8 @@ fn test_rust_crypto_provider_ecc_result_conventions() {
 
 #[test]
 fn test_rust_crypto_provider_ecdaa_sign_p256() {
+    // ECDAA signing is implemented in tpm2-impl (it needs the scheme hash); the provider
+    // primitive reports that it is not supported instead of producing non-spec signatures.
     let provider = RustCryptoProvider;
     let digest = [0xA5u8; 32];
     let mut k = [0u8; 32];
@@ -682,37 +684,7 @@ fn test_rust_crypto_provider_ecdaa_sign_p256() {
         &mut k,
         &mut s,
     );
-    assert_eq!(res, Ok(Some(32)));
-    // The nonce output is SHA-256(digest).
-    let mut expected_k = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    let expected_k =
-        tpm2::crypto::hash(&provider, TpmiAlgHash::Sha256, &digest, &mut expected_k).unwrap();
-    assert_eq!(&k[..], expected_k.digest());
-    assert_ne!(s, [0u8; 32]);
-
-    // An invalid (zero) commit or private scalar has no valid result.
-    let res = provider.ecdaa_sign(
-        TpmEccCurve::NistP256,
-        &[0],
-        &[],
-        &[],
-        &[9],
-        &digest,
-        &mut k,
-        &mut s,
-    );
-    assert_eq!(res, Ok(None));
-    let res = provider.ecdaa_sign(
-        TpmEccCurve::NistP256,
-        &[7],
-        &[],
-        &[],
-        &[0],
-        &digest,
-        &mut k,
-        &mut s,
-    );
-    assert_eq!(res, Ok(None));
+    assert_eq!(res, Err(CryptoError::Unsupported));
 }
 
 #[test]

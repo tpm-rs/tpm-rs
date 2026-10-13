@@ -149,7 +149,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let key_hierarchy = self.entity_get_hierarchy(auth_handle)?;
 
             let (proof_bytes, proof_len, ticket_hierarchy) =
-                self.resolve_hierarchy_proof(key_hierarchy);
+                self.resolve_hierarchy_proof(key_hierarchy)?;
 
             let mut hmac_input = [0u8; 512];
             let mut offset = 0;
@@ -197,7 +197,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
             let hmac_digest = tpm2::crypto::hmac(
                 self.crypto(),
-                tpm2::TpmiAlgHash::Sha256,
+                crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
                 &proof_bytes[..proof_len],
                 &hmac_input[..offset],
                 &mut hmac_digest_bytes,

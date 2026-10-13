@@ -9,8 +9,8 @@ use tpm2::crypto::{ConstantTimeEq, CryptoError, CryptoProvider, Random};
 /// Supported algorithms: SHA-1/SHA-256/SHA-384/SHA-512 (hash and HMAC),
 /// AES-128/192/256 (CMAC, and CFB for symmetric encryption), RSA 1024-4096
 /// (RSASSA, RSAPSS, RSAES, OAEP, raw RSA, key generation and import), the NIST
-/// P-224/P-256/P-384/P-521 curves (ECDSA, point operations and key generation;
-/// ECDAA on P-256), and BN-P256 (point operations and key generation).
+/// P-224/P-256/P-384/P-521 curves (ECDSA, point operations and key generation),
+/// and BN-P256 (point operations and key generation).
 /// Everything else returns [`CryptoError::Unsupported`].
 pub struct BsslCryptoProvider;
 

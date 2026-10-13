@@ -65,7 +65,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
         if (save_handle >> 24) == (TpmHt::Transient as u8 as u32)
-            && (save_handle & 0x00FF_FFFF) >= 256
+            && save_handle > tpm2::Handle::TRANSIENT_LAST.0
         {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
@@ -116,7 +116,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let offset = CONTEXT_FINGERPRINT_SIZE + entity_len;
 
         let handle_bytes = out_saved_handle.to_be_bytes();
-        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(obj_hierarchy);
+        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(obj_hierarchy)?;
         let mut proof_buf = [0u8; 64];
         proof_buf[..proof_len].copy_from_slice(&proof_bytes[..proof_len]);
         let proof = &proof_buf[..proof_len];
@@ -240,7 +240,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut sym_key_iv = [0u8; 32];
         kdfa_bits(
             self.crypto(),
-            TpmiAlgHash::Sha256,
+            crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
             proof,
             b"CONTEXT",
             sequence_bytes,
@@ -267,7 +267,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 
     /// Computes the context integrity value (TPM 2.0 Part 1, "Context Integrity
-    /// Protection"): a SHA-256 HMAC keyed with the hierarchy proof over
+    /// Protection"): an HMAC with `CONTEXT_INTEGRITY_HASH_ALG` keyed with the hierarchy proof over
     /// `totalResetCount || {clearCount} || sequence || savedHandle || encContext`,
     /// where `clearCount` is only included for ST_CLEAR objects (handle
     /// 0x80000002) and `encContext` is every byte of the context blob after
@@ -281,8 +281,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         saved_handle: u32,
         sensitive_buf: &[u8],
     ) -> Result<OwnedDigest, TpmRc> {
-        let mut mac_ctx = HmacStream::new(self.crypto(), TpmiAlgHash::Sha256, proof)
-            .map_err(|_| TpmRc::FAILURE)?;
+        let mut mac_ctx = HmacStream::new(
+            self.crypto(),
+            crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
+            proof,
+        )
+        .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx
             .update(&self.global_state.total_reset_count.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;

@@ -382,7 +382,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
                     tpm2::TpmEccCurve::NistP384 => 48,
                     tpm2::TpmEccCurve::NistP521 => 66,
-                    _ => return Err(TpmRc::ECC_POINT.with(pos_public)),
+                    _ => return Err(TpmRc::CURVE.with(pos_public)),
                 };
                 let mut ecc_pub_key = [0u8; 256];
                 if public_struct.name_alg.is_some() {
@@ -412,7 +412,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
                 if let TpmuSensitiveComposite::Ecc(sensitive_ecc) = &sensitive_struct.sensitive {
                     if sensitive_ecc.get_size() as usize > param_size {
-                        return Err(TpmRc::KEY_SIZE.with(pos_sensitive));
+                        return Err(TpmRc::KEY_SIZE.to_rc());
                     }
 
                     let mut scalar = [0u8; 128];
@@ -583,7 +583,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
                     tpm2::TpmEccCurve::NistP384 => 48,
                     tpm2::TpmEccCurve::NistP521 => 66,
-                    _ => return Err(TpmRc::ECC_POINT.with(Position::parameter(2))),
+                    _ => return Err(TpmRc::CURVE.with(Position::parameter(2))),
                 };
                 // Coordinates may have leading zero bytes stripped when a sensitive area is
                 // present (C adjusts them before the binding check); only oversized
@@ -687,7 +687,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
                 tpm2::TpmEccCurve::NistP384 => 48,
                 tpm2::TpmEccCurve::NistP521 => 66,
-                _ => return Err(TpmRc::ECC_POINT.with(Position::parameter(2))),
+                _ => return Err(TpmRc::CURVE.with(Position::parameter(2))),
             };
             let mut ecc_pub_key = [0u8; 256];
             let px = point.x.get_buffer();

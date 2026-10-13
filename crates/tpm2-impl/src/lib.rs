@@ -53,10 +53,12 @@
 #[cfg(test)]
 extern crate alloc;
 
+pub mod command_audit;
 mod error;
 mod handle_checks;
 pub mod handler;
 pub mod hash_state;
+mod modular;
 pub mod owned;
 pub mod storage;
 #[cfg(test)]

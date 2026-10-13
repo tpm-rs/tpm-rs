@@ -81,6 +81,7 @@ mod read_public;
 mod rewrap;
 mod sequence;
 pub(crate) mod session;
+mod set_command_code_audit_status;
 mod set_primary_policy;
 mod shutdown;
 mod startup;
@@ -306,6 +307,32 @@ pub struct CommandHandler<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, 
     pub context: &'b mut TpmEngine<'a, C, S, T, R>,
     pub global_state: &'b mut GlobalState,
 }
+
+/// Hash algorithm for context integrity, tickets and the other proof-keyed HMACs
+/// (`CONTEXT_INTEGRITY_HASH_ALG`, reported as `TPM_PT_CONTEXT_HASH`).
+///
+/// TPM 2.0 Part 1, "Context Integrity Protection": the algorithm "is required to have the
+/// highest security strength of any hash algorithm implemented on the TPM", i.e. SHA-512 here.
+/// Tickets are HMACs with this algorithm (Part 2, `TPMT_TK_*`), and the hierarchy authValue
+/// limit of `TPM2_HierarchyChangeAuth` is its digest size (Part 1, "Authorization Size
+/// Convention").
+pub(crate) const CONTEXT_INTEGRITY_HASH_ALG: TpmiAlgHash = TpmiAlgHash::Sha512;
+
+/// Returns the first `size` bytes of a Primary Seed or hierarchy proof buffer.
+///
+/// A size of 0 marks a value that was never provisioned (the TPM was not manufactured, or the
+/// platform RNG failed during manufacture). Primary Seeds and proofs are secret random values
+/// (TPM 2.0 Part 1, "Primary Seeds", "Hierarchy Proofs"), so an unprovisioned value is never
+/// used as key material: this fails with `TPM_RC_FAILURE` instead.
+pub(crate) fn provisioned_secret(buf: &[u8; 64], size: u16) -> Result<&[u8], TpmRc> {
+    match buf.get(..size as usize) {
+        Some(secret) if !secret.is_empty() => Ok(secret),
+        _ => Err(TpmRc::FAILURE),
+    }
+}
+
+/// Digest size of [`CONTEXT_INTEGRITY_HASH_ALG`]: the size of every ticket digest.
+pub(crate) const TICKET_DIGEST_SIZE: usize = 64;
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -907,7 +934,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         unique: &mut OwnedDigest,
         actual_private_key: &mut [u8],
     ) -> Result<usize, TpmRc> {
-        let key_len = if let Some(seed) = args.gen_seed {
+        let key_len = if let Some(data) = args.fallback_sensitive_data {
+            let data_len = data.len();
+            actual_private_key[..data_len].copy_from_slice(data);
+            data_len
+        } else if let Some(seed) = args.gen_seed {
             let mut generated_key = [0u8; 64];
             kdfa_bits(
                 self.crypto(),
@@ -927,10 +958,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .get_random(&mut actual_private_key[..sym_key_size])
                 .map_err(|_| TpmRc::FAILURE)?;
             sym_key_size
-        } else if let Some(data) = args.fallback_sensitive_data {
-            let data_len = data.len();
-            actual_private_key[..data_len].copy_from_slice(data);
-            data_len
         } else {
             return Err(TpmRc::VALUE.to_rc());
         };
@@ -1097,9 +1124,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut obfuscation = [0u8; 16];
             kdfa_bits(
                 self.crypto(),
-                // CONTEXT_INTEGRITY_HASH_ALG of the reference build (largest implemented hash).
-                tpm2::TpmiAlgHash::Sha512,
-                &self.global_state.sh_proof[..self.global_state.sh_proof_size as usize],
+                CONTEXT_INTEGRITY_HASH_ALG,
+                provisioned_secret(&self.global_state.sh_proof, self.global_state.sh_proof_size)?,
                 b"OBFUSCATE",
                 qualified_signer.get_buffer(),
                 &[],
@@ -1130,32 +1156,24 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         })
     }
 
-    pub fn resolve_hierarchy_proof(&self, hierarchy: u32) -> (&[u8], usize, u32) {
-        if hierarchy == 0x40000001 {
-            (
-                &self.global_state.sh_proof[..],
-                self.global_state.sh_proof_size as usize,
-                0x40000001,
-            )
+    /// Returns the proof of `hierarchy` (owner, endorsement, platform; anything else selects
+    /// the null hierarchy) as `(buffer, length, hierarchy handle)`.
+    ///
+    /// Fails with `TPM_RC_FAILURE` if the proof is not provisioned (see
+    /// [`provisioned_secret`]).
+    pub fn resolve_hierarchy_proof(&self, hierarchy: u32) -> Result<(&[u8], usize, u32), TpmRc> {
+        let gs = &self.global_state;
+        let (proof, size, handle) = if hierarchy == 0x40000001 {
+            (&gs.sh_proof, gs.sh_proof_size, 0x40000001)
         } else if hierarchy == 0x4000000B {
-            (
-                &self.global_state.eh_proof[..],
-                self.global_state.eh_proof_size as usize,
-                0x4000000B,
-            )
+            (&gs.eh_proof, gs.eh_proof_size, 0x4000000B)
         } else if hierarchy == 0x4000000C {
-            (
-                &self.global_state.ph_proof[..],
-                self.global_state.ph_proof_size as usize,
-                0x4000000C,
-            )
+            (&gs.ph_proof, gs.ph_proof_size, 0x4000000C)
         } else {
-            (
-                &self.global_state.null_proof[..],
-                self.global_state.null_proof_size as usize,
-                0x40000007,
-            )
-        }
+            (&gs.null_proof, gs.null_proof_size, 0x40000007)
+        };
+        let proof = provisioned_secret(proof, size)?;
+        Ok((proof, proof.len(), handle))
     }
 
     pub fn compute_verified_ticket(
@@ -1163,7 +1181,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         hierarchy: u32,
         digest: &[u8],
         key_name: &[u8],
-    ) -> Result<[u8; 32], TpmRc> {
+    ) -> Result<[u8; TICKET_DIGEST_SIZE], TpmRc> {
         self.compute_verified_ticket_with_meta(hierarchy, 0x8022, digest, key_name, &[])
     }
 
@@ -1174,8 +1192,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         digest_or_message: &[u8],
         key_name: &[u8],
         metadata: &[u8],
-    ) -> Result<[u8; 32], TpmRc> {
-        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy);
+    ) -> Result<[u8; TICKET_DIGEST_SIZE], TpmRc> {
+        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy)?;
 
         let mut hmac_input = [0u8; 512];
         let mut offset = 0;
@@ -1195,14 +1213,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = tpm2::crypto::hmac(
             self.crypto(),
-            TpmiAlgHash::Sha256,
+            CONTEXT_INTEGRITY_HASH_ALG,
             &proof_bytes[..proof_len],
             &hmac_input[..offset],
             &mut hmac_buf,
         )
         .map_err(|_| TpmRc::FAILURE)?;
 
-        let mut hmac_bytes = [0u8; 32];
+        let mut hmac_bytes = [0u8; TICKET_DIGEST_SIZE];
         hmac_bytes.copy_from_slice(hmac_digest.digest());
         Ok(hmac_bytes)
     }
@@ -1212,7 +1230,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         hierarchy: Handle,
         hash_alg: TpmiAlgHash,
         digest: &[u8],
-    ) -> Result<[u8; 32], TpmRc> {
+    ) -> Result<[u8; TICKET_DIGEST_SIZE], TpmRc> {
         if hierarchy != Handle::RH_NULL
             && hierarchy != Handle::RH_OWNER
             && hierarchy != Handle::RH_PLATFORM
@@ -1220,7 +1238,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         {
             return Err(TpmRc::HIERARCHY.to_rc());
         }
-        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy.0);
+        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy.0)?;
 
         let mut hmac_input = [0u8; 512];
         let mut offset = 0;
@@ -1239,14 +1257,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = tpm2::crypto::hmac(
             self.crypto(),
-            TpmiAlgHash::Sha256,
+            CONTEXT_INTEGRITY_HASH_ALG,
             &proof_bytes[..proof_len],
             &hmac_input[..offset],
             &mut hmac_buf,
         )
         .map_err(|_| TpmRc::FAILURE)?;
 
-        let mut hmac_bytes = [0u8; 32];
+        let mut hmac_bytes = [0u8; TICKET_DIGEST_SIZE];
         hmac_bytes.copy_from_slice(hmac_digest.digest());
         Ok(hmac_bytes)
     }

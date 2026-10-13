@@ -199,207 +199,23 @@ fn test_bssl_ecc_nist_p224_operations() {
 
 #[test]
 fn test_bssl_ecc_nist_p256_ecdaa_sign() {
+    // ECDAA signing is implemented in tpm2-impl (it needs the scheme hash); the provider
+    // primitive reports that it is not supported instead of producing non-spec signatures.
     let provider = BsslCryptoProvider;
     let ctx = provider.nist_p256().unwrap();
-
-    let commit_r = [0x05u8; 32];
-    let private_key_d = [0x07u8; 32];
-    let digest = [0x42u8; 32];
     let mut nonce_k = [0u8; 32];
     let mut s = [0u8; 32];
-
-    // 1. Basic ECDAA sign without commit_x and commit_p1
     assert_eq!(
         ctx.ecdaa_sign(
-            &commit_r,
+            &[0x05u8; 32],
             &[],
             &[],
-            &private_key_d,
-            &digest,
+            &[0x07u8; 32],
+            &[0x42u8; 32],
             &mut nonce_k,
             &mut s,
         ),
-        Ok(Some(()))
-    );
-
-    assert!(!nonce_k.iter().all(|&b| b == 0));
-    assert!(!s.iter().all(|&b| b == 0));
-
-    // 2. ECDAA sign with commit_p1 matching 42*G
-    let mut s42 = [0u8; 32];
-    s42[31] = 42;
-    let mut p42_x = [0u8; 32];
-    let mut p42_y = [0u8; 32];
-    assert_eq!(
-        ctx.point_multiply_generator(&s42, &mut p42_x, &mut p42_y),
-        Ok(Some(()))
-    );
-
-    let mut s_p42 = [0u8; 32];
-    assert_eq!(
-        ctx.ecdaa_sign(
-            &commit_r,
-            &[],
-            &p42_x,
-            &private_key_d,
-            &digest,
-            &mut nonce_k,
-            &mut s_p42,
-        ),
-        Ok(Some(()))
-    );
-
-    assert_ne!(s, s_p42);
-
-    // 3. ECDAA sign with commit_p1 matching 55*G
-    let mut s55 = [0u8; 32];
-    s55[31] = 55;
-    let mut p55_x = [0u8; 32];
-    let mut p55_y = [0u8; 32];
-    assert_eq!(
-        ctx.point_multiply_generator(&s55, &mut p55_x, &mut p55_y),
-        Ok(Some(()))
-    );
-
-    let mut s_p55 = [0u8; 32];
-    assert_eq!(
-        ctx.ecdaa_sign(
-            &commit_r,
-            &[],
-            &p55_x,
-            &private_key_d,
-            &digest,
-            &mut nonce_k,
-            &mut s_p55,
-        ),
-        Ok(Some(()))
-    );
-
-    assert_ne!(s, s_p55);
-    assert_ne!(s_p42, s_p55);
-
-    // 4. ECDAA sign with commit_p1 matching d*G (public key)
-    let mut pq_x = [0u8; 32];
-    let mut pq_y = [0u8; 32];
-    assert_eq!(
-        ctx.point_multiply_generator(&private_key_d, &mut pq_x, &mut pq_y),
-        Ok(Some(()))
-    );
-
-    let mut s_pq = [0u8; 32];
-    assert_eq!(
-        ctx.ecdaa_sign(
-            &commit_r,
-            &[],
-            &pq_x,
-            &private_key_d,
-            &digest,
-            &mut nonce_k,
-            &mut s_pq,
-        ),
-        Ok(Some(()))
-    );
-
-    assert_ne!(s, s_pq);
-
-    // 5. Verify exact mathematical test vector with commit_x
-    let mut e_x_custom = [0u8; 32];
-    e_x_custom[30] = 0x30;
-    e_x_custom[31] = 0x39; // 12345
-    let mut nonce_k_exact = [0u8; 32];
-    let mut s_exact = [0u8; 32];
-    assert_eq!(
-        ctx.ecdaa_sign(
-            &commit_r,
-            &e_x_custom,
-            &[],
-            &private_key_d,
-            &digest,
-            &mut nonce_k_exact,
-            &mut s_exact,
-        ),
-        Ok(Some(()))
-    );
-
-    assert_eq!(
-        nonce_k_exact,
-        hex!("425ed4e4a36b30ea21b90e21c712c649e8214c29b7eaf68089d1039c6e55384c")
-    );
-    assert_eq!(
-        s_exact,
-        hex!("e4e3d7cb096c11649b1d5b96a16100cc6ab4b3923d2a77dd79b96cd734296154")
-    );
-
-    // 6. Verify exact mathematical test vector with commit_p1 matching 42*G
-    let mut s_42_exact = [0u8; 32];
-    assert_eq!(
-        ctx.ecdaa_sign(
-            &commit_r,
-            &e_x_custom,
-            &p42_x,
-            &private_key_d,
-            &digest,
-            &mut nonce_k_exact,
-            &mut s_42_exact,
-        ),
-        Ok(Some(()))
-    );
-    assert_eq!(
-        s_42_exact,
-        hex!("8d6167748bbada5c72d106b679ea219334433ae4e28dc11ebe918d2014759313")
-    );
-
-    // 7. Verify exact mathematical test vector with commit_p1 matching 55*G
-    let mut s_55_exact = [0u8; 32];
-    assert_eq!(
-        ctx.ecdaa_sign(
-            &commit_r,
-            &e_x_custom,
-            &p55_x,
-            &private_key_d,
-            &digest,
-            &mut nonce_k_exact,
-            &mut s_55_exact,
-        ),
-        Ok(Some(()))
-    );
-    assert_eq!(
-        s_55_exact,
-        hex!("2cf35cd00637bc6c534ead5cabd72bf7c49c992e289a6922804692e9e5e9c48b")
-    );
-
-    // 8. Verify exact mathematical test vector with commit_p1 matching d*G
-    let mut s_d_exact = [0u8; 32];
-    assert_eq!(
-        ctx.ecdaa_sign(
-            &commit_r,
-            &e_x_custom,
-            &pq_x,
-            &private_key_d,
-            &digest,
-            &mut nonce_k_exact,
-            &mut s_d_exact,
-        ),
-        Ok(Some(()))
-    );
-    assert_eq!(
-        s_d_exact,
-        hex!("1f25073ae2645b970d15e5fcb76c130da3417881580fd73e355769e851c3fb6c")
-    );
-
-    // 9. Invalid private key (zero scalar) returns `Ok(None)`
-    let zero_scalar = [0u8; 32];
-    assert_eq!(
-        ctx.ecdaa_sign(
-            &commit_r,
-            &[],
-            &[],
-            &zero_scalar,
-            &digest,
-            &mut nonce_k,
-            &mut s,
-        ),
-        Ok(None)
+        Err(tpm2::crypto::CryptoError::Unsupported)
     );
 }
 
@@ -757,51 +573,6 @@ fn test_ecc_p224_p256_p384_p521_bnp256_operations() {
         )
         .unwrap();
     }
-}
-
-#[test]
-fn test_p256_ecdaa_sign() {
-    let commit_r = [0x01u8; 32];
-    let private_key_d = [0x02u8; 32];
-    let digest = [0x03u8; 32];
-    let mut nonce_k = [0u8; 32];
-    let mut s = [0u8; 32];
-
-    // Basic sign without commit_x / commit_p1
-    p256_ecdaa_sign(
-        &commit_r,
-        &[],
-        &[],
-        &private_key_d,
-        &digest,
-        &mut nonce_k,
-        &mut s,
-    )
-    .unwrap();
-
-    assert!(!nonce_k.iter().all(|&b| b == 0));
-    assert!(!s.iter().all(|&b| b == 0));
-
-    // Sign with commit_p1 matching 42*G
-    let mut s42 = [0u8; 32];
-    s42[31] = 42;
-    let mut p42_x = [0u8; 32];
-    let mut p42_y = [0u8; 32];
-    ec_point_multiply_generator(EcGroup::P256, &s42, &mut p42_x, &mut p42_y).unwrap();
-
-    let mut s_with_p42 = [0u8; 32];
-    p256_ecdaa_sign(
-        &commit_r,
-        &[],
-        &p42_x,
-        &private_key_d,
-        &digest,
-        &mut nonce_k,
-        &mut s_with_p42,
-    )
-    .unwrap();
-
-    assert_ne!(s, s_with_p42);
 }
 
 // =========================================================================

@@ -1,4 +1,6 @@
-use super::{KeyDerivationArgs, ParentSchemeInfo, ResolvedParentInfo, TransientObject};
+use super::{
+    KeyDerivationArgs, ParentSchemeInfo, ResolvedParentInfo, TransientObject, provisioned_secret,
+};
 use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
@@ -83,38 +85,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             parent_info.scheme,
         )?;
 
-        // 4. Derive/Generate the new object seed
-        let mut obj_seed = [0u8; 64];
-        let obj_seed_len = self.derive_create_loaded_seed(
-            is_primary,
-            is_derived,
-            &parent_seed_val[..parent_info.seed_len],
-            parent_info.seed_len,
-            &in_public_struct.as_tpmt(),
-            &in_sensitive_struct,
-            template_derive,
-            parent_info.name_alg,
-            &mut obj_seed,
-        )?;
-
-        let gen_seed_arg = if is_primary || is_derived {
-            Some(&obj_seed[..obj_seed_len])
-        } else {
-            None
-        };
-
-        // 5. Generate/Derive the key pairs and the unique identifier
-        let mut actual_private_key = [0u8; 1536];
-        let is_sym_primary_or_derived = is_primary || is_derived;
-        let get_random_fallback = !is_sym_primary_or_derived
-            && (in_public_struct.object_attributes.0 & TpmaObject::SENSITIVE_DATA_ORIGIN.0) != 0;
-        let fallback_sensitive_data = if !is_sym_primary_or_derived
-            && (in_public_struct.object_attributes.0 & TpmaObject::SENSITIVE_DATA_ORIGIN.0) == 0
-        {
-            Some(in_sensitive_struct.data.get_buffer())
-        } else {
-            None
-        };
         // A NULL or unimplemented nameAlg is rejected as `TPM_RC_HASH + RC_CreateLoaded_inPublic`.
         let name_alg = in_public_struct
             .name_alg
@@ -127,17 +97,66 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
 
-        let actual_private_key_len = self.generate_key_and_unique(
-            name_alg,
-            &mut in_public_struct.parms_and_id,
-            KeyDerivationArgs {
-                gen_seed: gen_seed_arg,
-                obj_seed: &obj_seed[..obj_seed_len],
-                get_random_fallback,
-                fallback_sensitive_data,
-            },
-            &mut actual_private_key,
-        )?;
+        let mut obj_seed = [0u8; 64];
+        let mut actual_private_key = [0u8; 1536];
+        let (obj_seed_len, actual_private_key_len) = if is_derived {
+            // 4-5. Derived Object: sensitive value and seedValue come from the KDFa stream of
+            // the derivation parent (Part 1, "Entropy for Derived Objects").
+            self.derive_object_material(
+                &parent_seed_val[..parent_info.seed_len],
+                parent_info.name_alg,
+                &in_sensitive_struct,
+                template_derive,
+                name_alg,
+                &mut in_public_struct.parms_and_id,
+                &mut actual_private_key,
+                &mut obj_seed,
+            )?
+        } else {
+            // 4. Derive/Generate the new object seed
+            let obj_seed_len = self.derive_create_loaded_seed(
+                is_primary,
+                is_derived,
+                &parent_seed_val[..parent_info.seed_len],
+                parent_info.seed_len,
+                &in_public_struct.as_tpmt(),
+                &in_sensitive_struct,
+                template_derive,
+                parent_info.name_alg,
+                &mut obj_seed,
+            )?;
+
+            let gen_seed_arg = if is_primary {
+                Some(&obj_seed[..obj_seed_len])
+            } else {
+                None
+            };
+
+            // 5. Generate/Derive the key pairs and the unique identifier
+            let get_random_fallback = !is_primary
+                && (in_public_struct.object_attributes.0 & TpmaObject::SENSITIVE_DATA_ORIGIN.0)
+                    != 0;
+            let fallback_sensitive_data = if (in_public_struct.object_attributes.0
+                & TpmaObject::SENSITIVE_DATA_ORIGIN.0)
+                == 0
+            {
+                Some(in_sensitive_struct.data.get_buffer())
+            } else {
+                None
+            };
+            let actual_private_key_len = self.generate_key_and_unique(
+                name_alg,
+                &mut in_public_struct.parms_and_id,
+                KeyDerivationArgs {
+                    gen_seed: gen_seed_arg,
+                    obj_seed: &obj_seed[..obj_seed_len],
+                    get_random_fallback,
+                    fallback_sensitive_data,
+                },
+                &mut actual_private_key,
+            )?;
+            (obj_seed_len, actual_private_key_len)
+        };
 
         let mut pub_buf = [0u8; tpm2::TpmtPublic::MAX_SIZE];
         let pub_len = in_public_struct.marshal(&mut pub_buf);
@@ -220,6 +239,131 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .map_err(|e| e.in_parameter(1).to_rc())?;
 
         Ok((parent_handle, in_sensitive_struct, cmd.in_public))
+    }
+
+    /// Generates the sensitive value and `seedValue` of a Derived Object (`TPM2_CreateLoaded`
+    /// with a Derivation Parent) and computes its public key or unique field.
+    ///
+    /// TPM 2.0 Part 1, "Entropy for Derived Objects": the values come from the byte stream
+    /// `KDFa(hashAlg, sensitive, label, context, 0, 8192)`, taken from most significant to
+    /// least significant byte with no bytes skipped: first the *sensitive* value, then the
+    /// *seedValue* (one digest of the derived object's `nameAlg`). `sensitive` is the
+    /// derivation parent's secret. `hashAlg` is the parent's KDF hash (the `hashAlg` of its
+    /// XOR scheme, as in the reference `CreateLoaded.c`). `label` and `context` come from
+    /// the template's `unique` field; each one that is empty there is taken from the
+    /// `TPMS_DERIVE` in `inSensitive.data`.
+    ///
+    /// - SYMCIPHER: `keyBits / 8` bytes of key.
+    /// - KEYEDHASH: one digest of the scheme hash (`nameAlg` for a NULL scheme).
+    /// - ECC: FIPS 186-5 A.2.1 "extra random bits": `c` is `orderBytes + 8` bytes and
+    ///   `d = (c mod (n - 1)) + 1`; the public point is `d·G`.
+    ///
+    /// For SYMCIPHER/KEYEDHASH, `unique = H_nameAlg(seedValue || sensitive)`. Returns
+    /// `(seedValue length, sensitive length)`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn derive_object_material(
+        &self,
+        parent_secret: &[u8],
+        kdf_hash: TpmiAlgHash,
+        in_sensitive_struct: &TpmsSensitiveCreate,
+        template_derive: Option<TpmsDerive>,
+        name_alg: TpmiAlgHash,
+        parms_and_id: &mut crate::owned::OwnedPublicParmsAndId,
+        actual_private_key: &mut [u8],
+        obj_seed: &mut [u8; 64],
+    ) -> Result<(usize, usize), TpmRc> {
+        use crate::owned::OwnedPublicParmsAndId;
+
+        let mut label_context = template_derive.ok_or(TpmRc::FAILURE)?;
+        let data_buf = in_sensitive_struct.data.get_buffer();
+        if !data_buf.is_empty() {
+            let mut slice = data_buf;
+            let sensitive_derive = TpmsDerive::unmarshal(&mut slice).map_err(|e| e.to_rc())?;
+            if label_context.label.get_size() == 0 {
+                label_context.label = sensitive_derive.label;
+            }
+            if label_context.context.get_size() == 0 {
+                label_context.context = sensitive_derive.context;
+            }
+        }
+
+        // `TPM_MAX_DERIVATION_BITS` (8192) of KDF output.
+        let mut stream = [0u8; DERIVATION_STREAM_BYTES];
+        kdfa_bits(
+            self.crypto(),
+            kdf_hash,
+            parent_secret,
+            label_context.label.get_buffer(),
+            label_context.context.get_buffer(),
+            &[],
+            (DERIVATION_STREAM_BYTES * 8) as u32,
+            &mut stream,
+        )
+        .map_err(|_| TpmRc::FAILURE)?;
+
+        let seed_len = name_alg.digest_size();
+        let take = |offset: usize, len: usize| -> Result<&[u8], TpmRc> {
+            stream.get(offset..offset + len).ok_or(TpmRc::NO_RESULT)
+        };
+
+        let key_len = match parms_and_id {
+            OwnedPublicParmsAndId::Sym(sym_def, _) => (sym_def.key_bits() as usize) / 8,
+            OwnedPublicParmsAndId::KeyedHash(scheme, _) => match scheme {
+                Some(TpmtKeyedHashScheme::Hmac(hash_alg))
+                | Some(TpmtKeyedHashScheme::ExclusiveOr(tpm2::TpmsSchemeXor {
+                    hash_alg, ..
+                })) => hash_alg.digest_size(),
+                None => name_alg.digest_size(),
+            },
+            OwnedPublicParmsAndId::Ecc(parms, _) => {
+                let n = crate::handler::commit::curve_order(parms.curve_id)
+                    .ok_or(TpmRc::CURVE.with(Position::parameter(2)))?;
+                n.len()
+            }
+            _ => return Err(TpmRc::TYPE.with(Position::parameter(2))),
+        };
+
+        let consumed = match parms_and_id {
+            OwnedPublicParmsAndId::Ecc(parms, point) => {
+                let curve = parms.curve_id;
+                let n = crate::handler::commit::curve_order(curve)
+                    .ok_or(TpmRc::CURVE.with(Position::parameter(2)))?;
+                let extra_len = n.len() + 8;
+                let c = take(0, extra_len)?;
+                let d = &mut actual_private_key[..n.len()];
+                crate::modular::ecc_scalar_from_extra_bits(c, n, d);
+                let mut pub_buf = [0u8; 2 * crate::handler::commit::MAX_ECC_ORDER_SIZE];
+                self.crypto()
+                    .point_multiply_generator(curve, d, &mut pub_buf[..2 * n.len()])
+                    .map_err(|_| TpmRc::NO_RESULT)?;
+                *point = crate::owned::OwnedEccPoint {
+                    x: crate::owned::OwnedTpm2b::from_bytes(&pub_buf[..n.len()])
+                        .map_err(|_| TpmRc::FAILURE)?,
+                    y: crate::owned::OwnedTpm2b::from_bytes(&pub_buf[n.len()..2 * n.len()])
+                        .map_err(|_| TpmRc::FAILURE)?,
+                };
+                extra_len
+            }
+            _ => {
+                actual_private_key[..key_len].copy_from_slice(take(0, key_len)?);
+                key_len
+            }
+        };
+
+        obj_seed[..seed_len].copy_from_slice(take(consumed, seed_len)?);
+
+        match parms_and_id {
+            OwnedPublicParmsAndId::Sym(_, unique) | OwnedPublicParmsAndId::KeyedHash(_, unique) => {
+                let (digest, digest_len) = self.compute_hash(
+                    name_alg,
+                    &[&obj_seed[..seed_len], &actual_private_key[..key_len]],
+                )?;
+                *unique = crate::owned::OwnedDigest::from_bytes(&digest[..digest_len])
+                    .map_err(|_| TpmRc::FAILURE)?;
+            }
+            _ => {}
+        }
+        Ok((seed_len, key_len))
     }
 
     /// Helper function to derive or generate the random seed for the newly created object.
@@ -398,8 +542,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if parent_handle == 0x40000001 {
             // TPM_RH_OWNER
             parent_qn_buf[..4].copy_from_slice(&parent_handle.to_be_bytes());
-            let seed_len = self.global_state.sp_seed_size as usize;
-            parent_seed_val[..seed_len].copy_from_slice(&self.global_state.sp_seed[..seed_len]);
+            let seed =
+                provisioned_secret(&self.global_state.sp_seed, self.global_state.sp_seed_size)?;
+            let seed_len = seed.len();
+            parent_seed_val[..seed_len].copy_from_slice(seed);
             Ok(ResolvedParentInfo {
                 req_auth: true,
                 seed_len,
@@ -415,9 +561,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else if parent_handle == 0x40000007 {
             // TPM_RH_NULL
             parent_qn_buf[..4].copy_from_slice(&parent_handle.to_be_bytes());
+            let seed = provisioned_secret(
+                &self.global_state.null_seed,
+                self.global_state.null_seed_size,
+            )?;
+            let seed_len = seed.len();
+            parent_seed_val[..seed_len].copy_from_slice(seed);
             Ok(ResolvedParentInfo {
                 req_auth: true,
-                seed_len: 0,
+                seed_len,
                 qn_len: 4,
                 hierarchy_val: parent_handle,
                 has_st_clear: false,
@@ -430,8 +582,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else if parent_handle == 0x4000000C {
             // TPM_RH_PLATFORM
             parent_qn_buf[..4].copy_from_slice(&parent_handle.to_be_bytes());
-            let seed_len = self.global_state.pp_seed_size as usize;
-            parent_seed_val[..seed_len].copy_from_slice(&self.global_state.pp_seed[..seed_len]);
+            let seed =
+                provisioned_secret(&self.global_state.pp_seed, self.global_state.pp_seed_size)?;
+            let seed_len = seed.len();
+            parent_seed_val[..seed_len].copy_from_slice(seed);
             Ok(ResolvedParentInfo {
                 req_auth: true,
                 seed_len,
@@ -447,8 +601,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else if parent_handle == 0x4000000B {
             // TPM_RH_ENDORSEMENT
             parent_qn_buf[..4].copy_from_slice(&parent_handle.to_be_bytes());
-            let seed_len = self.global_state.ep_seed_size as usize;
-            parent_seed_val[..seed_len].copy_from_slice(&self.global_state.ep_seed[..seed_len]);
+            let seed =
+                provisioned_secret(&self.global_state.ep_seed, self.global_state.ep_seed_size)?;
+            let seed_len = seed.len();
+            parent_seed_val[..seed_len].copy_from_slice(seed);
             Ok(ResolvedParentInfo {
                 req_auth: true,
                 seed_len,
@@ -599,6 +755,26 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let name_alg_opt = public_struct.name_alg;
         if !allow_null_name_alg && name_alg_opt.is_none() {
             return Err(TpmRc::HASH.with(error_pos));
+        }
+        if let Some(alg) = name_alg_opt
+            && !matches!(
+                alg,
+                TpmiAlgHash::Sha1 | TpmiAlgHash::Sha256 | TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512
+            )
+        {
+            return Err(TpmRc::HASH.with(error_pos));
+        }
+        // `TPMI_ALG_SYM_MODE` only includes implemented modes (Part 2, the `#ifdef`-delimited
+        // interface type). This TPM does not implement CMAC, so a `TPMT_SYM_DEF_OBJECT` with
+        // mode `TPM_ALG_CMAC` fails to unmarshal with `TPM_RC_MODE` (as in `TPM2_TestParms`).
+        let sym_def = match &public_struct.parms_and_id {
+            PublicParmsAndId::Sym(sym, _) => Some(*sym),
+            PublicParmsAndId::Rsa(parms, _) => parms.symmetric,
+            PublicParmsAndId::Ecc(parms, _) => parms.symmetric,
+            _ => None,
+        };
+        if sym_def.and_then(|s| s.mode()) == Some(TpmiAlgSymMode::Cmac) {
+            return Err(TpmRc::MODE.with(error_pos));
         }
 
         // 2. If there is an authPolicy, it needs to be the size of the digest produced by nameAlg
@@ -1231,3 +1407,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
     }
 }
+
+/// Bytes of KDF output available to a Derived Object (`TPM_MAX_DERIVATION_BITS` = 8192 bits).
+const DERIVATION_STREAM_BYTES: usize = 1024;

@@ -18,7 +18,7 @@ use tpm2::{
 };
 
 /// The integrity value of a saved context must be
-/// `HMAC_SHA256(hProof, totalResetCount || sequence || savedHandle || encContext)`,
+/// `HMAC_SHA512(hProof, totalResetCount || sequence || savedHandle || encContext)`,
 /// where `encContext` is the marshaled `TPM2B_CONTEXT_SENSITIVE` (size included)
 /// (TPM 2.0 Part 1, "Context Integrity Protection"), keyed with the proof of
 /// the hierarchy the object belongs to (here: the owner/storage hierarchy).
@@ -94,7 +94,9 @@ fn test_context_save_kdfa_bug() {
     );
 
     let proof = &global_state.sh_proof[..global_state.sh_proof_size as usize];
-    let mut hmac = tpm2::crypto::HmacStream::new(&crypto, TpmiAlgHash::Sha256, proof).unwrap();
+    // CONTEXT_INTEGRITY_HASH_ALG: the strongest implemented hash (Part 1, "Context Integrity
+    // Protection").
+    let mut hmac = tpm2::crypto::HmacStream::new(&crypto, TpmiAlgHash::Sha512, proof).unwrap();
     hmac.update(&global_state.total_reset_count.to_be_bytes())
         .unwrap();
     hmac.update(&context.sequence.to_be_bytes()).unwrap();

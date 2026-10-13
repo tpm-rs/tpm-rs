@@ -295,26 +295,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             let mut sig_r = [0u8; 128];
             let mut sig_s = [0u8; 128];
-            // Exp mapped every ECDAA signing failure to `TPM_RC_FAILURE`; an invalid `r`/`d` is
-            // now reported as `Ok(None)`.
-            match self.crypto().ecdaa_sign(
+            let (k_len, s_len) = self.ecdaa_sign(
                 curve,
+                hash_alg,
                 &commit_r[..r_len],
-                &self.global_state.commit_x[..param_size],
-                &self.global_state.commit_p1[..param_size * 2],
                 priv_key,
                 &digest_buf[..digest_len],
                 &mut sig_r[..param_size],
                 &mut sig_s[..param_size],
-            ) {
-                Ok(Some(_)) => {}
-                Ok(None) | Err(_) => return Err(TpmRc::FAILURE),
-            }
+            )?;
             let signature = OwnedSignature::Ecdaa {
                 hash: hash_alg,
-                signature_r: OwnedEccParameter::from_bytes(&sig_r[..param_size])
+                signature_r: OwnedEccParameter::from_bytes(&sig_r[..k_len])
                     .map_err(|_| TpmRc::FAILURE)?,
-                signature_s: OwnedEccParameter::from_bytes(&sig_s[..param_size])
+                signature_s: OwnedEccParameter::from_bytes(&sig_s[..s_len])
                     .map_err(|_| TpmRc::FAILURE)?,
             };
             // CryptEndCommit(): a commitment can only be used for one signature (reusing `r`

@@ -132,6 +132,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut parent_pub_modulus_len = 0;
         let mut parent_ecc_curve = None;
         let mut parent_ecc_pub_point = [0u8; 256];
+        let mut parent_ecc_px_len = 0;
         let mut parent_name_alg = TpmiAlgHash::Sha256;
 
         let mut parent_obj = None;
@@ -178,6 +179,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     if px_buf.len() > param_size || py_buf.len() > param_size {
                         return Err(TpmRc::VALUE.to_rc());
                     }
+                    parent_ecc_px_len = px_buf.len();
                     parent_ecc_pub_point[param_size - px_buf.len()..param_size]
                         .copy_from_slice(px_buf);
                     parent_ecc_pub_point[param_size * 2 - py_buf.len()..param_size * 2]
@@ -410,7 +412,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     &ecdh_point[..param_size],
                     b"DUPLICATE",
                     &eph_pub[..param_size],
-                    &parent_ecc_pub_point[..param_size],
+                    &parent_ecc_pub_point[param_size - parent_ecc_px_len..param_size],
                     total_bits,
                     &mut seed,
                 )

@@ -1,4 +1,4 @@
-use super::{KeyDerivationArgs, TransientObject};
+use super::{KeyDerivationArgs, TransientObject, provisioned_secret};
 use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
@@ -84,7 +84,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 1. Resolve parent seed value and length
         let mut parent_seed_val = [0u8; 64];
         let parent_seed_len =
-            self.resolve_primary_parent_seed(primary_handle, &mut parent_seed_val);
+            self.resolve_primary_parent_seed(primary_handle, &mut parent_seed_val)?;
 
         let name_alg = _in_public_struct
             .name_alg
@@ -222,25 +222,32 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         &self,
         primary_handle: Handle,
         parent_seed_val: &mut [u8; 64],
-    ) -> usize {
+    ) -> Result<usize, TpmRc> {
         if primary_handle.0 == Handle::RH_PLATFORM.0 {
-            let seed_len = self.global_state.pp_seed_size as usize;
-            parent_seed_val[..seed_len].copy_from_slice(&self.global_state.pp_seed[..seed_len]);
-            seed_len
+            let seed =
+                provisioned_secret(&self.global_state.pp_seed, self.global_state.pp_seed_size)?;
+            parent_seed_val[..seed.len()].copy_from_slice(seed);
+            Ok(seed.len())
         } else if primary_handle.0 == Handle::RH_OWNER.0 {
-            let seed_len = self.global_state.sp_seed_size as usize;
-            parent_seed_val[..seed_len].copy_from_slice(&self.global_state.sp_seed[..seed_len]);
-            seed_len
+            let seed =
+                provisioned_secret(&self.global_state.sp_seed, self.global_state.sp_seed_size)?;
+            parent_seed_val[..seed.len()].copy_from_slice(seed);
+            Ok(seed.len())
         } else if primary_handle.0 == Handle::RH_ENDORSEMENT.0 {
-            let seed_len = self.global_state.ep_seed_size as usize;
-            parent_seed_val[..seed_len].copy_from_slice(&self.global_state.ep_seed[..seed_len]);
-            seed_len
+            let seed =
+                provisioned_secret(&self.global_state.ep_seed, self.global_state.ep_seed_size)?;
+            parent_seed_val[..seed.len()].copy_from_slice(seed);
+            Ok(seed.len())
         } else if primary_handle.0 == Handle::RH_NULL.0 {
-            let seed_len = self.global_state.null_seed_size as usize;
-            parent_seed_val[..seed_len].copy_from_slice(&self.global_state.null_seed[..seed_len]);
-            seed_len
+            let seed = provisioned_secret(
+                &self.global_state.null_seed,
+                self.global_state.null_seed_size,
+            )?;
+            parent_seed_val[..seed.len()].copy_from_slice(seed);
+            Ok(seed.len())
         } else {
-            0
+            // `primaryHandle` is a validated `TPMI_RH_HIERARCHY+`, so this is unreachable.
+            Err(TpmRc::FAILURE)
         }
     }
 }

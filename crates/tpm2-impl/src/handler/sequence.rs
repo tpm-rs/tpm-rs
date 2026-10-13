@@ -463,9 +463,28 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             None => Alg::NULL,
         };
 
-        // CryptSelectMac(): a non-NULL key scheme provides the MAC algorithm. For an XOR key
-        // this is its hash (C reads `details.hmac.hashAlg`, which aliases the XOR hash); such
-        // keys can't sign and are rejected by the attribute checks below.
+        // `HMAC_Start.c` order (this TPM implements `TPM2_HMAC_Start`, not the CMAC-capable
+        // `TPM2_MAC_Start`): after the key type, the key must be unrestricted, then it must be
+        // a signing key, and only then is the hash algorithm selected. Part 3 clause 5.1 leaves
+        // the order of these checks implementation-defined.
+        if key_obj
+            .public
+            .object_attributes
+            .contains(TpmaObject::RESTRICTED)
+        {
+            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
+        }
+        if !key_obj
+            .public
+            .object_attributes
+            .contains(TpmaObject::SIGN_ENCRYPT)
+        {
+            return Err(TpmRc::KEY.with(Position::handle(1)));
+        }
+
+        // A non-NULL key scheme provides the HMAC hash. For an XOR key this is its hash (C reads
+        // `details.hmac.hashAlg`, which aliases the XOR hash); such keys can't sign and were
+        // rejected above.
         let key_hash_alg = match scheme {
             Some(TpmtKeyedHashScheme::Hmac(hash_alg))
             | Some(TpmtKeyedHashScheme::ExclusiveOr(tpm2::TpmsSchemeXor { hash_alg, .. })) => {
@@ -493,22 +512,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let key_hash_alg = TpmiAlgHash::try_from(key_hash_alg)
             .map_err(|_| TpmRc::HASH.with(Position::parameter(2)))?;
 
-        // MAC_Start.c order: the MAC scheme selection (`CryptSelectMac`, above) comes first,
-        // then the key must be unrestricted, and only then must it be a signing key.
-        if key_obj
-            .public
-            .object_attributes
-            .contains(TpmaObject::RESTRICTED)
-        {
-            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
-        }
-        if !key_obj
-            .public
-            .object_attributes
-            .contains(TpmaObject::SIGN_ENCRYPT)
-        {
-            return Err(TpmRc::KEY.with(Position::handle(1)));
-        }
         // Defense in depth: a public-only key cannot be authorized in C (AUTH_UNAVAILABLE).
         if key_obj.private_len == 0 {
             return Err(TpmRc::KEY.with(Position::handle(1)));

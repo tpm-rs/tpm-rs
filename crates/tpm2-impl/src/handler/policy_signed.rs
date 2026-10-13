@@ -183,7 +183,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         pub_buf[param_size * 2 - y_buf.len()..pub_len].copy_from_slice(y_buf);
                     }
                     _ => {
-                        return Err(TpmRc::KEY.with(Position::handle(1)));
+                        return Err(TpmRc::SCHEME.with(Position::parameter(5)));
                     }
                 }
 
@@ -322,7 +322,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let key_hierarchy = obj.hierarchy;
 
             let (proof_bytes, proof_len, ticket_hierarchy) =
-                self.resolve_hierarchy_proof(key_hierarchy);
+                self.resolve_hierarchy_proof(key_hierarchy)?;
 
             let mut hmac_input = [0u8; 512];
             let mut offset = 0;
@@ -370,7 +370,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
             let hmac_digest = tpm2::crypto::hmac(
                 self.crypto(),
-                tpm2::TpmiAlgHash::Sha256,
+                crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
                 &proof_bytes[..proof_len],
                 &hmac_input[..offset],
                 &mut hmac_digest_bytes,

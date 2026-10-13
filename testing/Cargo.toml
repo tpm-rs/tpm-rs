@@ -1,5 +1,6 @@
 [package]
 name = "testing"
+description = "End-to-end tests of the TPM stack"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -27,4 +28,14 @@ default = ["bssl"]
 rust = ["tpm2-simulator/rust", "tpm2-platform-linux/rust"]
 crux = ["tpm2-simulator/crux", "tpm2-platform-linux/crux"]
 bssl = ["tpm2-simulator/bssl", "tpm2-platform-linux/bssl"]
+
+# Go parity tests (`tests/go/`), one file per Go test file.
+[[test]]
+name = "go"
+path = "tests/go/mod.rs"
+
+# Topic-focused E2E tests (`tests/e2e/`), one file per command or feature area.
+[[test]]
+name = "e2e"
+path = "tests/e2e/mod.rs"
 

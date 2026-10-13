@@ -280,26 +280,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.global_state.platform_policy = crate::owned::OwnedDigest::default();
             self.global_state.platform_alg = None;
 
-            // `PCRStartup`: PCRs (and their authValues) are only preserved on TPM Resume.
+            // `PCRStartup`: PCR authValues are only preserved on TPM Resume.
             self.global_state.pcr_auth_value = crate::owned::OwnedAuth::default();
-            let saved_pcr0_sha1 = self.global_state.pcrs.sha1[0];
-            let saved_pcr0_sha256 = self.global_state.pcrs.sha256[0];
-            let saved_pcr0_sha384 = self.global_state.pcrs.sha384[0];
-            let saved_update_counter = self.global_state.pcrs.update_counter;
-            self.global_state.pcrs.reset();
-            if self.global_state.drtm_pre_startup {
-                self.global_state.pcrs.sha1[0] = saved_pcr0_sha1;
-                self.global_state.pcrs.sha256[0] = saved_pcr0_sha256;
-                self.global_state.pcrs.sha384[0] = saved_pcr0_sha384;
-                self.global_state.pcrs.update_counter = saved_update_counter;
-            }
         }
+        self.pcr_startup(kind);
         // `SessionStartup`: saved session contexts survive TPM Restart and Resume, but not a
         // TPM Reset. Loaded sessions never survive.
         if kind == StartupKind::Reset {
             for sess in self.global_state.saved_sessions.iter_mut() {
                 *sess = None;
             }
+        }
+        // `CommandAuditStartup`: the command audit digest survives TPM Restart and Resume (it is
+        // part of the saved `STATE_RESET_DATA`) and is cleared on TPM Reset.
+        if kind == StartupKind::Reset {
+            self.global_state.command_audit_digest = crate::owned::OwnedDigest::default();
         }
         for obj in self.global_state.transient_objects.iter_mut() {
             *obj = None;
@@ -497,6 +492,50 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
         Ok(())
+    }
+
+    /// Initializes the PCRs at `TPM2_Startup` (`PCRStartup` in `PCR.c`).
+    ///
+    /// - The PCR update counter (`pcrUpdateCounter`) is cleared on TPM Reset only. It survives
+    ///   TPM Restart and TPM Resume because saved policy sessions do (TPM 2.0 Part 1, "Other
+    ///   Volatile State": *pcrUpdateCounter* "is not reset until the context protections for
+    ///   saved session contexts are changed").
+    /// - Every PCR that is not restored from saved state is reinitialized, and that counts as a
+    ///   PCR change ([`Self::pcr_changed`]). A policy session that ran `TPM2_PolicyPCR` before
+    ///   a TPM Restart therefore sees `TPM_RC_PCR_CHANGED` afterwards.
+    /// - On TPM Resume only the state-saved PCRs (0-15) keep their values.
+    /// - After an H-CRTM event before Startup, the H-CRTM PCR keeps its value on TPM Reset and
+    ///   TPM Restart (it still counts as changed, as in the C reference).
+    fn pcr_startup(&mut self, kind: StartupKind) {
+        use crate::handler::pcr::{HCRTM_PCR, IMPLEMENTATION_PCR, pcr_is_state_saved};
+        use tpm2::platform::PcrState;
+
+        if kind == StartupKind::Reset {
+            self.global_state.pcrs.update_counter = 0;
+        }
+        let previous = self.global_state.pcrs;
+        // `reset` reinitializes every PCR (and the counter, which is restored below).
+        self.global_state.pcrs.reset();
+        self.global_state.pcrs.update_counter = previous.update_counter;
+        for pcr in 0..IMPLEMENTATION_PCR {
+            let state_saved = kind == StartupKind::Resume && pcr_is_state_saved(pcr);
+            if !state_saved {
+                self.pcr_changed(pcr);
+            }
+            let keep_hcrtm = pcr as usize == HCRTM_PCR
+                && kind != StartupKind::Resume
+                && self.global_state.drtm_pre_startup;
+            if state_saved || keep_hcrtm {
+                for &alg in PcrState::IMPLEMENTED_BANKS {
+                    if let (Some(dst), Some(src)) = (
+                        self.global_state.pcrs.value_mut(alg, pcr as usize),
+                        previous.value(alg, pcr as usize),
+                    ) {
+                        dst.copy_from_slice(src);
+                    }
+                }
+            }
+        }
     }
 
     /// Applies the per-boot NV index attribute rules to every defined NV index

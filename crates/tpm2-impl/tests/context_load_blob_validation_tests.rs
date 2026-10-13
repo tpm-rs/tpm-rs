@@ -13,6 +13,10 @@
 //! - only inconsistencies found *after* integrity verification (a decrypted
 //!   sequence fingerprint mismatch, Part 1 "Context Confidentiality
 //!   Protection") are treated as a TPM failure.
+//!
+//! The tests left here forge blobs with the TPM's internal hierarchy proof
+//! (white-box); the black-box tests live in
+//! `testing/src/impl_context_load_blob_validation_tests.rs`.
 
 mod common;
 
@@ -20,19 +24,18 @@ use common::{
     FakeRng, FakeStorage, FakeTimer, RealCryptoEngine, TestCryptoProvider, execute_command,
     password_auth, setup_real_crypto_tpm,
 };
-use tpm2::commands::{
-    ContextLoad, ContextSave, CreatePrimary, FlushContext, ReadPublic, StartAuthSession,
-};
+use tpm2::commands::{ContextLoad, ContextSave, CreatePrimary, FlushContext};
 use tpm2::crypto::{HmacStream, ModeIv, SymmetricKey};
-use tpm2::errors::{Position, TpmRc};
+use tpm2::errors::TpmRc;
 use tpm2::{
-    AlgSym, Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bContextData, Tpm2bDigest,
-    Tpm2bEncryptedSecret, Tpm2bNonce, Tpm2bSensitiveData, TpmEccCurve, TpmSe, TpmaObject,
-    TpmiAlgHash, TpmsContext, TpmsEccParms, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic,
+    AlgSym, Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bContextData, Tpm2bDigest, Tpm2bSensitiveData,
+    TpmEccCurve, TpmaObject, TpmiAlgHash, TpmsContext, TpmsEccParms, TpmsSensitiveCreate,
+    TpmtEccScheme, TpmtPublic,
 };
 
-/// Offset of `encrypted.size` in the blob: `integrity.size (2) || integrity (32)`.
-const ENC_SIZE_OFFSET: usize = 2 + 32;
+/// Offset of `encrypted.size` in the blob: `integrity.size (2) || integrity (64)` (the integrity
+/// HMAC uses SHA-512, the strongest implemented hash).
+const ENC_SIZE_OFFSET: usize = 2 + 64;
 /// Size of the sequence fingerprint at the start of the encrypted plaintext.
 const FINGERPRINT_SIZE: usize = 8;
 
@@ -110,25 +113,6 @@ fn with_blob(context: TpmsContext<'static>, blob: Vec<u8>) -> TpmsContext<'stati
     context
 }
 
-/// Asserts that a context with `blob` is rejected with `expected`, and that
-/// the TPM keeps working afterwards (the untouched `context` still loads).
-fn assert_load_rejected(
-    tpm: &mut RealCryptoEngine<'_>,
-    gs: &mut tpm2_impl::GlobalState,
-    context: TpmsContext<'static>,
-    blob: Vec<u8>,
-    expected: u32,
-    what: &str,
-) {
-    assert_eq!(
-        load(tpm, gs, with_blob(context, blob)),
-        Err(expected),
-        "{what}: unexpected ContextLoad result"
-    );
-    let handle = load(tpm, gs, context).expect("untouched context must still load");
-    flush(tpm, gs, handle);
-}
-
 macro_rules! setup {
     ($tpm:ident, $gs:ident) => {
         let mut crypto = TestCryptoProvider;
@@ -140,176 +124,6 @@ macro_rules! setup {
     };
 }
 
-fn integrity_rc() -> u32 {
-    // C: TPM_RCS_INTEGRITY + RC_ContextLoad_context (0x1DF), ContextLoad.c:76.
-    TpmRc::INTEGRITY.with(Position::parameter(1)).get()
-}
-
-fn size_rc() -> u32 {
-    TpmRc::SIZE.with(Position::parameter(1)).get()
-}
-
-#[test]
-fn context_load_untouched_object_context_round_trips() {
-    setup!(tpm, gs);
-    let context = save_object_context(&mut tpm, &mut gs);
-    let handle = load(&mut tpm, &mut gs, context).expect("ContextLoad failed");
-    execute_command(
-        &mut tpm,
-        &mut gs,
-        &ReadPublic {
-            object_handle: handle,
-        },
-        &[],
-    )
-    .expect("loaded object must be usable");
-}
-
-#[test]
-fn context_load_untouched_session_context_round_trips() {
-    setup!(tpm, gs);
-    let session = execute_command(
-        &mut tpm,
-        &mut gs,
-        &StartAuthSession {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-            nonce_caller: Tpm2bNonce::from_bytes(&[7; 16]).unwrap(),
-            encrypted_salt: Tpm2bEncryptedSecret::default(),
-            session_type: TpmSe::HMAC,
-            symmetric: None,
-            auth_hash: TpmiAlgHash::Sha256,
-        },
-        &[],
-    )
-    .expect("StartAuthSession failed");
-    let save = execute_command(
-        &mut tpm,
-        &mut gs,
-        &ContextSave {
-            save_handle: session.session_handle,
-        },
-        &[],
-    )
-    .expect("ContextSave of session failed");
-    assert_eq!(
-        load(&mut tpm, &mut gs, save.context),
-        Ok(session.session_handle)
-    );
-}
-
-#[test]
-fn context_load_enc_size_increased_returns_integrity() {
-    setup!(tpm, gs);
-    let context = save_object_context(&mut tpm, &mut gs);
-    let mut blob = context.context_blob.get_buffer().to_vec();
-    blob[ENC_SIZE_OFFSET] ^= 0x01; // +256: larger than the remaining data
-    assert_load_rejected(&mut tpm, &mut gs, context, blob, integrity_rc(), "size+256");
-}
-
-#[test]
-fn context_load_enc_size_decreased_returns_integrity() {
-    setup!(tpm, gs);
-    let context = save_object_context(&mut tpm, &mut gs);
-    let mut blob = context.context_blob.get_buffer().to_vec();
-    let size = u16::from_be_bytes([blob[ENC_SIZE_OFFSET], blob[ENC_SIZE_OFFSET + 1]]);
-    blob[ENC_SIZE_OFFSET..ENC_SIZE_OFFSET + 2].copy_from_slice(&(size - 1).to_be_bytes());
-    assert_load_rejected(&mut tpm, &mut gs, context, blob, integrity_rc(), "size-1");
-}
-
-#[test]
-fn context_load_trailing_bytes_returns_integrity() {
-    setup!(tpm, gs);
-    let context = save_object_context(&mut tpm, &mut gs);
-    let mut blob = context.context_blob.get_buffer().to_vec();
-    blob.push(0xEE);
-    assert_load_rejected(
-        &mut tpm,
-        &mut gs,
-        context,
-        blob,
-        integrity_rc(),
-        "trailing byte",
-    );
-}
-
-#[test]
-fn context_load_truncated_encrypted_data_returns_integrity() {
-    setup!(tpm, gs);
-    let context = save_object_context(&mut tpm, &mut gs);
-    let mut blob = context.context_blob.get_buffer().to_vec();
-    blob.pop();
-    assert_load_rejected(
-        &mut tpm,
-        &mut gs,
-        context,
-        blob,
-        integrity_rc(),
-        "truncated",
-    );
-}
-
-#[test]
-fn context_load_tampered_integrity_or_payload_returns_integrity() {
-    setup!(tpm, gs);
-    let context = save_object_context(&mut tpm, &mut gs);
-    let blob = context.context_blob.get_buffer().to_vec();
-    for (what, offset) in [
-        ("integrity", 2),
-        ("encrypted first byte", ENC_SIZE_OFFSET + 2),
-        ("encrypted last byte", blob.len() - 1),
-    ] {
-        let mut tampered = blob.clone();
-        tampered[offset] ^= 0x01;
-        assert_load_rejected(&mut tpm, &mut gs, context, tampered, integrity_rc(), what);
-    }
-}
-
-#[test]
-fn context_load_short_blobs_return_size() {
-    setup!(tpm, gs);
-    let context = save_object_context(&mut tpm, &mut gs);
-    let blob = context.context_blob.get_buffer().to_vec();
-    // C starts with TPM2B_DIGEST_Unmarshal(&integrity, blob) and returns its result unmodified
-    // (ContextLoad.c:49-51), so a blob too short for the integrity TPM2B gives bare
-    // TPM_RC_INSUFFICIENT; the later size checks return TPM_RCS_SIZE + RC_ContextLoad_context.
-    let insufficient = TpmRc::INSUFFICIENT.get();
-    for (what, len, rc) in [
-        ("empty blob", 0, insufficient),
-        ("1 byte", 1, insufficient),
-        ("partial integrity", 10, insufficient),
-        ("integrity only", ENC_SIZE_OFFSET, size_rc()),
-        ("integrity + size only", ENC_SIZE_OFFSET + 2, size_rc()),
-        (
-            "no room for fingerprint",
-            ENC_SIZE_OFFSET + 2 + FINGERPRINT_SIZE - 1,
-            size_rc(),
-        ),
-    ] {
-        assert_load_rejected(&mut tpm, &mut gs, context, blob[..len].to_vec(), rc, what);
-    }
-}
-
-#[test]
-fn context_load_wrong_integrity_size_returns_size() {
-    setup!(tpm, gs);
-    let context = save_object_context(&mut tpm, &mut gs);
-    let blob = context.context_blob.get_buffer().to_vec();
-    // Re-encode the integrity value as a 20-byte digest.
-    let mut tampered = Vec::new();
-    tampered.extend_from_slice(&20u16.to_be_bytes());
-    tampered.extend_from_slice(&blob[2..22]);
-    tampered.extend_from_slice(&blob[ENC_SIZE_OFFSET..]);
-    assert_load_rejected(
-        &mut tpm,
-        &mut gs,
-        context,
-        tampered,
-        size_rc(),
-        "20-byte integrity",
-    );
-}
-
 /// Recomputes the context integrity HMAC over `enc_context` (white-box: uses
 /// the owner hierarchy proof and `totalResetCount`).
 fn forge_integrity(
@@ -319,7 +133,7 @@ fn forge_integrity(
 ) -> Vec<u8> {
     let crypto = TestCryptoProvider;
     let proof = &gs.sh_proof[..gs.sh_proof_size as usize];
-    let mut hmac = HmacStream::new(&crypto, TpmiAlgHash::Sha256, proof).unwrap();
+    let mut hmac = HmacStream::new(&crypto, TpmiAlgHash::Sha512, proof).unwrap();
     hmac.update(&gs.total_reset_count.to_be_bytes()).unwrap();
     hmac.update(&context.sequence.to_be_bytes()).unwrap();
     hmac.update(&context.saved_handle.0.to_be_bytes()).unwrap();
@@ -355,7 +169,7 @@ fn context_cfb(
     let mut key_iv = [0u8; 32];
     tpm2::crypto::kdf::kdfa_bits(
         &crypto,
-        TpmiAlgHash::Sha256,
+        TpmiAlgHash::Sha512,
         proof,
         b"CONTEXT",
         &context.sequence.to_be_bytes(),

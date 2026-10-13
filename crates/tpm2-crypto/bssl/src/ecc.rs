@@ -1,6 +1,4 @@
-use crate::bssl::{
-    EcGroup, ec_point_multiply, ec_point_multiply_generator, ec_validate_point, p256_ecdaa_sign,
-};
+use crate::bssl::{EcGroup, ec_point_multiply, ec_point_multiply_generator, ec_validate_point};
 use crate::{BsslCryptoProvider, output, verified};
 use tpm2::crypto::{CryptoError, Ecc, EccCurve};
 
@@ -98,25 +96,21 @@ impl EccCurve<32> for BsslEccNistP256 {
         ))
     }
 
+    /// Not provided: ECDAA signing (TPM 2.0 Part 1, "ECDAA Sign Operation") needs the
+    /// signing scheme's hash, which this interface does not carry, so `tpm2-impl` computes it
+    /// itself from the generic primitives. The previous implementation did not follow the
+    /// spec (it derived the nonce from the digest and special-cased fixed test points).
     fn ecdaa_sign(
         &self,
-        commit_r: &[u8; 32],
-        commit_x: &[u8],
-        commit_p1: &[u8],
-        private_key_d: &[u8; 32],
-        digest: &[u8],
-        nonce_k_out: &mut [u8; 32],
-        s_out: &mut [u8; 32],
+        _commit_r: &[u8; 32],
+        _commit_x: &[u8],
+        _commit_p1: &[u8],
+        _private_key_d: &[u8; 32],
+        _digest: &[u8],
+        _nonce_k_out: &mut [u8; 32],
+        _s_out: &mut [u8; 32],
     ) -> Result<Option<()>, CryptoError> {
-        output(p256_ecdaa_sign(
-            commit_r,
-            commit_x,
-            commit_p1,
-            private_key_d,
-            digest,
-            nonce_k_out,
-            s_out,
-        ))
+        Err(CryptoError::Unsupported)
     }
 }
 

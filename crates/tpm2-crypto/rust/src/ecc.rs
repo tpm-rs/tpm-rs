@@ -170,93 +170,21 @@ impl EccCurve<32> for RustCryptoEccNistP256 {
         }
     }
 
+    /// Not provided: ECDAA signing (TPM 2.0 Part 1, "ECDAA Sign Operation") needs the
+    /// signing scheme's hash, which this interface does not carry, so `tpm2-impl` computes it
+    /// itself from the generic primitives. The previous implementation did not follow the
+    /// spec (it derived the nonce from the digest and special-cased fixed test points).
     fn ecdaa_sign(
         &self,
-        commit_r: &[u8; 32],
-        commit_x: &[u8],
-        commit_p1: &[u8],
-        private_key_d: &[u8; 32],
-        digest: &[u8],
-        nonce_k_out: &mut [u8; 32],
-        s_out: &mut [u8; 32],
+        _commit_r: &[u8; 32],
+        _commit_x: &[u8],
+        _commit_p1: &[u8],
+        _private_key_d: &[u8; 32],
+        _digest: &[u8],
+        _nonce_k_out: &mut [u8; 32],
+        _s_out: &mut [u8; 32],
     ) -> Result<Option<()>, CryptoError> {
-        let Ok(r_sk) = p256::SecretKey::from_slice(commit_r) else {
-            return Ok(None);
-        };
-        let r_scalar = *r_sk.to_nonzero_scalar().as_ref();
-        let Ok(d_sk) = p256::SecretKey::from_slice(private_key_d) else {
-            return Ok(None);
-        };
-        let d_scalar = *d_sk.to_nonzero_scalar().as_ref();
-
-        let mut l_x = [0u8; 32];
-        let mut l_y = [0u8; 32];
-        let e_x = if !commit_x.is_empty() && commit_x.iter().any(|&b| b != 0) {
-            let len = commit_x.len().min(32);
-            &commit_x[..len]
-        } else {
-            if self
-                .point_multiply_generator(commit_r, &mut l_x, &mut l_y)?
-                .is_none()
-            {
-                return Ok(None);
-            }
-            &l_x[..]
-        };
-
-        use p256::elliptic_curve::ops::Reduce;
-        let mut e_x_pad = [0u8; 32];
-        e_x_pad[32 - e_x.len()..].copy_from_slice(e_x);
-        let e_x_scalar = <p256::Scalar as Reduce<p256::U256>>::reduce_bytes(&e_x_pad.into());
-        let e_x_mod_n = e_x_scalar.to_bytes();
-
-        use sha2::Digest as _;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(e_x_mod_n);
-        hasher.update(digest);
-        let t_digest = hasher.finalize();
-
-        let t_scalar = <p256::Scalar as Reduce<p256::U256>>::reduce_bytes(&t_digest);
-
-        let Some(d_inv) = Option::<p256::Scalar>::from(d_scalar.invert()) else {
-            return Ok(None);
-        };
-
-        let mut u_scalar = p256::Scalar::ONE;
-        if !commit_p1.is_empty() && commit_p1.iter().any(|&b| b != 0) {
-            let mut s42 = [0u8; 32];
-            s42[31] = 42;
-            let p42 = p256::SecretKey::from_slice(&s42)
-                .map(|sk| sk.public_key().to_encoded_point(false))
-                .ok();
-            let mut s55 = [0u8; 32];
-            s55[31] = 55;
-            let p55 = p256::SecretKey::from_slice(&s55)
-                .map(|sk| sk.public_key().to_encoded_point(false))
-                .ok();
-            let pq = p256::SecretKey::from_slice(&d_scalar.to_bytes())
-                .map(|sk| sk.public_key().to_encoded_point(false))
-                .ok();
-            if commit_p1.len() >= 32 {
-                let x_fb = p256::FieldBytes::from_slice(&commit_p1[..32]);
-                if p42.as_ref().and_then(|p| p.x()) == Some(x_fb) {
-                    u_scalar = p256::Scalar::from(42u64);
-                } else if p55.as_ref().and_then(|p| p.x()) == Some(x_fb) {
-                    u_scalar = p256::Scalar::from(55u64);
-                } else if pq.as_ref().and_then(|p| p.x()) == Some(x_fb) {
-                    u_scalar = d_scalar;
-                }
-            }
-        }
-        let s_scalar = u_scalar * (t_scalar - r_scalar) * d_inv;
-
-        let mut hasher_sirrix = sha2::Sha256::new();
-        hasher_sirrix.update(digest);
-        let sirrix_digest = hasher_sirrix.finalize();
-
-        nonce_k_out.copy_from_slice(&sirrix_digest);
-        s_out.copy_from_slice(&s_scalar.to_bytes());
-        Ok(Some(()))
+        Err(CryptoError::Unsupported)
     }
 }
 

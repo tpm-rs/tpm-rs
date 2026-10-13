@@ -47,6 +47,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if !is_transient && !is_session {
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
         }
+        // `TPMI_DH_CONTEXT_Unmarshal` admits only {HMAC_SESSION_FIRST:HMAC_SESSION_LAST},
+        // {POLICY_SESSION_FIRST:POLICY_SESSION_LAST} and {TRANSIENT_FIRST:TRANSIENT_LAST}
+        // (Part 2, Handle Value Constants); other values are `TPM_RC_VALUE`.
+        let in_range = if is_transient {
+            flush_handle <= tpm2::Handle::TRANSIENT_LAST.0
+        } else {
+            (flush_handle & 0x00FF_FFFF) < tpm2::TPM2_MAX_ACTIVE_SESSIONS
+        };
+        if !in_range {
+            return Err(TpmRc::VALUE.with(Position::parameter(1)));
+        }
 
         let is_valid_transient = is_transient
             && (self

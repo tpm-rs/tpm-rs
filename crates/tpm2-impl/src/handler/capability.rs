@@ -235,7 +235,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     (TpmPt::NV_INDEX_MAX, 2048),
                     (TpmPt::MEMORY, tpm2::TpmaMemory::SHARED_NV.bits()),
                     (TpmPt::CLOCK_UPDATE, 8192),
-                    (TpmPt::CONTEXT_HASH, tpm2::Alg::SHA256.id() as u32),
+                    (
+                        TpmPt::CONTEXT_HASH,
+                        tpm2::Alg::from(crate::handler::CONTEXT_INTEGRITY_HASH_ALG).id() as u32,
+                    ),
                     (TpmPt::CONTEXT_SYM, tpm2::Alg::AES.id() as u32),
                     (TpmPt::CONTEXT_SYM_SIZE, 128),
                     (TpmPt::ORDERLY_COUNT, 255),
@@ -691,8 +694,28 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         .ok_or(TpmRc::FAILURE)?,
                 )
             }
+            // `PhysicalPresenceCapGetCCList`: `TPM2_PP_Commands` is not implemented, so the list
+            // of commands that require physical presence (`gp.ppList`) is always empty.
             TpmCap::PPCommands => TpmsCapabilityData::PPCommands(tpm2::TpmlCc::default()),
-            TpmCap::AuditCommands => TpmsCapabilityData::AuditCommands(tpm2::TpmlCc::default()),
+            // `CommandAuditCapGetCCList`: the audited commands with a command code of at least
+            // `property`, in ascending order; `moreData` is YES if more audited commands follow
+            // a full list.
+            TpmCap::AuditCommands => {
+                let max = (cmd.property_count as usize).min(tpm2::TPM2_MAX_CAP_CC);
+                let mut list = tpm2::TpmlCc::default();
+                for cc in self.global_state.audit_commands.iter() {
+                    if cc.code() < cmd.property {
+                        continue;
+                    }
+                    if list.count() < max {
+                        list.add(&cc)?;
+                    } else {
+                        more_data = true;
+                        break;
+                    }
+                }
+                TpmsCapabilityData::AuditCommands(list)
+            }
             _ => {
                 return Err(TpmRc::VALUE.with(Position::parameter(1)));
             }
@@ -767,14 +790,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                             }
                         }
                     } else if selector == 0x0001 || selector == 0x0023 {
+                        // Wire order: symmetric (TPMT_SYM_DEF_OBJECT) first, then the scheme,
+                        // (ECC) the curve and the KDF; report the first field that fails.
                         let sym_alg = u16::from_be_bytes([buf[2], buf[3]]);
-                        let scheme_offset = if sym_alg == 0x0010 {
-                            4
-                        } else if sym_alg == 0x0006 || sym_alg == 0x0013 || sym_alg == 0x0026 {
-                            8
-                        } else {
-                            4
-                        };
+                        match sym_alg {
+                            0x0010 => {}
+                            0x0006 if buf.len() >= 8 => {
+                                // `TPMI_AES_KEY_BITS`: only the implemented key sizes.
+                                let key_bits = u16::from_be_bytes([buf[4], buf[5]]);
+                                if key_bits != 128 && key_bits != 256 {
+                                    return Err(TpmRc::VALUE.with(Position::parameter(1)));
+                                }
+                                let mode = u16::from_be_bytes([buf[6], buf[7]]);
+                                if !is_valid_mode(mode) {
+                                    return Err(TpmRc::MODE.with(Position::parameter(1)));
+                                }
+                            }
+                            0x0006 => return Err(unmarshal_err),
+                            // Not a `TPMI_ALG_SYM_OBJECT` of this TPM.
+                            _ => return Err(TpmRc::SYMMETRIC.with(Position::parameter(1))),
+                        }
+                        let scheme_offset = if sym_alg == 0x0010 { 4 } else { 8 };
                         if buf.len() >= scheme_offset + 4 {
                             let scheme_id =
                                 u16::from_be_bytes([buf[scheme_offset], buf[scheme_offset + 1]]);
@@ -812,18 +848,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                                 }
                             }
                         }
-                        if let Ok(sym) =
-                            <Option<tpm2::TpmtSymDefObject> as tpm2::Unmarshal>::unmarshal(
-                                &mut &buf[2..],
-                            )
-                        {
-                            validate_symmetric(sym)?;
-                        } else if sym_alg == 0x0006 && buf.len() >= 8 {
-                            let mode = u16::from_be_bytes([buf[6], buf[7]]);
-                            if !is_valid_mode(mode) {
-                                return Err(TpmRc::MODE.with(Position::parameter(1)));
-                            }
-                        }
                     }
                 }
                 // Otherwise report the precise unmarshal error (e.g. `TPM_RC_INSUFFICIENT + RC_P1`
@@ -838,6 +862,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         match cmd.parameters {
             tpm2::TpmtPublicParms::Rsa(parms) => {
+                // Checked in `TPMS_RSA_PARMS` unmarshaling order: symmetric, scheme, keyBits.
+                validate_symmetric(parms.symmetric)?;
                 if let Some(scheme) = parms.scheme {
                     match scheme {
                         tpm2::TpmtRsaScheme::Rsapss(hash)
@@ -848,48 +874,38 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         tpm2::TpmtRsaScheme::Rsaes => {}
                     }
                 }
-                validate_symmetric(parms.symmetric)?;
                 // RSA-3072/4096 are enabled in the C reference profile, but this TPM's key
                 // generation does not support them and the go-tpm parity tests
                 // (`TestTestParms/rsa3072|rsa4096 - unsupported`) require `TPM_RC_VALUE`.
                 if !matches!(u16::from(parms.key_bits), 1024 | 2048) {
                     return Err(TpmRc::VALUE.with(Position::parameter(1)));
                 }
-                if parms.exponent != 0 && parms.exponent != 65537 {
-                    return Err(TpmRc::VALUE.with(Position::parameter(1)));
-                }
+                // `exponent` is a plain UINT32 that always unmarshals; TPM2_TestParms reports
+                // only unmarshaling errors (Part 3, TPM2_TestParms), so any exponent is accepted
+                // here (an unusable one is rejected when a key is created or loaded).
             }
             tpm2::TpmtPublicParms::Ecc(parms) => {
+                // Checked in `TPMS_ECC_PARMS` unmarshaling order: symmetric, scheme, curveID, kdf.
+                validate_symmetric(parms.symmetric)?;
                 if let Some(scheme) = parms.scheme {
                     match scheme {
-                        tpm2::TpmtEccScheme::Ecdsa(hash)
-                        | tpm2::TpmtEccScheme::Sm2(hash)
-                        | tpm2::TpmtEccScheme::Ecschnorr(hash)
-                        | tpm2::TpmtEccScheme::Ecdh(hash)
-                        | tpm2::TpmtEccScheme::Ecmqv(hash) => {
+                        tpm2::TpmtEccScheme::Ecdsa(hash) | tpm2::TpmtEccScheme::Ecdh(hash) => {
                             validate_hash_alg(Some(hash))?;
                         }
                         tpm2::TpmtEccScheme::Ecdaa(scheme) => {
                             validate_hash_alg(Some(scheme.hash_alg))?;
                         }
-                        tpm2::TpmtEccScheme::Eddsa | tpm2::TpmtEccScheme::HashEddsa => {
+                        // `TPMI_ALG_ECC_SCHEME` only includes implemented schemes; SM2, EC-Schnorr,
+                        // ECMQV and EdDSA are not implemented by this TPM (not in TPM_CAP_ALGS).
+                        tpm2::TpmtEccScheme::Sm2(_)
+                        | tpm2::TpmtEccScheme::Ecschnorr(_)
+                        | tpm2::TpmtEccScheme::Ecmqv(_)
+                        | tpm2::TpmtEccScheme::Eddsa
+                        | tpm2::TpmtEccScheme::HashEddsa => {
                             return Err(TpmRc::SCHEME.with(Position::parameter(1)));
                         }
                     }
                 }
-                if let Some(kdf) = parms.kdf {
-                    match kdf {
-                        tpm2::TpmtKdfScheme::Kdf1Sp800_56a(hash_alg)
-                        | tpm2::TpmtKdfScheme::Kdf2(hash_alg)
-                        | tpm2::TpmtKdfScheme::Kdf1Sp800_108(hash_alg) => {
-                            validate_hash_alg(Some(hash_alg))?;
-                        }
-                        tpm2::TpmtKdfScheme::Mgf1(_) | tpm2::TpmtKdfScheme::Hkdf(_) => {
-                            return Err(TpmRc::KDF.with(Position::parameter(1)));
-                        }
-                    }
-                }
-                validate_symmetric(parms.symmetric)?;
                 if parms.curve_id != tpm2::TpmEccCurve::NistP224
                     && parms.curve_id != tpm2::TpmEccCurve::NistP256
                     && parms.curve_id != tpm2::TpmEccCurve::NistP384
@@ -897,6 +913,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     && parms.curve_id != tpm2::TpmEccCurve::BNP256
                 {
                     return Err(TpmRc::CURVE.with(Position::parameter(1)));
+                }
+                if let Some(kdf) = parms.kdf {
+                    match kdf {
+                        // `TPMI_ALG_KDF` includes every implemented KDF/MGF, MGF1 included; that
+                        // an ECC key needs a NULL KDF is checked at object creation, not here.
+                        tpm2::TpmtKdfScheme::Kdf1Sp800_56a(hash_alg)
+                        | tpm2::TpmtKdfScheme::Kdf2(hash_alg)
+                        | tpm2::TpmtKdfScheme::Kdf1Sp800_108(hash_alg)
+                        | tpm2::TpmtKdfScheme::Mgf1(hash_alg) => {
+                            validate_hash_alg(Some(hash_alg))?;
+                        }
+                        tpm2::TpmtKdfScheme::Hkdf(_) => {
+                            return Err(TpmRc::KDF.with(Position::parameter(1)));
+                        }
+                    }
                 }
             }
             tpm2::TpmtPublicParms::KeyedHash(parms) => {
@@ -1286,6 +1317,12 @@ fn validate_symmetric(symmetric: Option<tpm2::TpmtSymDefObject>) -> Result<(), T
             }
         }
         None => {}
+        // AES is implemented but `TPMI_AES_KEY_BITS` only admits the implemented key sizes
+        // (128 and 256); other values are `TPM_RC_VALUE` (the default interface-type error).
+        Some(sym) if sym.algorithm() == tpm2::Alg::AES => {
+            return Err(TpmRc::VALUE.with(Position::parameter(1)));
+        }
+        // Other block ciphers are not in `TPMI_ALG_SYM_OBJECT` (`#TPM_RC_SYMMETRIC`).
         _ => {
             return Err(TpmRc::SYMMETRIC.with(Position::parameter(1)));
         }

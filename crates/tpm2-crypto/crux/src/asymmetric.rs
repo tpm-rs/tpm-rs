@@ -4,10 +4,38 @@ use tpm2::{TpmiAlgHash, TpmtHa};
 
 use crate::{BNP256, CruxCryptoProvider, RngWrapper};
 
+/// Normalizes an ECDSA `digest` to exactly `N` bytes, the byte length of the
+/// curve order, as described by FIPS 186-5 section 6.4 (`bits2int`).
+///
+/// TPM 2.0 allows any hash algorithm to be combined with any ECDSA curve
+/// (Part 1, section C.4 / `CryptEccSign`), so the digest length does not have
+/// to match the curve size:
+/// - A digest longer than the order is truncated to its leftmost `N` bytes.
+///   For the byte-aligned orders used here (P-256 and P-384) this is exactly
+///   the leftmost `bitlen(n)` bits.
+/// - A shorter digest is left-padded with zeros, which preserves its integer
+///   value.
+///
+/// This matches the BoringSSL and pure-Rust backends. It is also required to
+/// avoid a panic in `libcrux_p256`, whose `*_without_hash` functions read
+/// exactly 32 bytes from the message and index out of bounds on shorter input.
+///
+/// For P-521 (`N == 66`), every supported TPM digest (at most 64 bytes) is
+/// shorter than the order, so only the zero-padding branch is ever taken.
+fn ecdsa_prehash<const N: usize>(digest: &[u8]) -> [u8; N] {
+    let mut out = [0u8; N];
+    if digest.len() >= N {
+        out.copy_from_slice(&digest[..N]);
+    } else {
+        out[N - digest.len()..].copy_from_slice(digest);
+    }
+    out
+}
+
 /// Signing follows the [`AsymmetricSign`] conventions: `Ok(None)` if `private_key` is invalid or
 /// cannot sign the digest (e.g. an RSA key too small for the digest and its padding),
-/// `Err(CryptoError::Unsupported)` for an unsupported digest algorithm (ECDSA requires SHA-256 on
-/// P-256, SHA-384 on P-384 and SHA-512 on P-521), and `Err(CryptoError::Internal)` if
+/// `Err(CryptoError::Unsupported)` for an unsupported digest algorithm (ECDSA accepts any digest,
+/// normalized with `ecdsa_prehash`), and `Err(CryptoError::Internal)` if
 /// `signature_out` is too small or the operating system RNG fails.
 impl AsymmetricSign for CruxCryptoProvider {
     fn rsassa_sign(
@@ -96,12 +124,11 @@ impl AsymmetricSign for CruxCryptoProvider {
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
-        let hash_alg = digest.hash_alg();
+        // Any hash may be paired with any curve; the digest is normalized to the
+        // curve order size (see `ecdsa_prehash`), like the other backends.
         let digest_bytes = digest.digest();
         if private_key.len() == 32 {
-            if hash_alg != TpmiAlgHash::Sha256 {
-                return Err(CryptoError::Unsupported);
-            }
+            let prehash = ecdsa_prehash::<32>(digest_bytes);
 
             use rand::TryRngCore as _;
             let mut nonce = [0u8; 32];
@@ -120,8 +147,8 @@ impl AsymmetricSign for CruxCryptoProvider {
             let mut signature = [0u8; 64];
             if libcrux_p256::ecdsa_sign_p256_without_hash(
                 &mut signature,
-                digest_bytes.len() as u32,
-                digest_bytes,
+                prehash.len() as u32,
+                &prehash,
                 private_key,
                 &nonce,
             ) {
@@ -135,15 +162,13 @@ impl AsymmetricSign for CruxCryptoProvider {
                 Ok(None)
             }
         } else if private_key.len() == 48 {
-            if hash_alg != TpmiAlgHash::Sha384 {
-                return Err(CryptoError::Unsupported);
-            }
+            let prehash = ecdsa_prehash::<48>(digest_bytes);
             let Ok(secret_key) = p384::SecretKey::from_slice(private_key) else {
                 return Ok(None);
             };
             let signing_key = p384::ecdsa::SigningKey::from(secret_key);
             use p384::ecdsa::signature::hazmat::PrehashSigner as _;
-            let sig: Result<p384::ecdsa::Signature, _> = signing_key.sign_prehash(digest_bytes);
+            let sig: Result<p384::ecdsa::Signature, _> = signing_key.sign_prehash(&prehash);
             let Ok(sig) = sig else {
                 return Ok(None);
             };
@@ -154,14 +179,12 @@ impl AsymmetricSign for CruxCryptoProvider {
             signature_out[..sig_bytes.len()].copy_from_slice(&sig_bytes);
             Ok(Some(sig_bytes.len()))
         } else if private_key.len() == 66 {
-            if hash_alg != TpmiAlgHash::Sha512 {
-                return Err(CryptoError::Unsupported);
-            }
+            let prehash = ecdsa_prehash::<66>(digest_bytes);
             let Ok(signing_key) = p521::ecdsa::SigningKey::from_slice(private_key) else {
                 return Ok(None);
             };
             use p521::ecdsa::signature::hazmat::PrehashSigner as _;
-            let sig: Result<p521::ecdsa::Signature, _> = signing_key.sign_prehash(digest_bytes);
+            let sig: Result<p521::ecdsa::Signature, _> = signing_key.sign_prehash(&prehash);
             let Ok(sig) = sig else {
                 return Ok(None);
             };
@@ -252,31 +275,30 @@ impl Asymmetric for CruxCryptoProvider {
         digest: TpmtHa<'_>,
         signature: &[u8],
     ) -> Result<bool, CryptoError> {
-        let hash_alg = digest.hash_alg();
+        // Any hash may be paired with any curve; the digest is normalized to the
+        // curve order size (see `ecdsa_prehash`), like the other backends. A
+        // digest that does not match the signature is therefore reported as a
+        // verification failure (`Ok(false)`), never as `Unsupported`.
         let digest_bytes = digest.digest();
         if public_key.len() == 64 {
-            if hash_alg != TpmiAlgHash::Sha256 {
-                return Err(CryptoError::Unsupported);
-            }
             if signature.len() != 64 {
                 return Ok(false);
             }
+            let prehash = ecdsa_prehash::<32>(digest_bytes);
             let r = &signature[..32];
             let s = &signature[32..];
             Ok(libcrux_p256::ecdsa_verif_without_hash(
-                digest_bytes.len() as u32,
-                digest_bytes,
+                prehash.len() as u32,
+                &prehash,
                 public_key,
                 r,
                 s,
             ))
         } else if public_key.len() == 96 {
-            if hash_alg != TpmiAlgHash::Sha384 {
-                return Err(CryptoError::Unsupported);
-            }
             if signature.len() != 96 {
                 return Ok(false);
             }
+            let prehash = ecdsa_prehash::<48>(digest_bytes);
             let mut sec1 = [0u8; 97];
             sec1[0] = 0x04;
             sec1[1..].copy_from_slice(public_key);
@@ -288,14 +310,12 @@ impl Asymmetric for CruxCryptoProvider {
                 return Ok(false);
             };
             use p384::ecdsa::signature::hazmat::PrehashVerifier as _;
-            Ok(verifying_key.verify_prehash(digest_bytes, &sig).is_ok())
+            Ok(verifying_key.verify_prehash(&prehash, &sig).is_ok())
         } else if public_key.len() == 132 {
-            if hash_alg != TpmiAlgHash::Sha512 {
-                return Err(CryptoError::Unsupported);
-            }
             if signature.len() != 132 {
                 return Ok(false);
             }
+            let prehash = ecdsa_prehash::<66>(digest_bytes);
             let mut sec1 = [0u8; 133];
             sec1[0] = 0x04;
             sec1[1..].copy_from_slice(public_key);
@@ -306,7 +326,7 @@ impl Asymmetric for CruxCryptoProvider {
                 return Ok(false);
             };
             use p521::ecdsa::signature::hazmat::PrehashVerifier as _;
-            Ok(verifying_key.verify_prehash(digest_bytes, &sig).is_ok())
+            Ok(verifying_key.verify_prehash(&prehash, &sig).is_ok())
         } else {
             Ok(false)
         }
@@ -961,15 +981,11 @@ mod tests {
                 Ok(false),
                 "{curve:?}"
             );
-            // Invalid private scalars (zero) and the wrong digest for the curve.
+            // Invalid private scalars (zero). Any digest may be paired with any curve (see
+            // `ecdsa_prehash` and the `ecdsa_tests` module below).
             assert_eq!(
                 c.ecdsa_sign(&vec![0; sl], digest, &mut sig),
                 Ok(None),
-                "{curve:?}"
-            );
-            assert_eq!(
-                c.ecdsa_sign(private, TpmtHa::Sha1(&[0; 20]), &mut sig),
-                Err(CryptoError::Unsupported),
                 "{curve:?}"
             );
             assert_eq!(
@@ -1025,5 +1041,179 @@ mod tests {
             c.ecc_generate_key(TpmEccCurve::NistP224, &mut public, &mut private, None),
             Err(CryptoError::Unsupported)
         );
+    }
+}
+
+#[cfg(test)]
+mod ecdsa_tests {
+    use super::*;
+
+    /// Generates a deterministic ECC key pair on `curve`, returning
+    /// `(public_xy, private_scalar)`.
+    fn ecc_key(curve: TpmEccCurve) -> (Vec<u8>, Vec<u8>) {
+        let mut public = [0u8; 132];
+        let mut private = [0u8; 66];
+        let (pub_len, priv_len) = CruxCryptoProvider
+            .ecc_generate_key(curve, &mut public, &mut private, Some(b"crux ecdsa test"))
+            .unwrap();
+        (public[..pub_len].to_vec(), private[..priv_len].to_vec())
+    }
+
+    fn sign(private: &[u8], digest: TpmtHa<'_>) -> Vec<u8> {
+        let mut sig = [0u8; 132];
+        let len = CruxCryptoProvider
+            .ecdsa_sign(private, digest, &mut sig)
+            .unwrap()
+            .unwrap();
+        sig[..len].to_vec()
+    }
+
+    fn verify(public: &[u8], digest: TpmtHa<'_>, sig: &[u8]) -> Result<bool, CryptoError> {
+        CruxCryptoProvider.ecdsa_verify(public, digest, sig)
+    }
+
+    /// Returns `digest` left-padded with zeros to `N` bytes.
+    fn left_pad<const N: usize>(digest: &[u8]) -> [u8; N] {
+        let mut out = [0u8; N];
+        out[N - digest.len()..].copy_from_slice(digest);
+        out
+    }
+
+    /// Longer digests are truncated to their leftmost bytes, shorter ones are
+    /// zero-padded on the left, and equal-length digests are copied verbatim.
+    #[test]
+    fn ecdsa_prehash_truncates_and_pads() {
+        let long: [u8; 48] = core::array::from_fn(|i| i as u8);
+        assert_eq!(ecdsa_prehash::<32>(&long)[..], long[..32]);
+
+        let short = [0xAAu8; 20];
+        let padded = ecdsa_prehash::<32>(&short);
+        assert_eq!(padded[..12], [0u8; 12]);
+        assert_eq!(padded[12..], short);
+
+        let exact = [0x55u8; 48];
+        assert_eq!(ecdsa_prehash::<48>(&exact), exact);
+
+        let sha512 = [0x77u8; 64];
+        let p521 = ecdsa_prehash::<66>(&sha512);
+        assert_eq!(p521[..2], [0u8; 2]);
+        assert_eq!(p521[2..], sha512);
+    }
+
+    /// A P-256 key verifying a SHA-384 digest that does not match the
+    /// signature reports a failed verification (`Ok(false)`, signature mismatch), not
+    /// `Unsupported`. This is the regression for
+    /// `adv_test_signature_verification_edge_cases`.
+    #[test]
+    fn ecdsa_p256_verify_mismatched_sha384_digest_fails_verification() {
+        let (public, private) = ecc_key(TpmEccCurve::NistP256);
+        let sig = sign(&private, TpmtHa::Sha256(&[0xDE; 32]));
+        assert_eq!(
+            verify(&public, TpmtHa::Sha384(&[0xBC; 48]), &sig),
+            Ok(false)
+        );
+    }
+
+    /// P-256 signs and verifies SHA-1/SHA-384/SHA-512 digests, and the result
+    /// is equivalent to signing the FIPS 186 truncated/padded 32-byte value.
+    #[test]
+    fn ecdsa_p256_any_hash_round_trips_with_fips186_normalization() {
+        let (public, private) = ecc_key(TpmEccCurve::NistP256);
+
+        // SHA-384: truncated to the leftmost 32 bytes.
+        let d384: [u8; 48] = core::array::from_fn(|i| (i * 7) as u8);
+        let sig = sign(&private, TpmtHa::Sha384(&d384));
+        assert_eq!(verify(&public, TpmtHa::Sha384(&d384), &sig), Ok(true));
+        let truncated: [u8; 32] = d384[..32].try_into().unwrap();
+        assert_eq!(verify(&public, TpmtHa::Sha256(&truncated), &sig), Ok(true));
+        let mut tail_changed = d384;
+        tail_changed[47] ^= 1; // Beyond the 256-bit order: ignored.
+        assert_eq!(
+            verify(&public, TpmtHa::Sha384(&tail_changed), &sig),
+            Ok(true)
+        );
+        let mut head_changed = d384;
+        head_changed[0] ^= 1;
+        assert_eq!(
+            verify(&public, TpmtHa::Sha384(&head_changed), &sig),
+            Ok(false)
+        );
+
+        // SHA-512: truncated to the leftmost 32 bytes.
+        let d512: [u8; 64] = core::array::from_fn(|i| (i * 3 + 1) as u8);
+        let sig = sign(&private, TpmtHa::Sha512(&d512));
+        assert_eq!(verify(&public, TpmtHa::Sha512(&d512), &sig), Ok(true));
+        let truncated: [u8; 32] = d512[..32].try_into().unwrap();
+        assert_eq!(verify(&public, TpmtHa::Sha256(&truncated), &sig), Ok(true));
+
+        // SHA-1: shorter than the order, zero-padded (no panic in libcrux).
+        let d1 = [0x5Au8; 20];
+        let sig = sign(&private, TpmtHa::Sha1(&d1));
+        assert_eq!(verify(&public, TpmtHa::Sha1(&d1), &sig), Ok(true));
+        assert_eq!(
+            verify(&public, TpmtHa::Sha256(&left_pad::<32>(&d1)), &sig),
+            Ok(true)
+        );
+        assert_eq!(verify(&public, TpmtHa::Sha1(&[0x5B; 20]), &sig), Ok(false));
+    }
+
+    /// P-384 accepts shorter (SHA-1/SHA-256) and longer (SHA-512) digests.
+    /// Signatures over a SHA-512 digest are cross-checked with the `p384`
+    /// crate's own FIPS 186 handling of the full, untruncated digest.
+    #[test]
+    fn ecdsa_p384_any_hash_round_trips() {
+        let (public, private) = ecc_key(TpmEccCurve::NistP384);
+
+        let d256 = [0x11u8; 32];
+        let sig = sign(&private, TpmtHa::Sha256(&d256));
+        assert_eq!(verify(&public, TpmtHa::Sha256(&d256), &sig), Ok(true));
+        assert_eq!(
+            verify(&public, TpmtHa::Sha384(&left_pad::<48>(&d256)), &sig),
+            Ok(true)
+        );
+        assert_eq!(
+            verify(&public, TpmtHa::Sha384(&[0x11; 48]), &sig),
+            Ok(false)
+        );
+
+        let d1 = [0x22u8; 20];
+        let sig = sign(&private, TpmtHa::Sha1(&d1));
+        assert_eq!(verify(&public, TpmtHa::Sha1(&d1), &sig), Ok(true));
+
+        let d512: [u8; 64] = core::array::from_fn(|i| (255 - i) as u8);
+        let sig = sign(&private, TpmtHa::Sha512(&d512));
+        assert_eq!(verify(&public, TpmtHa::Sha512(&d512), &sig), Ok(true));
+        let truncated: [u8; 48] = d512[..48].try_into().unwrap();
+        assert_eq!(verify(&public, TpmtHa::Sha384(&truncated), &sig), Ok(true));
+
+        let mut sec1 = [0u8; 97];
+        sec1[0] = 0x04;
+        sec1[1..].copy_from_slice(&public);
+        let vk = p384::ecdsa::VerifyingKey::from_sec1_bytes(&sec1).unwrap();
+        let reference = p384::ecdsa::Signature::from_slice(&sig).unwrap();
+        use p384::ecdsa::signature::hazmat::PrehashVerifier as _;
+        vk.verify_prehash(&d512, &reference).unwrap();
+    }
+
+    /// P-521 accepts digests shorter than its order (SHA-1/SHA-256/SHA-384).
+    #[test]
+    fn ecdsa_p521_any_hash_round_trips() {
+        let (public, private) = ecc_key(TpmEccCurve::NistP521);
+
+        let d256 = [0x33u8; 32];
+        let sig = sign(&private, TpmtHa::Sha256(&d256));
+        assert_eq!(verify(&public, TpmtHa::Sha256(&d256), &sig), Ok(true));
+        assert_eq!(
+            verify(&public, TpmtHa::Sha256(&[0x34; 32]), &sig),
+            Ok(false)
+        );
+
+        let d384 = [0x44u8; 48];
+        let sig = sign(&private, TpmtHa::Sha384(&d384));
+        assert_eq!(verify(&public, TpmtHa::Sha384(&d384), &sig), Ok(true));
+
+        let d1 = [0x55u8; 20];
+        let sig = sign(&private, TpmtHa::Sha1(&d1));
+        assert_eq!(verify(&public, TpmtHa::Sha1(&d1), &sig), Ok(true));
     }
 }

@@ -6,7 +6,6 @@ use crate::timer::TpmTimer;
 use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::TpmiAlgHash;
 use tpm2::commands::HierarchyChangeAuth;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
@@ -56,7 +55,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let new_auth_slice = cmd.new_auth.get_buffer();
         let new_auth_stripped = crate::util::strip_trailing_zeros(new_auth_slice);
-        if new_auth_stripped.len() > TpmiAlgHash::Sha256.digest_size() {
+        if new_auth_stripped.len() > crate::handler::CONTEXT_INTEGRITY_HASH_ALG.digest_size() {
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
 

@@ -5,7 +5,8 @@
 //! In `ibmswtpm2`, non-volatile memory
 //! is represented as a single contiguous 16,384-byte buffer (`s_NV`) divided into:
 //! - Fixed-offset C structs:
-//!   - `NV_PERSISTENT_DATA` (`gp`, offset `0..792`)
+//!   - `NV_PERSISTENT_DATA` (`gp`, offset `0..792`; the command audit data
+//!     `auditHashAlg`/`auditCounter`/`auditCommands` occupies `758..792`)
 //!   - `NV_STATE_RESET_DATA` (`gr`, offset `792..1104`)
 //!   - `NV_STATE_CLEAR_DATA` (`gc`, offset `1104..2876`)
 //!   - `NV_ORDERLY_DATA` (`go`, offset `2876..2972`)
@@ -21,6 +22,7 @@
 
 use super::manager::{RESERVED_SIZE, StorageManager};
 use super::{NvStorage, StorageError, Tpm2Storage};
+use crate::engine::{AUDIT_EXT_LEN, AUDIT_EXT_MARKER, PERSISTENT_EXT_LEN, PERSISTENT_EXT_MARKER};
 
 /// Total byte size of the monolithic `ibmswtpm2` NVRAM image (`s_NV`).
 pub const NV_MEMORY_SIZE: usize = 16384;
@@ -40,6 +42,12 @@ pub const NV_USER_DYNAMIC_OFFSET: usize = 3484;
 
 /// Virtual handle used by `tpm-rs` to store persistent hierarchy authorizations and seeds.
 pub const HIERARCHY_AUTH_HANDLE: u32 = 0x00FFFFFF;
+
+/// Offset in `s_NV` (within `gp`) of the command audit data: `auditHashAlg` (u16),
+/// `auditCounter` (u64) and the `auditCommands` bitmap, all big-endian.
+pub const NV_AUDIT_OFFSET: usize = 758;
+/// Size of the command audit data at [`NV_AUDIT_OFFSET`].
+const NV_AUDIT_SIZE: usize = AUDIT_EXT_LEN - 1;
 
 /// Size of a fixed-width `TPM2B` buffer slot (`u16` length + 64-byte payload) in `s_NV`.
 const FIXED_TPM2B_SIZE: usize = 66;
@@ -213,6 +221,15 @@ pub fn transcode_s_nv_to_storage(
         &mut offset,
     );
 
+    // Command audit data (gp offset 758..792: auditHashAlg, auditCounter, auditCommands) as the
+    // tagged audit extension; omitted when the image holds no valid audit hash algorithm.
+    let audit = &s_nv[NV_AUDIT_OFFSET..NV_AUDIT_OFFSET + NV_AUDIT_SIZE];
+    if tpm2::TpmiAlgHash::try_from(u16::from_be_bytes([audit[0], audit[1]])).is_ok() {
+        auth_buf[offset] = AUDIT_EXT_MARKER;
+        auth_buf[offset + 1..offset + AUDIT_EXT_LEN].copy_from_slice(audit);
+        offset += AUDIT_EXT_LEN;
+    }
+
     let mut storage_mgr = StorageManager::new(storage);
     let _ = storage_mgr.undefine_space(HIERARCHY_AUTH_HANDLE);
     storage_mgr.define_space(HIERARCHY_AUTH_HANDLE, 1152, 0)?;
@@ -384,6 +401,15 @@ pub fn transcode_storage_to_s_nv(
                             ..NV_STATE_CLEAR_DATA_OFFSET + 210 + FIXED_TPM2B_SIZE],
                         &mut slice,
                     );
+                    // Skip the lifecycle extension (not part of this image layout), then
+                    // unpack the command audit extension into gp offset 758..792.
+                    if slice.len() >= PERSISTENT_EXT_LEN && slice[0] == PERSISTENT_EXT_MARKER {
+                        slice = &slice[PERSISTENT_EXT_LEN..];
+                    }
+                    if slice.len() >= AUDIT_EXT_LEN && slice[0] == AUDIT_EXT_MARKER {
+                        s_nv[NV_AUDIT_OFFSET..NV_AUDIT_OFFSET + NV_AUDIT_SIZE]
+                            .copy_from_slice(&slice[1..AUDIT_EXT_LEN]);
+                    }
                 }
             }
         }

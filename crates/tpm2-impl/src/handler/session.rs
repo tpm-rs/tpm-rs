@@ -372,12 +372,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     let hash_size = name_alg.digest_size();
                     let z_x = &z_buf[..param_size];
 
-                    let mut padded_in_x = [0u8; 128];
-                    padded_in_x[param_size - in_x.len()..param_size].copy_from_slice(in_x);
-
                     let ek_x = ecc_unique.x.get_buffer();
-                    let mut padded_ek_x = [0u8; 128];
-                    padded_ek_x[param_size - ek_x.len()..param_size].copy_from_slice(ek_x);
 
                     let mut derived_salt = [0u8; 64];
                     let derived_salt_len = kdfe_bits(
@@ -385,8 +380,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         name_alg,
                         z_x,
                         b"SECRET",
-                        &padded_in_x[..param_size],
-                        &padded_ek_x[..param_size],
+                        in_x,
+                        ek_x,
                         (hash_size * 8) as u32,
                         &mut derived_salt[..hash_size],
                     )
