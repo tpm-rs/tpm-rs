@@ -2,14 +2,15 @@ use crate::test_utils::marshal_to_slice;
 use crate::test_utils::{
     execute_with_hmac_sessions, execute_with_password_sessions, start_auth_session,
 };
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, ReadPublic, ReadPublicHandles};
+use tpm2::commands::{CreatePrimary, ReadPublic};
+use tpm2::{
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bSensitiveData,
+    TpmaObject, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiStCommandTag,
+    TpmsAuthCommand, TpmsEccParms, TpmsEccPoint, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic,
+    TpmtSymDefObject,
+};
 use tpm2::{Handle, TpmEccCurve, TpmSe};
 use tpm2::{Marshal, Unmarshal};
-use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bSensitiveData, TpmaObject,
-    TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmiStCommandTag, TpmsAuthCommand, TpmsEccParms,
-    TpmsEccPoint, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
-};
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn create_primary_key(sim: &mut Simulator) -> Handle {
@@ -44,15 +45,12 @@ fn create_primary_key(sim: &mut Simulator) -> Handle {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[]).unwrap();
+    let create_rsp_handles = execute_with_password_sessions(sim, &create_cmd, 1, &[]).unwrap();
     create_rsp_handles.object_handle
 }
 
@@ -84,12 +82,10 @@ fn test_decrypt_second_session_fails() {
     // Set decrypt on the second session (index 1), which is invalid
     session2.attributes.insert(TpmaSession::DECRYPT);
 
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
+    let read_cmd = ReadPublic { object_handle };
     let err = match execute_with_hmac_sessions(
         &mut sim,
         &read_cmd,
-        read_handles,
         &[],
         &mut [session1, session2],
         &[&[], &[]],
@@ -130,12 +126,10 @@ fn test_encrypt_multiple_sessions_fails() {
     session1.attributes.insert(TpmaSession::ENCRYPT);
     session2.attributes.insert(TpmaSession::ENCRYPT);
 
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
+    let read_cmd = ReadPublic { object_handle };
     let err = match execute_with_hmac_sessions(
         &mut sim,
         &read_cmd,
-        read_handles,
         &[],
         &mut [session1, session2],
         &[&[], &[]],
@@ -194,22 +188,13 @@ fn test_param_decrypt_symmetric_null_fails() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
+    let err = match execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]) {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -225,10 +210,10 @@ fn test_param_decrypt_symmetric_null_fails() {
 fn test_start_auth_session_rejects_non_cfb_symmetric_mode() {
     let mut sim = create_simulator!();
     for mode in [
-        TpmiAlgSymMode::CTR,
-        TpmiAlgSymMode::OFB,
-        TpmiAlgSymMode::CBC,
-        TpmiAlgSymMode::ECB,
+        TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Ctr),
+        TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Ofb),
+        TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cbc),
+        TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Ecb),
     ] {
         let res = start_auth_session(
             &mut sim,
@@ -236,7 +221,10 @@ fn test_start_auth_session_rejects_non_cfb_symmetric_mode() {
             Handle::RH_NULL,
             &[],
             TpmSe::HMAC,
-            Some(TpmtSymDefObject::Aes128(Some(mode))),
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(mode),
+            }),
             TpmiAlgHash::Sha256,
         );
         let err = res.expect_err("StartAuthSession accepted a non-CFB symmetric mode");
@@ -255,7 +243,10 @@ fn test_start_auth_session_rejects_non_cfb_symmetric_mode() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         TpmiAlgHash::Sha256,
     )
     .expect("StartAuthSession with AES-128-CFB failed");
@@ -270,7 +261,10 @@ fn test_param_decrypt_size_too_small() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -339,7 +333,10 @@ fn test_param_decrypt_size_mismatch() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();

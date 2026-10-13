@@ -1,13 +1,14 @@
 #[allow(unused_imports)]
 use tpm2::TpmCc;
+use tpm2::commands::ObjectChangeAuth;
 use tpm2::commands::responses;
-use tpm2::commands::{ObjectChangeAuth, ObjectChangeAuthHandles};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bPrivate, Tpm2bPrivateKeyRsa,
     Tpm2bSensitiveData, Tpm2bSymKey, TpmtSensitive, TpmuSensitiveComposite,
 };
 
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -39,13 +40,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<ObjectChangeAuthHandles>()?;
-        let object_handle = handles.object_handle.0;
-        let parent_handle = handles.parent_handle.0;
+        let handles = request.try_unmarshal_handles::<ObjectChangeAuth>()?;
+        let [object_handle, parent_handle] = handles;
+        check(object_handle, Tpmi::DhObject, Position::handle(1))?;
+        check(parent_handle, Tpmi::DhObject, Position::handle(2))?;
+        let object_handle = object_handle.0;
+        let parent_handle = parent_handle.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<ObjectChangeAuth>()?;
+        let cmd = request.try_unmarshal_command::<ObjectChangeAuth>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -102,10 +106,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .map_err(|_| TpmRc::FAILURE)?,
             ),
             crate::owned::OwnedPublicParmsAndId::Rsa(_, _) => {
-                let prime_p_len = self
+                // Exp mapped every failure (`InvalidData` included) to `TPM_RC_FAILURE`.
+                let prime_p_len = match self
                     .crypto()
                     .rsa_private_key_to_prime_p(&object.private[..object.private_len], &mut prime_p)
-                    .map_err(|_| TpmRc::FAILURE)?;
+                {
+                    Ok(Some(len)) => len,
+                    Ok(None) | Err(_) => return Err(TpmRc::FAILURE),
+                };
                 TpmuSensitiveComposite::Rsa(
                     Tpm2bPrivateKeyRsa::from_bytes(&prime_p[..prime_p_len])
                         .map_err(|_| TpmRc::FAILURE)?,
@@ -160,7 +168,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // Write the response
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }

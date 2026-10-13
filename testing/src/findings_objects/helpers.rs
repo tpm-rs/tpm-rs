@@ -39,34 +39,25 @@ pub fn rc0(rc: TpmRc) -> u32 {
     rc.get()
 }
 
-/// Executes `cmd` with `sessions` empty password sessions (no session area if 0).
+/// Executes `cmd` (which carries its handles) with `sessions` empty password sessions (no
+/// session area if 0). The response carries the response handles.
 pub fn run<C: Command>(
     sim: &mut Simulator<'_>,
     cmd: &C,
-    handles: C::Handles,
     sessions: usize,
-) -> Result<(C::Response<'static>, C::RespHandles), u32>
+) -> Result<C::Response<'static>, u32>
 where
-    C::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut C::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <C::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    execute_with_password_sessions(sim, cmd, handles, sessions, &[])
+    execute_with_password_sessions(sim, cmd, sessions, &[])
 }
 
 /// Returns the response code of executing `cmd` (0 on success).
-pub fn rc_of<C: Command>(
-    sim: &mut Simulator<'_>,
-    cmd: &C,
-    handles: C::Handles,
-    sessions: usize,
-) -> u32
+pub fn rc_of<C: Command>(sim: &mut Simulator<'_>, cmd: &C, sessions: usize) -> u32
 where
-    C::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut C::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <C::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    match run(sim, cmd, handles, sessions) {
+    match run(sim, cmd, sessions) {
         Ok(_) => 0,
         Err(rc) => rc,
     }
@@ -92,7 +83,10 @@ pub fn rsa_storage_template(name_alg: TpmiAlgHash, attrs: TpmaObject) -> TpmtPub
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Rsa(
             TpmsRsaParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 key_bits: TpmiRsaKeyBits(2048),
                 exponent: 0,
@@ -122,7 +116,10 @@ pub fn ecc_storage_template(name_alg: TpmiAlgHash, attrs: TpmaObject) -> TpmtPub
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -173,7 +170,10 @@ pub fn sym_template(name_alg: TpmiAlgHash, attrs: TpmaObject) -> TpmtPublic<'sta
             | TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgCipherMode::Cfb.into()),
+            },
             Tpm2bDigest::default(),
         ),
     }
@@ -206,19 +206,12 @@ pub fn create_primary(
     data: &[u8],
 ) -> Result<(Handle, responses::CreatePrimary<'static>), u32> {
     let cmd = CreatePrimary {
+        primary_handle: hierarchy,
         in_sensitive: sensitive_create(&[], data),
         in_public: Tpm2b(template),
         ..Default::default()
     };
-    run(
-        sim,
-        &cmd,
-        CreatePrimaryHandles {
-            primary_handle: hierarchy,
-        },
-        1,
-    )
-    .map(|(rsp, h)| (h.object_handle, rsp))
+    run(sim, &cmd, 1).map(|rsp| (rsp.object_handle, rsp))
 }
 
 /// Creates the default fixed RSA storage primary key under the owner hierarchy.
@@ -237,19 +230,12 @@ pub fn create(
     data: &[u8],
 ) -> Result<responses::Create<'static>, u32> {
     let cmd = Create {
+        parent_handle: parent,
         in_sensitive: sensitive_create(auth, data),
         in_public: Tpm2b(template),
         ..Default::default()
     };
-    run(
-        sim,
-        &cmd,
-        CreateHandles {
-            parent_handle: parent,
-        },
-        1,
-    )
-    .map(|(rsp, _)| rsp)
+    run(sim, &cmd, 1)
 }
 
 /// `TPM2_Load` under `parent`.
@@ -260,18 +246,11 @@ pub fn load(
     public: Tpm2bPublic<'static>,
 ) -> Result<Handle, u32> {
     let cmd = Load {
+        parent_handle: parent,
         in_private: private,
         in_public: public,
     };
-    run(
-        sim,
-        &cmd,
-        LoadHandles {
-            parent_handle: parent,
-        },
-        1,
-    )
-    .map(|(_, h)| h.object_handle)
+    run(sim, &cmd, 1).map(|rsp| rsp.object_handle)
 }
 
 /// Creates and loads a child of `parent`; returns (handle, create response).
@@ -299,7 +278,7 @@ pub fn load_external(
         in_public: Tpm2b(public),
         hierarchy,
     };
-    run(sim, &cmd, (), 0).map(|(_, h)| h.object_handle)
+    run(sim, &cmd, 0).map(|rsp| rsp.object_handle)
 }
 
 /// `TPM2_HashSequenceStart` (SHA-256, empty auth); returns the sequence handle.
@@ -308,9 +287,8 @@ pub fn hash_sequence_start(sim: &mut Simulator<'_>) -> Handle {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    run(sim, &cmd, (), 0)
+    run(sim, &cmd, 0)
         .expect("HashSequenceStart")
-        .1
         .sequence_handle
 }
 
@@ -322,18 +300,11 @@ pub fn evict_control(
     persistent: Handle,
 ) -> Result<(), u32> {
     let cmd = EvictControl {
+        auth,
+        object_handle: object,
         persistent_handle: persistent,
     };
-    run(
-        sim,
-        &cmd,
-        EvictControlHandles {
-            auth,
-            object_handle: object,
-        },
-        1,
-    )
-    .map(|_| ())
+    run(sim, &cmd, 1).map(|_| ())
 }
 
 /// `TPM2_ReadPublic`.
@@ -343,13 +314,11 @@ pub fn read_public(
 ) -> Result<responses::ReadPublic<'static>, u32> {
     run(
         sim,
-        &ReadPublic {},
-        ReadPublicHandles {
+        &ReadPublic {
             object_handle: handle,
         },
         0,
     )
-    .map(|(rsp, _)| rsp)
 }
 
 /// Digest of a policy consisting only of `TPM2_PolicyCommandCode(Duplicate)` (SHA-256).
@@ -385,10 +354,8 @@ pub fn duplicate_with_policy(
     run(
         sim,
         &PolicyCommandCode {
-            code: TpmCc::Duplicate,
-        },
-        PolicyCommandCodeHandles {
             policy_session: sess.session_handle,
+            code: TpmCc::Duplicate,
         },
         0,
     )
@@ -396,24 +363,21 @@ pub fn duplicate_with_policy(
     execute_with_hmac_sessions(
         sim,
         &Duplicate {
-            encryption_key_in: Tpm2bData::default(),
-            symmetric_alg: None,
-        },
-        DuplicateHandles {
             object_handle: object,
             new_parent_handle: Handle::RH_NULL,
+            encryption_key_in: Tpm2bData::default(),
+            symmetric_alg: None,
         },
         &[],
         &mut [sess],
         &[&[]],
     )
     .expect("Duplicate")
-    .0
 }
 
 /// Hashes the concatenation of `parts` with `alg` on the client.
 pub fn hash(alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HashCtx::new(CLIENT_CRYPTO, alg).unwrap();
+    let mut ctx = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, alg).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }
@@ -436,10 +400,8 @@ pub fn dup_policy_session_alg(sim: &mut Simulator<'_>, alg: TpmiAlgHash) -> Acti
     run(
         sim,
         &PolicyCommandCode {
-            code: TpmCc::Duplicate,
-        },
-        PolicyCommandCodeHandles {
             policy_session: sess.session_handle,
+            code: TpmCc::Duplicate,
         },
         0,
     )
@@ -467,21 +429,12 @@ pub fn duplicate_alg(
 ) -> Result<responses::Duplicate<'static>, u32> {
     let sess = dup_policy_session_alg(sim, alg);
     let cmd = Duplicate {
+        object_handle: object,
+        new_parent_handle: new_parent,
         encryption_key_in: Tpm2bData::default(),
         symmetric_alg: symmetric,
     };
-    let rsp = execute_with_hmac_sessions(
-        sim,
-        &cmd,
-        DuplicateHandles {
-            object_handle: object,
-            new_parent_handle: new_parent,
-        },
-        &[],
-        &mut [sess.clone()],
-        &[&[]],
-    )
-    .map(|(rsp, _)| rsp);
+    let rsp = execute_with_hmac_sessions(sim, &cmd, &[], &mut [sess.clone()], &[&[]]);
     let _ = flush_context(sim, sess.session_handle);
     rsp
 }
@@ -495,21 +448,14 @@ pub fn import(
     seed: Tpm2bEncryptedSecret<'static>,
 ) -> Result<Tpm2bPrivate<'static>, u32> {
     let cmd = Import {
+        parent_handle: parent,
         encryption_key: Tpm2bData::default(),
         object_public: public,
         duplicate,
         in_sym_seed: seed,
         symmetric_alg: None,
     };
-    run(
-        sim,
-        &cmd,
-        ImportHandles {
-            parent_handle: parent,
-        },
-        1,
-    )
-    .map(|(rsp, _)| rsp.out_private)
+    run(sim, &cmd, 1).map(|rsp| rsp.out_private)
 }
 
 /// `TPM2_Rewrap` (oldParent authorized with an empty password).
@@ -522,20 +468,13 @@ pub fn rewrap(
     in_sym_seed: Tpm2bEncryptedSecret<'static>,
 ) -> Result<responses::Rewrap<'static>, u32> {
     let cmd = Rewrap {
+        old_parent,
+        new_parent,
         in_duplicate,
         name,
         in_sym_seed,
     };
-    run(
-        sim,
-        &cmd,
-        RewrapHandles {
-            old_parent,
-            new_parent,
-        },
-        1,
-    )
-    .map(|(rsp, _)| rsp)
+    run(sim, &cmd, 1)
 }
 
 /// Returns the public area carried in a `TPM2B_PUBLIC`.
@@ -591,9 +530,9 @@ pub fn policy_command_code_session(
     .unwrap();
     run(
         sim,
-        &PolicyCommandCode { code },
-        PolicyCommandCodeHandles {
+        &PolicyCommandCode {
             policy_session: sess.session_handle,
+            code,
         },
         0,
     )

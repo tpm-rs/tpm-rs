@@ -2,6 +2,26 @@ use tpm2::commands::{responses, *};
 use tpm2::errors::UnmarshalError;
 use tpm2::*;
 
+/// Marshals a message's handle area: each handle as a big-endian `u32`.
+fn marshal_handles(handles: &[Handle]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for handle in handles {
+        let mut buf = [0u8; Handle::MAX_SIZE];
+        let len = handle.marshal(&mut buf);
+        out.extend_from_slice(&buf[..len]);
+    }
+    out
+}
+
+/// Unmarshals a handle area of `N` plain handles.
+fn unmarshal_handles<const N: usize>(src: &mut &[u8]) -> Result<[Handle; N], UnmarshalError> {
+    let mut handles = [Handle::default(); N];
+    for handle in &mut handles {
+        *handle = Handle::unmarshal(src)?;
+    }
+    Ok(handles)
+}
+
 #[test]
 fn test_marshal_struct_derive() {
     let name_buffer: [u8; 4] = [1, 2, 3, 4];
@@ -41,7 +61,10 @@ fn test_marshal_enum_override() {
 
 #[test]
 fn test_marshal_tpmt_public() {
-    let aes_sym_def_obj = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+    let aes_sym_def_obj = Some(TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: Some(TpmiAlgCipherMode::Cfb.into()),
+    });
     let mut buffer = [0u8; <Option<TpmtSymDefObject>>::MAX_SIZE];
     let marsh = aes_sym_def_obj.marshal(&mut buffer);
     assert_eq!(marsh, buffer.len());
@@ -122,20 +145,18 @@ fn test_2b_struct() {
 #[test]
 fn test_start_auth_session_marshalling() {
     // 1. Initialize all fields
-    let handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-
     let nonce_caller_bytes = [0x11; 20];
     let nonce_caller = Tpm2bNonce::new(&nonce_caller_bytes).unwrap();
     let encrypted_salt_bytes = [0x22; 32];
     let encrypted_salt = Tpm2bEncryptedSecret::new(&encrypted_salt_bytes).unwrap();
-    let symmetric = Some(TpmtSymDef::Cipher(TpmtSymDefObject::Aes128(Some(
-        TpmiAlgSymMode::CFB,
-    ))));
+    let symmetric = Some(TpmtSymDef::Cipher(TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: Some(TpmiAlgCipherMode::Cfb.into()),
+    }));
 
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller,
         encrypted_salt,
         session_type: TpmSe::Policy,
@@ -143,19 +164,17 @@ fn test_start_auth_session_marshalling() {
         auth_hash: TpmiAlgHash::Sha256,
     };
 
-    let resp_handles = StartAuthSessionRespHandles {
-        session_handle: Handle(0x02000001),
-    };
-
     let nonce_tpm_bytes = [0x33; 20];
     let nonce_tpm = Tpm2bNonce::new(&nonce_tpm_bytes).unwrap();
-    let rsp = responses::StartAuthSession { nonce_tpm };
+    let rsp = responses::StartAuthSession {
+        session_handle: Handle(0x02000001),
+        nonce_tpm,
+    };
 
     // 2. Test marshalling and check expected layout & size
     // Handles
-    let mut handles_buf = [0u8; StartAuthSessionHandles::MAX_SIZE];
-    let handles_len = handles.marshal(&mut handles_buf);
-    assert_eq!(handles_len, 8);
+    let handles_buf = marshal_handles(&cmd.handles());
+    assert_eq!(handles_buf.len(), 8);
     let expected_handles: [u8; 8] = [
         0x40, 0x00, 0x00, 0x07, // tpm_key: RHNull (0x40000007)
         0x40, 0x00, 0x00, 0x07, // bind: RHNull (0x40000007)
@@ -187,9 +206,8 @@ fn test_start_auth_session_marshalling() {
     assert_eq!(&cmd_buf[..cmd_len], expected_cmd.as_slice());
 
     // Resp Handles
-    let mut resp_handles_buf = [0u8; StartAuthSessionRespHandles::MAX_SIZE];
-    let resp_handles_len = resp_handles.marshal(&mut resp_handles_buf);
-    assert_eq!(resp_handles_len, 4);
+    let resp_handles_buf = marshal_handles(&rsp.handles());
+    assert_eq!(resp_handles_buf.len(), 4);
     let expected_resp_handles: [u8; 4] = [0x02, 0x00, 0x00, 0x01];
     assert_eq!(resp_handles_buf, expected_resp_handles);
 
@@ -207,21 +225,26 @@ fn test_start_auth_session_marshalling() {
 
     // 3. Test unmarshalling recovers exact original struct values
     let mut handles_slice = &handles_buf[..];
-    let unmarshalled_handles = StartAuthSessionHandles::unmarshal(&mut handles_slice).unwrap();
-    assert_eq!(unmarshalled_handles, handles);
+    let unmarshalled_handles = unmarshal_handles(&mut handles_slice).unwrap();
+    assert!(handles_slice.is_empty());
+    assert_eq!(unmarshalled_handles, cmd.handles());
 
     let mut cmd_slice = &cmd_buf[..cmd_len];
-    let unmarshalled_cmd = StartAuthSession::unmarshal(&mut cmd_slice).unwrap();
+    let unmarshalled_cmd =
+        StartAuthSession::unmarshal_with_handles(unmarshalled_handles, &mut cmd_slice).unwrap();
     assert_eq!(unmarshalled_cmd, cmd);
 
     let mut resp_handles_slice = &resp_handles_buf[..];
-    let unmarshalled_resp_handles =
-        StartAuthSessionRespHandles::unmarshal(&mut resp_handles_slice).unwrap();
-    assert_eq!(unmarshalled_resp_handles, resp_handles);
+    let unmarshalled_resp_handles = unmarshal_handles(&mut resp_handles_slice).unwrap();
+    assert!(resp_handles_slice.is_empty());
+    assert_eq!(unmarshalled_resp_handles, rsp.handles());
 
     let mut rsp_slice = &rsp_buf[..rsp_len];
-    let unmarshalled_rsp =
-        <StartAuthSession as Command>::Response::unmarshal(&mut rsp_slice).unwrap();
+    let unmarshalled_rsp = <StartAuthSession as Command>::Response::unmarshal_with_handles(
+        unmarshalled_resp_handles,
+        &mut rsp_slice,
+    )
+    .unwrap();
     assert_eq!(unmarshalled_rsp, rsp);
 }
 
@@ -247,7 +270,7 @@ fn test_hash_and_sequence_marshalling() {
     assert_eq!(&hash_cmd_buf[..hash_cmd_len], expected_hash_cmd.as_slice());
 
     let mut hash_cmd_slice = &hash_cmd_buf[..hash_cmd_len];
-    let unmarshalled_hash_cmd = Hash::unmarshal(&mut hash_cmd_slice).unwrap();
+    let unmarshalled_hash_cmd = Hash::unmarshal_with_handles([], &mut hash_cmd_slice).unwrap();
     assert_eq!(unmarshalled_hash_cmd, hash_cmd);
 
     let out_hash = Tpm2bDigest::new(&[0x66; 32]).unwrap();
@@ -262,7 +285,7 @@ fn test_hash_and_sequence_marshalling() {
 
     let mut hash_resp_slice = &hash_resp_buf[..hash_resp_len];
     let unmarshalled_hash_resp =
-        <Hash as Command>::Response::unmarshal(&mut hash_resp_slice).unwrap();
+        <Hash as Command>::Response::unmarshal_with_handles([], &mut hash_resp_slice).unwrap();
     assert_eq!(unmarshalled_hash_resp, hash_resp);
 
     // ---- Test TPM2_HashSequenceStart ----
@@ -275,7 +298,7 @@ fn test_hash_and_sequence_marshalling() {
     let hash_seq_start_cmd_len = hash_seq_start_cmd.marshal(&mut hash_seq_start_cmd_buf);
     let mut hash_seq_start_cmd_slice = &hash_seq_start_cmd_buf[..hash_seq_start_cmd_len];
     let unmarshalled_hash_seq_start_cmd =
-        HashSequenceStart::unmarshal(&mut hash_seq_start_cmd_slice).unwrap();
+        HashSequenceStart::unmarshal_with_handles([], &mut hash_seq_start_cmd_slice).unwrap();
     assert_eq!(unmarshalled_hash_seq_start_cmd, hash_seq_start_cmd);
 
     let hash_seq_start_null_cmd = HashSequenceStart {
@@ -286,75 +309,92 @@ fn test_hash_and_sequence_marshalling() {
     let hash_seq_start_null_len = hash_seq_start_null_cmd.marshal(&mut hash_seq_start_null_buf);
     let mut hash_seq_start_null_slice = &hash_seq_start_null_buf[..hash_seq_start_null_len];
     let unmarshalled_null_cmd =
-        HashSequenceStart::unmarshal(&mut hash_seq_start_null_slice).unwrap();
+        HashSequenceStart::unmarshal_with_handles([], &mut hash_seq_start_null_slice).unwrap();
     assert_eq!(unmarshalled_null_cmd, hash_seq_start_null_cmd);
 
-    let hash_seq_start_handles = HashSequenceStartHandles {
+    // The sequence handle is returned in the response handle area.
+    let hash_seq_start_rsp = responses::HashSequenceStart {
         sequence_handle: Handle(0x80000001),
     };
-    let mut hash_seq_start_handles_buf = [0u8; HashSequenceStartHandles::MAX_SIZE];
-    let hash_seq_start_handles_len =
-        hash_seq_start_handles.marshal(&mut hash_seq_start_handles_buf);
-    let mut hash_seq_start_handles_slice =
-        &hash_seq_start_handles_buf[..hash_seq_start_handles_len];
+    let hash_seq_start_handles_buf = marshal_handles(&hash_seq_start_rsp.handles());
+    let mut hash_seq_start_handles_slice = &hash_seq_start_handles_buf[..];
     let unmarshalled_hash_seq_start_handles =
-        HashSequenceStartHandles::unmarshal(&mut hash_seq_start_handles_slice).unwrap();
-    assert_eq!(unmarshalled_hash_seq_start_handles, hash_seq_start_handles);
+        unmarshal_handles(&mut hash_seq_start_handles_slice).unwrap();
+    assert_eq!(
+        unmarshalled_hash_seq_start_handles,
+        hash_seq_start_rsp.handles()
+    );
+    let mut hash_seq_start_rsp_slice: &[u8] = &[];
+    assert_eq!(
+        responses::HashSequenceStart::unmarshal_with_handles(
+            unmarshalled_hash_seq_start_handles,
+            &mut hash_seq_start_rsp_slice
+        )
+        .unwrap(),
+        hash_seq_start_rsp
+    );
 
     // ---- Test TPM2_SetPrimaryPolicy ----
     let set_primary_policy_cmd = SetPrimaryPolicy {
+        auth_handle: Handle::RH_OWNER,
         auth_policy: Tpm2bDigest::default(),
         hash_alg: None,
     };
     let mut set_primary_policy_buf = [0u8; SetPrimaryPolicy::MAX_SIZE];
     let set_primary_policy_len = set_primary_policy_cmd.marshal(&mut set_primary_policy_buf);
     let mut set_primary_policy_slice = &set_primary_policy_buf[..set_primary_policy_len];
-    let unmarshalled_set_primary_policy =
-        SetPrimaryPolicy::unmarshal(&mut set_primary_policy_slice).unwrap();
+    let unmarshalled_set_primary_policy = SetPrimaryPolicy::unmarshal_with_handles(
+        set_primary_policy_cmd.handles(),
+        &mut set_primary_policy_slice,
+    )
+    .unwrap();
     assert_eq!(unmarshalled_set_primary_policy, set_primary_policy_cmd);
 
     // ---- Test TPM2_SequenceUpdate ----
-    let seq_update_handles = SequenceUpdateHandles {
-        sequence_handle: Handle(0x80000001),
-    };
-    let mut seq_update_handles_buf = [0u8; SequenceUpdateHandles::MAX_SIZE];
-    let seq_update_handles_len = seq_update_handles.marshal(&mut seq_update_handles_buf);
-    let mut seq_update_handles_slice = &seq_update_handles_buf[..seq_update_handles_len];
-    let unmarshalled_seq_update_handles =
-        SequenceUpdateHandles::unmarshal(&mut seq_update_handles_slice).unwrap();
-    assert_eq!(unmarshalled_seq_update_handles, seq_update_handles);
-
     let update_data = Tpm2bMaxBuffer::new(&[0x99; 64]).unwrap();
     let seq_update_cmd = SequenceUpdate {
+        sequence_handle: Handle(0x80000001),
         buffer: update_data,
     };
+    let seq_update_handles_buf = marshal_handles(&seq_update_cmd.handles());
+    let mut seq_update_handles_slice = &seq_update_handles_buf[..];
+    let unmarshalled_seq_update_handles = unmarshal_handles(&mut seq_update_handles_slice).unwrap();
+    assert_eq!(unmarshalled_seq_update_handles, seq_update_cmd.handles());
+
     let mut seq_update_cmd_buf = [0u8; SequenceUpdate::MAX_SIZE];
     let seq_update_cmd_len = seq_update_cmd.marshal(&mut seq_update_cmd_buf);
     let mut seq_update_cmd_slice = &seq_update_cmd_buf[..seq_update_cmd_len];
-    let unmarshalled_seq_update_cmd = SequenceUpdate::unmarshal(&mut seq_update_cmd_slice).unwrap();
+    let unmarshalled_seq_update_cmd = SequenceUpdate::unmarshal_with_handles(
+        unmarshalled_seq_update_handles,
+        &mut seq_update_cmd_slice,
+    )
+    .unwrap();
     assert_eq!(unmarshalled_seq_update_cmd, seq_update_cmd);
 
     // ---- Test TPM2_SequenceComplete ----
-    let seq_complete_handles = SequenceCompleteHandles {
-        sequence_handle: Handle(0x80000001),
-    };
-    let mut seq_complete_handles_buf = [0u8; SequenceCompleteHandles::MAX_SIZE];
-    let seq_complete_handles_len = seq_complete_handles.marshal(&mut seq_complete_handles_buf);
-    let mut seq_complete_handles_slice = &seq_complete_handles_buf[..seq_complete_handles_len];
-    let unmarshalled_seq_complete_handles =
-        SequenceCompleteHandles::unmarshal(&mut seq_complete_handles_slice).unwrap();
-    assert_eq!(unmarshalled_seq_complete_handles, seq_complete_handles);
-
     let final_data = Tpm2bMaxBuffer::new(&[0xAA; 16]).unwrap();
     let seq_complete_cmd = SequenceComplete {
+        sequence_handle: Handle(0x80000001),
         buffer: final_data,
         hierarchy: Handle::RH_NULL,
     };
+    let seq_complete_handles_buf = marshal_handles(&seq_complete_cmd.handles());
+    let mut seq_complete_handles_slice = &seq_complete_handles_buf[..];
+    let unmarshalled_seq_complete_handles =
+        unmarshal_handles(&mut seq_complete_handles_slice).unwrap();
+    assert_eq!(
+        unmarshalled_seq_complete_handles,
+        seq_complete_cmd.handles()
+    );
+
     let mut seq_complete_cmd_buf = [0u8; SequenceComplete::MAX_SIZE];
     let seq_complete_cmd_len = seq_complete_cmd.marshal(&mut seq_complete_cmd_buf);
     let mut seq_complete_cmd_slice = &seq_complete_cmd_buf[..seq_complete_cmd_len];
-    let unmarshalled_seq_complete_cmd =
-        SequenceComplete::unmarshal(&mut seq_complete_cmd_slice).unwrap();
+    let unmarshalled_seq_complete_cmd = SequenceComplete::unmarshal_with_handles(
+        unmarshalled_seq_complete_handles,
+        &mut seq_complete_cmd_slice,
+    )
+    .unwrap();
     assert_eq!(unmarshalled_seq_complete_cmd, seq_complete_cmd);
 
     let result = Tpm2bDigest::new(&[0xBB; 32]).unwrap();
@@ -363,39 +403,48 @@ fn test_hash_and_sequence_marshalling() {
     let seq_complete_resp_len = seq_complete_resp.marshal(&mut seq_complete_resp_buf);
     let mut seq_complete_resp_slice = &seq_complete_resp_buf[..seq_complete_resp_len];
     let unmarshalled_seq_complete_resp =
-        <SequenceComplete as Command>::Response::unmarshal(&mut seq_complete_resp_slice).unwrap();
+        <SequenceComplete as Command>::Response::unmarshal_with_handles(
+            [],
+            &mut seq_complete_resp_slice,
+        )
+        .unwrap();
     assert_eq!(unmarshalled_seq_complete_resp, seq_complete_resp);
 
     // ---- Test TPM2_HMAC_Start ----
-    let hmac_handles = HmacStartHandles {
-        handle: Handle(0x80000001),
-    };
-    let mut hmac_handles_buf = [0u8; HmacStartHandles::MAX_SIZE];
-    let hmac_handles_len = hmac_handles.marshal(&mut hmac_handles_buf);
-    let mut hmac_handles_slice = &hmac_handles_buf[..hmac_handles_len];
-    let unmarshalled_hmac_handles = HmacStartHandles::unmarshal(&mut hmac_handles_slice).unwrap();
-    assert_eq!(unmarshalled_hmac_handles, hmac_handles);
-
     let auth = Tpm2bAuth::new(&[0x12; 20]).unwrap();
-    let hmac_cmd = HmacStart {
+    let hmac_cmd = HMACStart {
+        handle: Handle(0x80000001),
         auth,
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let mut hmac_cmd_buf = [0u8; HmacStart::MAX_SIZE];
+    let hmac_handles_buf = marshal_handles(&hmac_cmd.handles());
+    let mut hmac_handles_slice = &hmac_handles_buf[..];
+    let unmarshalled_hmac_handles = unmarshal_handles(&mut hmac_handles_slice).unwrap();
+    assert_eq!(unmarshalled_hmac_handles, hmac_cmd.handles());
+
+    let mut hmac_cmd_buf = [0u8; HMACStart::MAX_SIZE];
     let hmac_cmd_len = hmac_cmd.marshal(&mut hmac_cmd_buf);
     let mut hmac_cmd_slice = &hmac_cmd_buf[..hmac_cmd_len];
-    let unmarshalled_hmac_cmd = HmacStart::unmarshal(&mut hmac_cmd_slice).unwrap();
+    let unmarshalled_hmac_cmd =
+        HMACStart::unmarshal_with_handles(unmarshalled_hmac_handles, &mut hmac_cmd_slice).unwrap();
     assert_eq!(unmarshalled_hmac_cmd, hmac_cmd);
 
-    let hmac_resp_handles = HmacStartRespHandles {
+    let hmac_rsp = responses::HMACStart {
         sequence_handle: Handle(0x80000002),
     };
-    let mut hmac_resp_handles_buf = [0u8; HmacStartRespHandles::MAX_SIZE];
-    let hmac_resp_handles_len = hmac_resp_handles.marshal(&mut hmac_resp_handles_buf);
-    let mut hmac_resp_handles_slice = &hmac_resp_handles_buf[..hmac_resp_handles_len];
-    let unmarshalled_hmac_resp_handles =
-        HmacStartRespHandles::unmarshal(&mut hmac_resp_handles_slice).unwrap();
-    assert_eq!(unmarshalled_hmac_resp_handles, hmac_resp_handles);
+    let hmac_resp_handles_buf = marshal_handles(&hmac_rsp.handles());
+    let mut hmac_resp_handles_slice = &hmac_resp_handles_buf[..];
+    let unmarshalled_hmac_resp_handles = unmarshal_handles(&mut hmac_resp_handles_slice).unwrap();
+    assert_eq!(unmarshalled_hmac_resp_handles, hmac_rsp.handles());
+    let mut hmac_rsp_slice: &[u8] = &[];
+    assert_eq!(
+        responses::HMACStart::unmarshal_with_handles(
+            unmarshalled_hmac_resp_handles,
+            &mut hmac_rsp_slice
+        )
+        .unwrap(),
+        hmac_rsp
+    );
 }
 
 #[test]
@@ -477,31 +526,30 @@ fn test_tpml_pcr_selection_marshalling() {
 
 #[test]
 fn test_nv_undefine_space_marshalling() {
-    let handles = NVUndefineSpaceHandles {
+    let cmd = NVUndefineSpace {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(0x01000001),
     };
-    let mut handles_buf = [0u8; NVUndefineSpaceHandles::MAX_SIZE];
-    let handles_len = handles.marshal(&mut handles_buf);
+    let handles_buf = marshal_handles(&cmd.handles());
 
     let mut expected_handles = Vec::new();
     expected_handles.extend_from_slice(&0x40000001u32.to_be_bytes()); // RHOwner (0x40000001)
     expected_handles.extend_from_slice(&0x01000001u32.to_be_bytes()); // NV Index 0x01000001
 
-    assert_eq!(handles_len, expected_handles.len());
-    assert_eq!(&handles_buf[..handles_len], expected_handles.as_slice());
+    assert_eq!(handles_buf.len(), expected_handles.len());
+    assert_eq!(handles_buf.as_slice(), expected_handles.as_slice());
 
-    let mut handles_slice = &handles_buf[..handles_len];
-    let unmarshalled_handles = NVUndefineSpaceHandles::unmarshal(&mut handles_slice).unwrap();
-    assert_eq!(unmarshalled_handles, handles);
+    let mut handles_slice = &handles_buf[..];
+    let unmarshalled_handles = unmarshal_handles(&mut handles_slice).unwrap();
+    assert_eq!(unmarshalled_handles, cmd.handles());
 
-    let cmd = NVUndefineSpace {};
     let mut cmd_buf = [0u8; NVUndefineSpace::MAX_SIZE];
     let cmd_len = cmd.marshal(&mut cmd_buf);
     assert_eq!(cmd_len, 0);
 
     let mut cmd_slice = &cmd_buf[..cmd_len];
-    let unmarshalled_cmd = NVUndefineSpace::unmarshal(&mut cmd_slice).unwrap();
+    let unmarshalled_cmd =
+        NVUndefineSpace::unmarshal_with_handles(unmarshalled_handles, &mut cmd_slice).unwrap();
     assert_eq!(unmarshalled_cmd, cmd);
 }
 
@@ -518,7 +566,10 @@ fn test_print_ecc_parent() {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -542,6 +593,7 @@ fn test_command_and_struct_validated_spec_types() {
 
     // 1. HierarchyControl: state must be bool (TPMI_YES_NO)
     let hc = HierarchyControl {
+        auth_handle: Handle::RH_PLATFORM,
         enable: Handle::RH_OWNER,
         state: true,
     };
@@ -549,52 +601,65 @@ fn test_command_and_struct_validated_spec_types() {
     let hc_len = hc.marshal(&mut hc_buf);
     assert_eq!(&hc_buf[..hc_len], &[0x40, 0x00, 0x00, 0x01, 0x01]);
     let mut hc_slice = &hc_buf[..hc_len];
-    assert_eq!(HierarchyControl::unmarshal(&mut hc_slice), Ok(hc));
+    assert_eq!(
+        HierarchyControl::unmarshal_with_handles(hc.handles(), &mut hc_slice),
+        Ok(hc)
+    );
 
     // Invalid state (2, 0xFF) must fail unmarshalling with VALUE in parameter 2
     for invalid_state in [2u8, 0xFFu8] {
         let invalid_buf = [0x40, 0x00, 0x00, 0x01, invalid_state];
         let mut src = &invalid_buf[..];
         assert_eq!(
-            HierarchyControl::unmarshal(&mut src),
+            HierarchyControl::unmarshal_with_handles(hc.handles(), &mut src),
             Err(UnmarshalError::VALUE.in_parameter(2))
         );
     }
 
     // 2. ClearControl: disable must be bool (TPMI_YES_NO)
-    let cc = ClearControl { disable: false };
+    let cc = ClearControl {
+        auth: Handle::RH_PLATFORM,
+        disable: false,
+    };
     let mut cc_buf = [0u8; ClearControl::MAX_SIZE];
     let cc_len = cc.marshal(&mut cc_buf);
     assert_eq!(&cc_buf[..cc_len], &[0x00]);
     let mut cc_slice = &cc_buf[..cc_len];
-    assert_eq!(ClearControl::unmarshal(&mut cc_slice), Ok(cc));
+    assert_eq!(
+        ClearControl::unmarshal_with_handles(cc.handles(), &mut cc_slice),
+        Ok(cc)
+    );
 
     // Invalid disable (2, 0xFF) must fail unmarshalling with VALUE in parameter 1
     for invalid_disable in [2u8, 0xFFu8] {
         let invalid_buf = [invalid_disable];
         let mut src = &invalid_buf[..];
         assert_eq!(
-            ClearControl::unmarshal(&mut src),
+            ClearControl::unmarshal_with_handles(cc.handles(), &mut src),
             Err(UnmarshalError::VALUE.in_parameter(1))
         );
     }
 
     // 3. ClockRateAdjust: rate_adjust must be TpmClockAdjust (TPM_CLOCK_ADJUST)
     let cra = ClockRateAdjust {
+        auth: Handle::RH_OWNER,
         rate_adjust: TpmClockAdjust::CoarseSlower,
     };
     let mut cra_buf = [0u8; ClockRateAdjust::MAX_SIZE];
     let cra_len = cra.marshal(&mut cra_buf);
     assert_eq!(&cra_buf[..cra_len], &[(-3i8) as u8]);
     let mut cra_slice = &cra_buf[..cra_len];
-    assert_eq!(ClockRateAdjust::unmarshal(&mut cra_slice), Ok(cra));
+    assert_eq!(
+        ClockRateAdjust::unmarshal_with_handles(cra.handles(), &mut cra_slice),
+        Ok(cra)
+    );
 
     // Invalid rate_adjust (-4, 4, 42) must fail unmarshalling with VALUE in parameter 1
     for invalid_adj in [-4i8, 4i8, 42i8] {
         let invalid_buf = [invalid_adj as u8];
         let mut src = &invalid_buf[..];
         assert_eq!(
-            ClockRateAdjust::unmarshal(&mut src),
+            ClockRateAdjust::unmarshal_with_handles(cra.handles(), &mut src),
             Err(UnmarshalError::VALUE.in_parameter(1))
         );
     }
@@ -745,7 +810,7 @@ fn test_tpml_digest_count_validation() {
     // PolicyOR::unmarshal rejects count = 0 with parameter 1 SIZE error
     let mut src = &zero_buf[..];
     assert_eq!(
-        commands::PolicyOR::unmarshal(&mut src),
+        commands::PolicyOR::unmarshal_with_handles(Default::default(), &mut src),
         Err(UnmarshalError::SIZE.in_parameter(1))
     );
 
@@ -753,7 +818,7 @@ fn test_tpml_digest_count_validation() {
     let one_no_elem_buf = 1u32.to_be_bytes();
     let mut src = &one_no_elem_buf[..];
     assert_eq!(
-        commands::PolicyOR::unmarshal(&mut src),
+        commands::PolicyOR::unmarshal_with_handles(Default::default(), &mut src),
         Err(UnmarshalError::SIZE.in_parameter(1))
     );
     // whereas general TpmlDigest::unmarshal attempts to read 1 element and returns INSUFFICIENT
@@ -772,7 +837,7 @@ fn test_tpml_digest_count_validation() {
     // PolicyOR::unmarshal rejects count = 1 with parameter 1 SIZE error
     let mut src = &one_buf[..one_len];
     assert_eq!(
-        commands::PolicyOR::unmarshal(&mut src),
+        commands::PolicyOR::unmarshal_with_handles(Default::default(), &mut src),
         Err(UnmarshalError::SIZE.in_parameter(1))
     );
 
@@ -782,7 +847,7 @@ fn test_tpml_digest_count_validation() {
     assert_eq!(TpmlDigest::unmarshal(&mut src), Err(UnmarshalError::SIZE));
     let mut src = &nine_buf[..];
     assert_eq!(
-        commands::PolicyOR::unmarshal(&mut src),
+        commands::PolicyOR::unmarshal_with_handles(Default::default(), &mut src),
         Err(UnmarshalError::SIZE.in_parameter(1))
     );
 
@@ -794,7 +859,9 @@ fn test_tpml_digest_count_validation() {
     assert_eq!(TpmlDigest::unmarshal(&mut src).unwrap(), two_list);
     let mut src = &two_buf[..two_len];
     assert_eq!(
-        commands::PolicyOR::unmarshal(&mut src).unwrap().p_hash_list,
+        commands::PolicyOR::unmarshal_with_handles(Default::default(), &mut src)
+            .unwrap()
+            .p_hash_list,
         two_list
     );
 }
@@ -890,35 +957,59 @@ fn test_command_handles_and_parameters_tpmi_validation() {
     use tpm2::commands::*;
 
     // 1. Command Handles validation & error position modifiers (.in_handle(n))
-    // CreateHandles: parent_handle must be TPMI_DH_OBJECT (non-null)
+    // Handles are plain `Handle`s in the commands; the TPM checks each handle of
+    // the handle area against its `TPMI_*` interface type, in handle order, and
+    // attributes a failure to that handle. The checks below use the same
+    // interface types and positions as the old typed handle areas.
+
+    // Create: parent_handle must be TPMI_DH_OBJECT (non-null)
+    let create_handles = |src: &mut &[u8]| -> Result<[Handle; 1], UnmarshalError> {
+        let parent_handle = TpmiDhObject::<false>::unmarshal(src).map_err(|e| e.in_handle(1))?;
+        Ok([parent_handle.into()])
+    };
     let mut slice = &[0x40, 0x00, 0x00, 0x07][..]; // RH_NULL not allowed
     assert_eq!(
-        CreateHandles::unmarshal(&mut slice),
+        create_handles(&mut slice),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
 
-    // CertifyHandles: object_handle (H1: non-null object), sign_handle (H2: nullable object)
+    // Certify: object_handle (H1: non-null object), sign_handle (H2: nullable object)
+    let certify_handles = |src: &mut &[u8]| -> Result<[Handle; 2], UnmarshalError> {
+        let object_handle = TpmiDhObject::<false>::unmarshal(src).map_err(|e| e.in_handle(1))?;
+        let sign_handle = TpmiDhObject::<true>::unmarshal(src).map_err(|e| e.in_handle(2))?;
+        Ok([object_handle.into(), sign_handle.into()])
+    };
     let mut slice = &[0x80, 0x00, 0x00, 0x01, 0x40, 0x00, 0x00, 0x01][..]; // H2 = RH_OWNER invalid
     assert_eq!(
-        CertifyHandles::unmarshal(&mut slice),
+        certify_handles(&mut slice),
         Err(UnmarshalError::VALUE.in_handle(2))
     );
 
-    // PolicyNVHandles: auth_handle (H1: NV_AUTH), nv_index (H2: NV_INDEX), policy_session (H3: SH_POLICY)
+    // PolicyNV: auth_handle (H1: NV_AUTH), nv_index (H2: NV_INDEX), policy_session (H3: SH_POLICY)
+    let policy_nv_handles = |src: &mut &[u8]| -> Result<[Handle; 3], UnmarshalError> {
+        let auth_handle = TpmiRhNvAuth::unmarshal(src).map_err(|e| e.in_handle(1))?;
+        let nv_index = TpmiRhNvIndex::unmarshal(src).map_err(|e| e.in_handle(2))?;
+        let policy_session = TpmiShPolicy::unmarshal(src).map_err(|e| e.in_handle(3))?;
+        Ok([auth_handle.into(), nv_index.into(), policy_session.into()])
+    };
     let mut slice = &[
         0x40, 0x00, 0x00, 0x01, // H1: RH_OWNER (valid)
         0x01, 0x00, 0x00, 0x01, // H2: NV index (valid)
         0x02, 0x00, 0x00, 0x00, // H3: HMAC session (invalid for SH_POLICY)
     ][..];
     assert_eq!(
-        PolicyNVHandles::unmarshal(&mut slice),
+        policy_nv_handles(&mut slice),
         Err(UnmarshalError::VALUE.in_handle(3))
     );
 
-    // PCRExtendHandles: pcr_handle (H1: TPMI_DH_PCR 0..=23)
+    // PCRExtend: pcr_handle (H1: TPMI_DH_PCR 0..=23)
+    let pcr_extend_handles = |src: &mut &[u8]| -> Result<[Handle; 1], UnmarshalError> {
+        let pcr_handle = TpmiDhPcr::<true>::unmarshal(src).map_err(|e| e.in_handle(1))?;
+        Ok([pcr_handle.into()])
+    };
     let mut slice = &24u32.to_be_bytes()[..];
     assert_eq!(
-        PCRExtendHandles::unmarshal(&mut slice),
+        pcr_extend_handles(&mut slice),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
 
@@ -933,12 +1024,13 @@ fn test_command_handles_and_parameters_tpmi_validation() {
     let len = bad_hash.marshal(&mut buf);
     let mut slice = &buf[..len];
     assert_eq!(
-        Hash::unmarshal(&mut slice),
+        Hash::unmarshal_with_handles([], &mut slice),
         Err(UnmarshalError::VALUE.in_parameter(3))
     );
 
     // SequenceComplete: parameter 2 (hierarchy: TPMI_RH_HIERARCHY)
     let bad_seq_complete = SequenceComplete {
+        sequence_handle: Handle(0x8000_0001),
         buffer: Tpm2bMaxBuffer::default(),
         hierarchy: Handle(0x8000_0000),
     };
@@ -946,24 +1038,27 @@ fn test_command_handles_and_parameters_tpmi_validation() {
     let len = bad_seq_complete.marshal(&mut buf);
     let mut slice = &buf[..len];
     assert_eq!(
-        SequenceComplete::unmarshal(&mut slice),
+        SequenceComplete::unmarshal_with_handles(bad_seq_complete.handles(), &mut slice),
         Err(UnmarshalError::VALUE.in_parameter(2))
     );
 
     // EvictControl: parameter 1 (persistent_handle: TPMI_DH_PERSISTENT)
     let bad_evict = EvictControl {
+        auth: Handle::RH_OWNER,
+        object_handle: Handle(0x8000_0001),
         persistent_handle: Handle(0x8000_0000), // Transient instead of Persistent
     };
     let mut buf = [0u8; EvictControl::MAX_SIZE];
     let len = bad_evict.marshal(&mut buf);
     let mut slice = &buf[..len];
     assert_eq!(
-        EvictControl::unmarshal(&mut slice),
+        EvictControl::unmarshal_with_handles(bad_evict.handles(), &mut slice),
         Err(UnmarshalError::VALUE.in_parameter(1))
     );
 
     // HierarchyControl: parameter 1 (enable: TPMI_RH_ENABLES)
     let bad_hc = HierarchyControl {
+        auth_handle: Handle::RH_PLATFORM,
         enable: Handle(0x4000_0007), // RH_NULL not in TPMI_RH_ENABLES (non-nullable)
         state: true,
     };
@@ -971,12 +1066,13 @@ fn test_command_handles_and_parameters_tpmi_validation() {
     let len = bad_hc.marshal(&mut buf);
     let mut slice = &buf[..len];
     assert_eq!(
-        HierarchyControl::unmarshal(&mut slice),
+        HierarchyControl::unmarshal_with_handles(bad_hc.handles(), &mut slice),
         Err(UnmarshalError::VALUE.in_parameter(1))
     );
 
     // PCRSetAuthPolicy: parameter 3 (pcr_num: TPMI_DH_PCR)
     let bad_pcr_policy = PCRSetAuthPolicy {
+        auth_handle: Handle::RH_PLATFORM,
         auth_policy: Tpm2bDigest::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
         pcr_num: Handle(24),
@@ -985,7 +1081,7 @@ fn test_command_handles_and_parameters_tpmi_validation() {
     let len = bad_pcr_policy.marshal(&mut buf);
     let mut slice = &buf[..len];
     assert_eq!(
-        PCRSetAuthPolicy::unmarshal(&mut slice),
+        PCRSetAuthPolicy::unmarshal_with_handles(bad_pcr_policy.handles(), &mut slice),
         Err(UnmarshalError::VALUE.in_parameter(3))
     );
 
@@ -1007,9 +1103,12 @@ fn test_command_handles_and_parameters_tpmi_validation() {
 }
 
 #[test]
+#[allow(deprecated)] // The TPM2_VerifySignature response is deprecated.
 fn test_tpmt_tk_verified_all_variants_and_metadata() {
-    use tpm2::commands::{
-        PolicyAuthorize, VerifyDigestSignatureRsp, VerifySequenceCompleteRsp, VerifySignatureRsp,
+    use tpm2::commands::PolicyAuthorize;
+    use tpm2::commands::responses::{
+        VerifyDigestSignature as VerifyDigestSignatureRsp,
+        VerifySequenceComplete as VerifySequenceCompleteRsp, VerifySignature as VerifySignatureRsp,
     };
 
     assert_eq!(
@@ -1061,7 +1160,7 @@ fn test_tpmt_tk_verified_all_variants_and_metadata() {
     let rsp_len = vsc_rsp.marshal(&mut rsp_buf);
     let mut rsp_src = &rsp_buf[..rsp_len];
     assert_eq!(
-        VerifySequenceCompleteRsp::unmarshal(&mut rsp_src).unwrap(),
+        VerifySequenceCompleteRsp::unmarshal_with_handles([], &mut rsp_src).unwrap(),
         vsc_rsp
     );
 
@@ -1097,13 +1196,14 @@ fn test_tpmt_tk_verified_all_variants_and_metadata() {
     let rsp_len = vds_rsp.marshal(&mut rsp_buf);
     let mut rsp_src = &rsp_buf[..rsp_len];
     assert_eq!(
-        VerifyDigestSignatureRsp::unmarshal(&mut rsp_src).unwrap(),
+        VerifyDigestSignatureRsp::unmarshal_with_handles([], &mut rsp_src).unwrap(),
         vds_rsp
     );
 
     // PolicyAuthorize round-trip with MessageVerified and DigestVerified tickets
     for check_ticket in [tk_v, tk_mv, tk_dv] {
         let pa = PolicyAuthorize {
+            policy_session: Handle(0x0300_0000),
             approved_policy: hmac_digest,
             policy_ref: Tpm2bNonce::from_bytes(&[1, 2, 3, 4]).unwrap(),
             key_sign: Tpm2bName::from_bytes(&[0x00, 0x0B, 0x11, 0x22]).unwrap(),
@@ -1112,7 +1212,10 @@ fn test_tpmt_tk_verified_all_variants_and_metadata() {
         let mut pa_buf = [0u8; PolicyAuthorize::MAX_SIZE];
         let pa_len = pa.marshal(&mut pa_buf);
         let mut pa_src = &pa_buf[..pa_len];
-        assert_eq!(PolicyAuthorize::unmarshal(&mut pa_src).unwrap(), pa);
+        assert_eq!(
+            PolicyAuthorize::unmarshal_with_handles(pa.handles(), &mut pa_src).unwrap(),
+            pa
+        );
         assert!(pa_src.is_empty());
     }
 
@@ -1141,7 +1244,10 @@ fn test_tpmt_tk_verified_all_variants_and_metadata() {
     let mut rsp_buf = [0u8; VerifySignatureRsp::MAX_SIZE];
     let rsp_len = vs_rsp.marshal(&mut rsp_buf);
     let mut rsp_src = &rsp_buf[..rsp_len];
-    assert_eq!(VerifySignatureRsp::unmarshal(&mut rsp_src).unwrap(), vs_rsp);
+    assert_eq!(
+        VerifySignatureRsp::unmarshal_with_handles([], &mut rsp_src).unwrap(),
+        vs_rsp
+    );
 }
 
 #[test]
@@ -1248,7 +1354,8 @@ fn test_specific_unmarshal_error_codes_and_positions() {
     nv_def_cmd_buf[0..2].copy_from_slice(&[0x00, 0x00]); // auth
     nv_def_cmd_buf[2..18].copy_from_slice(&bad_nv_pub_buf);
     let mut src_nv_cmd = &nv_def_cmd_buf[..];
-    let err = NVDefineSpace::unmarshal(&mut src_nv_cmd).unwrap_err();
+    let err =
+        NVDefineSpace::unmarshal_with_handles(Default::default(), &mut src_nv_cmd).unwrap_err();
     assert_eq!(
         err.to_rc(),
         TpmRc::RESERVED_BITS.with(Position::parameter(2)),
@@ -1258,7 +1365,8 @@ fn test_specific_unmarshal_error_codes_and_positions() {
     // 6. CreatePrimary command unmarshalling with size == 0 inPublic attaches Parameter 2 position to SIZE error
     let cp_cmd_buf = [0x00u8, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
     let mut src_cp_cmd = &cp_cmd_buf[..];
-    let err_cp = CreatePrimary::unmarshal(&mut src_cp_cmd).unwrap_err();
+    let err_cp =
+        CreatePrimary::unmarshal_with_handles(Default::default(), &mut src_cp_cmd).unwrap_err();
     assert_eq!(
         err_cp.to_rc(),
         TpmRc::SIZE.with(Position::parameter(2)),
@@ -1320,7 +1428,8 @@ fn test_rsa_key_bits_and_sensitive_and_ecc_point_unmarshalling() {
     // CreatePrimary with size == 0 inSensitive (param 1) returns TPM_RC_SIZE + P1
     let cp_zero_sens = [0x00u8, 0x00, 0x00, 0x00];
     let mut src_cp_zero = &cp_zero_sens[..];
-    let err_cp_p1 = CreatePrimary::unmarshal(&mut src_cp_zero).unwrap_err();
+    let err_cp_p1 =
+        CreatePrimary::unmarshal_with_handles(Default::default(), &mut src_cp_zero).unwrap_err();
     assert_eq!(
         err_cp_p1.to_rc(),
         TpmRc::SIZE.with(Position::parameter(1)),
@@ -1339,7 +1448,7 @@ fn test_rsa_key_bits_and_sensitive_and_ecc_point_unmarshalling() {
     // LoadExternal with bad inPrivate (param 1) returns TPM_RC_TYPE + P1 even when inPublic (param 2) is size 0
     let le_bad_priv = [0x00u8, 0x02, 0x00, 0x99, 0x00, 0x00, 0x40, 0x00, 0x00, 0x07];
     let mut src_le = &le_bad_priv[..];
-    let err_le = LoadExternal::unmarshal(&mut src_le).unwrap_err();
+    let err_le = LoadExternal::unmarshal_with_handles([], &mut src_le).unwrap_err();
     assert_eq!(
         err_le.to_rc(),
         TpmRc::TYPE.with(Position::parameter(1)),
@@ -1365,7 +1474,7 @@ fn test_rsa_key_bits_and_sensitive_and_ecc_point_unmarshalling() {
     // ECDHZGen rejects size == 0 inPoint with TPM_RC_SIZE + P1
     let zero_pt = [0x00u8, 0x00];
     let mut src_ecdh = &zero_pt[..];
-    let err_ecdh = ECDHZGen::unmarshal(&mut src_ecdh).unwrap_err();
+    let err_ecdh = ECDHZGen::unmarshal_with_handles(Default::default(), &mut src_ecdh).unwrap_err();
     assert_eq!(
         err_ecdh.to_rc(),
         TpmRc::SIZE.with(Position::parameter(1)),
@@ -1375,12 +1484,19 @@ fn test_rsa_key_bits_and_sensitive_and_ecc_point_unmarshalling() {
 
 #[test]
 fn test_comprehensive_unmarshal_error_codes_and_handle_positions() {
-    use tpm2::commands::DuplicateHandles;
     use tpm2::errors::{Position, TpmRc};
     use tpm2::{
         TpmEccCurve, TpmaAlgorithm, TpmaNv, TpmaObject, TpmaSession, TpmiAlgHash, TpmiAlgSymMode,
         TpmtKeyedHashScheme, TpmtSigScheme, TpmtSymDefObject,
     };
+
+    /// The `TPM2_Duplicate` handle area: H1 `TPMI_DH_OBJECT`, H2 `TPMI_DH_OBJECT+`, each
+    /// checked against its interface type and attributed to its handle position.
+    fn unmarshal_duplicate_handles(src: &mut &[u8]) -> Result<[Handle; 2], UnmarshalError> {
+        let object_handle = TpmiDhObject::<false>::unmarshal(src).map_err(|e| e.in_handle(1))?;
+        let new_parent_handle = TpmiDhObject::<true>::unmarshal(src).map_err(|e| e.in_handle(2))?;
+        Ok([object_handle.into(), new_parent_handle.into()])
+    }
 
     // 1. Primitive integer buffer underflow -> INSUFFICIENT (0x09A)
     let mut empty = &[][..];
@@ -1462,14 +1578,14 @@ fn test_comprehensive_unmarshal_error_codes_and_handle_positions() {
 
     // 4. Handle position modifiers (H1 / H2) on handle unmarshalling failure
     let mut h1_short = &[0x80u8, 0x00][..];
-    let err_h1 = DuplicateHandles::unmarshal(&mut h1_short).unwrap_err();
+    let err_h1 = unmarshal_duplicate_handles(&mut h1_short).unwrap_err();
     assert_eq!(
         err_h1.to_rc(),
         TpmRc::INSUFFICIENT.with(Position::handle(1))
     );
 
     let mut h2_short = &[0x80u8, 0x00, 0x00, 0x01, 0x80, 0x00][..];
-    let err_h2 = DuplicateHandles::unmarshal(&mut h2_short).unwrap_err();
+    let err_h2 = unmarshal_duplicate_handles(&mut h2_short).unwrap_err();
     assert_eq!(
         err_h2.to_rc(),
         TpmRc::INSUFFICIENT.with(Position::handle(2))

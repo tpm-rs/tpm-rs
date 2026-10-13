@@ -1,3 +1,4 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, owned::OwnedName, req_resp::RequestThenResponse};
@@ -6,7 +7,7 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::TpmGenerated;
 use tpm2::commands::responses;
-use tpm2::commands::{Certify, CertifyCreation, CertifyCreationHandles, CertifyHandles};
+use tpm2::commands::{Certify, CertifyCreation};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bName, TpmsAttest, TpmsCertifyInfo, TpmsCreationInfo, TpmtSigScheme, TpmuAttest};
@@ -30,13 +31,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn certify(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<CertifyHandles>()?;
-        let object_handle = handles.object_handle;
-        let sign_handle = handles.sign_handle;
+        let handles = request.try_unmarshal_handles::<Certify>()?;
+        let [object_handle, sign_handle] = handles;
+        check(object_handle, Tpmi::DhObject, Position::handle(1))?;
+        check(sign_handle, Tpmi::DhObjectOrNull, Position::handle(2))?;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<Certify>()?;
+        let cmd = request.try_unmarshal_command::<Certify>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -122,7 +124,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -142,13 +144,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let hash_bytes = creation_hash.get_buffer();
 
         let mut hmac_ctx =
-            tpm2::crypto::HmacCtx::new(self.crypto(), tpm2::TpmiAlgHash::Sha256, proof)
+            tpm2::crypto::HmacStream::new(self.crypto(), tpm2::TpmiAlgHash::Sha256, proof)
                 .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(&tag_bytes).map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(name_bytes).map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(hash_bytes).map_err(|_| TpmRc::FAILURE)?;
 
-        let mut mac_buf = [0u8; 64];
+        let mut mac_buf = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
         let mac = hmac_ctx
             .finalize(&mut mac_buf)
             .map_err(|_| TpmRc::FAILURE)?;
@@ -175,13 +177,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<CertifyCreationHandles>()?;
-        let sign_handle = handles.sign_handle;
-        let object_handle = handles.object_handle;
+        let handles = request.try_unmarshal_handles::<CertifyCreation>()?;
+        let [sign_handle, object_handle] = handles;
+        check(sign_handle, Tpmi::DhObjectOrNull, Position::handle(1))?;
+        check(object_handle, Tpmi::DhObject, Position::handle(2))?;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<CertifyCreation>()?;
+        let cmd = request.try_unmarshal_command::<CertifyCreation>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -275,7 +278,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }

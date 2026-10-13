@@ -1,3 +1,4 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use tpm2::Handle;
@@ -5,14 +6,14 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
+use tpm2::commands::Load;
 use tpm2::commands::responses;
-use tpm2::commands::{Load, LoadHandles, LoadRespHandles};
 use tpm2::errors::{Position, TpmRc};
 
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use tpm2::crypto::kdf::kdfa;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
 use tpm2::{Tpm2bPrivate, TpmaObject, TpmiAlgHash, TpmtSensitive};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -35,12 +36,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn load(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<LoadHandles>()?;
-        let parent_handle = handles.parent_handle.0;
+        let handles = request.try_unmarshal_handles::<Load>()?;
+        let [parent_handle] = handles;
+        check(parent_handle, Tpmi::DhObject, Position::handle(1))?;
+        let parent_handle = parent_handle.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<Load>()?;
+        let cmd = request.try_unmarshal_command::<Load>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -139,21 +142,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             object_name.get_buffer(),
         )?;
 
-        let resp_handles = LoadRespHandles {
-            object_handle: Handle(handle),
-        };
         let rsp = responses::Load {
+            object_handle: Handle(handle),
             name: object_name.as_tpm2b(),
         };
 
         // 6. Write the response.
         let response = request.into_response();
-        self.write_response_all(
-            response,
-            &resp_handles,
-            &rsp,
-            &session_responses[..num_sessions],
-        )?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         // 7. Store the transient object.
         let st_clear = public_struct
@@ -206,11 +202,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 1. Verify integrity HMAC
         let mut integrity_key = [0u8; 64];
-        let mut computed_mac_bytes = [0u8; 64];
+        let mut computed_mac_bytes = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
 
         let parent_digest_size = parent_name_alg.digest_size();
         let parent_bits = (parent_digest_size * 8) as u32;
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             parent_name_alg,
             parent_seed_val,
@@ -222,7 +218,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )
         .map_err(|_| TpmRc::FAILURE)?;
 
-        let mut hmac_ctx = tpm2::crypto::HmacCtx::new(
+        let mut hmac_ctx = HmacStream::new(
             self.crypto(),
             parent_name_alg,
             &integrity_key[..parent_digest_size],
@@ -261,7 +257,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let mut sym_key_buf = [0u8; 32];
         let sym_key_len = (sym_key_bits / 8) as usize;
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             parent_name_alg,
             parent_seed_val,
@@ -280,11 +276,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let sym_alg =
             tpm2::TpmtSymDefObject::aes_cfb(sym_key_bits as u16).map_err(|_| TpmRc::FAILURE)?;
-        tpm2::crypto::decrypt(
-            self.crypto(),
+        self.sym_encrypt_decrypt(
             sym_alg,
             &sym_key_buf[..sym_key_len],
             &mut iv,
+            Direction::Decrypt,
             &mut decrypted_blob[..encrypted_blob.len()],
         )
         .map_err(|_| TpmRc::FAILURE)?;

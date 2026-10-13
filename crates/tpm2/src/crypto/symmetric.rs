@@ -1,572 +1,294 @@
-use crate::{
-    Alg, TpmiAlgSymMode, TpmtSymDefObject,
-    crypto::{Base, Finalize, UpdateInPlace},
-};
+use super::{CryptoError, Direction};
+use crate::{AlgSym, TpmiAlgCipherMode};
+
+/// A tagged symmetric key containing a symmetric algorithm ([`AlgSym`])
+/// and its fixed-size key buffer.
+///
+/// While a [`Symmetric`] implementation can implement whichever algorithms it
+/// wants, the variants of this enum will only exist if the corresponding
+/// symmetric cipher [crate feature](crate#algorithm-feature-flags) is enabled.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SymmetricKey<'a> {
+    #[cfg(feature = "aes128")]
+    Aes128(&'a [u8; AlgSym::Aes128.key_bytes()]),
+    #[cfg(feature = "aes192")]
+    Aes192(&'a [u8; AlgSym::Aes192.key_bytes()]),
+    #[cfg(feature = "aes256")]
+    Aes256(&'a [u8; AlgSym::Aes256.key_bytes()]),
+    #[cfg(feature = "sm4_128")]
+    Sm4_128(&'a [u8; AlgSym::Sm4_128.key_bytes()]),
+    #[cfg(feature = "camellia128")]
+    Camellia128(&'a [u8; AlgSym::Camellia128.key_bytes()]),
+    #[cfg(feature = "camellia192")]
+    Camellia192(&'a [u8; AlgSym::Camellia192.key_bytes()]),
+    #[cfg(feature = "camellia256")]
+    Camellia256(&'a [u8; AlgSym::Camellia256.key_bytes()]),
+}
+
+impl<'a> SymmetricKey<'a> {
+    /// Creates a [`SymmetricKey`] for `alg` from `key`, returning `None` if
+    /// `key.len()` does not match `alg`'s required key length.
+    pub fn new(alg: AlgSym, key: &'a [u8]) -> Option<Self> {
+        Some(match alg {
+            #[cfg(feature = "aes128")]
+            AlgSym::Aes128 => Self::Aes128(key.try_into().ok()?),
+            #[cfg(feature = "aes192")]
+            AlgSym::Aes192 => Self::Aes192(key.try_into().ok()?),
+            #[cfg(feature = "aes256")]
+            AlgSym::Aes256 => Self::Aes256(key.try_into().ok()?),
+            #[cfg(feature = "sm4_128")]
+            AlgSym::Sm4_128 => Self::Sm4_128(key.try_into().ok()?),
+            #[cfg(feature = "camellia128")]
+            AlgSym::Camellia128 => Self::Camellia128(key.try_into().ok()?),
+            #[cfg(feature = "camellia192")]
+            AlgSym::Camellia192 => Self::Camellia192(key.try_into().ok()?),
+            #[cfg(feature = "camellia256")]
+            AlgSym::Camellia256 => Self::Camellia256(key.try_into().ok()?),
+        })
+    }
+
+    pub const fn alg(self) -> AlgSym {
+        match self {
+            #[cfg(feature = "aes128")]
+            Self::Aes128(_) => AlgSym::Aes128,
+            #[cfg(feature = "aes192")]
+            Self::Aes192(_) => AlgSym::Aes192,
+            #[cfg(feature = "aes256")]
+            Self::Aes256(_) => AlgSym::Aes256,
+            #[cfg(feature = "sm4_128")]
+            Self::Sm4_128(_) => AlgSym::Sm4_128,
+            #[cfg(feature = "camellia128")]
+            Self::Camellia128(_) => AlgSym::Camellia128,
+            #[cfg(feature = "camellia192")]
+            Self::Camellia192(_) => AlgSym::Camellia192,
+            #[cfg(feature = "camellia256")]
+            Self::Camellia256(_) => AlgSym::Camellia256,
+        }
+    }
+
+    pub const fn key(self) -> &'a [u8] {
+        match self {
+            #[cfg(feature = "aes128")]
+            Self::Aes128(k) => k,
+            #[cfg(feature = "aes192")]
+            Self::Aes192(k) => k,
+            #[cfg(feature = "aes256")]
+            Self::Aes256(k) => k,
+            #[cfg(feature = "sm4_128")]
+            Self::Sm4_128(k) => k,
+            #[cfg(feature = "camellia128")]
+            Self::Camellia128(k) => k,
+            #[cfg(feature = "camellia192")]
+            Self::Camellia192(k) => k,
+            #[cfg(feature = "camellia256")]
+            Self::Camellia256(k) => k,
+        }
+    }
+}
+
+/// A symmetric block cipher mode ([`TpmiAlgCipherMode`]) paired with its
+/// mutable chaining value / initialization vector (`iv`).
+///
+/// All the variants of this enum will exist, regardless of which cipher mode
+/// [crate features](crate#algorithm-feature-flags) are enabled. If such a
+/// feature is disabled, the [`Symmetric`] methods will never be called with
+/// the corresponding [`ModeIv`] variant.
+///
+/// ## Preconditions for `data`
+/// - Block modes ([`ModeIv::Ecb`] and [`ModeIv::Cbc`]) require
+///   `data.len()` to be a multiple of [`AlgSym::BLOCK_SIZE`] (`16`).
+/// - Stream modes ([`ModeIv::Ctr`], [`ModeIv::Ofb`], and
+///   [`ModeIv::Cfb`]) accept arbitrary `data` lengths.
+///
+/// For modes with an IV, the buffer is updated in place with the final chaining
+/// value (`ivOut`) upon completion.
+#[derive(PartialEq, Eq, Debug)]
+pub enum ModeIv<'a> {
+    Ctr(&'a mut [u8; AlgSym::BLOCK_SIZE]),
+    Ofb(&'a mut [u8; AlgSym::BLOCK_SIZE]),
+    Cbc(&'a mut [u8; AlgSym::BLOCK_SIZE]),
+    Cfb(&'a mut [u8; AlgSym::BLOCK_SIZE]),
+    Ecb,
+}
+
+impl<'a> ModeIv<'a> {
+    /// Creates a [`ModeIv`] from `mode` and `iv`, returning `None` if
+    /// `iv.len()` is invalid for `mode` (must be `0` for `Ecb`, and
+    /// [`AlgSym::BLOCK_SIZE`] for all other modes).
+    pub fn new(mode: TpmiAlgCipherMode, iv: &'a mut [u8]) -> Option<Self> {
+        Some(match mode {
+            #[cfg(feature = "ctr")]
+            TpmiAlgCipherMode::Ctr => Self::Ctr(iv.try_into().ok()?),
+            #[cfg(feature = "ofb")]
+            TpmiAlgCipherMode::Ofb => Self::Ofb(iv.try_into().ok()?),
+            #[cfg(feature = "cbc")]
+            TpmiAlgCipherMode::Cbc => Self::Cbc(iv.try_into().ok()?),
+            TpmiAlgCipherMode::Cfb => Self::Cfb(iv.try_into().ok()?),
+            #[cfg(feature = "ecb")]
+            TpmiAlgCipherMode::Ecb => {
+                if !iv.is_empty() {
+                    return None;
+                }
+                Self::Ecb
+            }
+        })
+    }
+
+    /// Returns `true` if `data_len` satisfies the block-alignment requirements of `self`.
+    pub const fn is_valid_data_len(&self, data_len: usize) -> bool {
+        match self {
+            Self::Cbc(_) | Self::Ecb => data_len.is_multiple_of(AlgSym::BLOCK_SIZE),
+            Self::Ctr(_) | Self::Ofb(_) | Self::Cfb(_) => true,
+        }
+    }
+}
 
 /// Cryptographic symmetric encryption and decryption interfaces for TPM implementations and clients.
 ///
-/// Supported algorithms define concrete `*EncryptCtx` and `*DecryptCtx` types and implement:
-///   - Methods creating/initializing the encryption and decryption contexts with a mode, key, and IV
-///     (e.g. [`Symmetric::aes128_encrypt()`] and [`Symmetric::aes128_decrypt()`])
-///   - [`UpdateInPlace<Error>`] for `*EncryptCtx` and `*DecryptCtx`
-///   - [`Finalize<16, Error>`] for `*EncryptCtx` and `*DecryptCtx` (writing the updated 16-byte IV)
+/// Users should call [`encrypt_decrypt`], [`encrypt`], or [`decrypt`] rather than invoking trait
+/// methods directly.
 ///
-/// Unimplemented algorithms bind their context types to [`!`] and
-/// omit the methods, keeping the default body of
-/// [`Err(self.unimplemented(...))`](Base::unimplemented).
-///
-/// # Example
+/// ### Example
 ///
 /// ```
-/// # use tpm2::{crypto::{Base, Symmetric, Finalize, UpdateInPlace}, Alg, TpmiAlgSymMode};
+/// # use tpm2::crypto::{CryptoError, Direction, ModeIv, Symmetric};
 /// # struct MyBackend;
-/// # struct MyError;
-/// # impl Base for MyBackend {
-/// #   type Error = MyError;
-/// #   fn unimplemented(&self, _: Alg) -> MyError { MyError }
-/// # }
-/// # struct MyAes128;
 /// impl Symmetric for MyBackend {
-///     fn invalid_key(&self) -> MyError { MyError }
-///     fn invalid_iv(&self) -> MyError { MyError }
-///
-///     type Aes128EncryptCtx = MyAes128;
-///     fn aes128_encrypt(
+///     fn aes128(
 ///         &self,
-///         mode: TpmiAlgSymMode,
 ///         key: &[u8; 16],
-///         iv: &[u8; 16],
-///     ) -> Result<MyAes128, MyError> { todo!() }
+///         mode: ModeIv<'_>,
+///         dir: Direction,
+///         data: &mut [u8],
+///     ) -> Result<(), CryptoError> {
+///         // This backend only implements CFB; other modes are unsupported.
+///         let ModeIv::Cfb(iv) = mode else {
+///             return Err(CryptoError::Unsupported);
+///         };
+///         // Encrypt or decrypt `data` in place with `key` and `iv`, then write
+///         // the final chaining value back into `iv`.
+///         todo!()
+///     }
 ///
-///     type Aes128DecryptCtx = MyAes128;
-///     fn aes128_decrypt(
-///         &self,
-///         mode: TpmiAlgSymMode,
-///         key: &[u8; 16],
-///         iv: &[u8; 16],
-///     ) -> Result<MyAes128, MyError> { todo!() }
-///
-///     // Unsupported algorithms use `!` and default methods:
-///     type Aes192EncryptCtx = !;
-///     type Aes192DecryptCtx = !;
-///     type Aes256EncryptCtx = !;
-///     type Aes256DecryptCtx = !;
-///     type Sm4_128EncryptCtx = !;
-///     type Sm4_128DecryptCtx = !;
-///     type Camellia128EncryptCtx = !;
-///     type Camellia128DecryptCtx = !;
-///     type Camellia192EncryptCtx = !;
-///     type Camellia192DecryptCtx = !;
-///     type Camellia256EncryptCtx = !;
-///     type Camellia256DecryptCtx = !;
-/// }
-///
-/// impl UpdateInPlace<MyError> for MyAes128 {
-///     fn update(&mut self, data: &mut [u8]) -> Result<(), MyError> { todo!() }
-/// }
-/// impl Finalize<16, MyError> for MyAes128 {
-///     fn finalize(self, iv_out: &mut [u8; 16]) -> Result<(), MyError> { todo!() }
+///     // Unsupported algorithms keep the default methods, which return
+///     // `Err(CryptoError::Unsupported)`.
 /// }
 /// ```
-pub trait Symmetric: Base {
-    /// Returns the error value for invalid key length.
-    fn invalid_key(&self) -> Self::Error;
-
-    /// Returns the error value for invalid IV length.
-    fn invalid_iv(&self) -> Self::Error;
-
-    type Aes128EncryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn aes128_encrypt(
+#[allow(unused_variables)]
+pub trait Symmetric {
+    fn aes128(
         &self,
-        mode: TpmiAlgSymMode,
         key: &[u8; 16],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes128EncryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::AES))
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Aes128DecryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn aes128_decrypt(
+    fn aes192(
         &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 16],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes128DecryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::AES))
-    }
-
-    type Aes192EncryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn aes192_encrypt(
-        &self,
-        mode: TpmiAlgSymMode,
         key: &[u8; 24],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes192EncryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::AES))
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Aes192DecryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn aes192_decrypt(
+    fn aes256(
         &self,
-        mode: TpmiAlgSymMode,
+        key: &[u8; 32],
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
+    }
+
+    fn sm4_128(
+        &self,
+        key: &[u8; 16],
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
+    }
+
+    fn camellia128(
+        &self,
+        key: &[u8; 16],
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
+    }
+
+    fn camellia192(
+        &self,
         key: &[u8; 24],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes192DecryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::AES))
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Aes256EncryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn aes256_encrypt(
+    fn camellia256(
         &self,
-        mode: TpmiAlgSymMode,
         key: &[u8; 32],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes256EncryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::AES))
-    }
-
-    type Aes256DecryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn aes256_decrypt(
-        &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 32],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes256DecryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::AES))
-    }
-
-    type Sm4_128EncryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn sm4_128_encrypt(
-        &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 16],
-        iv: &[u8; 16],
-    ) -> Result<Self::Sm4_128EncryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::SM4))
-    }
-
-    type Sm4_128DecryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn sm4_128_decrypt(
-        &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 16],
-        iv: &[u8; 16],
-    ) -> Result<Self::Sm4_128DecryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::SM4))
-    }
-
-    type Camellia128EncryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn camellia128_encrypt(
-        &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 16],
-        iv: &[u8; 16],
-    ) -> Result<Self::Camellia128EncryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::CAMELLIA))
-    }
-
-    type Camellia128DecryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn camellia128_decrypt(
-        &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 16],
-        iv: &[u8; 16],
-    ) -> Result<Self::Camellia128DecryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::CAMELLIA))
-    }
-
-    type Camellia192EncryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn camellia192_encrypt(
-        &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 24],
-        iv: &[u8; 16],
-    ) -> Result<Self::Camellia192EncryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::CAMELLIA))
-    }
-
-    type Camellia192DecryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn camellia192_decrypt(
-        &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 24],
-        iv: &[u8; 16],
-    ) -> Result<Self::Camellia192DecryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::CAMELLIA))
-    }
-
-    type Camellia256EncryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn camellia256_encrypt(
-        &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 32],
-        iv: &[u8; 16],
-    ) -> Result<Self::Camellia256EncryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::CAMELLIA))
-    }
-
-    type Camellia256DecryptCtx: UpdateInPlace<Self::Error> + Finalize<16, Self::Error>;
-    fn camellia256_decrypt(
-        &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 32],
-        iv: &[u8; 16],
-    ) -> Result<Self::Camellia256DecryptCtx, Self::Error> {
-        let _ = (mode, key, iv);
-        Err(self.unimplemented(Alg::CAMELLIA))
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 }
 
-/// Dynamic encryption context wrapping algorithm-specific cipher streams.
-pub enum EncryptCtx<S: Symmetric> {
-    #[cfg(feature = "aes128")]
-    Aes128(S::Aes128EncryptCtx),
-    #[cfg(feature = "aes192")]
-    Aes192(S::Aes192EncryptCtx),
-    #[cfg(feature = "aes256")]
-    Aes256(S::Aes256EncryptCtx),
-    #[cfg(feature = "sm4_128")]
-    Sm4_128(S::Sm4_128EncryptCtx),
-    #[cfg(feature = "camellia128")]
-    Camellia128(S::Camellia128EncryptCtx),
-    #[cfg(feature = "camellia192")]
-    Camellia192(S::Camellia192EncryptCtx),
-    #[cfg(feature = "camellia256")]
-    Camellia256(S::Camellia256EncryptCtx),
-}
-
-impl<S: Symmetric> EncryptCtx<S> {
-    /// Initializes a symmetric encryption context for `alg` using backend `s`, `key`, and `iv`.
-    pub fn new(s: &S, alg: TpmtSymDefObject, key: &[u8], iv: &[u8]) -> Result<Self, S::Error> {
-        let mode = alg.mode().ok_or_else(|| s.unimplemented(Alg::NULL))?;
-        let iv_arr: &[u8; 16] = if mode == TpmiAlgSymMode::ECB {
-            if !iv.is_empty() {
-                return Err(s.invalid_iv());
-            }
-            &[0u8; 16]
-        } else {
-            iv.try_into().map_err(|_| s.invalid_iv())?
-        };
-
-        match alg {
-            #[cfg(feature = "aes128")]
-            TpmtSymDefObject::Aes128(_) => {
-                let key: &[u8; 16] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.aes128_encrypt(mode, key, iv_arr).map(EncryptCtx::Aes128)
-            }
-            #[cfg(feature = "aes192")]
-            TpmtSymDefObject::Aes192(_) => {
-                let key: &[u8; 24] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.aes192_encrypt(mode, key, iv_arr).map(EncryptCtx::Aes192)
-            }
-            #[cfg(feature = "aes256")]
-            TpmtSymDefObject::Aes256(_) => {
-                let key: &[u8; 32] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.aes256_encrypt(mode, key, iv_arr).map(EncryptCtx::Aes256)
-            }
-            #[cfg(feature = "sm4_128")]
-            TpmtSymDefObject::Sm4_128(_) => {
-                let key: &[u8; 16] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.sm4_128_encrypt(mode, key, iv_arr)
-                    .map(EncryptCtx::Sm4_128)
-            }
-            #[cfg(feature = "camellia128")]
-            TpmtSymDefObject::Camellia128(_) => {
-                let key: &[u8; 16] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.camellia128_encrypt(mode, key, iv_arr)
-                    .map(EncryptCtx::Camellia128)
-            }
-            #[cfg(feature = "camellia192")]
-            TpmtSymDefObject::Camellia192(_) => {
-                let key: &[u8; 24] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.camellia192_encrypt(mode, key, iv_arr)
-                    .map(EncryptCtx::Camellia192)
-            }
-            #[cfg(feature = "camellia256")]
-            TpmtSymDefObject::Camellia256(_) => {
-                let key: &[u8; 32] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.camellia256_encrypt(mode, key, iv_arr)
-                    .map(EncryptCtx::Camellia256)
-            }
-        }
-    }
-
-    /// Encrypts `data` in-place.
-    pub fn update(&mut self, data: &mut [u8]) -> Result<(), S::Error> {
-        match self {
-            #[cfg(feature = "aes128")]
-            EncryptCtx::Aes128(ctx) => ctx.update(data),
-            #[cfg(feature = "aes192")]
-            EncryptCtx::Aes192(ctx) => ctx.update(data),
-            #[cfg(feature = "aes256")]
-            EncryptCtx::Aes256(ctx) => ctx.update(data),
-            #[cfg(feature = "sm4_128")]
-            EncryptCtx::Sm4_128(ctx) => ctx.update(data),
-            #[cfg(feature = "camellia128")]
-            EncryptCtx::Camellia128(ctx) => ctx.update(data),
-            #[cfg(feature = "camellia192")]
-            EncryptCtx::Camellia192(ctx) => ctx.update(data),
-            #[cfg(feature = "camellia256")]
-            EncryptCtx::Camellia256(ctx) => ctx.update(data),
-        }
-    }
-
-    /// Finalizes the encryption stream and writes the updated IV into `iv_out` (if 16 bytes).
-    pub fn finalize(self, iv_out: &mut [u8]) -> Result<(), S::Error> {
-        let mut iv = [0u8; 16];
-        match self {
-            #[cfg(feature = "aes128")]
-            EncryptCtx::Aes128(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "aes192")]
-            EncryptCtx::Aes192(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "aes256")]
-            EncryptCtx::Aes256(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "sm4_128")]
-            EncryptCtx::Sm4_128(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "camellia128")]
-            EncryptCtx::Camellia128(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "camellia192")]
-            EncryptCtx::Camellia192(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "camellia256")]
-            EncryptCtx::Camellia256(ctx) => ctx.finalize(&mut iv)?,
-        }
-        if iv_out.len() == 16 {
-            iv_out.copy_from_slice(&iv);
-        }
-        Ok(())
-    }
-}
-
-/// Dynamic decryption context wrapping algorithm-specific cipher streams.
-pub enum DecryptCtx<S: Symmetric> {
-    #[cfg(feature = "aes128")]
-    Aes128(S::Aes128DecryptCtx),
-    #[cfg(feature = "aes192")]
-    Aes192(S::Aes192DecryptCtx),
-    #[cfg(feature = "aes256")]
-    Aes256(S::Aes256DecryptCtx),
-    #[cfg(feature = "sm4_128")]
-    Sm4_128(S::Sm4_128DecryptCtx),
-    #[cfg(feature = "camellia128")]
-    Camellia128(S::Camellia128DecryptCtx),
-    #[cfg(feature = "camellia192")]
-    Camellia192(S::Camellia192DecryptCtx),
-    #[cfg(feature = "camellia256")]
-    Camellia256(S::Camellia256DecryptCtx),
-}
-
-impl<S: Symmetric> DecryptCtx<S> {
-    /// Initializes a symmetric decryption context for `alg` using backend `s`, `key`, and `iv`.
-    pub fn new(s: &S, alg: TpmtSymDefObject, key: &[u8], iv: &[u8]) -> Result<Self, S::Error> {
-        let mode = alg.mode().ok_or_else(|| s.unimplemented(Alg::NULL))?;
-        let iv_arr: &[u8; 16] = if mode == TpmiAlgSymMode::ECB {
-            if !iv.is_empty() {
-                return Err(s.invalid_iv());
-            }
-            &[0u8; 16]
-        } else {
-            iv.try_into().map_err(|_| s.invalid_iv())?
-        };
-
-        match alg {
-            #[cfg(feature = "aes128")]
-            TpmtSymDefObject::Aes128(_) => {
-                let key: &[u8; 16] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.aes128_decrypt(mode, key, iv_arr).map(DecryptCtx::Aes128)
-            }
-            #[cfg(feature = "aes192")]
-            TpmtSymDefObject::Aes192(_) => {
-                let key: &[u8; 24] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.aes192_decrypt(mode, key, iv_arr).map(DecryptCtx::Aes192)
-            }
-            #[cfg(feature = "aes256")]
-            TpmtSymDefObject::Aes256(_) => {
-                let key: &[u8; 32] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.aes256_decrypt(mode, key, iv_arr).map(DecryptCtx::Aes256)
-            }
-            #[cfg(feature = "sm4_128")]
-            TpmtSymDefObject::Sm4_128(_) => {
-                let key: &[u8; 16] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.sm4_128_decrypt(mode, key, iv_arr)
-                    .map(DecryptCtx::Sm4_128)
-            }
-            #[cfg(feature = "camellia128")]
-            TpmtSymDefObject::Camellia128(_) => {
-                let key: &[u8; 16] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.camellia128_decrypt(mode, key, iv_arr)
-                    .map(DecryptCtx::Camellia128)
-            }
-            #[cfg(feature = "camellia192")]
-            TpmtSymDefObject::Camellia192(_) => {
-                let key: &[u8; 24] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.camellia192_decrypt(mode, key, iv_arr)
-                    .map(DecryptCtx::Camellia192)
-            }
-            #[cfg(feature = "camellia256")]
-            TpmtSymDefObject::Camellia256(_) => {
-                let key: &[u8; 32] = key.try_into().map_err(|_| s.invalid_key())?;
-                s.camellia256_decrypt(mode, key, iv_arr)
-                    .map(DecryptCtx::Camellia256)
-            }
-        }
-    }
-
-    /// Decrypts `data` in-place.
-    pub fn update(&mut self, data: &mut [u8]) -> Result<(), S::Error> {
-        match self {
-            #[cfg(feature = "aes128")]
-            DecryptCtx::Aes128(ctx) => ctx.update(data),
-            #[cfg(feature = "aes192")]
-            DecryptCtx::Aes192(ctx) => ctx.update(data),
-            #[cfg(feature = "aes256")]
-            DecryptCtx::Aes256(ctx) => ctx.update(data),
-            #[cfg(feature = "sm4_128")]
-            DecryptCtx::Sm4_128(ctx) => ctx.update(data),
-            #[cfg(feature = "camellia128")]
-            DecryptCtx::Camellia128(ctx) => ctx.update(data),
-            #[cfg(feature = "camellia192")]
-            DecryptCtx::Camellia192(ctx) => ctx.update(data),
-            #[cfg(feature = "camellia256")]
-            DecryptCtx::Camellia256(ctx) => ctx.update(data),
-        }
-    }
-
-    /// Finalizes the decryption stream and writes the updated IV into `iv_out` (if 16 bytes).
-    pub fn finalize(self, iv_out: &mut [u8]) -> Result<(), S::Error> {
-        let mut iv = [0u8; 16];
-        match self {
-            #[cfg(feature = "aes128")]
-            DecryptCtx::Aes128(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "aes192")]
-            DecryptCtx::Aes192(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "aes256")]
-            DecryptCtx::Aes256(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "sm4_128")]
-            DecryptCtx::Sm4_128(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "camellia128")]
-            DecryptCtx::Camellia128(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "camellia192")]
-            DecryptCtx::Camellia192(ctx) => ctx.finalize(&mut iv)?,
-            #[cfg(feature = "camellia256")]
-            DecryptCtx::Camellia256(ctx) => ctx.finalize(&mut iv)?,
-        }
-        if iv_out.len() == 16 {
-            iv_out.copy_from_slice(&iv);
-        }
-        Ok(())
-    }
-}
-
-/// Dynamic symmetric context wrapping either an encryption or decryption stream.
-pub enum SymmetricCtx<S: Symmetric> {
-    Encrypt(EncryptCtx<S>),
-    Decrypt(DecryptCtx<S>),
-}
-
-impl<S: Symmetric> SymmetricCtx<S> {
-    /// Initializes an encryption context for `alg` using backend `s`, `key`, and `iv`.
-    pub fn new_encrypt(
-        s: &S,
-        alg: TpmtSymDefObject,
-        key: &[u8],
-        iv: &[u8],
-    ) -> Result<Self, S::Error> {
-        EncryptCtx::new(s, alg, key, iv).map(SymmetricCtx::Encrypt)
-    }
-
-    /// Initializes a decryption context for `alg` using backend `s`, `key`, and `iv`.
-    pub fn new_decrypt(
-        s: &S,
-        alg: TpmtSymDefObject,
-        key: &[u8],
-        iv: &[u8],
-    ) -> Result<Self, S::Error> {
-        DecryptCtx::new(s, alg, key, iv).map(SymmetricCtx::Decrypt)
-    }
-
-    /// Initializes a symmetric context for `alg` using backend `s`, `key`, `iv`, and `is_decrypt`.
-    pub fn new(
-        s: &S,
-        alg: TpmtSymDefObject,
-        key: &[u8],
-        iv: &[u8],
-        is_decrypt: bool,
-    ) -> Result<Self, S::Error> {
-        if is_decrypt {
-            Self::new_decrypt(s, alg, key, iv)
-        } else {
-            Self::new_encrypt(s, alg, key, iv)
-        }
-    }
-
-    /// Encrypts or decrypts `data` in-place.
-    pub fn update(&mut self, data: &mut [u8]) -> Result<(), S::Error> {
-        match self {
-            SymmetricCtx::Encrypt(ctx) => ctx.update(data),
-            SymmetricCtx::Decrypt(ctx) => ctx.update(data),
-        }
-    }
-
-    /// Finalizes the symmetric stream and writes the updated IV into `iv_out` (if 16 bytes).
-    pub fn finalize(self, iv_out: &mut [u8]) -> Result<(), S::Error> {
-        match self {
-            SymmetricCtx::Encrypt(ctx) => ctx.finalize(iv_out),
-            SymmetricCtx::Decrypt(ctx) => ctx.finalize(iv_out),
-        }
-    }
-}
-
-/// Encrypts `data` in-place and updates `iv` using [`EncryptCtx`].
-pub fn encrypt<S: Symmetric>(
-    s: &S,
-    alg: TpmtSymDefObject,
-    key: &[u8],
-    iv: &mut [u8],
+/// Encrypts or decrypts `data` in-place using `key` and `mode` (updating `mode`'s IV in-place).
+pub fn encrypt_decrypt(
+    s: &impl Symmetric,
+    key: SymmetricKey<'_>,
+    mode: ModeIv<'_>,
+    dir: Direction,
     data: &mut [u8],
-) -> Result<(), S::Error> {
-    let mut ctx = EncryptCtx::new(s, alg, key, iv)?;
-    ctx.update(data)?;
-    ctx.finalize(iv)
-}
-
-/// Decrypts `data` in-place and updates `iv` using [`DecryptCtx`].
-pub fn decrypt<S: Symmetric>(
-    s: &S,
-    alg: TpmtSymDefObject,
-    key: &[u8],
-    iv: &mut [u8],
-    data: &mut [u8],
-) -> Result<(), S::Error> {
-    let mut ctx = DecryptCtx::new(s, alg, key, iv)?;
-    ctx.update(data)?;
-    ctx.finalize(iv)
-}
-
-/// Encrypts or decrypts `data` in-place and updates `iv` using [`SymmetricCtx`].
-pub fn encrypt_decrypt<S: Symmetric>(
-    s: &S,
-    alg: TpmtSymDefObject,
-    key: &[u8],
-    iv: &mut [u8],
-    is_decrypt: bool,
-    data: &mut [u8],
-) -> Result<(), S::Error> {
-    if is_decrypt {
-        decrypt(s, alg, key, iv, data)
-    } else {
-        encrypt(s, alg, key, iv, data)
+) -> Result<(), CryptoError> {
+    match key {
+        #[cfg(feature = "aes128")]
+        SymmetricKey::Aes128(key) => s.aes128(key, mode, dir, data),
+        #[cfg(feature = "aes192")]
+        SymmetricKey::Aes192(key) => s.aes192(key, mode, dir, data),
+        #[cfg(feature = "aes256")]
+        SymmetricKey::Aes256(key) => s.aes256(key, mode, dir, data),
+        #[cfg(feature = "sm4_128")]
+        SymmetricKey::Sm4_128(key) => s.sm4_128(key, mode, dir, data),
+        #[cfg(feature = "camellia128")]
+        SymmetricKey::Camellia128(key) => s.camellia128(key, mode, dir, data),
+        #[cfg(feature = "camellia192")]
+        SymmetricKey::Camellia192(key) => s.camellia192(key, mode, dir, data),
+        #[cfg(feature = "camellia256")]
+        SymmetricKey::Camellia256(key) => s.camellia256(key, mode, dir, data),
     }
+}
+
+/// Encrypts `data` in-place using `key` and `mode` (updating `mode`'s IV in-place).
+pub fn encrypt(
+    s: &impl Symmetric,
+    key: SymmetricKey<'_>,
+    mode: ModeIv<'_>,
+    data: &mut [u8],
+) -> Result<(), CryptoError> {
+    encrypt_decrypt(s, key, mode, Direction::Encrypt, data)
+}
+
+/// Decrypts `data` in-place using `key` and `mode` (updating `mode`'s IV in-place).
+pub fn decrypt(
+    s: &impl Symmetric,
+    key: SymmetricKey<'_>,
+    mode: ModeIv<'_>,
+    data: &mut [u8],
+) -> Result<(), CryptoError> {
+    encrypt_decrypt(s, key, mode, Direction::Decrypt, data)
 }

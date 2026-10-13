@@ -9,7 +9,7 @@
 //! Each command includes its corresponding request parameters, handle list,
 //! response parameters, and [`Command`] trait implementation.
 
-use super::Command;
+use super::{Command, Message, UnmarshalMessage};
 use crate::{errors::UnmarshalError, *};
 
 /// [TPM2.0 1.83] 9.2 _TPM_Init
@@ -27,21 +27,26 @@ pub struct Startup {
 }
 impl Command for Startup {
     const CMD_CODE: TpmCc = TpmCc::Startup;
-    type Handles = ();
     type Response<'a> = ();
-    type RespHandles = ();
+}
+impl Message for Startup {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
 }
 impl Marshal for Startup {
     const MAX_SIZE: usize = TpmSu::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.startup_type.marshal(dst)
     }
 }
-
-impl<'a> Unmarshal<'a> for Startup {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for Startup {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             startup_type: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
         })
@@ -55,23 +60,29 @@ impl<'a> Unmarshal<'a> for Startup {
 pub struct Shutdown {
     pub shutdown_type: TpmSu,
 }
+
 impl Command for Shutdown {
     const CMD_CODE: TpmCc = TpmCc::Shutdown;
-    type Handles = ();
     type Response<'a> = ();
-    type RespHandles = ();
+}
+impl Message for Shutdown {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
 }
 impl Marshal for Shutdown {
     const MAX_SIZE: usize = TpmSu::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.shutdown_type.marshal(dst)
     }
 }
-
-impl<'a> Unmarshal<'a> for Shutdown {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for Shutdown {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             shutdown_type: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
         })

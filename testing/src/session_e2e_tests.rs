@@ -5,16 +5,16 @@ use crate::test_utils::{
     execute_with_hmac_sessions_mismatch_nonce, execute_with_password_sessions, flush_context,
     start_auth_session,
 };
-use tpm2::Unmarshal;
-use tpm2::commands::{
-    Certify, CertifyHandles, CreatePrimary, CreatePrimaryHandles, FlushContext, ReadPublic,
-    ReadPublicHandles, Sign, SignHandles, StartAuthSession, StartAuthSessionHandles,
-};
-use tpm2::{Handle, TpmEccCurve, TpmSe};
+// `TPM2_Sign` is deprecated upstream; these tests use it as an authorized command.
+#[allow(deprecated)]
+use tpm2::commands::Sign;
+use tpm2::commands::{Certify, CreatePrimary, FlushContext, ReadPublic, StartAuthSession};
+use tpm2::{AlgSym, Handle, TpmEccCurve, TpmSe, TpmiAlgCipherMode};
+use tpm2::{Message, Unmarshal, UnmarshalMessage};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bNonce,
-    Tpm2bSensitiveCreate, Tpm2bSensitiveData, TpmaObject, TpmaSession, TpmiAlgHash, TpmiAlgSymMode,
-    TpmsEccParms, TpmsEccPoint, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
+    Tpm2bSensitiveCreate, Tpm2bSensitiveData, TpmaObject, TpmaSession, TpmiAlgHash, TpmsEccParms,
+    TpmsEccPoint, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2::{Tpm2bData, TpmtTkHashcheck};
 use tpm2_simulator::{Simulator, create_simulator};
@@ -50,19 +50,16 @@ fn create_primary_key(sim: &mut Simulator) -> Handle {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    create_rsp_handles.object_handle
+    let create_rsp = execute_with_password_sessions(sim, &create_cmd, 1, &[]).unwrap();
+    create_rsp.object_handle
 }
 
-fn get_create_primary_cmd_and_handles() -> (CreatePrimary<'static>, CreatePrimaryHandles) {
+fn get_create_primary_cmd_and_handles() -> CreatePrimary<'static> {
     let ecc_parms = TpmsEccParms {
         symmetric: None,
         scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),
@@ -92,40 +89,35 @@ fn get_create_primary_cmd_and_handles() -> (CreatePrimary<'static>, CreatePrimar
     };
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
-    let create_cmd = CreatePrimary {
+    CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
-    };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    (create_cmd, create_handles)
+    }
 }
 
 /// Builds a `TPM2_Sign` of a zero SHA-256 digest with `key_handle` (USER
 /// role), for tests that need an HMAC session to authorize a handle.
-fn sign_cmd_and_handles(key_handle: Handle) -> (Sign<'static>, SignHandles) {
-    let cmd = Sign {
+#[allow(deprecated)] // `TPM2_Sign` is deprecated upstream.
+fn sign_cmd_and_handles(key_handle: Handle) -> Sign<'static> {
+    Sign {
+        key_handle,
         digest: Tpm2bDigest::from_bytes(&[0u8; 32]).unwrap(),
         in_scheme: None,
         validation: TpmtTkHashcheck::default(),
-    };
-    (cmd, SignHandles { key_handle })
+    }
 }
 
 /// Builds a `TPM2_Certify` of `key_handle` signed by itself, a command with two
 /// authorization handles (objectHandle ADMIN, signHandle USER).
-fn certify_cmd_and_handles(key_handle: Handle) -> (Certify<'static>, CertifyHandles) {
-    let cmd = Certify {
-        qualifying_data: Tpm2bData::default(),
-        in_scheme: None,
-    };
-    let handles = CertifyHandles {
+fn certify_cmd_and_handles(key_handle: Handle) -> Certify<'static> {
+    Certify {
         object_handle: key_handle,
         sign_handle: key_handle,
-    };
-    (cmd, handles)
+        qualifying_data: Tpm2bData::default(),
+        in_scheme: None,
+    }
 }
 
 // helper macro to wrap expected failure sessions in catch_unwind
@@ -140,6 +132,8 @@ fn certify_cmd_and_handles(key_handle: Handle) -> (Certify<'static>, CertifyHand
 #[test]
 fn f1_t1_1_marshalling_rh_null() {
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::default(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
@@ -149,25 +143,28 @@ fn f1_t1_1_marshalling_rh_null() {
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(&cmd, &mut buf);
     let mut unmarsh = &buf[..len];
-    let decoded = StartAuthSession::unmarshal(&mut unmarsh).unwrap();
+    let decoded = StartAuthSession::unmarshal_with_handles(cmd.handles(), &mut unmarsh).unwrap();
     assert_eq!(cmd.session_type, decoded.session_type);
 }
 
 #[test]
 fn f1_t1_2_marshalling_ecc() {
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(b"1234567890123456").unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::from_bytes(b"some_encrypted_salt_data").unwrap(),
         session_type: TpmSe::HMAC,
-        symmetric: Some(tpm2::TpmtSymDef::Cipher(tpm2::TpmtSymDefObject::Aes128(
-            Some(TpmiAlgSymMode::CFB),
-        ))),
+        symmetric: Some(tpm2::TpmtSymDef::Cipher(tpm2::TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        })),
         auth_hash: TpmiAlgHash::Sha256,
     };
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(&cmd, &mut buf);
     let mut unmarsh = &buf[..len];
-    let decoded = StartAuthSession::unmarshal(&mut unmarsh).unwrap();
+    let decoded = StartAuthSession::unmarshal_with_handles(cmd.handles(), &mut unmarsh).unwrap();
     assert_eq!(
         cmd.nonce_caller.get_buffer(),
         decoded.nonce_caller.get_buffer()
@@ -177,18 +174,21 @@ fn f1_t1_2_marshalling_ecc() {
 #[test]
 fn f1_t1_3_marshalling_rsa() {
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(b"1234567890123456").unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::from_bytes(&[0u8; 256]).unwrap(),
         session_type: TpmSe::Policy,
-        symmetric: Some(tpm2::TpmtSymDef::Cipher(tpm2::TpmtSymDefObject::Aes256(
-            Some(TpmiAlgSymMode::CFB),
-        ))),
+        symmetric: Some(tpm2::TpmtSymDef::Cipher(tpm2::TpmtSymDefObject {
+            alg: AlgSym::Aes256,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        })),
         auth_hash: TpmiAlgHash::Sha384,
     };
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(&cmd, &mut buf);
     let mut unmarsh = &buf[..len];
-    let decoded = StartAuthSession::unmarshal(&mut unmarsh).unwrap();
+    let decoded = StartAuthSession::unmarshal_with_handles(cmd.handles(), &mut unmarsh).unwrap();
     assert_eq!(cmd.auth_hash, decoded.auth_hash);
 }
 
@@ -201,6 +201,8 @@ fn f1_t1_4_marshalling_hashes() {
         TpmiAlgHash::Sha512,
     ] {
         let cmd = StartAuthSession {
+            tpm_key: Handle::RH_NULL,
+            bind: Handle::RH_NULL,
             nonce_caller: Tpm2bNonce::default(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),
             session_type: TpmSe::Trial,
@@ -210,7 +212,8 @@ fn f1_t1_4_marshalling_hashes() {
         let mut buf = [0u8; 1024];
         let len = marshal_to_slice(&cmd, &mut buf);
         let mut unmarsh = &buf[..len];
-        let decoded = StartAuthSession::unmarshal(&mut unmarsh).unwrap();
+        let decoded =
+            StartAuthSession::unmarshal_with_handles(cmd.handles(), &mut unmarsh).unwrap();
         assert_eq!(decoded.auth_hash, *hash);
     }
 }
@@ -219,6 +222,8 @@ fn f1_t1_4_marshalling_hashes() {
 fn f1_t1_5_marshalling_types() {
     for st in &[TpmSe::HMAC, TpmSe::Policy, TpmSe::Trial] {
         let cmd = StartAuthSession {
+            tpm_key: Handle::RH_NULL,
+            bind: Handle::RH_NULL,
             nonce_caller: Tpm2bNonce::default(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),
             session_type: *st,
@@ -228,7 +233,8 @@ fn f1_t1_5_marshalling_types() {
         let mut buf = [0u8; 1024];
         let len = marshal_to_slice(&cmd, &mut buf);
         let mut unmarsh = &buf[..len];
-        let decoded = StartAuthSession::unmarshal(&mut unmarsh).unwrap();
+        let decoded =
+            StartAuthSession::unmarshal_with_handles(cmd.handles(), &mut unmarsh).unwrap();
         assert_eq!(decoded.session_type, *st);
     }
 }
@@ -437,16 +443,8 @@ fn f4_t1_1_valid_hmac_auth() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
-    execute_with_hmac_sessions(
-        &mut sim,
-        &auth_cmd,
-        auth_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let auth_cmd = sign_cmd_and_handles(object_handle);
+    execute_with_hmac_sessions(&mut sim, &auth_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 #[test]
@@ -482,16 +480,13 @@ fn f4_t1_2_password_auth_create_primary() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    flush_context(&mut sim, create_rsp_handles.object_handle).unwrap();
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
+    flush_context(&mut sim, create_rsp.object_handle).unwrap();
 }
 
 #[test]
@@ -512,15 +507,8 @@ fn f4_t1_3_hmac_auth_incorrect_fail() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
-    let res = execute_with_hmac_sessions(
-        &mut sim,
-        &auth_cmd,
-        auth_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    );
+    let auth_cmd = sign_cmd_and_handles(object_handle);
+    let res = execute_with_hmac_sessions(&mut sim, &auth_cmd, &[], &mut [session], &[&[]]);
     assert_eq!(res, Err(2446));
 }
 
@@ -551,11 +539,10 @@ fn f4_t1_4_multiple_sessions_auth() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = certify_cmd_and_handles(object_handle);
+    let auth_cmd = certify_cmd_and_handles(object_handle);
     execute_with_hmac_sessions(
         &mut sim,
         &auth_cmd,
-        auth_handles,
         &[],
         &mut [session1, session2],
         &[&[], &[]],
@@ -580,16 +567,8 @@ fn f4_t1_5_hmac_auth_sha256_rotation() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
-    execute_with_hmac_sessions(
-        &mut sim,
-        &auth_cmd,
-        auth_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let auth_cmd = sign_cmd_and_handles(object_handle);
+    execute_with_hmac_sessions(&mut sim, &auth_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 // F5: Response Format & HMAC (rpHash)
@@ -611,16 +590,8 @@ fn f5_t1_1_response_hmac_read_public() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
-    let _ = execute_with_hmac_sessions(
-        &mut sim,
-        &auth_cmd,
-        auth_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let auth_cmd = sign_cmd_and_handles(object_handle);
+    let _ = execute_with_hmac_sessions(&mut sim, &auth_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 #[test]
@@ -640,16 +611,8 @@ fn f5_t1_2_response_hmac_nonce_rotation() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
-    let _ = execute_with_hmac_sessions(
-        &mut sim,
-        &auth_cmd,
-        auth_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let auth_cmd = sign_cmd_and_handles(object_handle);
+    let _ = execute_with_hmac_sessions(&mut sim, &auth_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 #[test]
@@ -669,16 +632,8 @@ fn f5_t1_3_response_formatting_tag() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
-    let _ = execute_with_hmac_sessions(
-        &mut sim,
-        &auth_cmd,
-        auth_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let auth_cmd = sign_cmd_and_handles(object_handle);
+    let _ = execute_with_hmac_sessions(&mut sim, &auth_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 #[test]
@@ -698,16 +653,8 @@ fn f5_t1_4_response_hmac_sha384() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
-    let _ = execute_with_hmac_sessions(
-        &mut sim,
-        &auth_cmd,
-        auth_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let auth_cmd = sign_cmd_and_handles(object_handle);
+    let _ = execute_with_hmac_sessions(&mut sim, &auth_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 #[test]
@@ -723,14 +670,12 @@ fn f5_t1_5_response_hmac_omitted_on_error() {
         TpmiAlgHash::Sha256,
     )
     .unwrap();
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles {
+    let read_cmd = ReadPublic {
         object_handle: Handle::RH_NULL,
     }; // invalid handle
     let err = match execute_with_hmac_sessions(
         &mut sim,
         &read_cmd,
-        read_handles,
         &[&Handle::RH_NULL.0.to_be_bytes()],
         &mut [session],
         &[&[]],
@@ -754,22 +699,18 @@ fn f6_t1_1_aes128_cfb_decryption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::DECRYPT);
-    let (create_cmd, create_handles) = get_create_primary_cmd_and_handles();
-    let (_, resp_handles) = execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    let create_cmd = get_create_primary_cmd_and_handles();
+    let resp =
+        execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -781,22 +722,18 @@ fn f6_t1_2_aes256_cfb_decryption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes256(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes256,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::DECRYPT);
-    let (create_cmd, create_handles) = get_create_primary_cmd_and_handles();
-    let (_, resp_handles) = execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    let create_cmd = get_create_primary_cmd_and_handles();
+    let resp =
+        execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -808,22 +745,18 @@ fn f6_t1_3_nonce_validation_decryption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::DECRYPT);
-    let (create_cmd, create_handles) = get_create_primary_cmd_and_handles();
-    let (_, resp_handles) = execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    let create_cmd = get_create_primary_cmd_and_handles();
+    let resp =
+        execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -835,7 +768,10 @@ fn f6_t1_4_decryption_multiple_sessions() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -845,7 +781,10 @@ fn f6_t1_4_decryption_multiple_sessions() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -854,17 +793,16 @@ fn f6_t1_4_decryption_multiple_sessions() {
     // it to be audit/encrypt/decrypt (SessionProcess.c:1709-1712, else
     // ATTRIBUTES+S2). Make it the response-encryption session.
     session2.attributes.insert(TpmaSession::ENCRYPT);
-    let (create_cmd, create_handles) = get_create_primary_cmd_and_handles();
-    let (_, resp_handles) = execute_with_hmac_sessions(
+    let create_cmd = get_create_primary_cmd_and_handles();
+    let resp = execute_with_hmac_sessions(
         &mut sim,
         &create_cmd,
-        create_handles,
         &[],
         &mut [session1, session2],
         &[&[], &[]],
     )
     .unwrap();
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -876,22 +814,18 @@ fn f6_t1_5_decryption_empty_parameters() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::DECRYPT);
-    let (create_cmd, create_handles) = get_create_primary_cmd_and_handles();
-    let (_, resp_handles) = execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    let create_cmd = get_create_primary_cmd_and_handles();
+    let resp =
+        execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 // F7: Parameter Encryption
@@ -906,22 +840,16 @@ fn f7_t1_1_aes128_cfb_encryption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::ENCRYPT);
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    let _ = execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let read_cmd = ReadPublic { object_handle };
+    let _ = execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 #[test]
@@ -934,22 +862,16 @@ fn f7_t1_2_aes256_cfb_encryption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes256(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes256,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::ENCRYPT);
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    let _ = execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let read_cmd = ReadPublic { object_handle };
+    let _ = execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 #[test]
@@ -962,22 +884,16 @@ fn f7_t1_3_nonce_validation_encryption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::ENCRYPT);
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    let _ = execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let read_cmd = ReadPublic { object_handle };
+    let _ = execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 #[test]
@@ -990,7 +906,10 @@ fn f7_t1_4_encryption_multiple_sessions() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -1008,12 +927,10 @@ fn f7_t1_4_encryption_multiple_sessions() {
     // ReadPublic has no auth handle, so C requires every session to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712); make session2 audit.
     session2.attributes.insert(TpmaSession::AUDIT);
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
+    let read_cmd = ReadPublic { object_handle };
     let _ = execute_with_hmac_sessions(
         &mut sim,
         &read_cmd,
-        read_handles,
         &[],
         &mut [session1, session2],
         &[&[], &[]],
@@ -1031,22 +948,16 @@ fn f7_t1_5_encryption_empty_parameters() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::ENCRYPT);
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    let _ = execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let read_cmd = ReadPublic { object_handle };
+    let _ = execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 // ==========================================
@@ -1056,22 +967,38 @@ fn f7_t1_5_encryption_empty_parameters() {
 // F1: StartAuthSession Marshalling Boundaries
 #[test]
 fn f1_t2_1_marshalling_invalid_handle() {
-    let h = StartAuthSessionHandles {
+    let cmd = StartAuthSession {
         tpm_key: Handle(0x999999),
         bind: Handle::RH_NULL,
+        nonce_caller: Tpm2bNonce::default(),
+        encrypted_salt: Tpm2bEncryptedSecret::default(),
+        session_type: TpmSe::HMAC,
+        symmetric: None,
+        auth_hash: TpmiAlgHash::Sha256,
     };
+    // The handle area: one big-endian `u32` per handle.
     let mut buf = [0u8; 128];
-    marshal_to_slice(&h, &mut buf);
+    for (i, handle) in cmd.handles().iter().enumerate() {
+        marshal_to_slice(handle, &mut buf[4 * i..]);
+    }
 }
 
 #[test]
 fn f1_t2_2_marshalling_invalid_bind() {
-    let h = StartAuthSessionHandles {
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle(0x999999),
+        nonce_caller: Tpm2bNonce::default(),
+        encrypted_salt: Tpm2bEncryptedSecret::default(),
+        session_type: TpmSe::HMAC,
+        symmetric: None,
+        auth_hash: TpmiAlgHash::Sha256,
     };
+    // The handle area: one big-endian `u32` per handle.
     let mut buf = [0u8; 128];
-    marshal_to_slice(&h, &mut buf);
+    for (i, handle) in cmd.handles().iter().enumerate() {
+        marshal_to_slice(handle, &mut buf[4 * i..]);
+    }
 }
 
 #[test]
@@ -1084,6 +1011,8 @@ fn f1_t2_3_marshalling_invalid_symmetric() {
 #[test]
 fn f1_t2_4_marshalling_empty_nonce() {
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::default(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
@@ -1097,6 +1026,8 @@ fn f1_t2_4_marshalling_empty_nonce() {
 #[test]
 fn f1_t2_5_marshalling_salt_rh_null() {
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::default(),
         encrypted_salt: Tpm2bEncryptedSecret::from_bytes(b"salt").unwrap(),
         session_type: TpmSe::HMAC,
@@ -1254,16 +1185,8 @@ fn f3_t2_4_reuse_flushed_handle() {
     )
     .unwrap();
     flush_context(&mut sim, sess.session_handle).unwrap();
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [sess],
-        &[&[]],
-    ) {
+    let read_cmd = ReadPublic { object_handle };
+    let err = match execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [sess], &[&[]]) {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -1307,15 +1230,9 @@ fn f4_t2_1_mismatching_nonce_caller() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
-    let res = execute_with_hmac_sessions_mismatch_nonce(
-        &mut sim,
-        &auth_cmd,
-        auth_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    );
+    let auth_cmd = sign_cmd_and_handles(object_handle);
+    let res =
+        execute_with_hmac_sessions_mismatch_nonce(&mut sim, &auth_cmd, &[], &mut [session], &[&[]]);
     assert_eq!(res, Err(2446));
 }
 
@@ -1337,15 +1254,8 @@ fn f4_t2_2_mismatching_nonce_tpm() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &auth_cmd,
-        auth_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
+    let auth_cmd = sign_cmd_and_handles(object_handle);
+    let err = match execute_with_hmac_sessions(&mut sim, &auth_cmd, &[], &mut [session], &[&[]]) {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -1367,16 +1277,8 @@ fn f4_t2_3_mismatching_attributes() {
     )
     .unwrap();
     session.attributes.insert(TpmaSession::DECRYPT); // attribute not validated correctly
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
+    let read_cmd = ReadPublic { object_handle };
+    let err = match execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [session], &[&[]]) {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -1400,11 +1302,10 @@ fn f4_t2_4_incorrect_cphash() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
+    let auth_cmd = sign_cmd_and_handles(object_handle);
     let err = match execute_with_hmac_sessions(
         &mut sim,
         &auth_cmd,
-        auth_handles,
         &[b"bad_handle_name"],
         &mut [session],
         &[&[]],
@@ -1432,11 +1333,10 @@ fn f4_t2_5_empty_vs_non_empty_auth() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
+    let auth_cmd = sign_cmd_and_handles(object_handle);
     let err = match execute_with_hmac_sessions(
         &mut sim,
         &auth_cmd,
-        auth_handles,
         &[],
         &mut [session],
         &[b"wrong_auth_val"],
@@ -1467,11 +1367,10 @@ fn f5_t2_1_invalid_response_hmac_detect() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
+    let auth_cmd = sign_cmd_and_handles(object_handle);
     execute_with_hmac_sessions_corrupt_response(
         &mut sim,
         &auth_cmd,
-        auth_handles,
         &[],
         &mut [session],
         &[&[]],
@@ -1498,11 +1397,10 @@ fn f5_t2_2_incorrect_response_nonce_tpm() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
+    let auth_cmd = sign_cmd_and_handles(object_handle);
     execute_with_hmac_sessions_corrupt_response(
         &mut sim,
         &auth_cmd,
-        auth_handles,
         &[],
         &mut [session],
         &[&[]],
@@ -1529,11 +1427,10 @@ fn f5_t2_3_incorrect_response_attributes() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = sign_cmd_and_handles(object_handle);
+    let auth_cmd = sign_cmd_and_handles(object_handle);
     execute_with_hmac_sessions_corrupt_response(
         &mut sim,
         &auth_cmd,
-        auth_handles,
         &[],
         &mut [session],
         &[&[]],
@@ -1558,15 +1455,7 @@ fn f5_t2_4_response_hmac_empty_params() {
     let flush_cmd = FlushContext {
         flush_handle: Handle(0x0200003f),
     };
-    let flush_handles = ();
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &flush_cmd,
-        flush_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
+    let err = match execute_with_hmac_sessions(&mut sim, &flush_cmd, &[], &mut [session], &[&[]]) {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -1588,14 +1477,12 @@ fn f5_t2_5_response_hmac_rp_hash_error_code() {
         TpmiAlgHash::Sha256,
     )
     .unwrap();
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles {
+    let read_cmd = ReadPublic {
         object_handle: Handle::RH_NULL,
     }; // invalid
     let err = match execute_with_hmac_sessions(
         &mut sim,
         &read_cmd,
-        read_handles,
         &[&Handle::RH_NULL.0.to_be_bytes()],
         &mut [session],
         &[&[]],
@@ -1619,7 +1506,10 @@ fn f6_t2_1_param_size_mismatch_decryption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -1666,6 +1556,7 @@ fn f6_t2_1_param_size_mismatch_decryption() {
     );
 
     struct BadCreatePrimary<'a> {
+        primary_handle: Handle,
         in_sensitive_buf: &'a [u8],
         in_public: tpm2::Tpm2bPublic<'a>,
         outside_info: tpm2::Tpm2bData<'a>,
@@ -1699,29 +1590,24 @@ fn f6_t2_1_param_size_mismatch_decryption() {
     }
     impl tpm2::Command for BadCreatePrimary<'_> {
         const CMD_CODE: tpm2::TpmCc = tpm2::TpmCc::CreatePrimary;
-        type Handles = CreatePrimaryHandles;
-        type Response<'a> = tpm2::commands::CreatePrimaryRsp<'a>;
-        type RespHandles = tpm2::commands::CreatePrimaryRespHandles;
+        type Response<'a> = tpm2::commands::responses::CreatePrimary<'a>;
+    }
+    impl tpm2::Message for BadCreatePrimary<'_> {
+        type Handles = [Handle; 1];
+        fn handles(&self) -> Self::Handles {
+            [self.primary_handle]
+        }
     }
 
     let create_cmd = BadCreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive_buf: &corrupted_bytes,
         in_public,
         outside_info: tpm2::Tpm2bData::default(),
         creation_pcr: tpm2::TpmlPcrSelection::default(),
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
+    let err = match execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]) {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -1742,7 +1628,10 @@ fn f6_t2_2_decryption_invalid_session_key() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -1779,22 +1668,13 @@ fn f6_t2_2_decryption_invalid_session_key() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
+    let err = match execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]) {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -1820,15 +1700,7 @@ fn f6_t2_3_decryption_unsupported_command() {
     let flush_cmd = FlushContext {
         flush_handle: Handle(0x02800001),
     };
-    let flush_handles = ();
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &flush_cmd,
-        flush_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
+    let err = match execute_with_hmac_sessions(&mut sim, &flush_cmd, &[], &mut [session], &[&[]]) {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -1871,7 +1743,10 @@ fn f6_t2_4_decryption_cfb_block_boundaries() {
             Handle::RH_NULL,
             &[],
             TpmSe::HMAC,
-            Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgCipherMode::Cfb.into()),
+            }),
             TpmiAlgHash::Sha256,
         )
         .unwrap();
@@ -1888,25 +1763,16 @@ fn f6_t2_4_decryption_cfb_block_boundaries() {
         let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
         let create_cmd = CreatePrimary {
+            primary_handle: Handle::RH_OWNER,
             in_sensitive,
             in_public,
             ..Default::default()
         };
-        let create_handles = CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
-        };
 
-        let (_, create_rsp_handles) = execute_with_hmac_sessions(
-            &mut sim,
-            &create_cmd,
-            create_handles,
-            &[],
-            &mut [session],
-            &[&[]],
-        )
-        .unwrap();
+        let create_rsp =
+            execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]).unwrap();
 
-        flush_context(&mut sim, create_rsp_handles.object_handle).unwrap();
+        flush_context(&mut sim, create_rsp.object_handle).unwrap();
     }
 }
 
@@ -1924,15 +1790,8 @@ fn f6_t2_5_decryption_unsupported_symmetric() {
     )
     .unwrap();
     session.attributes.insert(TpmaSession::DECRYPT);
-    let (create_cmd, create_handles) = get_create_primary_cmd_and_handles();
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
+    let create_cmd = get_create_primary_cmd_and_handles();
+    let err = match execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]) {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -1950,7 +1809,10 @@ fn f7_t2_1_decryption_failure_encrypted_response() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -1986,26 +1848,17 @@ fn f7_t2_1_decryption_failure_encrypted_response() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (_, resp_handles) = execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let resp =
+        execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]).unwrap();
 
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
-    assert_ne!(resp_handles.object_handle.0, 0);
+    flush_context(&mut sim, resp.object_handle).unwrap();
+    assert_ne!(resp.object_handle.0, 0);
 }
 
 #[test]
@@ -2022,14 +1875,12 @@ fn f7_t2_2_encryption_bypassed_on_error() {
     )
     .unwrap();
     session.attributes.insert(TpmaSession::ENCRYPT);
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles {
+    let read_cmd = ReadPublic {
         object_handle: Handle::RH_NULL,
     }; // invalid
     let err = match execute_with_hmac_sessions(
         &mut sim,
         &read_cmd,
-        read_handles,
         &[&Handle::RH_NULL.0.to_be_bytes()],
         &mut [session],
         &[&[]],
@@ -2052,22 +1903,16 @@ fn f7_t2_3_encryption_cfb_block_boundaries() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::ENCRYPT);
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let read_cmd = ReadPublic { object_handle };
+    execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 #[test]
@@ -2085,16 +1930,8 @@ fn f7_t2_4_encryption_different_symmetric() {
     )
     .unwrap();
     session.attributes.insert(TpmaSession::ENCRYPT);
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
+    let read_cmd = ReadPublic { object_handle };
+    let err = match execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [session], &[&[]]) {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -2110,7 +1947,10 @@ fn f7_t2_5_encryption_attributes_mismatch() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -2146,26 +1986,17 @@ fn f7_t2_5_encryption_attributes_mismatch() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (_, resp_handles) = execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let resp =
+        execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]).unwrap();
 
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
-    assert_ne!(resp_handles.object_handle.0, 0);
+    flush_context(&mut sim, resp.object_handle).unwrap();
+    assert_ne!(resp.object_handle.0, 0);
 }
 
 #[test]
@@ -2177,7 +2008,10 @@ fn f7_t2_6_encryption_unsupported_command() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -2185,15 +2019,7 @@ fn f7_t2_6_encryption_unsupported_command() {
     let flush_cmd = FlushContext {
         flush_handle: Handle(0x02800001),
     };
-    let flush_handles = ();
-    let err = match execute_with_hmac_sessions(
-        &mut sim,
-        &flush_cmd,
-        flush_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    ) {
+    let err = match execute_with_hmac_sessions(&mut sim, &flush_cmd, &[], &mut [session], &[&[]]) {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -2215,22 +2041,18 @@ fn t3_1_hmac_session_parameter_decryption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::DECRYPT);
-    let (create_cmd, create_handles) = get_create_primary_cmd_and_handles();
-    let (_, resp_handles) = execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    let create_cmd = get_create_primary_cmd_and_handles();
+    let resp =
+        execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -2243,22 +2065,16 @@ fn t3_2_hmac_session_parameter_encryption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::ENCRYPT);
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let read_cmd = ReadPublic { object_handle };
+    execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 #[test]
@@ -2270,24 +2086,20 @@ fn t3_3_hmac_session_dec_enc() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session
         .attributes
         .insert(TpmaSession::DECRYPT | TpmaSession::ENCRYPT);
-    let (create_cmd, create_handles) = get_create_primary_cmd_and_handles();
-    let (_, resp_handles) = execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    let create_cmd = get_create_primary_cmd_and_handles();
+    let resp =
+        execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -2299,7 +2111,10 @@ fn t3_4_multiple_hmac_sessions_enc_dec() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -2309,23 +2124,25 @@ fn t3_4_multiple_hmac_sessions_enc_dec() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session1.attributes.insert(TpmaSession::DECRYPT);
     session2.attributes.insert(TpmaSession::ENCRYPT);
-    let (create_cmd, create_handles) = get_create_primary_cmd_and_handles();
-    let (_, resp_handles) = execute_with_hmac_sessions(
+    let create_cmd = get_create_primary_cmd_and_handles();
+    let resp = execute_with_hmac_sessions(
         &mut sim,
         &create_cmd,
-        create_handles,
         &[],
         &mut [session1, session2],
         &[&[], &[]],
     )
     .unwrap();
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -2364,22 +2181,16 @@ fn t3_6_salted_session_hmac_encryption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::ENCRYPT);
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let read_cmd = ReadPublic { object_handle };
+    execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [session], &[&[]]).unwrap();
 }
 
 #[test]
@@ -2391,22 +2202,18 @@ fn t3_7_bound_session_hmac_decryption() {
         Handle::RH_NULL,
         b"bind_auth",
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::DECRYPT);
-    let (create_cmd, create_handles) = get_create_primary_cmd_and_handles();
-    let (_, resp_handles) = execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    let create_cmd = get_create_primary_cmd_and_handles();
+    let resp =
+        execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 // ==========================================
@@ -2446,21 +2253,16 @@ fn t4_1_ported_go_test_read_public() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (create_rsp, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    let object_handle = create_rsp_handles.object_handle;
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
+    let object_handle = create_rsp.object_handle;
 
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-    let (read_rsp, _) =
-        execute_with_password_sessions(&mut sim, &read_cmd, read_handles, 0, &[]).unwrap();
+    let read_cmd = ReadPublic { object_handle };
+    let read_rsp = execute_with_password_sessions(&mut sim, &read_cmd, 0, &[]).unwrap();
 
     let out_pub_create = create_rsp.out_public.0;
     let out_pub_read = read_rsp.out_public.0;
@@ -2580,17 +2382,9 @@ fn t4_5_multi_session_authorization() {
     // ReadPublic has no auth handle, and C requires such sessions to be
     // audit/encrypt/decrypt (SessionProcess.c:1709-1712), so authorize the key
     // instead to keep the HMAC session an authorization session.
-    let (auth_cmd, auth_handles) = certify_cmd_and_handles(object_handle);
+    let auth_cmd = certify_cmd_and_handles(object_handle);
     let mut sessions = [sess1, sess2];
-    execute_with_hmac_sessions(
-        &mut sim,
-        &auth_cmd,
-        auth_handles,
-        &[],
-        &mut sessions,
-        &[&[], &[]],
-    )
-    .unwrap();
+    execute_with_hmac_sessions(&mut sim, &auth_cmd, &[], &mut sessions, &[&[], &[]]).unwrap();
 }
 
 #[test]
@@ -2602,31 +2396,28 @@ fn test_hierarchy_change_auth_with_hmac_session_encrypt_decrypt() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::DECRYPT);
 
-    use tpm2::commands::{HierarchyChangeAuth, HierarchyChangeAuthHandles};
+    use tpm2::commands::HierarchyChangeAuth;
     let cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(b"new_auth_password").unwrap(),
     };
-    let handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
 
-    let _ =
-        execute_with_hmac_sessions(&mut sim, &cmd, handles, &[], &mut [session], &[&[]]).unwrap();
+    execute_with_hmac_sessions(&mut sim, &cmd, &[], &mut [session], &[&[]]).unwrap();
 
     let cmd_back = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::default(),
     };
-    let handles_back = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd_back, handles_back, 1, b"new_auth_password")
-        .unwrap();
+    execute_with_password_sessions(&mut sim, &cmd_back, 1, b"new_auth_password").unwrap();
 }
 
 #[test]
@@ -2638,7 +2429,10 @@ fn test_create_primary_with_hmac_session_encrypt_decrypt() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -2675,25 +2469,16 @@ fn test_create_primary_with_hmac_session_encrypt_decrypt() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (resp, resp_handles) = execute_with_hmac_sessions(
-        &mut sim,
-        &create_cmd,
-        create_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let resp =
+        execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]).unwrap();
 
-    let object_handle = resp_handles.object_handle;
+    let object_handle = resp.object_handle;
     assert_ne!(object_handle.0, 0);
 
     let out_public_struct = resp.out_public.0;
@@ -2733,16 +2518,13 @@ fn create_primary_key_with_auth(sim: &mut Simulator, auth: &[u8]) -> Handle {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    create_rsp_handles.object_handle
+    let create_rsp = execute_with_password_sessions(sim, &create_cmd, 1, &[]).unwrap();
+    create_rsp.object_handle
 }
 
 #[test]
@@ -2757,26 +2539,21 @@ fn test_read_public_with_auth_key_session_encrypt() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::ENCRYPT);
 
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
+    let read_cmd = ReadPublic { object_handle };
 
     // ReadPublic does not require authorization, so the entity auth for key derivation is empty.
     // Therefore, client uses empty auth (&[]) for the session.
-    let (resp, _) = execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    )
-    .unwrap();
+    let resp =
+        execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [session], &[&[]]).unwrap();
 
     let out_public_struct = resp.out_public.0;
     assert_eq!(out_public_struct.name_alg, Some(TpmiAlgHash::Sha256));
@@ -2806,7 +2583,10 @@ fn test_encrypt_on_second_session_of_multi_session_command() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -2817,14 +2597,12 @@ fn test_encrypt_on_second_session_of_multi_session_command() {
     // audit/encrypt/decrypt too (SessionProcess.c:1709-1712); make it audit.
     session1.attributes.insert(TpmaSession::AUDIT);
 
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
+    let read_cmd = ReadPublic { object_handle };
 
     // Since neither session authorizes a handle requiring auth, both use empty auth.
-    let (resp, _) = execute_with_hmac_sessions(
+    let resp = execute_with_hmac_sessions(
         &mut sim,
         &read_cmd,
-        read_handles,
         &[],
         &mut [session1, session2],
         &[&[], &[]],
@@ -2843,14 +2621,12 @@ fn test_encrypt_on_second_session_of_authorizing_command_with_non_empty_auth() {
     let owner_auth_value = b"owner_auth_password";
 
     // Set owner auth to owner_auth_value
-    use tpm2::commands::{HierarchyChangeAuth, HierarchyChangeAuthHandles};
+    use tpm2::commands::HierarchyChangeAuth;
     let cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(owner_auth_value).unwrap(),
     };
-    let handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     // Start Session 1: HMAC session, which will authorize Handle::RH_OWNER using the owner_auth_value password
     let session1 = start_auth_session(
@@ -2871,7 +2647,10 @@ fn test_encrypt_on_second_session_of_authorizing_command_with_non_empty_auth() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -2911,26 +2690,23 @@ fn test_encrypt_on_second_session_of_authorizing_command_with_non_empty_auth() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
     let mut sessions = [session1, session2];
-    let (_, resp_handles) = execute_with_hmac_sessions(
+    let resp = execute_with_hmac_sessions(
         &mut sim,
         &create_cmd,
-        create_handles,
         &[],
         &mut sessions,
         &[owner_auth_value, &[]],
     )
     .unwrap();
 
-    let object_handle = resp_handles.object_handle;
+    let object_handle = resp.object_handle;
     assert_ne!(object_handle.0, 0);
 
     flush_context(&mut sim, object_handle).unwrap();

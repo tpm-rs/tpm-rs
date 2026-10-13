@@ -3,11 +3,9 @@
 use crate::test_utils::{execute_with_password_sessions, flush_context};
 use rand::{RngCore, thread_rng};
 use tpm2::Handle;
-use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, EncryptDecrypt2, EncryptDecrypt2Handles,
-};
+use tpm2::commands::{CreatePrimary, EncryptDecrypt2};
 use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bIv, Tpm2bMaxBuffer, Tpm2bSensitiveData,
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bIv, Tpm2bMaxBuffer, Tpm2bSensitiveData,
     TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmsSensitiveCreate, TpmtPublic,
     TpmtSymDefObject,
 };
@@ -34,13 +32,13 @@ fn encrypt_decrypt_symmetric(
         rest = next_rest;
 
         let cmd = EncryptDecrypt2 {
+            key_handle,
             in_data: Tpm2bMaxBuffer::from_bytes(block).unwrap(),
             decrypt,
             mode: Some(mode),
             iv_in: Tpm2bIv::from_bytes(&iv).unwrap(),
         };
-        let handles = EncryptDecrypt2Handles { key_handle };
-        let (resp, _) = execute_with_password_sessions(sim, &cmd, handles, 1, &[])?;
+        let resp = execute_with_password_sessions(sim, &cmd, 1, &[])?;
 
         let out_block = resp.out_data.get_buffer();
         out.extend_from_slice(out_block);
@@ -65,11 +63,15 @@ fn test_aes_encryption() {
             | TpmaObject::SIGN_ENCRYPT,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            },
             Tpm2bDigest::default(),
         ),
     };
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -77,18 +79,9 @@ fn test_aes_encryption() {
         in_public: tpm2::Tpm2b(sym_template),
         ..Default::default()
     };
-    let create_primary_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, create_primary_resp_handles) = execute_with_password_sessions(
-        &mut sim,
-        &create_primary_cmd,
-        create_primary_handles,
-        1,
-        &[],
-    )
-    .expect("CreatePrimary failed");
-    let primary_handle = create_primary_resp_handles.object_handle;
+    let create_primary_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[])
+        .expect("CreatePrimary failed");
+    let primary_handle = create_primary_resp.object_handle;
 
     let message = b"secret";
 
@@ -97,31 +90,25 @@ fn test_aes_encryption() {
 
     // test encryption
     let encrypt_cmd = EncryptDecrypt2 {
+        key_handle: primary_handle,
         in_data: Tpm2bMaxBuffer::from_bytes(message).unwrap(),
         decrypt: false,
-        mode: Some(TpmiAlgCipherMode::CFB),
+        mode: Some(TpmiAlgCipherMode::Cfb),
         iv_in: Tpm2bIv::from_bytes(&iv).unwrap(),
     };
-    let encrypt_handles = EncryptDecrypt2Handles {
-        key_handle: primary_handle,
-    };
-    let (encrypt_resp, _) =
-        execute_with_password_sessions(&mut sim, &encrypt_cmd, encrypt_handles, 1, &[])
-            .expect("EncryptDecrypt2 encryption failed");
+    let encrypt_resp = execute_with_password_sessions(&mut sim, &encrypt_cmd, 1, &[])
+        .expect("EncryptDecrypt2 encryption failed");
 
     // test decryption
     let decrypt_cmd = EncryptDecrypt2 {
+        key_handle: primary_handle,
         in_data: encrypt_resp.out_data,
         decrypt: true,
-        mode: Some(TpmiAlgCipherMode::CFB),
+        mode: Some(TpmiAlgCipherMode::Cfb),
         iv_in: Tpm2bIv::from_bytes(&iv).unwrap(),
     };
-    let decrypt_handles = EncryptDecrypt2Handles {
-        key_handle: primary_handle,
-    };
-    let (decrypt_resp, _) =
-        execute_with_password_sessions(&mut sim, &decrypt_cmd, decrypt_handles, 1, &[])
-            .expect("EncryptDecrypt2 decryption failed");
+    let decrypt_resp = execute_with_password_sessions(&mut sim, &decrypt_cmd, 1, &[])
+        .expect("EncryptDecrypt2 decryption failed");
 
     assert_eq!(
         decrypt_resp.out_data.get_buffer(),
@@ -148,11 +135,15 @@ fn test_aes_encryption_block() {
             | TpmaObject::SIGN_ENCRYPT,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            },
             Tpm2bDigest::default(),
         ),
     };
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -160,18 +151,9 @@ fn test_aes_encryption_block() {
         in_public: tpm2::Tpm2b(sym_template),
         ..Default::default()
     };
-    let create_primary_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, create_primary_resp_handles) = execute_with_password_sessions(
-        &mut sim,
-        &create_primary_cmd,
-        create_primary_handles,
-        1,
-        &[],
-    )
-    .expect("CreatePrimary failed");
-    let primary_handle = create_primary_resp_handles.object_handle;
+    let create_primary_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[])
+        .expect("CreatePrimary failed");
+    let primary_handle = create_primary_resp.object_handle;
 
     let mut message = vec![0u8; 2048];
     thread_rng().fill_bytes(&mut message);
@@ -184,7 +166,7 @@ fn test_aes_encryption_block() {
         primary_handle,
         iv.clone(),
         &message,
-        TpmiAlgCipherMode::CFB,
+        TpmiAlgCipherMode::Cfb,
         false,
     )
     .expect("Symmetric encryption failed");
@@ -194,7 +176,7 @@ fn test_aes_encryption_block() {
         primary_handle,
         iv,
         &encrypted,
-        TpmiAlgCipherMode::CFB,
+        TpmiAlgCipherMode::Cfb,
         true,
     )
     .expect("Symmetric decryption failed");

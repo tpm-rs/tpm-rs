@@ -1,10 +1,7 @@
 #![allow(unused_imports, dead_code)]
 use tpm2::Handle;
 use tpm2::Unmarshal;
-use tpm2::commands::{
-    Clear, ClearControl, ClearControlHandles, ClearHandles, CreatePrimary, CreatePrimaryHandles,
-    FlushContext,
-};
+use tpm2::commands::{Clear, ClearControl, CreatePrimary, FlushContext};
 use tpm2::errors::TpmRc;
 use tpm2_simulator::{Simulator, create_simulator};
 
@@ -12,27 +9,23 @@ use tpm2_simulator::{Simulator, create_simulator};
 fn clear_disabled() {
     let mut sim = create_simulator!();
 
-    let disable_cmd = ClearControl { disable: true };
-    let disable_handles = ClearControlHandles {
+    let disable_cmd = ClearControl {
         auth: Handle::RH_LOCKOUT,
+        disable: true,
     };
-    sim.execute_with_handles(disable_cmd, disable_handles)
-        .expect("ClearControl failed");
+    sim.execute(disable_cmd).expect("ClearControl failed");
 
-    let cmd = Clear {};
-    let cmd_handles = ClearHandles {
+    let cmd = Clear {
         auth_handle: Handle::RH_LOCKOUT,
     };
 
-    let err = sim.execute_with_handles(cmd, cmd_handles).unwrap_err();
+    let err = sim.execute(cmd).unwrap_err();
     assert_eq!(err.get(), TpmRc::DISABLED.get());
 
-    let reenable_cmd = ClearControl { disable: false };
-    let reenable_handles = ClearControlHandles {
+    let reenable_cmd = ClearControl {
         auth: Handle::RH_LOCKOUT,
+        disable: false,
     };
-    let err2 = sim
-        .execute_with_handles(reenable_cmd, reenable_handles)
-        .unwrap_err();
+    let err2 = sim.execute(reenable_cmd).unwrap_err();
     assert_eq!(err2.get(), TpmRc::AUTH_FAIL.get());
 }

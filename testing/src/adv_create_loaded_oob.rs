@@ -1,10 +1,12 @@
 use crate::test_utils::*;
-use tpm2::commands::{CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::CreateLoaded;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_create_loaded_oob() {
     let mut sim = create_simulator!();
 
@@ -41,15 +43,13 @@ fn test_create_loaded_oob() {
     let in_public = crate::test_utils::make_template(&pub_area);
 
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
-    };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001),
     };
 
     // GlobalState transient_objects has size 64. Calling this 65 times should panic!
     for _ in 0..65 {
-        let _ = execute_with_password_sessions(&mut sim, &create, create_handles.clone(), 1, &[]);
+        let _ = execute_with_password_sessions(&mut sim, &create, 1, &[]);
     }
 }

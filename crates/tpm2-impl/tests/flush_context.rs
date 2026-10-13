@@ -11,8 +11,8 @@ fn test_flush_context_session() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -132,8 +132,8 @@ fn test_flush_context_transient_vs_session() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -250,8 +250,8 @@ fn test_flush_context_exhaustive_prefixes() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -414,8 +414,8 @@ fn test_flush_context_multi_session_isolation() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -542,8 +542,8 @@ fn test_policy_session_handle_persistence() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -643,8 +643,8 @@ fn test_flush_context_parameter_framing_and_attributes() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);

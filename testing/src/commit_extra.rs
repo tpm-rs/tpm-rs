@@ -1,7 +1,9 @@
 //! Extra (non-Go-parity) tests for commit, moved out of src/go.
 
 use crate::test_utils::*;
-use tpm2::commands::{Commit, CommitHandles, CreateLoaded, CreateLoadedHandles};
+use tpm2::commands::Commit;
+#[allow(deprecated)]
+use tpm2::commands::CreateLoaded;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
@@ -10,6 +12,7 @@ use tpm2_simulator::create_simulator;
 /// on NIST P-256 with an empty P1, and additionally checks that TPM2_Commit
 /// fails when the signing key is authorized with a wrong password.
 #[test]
+#[allow(deprecated)]
 fn test_commit_nist_p256_wrong_password() {
     let mut sim = create_simulator!();
 
@@ -49,42 +52,28 @@ fn test_commit_nist_p256_wrong_password() {
     let in_public = crate::test_utils::make_template(&pub_area);
 
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
-    };
 
-    let (_rsp_cp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
 
     let commit = Commit {
+        sign_handle: rsp_handles.object_handle,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    let commit_handles = CommitHandles {
-        sign_handle: rsp_handles.object_handle,
-    };
 
     let password_wrong = b"wrong";
-    let res = execute_with_password_sessions(
-        &mut sim,
-        &commit,
-        commit_handles.clone(),
-        1,
-        password_wrong,
-    );
+    let res = execute_with_password_sessions(&mut sim, &commit, 1, password_wrong);
     assert!(res.is_err(), "Wrong password should fail");
 
-    let (resp1, _) =
-        execute_with_password_sessions(&mut sim, &commit, commit_handles.clone(), 1, password)
-            .unwrap();
+    let resp1 = execute_with_password_sessions(&mut sim, &commit, 1, password).unwrap();
     let first_counter = resp1.counter;
 
-    let (resp2, _) =
-        execute_with_password_sessions(&mut sim, &commit, commit_handles, 1, password).unwrap();
+    let resp2 = execute_with_password_sessions(&mut sim, &commit, 1, password).unwrap();
     let second_counter = resp2.counter;
 
     assert_eq!(

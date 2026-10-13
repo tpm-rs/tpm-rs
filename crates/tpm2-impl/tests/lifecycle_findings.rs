@@ -85,8 +85,8 @@ fn tpm2_startup_missing_nv_loads_for_orderly_counters_and_lockout() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
 
     let mut gs = GlobalState::default();
@@ -146,17 +146,26 @@ fn tpm2_startup_missing_nv_loads_for_orderly_counters_and_lockout() {
 }
 
 /// A platform RNG that can be switched into a failing state.
-struct FlakyRng {
+///
+/// The switch is shared (`fail`), because the engine borrows the RNG mutably while the test
+/// toggles it.
+struct FlakyRng<'f> {
     inner: FakeRng,
-    fail: AtomicBool,
+    fail: &'f AtomicBool,
 }
 
-impl Rng for FlakyRng {
-    fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
+impl Rng for FlakyRng<'_> {
+    fn fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), CryptoError> {
         if self.fail.load(Ordering::SeqCst) {
-            return Err(CryptoError::HardwareFailure);
+            return Err(CryptoError::Internal);
         }
-        self.inner.get_random(dest)
+        self.inner.fill_bytes(dest)
+    }
+
+    /// Ignores `data`, even in the failing state (like the default `stir_random` of the previous
+    /// `Rng` trait).
+    fn reseed(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
+        Ok(())
     }
 }
 
@@ -168,11 +177,12 @@ fn tpm2_getrandom_stirrandom_unmarshal_panic_and_size_bugs() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FlakyRng {
+    let fail = AtomicBool::new(false);
+    let mut rng = FlakyRng {
         inner: FakeRng::new(),
-        fail: AtomicBool::new(false),
+        fail: &fail,
     };
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut gs = GlobalState::default();
     tpm.init_storage(&mut gs);
@@ -180,8 +190,8 @@ fn tpm2_getrandom_stirrandom_unmarshal_panic_and_size_bugs() {
 
     let get_random = plain_command(TPM_CC_GET_RANDOM, &16u16.to_be_bytes());
     assert_eq!(run(&mut tpm, &mut gs, &get_random), 0);
-    rng.fail.store(true, Ordering::SeqCst);
+    fail.store(true, Ordering::SeqCst);
     assert_eq!(run(&mut tpm, &mut gs, &get_random), 0x101); // TPM_RC_FAILURE
-    rng.fail.store(false, Ordering::SeqCst);
+    fail.store(false, Ordering::SeqCst);
     assert_eq!(run(&mut tpm, &mut gs, &get_random), 0);
 }

@@ -1,6 +1,6 @@
 #![allow(unused_imports, dead_code)]
 use tpm2::Handle;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, GetTime, GetTimeHandles};
+use tpm2::commands::{CreatePrimary, GetTime};
 
 use crate::test_utils::*;
 use tpm2::{
@@ -43,16 +43,14 @@ fn create_test_key(sim: &mut Simulator<'_>, auth: &[u8], scheme: Option<TpmtRsaS
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
         ..Default::default()
     };
 
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_ENDORSEMENT,
-    };
-    let (_, rsp_handles) = execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[])
-        .expect("could not generate key");
+    let rsp_handles =
+        execute_with_password_sessions(sim, &create_cmd, 1, &[]).expect("could not generate key");
 
     rsp_handles.object_handle
 }
@@ -67,17 +65,13 @@ fn test_get_time_scheme_fallback() {
     let qualifying_data = Tpm2bData::from_bytes(qualifying_data_bytes).unwrap();
 
     let get_time_cmd = GetTime {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: key_handle,
         qualifying_data,
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
     };
 
-    let get_time_handles = GetTimeHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: key_handle,
-    };
-
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &get_time_cmd, get_time_handles, 2, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &get_time_cmd, 2, &[]);
     assert!(
         resp.is_ok(),
         "GetTime failed with valid scheme on a scheme-less key! {:?}",
@@ -92,17 +86,13 @@ fn test_get_time_auth_missing() {
     let key_handle = create_test_key(&mut sim, b"secret", scheme);
 
     let get_time_cmd = GetTime {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: key_handle,
         qualifying_data: Tpm2bData::from_bytes(b"data").unwrap(),
         in_scheme: None,
     };
 
-    let get_time_handles = GetTimeHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: key_handle,
-    };
-
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &get_time_cmd, get_time_handles, 0, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &get_time_cmd, 0, &[]);
     assert!(resp.is_err(), "GetTime should fail without sessions");
     if let Err(e) = resp {
         assert_eq!(e, 0x125, "Expected TPM_RC_AUTH_MISSING (0x125)");
@@ -116,22 +106,13 @@ fn test_get_time_auth_incorrect() {
     let key_handle = create_test_key(&mut sim, b"secret", scheme);
 
     let get_time_cmd = GetTime {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: key_handle,
         qualifying_data: Tpm2bData::from_bytes(b"data").unwrap(),
         in_scheme: None,
     };
 
-    let get_time_handles = GetTimeHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: key_handle,
-    };
-
-    let resp = execute_with_password_sessions_status(
-        &mut sim,
-        &get_time_cmd,
-        get_time_handles,
-        2,
-        b"wrong",
-    );
+    let resp = execute_with_password_sessions_status(&mut sim, &get_time_cmd, 2, b"wrong");
     assert!(resp.is_err(), "GetTime should fail with incorrect auth");
     if let Err(e) = resp {
         // AuthFail is RC_FMT1 (0x80) + 0x00E + optional handle indicators.
@@ -147,42 +128,28 @@ fn test_get_time_signature_recovery() {
     let key_handle = create_test_key(&mut sim, &[], scheme);
 
     let get_time_cmd_fail = GetTime {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: key_handle,
         qualifying_data: Tpm2bData::from_bytes(b"fail").unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha384)),
     };
 
-    let get_time_handles = GetTimeHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: key_handle,
-    };
-
-    let resp_fail = execute_with_password_sessions_status(
-        &mut sim,
-        &get_time_cmd_fail,
-        get_time_handles,
-        2,
-        &[],
-    );
+    let resp_fail = execute_with_password_sessions_status(&mut sim, &get_time_cmd_fail, 2, &[]);
     assert!(
         resp_fail.is_err(),
         "Expected failure due to scheme mismatch"
     );
 
     let get_time_cmd_ok = GetTime {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: key_handle,
         qualifying_data: Tpm2bData::from_bytes(b"recovery").unwrap(),
         in_scheme: None,
     };
 
     let mut resp_buffer = [0u8; 4096];
-    let (get_time_resp_ok, _) = execute_get_time(
-        &mut sim,
-        &get_time_cmd_ok,
-        get_time_handles,
-        2,
-        &[],
-        &mut resp_buffer,
-    )
-    .expect("GetTime recovery failed");
+    let get_time_resp_ok = execute_get_time(&mut sim, &get_time_cmd_ok, 2, &[], &mut resp_buffer)
+        .expect("GetTime recovery failed");
 
     let tpms_attest = get_time_resp_ok
         .time_info

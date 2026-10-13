@@ -4,7 +4,6 @@ mod common;
 
 use common::{FakeRng, FakeStorage, FakeTimer};
 use tpm2::commands::{Command, GetCapability};
-use tpm2::crypto::Rng;
 use tpm2::crypto::{Asymmetric, AsymmetricSign};
 use tpm2::crypto::{CryptoError, CryptoProvider};
 use tpm2::{Marshal, Tpm2bAuth, TpmaSession, TpmiAlgHash, TpmsAuthCommand};
@@ -18,42 +17,45 @@ struct StressTestCrypto;
 impl_fake_hash!(StressTestCrypto);
 
 impl AsymmetricSign for StressTestCrypto {
+    /// Fills the signature with `0xee` bytes (64 for ECDSA, 256 otherwise). A `signature_out`
+    /// that is too small fails with [`CryptoError::Internal`] (formerly `BufferTooSmall`).
     fn sign_inner(
         &self,
         sign_alg: tpm2::Alg,
         _private_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         let len = match sign_alg {
             tpm2::Alg::ECDSA => {
                 if signature_out.len() < 64 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..64].fill(0xee);
                 64
             }
             _ => {
                 if signature_out.len() < 256 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..256].fill(0xee);
                 256
             }
         };
-        Ok(len)
+        Ok(Some(len))
     }
 }
 
 impl Asymmetric for StressTestCrypto {
+    /// Accepts every signature (formerly `Ok(())`).
     fn verify_inner(
         &self,
         _sign_alg: tpm2::Alg,
         _public_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         _signature: &[u8],
-    ) -> Result<(), CryptoError> {
-        Ok(())
+    ) -> Result<bool, CryptoError> {
+        Ok(true)
     }
     fn encrypt(
         &self,
@@ -63,9 +65,12 @@ impl Asymmetric for StressTestCrypto {
         _data: &[u8],
         _ciphertext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
-        Ok(0)
+    ) -> Result<Option<usize>, CryptoError> {
+        Ok(Some(0))
     }
+    /// Copies `ciphertext` to `plaintext`. An empty private key fails with
+    /// [`CryptoError::Internal`] (formerly `HardwareFailure`), and so does a `plaintext` buffer
+    /// that is too small (formerly `BufferTooSmall`).
     fn decrypt(
         &self,
         _scheme: tpm2::Alg,
@@ -74,16 +79,16 @@ impl Asymmetric for StressTestCrypto {
         ciphertext: &[u8],
         plaintext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         if private_key.is_empty() {
-            return Err(CryptoError::HardwareFailure);
+            return Err(CryptoError::Internal);
         }
         let len = ciphertext.len();
         if plaintext.len() < len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         plaintext[..len].copy_from_slice(ciphertext);
-        Ok(len)
+        Ok(Some(len))
     }
     fn generate_key(
         &self,
@@ -104,25 +109,24 @@ impl Asymmetric for StressTestCrypto {
                 private_key[..32].fill(0xdd);
                 Ok((64, 32))
             }
-            _ => Err(CryptoError::HardwareFailure),
+            _ => Err(CryptoError::Internal),
         }
     }
 }
 
-impl Rng for StressTestCrypto {
+impl CryptoProvider for StressTestCrypto {
+    /// The provider CSPRNG: fills `dest` with `0xaa` bytes.
     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
         dest.fill(0xaa);
         Ok(())
     }
 }
 
-impl CryptoProvider for StressTestCrypto {}
-
 fn setup_tpm<'a>(
     crypto: &'a mut StressTestCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -149,13 +153,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command_with_auths<C: Command>(
     tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<(), u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -170,13 +172,15 @@ where
     // Command code
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut <tpm2::Handle as Marshal>::MaxBuffer = (&mut request_buf
+            [offset..offset + tpm2::Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        let handle_len = handle.marshal(handle_slice);
+        offset += handle_len;
+    }
 
     // Marshal auth area if tag is 0x8002
     if !auths.is_empty() {
@@ -247,8 +251,8 @@ fn test_audit_reset_handover_with_existing_exclusive_session() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle_1 = 0x02000001;
     let session_handle_2 = 0x02000002;
@@ -347,7 +351,7 @@ fn test_audit_reset_handover_with_existing_exclusive_session() {
         hmac,
     };
 
-    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &(), &cmd, &[auth])
+    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[auth])
         .expect("Command failed");
 
     // Verify exclusivity successfully hands over to Session 2
@@ -368,8 +372,8 @@ fn test_exclusivity_loss_when_using_non_exclusive_session() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle_1 = 0x02000001;
     let session_handle_2 = 0x02000002;
@@ -468,7 +472,7 @@ fn test_exclusivity_loss_when_using_non_exclusive_session() {
         hmac,
     };
 
-    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &(), &cmd, &[auth])
+    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[auth])
         .expect("Command failed");
 
     // Verify exclusivity is lost (cleared to None)
@@ -481,8 +485,8 @@ fn test_exclusivity_gating() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle_1 = 0x02000001;
     let session_handle_2 = 0x02000002;
@@ -583,7 +587,7 @@ fn test_exclusivity_gating() {
         hmac: hmac_1,
     };
 
-    let res_1 = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &(), &cmd, &[auth_1]);
+    let res_1 = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[auth_1]);
     assert_eq!(res_1.err(), Some(0x121)); // TPM_RC_EXCLUSIVE
 
     // B. Command with Session 2 (AUDIT_EXCLUSIVE set)
@@ -597,7 +601,7 @@ fn test_exclusivity_gating() {
         hmac: hmac_2,
     };
 
-    let res_2 = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &(), &cmd, &[auth_2]);
+    let res_2 = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[auth_2]);
     assert!(res_2.is_ok());
 }
 
@@ -607,8 +611,8 @@ fn test_exclusivity_loss_when_using_non_audit_session() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle_1 = 0x02000001;
     let session_handle_2 = 0x02000002;
@@ -699,14 +703,12 @@ fn test_exclusivity_loss_when_using_non_audit_session() {
     // instead: the command carries sessions but no audit session, which clears the exclusive
     // audit session (C UpdateAuditSessionStatus, SessionProcess.c:1993-1996).
     let cmd = tpm2::commands::HierarchyChangeAuth {
-        new_auth: Tpm2bAuth::default(),
-    };
-    let handles = tpm2::commands::HierarchyChangeAuthHandles {
         auth_handle: tpm2::Handle::RH_OWNER,
+        new_auth: Tpm2bAuth::default(),
     };
     let auth = common::password_auth(b"");
 
-    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[auth])
+    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[auth])
         .expect("Command failed");
 
     // Verify exclusivity is lost (cleared to None)

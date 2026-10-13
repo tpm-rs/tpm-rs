@@ -1,15 +1,16 @@
-use tpm2::commands::{
-    GetTestResult, GetTestResultRsp, IncrementalSelfTest, IncrementalSelfTestRsp, SelfTest,
-    responses,
+use tpm2::commands::responses::{
+    GetTestResult as GetTestResultRsp, IncrementalSelfTest as IncrementalSelfTestRsp,
 };
+use tpm2::commands::{GetTestResult, IncrementalSelfTest, SelfTest, responses};
 use tpm2::errors::{TpmRc, UnmarshalError};
 use tpm2::*;
 
 fn verify_command_trait<C: Command>() -> TpmCc
 where
     for<'a> &'a mut C::MaxBuffer: TryFrom<&'a mut [u8]>,
-    for<'a> &'a mut <C::Handles as Marshal>::MaxBuffer: TryFrom<&'a mut [u8]>,
 {
+    // The testing commands have no handles in their handle area.
+    assert!(C::Handles::default().as_ref().is_empty());
     C::CMD_CODE
 }
 
@@ -42,7 +43,7 @@ fn test_self_test_command_roundtrip_and_errors() {
         assert_eq!(buf[0], u8::from(full_test));
 
         let mut slice = &buf[..len];
-        let unmarshaled = SelfTest::unmarshal(&mut slice).unwrap();
+        let unmarshaled = SelfTest::unmarshal_with_handles([], &mut slice).unwrap();
         assert_eq!(unmarshaled, cmd);
         assert!(slice.is_empty());
     }
@@ -50,7 +51,7 @@ fn test_self_test_command_roundtrip_and_errors() {
     // Empty buffer error
     let mut empty: &[u8] = &[];
     assert_eq!(
-        SelfTest::unmarshal(&mut empty).unwrap_err(),
+        SelfTest::unmarshal_with_handles([], &mut empty).unwrap_err(),
         UnmarshalError::INSUFFICIENT.in_parameter(1)
     );
 
@@ -58,7 +59,7 @@ fn test_self_test_command_roundtrip_and_errors() {
     let invalid_bool = [2u8];
     let mut slice = &invalid_bool[..];
     assert_eq!(
-        SelfTest::unmarshal(&mut slice).unwrap_err(),
+        SelfTest::unmarshal_with_handles([], &mut slice).unwrap_err(),
         UnmarshalError::VALUE.in_parameter(1)
     );
 }
@@ -74,7 +75,7 @@ fn test_incremental_self_test_command_and_response_roundtrip() {
     assert_eq!(len, 4 + algs.len() * 2);
 
     let mut slice = &buf[..len];
-    let unmarshaled = IncrementalSelfTest::unmarshal(&mut slice).unwrap();
+    let unmarshaled = IncrementalSelfTest::unmarshal_with_handles([], &mut slice).unwrap();
     assert_eq!(unmarshaled, cmd);
     assert!(slice.is_empty());
 
@@ -86,21 +87,22 @@ fn test_incremental_self_test_command_and_response_roundtrip() {
     assert_eq!(rsp_len, 4 + 2);
 
     let mut rsp_slice = &rsp_buf[..rsp_len];
-    let unmarshaled_rsp = IncrementalSelfTestRsp::unmarshal(&mut rsp_slice).unwrap();
+    let unmarshaled_rsp =
+        IncrementalSelfTestRsp::unmarshal_with_handles([], &mut rsp_slice).unwrap();
     assert_eq!(unmarshaled_rsp, rsp);
     assert!(rsp_slice.is_empty());
 
     // Command unmarshal error should be attributed to parameter 1
     let mut short_cmd: &[u8] = &[0, 0];
     assert_eq!(
-        IncrementalSelfTest::unmarshal(&mut short_cmd).unwrap_err(),
+        IncrementalSelfTest::unmarshal_with_handles([], &mut short_cmd).unwrap_err(),
         UnmarshalError::INSUFFICIENT.in_parameter(1)
     );
 
     // Response unmarshal error on truncated buffer
     let mut short_rsp: &[u8] = &[0, 0, 0, 1]; // claims 1 algorithm (2 bytes), but 0 bytes follow
     assert_eq!(
-        IncrementalSelfTestRsp::unmarshal(&mut short_rsp).unwrap_err(),
+        IncrementalSelfTestRsp::unmarshal_with_handles([], &mut short_rsp).unwrap_err(),
         UnmarshalError::INSUFFICIENT
     );
 }
@@ -112,7 +114,10 @@ fn test_get_test_result_command_and_response_roundtrip() {
     assert_eq!(cmd.marshal(&mut cmd_buf), 0);
 
     let mut cmd_slice: &[u8] = &[];
-    assert_eq!(GetTestResult::unmarshal(&mut cmd_slice).unwrap(), cmd);
+    assert_eq!(
+        GetTestResult::unmarshal_with_handles([], &mut cmd_slice).unwrap(),
+        cmd
+    );
 
     // Default response (empty out_data, TPM_RC_SUCCESS)
     let default_rsp = GetTestResultRsp::default();
@@ -125,7 +130,7 @@ fn test_get_test_result_command_and_response_roundtrip() {
     assert_eq!(&rsp_buf[..len], &[0, 0, 0, 0, 0, 0]);
 
     let mut slice = &rsp_buf[..len];
-    let unmarshaled = GetTestResultRsp::unmarshal(&mut slice).unwrap();
+    let unmarshaled = GetTestResultRsp::unmarshal_with_handles([], &mut slice).unwrap();
     assert_eq!(unmarshaled, default_rsp);
     assert!(slice.is_empty());
 
@@ -148,7 +153,7 @@ fn test_get_test_result_command_and_response_roundtrip() {
         assert_eq!(len, 2 + diag_data.len() + 4);
 
         let mut slice = &rsp_buf[..len];
-        let unmarshaled = GetTestResultRsp::unmarshal(&mut slice).unwrap();
+        let unmarshaled = GetTestResultRsp::unmarshal_with_handles([], &mut slice).unwrap();
         assert_eq!(unmarshaled, rsp);
         assert!(slice.is_empty());
     }
@@ -157,7 +162,7 @@ fn test_get_test_result_command_and_response_roundtrip() {
     let short_buf = [0u8; 4]; // needs at least 2 (out_data size) + 4 (test_result) = 6 bytes
     let mut short_slice = &short_buf[..];
     assert_eq!(
-        GetTestResultRsp::unmarshal(&mut short_slice).unwrap_err(),
+        GetTestResultRsp::unmarshal_with_handles([], &mut short_slice).unwrap_err(),
         UnmarshalError::INSUFFICIENT
     );
 }

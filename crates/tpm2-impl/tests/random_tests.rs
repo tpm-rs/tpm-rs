@@ -9,8 +9,8 @@ fn test_stir_random_success() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -48,8 +48,8 @@ fn test_stir_random_size_exceeded() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();

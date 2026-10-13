@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, EvictControl, EvictControlHandles};
+use tpm2::commands::{CreatePrimary, EvictControl};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
@@ -17,7 +17,10 @@ fn get_ecc_srk_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -41,34 +44,30 @@ fn test_platform_can_evict_owner_object() {
     let in_sensitive = tpm2::Tpm2b(t_sens);
     let in_public = tpm2::Tpm2b(get_ecc_srk_template());
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
 
-    let create_handles_owner = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, rsp_owner) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles_owner, 1, &[])
-            .unwrap();
+    let rsp_owner = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
     let owner_transient_handle = rsp_owner.object_handle;
 
     let persistent_handle = Handle(0x81000000);
-    let make_pers_handles = EvictControlHandles {
+    let make_pers_cmd = EvictControl {
         auth: Handle::RH_OWNER,
         object_handle: owner_transient_handle,
+        persistent_handle,
     };
-    let make_pers_cmd = EvictControl { persistent_handle };
-    execute_with_password_sessions(&mut sim, &make_pers_cmd, make_pers_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &make_pers_cmd, 1, &[]).unwrap();
 
-    let evict_handles = EvictControlHandles {
+    let evict_cmd = EvictControl {
         auth: Handle::RH_PLATFORM,
         object_handle: persistent_handle,
+        persistent_handle,
     };
-    let evict_cmd = EvictControl { persistent_handle };
-    let evict_res = execute_with_password_sessions(&mut sim, &evict_cmd, evict_handles, 1, &[]);
+    let evict_res = execute_with_password_sessions(&mut sim, &evict_cmd, 1, &[]);
     assert!(
         evict_res.is_ok(),
         "Platform failed to evict owner persistent object! Error code: {:?}",

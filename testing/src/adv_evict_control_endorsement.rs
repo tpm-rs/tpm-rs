@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, EvictControl, EvictControlHandles};
+use tpm2::commands::{CreatePrimary, EvictControl};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
@@ -18,7 +18,10 @@ fn get_ecc_srk_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -42,6 +45,7 @@ fn test_platform_cannot_persist_endorsement_object() {
     let in_sensitive = tpm2::Tpm2b(t_sens);
     let in_public = tpm2::Tpm2b(get_ecc_srk_template());
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
@@ -49,23 +53,17 @@ fn test_platform_cannot_persist_endorsement_object() {
     };
 
     // Create a transient object in Endorsement hierarchy
-    let create_handles_end = CreatePrimaryHandles {
-        primary_handle: Handle::RH_ENDORSEMENT,
-    };
-    let (_, rsp_end) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles_end, 1, &[]).unwrap();
+    let rsp_end = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
     let end_transient_handle = rsp_end.object_handle;
 
     // Try to persist with Platform auth
-    let handles = EvictControlHandles {
+    let cmd = EvictControl {
         auth: Handle::RH_PLATFORM,
         object_handle: end_transient_handle,
-    };
-    let cmd = EvictControl {
         persistent_handle: Handle(0x81800005),
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
 
     assert!(
         res.is_err(),

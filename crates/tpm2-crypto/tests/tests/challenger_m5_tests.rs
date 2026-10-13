@@ -1,9 +1,9 @@
 use hex_literal::hex;
 use tpm2::Alg;
 use tpm2::crypto::CryptoError;
+use tpm2::crypto::CryptoProvider;
 use tpm2::crypto::asymmetric::{Asymmetric, AsymmetricSign, TpmiRsaKeyBits};
 use tpm2::crypto::ecc::Ecc;
-use tpm2::crypto::rng::Rng;
 use tpm2_crypto_tests::TestProvider;
 
 #[test]
@@ -15,7 +15,7 @@ fn test_rsa_import_modulus_zero() {
 
     // Modulus and p are zero
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 }
 
 #[test]
@@ -27,7 +27,7 @@ fn test_rsa_import_p_equals_n() {
     let mut private_key_out = [0u8; 1024];
 
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 65537, &mut private_key_out);
-    assert!(res.is_err(), "Importing p == n should fail, got {:?}", res);
+    assert_eq!(res, Ok(None), "Importing p == n should fail, got {:?}", res);
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn test_rsa_import_p_equals_one() {
     let mut private_key_out = [0u8; 1024];
 
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 65537, &mut private_key_out);
-    assert!(res.is_err(), "Importing p == 1 should fail, got {:?}", res);
+    assert_eq!(res, Ok(None), "Importing p == 1 should fail, got {:?}", res);
 }
 
 #[test]
@@ -50,8 +50,9 @@ fn test_rsa_import_composite_non_primes() {
     let mut private_key_out = [0u8; 1024];
 
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 65537, &mut private_key_out);
-    assert!(
-        res.is_err(),
+    assert_eq!(
+        res,
+        Ok(None),
         "Importing composite numbers should fail, got {:?}",
         res
     );
@@ -85,16 +86,18 @@ fn test_rsa_import_exponent_invalid() {
     let mut imported_private_key = [0u8; 2048];
     // Try with invalid exponent = 0
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 0, &mut imported_private_key);
-    assert!(
-        res.is_err(),
+    assert_eq!(
+        res,
+        Ok(None),
         "Importing exponent = 0 should fail, got {:?}",
         res
     );
 
     // Try with invalid exponent = 1
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 1, &mut imported_private_key);
-    assert!(
-        res.is_err(),
+    assert_eq!(
+        res,
+        Ok(None),
         "Importing exponent = 1 should fail, got {:?}",
         res
     );
@@ -112,7 +115,7 @@ fn test_ecc_scalar_zero() {
         &scalar,
         &mut public_key_out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     let pt = hex!(
         "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
@@ -125,7 +128,7 @@ fn test_ecc_scalar_zero() {
         &pt,
         &mut out_point,
     );
-    assert_eq!(res_mult.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res_mult, Ok(None));
 }
 
 #[test]
@@ -142,7 +145,7 @@ fn test_ecc_scalar_too_large() {
         &scalar,
         &mut public_key_out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 }
 
 #[test]
@@ -157,7 +160,7 @@ fn test_ecc_scalar_empty() {
         &mut public_key_out,
     );
     // Since empty scalar resolves to zero scalar, it should fail
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 }
 
 #[test]
@@ -185,7 +188,7 @@ fn test_ecc_point_multiply_small_buffer() {
         &priv_a,
         &mut small_buf,
     );
-    assert_eq!(res_gen.unwrap_err(), CryptoError::BufferTooSmall);
+    assert_eq!(res_gen.unwrap_err(), CryptoError::Internal);
 
     // Let's check point_multiply behavior
     let res = provider.point_multiply(
@@ -194,7 +197,7 @@ fn test_ecc_point_multiply_small_buffer() {
         &pub_a,
         &mut small_buf,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+    assert_eq!(res.unwrap_err(), CryptoError::Internal);
 }
 
 #[test]
@@ -226,7 +229,7 @@ fn test_rsa_decrypt_null_large_ciphertext() {
         &mut plaintext,
         &[],
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 }
 
 #[test]
@@ -259,7 +262,7 @@ fn test_rsa_decrypt_null_empty_ciphertext() {
     );
     assert!(res.is_ok());
     let dec_len = res.unwrap();
-    assert_eq!(dec_len, 128);
+    assert_eq!(dec_len, Some(128));
     assert!(plaintext.iter().all(|&x| x == 0));
 }
 
@@ -293,7 +296,7 @@ fn test_rsa_decrypt_oaep_non_utf8_label() {
         &mut plaintext,
         invalid_label,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 }
 
 #[test]
@@ -343,7 +346,7 @@ fn test_rsa_keygen_small_buffers() {
         &mut private_key,
         None,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+    assert_eq!(res.unwrap_err(), CryptoError::Internal);
 }
 
 #[test]

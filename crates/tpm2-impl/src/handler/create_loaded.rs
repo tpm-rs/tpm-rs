@@ -1,4 +1,5 @@
 use super::{KeyDerivationArgs, ParentSchemeInfo, ResolvedParentInfo, TransientObject};
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -8,10 +9,11 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
+#[allow(deprecated)] // `TPM2_CreateLoaded` is deprecated, but this TPM still implements it.
+use tpm2::commands::CreateLoaded;
 use tpm2::commands::responses;
-use tpm2::commands::{CreateLoaded, CreateLoadedHandles, CreateLoadedRespHandles};
-use tpm2::crypto::kdf::kdfa;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     PublicParmsAndId, Tpm2bDigest, Tpm2bEccParameter, Tpm2bPrivate, Tpm2bPrivateKeyRsa,
@@ -38,6 +40,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ///   and [TpmCc::Load](load.rs) sequence.
     /// - The parent key (`parent_handle`) can be a hierarchy root (`TPM_RH_OWNER`, `TPM_RH_PLATFORM`, etc.) or a loaded Restricted Decryption Key.
     /// - Returns a loaded transient handle that can be used directly in signing or cryptographic operations.
+    #[allow(deprecated)] // `TPM2_CreateLoaded` is deprecated, but this TPM still implements it.
     pub fn create_loaded(
         &mut self,
         request_response: RequestThenResponse<'_, '_>,
@@ -45,9 +48,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut request = request_response;
 
         // 1. Unmarshal handles and command parameters from the request buffer.
-        let (handles, in_sensitive_struct, in_public_template) =
+        let (parent_handle, in_sensitive_struct, in_public_template) =
             self.unmarshal_create_loaded_cmd(&mut request)?;
-        let parent_handle = handles.parent_handle.0;
+        let parent_handle = parent_handle.0;
         let mut parent_seed_val = [0u8; 64];
         let mut parent_qn_buf = [0u8; 66];
 
@@ -146,10 +149,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             object_name.get_buffer(),
         )?;
 
-        let resp_handles = CreateLoadedRespHandles {
-            object_handle: Handle(handle),
-        };
-
         let out_public = in_public_struct.as_tpm2b();
 
         // 7. Build and encrypt the sensitive area (out_private)
@@ -169,6 +168,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )?;
 
         let rsp = responses::CreateLoaded {
+            object_handle: Handle(handle),
             name: object_name.as_tpm2b(),
             out_public,
             out_private,
@@ -176,12 +176,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 9. Write the response buffers
         let response = request.into_response();
-        self.write_response_all(
-            response,
-            &resp_handles,
-            &rsp,
-            &session_responses[..num_sessions],
-        )?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         // 10. Save the loaded object in the transient objects slot
         self.store_transient_object(
@@ -203,19 +198,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 
     /// Helper function to unmarshal command parameters and sensitive structure from request.
+    ///
+    /// Returns the (range-checked) `parentHandle`, the unmarshaled `inSensitive` and the
+    /// `inPublic` template.
+    #[allow(deprecated)] // `TPM2_CreateLoaded` is deprecated, but this TPM still implements it.
     fn unmarshal_create_loaded_cmd<'c>(
         &self,
         request: &mut RequestThenResponse<'_, 'c>,
-    ) -> Result<
-        (
-            CreateLoadedHandles,
-            TpmsSensitiveCreate<'c>,
-            Tpm2bTemplate<'c>,
-        ),
-        TpmRc,
-    > {
-        let handles = request.try_unmarshal::<CreateLoadedHandles>()?;
-        let cmd = request.try_unmarshal::<CreateLoaded>()?;
+    ) -> Result<(Handle, TpmsSensitiveCreate<'c>, Tpm2bTemplate<'c>), TpmRc> {
+        let handles = request.try_unmarshal_handles::<CreateLoaded>()?;
+        let [parent_handle] = handles;
+        check(parent_handle, Tpmi::DhParent, Position::handle(1))?;
+        let cmd = request.try_unmarshal_command::<CreateLoaded>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -225,7 +219,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .to_struct()
             .map_err(|e| e.in_parameter(1).to_rc())?;
 
-        Ok((handles, in_sensitive_struct, cmd.in_public))
+        Ok((parent_handle, in_sensitive_struct, cmd.in_public))
     }
 
     /// Helper function to derive or generate the random seed for the newly created object.
@@ -270,7 +264,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     label_context.context = sensitive_derive.context;
                 }
             }
-            kdfa(
+            kdfa_bits(
                 self.crypto(),
                 parent_name_alg,
                 &parent_seed_val[..parent_seed_len],
@@ -314,7 +308,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let pub_len = template.marshal(&mut pub_buf);
         let template_name = self.compute_name(Some(name_alg), &pub_buf[..pub_len])?;
         let digest_size = name_alg.digest_size();
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             name_alg,
             primary_seed,
@@ -774,18 +768,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // `None` = this type has no symmetric definition (KEYEDHASH); `Some(sym)` otherwise.
         let sym_algs: Option<Option<tpm2::TpmtSymDefObject>> = match &public_struct.parms_and_id {
             PublicParmsAndId::Sym(sym, _) => {
-                if decrypt
-                    && !matches!(
-                        sym.mode(),
-                        None | Some(
-                            TpmiAlgSymMode::CTR
-                                | TpmiAlgSymMode::OFB
-                                | TpmiAlgSymMode::CBC
-                                | TpmiAlgSymMode::CFB
-                                | TpmiAlgSymMode::ECB
-                        )
-                    )
-                {
+                // A decryption key needs a block cipher mode (`CTR`/`OFB`/`CBC`/`CFB`/`ECB`)
+                // or `TPM_ALG_NULL`, i.e. anything but `CMAC`.
+                if decrypt && !matches!(sym.mode(), None | Some(TpmiAlgSymMode::Cipher(_))) {
                     return Err(TpmRc::SCHEME.to_rc());
                 }
                 Some(Some(*sym))
@@ -1041,8 +1026,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
     /// Encrypts the sensitive area of the target object using storage seed and CFB mode,
     /// computes inner/outer integrity MAC hashes, and formats the output private buffer.
+    ///
+    /// Takes `&mut self` because the IV comes from the platform RNG ([`Rng::fill_bytes`]).
     pub(crate) fn encrypt_sensitive_area(
-        &self,
+        &mut self,
         tpmt_sensitive: &TpmtSensitive<'_>,
         parent_seed_val: &[u8],
         object_name: &crate::owned::OwnedName,
@@ -1072,7 +1059,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // KDFA for symmetric key
         let mut sym_key_buf = [0u8; 32];
         let sym_key_len = (sym_key_bits / 8) as usize;
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             parent_name_alg,
             parent_seed_val,
@@ -1088,17 +1075,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .rng
-            .get_random(&mut iv)
+            .fill_bytes(&mut iv)
             .map_err(|_| TpmRc::FAILURE)?;
         let orig_iv = iv;
 
         let sym_alg =
             tpm2::TpmtSymDefObject::aes_cfb(sym_key_bits as u16).map_err(|_| TpmRc::FAILURE)?;
-        tpm2::crypto::encrypt(
-            self.crypto(),
+        self.sym_encrypt_decrypt(
             sym_alg,
             &sym_key_buf[..sym_key_len],
             &mut iv,
+            Direction::Encrypt,
             &mut unencrypted_blob[..unencrypted_len],
         )
         .map_err(|_| TpmRc::FAILURE)?;
@@ -1106,7 +1093,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // KDFA for MAC
         let mut mac_key = [0u8; 64];
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             parent_name_alg,
             parent_seed_val,
@@ -1128,14 +1115,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let mac_input = &private_buf[iv_offset..enc_offset + unencrypted_len];
 
-        let mut mac_ctx =
-            tpm2::crypto::HmacCtx::new(self.crypto(), parent_name_alg, &mac_key[..digest_size])
-                .map_err(|_| TpmRc::FAILURE)?;
+        let mut mac_ctx = HmacStream::new(self.crypto(), parent_name_alg, &mac_key[..digest_size])
+            .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx.update(mac_input).map_err(|_| TpmRc::FAILURE)?;
         mac_ctx
             .update(object_name.get_buffer())
             .map_err(|_| TpmRc::FAILURE)?;
-        let mut mac_buf = [0u8; 64];
+        let mut mac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let mac = mac_ctx.finalize(&mut mac_buf).map_err(|_| TpmRc::FAILURE)?;
         private_buf[2..2 + digest_size].copy_from_slice(mac.digest());
 
@@ -1143,9 +1129,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 
     /// Helper function to build the sensitive struct and encrypt it into out_private.
+    ///
+    /// Takes `&mut self` because [`Self::encrypt_sensitive_area`] draws the IV from the
+    /// platform RNG.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn create_and_encrypt_private_area<'c>(
-        &self,
+        &mut self,
         in_public_struct: &TpmtPublic<'_>,
         in_sensitive_struct: &TpmsSensitiveCreate<'_>,
         actual_private_key: &[u8],
@@ -1165,12 +1154,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .expect("private key has valid size"),
             ),
             PublicParmsAndId::Rsa(_, _) => {
+                // Any failure (exp: any `Err`, now also `Ok(None)` for an invalid key) falls
+                // back to the raw key bytes.
                 let prime_p_len = match self
                     .crypto()
                     .rsa_private_key_to_prime_p(actual_private_key, &mut prime_p)
                 {
-                    Ok(len) => len,
-                    Err(_) => {
+                    Ok(Some(len)) => len,
+                    Ok(None) | Err(_) => {
                         if actual_private_key.len() <= prime_p.len() {
                             prime_p[..actual_private_key.len()].copy_from_slice(actual_private_key);
                             actual_private_key.len()

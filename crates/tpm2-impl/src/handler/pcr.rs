@@ -4,13 +4,12 @@ use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::platform::PcrState;
 
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::manager::StorageManager;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
 use tpm2::commands::{
-    PCRAllocate, PCRAllocateHandles, PCREvent, PCREventHandles, PCRExtend, PCRExtendHandles,
-    PCRRead, PCRReset, PCRResetHandles, PCRSetAuthPolicy, PCRSetAuthPolicyHandles, PCRSetAuthValue,
-    PCRSetAuthValueHandles,
+    PCRAllocate, PCREvent, PCRExtend, PCRRead, PCRReset, PCRSetAuthPolicy, PCRSetAuthValue,
 };
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
@@ -176,9 +175,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn pcr_read(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        request.try_unmarshal::<()>()?;
+        let handles = request.try_unmarshal_handles::<PCRRead>()?;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let cmd = request.try_unmarshal::<PCRRead>()?;
+        let cmd = request.try_unmarshal_command::<PCRRead>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -234,7 +233,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
 
@@ -257,11 +256,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<PCRExtendHandles>()?;
-        let pcr_handle = handles.pcr_handle.0;
+        let handles = request.try_unmarshal_handles::<PCRExtend>()?;
+        let [pcr] = handles;
+        check(pcr, Tpmi::DhPcrOrNull, Position::handle(1))?;
+        let pcr_handle = pcr.0;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<PCRExtend>()?;
+        let cmd = request.try_unmarshal_command::<PCRExtend>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -315,11 +316,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<PCREventHandles>()?;
-        let pcr_handle = handles.pcr_handle.0;
+        let handles = request.try_unmarshal_handles::<PCREvent>()?;
+        let [pcr] = handles;
+        check(pcr, Tpmi::DhPcrOrNull, Position::handle(1))?;
+        let pcr_handle = pcr.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let cmd = request.try_unmarshal::<PCREvent>()?;
+        let cmd = request.try_unmarshal_command::<PCREvent>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -364,7 +367,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let rsp = responses::PCREvent { digests };
 
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
 
@@ -389,11 +392,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<PCRResetHandles>()?;
-        let pcr_handle = handles.pcr_handle.0;
+        let handles = request.try_unmarshal_handles::<PCRReset>()?;
+        let [pcr] = handles;
+        check(pcr, Tpmi::DhPcr, Position::handle(1))?;
+        let pcr_handle = pcr.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let _cmd = request.try_unmarshal::<PCRReset>()?;
+        let _cmd = request.try_unmarshal_command::<PCRReset>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -451,8 +456,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// - Requires Platform Authorization (`TPM_RH_PLATFORM`).
     /// - The current allocation is reported via [TpmCc::GetCapability](capability.rs).
     pub fn pcr_allocate(&mut self, mut request: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
-        let handles = request.try_unmarshal::<PCRAllocateHandles>()?;
-        let auth_handle = handles.auth_handle.0;
+        let handles = request.try_unmarshal_handles::<PCRAllocate>()?;
+        let [auth] = handles;
+        check(auth, Tpmi::RhPlatform, Position::handle(1))?;
+        let auth_handle = auth.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
         let provided_auth = self.global_state.parsed_auths[..self.global_state.parsed_auths_len]
@@ -461,7 +468,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         self.validate_platform_auth(auth_handle, provided_auth)?;
 
-        let cmd = request.try_unmarshal::<PCRAllocate>()?;
+        let cmd = request.try_unmarshal_command::<PCRAllocate>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -523,7 +530,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_rsp(response, &resp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &resp, &session_responses[..num_sessions])?;
         Ok(())
     }
 
@@ -559,11 +566,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<PCRSetAuthValueHandles>()?;
-        let pcr_handle = handles.pcr_handle.0;
+        let handles = request.try_unmarshal_handles::<PCRSetAuthValue>()?;
+        let [pcr] = handles;
+        check(pcr, Tpmi::DhPcr, Position::handle(1))?;
+        let pcr_handle = pcr.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let cmd = request.try_unmarshal::<PCRSetAuthValue>()?;
+        let cmd = request.try_unmarshal_command::<PCRSetAuthValue>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -610,8 +619,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<PCRSetAuthPolicyHandles>()?;
-        let auth_handle = handles.auth_handle.0;
+        let handles = request.try_unmarshal_handles::<PCRSetAuthPolicy>()?;
+        let [auth] = handles;
+        check(auth, Tpmi::RhPlatform, Position::handle(1))?;
+        let auth_handle = auth.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
         let provided_auth = self.global_state.parsed_auths[..self.global_state.parsed_auths_len]
@@ -619,7 +630,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .cloned();
         self.validate_platform_auth(auth_handle, provided_auth)?;
 
-        let cmd = request.try_unmarshal::<PCRSetAuthPolicy>()?;
+        let cmd = request.try_unmarshal_command::<PCRSetAuthPolicy>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());

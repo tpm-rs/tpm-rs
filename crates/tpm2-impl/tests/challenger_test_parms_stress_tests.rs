@@ -1,5 +1,5 @@
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Marshal, Unmarshal};
+use tpm2::{Handle, Marshal, Message, Unmarshal, UnmarshalMessage};
 mod common;
 
 use common::TestCryptoProvider;
@@ -8,9 +8,9 @@ use hex_literal::hex;
 use tpm2::TpmEccCurve;
 use tpm2::commands::{Command, TestParms};
 use tpm2::{
-    TpmiAlgHash, TpmiAlgKdf, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsAuthCommand, TpmsEccParms,
-    TpmsRsaParms, TpmsSchemeEcdaa, TpmsSchemeXor, TpmtEccScheme, TpmtKdfScheme,
-    TpmtKeyedHashScheme, TpmtPublicParms, TpmtRsaScheme, TpmtSymDefObject,
+    AlgSym, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgKdf, TpmiAlgSymMode, TpmiRsaKeyBits,
+    TpmsAuthCommand, TpmsEccParms, TpmsRsaParms, TpmsSchemeEcdaa, TpmsSchemeXor, TpmtEccScheme,
+    TpmtKdfScheme, TpmtKeyedHashScheme, TpmtPublicParms, TpmtRsaScheme, TpmtSymDefObject,
 };
 use tpm2_impl::TpmEngine;
 use tpm2_impl::TpmPlatform;
@@ -19,7 +19,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -46,14 +46,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -66,13 +63,14 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut <Handle as Marshal>::MaxBuffer = (&mut request_buf
+            [offset..offset + <Handle as Marshal>::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        offset += handle.marshal(handle_slice);
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -112,8 +110,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -126,9 +126,10 @@ where
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
     let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+        <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+            .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp_params)
 }
 
 struct SimpleRng(u64);
@@ -253,19 +254,22 @@ fn oracle_validate_hash_alg(hash_alg: TpmiAlgHash) -> Result<(), TpmRc> {
 
 fn oracle_validate_symmetric(symmetric: Option<TpmtSymDefObject>) -> Result<(), TpmRc> {
     match symmetric {
-        Some(TpmtSymDefObject::Aes128(mode)) | Some(TpmtSymDefObject::Aes256(mode)) => {
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128 | AlgSym::Aes256,
+            mode,
+        }) => {
             // TPM2_TestParms only unmarshals (C TestParms.c): TPMI_ALG_SYM_MODE+ accepts every
             // implemented mode (CTR, OFB, CBC, CFB, ECB) and TPM_ALG_NULL. The CFB requirement
             // only applies when an object is created (PublicAttributesValidation).
             if !matches!(
                 mode,
-                None | Some(
-                    TpmiAlgSymMode::CTR
-                        | TpmiAlgSymMode::OFB
-                        | TpmiAlgSymMode::CBC
-                        | TpmiAlgSymMode::CFB
-                        | TpmiAlgSymMode::ECB
-                )
+                None | Some(TpmiAlgSymMode::Cipher(
+                    TpmiAlgCipherMode::Ctr
+                        | TpmiAlgCipherMode::Ofb
+                        | TpmiAlgCipherMode::Cbc
+                        | TpmiAlgCipherMode::Cfb
+                        | TpmiAlgCipherMode::Ecb
+                ))
             ) {
                 return Err(TpmRc::MODE.with(Position::parameter(1)));
             }
@@ -281,16 +285,34 @@ fn oracle_validate_symmetric(symmetric: Option<TpmtSymDefObject>) -> Result<(), 
 fn gen_symmetric(rng: &mut SimpleRng, make_valid: bool) -> Option<TpmtSymDefObject> {
     if make_valid {
         rng.choose(&[
-            Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
-            Some(TpmtSymDefObject::Aes256(Some(TpmiAlgSymMode::CFB))),
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            }),
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes256,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            }),
             None,
         ])
     } else {
         rng.choose(&[
-            Some(TpmtSymDefObject::Aes192(Some(TpmiAlgSymMode::CFB))),
-            Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CBC))),
-            Some(TpmtSymDefObject::Aes256(Some(TpmiAlgSymMode::CTR))),
-            Some(TpmtSymDefObject::Sm4_128(Some(TpmiAlgSymMode::CFB))),
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes192,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            }),
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cbc)),
+            }),
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes256,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Ctr)),
+            }),
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Sm4_128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            }),
             None,
         ])
     }
@@ -468,13 +490,25 @@ fn gen_random_parms(rng: &mut SimpleRng) -> TpmtPublicParms {
         _ => {
             let sym = if make_valid {
                 rng.choose(&[
-                    TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
-                    TpmtSymDefObject::Aes256(Some(TpmiAlgSymMode::CFB)),
+                    TpmtSymDefObject {
+                        alg: AlgSym::Aes128,
+                        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                    },
+                    TpmtSymDefObject {
+                        alg: AlgSym::Aes256,
+                        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                    },
                 ])
             } else {
                 rng.choose(&[
-                    TpmtSymDefObject::Aes192(Some(TpmiAlgSymMode::CFB)),
-                    TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CBC)),
+                    TpmtSymDefObject {
+                        alg: AlgSym::Aes192,
+                        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                    },
+                    TpmtSymDefObject {
+                        alg: AlgSym::Aes128,
+                        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cbc)),
+                    },
                 ])
             };
             TpmtPublicParms::Sym(sym)
@@ -487,8 +521,9 @@ fn test_test_parms_stress_fuzz() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng_fake = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng_fake);
+    let mut rng_fake = FakeRng::new();
+    let (mut tpm, mut global_state) =
+        setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng_fake);
 
     let mut rng = SimpleRng::new(42);
     let mut passed = 0;
@@ -497,7 +532,7 @@ fn test_test_parms_stress_fuzz() {
         let parms = gen_random_parms(&mut rng);
         let expected = oracle_validate_parms(&parms);
         let cmd = TestParms { parameters: parms };
-        let res = execute_tpm_command::<TestParms>(&mut tpm, &mut global_state, &(), &cmd, &[]);
+        let res = execute_tpm_command::<TestParms>(&mut tpm, &mut global_state, &cmd, &[]);
 
         match (expected, res) {
             (Ok(()), Ok(_)) => {

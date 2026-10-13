@@ -2,16 +2,15 @@ use common::marshal_to_slice;
 use tpm2::Alg;
 use tpm2::errors::{Position, TpmRc};
 
-use tpm2::Unmarshal;
 extern crate alloc;
 
 mod common;
 
 use common::{FakeRng, FakeStorage, FakeTimer};
+#[allow(deprecated)] // TPM2_VerifySignature is deprecated in the `tpm2` crate.
 use tpm2::commands::{
-    Command, PolicyAuthorize, PolicyAuthorizeHandles, PolicyDuplicationSelect,
-    PolicyDuplicationSelectHandles, PolicySigned, PolicySignedHandles, VerifySignature,
-    VerifySignatureHandles,
+    Command, Message, PolicyAuthorize, PolicyDuplicationSelect, PolicySigned, UnmarshalMessage,
+    VerifySignature,
 };
 use tpm2::crypto::{Asymmetric, AsymmetricSign};
 use tpm2::{Handle, Marshal, TpmCc};
@@ -38,7 +37,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -65,14 +64,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command_with_auths<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -85,7 +81,10 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    offset += marshal_to_slice(handles, &mut request_buf[offset..]);
+    for handle in cmd.handles().as_ref() {
+        request_buf[offset..offset + Handle::MAX_SIZE].copy_from_slice(&handle.0.to_be_bytes());
+        offset += Handle::MAX_SIZE;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -122,8 +121,11 @@ where
 
     let mut unmarshal_buf: &'static [u8] =
         std::vec::Vec::leak(response_buf[params_offset..resp_size].to_vec());
-    let resp =
-        <C::Response<'static>>::unmarshal(&mut unmarshal_buf).map_err(|_| TpmRc::FAILURE.get())?;
+    let resp = <C::Response<'static>>::unmarshal_with_handles(
+        <<C::Response<'static> as Message>::Handles>::default(),
+        &mut unmarshal_buf,
+    )
+    .map_err(|_| TpmRc::FAILURE.get())?;
     Ok(resp)
 }
 
@@ -263,8 +265,8 @@ fn test_policy_signed_ecc_correctness() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000001;
     let (signer_obj, priv_bytes, priv_len) = create_transient_ecc_key(
@@ -343,6 +345,7 @@ fn test_policy_signed_ecc_correctness() {
             tpm2::TpmtHa::Sha256(&digest_to_sign),
             &mut raw_sig,
         )
+        .unwrap()
         .unwrap();
 
     let signature_r = tpm2::Tpm2bEccParameter::from_bytes(&raw_sig[..32]).unwrap();
@@ -354,11 +357,9 @@ fn test_policy_signed_ecc_correctness() {
         signature_s,
     });
 
-    let handles = PolicySignedHandles {
+    let cmd = PolicySigned {
         auth_object: Handle(key_handle),
         policy_session: Handle(session_handle),
-    };
-    let cmd = PolicySigned {
         nonce_tpm: nonce_tpm_input,
         cp_hash_a,
         policy_ref,
@@ -366,8 +367,7 @@ fn test_policy_signed_ecc_correctness() {
         auth,
     };
 
-    let rsp =
-        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let rsp = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
 
     // Verify session state is updated
     let (_policy_digest, policy_digest_len) = {
@@ -405,8 +405,8 @@ fn test_policy_signed_rsa_correctness() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000001;
     let (signer_obj, priv_bytes, priv_len) = create_transient_rsa_key(
@@ -477,6 +477,7 @@ fn test_policy_signed_rsa_correctness() {
             tpm2::TpmtHa::Sha256(&digest_to_sign),
             &mut raw_sig,
         )
+        .unwrap()
         .unwrap();
 
     let sig = tpm2::Tpm2bPublicKeyRsa::from_bytes(&raw_sig[..sig_len]).unwrap();
@@ -485,11 +486,9 @@ fn test_policy_signed_rsa_correctness() {
         sig,
     });
 
-    let handles = PolicySignedHandles {
+    let cmd = PolicySigned {
         auth_object: Handle(key_handle),
         policy_session: Handle(session_handle),
-    };
-    let cmd = PolicySigned {
         nonce_tpm: nonce_tpm_input,
         cp_hash_a,
         policy_ref,
@@ -497,8 +496,7 @@ fn test_policy_signed_rsa_correctness() {
         auth,
     };
 
-    let rsp =
-        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let rsp = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
 
     // Verify session state is updated
     let (_policy_digest, policy_digest_len) = {
@@ -515,8 +513,8 @@ fn test_policy_signed_incorrect_signature_fails() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000001;
     let (signer_obj, _priv_bytes, _priv_len) = create_transient_ecc_key(
@@ -574,11 +572,9 @@ fn test_policy_signed_incorrect_signature_fails() {
         signature_s,
     });
 
-    let handles = PolicySignedHandles {
+    let cmd = PolicySigned {
         auth_object: Handle(key_handle),
         policy_session: Handle(session_handle),
-    };
-    let cmd = PolicySigned {
         nonce_tpm: Tpm2bNonce::from_bytes(&[2; 32]).unwrap(),
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
@@ -586,7 +582,7 @@ fn test_policy_signed_incorrect_signature_fails() {
         auth,
     };
 
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]);
     // Should fail with a signature/parameter verification error
     assert!(res.is_err());
 }
@@ -596,8 +592,8 @@ fn test_policy_authorize_rh_null_bypass_vulnerability() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x03000001;
     let policy_session = SessionState {
@@ -681,10 +677,8 @@ fn test_policy_authorize_rh_null_bypass_vulnerability() {
         Tpm2bDigest::from_bytes(computed_hmac.digest()).unwrap(),
     );
 
-    let handles = PolicyAuthorizeHandles {
-        policy_session: Handle(session_handle),
-    };
     let cmd = PolicyAuthorize {
+        policy_session: Handle(session_handle),
         approved_policy,
         policy_ref,
         key_sign,
@@ -692,7 +686,7 @@ fn test_policy_authorize_rh_null_bypass_vulnerability() {
     };
 
     // Execute PolicyAuthorize. It should fail because the ticket uses an empty key but the TPM uses the random null_proof!
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]);
     assert!(
         res.is_err(),
         "Expected PolicyAuthorize to fail with forged RH_NULL ticket, but it succeeded!"
@@ -702,12 +696,13 @@ fn test_policy_authorize_rh_null_bypass_vulnerability() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_VerifySignature is deprecated in the `tpm2` crate.
 fn test_policy_authorize_verify_signature_ticket_mismatch() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Create a key in Owner hierarchy
     let key_handle = 0x80000001;
@@ -737,6 +732,7 @@ fn test_policy_authorize_verify_signature_ticket_mismatch() {
             tpm2::TpmtHa::Sha256(&a_hash),
             &mut raw_sig,
         )
+        .unwrap()
         .unwrap();
 
     let signature_r = tpm2::Tpm2bEccParameter::from_bytes(&raw_sig[..32]).unwrap();
@@ -748,16 +744,12 @@ fn test_policy_authorize_verify_signature_ticket_mismatch() {
     });
 
     // 3. Call VerifySignature to get a verification ticket
-    let vs_handles = VerifySignatureHandles {
-        key_handle: Handle(key_handle),
-    };
     let vs_cmd = VerifySignature {
+        key_handle: Handle(key_handle),
         digest: Tpm2bDigest::from_bytes(&a_hash).unwrap(),
         signature,
     };
-    let vs_rsp =
-        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &vs_handles, &vs_cmd, &[])
-            .unwrap();
+    let vs_rsp = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &vs_cmd, &[]).unwrap();
 
     // Verify the ticket returned by VerifySignature
     let check_ticket = vs_rsp.validation;
@@ -804,10 +796,8 @@ fn test_policy_authorize_verify_signature_ticket_mismatch() {
     };
     global_state.add_session(policy_session).unwrap();
 
-    let handles = PolicyAuthorizeHandles {
-        policy_session: Handle(session_handle),
-    };
     let cmd = PolicyAuthorize {
+        policy_session: Handle(session_handle),
         approved_policy,
         policy_ref,
         key_sign: signer_obj.name.as_tpm2b(),
@@ -815,7 +805,7 @@ fn test_policy_authorize_verify_signature_ticket_mismatch() {
     };
 
     // 5. This command SHOULD succeed because VerifySignature now correctly computes the HMAC ticket.
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]);
     assert!(
         res.is_ok(),
         "Expected PolicyAuthorize to succeed, but it failed: {:?}",
@@ -828,8 +818,8 @@ fn test_policy_duplication_select_name_66_success() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x03000001;
     let policy_session = SessionState {
@@ -878,16 +868,14 @@ fn test_policy_duplication_select_name_66_success() {
     parent_name_bytes[0..2].copy_from_slice(&Alg::from(TpmiAlgHash::Sha256).id().to_be_bytes()); // SHA256
     let new_parent_name = Tpm2bName::from_bytes(&parent_name_bytes).unwrap();
 
-    let handles = PolicyDuplicationSelectHandles {
-        policy_session: Handle(session_handle),
-    };
     let cmd = PolicyDuplicationSelect {
+        policy_session: Handle(session_handle),
         object_name,
         new_parent_name,
         include_object: false,
     };
 
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]);
     assert!(
         res.is_ok(),
         "Expected PolicyDuplicationSelect to succeed for 66-byte name with include_object=NO, but failed: {:?}",
@@ -900,8 +888,8 @@ fn test_policy_duplication_select_name_67_rejected() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x03000001;
     let policy_session = SessionState {
@@ -998,8 +986,8 @@ fn test_policy_duplication_select_name_66_include_object_yes_success() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x03000001;
     let policy_session = SessionState {
@@ -1048,16 +1036,14 @@ fn test_policy_duplication_select_name_66_include_object_yes_success() {
     parent_name_bytes[0..2].copy_from_slice(&Alg::from(TpmiAlgHash::Sha256).id().to_be_bytes()); // SHA256
     let new_parent_name = Tpm2bName::from_bytes(&parent_name_bytes).unwrap();
 
-    let handles = PolicyDuplicationSelectHandles {
-        policy_session: Handle(session_handle),
-    };
     let cmd = PolicyDuplicationSelect {
+        policy_session: Handle(session_handle),
         object_name,
         new_parent_name,
         include_object: true,
     };
 
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]);
     assert!(
         res.is_ok(),
         "Expected PolicyDuplicationSelect to succeed for 66-byte name with include_object=YES, but failed: {:?}",

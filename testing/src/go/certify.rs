@@ -2,9 +2,8 @@
 
 use crate::test_utils::*;
 use tpm2::commands::{
-    Certify, CertifyCreation, CertifyCreationHandles, CertifyHandles, Command, CreatePrimary,
-    CreatePrimaryHandles, NVCertify, NVCertifyHandles, NVDefineSpace, NVDefineSpaceHandles,
-    NVReadPublic, NVReadPublicHandles, NVWrite, NVWriteHandles,
+    Certify, CertifyCreation, Command, CreatePrimary, NVCertify, NVDefineSpace, NVReadPublic,
+    NVWrite, UnmarshalMessage,
 };
 use tpm2::{Handle, Marshal, TpmNt, TpmSt, Unmarshal};
 use tpm2::{
@@ -22,13 +21,10 @@ use tpm2_simulator::{Simulator, create_simulator};
 fn execute_with_password_auths<CmdT: Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     auth_values: &[&[u8]],
-) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), u32>
+) -> Result<CmdT::Response<'static>, u32>
 where
-    CmdT::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut cmd_buffer = [0u8; 4096];
     let mut cmd_header = CmdHeader {
@@ -41,7 +37,13 @@ where
         code: CmdT::CMD_CODE,
     };
     let mut written = cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
-    written += marshal_to_slice(&cmd_handles, &mut cmd_buffer[written..]);
+    // Handle area: one big-endian u32 per handle. Written by hand: a generic
+    // `marshal_to_slice` call here would select this fn's `MaxBuffer` bound
+    // (E0271).
+    for handle in cmd.handles().as_ref() {
+        cmd_buffer[written..written + 4].copy_from_slice(&handle.0.to_be_bytes());
+        written += 4;
+    }
 
     let mut auth_buffer = [0u8; 1024];
     let mut auth_written = 0;
@@ -52,10 +54,11 @@ where
             session_attributes: TpmaSession::CONTINUE_SESSION,
             hmac: Tpm2bAuth::from_bytes(auth_value).unwrap(),
         };
-        auth_written += marshal_to_slice(&auth_cmd, &mut auth_buffer[auth_written..]);
+        auth_written += marshal_auth_command(&auth_cmd, &mut auth_buffer[auth_written..]);
     }
     if !auth_values.is_empty() {
-        written += marshal_to_slice(&(auth_written as u32), &mut cmd_buffer[written..]);
+        cmd_buffer[written..written + 4].copy_from_slice(&(auth_written as u32).to_be_bytes());
+        written += 4;
         cmd_buffer[written..written + auth_written].copy_from_slice(&auth_buffer[..auth_written]);
         written += auth_written;
     }
@@ -73,15 +76,19 @@ where
     if resp_header.rc != 0 {
         return Err(resp_header.rc);
     }
-    let resp_handles = CmdT::RespHandles::unmarshal(&mut slice).unwrap();
+    let mut resp_handles = RespHandles::<CmdT>::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut slice).unwrap();
+    }
     if resp_header.tag == TpmSt::SESSIONS {
         let _param_size = u32::unmarshal(&mut slice).unwrap();
     }
     let param_start = resp_buffer.len() - slice.len();
     let mut params: &'static [u8] =
         leak_bytes(&resp_buffer[param_start..resp_header.size as usize]);
-    let resp = <CmdT::Response<'static>>::unmarshal(&mut params).unwrap();
-    Ok((resp, resp_handles))
+    let resp =
+        <CmdT::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params).unwrap();
+    Ok(resp)
 }
 
 // Original Go test: certify_test.go - TestCertify
@@ -124,18 +131,14 @@ fn test_certify() {
 
     // Create primary signer key
     let create_signer_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         creation_pcr: pcr_selection,
         ..Default::default()
     };
-    let create_signer_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (signer_rsp, signer_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_signer_cmd, create_signer_handles, 1, &[])
-            .unwrap();
-    let signer_handle = signer_rsp_handles.object_handle;
+    let signer_rsp = execute_with_password_sessions(&mut sim, &create_signer_cmd, 1, &[]).unwrap();
+    let signer_handle = signer_rsp.object_handle;
 
     // Create primary subject key
     let mut subject_pub_area = pub_area;
@@ -148,46 +151,28 @@ fn test_certify() {
     let subject_in_public = tpm2::Tpm2b(subject_pub_area);
 
     let create_subject_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: subject_in_public,
         creation_pcr: pcr_selection,
         ..Default::default()
     };
-    let create_subject_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_subject_rsp, subject_rsp_handles) = execute_with_password_sessions(
-        &mut sim,
-        &create_subject_cmd,
-        create_subject_handles,
-        1,
-        &[],
-    )
-    .unwrap();
-    let subject_handle = subject_rsp_handles.object_handle;
+    let subject_rsp =
+        execute_with_password_sessions(&mut sim, &create_subject_cmd, 1, &[]).unwrap();
+    let subject_handle = subject_rsp.object_handle;
 
     let original_buffer = b"test nonce";
 
     // Call Certify
     let certify_cmd = Certify {
+        object_handle: subject_handle,
+        sign_handle: signer_handle,
         qualifying_data: Tpm2bData::from_bytes(original_buffer).unwrap(),
         in_scheme: None,
     };
-    let certify_handles = CertifyHandles {
-        object_handle: subject_handle,
-        sign_handle: signer_handle,
-    };
 
     let mut resp_buffer = [0u8; 4096];
-    let (certify_rsp, _) = execute_certify(
-        &mut sim,
-        &certify_cmd,
-        certify_handles,
-        2,
-        auth,
-        &mut resp_buffer,
-    )
-    .unwrap();
+    let certify_rsp = execute_certify(&mut sim, &certify_cmd, 2, auth, &mut resp_buffer).unwrap();
 
     // Verification
     let certify_info = certify_rsp.certify_info.0;
@@ -218,7 +203,7 @@ fn test_certify() {
 
         let verify_res = provider.verify_inner(sig_alg, rsa_unique.get_buffer(), digest, sig_bytes);
         assert!(
-            verify_res.is_ok(),
+            matches!(verify_res, Ok(true)),
             "Signature verification failed: {:?}",
             verify_res
         );
@@ -275,40 +260,29 @@ fn test_create_and_certify_creation() {
 
     // Create primary key on Endorsement hierarchy
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
         creation_pcr: pcr_selection,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_ENDORSEMENT,
-    };
-    let (create_rsp, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    let object_handle = create_rsp_handles.object_handle;
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
+    let object_handle = create_rsp.object_handle;
 
     // Call CertifyCreation
     let in_scheme = Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256));
     let certify_creation_cmd = CertifyCreation {
+        sign_handle: object_handle,
+        object_handle,
         qualifying_data: Tpm2bData::default(),
         creation_hash: create_rsp.creation_hash,
         in_scheme,
         creation_ticket: create_rsp.creation_ticket,
     };
-    let certify_creation_handles = CertifyCreationHandles {
-        sign_handle: object_handle,
-        object_handle,
-    };
     let mut resp_buffer = [0u8; 4096];
-    let (certify_creation_rsp, _) = execute_certify_creation(
-        &mut sim,
-        &certify_creation_cmd,
-        certify_creation_handles,
-        1,
-        &[],
-        &mut resp_buffer,
-    )
-    .unwrap();
+    let certify_creation_rsp =
+        execute_certify_creation(&mut sim, &certify_creation_cmd, 1, &[], &mut resp_buffer)
+            .unwrap();
 
     // Verification
     let certify_info = certify_creation_rsp.certify_info.0;
@@ -347,7 +321,7 @@ fn test_create_and_certify_creation() {
 
         let verify_res = provider.verify_inner(sig_alg, rsa_unique.get_buffer(), digest, sig_bytes);
         assert!(
-            verify_res.is_ok(),
+            matches!(verify_res, Ok(true)),
             "Signature verification failed: {:?}",
             verify_res
         );
@@ -393,17 +367,13 @@ fn test_nv_certify() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_signer_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_signer_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (signer_rsp, signer_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_signer_cmd, create_signer_handles, 1, &[])
-            .unwrap();
-    let signer_handle = signer_rsp_handles.object_handle;
+    let signer_rsp = execute_with_password_sessions(&mut sim, &create_signer_cmd, 1, &[]).unwrap();
+    let signer_handle = signer_rsp.object_handle;
 
     // Define NV Space
     let nv_index_val = 0x0180000F;
@@ -424,58 +394,49 @@ fn test_nv_certify() {
     let public_info = tpm2::Tpm2b(nv_public_struct);
 
     let nv_define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let nv_define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &nv_define_cmd, nv_define_handles, 1, &[])
+    execute_with_password_sessions(&mut sim, &nv_define_cmd, 1, &[])
         .expect("Calling TPM2_NV_DefineSpace");
 
     // Get NV Name (only needed by go-tpm to bind names to handles; password
     // sessions do not use it).
-    let nv_read_pub_cmd = NVReadPublic {};
-    let nv_read_pub_handles = NVReadPublicHandles {
+    let nv_read_pub_cmd = NVReadPublic {
         nv_index: Handle(nv_index_val),
     };
-    execute_with_password_sessions(&mut sim, &nv_read_pub_cmd, nv_read_pub_handles, 0, &[])
+    execute_with_password_sessions(&mut sim, &nv_read_pub_cmd, 0, &[])
         .expect("Calling TPM2_NV_ReadPublic");
 
     // Write to NV Space, authorized with the NV index auth (empty password).
     let data_to_write = &[0x01, 0x02, 0x03, 0x04];
     let nv_write_cmd = NVWrite {
+        auth_handle: Handle(nv_index_val),
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(data_to_write).unwrap(),
         offset: 0,
     };
-    let nv_write_handles = NVWriteHandles {
-        auth_handle: Handle(nv_index_val),
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(&mut sim, &nv_write_cmd, nv_write_handles, 1, &[])
-        .expect("Calling TPM2_NV_Write");
+    execute_with_password_sessions(&mut sim, &nv_write_cmd, 1, &[]).expect("Calling TPM2_NV_Write");
 
     // Re-read the NV public area (its Name changed once NV_WRITTEN was set).
-    execute_with_password_sessions(&mut sim, &nv_read_pub_cmd, nv_read_pub_handles, 0, &[])
+    execute_with_password_sessions(&mut sim, &nv_read_pub_cmd, 0, &[])
         .expect("Calling TPM2_NV_ReadPublic");
 
     // Call NVCertify. Handle order is (signHandle, authHandle, nvIndex), so the
     // sessions are: signer password "password", NV index password (empty).
     let qualifying_data = b"nonce";
     let nv_certify_cmd = NVCertify {
+        sign_handle: signer_handle,
+        auth_handle: Handle(nv_index_val),
+        nv_index: Handle(nv_index_val),
         qualifying_data: Tpm2bData::from_bytes(qualifying_data).unwrap(),
         in_scheme: None,
         size: 0,
         offset: 0,
     };
-    let nv_certify_handles = NVCertifyHandles {
-        sign_handle: signer_handle,
-        auth_handle: Handle(nv_index_val),
-        nv_index: Handle(nv_index_val),
-    };
-    let (nv_certify_rsp, _) =
-        execute_with_password_auths(&mut sim, &nv_certify_cmd, nv_certify_handles, &[auth, &[]])
-            .expect("Failed to certify");
+    let nv_certify_rsp = execute_with_password_auths(&mut sim, &nv_certify_cmd, &[auth, &[]])
+        .expect("Failed to certify");
 
     // Verification
     let certify_info = nv_certify_rsp.certify_info.0;
@@ -506,7 +467,7 @@ fn test_nv_certify() {
 
         let verify_res = provider.verify_inner(sig_alg, rsa_unique.get_buffer(), digest, sig_bytes);
         assert!(
-            verify_res.is_ok(),
+            matches!(verify_res, Ok(true)),
             "Signature verification failed: {:?}",
             verify_res
         );

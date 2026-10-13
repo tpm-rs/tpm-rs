@@ -13,8 +13,8 @@ fn get_random_in_place() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -62,8 +62,8 @@ fn get_random_separate() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -110,8 +110,8 @@ fn test_unmapped_command_code_returns_error() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -206,8 +206,8 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -268,8 +268,8 @@ fn test_pcr_set_auth_value_and_extend_authorization() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -385,8 +385,8 @@ fn test_pcr_set_auth_policy_and_change_pps() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -491,8 +491,8 @@ fn test_platform_construction_with_generic_rng() {
     let mut crypto = FakeCrypto;
     let mut storage = RamStorageMock::<128>::new();
     let mut timer = SoftwareTimer { tick: 0 };
-    let rng = FakeRng::new();
-    let _platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let _platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let global_state = GlobalState::default();
 
     assert_eq!(global_state.seeds, [0u8; 32]);

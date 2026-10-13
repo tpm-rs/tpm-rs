@@ -30,3 +30,4 @@ cmac = "0.7.2"
 aes = "0.8.4"
 cfb-mode = "0.8.2"
 rand_core = "0.6.4"
+subtle = { version = "2.6.1", default-features = false }

@@ -1,27 +1,39 @@
 #![cfg_attr(not(test), no_std)]
 #![deny(unsafe_code)]
 
-use tpm2::Alg;
-use tpm2::crypto::Rng;
-use tpm2::crypto::{CryptoError, CryptoProvider};
+use tpm2::crypto::{ConstantTimeEq, CryptoError, CryptoProvider, Random};
 
+/// BoringSSL-based implementation of the `tpm2::crypto` interfaces
+/// ([`CryptoProvider`] and its super-traits).
+///
+/// Supported algorithms: SHA-1/SHA-256/SHA-384/SHA-512 (hash and HMAC),
+/// AES-128/192/256 (CMAC, and CFB for symmetric encryption), RSA 1024-4096
+/// (RSASSA, RSAPSS, RSAES, OAEP, raw RSA, key generation and import), the NIST
+/// P-224/P-256/P-384/P-521 curves (ECDSA, point operations and key generation;
+/// ECDAA on P-256), and BN-P256 (point operations and key generation).
+/// Everything else returns [`CryptoError::Unsupported`].
 pub struct BsslCryptoProvider;
 
-impl CryptoProvider for BsslCryptoProvider {}
-
-impl tpm2::crypto::Base for BsslCryptoProvider {
-    type Error = CryptoError;
-
-    fn unimplemented(&self, _alg: Alg) -> Self::Error {
-        CryptoError::UnsupportedAlgorithm
-    }
-}
-
-impl Rng for BsslCryptoProvider {
+impl CryptoProvider for BsslCryptoProvider {
     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
         bssl_crypto::rand_bytes(dest);
         Ok(())
     }
+}
+
+impl ConstantTimeEq for BsslCryptoProvider {
+    /// Compares `a` and `b` with BoringSSL's `CRYPTO_memcmp`, in time independent
+    /// of their contents.
+    fn constant_time_eq<const N: usize>(&self, a: &[u8; N], b: &[u8; N]) -> bool {
+        bssl_crypto::constant_time_compare(a, b)
+    }
+}
+
+/// The provider does not create [`tpm2::crypto::Rng`] instances: its CSPRNG is
+/// [`CryptoProvider::get_random`], and deterministic key generation takes a seed
+/// directly ([`tpm2::crypto::Asymmetric::generate_key`]).
+impl Random for BsslCryptoProvider {
+    type Rng = !;
 }
 
 #[forbid(unsafe_code)]
@@ -35,7 +47,28 @@ pub mod ecc;
 pub mod hash;
 #[forbid(unsafe_code)]
 pub mod symmetric;
-pub use {bssl::*, cmac::*, ecc::*, hash::*, symmetric::*};
+pub use {bssl::*, cmac::*, ecc::*, hash::*};
+
+/// Maps the result of a verification or validation binding to the
+/// `tpm2::crypto` convention: [`BsslError::InvalidData`] (a bad signature, key,
+/// or point) is `Ok(false)`.
+pub(crate) fn verified(result: Result<(), BsslError>) -> Result<bool, CryptoError> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(BsslError::InvalidData) => Ok(false),
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Maps the result of a binding producing output to the `tpm2::crypto`
+/// convention: [`BsslError::InvalidData`] (an invalid input) is `Ok(None)`.
+pub(crate) fn output<T>(result: Result<T, BsslError>) -> Result<Option<T>, CryptoError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(BsslError::InvalidData) => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
 
 /// Random number generator backed by BoringSSL's `RAND_bytes`.
 pub struct BsslRng;

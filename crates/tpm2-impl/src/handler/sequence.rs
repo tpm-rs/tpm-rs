@@ -1,3 +1,4 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -6,9 +7,7 @@ use tpm2::Handle;
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{
-    EventSequenceComplete, EventSequenceCompleteHandles, Hash, HashSequenceStart,
-    HashSequenceStartHandles, HmacStart, HmacStartHandles, HmacStartRespHandles, SequenceComplete,
-    SequenceCompleteHandles, SequenceUpdate, SequenceUpdateHandles,
+    EventSequenceComplete, HMACStart, Hash, HashSequenceStart, SequenceComplete, SequenceUpdate,
 };
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
@@ -35,7 +34,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn hash(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let cmd = request.try_unmarshal::<Hash>()?;
+        let cmd = request.try_unmarshal_command::<Hash>([])?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -83,7 +82,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -105,7 +104,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let cmd = request.try_unmarshal::<HashSequenceStart>()?;
+        let cmd = request.try_unmarshal_command::<HashSequenceStart>([])?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -134,12 +133,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             sequence_type,
         ));
 
-        let resp_handles = HashSequenceStartHandles {
+        let rsp = responses::HashSequenceStart {
             sequence_handle: Handle(handle),
         };
 
         let response = request.into_response();
-        self.write_response_handles(response, &resp_handles, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -160,12 +159,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        let handles = request.try_unmarshal::<SequenceUpdateHandles>()?;
-        let sequence_handle = handles.sequence_handle.0;
+        let handles = request.try_unmarshal_handles::<SequenceUpdate>()?;
+        let [sequence_handle] = handles;
+        check(sequence_handle, Tpmi::DhObject, Position::handle(1))?;
+        let sequence_handle = sequence_handle.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<SequenceUpdate>()?;
+        let cmd = request.try_unmarshal_command::<SequenceUpdate>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -226,12 +227,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        let handles = request.try_unmarshal::<SequenceCompleteHandles>()?;
-        let sequence_handle = handles.sequence_handle.0;
+        let handles = request.try_unmarshal_handles::<SequenceComplete>()?;
+        let [sequence_handle] = handles;
+        check(sequence_handle, Tpmi::DhObject, Position::handle(1))?;
+        let sequence_handle = sequence_handle.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<SequenceComplete>()?;
+        let cmd = request.try_unmarshal_command::<SequenceComplete>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -317,7 +320,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.global_state.remove_active_sequence(sequence_handle)?;
 
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -339,13 +342,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        let handles = request.try_unmarshal::<EventSequenceCompleteHandles>()?;
-        let pcr_handle = handles.pcr_handle.0;
-        let sequence_handle = handles.sequence_handle.0;
+        let handles = request.try_unmarshal_handles::<EventSequenceComplete>()?;
+        let [pcr_handle, sequence_handle] = handles;
+        check(pcr_handle, Tpmi::DhPcrOrNull, Position::handle(1))?;
+        check(sequence_handle, Tpmi::DhObject, Position::handle(2))?;
+        let pcr_handle = pcr_handle.0;
+        let sequence_handle = sequence_handle.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<EventSequenceComplete>()?;
+        let cmd = request.try_unmarshal_command::<EventSequenceComplete>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -413,7 +419,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let rsp = responses::EventSequenceComplete { results };
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -435,14 +441,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        let handles = request.try_unmarshal::<HmacStartHandles>()?;
+        let handles = request.try_unmarshal_handles::<HMACStart>()?;
+        let [key_handle] = handles;
+        check(key_handle, Tpmi::DhObject, Position::handle(1))?;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let cmd = request.try_unmarshal::<HmacStart>()?;
+        let cmd = request.try_unmarshal_command::<HMACStart>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        let key_handle = handles.handle.0;
+        let key_handle = key_handle.0;
         let key_obj = self.resolve_object(key_handle, Position::handle(1))?;
 
         let scheme = match &key_obj.public.parms_and_id {
@@ -521,12 +529,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             },
         ));
 
-        let resp_handles = HmacStartRespHandles {
+        let rsp = responses::HMACStart {
             sequence_handle: Handle(handle),
         };
 
         let response = request.into_response();
-        self.write_response_handles(response, &resp_handles, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -537,7 +545,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         key: &[u8],
         buffers: &[&[u8]],
     ) -> Result<([u8; 64], usize), TpmRc> {
-        let mut state = tpm2::crypto::HmacCtx::new(self.crypto(), hash_alg, key)
+        let mut state = tpm2::crypto::HmacStream::new(self.crypto(), hash_alg, key)
             .map_err(|_| TpmRc::VALUE.to_rc())?;
         for buf in buffers {
             state.update(buf).map_err(|_| TpmRc::FAILURE)?;

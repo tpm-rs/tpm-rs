@@ -1,3 +1,4 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
@@ -5,7 +6,7 @@ use crate::timer::TpmTimer;
 use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::commands::{ChangeEPS, ChangeEPSHandles};
+use tpm2::commands::ChangeEPS;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 
@@ -27,8 +28,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<ChangeEPSHandles>()?;
-        let auth_handle = handles.auth_handle.0;
+        let handles = request.try_unmarshal_handles::<ChangeEPS>()?;
+        let [auth_handle] = handles;
+        check(auth_handle, Tpmi::RhPlatform, Position::handle(1))?;
+        let auth_handle = auth_handle.0;
 
         if auth_handle != Handle::RH_PLATFORM.0 {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
@@ -36,7 +39,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<ChangeEPS>()?;
+        let _cmd = request.try_unmarshal_command::<ChangeEPS>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -50,12 +53,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .rng
-            .get_random(&mut new_ep_seed)
+            .fill_bytes(&mut new_ep_seed)
             .map_err(|_| TpmRc::FAILURE)?;
         self.context
             .platform
             .rng
-            .get_random(&mut new_eh_proof)
+            .fill_bytes(&mut new_eh_proof)
             .map_err(|_| TpmRc::FAILURE)?;
 
         self.nv_clear_orderly()?;

@@ -11,15 +11,15 @@ use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
 use tpm2::commands::{
-    Certify, CertifyHandles, Command, Load, LoadHandles, ObjectChangeAuth, ObjectChangeAuthHandles,
+    Certify, Command, Load, Message, ObjectChangeAuth, UnmarshalMessage, responses,
 };
-use tpm2::crypto::Rng;
 use tpm2::crypto::{Asymmetric, AsymmetricSign};
 use tpm2::crypto::{CryptoError, CryptoProvider};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    Alg, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bName, Tpm2bNonce, Tpm2bPublicKeyRsa,
-    TpmaObject, TpmaSession, TpmiAlgHash, TpmsAuthCommand, TpmtPublic, TpmtSymDefObject,
+    Alg, AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bName, Tpm2bNonce,
+    Tpm2bPublicKeyRsa, TpmaObject, TpmaSession, TpmiAlgHash, TpmsAuthCommand, TpmtPublic,
+    TpmtSymDefObject,
 };
 use tpm2_impl::TpmEngine;
 use tpm2_impl::TpmPlatform;
@@ -32,19 +32,21 @@ struct ChallengerCrypto {
 impl_delegate_hash!(ChallengerCrypto, crypto);
 
 impl AsymmetricSign for ChallengerCrypto {
+    /// Fills 256 signature bytes with `0xbb`. A `signature_out` shorter than that fails with
+    /// [`CryptoError::Internal`] (formerly `BufferTooSmall`).
     fn sign_inner(
         &self,
         _sign_alg: Alg,
         _private_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         let len = 256;
         if signature_out.len() < len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         signature_out[..len].fill(0xbb);
-        Ok(len)
+        Ok(Some(len))
     }
 }
 
@@ -55,7 +57,7 @@ impl Asymmetric for ChallengerCrypto {
         public_key: &[u8],
         digest: tpm2::TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), CryptoError> {
+    ) -> Result<bool, CryptoError> {
         self.crypto
             .verify_inner(sign_alg, public_key, digest, signature)
     }
@@ -67,10 +69,12 @@ impl Asymmetric for ChallengerCrypto {
         data: &[u8],
         ciphertext: &mut [u8],
         label: &[u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         self.crypto
             .encrypt(scheme, hash_alg, public_key, data, ciphertext, label)
     }
+    /// An all-zero private key "decrypts" by copying `ciphertext` to `plaintext`; any other key
+    /// goes to the real provider.
     fn decrypt(
         &self,
         scheme: Alg,
@@ -79,11 +83,11 @@ impl Asymmetric for ChallengerCrypto {
         ciphertext: &[u8],
         plaintext: &mut [u8],
         label: &[u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         if private_key.iter().all(|&b| b == 0) {
             let len = ciphertext.len();
             plaintext[..len].copy_from_slice(ciphertext);
-            Ok(len)
+            Ok(Some(len))
         } else {
             self.crypto
                 .decrypt(scheme, hash_alg, private_key, ciphertext, plaintext, label)
@@ -100,18 +104,21 @@ impl Asymmetric for ChallengerCrypto {
         self.crypto
             .generate_key(scheme, params, public_key, private_key, seed)
     }
+    /// An all-zero private key yields a fake 128-byte prime P (`0xaa` bytes); a `prime_p_out`
+    /// shorter than that fails with [`CryptoError::Internal`] (formerly `BufferTooSmall`). Any
+    /// other key goes to the real provider.
     fn rsa_private_key_to_prime_p(
         &self,
         private_key: &[u8],
         prime_p_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         if private_key.iter().all(|&b| b == 0) {
             let len = 128; // Standard size for 2048-bit RSA prime P (1024 bits)
             if prime_p_out.len() < len {
-                return Err(CryptoError::BufferTooSmall);
+                return Err(CryptoError::Internal);
             }
             prime_p_out[..len].fill(0xaa);
-            Ok(len)
+            Ok(Some(len))
         } else {
             self.crypto
                 .rsa_private_key_to_prime_p(private_key, prime_p_out)
@@ -123,14 +130,14 @@ impl Asymmetric for ChallengerCrypto {
         prime_p: &[u8],
         exponent: u32,
         private_key_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         if modulus.iter().all(|&b| b == 0) {
             let len = 256;
             if private_key_out.len() < len {
-                return Err(CryptoError::BufferTooSmall);
+                return Err(CryptoError::Internal);
             }
             private_key_out[..len].fill(0);
-            Ok(len)
+            Ok(Some(len))
         } else {
             self.crypto
                 .rsa_import_private_key(modulus, prime_p, exponent, private_key_out)
@@ -138,19 +145,18 @@ impl Asymmetric for ChallengerCrypto {
     }
 }
 
-impl Rng for ChallengerCrypto {
+impl CryptoProvider for ChallengerCrypto {
+    /// The provider CSPRNG of the real test provider.
     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
         self.crypto.get_random(dest)
     }
 }
 
-impl CryptoProvider for ChallengerCrypto {}
-
 fn setup_tpm<'a>(
     crypto: &'a mut ChallengerCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, ChallengerCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -177,14 +183,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, ChallengerCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 32768];
     let mut offset = 10;
@@ -197,13 +200,15 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut <Handle as Marshal>::MaxBuffer = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        let handle_len = handle.marshal(handle_slice);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -243,8 +248,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -256,20 +263,22 @@ where
 
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
-    let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let resp_params = <C::Response<'static> as UnmarshalMessage>::unmarshal_with_handles(
+        resp_handles,
+        &mut params_slice,
+    )
+    .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp_params)
 }
 
 fn execute_tpm_certify<'a>(
     tpm: &mut TpmEngine<'_, ChallengerCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &CertifyHandles,
     cmd: &Certify,
     auths: &[TpmsAuthCommand],
     response_buf: &'a mut [u8; 32768],
-) -> Result<<Certify<'static> as Command>::Response<'a>, u32> {
+) -> Result<responses::Certify<'a>, u32> {
     let mut request_buf = [0u8; 32768];
     let mut offset = 10;
 
@@ -281,10 +290,12 @@ fn execute_tpm_certify<'a>(
 
     request_buf[6..10].copy_from_slice(&(Certify::CMD_CODE.code()).to_be_bytes());
 
-    let mut handles_buf = [0u8; CertifyHandles::MAX_SIZE];
-    let handles_len = handles.marshal(&mut handles_buf);
-    request_buf[offset..offset + handles_len].copy_from_slice(&handles_buf.as_ref()[..handles_len]);
-    offset += handles_len;
+    for handle in cmd.handles() {
+        let mut handle_buf = [0u8; Handle::MAX_SIZE];
+        let handle_len = handle.marshal(&mut handle_buf);
+        request_buf[offset..offset + handle_len].copy_from_slice(&handle_buf[..handle_len]);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -324,7 +335,8 @@ fn execute_tpm_certify<'a>(
     }
 
     let mut params_slice = &response_buf[resp_offset..resp_size];
-    Unmarshal::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())
+    responses::Certify::unmarshal_with_handles([], &mut params_slice)
+        .map_err(|_| TpmRc::FAILURE.get())
 }
 
 fn compute_name_from_bytes(name_alg: TpmiAlgHash, bytes: &[u8]) -> Tpm2bName<'static> {
@@ -357,7 +369,10 @@ fn make_parent_object(handle: u32, qn: Tpm2bName) -> TransientObject {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Rsa(
             tpm2::TpmsRsaParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(tpm2::TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 key_bits: tpm2::TpmiRsaKeyBits(2048),
                 exponent: 0,
@@ -478,8 +493,8 @@ fn test_object_change_auth_success() {
     let mut crypto = ChallengerCrypto { crypto };
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let parent_handle = 0x80000000;
     let object_handle = 0x80000001;
@@ -502,11 +517,9 @@ fn test_object_change_auth_success() {
     global_state.transient_objects[0] = Some(parent);
     global_state.transient_objects[1] = Some(obj.clone());
 
-    let handles = ObjectChangeAuthHandles {
+    let cmd = ObjectChangeAuth {
         object_handle: Handle(object_handle),
         parent_handle: Handle(parent_handle),
-    };
-    let cmd = ObjectChangeAuth {
         new_auth: Tpm2bAuth::from_bytes(b"newauth").unwrap(),
     };
 
@@ -517,14 +530,7 @@ fn test_object_change_auth_success() {
         hmac: Tpm2bAuth::from_bytes(b"oldauth").unwrap(),
     };
 
-    let (_, rsp) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &handles,
-        &cmd,
-        &[old_auth_session],
-    )
-    .unwrap();
+    let rsp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[old_auth_session]).unwrap();
 
     global_state.transient_objects[1] = None;
 
@@ -532,18 +538,15 @@ fn test_object_change_auth_success() {
         make_transient_rsa_object(object_handle, TpmiAlgHash::Sha256, b"oldauth", dummy_qn);
     let in_public = tpm2::Tpm2b(temp_obj2.public.as_tpmt());
 
-    let load_handles = LoadHandles {
-        parent_handle: Handle(parent_handle),
-    };
     let load_cmd = Load {
+        parent_handle: Handle(parent_handle),
         in_private: rsp.out_private,
         in_public,
     };
 
-    let (load_resp_handles, load_rsp) = execute_tpm_command(
+    let load_rsp = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &load_handles,
         &load_cmd,
         &[common::password_auth(b"")],
     )
@@ -555,11 +558,9 @@ fn test_object_change_auth_success() {
     let target_obj = make_transient_object(target_handle, TpmiAlgHash::Sha256, &[], dummy_qn);
     global_state.transient_objects[2] = Some(target_obj);
 
-    let certify_handles = CertifyHandles {
-        object_handle: Handle(target_handle),
-        sign_handle: load_resp_handles.object_handle,
-    };
     let certify_cmd = Certify {
+        object_handle: Handle(target_handle),
+        sign_handle: load_rsp.object_handle,
         qualifying_data: tpm2::Tpm2bData::default(),
         in_scheme: None,
     };
@@ -581,7 +582,6 @@ fn test_object_change_auth_success() {
     let certify_res = execute_tpm_certify(
         &mut tpm,
         &mut global_state,
-        &certify_handles,
         &certify_cmd,
         &[target_auth, new_auth_session],
         &mut response_buf,
@@ -603,8 +603,8 @@ fn test_object_change_auth_oversized_auth() {
     let mut crypto = ChallengerCrypto { crypto };
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let parent_handle = 0x80000001;
     let object_handle = 0x80000002;
@@ -625,12 +625,9 @@ fn test_object_change_auth_oversized_auth() {
     global_state.transient_objects[0] = Some(parent);
     global_state.transient_objects[1] = Some(obj);
 
-    let handles = ObjectChangeAuthHandles {
+    let cmd = ObjectChangeAuth {
         object_handle: Handle(object_handle),
         parent_handle: Handle(parent_handle),
-    };
-
-    let cmd = ObjectChangeAuth {
         new_auth: Tpm2bAuth::from_bytes(&[1u8; 33]).unwrap(),
     };
 
@@ -641,13 +638,7 @@ fn test_object_change_auth_oversized_auth() {
         hmac: Tpm2bAuth::from_bytes(b"oldauth").unwrap(),
     };
 
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &handles,
-        &cmd,
-        &[old_auth_session],
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[old_auth_session]);
     assert!(res.is_err());
     let err_code = res.err().unwrap();
     assert_eq!(err_code, TpmRc::SIZE.with(Position::parameter(1)).get());
@@ -659,8 +650,8 @@ fn test_object_change_auth_mismatched_parent() {
     let mut crypto = ChallengerCrypto { crypto };
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let parent_handle = 0x80000001;
     let object_handle = 0x80000002;
@@ -686,11 +677,9 @@ fn test_object_change_auth_mismatched_parent() {
     global_state.transient_objects[1] = Some(obj);
     global_state.transient_objects[2] = Some(wrong_parent);
 
-    let handles = ObjectChangeAuthHandles {
+    let cmd = ObjectChangeAuth {
         object_handle: Handle(object_handle),
         parent_handle: Handle(wrong_parent_handle),
-    };
-    let cmd = ObjectChangeAuth {
         new_auth: Tpm2bAuth::from_bytes(b"newauth").unwrap(),
     };
 
@@ -701,13 +690,7 @@ fn test_object_change_auth_mismatched_parent() {
         hmac: Tpm2bAuth::from_bytes(b"oldauth").unwrap(),
     };
 
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &handles,
-        &cmd,
-        &[old_auth_session],
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[old_auth_session]);
     assert!(res.is_err());
     let err_code = res.err().unwrap();
     assert_eq!(err_code, TpmRc::TYPE.with(Position::handle(2)).get());
@@ -719,8 +702,8 @@ fn test_object_change_auth_active_sequence() {
     let mut crypto = ChallengerCrypto { crypto };
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let parent_handle = 0x80000001;
     let object_handle = 0x80000002;
@@ -738,18 +721,15 @@ fn test_object_change_auth_active_sequence() {
     global_state.active_sequences[0] = Some(active_seq);
     global_state.transient_objects[0] = Some(parent);
 
-    let handles = ObjectChangeAuthHandles {
+    let cmd = ObjectChangeAuth {
         object_handle: Handle(object_handle),
         parent_handle: Handle(parent_handle),
-    };
-    let cmd = ObjectChangeAuth {
         new_auth: Tpm2bAuth::from_bytes(b"newauth").unwrap(),
     };
 
     let res = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd,
         &[common::password_auth(b"")],
     );
@@ -764,21 +744,19 @@ fn test_object_change_auth_on_nv_index() {
     let mut crypto = ChallengerCrypto { crypto };
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let parent_handle = 0x40000001;
     let object_handle = 0x01400001; // NV Index
 
-    let handles = ObjectChangeAuthHandles {
+    let cmd = ObjectChangeAuth {
         object_handle: Handle(object_handle),
         parent_handle: Handle(parent_handle),
-    };
-    let cmd = ObjectChangeAuth {
         new_auth: Tpm2bAuth::from_bytes(b"newauth").unwrap(),
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]);
     assert!(res.is_err());
     let err_code = res.err().unwrap();
     assert_eq!(err_code, TpmRc::VALUE.with(Position::handle(1)).get());

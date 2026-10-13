@@ -1,10 +1,10 @@
 use crate::test_utils::*;
 use sha2::{Digest, Sha256};
 use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, PolicyAuthorize, PolicyAuthorizeHandles, PolicyGetDigest,
-    PolicyGetDigestHandles, PolicySecret, PolicySecretHandles, Sign, SignHandles, StartAuthSession,
-    StartAuthSessionHandles, VerifySignature, VerifySignatureHandles,
+    CreatePrimary, PolicyAuthorize, PolicyGetDigest, PolicySecret, StartAuthSession,
 };
+#[allow(deprecated)]
+use tpm2::commands::{Sign, VerifySignature};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve, TpmSe};
 use tpm2_simulator::{Simulator, create_simulator};
@@ -36,18 +36,15 @@ fn create_signing_key(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_primary = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &create_primary, create_handles, 1, &[])
-            .expect("could not call TPM2_CreatePrimary");
-    (rsp_handles.object_handle, rsp.name)
+    let rsp = execute_with_password_sessions(sim, &create_primary, 1, &[])
+        .expect("could not call TPM2_CreatePrimary");
+    (rsp.object_handle, rsp.name)
 }
 
 #[test]
@@ -56,42 +53,34 @@ fn test_session_expiration_enforced() {
 
     // 1. Start Policy session
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (start_rsp, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
-    let session_handle = start_rsp_handles.session_handle;
+    let start_rsp = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
+    let session_handle = start_rsp.session_handle;
 
     // 2. Call PolicySecret with expiration = -1 (which sets the timeout to 1 second)
     let policy_secret = PolicySecret {
+        auth_handle: Handle::RH_OWNER,
+        policy_session: session_handle,
         nonce_tpm: Tpm2bNonce::default(),
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         expiration: -1, // 1 second timeout
     };
-    let policy_secret_handles = PolicySecretHandles {
-        auth_handle: Handle::RH_OWNER,
-        policy_session: session_handle,
-    };
-    let _ = execute_with_password_sessions(&mut sim, &policy_secret, policy_secret_handles, 1, &[])
+    let _ = execute_with_password_sessions(&mut sim, &policy_secret, 1, &[])
         .expect("PolicySecret failed");
 
     // Immediately the policy should still be valid. Let's verify by calling PolicyGetDigest
-    let get_digest = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest = PolicyGetDigest {
         policy_session: session_handle,
     };
-    assert!(
-        execute_with_password_sessions(&mut sim, &get_digest, get_digest_handles, 0, &[]).is_ok()
-    );
+    assert!(execute_with_password_sessions(&mut sim, &get_digest, 0, &[]).is_ok());
 
     // 3. Wait for 1.5 seconds so that the session expires
     std::thread::sleep(std::time::Duration::from_millis(1500));
@@ -105,17 +94,14 @@ fn test_session_expiration_enforced() {
     // time (Policy_spt.c ComputeAuthTimeout); with an empty nonce it would be
     // relative to the current second and not reliably expired.
     let policy_secret = PolicySecret {
+        auth_handle: Handle::RH_OWNER,
+        policy_session: session_handle,
         nonce_tpm: start_rsp.nonce_tpm,
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         expiration: -1,
     };
-    let policy_secret_handles = PolicySecretHandles {
-        auth_handle: Handle::RH_OWNER,
-        policy_session: session_handle,
-    };
-    let res =
-        execute_with_password_sessions(&mut sim, &policy_secret, policy_secret_handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &policy_secret, 1, &[]);
     assert!(
         res.is_err(),
         "Expected command to fail on expired session, but it succeeded!"
@@ -138,27 +124,22 @@ fn test_ticket_forgery_fails() {
 
     // Start a Policy session
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
     let session_handle = start_rsp_handles.session_handle;
 
     // Get the current policy digest (which is all zeros initially)
-    let get_digest = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest = PolicyGetDigest {
         policy_session: session_handle,
     };
-    let (digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest, get_digest_handles, 0, &[]).unwrap();
+    let digest_rsp = execute_with_password_sessions(&mut sim, &get_digest, 0, &[]).unwrap();
     let approved_policy = digest_rsp.policy_digest;
 
     // 1. Try to use PolicyAuthorize with a forged ticket under NULL hierarchy
@@ -169,17 +150,14 @@ fn test_ticket_forgery_fails() {
     );
 
     let policy_auth_cmd = PolicyAuthorize {
+        policy_session: session_handle,
         approved_policy,
         policy_ref: Tpm2bNonce::default(),
         key_sign: sk_name,
         check_ticket: forged_ticket,
     };
-    let policy_auth_handles = PolicyAuthorizeHandles {
-        policy_session: session_handle,
-    };
 
-    let res =
-        execute_with_password_sessions(&mut sim, &policy_auth_cmd, policy_auth_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &policy_auth_cmd, 0, &[]);
     assert!(
         res.is_err(),
         "PolicyAuthorize should fail with a forged ticket!"
@@ -199,18 +177,13 @@ fn test_ticket_forgery_fails() {
         Tpm2bDigest::from_bytes(&[0xBB; 32]).unwrap(),
     );
     let policy_auth_cmd_owner = PolicyAuthorize {
+        policy_session: session_handle,
         approved_policy,
         policy_ref: Tpm2bNonce::default(),
         key_sign: sk_name,
         check_ticket: forged_owner_ticket,
     };
-    let res_owner = execute_with_password_sessions(
-        &mut sim,
-        &policy_auth_cmd_owner,
-        policy_auth_handles,
-        0,
-        &[],
-    );
+    let res_owner = execute_with_password_sessions(&mut sim, &policy_auth_cmd_owner, 0, &[]);
     assert!(
         res_owner.is_err(),
         "PolicyAuthorize should fail with forged ticket under Owner hierarchy!"
@@ -221,33 +194,29 @@ fn test_ticket_forgery_fails() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_verify_signature_to_policy_authorize() {
     let mut sim = create_simulator!();
     let (sk, sk_name) = create_signing_key(&mut sim);
 
     // 1. Start Policy session to get the approved policy digest
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
     let session_handle = start_rsp_handles.session_handle;
 
     // Get policy digest
-    let get_digest = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest = PolicyGetDigest {
         policy_session: session_handle,
     };
-    let (digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest, get_digest_handles, 0, &[]).unwrap();
+    let digest_rsp = execute_with_password_sessions(&mut sim, &get_digest, 0, &[]).unwrap();
     let approved_policy = digest_rsp.policy_digest;
 
     // 2. Compute aHash = hash(approvedPolicy || policyRef)
@@ -259,45 +228,35 @@ fn test_verify_signature_to_policy_authorize() {
 
     // 3. Sign the aHash using Sign command on the signing key
     let sign_cmd = Sign {
+        key_handle: sk,
         digest: Tpm2bDigest::from_bytes(&a_hash).unwrap(),
         in_scheme: Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
         validation: TpmtTkHashcheck::default(),
     };
     let mut resp_buffer = [0u8; 4096];
-    let (sign_resp, _) = execute_sign(
-        &mut sim,
-        &sign_cmd,
-        SignHandles { key_handle: sk },
-        1,
-        &[],
-        &mut resp_buffer,
-    )
-    .expect("Sign failed");
+    let sign_resp =
+        execute_sign(&mut sim, &sign_cmd, 1, &[], &mut resp_buffer).expect("Sign failed");
 
     // 4. Verify signature on the TPM to generate the validation ticket
     let verify_cmd = VerifySignature {
+        key_handle: sk,
         digest: Tpm2bDigest::from_bytes(&a_hash).unwrap(),
         signature: sign_resp.signature,
     };
-    let verify_handles = VerifySignatureHandles { key_handle: sk };
-    let (verify_resp, _) =
-        execute_with_password_sessions(&mut sim, &verify_cmd, verify_handles, 0, &[])
-            .expect("VerifySignature failed");
+    let verify_resp = execute_with_password_sessions(&mut sim, &verify_cmd, 0, &[])
+        .expect("VerifySignature failed");
 
     assert_eq!(verify_resp.validation.tag(), 0x8022); // TPM_ST_VERIFIED
 
     // 5. Execute PolicyAuthorize command with the computed ticket
     let policy_auth_cmd = PolicyAuthorize {
+        policy_session: session_handle,
         approved_policy,
         policy_ref: Tpm2bNonce::default(),
         key_sign: sk_name,
         check_ticket: verify_resp.validation,
     };
-    let policy_auth_handles = PolicyAuthorizeHandles {
-        policy_session: session_handle,
-    };
-    let res =
-        execute_with_password_sessions(&mut sim, &policy_auth_cmd, policy_auth_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &policy_auth_cmd, 0, &[]);
     assert!(
         res.is_ok(),
         "PolicyAuthorize failed with valid VerifySignature ticket: {:?}",
@@ -306,8 +265,7 @@ fn test_verify_signature_to_policy_authorize() {
 
     // 6. Verify that the session policy digest was updated correctly:
     // digest_new = hash(digest_old=0 || TPM_CC_PolicyAuthorize || keySign || policyRef)
-    let (final_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest, get_digest_handles, 0, &[]).unwrap();
+    let final_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest, 0, &[]).unwrap();
 
     let mut pol = PolicyCalculator::new(TpmiAlgHash::Sha256);
     pol.policy_authorize(

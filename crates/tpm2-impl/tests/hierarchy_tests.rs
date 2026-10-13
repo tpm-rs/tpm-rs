@@ -5,9 +5,7 @@ mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
-use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, SetPrimaryPolicy, SetPrimaryPolicyHandles,
-};
+use tpm2::commands::{CreatePrimary, Message, SetPrimaryPolicy};
 use tpm2::{Handle, TpmCc};
 use tpm2::{Tpm2bDigest, TpmiAlgHash, TpmsAuthCommand};
 use tpm2_impl::{TpmEngine, TpmPlatform};
@@ -16,7 +14,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut FakeCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -45,17 +43,15 @@ fn test_set_primary_policy_owner() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Authorize under Owner hierarchy and set a 32-byte authPolicy
     let policy_digest = Tpm2bDigest::from_bytes(&[0x42; 32]).unwrap();
     let cmd = SetPrimaryPolicy {
+        auth_handle: Handle::RH_OWNER,
         auth_policy: policy_digest,
         hash_alg: Some(TpmiAlgHash::Sha256),
-    };
-    let handles = SetPrimaryPolicyHandles {
-        auth_handle: Handle::RH_OWNER,
     };
 
     let mut req_buf = [0u8; 1024];
@@ -64,7 +60,9 @@ fn test_set_primary_policy_owner() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::SetPrimaryPolicy.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    for handle in cmd.handles() {
+        offset += marshal_to_slice(&handle, &mut req_buf[offset..]);
+    }
 
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
@@ -90,17 +88,19 @@ fn test_set_primary_policy_owner() {
     assert_eq!(global_state.owner_policy.get_buffer(), &[0x42; 32]);
 
     // 2. Confirm subsequent hierarchy-bound operations enforce the new primary policy.
-    let create_handles = CreatePrimaryHandles {
+    let create_cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
+        ..Default::default()
     };
-    let create_cmd = CreatePrimary::default();
 
     offset = 0;
     offset += marshal_to_slice(&(0x8002u16), &mut req_buf[offset..]);
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::CreatePrimary.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&(create_handles), &mut req_buf[offset..]);
+    for handle in create_cmd.handles() {
+        offset += marshal_to_slice(&handle, &mut req_buf[offset..]);
+    }
 
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
@@ -125,16 +125,14 @@ fn test_set_primary_policy_endorsement_and_lockout() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let policy_digest = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
     let cmd = SetPrimaryPolicy {
+        auth_handle: Handle::RH_ENDORSEMENT,
         auth_policy: policy_digest,
         hash_alg: Some(TpmiAlgHash::Sha256),
-    };
-    let handles = SetPrimaryPolicyHandles {
-        auth_handle: Handle::RH_ENDORSEMENT,
     };
 
     let mut req_buf = [0u8; 1024];
@@ -143,7 +141,9 @@ fn test_set_primary_policy_endorsement_and_lockout() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::SetPrimaryPolicy.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    for handle in cmd.handles() {
+        offset += marshal_to_slice(&handle, &mut req_buf[offset..]);
+    }
 
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
@@ -174,18 +174,16 @@ fn test_set_primary_policy_disabled_hierarchy() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     global_state.sh_enable = false;
 
     let policy_digest = Tpm2bDigest::from_bytes(&[0x42; 32]).unwrap();
     let cmd = SetPrimaryPolicy {
+        auth_handle: Handle::RH_OWNER,
         auth_policy: policy_digest,
         hash_alg: Some(TpmiAlgHash::Sha256),
-    };
-    let handles = SetPrimaryPolicyHandles {
-        auth_handle: Handle::RH_OWNER,
     };
 
     let mut req_buf = [0u8; 1024];
@@ -194,7 +192,9 @@ fn test_set_primary_policy_disabled_hierarchy() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::SetPrimaryPolicy.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    for handle in cmd.handles() {
+        offset += marshal_to_slice(&handle, &mut req_buf[offset..]);
+    }
 
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
@@ -227,16 +227,14 @@ fn test_set_primary_policy_size_mismatch() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let policy_digest = Tpm2bDigest::from_bytes(&[0x22; 20]).unwrap();
     let cmd = SetPrimaryPolicy {
+        auth_handle: Handle::RH_OWNER,
         auth_policy: policy_digest,
         hash_alg: Some(TpmiAlgHash::Sha256),
-    };
-    let handles = SetPrimaryPolicyHandles {
-        auth_handle: Handle::RH_OWNER,
     };
 
     let mut req_buf = [0u8; 1024];
@@ -245,7 +243,9 @@ fn test_set_primary_policy_size_mismatch() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::SetPrimaryPolicy.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    for handle in cmd.handles() {
+        offset += marshal_to_slice(&handle, &mut req_buf[offset..]);
+    }
 
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);

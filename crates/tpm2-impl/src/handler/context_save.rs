@@ -1,6 +1,7 @@
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{
+    handle_checks::{Tpmi, check},
     handler::{CommandHandler, SessionState, TransientObject},
     owned::OwnedDigest,
     req_resp::RequestThenResponse,
@@ -9,11 +10,14 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::TpmaObject;
-use tpm2::commands::{ContextSave, ContextSaveHandles};
-use tpm2::crypto::kdf::kdfa;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::commands::ContextSave;
+use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt, TpmiAlgSymMode, TpmtSymDefObject};
+use tpm2::{
+    AlgSym, Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
+    TpmtSymDefObject,
+};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -37,12 +41,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<ContextSaveHandles>()?;
-        let save_handle = handles.save_handle.0;
+        let handles = request.try_unmarshal_handles::<ContextSave>()?;
+        let [save] = handles;
+        check(save, Tpmi::DhContext, Position::handle(1))?;
+        let save_handle = save.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<ContextSave>()?;
+        let _cmd = request.try_unmarshal_command::<ContextSave>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -232,9 +238,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         sensitive_buf: &mut [u8],
     ) -> Result<(), TpmRc> {
         let mut sym_key_iv = [0u8; 32];
-        kdfa(
+        kdfa_bits(
             self.crypto(),
-            tpm2::TpmiAlgHash::Sha256,
+            TpmiAlgHash::Sha256,
             proof,
             b"CONTEXT",
             sequence_bytes,
@@ -249,11 +255,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut iv = [0u8; 16];
         iv.copy_from_slice(&sym_key_iv[16..32]);
 
-        tpm2::crypto::encrypt(
-            self.crypto(),
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+        self.sym_encrypt_decrypt(
+            CONTEXT_ENCRYPTION_ALG,
             &sym_key,
             &mut iv,
+            Direction::Encrypt,
             sensitive_buf,
         )
         .map_err(|_| TpmRc::FAILURE)?;
@@ -275,9 +281,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         saved_handle: u32,
         sensitive_buf: &[u8],
     ) -> Result<OwnedDigest, TpmRc> {
-        let mut mac_ctx =
-            tpm2::crypto::HmacCtx::new(self.crypto(), tpm2::TpmiAlgHash::Sha256, proof)
-                .map_err(|_| TpmRc::FAILURE)?;
+        let mut mac_ctx = HmacStream::new(self.crypto(), TpmiAlgHash::Sha256, proof)
+            .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx
             .update(&self.global_state.total_reset_count.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
@@ -294,7 +299,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx.update(sensitive_buf).map_err(|_| TpmRc::FAILURE)?;
 
-        let mut mac_buf = [0u8; 64];
+        let mut mac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let mac = mac_ctx.finalize(&mut mac_buf).map_err(|_| TpmRc::FAILURE)?;
         OwnedDigest::from_bytes(mac.digest()).map_err(|_| TpmRc::FAILURE)
     }
@@ -502,6 +507,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 /// Size of the `sequence` fingerprint prepended to the plaintext of every
 /// saved context and verified by `TPM2_ContextLoad` after decryption.
 pub(crate) const CONTEXT_FINGERPRINT_SIZE: usize = 8;
+
+/// Symmetric algorithm protecting the confidentiality of saved contexts: AES-128 in CFB mode,
+/// keyed with `KDFa(SHA256, proof, "CONTEXT", sequence, savedHandle, 256)` (key || IV).
+pub(crate) const CONTEXT_ENCRYPTION_ALG: TpmtSymDefObject = TpmtSymDefObject {
+    alg: AlgSym::Aes128,
+    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+};
 
 /// Maximum marshaled size of [`RawContextSaveRsp`].
 const RAW_CONTEXT_SAVE_RSP_MAX_SIZE: usize =

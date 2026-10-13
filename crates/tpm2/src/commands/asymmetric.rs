@@ -7,11 +7,12 @@
 //! - RSA encryption and decryption
 //! - ECC key generation and ECDH key agreement
 //! - ECC parameter queries
+//! - ECC encryption and decryption, and KEM encapsulation and decapsulation
 //!
-//! Each command includes its corresponding request parameters, handle list,
-//! response parameters, and [`Command`] trait implementation.
-
-use super::Command;
+//! Each command includes its request (handles first, then parameters), its
+//! response, and the [`Command`] / [`Message`] / [`UnmarshalMessage`] trait
+//! implementations.
+use super::{Command, Message, UnmarshalMessage};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// [TPM2.0 1.83] 14.2 TPM2_RSA_Encrypt (Command)
@@ -19,26 +20,45 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 #[doc(alias = "RSA_Encrypt_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
 pub struct RSAEncrypt<'a> {
+    pub key_handle: Handle,
     pub message: Tpm2bPublicKeyRsa<'a>,
     pub in_scheme: Option<TpmtRsaDecrypt>,
-    pub label: crate::Tpm2bData<'a>,
+    pub label: Tpm2bData<'a>,
+}
+/// [TPM2.0 1.83] 14.2 TPM2_RSA_Encrypt (Response)
+#[doc(alias = "RSA_Encrypt_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+pub struct RSAEncryptRsp<'a> {
+    pub out_data: Tpm2bPublicKeyRsa<'a>,
+}
+
+impl Command for RSAEncrypt<'_> {
+    const CMD_CODE: TpmCc = TpmCc::RSAEncrypt;
+    type Response<'a> = RSAEncryptRsp<'a>;
+}
+impl Message for RSAEncrypt<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
 }
 impl Marshal for RSAEncrypt<'_> {
-    const MAX_SIZE: usize = Tpm2bPublicKeyRsa::MAX_SIZE
-        + <Option<TpmtRsaDecrypt>>::MAX_SIZE
-        + <crate::Tpm2bData>::MAX_SIZE;
+    const MAX_SIZE: usize =
+        Tpm2bPublicKeyRsa::MAX_SIZE + <Option<TpmtRsaDecrypt>>::MAX_SIZE + Tpm2bData::MAX_SIZE;
     type MaxBuffer = [u8; RSAEncrypt::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.message, dst, 0);
         let count = marshal_helper(&self.in_scheme, dst, count);
         marshal_helper(&self.label, dst, count)
     }
 }
-
-impl<'a> Unmarshal<'a> for RSAEncrypt<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for RSAEncrypt<'a> {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
+            key_handle,
             message: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
             in_scheme: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(2))?,
             label: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(3))?,
@@ -46,57 +66,28 @@ impl<'a> Unmarshal<'a> for RSAEncrypt<'a> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct RSAEncryptHandles {
-    pub key_handle: crate::constants::Handle,
-}
-impl Marshal for RSAEncryptHandles {
-    const MAX_SIZE: usize = <crate::constants::Handle>::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.key_handle.marshal(dst)
+impl Message for RSAEncryptRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
     }
-}
-
-impl<'a> Unmarshal<'a> for RSAEncryptHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            key_handle: TpmiDhObject::<false>::unmarshal(src)
-                .map_err(|e| e.in_handle(1))?
-                .0,
-        })
-    }
-}
-
-/// [TPM2.0 1.83] 14.2 TPM2_RSA_Encrypt (Response)
-#[doc(alias = "RSA_Encrypt_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct RSAEncryptRsp<'a> {
-    pub out_data: crate::Tpm2bPublicKeyRsa<'a>,
 }
 impl Marshal for RSAEncryptRsp<'_> {
-    const MAX_SIZE: usize = <crate::Tpm2bPublicKeyRsa>::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bPublicKeyRsa::MAX_SIZE;
     type MaxBuffer = [u8; RSAEncryptRsp::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.out_data.marshal(dst)
     }
 }
-
-impl<'a> Unmarshal<'a> for RSAEncryptRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for RSAEncryptRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             out_data: Unmarshal::unmarshal(src)?,
         })
     }
-}
-
-impl Command for RSAEncrypt<'_> {
-    const CMD_CODE: crate::constants::TpmCc = crate::constants::TpmCc::RSAEncrypt;
-    type Handles = RSAEncryptHandles;
-    type Response<'a> = RSAEncryptRsp<'a>;
-    type RespHandles = ();
 }
 
 /// [TPM2.0 1.83] 14.3 TPM2_RSA_Decrypt (Command)
@@ -104,26 +95,45 @@ impl Command for RSAEncrypt<'_> {
 #[doc(alias = "RSA_Decrypt_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
 pub struct RSADecrypt<'a> {
-    pub cipher_text: crate::Tpm2bPublicKeyRsa<'a>,
-    pub in_scheme: Option<crate::TpmtRsaDecrypt>,
-    pub label: crate::Tpm2bData<'a>,
+    pub key_handle: Handle,
+    pub cipher_text: Tpm2bPublicKeyRsa<'a>,
+    pub in_scheme: Option<TpmtRsaDecrypt>,
+    pub label: Tpm2bData<'a>,
+}
+/// [TPM2.0 1.83] 14.3 TPM2_RSA_Decrypt (Response)
+#[doc(alias = "RSA_Decrypt_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+pub struct RSADecryptRsp<'a> {
+    pub message: Tpm2bPublicKeyRsa<'a>,
+}
+
+impl Command for RSADecrypt<'_> {
+    const CMD_CODE: TpmCc = TpmCc::RSADecrypt;
+    type Response<'a> = RSADecryptRsp<'a>;
+}
+impl Message for RSADecrypt<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
 }
 impl Marshal for RSADecrypt<'_> {
-    const MAX_SIZE: usize = <crate::Tpm2bPublicKeyRsa>::MAX_SIZE
-        + <Option<crate::TpmtRsaDecrypt>>::MAX_SIZE
-        + <crate::Tpm2bData>::MAX_SIZE;
+    const MAX_SIZE: usize =
+        Tpm2bPublicKeyRsa::MAX_SIZE + <Option<TpmtRsaDecrypt>>::MAX_SIZE + Tpm2bData::MAX_SIZE;
     type MaxBuffer = [u8; RSADecrypt::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.cipher_text, dst, 0);
         let count = marshal_helper(&self.in_scheme, dst, count);
         marshal_helper(&self.label, dst, count)
     }
 }
-
-impl<'a> Unmarshal<'a> for RSADecrypt<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for RSADecrypt<'a> {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
+            key_handle,
             cipher_text: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
             in_scheme: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(2))?,
             label: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(3))?,
@@ -131,121 +141,90 @@ impl<'a> Unmarshal<'a> for RSADecrypt<'a> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct RSADecryptHandles {
-    pub key_handle: crate::constants::Handle,
-}
-impl Marshal for RSADecryptHandles {
-    const MAX_SIZE: usize = <crate::constants::Handle>::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.key_handle.marshal(dst)
+impl Message for RSADecryptRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
     }
-}
-
-impl<'a> Unmarshal<'a> for RSADecryptHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            key_handle: TpmiDhObject::<false>::unmarshal(src)
-                .map_err(|e| e.in_handle(1))?
-                .0,
-        })
-    }
-}
-
-/// [TPM2.0 1.83] 14.3 TPM2_RSA_Decrypt (Response)
-#[doc(alias = "RSA_Decrypt_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct RSADecryptRsp<'a> {
-    pub message: crate::Tpm2bPublicKeyRsa<'a>,
 }
 impl Marshal for RSADecryptRsp<'_> {
-    const MAX_SIZE: usize = <crate::Tpm2bPublicKeyRsa>::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bPublicKeyRsa::MAX_SIZE;
     type MaxBuffer = [u8; RSADecryptRsp::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.message.marshal(dst)
     }
 }
-
-impl<'a> Unmarshal<'a> for RSADecryptRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for RSADecryptRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             message: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Command for RSADecrypt<'_> {
-    const CMD_CODE: crate::constants::TpmCc = crate::constants::TpmCc::RSADecrypt;
-    type Handles = RSADecryptHandles;
-    type Response<'a> = RSADecryptRsp<'a>;
-    type RespHandles = ();
-}
-
 /// [TPM2.0 1.83] 14.4 TPM2_ECDH_KeyGen (Command)
 #[doc(alias = "TPM2_ECDH_KeyGen")]
 #[doc(alias = "ECDH_KeyGen_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct ECDHKeyGen {}
-impl Marshal for ECDHKeyGen {
-    const MAX_SIZE: usize = 0;
-    type MaxBuffer = [u8; 0];
-
-    fn marshal(&self, _dst: &mut Self::MaxBuffer) -> usize {
-        0
-    }
+pub struct ECDHKeyGen {
+    pub key_handle: Handle,
 }
-
-impl<'a> Unmarshal<'a> for ECDHKeyGen {
-    fn unmarshal(_src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {})
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct ECDHKeyGenHandles {
-    pub key_handle: crate::constants::Handle,
-}
-impl Marshal for ECDHKeyGenHandles {
-    const MAX_SIZE: usize = <crate::constants::Handle>::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.key_handle.marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for ECDHKeyGenHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            key_handle: TpmiDhObject::<false>::unmarshal(src)
-                .map_err(|e| e.in_handle(1))?
-                .0,
-        })
-    }
-}
-
 /// [TPM2.0 1.83] 14.4 TPM2_ECDH_KeyGen (Response)
 #[doc(alias = "ECDH_KeyGen_Out")]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
 pub struct ECDHKeyGenRsp<'a> {
-    pub z_point: crate::Tpm2bEccPoint<'a>,
-    pub pub_point: crate::Tpm2bEccPoint<'a>,
+    pub z_point: Tpm2bEccPoint<'a>,
+    pub pub_point: Tpm2bEccPoint<'a>,
+}
+
+impl Command for ECDHKeyGen {
+    const CMD_CODE: TpmCc = TpmCc::ECDHKeyGen;
+    type Response<'a> = ECDHKeyGenRsp<'a>;
+}
+impl Message for ECDHKeyGen {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
+impl Marshal for ECDHKeyGen {
+    const MAX_SIZE: usize = 0;
+    type MaxBuffer = [u8; 0];
+    fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
+        0
+    }
+}
+impl<'a> UnmarshalMessage<'a> for ECDHKeyGen {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self { key_handle })
+    }
+}
+
+impl Message for ECDHKeyGenRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
 }
 impl Marshal for ECDHKeyGenRsp<'_> {
-    const MAX_SIZE: usize = <crate::Tpm2bEccPoint>::MAX_SIZE + <crate::Tpm2bEccPoint>::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bEccPoint::MAX_SIZE + Tpm2bEccPoint::MAX_SIZE;
     type MaxBuffer = [u8; ECDHKeyGenRsp::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.z_point, dst, 0);
         marshal_helper(&self.pub_point, dst, count)
     }
 }
-
-impl<'a> Unmarshal<'a> for ECDHKeyGenRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for ECDHKeyGenRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             z_point: Unmarshal::unmarshal(src)?,
             pub_point: Unmarshal::unmarshal(src)?,
@@ -253,88 +232,72 @@ impl<'a> Unmarshal<'a> for ECDHKeyGenRsp<'a> {
     }
 }
 
-impl Command for ECDHKeyGen {
-    const CMD_CODE: crate::constants::TpmCc = crate::constants::TpmCc::ECDHKeyGen;
-    type Handles = ECDHKeyGenHandles;
-    type Response<'a> = ECDHKeyGenRsp<'a>;
-    type RespHandles = ();
-}
-
 /// [TPM2.0 1.83] 14.5 TPM2_ECDH_ZGen (Command)
 #[doc(alias = "TPM2_ECDH_ZGen")]
 #[doc(alias = "ECDH_ZGen_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
 pub struct ECDHZGen<'a> {
-    pub in_point: crate::Tpm2bEccPoint<'a>,
+    pub key_handle: Handle,
+    pub in_point: Tpm2bEccPoint<'a>,
 }
-impl Marshal for ECDHZGen<'_> {
-    const MAX_SIZE: usize = <crate::Tpm2bEccPoint>::MAX_SIZE;
-    type MaxBuffer = [u8; ECDHZGen::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.in_point.marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for ECDHZGen<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        let in_point: crate::Tpm2bEccPoint =
-            Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?;
-        Ok(Self { in_point })
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct ECDHZGenHandles {
-    pub key_handle: crate::constants::Handle,
-}
-impl Marshal for ECDHZGenHandles {
-    const MAX_SIZE: usize = <crate::constants::Handle>::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.key_handle.marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for ECDHZGenHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            key_handle: TpmiDhObject::<false>::unmarshal(src)
-                .map_err(|e| e.in_handle(1))?
-                .0,
-        })
-    }
-}
-
 /// [TPM2.0 1.83] 14.5 TPM2_ECDH_ZGen (Response)
 #[doc(alias = "ECDH_ZGen_Out")]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
 pub struct ECDHZGenRsp<'a> {
-    pub out_point: crate::Tpm2bEccPoint<'a>,
+    pub out_point: Tpm2bEccPoint<'a>,
 }
-impl Marshal for ECDHZGenRsp<'_> {
-    const MAX_SIZE: usize = <crate::Tpm2bEccPoint>::MAX_SIZE;
-    type MaxBuffer = [u8; ECDHZGenRsp::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.out_point.marshal(dst)
+impl Command for ECDHZGen<'_> {
+    const CMD_CODE: TpmCc = TpmCc::ECDHZGen;
+    type Response<'a> = ECDHZGenRsp<'a>;
+}
+impl Message for ECDHZGen<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
     }
 }
-
-impl<'a> Unmarshal<'a> for ECDHZGenRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl Marshal for ECDHZGen<'_> {
+    const MAX_SIZE: usize = Tpm2bEccPoint::MAX_SIZE;
+    type MaxBuffer = [u8; ECDHZGen::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.in_point.marshal(dst)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for ECDHZGen<'a> {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            out_point: Unmarshal::unmarshal(src)?,
+            key_handle,
+            in_point: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
         })
     }
 }
 
-impl Command for ECDHZGen<'_> {
-    const CMD_CODE: crate::constants::TpmCc = crate::constants::TpmCc::ECDHZGen;
-    type Handles = ECDHZGenHandles;
-    type Response<'a> = ECDHZGenRsp<'a>;
-    type RespHandles = ();
+impl Message for ECDHZGenRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl Marshal for ECDHZGenRsp<'_> {
+    const MAX_SIZE: usize = Tpm2bEccPoint::MAX_SIZE;
+    type MaxBuffer = [u8; ECDHZGenRsp::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.out_point.marshal(dst)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for ECDHZGenRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            out_point: Unmarshal::unmarshal(src)?,
+        })
+    }
 }
 
 /// [TPM2.0 1.83] 14.6 TPM2_ECC_Parameters (Command)
@@ -342,75 +305,63 @@ impl Command for ECDHZGen<'_> {
 #[doc(alias = "ECC_Parameters_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct ECCParameters {
-    pub curve_id: crate::TpmEccCurve,
+    pub curve_id: TpmEccCurve,
+}
+/// [TPM2.0 1.83] 14.6 TPM2_ECC_Parameters (Response)
+#[doc(alias = "ECC_Parameters_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct ECCParametersRsp<'a> {
+    pub parameters: TpmsAlgorithmDetailEcc<'a>,
+}
+
+impl Command for ECCParameters {
+    const CMD_CODE: TpmCc = TpmCc::ECCParameters;
+    type Response<'a> = ECCParametersRsp<'a>;
+}
+impl Message for ECCParameters {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
 }
 impl Marshal for ECCParameters {
-    const MAX_SIZE: usize = <crate::TpmEccCurve>::MAX_SIZE;
+    const MAX_SIZE: usize = TpmEccCurve::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.curve_id.marshal(dst)
     }
 }
-
-impl<'a> Unmarshal<'a> for ECCParameters {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for ECCParameters {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             curve_id: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
         })
     }
 }
 
-/// [TPM2.0 1.83] 14.6 TPM2_ECC_Parameters (Response)
-#[doc(alias = "ECC_Parameters_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct ECCParametersRsp<'a> {
-    pub parameters: crate::TpmsAlgorithmDetailEcc<'a>,
+impl Message for ECCParametersRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
 }
 impl Marshal for ECCParametersRsp<'_> {
-    const MAX_SIZE: usize = <crate::TpmsAlgorithmDetailEcc>::MAX_SIZE;
+    const MAX_SIZE: usize = TpmsAlgorithmDetailEcc::MAX_SIZE;
     type MaxBuffer = [u8; ECCParametersRsp::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.parameters.marshal(dst)
     }
 }
-
-impl<'a> Unmarshal<'a> for ECCParametersRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for ECCParametersRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             parameters: Unmarshal::unmarshal(src)?,
-        })
-    }
-}
-
-impl Command for ECCParameters {
-    const CMD_CODE: crate::constants::TpmCc = crate::constants::TpmCc::ECCParameters;
-    type Handles = ();
-    type Response<'a> = ECCParametersRsp<'a>;
-    type RespHandles = ();
-}
-
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct ZGen2PhaseHandles {
-    pub key_a: Handle,
-}
-
-impl Marshal for ZGen2PhaseHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.key_a.marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for ZGen2PhaseHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            key_a: TpmiDhObject::<false>::unmarshal(src)
-                .map_err(|e| e.in_handle(1))?
-                .0,
         })
     }
 }
@@ -420,19 +371,36 @@ impl<'a> Unmarshal<'a> for ZGen2PhaseHandles {
 #[doc(alias = "ZGen_2Phase_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct ZGen2Phase<'a> {
+    pub key_a: Handle,
     pub in_qs_b: Tpm2bEccPoint<'a>,
     pub in_qe_b: Tpm2bEccPoint<'a>,
     pub in_scheme: TpmiEccKeyExchange,
     pub counter: u16,
 }
+/// [TPM2.0 1.83] 14.7 TPM2_ZGen_2Phase (Response)
+#[doc(alias = "ZGen_2Phase_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+pub struct ZGen2PhaseRsp<'a> {
+    pub out_z1: Tpm2bEccPoint<'a>,
+    pub out_z2: Tpm2bEccPoint<'a>,
+}
 
+impl Command for ZGen2Phase<'_> {
+    const CMD_CODE: TpmCc = TpmCc::ZGen2Phase;
+    type Response<'a> = ZGen2PhaseRsp<'a>;
+}
+impl Message for ZGen2Phase<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_a]
+    }
+}
 impl Marshal for ZGen2Phase<'_> {
     const MAX_SIZE: usize = Tpm2bEccPoint::MAX_SIZE
         + Tpm2bEccPoint::MAX_SIZE
         + TpmiEccKeyExchange::MAX_SIZE
         + u16::MAX_SIZE;
     type MaxBuffer = [u8; ZGen2Phase::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.in_qs_b, dst, 0);
         let count = marshal_helper(&self.in_qe_b, dst, count);
@@ -440,10 +408,13 @@ impl Marshal for ZGen2Phase<'_> {
         marshal_helper(&self.counter, dst, count)
     }
 }
-
-impl<'a> Unmarshal<'a> for ZGen2Phase<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for ZGen2Phase<'a> {
+    fn unmarshal_with_handles(
+        [key_a]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
+            key_a,
             in_qs_b: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
             in_qe_b: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(2))?,
             in_scheme: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(3))?,
@@ -452,26 +423,25 @@ impl<'a> Unmarshal<'a> for ZGen2Phase<'a> {
     }
 }
 
-/// [TPM2.0 1.83] 14.7 TPM2_ZGen_2Phase (Response)
-#[doc(alias = "ZGen_2Phase_Out")]
-#[derive(Clone, PartialEq, Debug, Default, Eq)]
-pub struct ZGen2PhaseRsp<'a> {
-    pub out_z1: Tpm2bEccPoint<'a>,
-    pub out_z2: Tpm2bEccPoint<'a>,
+impl Message for ZGen2PhaseRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
 }
-
 impl Marshal for ZGen2PhaseRsp<'_> {
     const MAX_SIZE: usize = Tpm2bEccPoint::MAX_SIZE + Tpm2bEccPoint::MAX_SIZE;
     type MaxBuffer = [u8; ZGen2PhaseRsp::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.out_z1, dst, 0);
         marshal_helper(&self.out_z2, dst, count)
     }
 }
-
-impl<'a> Unmarshal<'a> for ZGen2PhaseRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for ZGen2PhaseRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             out_z1: Unmarshal::unmarshal(src)?,
             out_z2: Unmarshal::unmarshal(src)?,
@@ -479,88 +449,76 @@ impl<'a> Unmarshal<'a> for ZGen2PhaseRsp<'a> {
     }
 }
 
-impl Command for ZGen2Phase<'_> {
-    const CMD_CODE: TpmCc = TpmCc::ZGen2Phase;
-    type Handles = ZGen2PhaseHandles;
-    type Response<'a> = ZGen2PhaseRsp<'a>;
-    type RespHandles = ();
-}
-
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct ECCEncryptHandles {
-    pub key_handle: Handle,
-}
-
-impl Marshal for ECCEncryptHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.key_handle.marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for ECCEncryptHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            key_handle: TpmiDhObject::<false>::unmarshal(src)
-                .map_err(|e| e.in_handle(1))?
-                .0,
-        })
-    }
-}
-
 /// [TPM2.0 1.83] 14.8 TPM2_ECC_Encrypt (Command)
 #[doc(alias = "TPM2_ECC_Encrypt")]
 #[doc(alias = "ECC_Encrypt_In")]
-#[derive(Clone, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
 pub struct ECCEncrypt<'a> {
+    pub key_handle: Handle,
     pub plain_text: Tpm2bMaxBuffer<'a>,
     pub in_scheme: Option<TpmtKdfScheme>,
 }
-
-impl Marshal for ECCEncrypt<'_> {
-    const MAX_SIZE: usize = Tpm2bMaxBuffer::MAX_SIZE + <Option<TpmtKdfScheme>>::MAX_SIZE;
-    type MaxBuffer = [u8; ECCEncrypt::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        let count = marshal_helper(&self.plain_text, dst, 0);
-        marshal_helper(&self.in_scheme, dst, count)
-    }
-}
-
-impl<'a> Unmarshal<'a> for ECCEncrypt<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            plain_text: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
-            in_scheme: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(2))?,
-        })
-    }
-}
-
 /// [TPM2.0 1.83] 14.8 TPM2_ECC_Encrypt (Response)
 #[doc(alias = "ECC_Encrypt_Out")]
-#[derive(Clone, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
 pub struct ECCEncryptRsp<'a> {
     pub c1: Tpm2bEccPoint<'a>,
     pub c2: Tpm2bMaxBuffer<'a>,
     pub c3: Tpm2bDigest<'a>,
 }
 
+impl Command for ECCEncrypt<'_> {
+    const CMD_CODE: TpmCc = TpmCc::ECCEncrypt;
+    type Response<'a> = ECCEncryptRsp<'a>;
+}
+impl Message for ECCEncrypt<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
+impl Marshal for ECCEncrypt<'_> {
+    const MAX_SIZE: usize = Tpm2bMaxBuffer::MAX_SIZE + <Option<TpmtKdfScheme>>::MAX_SIZE;
+    type MaxBuffer = [u8; ECCEncrypt::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.plain_text, dst, 0);
+        marshal_helper(&self.in_scheme, dst, count)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for ECCEncrypt<'a> {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            key_handle,
+            plain_text: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
+            in_scheme: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(2))?,
+        })
+    }
+}
+
+impl Message for ECCEncryptRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
 impl Marshal for ECCEncryptRsp<'_> {
     const MAX_SIZE: usize =
         Tpm2bEccPoint::MAX_SIZE + Tpm2bMaxBuffer::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
     type MaxBuffer = [u8; ECCEncryptRsp::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.c1, dst, 0);
         let count = marshal_helper(&self.c2, dst, count);
         marshal_helper(&self.c3, dst, count)
     }
 }
-
-impl<'a> Unmarshal<'a> for ECCEncryptRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for ECCEncryptRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             c1: Unmarshal::unmarshal(src)?,
             c2: Unmarshal::unmarshal(src)?,
@@ -569,55 +527,40 @@ impl<'a> Unmarshal<'a> for ECCEncryptRsp<'a> {
     }
 }
 
-impl Command for ECCEncrypt<'_> {
-    const CMD_CODE: TpmCc = TpmCc::ECCEncrypt;
-    type Handles = ECCEncryptHandles;
-    type Response<'a> = ECCEncryptRsp<'a>;
-    type RespHandles = ();
-}
-
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct ECCDecryptHandles {
-    pub key_handle: Handle,
-}
-
-impl Marshal for ECCDecryptHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.key_handle.marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for ECCDecryptHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            key_handle: TpmiDhObject::<false>::unmarshal(src)
-                .map_err(|e| e.in_handle(1))?
-                .0,
-        })
-    }
-}
-
 /// [TPM2.0 1.83] 14.9 TPM2_ECC_Decrypt (Command)
 #[doc(alias = "TPM2_ECC_Decrypt")]
 #[doc(alias = "ECC_Decrypt_In")]
-#[derive(Clone, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
 pub struct ECCDecrypt<'a> {
+    pub key_handle: Handle,
     pub c1: Tpm2bEccPoint<'a>,
     pub c2: Tpm2bMaxBuffer<'a>,
     pub c3: Tpm2bDigest<'a>,
     pub in_scheme: Option<TpmtKdfScheme>,
 }
+/// [TPM2.0 1.83] 14.9 TPM2_ECC_Decrypt (Response)
+#[doc(alias = "ECC_Decrypt_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+pub struct ECCDecryptRsp<'a> {
+    pub plain_text: Tpm2bMaxBuffer<'a>,
+}
 
+impl Command for ECCDecrypt<'_> {
+    const CMD_CODE: TpmCc = TpmCc::ECCDecrypt;
+    type Response<'a> = ECCDecryptRsp<'a>;
+}
+impl Message for ECCDecrypt<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
 impl Marshal for ECCDecrypt<'_> {
     const MAX_SIZE: usize = Tpm2bEccPoint::MAX_SIZE
         + Tpm2bMaxBuffer::MAX_SIZE
         + Tpm2bDigest::MAX_SIZE
         + <Option<TpmtKdfScheme>>::MAX_SIZE;
     type MaxBuffer = [u8; ECCDecrypt::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.c1, dst, 0);
         let count = marshal_helper(&self.c2, dst, count);
@@ -625,10 +568,13 @@ impl Marshal for ECCDecrypt<'_> {
         marshal_helper(&self.in_scheme, dst, count)
     }
 }
-
-impl<'a> Unmarshal<'a> for ECCDecrypt<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for ECCDecrypt<'a> {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
+            key_handle,
             c1: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
             c2: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(2))?,
             c3: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(3))?,
@@ -637,57 +583,26 @@ impl<'a> Unmarshal<'a> for ECCDecrypt<'a> {
     }
 }
 
-/// [TPM2.0 1.83] 14.9 TPM2_ECC_Decrypt (Response)
-#[doc(alias = "ECC_Decrypt_Out")]
-#[derive(Clone, PartialEq, Debug, Default, Eq)]
-pub struct ECCDecryptRsp<'a> {
-    pub plain_text: Tpm2bMaxBuffer<'a>,
+impl Message for ECCDecryptRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
 }
-
 impl Marshal for ECCDecryptRsp<'_> {
     const MAX_SIZE: usize = Tpm2bMaxBuffer::MAX_SIZE;
     type MaxBuffer = [u8; ECCDecryptRsp::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.plain_text.marshal(dst)
     }
 }
-
-impl<'a> Unmarshal<'a> for ECCDecryptRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for ECCDecryptRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             plain_text: Unmarshal::unmarshal(src)?,
-        })
-    }
-}
-
-impl Command for ECCDecrypt<'_> {
-    const CMD_CODE: TpmCc = TpmCc::ECCDecrypt;
-    type Handles = ECCDecryptHandles;
-    type Response<'a> = ECCDecryptRsp<'a>;
-    type RespHandles = ();
-}
-
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct EncapsulateHandles {
-    pub key_handle: Handle,
-}
-
-impl Marshal for EncapsulateHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.key_handle.marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for EncapsulateHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            key_handle: TpmiDhObject::<false>::unmarshal(src)
-                .map_err(|e| e.in_handle(1))?
-                .0,
         })
     }
 }
@@ -696,23 +611,9 @@ impl<'a> Unmarshal<'a> for EncapsulateHandles {
 #[doc(alias = "TPM2_Encapsulate")]
 #[doc(alias = "Encapsulate_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct Encapsulate {}
-
-impl Marshal for Encapsulate {
-    const MAX_SIZE: usize = 0;
-    type MaxBuffer = [u8; 0];
-
-    fn marshal(&self, _dst: &mut Self::MaxBuffer) -> usize {
-        0
-    }
+pub struct Encapsulate {
+    pub key_handle: Handle,
 }
-
-impl<'a> Unmarshal<'a> for Encapsulate {
-    fn unmarshal(_src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {})
-    }
-}
-
 /// [TPM2.0 1.83] 14.10 TPM2_Encapsulate (Response)
 #[doc(alias = "Encapsulate_Out")]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
@@ -721,52 +622,54 @@ pub struct EncapsulateRsp<'a> {
     pub ciphertext: Tpm2bKemCiphertext<'a>,
 }
 
+impl Command for Encapsulate {
+    const CMD_CODE: TpmCc = TpmCc::Encapsulate;
+    type Response<'a> = EncapsulateRsp<'a>;
+}
+impl Message for Encapsulate {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
+impl Marshal for Encapsulate {
+    const MAX_SIZE: usize = 0;
+    type MaxBuffer = [u8; 0];
+    fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
+        0
+    }
+}
+impl<'a> UnmarshalMessage<'a> for Encapsulate {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self { key_handle })
+    }
+}
+
+impl Message for EncapsulateRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
 impl Marshal for EncapsulateRsp<'_> {
     const MAX_SIZE: usize = Tpm2bSharedSecret::MAX_SIZE + Tpm2bKemCiphertext::MAX_SIZE;
     type MaxBuffer = [u8; EncapsulateRsp::MAX_SIZE];
-
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.shared_secret, dst, 0);
         marshal_helper(&self.ciphertext, dst, count)
     }
 }
-
-impl<'a> Unmarshal<'a> for EncapsulateRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for EncapsulateRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             shared_secret: Unmarshal::unmarshal(src)?,
             ciphertext: Unmarshal::unmarshal(src)?,
-        })
-    }
-}
-
-impl Command for Encapsulate {
-    const CMD_CODE: TpmCc = TpmCc::Encapsulate;
-    type Handles = EncapsulateHandles;
-    type Response<'a> = EncapsulateRsp<'a>;
-    type RespHandles = ();
-}
-
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
-pub struct DecapsulateHandles {
-    pub key_handle: Handle,
-}
-
-impl Marshal for DecapsulateHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.key_handle.marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for DecapsulateHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            key_handle: TpmiDhObject::<false>::unmarshal(src)
-                .map_err(|e| e.in_handle(1))?
-                .0,
         })
     }
 }
@@ -776,26 +679,9 @@ impl<'a> Unmarshal<'a> for DecapsulateHandles {
 #[doc(alias = "Decapsulate_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
 pub struct Decapsulate<'a> {
+    pub key_handle: Handle,
     pub ciphertext: Tpm2bKemCiphertext<'a>,
 }
-
-impl Marshal for Decapsulate<'_> {
-    const MAX_SIZE: usize = Tpm2bKemCiphertext::MAX_SIZE;
-    type MaxBuffer = [u8; Decapsulate::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.ciphertext.marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for Decapsulate<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            ciphertext: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
-        })
-    }
-}
-
 /// [TPM2.0 1.83] 14.11 TPM2_Decapsulate (Response)
 #[doc(alias = "Decapsulate_Out")]
 #[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
@@ -803,26 +689,55 @@ pub struct DecapsulateRsp<'a> {
     pub shared_secret: Tpm2bSharedSecret<'a>,
 }
 
-impl Marshal for DecapsulateRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bSharedSecret::MAX_SIZE;
-    type MaxBuffer = [u8; DecapsulateRsp::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.shared_secret.marshal(dst)
+impl Command for Decapsulate<'_> {
+    const CMD_CODE: TpmCc = TpmCc::Decapsulate;
+    type Response<'a> = DecapsulateRsp<'a>;
+}
+impl Message for Decapsulate<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
     }
 }
-
-impl<'a> Unmarshal<'a> for DecapsulateRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl Marshal for Decapsulate<'_> {
+    const MAX_SIZE: usize = Tpm2bKemCiphertext::MAX_SIZE;
+    type MaxBuffer = [u8; Decapsulate::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.ciphertext.marshal(dst)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for Decapsulate<'a> {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            shared_secret: Unmarshal::unmarshal(src)?,
+            key_handle,
+            ciphertext: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
         })
     }
 }
 
-impl Command for Decapsulate<'_> {
-    const CMD_CODE: TpmCc = TpmCc::Decapsulate;
-    type Handles = DecapsulateHandles;
-    type Response<'a> = DecapsulateRsp<'a>;
-    type RespHandles = ();
+impl Message for DecapsulateRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl Marshal for DecapsulateRsp<'_> {
+    const MAX_SIZE: usize = Tpm2bSharedSecret::MAX_SIZE;
+    type MaxBuffer = [u8; DecapsulateRsp::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.shared_secret.marshal(dst)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for DecapsulateRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            shared_secret: Unmarshal::unmarshal(src)?,
+        })
+    }
 }

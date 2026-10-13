@@ -1,3 +1,4 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::{CommandHandler, SessionState};
 use crate::req_resp::RequestThenResponse;
 use crate::storage::{NvStorage, Tpm2Storage};
@@ -6,17 +7,14 @@ use tpm2::Alg;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
-use tpm2::commands::{
-    PolicyRestart, PolicyRestartHandles, StartAuthSession, StartAuthSessionHandles,
-    StartAuthSessionRespHandles,
-};
-use tpm2::crypto::kdf::{kdfa, kdfe};
+use tpm2::commands::{PolicyCommandCode, PolicyGetDigest, PolicyRestart, StartAuthSession};
+use tpm2::crypto::kdf::{kdfa_bits, kdfe_bits};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TPM2_MAX_ACTIVE_SESSIONS, TpmSe};
 use tpm2::{
-    Tpm2bAuth, Tpm2bNonce, TpmaObject, TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmsAuthCommand,
-    TpmsAuthResponse, Unmarshal,
+    Tpm2bAuth, Tpm2bNonce, TpmaObject, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
+    TpmsAuthCommand, TpmsAuthResponse, Unmarshal,
 };
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -42,14 +40,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<StartAuthSessionHandles>()?;
+        let handles = request.try_unmarshal_handles::<StartAuthSession>()?;
+        let [tpm_key, bind] = handles;
+        check(tpm_key, Tpmi::DhObjectOrNull, Position::handle(1))?;
+        check(bind, Tpmi::DhEntityOrNull, Position::handle(2))?;
 
         let mut session_responses = [TpmsAuthResponse::default(); 3];
         // Parse authorization sessions if present.
         let num_sessions =
             self.parse_auth_sessions_for_start_session(&mut request, &mut session_responses)?;
 
-        let cmd = match request.try_unmarshal::<StartAuthSession>() {
+        let cmd = match request.try_unmarshal_command::<StartAuthSession>(handles) {
             Ok(cmd) => cmd,
             Err(e) => {
                 let mut slice = request.remaining_slice();
@@ -73,7 +74,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // Validate symmetric block cipher mode (if not Null, mode must be CFB)
         if let Some(tpm2::TpmtSymDef::Cipher(sym_obj)) = cmd.symmetric
-            && sym_obj.mode() != Some(TpmiAlgSymMode::CFB)
+            && sym_obj.mode() != Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb))
         {
             return Err(TpmRc::MODE.with(Position::parameter(4)));
         }
@@ -93,7 +94,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .rng
-            .get_random(&mut nonce_tpm_bytes[..nonce_caller_len])
+            .fill_bytes(&mut nonce_tpm_bytes[..nonce_caller_len])
             .map_err(|_| TpmRc::FAILURE)?;
         let nonce_tpm = Tpm2bNonce::from_bytes(&nonce_tpm_bytes[..nonce_caller_len])
             .map_err(|_| TpmRc::FAILURE)?;
@@ -101,7 +102,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Decrypt salt
         let mut decrypted_salt = [0u8; 64];
         let decrypted_salt_len = self.decrypt_session_salt(
-            handles.tpm_key,
+            tpm_key,
             cmd.encrypted_salt.get_buffer(),
             &nonce_tpm,
             &cmd.nonce_caller,
@@ -110,7 +111,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // Retrieve auth value of bind entity
         let mut bind_auth = [0u8; 64];
-        let bind_auth_len = self.retrieve_bind_auth(handles.bind, &mut bind_auth)?;
+        let bind_auth_len = self.retrieve_bind_auth(bind, &mut bind_auth)?;
         let bind_auth_stripped = crate::util::strip_trailing_zeros(&bind_auth[..bind_auth_len]);
 
         // Generate unique session handle
@@ -119,8 +120,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Derive session key (if not Trial session)
         let (session_key, session_key_len) = self.derive_session_key(
             cmd.session_type,
-            handles.tpm_key,
-            handles.bind,
+            tpm_key,
+            bind,
             bind_auth_stripped,
             &decrypted_salt[..decrypted_salt_len],
             cmd.auth_hash,
@@ -132,24 +133,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Only HMAC sessions are bound to an entity; a policy (or trial) session is never bound
         // (C `SessionCreate`, Session.c: `bind != TPM_RH_NULL && sessionType == TPM_SE_HMAC`).
         // The bind entity's authValue still contributes to the session key of every session type.
-        let is_bound_session = handles.bind != Handle::RH_NULL && cmd.session_type == TpmSe::HMAC;
+        let is_bound_session = bind != Handle::RH_NULL && cmd.session_type == TpmSe::HMAC;
         let mut bound_entity = crate::owned::OwnedName::default();
         if is_bound_session {
-            let bind_name = self.context.handle_name(self.global_state, handles.bind.0);
+            let bind_name = self.context.handle_name(self.global_state, bind.0);
             bound_entity = compute_bound_entity(bind_name.get_buffer(), bind_auth_stripped)?;
         }
         let bind_entity = if is_bound_session {
-            handles.bind
+            bind
         } else {
             Handle::RH_NULL
         };
         // A DA-protected bind entity makes every use of the session subject to DA, for all
         // session types (C `SessionCreate`: `isDaBound`, `isLockoutBound`).
-        let is_da_bound = handles.bind != Handle::RH_NULL
-            && self
-                .context
-                .has_da_protection(self.global_state, handles.bind.0);
-        let is_lockout_bound = is_da_bound && handles.bind == Handle::RH_LOCKOUT;
+        let is_da_bound =
+            bind != Handle::RH_NULL && self.context.has_da_protection(self.global_state, bind.0);
+        let is_lockout_bound = is_da_bound && bind == Handle::RH_LOCKOUT;
 
         // Add to active sessions
         let session_state = SessionState {
@@ -191,19 +190,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.global_state.add_session(session_state)?;
 
         // Write response
-        let resp_handles = StartAuthSessionRespHandles {
+        let rsp = responses::StartAuthSession {
             session_handle: Handle(session_handle),
+            nonce_tpm,
         };
-        let rsp = responses::StartAuthSession { nonce_tpm };
 
         let response = request.into_response();
 
-        self.write_response_all(
-            response,
-            &resp_handles,
-            &rsp,
-            &session_responses[..num_sessions],
-        )?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -296,17 +290,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     let name_alg = key_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
                     let hash_alg = Alg::from(name_alg);
 
-                    let decrypted_len = self
-                        .crypto()
-                        .decrypt(
-                            Alg::OAEP,
-                            hash_alg,
-                            &key_obj.private[..key_obj.private_len],
-                            encrypted_salt,
-                            &mut plaintext_buf,
-                            b"SECRET\0",
-                        )
-                        .map_err(|_| TpmRc::VALUE.with(Position::parameter(2)))?;
+                    let decrypted_len = match self.crypto().decrypt(
+                        Alg::OAEP,
+                        hash_alg,
+                        &key_obj.private[..key_obj.private_len],
+                        encrypted_salt,
+                        &mut plaintext_buf,
+                        b"SECRET\0",
+                    ) {
+                        Ok(Some(len)) => len,
+                        Ok(None) | Err(_) => {
+                            return Err(TpmRc::VALUE.with(Position::parameter(2)));
+                        }
+                    };
 
                     let name_alg_digest_size = name_alg.digest_size();
                     if name_alg_digest_size == 0 || decrypted_len > name_alg_digest_size {
@@ -351,19 +347,26 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     raw_point[param_size - in_x.len()..param_size].copy_from_slice(in_x);
                     raw_point[param_size * 2 - in_y.len()..param_size * 2].copy_from_slice(in_y);
 
-                    self.crypto()
-                        .validate_point(curve, &raw_point[..param_size * 2])
-                        .map_err(|_| TpmRc::VALUE.with(Position::parameter(2)))?;
+                    if !matches!(
+                        self.crypto()
+                            .validate_point(curve, &raw_point[..param_size * 2]),
+                        Ok(true)
+                    ) {
+                        return Err(TpmRc::VALUE.with(Position::parameter(2)));
+                    }
 
                     let mut z_buf = [0u8; 256];
-                    self.crypto()
-                        .point_multiply(
+                    if !matches!(
+                        self.crypto().point_multiply(
                             curve,
                             &key_obj.private[..key_obj.private_len],
                             &raw_point[..param_size * 2],
                             &mut z_buf,
-                        )
-                        .map_err(|_| TpmRc::VALUE.with(Position::parameter(2)))?;
+                        ),
+                        Ok(Some(_))
+                    ) {
+                        return Err(TpmRc::VALUE.with(Position::parameter(2)));
+                    }
 
                     let name_alg = key_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
                     let hash_size = name_alg.digest_size();
@@ -377,7 +380,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     padded_ek_x[param_size - ek_x.len()..param_size].copy_from_slice(ek_x);
 
                     let mut derived_salt = [0u8; 64];
-                    let derived_salt_len = kdfe(
+                    let derived_salt_len = kdfe_bits(
                         self.crypto(),
                         name_alg,
                         z_x,
@@ -545,7 +548,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             let mut derived_key = [0u8; 128];
 
-            kdfa(
+            kdfa_bits(
                 self.crypto(),
                 auth_hash,
                 &secret[..secret_len],
@@ -579,18 +582,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        let handles = request.try_unmarshal::<tpm2::commands::PolicyCommandCodeHandles>()?;
+        let handles = request.try_unmarshal_handles::<PolicyCommandCode>()?;
+        let [policy_session] = handles;
+        check(policy_session, Tpmi::ShPolicy, Position::handle(1))?;
         let mut session_responses = [TpmsAuthResponse::default(); 3];
         let num_sessions =
             self.parse_auth_sessions_for_start_session(&mut request, &mut session_responses)?;
-        let cmd = request.try_unmarshal::<tpm2::commands::PolicyCommandCode>()?;
+        let cmd = request.try_unmarshal_command::<PolicyCommandCode>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
 
         // 1. Retrieve session state details.
-        let session_handle = handles.policy_session.0;
+        let session_handle = policy_session.0;
         let (auth_hash, policy_digest, policy_digest_len) = {
             let session_state = self
                 .global_state
@@ -653,7 +658,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let response = request.into_response();
-        self.write_response_all(response, &(), &(), &session_responses[..num_sessions])?;
+        self.write_response_message(response, &(), &session_responses[..num_sessions])?;
         Ok(())
     }
 
@@ -672,7 +677,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        let handles = request.try_unmarshal::<tpm2::commands::PolicyGetDigestHandles>()?;
+        let handles = request.try_unmarshal_handles::<PolicyGetDigest>()?;
+        let [policy_session] = handles;
+        check(policy_session, Tpmi::ShPolicy, Position::handle(1))?;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
         if request.remaining_bytes() != 0 {
@@ -680,7 +687,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         // 1. Retrieve session state.
-        let session_handle = handles.policy_session.0;
+        let session_handle = policy_session.0;
         let global_state = &self.global_state;
         let session_state = global_state
             .session(session_handle)
@@ -697,10 +704,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &session_state.policy_digest[..session_state.policy_digest_len],
         )
         .map_err(|_| TpmRc::FAILURE)?;
-        let rsp = tpm2::commands::responses::PolicyGetDigest { policy_digest };
+        let rsp = responses::PolicyGetDigest { policy_digest };
 
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
 
@@ -721,15 +728,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        let handles = request.try_unmarshal::<PolicyRestartHandles>()?;
+        let handles = request.try_unmarshal_handles::<PolicyRestart>()?;
+        let [session_handle] = handles;
+        check(session_handle, Tpmi::ShPolicy, Position::handle(1))?;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<PolicyRestart>()?;
+        let _cmd = request.try_unmarshal_command::<PolicyRestart>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        let session_handle = handles.session_handle.0;
+        let session_handle = session_handle.0;
 
         let auth_hash = {
             let session_state = self
@@ -772,7 +781,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let response = request.into_response();
-        self.write_response_all(response, &(), &(), &session_responses[..num_sessions])?;
+        self.write_response_message(response, &(), &session_responses[..num_sessions])?;
         Ok(())
     }
 }
@@ -813,7 +822,7 @@ fn compute_hash<C: CryptoProvider>(
     data: &[u8],
     hash_out: &mut [u8],
 ) -> Result<usize, TpmRc> {
-    let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut digest_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
     let digest = tpm2::crypto::hash(crypto, auth_hash, data, &mut digest_buf)
         .map_err(|_| TpmRc::HASH.to_rc())?;
     let slice = digest.digest();

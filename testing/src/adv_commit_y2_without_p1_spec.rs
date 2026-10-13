@@ -1,10 +1,11 @@
 use crate::test_utils::*;
 use tpm2::TpmEccCurve;
-use tpm2::commands::{Commit, CommitHandles};
+use tpm2::commands::Commit;
 use tpm2::*;
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_y2_without_p1() {
     let mut sim = create_simulator!();
 
@@ -39,30 +40,25 @@ fn test_commit_y2_without_p1() {
     };
 
     let create = tpm2::commands::CreateLoaded {
+        parent_handle: tpm2::Handle(0x40000001),
         in_sensitive,
         in_public: crate::test_utils::make_template(&pub_area),
     };
-    let create_handles = tpm2::commands::CreateLoadedHandles {
-        parent_handle: tpm2::Handle(0x40000001),
-    };
 
-    let (_, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
     let key_handle = rsp_handles.object_handle;
 
     // Test with y2 provided but P1 empty
     let y2_bytes = [0xCC; 32];
     let y2 = Tpm2bEccParameter::from_bytes(&y2_bytes).unwrap();
     let commit = Commit {
+        sign_handle: key_handle,
         p1: Tpm2bEccPoint::default(), // Empty!
         s2: Tpm2bSensitiveData::default(),
         y2,
     };
-    let commit_handles = CommitHandles {
-        sign_handle: key_handle,
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &commit, commit_handles, 1, b"password");
+    let res = execute_with_password_sessions(&mut sim, &commit, 1, b"password");
     match res {
         Err(e) => {
             // Should be TPM_RC_SIZE (0x095) per TPM 2.0 Spec (when s2 is empty and y2 is present).

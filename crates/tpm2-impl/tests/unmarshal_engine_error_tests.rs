@@ -15,7 +15,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     GlobalState,
@@ -47,8 +47,8 @@ fn test_engine_session_unmarshalling_error_codes_and_positions() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Invalid session handle (0x80000000) in session 1 of TPM2_ClearControl (0x0127)
     // Header: tag = 0x8002 (ST_SESSIONS), size = 28 (0x1C), cmd = 0x00000127 (ClearControl)
@@ -112,8 +112,8 @@ fn test_engine_command_parameter_error_codes_and_positions() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. HierarchyControl (0x0121): invalid parameter 1 (enable = RH_NULL = 0x40000007) -> VALUE + P1
     // Total size: 10 (hdr) + 4 (auth handle) + 4 (auth size) + 9 (PW session) + 4 (enable) + 1 (state) = 32 (0x20)
@@ -171,8 +171,8 @@ fn test_engine_sign_validation_ticket_parameter_position() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Populate a loaded signing key at handle 0x80000001
     let key_handle = 0x80000001;
@@ -243,8 +243,8 @@ fn test_engine_context_load_and_get_random_parameter_positions() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. TPM2_ContextLoad (0x0161): truncated parameter 1 (only 4 bytes of sequence) -> INSUFFICIENT + P1
     let req_ctx_load_truncated = hex!(
@@ -318,8 +318,8 @@ fn test_engine_nv_define_space_and_object_commands_error_codes_and_positions() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut resp = [0u8; 256];
 
     // 1. TPM2_NV_DefineSpace (0x012A): publicInfo (param 2) with size == 0 -> TPM_RC_SIZE + P2
@@ -468,8 +468,8 @@ fn test_engine_sensitive_rsa_key_bits_and_ecc_point_unmarshalling_errors() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut resp = [0u8; 256];
 
     // 1. TPM2_CreatePrimary (0x0131): inSensitive (param 1) with size == 0 -> TPM_RC_SIZE + P1
@@ -693,8 +693,8 @@ fn test_non_null_schemes_with_tpm_alg_null_inner_hash_and_kdf_in_commands() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut resp = [0u8; 256];
 
     // 1. TPM2_TestParms (0x018A) with RSA (0x0001), symmetric=NULL (0x0010), scheme=RSASSA (0x0014), hash=NULL (0x0010), keyBits=2048 (0x0800), exponent=0 (0x00000000)
@@ -774,8 +774,8 @@ fn test_verify_signature_and_policy_signed_reject_null_signature() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut resp = [0u8; 256];
 
     // Populate a loaded signing key at handle 0x80000001
@@ -864,8 +864,8 @@ fn test_incremental_self_test_reserved_alg_error_codes() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut resp = [0u8; 256];
 
     for reserved_id in [0x0000u16, 0x00C1, 0x8000, 0xFFFF] {
@@ -916,8 +916,8 @@ fn test_engine_object_public_null_name_alg_validation() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut resp = [0u8; 512];
 
     // Populate a loaded parent key at handle 0x80000000 so handle resolution and session validation pass
@@ -1093,10 +1093,10 @@ fn test_engine_object_public_null_name_alg_validation() {
         0,
         "ReadPublic on object with null nameAlg must succeed"
     );
-    // Parse ReadPublicRsp using tpm2::commands::responses::ReadPublic
+    // Parse ReadPublicRsp using tpm2::commands::responses::ReadPublic (no response handles)
     let resp_len = u32::from_be_bytes([resp[2], resp[3], resp[4], resp[5]]) as usize;
     let mut resp_body = &resp[10..resp_len];
-    let parsed_rsp = tpm2::Unmarshal::unmarshal(&mut resp_body)
+    let parsed_rsp = tpm2::UnmarshalMessage::unmarshal_with_handles([], &mut resp_body)
         .expect("ReadPublicRsp unmarshal must succeed for null nameAlg object");
     let parsed_rsp: tpm2::commands::responses::ReadPublic = parsed_rsp;
     assert_eq!(
@@ -1110,8 +1110,8 @@ fn test_engine_rsa_encrypt_and_decrypt_reject_signature_schemes_on_unmarshal() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut resp = [0u8; 256];
 
     let key_handle = 0x80000001;

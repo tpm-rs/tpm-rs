@@ -1,10 +1,12 @@
 use crate::test_utils::*;
-use tpm2::commands::{Commit, CommitHandles, CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::{Commit, CreateLoaded};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_on_ecc_key_without_sign_attribute() {
     let mut sim = create_simulator!();
 
@@ -29,7 +31,10 @@ fn test_commit_on_ecc_key_without_sign_attribute() {
             TpmsEccParms {
                 // A restricted decryption (storage) key needs a symmetric algorithm, otherwise
                 // creation fails with TPM_RC_SYMMETRIC (C PublicAttributesValidation).
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -44,27 +49,21 @@ fn test_commit_on_ecc_key_without_sign_attribute() {
     let in_public = crate::test_utils::make_template(&pub_area);
 
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
-    };
 
-    let (_rsp_cp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
 
     let commit = Commit {
+        sign_handle: rsp_handles.object_handle,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    let commit_handles = CommitHandles {
-        sign_handle: rsp_handles.object_handle,
-    };
 
-    let res =
-        execute_with_password_sessions(&mut sim, &commit, commit_handles.clone(), 1, password);
+    let res = execute_with_password_sessions(&mut sim, &commit, 1, password);
     assert!(
         res.is_err(),
         "Commit on ECC key without SIGN attribute should fail"

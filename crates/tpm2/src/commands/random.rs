@@ -8,8 +8,7 @@
 //!
 //! Each command includes its corresponding request parameters, handle list,
 //! response parameters, and [`Command`] trait implementation.
-
-use super::Command;
+use super::{Command, Message, UnmarshalMessage};
 use crate::{errors::UnmarshalError, *};
 
 /// [TPM2.0 1.83] 16.1 TPM2_GetRandom (Command)
@@ -19,46 +18,59 @@ use crate::{errors::UnmarshalError, *};
 pub struct GetRandom {
     pub bytes_requested: u16,
 }
-impl Command for GetRandom {
-    const CMD_CODE: TpmCc = TpmCc::GetRandom;
-    type Handles = ();
-    type Response<'a> = GetRandomRsp<'a>;
-    type RespHandles = ();
-}
-impl Marshal for GetRandom {
-    const MAX_SIZE: usize = u16::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.bytes_requested.marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for GetRandom {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self {
-            bytes_requested: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
-        })
-    }
-}
-
 /// [TPM2.0 1.83] 16.1 TPM2_GetRandom (Response)
 #[doc(alias = "GetRandom_Out")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct GetRandomRsp<'a> {
     pub random_bytes: Tpm2bDigest<'a>,
 }
-impl Marshal for GetRandomRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bDigest::MAX_SIZE;
-    type MaxBuffer = [u8; GetRandomRsp::MAX_SIZE];
 
-    fn marshal(&self, dst: &mut [u8; GetRandomRsp::MAX_SIZE]) -> usize {
-        self.random_bytes.marshal(dst)
+impl Command for GetRandom {
+    const CMD_CODE: TpmCc = TpmCc::GetRandom;
+    type Response<'a> = GetRandomRsp<'a>;
+}
+impl Message for GetRandom {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl Marshal for GetRandom {
+    const MAX_SIZE: usize = u16::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.bytes_requested.marshal(dst)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for GetRandom {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            bytes_requested: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
+        })
     }
 }
 
-impl<'a> Unmarshal<'a> for GetRandomRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl Message for GetRandomRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl Marshal for GetRandomRsp<'_> {
+    const MAX_SIZE: usize = Tpm2bDigest::MAX_SIZE;
+    type MaxBuffer = [u8; GetRandomRsp::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.random_bytes.marshal(dst)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for GetRandomRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             random_bytes: Unmarshal::unmarshal(src)?,
         })
@@ -72,23 +84,29 @@ impl<'a> Unmarshal<'a> for GetRandomRsp<'a> {
 pub struct StirRandom<'a> {
     pub in_data: Tpm2bSensitiveData<'a>,
 }
+
 impl Command for StirRandom<'_> {
     const CMD_CODE: TpmCc = TpmCc::StirRandom;
-    type Handles = ();
     type Response<'a> = ();
-    type RespHandles = ();
+}
+impl Message for StirRandom<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
 }
 impl Marshal for StirRandom<'_> {
     const MAX_SIZE: usize = Tpm2bSensitiveData::MAX_SIZE;
     type MaxBuffer = [u8; StirRandom::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut [u8; StirRandom::MAX_SIZE]) -> usize {
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.in_data.marshal(dst)
     }
 }
-
-impl<'a> Unmarshal<'a> for StirRandom<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for StirRandom<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             in_data: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
         })

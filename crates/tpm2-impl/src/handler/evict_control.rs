@@ -1,3 +1,4 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::{CommandHandler, TransientObject};
 use crate::owned::OwnedAuthCommand;
 use crate::req_resp::RequestThenResponse;
@@ -8,7 +9,7 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::TpmaObject;
-use tpm2::commands::{EvictControl, EvictControlHandles};
+use tpm2::commands::EvictControl;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bDigest, TpmHt};
@@ -36,9 +37,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<EvictControlHandles>()?;
-        let object_handle = handles.object_handle.0;
-        let auth_handle = handles.auth.0;
+        let handles = request.try_unmarshal_handles::<EvictControl>()?;
+        let [auth, object] = handles;
+        check(auth, Tpmi::RhProvision, Position::handle(1))?;
+        check(object, Tpmi::DhObject, Position::handle(2))?;
+        let object_handle = object.0;
+        let auth_handle = auth.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
         let provided_auth = self.global_state.parsed_auths[..self.global_state.parsed_auths_len]
@@ -48,7 +52,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 1. Verify authority session auth
         self.validate_evict_control_auth(auth_handle, provided_auth)?;
 
-        let cmd = request.try_unmarshal::<EvictControl>()?;
+        let cmd = request.try_unmarshal_command::<EvictControl>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }

@@ -375,6 +375,7 @@ fn object_load_evict_persistent_handles_ignore_transient_slot_capacity() {
     let mut loaded = vec![key];
     loop {
         let cmd = CreatePrimary {
+            primary_handle: Handle::RH_OWNER,
             in_sensitive: Tpm2b(TpmsSensitiveCreate {
                 user_auth: Tpm2bAuth::default(),
                 data: Tpm2bSensitiveData::default(),
@@ -383,11 +384,8 @@ fn object_load_evict_persistent_handles_ignore_transient_slot_capacity() {
             outside_info: Tpm2bData::default(),
             creation_pcr: TpmlPcrSelection::default(),
         };
-        let handles = CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
-        };
-        match execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]) {
-            Ok((_, h)) => loaded.push(h.object_handle),
+        match execute_with_password_sessions(&mut sim, &cmd, 1, &[]) {
+            Ok(rsp) => loaded.push(rsp.object_handle),
             Err(rc) => {
                 assert_eq!(rc, TpmRc::OBJECT_MEMORY.get());
                 break;

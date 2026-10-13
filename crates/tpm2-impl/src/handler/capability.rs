@@ -127,7 +127,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<GetCapability>()?;
+        let cmd = request.try_unmarshal_command::<GetCapability>([])?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -704,7 +704,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -729,7 +729,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = match request.try_unmarshal::<TestParms>() {
+        let cmd = match request.try_unmarshal_command::<TestParms>([]) {
             Ok(c) => c,
             Err(unmarshal_err) => {
                 let buf = request.remaining_slice();
@@ -926,7 +926,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let response = request.into_response();
-        self.write_response_all(response, &(), &(), &session_responses[..num_sessions])?;
+        self.write_response_message(response, &(), &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -944,7 +944,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let cmd = request.try_unmarshal::<ECCParameters>()?;
+        let cmd = request.try_unmarshal_command::<ECCParameters>([])?;
 
         // An unimplemented curve fails while unmarshaling `TPMI_ECC_CURVE` (`TPM_RC_CURVE + RC_P1`),
         // i.e. before the dispatcher checks for trailing parameter bytes (`TPM_RC_SIZE`).
@@ -1254,7 +1254,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let rsp = responses::ECCParameters { parameters };
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
 }
@@ -1277,8 +1277,11 @@ fn validate_hash_alg(hash_alg: Option<tpm2::TpmiAlgHash>) -> Result<(), TpmRc> {
 /// not here. CMAC is not implemented by this TPM and is rejected with `TPM_RC_MODE`.
 fn validate_symmetric(symmetric: Option<tpm2::TpmtSymDefObject>) -> Result<(), TpmRc> {
     match symmetric {
-        Some(tpm2::TpmtSymDefObject::Aes128(mode)) | Some(tpm2::TpmtSymDefObject::Aes256(mode)) => {
-            if mode == Some(tpm2::TpmiAlgSymMode::CMAC) {
+        Some(tpm2::TpmtSymDefObject {
+            alg: tpm2::AlgSym::Aes128 | tpm2::AlgSym::Aes256,
+            mode,
+        }) => {
+            if mode.map(Alg::from) == Some(Alg::CMAC) {
                 return Err(TpmRc::MODE.with(Position::parameter(1)));
             }
         }

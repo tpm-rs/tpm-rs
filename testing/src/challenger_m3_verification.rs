@@ -2,12 +2,11 @@
 use tpm2::Alg;
 
 use crate::test_utils::*;
+// TPM2_CreateLoaded and TPM2_EncryptDecrypt are deprecated, but this TPM implements them.
+#[allow(deprecated)]
 use tpm2::commands::{
-    CreateLoaded, CreateLoadedHandles, CreatePrimary, CreatePrimaryHandles, Duplicate,
-    DuplicateHandles, EncryptDecrypt, EncryptDecrypt2, EncryptDecrypt2Handles,
-    EncryptDecryptHandles, PolicyAuthorize, PolicyAuthorizeHandles, PolicyCommandCode,
-    PolicyCommandCodeHandles, PolicyCpHash, PolicyCpHashHandles, PolicyDuplicationSelect,
-    PolicyDuplicationSelectHandles, PolicyGetDigest, PolicyGetDigestHandles,
+    CreateLoaded, CreatePrimary, Duplicate, EncryptDecrypt, EncryptDecrypt2, PolicyAuthorize,
+    PolicyCommandCode, PolicyCpHash, PolicyDuplicationSelect, PolicyGetDigest,
 };
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve, TpmSe};
@@ -29,7 +28,10 @@ fn get_ecc_srk_template_with_unique(unique: u8) -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -61,12 +63,12 @@ fn run_policy_cphash_for_alg(alg: TpmiAlgHash, cp_hash_len: usize) {
     let cp_hash_val = vec![0xaa; cp_hash_len];
     let cp_hash_a = Tpm2bDigest::from_bytes(&cp_hash_val).unwrap();
 
-    let cp_hash_cmd = PolicyCpHash { cp_hash_a };
-    let cp_hash_handles = PolicyCpHashHandles {
+    let cp_hash_cmd = PolicyCpHash {
         policy_session: sess.session_handle,
+        cp_hash_a,
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cp_hash_cmd, cp_hash_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cp_hash_cmd, 0, &[]);
     assert!(
         res.is_ok(),
         "PolicyCpHash failed for {:?} with: {:?}",
@@ -75,13 +77,10 @@ fn run_policy_cphash_for_alg(alg: TpmiAlgHash, cp_hash_len: usize) {
     );
 
     // Verify policy digest against PolicyCalculator
-    let get_digest_cmd = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest_cmd = PolicyGetDigest {
         policy_session: sess.session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest_cmd, get_digest_handles, 0, &[])
-            .unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest_cmd, 0, &[]).unwrap();
 
     let mut calc = PolicyCalculator::new(alg);
     calc.policy_cp_hash(&cp_hash_val);
@@ -119,15 +118,13 @@ fn run_policy_dup_select_for_alg(alg: TpmiAlgHash, include_obj: bool) {
     .unwrap();
 
     let dup_cmd = PolicyDuplicationSelect {
+        policy_session: sess.session_handle,
         object_name,
         new_parent_name,
         include_object: include_obj,
     };
-    let dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: sess.session_handle,
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &dup_cmd, 0, &[]);
     assert!(
         res.is_ok(),
         "PolicyDuplicationSelect failed for {:?}, include={:?}: {:?}",
@@ -137,13 +134,10 @@ fn run_policy_dup_select_for_alg(alg: TpmiAlgHash, include_obj: bool) {
     );
 
     // Verify policy digest against PolicyCalculator
-    let get_digest_cmd = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest_cmd = PolicyGetDigest {
         policy_session: sess.session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest_cmd, get_digest_handles, 0, &[])
-            .unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest_cmd, 0, &[]).unwrap();
 
     let mut calc = PolicyCalculator::new(alg);
     calc.policy_duplication_select(
@@ -200,29 +194,28 @@ fn test_policy_cphash_collision_and_overwriting() {
     let cp_hash_2 = Tpm2bDigest::from_bytes(&[0x22; 32]).unwrap();
 
     let cp_hash_cmd_1 = PolicyCpHash {
+        policy_session: sess.session_handle,
         cp_hash_a: cp_hash_1,
     };
-    let cp_hash_handles = PolicyCpHashHandles {
-        policy_session: sess.session_handle,
-    };
     assert!(
-        execute_with_password_sessions(&mut sim, &cp_hash_cmd_1, cp_hash_handles, 0, &[]).is_ok(),
+        execute_with_password_sessions(&mut sim, &cp_hash_cmd_1, 0, &[]).is_ok(),
         "First PolicyCpHash failed"
     );
 
     let cp_hash_cmd_same = PolicyCpHash {
+        policy_session: sess.session_handle,
         cp_hash_a: cp_hash_1,
     };
     assert!(
-        execute_with_password_sessions(&mut sim, &cp_hash_cmd_same, cp_hash_handles, 0, &[])
-            .is_ok(),
+        execute_with_password_sessions(&mut sim, &cp_hash_cmd_same, 0, &[]).is_ok(),
         "Second PolicyCpHash with same cpHash failed"
     );
 
     let cp_hash_cmd_diff = PolicyCpHash {
+        policy_session: sess.session_handle,
         cp_hash_a: cp_hash_2,
     };
-    let res = execute_with_password_sessions(&mut sim, &cp_hash_cmd_diff, cp_hash_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cp_hash_cmd_diff, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x151),
@@ -255,20 +248,18 @@ fn test_policy_duplication_select_collision_and_overwriting() {
     .unwrap();
 
     let dup_cmd = PolicyDuplicationSelect {
+        policy_session: sess.session_handle,
         object_name,
         new_parent_name,
         include_object: true,
     };
-    let dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: sess.session_handle,
-    };
 
     assert!(
-        execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]).is_ok(),
+        execute_with_password_sessions(&mut sim, &dup_cmd, 0, &[]).is_ok(),
         "First PolicyDuplicationSelect failed"
     );
 
-    let res = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &dup_cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x151),
@@ -292,13 +283,11 @@ fn test_policy_mixed_collision_and_overwriting() {
     .unwrap();
 
     let cp_hash = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
-    let cp_hash_cmd = PolicyCpHash { cp_hash_a: cp_hash };
-    let cp_hash_handles = PolicyCpHashHandles {
+    let cp_hash_cmd = PolicyCpHash {
         policy_session: sess_a.session_handle,
+        cp_hash_a: cp_hash,
     };
-    assert!(
-        execute_with_password_sessions(&mut sim, &cp_hash_cmd, cp_hash_handles, 0, &[]).is_ok()
-    );
+    assert!(execute_with_password_sessions(&mut sim, &cp_hash_cmd, 0, &[]).is_ok());
 
     let object_name = Tpm2bName::from_bytes(crate::test_utils::leak_bytes(
         &[[0x00, 0x0b].as_slice(), [0x11; 32].as_slice()].concat(),
@@ -309,14 +298,12 @@ fn test_policy_mixed_collision_and_overwriting() {
     ))
     .unwrap();
     let dup_cmd = PolicyDuplicationSelect {
+        policy_session: sess_a.session_handle,
         object_name,
         new_parent_name,
         include_object: true,
     };
-    let dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: sess_a.session_handle,
-    };
-    let res_a = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
+    let res_a = execute_with_password_sessions(&mut sim, &dup_cmd, 0, &[]);
     assert_eq!(
         res_a.err(),
         Some(0x151),
@@ -334,15 +321,17 @@ fn test_policy_mixed_collision_and_overwriting() {
     )
     .unwrap();
 
-    let cp_hash_handles_b = PolicyCpHashHandles {
+    let cp_hash_cmd_b = PolicyCpHash {
         policy_session: sess_b.session_handle,
+        ..cp_hash_cmd
     };
-    let dup_handles_b = PolicyDuplicationSelectHandles {
+    let dup_cmd_b = PolicyDuplicationSelect {
         policy_session: sess_b.session_handle,
+        ..dup_cmd
     };
-    assert!(execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles_b, 0, &[]).is_ok());
+    assert!(execute_with_password_sessions(&mut sim, &dup_cmd_b, 0, &[]).is_ok());
 
-    let res_b = execute_with_password_sessions(&mut sim, &cp_hash_cmd, cp_hash_handles_b, 0, &[]);
+    let res_b = execute_with_password_sessions(&mut sim, &cp_hash_cmd_b, 0, &[]);
     assert_eq!(
         res_b.err(),
         Some(0x151),
@@ -365,16 +354,12 @@ fn test_policy_cphash_incorrect_inputs() {
     )
     .unwrap();
 
-    let cp_hash_handles = PolicyCpHashHandles {
-        policy_session: sess.session_handle,
-    };
-
     let cp_hash_bad_1 = Tpm2bDigest::from_bytes(&[0x11; 20]).unwrap();
     let cp_hash_cmd_bad_1 = PolicyCpHash {
+        policy_session: sess.session_handle,
         cp_hash_a: cp_hash_bad_1,
     };
-    let res1 =
-        execute_with_password_sessions(&mut sim, &cp_hash_cmd_bad_1, cp_hash_handles, 0, &[]);
+    let res1 = execute_with_password_sessions(&mut sim, &cp_hash_cmd_bad_1, 0, &[]);
     assert_eq!(
         res1.err(),
         Some(0x1D5),
@@ -383,10 +368,10 @@ fn test_policy_cphash_incorrect_inputs() {
 
     let cp_hash_bad_2 = Tpm2bDigest::from_bytes(&[0x11; 48]).unwrap();
     let cp_hash_cmd_bad_2 = PolicyCpHash {
+        policy_session: sess.session_handle,
         cp_hash_a: cp_hash_bad_2,
     };
-    let res2 =
-        execute_with_password_sessions(&mut sim, &cp_hash_cmd_bad_2, cp_hash_handles, 0, &[]);
+    let res2 = execute_with_password_sessions(&mut sim, &cp_hash_cmd_bad_2, 0, &[]);
     assert_eq!(
         res2.err(),
         Some(0x1D5),
@@ -395,6 +380,7 @@ fn test_policy_cphash_incorrect_inputs() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_CreateLoaded is deprecated, but this TPM implements it.
 fn test_policy_session_reuse_and_enforcement() {
     let mut sim = create_simulator!();
 
@@ -402,42 +388,30 @@ fn test_policy_session_reuse_and_enforcement() {
     let srk_pub = get_ecc_srk_template();
     let in_public = crate::test_utils::make_template(&srk_pub);
     let create_srk_cmd = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public,
     };
-    let create_srk_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
-    };
-    let (_, srk_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_srk_cmd, create_srk_handles, 1, &[])
-            .unwrap();
-    let srk_handle = srk_resp_handles.object_handle;
+    let srk_resp = execute_with_password_sessions(&mut sim, &create_srk_cmd, 1, &[]).unwrap();
+    let srk_handle = srk_resp.object_handle;
 
     // 2. Create ECC Endorsement SRK (as new parent for duplication)
     let ecc_srk_pub = get_ecc_srk_template_with_unique(1);
     let ecc_in_public = crate::test_utils::make_template(&ecc_srk_pub);
     let create_ecc_srk_cmd = CreateLoaded {
+        parent_handle: Handle(0x4000000B), // TPMRH_ENDORSEMENT
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: ecc_in_public,
     };
-    let create_ecc_srk_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x4000000B), // TPMRH_ENDORSEMENT
-    };
-    let (_, ecc_srk_resp_handles) = execute_with_password_sessions(
-        &mut sim,
-        &create_ecc_srk_cmd,
-        create_ecc_srk_handles,
-        1,
-        &[],
-    )
-    .unwrap();
-    let new_parent_handle = ecc_srk_resp_handles.object_handle;
+    let ecc_srk_resp =
+        execute_with_password_sessions(&mut sim, &create_ecc_srk_cmd, 1, &[]).unwrap();
+    let new_parent_handle = ecc_srk_resp.object_handle;
     let new_parent_name = read_public_name(&mut sim, new_parent_handle);
 
     // 3. Compute expected cpHash for:
@@ -503,19 +477,15 @@ fn test_policy_session_reuse_and_enforcement() {
     obj_pub.auth_policy = policy_digest;
     let obj_in_public = crate::test_utils::make_template(&obj_pub);
     let create_obj_cmd = CreateLoaded {
+        parent_handle: srk_handle,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::from_bytes(obj_auth).unwrap(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: obj_in_public,
     };
-    let create_obj_handles = CreateLoadedHandles {
-        parent_handle: srk_handle,
-    };
-    let (_obj_resp, obj_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_obj_cmd, create_obj_handles, 1, &[])
-            .unwrap();
-    let obj_handle = obj_resp_handles.object_handle;
+    let obj_resp = execute_with_password_sessions(&mut sim, &create_obj_cmd, 1, &[]).unwrap();
+    let obj_handle = obj_resp.object_handle;
     let object_name = read_public_name(&mut sim, obj_handle);
 
     // Flush owner SRK
@@ -535,31 +505,25 @@ fn test_policy_session_reuse_and_enforcement() {
 
     // Run PolicyDuplicationSelect (with correct names)
     let dup_select_cmd = PolicyDuplicationSelect {
+        policy_session: policy_sess.session_handle,
         object_name,
         new_parent_name,
         include_object: false,
     };
-    let dup_select_handles = PolicyDuplicationSelectHandles {
-        policy_session: policy_sess.session_handle,
-    };
     assert!(
-        execute_with_password_sessions(&mut sim, &dup_select_cmd, dup_select_handles, 0, &[])
-            .is_ok(),
+        execute_with_password_sessions(&mut sim, &dup_select_cmd, 0, &[]).is_ok(),
         "PolicyDuplicationSelect failed"
     );
 
     // Execute Duplicate using this policy session. It should succeed!
     let dup_cmd = Duplicate {
+        object_handle: obj_handle,
+        new_parent_handle,
         encryption_key_in: Tpm2bData::default(),
         symmetric_alg: None,
     };
-    let dup_handles = DuplicateHandles {
-        object_handle: obj_handle,
-        new_parent_handle,
-    };
     let mut sessions = [policy_sess.clone()];
-    let res =
-        execute_with_hmac_sessions(&mut sim, &dup_cmd, dup_handles, &[], &mut sessions, &[&[]]);
+    let res = execute_with_hmac_sessions(&mut sim, &dup_cmd, &[], &mut sessions, &[&[]]);
     assert!(
         res.is_ok(),
         "Duplicate failed with policy auth: {:?}",
@@ -572,6 +536,7 @@ fn test_policy_session_reuse_and_enforcement() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_CreateLoaded is deprecated, but this TPM implements it.
 fn test_policy_cphash_on_bound_session() {
     let mut sim = create_simulator!();
 
@@ -579,18 +544,15 @@ fn test_policy_cphash_on_bound_session() {
     let srk_pub = get_ecc_srk_template();
     let in_public = crate::test_utils::make_template(&srk_pub);
     let create_cmd = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    let key_handle = create_rsp_handles.object_handle;
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
+    let key_handle = create_rsp.object_handle;
 
     // 2. Start session bound to key_handle
     let sess = start_auth_session(
@@ -606,11 +568,11 @@ fn test_policy_cphash_on_bound_session() {
 
     // 3. Executing PolicyCpHash on bound session must fail with TPM_RC_CPHASH (0x151)
     let cp_hash = Tpm2bDigest::from_bytes(&[0xaa; 32]).unwrap();
-    let cp_hash_cmd = PolicyCpHash { cp_hash_a: cp_hash };
-    let cp_hash_handles = PolicyCpHashHandles {
+    let cp_hash_cmd = PolicyCpHash {
         policy_session: sess.session_handle,
+        cp_hash_a: cp_hash,
     };
-    let res = execute_with_password_sessions(&mut sim, &cp_hash_cmd, cp_hash_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cp_hash_cmd, 0, &[]);
     // C SessionCreate (Session.c) only binds HMAC sessions ("Policy session is not bound to an
     // entity"), so the cpHash union of a policy/trial session started with a bind entity is
     // free and the command succeeds.
@@ -626,6 +588,7 @@ fn test_policy_cphash_on_bound_session() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_CreateLoaded is deprecated, but this TPM implements it.
 fn test_policy_duplication_select_on_bound_session() {
     let mut sim = create_simulator!();
 
@@ -633,18 +596,15 @@ fn test_policy_duplication_select_on_bound_session() {
     let srk_pub = get_ecc_srk_template();
     let in_public = crate::test_utils::make_template(&srk_pub);
     let create_cmd = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    let key_handle = create_rsp_handles.object_handle;
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
+    let key_handle = create_rsp.object_handle;
 
     // 2. Start session bound to key_handle
     let sess = start_auth_session(
@@ -668,14 +628,12 @@ fn test_policy_duplication_select_on_bound_session() {
     ))
     .unwrap();
     let dup_cmd = PolicyDuplicationSelect {
+        policy_session: sess.session_handle,
         object_name,
         new_parent_name,
         include_object: true,
     };
-    let dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: sess.session_handle,
-    };
-    let res = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &dup_cmd, 0, &[]);
     // C SessionCreate (Session.c) only binds HMAC sessions ("Policy session is not bound to an
     // entity"), so the cpHash union of a policy/trial session started with a bind entity is
     // free and the command succeeds.
@@ -691,6 +649,7 @@ fn test_policy_duplication_select_on_bound_session() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_CreateLoaded is deprecated, but this TPM implements it.
 fn test_policy_cphash_on_bound_trial_session() {
     let mut sim = create_simulator!();
 
@@ -698,18 +657,15 @@ fn test_policy_cphash_on_bound_trial_session() {
     let srk_pub = get_ecc_srk_template();
     let in_public = crate::test_utils::make_template(&srk_pub);
     let create_cmd = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    let key_handle = create_rsp_handles.object_handle;
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
+    let key_handle = create_rsp.object_handle;
 
     // 2. Start TRIAL session bound to key_handle
     let sess = start_auth_session(
@@ -725,11 +681,11 @@ fn test_policy_cphash_on_bound_trial_session() {
 
     // 3. Executing PolicyCpHash on bound trial session must fail with TPM_RC_CPHASH (0x151)
     let cp_hash = Tpm2bDigest::from_bytes(&[0xaa; 32]).unwrap();
-    let cp_hash_cmd = PolicyCpHash { cp_hash_a: cp_hash };
-    let cp_hash_handles = PolicyCpHashHandles {
+    let cp_hash_cmd = PolicyCpHash {
         policy_session: sess.session_handle,
+        cp_hash_a: cp_hash,
     };
-    let res = execute_with_password_sessions(&mut sim, &cp_hash_cmd, cp_hash_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cp_hash_cmd, 0, &[]);
     // C SessionCreate (Session.c) only binds HMAC sessions ("Policy session is not bound to an
     // entity"), so the cpHash union of a policy/trial session started with a bind entity is
     // free and the command succeeds.
@@ -745,6 +701,7 @@ fn test_policy_cphash_on_bound_trial_session() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_CreateLoaded is deprecated, but this TPM implements it.
 fn test_policy_duplication_select_on_bound_trial_session() {
     let mut sim = create_simulator!();
 
@@ -752,18 +709,15 @@ fn test_policy_duplication_select_on_bound_trial_session() {
     let srk_pub = get_ecc_srk_template();
     let in_public = crate::test_utils::make_template(&srk_pub);
     let create_cmd = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    let key_handle = create_rsp_handles.object_handle;
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
+    let key_handle = create_rsp.object_handle;
 
     // 2. Start TRIAL session bound to key_handle
     let sess = start_auth_session(
@@ -787,14 +741,12 @@ fn test_policy_duplication_select_on_bound_trial_session() {
     ))
     .unwrap();
     let dup_cmd = PolicyDuplicationSelect {
+        policy_session: sess.session_handle,
         object_name,
         new_parent_name,
         include_object: true,
     };
-    let dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: sess.session_handle,
-    };
-    let res = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &dup_cmd, 0, &[]);
     // C SessionCreate (Session.c) only binds HMAC sessions ("Policy session is not bound to an
     // entity"), so the cpHash union of a policy/trial session started with a bind entity is
     // free and the command succeeds.
@@ -835,24 +787,15 @@ fn test_policy_cphash_with_session() {
     .unwrap();
 
     let cp_hash_cmd = PolicyCpHash {
-        cp_hash_a: Tpm2bDigest::from_bytes(&[0xaa; 32]).unwrap(),
-    };
-    let cp_hash_handles = PolicyCpHashHandles {
         policy_session: sess.session_handle,
+        cp_hash_a: Tpm2bDigest::from_bytes(&[0xaa; 32]).unwrap(),
     };
 
     // The command has no authorization handles, so the session is unassociated: C
     // ParseSessionBuffer requires it to be an audit, encrypt or decrypt session.
     let mut sessions = [hmac_sess.clone()];
     sessions[0].attributes = tpm2::TpmaSession::CONTINUE_SESSION | tpm2::TpmaSession::AUDIT;
-    let res = execute_with_hmac_sessions(
-        &mut sim,
-        &cp_hash_cmd,
-        cp_hash_handles,
-        &[],
-        &mut sessions,
-        &[&[]],
-    );
+    let res = execute_with_hmac_sessions(&mut sim, &cp_hash_cmd, &[], &mut sessions, &[&[]]);
     assert!(
         res.is_ok(),
         "PolicyCpHash with HMAC session (tag 0x8002) failed: {:?}",
@@ -895,20 +838,17 @@ fn test_policy_duplication_select_with_session_tag_0x8002() {
     .unwrap();
 
     let dup_cmd = PolicyDuplicationSelect {
+        policy_session: sess.session_handle,
         object_name,
         new_parent_name,
         include_object: true,
-    };
-    let dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: sess.session_handle,
     };
 
     // The command has no authorization handles, so the session is unassociated: C
     // ParseSessionBuffer requires it to be an audit, encrypt or decrypt session.
     let mut sessions = [hmac_sess.clone()];
     sessions[0].attributes = tpm2::TpmaSession::CONTINUE_SESSION | tpm2::TpmaSession::AUDIT;
-    let res =
-        execute_with_hmac_sessions(&mut sim, &dup_cmd, dup_handles, &[], &mut sessions, &[&[]]);
+    let res = execute_with_hmac_sessions(&mut sim, &dup_cmd, &[], &mut sessions, &[&[]]);
     assert!(
         res.is_ok(),
         "PolicyDuplicationSelect under tag 0x8002 failed: {:?}",
@@ -932,12 +872,10 @@ fn test_policy_duplication_select_command_code_gate() {
 
     // 1. Execute PolicyCommandCode first (e.g. set to TpmCc::Duplicate)
     let cmd_code = PolicyCommandCode {
+        policy_session: sess.session_handle,
         code: TpmCc::Duplicate,
     };
-    let handles_code = PolicyCommandCodeHandles {
-        policy_session: sess.session_handle,
-    };
-    assert!(execute_with_password_sessions(&mut sim, &cmd_code, handles_code, 0, &[]).is_ok());
+    assert!(execute_with_password_sessions(&mut sim, &cmd_code, 0, &[]).is_ok());
 
     // 2. Executing PolicyDuplicationSelect now must fail with TPM_RC_COMMAND_CODE (0x143)
     let object_name = Tpm2bName::from_bytes(crate::test_utils::leak_bytes(
@@ -949,15 +887,13 @@ fn test_policy_duplication_select_command_code_gate() {
     ))
     .unwrap();
     let dup_cmd = PolicyDuplicationSelect {
+        policy_session: sess.session_handle,
         object_name,
         new_parent_name,
         include_object: true,
     };
-    let dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: sess.session_handle,
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &dup_cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x143),
@@ -980,22 +916,13 @@ fn test_policy_cphash_with_self_authorization() {
     .unwrap();
 
     let cp_hash_cmd = PolicyCpHash {
-        cp_hash_a: Tpm2bDigest::from_bytes(&[0xaa; 32]).unwrap(),
-    };
-    let cp_hash_handles = PolicyCpHashHandles {
         policy_session: sess.session_handle,
+        cp_hash_a: Tpm2bDigest::from_bytes(&[0xaa; 32]).unwrap(),
     };
 
     // Try to authorize PolicyCpHash with the policy_session itself (in sessions area under tag 0x8002)
     let mut sessions = [sess.clone()];
-    let res = execute_with_hmac_sessions(
-        &mut sim,
-        &cp_hash_cmd,
-        cp_hash_handles,
-        &[],
-        &mut sessions,
-        &[&[]],
-    );
+    let res = execute_with_hmac_sessions(&mut sim, &cp_hash_cmd, &[], &mut sessions, &[&[]]);
     // Since policy session is not yet matched or it is a policy session being modified,
     // this self-authorization should either fail or behave correctly according to TPM spec.
     assert!(
@@ -1029,15 +956,13 @@ fn test_policy_duplication_select_invalid_name_structure() {
     .unwrap();
 
     let dup_cmd = PolicyDuplicationSelect {
+        policy_session: sess.session_handle,
         object_name,
         new_parent_name,
         include_object: true,
     };
-    let dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: sess.session_handle,
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &dup_cmd, 0, &[]);
     // Names are opaque TPM2B_NAME values: C TPM2_PolicyDuplicationSelect only bounds their size
     // (unmarshaling) and hashes them, so a Name with an unexpected internal structure is accepted.
     assert!(
@@ -1068,17 +993,14 @@ fn test_policy_authorize_invalid_ticket_hierarchy() {
     .unwrap();
 
     let cmd = PolicyAuthorize {
+        policy_session: sess.session_handle,
         approved_policy,
         policy_ref: Tpm2bNonce::default(),
         key_sign,
         check_ticket: TpmtTkVerified::Verified(Handle(0x1234), Tpm2bDigest::default()),
     };
 
-    let handles = PolicyAuthorizeHandles {
-        policy_session: sess.session_handle,
-    };
-
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     // Expected value error: value_for(Position::parameter(4))
     // 0x04C4 = 0x0004 (Value) + 0x0080 (Format 1) + 0x0040 (Parameter) + 0x0400 (Pos4)
     assert_eq!(
@@ -1089,6 +1011,7 @@ fn test_policy_authorize_invalid_ticket_hierarchy() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_EncryptDecrypt is deprecated, but this TPM implements it.
 fn test_encrypt_decrypt_invalid_yes_no() {
     let mut sim = create_simulator!();
 
@@ -1103,11 +1026,15 @@ fn test_encrypt_decrypt_invalid_yes_no() {
             | TpmaObject::USER_WITH_AUTH,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgCipherMode::Cfb.into()),
+            },
             Tpm2bDigest::default(),
         ),
     };
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -1115,22 +1042,18 @@ fn test_encrypt_decrypt_invalid_yes_no() {
         in_public: tpm2::Tpm2b(sym_template),
         ..Default::default()
     };
-    let cp_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, cp_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary_cmd, cp_handles, 1, &[]).unwrap();
-    let key_handle = cp_resp_handles.object_handle;
+    let cp_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[]).unwrap();
+    let key_handle = cp_resp.object_handle;
 
     let cmd = EncryptDecrypt {
+        key_handle,
         decrypt: false,
-        mode: Some(TpmiAlgCipherMode::CFB),
+        mode: Some(TpmiAlgCipherMode::Cfb),
         iv_in: Tpm2bIv::default(),
         in_data: Tpm2bMaxBuffer::default(),
     };
-    let handles = EncryptDecryptHandles { key_handle };
 
-    let res = execute_with_corrupted_bytes(&mut sim, &cmd, handles, 1, &[], |buf| {
+    let res = execute_with_corrupted_bytes(&mut sim, &cmd, 1, &[], |buf| {
         buf[0] = 2; // decrypt is the first parameter (1 byte)
     });
     // Expected unmarshal error: Value + parameter 1 (452 / 0x01C4)
@@ -1160,11 +1083,15 @@ fn test_encrypt_decrypt_2_invalid_yes_no() {
             | TpmaObject::USER_WITH_AUTH,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgCipherMode::Cfb.into()),
+            },
             Tpm2bDigest::default(),
         ),
     };
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -1172,22 +1099,18 @@ fn test_encrypt_decrypt_2_invalid_yes_no() {
         in_public: tpm2::Tpm2b(sym_template),
         ..Default::default()
     };
-    let cp_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, cp_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary_cmd, cp_handles, 1, &[]).unwrap();
-    let key_handle = cp_resp_handles.object_handle;
+    let cp_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[]).unwrap();
+    let key_handle = cp_resp.object_handle;
 
     let cmd = EncryptDecrypt2 {
+        key_handle,
         in_data: Tpm2bMaxBuffer::default(),
         decrypt: false,
-        mode: Some(TpmiAlgCipherMode::CFB),
+        mode: Some(TpmiAlgCipherMode::Cfb),
         iv_in: Tpm2bIv::default(),
     };
-    let handles = EncryptDecrypt2Handles { key_handle };
 
-    let res = execute_with_corrupted_bytes(&mut sim, &cmd, handles, 1, &[], |buf| {
+    let res = execute_with_corrupted_bytes(&mut sim, &cmd, 1, &[], |buf| {
         buf[2] = 2; // in_data is empty (2 bytes size = 0), decrypt is at index 2 (1 byte)
     });
     // Expected unmarshal error: Value + parameter 2 (708 / 0x02C4)
@@ -1229,15 +1152,13 @@ fn test_policy_duplication_select_sha512_name_include_object_no() {
     .unwrap();
 
     let dup_cmd = PolicyDuplicationSelect {
+        policy_session: sess.session_handle,
         object_name,
         new_parent_name,
         include_object: false,
     };
-    let dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: sess.session_handle,
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &dup_cmd, 0, &[]);
     assert!(
         res.is_ok(),
         "PolicyDuplicationSelect failed with a valid 66-byte SHA-512 name: {:?}",
@@ -1278,6 +1199,7 @@ impl<'a> tpm2::Unmarshal<'a> for OversizedTpm2bName {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct TestPolicyDuplicationSelectOversizedCmd {
+    pub policy_session: Handle,
     pub object_name: OversizedTpm2bName,
     pub new_parent_name: Tpm2bName<'static>,
     pub include_object: bool,
@@ -1304,8 +1226,18 @@ impl tpm2::Marshal for TestPolicyDuplicationSelectOversizedCmd {
     }
 }
 
-impl<'a> tpm2::Unmarshal<'a> for TestPolicyDuplicationSelectOversizedCmd {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
+impl tpm2::Message for TestPolicyDuplicationSelectOversizedCmd {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.policy_session]
+    }
+}
+
+impl<'a> tpm2::UnmarshalMessage<'a> for TestPolicyDuplicationSelectOversizedCmd {
+    fn unmarshal_with_handles(
+        [policy_session]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, tpm2::errors::UnmarshalError> {
         let orig_len = src.len();
         let mut leaked: &'static [u8] = crate::test_utils::leak_bytes(src);
         let object_name = OversizedTpm2bName::unmarshal(&mut leaked)?;
@@ -1314,6 +1246,7 @@ impl<'a> tpm2::Unmarshal<'a> for TestPolicyDuplicationSelectOversizedCmd {
         let consumed = orig_len - leaked.len();
         *src = &src[consumed..];
         Ok(Self {
+            policy_session,
             object_name,
             new_parent_name,
             include_object,
@@ -1323,9 +1256,7 @@ impl<'a> tpm2::Unmarshal<'a> for TestPolicyDuplicationSelectOversizedCmd {
 
 impl tpm2::commands::Command for TestPolicyDuplicationSelectOversizedCmd {
     const CMD_CODE: TpmCc = TpmCc::PolicyDuplicationSelect;
-    type Handles = PolicyDuplicationSelectHandles;
     type Response<'a> = ();
-    type RespHandles = ();
 }
 
 #[test]
@@ -1359,15 +1290,13 @@ fn test_policy_duplication_select_name_oversized_rejected() {
     .unwrap();
 
     let dup_cmd = TestPolicyDuplicationSelectOversizedCmd {
+        policy_session: sess.session_handle,
         object_name,
         new_parent_name,
         include_object: false,
     };
-    let dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: sess.session_handle,
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &dup_cmd, dup_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &dup_cmd, 0, &[]);
 
     // We expect it to be rejected.
     // The TPM 2.0 specification requires TPM_RC_SIZE + TPM_RC_P + TPM_RC_1 (Format-1 error 0x01D5) for name size > 66.
@@ -1380,6 +1309,7 @@ fn test_policy_duplication_select_name_oversized_rejected() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_EncryptDecrypt is deprecated, but this TPM implements it.
 fn test_encrypt_decrypt_rejects_cmac_mode() {
     let mut sim = create_simulator!();
 
@@ -1394,11 +1324,15 @@ fn test_encrypt_decrypt_rejects_cmac_mode() {
             | TpmaObject::USER_WITH_AUTH,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgCipherMode::Cfb.into()),
+            },
             Tpm2bDigest::default(),
         ),
     };
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -1406,22 +1340,18 @@ fn test_encrypt_decrypt_rejects_cmac_mode() {
         in_public: tpm2::Tpm2b(sym_template),
         ..Default::default()
     };
-    let cp_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, cp_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary_cmd, cp_handles, 1, &[]).unwrap();
-    let key_handle = cp_resp_handles.object_handle;
+    let cp_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[]).unwrap();
+    let key_handle = cp_resp.object_handle;
 
     // 1. EncryptDecrypt with mode corrupted to TPM_ALG_CMAC (0x003F)
     let cmd = EncryptDecrypt {
+        key_handle,
         decrypt: false,
-        mode: Some(TpmiAlgCipherMode::CFB),
+        mode: Some(TpmiAlgCipherMode::Cfb),
         iv_in: Tpm2bIv::from_bytes(&[0u8; 16]).unwrap(),
         in_data: Tpm2bMaxBuffer::from_bytes(&[0u8; 16]).unwrap(),
     };
-    let handles = EncryptDecryptHandles { key_handle };
-    let res = execute_with_corrupted_bytes(&mut sim, &cmd, handles, 1, &[], |buf| {
+    let res = execute_with_corrupted_bytes(&mut sim, &cmd, 1, &[], |buf| {
         // decrypt is 1 byte at offset 0; mode is 2 bytes at offset 1..3
         buf[1..3].copy_from_slice(&0x003Fu16.to_be_bytes());
     });
@@ -1437,13 +1367,13 @@ fn test_encrypt_decrypt_rejects_cmac_mode() {
 
     // 2. EncryptDecrypt2 with mode corrupted to TPM_ALG_CMAC (0x003F)
     let cmd2 = EncryptDecrypt2 {
+        key_handle,
         in_data: Tpm2bMaxBuffer::default(),
         decrypt: false,
-        mode: Some(TpmiAlgCipherMode::CFB),
+        mode: Some(TpmiAlgCipherMode::Cfb),
         iv_in: Tpm2bIv::from_bytes(&[0u8; 16]).unwrap(),
     };
-    let handles2 = EncryptDecrypt2Handles { key_handle };
-    let res2 = execute_with_corrupted_bytes(&mut sim, &cmd2, handles2, 1, &[], |buf| {
+    let res2 = execute_with_corrupted_bytes(&mut sim, &cmd2, 1, &[], |buf| {
         // in_data size is 2 bytes (0) at offset 0..2; decrypt is 1 byte at offset 2; mode is 2 bytes at offset 3..5
         buf[3..5].copy_from_slice(&0x003Fu16.to_be_bytes());
     });

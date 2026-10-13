@@ -2,9 +2,7 @@ use crate::test_utils::marshal_to_slice;
 use crate::test_utils::*;
 use tpm2::Handle;
 use tpm2::Unmarshal;
-use tpm2::commands::{
-    ContextLoad, ContextSave, ContextSaveHandles, CreatePrimary, CreatePrimaryHandles,
-};
+use tpm2::commands::{ContextLoad, ContextSave, CreatePrimary};
 use tpm2::*;
 use tpm2_simulator::create_simulator;
 
@@ -50,28 +48,23 @@ fn test_stress_combined_context() {
     let creation_pcr = TpmlPcrSelection::unmarshal(&mut unmarsh).unwrap();
 
     let cp_cmd = CreatePrimary {
+        primary_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr,
     };
-    let cp_handles = CreatePrimaryHandles {
-        primary_handle: Handle(0x40000001),
-    };
 
-    let (_cp_resp, cp_resp_handles) =
-        execute_with_password_sessions(&mut sim, &cp_cmd, cp_handles, 1, &[]).unwrap();
+    let cp_resp_handles = execute_with_password_sessions(&mut sim, &cp_cmd, 1, &[]).unwrap();
     let cp_handle = cp_resp_handles.object_handle;
 
     let cp_name = read_public_name(&mut sim, cp_handle);
 
     // Save Context
-    let save_cmd = ContextSave::default();
-    let save_handles = ContextSaveHandles {
+    let save_cmd = ContextSave {
         save_handle: cp_handle,
     };
-    let (save_resp, _) =
-        execute_with_password_sessions(&mut sim, &save_cmd, save_handles, 0, &[]).unwrap();
+    let save_resp = execute_with_password_sessions(&mut sim, &save_cmd, 0, &[]).unwrap();
 
     // Flush it before load
     let _ = flush_context(&mut sim, cp_handle);
@@ -80,8 +73,7 @@ fn test_stress_combined_context() {
     let load_cmd = ContextLoad {
         context: save_resp.context,
     };
-    let (_, load_resp_handles) =
-        execute_with_password_sessions(&mut sim, &load_cmd, (), 0, &[]).unwrap();
+    let load_resp_handles = execute_with_password_sessions(&mut sim, &load_cmd, 0, &[]).unwrap();
     let cl_handle = load_resp_handles.loaded_handle;
 
     let cl_name = read_public_name(&mut sim, cl_handle);
@@ -98,8 +90,7 @@ fn test_stress_combined_context() {
     );
 
     // Load it again, should work and give a different handle
-    let (_, load_resp_handles2) =
-        execute_with_password_sessions(&mut sim, &load_cmd, (), 0, &[]).unwrap();
+    let load_resp_handles2 = execute_with_password_sessions(&mut sim, &load_cmd, 0, &[]).unwrap();
     let cl_handle2 = load_resp_handles2.loaded_handle;
     assert_ne!(
         cl_handle.0, cl_handle2.0,

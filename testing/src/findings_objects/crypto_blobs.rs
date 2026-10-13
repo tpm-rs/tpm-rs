@@ -103,7 +103,7 @@ fn kdfa256(key: &[u8], label: &[u8], context: &[u8], bits: u32) -> Vec<u8> {
 
 /// HMAC-SHA-256 of the concatenation of `parts`.
 fn hmac256(key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HmacCtx::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256, key).unwrap();
+    let mut ctx = tpm2::crypto::HmacStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256, key).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }
@@ -121,9 +121,9 @@ fn aes_cfb(key: &[u8], iv: &[u8; 16], data: &mut [u8], encrypt: bool) {
     let alg = TpmtSymDefObject::aes_cfb(128).unwrap();
     let mut iv = *iv;
     if encrypt {
-        tpm2::crypto::encrypt(CLIENT_CRYPTO, alg, key, &mut iv, data).unwrap();
+        sym_encrypt(CLIENT_CRYPTO, alg, key, &mut iv, data).unwrap();
     } else {
-        tpm2::crypto::decrypt(CLIENT_CRYPTO, alg, key, &mut iv, data).unwrap();
+        sym_decrypt(CLIENT_CRYPTO, alg, key, &mut iv, data).unwrap();
     }
 }
 
@@ -228,10 +228,9 @@ pub fn private_area_format_round_trip() {
         Tpm2b(public),
     )
     .expect("C-format TPM2B_PRIVATE must load");
-    let (unsealed, _) = run(
+    let unsealed = run(
         &mut sim,
-        &Unseal {},
-        UnsealHandles {
+        &Unseal {
             item_handle: handle,
         },
         1,

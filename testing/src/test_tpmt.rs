@@ -6,7 +6,7 @@ use tpm2::*;
 /// on the simulator and checks that `TPM2_Unseal` returns the same bytes.
 #[test]
 fn test_tpmt() {
-    use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, Unseal, UnsealHandles};
+    use tpm2::commands::{CreatePrimary, Unseal};
     use tpm2_simulator::create_simulator;
 
     let tpms_derive = TpmsDerive {
@@ -44,25 +44,18 @@ fn test_tpmt() {
         parms_and_id: PublicParmsAndId::KeyedHash(None, Tpm2bDigest::default()),
     });
     let create = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: unmarshaled,
         in_public,
         ..Default::default()
     };
-    let (_, create_handles) = crate::test_utils::execute_with_password_sessions(
-        &mut sim,
-        &create,
-        CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
-        },
-        1,
-        &[],
-    )
-    .expect("CreatePrimary of sealed data object failed");
+    let create_handles =
+        crate::test_utils::execute_with_password_sessions(&mut sim, &create, 1, &[])
+            .expect("CreatePrimary of sealed data object failed");
 
-    let (unseal, _) = crate::test_utils::execute_with_password_sessions(
+    let unseal = crate::test_utils::execute_with_password_sessions(
         &mut sim,
-        &Unseal {},
-        UnsealHandles {
+        &Unseal {
             item_handle: create_handles.object_handle,
         },
         1,

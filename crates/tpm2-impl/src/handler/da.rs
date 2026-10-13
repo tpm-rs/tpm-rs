@@ -1,10 +1,8 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::commands::{
-    DictionaryAttackLockReset, DictionaryAttackLockResetHandles, DictionaryAttackParameters,
-    DictionaryAttackParametersHandles,
-};
+use tpm2::commands::{DictionaryAttackLockReset, DictionaryAttackParameters};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 
@@ -25,8 +23,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<DictionaryAttackLockResetHandles>()?;
-        let auth_handle = handles.lock_handle.0;
+        let handles = request.try_unmarshal_handles::<DictionaryAttackLockReset>()?;
+        let [lock_handle] = handles;
+        check(lock_handle, Tpmi::RhLockout, Position::handle(1))?;
+        let auth_handle = lock_handle.0;
         if auth_handle != tpm2::Handle::RH_LOCKOUT.0 {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
@@ -40,7 +40,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.validate_lockout_auth(auth_handle, provided_auth)?;
         }
 
-        let _cmd = request.try_unmarshal::<DictionaryAttackLockReset>()?;
+        let _cmd = request.try_unmarshal_command::<DictionaryAttackLockReset>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -71,8 +71,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<DictionaryAttackParametersHandles>()?;
-        let auth_handle = handles.lock_handle.0;
+        let handles = request.try_unmarshal_handles::<DictionaryAttackParameters>()?;
+        let [lock_handle] = handles;
+        check(lock_handle, Tpmi::RhLockout, Position::handle(1))?;
+        let auth_handle = lock_handle.0;
         if auth_handle != tpm2::Handle::RH_LOCKOUT.0 {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
@@ -86,7 +88,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.validate_lockout_auth(auth_handle, provided_auth)?;
         }
 
-        let cmd = request.try_unmarshal::<DictionaryAttackParameters>()?;
+        let cmd = request.try_unmarshal_command::<DictionaryAttackParameters>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());

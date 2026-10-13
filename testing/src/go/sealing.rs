@@ -19,21 +19,21 @@
 
 use crate::test_utils::CLIENT_CRYPTO;
 use crate::test_utils::{
-    CmdHeader, RespHeader, execute_with_password_sessions, flush_context, kdfa_by_alg, leak_bytes,
-    marshal_to_slice, strip_trailing_zeros,
+    CmdHeader, RespHandles, RespHeader, execute_with_password_sessions, flush_context, kdfa_by_alg,
+    leak_bytes, marshal_auth_command, marshal_to_slice, strip_trailing_zeros, sym_decrypt,
+    sym_encrypt,
 };
 use tpm2::commands::{
-    Command, Create, CreateHandles, CreatePrimary, CreatePrimaryHandles, Load, LoadHandles,
-    StartAuthSession, StartAuthSessionHandles, Unseal, UnsealHandles,
+    Command, Create, CreatePrimary, Load, StartAuthSession, UnmarshalMessage, Unseal,
 };
-use tpm2::crypto::Rng;
+use tpm2::crypto::CryptoProvider;
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, Marshal, TpmSe, TpmSt, Unmarshal};
+use tpm2::{AlgSym, Handle, Marshal, TpmSe, TpmSt, Unmarshal};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret,
     Tpm2bNonce, Tpm2bPrivate, Tpm2bPublic, Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmaObject,
-    TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmiStCommandTag, TpmlPcrSelection,
-    TpmsAuthCommand, TpmsAuthResponse, TpmsEccParms, TpmsEccPoint, TpmsRsaParms,
+    TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiRsaKeyBits, TpmiStCommandTag,
+    TpmlPcrSelection, TpmsAuthCommand, TpmsAuthResponse, TpmsEccParms, TpmsEccPoint, TpmsRsaParms,
     TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2_simulator::{Simulator, create_simulator};
@@ -86,7 +86,10 @@ fn rsa_srk_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Rsa(
             TpmsRsaParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 key_bits: TpmiRsaKeyBits(2048),
                 exponent: 0,
@@ -104,7 +107,10 @@ fn ecc_srk_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 curve_id: tpm2::TpmEccCurve::NistP256,
                 kdf: None,
@@ -211,7 +217,10 @@ impl GoHmacSession {
             TpmaSession::ENCRYPT,
             matches!(dir, EncryptDir::Out | EncryptDir::InOut),
         );
-        self.symmetric = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+        self.symmetric = Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        });
         self
     }
 
@@ -269,16 +278,17 @@ impl GoHmacSession {
         };
         let bind = self.bind.as_ref().map_or(Handle::RH_NULL, |b| b.0);
         let cmd = StartAuthSession {
+            tpm_key,
+            bind,
             nonce_caller: Tpm2bNonce::from_bytes(leak_bytes(&self.nonce_caller)).unwrap(),
             encrypted_salt,
             session_type: TpmSe::HMAC,
             symmetric: self.symmetric.map(tpm2::TpmtSymDef::from),
             auth_hash: self.hash,
         };
-        let handles = StartAuthSessionHandles { tpm_key, bind };
-        let (rsp, rsp_handles) = execute_with_password_sessions(sim, &cmd, handles, 0, &[])
+        let rsp = execute_with_password_sessions(sim, &cmd, 0, &[])
             .expect("TPM2_StartAuthSession failed");
-        self.handle = rsp_handles.session_handle;
+        self.handle = rsp.session_handle;
         self.nonce_tpm = rsp.nonce_tpm.get_buffer().to_vec();
 
         // Part 1, 19.6
@@ -340,10 +350,10 @@ impl GoHmacSession {
         param: &mut [u8],
     ) {
         let sym = self.symmetric.expect("parameter encryption needs AES");
-        let key_bytes = match sym {
-            TpmtSymDefObject::Aes128(_) => 16,
-            TpmtSymDefObject::Aes256(_) => 32,
-            other => panic!("unsupported session symmetric {other:?}"),
+        let key_bytes = match sym.alg {
+            AlgSym::Aes128 => 16,
+            AlgSym::Aes256 => 32,
+            _ => panic!("unsupported session symmetric {sym:?}"),
         };
         let mut session_value = self.session_key.clone();
         session_value.extend_from_slice(&self.auth);
@@ -361,9 +371,9 @@ impl GoHmacSession {
         let (key, iv) = key_iv.split_at_mut(key_bytes);
         let alg = TpmtSymDefObject::aes_cfb((key_bytes * 8) as u16).unwrap();
         if decrypt {
-            tpm2::crypto::decrypt(CLIENT_CRYPTO, alg, key, iv, param).unwrap();
+            sym_decrypt(CLIENT_CRYPTO, alg, key, iv, param).unwrap();
         } else {
-            tpm2::crypto::encrypt(CLIENT_CRYPTO, alg, key, iv, param).unwrap();
+            sym_encrypt(CLIENT_CRYPTO, alg, key, iv, param).unwrap();
         }
     }
 }
@@ -390,7 +400,8 @@ fn encrypted_salt(
                     &mut ciphertext,
                     b"SECRET\0",
                 )
-                .unwrap();
+                .unwrap()
+                .expect("OAEP encryption of the salt failed");
             (
                 Tpm2bEncryptedSecret::from_bytes(leak_bytes(&ciphertext[..len])).unwrap(),
                 salt,
@@ -419,7 +430,7 @@ fn encrypted_salt(
             let mut padded_tpm_x = [0u8; 32];
             padded_tpm_x[32 - tpm_x.len()..].copy_from_slice(tpm_x);
             let mut salt = vec![0u8; 32];
-            tpm2::crypto::kdf::kdfe(
+            tpm2::crypto::kdf::kdfe_bits(
                 CLIENT_CRYPTO,
                 TpmiAlgHash::Sha256,
                 z.raw_secret_bytes().as_slice(),
@@ -448,7 +459,7 @@ fn encrypted_salt(
 
 /// Computes a digest with the simulator's crypto provider.
 fn hash(_sim: &Simulator<'_>, alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HashCtx::new(CLIENT_CRYPTO, alg).unwrap();
+    let mut ctx = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, alg).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }
@@ -458,7 +469,7 @@ fn hash(_sim: &Simulator<'_>, alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
 
 /// Computes an HMAC with the simulator's crypto provider.
 fn hmac(_sim: &Simulator<'_>, alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HmacCtx::new(CLIENT_CRYPTO, alg, key).unwrap();
+    let mut ctx = tpm2::crypto::HmacStream::new(CLIENT_CRYPTO, alg, key).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }
@@ -467,21 +478,19 @@ fn hmac(_sim: &Simulator<'_>, alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> 
 }
 
 /// go-tpm `execute(...)` with HMAC sessions: the sessions authorizing the
-/// command handles come first, followed by any extra sessions. `names` are the
-/// names of the command handles (as supplied via `AuthHandle`/`NamedHandle` in
-/// Go). Returns the TPM response code on failure, after flushing use-once
-/// sessions (go-tpm `CleanupFailure`).
+/// command handles come first, followed by any extra sessions. The command's
+/// handles (`cmd.handles()`) are sent in the handle area and `names` are their
+/// names (as supplied via `AuthHandle`/`NamedHandle` in Go). Returns the
+/// response, which carries the response handles, or the TPM response code on
+/// failure, after flushing use-once sessions (go-tpm `CleanupFailure`).
 fn execute_go<CmdT: Command>(
     sim: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     names: &[&[u8]],
     sessions: &mut [&mut GoHmacSession],
-) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), u32>
+) -> Result<CmdT::Response<'static>, u32>
 where
-    CmdT::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     assert!(
         !sessions.is_empty() && sessions.len() <= 3,
@@ -557,7 +566,7 @@ where
             hmac: Tpm2bAuth::from_bytes(leak_bytes(&mac)).unwrap(),
         };
         let mut buf = [0u8; 1024];
-        let len = marshal_to_slice(&auth_cmd, &mut buf);
+        let len = marshal_auth_command(&auth_cmd, &mut buf);
         auth_area.extend_from_slice(&buf[..len]);
     }
 
@@ -569,7 +578,10 @@ where
         code: CmdT::CMD_CODE,
     };
     let mut written = 10;
-    written += marshal_to_slice(&cmd_handles, &mut cmd_buf[written..]);
+    for handle in cmd.handles().as_ref() {
+        cmd_buf[written..written + 4].copy_from_slice(&handle.0.to_be_bytes());
+        written += 4;
+    }
     cmd_buf[written..written + 4].copy_from_slice(&(auth_area.len() as u32).to_be_bytes());
     written += 4;
     cmd_buf[written..written + auth_area.len()].copy_from_slice(&auth_area);
@@ -598,7 +610,10 @@ where
         }
         return Err(rsp_header.rc);
     }
-    let rsp_handles = CmdT::RespHandles::unmarshal(&mut slice).unwrap();
+    let mut rsp_handles = RespHandles::<CmdT>::default();
+    for handle in rsp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut slice).unwrap();
+    }
     assert_eq!(rsp_header.tag, TpmSt::SESSIONS);
     let param_size = u32::unmarshal(&mut slice).unwrap() as usize;
     let (rsp_params, mut sess_slice) = slice.split_at(param_size);
@@ -650,8 +665,8 @@ where
     }
 
     let mut params: &'static [u8] = leak_bytes(&rsp_params);
-    let rsp = <CmdT::Response<'static>>::unmarshal(&mut params).unwrap();
-    Ok((rsp, rsp_handles))
+    let rsp = <CmdT::Response<'static>>::unmarshal_with_handles(rsp_handles, &mut params).unwrap();
+    Ok(rsp)
 }
 
 // =========================================================================
@@ -669,6 +684,7 @@ struct Srk {
 /// `unsealingTest` prologue: creates the SRK with `srkAuth`.
 fn create_srk(sim: &mut Simulator<'_>, kind: SrkKind) -> Srk {
     let cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::from_bytes(SRK_AUTH).unwrap(),
             data: Tpm2bSensitiveData::default(),
@@ -676,21 +692,19 @@ fn create_srk(sim: &mut Simulator<'_>, kind: SrkKind) -> Srk {
         in_public: tpm2::Tpm2b(kind.template()),
         ..Default::default()
     };
-    let handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (rsp, rsp_handles) = execute_with_password_sessions(sim, &cmd, handles, 1, &[])
-        .expect("TPM2_CreatePrimary failed");
+    let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("TPM2_CreatePrimary failed");
     Srk {
-        handle: rsp_handles.object_handle,
+        handle: rsp.object_handle,
         name: rsp.name.get_buffer().to_vec(),
         public: rsp.out_public.0,
     }
 }
 
-/// `createBlobCmd` from the Go test (without the parent auth).
-fn create_blob_cmd() -> Create<'static> {
+/// `createBlobCmd` from the Go test (without the parent auth), with the
+/// given parent.
+fn create_blob_cmd(parent_handle: Handle) -> Create<'static> {
     Create {
+        parent_handle,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::from_bytes(AUTH).unwrap(),
             data: Tpm2bSensitiveData::from_bytes(DATA).unwrap(),
@@ -711,10 +725,7 @@ fn create_blob_cmd() -> Create<'static> {
 
 /// Runs `createBlobCmd` with `PasswordAuth(srkAuth)` on the parent.
 fn create_blob_with_password(sim: &mut Simulator<'_>, srk: &Srk) {
-    let handles = CreateHandles {
-        parent_handle: srk.handle,
-    };
-    execute_with_password_sessions(sim, &create_blob_cmd(), handles, 1, SRK_AUTH)
+    execute_with_password_sessions(sim, &create_blob_cmd(srk.handle), 1, SRK_AUTH)
         .expect("TPM2_Create failed");
 }
 
@@ -725,10 +736,7 @@ fn create_blob_with_sessions(
     srk: &Srk,
     sessions: &mut [&mut GoHmacSession],
 ) -> (Tpm2bPrivate<'static>, Tpm2bPublic<'static>) {
-    let handles = CreateHandles {
-        parent_handle: srk.handle,
-    };
-    let (rsp, _) = execute_go(sim, &create_blob_cmd(), handles, &[&srk.name], sessions)
+    let rsp = execute_go(sim, &create_blob_cmd(srk.handle), &[&srk.name], sessions)
         .expect("TPM2_Create failed");
     (rsp.out_private, rsp.out_public)
 }
@@ -790,21 +798,19 @@ fn run_unseal_subtest(kind: SrkKind, unseal: impl FnOnce(&mut Simulator<'_>, &Sr
 
     // Load the sealed blob.
     let mut load_auth = GoHmacSession::new(TpmiAlgHash::Sha256, 16).auth(SRK_AUTH);
-    let (load_rsp, load_handles) = execute_go(
+    let load_rsp = execute_go(
         &mut sim,
         &Load {
+            parent_handle: srk.handle,
             in_private: out_private,
             in_public: out_public,
-        },
-        LoadHandles {
-            parent_handle: srk.handle,
         },
         &[&srk.name],
         &mut [&mut load_auth],
     )
     .expect("TPM2_Load failed");
     let blob = LoadedBlob {
-        handle: load_handles.object_handle,
+        handle: load_rsp.object_handle,
         name: load_rsp.name.get_buffer().to_vec(),
     };
 
@@ -821,10 +827,9 @@ fn unseal_with_sessions(
     blob: &LoadedBlob,
     sessions: &mut [&mut GoHmacSession],
 ) {
-    let (rsp, _) = execute_go(
+    let rsp = execute_go(
         sim,
-        &Unseal {},
-        UnsealHandles {
+        &Unseal {
             item_handle: blob.handle,
         },
         &[&blob.name],
@@ -917,10 +922,9 @@ fn create_decrypt_encrypt2_separate_01(kind: SrkKind) {
 
 fn with_password(kind: SrkKind) {
     run_unseal_subtest(kind, |sim, _srk, blob| {
-        let (rsp, _) = execute_with_password_sessions(
+        let rsp = execute_with_password_sessions(
             sim,
-            &Unseal {},
-            UnsealHandles {
+            &Unseal {
                 item_handle: blob.handle,
             },
             1,
@@ -935,8 +939,7 @@ fn with_wrong_password(kind: SrkKind) {
     run_unseal_subtest(kind, |sim, _srk, blob| {
         let err = execute_with_password_sessions(
             sim,
-            &Unseal {},
-            UnsealHandles {
+            &Unseal {
                 item_handle: blob.handle,
             },
             1,

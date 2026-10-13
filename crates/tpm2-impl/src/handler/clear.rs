@@ -1,10 +1,11 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::commands::{Clear, ClearHandles};
+use tpm2::commands::Clear;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 
@@ -27,8 +28,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn clear(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<ClearHandles>()?;
-        let auth_handle = handles.auth_handle.0;
+        let handles = request.try_unmarshal_handles::<Clear>()?;
+        let [auth_handle] = handles;
+        check(auth_handle, Tpmi::RhClear, Position::handle(1))?;
+        let auth_handle = auth_handle.0;
 
         if auth_handle != Handle::RH_LOCKOUT.0 && auth_handle != Handle::RH_PLATFORM.0 {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
@@ -36,7 +39,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<Clear>()?;
+        let _cmd = request.try_unmarshal_command::<Clear>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -61,17 +64,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .rng
-            .get_random(&mut new_sh_proof)
+            .fill_bytes(&mut new_sh_proof)
             .map_err(|_| TpmRc::FAILURE)?;
         self.context
             .platform
             .rng
-            .get_random(&mut new_eh_proof)
+            .fill_bytes(&mut new_eh_proof)
             .map_err(|_| TpmRc::FAILURE)?;
         self.context
             .platform
             .rng
-            .get_random(&mut new_sp_seed)
+            .fill_bytes(&mut new_sp_seed)
             .map_err(|_| TpmRc::FAILURE)?;
 
         // All random generated successfully, now mutate state

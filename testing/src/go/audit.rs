@@ -2,17 +2,17 @@
 
 use crate::test_utils::CLIENT_CRYPTO;
 use crate::test_utils::{
-    ActiveSession, CmdHeader, RespHeader, flush_context, leak_bytes, marshal_to_vec,
-    start_auth_session, strip_trailing_zeros,
+    ActiveSession, CmdHeader, RespHandles, RespHeader, flush_context, leak_bytes,
+    marshal_auth_command, marshal_to_vec, start_auth_session, strip_trailing_zeros,
 };
 use sha2::{Digest as _, Sha256};
 use tpm2::Marshal;
 use tpm2::Unmarshal;
 use tpm2::commands::{
-    Certify, CertifyHandles, Command, CreatePrimary, CreatePrimaryHandles, GetCapability,
-    GetSessionAuditDigest, GetSessionAuditDigestHandles,
+    Certify, Command, CreatePrimary, GetCapability, GetSessionAuditDigest, UnmarshalMessage,
+    responses,
 };
-use tpm2::crypto::Rng;
+use tpm2::crypto::CryptoProvider;
 use tpm2::{Handle, TpmCap, TpmEccCurve, TpmPt, TpmSe, TpmSt};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bEccParameter, Tpm2bName, Tpm2bNonce,
@@ -45,7 +45,7 @@ pub(crate) enum SessionAuth<'a> {
 
 fn hash_parts(alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
     let crypto = PlatformCryptoProvider;
-    let mut state = tpm2::crypto::HashCtx::new(&crypto, alg).unwrap();
+    let mut state = tpm2::crypto::HashStream::new(&crypto, alg).unwrap();
     for part in parts {
         state.update(part).unwrap();
     }
@@ -55,7 +55,7 @@ fn hash_parts(alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
 
 fn hmac_parts(alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
     let crypto = PlatformCryptoProvider;
-    let mut state = tpm2::crypto::HmacCtx::new(&crypto, alg, key).unwrap();
+    let mut state = tpm2::crypto::HmacStream::new(&crypto, alg, key).unwrap();
     for part in parts {
         state.update(part).unwrap();
     }
@@ -68,7 +68,8 @@ fn hmac_parts(alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
 /// does: auth-handle sessions first, followed by any extra sessions (e.g. an
 /// audit session).
 ///
-/// `handle_names` are the Names of the command handles (used for cpHash).
+/// The command's handles (`cmd.handles()`) are sent in the handle area;
+/// `handle_names` are their Names (used for cpHash).
 /// Response session areas are validated like go-tpm does (password sessions
 /// must echo an empty nonce/HMAC with only `continueSession` set; HMAC/policy
 /// sessions must carry a valid response HMAC), and the nonces of HMAC/policy
@@ -78,13 +79,11 @@ fn hmac_parts(alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
 pub(crate) fn execute_with_mixed_sessions<CmdT: Command>(
     sim: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     handle_names: &[&[u8]],
     auths: &mut [SessionAuth<'_>],
-) -> Result<(Vec<u8>, CmdT::RespHandles), u32>
+) -> Result<(Vec<u8>, RespHandles<CmdT>), u32>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let cc_bytes = CmdT::CMD_CODE.code().to_be_bytes();
     let params = marshal_to_vec(cmd);
@@ -141,7 +140,9 @@ where
                 }
             }
         };
-        auth_area.extend_from_slice(&marshal_to_vec(&auth_cmd));
+        let mut auth_buf = [0u8; TpmsAuthCommand::MAX_SIZE];
+        let auth_len = marshal_auth_command(&auth_cmd, &mut auth_buf);
+        auth_area.extend_from_slice(&auth_buf[..auth_len]);
     }
 
     // Assemble the command.
@@ -155,7 +156,9 @@ where
         code: CmdT::CMD_CODE,
     };
     let mut cmd_buffer = vec![0u8; 10];
-    cmd_buffer.extend_from_slice(&marshal_to_vec(&cmd_handles));
+    for handle in cmd.handles().as_ref() {
+        cmd_buffer.extend_from_slice(&handle.0.to_be_bytes());
+    }
     if !auths.is_empty() {
         cmd_buffer.extend_from_slice(&(auth_area.len() as u32).to_be_bytes());
         cmd_buffer.extend_from_slice(&auth_area);
@@ -174,7 +177,10 @@ where
     if resp_header.rc != 0 {
         return Err(resp_header.rc);
     }
-    let resp_handles = CmdT::RespHandles::unmarshal(&mut slice).unwrap();
+    let mut resp_handles = RespHandles::<CmdT>::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut slice).unwrap();
+    }
     let parameter_size = if resp_header.tag == TpmSt::SESSIONS {
         u32::unmarshal(&mut slice).unwrap() as usize
     } else {
@@ -230,45 +236,39 @@ where
 }
 
 /// Like [`execute_with_mixed_sessions`], but unmarshals the response
-/// parameters.
+/// parameters into the response, together with the response handles.
 pub(crate) fn execute_mixed<CmdT: Command>(
     sim: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     handle_names: &[&[u8]],
     auths: &mut [SessionAuth<'_>],
-) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), u32>
+) -> Result<CmdT::Response<'static>, u32>
 where
-    CmdT::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    let (params, resp_handles) =
-        execute_with_mixed_sessions(sim, cmd, cmd_handles, handle_names, auths)?;
+    let (params, resp_handles) = execute_with_mixed_sessions(sim, cmd, handle_names, auths)?;
     let mut slice: &'static [u8] = leak_bytes(&params);
-    let resp = <CmdT::Response<'static>>::unmarshal(&mut slice).unwrap();
-    Ok((resp, resp_handles))
+    let resp = <CmdT::Response<'static>>::unmarshal_with_handles(resp_handles, &mut slice).unwrap();
+    Ok(resp)
 }
 
 /// Executes `CreatePrimary` under `hierarchy` the way go-tpm does when the
 /// primary handle is a plain handle: authorized with `PasswordAuth(nil)`.
+///
+/// `cmd.primary_handle` is ignored: the command is sent with
+/// `primary_handle: hierarchy`.
 pub(crate) fn create_primary_pw(
     sim: &mut Simulator<'_>,
     hierarchy: Handle,
     cmd: &CreatePrimary<'_>,
-) -> Result<
-    (
-        <CreatePrimary<'static> as Command>::Response<'static>,
-        <CreatePrimary<'static> as Command>::RespHandles,
-    ),
-    u32,
-> {
+) -> Result<responses::CreatePrimary<'static>, u32> {
+    let cmd = CreatePrimary {
+        primary_handle: hierarchy,
+        ..*cmd
+    };
     execute_mixed(
         sim,
-        cmd,
-        CreatePrimaryHandles {
-            primary_handle: hierarchy,
-        },
+        &cmd,
         &[&hierarchy.0.to_be_bytes()],
         &mut [SessionAuth::Password(&[])],
     )
@@ -298,7 +298,6 @@ impl CommandAudit {
         rsp: &CmdT::Response<'_>,
     ) where
         for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-        for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
         for<'b, 'c> &'b mut <CmdT::Response<'c> as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
     {
         let cp_hash = Sha256::digest(marshal_command(cmd, names));
@@ -320,7 +319,6 @@ impl CommandAudit {
 fn marshal_command<CmdT: Command>(cmd: &CmdT, names: &[&[u8]]) -> Vec<u8>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut buf = CmdT::CMD_CODE.code().to_be_bytes().to_vec();
     for name in names {
@@ -335,7 +333,6 @@ where
 fn marshal_response<CmdT: Command>(rsp: &CmdT::Response<'_>) -> Vec<u8>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
     for<'b, 'c> &'b mut <CmdT::Response<'c> as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut buf = 0u32.to_be_bytes().to_vec();
@@ -367,11 +364,13 @@ fn parse_name_size(buf: &[u8]) -> usize {
 
 /// Mirrors go-tpm `UnmarshalCommand`: parses a raw cpHash preimage produced by
 /// [`marshal_command`] back into the command's handle Names and parameters.
+///
+/// The preimage carries the handles' Names, not the handles themselves, so the
+/// returned command's handles are all `Handle::default()`.
 fn unmarshal_command<CmdT>(data: &'static [u8], num_names: usize) -> (Vec<&'static [u8]>, CmdT)
 where
-    CmdT: Command + Unmarshal<'static>,
+    CmdT: Command + UnmarshalMessage<'static>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let (cc, mut rest) = data.split_at(4);
     assert_eq!(
@@ -386,22 +385,24 @@ where
         names.push(name);
         rest = tail;
     }
-    let cmd = CmdT::unmarshal(&mut rest).unwrap();
+    let cmd = CmdT::unmarshal_with_handles(Default::default(), &mut rest).unwrap();
     (names, cmd)
 }
 
 /// Mirrors go-tpm `UnmarshalResponse`: parses a raw rpHash preimage produced
 /// by [`marshal_response`] back into the response parameters.
+///
+/// The preimage carries no response handles, so the returned response's
+/// handles are all `Handle::default()`.
 fn unmarshal_response<CmdT: Command>(data: &'static [u8]) -> CmdT::Response<'static>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     assert!(data.len() >= 8, "data too short");
     let (rc, rest) = data.split_at(4);
     assert_eq!(rc, [0u8; 4], "invalid response code");
     let (_cc, mut params) = rest.split_at(4);
-    <CmdT::Response<'static>>::unmarshal(&mut params).unwrap()
+    <CmdT::Response<'static>>::unmarshal_with_handles(Default::default(), &mut params).unwrap()
 }
 
 // =========================================================================
@@ -442,10 +443,10 @@ fn create_ak_ecc(sim: &mut Simulator<'_>, auth: &[u8]) -> (Handle, Tpm2bName<'st
         in_public: tpm2::Tpm2b(public_area),
         ..Default::default()
     };
-    let (rsp, rsp_handles) = create_primary_pw(sim, Handle::RH_OWNER, &create_cmd)
+    let rsp = create_primary_pw(sim, Handle::RH_OWNER, &create_cmd)
         .expect("could not generate AK ECC key");
 
-    (rsp_handles.object_handle, rsp.name)
+    (rsp.object_handle, rsp.name)
 }
 
 /// Creates the RSA-2048 sign+decrypt key certified in
@@ -478,10 +479,10 @@ fn create_certifiable_key_rsa(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'st
         in_public: tpm2::Tpm2b(public_area),
         ..Default::default()
     };
-    let (rsp, rsp_handles) = create_primary_pw(sim, Handle::RH_OWNER, &create_cmd)
+    let rsp = create_primary_pw(sim, Handle::RH_OWNER, &create_cmd)
         .expect("could not generate RSA key to certify");
 
-    (rsp_handles.object_handle, rsp.name)
+    (rsp.object_handle, rsp.name)
 }
 
 /// Mirrors go-tpm `HMACSession(tpm, TPMAlgSHA256, 16, Audit())`: an unbound,
@@ -502,9 +503,7 @@ fn start_audit_session(sim: &mut Simulator<'_>) -> ActiveSession {
 }
 
 /// Extracts the session digest from a `GetSessionAuditDigest` response.
-fn session_audit_digest(
-    rsp: &<GetSessionAuditDigest<'static> as Command>::Response<'static>,
-) -> Vec<u8> {
+fn session_audit_digest(rsp: &responses::GetSessionAuditDigest<'static>) -> Vec<u8> {
     let attest = rsp
         .audit_info
         .to_struct()
@@ -550,10 +549,9 @@ fn test_audit_session() {
             property: u32::from(prop),
             property_count: 1,
         };
-        let (get_rsp, _) = execute_mixed(
+        let get_rsp = execute_mixed(
             &mut sim,
             &get_cmd,
-            (),
             &[],
             &mut [SessionAuth::Session {
                 session: &mut sess,
@@ -571,20 +569,17 @@ fn test_audit_session() {
 
         // Get the audit digest signed by the AK
         let get_audit_cmd = GetSessionAuditDigest {
-            qualifying_data: Tpm2bData::from_bytes(b"foobar").unwrap(),
-            in_scheme: None,
-        };
-        let get_audit_handles = GetSessionAuditDigestHandles {
             privacy_admin_handle: Handle::RH_ENDORSEMENT,
             sign_handle: ak_handle,
             session_handle: sess.session_handle,
+            qualifying_data: Tpm2bData::from_bytes(b"foobar").unwrap(),
+            in_scheme: None,
         };
         // PrivacyAdminHandle and SignHandle (a NamedHandle) are both
         // authorized by go-tpm with PasswordAuth(nil).
-        let (get_audit_rsp, _) = execute_mixed(
+        let get_audit_rsp = execute_mixed(
             &mut sim,
             &get_audit_cmd,
-            get_audit_handles,
             &[
                 &Handle::RH_ENDORSEMENT.0.to_be_bytes(),
                 ak_name.get_buffer(),
@@ -644,21 +639,18 @@ fn test_audit_session_with_certify() {
     let (key_handle, key_name) = create_certifiable_key_rsa(&mut sim);
 
     let original_cmd = Certify {
-        qualifying_data: Tpm2bData::from_bytes(b"test").unwrap(),
-        in_scheme: Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
-    };
-    let certify_handles = CertifyHandles {
         object_handle: key_handle,
         sign_handle: ak_handle,
+        qualifying_data: Tpm2bData::from_bytes(b"test").unwrap(),
+        in_scheme: Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
     };
     let names: [&[u8]; 2] = [key_name.get_buffer(), ak_name.get_buffer()];
 
     // Execute the command with audit session: PasswordAuth(nil) for
     // ObjectHandle, PasswordAuth(Auth) for SignHandle, plus the audit session.
-    let (original_rsp, _) = execute_mixed(
+    let original_rsp = execute_mixed(
         &mut sim,
         &original_cmd,
-        certify_handles,
         &names,
         &mut [
             SessionAuth::Password(&[]),
@@ -677,18 +669,15 @@ fn test_audit_session_with_certify() {
 
     // Get the audit digest signed by the AK
     let get_audit_cmd = GetSessionAuditDigest {
-        qualifying_data: Tpm2bData::from_bytes(b"foobar").unwrap(),
-        in_scheme: None,
-    };
-    let get_audit_handles = GetSessionAuditDigestHandles {
         privacy_admin_handle: Handle::RH_ENDORSEMENT,
         sign_handle: ak_handle,
         session_handle: sess.session_handle,
+        qualifying_data: Tpm2bData::from_bytes(b"foobar").unwrap(),
+        in_scheme: None,
     };
-    let (get_audit_rsp, _) = execute_mixed(
+    let get_audit_rsp = execute_mixed(
         &mut sim,
         &get_audit_cmd,
-        get_audit_handles,
         &[
             &Handle::RH_ENDORSEMENT.0.to_be_bytes(),
             ak_name.get_buffer(),

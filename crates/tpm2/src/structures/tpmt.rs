@@ -32,24 +32,9 @@ pub enum TpmtHa<'a> {
 
 impl<'a> TpmtHa<'a> {
     /// The maximum digest size (in bytes) across all supported TPM2 hash algorithms.
-    pub const MAX_DIGEST_SIZE: usize = max(&[
-        #[cfg(feature = "sha1")]
-        Sha1.digest_size(),
-        #[cfg(feature = "sha256")]
-        Sha256.digest_size(),
-        #[cfg(feature = "sha384")]
-        Sha384.digest_size(),
-        #[cfg(feature = "sha512")]
-        Sha512.digest_size(),
-        #[cfg(feature = "sm3_256")]
-        Sm3_256.digest_size(),
-        #[cfg(feature = "sha3_256")]
-        Sha3_256.digest_size(),
-        #[cfg(feature = "sha3_384")]
-        Sha3_384.digest_size(),
-        #[cfg(feature = "sha3_512")]
-        Sha3_512.digest_size(),
-    ]);
+    ///
+    /// Alias of [`TpmiAlgHash::MAX_DIGEST_BYTES`].
+    pub const MAX_DIGEST_SIZE: usize = TpmiAlgHash::MAX_DIGEST_BYTES;
     /// The maximum number of implemented hash algorithms (`HASH_COUNT`).
     ///
     /// Computed dynamically from the enabled hash algorithm features, matching
@@ -164,6 +149,31 @@ impl<'a> TpmtHa<'a> {
             #[cfg(feature = "sha3_512")]
             Self::Sha3_512(b) => b,
         }
+    }
+
+    /// Creates a new `TpmtHa` from a hash algorithm and a digest slice.
+    ///
+    /// Returns `None` if `slice.len()` does not match `alg.digest_size()`. This is the
+    /// non-`const` counterpart of [`Self::new`].
+    pub fn from_slice(alg: TpmiAlgHash, slice: &'a [u8]) -> Option<Self> {
+        Some(match alg {
+            #[cfg(feature = "sha1")]
+            Sha1 => Self::Sha1(slice.try_into().ok()?),
+            #[cfg(feature = "sha256")]
+            Sha256 => Self::Sha256(slice.try_into().ok()?),
+            #[cfg(feature = "sha384")]
+            Sha384 => Self::Sha384(slice.try_into().ok()?),
+            #[cfg(feature = "sha512")]
+            Sha512 => Self::Sha512(slice.try_into().ok()?),
+            #[cfg(feature = "sm3_256")]
+            Sm3_256 => Self::Sm3_256(slice.try_into().ok()?),
+            #[cfg(feature = "sha3_256")]
+            Sha3_256 => Self::Sha3_256(slice.try_into().ok()?),
+            #[cfg(feature = "sha3_384")]
+            Sha3_384 => Self::Sha3_384(slice.try_into().ok()?),
+            #[cfg(feature = "sha3_512")]
+            Sha3_512 => Self::Sha3_512(slice.try_into().ok()?),
+        })
     }
 }
 
@@ -298,148 +308,133 @@ impl<'a> Unmarshal<'a> for Option<TpmtKeyedHashScheme> {
     }
 }
 
-/// `TPMT_SYM_DEF_OBJECT` structure defined in TPM 2.0 Part 2: Structures, Section 11.1.5 (Table 152).
+/// Symmetric block cipher algorithm and key size (AES, SM4, Camellia).
 ///
-/// Used to select a symmetric block cipher algorithm and key size (AES, SM4, Camellia, not XOR).
+/// This is the `algorithm` and `keyBits` part of a `TPMT_SYM_DEF_OBJECT` ([`TpmtSymDefObject`])
+/// and of a non-XOR `TPMT_SYM_DEF` ([`TpmtSymDef::Cipher`]). Each variant is enabled by the
+/// Cargo feature of the same (lowercase) name, and at least one must be enabled.
+///
+/// Unmarshalling an algorithm that is not an enabled symmetric block cipher fails with
+/// `TPM_RC_SYMMETRIC` ([`UnmarshalError::SYMMETRIC`]) before the key size is read, and an
+/// unsupported key size for an enabled algorithm fails with `TPM_RC_VALUE`
+/// ([`UnmarshalError::VALUE`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TpmtSymDefObject {
+pub enum AlgSym {
     #[cfg(feature = "aes128")]
-    Aes128(Option<TpmiAlgSymMode>),
+    Aes128,
     #[cfg(feature = "aes192")]
-    Aes192(Option<TpmiAlgSymMode>),
+    Aes192,
     #[cfg(feature = "aes256")]
-    Aes256(Option<TpmiAlgSymMode>),
+    Aes256,
     #[cfg(feature = "sm4_128")]
-    Sm4_128(Option<TpmiAlgSymMode>),
+    Sm4_128,
     #[cfg(feature = "camellia128")]
-    Camellia128(Option<TpmiAlgSymMode>),
+    Camellia128,
     #[cfg(feature = "camellia192")]
-    Camellia192(Option<TpmiAlgSymMode>),
+    Camellia192,
     #[cfg(feature = "camellia256")]
-    Camellia256(Option<TpmiAlgSymMode>),
+    Camellia256,
 }
 
-impl TpmtSymDefObject {
+#[cfg(not(any(
+    feature = "aes128",
+    feature = "aes192",
+    feature = "aes256",
+    feature = "sm4_128",
+    feature = "camellia128",
+    feature = "camellia192",
+    feature = "camellia256",
+)))]
+compile_error!("at least one symmetric algorithm feature must be enabled");
+
+impl AlgSym {
     pub const MAX_KEY_BITS: usize = max(&[
-        #[cfg(feature = "aes128")]
+        #[cfg(any(feature = "aes128", feature = "sm4_128", feature = "camellia128"))]
         128,
-        #[cfg(feature = "aes192")]
+        #[cfg(any(feature = "aes192", feature = "camellia192"))]
         192,
-        #[cfg(feature = "aes256")]
-        256,
-        #[cfg(feature = "sm4_128")]
-        128,
-        #[cfg(feature = "camellia128")]
-        128,
-        #[cfg(feature = "camellia192")]
-        192,
-        #[cfg(feature = "camellia256")]
+        #[cfg(any(feature = "aes256", feature = "camellia256"))]
         256,
     ]);
     pub const MAX_KEY_BYTES: usize = Self::MAX_KEY_BITS.div_ceil(8);
-    pub const MAX_BLOCK_SIZE_BYTES: usize = 16;
+
+    /// All symmetric encryption algorithms have a block size of 16.
+    #[doc(alias = "MAX_SYM_BLOCK_SIZE")]
+    #[doc(alias = "TPM2_MAX_SYM_BLOCK_SIZE")]
+    pub const BLOCK_SIZE: usize = 16;
 
     #[doc(alias = "TPMI_ALG_SYM_OBJECT")]
     pub const fn algorithm(self) -> Alg {
         match self {
             #[cfg(feature = "aes128")]
-            Self::Aes128(_) => Alg::AES,
+            Self::Aes128 => Alg::AES,
             #[cfg(feature = "aes192")]
-            Self::Aes192(_) => Alg::AES,
+            Self::Aes192 => Alg::AES,
             #[cfg(feature = "aes256")]
-            Self::Aes256(_) => Alg::AES,
+            Self::Aes256 => Alg::AES,
             #[cfg(feature = "sm4_128")]
-            Self::Sm4_128(_) => Alg::SM4,
+            Self::Sm4_128 => Alg::SM4,
             #[cfg(feature = "camellia128")]
-            Self::Camellia128(_) => Alg::CAMELLIA,
+            Self::Camellia128 => Alg::CAMELLIA,
             #[cfg(feature = "camellia192")]
-            Self::Camellia192(_) => Alg::CAMELLIA,
+            Self::Camellia192 => Alg::CAMELLIA,
             #[cfg(feature = "camellia256")]
-            Self::Camellia256(_) => Alg::CAMELLIA,
+            Self::Camellia256 => Alg::CAMELLIA,
         }
     }
 
+    #[doc(alias = "TPMU_SYM_KEY_BITS")]
+    #[doc(alias = "TPMI_AES_KEY_BITS")]
+    #[doc(alias = "TPMI_SM4_KEY_BITS")]
+    #[doc(alias = "TPMI_CAMELLIA_KEY_BITS")]
     pub const fn key_bits(self) -> u16 {
         match self {
             #[cfg(feature = "aes128")]
-            Self::Aes128(_) => 128,
-            #[cfg(feature = "aes192")]
-            Self::Aes192(_) => 192,
-            #[cfg(feature = "aes256")]
-            Self::Aes256(_) => 256,
+            Self::Aes128 => 128,
             #[cfg(feature = "sm4_128")]
-            Self::Sm4_128(_) => 128,
+            Self::Sm4_128 => 128,
             #[cfg(feature = "camellia128")]
-            Self::Camellia128(_) => 128,
+            Self::Camellia128 => 128,
+            #[cfg(feature = "aes192")]
+            Self::Aes192 => 192,
             #[cfg(feature = "camellia192")]
-            Self::Camellia192(_) => 192,
+            Self::Camellia192 => 192,
+            #[cfg(feature = "aes256")]
+            Self::Aes256 => 256,
             #[cfg(feature = "camellia256")]
-            Self::Camellia256(_) => 256,
+            Self::Camellia256 => 256,
         }
     }
 
-    pub const fn mode(self) -> Option<TpmiAlgSymMode> {
-        match self {
-            #[cfg(feature = "aes128")]
-            Self::Aes128(m) => m,
-            #[cfg(feature = "aes192")]
-            Self::Aes192(m) => m,
-            #[cfg(feature = "aes256")]
-            Self::Aes256(m) => m,
-            #[cfg(feature = "sm4_128")]
-            Self::Sm4_128(m) => m,
-            #[cfg(feature = "camellia128")]
-            Self::Camellia128(m) => m,
-            #[cfg(feature = "camellia192")]
-            Self::Camellia192(m) => m,
-            #[cfg(feature = "camellia256")]
-            Self::Camellia256(m) => m,
-        }
+    pub const fn key_bytes(self) -> usize {
+        self.key_bits().div_ceil(8) as usize
     }
 
-    pub const fn with_mode(self, mode: Option<TpmiAlgSymMode>) -> Self {
-        match self {
-            #[cfg(feature = "aes128")]
-            Self::Aes128(_) => Self::Aes128(mode),
-            #[cfg(feature = "aes192")]
-            Self::Aes192(_) => Self::Aes192(mode),
-            #[cfg(feature = "aes256")]
-            Self::Aes256(_) => Self::Aes256(mode),
-            #[cfg(feature = "sm4_128")]
-            Self::Sm4_128(_) => Self::Sm4_128(mode),
-            #[cfg(feature = "camellia128")]
-            Self::Camellia128(_) => Self::Camellia128(mode),
-            #[cfg(feature = "camellia192")]
-            Self::Camellia192(_) => Self::Camellia192(mode),
-            #[cfg(feature = "camellia256")]
-            Self::Camellia256(_) => Self::Camellia256(mode),
-        }
-    }
-
-    pub const fn aes_cfb(key_bits: u16) -> Result<Self, UnmarshalError> {
-        Self::from_parts(Alg::AES, key_bits, Some(TpmiAlgSymMode::CFB))
-    }
-
-    pub const fn from_parts(
-        algorithm: Alg,
-        key_bits: u16,
-        mode: Option<TpmiAlgSymMode>,
-    ) -> Result<Self, UnmarshalError> {
+    /// Builds an [`AlgSym`] from a symmetric algorithm identifier and a key size in bits (the
+    /// `algorithm` and `keyBits` fields of a `TPMT_SYM_DEF_OBJECT`).
+    ///
+    /// # Errors
+    ///
+    /// - [`UnmarshalError::SYMMETRIC`] (`TPM_RC_SYMMETRIC`) if `algorithm` is not an enabled
+    ///   symmetric block cipher (`TPMI_ALG_SYM_OBJECT`).
+    /// - [`UnmarshalError::VALUE`] (`TPM_RC_VALUE`) if `key_bits` is not an enabled key size for
+    ///   `algorithm`.
+    pub const fn from_parts(algorithm: Alg, key_bits: u16) -> Result<Self, UnmarshalError> {
         match (algorithm, key_bits) {
             #[cfg(feature = "aes128")]
-            (Alg::AES, 128) => Ok(Self::Aes128(mode)),
+            (Alg::AES, 128) => Ok(Self::Aes128),
             #[cfg(feature = "aes192")]
-            (Alg::AES, 192) => Ok(Self::Aes192(mode)),
+            (Alg::AES, 192) => Ok(Self::Aes192),
             #[cfg(feature = "aes256")]
-            (Alg::AES, 256) => Ok(Self::Aes256(mode)),
+            (Alg::AES, 256) => Ok(Self::Aes256),
             #[cfg(feature = "sm4_128")]
-            (Alg::SM4, 128) => Ok(Self::Sm4_128(mode)),
+            (Alg::SM4, 128) => Ok(Self::Sm4_128),
             #[cfg(feature = "camellia128")]
-            (Alg::CAMELLIA, 128) => Ok(Self::Camellia128(mode)),
+            (Alg::CAMELLIA, 128) => Ok(Self::Camellia128),
             #[cfg(feature = "camellia192")]
-            (Alg::CAMELLIA, 192) => Ok(Self::Camellia192(mode)),
+            (Alg::CAMELLIA, 192) => Ok(Self::Camellia192),
             #[cfg(feature = "camellia256")]
-            (Alg::CAMELLIA, 256) => Ok(Self::Camellia256(mode)),
+            (Alg::CAMELLIA, 256) => Ok(Self::Camellia256),
             #[cfg(any(feature = "aes128", feature = "aes192", feature = "aes256"))]
             (Alg::AES, _) => Err(UnmarshalError::VALUE),
             #[cfg(feature = "sm4_128")]
@@ -453,22 +448,11 @@ impl TpmtSymDefObject {
             _ => Err(UnmarshalError::SYMMETRIC),
         }
     }
-}
 
-impl Marshal for TpmtSymDefObject {
-    const MAX_SIZE: usize = Alg::MAX_SIZE + u16::MAX_SIZE + Option::<TpmiAlgSymMode>::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        let count = marshal_helper(&self.algorithm(), dst, 0);
-        let count = marshal_helper(&self.key_bits(), dst, count);
-        marshal_helper(&self.mode(), dst, count)
-    }
-}
-
-impl TpmtSymDefObject {
-    fn unmarshal_with_algorithm(algorithm: Alg, src: &mut &[u8]) -> Result<Self, UnmarshalError> {
-        let is_valid_alg = match algorithm {
+    /// Returns `true` if `algorithm` is an enabled symmetric block cipher
+    /// (`TPMI_ALG_SYM_OBJECT`), whatever the key size.
+    const fn is_enabled_algorithm(algorithm: Alg) -> bool {
+        match algorithm {
             #[cfg(any(feature = "aes128", feature = "aes192", feature = "aes256"))]
             Alg::AES => true,
             #[cfg(feature = "sm4_128")]
@@ -480,40 +464,136 @@ impl TpmtSymDefObject {
             ))]
             Alg::CAMELLIA => true,
             _ => false,
-        };
-        if !is_valid_alg {
+        }
+    }
+
+    /// Unmarshals `keyBits` for an `algorithm` that was already unmarshalled.
+    ///
+    /// The algorithm is validated before `keyBits` is read (`TPM_RC_SYMMETRIC`), and the key size
+    /// is then validated for that algorithm (`TPM_RC_VALUE`).
+    fn unmarshal_with_algorithm(algorithm: Alg, src: &mut &[u8]) -> Result<Self, UnmarshalError> {
+        if !Self::is_enabled_algorithm(algorithm) {
             return Err(UnmarshalError::SYMMETRIC);
         }
-        let key_bits: u16 = Unmarshal::unmarshal(src)?;
-        let is_valid_key_bits = match (algorithm, key_bits) {
-            #[cfg(feature = "aes128")]
-            (Alg::AES, 128) => true,
-            #[cfg(feature = "aes192")]
-            (Alg::AES, 192) => true,
-            #[cfg(feature = "aes256")]
-            (Alg::AES, 256) => true,
-            #[cfg(feature = "sm4_128")]
-            (Alg::SM4, 128) => true,
-            #[cfg(feature = "camellia128")]
-            (Alg::CAMELLIA, 128) => true,
-            #[cfg(feature = "camellia192")]
-            (Alg::CAMELLIA, 192) => true,
-            #[cfg(feature = "camellia256")]
-            (Alg::CAMELLIA, 256) => true,
-            _ => false,
-        };
-        if !is_valid_key_bits {
-            return Err(UnmarshalError::VALUE);
+        let key_bits = u16::unmarshal(src)?;
+        Self::from_parts(algorithm, key_bits)
+    }
+}
+
+impl Marshal for AlgSym {
+    const MAX_SIZE: usize = Alg::MAX_SIZE + u16::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.algorithm(), dst, 0);
+        marshal_helper(&self.key_bits(), dst, count)
+    }
+}
+
+impl<'a> Unmarshal<'a> for AlgSym {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        let algorithm = Alg::unmarshal(src)?;
+        Self::unmarshal_with_algorithm(algorithm, src)
+    }
+}
+
+/// `TPMT_SYM_DEF_OBJECT` structure defined in TPM 2.0 Part 2: Structures, Section 11.1.5 (Table 152).
+///
+/// Used to select a symmetric block cipher algorithm and key size (AES, SM4, Camellia, not XOR).
+/// Note: `TPM_ALG_NULL` is represented as `Option<TpmtSymDefObject>::None`.
+#[doc(alias = "TPMT_SYM_DEF_OBJECT")]
+#[doc(alias = "TPMU_SYM_DETAILS")]
+#[doc(alias = "TPMS_SYMCIPHER_PARMS")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TpmtSymDefObject {
+    /// The symmetric block cipher algorithm and key size (`algorithm` and `keyBits`).
+    pub alg: AlgSym,
+    /// The block cipher mode (`mode`); `None` is `TPM_ALG_NULL`.
+    pub mode: Option<TpmiAlgSymMode>,
+}
+
+impl TpmtSymDefObject {
+    /// Returns the symmetric algorithm identifier (`TPM_ALG_AES`, `TPM_ALG_SM4`, or
+    /// `TPM_ALG_CAMELLIA`). Shorthand for `self.alg.algorithm()`.
+    pub const fn algorithm(self) -> Alg {
+        self.alg.algorithm()
+    }
+
+    /// Returns the key size in bits. Shorthand for `self.alg.key_bits()`.
+    pub const fn key_bits(self) -> u16 {
+        self.alg.key_bits()
+    }
+
+    /// Returns the block cipher mode (`None` is `TPM_ALG_NULL`). Same as the `mode` field.
+    #[doc(alias = "TPMU_SYM_MODE")]
+    pub const fn mode(self) -> Option<TpmiAlgSymMode> {
+        self.mode
+    }
+
+    /// Returns a copy of this definition with its mode replaced by `mode`.
+    pub const fn with_mode(self, mode: Option<TpmiAlgSymMode>) -> Self {
+        Self {
+            alg: self.alg,
+            mode,
         }
+    }
+
+    /// Builds an AES definition with a key size of `key_bits` in CFB mode (the symmetric
+    /// definition used for parameter encryption and for protecting sensitive data, credential
+    /// and duplication blobs).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::from_parts`] with `Alg::AES`.
+    pub const fn aes_cfb(key_bits: u16) -> Result<Self, UnmarshalError> {
+        Self::from_parts(
+            Alg::AES,
+            key_bits,
+            Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        )
+    }
+
+    /// Builds a definition from its wire-format fields (`algorithm`, `keyBits`, and `mode`).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`AlgSym::from_parts`]: [`UnmarshalError::SYMMETRIC`] if `algorithm` is not an
+    /// enabled symmetric block cipher, or [`UnmarshalError::VALUE`] if `key_bits` is not an
+    /// enabled key size for `algorithm`.
+    pub const fn from_parts(
+        algorithm: Alg,
+        key_bits: u16,
+        mode: Option<TpmiAlgSymMode>,
+    ) -> Result<Self, UnmarshalError> {
+        match AlgSym::from_parts(algorithm, key_bits) {
+            Ok(alg) => Ok(Self { alg, mode }),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Unmarshals the rest of a `TPMT_SYM_DEF_OBJECT` (`keyBits` and `mode`) whose `algorithm`
+    /// was already unmarshalled.
+    fn unmarshal_with_algorithm(algorithm: Alg, src: &mut &[u8]) -> Result<Self, UnmarshalError> {
+        let alg = AlgSym::unmarshal_with_algorithm(algorithm, src)?;
         let mode = Unmarshal::unmarshal(src)?;
-        Self::from_parts(algorithm, key_bits, mode)
+        Ok(Self { alg, mode })
+    }
+}
+
+impl Marshal for TpmtSymDefObject {
+    const MAX_SIZE: usize = AlgSym::MAX_SIZE + <Option<TpmiAlgSymMode>>::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.alg, dst, 0);
+        marshal_helper(&self.mode, dst, count)
     }
 }
 
 impl<'a> Unmarshal<'a> for TpmtSymDefObject {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        let algorithm = Alg::unmarshal(src)?;
-        Self::unmarshal_with_algorithm(algorithm, src)
+        Ok(Self {
+            alg: Unmarshal::unmarshal(src)?,
+            mode: Unmarshal::unmarshal(src)?,
+        })
     }
 }
 
@@ -550,23 +630,24 @@ pub enum TpmtSymDef {
 }
 
 impl TpmtSymDef {
+    #[doc(alias = "TPMI_ALG_SYM")]
     pub const fn algorithm(&self) -> Alg {
         match self {
-            Self::Cipher(obj) => obj.algorithm(),
+            Self::Cipher(obj) => obj.alg.algorithm(),
             Self::Xor(_) => Alg::XOR,
         }
     }
 
     pub const fn key_bits(&self) -> u16 {
         match self {
-            Self::Cipher(obj) => obj.key_bits(),
+            Self::Cipher(obj) => obj.alg.key_bits(),
             Self::Xor(_) => 0,
         }
     }
 
     pub const fn mode(&self) -> Option<TpmiAlgSymMode> {
         match self {
-            Self::Cipher(obj) => obj.mode(),
+            Self::Cipher(obj) => obj.mode,
             Self::Xor(_) => None,
         }
     }

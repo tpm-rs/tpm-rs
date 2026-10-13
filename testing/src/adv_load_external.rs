@@ -120,7 +120,7 @@ fn adv_load_external_auth_value_too_large() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     match res {
         Err(e) => assert_eq!(e, TpmRc::SIZE.with(Position::parameter(1)).get()),
         Ok(_) => panic!("Expected error, got Ok"),
@@ -148,7 +148,7 @@ fn adv_load_external_rsa_primes_key_size_mismatch() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     match res {
         Err(e) => assert_eq!(e, TpmRc::KEY_SIZE.with(Position::parameter(1)).get()),
         Ok(_) => panic!("Expected error, got Ok"),
@@ -176,7 +176,7 @@ fn adv_load_external_rsa_prime_zero() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     // C CryptValidateKeys (CryptUtil.c:1724-1726): a prime whose top byte is
     // below 0x80 is rejected with KEY_SIZE + blameSensitive (P1).
     match res {
@@ -206,7 +206,7 @@ fn adv_load_external_rsa_prime_unbalanced() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     // C CryptValidateKeys (CryptUtil.c:1724-1726): a prime whose top byte is
     // below 0x80 is rejected with KEY_SIZE + blameSensitive (P1) before any
     // binding check.
@@ -231,7 +231,7 @@ fn adv_load_external_ecc_scalar_too_large() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     match res {
         Err(e) => assert_eq!(e, TpmRc::KEY_SIZE.with(Position::parameter(1)).get()),
         Ok(_) => panic!("Expected error, got Ok"),
@@ -261,7 +261,7 @@ fn adv_load_external_keyed_hash_sensitive_too_large() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     match res {
         Err(e) => assert_eq!(e, TpmRc::KEY_SIZE.with(Position::parameter(1)).get()),
         Ok(_) => panic!("Expected error, got Ok"),
@@ -281,7 +281,7 @@ fn adv_load_external_rsa_public_modulus_size_mismatch() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     match res {
         Err(e) => assert_eq!(e, TpmRc::KEY.with(Position::parameter(2)).get()),
         Ok(_) => panic!("Expected error, got Ok"),
@@ -301,7 +301,7 @@ fn adv_load_external_ecc_public_coord_size_mismatch() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     match res {
         Err(e) => assert_eq!(e, TpmRc::KEY.with(Position::parameter(2)).get()),
         Ok(_) => panic!("Expected error, got Ok"),
@@ -321,7 +321,7 @@ fn adv_load_external_unsupported_name_alg() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     match res {
         Err(e) => assert_eq!(e, TpmRc::HASH.with(Position::parameter(2)).get()),
         Ok(_) => panic!("Expected error, got Ok"),
@@ -340,7 +340,7 @@ fn adv_load_external_object_memory_exhaustion() {
             in_public,
             hierarchy: Handle::RH_NULL,
         };
-        let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+        let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
         assert!(res.is_ok(), "Failed to load object {}", i);
     }
 
@@ -350,7 +350,7 @@ fn adv_load_external_object_memory_exhaustion() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, (), 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     match res {
         Err(e) => assert_eq!(e, TpmRc::OBJECT_MEMORY.get()),
         Ok(_) => panic!("Expected error, got Ok"),

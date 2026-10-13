@@ -51,8 +51,8 @@ fn test_load_external_ecc_no_sensitive() {
         hierarchy: Handle::RH_NULL,
     };
 
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    let resp = sim.execute(cmd).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 // Original Go test: load_external_test.go - TestLoadExternal/KeyedHashSensitive
@@ -92,6 +92,6 @@ fn test_load_external_keyed_hash_sensitive() {
         hierarchy: Handle::RH_NULL,
     };
 
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    let resp = sim.execute(cmd).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }

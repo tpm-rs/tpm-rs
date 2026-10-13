@@ -9,7 +9,7 @@ use common::{FakeRng, FakeStorage};
 use hex_literal::hex;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tpm2::commands::Command;
+use tpm2::commands::{Command, Message, UnmarshalMessage};
 use tpm2::crypto::asymmetric::{KeyParams, TpmiRsaKeyBits};
 use tpm2::crypto::{Asymmetric, AsymmetricSign};
 use tpm2::crypto::{Finalize as _, Hash as _, Update as _};
@@ -45,7 +45,7 @@ fn setup_tpm<'a, T: tpm2_impl::timer::TpmTimer>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut T,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, T, FakeRng>,
     tpm2_impl::GlobalState,
@@ -69,17 +69,14 @@ fn setup_tpm<'a, T: tpm2_impl::timer::TpmTimer>(
     (tpm, global_state)
 }
 
-fn execute_tpm_command<'a, C: Command, T: tpm2_impl::timer::TpmTimer>(
+fn execute_tpm_command<C: Command, T: tpm2_impl::timer::TpmTimer>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, T, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -92,13 +89,10 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        request_buf[offset..offset + 4].copy_from_slice(&handle.0.to_be_bytes());
+        offset += 4;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -138,8 +132,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -151,10 +147,10 @@ where
 
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
-    let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let resp = <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+        .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp)
 }
 
 fn compute_key_name(crypto: &TestCryptoProvider, public: &TpmtPublic) -> Tpm2bName<'static> {
@@ -227,27 +223,24 @@ fn test_challenger_policy_signed_invalid_signature() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let (signing_key, priv_buf, priv_len) = create_signing_key(&mut tpm);
     global_state.transient_objects[0] = Some(signing_key);
 
     // 1. Start a policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     let nonce_tpm = global_state
@@ -286,6 +279,7 @@ fn test_challenger_policy_signed_invalid_signature() {
             tpm2::TpmtHa::Sha256(&digest),
             &mut sig_out,
         )
+        .unwrap()
         .unwrap();
 
     // Tamper with the signature bytes to make it invalid
@@ -297,12 +291,10 @@ fn test_challenger_policy_signed_invalid_signature() {
     };
     let auth = TpmtSignature::Rsapss(sig);
 
-    use tpm2::commands::{PolicySigned, PolicySignedHandles};
-    let ps_handles = PolicySignedHandles {
+    use tpm2::commands::PolicySigned;
+    let ps_cmd = PolicySigned {
         auth_object: Handle(0x80000001),
         policy_session: policy_session_handle,
-    };
-    let ps_cmd = PolicySigned {
         nonce_tpm: nonce_tpm.as_tpm2b(),
         cp_hash_a,
         policy_ref,
@@ -311,7 +303,7 @@ fn test_challenger_policy_signed_invalid_signature() {
     };
 
     // Calling PolicySigned with tampered signature should fail with signature_for(Parameter, Pos5)
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_cmd, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::SIGNATURE.with(Position::parameter(5)).get())
@@ -324,27 +316,24 @@ fn test_challenger_policy_signed_incorrect_message() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let (signing_key, priv_buf, priv_len) = create_signing_key(&mut tpm);
     global_state.transient_objects[0] = Some(signing_key);
 
     // 1. Start a policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     let nonce_tpm = global_state
@@ -385,6 +374,7 @@ fn test_challenger_policy_signed_incorrect_message() {
             tpm2::TpmtHa::Sha256(&digest),
             &mut sig_out,
         )
+        .unwrap()
         .unwrap();
 
     let sig = tpm2::TpmsSignatureRsa {
@@ -393,12 +383,10 @@ fn test_challenger_policy_signed_incorrect_message() {
     };
     let auth = TpmtSignature::Rsapss(sig);
 
-    use tpm2::commands::{PolicySigned, PolicySignedHandles};
-    let ps_handles = PolicySignedHandles {
+    use tpm2::commands::PolicySigned;
+    let ps_cmd = PolicySigned {
         auth_object: Handle(0x80000001),
         policy_session: policy_session_handle,
-    };
-    let ps_cmd = PolicySigned {
         nonce_tpm: nonce_tpm.as_tpm2b(), // The correct nonce_tpm is passed in the command parameters!
         cp_hash_a,
         policy_ref,
@@ -407,7 +395,7 @@ fn test_challenger_policy_signed_incorrect_message() {
     };
 
     // Calling PolicySigned should fail because the signature is over the incorrect nonce!
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_cmd, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::SIGNATURE.with(Position::parameter(5)).get())
@@ -422,27 +410,24 @@ fn test_challenger_policy_signed_expiration_and_timeout() {
     let mut timer = MutableTimer {
         time: shared_time.clone(),
     };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let (signing_key, priv_buf, priv_len) = create_signing_key(&mut tpm);
     global_state.transient_objects[0] = Some(signing_key);
 
     // 1. Start a policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     let nonce_tpm = global_state
@@ -481,6 +466,7 @@ fn test_challenger_policy_signed_expiration_and_timeout() {
             tpm2::TpmtHa::Sha256(&digest),
             &mut sig_out,
         )
+        .unwrap()
         .unwrap();
 
     let sig = tpm2::TpmsSignatureRsa {
@@ -489,12 +475,10 @@ fn test_challenger_policy_signed_expiration_and_timeout() {
     };
     let auth = TpmtSignature::Rsapss(sig);
 
-    use tpm2::commands::{PolicySigned, PolicySignedHandles};
-    let ps_handles = PolicySignedHandles {
+    use tpm2::commands::PolicySigned;
+    let ps_cmd = PolicySigned {
         auth_object: Handle(0x80000001),
         policy_session: policy_session_handle,
-    };
-    let ps_cmd = PolicySigned {
         nonce_tpm: nonce_tpm.as_tpm2b(),
         cp_hash_a,
         policy_ref,
@@ -503,7 +487,7 @@ fn test_challenger_policy_signed_expiration_and_timeout() {
     };
 
     // Calling PolicySigned with expiration = 10 should succeed and set the timeout
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_cmd, &[]);
     assert!(res.is_ok());
 
     // Verify session timeout is 10000 ms (since clock was 0)
@@ -518,7 +502,7 @@ fn test_challenger_policy_signed_expiration_and_timeout() {
     // The policy session itself never expires for policy commands (C only checks the session
     // timeout when the session authorizes a command); the new authorization's own expiration
     // is what has passed: TPM_RC_EXPIRED + RC_P4 (`expiration`, C PolicyParameterChecks).
-    let res2 = execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]);
+    let res2 = execute_tpm_command(&mut tpm, &mut global_state, &ps_cmd, &[]);
     assert_eq!(
         res2.err(),
         Some(TpmRc::EXPIRED.with(Position::parameter(4)).get())
@@ -531,27 +515,24 @@ fn test_challenger_policy_signed_ticket_generation() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let (signing_key, priv_buf, priv_len) = create_signing_key(&mut tpm);
     global_state.transient_objects[0] = Some(signing_key);
 
     // 1. Start a policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     let nonce_tpm = global_state
@@ -590,6 +571,7 @@ fn test_challenger_policy_signed_ticket_generation() {
             tpm2::TpmtHa::Sha256(&digest),
             &mut sig_out,
         )
+        .unwrap()
         .unwrap();
 
     let sig = tpm2::TpmsSignatureRsa {
@@ -598,12 +580,10 @@ fn test_challenger_policy_signed_ticket_generation() {
     };
     let auth = TpmtSignature::Rsapss(sig);
 
-    use tpm2::commands::{PolicySigned, PolicySignedHandles};
-    let ps_handles = PolicySignedHandles {
+    use tpm2::commands::PolicySigned;
+    let ps_cmd = PolicySigned {
         auth_object: Handle(0x80000001),
         policy_session: policy_session_handle,
-    };
-    let ps_cmd = PolicySigned {
         nonce_tpm: nonce_tpm.as_tpm2b(),
         cp_hash_a,
         policy_ref,
@@ -612,8 +592,7 @@ fn test_challenger_policy_signed_ticket_generation() {
     };
 
     // Calling PolicySigned with negative expiration should generate a ticket in response
-    let (_, ps_rsp) =
-        execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]).unwrap();
+    let ps_rsp = execute_tpm_command(&mut tpm, &mut global_state, &ps_cmd, &[]).unwrap();
 
     // Verify tag is 0x8025 and digest is non-empty
     assert_eq!(ps_rsp.policy_ticket.tag(), 0x8025);
@@ -626,35 +605,30 @@ fn test_challenger_policy_authorize_mismatched_policy() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Start a policy session and get its digest
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     // Set a policy command code to advance digest
-    use tpm2::commands::{PolicyCommandCode, PolicyCommandCodeHandles};
-    let pcc_handles = PolicyCommandCodeHandles {
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicyCommandCode;
     let pcc_cmd = PolicyCommandCode {
+        policy_session: policy_session_handle,
         code: TpmCc::GetRandom,
     };
-    execute_tpm_command(&mut tpm, &mut global_state, &pcc_handles, &pcc_cmd, &[]).unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &pcc_cmd, &[]).unwrap();
 
     // 2. Prepare ticket inputs with a MISMATCHED approvedPolicy (e.g. all 0xEE)
     let mismatched_approved_policy = Tpm2bDigest::from_bytes(&[0xEE; 32]).unwrap();
@@ -667,11 +641,9 @@ fn test_challenger_policy_authorize_mismatched_policy() {
 
     let check_ticket = tpm2::TpmtTkVerified::Verified(Handle(0x4000000C), Tpm2bDigest::default());
 
-    use tpm2::commands::{PolicyAuthorize, PolicyAuthorizeHandles};
-    let pa_handles = PolicyAuthorizeHandles {
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicyAuthorize;
     let pa_cmd = PolicyAuthorize {
+        policy_session: policy_session_handle,
         approved_policy: mismatched_approved_policy,
         policy_ref,
         key_sign,
@@ -679,7 +651,7 @@ fn test_challenger_policy_authorize_mismatched_policy() {
     };
 
     // Calling PolicyAuthorize with mismatched approved_policy should return value_for(Parameter, Pos1)
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_handles, &pa_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_cmd, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::VALUE.with(Position::parameter(1)).get())
@@ -692,34 +664,29 @@ fn test_challenger_policy_authorize_wrong_ticket_hmac() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Start a policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     // Get the current policy digest (empty, i.e., 32 bytes of zeros)
-    use tpm2::commands::{PolicyGetDigest, PolicyGetDigestHandles};
-    let pgd_handles = PolicyGetDigestHandles {
+    use tpm2::commands::PolicyGetDigest;
+    let pgd_cmd = PolicyGetDigest {
         policy_session: policy_session_handle,
     };
-    let pgd_cmd = PolicyGetDigest {};
-    let (_, pgd_rsp) =
-        execute_tpm_command(&mut tpm, &mut global_state, &pgd_handles, &pgd_cmd, &[]).unwrap();
+    let pgd_rsp = execute_tpm_command(&mut tpm, &mut global_state, &pgd_cmd, &[]).unwrap();
     let approved_policy = pgd_rsp.policy_digest;
 
     // 2. Prepare ticket inputs with a WRONG/tampered HMAC digest
@@ -735,11 +702,9 @@ fn test_challenger_policy_authorize_wrong_ticket_hmac() {
         Tpm2bDigest::from_bytes(&[0x99; 32]).unwrap(),
     );
 
-    use tpm2::commands::{PolicyAuthorize, PolicyAuthorizeHandles};
-    let pa_handles = PolicyAuthorizeHandles {
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicyAuthorize;
     let pa_cmd = PolicyAuthorize {
+        policy_session: policy_session_handle,
         approved_policy,
         policy_ref,
         key_sign,
@@ -747,7 +712,7 @@ fn test_challenger_policy_authorize_wrong_ticket_hmac() {
     };
 
     // Calling PolicyAuthorize with wrong ticket HMAC should fail with value_for(Parameter, Pos4)
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_handles, &pa_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_cmd, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::VALUE.with(Position::parameter(4)).get())
@@ -760,33 +725,28 @@ fn test_challenger_policy_authorize_wrong_ticket_tag() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Start a policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
-    use tpm2::commands::{PolicyGetDigest, PolicyGetDigestHandles};
-    let pgd_handles = PolicyGetDigestHandles {
+    use tpm2::commands::PolicyGetDigest;
+    let pgd_cmd = PolicyGetDigest {
         policy_session: policy_session_handle,
     };
-    let pgd_cmd = PolicyGetDigest {};
-    let (_, pgd_rsp) =
-        execute_tpm_command(&mut tpm, &mut global_state, &pgd_handles, &pgd_cmd, &[]).unwrap();
+    let pgd_rsp = execute_tpm_command(&mut tpm, &mut global_state, &pgd_cmd, &[]).unwrap();
     let approved_policy = pgd_rsp.policy_digest;
 
     // 2. Prepare ticket inputs with a WRONG tag (e.g. 0x8025 instead of 0x8022)
@@ -799,11 +759,9 @@ fn test_challenger_policy_authorize_wrong_ticket_tag() {
 
     let check_ticket = tpm2::TpmtTkVerified::Verified(Handle(0x4000000C), Tpm2bDigest::default());
 
-    use tpm2::commands::{PolicyAuthorize, PolicyAuthorizeHandles};
-    let pa_handles = PolicyAuthorizeHandles {
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicyAuthorize;
     let pa_cmd = PolicyAuthorize {
+        policy_session: policy_session_handle,
         approved_policy,
         policy_ref,
         key_sign,
@@ -811,7 +769,7 @@ fn test_challenger_policy_authorize_wrong_ticket_tag() {
     };
 
     // Calling PolicyAuthorize with wrong ticket tag should fail with value_for(Parameter, Pos4)
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_handles, &pa_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_cmd, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::VALUE.with(Position::parameter(4)).get())
@@ -824,38 +782,33 @@ fn test_challenger_policy_signed_trial_session_digest_update() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let (signing_key, _, _) = create_signing_key(&mut tpm);
     let key_name = signing_key.name;
     global_state.transient_objects[0] = Some(signing_key);
 
     // 1. Start a trial session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     // 2. Call PolicySigned on Trial session
     let policy_ref = Tpm2bNonce::from_bytes(&[9; 16]).unwrap();
-    use tpm2::commands::{PolicySigned, PolicySignedHandles};
-    let ps_handles = PolicySignedHandles {
+    use tpm2::commands::PolicySigned;
+    let ps_cmd = PolicySigned {
         auth_object: Handle(0x80000001),
         policy_session: policy_session_handle,
-    };
-    let ps_cmd = PolicySigned {
         nonce_tpm: Tpm2bNonce::default(),
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref,
@@ -866,17 +819,15 @@ fn test_challenger_policy_signed_trial_session_digest_update() {
         }),
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_cmd, &[]);
     assert!(res.is_ok());
 
     // 3. Call PolicyGetDigest to verify updated digest
-    use tpm2::commands::{PolicyGetDigest, PolicyGetDigestHandles};
-    let pgd_handles = PolicyGetDigestHandles {
+    use tpm2::commands::PolicyGetDigest;
+    let pgd_cmd = PolicyGetDigest {
         policy_session: policy_session_handle,
     };
-    let pgd_cmd = PolicyGetDigest {};
-    let (_, pgd_rsp) =
-        execute_tpm_command(&mut tpm, &mut global_state, &pgd_handles, &pgd_cmd, &[]).unwrap();
+    let pgd_rsp = execute_tpm_command(&mut tpm, &mut global_state, &pgd_cmd, &[]).unwrap();
 
     // Expected digest update:
     // digest1 = SHA256(0..32 || TPM_CC_PolicySigned || key_name)
@@ -905,44 +856,37 @@ fn test_challenger_policy_authorize_trial_session_digest_update() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Start a trial session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     // Advance digest by some command first
-    use tpm2::commands::{PolicyCommandCode, PolicyCommandCodeHandles};
-    let pcc_handles = PolicyCommandCodeHandles {
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicyCommandCode;
     let pcc_cmd = PolicyCommandCode {
+        policy_session: policy_session_handle,
         code: TpmCc::GetRandom,
     };
-    execute_tpm_command(&mut tpm, &mut global_state, &pcc_handles, &pcc_cmd, &[]).unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &pcc_cmd, &[]).unwrap();
 
     // Get current policy digest
-    use tpm2::commands::{PolicyGetDigest, PolicyGetDigestHandles};
-    let pgd_handles = PolicyGetDigestHandles {
+    use tpm2::commands::PolicyGetDigest;
+    let pgd_cmd = PolicyGetDigest {
         policy_session: policy_session_handle,
     };
-    let pgd_cmd = PolicyGetDigest {};
-    let (_, pgd_rsp1) =
-        execute_tpm_command(&mut tpm, &mut global_state, &pgd_handles, &pgd_cmd, &[]).unwrap();
+    let pgd_rsp1 = execute_tpm_command(&mut tpm, &mut global_state, &pgd_cmd, &[]).unwrap();
     let approved_policy = pgd_rsp1.policy_digest;
 
     // 2. Call PolicyAuthorize on Trial session (no ticket validation)
@@ -952,23 +896,20 @@ fn test_challenger_policy_authorize_trial_session_digest_update() {
     let key_sign = Tpm2bName::from_bytes(&key_sign_bytes).unwrap();
     let policy_ref = Tpm2bNonce::from_bytes(&[7; 8]).unwrap();
 
-    use tpm2::commands::{PolicyAuthorize, PolicyAuthorizeHandles};
-    let pa_handles = PolicyAuthorizeHandles {
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicyAuthorize;
     let pa_cmd = PolicyAuthorize {
+        policy_session: policy_session_handle,
         approved_policy,
         policy_ref,
         key_sign,
         check_ticket: tpm2::TpmtTkVerified::default(),
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_handles, &pa_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_cmd, &[]);
     assert!(res.is_ok());
 
     // 3. Verify updated digest
-    let (_, pgd_rsp2) =
-        execute_tpm_command(&mut tpm, &mut global_state, &pgd_handles, &pgd_cmd, &[]).unwrap();
+    let pgd_rsp2 = execute_tpm_command(&mut tpm, &mut global_state, &pgd_cmd, &[]).unwrap();
 
     // Expected digest update:
     // digest1 = SHA256(ZeroDigest || TPM_CC_PolicyAuthorize || key_sign)
@@ -996,41 +937,36 @@ fn test_challenger_policy_authorize_invalid_key_sign_size() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Start a trial session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     // 2. Call PolicyAuthorize with key_sign size < 2
     let key_sign_too_small = Tpm2bName::from_bytes(&[0]).unwrap();
 
-    use tpm2::commands::{PolicyAuthorize, PolicyAuthorizeHandles};
-    let pa_handles = PolicyAuthorizeHandles {
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicyAuthorize;
     let pa_cmd = PolicyAuthorize {
+        policy_session: policy_session_handle,
         approved_policy: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         key_sign: key_sign_too_small,
         check_ticket: tpm2::TpmtTkVerified::default(),
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_handles, &pa_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_cmd, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::SIZE.with(Position::parameter(3)).get())
@@ -1042,12 +978,13 @@ fn test_challenger_policy_authorize_invalid_key_sign_size() {
     let key_sign = Tpm2bName::from_bytes(&key_sign_mismatched).unwrap();
 
     let pa_cmd2 = PolicyAuthorize {
+        policy_session: policy_session_handle,
         approved_policy: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         key_sign,
         check_ticket: tpm2::TpmtTkVerified::default(),
     };
-    let res2 = execute_tpm_command(&mut tpm, &mut global_state, &pa_handles, &pa_cmd2, &[]);
+    let res2 = execute_tpm_command(&mut tpm, &mut global_state, &pa_cmd2, &[]);
     assert_eq!(
         res2.err(),
         Some(TpmRc::SIZE.with(Position::parameter(3)).get())
@@ -1060,24 +997,21 @@ fn test_challenger_policy_authorize_invalid_key_sign_hash() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Start a trial session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     // 2. Call PolicyAuthorize with invalid hash alg in key_sign (e.g. 0xFFFF)
@@ -1085,18 +1019,16 @@ fn test_challenger_policy_authorize_invalid_key_sign_hash() {
     key_sign_bad_hash[0..2].copy_from_slice(&0xFFFFu16.to_be_bytes());
     let key_sign = Tpm2bName::from_bytes(&key_sign_bad_hash).unwrap();
 
-    use tpm2::commands::{PolicyAuthorize, PolicyAuthorizeHandles};
-    let pa_handles = PolicyAuthorizeHandles {
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicyAuthorize;
     let pa_cmd = PolicyAuthorize {
+        policy_session: policy_session_handle,
         approved_policy: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         key_sign,
         check_ticket: tpm2::TpmtTkVerified::default(),
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_handles, &pa_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_cmd, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::HASH.with(Position::parameter(3)).get())
@@ -1109,8 +1041,8 @@ fn test_challenger_policy_signed_invalid_key_type() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Create a symmetric key and load it
     let public = TpmtPublic {
@@ -1118,7 +1050,10 @@ fn test_challenger_policy_signed_invalid_key_type() {
         object_attributes: TpmaObject::DECRYPT | TpmaObject::USER_WITH_AUTH,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            tpm2::TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)),
+            tpm2::TpmtSymDefObject {
+                alg: tpm2::AlgSym::Aes128,
+                mode: Some(tpm2::TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)),
+            },
             Tpm2bDigest::default(),
         ),
     };
@@ -1141,20 +1076,17 @@ fn test_challenger_policy_signed_invalid_key_type() {
     global_state.transient_objects[0] = Some(sym_key);
 
     // 2. Start a policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     let nonce_tpm = global_state
@@ -1173,12 +1105,10 @@ fn test_challenger_policy_signed_invalid_key_type() {
     };
     let auth = TpmtSignature::Rsapss(sig);
 
-    use tpm2::commands::{PolicySigned, PolicySignedHandles};
-    let ps_handles = PolicySignedHandles {
+    use tpm2::commands::PolicySigned;
+    let ps_cmd = PolicySigned {
         auth_object: Handle(0x80000002), // Symmetric key
         policy_session: policy_session_handle,
-    };
-    let ps_cmd = PolicySigned {
         nonce_tpm: nonce_tpm.as_tpm2b(),
         cp_hash_a,
         policy_ref,
@@ -1186,7 +1116,7 @@ fn test_challenger_policy_signed_invalid_key_type() {
         auth,
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_cmd, &[]);
     assert_eq!(res.err(), Some(TpmRc::KEY.with(Position::handle(1)).get()));
 }
 
@@ -1196,27 +1126,24 @@ fn test_challenger_policy_signed_scheme_mismatch() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let (signing_key, _, _) = create_signing_key(&mut tpm); // This creates an RSA key
     global_state.transient_objects[0] = Some(signing_key);
 
     // 1. Start a policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     let nonce_tpm = global_state
@@ -1236,12 +1163,10 @@ fn test_challenger_policy_signed_scheme_mismatch() {
     };
     let auth = TpmtSignature::Ecdsa(sig);
 
-    use tpm2::commands::{PolicySigned, PolicySignedHandles};
-    let ps_handles = PolicySignedHandles {
+    use tpm2::commands::PolicySigned;
+    let ps_cmd = PolicySigned {
         auth_object: Handle(0x80000001),
         policy_session: policy_session_handle,
-    };
-    let ps_cmd = PolicySigned {
         nonce_tpm: nonce_tpm.as_tpm2b(),
         cp_hash_a,
         policy_ref,
@@ -1249,7 +1174,7 @@ fn test_challenger_policy_signed_scheme_mismatch() {
         auth,
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_cmd, &[]);
     // C CryptRsaValidateSignature rejects a non-RSA sigAlg with TPM_RC_SCHEME (CryptRsa.c:1200),
     // which PolicySigned blames on `auth` (PolicySigned.c:96): SCHEME + P5.
     assert_eq!(
@@ -1259,13 +1184,14 @@ fn test_challenger_policy_signed_scheme_mismatch() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_VerifySignature is deprecated in the `tpm2` crate.
 fn test_challenger_policy_authorize_success_flow() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let (signing_key, priv_buf, priv_len) = create_signing_key(&mut tpm);
     let key_name = signing_key.name;
@@ -1293,6 +1219,7 @@ fn test_challenger_policy_authorize_success_flow() {
             tpm2::TpmtHa::Sha256(&ahash_digest),
             &mut sig_out,
         )
+        .unwrap()
         .unwrap();
 
     let sig = tpm2::TpmsSignatureRsa {
@@ -1302,16 +1229,13 @@ fn test_challenger_policy_authorize_success_flow() {
     let signature = TpmtSignature::Rsapss(sig);
 
     // 3. Call VerifySignature to get a ticket
-    use tpm2::commands::{VerifySignature, VerifySignatureHandles};
-    let vs_handles = VerifySignatureHandles {
-        key_handle: Handle(0x80000001),
-    };
+    use tpm2::commands::VerifySignature;
     let vs_cmd = VerifySignature {
+        key_handle: Handle(0x80000001),
         digest: Tpm2bDigest::from_bytes(&ahash_digest).unwrap(),
         signature,
     };
-    let (_, vs_rsp) =
-        execute_tpm_command(&mut tpm, &mut global_state, &vs_handles, &vs_cmd, &[]).unwrap();
+    let vs_rsp = execute_tpm_command(&mut tpm, &mut global_state, &vs_cmd, &[]).unwrap();
     let mut ticket = vs_rsp.validation;
 
     // Manually compute the correct HMAC to work around VerifySignature mock bug!
@@ -1336,35 +1260,30 @@ fn test_challenger_policy_authorize_success_flow() {
     );
 
     // 4. Start a real policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     // 5. Call PolicyAuthorize on this session
-    use tpm2::commands::{PolicyAuthorize, PolicyAuthorizeHandles};
-    let pa_handles = PolicyAuthorizeHandles {
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicyAuthorize;
     let pa_cmd = PolicyAuthorize {
+        policy_session: policy_session_handle,
         approved_policy: Tpm2bDigest::from_bytes(&approved_policy).unwrap(),
         policy_ref,
         key_sign: key_name.as_tpm2b(),
         check_ticket: ticket,
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_handles, &pa_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_cmd, &[]);
     assert!(res.is_ok(), "PolicyAuthorize failed with {:?}", res.err());
 }
 
@@ -1374,8 +1293,8 @@ fn test_challenger_policy_authorize_forged_ticket_null_hierarchy() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Let's use a dummy authority key name (it does not even need to exist!)
     let key_name = Tpm2bName::from_bytes(&[
@@ -1417,35 +1336,30 @@ fn test_challenger_policy_authorize_forged_ticket_null_hierarchy() {
     );
 
     // Start a real policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     // Call PolicyAuthorize on this session
-    use tpm2::commands::{PolicyAuthorize, PolicyAuthorizeHandles};
-    let pa_handles = PolicyAuthorizeHandles {
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicyAuthorize;
     let pa_cmd = PolicyAuthorize {
+        policy_session: policy_session_handle,
         approved_policy: Tpm2bDigest::from_bytes(&approved_policy).unwrap(),
         policy_ref,
         key_sign: key_name,
         check_ticket: ticket,
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_handles, &pa_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &pa_cmd, &[]);
     assert!(
         res.is_err(),
         "Expected PolicyAuthorize to fail with forged RHNull ticket, but it succeeded!"
@@ -1455,6 +1369,7 @@ fn test_challenger_policy_authorize_forged_ticket_null_hierarchy() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_VerifySignature is deprecated in the `tpm2` crate.
 fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
@@ -1462,38 +1377,31 @@ fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
     let mut timer = MutableTimer {
         time: shared_time.clone(),
     };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let (signing_key, priv_buf, priv_len) = create_signing_key(&mut tpm);
     let key_name = signing_key.name;
     global_state.transient_objects[0] = Some(signing_key);
 
     // Start policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp_handles, policy_session_resp) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
-    let policy_session_handle = policy_session_resp_handles.session_handle;
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
+    let policy_session_handle = policy_session_resp.session_handle;
 
     let nonce_tpm = policy_session_resp.nonce_tpm;
 
     // Set a timeout on the session using PolicySigned first
-    use tpm2::commands::{PolicySigned, PolicySignedHandles};
-    let ps_handles = PolicySignedHandles {
-        auth_object: Handle(0x80000001),
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicySigned;
 
     let cp_hash_a = Tpm2bDigest::default();
     let policy_ref = Tpm2bNonce::default();
@@ -1525,6 +1433,7 @@ fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
             tpm2::TpmtHa::Sha256(&digest),
             &mut sig_out_ps,
         )
+        .unwrap()
         .unwrap();
 
     let sig_ps = tpm2::TpmsSignatureRsa {
@@ -1534,6 +1443,8 @@ fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
     let auth_ps = TpmtSignature::Rsapss(sig_ps);
 
     let ps_cmd = PolicySigned {
+        auth_object: Handle(0x80000001),
+        policy_session: policy_session_handle,
         nonce_tpm,
         cp_hash_a,
         policy_ref,
@@ -1541,7 +1452,7 @@ fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
         auth: auth_ps,
     };
     // Call PolicySigned to set session.timeout = 10000 ms
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &ps_cmd, &[]);
     assert!(res.is_ok());
 
     // Verify session timeout is 10000 ms
@@ -1574,6 +1485,7 @@ fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
             tpm2::TpmtHa::Sha256(&ahash_digest),
             &mut sig_out,
         )
+        .unwrap()
         .unwrap();
 
     let sig = tpm2::TpmsSignatureRsa {
@@ -1583,16 +1495,13 @@ fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
     let signature = TpmtSignature::Rsapss(sig);
 
     // Call VerifySignature to get a ticket
-    use tpm2::commands::{VerifySignature, VerifySignatureHandles};
-    let vs_handles = VerifySignatureHandles {
-        key_handle: Handle(0x80000001),
-    };
+    use tpm2::commands::VerifySignature;
     let vs_cmd = VerifySignature {
+        key_handle: Handle(0x80000001),
         digest: Tpm2bDigest::from_bytes(&ahash_digest).unwrap(),
         signature,
     };
-    let (_, vs_rsp) =
-        execute_tpm_command(&mut tpm, &mut global_state, &vs_handles, &vs_cmd, &[]).unwrap();
+    let vs_rsp = execute_tpm_command(&mut tpm, &mut global_state, &vs_cmd, &[]).unwrap();
     let mut ticket = vs_rsp.validation;
 
     // Compute correct HMAC
@@ -1620,11 +1529,9 @@ fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
     shared_time.store(10001, Ordering::SeqCst);
 
     // Call PolicyAuthorize on the expired session
-    use tpm2::commands::{PolicyAuthorize, PolicyAuthorizeHandles};
-    let pa_handles = PolicyAuthorizeHandles {
-        policy_session: policy_session_handle,
-    };
+    use tpm2::commands::PolicyAuthorize;
     let pa_cmd = PolicyAuthorize {
+        policy_session: policy_session_handle,
         approved_policy: Tpm2bDigest::from_bytes(
             &current_policy_digest[..current_policy_digest_len],
         )
@@ -1637,7 +1544,7 @@ fn test_challenger_policy_authorize_timeout_bypass_vulnerability() {
     // As in C, policy commands never check the session timeout (only CheckPolicyAuthSession does
     // when the session authorizes a command), so PolicyAuthorize succeeds. It must not clear the
     // timeout either, so the expired session still cannot authorize anything.
-    let res2 = execute_tpm_command(&mut tpm, &mut global_state, &pa_handles, &pa_cmd, &[]);
+    let res2 = execute_tpm_command(&mut tpm, &mut global_state, &pa_cmd, &[]);
     assert!(res2.is_ok(), "PolicyAuthorize failed: {:?}", res2.err());
     let session = global_state.session(policy_session_handle.0).unwrap();
     assert_eq!(session.timeout, 10000);
@@ -1649,28 +1556,25 @@ fn test_ticket_revival_fails_after_restart() {
     let mut storage = FakeStorage::default();
     let shared_time = Arc::new(AtomicU64::new(0));
     let mut timer = MutableTimer { time: shared_time };
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let (signing_key, priv_buf, priv_len) = create_signing_key(&mut tpm);
     let auth_name = signing_key.name;
     global_state.transient_objects[0] = Some(signing_key);
 
     // 1. Start a policy session
-    use tpm2::commands::{StartAuthSession, StartAuthSessionHandles};
-    let handles = StartAuthSessionHandles {
+    use tpm2::commands::StartAuthSession;
+    let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: tpm2::Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle = policy_session_resp.session_handle;
 
     let nonce_tpm = global_state
@@ -1709,6 +1613,7 @@ fn test_ticket_revival_fails_after_restart() {
             tpm2::TpmtHa::Sha256(&digest),
             &mut sig_out,
         )
+        .unwrap()
         .unwrap();
 
     let sig = tpm2::TpmsSignatureRsa {
@@ -1717,12 +1622,10 @@ fn test_ticket_revival_fails_after_restart() {
     };
     let auth = TpmtSignature::Rsapss(sig);
 
-    use tpm2::commands::{PolicySigned, PolicySignedHandles};
-    let ps_handles = PolicySignedHandles {
+    use tpm2::commands::PolicySigned;
+    let ps_cmd = PolicySigned {
         auth_object: Handle(0x80000001),
         policy_session: policy_session_handle,
-    };
-    let ps_cmd = PolicySigned {
         nonce_tpm: nonce_tpm.as_tpm2b(),
         cp_hash_a,
         policy_ref,
@@ -1730,8 +1633,7 @@ fn test_ticket_revival_fails_after_restart() {
         auth,
     };
 
-    let (_, ps_rsp) =
-        execute_tpm_command(&mut tpm, &mut global_state, &ps_handles, &ps_cmd, &[]).unwrap();
+    let ps_rsp = execute_tpm_command(&mut tpm, &mut global_state, &ps_cmd, &[]).unwrap();
 
     // We get our auth ticket (TPMT_TK_AUTH) bound to the current time_epoch
     let ticket = ps_rsp.policy_ticket;
@@ -1741,16 +1643,13 @@ fn test_ticket_revival_fails_after_restart() {
     global_state.time_epoch ^= 0x1234567890ABCDEF;
 
     // 4. Start a NEW policy session (because the old one died on reboot)
-    let (policy_session_resp2, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]).unwrap();
+    let policy_session_resp2 = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let policy_session_handle2 = policy_session_resp2.session_handle;
 
     // 5. Try to use PolicyTicket with the expired ticket from the old epoch
-    use tpm2::commands::{PolicyTicket, PolicyTicketHandles};
-    let pt_handles = PolicyTicketHandles {
-        policy_session: policy_session_handle2,
-    };
+    use tpm2::commands::PolicyTicket;
     let pt_cmd = PolicyTicket {
+        policy_session: policy_session_handle2,
         timeout,
         cp_hash_a,
         policy_ref,
@@ -1758,7 +1657,7 @@ fn test_ticket_revival_fails_after_restart() {
         ticket,
     };
 
-    let pt_res = execute_tpm_command(&mut tpm, &mut global_state, &pt_handles, &pt_cmd, &[]);
+    let pt_res = execute_tpm_command(&mut tpm, &mut global_state, &pt_cmd, &[]);
 
     // It should fail with TPM_RC_TICKET because the ticket's HMAC won't match the new epoch
     assert_eq!(

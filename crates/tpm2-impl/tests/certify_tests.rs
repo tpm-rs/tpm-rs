@@ -1,11 +1,11 @@
 use tpm2::errors::TpmRc;
-use tpm2::{Marshal, Unmarshal};
+use tpm2::{Marshal, Message, UnmarshalMessage};
 mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
-use tpm2::commands::{Certify, CertifyHandles, Command};
+use tpm2::commands::{Certify, Command};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce, Tpm2bPublicKeyRsa,
     TpmEccCurve, TpmaObject, TpmaSession, TpmiAlgHash, TpmsAuthCommand, TpmsEccParms, TpmsEccPoint,
@@ -19,7 +19,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut FakeCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -42,7 +42,6 @@ fn setup_tpm<'a>(
 fn execute_tpm_certify<'a>(
     tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &CertifyHandles,
     cmd: &Certify,
     auths: &[TpmsAuthCommand],
     response_buf: &'a mut [u8; 32768],
@@ -58,10 +57,12 @@ fn execute_tpm_certify<'a>(
 
     request_buf[6..10].copy_from_slice(&(Certify::CMD_CODE.code()).to_be_bytes());
 
-    let mut handles_buf = [0u8; CertifyHandles::MAX_SIZE];
-    let handles_len = handles.marshal(&mut handles_buf);
-    request_buf[offset..offset + handles_len].copy_from_slice(&handles_buf.as_ref()[..handles_len]);
-    offset += handles_len;
+    for handle in cmd.handles() {
+        let mut handle_buf = [0u8; Handle::MAX_SIZE];
+        let handle_len = handle.marshal(&mut handle_buf);
+        request_buf[offset..offset + handle_len].copy_from_slice(&handle_buf[..handle_len]);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -101,7 +102,8 @@ fn execute_tpm_certify<'a>(
     }
 
     let mut params_slice = &response_buf[resp_offset..resp_size];
-    Unmarshal::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())
+    UnmarshalMessage::unmarshal_with_handles([], &mut params_slice)
+        .map_err(|_| TpmRc::FAILURE.get())
 }
 
 #[test]
@@ -109,8 +111,8 @@ fn test_certify_qualified_name_and_signer_exact_accumulation() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let signer_handle = Handle(0x80000002);
     let signer_qn = Tpm2bName::from_bytes(&[10, 11, 12, 13]).unwrap();
@@ -184,12 +186,10 @@ fn test_certify_qualified_name_and_signer_exact_accumulation() {
     global_state.transient_parents[1] = Some(0x40000001);
 
     let cmd = Certify {
-        qualifying_data: Tpm2bData::from_bytes(&[99, 100]).unwrap(),
-        in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
-    };
-    let handles = CertifyHandles {
         object_handle: certified_handle,
         sign_handle: signer_handle,
+        qualifying_data: Tpm2bData::from_bytes(&[99, 100]).unwrap(),
+        in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
     };
 
     let auths = [
@@ -208,15 +208,8 @@ fn test_certify_qualified_name_and_signer_exact_accumulation() {
     ];
 
     let mut response_buf = [0u8; 32768];
-    let resp = execute_tpm_certify(
-        &mut tpm,
-        &mut global_state,
-        &handles,
-        &cmd,
-        &auths,
-        &mut response_buf,
-    )
-    .unwrap();
+    let resp =
+        execute_tpm_certify(&mut tpm, &mut global_state, &cmd, &auths, &mut response_buf).unwrap();
     let attest = resp.certify_info.0;
     let _ = attest.magic;
     assert_eq!(attest.qualified_signer.get_buffer(), signer_qn.get_buffer());
@@ -237,8 +230,8 @@ fn test_certify_with_ecdaa_scheme() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let certified_handle = Handle(0x80000001);
     let certified_obj = TransientObject {
@@ -305,15 +298,13 @@ fn test_certify_with_ecdaa_scheme() {
     global_state.commit_array[0] |= 1 << 1;
 
     let cmd = Certify {
+        object_handle: certified_handle,
+        sign_handle: signer_handle,
         qualifying_data: Tpm2bData::from_bytes(&[0x11, 0x22]).unwrap(),
         in_scheme: Some(TpmtSigScheme::Ecdaa(TpmsSchemeEcdaa {
             hash_alg: TpmiAlgHash::Sha256,
             count: 1,
         })),
-    };
-    let handles = CertifyHandles {
-        object_handle: certified_handle,
-        sign_handle: signer_handle,
     };
     let auths = [
         TpmsAuthCommand {
@@ -331,15 +322,8 @@ fn test_certify_with_ecdaa_scheme() {
     ];
 
     let mut response_buf = [0u8; 32768];
-    let resp = execute_tpm_certify(
-        &mut tpm,
-        &mut global_state,
-        &handles,
-        &cmd,
-        &auths,
-        &mut response_buf,
-    )
-    .expect("TPM2_Certify with TPMS_SCHEME_ECDAA must succeed");
+    let resp = execute_tpm_certify(&mut tpm, &mut global_state, &cmd, &auths, &mut response_buf)
+        .expect("TPM2_Certify with TPMS_SCHEME_ECDAA must succeed");
 
     let attest = resp.certify_info.0;
     let _ = attest.magic;

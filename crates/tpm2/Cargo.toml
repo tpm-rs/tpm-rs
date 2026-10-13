@@ -16,13 +16,12 @@ categories.workspace = true
 # Implement conversions/traits which require std
 std = []
 
-# Only enable SHA2, AES, RSA-2048+, and NIST P-256+ by default
+# We enable all hash, symmetric and mode algorithms by default, plus RSA-2048+
+# and NIST P-256+.
 default = [
-    "sha256",
-    "sha384",
-    "sha512",
-    "aes128",
-    "aes256",
+    "sha1", "sha256", "sha384", "sha512", "sm3_256", "sha3_256", "sha3_384", "sha3_512",
+    "aes128", "aes192", "aes256", "sm4_128", "camellia128", "camellia192", "camellia256",
+    "cmac", "ctr", "ofb", "cbc", "ecb",
     "ecc_curve_nist_p256",
     "ecc_curve_nist_p384",
     "ecc_curve_nist_p521",
@@ -40,6 +39,8 @@ default = [
     "ecdh",
     "ecdaa",
 ]
+
+# Hash Algorithms
 sha1 = []
 sha256 = []
 sha384 = []
@@ -48,6 +49,8 @@ sm3_256 = []
 sha3_256 = []
 sha3_384 = []
 sha3_512 = []
+
+# Symmetric Encryption Algorithms
 aes128 = []
 aes192 = []
 aes256 = []
@@ -55,6 +58,15 @@ sm4_128 = []
 camellia128 = []
 camellia192 = []
 camellia256 = []
+
+# Symmetric Encryption Modes (CFB always enabled)
+cmac = []
+ctr = []
+ofb = []
+cbc = []
+ecb = []
+
+# ECC Curves
 ecc_curve_nist_p192 = ["ecc"]
 ecc_curve_nist_p224 = ["ecc"]
 ecc_curve_nist_p256 = ["ecc"]
@@ -68,6 +80,8 @@ ecc_curve_bp_p384_r1 = ["ecc"]
 ecc_curve_bp_p512_r1 = ["ecc"]
 ecc_curve_curve25519 = ["ecc"]
 ecc_curve_curve448 = ["ecc"]
+
+# RSA Key Sizes and Schemes
 rsa = []
 rsa1024 = ["rsa"]
 rsa2048 = ["rsa"]
@@ -77,6 +91,8 @@ rsassa = ["rsa"]
 rsapss = ["rsa"]
 rsaes = ["rsa"]
 oaep = ["rsa"]
+
+# ECC Curve Shorthands and Schemes
 ecc = []
 nist_p224 = ["ecc", "ecc_curve_nist_p224"]
 nist_p256 = ["ecc", "ecc_curve_nist_p256"]

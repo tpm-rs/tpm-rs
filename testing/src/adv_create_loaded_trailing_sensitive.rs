@@ -1,5 +1,4 @@
 use crate::test_utils::*;
-use tpm2::commands::CreateLoadedHandles;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
@@ -51,6 +50,7 @@ fn test_create_loaded_trailing_garbage_sensitive() {
     let in_public = crate::test_utils::make_template(&pub_area);
 
     struct BadCreateLoaded<'a> {
+        parent_handle: Handle,
         in_sensitive_buf: &'a [u8],
         in_public: Tpm2bTemplate<'a>,
     }
@@ -70,22 +70,24 @@ fn test_create_loaded_trailing_garbage_sensitive() {
             off
         }
     }
+    impl Message for BadCreateLoaded<'_> {
+        type Handles = [Handle; 1];
+        fn handles(&self) -> Self::Handles {
+            [self.parent_handle]
+        }
+    }
     impl Command for BadCreateLoaded<'_> {
         const CMD_CODE: TpmCc = TpmCc::CreateLoaded;
-        type Handles = CreateLoadedHandles;
         type Response<'a> = ();
-        type RespHandles = ();
     }
 
     let create = BadCreateLoaded {
+        parent_handle: Handle(0x40000001), // TPM_RH_OWNER
         in_sensitive_buf: &bad_buf,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPM_RH_OWNER
-    };
 
-    let res = execute_with_password_sessions_status(&mut sim, &create, create_handles, 1, &[]);
+    let res = execute_with_password_sessions_status(&mut sim, &create, 1, &[]);
     match res {
         Ok(_) => panic!("BUG: CreateLoaded succeeded with trailing garbage in in_sensitive!"),
         Err(e) => {

@@ -7,6 +7,7 @@
 //! `TPM_RC_TYPE`, `TPM_RC_TAG`, `TPM_RC_SCHEME`, `TPM_RC_SYMMETRIC`, `TPM_RC_HASH`, `TPM_RC_MODE`,
 //! `TPM_RC_CURVE`, `TPM_RC_SELECTOR`) and attach appropriate position modifiers.
 
+#[allow(deprecated)] // TPM2_VerifySignature is deprecated.
 use tpm2::commands::{
     ClearControl, ClockRateAdjust, HierarchyControl, PCRExtend, PolicySigned, VerifySignature,
 };
@@ -14,8 +15,40 @@ use tpm2::errors::{Position, TpmRc, UnmarshalError};
 use tpm2::{
     Alg, Handle, Marshal, PublicParmsAndId, Tpm2bAuth, TpmaSession, TpmsAuthCommand,
     TpmsAuthResponse, TpmsContext, TpmtPublic, TpmtSensitive, TpmtTkAuth, TpmtTkCreation,
-    TpmtTkHashcheck, TpmtTkVerified, TpmuSensitiveComposite, Unmarshal,
+    TpmtTkHashcheck, TpmtTkVerified, TpmuSensitiveComposite, Unmarshal, UnmarshalMessage,
 };
+
+/// Unmarshals a command handle area the way the TPM validates it: each handle is read with
+/// its `TPMI_*` interface type, in handle order, and a failure is attributed to that handle
+/// (`UnmarshalError::in_handle(n)`).
+///
+/// Command structs hold plain [`Handle`]s; these checks are what the typed handle-area
+/// unmarshalling used to do, and what the TPM implementation does before it unmarshals the
+/// parameter area.
+macro_rules! unmarshal_handle_area {
+    ($src:expr, $($tpmi:ty),+ $(,)?) => {{
+        let src: &mut &[u8] = $src;
+        (|| -> Result<(), UnmarshalError> {
+            let mut position = 0u8;
+            $(
+                position += 1;
+                <$tpmi>::unmarshal(src).map_err(|e| e.in_handle(position))?;
+            )+
+            Ok(())
+        })()
+    }};
+}
+
+/// Marshals a message's handle area: each handle as a big-endian `u32`.
+fn marshal_handles(handles: &[Handle]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for handle in handles {
+        let mut buf = [0u8; Handle::MAX_SIZE];
+        let len = handle.marshal(&mut buf);
+        out.extend_from_slice(&buf[..len]);
+    }
+    out
+}
 
 #[test]
 fn test_tpms_auth_command_unmarshal_errors() {
@@ -217,12 +250,13 @@ fn test_ticket_structures_tag_and_hierarchy_validation() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_VerifySignature is deprecated.
 fn test_command_parameter_positions_on_unmarshal() {
     // 1. PCRExtend: parameter 1 is digests (TpmlDigestValues)
     // Truncated buffer at parameter 1 -> INSUFFICIENT + P1
     let empty: [u8; 0] = [];
     let mut slice = &empty[..];
-    let err = PCRExtend::unmarshal(&mut slice).unwrap_err();
+    let err = PCRExtend::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err();
     assert_eq!(
         err.to_rc(),
         TpmRc::INSUFFICIENT.with(Position::parameter(1))
@@ -235,7 +269,7 @@ fn test_command_parameter_positions_on_unmarshal() {
         0xFF, 0xFF, // param 2: sig scheme = 0xFFFF (invalid)
     ];
     let mut slice = &verify_sig_bytes[..];
-    let err = VerifySignature::unmarshal(&mut slice).unwrap_err();
+    let err = VerifySignature::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err();
     assert_eq!(err.to_rc(), TpmRc::SCHEME.with(Position::parameter(2)));
 
     // 3. PolicySigned: parameter 5 is auth (TpmtSignature)
@@ -248,14 +282,14 @@ fn test_command_parameter_positions_on_unmarshal() {
         0xFF, 0xFF, // param 5: auth signature scheme = 0xFFFF
     ];
     let mut slice = &policy_signed_bytes[..];
-    let err = PolicySigned::unmarshal(&mut slice).unwrap_err();
+    let err = PolicySigned::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err();
     assert_eq!(err.to_rc(), TpmRc::SCHEME.with(Position::parameter(5)));
 
     // 4. ClockRateAdjust: parameter 1 is rate_adjust (u8 mapped to TpmClockAdjust)
     // Value 4 is out of range (valid are -3..=3 in i8, or 0..=3, 0xFD..=0xFF) -> VALUE + P1
     let bad_clock_adjust = [0x04];
     let mut slice = &bad_clock_adjust[..];
-    let err = ClockRateAdjust::unmarshal(&mut slice).unwrap_err();
+    let err = ClockRateAdjust::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err();
     assert_eq!(err.to_rc(), TpmRc::VALUE.with(Position::parameter(1)));
 
     // 5. HierarchyControl: parameter 1 is enable (Handle), parameter 2 is state (u8 TpmiYesNo)
@@ -265,7 +299,7 @@ fn test_command_parameter_positions_on_unmarshal() {
         0x01, // state = YES
     ];
     let mut slice = &bad_hier_enable[..];
-    let err = HierarchyControl::unmarshal(&mut slice).unwrap_err();
+    let err = HierarchyControl::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err();
     assert_eq!(err.to_rc(), TpmRc::VALUE.with(Position::parameter(1)));
 
     // Valid enable (0x40000001 = RH_OWNER) but invalid state (2) in parameter 2 -> VALUE + P2
@@ -274,14 +308,14 @@ fn test_command_parameter_positions_on_unmarshal() {
         0x02, // state = 2 (invalid TpmiYesNo)
     ];
     let mut slice = &bad_hier_state[..];
-    let err = HierarchyControl::unmarshal(&mut slice).unwrap_err();
+    let err = HierarchyControl::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err();
     assert_eq!(err.to_rc(), TpmRc::VALUE.with(Position::parameter(2)));
 
     // 6. ClearControl: parameter 1 is disable (u8 TpmiYesNo)
     // Invalid disable (0xFF) -> VALUE + P1
     let bad_clear_disable = [0xFF];
     let mut slice = &bad_clear_disable[..];
-    let err = ClearControl::unmarshal(&mut slice).unwrap_err();
+    let err = ClearControl::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err();
     assert_eq!(err.to_rc(), TpmRc::VALUE.with(Position::parameter(1)));
 }
 
@@ -315,7 +349,7 @@ fn test_tpms_context_and_context_load_unmarshal_validation() {
     assert_eq!(err, UnmarshalError::VALUE);
 
     let mut slice = &bad_saved_handle[..];
-    let err = ContextLoad::unmarshal(&mut slice).unwrap_err();
+    let err = ContextLoad::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err();
     assert_eq!(err.to_rc(), TpmRc::VALUE.with(Position::parameter(1)));
 
     // 2. Valid saved_handle (0x8000_0000) but invalid hierarchy (0x4000_000A = RH_LOCKOUT) -> VALUE + P1
@@ -330,7 +364,7 @@ fn test_tpms_context_and_context_load_unmarshal_validation() {
     assert_eq!(err, UnmarshalError::VALUE);
 
     let mut slice = &bad_hierarchy[..];
-    let err = ContextLoad::unmarshal(&mut slice).unwrap_err();
+    let err = ContextLoad::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err();
     assert_eq!(err.to_rc(), TpmRc::VALUE.with(Position::parameter(1)));
 }
 
@@ -909,6 +943,7 @@ fn test_non_null_scheme_structures_reject_tpm_alg_null_inner_algorithms() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_VerifySignature is deprecated.
 fn test_tpmt_signature_unmarshal_rejects_null_and_option_handles_attestation() {
     use tpm2::commands::responses::{
         Certify, CertifyCreation, GetCommandAuditDigest, GetSessionAuditDigest, GetTime, NVCertify,
@@ -942,7 +977,7 @@ fn test_tpmt_signature_unmarshal_rejects_null_and_option_handles_attestation() {
     ];
     let mut slice = &verify_null_bytes[..];
     assert_eq!(
-        VerifySignature::unmarshal(&mut slice),
+        VerifySignature::unmarshal_with_handles(Default::default(), &mut slice),
         Err(UnmarshalError::SCHEME.in_parameter(2))
     );
 
@@ -956,7 +991,7 @@ fn test_tpmt_signature_unmarshal_rejects_null_and_option_handles_attestation() {
     ];
     let mut slice = &policy_signed_null_bytes[..];
     assert_eq!(
-        PolicySigned::unmarshal(&mut slice),
+        PolicySigned::unmarshal_with_handles(Default::default(), &mut slice),
         Err(UnmarshalError::SCHEME.in_parameter(5))
     );
 
@@ -970,24 +1005,30 @@ fn test_tpmt_signature_unmarshal_rejects_null_and_option_handles_attestation() {
     let attest_rsp_bytes = &attest_rsp_buf[..attest_len + 2];
 
     let mut s = attest_rsp_bytes;
-    let certify_rsp = Certify::unmarshal(&mut s).expect("CertifyRsp with null signature");
+    let certify_rsp = Certify::unmarshal_with_handles(Default::default(), &mut s)
+        .expect("CertifyRsp with null signature");
     assert_eq!(certify_rsp.signature, None);
     assert_eq!(certify_rsp.certify_info, default_attest);
 
     let mut s = attest_rsp_bytes;
     assert_eq!(
-        CertifyCreation::unmarshal(&mut s)
+        CertifyCreation::unmarshal_with_handles(Default::default(), &mut s)
             .expect("CertifyCreationRsp")
             .signature,
         None
     );
 
     let mut s = attest_rsp_bytes;
-    assert_eq!(Quote::unmarshal(&mut s).expect("QuoteRsp").signature, None);
+    assert_eq!(
+        Quote::unmarshal_with_handles(Default::default(), &mut s)
+            .expect("QuoteRsp")
+            .signature,
+        None
+    );
 
     let mut s = attest_rsp_bytes;
     assert_eq!(
-        GetSessionAuditDigest::unmarshal(&mut s)
+        GetSessionAuditDigest::unmarshal_with_handles(Default::default(), &mut s)
             .expect("GetSessionAuditDigestRsp")
             .signature,
         None
@@ -995,7 +1036,7 @@ fn test_tpmt_signature_unmarshal_rejects_null_and_option_handles_attestation() {
 
     let mut s = attest_rsp_bytes;
     assert_eq!(
-        GetCommandAuditDigest::unmarshal(&mut s)
+        GetCommandAuditDigest::unmarshal_with_handles(Default::default(), &mut s)
             .expect("GetCommandAuditDigestRsp")
             .signature,
         None
@@ -1003,13 +1044,15 @@ fn test_tpmt_signature_unmarshal_rejects_null_and_option_handles_attestation() {
 
     let mut s = attest_rsp_bytes;
     assert_eq!(
-        GetTime::unmarshal(&mut s).expect("GetTimeRsp").signature,
+        GetTime::unmarshal_with_handles(Default::default(), &mut s)
+            .expect("GetTimeRsp")
+            .signature,
         None
     );
 
     let mut s = attest_rsp_bytes;
     assert_eq!(
-        NVCertify::unmarshal(&mut s)
+        NVCertify::unmarshal_with_handles(Default::default(), &mut s)
             .expect("NVCertifyRsp")
             .signature,
         None
@@ -1132,13 +1175,13 @@ fn test_tpmt_public_and_tpm2b_public_null_name_alg_validation() {
     offset += pcr_len;
 
     let mut s = &create_buf[..offset];
-    let err = Create::unmarshal(&mut s).unwrap_err();
+    let err = Create::unmarshal_with_handles(Default::default(), &mut s).unwrap_err();
     assert_eq!(err, UnmarshalError::HASH.in_parameter(2));
     assert_eq!(err.to_rc().get(), 0x2C3);
 
     // 6. CreatePrimary::unmarshal with null name_alg in in_public (param 2) -> TPM_RC_HASH + P2 (0x2C3)
     let mut s = &create_buf[..offset];
-    let err = CreatePrimary::unmarshal(&mut s).unwrap_err();
+    let err = CreatePrimary::unmarshal_with_handles(Default::default(), &mut s).unwrap_err();
     assert_eq!(err, UnmarshalError::HASH.in_parameter(2));
     assert_eq!(err.to_rc().get(), 0x2C3);
 
@@ -1149,7 +1192,7 @@ fn test_tpmt_public_and_tpm2b_public_null_name_alg_validation() {
     load_buf[..priv_len].copy_from_slice(&tmp_priv[..priv_len]);
     load_buf[priv_len..priv_len + len_2b].copy_from_slice(raw_2b_slice);
     let mut s = &load_buf[..priv_len + len_2b];
-    let err = Load::unmarshal(&mut s).unwrap_err();
+    let err = Load::unmarshal_with_handles(Default::default(), &mut s).unwrap_err();
     assert_eq!(err, UnmarshalError::HASH.in_parameter(2));
     assert_eq!(err.to_rc().get(), 0x2C3);
 
@@ -1170,7 +1213,7 @@ fn test_tpmt_public_and_tpm2b_public_null_name_alg_validation() {
     import_buf[off..off + 2].copy_from_slice(&0x0010u16.to_be_bytes());
     off += 2;
     let mut s = &import_buf[..off];
-    let err = Import::unmarshal(&mut s).unwrap_err();
+    let err = Import::unmarshal_with_handles(Default::default(), &mut s).unwrap_err();
     assert_eq!(err, UnmarshalError::HASH.in_parameter(2));
     assert_eq!(err.to_rc().get(), 0x2C3);
 
@@ -1183,7 +1226,8 @@ fn test_tpmt_public_and_tpm2b_public_null_name_alg_validation() {
     let mut le_buf = [0u8; LoadExternal::MAX_SIZE];
     let le_len = cmd_le.marshal(&mut le_buf);
     let mut s = &le_buf[..le_len];
-    let unmarshaled_le = LoadExternal::unmarshal(&mut s).expect("LoadExternal allows null nameAlg");
+    let unmarshaled_le = LoadExternal::unmarshal_with_handles(Default::default(), &mut s)
+        .expect("LoadExternal allows null nameAlg");
     assert_eq!(
         unmarshaled_le
             .in_public
@@ -1202,8 +1246,8 @@ fn test_tpmt_public_and_tpm2b_public_null_name_alg_validation() {
     let mut rp_buf = [0u8; ReadPublicRsp::MAX_SIZE];
     let rp_len = rsp_rp.marshal(&mut rp_buf);
     let mut s = &rp_buf[..rp_len];
-    let unmarshaled_rp =
-        ReadPublicRsp::unmarshal(&mut s).expect("ReadPublicRsp allows null nameAlg");
+    let unmarshaled_rp = ReadPublicRsp::unmarshal_with_handles(Default::default(), &mut s)
+        .expect("ReadPublicRsp allows null nameAlg");
     assert_eq!(
         unmarshaled_rp
             .out_public
@@ -1242,14 +1286,12 @@ fn test_tpmt_public_and_tpm2b_public_null_name_alg_validation() {
 #[test]
 fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     use tpm2::{
-        TpmiRhAc, TpmiRhAct, TpmsNvPublic,
+        TpmiDhContext, TpmiDhEntity, TpmiDhObject, TpmiDhPcr, TpmiRhAc, TpmiRhAct,
+        TpmiRhBaseHierarchy, TpmiRhClear, TpmiRhHierarchy, TpmiRhHierarchyAuth,
+        TpmiRhHierarchyPolicy, TpmiRhLockout, TpmiRhNvAuth, TpmiRhNvDefinedIndex, TpmiRhNvIndex,
+        TpmiRhPlatform, TpmiRhProvision, TpmiShPolicy, TpmsNvPublic,
         commands::{
-            ClearHandles, ContextSaveHandles, CreateHandles, CreatePrimaryHandles,
-            DictionaryAttackLockResetHandles, EvictControl, EvictControlHandles, FlushContext,
-            Hash, HierarchyChangeAuthHandles, HierarchyControlHandles, LoadExternal,
-            NVDefineSpaceHandles, NVReadHandles, NVUndefineSpaceHandles,
-            NVUndefineSpaceSpecialHandles, PCRResetHandles, PCRSetAuthPolicy, PolicyRestartHandles,
-            SequenceComplete, SetPrimaryPolicyHandles, StartAuthSessionHandles,
+            EvictControl, FlushContext, Hash, LoadExternal, PCRSetAuthPolicy, SequenceComplete,
         },
     };
 
@@ -1258,25 +1300,25 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     // CreatePrimaryHandles: auth_handle is TpmiRhHierarchy
     let mut s = &0x8000_0001u32.to_be_bytes()[..];
     assert_eq!(
-        CreatePrimaryHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhHierarchy),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     let mut s = &Handle::RH_OWNER.0.to_be_bytes()[..];
-    assert!(CreatePrimaryHandles::unmarshal(&mut s).is_ok());
+    assert!(unmarshal_handle_area!(&mut s, TpmiRhHierarchy).is_ok());
 
     // CreateHandles: parent_handle is TpmiDhObject::<false> (rejects RH_NULL and hierarchies)
     let mut s = &Handle::RH_NULL.0.to_be_bytes()[..];
     assert_eq!(
-        CreateHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiDhObject<false>),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     let mut s = &Handle::RH_OWNER.0.to_be_bytes()[..];
     assert_eq!(
-        CreateHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiDhObject<false>),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     let mut s = &0x8000_0001u32.to_be_bytes()[..];
-    assert!(CreateHandles::unmarshal(&mut s).is_ok());
+    assert!(unmarshal_handle_area!(&mut s, TpmiDhObject<false>).is_ok());
 
     // StartAuthSessionHandles: tpm_key (TpmiDhObject::<true>), bind (TpmiDhEntity::<true>)
     let mut buf = [0u8; 8];
@@ -1284,34 +1326,34 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     buf[4..8].copy_from_slice(&Handle::RH_NULL.0.to_be_bytes());
     let mut s = &buf[..];
     assert_eq!(
-        StartAuthSessionHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiDhObject<true>, TpmiDhEntity<true>),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     buf[0..4].copy_from_slice(&Handle::RH_NULL.0.to_be_bytes());
     buf[4..8].copy_from_slice(&0x0200_0001u32.to_be_bytes()); // session invalid for bind
     let mut s = &buf[..];
     assert_eq!(
-        StartAuthSessionHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiDhObject<true>, TpmiDhEntity<true>),
         Err(UnmarshalError::VALUE.in_handle(2))
     );
 
     // PolicyRestartHandles: session_handle is TpmiShPolicy (rejects HMAC session)
     let mut s = &0x0200_0001u32.to_be_bytes()[..];
     assert_eq!(
-        PolicyRestartHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiShPolicy),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     let mut s = &0x0300_0001u32.to_be_bytes()[..];
-    assert!(PolicyRestartHandles::unmarshal(&mut s).is_ok());
+    assert!(unmarshal_handle_area!(&mut s, TpmiShPolicy).is_ok());
 
     // ContextSaveHandles: TpmiDhContext (rejects persistent 0x81000000)
     let mut s = &0x8100_0001u32.to_be_bytes()[..];
     assert_eq!(
-        ContextSaveHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiDhContext),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     let mut s = &0x8000_0001u32.to_be_bytes()[..];
-    assert!(ContextSaveHandles::unmarshal(&mut s).is_ok());
+    assert!(unmarshal_handle_area!(&mut s, TpmiDhContext).is_ok());
 
     // EvictControlHandles: auth (TpmiRhProvision), object_handle (TpmiDhObject::<false>)
     let mut buf = [0u8; 8];
@@ -1319,86 +1361,86 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     buf[4..8].copy_from_slice(&0x8000_0001u32.to_be_bytes());
     let mut s = &buf[..];
     assert_eq!(
-        EvictControlHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhProvision, TpmiDhObject<false>),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     buf[0..4].copy_from_slice(&Handle::RH_OWNER.0.to_be_bytes());
     buf[4..8].copy_from_slice(&Handle::RH_NULL.0.to_be_bytes()); // null object invalid
     let mut s = &buf[..];
     assert_eq!(
-        EvictControlHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhProvision, TpmiDhObject<false>),
         Err(UnmarshalError::VALUE.in_handle(2))
     );
 
     // ClearHandles: TpmiRhClear (only LOCKOUT or PLATFORM)
     let mut s = &Handle::RH_OWNER.0.to_be_bytes()[..];
     assert_eq!(
-        ClearHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhClear),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     let mut s = &Handle::RH_LOCKOUT.0.to_be_bytes()[..];
-    assert!(ClearHandles::unmarshal(&mut s).is_ok());
+    assert!(unmarshal_handle_area!(&mut s, TpmiRhClear).is_ok());
 
     // HierarchyChangeAuthHandles: TpmiRhHierarchyAuth::<false> (rejects RH_NULL)
     let mut s = &Handle::RH_NULL.0.to_be_bytes()[..];
     assert_eq!(
-        HierarchyChangeAuthHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhHierarchyAuth<false>),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
 
     // HierarchyControlHandles: TpmiRhBaseHierarchy (accepts OWNER, PLATFORM, ENDORSEMENT; rejects NULL and LOCKOUT)
     let mut s = &Handle::RH_NULL.0.to_be_bytes()[..];
     assert_eq!(
-        HierarchyControlHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhBaseHierarchy),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     let mut s = &Handle::RH_LOCKOUT.0.to_be_bytes()[..];
     assert_eq!(
-        HierarchyControlHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhBaseHierarchy),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     let mut s = &Handle::RH_OWNER.0.to_be_bytes()[..];
-    assert!(HierarchyControlHandles::unmarshal(&mut s).is_ok());
+    assert!(unmarshal_handle_area!(&mut s, TpmiRhBaseHierarchy).is_ok());
 
     // PCRResetHandles: TpmiDhPcr::<false> (rejects non-PCR handles including RH_NULL and PCR >= 24; accepts valid PCRs)
     let mut s = &Handle::RH_NULL.0.to_be_bytes()[..];
     assert_eq!(
-        PCRResetHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiDhPcr<false>),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     let mut s = &Handle::RH_OWNER.0.to_be_bytes()[..];
     assert_eq!(
-        PCRResetHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiDhPcr<false>),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     let mut s = &24u32.to_be_bytes()[..];
     assert_eq!(
-        PCRResetHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiDhPcr<false>),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     let mut s = &16u32.to_be_bytes()[..];
-    assert!(PCRResetHandles::unmarshal(&mut s).is_ok());
+    assert!(unmarshal_handle_area!(&mut s, TpmiDhPcr<false>).is_ok());
 
     // SetPrimaryPolicyHandles: TpmiRhHierarchyPolicy (accepts ACT handles, rejects RH_NULL)
     let mut s = &0x4000_0110u32.to_be_bytes()[..];
-    assert!(SetPrimaryPolicyHandles::unmarshal(&mut s).is_ok());
+    assert!(unmarshal_handle_area!(&mut s, TpmiRhHierarchyPolicy).is_ok());
     let mut s = &Handle::RH_NULL.0.to_be_bytes()[..];
     assert_eq!(
-        SetPrimaryPolicyHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhHierarchyPolicy),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
 
     // DictionaryAttackLockResetHandles: TpmiRhLockout
     let mut s = &Handle::RH_OWNER.0.to_be_bytes()[..];
     assert_eq!(
-        DictionaryAttackLockResetHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhLockout),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
 
     // NVDefineSpaceHandles: TpmiRhProvision
     let mut s = &Handle::RH_ENDORSEMENT.0.to_be_bytes()[..];
     assert_eq!(
-        NVDefineSpaceHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhProvision),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
 
@@ -1409,7 +1451,7 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     buf[4..8].copy_from_slice(&0x1200_0001u32.to_be_bytes());
     let mut s = &buf[..];
     assert_eq!(
-        NVUndefineSpaceHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhProvision, TpmiRhNvDefinedIndex),
         Err(UnmarshalError::VALUE.in_handle(2))
     );
 
@@ -1419,14 +1461,14 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     buf[4..8].copy_from_slice(&Handle::RH_PLATFORM.0.to_be_bytes());
     let mut s = &buf[..];
     assert_eq!(
-        NVUndefineSpaceSpecialHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhNvDefinedIndex, TpmiRhPlatform),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
     buf[0..4].copy_from_slice(&0x0100_0001u32.to_be_bytes());
     buf[4..8].copy_from_slice(&Handle::RH_OWNER.0.to_be_bytes()); // owner rejected (platform required)
     let mut s = &buf[..];
     assert_eq!(
-        NVUndefineSpaceSpecialHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhNvDefinedIndex, TpmiRhPlatform),
         Err(UnmarshalError::VALUE.in_handle(2))
     );
 
@@ -1436,7 +1478,7 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     buf[4..8].copy_from_slice(&0x0100_0001u32.to_be_bytes());
     let mut s = &buf[..];
     assert_eq!(
-        NVReadHandles::unmarshal(&mut s),
+        unmarshal_handle_area!(&mut s, TpmiRhNvAuth, TpmiRhNvIndex),
         Err(UnmarshalError::VALUE.in_handle(1))
     );
 
@@ -1460,7 +1502,7 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     hash_buf[4..8].copy_from_slice(&0x8000_0001u32.to_be_bytes()); // invalid hierarchy
     let mut s = &hash_buf[..];
     assert_eq!(
-        Hash::unmarshal(&mut s),
+        Hash::unmarshal_with_handles(Default::default(), &mut s),
         Err(UnmarshalError::VALUE.in_parameter(3))
     );
 
@@ -1470,7 +1512,7 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     seq_buf[2..6].copy_from_slice(&0x0100_0001u32.to_be_bytes()); // invalid hierarchy
     let mut s = &seq_buf[..];
     assert_eq!(
-        SequenceComplete::unmarshal(&mut s),
+        SequenceComplete::unmarshal_with_handles(Default::default(), &mut s),
         Err(UnmarshalError::VALUE.in_parameter(2))
     );
 
@@ -1483,12 +1525,12 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     le_zero_pub[4..8].copy_from_slice(&0x8000_0001u32.to_be_bytes()); // invalid hierarchy
     let mut s = &le_zero_pub[..];
     assert_eq!(
-        LoadExternal::unmarshal(&mut s),
+        LoadExternal::unmarshal_with_handles(Default::default(), &mut s),
         Err(UnmarshalError::SIZE.in_parameter(2))
     );
     let mut s_truncated = &le_zero_pub[..4]; // hierarchy missing completely
     assert_eq!(
-        LoadExternal::unmarshal(&mut s_truncated),
+        LoadExternal::unmarshal_with_handles(Default::default(), &mut s_truncated),
         Err(UnmarshalError::SIZE.in_parameter(2))
     );
 
@@ -1508,7 +1550,7 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     le_bad[2 + pub_tmp_len..6 + pub_tmp_len].copy_from_slice(&0x8000_0001u32.to_be_bytes()); // invalid hierarchy
     let mut s = &le_bad[..6 + pub_tmp_len];
     assert_eq!(
-        LoadExternal::unmarshal(&mut s),
+        LoadExternal::unmarshal_with_handles(Default::default(), &mut s),
         Err(UnmarshalError::VALUE.in_parameter(3))
     );
 
@@ -1519,33 +1561,31 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     pcr_pol_buf[4..8].copy_from_slice(&Handle::RH_NULL.0.to_be_bytes()); // RH_NULL not allowed for pcr_num
     let mut s = &pcr_pol_buf[..];
     assert_eq!(
-        PCRSetAuthPolicy::unmarshal(&mut s),
+        PCRSetAuthPolicy::unmarshal_with_handles(Default::default(), &mut s),
         Err(UnmarshalError::VALUE.in_parameter(3))
     );
     pcr_pol_buf[4..8].copy_from_slice(&24u32.to_be_bytes()); // PCR 24 out of range
     let mut s = &pcr_pol_buf[..];
     assert_eq!(
-        PCRSetAuthPolicy::unmarshal(&mut s),
+        PCRSetAuthPolicy::unmarshal_with_handles(Default::default(), &mut s),
         Err(UnmarshalError::VALUE.in_parameter(3))
     );
 
     // EvictControl: param 1 = persistent_handle (TpmiDhPersistent)
     let mut s = &0x8000_0001u32.to_be_bytes()[..]; // transient handle rejected
     assert_eq!(
-        EvictControl::unmarshal(&mut s),
+        EvictControl::unmarshal_with_handles(Default::default(), &mut s),
         Err(UnmarshalError::VALUE.in_parameter(1))
     );
     let mut s = &0x8100_0001u32.to_be_bytes()[..];
-    assert!(EvictControl::unmarshal(&mut s).is_ok());
+    assert!(EvictControl::unmarshal_with_handles(Default::default(), &mut s).is_ok());
 
-    // FlushContext: cHandles = 0 (type Handles = ()), param 1 = flush_handle (TpmiDhContext)
-    assert_eq!(
-        <<FlushContext as tpm2::commands::Command>::Handles as Marshal>::MAX_SIZE,
-        0
-    );
+    // FlushContext: cHandles = 0 (no handle area), param 1 = flush_handle (TpmiDhContext)
+    let no_handles: [Handle; 0] = <FlushContext as tpm2::Message>::Handles::default();
+    assert_eq!(no_handles.len(), 0);
     let mut short_buf = &[0x80u8, 0x00][..];
     assert_eq!(
-        FlushContext::unmarshal(&mut short_buf),
+        FlushContext::unmarshal_with_handles(Default::default(), &mut short_buf),
         Err(UnmarshalError::INSUFFICIENT.in_parameter(1))
     );
     for invalid_handle in [
@@ -1558,7 +1598,7 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
         let bytes = invalid_handle.to_be_bytes();
         let mut s = &bytes[..];
         assert_eq!(
-            FlushContext::unmarshal(&mut s),
+            FlushContext::unmarshal_with_handles(Default::default(), &mut s),
             Err(UnmarshalError::VALUE.in_parameter(1)),
             "FlushContext must reject invalid handle 0x{:08X} with parameter(1) modifier",
             invalid_handle
@@ -1572,7 +1612,10 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
         let written = cmd.marshal(&mut buf);
         assert_eq!(written, 4);
         let mut s = &buf[..];
-        assert_eq!(FlushContext::unmarshal(&mut s), Ok(cmd));
+        assert_eq!(
+            FlushContext::unmarshal_with_handles(Default::default(), &mut s),
+            Ok(cmd)
+        );
         assert!(s.is_empty());
     }
 
@@ -1582,12 +1625,12 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
     hc_buf[4] = 1;
     let mut s = &hc_buf[..];
     assert_eq!(
-        HierarchyControl::unmarshal(&mut s),
+        HierarchyControl::unmarshal_with_handles(Default::default(), &mut s),
         Err(UnmarshalError::VALUE.in_parameter(1))
     );
     hc_buf[0..4].copy_from_slice(&Handle::RH_PLATFORM_NV.0.to_be_bytes()); // RH_PLATFORM_NV accepted
     let mut s = &hc_buf[..];
-    assert!(HierarchyControl::unmarshal(&mut s).is_ok());
+    assert!(HierarchyControl::unmarshal_with_handles(Default::default(), &mut s).is_ok());
 
     // --- 3. TpmsNvPublic::nv_index (TpmiRhNvLegacyIndex) ---
     let mut nv_pub_buf = [0u8; 14];
@@ -1603,7 +1646,7 @@ fn test_command_handle_and_parameter_tpmi_unmarshalling() {
 
 #[test]
 fn test_tpmt_ha_unmarshal_rejects_null_and_option_tpmt_ha_handles_tagged_policy() {
-    use tpm2::commands::GetCapabilityRsp;
+    use tpm2::commands::responses::GetCapability as GetCapabilityRsp;
     use tpm2::{TpmlTaggedPolicy, TpmsCapabilityData, TpmsTaggedPolicy, TpmtHa};
 
     // 1. TpmtHa::unmarshal MUST reject TPM_ALG_NULL (0x0010) with HASH error
@@ -1706,45 +1749,59 @@ fn test_tpmt_ha_unmarshal_rejects_null_and_option_tpmt_ha_handles_tagged_policy(
     let mut rsp_buf = [0u8; GetCapabilityRsp::MAX_SIZE];
     let rsp_len = cap_rsp.marshal(&mut rsp_buf);
     let mut slice = &rsp_buf[..rsp_len];
-    let parsed_rsp = GetCapabilityRsp::unmarshal(&mut slice).expect("unmarshal GetCapabilityRsp");
+    let parsed_rsp = GetCapabilityRsp::unmarshal_with_handles([], &mut slice)
+        .expect("unmarshal GetCapabilityRsp");
     assert_eq!(parsed_rsp, cap_rsp);
 }
 
 #[test]
 fn test_attestation_command_handles_tpmi_validation() {
-    use tpm2::commands::{
-        GetCommandAuditDigestHandles, GetSessionAuditDigestHandles, GetTimeHandles,
-    };
+    use tpm2::commands::{GetCommandAuditDigest, GetSessionAuditDigest, GetTime};
+    use tpm2::{Message, TpmiDhObject, TpmiRhEndorsement, TpmiShHmac};
 
-    // 1. GetSessionAuditDigestHandles:
+    // The handle areas below are checked against each handle's `TPMI_*` interface type,
+    // in handle order (see `unmarshal_handle_area!`).
+
+    // 1. GetSessionAuditDigest handles:
     // Handle 1 (@privacyAdminHandle): TPMI_RH_ENDORSEMENT (non-nullable, only TPM_RH_ENDORSEMENT)
     // Handle 2 (@signHandle): TPMI_DH_OBJECT+ (transient, persistent, or TPM_RH_NULL)
     // Handle 3 (sessionHandle): TPMI_SH_HMAC (HMAC sessions 0x02000000..=0x02FFFFFF only)
-    let valid_sad_handles = GetSessionAuditDigestHandles {
+    let valid_sad_handles = GetSessionAuditDigest {
         privacy_admin_handle: Handle::RH_ENDORSEMENT,
         sign_handle: Handle::RH_NULL,
         session_handle: Handle(0x0200_0000),
+        ..Default::default()
     };
-    let mut sad_buf = [0u8; GetSessionAuditDigestHandles::MAX_SIZE];
-    let sad_len = valid_sad_handles.marshal(&mut sad_buf);
-    let mut slice = &sad_buf[..sad_len];
+    let sad_buf = marshal_handles(&valid_sad_handles.handles());
+    let mut slice = &sad_buf[..];
     assert_eq!(
-        GetSessionAuditDigestHandles::unmarshal(&mut slice),
-        Ok(valid_sad_handles)
+        unmarshal_handle_area!(
+            &mut slice,
+            TpmiRhEndorsement<false>,
+            TpmiDhObject<true>,
+            TpmiShHmac
+        ),
+        Ok(())
     );
+    assert!(slice.is_empty());
 
     // Reject TPM_RH_NULL, TPM_RH_OWNER, TPM_RH_PLATFORM in handle 1 with VALUE in handle 1
     for bad_privacy_handle in [Handle::RH_NULL, Handle::RH_OWNER, Handle::RH_PLATFORM] {
-        let bad = GetSessionAuditDigestHandles {
+        let bad = GetSessionAuditDigest {
             privacy_admin_handle: bad_privacy_handle,
             ..valid_sad_handles
         };
-        let len = bad.marshal(&mut sad_buf);
-        let mut s = &sad_buf[..len];
+        let sad_buf = marshal_handles(&bad.handles());
+        let mut s = &sad_buf[..];
         assert_eq!(
-            GetSessionAuditDigestHandles::unmarshal(&mut s),
+            unmarshal_handle_area!(
+                &mut s,
+                TpmiRhEndorsement<false>,
+                TpmiDhObject<true>,
+                TpmiShHmac
+            ),
             Err(UnmarshalError::VALUE.in_handle(1)),
-            "GetSessionAuditDigestHandles should reject privacy_admin_handle {bad_privacy_handle:?}"
+            "GetSessionAuditDigest handles should reject privacy_admin_handle {bad_privacy_handle:?}"
         );
     }
 
@@ -1756,71 +1813,81 @@ fn test_attestation_command_handles_tpmi_validation() {
         Handle::RH_NULL,
         Handle(0x8000_0000),
     ] {
-        let bad = GetSessionAuditDigestHandles {
+        let bad = GetSessionAuditDigest {
             session_handle: bad_session_handle,
             ..valid_sad_handles
         };
-        let len = bad.marshal(&mut sad_buf);
-        let mut s = &sad_buf[..len];
+        let sad_buf = marshal_handles(&bad.handles());
+        let mut s = &sad_buf[..];
         assert_eq!(
-            GetSessionAuditDigestHandles::unmarshal(&mut s),
+            unmarshal_handle_area!(
+                &mut s,
+                TpmiRhEndorsement<false>,
+                TpmiDhObject<true>,
+                TpmiShHmac
+            ),
             Err(UnmarshalError::VALUE.in_handle(3)),
-            "GetSessionAuditDigestHandles should reject session_handle {bad_session_handle:?}"
+            "GetSessionAuditDigest handles should reject session_handle {bad_session_handle:?}"
         );
     }
 
-    // 2. GetCommandAuditDigestHandles:
+    // 2. GetCommandAuditDigest handles:
     // Handle 1 (@privacyHandle): TPMI_RH_ENDORSEMENT (non-nullable, only TPM_RH_ENDORSEMENT)
     // Handle 2 (@signHandle): TPMI_DH_OBJECT+
-    let valid_cad_handles = GetCommandAuditDigestHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+    let valid_cad_handles = GetCommandAuditDigest {
+        privacy_handle: Handle::RH_ENDORSEMENT,
         sign_handle: Handle::RH_NULL,
+        ..Default::default()
     };
-    let mut cad_buf = [0u8; GetCommandAuditDigestHandles::MAX_SIZE];
-    let cad_len = valid_cad_handles.marshal(&mut cad_buf);
-    let mut slice = &cad_buf[..cad_len];
+    let cad_buf = marshal_handles(&valid_cad_handles.handles());
+    let mut slice = &cad_buf[..];
     assert_eq!(
-        GetCommandAuditDigestHandles::unmarshal(&mut slice),
-        Ok(valid_cad_handles)
+        unmarshal_handle_area!(&mut slice, TpmiRhEndorsement<false>, TpmiDhObject<true>),
+        Ok(())
     );
+    assert!(slice.is_empty());
 
     for bad_privacy_handle in [Handle::RH_OWNER, Handle::RH_PLATFORM, Handle::RH_NULL] {
-        let bad = GetCommandAuditDigestHandles {
-            privacy_admin_handle: bad_privacy_handle,
+        let bad = GetCommandAuditDigest {
+            privacy_handle: bad_privacy_handle,
             ..valid_cad_handles
         };
-        let len = bad.marshal(&mut cad_buf);
-        let mut s = &cad_buf[..len];
+        let cad_buf = marshal_handles(&bad.handles());
+        let mut s = &cad_buf[..];
         assert_eq!(
-            GetCommandAuditDigestHandles::unmarshal(&mut s),
+            unmarshal_handle_area!(&mut s, TpmiRhEndorsement<false>, TpmiDhObject<true>),
             Err(UnmarshalError::VALUE.in_handle(1)),
-            "GetCommandAuditDigestHandles should reject privacy_admin_handle {bad_privacy_handle:?}"
+            "GetCommandAuditDigest handles should reject privacy_handle {bad_privacy_handle:?}"
         );
     }
 
-    // 3. GetTimeHandles:
+    // 3. GetTime handles:
     // Handle 1 (@privacyAdminHandle): TPMI_RH_ENDORSEMENT (non-nullable, only TPM_RH_ENDORSEMENT)
     // Handle 2 (@signHandle): TPMI_DH_OBJECT+
-    let valid_gt_handles = GetTimeHandles {
+    let valid_gt_handles = GetTime {
         privacy_admin_handle: Handle::RH_ENDORSEMENT,
         sign_handle: Handle::RH_NULL,
+        ..Default::default()
     };
-    let mut gt_buf = [0u8; GetTimeHandles::MAX_SIZE];
-    let gt_len = valid_gt_handles.marshal(&mut gt_buf);
-    let mut slice = &gt_buf[..gt_len];
-    assert_eq!(GetTimeHandles::unmarshal(&mut slice), Ok(valid_gt_handles));
+    let gt_buf = marshal_handles(&valid_gt_handles.handles());
+    let mut slice = &gt_buf[..];
+    assert_eq!(
+        unmarshal_handle_area!(&mut slice, TpmiRhEndorsement<false>, TpmiDhObject<true>),
+        Ok(())
+    );
+    assert!(slice.is_empty());
 
     for bad_privacy_handle in [Handle::RH_OWNER, Handle::RH_PLATFORM, Handle::RH_NULL] {
-        let bad = GetTimeHandles {
+        let bad = GetTime {
             privacy_admin_handle: bad_privacy_handle,
             ..valid_gt_handles
         };
-        let len = bad.marshal(&mut gt_buf);
-        let mut s = &gt_buf[..len];
+        let gt_buf = marshal_handles(&bad.handles());
+        let mut s = &gt_buf[..];
         assert_eq!(
-            GetTimeHandles::unmarshal(&mut s),
+            unmarshal_handle_area!(&mut s, TpmiRhEndorsement<false>, TpmiDhObject<true>),
             Err(UnmarshalError::VALUE.in_handle(1)),
-            "GetTimeHandles should reject privacy_admin_handle {bad_privacy_handle:?}"
+            "GetTime handles should reject privacy_admin_handle {bad_privacy_handle:?}"
         );
     }
 }

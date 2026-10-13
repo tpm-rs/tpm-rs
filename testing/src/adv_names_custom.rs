@@ -2,10 +2,11 @@
 use crate::test_utils::marshal_to_slice;
 use tpm2::Alg;
 use tpm2::errors::TpmRc;
+use tpm2::{AlgSym, TpmiAlgCipherMode};
 // Ported from tpm-go/tpm2/test/names_test.go
 
 use tpm2::Handle;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles};
+use tpm2::commands::CreatePrimary;
 
 use crate::test_utils::*;
 use tpm2::{
@@ -34,22 +35,19 @@ fn test_nv_name_algorithms_adversarial() {
         let public_info = tpm2::Tpm2b(public_info_struct);
 
         let define_space = tpm2::commands::NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: tpm2::Tpm2bAuth::default(),
             public_info,
         };
-        let define_handles = tpm2::commands::NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
 
-        execute_with_password_sessions(&mut sim, &define_space, define_handles, 1, &[])
+        execute_with_password_sessions(&mut sim, &define_space, 1, &[])
             .expect("could not call TPM2_DefineSpace with SHA384");
 
-        let read_public = tpm2::commands::NVReadPublic {};
-        let read_handles = tpm2::commands::NVReadPublicHandles {
+        let read_public = tpm2::commands::NVReadPublic {
             nv_index: Handle(0x01800010),
         };
 
-        let (rsp, _) = execute_with_password_sessions(&mut sim, &read_public, read_handles, 0, &[])
+        let rsp = execute_with_password_sessions(&mut sim, &read_public, 0, &[])
             .expect("could not call TPM2_ReadPublic");
 
         let mut pub_buf = [0u8; 1024];
@@ -88,22 +86,19 @@ fn test_nv_name_algorithms_adversarial() {
         let public_info = tpm2::Tpm2b(public_info_struct);
 
         let define_space = tpm2::commands::NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: tpm2::Tpm2bAuth::default(),
             public_info,
         };
-        let define_handles = tpm2::commands::NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
 
-        execute_with_password_sessions(&mut sim, &define_space, define_handles, 1, &[])
+        execute_with_password_sessions(&mut sim, &define_space, 1, &[])
             .expect("could not call TPM2_DefineSpace with SHA512");
 
-        let read_public = tpm2::commands::NVReadPublic {};
-        let read_handles = tpm2::commands::NVReadPublicHandles {
+        let read_public = tpm2::commands::NVReadPublic {
             nv_index: Handle(0x01800011),
         };
 
-        let (rsp, _) = execute_with_password_sessions(&mut sim, &read_public, read_handles, 0, &[])
+        let rsp = execute_with_password_sessions(&mut sim, &read_public, 0, &[])
             .expect("could not call TPM2_ReadPublic");
 
         let mut pub_buf = [0u8; 1024];
@@ -142,22 +137,19 @@ fn test_nv_name_algorithms_adversarial() {
         let public_info = tpm2::Tpm2b(public_info_struct);
 
         let define_space = tpm2::commands::NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: tpm2::Tpm2bAuth::default(),
             public_info,
         };
-        let define_handles = tpm2::commands::NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
 
-        execute_with_password_sessions(&mut sim, &define_space, define_handles, 1, &[])
+        execute_with_password_sessions(&mut sim, &define_space, 1, &[])
             .expect("could not call TPM2_DefineSpace with SHA1");
 
-        let read_public = tpm2::commands::NVReadPublic {};
-        let read_handles = tpm2::commands::NVReadPublicHandles {
+        let read_public = tpm2::commands::NVReadPublic {
             nv_index: Handle(0x01800012),
         };
 
-        let (rsp, _) = execute_with_password_sessions(&mut sim, &read_public, read_handles, 0, &[])
+        let rsp = execute_with_password_sessions(&mut sim, &read_public, 0, &[])
             .expect("could not call TPM2_ReadPublic on SHA1 NV index");
         assert_eq!(
             &rsp.nv_name.get_buffer()[0..2],
@@ -168,7 +160,10 @@ fn test_nv_name_algorithms_adversarial() {
     // 4. create_primary with name_alg = SHA512 must fail with Value error
     {
         let ecc_parms = TpmsEccParms {
-            symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+            symmetric: Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            }),
             scheme: None,
             curve_id: tpm2::TpmEccCurve::NistP256,
             kdf: None,
@@ -200,22 +195,18 @@ fn test_nv_name_algorithms_adversarial() {
         let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
         let create_primary = CreatePrimary {
+            primary_handle: Handle::RH_ENDORSEMENT,
             in_sensitive,
             in_public,
             ..Default::default()
         };
-        let create_handles = CreatePrimaryHandles {
-            primary_handle: Handle::RH_ENDORSEMENT,
-        };
 
         // One password session: with none, C returns AUTH_MISSING before the
         // template is checked (SessionProcess.c:1650).
-        let err =
-            match execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[])
-            {
-                Ok(_) => panic!("expected create_primary to fail"),
-                Err(e) => e,
-            };
+        let err = match execute_with_password_sessions(&mut sim, &create_primary, 1, &[]) {
+            Ok(_) => panic!("expected create_primary to fail"),
+            Err(e) => e,
+        };
         assert_eq!(err, TpmRc::VALUE.get());
     }
 }

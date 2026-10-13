@@ -8,15 +8,13 @@ mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
-use tpm2::commands::{
-    Command, CreatePrimary, CreatePrimaryHandles, StartAuthSession, StartAuthSessionHandles,
-};
-use tpm2::{Handle, TpmSe};
+use tpm2::commands::{Command, CreatePrimary, Message, StartAuthSession, UnmarshalMessage};
 use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bEncryptedSecret, Tpm2bNonce, Tpm2bPublic,
-    Tpm2bSensitiveData, TpmaObject, TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmlPcrSelection,
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bEncryptedSecret, Tpm2bNonce, Tpm2bPublic,
+    Tpm2bSensitiveData, TpmaObject, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmlPcrSelection,
     TpmsAuthCommand, TpmsSensitiveCreate, TpmtKeyedHashScheme, TpmtPublic, TpmtSymDefObject,
 };
+use tpm2::{Handle, TpmSe};
 use tpm2_impl::{GlobalState, TpmEngine, TpmPlatform};
 
 fn leak_bytes(bytes: &[u8]) -> &'static [u8] {
@@ -28,7 +26,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut FakeCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
     GlobalState,
@@ -55,14 +53,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -75,13 +70,15 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        let handle_len = handle.marshal(handle_slice);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -121,8 +118,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -134,23 +133,21 @@ where
 
     let mut params_slice = leak_bytes(&response_buf[resp_offset..resp_size]);
     let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+        <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+            .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp_params)
 }
 
 fn execute_tpm_command_with_corrupted_bytes<C: Command>(
     tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
     corrupt_fn: impl FnOnce(&mut [u8]),
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -163,13 +160,15 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        let handle_len = handle.marshal(handle_slice);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -213,8 +212,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -226,9 +227,10 @@ where
 
     let mut params_slice = leak_bytes(&response_buf[resp_offset..resp_size]);
     let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+        <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+            .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp_params)
 }
 
 fn get_test_template() -> TpmtPublic<'static> {
@@ -244,7 +246,10 @@ fn get_test_template() -> TpmtPublic<'static> {
         // A restricted decrypt KEYEDHASH object would need an XOR scheme (C `SchemeChecks()`);
         // use a symmetric storage key instead.
         parms_and_id: PublicParmsAndId::Sym(
-            tpm2::TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)),
+            tpm2::TpmtSymDefObject {
+                alg: tpm2::AlgSym::Aes128,
+                mode: Some(tpm2::TpmiAlgCipherMode::Cfb.into()),
+            },
             tpm2::Tpm2bDigest::default(),
         ),
     }
@@ -257,8 +262,8 @@ fn test_transient_object_capacity_boundary() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -269,10 +274,8 @@ fn test_transient_object_capacity_boundary() {
     let outside_info = Tpm2bData::default();
     let creation_pcr = TpmlPcrSelection::default();
 
-    let handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
     let cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         outside_info,
@@ -284,7 +287,6 @@ fn test_transient_object_capacity_boundary() {
         let res = execute_tpm_command(
             &mut tpm,
             &mut global_state,
-            &handles,
             &cmd,
             &[common::password_auth(b"")],
         );
@@ -300,7 +302,6 @@ fn test_transient_object_capacity_boundary() {
     let overflow_res = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd,
         &[common::password_auth(b"")],
     );
@@ -318,8 +319,8 @@ fn test_unmapped_transient_flush_validation() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let flush_request = hex!(
         "8001"     // tag: NO_SESSIONS
@@ -346,8 +347,8 @@ fn test_make_credential_object_handle_recognition() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let make_cred_req = hex!(
         "8001"     // tag: NO_SESSIONS
@@ -374,8 +375,8 @@ fn test_persistent_handle_unseal_resolution() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let unseal_req = hex!(
         "8002"     // tag: SESSIONS
@@ -409,8 +410,8 @@ fn test_regression_tc2_0_32_03_06_ecc_kdf_invalid_hash() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // TestParms ECC: sym=Null, scheme=Null, curve=NistP256, kdf=KDF1_SP800_56A with hash=AES(0x0006)
     let req = hex!(
@@ -445,8 +446,8 @@ fn test_regression_tc2_0_32_03_08_keyedhash_schemes() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. KeyedHash HMAC with hash=AES(0x0006)
     let req_hmac_invalid = hex!(
@@ -523,23 +524,21 @@ fn test_regression_tc2_1_25_19_02_policy_pcr_invalid_hash() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Start a trial policy session
-    let start_handles = StartAuthSessionHandles {
+    let start_cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let start_cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &start_handles, &start_cmd, &[]).unwrap();
+    let policy_session_resp =
+        execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
     let session_handle = policy_session_resp.session_handle;
 
     // Send PolicyPCR with invalid hash algorithm 0xFFFF in PCR selection
@@ -582,8 +581,8 @@ fn test_regression_tc2_2_14_01_06_create_keyedhash_invalid_scheme_hash() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Create Primary object under Owner hierarchy first
     let t_sens = TpmsSensitiveCreate {
@@ -592,19 +591,16 @@ fn test_regression_tc2_2_14_01_06_create_keyedhash_invalid_scheme_hash() {
     };
     let in_sensitive = tpm2::Tpm2b(t_sens);
     let in_public = tpm2::Tpm2b(get_test_template());
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let (primary_resp, _) = execute_tpm_command(
+    let primary_resp = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &create_handles,
         &create_cmd,
         &[common::password_auth(b"")],
     )
@@ -625,10 +621,8 @@ fn test_regression_tc2_2_14_01_06_create_keyedhash_invalid_scheme_hash() {
             tpm2::Tpm2bDigest::default(),
         ),
     };
-    let child_create_handles = tpm2::commands::CreateHandles {
-        parent_handle: primary_obj_handle,
-    };
     let child_create_cmd = tpm2::commands::Create {
+        parent_handle: primary_obj_handle,
         in_sensitive: tpm2::Tpm2b(t_sens),
         in_public: tpm2::Tpm2b(keyed_hash_pub),
         outside_info: Tpm2bData::default(),
@@ -643,7 +637,6 @@ fn test_regression_tc2_2_14_01_06_create_keyedhash_invalid_scheme_hash() {
     let err = execute_tpm_command_with_corrupted_bytes::<tpm2::commands::Create>(
         &mut tpm,
         &mut global_state,
-        &child_create_handles,
         &child_create_cmd,
         &[common::password_auth(b"")],
         |payload| {
@@ -679,6 +672,7 @@ fn test_regression_tc2_2_14_01_06_create_keyedhash_invalid_scheme_hash() {
         ),
     };
     let decrypt_hmac_cmd = tpm2::commands::Create {
+        parent_handle: primary_obj_handle,
         in_sensitive: tpm2::Tpm2b(t_sens),
         in_public: tpm2::Tpm2b(decrypt_hmac_pub),
         outside_info: Tpm2bData::default(),
@@ -687,7 +681,6 @@ fn test_regression_tc2_2_14_01_06_create_keyedhash_invalid_scheme_hash() {
     let err2 = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &child_create_handles,
         &decrypt_hmac_cmd,
         &[common::password_auth(b"")],
     )
@@ -707,8 +700,8 @@ fn test_regression_tc2_2_24_02_05_pcr_extend_invalid_hash() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut pcr_extend_req = hex!(
         "8002"     // SESSIONS
@@ -750,8 +743,8 @@ fn test_regression_tc2_2_26_03_04_set_primary_policy_validation() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Invalid hashAlg TPM_ALG_AES (0x0006) -> TPM_RC_HASH (Pos2, 0x02C3)
     let mut set_policy_invalid_hash = hex!(
@@ -821,8 +814,8 @@ fn test_regression_tc2_0_11_04_02_shutdown_invalid_type() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let shutdown_req = hex!(
         "8001"     // NO_SESSIONS
@@ -849,8 +842,8 @@ fn test_regression_tc2_0_12_03_02_incremental_self_test_invalid_alg() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let inc_test_req = hex!(
         "8001"     // NO_SESSIONS
@@ -879,8 +872,8 @@ fn test_incremental_self_test_reserved_alg_trailing_bytes_and_truncated() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Trailing bytes after a reserved algorithm ID must return TPM_RC_SIZE (not TPM_RC_VALUE)
     for reserved_hex in ["0000", "00C4", "8001", "FFFF"] {
@@ -931,23 +924,21 @@ fn test_regression_tc2_1_25_20_05_policy_nv_written_invalid_yes_no() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Start a trial policy session
-    let start_handles = StartAuthSessionHandles {
+    let start_cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let start_cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1; 32]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (policy_session_resp, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &start_handles, &start_cmd, &[]).unwrap();
+    let policy_session_resp =
+        execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
     let session_handle = policy_session_resp.session_handle;
 
     let mut pnw_req = hex!(
@@ -980,8 +971,8 @@ fn test_regression_tc2_2_15_03_06_import_validation() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Create RSA primary storage parent key under Owner hierarchy
     let rsa_parent_pub = TpmtPublic {
@@ -995,7 +986,10 @@ fn test_regression_tc2_2_15_03_06_import_validation() {
         auth_policy: Default::default(),
         parms_and_id: PublicParmsAndId::Rsa(
             tpm2::TpmsRsaParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 key_bits: tpm2::TpmiRsaKeyBits(2048),
                 exponent: 0x00010001,
@@ -1007,19 +1001,16 @@ fn test_regression_tc2_2_15_03_06_import_validation() {
         user_auth: Tpm2bAuth::default(),
         data: Tpm2bSensitiveData::default(),
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(t_sens),
         in_public: tpm2::Tpm2b(rsa_parent_pub),
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let (primary_resp, _) = execute_tpm_command(
+    let primary_resp = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &create_handles,
         &create_cmd,
         &[common::password_auth(b"")],
     )
@@ -1035,7 +1026,10 @@ fn test_regression_tc2_2_15_03_06_import_validation() {
         auth_policy: Default::default(),
         parms_and_id: PublicParmsAndId::Rsa(
             tpm2::TpmsRsaParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 key_bits: tpm2::TpmiRsaKeyBits(2048),
                 exponent: 0x00010001,
@@ -1149,8 +1143,8 @@ fn test_regression_tc2_4_13_01_03_start_auth_session_invalid_symmetric_and_salt(
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Create RSA primary key
     let rsa_pub = TpmtPublic {
@@ -1164,7 +1158,10 @@ fn test_regression_tc2_4_13_01_03_start_auth_session_invalid_symmetric_and_salt(
         auth_policy: Default::default(),
         parms_and_id: PublicParmsAndId::Rsa(
             tpm2::TpmsRsaParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 key_bits: tpm2::TpmiRsaKeyBits(2048),
                 exponent: 0x00010001,
@@ -1176,19 +1173,16 @@ fn test_regression_tc2_4_13_01_03_start_auth_session_invalid_symmetric_and_salt(
         user_auth: Tpm2bAuth::default(),
         data: Tpm2bSensitiveData::default(),
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(t_sens),
         in_public: tpm2::Tpm2b(rsa_pub),
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let (primary_resp, _) = execute_tpm_command(
+    let primary_resp = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &create_handles,
         &create_cmd,
         &[common::password_auth(b"")],
     )
@@ -1260,8 +1254,8 @@ fn test_regression_tc2_2_17_03_04_hash_invalid_hash_alg() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // TPM2_Hash request with hashAlg = TPM_ALG_AES (0x0006)
     let mut hash_req = alloc::vec::Vec::new();
@@ -1313,8 +1307,8 @@ fn test_regression_tc2_3_33_03_06_nv_define_space_invalid_attributes() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // NV_DefineSpace with authHandle = RH_OWNER, attributes containing reserved NT = 0x05 (bits 4..7 = 0x50)
     // Attributes: OWNERWRITE (0x00020000) | OWNERREAD (0x00040000) | (0x05 << 4 = 0x50) -> 0x00060050

@@ -5,7 +5,7 @@ use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
-use tpm2::commands::{Command, HmacStart, HmacStartHandles};
+use tpm2::commands::{Command, HMACStart, Message, UnmarshalMessage};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bAuth, Tpm2bDigest, Tpm2bName, Tpm2bNonce, TpmaObject, TpmaSession, TpmiAlgHash,
@@ -18,7 +18,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -45,14 +45,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -65,13 +62,14 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        offset += handle.marshal(handle_slice);
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -111,8 +109,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -124,10 +124,10 @@ where
 
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
-    let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let resp = <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+        .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp)
 }
 
 #[test]
@@ -135,18 +135,16 @@ fn test_mac_start_dispatch_without_sessions() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
-    let handles = HmacStartHandles {
+    let cmd = HMACStart {
         handle: Handle(0x80000001),
-    };
-    let cmd = HmacStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]);
 
     // We expect the command to fail with the specific error returned by hmac_start.
     // If hmac_start is returning CommandCode, we expect CommandCode.
@@ -165,8 +163,8 @@ fn test_mac_start_dispatch_with_sessions() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Setup a transient object so that it exists in the TPM and we can authenticate it
     let key_handle = 0x80000001;
@@ -204,15 +202,13 @@ fn test_mac_start_dispatch_with_sessions() {
         hmac: Tpm2bDigest::from_bytes(b"password").unwrap(),
     }];
 
-    let handles = HmacStartHandles {
+    let cmd = HMACStart {
         handle: Handle(key_handle),
-    };
-    let cmd = HmacStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &handles, &cmd, &auths);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &auths);
 
     assert!(res.is_err());
     let err_code = res.err().unwrap();

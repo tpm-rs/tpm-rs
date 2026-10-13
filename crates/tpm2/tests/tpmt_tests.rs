@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[allow(deprecated)] // TPM2_Sign and TPM2_VerifySignature are deprecated.
 use tpm2::commands::{PolicySigned, Sign, VerifySignature};
 use tpm2::errors::UnmarshalError;
 use tpm2::*;
@@ -343,6 +344,7 @@ fn test_tpmt_rsa_decrypt_marshal_unmarshal() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_Sign and TPM2_VerifySignature are deprecated.
 fn test_eddsa_schemes_and_signatures() {
     // 1. TpmtSigScheme::Eddsa and TpmtSigScheme::HashEddsa
     for (scheme, expected_alg, expected_tpmi, expected_wire) in [
@@ -466,6 +468,7 @@ fn test_eddsa_schemes_and_signatures() {
     let validation = TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default());
     for scheme in [TpmtSigScheme::Eddsa, TpmtSigScheme::HashEddsa] {
         let sign_cmd = Sign {
+            key_handle: Handle(0x80000001),
             digest,
             in_scheme: Some(scheme),
             validation,
@@ -473,7 +476,10 @@ fn test_eddsa_schemes_and_signatures() {
         let mut dst = [0u8; Sign::MAX_SIZE];
         let len = sign_cmd.marshal(&mut dst);
         let mut src = &dst[..len];
-        assert_eq!(Sign::unmarshal(&mut src), Ok(sign_cmd));
+        assert_eq!(
+            Sign::unmarshal_with_handles(sign_cmd.handles(), &mut src),
+            Ok(sign_cmd)
+        );
         assert!(src.is_empty());
     }
 
@@ -482,16 +488,22 @@ fn test_eddsa_schemes_and_signatures() {
         TpmtSignature::HashEddsa(eddsa_buf),
     ] {
         let verify_cmd = VerifySignature {
+            key_handle: Handle(0x80000001),
             digest,
             signature: sig,
         };
         let mut dst = [0u8; VerifySignature::MAX_SIZE];
         let len = verify_cmd.marshal(&mut dst);
         let mut src = &dst[..len];
-        assert_eq!(VerifySignature::unmarshal(&mut src), Ok(verify_cmd));
+        assert_eq!(
+            VerifySignature::unmarshal_with_handles(verify_cmd.handles(), &mut src),
+            Ok(verify_cmd)
+        );
         assert!(src.is_empty());
 
         let policy_signed_cmd = PolicySigned {
+            auth_object: Handle(0x80000001),
+            policy_session: Handle(0x03000000),
             nonce_tpm: Tpm2bNonce::default(),
             cp_hash_a: Tpm2bDigest::default(),
             policy_ref: Tpm2bNonce::default(),
@@ -501,7 +513,10 @@ fn test_eddsa_schemes_and_signatures() {
         let mut dst = [0u8; PolicySigned::MAX_SIZE];
         let len = policy_signed_cmd.marshal(&mut dst);
         let mut src = &dst[..len];
-        assert_eq!(PolicySigned::unmarshal(&mut src), Ok(policy_signed_cmd));
+        assert_eq!(
+            PolicySigned::unmarshal_with_handles(policy_signed_cmd.handles(), &mut src),
+            Ok(policy_signed_cmd)
+        );
         assert!(src.is_empty());
     }
 }
@@ -638,7 +653,10 @@ fn test_pqc_tpm2b_and_tpms_structures() {
     // TpmsMlkemParms roundtrip (with NULL symmetric and AES-128 CFB symmetric)
     for sym in [
         None,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
     ] {
         let mlkem_parms = TpmsMlkemParms {
             symmetric: sym,
@@ -676,7 +694,10 @@ fn test_pqc_tpmt_public_parms_public_and_sensitive_roundtrip() {
         ),
         PublicParmsAndId::Mlkem(
             TpmsMlkemParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 parameter_set: TpmiMlkemParms::Mlkem512,
             },
             mlkem_pub_key,

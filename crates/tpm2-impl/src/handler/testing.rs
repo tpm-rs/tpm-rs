@@ -5,9 +5,7 @@ use tpm2::Alg;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::TpmlAlg;
-use tpm2::commands::{
-    GetTestResult, GetTestResultRsp, IncrementalSelfTest, IncrementalSelfTestRsp, SelfTest,
-};
+use tpm2::commands::{GetTestResult, IncrementalSelfTest, SelfTest, responses};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 
@@ -20,9 +18,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        request.try_unmarshal::<()>()?;
+        let handles = request.try_unmarshal_handles::<SelfTest>()?;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let _cmd = request.try_unmarshal::<SelfTest>()?;
+        let _cmd = request.try_unmarshal_command::<SelfTest>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -41,9 +39,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        request.try_unmarshal::<()>()?;
+        let handles = request.try_unmarshal_handles::<IncrementalSelfTest>()?;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let cmd = request.try_unmarshal::<IncrementalSelfTest>()?;
+        let cmd = request.try_unmarshal_command::<IncrementalSelfTest>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -100,10 +98,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &self.global_state.untested_algorithms[..self.global_state.untested_algorithms_len],
         )
         .ok_or(TpmRc::FAILURE)?;
-        let rsp = IncrementalSelfTestRsp { to_do_list };
+        let rsp = responses::IncrementalSelfTest { to_do_list };
 
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
 
@@ -113,9 +111,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        request.try_unmarshal::<()>()?;
+        let handles = request.try_unmarshal_handles::<GetTestResult>()?;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let _cmd = request.try_unmarshal::<GetTestResult>()?;
+        let _cmd = request.try_unmarshal_command::<GetTestResult>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -123,10 +121,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // We will match the response of mstpm20 dynamically after we see the mismatch log.
         // For now, return default (empty out_data, success).
-        let rsp = GetTestResultRsp::default();
+        let rsp = responses::GetTestResult::default();
 
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
 }

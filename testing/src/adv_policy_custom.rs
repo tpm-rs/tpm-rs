@@ -4,12 +4,9 @@ use crate::go::policy::get_expected_pcr_digest;
 
 use crate::test_utils::*;
 use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, PolicyAuthValue, PolicyAuthValueHandles, PolicyAuthorize,
-    PolicyAuthorizeHandles, PolicyCommandCode, PolicyCommandCodeHandles, PolicyCpHash,
-    PolicyCpHashHandles, PolicyDuplicationSelect, PolicyDuplicationSelectHandles, PolicyGetDigest,
-    PolicyGetDigestHandles, PolicyNV, PolicyNVHandles, PolicyNvWritten, PolicyNvWrittenHandles,
-    PolicyOR, PolicyORHandles, PolicyPCR, PolicyPCRHandles, PolicySecret, PolicySecretHandles,
-    PolicySigned, PolicySignedHandles, StartAuthSession, StartAuthSessionHandles,
+    CreatePrimary, PolicyAuthValue, PolicyAuthorize, PolicyCommandCode, PolicyCpHash,
+    PolicyDuplicationSelect, PolicyGetDigest, PolicyNV, PolicyNvWritten, PolicyOR, PolicyPCR,
+    PolicySecret, PolicySigned, StartAuthSession,
 };
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmCc, TpmSe};
@@ -62,18 +59,15 @@ fn create_signing_key_with_unique(
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_primary = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &create_primary, create_handles, 1, &[])
-            .expect("could not call TPM2_CreatePrimary");
-    (rsp_handles.object_handle, rsp.name)
+    let rsp = execute_with_password_sessions(sim, &create_primary, 1, &[])
+        .expect("could not call TPM2_CreatePrimary");
+    (rsp.object_handle, rsp.name)
 }
 
 fn create_nv_index(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
@@ -89,46 +83,39 @@ fn create_nv_index(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
     };
     let in_public = tpm2::Tpm2b(nv_public);
     let def_space = tpm2::commands::NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         public_info: in_public,
         auth: Tpm2bAuth::default(),
     };
-    let def_space_handles = tpm2::commands::NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    let _ = execute_with_password_sessions(sim, &def_space, def_space_handles, 1, &[])
-        .expect("could not define NV space");
+    execute_with_password_sessions(sim, &def_space, 1, &[]).expect("could not define NV space");
 
     // Read the NV index Name
-    let read_pub = tpm2::commands::NVReadPublic {};
-    let read_pub_handles = tpm2::commands::NVReadPublicHandles {
+    let read_pub = tpm2::commands::NVReadPublic {
         nv_index: Handle(0x01800001),
     };
-    let (read_pub_rsp, _) =
-        execute_with_password_sessions(sim, &read_pub, read_pub_handles, 0, &[])
-            .expect("could not read NV public");
+    let read_pub_rsp =
+        execute_with_password_sessions(sim, &read_pub, 0, &[]).expect("could not read NV public");
 
     (Handle(0x01800001), read_pub_rsp.nv_name)
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_policy_pcr_counter_changed() {
     let mut sim = create_simulator!();
     let password = b"foo";
 
     // Step 1: Calculate policy digest of PolicyPCR using trial session
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
 
     let mut select_bytes = [0u8; 3];
     select_bytes[0] = 0x01; // PCR 0
@@ -141,21 +128,16 @@ fn test_policy_pcr_counter_changed() {
     let expected_digest = get_expected_pcr_digest(&mut sim, &selection);
 
     let policy_pcr = PolicyPCR {
+        policy_session: start_rsp_handles.session_handle,
         pcr_digest: Tpm2bDigest::from_bytes(&expected_digest).unwrap(),
         pcrs: selection,
     };
-    let policy_pcr_handles = PolicyPCRHandles {
-        policy_session: start_rsp_handles.session_handle,
-    };
-    let _ =
-        execute_with_password_sessions(&mut sim, &policy_pcr, policy_pcr_handles, 0, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &policy_pcr, 0, &[]).unwrap();
 
-    let get_digest = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest = PolicyGetDigest {
         policy_session: start_rsp_handles.session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest, get_digest_handles, 0, &[]).unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest, 0, &[]).unwrap();
 
     // Step 2: Create a primary key with this authPolicy
     let ecc_parms = TpmsEccParms {
@@ -184,17 +166,14 @@ fn test_policy_pcr_counter_changed() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_primary = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (_rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[])
-            .expect("could not call TPM2_CreatePrimary");
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create_primary, 1, &[])
+        .expect("could not call TPM2_CreatePrimary");
 
     // Flush trial session
     let _ = flush_context(&mut sim, start_rsp_handles.session_handle);
@@ -213,24 +192,20 @@ fn test_policy_pcr_counter_changed() {
 
     // Step 4: PolicyPCR gating
     let policy_pcr_real = PolicyPCR {
+        policy_session: active_sess.session_handle,
         pcr_digest: Tpm2bDigest::from_bytes(&expected_digest).unwrap(),
         pcrs: selection,
     };
-    let policy_pcr_real_handles = PolicyPCRHandles {
-        policy_session: active_sess.session_handle,
-    };
-    let _ = sim
-        .execute_with_handles(policy_pcr_real, policy_pcr_real_handles)
-        .unwrap();
+    sim.execute(policy_pcr_real).unwrap();
 
     // Step 5: Extend PCR 0, incrementing the PCR update counter
     let mut digests = tpm2::TpmlDigestValues::default();
     digests.add(&tpm2::TpmtHa::Sha256(&[0xaa; 32])).unwrap();
-    let extend_cmd = tpm2::commands::PCRExtend { digests };
-    let extend_handles = tpm2::commands::PCRExtendHandles {
+    let extend_cmd = tpm2::commands::PCRExtend {
         pcr_handle: Handle(0),
+        digests,
     };
-    let _ = execute_with_password_sessions(&mut sim, &extend_cmd, extend_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &extend_cmd, 1, &[]).unwrap();
 
     // Step 6: Attempt to Sign with the session
     let mut final_session = active_sess.clone();
@@ -239,18 +214,15 @@ fn test_policy_pcr_counter_changed() {
 
     let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
     let sign_cmd = tpm2::commands::Sign {
+        key_handle: rsp_handles.object_handle,
         digest: digest_to_sign,
         in_scheme: None,
         validation: tpm2::TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default()),
-    };
-    let sign_handles = tpm2::commands::SignHandles {
-        key_handle: rsp_handles.object_handle,
     };
 
     let res = execute_with_hmac_sessions_status(
         &mut sim,
         &sign_cmd,
-        sign_handles,
         &[],
         &mut [final_session],
         &[password],
@@ -274,18 +246,15 @@ fn test_policy_pcr_unsupported_hash() {
     let mut sim = create_simulator!();
 
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
 
     let mut select_bytes = [0u8; 3];
     select_bytes[0] = 0x01; // PCR 0
@@ -296,16 +265,14 @@ fn test_policy_pcr_unsupported_hash() {
         .unwrap();
 
     let policy_pcr = PolicyPCR {
+        policy_session: start_rsp_handles.session_handle,
         pcr_digest: Tpm2bDigest::default(),
         pcrs: selection,
-    };
-    let policy_pcr_handles = PolicyPCRHandles {
-        policy_session: start_rsp_handles.session_handle,
     };
 
     // SHA-512 is an implemented hash: C accepts the selection and FilterPcr clears it because
     // the SHA-512 bank is not allocated by default.
-    let res = execute_with_password_sessions(&mut sim, &policy_pcr, policy_pcr_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &policy_pcr, 0, &[]);
     assert!(
         res.is_ok(),
         "PolicyPCR with an unallocated SHA-512 bank selection succeeds: {:?}",
@@ -316,6 +283,7 @@ fn test_policy_pcr_unsupported_hash() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_policy_auth_value_and_pcr_combination() {
     let mut sim = create_simulator!();
     let password = b"barpassword";
@@ -333,44 +301,35 @@ fn test_policy_auth_value_and_pcr_combination() {
 
     // Compute expected policy digest using trial session
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
 
     // Call PolicyPCR
     let policy_pcr = PolicyPCR {
+        policy_session: start_rsp_handles.session_handle,
         pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
         pcrs: selection,
     };
-    let policy_pcr_handles = PolicyPCRHandles {
-        policy_session: start_rsp_handles.session_handle,
-    };
-    let _ =
-        execute_with_password_sessions(&mut sim, &policy_pcr, policy_pcr_handles, 0, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &policy_pcr, 0, &[]).unwrap();
 
     // Call PolicyAuthValue
-    let pav = PolicyAuthValue {};
-    let pav_handles = PolicyAuthValueHandles {
+    let pav = PolicyAuthValue {
         policy_session: start_rsp_handles.session_handle,
     };
-    let _ = execute_with_password_sessions(&mut sim, &pav, pav_handles, 0, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &pav, 0, &[]).unwrap();
 
     // Get the final digest
-    let get_digest = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest = PolicyGetDigest {
         policy_session: start_rsp_handles.session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest, get_digest_handles, 0, &[]).unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest, 0, &[]).unwrap();
 
     // Flush trial session
     let _ = flush_context(&mut sim, start_rsp_handles.session_handle);
@@ -402,17 +361,14 @@ fn test_policy_auth_value_and_pcr_combination() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_primary = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (_rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[])
-            .expect("could not call TPM2_CreatePrimary");
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create_primary, 1, &[])
+        .expect("could not call TPM2_CreatePrimary");
 
     // 3. Sub-tests for verifying various authorization paths
 
@@ -430,23 +386,16 @@ fn test_policy_auth_value_and_pcr_combination() {
         .unwrap();
 
         let policy_pcr_real = PolicyPCR {
+            policy_session: active_sess.session_handle,
             pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
             pcrs: selection,
         };
-        let policy_pcr_real_handles = PolicyPCRHandles {
-            policy_session: active_sess.session_handle,
-        };
-        let _ = sim
-            .execute_with_handles(policy_pcr_real, policy_pcr_real_handles)
-            .unwrap();
+        sim.execute(policy_pcr_real).unwrap();
 
-        let pav_real = PolicyAuthValue {};
-        let pav_real_handles = PolicyAuthValueHandles {
+        let pav_real = PolicyAuthValue {
             policy_session: active_sess.session_handle,
         };
-        let _ = sim
-            .execute_with_handles(pav_real, pav_real_handles)
-            .unwrap();
+        sim.execute(pav_real).unwrap();
 
         let mut final_session = active_sess.clone();
         final_session.bind_auth = password.to_vec();
@@ -455,18 +404,15 @@ fn test_policy_auth_value_and_pcr_combination() {
 
         let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
         let sign_cmd = tpm2::commands::Sign {
+            key_handle: rsp_handles.object_handle,
             digest: digest_to_sign,
             in_scheme: None,
             validation: tpm2::TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default()),
-        };
-        let sign_handles = tpm2::commands::SignHandles {
-            key_handle: rsp_handles.object_handle,
         };
 
         let res = execute_with_hmac_sessions_status(
             &mut sim,
             &sign_cmd,
-            sign_handles,
             &[],
             &mut [final_session],
             &[password],
@@ -493,23 +439,16 @@ fn test_policy_auth_value_and_pcr_combination() {
         .unwrap();
 
         let policy_pcr_real = PolicyPCR {
+            policy_session: active_sess.session_handle,
             pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
             pcrs: selection,
         };
-        let policy_pcr_real_handles = PolicyPCRHandles {
-            policy_session: active_sess.session_handle,
-        };
-        let _ = sim
-            .execute_with_handles(policy_pcr_real, policy_pcr_real_handles)
-            .unwrap();
+        sim.execute(policy_pcr_real).unwrap();
 
-        let pav_real = PolicyAuthValue {};
-        let pav_real_handles = PolicyAuthValueHandles {
+        let pav_real = PolicyAuthValue {
             policy_session: active_sess.session_handle,
         };
-        let _ = sim
-            .execute_with_handles(pav_real, pav_real_handles)
-            .unwrap();
+        sim.execute(pav_real).unwrap();
 
         let mut final_session = active_sess.clone();
         final_session.bind_auth = b"wrongpwd".to_vec();
@@ -518,18 +457,15 @@ fn test_policy_auth_value_and_pcr_combination() {
 
         let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
         let sign_cmd = tpm2::commands::Sign {
+            key_handle: rsp_handles.object_handle,
             digest: digest_to_sign,
             in_scheme: None,
             validation: tpm2::TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default()),
-        };
-        let sign_handles = tpm2::commands::SignHandles {
-            key_handle: rsp_handles.object_handle,
         };
 
         let res = execute_with_hmac_sessions_status(
             &mut sim,
             &sign_cmd,
-            sign_handles,
             &[],
             &mut [final_session],
             &[b"wrongpwd"],
@@ -553,33 +489,26 @@ fn test_policy_auth_value_and_pcr_combination() {
         .unwrap();
 
         let policy_pcr_real = PolicyPCR {
+            policy_session: active_sess.session_handle,
             pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
             pcrs: selection,
         };
-        let policy_pcr_real_handles = PolicyPCRHandles {
-            policy_session: active_sess.session_handle,
-        };
-        let _ = sim
-            .execute_with_handles(policy_pcr_real, policy_pcr_real_handles)
-            .unwrap();
+        sim.execute(policy_pcr_real).unwrap();
 
         let mut final_session = active_sess.clone();
         final_session.bind_auth = password.to_vec();
 
         let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
         let sign_cmd = tpm2::commands::Sign {
+            key_handle: rsp_handles.object_handle,
             digest: digest_to_sign,
             in_scheme: None,
             validation: tpm2::TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default()),
-        };
-        let sign_handles = tpm2::commands::SignHandles {
-            key_handle: rsp_handles.object_handle,
         };
 
         let res = execute_with_hmac_sessions_status(
             &mut sim,
             &sign_cmd,
-            sign_handles,
             &[],
             &mut [final_session],
             &[password],
@@ -605,24 +534,17 @@ fn test_policy_auth_value_and_pcr_combination() {
         )
         .unwrap();
 
-        let pav_real = PolicyAuthValue {};
-        let pav_real_handles = PolicyAuthValueHandles {
+        let pav_real = PolicyAuthValue {
             policy_session: active_sess.session_handle,
         };
-        let _ = sim
-            .execute_with_handles(pav_real, pav_real_handles)
-            .unwrap();
+        sim.execute(pav_real).unwrap();
 
         let policy_pcr_real = PolicyPCR {
+            policy_session: active_sess.session_handle,
             pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
             pcrs: selection,
         };
-        let policy_pcr_real_handles = PolicyPCRHandles {
-            policy_session: active_sess.session_handle,
-        };
-        let _ = sim
-            .execute_with_handles(policy_pcr_real, policy_pcr_real_handles)
-            .unwrap();
+        sim.execute(policy_pcr_real).unwrap();
 
         let mut final_session = active_sess.clone();
         final_session.bind_auth = password.to_vec();
@@ -631,18 +553,15 @@ fn test_policy_auth_value_and_pcr_combination() {
 
         let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
         let sign_cmd = tpm2::commands::Sign {
+            key_handle: rsp_handles.object_handle,
             digest: digest_to_sign,
             in_scheme: None,
             validation: tpm2::TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default()),
-        };
-        let sign_handles = tpm2::commands::SignHandles {
-            key_handle: rsp_handles.object_handle,
         };
 
         let res = execute_with_hmac_sessions_status(
             &mut sim,
             &sign_cmd,
-            sign_handles,
             &[],
             &mut [final_session],
             &[password],
@@ -669,23 +588,16 @@ fn test_policy_auth_value_and_pcr_combination() {
         .unwrap();
 
         let policy_pcr_real = PolicyPCR {
+            policy_session: active_sess.session_handle,
             pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
             pcrs: selection,
         };
-        let policy_pcr_real_handles = PolicyPCRHandles {
-            policy_session: active_sess.session_handle,
-        };
-        let _ = sim
-            .execute_with_handles(policy_pcr_real, policy_pcr_real_handles)
-            .unwrap();
+        sim.execute(policy_pcr_real).unwrap();
 
-        let pav_real = PolicyAuthValue {};
-        let pav_real_handles = PolicyAuthValueHandles {
+        let pav_real = PolicyAuthValue {
             policy_session: active_sess.session_handle,
         };
-        let _ = sim
-            .execute_with_handles(pav_real, pav_real_handles)
-            .unwrap();
+        sim.execute(pav_real).unwrap();
 
         let mut final_session = active_sess.clone();
         final_session.bind_auth = password.to_vec();
@@ -694,18 +606,15 @@ fn test_policy_auth_value_and_pcr_combination() {
 
         let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
         let sign_cmd = tpm2::commands::Sign {
+            key_handle: rsp_handles.object_handle,
             digest: digest_to_sign,
             in_scheme: None,
             validation: tpm2::TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default()),
-        };
-        let sign_handles = tpm2::commands::SignHandles {
-            key_handle: rsp_handles.object_handle,
         };
 
         let res = execute_with_hmac_sessions_status(
             &mut sim,
             &sign_cmd,
-            sign_handles,
             &[],
             &mut [final_session],
             &[password],
@@ -723,6 +632,7 @@ fn test_policy_auth_value_and_pcr_combination() {
 /// session; using the session afterwards must fail with `TPM_RC_PCR_CHANGED`
 /// (the TPM's `pcrUpdateCounter` no longer matches the session's snapshot).
 #[test]
+#[allow(deprecated)]
 fn test_policy_pcr_gated_pcr_extended_fails() {
     let mut sim = create_simulator!();
     let password = b"barpassword";
@@ -740,35 +650,27 @@ fn test_policy_pcr_gated_pcr_extended_fails() {
 
     // Compute expected policy digest using trial session
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
 
     let policy_pcr = PolicyPCR {
+        policy_session: start_rsp_handles.session_handle,
         pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
         pcrs: selection,
     };
-    let policy_pcr_handles = PolicyPCRHandles {
-        policy_session: start_rsp_handles.session_handle,
-    };
-    let _ =
-        execute_with_password_sessions(&mut sim, &policy_pcr, policy_pcr_handles, 0, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &policy_pcr, 0, &[]).unwrap();
 
-    let get_digest = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest = PolicyGetDigest {
         policy_session: start_rsp_handles.session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest, get_digest_handles, 0, &[]).unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest, 0, &[]).unwrap();
 
     let _ = flush_context(&mut sim, start_rsp_handles.session_handle);
 
@@ -799,16 +701,13 @@ fn test_policy_pcr_gated_pcr_extended_fails() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_primary = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (_rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create_primary, 1, &[]).unwrap();
 
     // 3. Start a policy session to authorize command
     let active_sess = start_auth_session(
@@ -824,24 +723,20 @@ fn test_policy_pcr_gated_pcr_extended_fails() {
 
     // 4. Gate using PolicyPCR. This snapshots the TPM's pcrUpdateCounter.
     let policy_pcr_real = PolicyPCR {
+        policy_session: active_sess.session_handle,
         pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
         pcrs: selection,
     };
-    let policy_pcr_real_handles = PolicyPCRHandles {
-        policy_session: active_sess.session_handle,
-    };
-    let _ = sim
-        .execute_with_handles(policy_pcr_real, policy_pcr_real_handles)
-        .unwrap();
+    sim.execute(policy_pcr_real).unwrap();
 
     // 5. Extend PCR 0, incrementing pcrUpdateCounter
     let mut digests = tpm2::TpmlDigestValues::default();
     digests.add(&tpm2::TpmtHa::Sha256(&[0xaa; 32])).unwrap();
-    let extend_cmd = tpm2::commands::PCRExtend { digests };
-    let extend_handles = tpm2::commands::PCRExtendHandles {
+    let extend_cmd = tpm2::commands::PCRExtend {
         pcr_handle: Handle(0),
+        digests,
     };
-    let _ = execute_with_password_sessions(&mut sim, &extend_cmd, extend_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &extend_cmd, 1, &[]).unwrap();
 
     // 6. Attempt to Sign. It MUST fail with PcrChanged because PCR changed since gating
     let mut final_session = active_sess.clone();
@@ -849,18 +744,15 @@ fn test_policy_pcr_gated_pcr_extended_fails() {
 
     let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
     let sign_cmd = tpm2::commands::Sign {
+        key_handle: rsp_handles.object_handle,
         digest: digest_to_sign,
         in_scheme: None,
         validation: tpm2::TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default()),
-    };
-    let sign_handles = tpm2::commands::SignHandles {
-        key_handle: rsp_handles.object_handle,
     };
 
     let res = execute_with_hmac_sessions_status(
         &mut sim,
         &sign_cmd,
-        sign_handles,
         &[],
         &mut [final_session],
         &[password],
@@ -879,6 +771,7 @@ fn test_policy_pcr_gated_pcr_extended_fails() {
 /// gated the session. `pcrUpdateCounter` is global, so the session must still
 /// be rejected with `TPM_RC_PCR_CHANGED` (TPM 2.0 Part 3, TPM2_PolicyPCR).
 #[test]
+#[allow(deprecated)]
 fn test_policy_pcr_other_pcr_extended_fails() {
     let mut sim = create_simulator!();
     let password = b"barpassword";
@@ -896,35 +789,27 @@ fn test_policy_pcr_other_pcr_extended_fails() {
 
     // Compute expected policy digest using trial session
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
 
     let policy_pcr = PolicyPCR {
+        policy_session: start_rsp_handles.session_handle,
         pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
         pcrs: selection,
     };
-    let policy_pcr_handles = PolicyPCRHandles {
-        policy_session: start_rsp_handles.session_handle,
-    };
-    let _ =
-        execute_with_password_sessions(&mut sim, &policy_pcr, policy_pcr_handles, 0, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &policy_pcr, 0, &[]).unwrap();
 
-    let get_digest = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest = PolicyGetDigest {
         policy_session: start_rsp_handles.session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest, get_digest_handles, 0, &[]).unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest, 0, &[]).unwrap();
 
     let _ = flush_context(&mut sim, start_rsp_handles.session_handle);
 
@@ -955,16 +840,13 @@ fn test_policy_pcr_other_pcr_extended_fails() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_primary = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (_rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create_primary, 1, &[]).unwrap();
 
     // 3. Start a policy session to authorize command
     let active_sess = start_auth_session(
@@ -980,24 +862,20 @@ fn test_policy_pcr_other_pcr_extended_fails() {
 
     // 4. Gate using PolicyPCR. This snapshots the TPM's pcrUpdateCounter.
     let policy_pcr_real = PolicyPCR {
+        policy_session: active_sess.session_handle,
         pcr_digest: Tpm2bDigest::from_bytes(&pcr_digest_val).unwrap(),
         pcrs: selection,
     };
-    let policy_pcr_real_handles = PolicyPCRHandles {
-        policy_session: active_sess.session_handle,
-    };
-    let _ = sim
-        .execute_with_handles(policy_pcr_real, policy_pcr_real_handles)
-        .unwrap();
+    sim.execute(policy_pcr_real).unwrap();
 
     // 5. Extend PCR 1, which is not part of the policy selection.
     let mut digests = tpm2::TpmlDigestValues::default();
     digests.add(&tpm2::TpmtHa::Sha256(&[0xbb; 32])).unwrap();
-    let extend_cmd = tpm2::commands::PCRExtend { digests };
-    let extend_handles = tpm2::commands::PCRExtendHandles {
+    let extend_cmd = tpm2::commands::PCRExtend {
         pcr_handle: Handle(1),
+        digests,
     };
-    let _ = execute_with_password_sessions(&mut sim, &extend_cmd, extend_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &extend_cmd, 1, &[]).unwrap();
 
     // 6. Attempt to Sign. It MUST fail with PcrChanged because pcrUpdateCounter changed since gating
     let mut final_session = active_sess.clone();
@@ -1006,18 +884,15 @@ fn test_policy_pcr_other_pcr_extended_fails() {
 
     let digest_to_sign = Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap();
     let sign_cmd = tpm2::commands::Sign {
+        key_handle: rsp_handles.object_handle,
         digest: digest_to_sign,
         in_scheme: None,
         validation: tpm2::TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default()),
-    };
-    let sign_handles = tpm2::commands::SignHandles {
-        key_handle: rsp_handles.object_handle,
     };
 
     let res = execute_with_hmac_sessions_status(
         &mut sim,
         &sign_cmd,
-        sign_handles,
         &[],
         &mut [final_session],
         &[password],
@@ -1063,16 +938,14 @@ fn test_policy_pcr_duplicate_algorithms() {
     .unwrap();
 
     let policy_pcr = PolicyPCR {
+        policy_session: active_sess.session_handle,
         pcr_digest: Tpm2bDigest::default(),
         pcrs: selection,
-    };
-    let policy_pcr_handles = PolicyPCRHandles {
-        policy_session: active_sess.session_handle,
     };
 
     // C (TPML_PCR_SELECTION_Unmarshal / PCRComputeCurrentDigest) does not reject a repeated
     // bank: each selection is hashed in order.
-    let res = sim.execute_with_handles(policy_pcr, policy_pcr_handles);
+    let res = sim.execute(policy_pcr);
     assert!(res.is_ok(), "duplicate banks are accepted: {:?}", res.err());
 
     let _ = flush_context(&mut sim, active_sess.session_handle);
@@ -1096,14 +969,12 @@ fn test_policy_pcr_empty_selection() {
     let selection = TpmlPcrSelection::from_slice(&[]).unwrap();
 
     let policy_pcr = PolicyPCR {
+        policy_session: active_sess.session_handle,
         pcr_digest: Tpm2bDigest::default(),
         pcrs: selection,
     };
-    let policy_pcr_handles = PolicyPCRHandles {
-        policy_session: active_sess.session_handle,
-    };
 
-    let res = sim.execute_with_handles(policy_pcr, policy_pcr_handles);
+    let res = sim.execute(policy_pcr);
     assert!(
         res.is_ok(),
         "Expected PolicyPCR with empty selection to succeed"
@@ -1136,14 +1007,12 @@ fn test_policy_pcr_digest_mismatch() {
         .unwrap();
 
     let policy_pcr = PolicyPCR {
+        policy_session: active_sess.session_handle,
         pcr_digest: Tpm2bDigest::from_bytes(&[0xcd; 32]).unwrap(),
         pcrs: selection,
     };
-    let policy_pcr_handles = PolicyPCRHandles {
-        policy_session: active_sess.session_handle,
-    };
 
-    let res = sim.execute_with_handles(policy_pcr, policy_pcr_handles);
+    let res = sim.execute(policy_pcr);
     assert!(res.is_err(), "Expected PolicyPCR with wrong digest to fail");
     // pcrDigest is parameter 1 (TPM_RCS_VALUE + RC_PolicyPCR_pcrDigest).
     assert_eq!(
@@ -1160,29 +1029,24 @@ fn test_policy_cp_hash_adversarial() {
 
     // 1. Setup a trial session.
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
     let session_handle = start_rsp_handles.session_handle;
 
     // 2. Try calling PolicyCpHash with a wrong size cpHash (e.g. 16 bytes instead of 32 bytes).
     let wrong_size_cp_hash = [0x55; 16];
     let policy_cp_hash_wrong = PolicyCpHash {
+        policy_session: session_handle,
         cp_hash_a: Tpm2bDigest::from_bytes(&wrong_size_cp_hash).unwrap(),
     };
-    let policy_cp_hash_handles = PolicyCpHashHandles {
-        policy_session: session_handle,
-    };
-    let res = sim.execute_with_handles(policy_cp_hash_wrong, policy_cp_hash_handles);
+    let res = sim.execute(policy_cp_hash_wrong);
     assert!(
         res.is_err(),
         "Expected PolicyCpHash with wrong size cpHash to fail"
@@ -1192,23 +1056,18 @@ fn test_policy_cp_hash_adversarial() {
     // 3. Call PolicyCpHash with correct size cpHash (32 bytes).
     let dummy_cp_hash = [0x55; 32];
     let policy_cp_hash_correct = PolicyCpHash {
+        policy_session: session_handle,
         cp_hash_a: Tpm2bDigest::from_bytes(&dummy_cp_hash).unwrap(),
     };
-    let _ = execute_with_password_sessions(
-        &mut sim,
-        &policy_cp_hash_correct,
-        policy_cp_hash_handles,
-        0,
-        &[],
-    )
-    .unwrap();
+    execute_with_password_sessions(&mut sim, &policy_cp_hash_correct, 0, &[]).unwrap();
 
     // 4. Try calling PolicyCpHash again with a DIFFERENT cpHash (32 bytes).
     let diff_cp_hash = [0x66; 32];
     let policy_cp_hash_diff = PolicyCpHash {
+        policy_session: session_handle,
         cp_hash_a: Tpm2bDigest::from_bytes(&diff_cp_hash).unwrap(),
     };
-    let res = sim.execute_with_handles(policy_cp_hash_diff, policy_cp_hash_handles);
+    let res = sim.execute(policy_cp_hash_diff);
     assert!(
         res.is_err(),
         "Expected PolicyCpHash with different cpHash to fail"
@@ -1216,28 +1075,19 @@ fn test_policy_cp_hash_adversarial() {
     assert_eq!(res.err().unwrap(), TpmRc::CPHASH);
 
     // 5. Call PolicyCpHash again with the SAME cpHash (should succeed).
-    let _ = execute_with_password_sessions(
-        &mut sim,
-        &policy_cp_hash_correct,
-        policy_cp_hash_handles,
-        0,
-        &[],
-    )
-    .unwrap();
+    execute_with_password_sessions(&mut sim, &policy_cp_hash_correct, 0, &[]).unwrap();
 
     // 6. Try calling PolicyDuplicationSelect on the same session.
     // It should fail because is_cp_hash_defined is true (policy_hash_len != 0).
     let (_sk, sk_name) = create_signing_key(&mut sim);
     let (_ek, ek_name) = create_signing_key(&mut sim);
     let policy_dup = PolicyDuplicationSelect {
+        policy_session: session_handle,
         object_name: sk_name,
         new_parent_name: ek_name,
         include_object: true,
     };
-    let policy_dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: session_handle,
-    };
-    let res = sim.execute_with_handles(policy_dup, policy_dup_handles);
+    let res = sim.execute(policy_dup);
     assert!(
         res.is_err(),
         "Expected PolicyDuplicationSelect to fail when cpHash is already defined"
@@ -1255,34 +1105,28 @@ fn test_policy_duplication_select_adversarial() {
 
     // 1. Setup a trial session.
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
     let session_handle = start_rsp_handles.session_handle;
 
     // 2. Call PolicyDuplicationSelect.
     let policy_dup = PolicyDuplicationSelect {
+        policy_session: session_handle,
         object_name: sk_name,
         new_parent_name: ek_name,
         include_object: true,
     };
-    let policy_dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: session_handle,
-    };
-    let _ =
-        execute_with_password_sessions(&mut sim, &policy_dup, policy_dup_handles, 0, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &policy_dup, 0, &[]).unwrap();
 
     // 3. Try calling PolicyDuplicationSelect again (should fail because is_name_hash_defined is true).
-    let res = sim.execute_with_handles(policy_dup, policy_dup_handles);
+    let res = sim.execute(policy_dup);
     assert!(
         res.is_err(),
         "Expected second PolicyDuplicationSelect to fail"
@@ -1293,12 +1137,10 @@ fn test_policy_duplication_select_adversarial() {
     // It should fail because is_name_hash_defined is true.
     let dummy_cp_hash = [0x55; 32];
     let policy_cp_hash = PolicyCpHash {
+        policy_session: session_handle,
         cp_hash_a: Tpm2bDigest::from_bytes(&dummy_cp_hash).unwrap(),
     };
-    let policy_cp_hash_handles = PolicyCpHashHandles {
-        policy_session: session_handle,
-    };
-    let res = sim.execute_with_handles(policy_cp_hash, policy_cp_hash_handles);
+    let res = sim.execute(policy_cp_hash);
     assert!(
         res.is_err(),
         "Expected PolicyCpHash to fail when nameHash is defined"
@@ -1314,18 +1156,15 @@ fn test_policy_commands_with_session_tag_0x8002() {
 
     // 1. Setup a trial session.
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
     let session_handle = start_rsp_handles.session_handle;
 
     // 2. Setup a separate active session to use in the command's session area (tag 0x8002).
@@ -1347,20 +1186,10 @@ fn test_policy_commands_with_session_tag_0x8002() {
     // 3. Call PolicyCpHash with tag 0x8002 (num_sessions = 1) using an HMAC session.
     let dummy_cp_hash = [0x55; 32];
     let policy_cp_hash = PolicyCpHash {
+        policy_session: session_handle,
         cp_hash_a: Tpm2bDigest::from_bytes(&dummy_cp_hash).unwrap(),
     };
-    let policy_cp_hash_handles = PolicyCpHashHandles {
-        policy_session: session_handle,
-    };
-    let _ = execute_with_hmac_sessions(
-        &mut sim,
-        &policy_cp_hash,
-        policy_cp_hash_handles,
-        &[],
-        &mut [active_sess],
-        &[&[]],
-    )
-    .unwrap();
+    execute_with_hmac_sessions(&mut sim, &policy_cp_hash, &[], &mut [active_sess], &[&[]]).unwrap();
 
     flush_context(&mut sim, session_handle).unwrap();
 }
@@ -1372,31 +1201,26 @@ fn test_policy_commands_bind_entity_fail() {
 
     // Start a trial session bound to 'sk'.
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: sk,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: sk,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
     let session_handle = start_rsp_handles.session_handle;
 
     // 1. PolicyCpHash should fail because bind_entity != RHNull
     let dummy_cp_hash = [0x55; 32];
     let policy_cp_hash = PolicyCpHash {
-        cp_hash_a: Tpm2bDigest::from_bytes(&dummy_cp_hash).unwrap(),
-    };
-    let policy_cp_hash_handles = PolicyCpHashHandles {
         policy_session: session_handle,
+        cp_hash_a: Tpm2bDigest::from_bytes(&dummy_cp_hash).unwrap(),
     };
     // C SessionCreate only binds HMAC sessions: a trial/policy session started with a bind
     // entity is not bound, so its cpHash union is free and PolicyCpHash succeeds.
-    let res = sim.execute_with_handles(policy_cp_hash, policy_cp_hash_handles);
+    let res = sim.execute(policy_cp_hash);
     assert!(
         res.is_ok(),
         "PolicyCpHash must succeed (policy sessions are never bound): {:?}",
@@ -1406,16 +1230,14 @@ fn test_policy_commands_bind_entity_fail() {
     // 2. PolicyDuplicationSelect should fail because bind_entity != RHNull
     let (_ek, ek_name) = create_signing_key(&mut sim);
     let policy_dup = PolicyDuplicationSelect {
+        policy_session: session_handle,
         object_name: sk_name,
         new_parent_name: ek_name,
         include_object: true,
     };
-    let policy_dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: session_handle,
-    };
     // The session is not bound (see above), but PolicyCpHash already set the cpHash union, so
     // PolicyDuplicationSelect still fails with TPM_RC_CPHASH (nameHash must be empty).
-    let res = sim.execute_with_handles(policy_dup, policy_dup_handles);
+    let res = sim.execute(policy_dup);
     assert!(
         res.is_err(),
         "Expected PolicyDuplicationSelect to fail once cpHash is set"
@@ -1433,34 +1255,28 @@ fn test_policy_duplication_select_invalid_yes_no() {
 
     // 1. Setup a trial session.
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
     let session_handle = start_rsp_handles.session_handle;
 
     // 2. Call PolicyDuplicationSelect with include_object = 2 (invalid value).
     let policy_dup = PolicyDuplicationSelect {
+        policy_session: session_handle,
         object_name: sk_name,
         new_parent_name: ek_name,
         include_object: false,
     };
-    let policy_dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: session_handle,
-    };
-    let res =
-        execute_with_corrupted_bytes(&mut sim, &policy_dup, policy_dup_handles, 0, &[], |buf| {
-            let last_idx = buf.len() - 1;
-            buf[last_idx] = 2; // corrupt to 2 (invalid)
-        });
+    let res = execute_with_corrupted_bytes(&mut sim, &policy_dup, 0, &[], |buf| {
+        let last_idx = buf.len() - 1;
+        buf[last_idx] = 2; // corrupt to 2 (invalid)
+    });
     assert!(
         res.is_err(),
         "Expected PolicyDuplicationSelect to fail with invalid bool"
@@ -1480,30 +1296,24 @@ fn test_trial_session_leak_stress() {
     // we would fail by iteration 5.
     for _ in 0..20 {
         let start_auth = StartAuthSession {
+            tpm_key: Handle::RH_NULL,
+            bind: Handle::RH_NULL,
             nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),
             session_type: TpmSe::Trial,
             symmetric: None,
             auth_hash: TpmiAlgHash::Sha256,
         };
-        let start_auth_handles = StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        };
-        let (_, start_rsp_handles) =
-            execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[])
-                .unwrap();
+        let start_rsp_handles =
+            execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
 
         let policy_dup = PolicyDuplicationSelect {
+            policy_session: start_rsp_handles.session_handle,
             object_name: sk_name,
             new_parent_name: ek_name,
             include_object: true,
         };
-        let policy_dup_handles = PolicyDuplicationSelectHandles {
-            policy_session: start_rsp_handles.session_handle,
-        };
-        sim.execute_with_handles(policy_dup, policy_dup_handles)
-            .unwrap();
+        sim.execute(policy_dup).unwrap();
 
         // Flush session at the end of each iteration.
         flush_context(&mut sim, start_rsp_handles.session_handle).unwrap();
@@ -1513,35 +1323,30 @@ fn test_trial_session_leak_stress() {
     let mut active_handles = Vec::new();
     for _ in 0..max_loaded_sessions(&mut sim) {
         let start_auth = StartAuthSession {
+            tpm_key: Handle::RH_NULL,
+            bind: Handle::RH_NULL,
             nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),
             session_type: TpmSe::Trial,
             symmetric: None,
             auth_hash: TpmiAlgHash::Sha256,
         };
-        let start_auth_handles = StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        };
-        let (_, start_rsp_handles) =
-            execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[])
-                .unwrap();
+        let start_rsp_handles =
+            execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
         active_handles.push(start_rsp_handles.session_handle);
     }
 
     // The next StartAuthSession beyond capacity should fail with SessionMemory
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let res = execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]);
     assert!(res.is_err(), "Expected 65th session creation to fail");
     let err = res.unwrap_err();
     assert_eq!(err, TpmRc::SESSION_MEMORY.get());
@@ -1564,34 +1369,28 @@ fn test_trial_session_cleanup_on_failure() {
 
     // 1. Start a trial session.
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
     let session_handle = start_rsp_handles.session_handle;
 
     // 2. Execute a policy command that fails (e.g., PolicyDuplicationSelect with invalid bool).
     let policy_dup = PolicyDuplicationSelect {
+        policy_session: session_handle,
         object_name: sk_name,
         new_parent_name: ek_name,
         include_object: false,
     };
-    let policy_dup_handles = PolicyDuplicationSelectHandles {
-        policy_session: session_handle,
-    };
-    let res =
-        execute_with_corrupted_bytes(&mut sim, &policy_dup, policy_dup_handles, 0, &[], |buf| {
-            let last_idx = buf.len() - 1;
-            buf[last_idx] = 2; // corrupt to 2 (invalid)
-        });
+    let res = execute_with_corrupted_bytes(&mut sim, &policy_dup, 0, &[], |buf| {
+        let last_idx = buf.len() - 1;
+        buf[last_idx] = 2; // corrupt to 2 (invalid)
+    });
     assert!(
         res.is_err(),
         "Expected PolicyDuplicationSelect to fail with invalid bool"
@@ -1604,19 +1403,16 @@ fn test_trial_session_cleanup_on_failure() {
     let mut active_handles = Vec::new();
     for _ in 0..max_loaded_sessions(&mut sim) {
         let start_auth = StartAuthSession {
+            tpm_key: Handle::RH_NULL,
+            bind: Handle::RH_NULL,
             nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),
             session_type: TpmSe::Trial,
             symmetric: None,
             auth_hash: TpmiAlgHash::Sha256,
         };
-        let start_auth_handles = StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        };
-        let (_, start_rsp_handles) =
-            execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[])
-                .unwrap();
+        let start_rsp_handles =
+            execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
         active_handles.push(start_rsp_handles.session_handle);
     }
 
@@ -1635,17 +1431,16 @@ fn test_trial_session_creation_failure_no_leak() {
     // 1. Attempt to start a session with a non-existent key handle (e.g. 0x80000000).
     // This should fail to create the session.
     let start_auth = StartAuthSession {
+        tpm_key: Handle(0x80000000), // Non-existent key handle
+        // Non-existent key handle
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle(0x80000000), // Non-existent key handle
-        bind: Handle::RH_NULL,
-    };
-    let res = execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]);
     assert!(
         res.is_err(),
         "Expected StartAuthSession to fail with invalid key handle"
@@ -1655,19 +1450,16 @@ fn test_trial_session_creation_failure_no_leak() {
     let mut active_handles = Vec::new();
     for _ in 0..max_loaded_sessions(&mut sim) {
         let start_auth = StartAuthSession {
+            tpm_key: Handle::RH_NULL,
+            bind: Handle::RH_NULL,
             nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),
             session_type: TpmSe::Trial,
             symmetric: None,
             auth_hash: TpmiAlgHash::Sha256,
         };
-        let start_auth_handles = StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        };
-        let (_, start_rsp_handles) =
-            execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[])
-                .unwrap();
+        let start_rsp_handles =
+            execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
         active_handles.push(start_rsp_handles.session_handle);
     }
 
@@ -1683,18 +1475,15 @@ fn test_trial_session_double_flush() {
 
     // 1. Start a trial session.
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_auth_handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let (_, start_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[]).unwrap();
+    let start_rsp_handles = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
     let session_handle = start_rsp_handles.session_handle;
 
     // 2. Flush it once.
@@ -1708,19 +1497,16 @@ fn test_trial_session_double_flush() {
     let mut active_handles = Vec::new();
     for _ in 0..max_loaded_sessions(&mut sim) {
         let start_auth = StartAuthSession {
+            tpm_key: Handle::RH_NULL,
+            bind: Handle::RH_NULL,
             nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),
             session_type: TpmSe::Trial,
             symmetric: None,
             auth_hash: TpmiAlgHash::Sha256,
         };
-        let start_auth_handles = StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        };
-        let (_, start_rsp_handles) =
-            execute_with_password_sessions(&mut sim, &start_auth, start_auth_handles, 0, &[])
-                .unwrap();
+        let start_rsp_handles =
+            execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
         active_handles.push(start_rsp_handles.session_handle);
     }
 

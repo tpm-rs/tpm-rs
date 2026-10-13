@@ -1,169 +1,179 @@
-use crate::{
-    Alg, TpmiAlgHash, TpmtHa,
-    crypto::{Base, Finalize, Update},
-};
+use super::{ConstantTimeEq, CryptoError, Finalize, Update};
+use crate::{TpmiAlgHash, TpmtHa};
 
 /// Cryptographic hashing interfaces for TPM implementations and clients.
 ///
-/// Supported algorithms define a concrete `*Ctx` type and implement:
+/// ## Using [`Hash`]
+///
+/// Users will generally not call [`Hash`]'s methods (like [`Hash::sha256`])
+/// directly. Instead they should call functions like [`hash`] or use the
+/// [`HashStream`] structure, which allow passing in the desired [`TpmiAlgHash`].
+///
+/// Digests are written into a caller-provided buffer and returned as a [`TpmtHa`].
+///
+/// ## Implementing [`Hash`]
+///
+/// Supported algorithms define a concrete `*Context` type and implement:
 ///   - A method creating/initializing the context (e.g. [`Hash::sha256()`])
-///   - [`Update<Error>`] for `*Ctx`
-///   - [`Finalize<N, Error>`] for `*Ctx` (where `N` is the digest length)
+///   - [`Update`] for `*Context`
+///   - [`Finalize<N>`] for `*Context` (where `N` is the digest length)
 ///
 /// Unimplemented algorithms bind their context type to [`!`] and
 /// omit the method, keeping the default body of
-/// [`Err(self.unimplemented(...))`](Base::unimplemented).
+/// `Err(`[`CryptoError::Unsupported`]`)`.
 ///
-/// # Example
+/// ### Example
 ///
 /// ```
-/// # use tpm2::{crypto::{Base, Hash, Finalize, Update}, Alg};
+/// # use tpm2::crypto::{CryptoError, Hash, Finalize, Update};
 /// # struct MyBackend;
-/// # struct MyError;
-/// # impl Base for MyBackend {
-/// #   type Error = MyError;
-/// #   fn unimplemented(&self, _: Alg) -> MyError { MyError }
-/// # }
 /// # struct MySha256;
 /// impl Hash for MyBackend {
-///     type Sha256Ctx = MySha256;
-///     fn sha256(&self) -> Result<MySha256, MyError> { todo!() }
+///     type Sha256Context = MySha256;
+///     fn sha256(&self) -> Result<MySha256, CryptoError> { todo!() }
 ///
 ///     // Unsupported algorithms use `!` and default methods:
-///     type Sha1Ctx = !;
-///     type Sha384Ctx = !;
-///     type Sha512Ctx = !;
-///     type Sm3_256Ctx = !;
-///     type Sha3_256Ctx = !;
-///     type Sha3_384Ctx = !;
-///     type Sha3_512Ctx = !;
+///     type Sha1Context = !;
+///     type Sha384Context = !;
+///     type Sha512Context = !;
+///     type Sm3_256Context = !;
+///     type Sha3_256Context = !;
+///     type Sha3_384Context = !;
+///     type Sha3_512Context = !;
 /// }
 ///
-/// impl Update<MyError> for MySha256 {
-///     fn update(&mut self, data: &[u8]) -> Result<(), MyError> { todo!() }
+/// impl Update for MySha256 {
+///     fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> { todo!() }
 /// }
-/// impl Finalize<32, MyError> for MySha256 {
-///     fn finalize(self, out: &mut [u8; 32]) -> Result<(), MyError> { todo!() }
+/// impl Finalize<32> for MySha256 {
+///     fn finalize(self, out: &mut [u8; 32]) -> Result<(), CryptoError> { todo!() }
 /// }
 /// ```
-pub trait Hash: Base {
-    type Sha1Ctx: Update<Self::Error> + Finalize<20, Self::Error>;
-    fn sha1(&self) -> Result<Self::Sha1Ctx, Self::Error> {
-        Err(self.unimplemented(Alg::SHA1))
+pub trait Hash {
+    type Sha1Context: Update + Finalize<20>;
+    fn sha1(&self) -> Result<Self::Sha1Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Sha256Ctx: Update<Self::Error> + Finalize<32, Self::Error>;
-    fn sha256(&self) -> Result<Self::Sha256Ctx, Self::Error> {
-        Err(self.unimplemented(Alg::SHA256))
+    type Sha256Context: Update + Finalize<32>;
+    fn sha256(&self) -> Result<Self::Sha256Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Sha384Ctx: Update<Self::Error> + Finalize<48, Self::Error>;
-    fn sha384(&self) -> Result<Self::Sha384Ctx, Self::Error> {
-        Err(self.unimplemented(Alg::SHA384))
+    type Sha384Context: Update + Finalize<48>;
+    fn sha384(&self) -> Result<Self::Sha384Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Sha512Ctx: Update<Self::Error> + Finalize<64, Self::Error>;
-    fn sha512(&self) -> Result<Self::Sha512Ctx, Self::Error> {
-        Err(self.unimplemented(Alg::SHA512))
+    type Sha512Context: Update + Finalize<64>;
+    fn sha512(&self) -> Result<Self::Sha512Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Sm3_256Ctx: Update<Self::Error> + Finalize<32, Self::Error>;
-    fn sm3_256(&self) -> Result<Self::Sm3_256Ctx, Self::Error> {
-        Err(self.unimplemented(Alg::SM3_256))
+    type Sm3_256Context: Update + Finalize<32>;
+    fn sm3_256(&self) -> Result<Self::Sm3_256Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Sha3_256Ctx: Update<Self::Error> + Finalize<32, Self::Error>;
-    fn sha3_256(&self) -> Result<Self::Sha3_256Ctx, Self::Error> {
-        Err(self.unimplemented(Alg::SHA3_256))
+    type Sha3_256Context: Update + Finalize<32>;
+    fn sha3_256(&self) -> Result<Self::Sha3_256Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Sha3_384Ctx: Update<Self::Error> + Finalize<48, Self::Error>;
-    fn sha3_384(&self) -> Result<Self::Sha3_384Ctx, Self::Error> {
-        Err(self.unimplemented(Alg::SHA3_384))
+    type Sha3_384Context: Update + Finalize<48>;
+    fn sha3_384(&self) -> Result<Self::Sha3_384Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Sha3_512Ctx: Update<Self::Error> + Finalize<64, Self::Error>;
-    fn sha3_512(&self) -> Result<Self::Sha3_512Ctx, Self::Error> {
-        Err(self.unimplemented(Alg::SHA3_512))
+    type Sha3_512Context: Update + Finalize<64>;
+    fn sha3_512(&self) -> Result<Self::Sha3_512Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 }
 
-/// Dynamic hash context wrapping algorithm-specific streams.
-pub enum HashCtx<H: Hash> {
+/// Dynamic hash context wrapping algorithm-specific contexts.
+///
+/// This is for streaming hashing. One-shot users should use [`hash`].
+///
+/// While a [`Hash`] implementation can implement whichever algorithms it
+/// wants, the variants of this enum will only exist if the corresponding
+/// [crate feature](crate#algorithm-feature-flags) is enabled.
+pub enum HashStream<H: Hash> {
     #[cfg(feature = "sha1")]
-    Sha1(H::Sha1Ctx),
+    Sha1(H::Sha1Context),
     #[cfg(feature = "sha256")]
-    Sha256(H::Sha256Ctx),
+    Sha256(H::Sha256Context),
     #[cfg(feature = "sha384")]
-    Sha384(H::Sha384Ctx),
+    Sha384(H::Sha384Context),
     #[cfg(feature = "sha512")]
-    Sha512(H::Sha512Ctx),
+    Sha512(H::Sha512Context),
     #[cfg(feature = "sm3_256")]
-    Sm3_256(H::Sm3_256Ctx),
+    Sm3_256(H::Sm3_256Context),
     #[cfg(feature = "sha3_256")]
-    Sha3_256(H::Sha3_256Ctx),
+    Sha3_256(H::Sha3_256Context),
     #[cfg(feature = "sha3_384")]
-    Sha3_384(H::Sha3_384Ctx),
+    Sha3_384(H::Sha3_384Context),
     #[cfg(feature = "sha3_512")]
-    Sha3_512(H::Sha3_512Ctx),
+    Sha3_512(H::Sha3_512Context),
 }
 
-impl<H: Hash> HashCtx<H> {
+impl<H: Hash> HashStream<H> {
     /// Initializes a hash context for `alg` using backend `h`.
-    pub fn new(h: &H, alg: TpmiAlgHash) -> Result<Self, H::Error> {
+    pub fn new(h: &H, alg: TpmiAlgHash) -> Result<Self, CryptoError> {
         match alg {
             #[cfg(feature = "sha1")]
-            TpmiAlgHash::Sha1 => h.sha1().map(HashCtx::Sha1),
+            TpmiAlgHash::Sha1 => h.sha1().map(HashStream::Sha1),
             #[cfg(feature = "sha256")]
-            TpmiAlgHash::Sha256 => h.sha256().map(HashCtx::Sha256),
+            TpmiAlgHash::Sha256 => h.sha256().map(HashStream::Sha256),
             #[cfg(feature = "sha384")]
-            TpmiAlgHash::Sha384 => h.sha384().map(HashCtx::Sha384),
+            TpmiAlgHash::Sha384 => h.sha384().map(HashStream::Sha384),
             #[cfg(feature = "sha512")]
-            TpmiAlgHash::Sha512 => h.sha512().map(HashCtx::Sha512),
+            TpmiAlgHash::Sha512 => h.sha512().map(HashStream::Sha512),
             #[cfg(feature = "sm3_256")]
-            TpmiAlgHash::Sm3_256 => h.sm3_256().map(HashCtx::Sm3_256),
+            TpmiAlgHash::Sm3_256 => h.sm3_256().map(HashStream::Sm3_256),
             #[cfg(feature = "sha3_256")]
-            TpmiAlgHash::Sha3_256 => h.sha3_256().map(HashCtx::Sha3_256),
+            TpmiAlgHash::Sha3_256 => h.sha3_256().map(HashStream::Sha3_256),
             #[cfg(feature = "sha3_384")]
-            TpmiAlgHash::Sha3_384 => h.sha3_384().map(HashCtx::Sha3_384),
+            TpmiAlgHash::Sha3_384 => h.sha3_384().map(HashStream::Sha3_384),
             #[cfg(feature = "sha3_512")]
-            TpmiAlgHash::Sha3_512 => h.sha3_512().map(HashCtx::Sha3_512),
+            TpmiAlgHash::Sha3_512 => h.sha3_512().map(HashStream::Sha3_512),
         }
     }
 
     /// Feeds `data` into the active hash stream.
-    pub fn update(&mut self, data: &[u8]) -> Result<(), H::Error> {
+    pub fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
         match self {
             #[cfg(feature = "sha1")]
-            HashCtx::Sha1(ctx) => ctx.update(data),
+            HashStream::Sha1(ctx) => ctx.update(data),
             #[cfg(feature = "sha256")]
-            HashCtx::Sha256(ctx) => ctx.update(data),
+            HashStream::Sha256(ctx) => ctx.update(data),
             #[cfg(feature = "sha384")]
-            HashCtx::Sha384(ctx) => ctx.update(data),
+            HashStream::Sha384(ctx) => ctx.update(data),
             #[cfg(feature = "sha512")]
-            HashCtx::Sha512(ctx) => ctx.update(data),
+            HashStream::Sha512(ctx) => ctx.update(data),
             #[cfg(feature = "sm3_256")]
-            HashCtx::Sm3_256(ctx) => ctx.update(data),
+            HashStream::Sm3_256(ctx) => ctx.update(data),
             #[cfg(feature = "sha3_256")]
-            HashCtx::Sha3_256(ctx) => ctx.update(data),
+            HashStream::Sha3_256(ctx) => ctx.update(data),
             #[cfg(feature = "sha3_384")]
-            HashCtx::Sha3_384(ctx) => ctx.update(data),
+            HashStream::Sha3_384(ctx) => ctx.update(data),
             #[cfg(feature = "sha3_512")]
-            HashCtx::Sha3_512(ctx) => ctx.update(data),
+            HashStream::Sha3_512(ctx) => ctx.update(data),
         }
     }
 
     /// Finalizes the digest into `out` and returns the tagged [`TpmtHa`].
     pub fn finalize<'a>(
         self,
-        out: &'a mut [u8; TpmtHa::MAX_DIGEST_SIZE],
-    ) -> Result<TpmtHa<'a>, H::Error> {
-        /// Helper function for handling finalizing into the output buffer.
-        fn helper<'a, const N: usize, Error>(
-            ctx: impl Finalize<N, Error>,
-            out: &'a mut [u8; TpmtHa::MAX_DIGEST_SIZE],
-        ) -> Result<&'a [u8; N], Error> {
-            const { assert!(N <= TpmtHa::MAX_DIGEST_SIZE) };
+        out: &'a mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
+    ) -> Result<TpmtHa<'a>, CryptoError> {
+        /// Bridge between a digest-specific sized output buffer needed for
+        /// [`Finalize`] and the generic [`TpmiAlgHash::MAX_DIGEST_BYTES`].
+        fn helper<'a, const N: usize>(
+            ctx: impl Finalize<N>,
+            out: &'a mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
+        ) -> Result<&'a [u8; N], CryptoError> {
+            const { assert!(N <= TpmiAlgHash::MAX_DIGEST_BYTES) };
             let digest: &'a mut [u8; N] = out.first_chunk_mut().unwrap();
             ctx.finalize(digest)?;
             Ok(digest)
@@ -171,241 +181,59 @@ impl<H: Hash> HashCtx<H> {
 
         match self {
             #[cfg(feature = "sha1")]
-            HashCtx::Sha1(ctx) => helper(ctx, out).map(TpmtHa::Sha1),
+            HashStream::Sha1(ctx) => helper(ctx, out).map(TpmtHa::Sha1),
             #[cfg(feature = "sha256")]
-            HashCtx::Sha256(ctx) => helper(ctx, out).map(TpmtHa::Sha256),
+            HashStream::Sha256(ctx) => helper(ctx, out).map(TpmtHa::Sha256),
             #[cfg(feature = "sha384")]
-            HashCtx::Sha384(ctx) => helper(ctx, out).map(TpmtHa::Sha384),
+            HashStream::Sha384(ctx) => helper(ctx, out).map(TpmtHa::Sha384),
             #[cfg(feature = "sha512")]
-            HashCtx::Sha512(ctx) => helper(ctx, out).map(TpmtHa::Sha512),
+            HashStream::Sha512(ctx) => helper(ctx, out).map(TpmtHa::Sha512),
             #[cfg(feature = "sm3_256")]
-            HashCtx::Sm3_256(ctx) => helper(ctx, out).map(TpmtHa::Sm3_256),
+            HashStream::Sm3_256(ctx) => helper(ctx, out).map(TpmtHa::Sm3_256),
             #[cfg(feature = "sha3_256")]
-            HashCtx::Sha3_256(ctx) => helper(ctx, out).map(TpmtHa::Sha3_256),
+            HashStream::Sha3_256(ctx) => helper(ctx, out).map(TpmtHa::Sha3_256),
             #[cfg(feature = "sha3_384")]
-            HashCtx::Sha3_384(ctx) => helper(ctx, out).map(TpmtHa::Sha3_384),
+            HashStream::Sha3_384(ctx) => helper(ctx, out).map(TpmtHa::Sha3_384),
             #[cfg(feature = "sha3_512")]
-            HashCtx::Sha3_512(ctx) => helper(ctx, out).map(TpmtHa::Sha3_512),
+            HashStream::Sha3_512(ctx) => helper(ctx, out).map(TpmtHa::Sha3_512),
         }
     }
 }
 
-/// Computes a digest in a stack-allocated buffer using [`HashCtx`].
-pub fn hash<'a, H: Hash>(
-    h: &H,
+/// Write a digest into a caller-provided buffer.
+///
+/// This is for one-shot hashing. [`HashStream`] allows for streaming hashing.
+pub fn hash<'a>(
+    h: &impl Hash,
     alg: TpmiAlgHash,
     data: &[u8],
-    out: &'a mut [u8; TpmtHa::MAX_DIGEST_SIZE],
-) -> Result<TpmtHa<'a>, H::Error> {
-    let mut ctx = HashCtx::new(h, alg)?;
+    out: &'a mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
+) -> Result<TpmtHa<'a>, CryptoError> {
+    let mut ctx = HashStream::new(h, alg)?;
     ctx.update(data)?;
     ctx.finalize(out)
 }
 
-/// Cryptographic HMAC interfaces for TPM implementations and clients.
-///
-/// Supported algorithms define a concrete `*Ctx` type and implement:
-///   - A method creating/initializing the context with a key (e.g. [`Hmac::sha256()`])
-///   - [`Update<Error>`] for `*Ctx`
-///   - [`Finalize<N, Error>`] for `*Ctx` (where `N` is the digest length)
-///
-/// Unimplemented algorithms bind their context type to [`!`] and
-/// omit the method, keeping the default body of
-/// [`Err(self.unimplemented(...))`](Base::unimplemented).
-///
-/// # Example
-///
-/// ```
-/// # use tpm2::{crypto::{Base, Hmac, Finalize, Update}, Alg};
-/// # struct MyBackend;
-/// # struct MyError;
-/// # impl Base for MyBackend {
-/// #   type Error = MyError;
-/// #   fn unimplemented(&self, _: Alg) -> MyError { MyError }
-/// # }
-/// # struct MyHmacSha256;
-/// impl Hmac for MyBackend {
-///     type Sha256Ctx = MyHmacSha256;
-///     fn sha256(&self, key: &[u8]) -> Result<MyHmacSha256, MyError> { todo!() }
-///
-///     // Unsupported algorithms use `!` and default methods:
-///     type Sha1Ctx = !;
-///     type Sha384Ctx = !;
-///     type Sha512Ctx = !;
-///     type Sm3_256Ctx = !;
-///     type Sha3_256Ctx = !;
-///     type Sha3_384Ctx = !;
-///     type Sha3_512Ctx = !;
-/// }
-///
-/// impl Update<MyError> for MyHmacSha256 {
-///     fn update(&mut self, data: &[u8]) -> Result<(), MyError> { todo!() }
-/// }
-/// impl Finalize<32, MyError> for MyHmacSha256 {
-///     fn finalize(self, out: &mut [u8; 32]) -> Result<(), MyError> { todo!() }
-/// }
-/// ```
-pub trait Hmac: Base {
-    type Sha1Ctx: Update<Self::Error> + Finalize<20, Self::Error>;
-    fn sha1(&self, key: &[u8]) -> Result<Self::Sha1Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::SHA1))
+/// Compares two [`TpmtHa`] digests in constant time using [`ConstantTimeEq`].
+pub fn digest_eq(c: &impl ConstantTimeEq, a: TpmtHa<'_>, b: TpmtHa<'_>) -> bool {
+    match (a, b) {
+        #[cfg(feature = "sha1")]
+        (TpmtHa::Sha1(a), TpmtHa::Sha1(b)) => c.constant_time_eq(a, b),
+        #[cfg(feature = "sha256")]
+        (TpmtHa::Sha256(a), TpmtHa::Sha256(b)) => c.constant_time_eq(a, b),
+        #[cfg(feature = "sha384")]
+        (TpmtHa::Sha384(a), TpmtHa::Sha384(b)) => c.constant_time_eq(a, b),
+        #[cfg(feature = "sha512")]
+        (TpmtHa::Sha512(a), TpmtHa::Sha512(b)) => c.constant_time_eq(a, b),
+        #[cfg(feature = "sm3_256")]
+        (TpmtHa::Sm3_256(a), TpmtHa::Sm3_256(b)) => c.constant_time_eq(a, b),
+        #[cfg(feature = "sha3_256")]
+        (TpmtHa::Sha3_256(a), TpmtHa::Sha3_256(b)) => c.constant_time_eq(a, b),
+        #[cfg(feature = "sha3_384")]
+        (TpmtHa::Sha3_384(a), TpmtHa::Sha3_384(b)) => c.constant_time_eq(a, b),
+        #[cfg(feature = "sha3_512")]
+        (TpmtHa::Sha3_512(a), TpmtHa::Sha3_512(b)) => c.constant_time_eq(a, b),
+        #[allow(unreachable_patterns)]
+        _ => false,
     }
-
-    type Sha256Ctx: Update<Self::Error> + Finalize<32, Self::Error>;
-    fn sha256(&self, key: &[u8]) -> Result<Self::Sha256Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::SHA256))
-    }
-
-    type Sha384Ctx: Update<Self::Error> + Finalize<48, Self::Error>;
-    fn sha384(&self, key: &[u8]) -> Result<Self::Sha384Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::SHA384))
-    }
-
-    type Sha512Ctx: Update<Self::Error> + Finalize<64, Self::Error>;
-    fn sha512(&self, key: &[u8]) -> Result<Self::Sha512Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::SHA512))
-    }
-
-    type Sm3_256Ctx: Update<Self::Error> + Finalize<32, Self::Error>;
-    fn sm3_256(&self, key: &[u8]) -> Result<Self::Sm3_256Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::SM3_256))
-    }
-
-    type Sha3_256Ctx: Update<Self::Error> + Finalize<32, Self::Error>;
-    fn sha3_256(&self, key: &[u8]) -> Result<Self::Sha3_256Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::SHA3_256))
-    }
-
-    type Sha3_384Ctx: Update<Self::Error> + Finalize<48, Self::Error>;
-    fn sha3_384(&self, key: &[u8]) -> Result<Self::Sha3_384Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::SHA3_384))
-    }
-
-    type Sha3_512Ctx: Update<Self::Error> + Finalize<64, Self::Error>;
-    fn sha3_512(&self, key: &[u8]) -> Result<Self::Sha3_512Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::SHA3_512))
-    }
-}
-
-/// Dynamic HMAC context wrapping algorithm-specific streams.
-pub enum HmacCtx<H: Hmac> {
-    #[cfg(feature = "sha1")]
-    Sha1(H::Sha1Ctx),
-    #[cfg(feature = "sha256")]
-    Sha256(H::Sha256Ctx),
-    #[cfg(feature = "sha384")]
-    Sha384(H::Sha384Ctx),
-    #[cfg(feature = "sha512")]
-    Sha512(H::Sha512Ctx),
-    #[cfg(feature = "sm3_256")]
-    Sm3_256(H::Sm3_256Ctx),
-    #[cfg(feature = "sha3_256")]
-    Sha3_256(H::Sha3_256Ctx),
-    #[cfg(feature = "sha3_384")]
-    Sha3_384(H::Sha3_384Ctx),
-    #[cfg(feature = "sha3_512")]
-    Sha3_512(H::Sha3_512Ctx),
-}
-
-impl<H: Hmac> HmacCtx<H> {
-    /// Initializes an HMAC context for `alg` using backend `h` and `key`.
-    pub fn new(h: &H, alg: TpmiAlgHash, key: &[u8]) -> Result<Self, H::Error> {
-        match alg {
-            #[cfg(feature = "sha1")]
-            TpmiAlgHash::Sha1 => Hmac::sha1(h, key).map(HmacCtx::Sha1),
-            #[cfg(feature = "sha256")]
-            TpmiAlgHash::Sha256 => Hmac::sha256(h, key).map(HmacCtx::Sha256),
-            #[cfg(feature = "sha384")]
-            TpmiAlgHash::Sha384 => Hmac::sha384(h, key).map(HmacCtx::Sha384),
-            #[cfg(feature = "sha512")]
-            TpmiAlgHash::Sha512 => Hmac::sha512(h, key).map(HmacCtx::Sha512),
-            #[cfg(feature = "sm3_256")]
-            TpmiAlgHash::Sm3_256 => Hmac::sm3_256(h, key).map(HmacCtx::Sm3_256),
-            #[cfg(feature = "sha3_256")]
-            TpmiAlgHash::Sha3_256 => Hmac::sha3_256(h, key).map(HmacCtx::Sha3_256),
-            #[cfg(feature = "sha3_384")]
-            TpmiAlgHash::Sha3_384 => Hmac::sha3_384(h, key).map(HmacCtx::Sha3_384),
-            #[cfg(feature = "sha3_512")]
-            TpmiAlgHash::Sha3_512 => Hmac::sha3_512(h, key).map(HmacCtx::Sha3_512),
-        }
-    }
-
-    /// Feeds `data` into the active HMAC stream.
-    pub fn update(&mut self, data: &[u8]) -> Result<(), H::Error> {
-        match self {
-            #[cfg(feature = "sha1")]
-            HmacCtx::Sha1(ctx) => ctx.update(data),
-            #[cfg(feature = "sha256")]
-            HmacCtx::Sha256(ctx) => ctx.update(data),
-            #[cfg(feature = "sha384")]
-            HmacCtx::Sha384(ctx) => ctx.update(data),
-            #[cfg(feature = "sha512")]
-            HmacCtx::Sha512(ctx) => ctx.update(data),
-            #[cfg(feature = "sm3_256")]
-            HmacCtx::Sm3_256(ctx) => ctx.update(data),
-            #[cfg(feature = "sha3_256")]
-            HmacCtx::Sha3_256(ctx) => ctx.update(data),
-            #[cfg(feature = "sha3_384")]
-            HmacCtx::Sha3_384(ctx) => ctx.update(data),
-            #[cfg(feature = "sha3_512")]
-            HmacCtx::Sha3_512(ctx) => ctx.update(data),
-        }
-    }
-
-    /// Finalizes the MAC into `out` and returns the tagged [`TpmtHa`].
-    pub fn finalize<'a>(
-        self,
-        out: &'a mut [u8; TpmtHa::MAX_DIGEST_SIZE],
-    ) -> Result<TpmtHa<'a>, H::Error> {
-        /// Helper function for handling finalizing into the output buffer.
-        fn helper<'a, const N: usize, Error>(
-            ctx: impl Finalize<N, Error>,
-            out: &'a mut [u8; TpmtHa::MAX_DIGEST_SIZE],
-        ) -> Result<&'a [u8; N], Error> {
-            const { assert!(N <= TpmtHa::MAX_DIGEST_SIZE) };
-            let digest: &'a mut [u8; N] = out.first_chunk_mut().unwrap();
-            ctx.finalize(digest)?;
-            Ok(digest)
-        }
-
-        match self {
-            #[cfg(feature = "sha1")]
-            HmacCtx::Sha1(ctx) => helper(ctx, out).map(TpmtHa::Sha1),
-            #[cfg(feature = "sha256")]
-            HmacCtx::Sha256(ctx) => helper(ctx, out).map(TpmtHa::Sha256),
-            #[cfg(feature = "sha384")]
-            HmacCtx::Sha384(ctx) => helper(ctx, out).map(TpmtHa::Sha384),
-            #[cfg(feature = "sha512")]
-            HmacCtx::Sha512(ctx) => helper(ctx, out).map(TpmtHa::Sha512),
-            #[cfg(feature = "sm3_256")]
-            HmacCtx::Sm3_256(ctx) => helper(ctx, out).map(TpmtHa::Sm3_256),
-            #[cfg(feature = "sha3_256")]
-            HmacCtx::Sha3_256(ctx) => helper(ctx, out).map(TpmtHa::Sha3_256),
-            #[cfg(feature = "sha3_384")]
-            HmacCtx::Sha3_384(ctx) => helper(ctx, out).map(TpmtHa::Sha3_384),
-            #[cfg(feature = "sha3_512")]
-            HmacCtx::Sha3_512(ctx) => helper(ctx, out).map(TpmtHa::Sha3_512),
-        }
-    }
-}
-
-/// Computes an HMAC in a stack-allocated buffer using [`HmacCtx`].
-pub fn hmac<'a, H: Hmac>(
-    h: &H,
-    alg: TpmiAlgHash,
-    key: &[u8],
-    data: &[u8],
-    out: &'a mut [u8; TpmtHa::MAX_DIGEST_SIZE],
-) -> Result<TpmtHa<'a>, H::Error> {
-    let mut ctx = HmacCtx::new(h, alg, key)?;
-    ctx.update(data)?;
-    ctx.finalize(out)
 }

@@ -1,7 +1,7 @@
 //! Rust port of `get_time_test.go`.
 
 use tpm2::Handle;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, GetTime, GetTimeHandles};
+use tpm2::commands::{CreatePrimary, GetTime};
 
 use crate::test_utils::*;
 use tpm2::{
@@ -36,6 +36,7 @@ fn test_get_time() {
         ),
     };
     let create_primary = CreatePrimary {
+        primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -43,35 +44,22 @@ fn test_get_time() {
         in_public: tpm2::Tpm2b(public_area),
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_ENDORSEMENT,
-    };
-    let (_, rsp_cp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[])
-            .expect("could not create key");
-    let key_handle = rsp_cp_handles.object_handle;
+    let rsp_cp = execute_with_password_sessions(&mut sim, &create_primary, 1, &[])
+        .expect("could not create key");
+    let key_handle = rsp_cp.object_handle;
 
     let qualifying_data: &[u8] = b"migrationpains";
 
     let get_time_cmd = GetTime {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: key_handle,
         qualifying_data: Tpm2bData::from_bytes(qualifying_data).unwrap(),
         in_scheme: None,
     };
-    let get_time_handles = GetTimeHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: key_handle,
-    };
 
     let mut resp_buffer = [0u8; 4096];
-    let (get_time_resp, _) = execute_get_time(
-        &mut sim,
-        &get_time_cmd,
-        get_time_handles,
-        2,
-        &[],
-        &mut resp_buffer,
-    )
-    .expect("GetTime failed");
+    let get_time_resp = execute_get_time(&mut sim, &get_time_cmd, 2, &[], &mut resp_buffer)
+        .expect("GetTime failed");
 
     let tpms_attest = get_time_resp
         .time_info

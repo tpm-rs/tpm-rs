@@ -4,7 +4,7 @@ use crate::test_utils::*;
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bData, Tpm2bEccParameter, TpmaObject, TpmiAlgHash, TpmsEccParms,
     TpmsEccPoint, TpmtPublic,
-    commands::{Commit, CommitHandles, CreatePrimary, CreatePrimaryHandles},
+    commands::{Commit, CreatePrimary},
 };
 use tpm2_simulator::create_simulator;
 
@@ -40,6 +40,7 @@ fn test_commit_decrypt_attr() {
     };
 
     let cmd1 = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(tpm2::TpmsSensitiveCreate {
             user_auth: Default::default(),
             data: Default::default(),
@@ -48,22 +49,18 @@ fn test_commit_decrypt_attr() {
         outside_info: Tpm2bData::default(),
         creation_pcr: Default::default(),
     };
-    let handles1 = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_rsp1, resp_handles1) =
-        execute_with_password_sessions(&mut sim, &cmd1, handles1, 1, &[]).unwrap();
+    let resp_handles1 = execute_with_password_sessions(&mut sim, &cmd1, 1, &[]).unwrap();
 
     let sign_handle = resp_handles1.object_handle;
 
     let cmd2 = Commit {
+        sign_handle,
         p1: tpm2::Tpm2bEccPoint::default(),
         s2: tpm2::Tpm2bSensitiveData::default(),
         y2: tpm2::Tpm2bEccParameter::default(),
     };
-    let handles2 = CommitHandles { sign_handle };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd2, handles2, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd2, 1, &[]);
     assert!(
         res.is_err(),
         "Expected TPM2_Commit to fail on handle WITH decrypt attr"

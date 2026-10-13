@@ -4,12 +4,9 @@ mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
-use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, EvictControl, EvictControlHandles, HierarchyControl,
-    HierarchyControlHandles,
-};
+use tpm2::commands::{CreatePrimary, EvictControl, HierarchyControl};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, TpmCc};
+use tpm2::{Handle, Message, TpmCc};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bSensitiveData, TpmaObject, TpmiAlgHash,
     TpmlPcrSelection, TpmsAuthCommand, TpmsSensitiveCreate, TpmtPublic,
@@ -20,7 +17,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut FakeCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -61,7 +58,10 @@ fn get_test_template(st_clear: bool) -> TpmtPublic<'static> {
         // A restricted decrypt KEYEDHASH object would need an XOR scheme (C `SchemeChecks()`);
         // use a symmetric storage key instead.
         parms_and_id: PublicParmsAndId::Sym(
-            tpm2::TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)),
+            tpm2::TpmtSymDefObject {
+                alg: tpm2::AlgSym::Aes128,
+                mode: Some(tpm2::TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)),
+            },
             tpm2::Tpm2bDigest::default(),
         ),
     }
@@ -82,10 +82,8 @@ fn create_primary(
     let outside_info = Tpm2bData::default();
     let creation_pcr = TpmlPcrSelection::default();
 
-    let handles = CreatePrimaryHandles {
-        primary_handle: hierarchy,
-    };
     let cmd = CreatePrimary {
+        primary_handle: hierarchy,
         in_sensitive,
         in_public,
         outside_info,
@@ -98,7 +96,9 @@ fn create_primary(
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::CreatePrimary.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    for handle in cmd.handles() {
+        offset += marshal_to_slice(&handle, &mut req_buf[offset..]);
+    }
 
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
@@ -131,11 +131,9 @@ fn evict_control(
     object_handle: u32,
     persistent_handle: u32,
 ) -> u32 {
-    let handles = EvictControlHandles {
+    let cmd = EvictControl {
         auth,
         object_handle: Handle(object_handle),
-    };
-    let cmd = EvictControl {
         persistent_handle: Handle(persistent_handle),
     };
 
@@ -145,7 +143,9 @@ fn evict_control(
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::EvictControl.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    for handle in cmd.handles() {
+        offset += marshal_to_slice(&handle, &mut req_buf[offset..]);
+    }
 
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
@@ -176,8 +176,11 @@ fn hierarchy_control(
     enable: Handle,
     state: bool,
 ) -> u32 {
-    let handles = HierarchyControlHandles { auth_handle: auth };
-    let cmd = HierarchyControl { enable, state };
+    let cmd = HierarchyControl {
+        auth_handle: auth,
+        enable,
+        state,
+    };
 
     let mut req_buf = [0u8; 1024];
     let mut offset = 0;
@@ -185,7 +188,9 @@ fn hierarchy_control(
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::HierarchyControl.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    for handle in cmd.handles() {
+        offset += marshal_to_slice(&handle, &mut req_buf[offset..]);
+    }
 
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
@@ -214,8 +219,8 @@ fn test_evict_control_stclear_primary_fails() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Create a primary object with stClear = true
     let (rc, primary_handle) = create_primary(&mut tpm, &mut global_state, Handle::RH_OWNER, true);
@@ -243,8 +248,8 @@ fn test_evict_control_persistency_constraints() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Create a primary object without stClear
     let (rc, primary_handle) = create_primary(&mut tpm, &mut global_state, Handle::RH_OWNER, false);
@@ -284,8 +289,8 @@ fn test_evict_control_hierarchy_disabled() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Create and persist an Owner hierarchy object without stClear
     let (rc, primary_handle) = create_primary(&mut tpm, &mut global_state, Handle::RH_OWNER, false);

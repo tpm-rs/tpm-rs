@@ -4,7 +4,7 @@ use tpm2::errors::{Position, TpmRc};
 mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
-use tpm2::commands::{HierarchyChangeAuth, HierarchyChangeAuthHandles};
+use tpm2::commands::HierarchyChangeAuth;
 use tpm2::{Handle, TpmSu};
 use tpm2_impl::TpmEngine;
 use tpm2_impl::TpmPlatform;
@@ -14,8 +14,8 @@ fn test_state_desync_fixed() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -27,9 +27,6 @@ fn test_state_desync_fixed() {
     global_state.state_saved = true;
     global_state.orderly_state = u16::from(TpmSu::State);
 
-    let request_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let request_auth = tpm2::TpmsAuthCommand {
         session_handle: tpm2::Handle::RS_PW,
         nonce: tpm2::Tpm2bNonce::default(),
@@ -37,6 +34,7 @@ fn test_state_desync_fixed() {
         hmac: tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap(),
     };
     let request_cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_PLATFORM,
         new_auth: tpm2::Tpm2bAuth::from_bytes(&[4, 5, 6]).unwrap(),
     };
 
@@ -46,7 +44,7 @@ fn test_state_desync_fixed() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(0x129u32), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&request_handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&request_cmd.auth_handle, &mut req_buf[offset..]);
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     let auth_start = offset;
@@ -71,8 +69,8 @@ fn test_challenger_badauthfor_returned() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -82,9 +80,6 @@ fn test_challenger_badauthfor_returned() {
 
     global_state.owner_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
 
-    let request_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
     // Provide WRONG hmac
     let request_auth = tpm2::TpmsAuthCommand {
         session_handle: tpm2::Handle::RS_PW,
@@ -93,6 +88,7 @@ fn test_challenger_badauthfor_returned() {
         hmac: tpm2::Tpm2bAuth::from_bytes(&[9, 9, 9]).unwrap(),
     };
     let request_cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: tpm2::Tpm2bAuth::from_bytes(&[4, 5, 6]).unwrap(),
     };
 
@@ -102,7 +98,7 @@ fn test_challenger_badauthfor_returned() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(0x129u32), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&request_handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&request_cmd.auth_handle, &mut req_buf[offset..]);
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     let auth_start = offset;
@@ -127,8 +123,8 @@ fn test_no_direct_nv_write() {
     let mut storage = FakeStorage::default();
     storage.fail_on_write = true; // MUST NOT write to NV directly
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -138,9 +134,6 @@ fn test_no_direct_nv_write() {
 
     global_state.platform_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
 
-    let request_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let request_auth = tpm2::TpmsAuthCommand {
         session_handle: tpm2::Handle::RS_PW,
         nonce: tpm2::Tpm2bNonce::default(),
@@ -148,6 +141,7 @@ fn test_no_direct_nv_write() {
         hmac: tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap(),
     };
     let request_cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_PLATFORM,
         new_auth: tpm2::Tpm2bAuth::from_bytes(&[4, 5, 6]).unwrap(),
     };
 
@@ -157,7 +151,7 @@ fn test_no_direct_nv_write() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(0x129u32), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&request_handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&request_cmd.auth_handle, &mut req_buf[offset..]);
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     let auth_start = offset;
@@ -179,8 +173,8 @@ fn test_session_tag_validation() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -188,10 +182,8 @@ fn test_session_tag_validation() {
     global_state.initialized = true;
     global_state.locality = 0;
 
-    let request_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let request_cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_PLATFORM,
         new_auth: tpm2::Tpm2bAuth::from_bytes(&[4, 5, 6]).unwrap(),
     };
 
@@ -202,7 +194,7 @@ fn test_session_tag_validation() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(0x129u32), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&request_handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&request_cmd.auth_handle, &mut req_buf[offset..]);
     // The rest of the message has no auth
     offset += marshal_to_slice(&request_cmd, &mut req_buf[offset..]);
     let total_len = offset as u32;
@@ -221,8 +213,8 @@ fn test_strip_trailing_zeros_bug() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -233,9 +225,6 @@ fn test_strip_trailing_zeros_bug() {
     // Set Owner Auth to [1, 2, 3, 0]
     global_state.owner_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3, 0]).unwrap().into();
 
-    let request_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
     // Provide WRONG hmac length: [1, 2, 3]
     let request_auth = tpm2::TpmsAuthCommand {
         session_handle: tpm2::Handle::RS_PW,
@@ -244,6 +233,7 @@ fn test_strip_trailing_zeros_bug() {
         hmac: tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap(),
     };
     let request_cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: tpm2::Tpm2bAuth::from_bytes(&[4, 5, 6]).unwrap(),
     };
 
@@ -253,7 +243,7 @@ fn test_strip_trailing_zeros_bug() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(0x129u32), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&request_handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&request_cmd.auth_handle, &mut req_buf[offset..]);
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     let auth_start = offset;
@@ -322,8 +312,8 @@ fn test_no_nv_writes_stress() {
         writes: 0,
     };
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -333,9 +323,6 @@ fn test_no_nv_writes_stress() {
 
     global_state.owner_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
 
-    let request_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
     let request_auth = tpm2::TpmsAuthCommand {
         session_handle: tpm2::Handle::RS_PW,
         nonce: tpm2::Tpm2bNonce::default(),
@@ -343,6 +330,7 @@ fn test_no_nv_writes_stress() {
         hmac: tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap(),
     };
     let request_cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: tpm2::Tpm2bAuth::from_bytes(&[4, 5, 6]).unwrap(),
     };
 
@@ -352,7 +340,7 @@ fn test_no_nv_writes_stress() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(0x129u32), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&request_handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&request_cmd.auth_handle, &mut req_buf[offset..]);
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     let auth_start = offset;
@@ -375,8 +363,8 @@ fn test_strict_session_tag_validation() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -384,10 +372,8 @@ fn test_strict_session_tag_validation() {
     global_state.initialized = true;
     global_state.locality = 0;
 
-    let request_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
     let request_cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: tpm2::Tpm2bAuth::from_bytes(&[4, 5, 6]).unwrap(),
     };
 
@@ -397,7 +383,7 @@ fn test_strict_session_tag_validation() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(0x129u32), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&request_handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&request_cmd.auth_handle, &mut req_buf[offset..]);
     offset += marshal_to_slice(&request_cmd, &mut req_buf[offset..]);
     let total_len = offset as u32;
     req_buf[len_offset..len_offset + 4].copy_from_slice(&total_len.to_be_bytes());
@@ -415,8 +401,8 @@ fn test_multiple_sessions_error() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -426,9 +412,6 @@ fn test_multiple_sessions_error() {
 
     global_state.owner_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
 
-    let request_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
     let request_auth = tpm2::TpmsAuthCommand {
         session_handle: tpm2::Handle::RS_PW,
         nonce: tpm2::Tpm2bNonce::default(),
@@ -436,6 +419,7 @@ fn test_multiple_sessions_error() {
         hmac: tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap(),
     };
     let request_cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: tpm2::Tpm2bAuth::from_bytes(&[4, 5, 6]).unwrap(),
     };
 
@@ -445,7 +429,7 @@ fn test_multiple_sessions_error() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(0x129u32), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&request_handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&request_cmd.auth_handle, &mut req_buf[offset..]);
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     let auth_start = offset;

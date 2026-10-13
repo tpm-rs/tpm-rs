@@ -237,7 +237,7 @@ fn test_tagged_property_and_pcr_select_open_tag_unmarshalling() {
     let mut buf = [0u8; GetCapabilityRsp::MAX_SIZE];
     let written = rsp.marshal(&mut buf);
     let mut reader = &buf[..written];
-    let unmarshaled_rsp = GetCapabilityRsp::unmarshal(&mut reader).unwrap();
+    let unmarshaled_rsp = GetCapabilityRsp::unmarshal_with_handles([], &mut reader).unwrap();
     assert!(reader.is_empty());
     assert_eq!(unmarshaled_rsp, rsp);
 
@@ -275,7 +275,8 @@ fn test_tagged_property_and_pcr_select_open_tag_unmarshalling() {
     let mut pcr_buf = [0u8; GetCapabilityRsp::MAX_SIZE];
     let pcr_written = pcr_rsp.marshal(&mut pcr_buf);
     let mut pcr_reader = &pcr_buf[..pcr_written];
-    let unmarshaled_pcr_rsp = GetCapabilityRsp::unmarshal(&mut pcr_reader).unwrap();
+    let unmarshaled_pcr_rsp =
+        GetCapabilityRsp::unmarshal_with_handles([], &mut pcr_reader).unwrap();
     assert!(pcr_reader.is_empty());
     assert_eq!(unmarshaled_pcr_rsp, pcr_rsp);
     assert!(matches!(

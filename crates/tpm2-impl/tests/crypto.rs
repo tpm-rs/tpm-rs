@@ -31,7 +31,7 @@ fn setup_tpm_with_fake_platform<'a>(
     crypto: &'a mut FakeCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -57,9 +57,9 @@ fn test_adv_mac_key_type_confusion() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     // Populate transient object 0 with an RSA public key (NOT a KeyedHash or HMAC key).
@@ -120,9 +120,9 @@ fn test_adv_rsa_decrypt_signing_only() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     let public = TpmtPublic {
@@ -188,9 +188,9 @@ fn test_adv_sign_storage_only() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     let public = TpmtPublic {
@@ -256,9 +256,9 @@ fn test_adv_verify_signature_keyed_hash_success() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     let public = TpmtPublic {
@@ -322,9 +322,9 @@ fn test_adv_mac_unsupported_hash() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     let public = TpmtPublic {
@@ -380,9 +380,9 @@ fn test_adv_crypt_ops_missing_handle() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let _missing_handle = 0x800000FFu32; // Non-existent transient key handle.
 
     // 1. MAC Command
@@ -458,9 +458,9 @@ fn test_adv_rsa_decrypt_restricted_key() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     let public = TpmtPublic {
@@ -528,9 +528,9 @@ fn test_adv_verify_signature_missing_sign_attribute() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     // Key has DECRYPT but lacks SIGN_ENCRYPT
@@ -593,9 +593,9 @@ fn test_adv_verify_signature_keyed_hash_public_only() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     // KeyedHash key with SIGN_ENCRYPT but private_len = 0 (public-only)
@@ -650,9 +650,9 @@ fn test_ecdh_zgen_success() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     let public = TpmtPublic {
@@ -722,9 +722,9 @@ fn test_ecdh_zgen_key_attributes_error() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     // Key with RESTRICTED attribute set (invalid for ECDH_ZGen)
@@ -798,9 +798,9 @@ fn test_ecdh_zgen_scheme_error() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     // Key with ECDSA scheme (invalid for ECDH_ZGen)
@@ -872,9 +872,9 @@ fn test_ecdh_zgen_key_type_error() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     // RSA key instead of ECC key
@@ -943,9 +943,9 @@ fn test_ecdh_zgen_public_only_key_error() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
     let key_handle = 0x80000001;
 
     // ECC key but private_len = 0

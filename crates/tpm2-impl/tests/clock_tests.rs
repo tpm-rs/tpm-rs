@@ -1,6 +1,6 @@
 use tpm2::commands::{Command, ReadClock};
 
-use tpm2::{Marshal, Unmarshal};
+use tpm2::{Marshal, UnmarshalMessage};
 mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
@@ -13,8 +13,8 @@ fn test_read_clock_success() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -45,7 +45,7 @@ fn test_read_clock_success() {
     assert_eq!(&response[6..10], &[0, 0, 0, 0]);
 
     let mut resp_slice = &response[10..];
-    let rsp = <ReadClock as Command>::Response::unmarshal(&mut resp_slice)
+    let rsp = <ReadClock as Command>::Response::unmarshal_with_handles([], &mut resp_slice)
         .expect("unmarshal <ReadClock as Command>::Response");
     assert!(rsp.current_time.clock_info.safe);
     assert_eq!(rsp.current_time.clock_info.clock, 42);
@@ -57,8 +57,8 @@ fn test_read_clock_after_restart() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -87,7 +87,7 @@ fn test_read_clock_after_restart() {
     );
     assert_eq!(&response1[6..10], &[0, 0, 0, 0]);
     let mut resp_slice1 = &response1[10..];
-    let rsp1 = <ReadClock as Command>::Response::unmarshal(&mut resp_slice1)
+    let rsp1 = <ReadClock as Command>::Response::unmarshal_with_handles([], &mut resp_slice1)
         .expect("unmarshal <ReadClock as Command>::Response");
     let initial_reset = rsp1.current_time.clock_info.reset_count;
     let initial_restart = rsp1.current_time.clock_info.restart_count;
@@ -122,7 +122,7 @@ fn test_read_clock_after_restart() {
     );
     assert_eq!(&response2[6..10], &[0, 0, 0, 0]);
     let mut resp_slice = &response2[10..];
-    let rsp2 = <ReadClock as Command>::Response::unmarshal(&mut resp_slice)
+    let rsp2 = <ReadClock as Command>::Response::unmarshal_with_handles([], &mut resp_slice)
         .expect("unmarshal <ReadClock as Command>::Response");
 
     assert_eq!(rsp2.current_time.clock_info.clock, 1100);
@@ -220,8 +220,8 @@ fn test_clock_set_success() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -254,7 +254,7 @@ fn test_clock_set_success() {
     assert_eq!(&response[6..10], &[0, 0, 0, 0]);
 
     let mut resp_slice = &response[10..];
-    let rsp = <ReadClock as Command>::Response::unmarshal(&mut resp_slice)
+    let rsp = <ReadClock as Command>::Response::unmarshal_with_handles([], &mut resp_slice)
         .expect("unmarshal <ReadClock as Command>::Response");
     assert!(rsp.current_time.clock_info.clock >= 100 + 1000);
 }
@@ -264,8 +264,8 @@ fn test_clock_set_backward_fails() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -294,8 +294,8 @@ fn test_clock_rate_adjust_modes() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -336,8 +336,8 @@ fn test_time_epoch_monotonic_persistence_and_resume_preservation() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -390,8 +390,8 @@ fn test_read_clock_g_time_vs_clock_separation_and_migration_semantics() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -411,7 +411,7 @@ fn test_read_clock_g_time_vs_clock_separation_and_migration_semantics() {
     tpm.execute_command_separate(&mut global_state, &read_clock_req[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
     let mut slice = &resp[10..];
-    let rsp1 = <ReadClock as Command>::Response::unmarshal(&mut slice).unwrap();
+    let rsp1 = <ReadClock as Command>::Response::unmarshal_with_handles([], &mut slice).unwrap();
     assert_eq!(rsp1.current_time.time, 200, "g_time should be 200 ms");
     assert_eq!(
         rsp1.current_time.clock_info.clock, 200,
@@ -426,7 +426,7 @@ fn test_read_clock_g_time_vs_clock_separation_and_migration_semantics() {
     tpm.execute_command_separate(&mut global_state, &read_clock_req[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
     let mut slice = &resp[10..];
-    let rsp2 = <ReadClock as Command>::Response::unmarshal(&mut slice).unwrap();
+    let rsp2 = <ReadClock as Command>::Response::unmarshal_with_handles([], &mut slice).unwrap();
     assert_eq!(
         rsp2.current_time.time, 200,
         "g_time must never be modified by TPM2_ClockSet"
@@ -441,7 +441,7 @@ fn test_read_clock_g_time_vs_clock_separation_and_migration_semantics() {
     tpm.execute_command_separate(&mut global_state, &read_clock_req[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
     let mut slice = &resp[10..];
-    let rsp3 = <ReadClock as Command>::Response::unmarshal(&mut slice).unwrap();
+    let rsp3 = <ReadClock as Command>::Response::unmarshal_with_handles([], &mut slice).unwrap();
     assert_eq!(rsp3.current_time.time, 500);
     assert_eq!(rsp3.current_time.clock_info.clock, 10_300);
 
@@ -459,7 +459,7 @@ fn test_read_clock_g_time_vs_clock_separation_and_migration_semantics() {
     tpm.execute_command_separate(&mut global_state, &read_clock_req[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
     let mut slice = &resp[10..];
-    let rsp4 = <ReadClock as Command>::Response::unmarshal(&mut slice).unwrap();
+    let rsp4 = <ReadClock as Command>::Response::unmarshal_with_handles([], &mut slice).unwrap();
     assert_eq!(
         rsp4.current_time.time, 0,
         "g_time resets to 0 on power cycle"

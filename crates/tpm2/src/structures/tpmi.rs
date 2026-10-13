@@ -1,4 +1,4 @@
-use crate::{errors::*, *};
+use crate::{errors::*, marshal::max, *};
 
 /// `TPMI_ALG_KDF` interface type defined in TPM 2.0 Part 2: Structures, Section 9.31 (Table 77).
 ///
@@ -91,94 +91,44 @@ impl<'a> Unmarshal<'a> for Option<TpmiAlgKdf> {
     }
 }
 
-/// `TPMI_ALG_SYM_MODE` interface type defined in TPM 2.0 Part 2: Structures, Section 9.25 (Table 56).
-///
-/// Selects a symmetric block cipher mode of operation (such as CBC, CFB, ECB, OFB, CTR, or CMAC).
-/// Used in symmetric cipher definitions (`TPMT_SYM_DEF`, `TPMT_SYM_DEF_OBJECT`).
-/// Note: `TPM_ALG_NULL` is represented as `Option<TpmiAlgSymMode>::None`.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-#[repr(u16)]
-pub enum TpmiAlgSymMode {
-    CMAC = Alg::CMAC.tag(),
-    CTR = Alg::CTR.tag(),
-    OFB = Alg::OFB.tag(),
-    CBC = Alg::CBC.tag(),
-    CFB = Alg::CFB.tag(),
-    ECB = Alg::ECB.tag(),
-}
-
-impl TryFrom<Alg> for Option<TpmiAlgSymMode> {
-    type Error = UnmarshalError;
-    fn try_from(a: Alg) -> Result<Self, Self::Error> {
-        match a {
-            Alg::NULL => Ok(None),
-            Alg::CMAC => Ok(Some(TpmiAlgSymMode::CMAC)),
-            Alg::CTR => Ok(Some(TpmiAlgSymMode::CTR)),
-            Alg::OFB => Ok(Some(TpmiAlgSymMode::OFB)),
-            Alg::CBC => Ok(Some(TpmiAlgSymMode::CBC)),
-            Alg::CFB => Ok(Some(TpmiAlgSymMode::CFB)),
-            Alg::ECB => Ok(Some(TpmiAlgSymMode::ECB)),
-            _ => Err(UnmarshalError::MODE),
-        }
-    }
-}
-
-impl From<Option<TpmiAlgSymMode>> for Alg {
-    fn from(mode: Option<TpmiAlgSymMode>) -> Self {
-        match mode {
-            Some(TpmiAlgSymMode::CMAC) => Alg::CMAC,
-            Some(TpmiAlgSymMode::CTR) => Alg::CTR,
-            Some(TpmiAlgSymMode::OFB) => Alg::OFB,
-            Some(TpmiAlgSymMode::CBC) => Alg::CBC,
-            Some(TpmiAlgSymMode::CFB) => Alg::CFB,
-            Some(TpmiAlgSymMode::ECB) => Alg::ECB,
-            None => Alg::NULL,
-        }
-    }
-}
-
-impl Marshal for Option<TpmiAlgSymMode> {
-    const MAX_SIZE: usize = Alg::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    #[inline(always)]
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        Alg::from(*self).marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for Option<TpmiAlgSymMode> {
-    #[inline(always)]
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Alg::unmarshal(src)?.try_into()
-    }
-}
-
 /// `TPMI_ALG_CIPHER_MODE` interface type defined in TPM 2.0 Part 2: Structures, Section 9.26 (Table 57).
 ///
-/// Selects a symmetric block cipher mode of operation (CTR, OFB, CBC, CFB, or ECB).
-/// Unlike [`TpmiAlgSymMode`], this type excludes `TPM_ALG_CMAC` and is used in
-/// `TPM2_EncryptDecrypt` and `TPM2_EncryptDecrypt2`.
+/// Selects a symmetric block cipher encryption mode of operation (CTR, OFB, CBC, CFB, or ECB).
+/// Unlike [`TpmiAlgSymMode`], this excludes `CMAC`; it is used in `TPM2_EncryptDecrypt` and
+/// `TPM2_EncryptDecrypt2`, and as the [`TpmiAlgSymMode::Cipher`] payload.
+///
+/// `CFB` is always available. The other modes are enabled by the `ctr`, `ofb`, `cbc`, and `ecb`
+/// Cargo features; converting or unmarshalling a mode that is not enabled fails with
+/// `TPM_RC_MODE` ([`UnmarshalError::MODE`]).
 /// Note: `TPM_ALG_NULL` is represented as `Option<TpmiAlgCipherMode>::None`.
+#[doc(alias = "TPMI_ALG_CIPHER_MODE")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum TpmiAlgCipherMode {
-    CTR = Alg::CTR.tag(),
-    OFB = Alg::OFB.tag(),
-    CBC = Alg::CBC.tag(),
-    CFB = Alg::CFB.tag(),
-    ECB = Alg::ECB.tag(),
+    #[cfg(feature = "ctr")]
+    Ctr = Alg::CTR.tag(),
+    #[cfg(feature = "ofb")]
+    Ofb = Alg::OFB.tag(),
+    #[cfg(feature = "cbc")]
+    Cbc = Alg::CBC.tag(),
+    Cfb = Alg::CFB.tag(),
+    #[cfg(feature = "ecb")]
+    Ecb = Alg::ECB.tag(),
 }
 
 impl TryFrom<Alg> for TpmiAlgCipherMode {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<TpmiAlgCipherMode, Self::Error> {
         match a {
-            Alg::CTR => Ok(Self::CTR),
-            Alg::OFB => Ok(Self::OFB),
-            Alg::CBC => Ok(Self::CBC),
-            Alg::CFB => Ok(Self::CFB),
-            Alg::ECB => Ok(Self::ECB),
+            #[cfg(feature = "ctr")]
+            Alg::CTR => Ok(Self::Ctr),
+            #[cfg(feature = "ofb")]
+            Alg::OFB => Ok(Self::Ofb),
+            #[cfg(feature = "cbc")]
+            Alg::CBC => Ok(Self::Cbc),
+            Alg::CFB => Ok(Self::Cfb),
+            #[cfg(feature = "ecb")]
+            Alg::ECB => Ok(Self::Ecb),
             _ => Err(UnmarshalError::MODE),
         }
     }
@@ -197,28 +147,17 @@ impl From<TpmiAlgCipherMode> for Alg {
     }
 }
 
-impl From<TpmiAlgCipherMode> for TpmiAlgSymMode {
-    fn from(mode: TpmiAlgCipherMode) -> Self {
-        match mode {
-            TpmiAlgCipherMode::CTR => Self::CTR,
-            TpmiAlgCipherMode::OFB => Self::OFB,
-            TpmiAlgCipherMode::CBC => Self::CBC,
-            TpmiAlgCipherMode::CFB => Self::CFB,
-            TpmiAlgCipherMode::ECB => Self::ECB,
-        }
-    }
-}
-
+/// Extracts the encryption mode from a [`TpmiAlgSymMode`].
+///
+/// Fails with `TPM_RC_MODE` ([`UnmarshalError::MODE`]) for [`TpmiAlgSymMode::Cmac`], which is not
+/// a `TPMI_ALG_CIPHER_MODE`.
 impl TryFrom<TpmiAlgSymMode> for TpmiAlgCipherMode {
     type Error = UnmarshalError;
     fn try_from(mode: TpmiAlgSymMode) -> Result<Self, Self::Error> {
         match mode {
-            TpmiAlgSymMode::CTR => Ok(Self::CTR),
-            TpmiAlgSymMode::OFB => Ok(Self::OFB),
-            TpmiAlgSymMode::CBC => Ok(Self::CBC),
-            TpmiAlgSymMode::CFB => Ok(Self::CFB),
-            TpmiAlgSymMode::ECB => Ok(Self::ECB),
-            TpmiAlgSymMode::CMAC => Err(UnmarshalError::MODE),
+            TpmiAlgSymMode::Cipher(mode) => Ok(mode),
+            #[cfg(feature = "cmac")]
+            TpmiAlgSymMode::Cmac => Err(UnmarshalError::MODE),
         }
     }
 }
@@ -267,6 +206,73 @@ impl Marshal for Option<TpmiAlgCipherMode> {
 }
 
 impl<'a> Unmarshal<'a> for Option<TpmiAlgCipherMode> {
+    #[inline(always)]
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Alg::unmarshal(src)?.try_into()
+    }
+}
+
+/// `TPMI_ALG_SYM_MODE` interface type defined in TPM 2.0 Part 2: Structures, Section 9.25 (Table 56).
+///
+/// Selects a symmetric block cipher mode of operation (CBC, CFB, ECB, OFB, CTR, or CMAC).
+/// Used in symmetric cipher definitions (`TPMT_SYM_DEF`, `TPMT_SYM_DEF_OBJECT`).
+/// Converting or unmarshalling an unknown or disabled mode fails with `TPM_RC_MODE`
+/// ([`UnmarshalError::MODE`]).
+/// Note: `TPM_ALG_NULL` is represented as `Option<TpmiAlgSymMode>::None`.
+#[doc(alias = "TPMI_ALG_SYM_MODE")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum TpmiAlgSymMode {
+    /// `TPM_ALG_CMAC` (enabled by the `cmac` Cargo feature).
+    #[cfg(feature = "cmac")]
+    Cmac,
+    /// A block cipher encryption mode ([`TpmiAlgCipherMode`]).
+    Cipher(TpmiAlgCipherMode),
+}
+
+impl From<TpmiAlgCipherMode> for TpmiAlgSymMode {
+    fn from(mode: TpmiAlgCipherMode) -> Self {
+        Self::Cipher(mode)
+    }
+}
+
+impl From<TpmiAlgSymMode> for Alg {
+    fn from(mode: TpmiAlgSymMode) -> Alg {
+        match mode {
+            #[cfg(feature = "cmac")]
+            TpmiAlgSymMode::Cmac => Alg::CMAC,
+            TpmiAlgSymMode::Cipher(c) => Alg::from(c),
+        }
+    }
+}
+
+impl TryFrom<Alg> for Option<TpmiAlgSymMode> {
+    type Error = UnmarshalError;
+    fn try_from(a: Alg) -> Result<Self, Self::Error> {
+        match a {
+            #[cfg(feature = "cmac")]
+            Alg::CMAC => Ok(Some(TpmiAlgSymMode::Cmac)),
+            other => Option::<TpmiAlgCipherMode>::try_from(other).map(|m| m.map(Into::into)),
+        }
+    }
+}
+
+impl From<Option<TpmiAlgSymMode>> for Alg {
+    fn from(mode: Option<TpmiAlgSymMode>) -> Self {
+        mode.map_or(Alg::NULL, Alg::from)
+    }
+}
+
+impl Marshal for Option<TpmiAlgSymMode> {
+    const MAX_SIZE: usize = Alg::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    #[inline(always)]
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        Alg::from(*self).marshal(dst)
+    }
+}
+
+impl<'a> Unmarshal<'a> for Option<TpmiAlgSymMode> {
     #[inline(always)]
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Alg::unmarshal(src)?.try_into()
@@ -422,6 +428,18 @@ pub enum TpmiAlgHash {
     Sha3_512 = Alg::SHA3_512.tag(),
 }
 
+#[cfg(not(any(
+    feature = "sha1",
+    feature = "sha256",
+    feature = "sha384",
+    feature = "sha512",
+    feature = "sm3_256",
+    feature = "sha3_256",
+    feature = "sha3_384",
+    feature = "sha3_512",
+)))]
+compile_error!("at least one hash algorithm feature must be enabled");
+
 impl TpmiAlgHash {
     /// Default hash algorithm selected from the enabled hash algorithm features,
     /// preferring `Sha256`, then `Sha384`, `Sha512`, `Sha1`, `Sm3_256`, `Sha3_256`,
@@ -496,8 +514,8 @@ impl TpmiAlgHash {
         }
     };
 
-    /// The maximum digest size (in bytes) across all supported TPM2 hash algorithms.
-    pub const MAX_DIGEST_BYTES: usize = crate::marshal::max(&[
+    /// Private helper to define [Self::MAX_DIGEST_BYTES] and [Self::HASH_COUNT]
+    const DIGEST_SIZES: &'static [usize] = &[
         #[cfg(feature = "sha1")]
         Self::Sha1.digest_size(),
         #[cfg(feature = "sha256")]
@@ -514,10 +532,15 @@ impl TpmiAlgHash {
         Self::Sha3_384.digest_size(),
         #[cfg(feature = "sha3_512")]
         Self::Sha3_512.digest_size(),
-    ]);
+    ];
+
+    /// The maximum digest size (in bytes) across all supported TPM2 hash algorithms.
+    #[doc(alias = "MAX_DIGEST_SIZE")]
+    #[doc(alias = "MAX_HASH_DIGEST_SIZE")]
+    pub const MAX_DIGEST_BYTES: usize = max(Self::DIGEST_SIZES);
     /// The maximum number of implemented hash algorithms.
     #[doc(alias = "TPM2_NUM_PCR_BANKS")]
-    pub const HASH_COUNT: usize = crate::TPM2_NUM_PCR_BANKS as usize;
+    pub const HASH_COUNT: usize = Self::DIGEST_SIZES.len();
 
     /// Returns the digest size (in bytes) of this hash algorithm.
     pub const fn digest_size(self) -> usize {

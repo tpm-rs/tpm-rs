@@ -1,12 +1,14 @@
 use crate::test_utils::*;
+#[allow(deprecated)]
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bData, Tpm2bPublicKeyRsa, Tpm2bTemplate, TpmaObject, TpmiAlgHash,
     TpmsRsaParms, TpmtPublic, TpmtRsaScheme,
-    commands::{CreateLoaded, CreateLoadedHandles, CreatePrimary, CreatePrimaryHandles},
+    commands::{CreateLoaded, CreatePrimary},
 };
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_create_loaded_decrypt_attr() {
     let mut sim = create_simulator!();
 
@@ -31,6 +33,7 @@ fn test_create_loaded_decrypt_attr() {
     };
 
     let cmd1 = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(tpm2::TpmsSensitiveCreate {
             user_auth: Default::default(),
             data: Default::default(),
@@ -39,11 +42,7 @@ fn test_create_loaded_decrypt_attr() {
         outside_info: Tpm2bData::default(),
         creation_pcr: Default::default(),
     };
-    let handles1 = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_rsp1, resp_handles1) =
-        execute_with_password_sessions(&mut sim, &cmd1, handles1, 1, &[]).unwrap();
+    let resp_handles1 = execute_with_password_sessions(&mut sim, &cmd1, 1, &[]).unwrap();
 
     let parent_handle = resp_handles1.object_handle;
 
@@ -64,15 +63,15 @@ fn test_create_loaded_decrypt_attr() {
     let pub_len = marshal_to_slice(&public_child, &mut pub_buf);
 
     let cmd2 = CreateLoaded {
+        parent_handle,
         in_sensitive: tpm2::Tpm2b(tpm2::TpmsSensitiveCreate {
             user_auth: Default::default(),
             data: Default::default(),
         }),
         in_public: Tpm2bTemplate::from_bytes(&pub_buf[..pub_len]).unwrap(),
     };
-    let handles2 = CreateLoadedHandles { parent_handle };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd2, handles2, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd2, 1, &[]);
     assert!(
         res.is_err(),
         "Expected TPM2_CreateLoaded to fail on parent without decrypt attr"

@@ -1,10 +1,12 @@
 use crate::test_utils::*;
-use tpm2::commands::{Commit, CommitHandles, CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::{Commit, CreateLoaded};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_auth() {
     let mut sim = create_simulator!();
 
@@ -44,31 +46,27 @@ fn test_commit_auth() {
     let in_public = crate::test_utils::make_template(&pub_area);
 
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
-    };
 
-    let (_rsp_cp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
 
     let commit = Commit {
+        sign_handle: rsp_handles.object_handle,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    let commit_handles = CommitHandles {
-        sign_handle: rsp_handles.object_handle,
-    };
 
-    if execute_with_password_sessions(&mut sim, &commit, commit_handles, 0, &[]).is_ok() {
+    if execute_with_password_sessions(&mut sim, &commit, 0, &[]).is_ok() {
         panic!("Should fail with 0 sessions, but succeeded!");
     }
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_zero_auth_ignored() {
     let mut sim = create_simulator!();
 
@@ -108,26 +106,21 @@ fn test_commit_zero_auth_ignored() {
     let in_public = crate::test_utils::make_template(&pub_area);
 
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
-    };
 
-    let (_rsp_cp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
 
     let commit = Commit {
+        sign_handle: rsp_handles.object_handle,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    let commit_handles = CommitHandles {
-        sign_handle: rsp_handles.object_handle,
-    };
 
-    let result = execute_with_password_sessions(&mut sim, &commit, commit_handles, 1, b"");
+    let result = execute_with_password_sessions(&mut sim, &commit, 1, b"");
     assert!(
         result.is_ok(),
         "Expected authorization to succeed because trailing zeros in authValue are ignored"
@@ -135,6 +128,7 @@ fn test_commit_zero_auth_ignored() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_trailing_garbage_p1() {
     let mut sim = create_simulator!();
 
@@ -174,15 +168,12 @@ fn test_commit_trailing_garbage_p1() {
     let in_public = crate::test_utils::make_template(&pub_area);
 
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
-    };
 
-    let (_rsp_cp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
 
     // Create a p1 that is a valid empty point but has trailing garbage
     let valid_point = TpmsEccPoint {
@@ -198,6 +189,7 @@ fn test_commit_trailing_garbage_p1() {
     );
 
     struct BadCommit<'a> {
+        sign_handle: Handle,
         p1_buf: &'a [u8],
         s2: Tpm2bSensitiveData<'a>,
         y2: Tpm2bEccParameter<'a>,
@@ -222,24 +214,25 @@ fn test_commit_trailing_garbage_p1() {
             off
         }
     }
+    impl Message for BadCommit<'_> {
+        type Handles = [Handle; 1];
+        fn handles(&self) -> Self::Handles {
+            [self.sign_handle]
+        }
+    }
     impl Command for BadCommit<'_> {
         const CMD_CODE: TpmCc = TpmCc::Commit;
-        type Handles = CommitHandles;
         type Response<'a> = ();
-        type RespHandles = ();
     }
 
     let commit = BadCommit {
+        sign_handle: rsp_handles.object_handle,
         p1_buf: &bad_p1_buf,
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    let commit_handles = CommitHandles {
-        sign_handle: rsp_handles.object_handle,
-    };
 
-    let result =
-        execute_with_password_sessions_status(&mut sim, &commit, commit_handles, 1, password);
+    let result = execute_with_password_sessions_status(&mut sim, &commit, 1, password);
     println!("Is Ok: {}", result.is_ok());
     if result.is_ok() {
         panic!("VULNERABILITY: Trailing garbage in p1 ignored!");

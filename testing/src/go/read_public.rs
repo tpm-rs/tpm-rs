@@ -1,11 +1,11 @@
 use crate::test_utils::{execute_with_password_sessions, flush_context};
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, ReadPublic, ReadPublicHandles};
-use tpm2::{Handle, TpmEccCurve};
+use tpm2::commands::{CreatePrimary, ReadPublic};
 use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bName, Tpm2bSensitiveData,
-    TpmaObject, TpmiAlgHash, TpmiAlgSymMode, TpmsEccParms, TpmsEccPoint, TpmsSensitiveCreate,
-    TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bName,
+    Tpm2bSensitiveData, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmsEccParms,
+    TpmsEccPoint, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
 };
+use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::{Simulator, create_simulator};
 
 use crate::test_utils::{execute_with_hmac_sessions, start_auth_session};
@@ -26,7 +26,10 @@ fn ecc_srk_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -76,26 +79,21 @@ fn test_read_public_key() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
 
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[])
+        .expect("CreatePrimary failed");
 
-    let (create_rsp, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[])
-            .expect("CreatePrimary failed");
+    let object_handle = create_rsp.object_handle;
 
-    let object_handle = create_rsp_handles.object_handle;
+    let read_cmd = ReadPublic { object_handle };
 
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
-
-    let (read_rsp, _) = execute_with_password_sessions(&mut sim, &read_cmd, read_handles, 0, &[])
-        .expect("ReadPublic failed");
+    let read_rsp =
+        execute_with_password_sessions(&mut sim, &read_cmd, 0, &[]).expect("ReadPublic failed");
 
     let out_pub_create = create_rsp.out_public.0;
     let out_pub_read = read_rsp.out_public.0;
@@ -120,6 +118,7 @@ fn test_read_public_key() {
 /// name.
 fn read_public_with_hmac_session_setup(sim: &mut Simulator<'_>) -> (Handle, Tpm2bName<'static>) {
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -127,13 +126,9 @@ fn read_public_with_hmac_session_setup(sim: &mut Simulator<'_>) -> (Handle, Tpm2
         in_public: tpm2::Tpm2b(ecc_srk_template()),
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (create_rsp, create_rsp_handles) =
-        execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[])
-            .expect("CreatePrimary failed");
-    (create_rsp_handles.object_handle, create_rsp.name)
+    let create_rsp =
+        execute_with_password_sessions(sim, &create_cmd, 1, &[]).expect("CreatePrimary failed");
+    (create_rsp.object_handle, create_rsp.name)
 }
 
 // Original Go test: read_public_test.go - TestReadPublicWithHMACSession/ReadPublic with HMAC session
@@ -144,7 +139,10 @@ fn test_read_public_with_hmac_session_read_public_with_hmac_session() {
 
     // HMAC(TPMAlgSHA256, 16, AESEncryption(128, EncryptOut)): a one-off,
     // unbound, unsalted HMAC session encrypting the response parameter.
-    let sym_def = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+    let sym_def = Some(TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+    });
     let mut session = start_auth_session(
         &mut sim,
         Handle::RH_NULL,
@@ -158,13 +156,11 @@ fn test_read_public_with_hmac_session_read_public_with_hmac_session() {
 
     session.attributes.insert(TpmaSession::ENCRYPT); // Encrypt output parameter (response)
 
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
+    let read_cmd = ReadPublic { object_handle };
 
     execute_with_hmac_sessions(
         &mut sim,
         &read_cmd,
-        read_handles,
         &[name.get_buffer()],
         &mut [session],
         &[&[]],
@@ -180,11 +176,9 @@ fn test_read_public_with_hmac_session_read_public_without_hmac_session() {
     let mut sim = create_simulator!();
     let (object_handle, _name) = read_public_with_hmac_session_setup(&mut sim);
 
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles { object_handle };
+    let read_cmd = ReadPublic { object_handle };
 
-    execute_with_password_sessions(&mut sim, &read_cmd, read_handles, 0, &[])
-        .expect("ReadPublic failed");
+    execute_with_password_sessions(&mut sim, &read_cmd, 0, &[]).expect("ReadPublic failed");
 
     flush_context(&mut sim, object_handle).expect("FlushContext failed");
 }

@@ -7,17 +7,18 @@ mod common;
 
 use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
+#[allow(deprecated)]
+use tpm2::commands::EncryptDecrypt;
 use tpm2::commands::{
-    Command, EncryptDecrypt, EncryptDecrypt2, EncryptDecrypt2Handles, EncryptDecryptHandles,
-    PolicyAuthorize, PolicyAuthorizeHandles, PolicyCpHash, PolicyCpHashHandles,
-    PolicyDuplicationSelect, PolicyDuplicationSelectHandles,
+    Command, EncryptDecrypt2, Message, PolicyAuthorize, PolicyCpHash, PolicyDuplicationSelect,
+    UnmarshalMessage,
+};
+use tpm2::{
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bIv, Tpm2bMaxBuffer, Tpm2bName,
+    Tpm2bNonce, TpmaObject, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
+    TpmsAuthCommand, TpmtPublic, TpmtSymDefObject, TpmtTkVerified,
 };
 use tpm2::{Handle, Marshal, TpmCc, TpmSe};
-use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bIv, Tpm2bMaxBuffer, Tpm2bName, Tpm2bNonce,
-    TpmaObject, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmsAuthCommand,
-    TpmtPublic, TpmtSymDefObject, TpmtTkVerified,
-};
 use tpm2_impl::TpmEngine;
 use tpm2_impl::handler::SessionState;
 
@@ -25,7 +26,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -52,14 +53,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command_with_auths<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -72,7 +70,14 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    offset += marshal_to_slice(handles, &mut request_buf[offset..]);
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        offset += handle.marshal(handle_slice);
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -105,27 +110,30 @@ where
     }
 
     let resp_tag = u16::from_be_bytes([response_buf[0], response_buf[1]]);
-    let params_offset = if resp_tag == 0x8002 { 14 } else { 10 };
-
     let mut unmarshal_buf: &'static [u8] =
-        std::vec::Vec::leak(response_buf[params_offset..resp_size].to_vec());
-    let resp =
-        <C::Response<'static>>::unmarshal(&mut unmarshal_buf).map_err(|_| TpmRc::FAILURE.get())?;
+        std::vec::Vec::leak(response_buf[10..resp_size].to_vec());
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut unmarshal_buf).map_err(|_| TpmRc::FAILURE.get())?;
+    }
+    if resp_tag == 0x8002 {
+        // Skip parameterSize.
+        unmarshal_buf = &unmarshal_buf[4..];
+    }
+    let resp = <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut unmarshal_buf)
+        .map_err(|_| TpmRc::FAILURE.get())?;
     Ok(resp)
 }
 
 fn execute_tpm_command_with_corrupted_bytes<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
     corrupt_fn: impl FnOnce(&mut [u8]),
 ) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -138,7 +146,14 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    offset += marshal_to_slice(handles, &mut request_buf[offset..]);
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        offset += handle.marshal(handle_slice);
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -174,12 +189,18 @@ where
     }
 
     let resp_tag = u16::from_be_bytes([response_buf[0], response_buf[1]]);
-    let params_offset = if resp_tag == 0x8002 { 14 } else { 10 };
-
     let mut unmarshal_buf: &'static [u8] =
-        std::vec::Vec::leak(response_buf[params_offset..resp_size].to_vec());
-    let resp =
-        <C::Response<'static>>::unmarshal(&mut unmarshal_buf).map_err(|_| TpmRc::FAILURE.get())?;
+        std::vec::Vec::leak(response_buf[10..resp_size].to_vec());
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut unmarshal_buf).map_err(|_| TpmRc::FAILURE.get())?;
+    }
+    if resp_tag == 0x8002 {
+        // Skip parameterSize.
+        unmarshal_buf = &unmarshal_buf[4..];
+    }
+    let resp = <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut unmarshal_buf)
+        .map_err(|_| TpmRc::FAILURE.get())?;
     Ok(resp)
 }
 
@@ -188,8 +209,8 @@ fn test_policy_duplication_select_invalid_inputs() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x03000001;
     let policy_session = SessionState {
@@ -230,12 +251,9 @@ fn test_policy_duplication_select_invalid_inputs() {
     };
     global_state.add_session(policy_session).unwrap();
 
-    let handles = PolicyDuplicationSelectHandles {
-        policy_session: Handle(session_handle),
-    };
-
     // 1. Invalid include_object (e.g. 2) -> Expects 0x95 (TPM_RC_SIZE)
     let cmd_invalid_include = PolicyDuplicationSelect {
+        policy_session: Handle(session_handle),
         object_name: Tpm2bName::default(),
         new_parent_name: Tpm2bName::default(),
         include_object: true,
@@ -243,7 +261,6 @@ fn test_policy_duplication_select_invalid_inputs() {
     let res = execute_tpm_command_with_corrupted_bytes::<PolicyDuplicationSelect>(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd_invalid_include,
         &[],
         |buf| {
@@ -259,6 +276,7 @@ fn test_policy_duplication_select_invalid_inputs() {
 
     // 2. Malformed object_name (size 3) -> Expects 0x01C4 or 0x01D5?
     let cmd_malformed_object_name = PolicyDuplicationSelect {
+        policy_session: Handle(session_handle),
         object_name: Tpm2bName::from_bytes(&[0, 1, 2]).unwrap(),
         new_parent_name: Tpm2bName::default(),
         include_object: true,
@@ -266,7 +284,6 @@ fn test_policy_duplication_select_invalid_inputs() {
     let res = execute_tpm_command_with_auths::<PolicyDuplicationSelect>(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd_malformed_object_name,
         &[],
     );
@@ -280,6 +297,7 @@ fn test_policy_duplication_select_invalid_inputs() {
 
     // 3. Malformed new_parent_name (size 3) -> Expects 0x02C4 or 0x02D5?
     let cmd_malformed_parent_name = PolicyDuplicationSelect {
+        policy_session: Handle(session_handle),
         object_name: Tpm2bName::default(),
         new_parent_name: Tpm2bName::from_bytes(&[0, 1, 2]).unwrap(),
         include_object: true,
@@ -287,7 +305,6 @@ fn test_policy_duplication_select_invalid_inputs() {
     let res = execute_tpm_command_with_auths::<PolicyDuplicationSelect>(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd_malformed_parent_name,
         &[],
     );
@@ -310,7 +327,7 @@ fn compute_hmac_in_test(
     let mut digest = [0u8; 32];
     hash_state.finalize(&mut digest).unwrap();
 
-    let mut hmac_state = tpm2::crypto::HmacCtx::new(crypto, TpmiAlgHash::Sha256, &[]).unwrap();
+    let mut hmac_state = tpm2::crypto::HmacStream::new(crypto, TpmiAlgHash::Sha256, &[]).unwrap();
     hmac_state.update(&digest).unwrap();
     for data in updates_hmac {
         hmac_state.update(data).unwrap();
@@ -325,8 +342,8 @@ fn test_policy_cp_hash_self_authorization() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // We use a valid policy session handle (0x03000001) in this test.
     let session_handle = 0x03000001;
@@ -368,10 +385,8 @@ fn test_policy_cp_hash_self_authorization() {
     };
     global_state.add_session(policy_session).unwrap();
 
-    let handles = PolicyCpHashHandles {
-        policy_session: Handle(session_handle),
-    };
     let cmd = PolicyCpHash {
+        policy_session: Handle(session_handle),
         cp_hash_a: Tpm2bDigest::from_bytes(&[0xaa; 32]).unwrap(),
     };
 
@@ -403,13 +418,8 @@ fn test_policy_cp_hash_self_authorization() {
     // C has no "self-authorization" check; the session does not authorize any handle and has
     // none of audit/encrypt/decrypt set, so C ParseSessionBuffer returns
     // TPM_RC_ATTRIBUTES + RC_S1 (0x0982).
-    let res = execute_tpm_command_with_auths::<PolicyCpHash>(
-        &mut tpm,
-        &mut global_state,
-        &handles,
-        &cmd,
-        &auths,
-    );
+    let res =
+        execute_tpm_command_with_auths::<PolicyCpHash>(&mut tpm, &mut global_state, &cmd, &auths);
     let err_val = res.err().unwrap();
     println!(
         "PolicyCpHash self-authorization returned error: 0x{:08X}",
@@ -423,8 +433,8 @@ fn test_policy_authorize_invalid_hierarchy() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x03000001;
     let policy_session = SessionState {
@@ -465,10 +475,6 @@ fn test_policy_authorize_invalid_hierarchy() {
     };
     global_state.add_session(policy_session).unwrap();
 
-    let handles = PolicyAuthorizeHandles {
-        policy_session: Handle(session_handle),
-    };
-
     // Use a ticket with an invalid hierarchy (e.g. 0x40000009 - RH_PW)
     let check_ticket = TpmtTkVerified::Verified(
         Handle(0x40000009),
@@ -477,19 +483,15 @@ fn test_policy_authorize_invalid_hierarchy() {
 
     let key_sign_bytes = [[0x00, 0x0b].as_slice(), [0x11; 32].as_slice()].concat();
     let cmd = PolicyAuthorize {
+        policy_session: Handle(session_handle),
         approved_policy: Tpm2bDigest::from_bytes(&[0; 32]).unwrap(),
         policy_ref: Tpm2bNonce::default(),
         key_sign: Tpm2bName::from_bytes(&key_sign_bytes).unwrap(),
         check_ticket,
     };
 
-    let res = execute_tpm_command_with_auths::<PolicyAuthorize>(
-        &mut tpm,
-        &mut global_state,
-        &handles,
-        &cmd,
-        &[],
-    );
+    let res =
+        execute_tpm_command_with_auths::<PolicyAuthorize>(&mut tpm, &mut global_state, &cmd, &[]);
     let err_val = res.err().unwrap();
     println!(
         "PolicyAuthorize invalid hierarchy returned error: 0x{:08X}",
@@ -499,13 +501,15 @@ fn test_policy_authorize_invalid_hierarchy() {
     assert_eq!(err_val, 0x04C4);
 }
 
+// `TPM2_EncryptDecrypt` is `#[deprecated]` upstream.
+#[allow(deprecated)]
 #[test]
 fn test_encrypt_decrypt_invalid_decrypt_value() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000001;
     let transient_obj = tpm2_impl::handler::TransientObject {
@@ -540,12 +544,10 @@ fn test_encrypt_decrypt_invalid_decrypt_value() {
         hmac: Tpm2bDigest::from_bytes(b"password").unwrap(),
     }];
 
-    let handles = EncryptDecryptHandles {
-        key_handle: Handle(key_handle),
-    };
     let cmd = EncryptDecrypt {
+        key_handle: Handle(key_handle),
         decrypt: false,
-        mode: Some(TpmiAlgCipherMode::CFB),
+        mode: Some(TpmiAlgCipherMode::Cfb),
         iv_in: Tpm2bIv::default(),
         in_data: Tpm2bMaxBuffer::default(),
     };
@@ -553,7 +555,6 @@ fn test_encrypt_decrypt_invalid_decrypt_value() {
     let res = execute_tpm_command_with_corrupted_bytes::<EncryptDecrypt>(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd,
         &auths,
         |buf| {
@@ -574,8 +575,8 @@ fn test_encrypt_decrypt2_invalid_decrypt_value() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000001;
     let transient_obj = tpm2_impl::handler::TransientObject {
@@ -610,20 +611,17 @@ fn test_encrypt_decrypt2_invalid_decrypt_value() {
         hmac: Tpm2bDigest::from_bytes(b"password").unwrap(),
     }];
 
-    let handles = EncryptDecrypt2Handles {
-        key_handle: Handle(key_handle),
-    };
     let cmd = EncryptDecrypt2 {
+        key_handle: Handle(key_handle),
         in_data: Tpm2bMaxBuffer::default(),
         decrypt: false,
-        mode: Some(TpmiAlgCipherMode::CFB),
+        mode: Some(TpmiAlgCipherMode::Cfb),
         iv_in: Tpm2bIv::default(),
     };
 
     let res = execute_tpm_command_with_corrupted_bytes::<EncryptDecrypt2>(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd,
         &auths,
         |buf| {
@@ -639,13 +637,15 @@ fn test_encrypt_decrypt2_invalid_decrypt_value() {
     );
 }
 
+// `TPM2_EncryptDecrypt` is `#[deprecated]` upstream.
+#[allow(deprecated)]
 #[test]
 fn test_encrypt_decrypt_cmac_key_and_mode_rejection() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000001;
     let transient_obj = tpm2_impl::handler::TransientObject {
@@ -665,7 +665,10 @@ fn test_encrypt_decrypt_cmac_key_and_mode_rejection() {
                 | TpmaObject::DECRYPT
                 | TpmaObject::SIGN_ENCRYPT,
             parms_and_id: PublicParmsAndId::Sym(
-                TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CMAC)),
+                TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cmac),
+                },
                 Tpm2bDigest::default(),
             ),
             ..Default::default()
@@ -687,10 +690,8 @@ fn test_encrypt_decrypt_cmac_key_and_mode_rejection() {
     }];
 
     // 1. EncryptDecrypt with mode = None on a key whose default mode is CMAC -> should return TPM_RC_MODE + TPM_RC_H + TPM_RC_1
-    let handles = EncryptDecryptHandles {
-        key_handle: Handle(key_handle),
-    };
     let cmd = EncryptDecrypt {
+        key_handle: Handle(key_handle),
         decrypt: false,
         mode: None,
         iv_in: Tpm2bIv::from_bytes(&[0u8; 16]).unwrap(),
@@ -699,7 +700,6 @@ fn test_encrypt_decrypt_cmac_key_and_mode_rejection() {
     let res = execute_tpm_command_with_corrupted_bytes::<EncryptDecrypt>(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd,
         &auths,
         |_| {},
@@ -713,7 +713,6 @@ fn test_encrypt_decrypt_cmac_key_and_mode_rejection() {
     let res_param = execute_tpm_command_with_corrupted_bytes::<EncryptDecrypt>(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd,
         &auths,
         |buf| {
@@ -727,10 +726,8 @@ fn test_encrypt_decrypt_cmac_key_and_mode_rejection() {
     );
 
     // 3. EncryptDecrypt2 with mode parameter corrupted to TPM_ALG_CMAC (0x003F) -> unmarshalling fails with TPM_RC_MODE + TPM_RC_P + TPM_RC_3
-    let handles2 = EncryptDecrypt2Handles {
-        key_handle: Handle(key_handle),
-    };
     let cmd2 = EncryptDecrypt2 {
+        key_handle: Handle(key_handle),
         in_data: Tpm2bMaxBuffer::from_bytes(&[0u8; 16]).unwrap(),
         decrypt: false,
         mode: None,
@@ -739,7 +736,6 @@ fn test_encrypt_decrypt_cmac_key_and_mode_rejection() {
     let res_param2 = execute_tpm_command_with_corrupted_bytes::<EncryptDecrypt2>(
         &mut tpm,
         &mut global_state,
-        &handles2,
         &cmd2,
         &auths,
         |buf| {
@@ -758,8 +754,8 @@ fn test_policy_duplication_select_name_size_limits() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle_1 = 0x03000001;
     let policy_session_1 = SessionState {
@@ -800,10 +796,6 @@ fn test_policy_duplication_select_name_size_limits() {
     };
     global_state.add_session(policy_session_1).unwrap();
 
-    let handles_1 = PolicyDuplicationSelectHandles {
-        policy_session: Handle(session_handle_1),
-    };
-
     // 1. A 66-byte name (SHA512 Name) when include_object is NO should succeed.
     let mut sha512_name = [0u8; 66];
     sha512_name[0..2].copy_from_slice(&0x0012u16.to_be_bytes()); // SHA512 alg id
@@ -811,6 +803,7 @@ fn test_policy_duplication_select_name_size_limits() {
     let object_name_66 = Tpm2bName::from_bytes(&sha512_name).unwrap();
 
     let cmd_66 = PolicyDuplicationSelect {
+        policy_session: Handle(session_handle_1),
         object_name: object_name_66,
         new_parent_name: Tpm2bName::default(),
         include_object: false,
@@ -818,7 +811,6 @@ fn test_policy_duplication_select_name_size_limits() {
     let res = execute_tpm_command_with_auths::<PolicyDuplicationSelect>(
         &mut tpm,
         &mut global_state,
-        &handles_1,
         &cmd_66,
         &[],
     );
@@ -868,16 +860,13 @@ fn test_policy_duplication_select_name_size_limits() {
     };
     global_state.add_session(policy_session_2).unwrap();
 
-    let handles_2 = PolicyDuplicationSelectHandles {
-        policy_session: Handle(session_handle_2),
-    };
-
     let mut name_65 = [0u8; 65];
     name_65[0..2].copy_from_slice(&0x0012u16.to_be_bytes()); // SHA512 alg id
     name_65[2..65].fill(0xbb);
     let object_name_65 = Tpm2bName::from_bytes(&name_65).unwrap();
 
     let cmd_65 = PolicyDuplicationSelect {
+        policy_session: Handle(session_handle_2),
         object_name: object_name_65,
         new_parent_name: Tpm2bName::default(),
         include_object: false,
@@ -885,7 +874,6 @@ fn test_policy_duplication_select_name_size_limits() {
     let res = execute_tpm_command_with_auths::<PolicyDuplicationSelect>(
         &mut tpm,
         &mut global_state,
-        &handles_2,
         &cmd_65,
         &[],
     );

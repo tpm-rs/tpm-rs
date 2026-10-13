@@ -8,20 +8,17 @@ fn test_unsupported_algorithm_id() {
 
     // sm3_256 should fail
     let res = tpm2::crypto::Hash::sm3_256(&provider);
-    assert!(matches!(res, Err(CryptoError::UnsupportedAlgorithm)));
+    assert!(matches!(res, Err(CryptoError::Unsupported)));
 
     // hmac sm3_256 should fail
     let res_hmac = tpm2::crypto::Hmac::sm3_256(&provider, &[0u8; 16]);
-    assert!(matches!(res_hmac, Err(CryptoError::UnsupportedAlgorithm)));
+    assert!(matches!(res_hmac, Err(CryptoError::Unsupported)));
 
     // direct hash should fail
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
     let res_hash_direct =
         tpm2::crypto::hash(&provider, tpm2::TpmiAlgHash::Sm3_256, &[1, 2, 3], &mut out);
-    assert!(matches!(
-        res_hash_direct,
-        Err(CryptoError::UnsupportedAlgorithm)
-    ));
+    assert!(matches!(res_hash_direct, Err(CryptoError::Unsupported)));
 
     // direct hmac should fail
     let res_hmac_direct = tpm2::crypto::hmac(
@@ -31,10 +28,7 @@ fn test_unsupported_algorithm_id() {
         &[1, 2, 3],
         &mut out,
     );
-    assert!(matches!(
-        res_hmac_direct,
-        Err(CryptoError::UnsupportedAlgorithm)
-    ));
+    assert!(matches!(res_hmac_direct, Err(CryptoError::Unsupported)));
 }
 
 #[test]
@@ -44,7 +38,7 @@ fn test_empty_and_massive_inputs() {
     // Empty key and data for HMAC
     let key_empty = [];
     let data_empty = [];
-    let mut out_empty = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out_empty = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
     let hmac_empty = tpm2::crypto::hmac(
         &provider,
         tpm2::TpmiAlgHash::Sha256,
@@ -91,7 +85,7 @@ fn test_fine_grained_incremental_updates() {
     let mut digest = [0u8; 32];
     state.finalize(&mut digest).unwrap();
 
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
     let expected =
         tpm2::crypto::hash(&provider, tpm2::TpmiAlgHash::Sha256, data, &mut out).unwrap();
     assert_eq!(&digest[..], expected.digest());

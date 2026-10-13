@@ -30,7 +30,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut request = request_response;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<FlushContext>()?;
+        // `flushHandle` is a parameter (no handle area); its `TPMI_DH_CONTEXT` range check is
+        // done by `FlushContext::unmarshal_with_handles` (`TPM_RC_VALUE + RC_P1`).
+        let cmd = request.try_unmarshal_command::<FlushContext>([])?;
         let flush_handle = cmd.flush_handle.0;
 
         if request.remaining_bytes() != 0 {

@@ -1,10 +1,12 @@
 use crate::test_utils::*;
-use tpm2::commands::{CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::CreateLoaded;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_create_loaded_no_user_with_auth_bypass() {
     let mut sim = create_simulator!();
 
@@ -27,7 +29,10 @@ fn test_create_loaded_no_user_with_auth_bypass() {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -40,16 +45,12 @@ fn test_create_loaded_no_user_with_auth_bypass() {
     };
 
     let create_parent = CreateLoaded {
+        parent_handle: Handle(tpm2::Handle::RH_OWNER.0),
         in_sensitive: parent_in_sensitive,
         in_public: crate::test_utils::make_template(&parent_pub_area),
     };
 
-    let parent_handles = CreateLoadedHandles {
-        parent_handle: Handle(tpm2::Handle::RH_OWNER.0),
-    };
-
-    let (_rsp_cp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_parent, parent_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create_parent, 1, &[]).unwrap();
     let parent_handle = rsp_handles.object_handle;
 
     // 2. Try to create a child under this parent
@@ -80,14 +81,12 @@ fn test_create_loaded_no_user_with_auth_bypass() {
     };
 
     let create_child = CreateLoaded {
+        parent_handle,
         in_sensitive: child_in_sensitive,
         in_public: crate::test_utils::make_template(&child_pub_area),
     };
 
-    let child_handles = CreateLoadedHandles { parent_handle };
-
-    let result =
-        execute_with_password_sessions(&mut sim, &create_child, child_handles, 1, password);
+    let result = execute_with_password_sessions(&mut sim, &create_child, 1, password);
     if result.is_ok() {
         panic!(
             "VULNERABILITY: CreateLoaded allowed password authorization for parent even though parent's USER_WITH_AUTH was 0!"

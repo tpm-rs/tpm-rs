@@ -10,7 +10,7 @@ use common::{
     FakeRng, FakeStorage, FakeTimer, TestCryptoProvider, execute_command, password_auth,
     setup_real_crypto_tpm,
 };
-use tpm2::commands::{ContextSave, ContextSaveHandles, CreatePrimary, CreatePrimaryHandles};
+use tpm2::commands::{ContextSave, CreatePrimary};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bSensitiveData,
     TpmEccCurve, TpmaObject, TpmiAlgHash, TpmsEccParms, TpmsEccPoint, TpmsSchemeEcdaa,
@@ -27,9 +27,9 @@ fn test_context_save_kdfa_bug() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::from_bytes(b"pass").unwrap(),
@@ -60,28 +60,20 @@ fn test_context_save_kdfa_bug() {
         ),
     });
     let create = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let (create_handles, _) = execute_command(
-        &mut tpm,
-        &mut global_state,
-        &CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
-        },
-        &create,
-        &[password_auth(b"")],
-    )
-    .expect("CreatePrimary failed");
+    let create_resp = execute_command(&mut tpm, &mut global_state, &create, &[password_auth(b"")])
+        .expect("CreatePrimary failed");
 
-    let (_, save_resp) = execute_command(
+    let save_resp = execute_command(
         &mut tpm,
         &mut global_state,
-        &ContextSaveHandles {
-            save_handle: create_handles.object_handle,
+        &ContextSave {
+            save_handle: create_resp.object_handle,
         },
-        &ContextSave {},
         &[],
     )
     .expect("ContextSave failed");
@@ -102,13 +94,13 @@ fn test_context_save_kdfa_bug() {
     );
 
     let proof = &global_state.sh_proof[..global_state.sh_proof_size as usize];
-    let mut hmac = tpm2::crypto::HmacCtx::new(&crypto, TpmiAlgHash::Sha256, proof).unwrap();
+    let mut hmac = tpm2::crypto::HmacStream::new(&crypto, TpmiAlgHash::Sha256, proof).unwrap();
     hmac.update(&global_state.total_reset_count.to_be_bytes())
         .unwrap();
     hmac.update(&context.sequence.to_be_bytes()).unwrap();
     hmac.update(&context.saved_handle.0.to_be_bytes()).unwrap();
     hmac.update(enc_context).unwrap();
-    let mut mac_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut mac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
     let mac = hmac.finalize(&mut mac_buf).unwrap();
 
     assert_eq!(

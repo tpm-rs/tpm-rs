@@ -1,7 +1,9 @@
 use rsa::{BigUint, Pkcs1v15Sign, RsaPublicKey};
 use sha2::{Digest, Sha256};
 use tpm2::Handle;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, Sign, SignHandles};
+use tpm2::commands::CreatePrimary;
+#[allow(deprecated)] // TPM2_Sign is deprecated upstream, but the TPM implements it.
+use tpm2::commands::Sign;
 use tpm2::*;
 use tpm2_simulator::create_simulator;
 
@@ -9,6 +11,7 @@ use crate::test_utils::*;
 
 // Original Go test: sign_test.go - TestSign
 #[test]
+#[allow(deprecated)] // TPM2_Sign is deprecated upstream, but the TPM implements it.
 fn test_sign() {
     let mut sim = create_simulator!();
 
@@ -37,6 +40,7 @@ fn test_sign() {
     let pcr_selection = TpmlPcrSelection::from_slice(&[tpms_pcr_selection]).unwrap();
 
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -45,37 +49,26 @@ fn test_sign() {
         outside_info: Tpm2bData::default(),
         creation_pcr: pcr_selection,
     };
-    let create_primary_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (create_primary_resp, create_primary_resp_handles) = execute_with_password_sessions(
-        &mut sim,
-        &create_primary_cmd,
-        create_primary_handles,
-        1,
-        &[],
-    )
-    .expect("could not create key");
+    let create_primary_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[])
+        .expect("could not create key");
 
-    let object_handle = create_primary_resp_handles.object_handle;
+    let object_handle = create_primary_resp.object_handle;
 
     // Computes the SHA256 digest of "migrationpains"
     let data_to_sign = b"migrationpains";
     let digest = Sha256::digest(data_to_sign);
 
     let sign_cmd = Sign {
+        key_handle: object_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
         validation: TpmtTkHashcheck::default(),
     };
-    let sign_handles = SignHandles {
-        key_handle: object_handle,
-    };
 
     let mut resp_buffer = [0u8; 4096];
-    let (sign_resp, _) = execute_sign(&mut sim, &sign_cmd, sign_handles, 1, &[], &mut resp_buffer)
-        .expect("Sign failed");
+    let sign_resp =
+        execute_sign(&mut sim, &sign_cmd, 1, &[], &mut resp_buffer).expect("Sign failed");
 
     // Extract the public key details from create_primary_resp
     let out_public_struct = create_primary_resp.out_public.0;

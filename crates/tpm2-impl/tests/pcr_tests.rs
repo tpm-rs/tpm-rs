@@ -1,12 +1,12 @@
 use common::marshal_to_slice;
 use tpm2::errors::TpmRc;
 
-use tpm2::Unmarshal;
+use tpm2::UnmarshalMessage;
 mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
-use tpm2::commands::{Command, PCRAllocate, PCRAllocateHandles};
+use tpm2::commands::{Command, PCRAllocate};
 use tpm2::{Handle, TpmCc};
 use tpm2::{TpmiAlgHash, TpmlPcrSelection, TpmsPcrSelection};
 use tpm2_impl::{TpmEngine, TpmPlatform};
@@ -18,7 +18,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut FakeCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -49,15 +49,15 @@ fn test_pcr_allocate_success() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let sha256_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0xFF, 0xFF, 0xFF]).unwrap();
     let pcr_allocation = TpmlPcrSelection::from_slice(&[sha256_sel]).unwrap();
 
-    let cmd = PCRAllocate { pcr_allocation };
-    let handles = PCRAllocateHandles {
+    let cmd = PCRAllocate {
         auth_handle: Handle::RH_PLATFORM,
+        pcr_allocation,
     };
 
     let mut req_buf = [0u8; 1024];
@@ -66,7 +66,7 @@ fn test_pcr_allocate_success() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::PCRAllocate.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&cmd.auth_handle, &mut req_buf[offset..]);
     // authHandle (platform) has the USER auth role; C requires a session even for an empty
     // authValue (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
     req_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);
@@ -85,7 +85,7 @@ fn test_pcr_allocate_success() {
     );
 
     let mut resp_slice = &resp_buf[14..]; // skip the response parameterSize
-    let rsp = <PCRAllocate as Command>::Response::unmarshal(&mut resp_slice)
+    let rsp = <PCRAllocate as Command>::Response::unmarshal_with_handles([], &mut resp_slice)
         .expect("unmarshal <PCRAllocate as Command>::Response");
     assert!(rsp.allocation_success);
     assert_eq!(rsp.max_pcr, 24);
@@ -102,15 +102,15 @@ fn test_pcr_allocate_unauthorized_fails() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let sha256_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0xFF, 0xFF, 0xFF]).unwrap();
     let pcr_allocation = TpmlPcrSelection::from_slice(&[sha256_sel]).unwrap();
 
-    let cmd = PCRAllocate { pcr_allocation };
-    let handles = PCRAllocateHandles {
+    let cmd = PCRAllocate {
         auth_handle: Handle::RH_OWNER,
+        pcr_allocation,
     };
 
     let mut req_buf = [0u8; 1024];
@@ -119,7 +119,7 @@ fn test_pcr_allocate_unauthorized_fails() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::PCRAllocate.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&cmd.auth_handle, &mut req_buf[offset..]);
     // authHandle (platform) has the USER auth role; C requires a session even for an empty
     // authValue (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
     req_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);
@@ -140,17 +140,17 @@ fn test_pcr_allocate_missing_drtm_fails() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let sha1_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha1, &[0x00, 0x00, 0x00]).unwrap();
     let sha256_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0x00, 0x00, 0x00]).unwrap();
     let sha384_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha384, &[0x00, 0x00, 0x00]).unwrap();
     let pcr_allocation = TpmlPcrSelection::from_slice(&[sha1_sel, sha256_sel, sha384_sel]).unwrap();
 
-    let cmd = PCRAllocate { pcr_allocation };
-    let handles = PCRAllocateHandles {
+    let cmd = PCRAllocate {
         auth_handle: Handle::RH_PLATFORM,
+        pcr_allocation,
     };
 
     let mut req_buf = [0u8; 1024];
@@ -159,7 +159,7 @@ fn test_pcr_allocate_missing_drtm_fails() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::PCRAllocate.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&cmd.auth_handle, &mut req_buf[offset..]);
     // authHandle (platform) has the USER auth role; C requires a session even for an empty
     // authValue (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
     req_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);
@@ -184,15 +184,15 @@ fn test_pcr_reconfig_blocks_shutdown_state() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Reallocate PCRs
     let sha256_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0xFF, 0xFF, 0xFF]).unwrap();
     let pcr_allocation = TpmlPcrSelection::from_slice(&[sha256_sel]).unwrap();
-    let cmd = PCRAllocate { pcr_allocation };
-    let handles = PCRAllocateHandles {
+    let cmd = PCRAllocate {
         auth_handle: Handle::RH_PLATFORM,
+        pcr_allocation,
     };
 
     let mut req_buf = [0u8; 1024];
@@ -201,7 +201,7 @@ fn test_pcr_reconfig_blocks_shutdown_state() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::PCRAllocate.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&cmd.auth_handle, &mut req_buf[offset..]);
     // authHandle (platform) has the USER auth role; C requires a session even for an empty
     // authValue (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
     req_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);
@@ -259,8 +259,8 @@ fn test_drtm_post_startup_sequence_and_termination() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut resp = [0u8; 256];
     assert_eq!(global_state.drtm_handle, Handle::RH_UNASSIGNED.0);
 
@@ -321,8 +321,8 @@ fn test_hcrtm_pre_startup_sequence_and_slot_eviction() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -382,17 +382,17 @@ fn test_pcr_allocate_persists_across_startup_clear() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Allocate PCRs: enable sha256 with [0xFF, 0xFF, 0xFF] and sha384 with [0xFF, 0xFF, 0xFF]
     let sha256_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0xFF, 0xFF, 0xFF]).unwrap();
     let sha384_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha384, &[0xFF, 0xFF, 0xFF]).unwrap();
     let pcr_allocation = TpmlPcrSelection::from_slice(&[sha256_sel, sha384_sel]).unwrap();
 
-    let cmd = PCRAllocate { pcr_allocation };
-    let handles = PCRAllocateHandles {
+    let cmd = PCRAllocate {
         auth_handle: Handle::RH_PLATFORM,
+        pcr_allocation,
     };
 
     let mut req_buf = [0u8; 1024];
@@ -401,7 +401,7 @@ fn test_pcr_allocate_persists_across_startup_clear() {
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(TpmCc::PCRAllocate.code()), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&cmd.auth_handle, &mut req_buf[offset..]);
     // authHandle (platform) has the USER auth role; C requires a session even for an empty
     // authValue (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession).
     req_buf[offset..offset + PW_AREA.len()].copy_from_slice(&PW_AREA);

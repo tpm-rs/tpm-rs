@@ -1,10 +1,11 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::commands::{ClearControl, ClearControlHandles};
+use tpm2::commands::ClearControl;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 
@@ -28,8 +29,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<ClearControlHandles>()?;
-        let auth = handles.auth.0;
+        let handles = request.try_unmarshal_handles::<ClearControl>()?;
+        let [auth] = handles;
+        check(auth, Tpmi::RhClear, Position::handle(1))?;
+        let auth = auth.0;
 
         if auth != Handle::RH_LOCKOUT.0 && auth != Handle::RH_PLATFORM.0 {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
@@ -37,7 +40,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<ClearControl>()?;
+        let cmd = request.try_unmarshal_command::<ClearControl>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());

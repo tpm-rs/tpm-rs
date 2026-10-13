@@ -147,7 +147,10 @@ pub(crate) fn ecc_storage_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -164,6 +167,7 @@ pub(crate) fn ecc_storage_template() -> TpmtPublic<'static> {
 /// its handle.
 pub(crate) fn create_primary(sim: &mut Simulator<'_>, hierarchy: Handle) -> Handle {
     let cmd = CreatePrimary {
+        primary_handle: hierarchy,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -172,24 +176,19 @@ pub(crate) fn create_primary(sim: &mut Simulator<'_>, hierarchy: Handle) -> Hand
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let handles = CreatePrimaryHandles {
-        primary_handle: hierarchy,
-    };
-    let (_, rsp_handles) = execute_with_password_sessions(sim, &cmd, handles, 1, &[])
+    let rsp = execute_with_password_sessions(sim, &cmd, 1, &[])
         .unwrap_or_else(|rc| panic!("CreatePrimary({hierarchy:?}) failed: {rc:#x}"));
-    rsp_handles.object_handle
+    rsp.object_handle
 }
 
 /// Makes `object` persistent at `persistent`, authorized by `auth` (empty password).
 pub(crate) fn evict(sim: &mut Simulator<'_>, auth: Handle, object: Handle, persistent: u32) {
     let cmd = EvictControl {
-        persistent_handle: Handle(persistent),
-    };
-    let handles = EvictControlHandles {
         auth,
         object_handle: object,
+        persistent_handle: Handle(persistent),
     };
-    execute_with_password_sessions(sim, &cmd, handles, 1, &[])
+    execute_with_password_sessions(sim, &cmd, 1, &[])
         .unwrap_or_else(|rc| panic!("EvictControl({persistent:#x}) failed: {rc:#x}"));
 }
 

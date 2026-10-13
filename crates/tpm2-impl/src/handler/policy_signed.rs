@@ -1,11 +1,12 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
+use tpm2::commands::PolicySigned;
 use tpm2::commands::responses;
-use tpm2::commands::{PolicySigned, PolicySignedHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bDigest, Tpm2bTimeout, TpmSe, TpmtSignature, TpmtTkAuth};
@@ -32,13 +33,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<PolicySignedHandles>()?;
-        let auth_object = handles.auth_object.0;
-        let policy_session = handles.policy_session.0;
+        let handles = request.try_unmarshal_handles::<PolicySigned>()?;
+        let [auth_object, policy_session] = handles;
+        check(auth_object, Tpmi::DhObject, Position::handle(1))?;
+        check(policy_session, Tpmi::ShPolicy, Position::handle(2))?;
+        let auth_object = auth_object.0;
+        let policy_session = policy_session.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<PolicySigned>()?;
+        let cmd = request.try_unmarshal_command::<PolicySigned>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -253,14 +257,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let digest_ha = tpm2::TpmtHa::new(tpmi_hash, &digest_bytes[..digest_len])
                     .ok_or_else(|| TpmRc::SIGNATURE.with(Position::parameter(5)))?;
 
-                self.crypto()
-                    .verify_inner(
+                // `Ok(false)` (bad signature or unusable key) and any crypto error both fail
+                // with `TPM_RC_SIGNATURE` (`RC_PolicySigned_auth`), as exp's catch-all did.
+                if !matches!(
+                    self.crypto().verify_inner(
                         sign_alg,
                         &pub_buf[..pub_len],
                         digest_ha,
                         &sig_buf[..sig_len],
-                    )
-                    .map_err(|_| TpmRc::SIGNATURE.with(Position::parameter(5)))?;
+                    ),
+                    Ok(true)
+                ) {
+                    return Err(TpmRc::SIGNATURE.with(Position::parameter(5)));
+                }
             }
         }
 
@@ -394,7 +403,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 5. Write response
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }

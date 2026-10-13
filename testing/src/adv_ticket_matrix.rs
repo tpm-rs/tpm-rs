@@ -3,11 +3,11 @@
 use crate::test_utils::*;
 use sha2::{Digest, Sha256};
 use tpm2::commands::{
-    CertifyCreation, CertifyCreationHandles, CreatePrimary, CreatePrimaryHandles, FlushContext,
-    Hash, PolicyAuthorize, PolicyAuthorizeHandles, PolicyGetDigest, PolicyGetDigestHandles,
-    PolicySecret, PolicySecretHandles, PolicyTicket, PolicyTicketHandles, Sign, SignHandles,
-    StartAuthSession, StartAuthSessionHandles, VerifySignature, VerifySignatureHandles,
+    CertifyCreation, CreatePrimary, FlushContext, Hash, PolicyAuthorize, PolicyGetDigest,
+    PolicySecret, PolicyTicket, StartAuthSession,
 };
+#[allow(deprecated)]
+use tpm2::commands::{Sign, VerifySignature};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve, TpmSe, TpmSt};
@@ -19,7 +19,6 @@ fn flush_session(sim: &mut Simulator<'_>, handle: Handle) {
         &FlushContext {
             flush_handle: handle,
         },
-        (),
         0,
         &[],
     );
@@ -61,18 +60,15 @@ fn create_ecc_signing_key(
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_primary = CreatePrimary {
+        primary_handle: hierarchy,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: hierarchy,
-    };
 
-    let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &create_primary, create_handles, 1, &[])
-            .expect("could not create ECC primary key");
-    (rsp_handles.object_handle, rsp.name)
+    let rsp = execute_with_password_sessions(sim, &create_primary, 1, &[])
+        .expect("could not create ECC primary key");
+    (rsp.object_handle, rsp.name)
 }
 
 // -----------------------------------------------------------------------------
@@ -110,20 +106,12 @@ fn test_ticket_creation_matrix() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let (owner_rsp, owner_handles) = execute_with_password_sessions(
-        &mut sim,
-        &create_cmd,
-        CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
-        },
-        1,
-        &[],
-    )
-    .unwrap();
+    let owner_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
 
     // Verify Owner creation ticket properties
     assert_eq!(owner_rsp.creation_ticket.hierarchy(), Handle::RH_OWNER);
@@ -132,26 +120,21 @@ fn test_ticket_creation_matrix() {
 
     // CertifyCreation should succeed with valid ticket
     let certify_cmd = CertifyCreation {
+        sign_handle: signer_handle,
+        object_handle: owner_rsp.object_handle,
         qualifying_data: Tpm2bData::default(),
         creation_hash: owner_rsp.creation_hash,
         in_scheme,
         creation_ticket: owner_rsp.creation_ticket,
     };
-    let certify_handles = CertifyCreationHandles {
-        sign_handle: signer_handle,
-        object_handle: owner_handles.object_handle,
-    };
-    assert!(
-        execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 1, &[])
-            .is_ok()
-    );
+    assert!(execute_with_password_sessions_status(&mut sim, &certify_cmd, 1, &[]).is_ok());
 
     // Case 1B: Non-NULL Ticket in TPM_RH_NULL hierarchy (computed with nullProof)
-    let (null_rsp, null_handles) = execute_with_password_sessions(
+    let null_rsp = execute_with_password_sessions(
         &mut sim,
-        &create_cmd,
-        CreatePrimaryHandles {
+        &CreatePrimary {
             primary_handle: Handle::RH_NULL,
+            ..create_cmd
         },
         1,
         &[],
@@ -168,46 +151,27 @@ fn test_ticket_creation_matrix() {
 
     // CertifyCreation on RHNull object should succeed with this ticket
     let certify_null_cmd = CertifyCreation {
+        sign_handle: signer_handle,
+        object_handle: null_rsp.object_handle,
         qualifying_data: Tpm2bData::default(),
         creation_hash: null_rsp.creation_hash,
         in_scheme,
         creation_ticket: null_rsp.creation_ticket,
     };
-    let certify_null_handles = CertifyCreationHandles {
-        sign_handle: signer_handle,
-        object_handle: null_handles.object_handle,
-    };
-    assert!(
-        execute_with_password_sessions_status(
-            &mut sim,
-            &certify_null_cmd,
-            certify_null_handles,
-            1,
-            &[]
-        )
-        .is_ok()
-    );
+    assert!(execute_with_password_sessions_status(&mut sim, &certify_null_cmd, 1, &[]).is_ok());
 
     // Case 1C: NULL Ticket usage (empty digest) must be rejected by CertifyCreation
     let null_creation_ticket = TpmtTkCreation::Creation(Handle::RH_NULL, Tpm2bDigest::default());
     let certify_null_ticket_cmd = CertifyCreation {
+        sign_handle: signer_handle,
+        object_handle: owner_rsp.object_handle,
         qualifying_data: Tpm2bData::default(),
         creation_hash: owner_rsp.creation_hash,
         in_scheme,
         creation_ticket: null_creation_ticket,
     };
-    let certify_null_ticket_handles = CertifyCreationHandles {
-        sign_handle: signer_handle,
-        object_handle: owner_handles.object_handle,
-    };
-    let err = execute_with_password_sessions_status(
-        &mut sim,
-        &certify_null_ticket_cmd,
-        certify_null_ticket_handles,
-        1,
-        &[],
-    )
-    .expect_err("CertifyCreation must reject NULL ticket");
+    let err = execute_with_password_sessions_status(&mut sim, &certify_null_ticket_cmd, 1, &[])
+        .expect_err("CertifyCreation must reject NULL ticket");
     // TPM_RC_TICKET + RC_CertifyCreation_creationTicket (P4).
     assert_eq!(err, 0x4E0);
 
@@ -219,14 +183,15 @@ fn test_ticket_creation_matrix() {
         Tpm2bDigest::from_bytes(&bad_digest).unwrap(),
     );
     let certify_bad_cmd = CertifyCreation {
+        sign_handle: signer_handle,
+        object_handle: owner_rsp.object_handle,
         qualifying_data: Tpm2bData::default(),
         creation_hash: owner_rsp.creation_hash,
         in_scheme,
         creation_ticket: bad_ticket,
     };
-    let err =
-        execute_with_password_sessions_status(&mut sim, &certify_bad_cmd, certify_handles, 1, &[])
-            .expect_err("CertifyCreation must reject modified digest");
+    let err = execute_with_password_sessions_status(&mut sim, &certify_bad_cmd, 1, &[])
+        .expect_err("CertifyCreation must reject modified digest");
     // TPM_RC_TICKET + RC_CertifyCreation_creationTicket (P4).
     assert_eq!(err, 0x4E0);
 }
@@ -241,41 +206,26 @@ fn test_ticket_auth_matrix() {
 
     // Case 2A: NULL Ticket on non-negative expiration (expiration >= 0)
     let start_auth = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (_, start_rsp) = execute_with_password_sessions(
-        &mut sim,
-        &start_auth,
-        StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let start_rsp = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
 
     let policy_secret_zero_exp = PolicySecret {
+        auth_handle: Handle::RH_OWNER,
+        policy_session: start_rsp.session_handle,
         nonce_tpm: Tpm2bNonce::default(),
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         expiration: 0,
     };
-    let (sec_zero_rsp, _) = execute_with_password_sessions(
-        &mut sim,
-        &policy_secret_zero_exp,
-        PolicySecretHandles {
-            auth_handle: Handle::RH_OWNER,
-            policy_session: start_rsp.session_handle,
-        },
-        1,
-        &[],
-    )
-    .unwrap();
+    let sec_zero_rsp =
+        execute_with_password_sessions(&mut sim, &policy_secret_zero_exp, 1, &[]).unwrap();
 
     assert_eq!(sec_zero_rsp.policy_ticket.hierarchy(), Handle::RH_NULL);
     assert_eq!(sec_zero_rsp.policy_ticket.tag(), TpmSt::AUTH_SECRET.id());
@@ -287,6 +237,7 @@ fn test_ticket_auth_matrix() {
 
     // PolicyTicket must REJECT NULL ticket (parameter 5 is ticket)
     let bad_policy_ticket_cmd = PolicyTicket {
+        policy_session: start_rsp.session_handle,
         timeout: sec_zero_rsp.timeout,
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
@@ -296,61 +247,35 @@ fn test_ticket_auth_matrix() {
         .unwrap(),
         ticket: sec_zero_rsp.policy_ticket,
     };
-    let err = execute_with_password_sessions(
-        &mut sim,
-        &bad_policy_ticket_cmd,
-        PolicyTicketHandles {
-            policy_session: start_rsp.session_handle,
-        },
-        0,
-        &[],
-    )
-    .expect_err("PolicyTicket must reject NULL ticket");
+    let err = execute_with_password_sessions(&mut sim, &bad_policy_ticket_cmd, 0, &[])
+        .expect_err("PolicyTicket must reject NULL ticket");
     // The NULL ticket comes with an empty timeout, and C checks the timeout size
     // first: TPM_RCS_SIZE + RC_PolicyTicket_timeout (SIZE+P1, PolicyTicket.c:48-49).
     assert_eq!(err, TpmRc::SIZE.with(Position::parameter(1)).get());
     flush_session(&mut sim, start_rsp.session_handle);
 
     // Case 2B: Non-NULL Ticket under regular hierarchy (TPM_RH_OWNER) with expiration < 0
-    let (_, session1) = execute_with_password_sessions(
-        &mut sim,
-        &start_auth,
-        StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let session1 = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
 
     let policy_secret_neg = PolicySecret {
+        auth_handle: Handle::RH_OWNER,
+        policy_session: session1.session_handle,
         nonce_tpm: Tpm2bNonce::default(),
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         expiration: -1,
     };
-    let (sec_owner_rsp, _) = execute_with_password_sessions(
-        &mut sim,
-        &policy_secret_neg,
-        PolicySecretHandles {
-            auth_handle: Handle::RH_OWNER,
-            policy_session: session1.session_handle,
-        },
-        1,
-        &[],
-    )
-    .unwrap();
+    let sec_owner_rsp =
+        execute_with_password_sessions(&mut sim, &policy_secret_neg, 1, &[]).unwrap();
 
     assert_eq!(sec_owner_rsp.policy_ticket.hierarchy(), Handle::RH_OWNER);
     assert_eq!(sec_owner_rsp.policy_ticket.tag(), TpmSt::AUTH_SECRET.id());
     assert!(!sec_owner_rsp.policy_ticket.digest().get_buffer().is_empty());
     assert!(!sec_owner_rsp.timeout.get_buffer().is_empty());
 
-    let (digest1, _) = execute_with_password_sessions(
+    let digest1 = execute_with_password_sessions(
         &mut sim,
-        &PolicyGetDigest {},
-        PolicyGetDigestHandles {
+        &PolicyGetDigest {
             policy_session: session1.session_handle,
         },
         0,
@@ -359,19 +284,10 @@ fn test_ticket_auth_matrix() {
     .unwrap();
 
     // Use ticket in session 2
-    let (_, session2) = execute_with_password_sessions(
-        &mut sim,
-        &start_auth,
-        StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let session2 = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
 
     let policy_ticket_cmd = PolicyTicket {
+        policy_session: session2.session_handle,
         timeout: sec_owner_rsp.timeout,
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
@@ -381,21 +297,12 @@ fn test_ticket_auth_matrix() {
         .unwrap(),
         ticket: sec_owner_rsp.policy_ticket,
     };
-    execute_with_password_sessions(
-        &mut sim,
-        &policy_ticket_cmd,
-        PolicyTicketHandles {
-            policy_session: session2.session_handle,
-        },
-        0,
-        &[],
-    )
-    .expect("PolicyTicket with valid owner ticket must succeed");
+    execute_with_password_sessions(&mut sim, &policy_ticket_cmd, 0, &[])
+        .expect("PolicyTicket with valid owner ticket must succeed");
 
-    let (digest2, _) = execute_with_password_sessions(
+    let digest2 = execute_with_password_sessions(
         &mut sim,
-        &PolicyGetDigest {},
-        PolicyGetDigestHandles {
+        &PolicyGetDigest {
             policy_session: session2.session_handle,
         },
         0,
@@ -408,25 +315,15 @@ fn test_ticket_auth_matrix() {
     flush_session(&mut sim, session2.session_handle);
 
     // Case 2C: Non-NULL Ticket under TPM_RH_NULL hierarchy with expiration < 0 (computed with nullProof)
-    let (_, session3) = execute_with_password_sessions(
-        &mut sim,
-        &start_auth,
-        StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let session3 = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
 
     // Direct Handle::RH_NULL as auth_handle must be rejected during handle unmarshalling (TPMI_DH_ENTITY without +)
     let null_auth_err = execute_with_password_sessions(
         &mut sim,
-        &policy_secret_neg,
-        PolicySecretHandles {
+        &PolicySecret {
             auth_handle: Handle::RH_NULL,
             policy_session: session3.session_handle,
+            ..policy_secret_neg
         },
         1,
         &[],
@@ -436,12 +333,12 @@ fn test_ticket_auth_matrix() {
 
     let (null_obj_handle, null_obj_name) = create_ecc_signing_key(&mut sim, Handle::RH_NULL, false);
 
-    let (sec_null_rsp, _) = execute_with_password_sessions(
+    let sec_null_rsp = execute_with_password_sessions(
         &mut sim,
-        &policy_secret_neg,
-        PolicySecretHandles {
+        &PolicySecret {
             auth_handle: null_obj_handle,
             policy_session: session3.session_handle,
+            ..policy_secret_neg
         },
         1,
         &[],
@@ -456,10 +353,9 @@ fn test_ticket_auth_matrix() {
     );
     assert!(!sec_null_rsp.timeout.get_buffer().is_empty());
 
-    let (digest3, _) = execute_with_password_sessions(
+    let digest3 = execute_with_password_sessions(
         &mut sim,
-        &PolicyGetDigest {},
-        PolicyGetDigestHandles {
+        &PolicyGetDigest {
             policy_session: session3.session_handle,
         },
         0,
@@ -468,40 +364,22 @@ fn test_ticket_auth_matrix() {
     .unwrap();
 
     // Use RHNull ticket in session 4
-    let (_, session4) = execute_with_password_sessions(
-        &mut sim,
-        &start_auth,
-        StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let session4 = execute_with_password_sessions(&mut sim, &start_auth, 0, &[]).unwrap();
 
     let policy_null_ticket_cmd = PolicyTicket {
+        policy_session: session4.session_handle,
         timeout: sec_null_rsp.timeout,
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         auth_name: null_obj_name,
         ticket: sec_null_rsp.policy_ticket,
     };
-    execute_with_password_sessions(
-        &mut sim,
-        &policy_null_ticket_cmd,
-        PolicyTicketHandles {
-            policy_session: session4.session_handle,
-        },
-        0,
-        &[],
-    )
-    .expect("PolicyTicket with valid RHNull ticket must succeed");
+    execute_with_password_sessions(&mut sim, &policy_null_ticket_cmd, 0, &[])
+        .expect("PolicyTicket with valid RHNull ticket must succeed");
 
-    let (digest4, _) = execute_with_password_sessions(
+    let digest4 = execute_with_password_sessions(
         &mut sim,
-        &PolicyGetDigest {},
-        PolicyGetDigestHandles {
+        &PolicyGetDigest {
             policy_session: session4.session_handle,
         },
         0,
@@ -520,6 +398,7 @@ fn test_ticket_auth_matrix() {
 // -----------------------------------------------------------------------------
 
 #[test]
+#[allow(deprecated)]
 fn test_ticket_hashcheck_matrix() {
     let mut sim = create_simulator!();
     let (unrestricted_key, _) = create_ecc_signing_key(&mut sim, Handle::RH_OWNER, false);
@@ -543,6 +422,7 @@ fn test_ticket_hashcheck_matrix() {
 
     // NULL ticket works with UNRESTRICTED signing key
     let sign_unrestricted_cmd = Sign {
+        key_handle: unrestricted_key,
         digest: hash_null_rsp.out_hash,
         in_scheme: None,
         validation: hash_null_rsp.validation,
@@ -552,9 +432,6 @@ fn test_ticket_hashcheck_matrix() {
         execute_sign(
             &mut sim,
             &sign_unrestricted_cmd,
-            SignHandles {
-                key_handle: unrestricted_key
-            },
             1, // Sign keyHandle needs a session (USER role)
             &[],
             &mut resp_buf,
@@ -565,6 +442,7 @@ fn test_ticket_hashcheck_matrix() {
 
     // NULL ticket FAILS with RESTRICTED signing key
     let sign_restricted_cmd = Sign {
+        key_handle: restricted_key,
         digest: hash_null_rsp.out_hash,
         in_scheme: None,
         validation: hash_null_rsp.validation,
@@ -572,9 +450,6 @@ fn test_ticket_hashcheck_matrix() {
     let err = execute_sign(
         &mut sim,
         &sign_restricted_cmd,
-        SignHandles {
-            key_handle: restricted_key,
-        },
         1, // Sign keyHandle needs a session (USER role)
         &[],
         &mut resp_buf,
@@ -610,6 +485,7 @@ fn test_ticket_hashcheck_matrix() {
 
     // Non-NULL ticket works with RESTRICTED signing key
     let sign_restricted_valid = Sign {
+        key_handle: restricted_key,
         digest: hash_owner_rsp.out_hash,
         in_scheme: None,
         validation: hash_owner_rsp.validation,
@@ -618,9 +494,6 @@ fn test_ticket_hashcheck_matrix() {
         execute_sign(
             &mut sim,
             &sign_restricted_valid,
-            SignHandles {
-                key_handle: restricted_key
-            },
             1, // Sign keyHandle needs a session (USER role)
             &[],
             &mut resp_buf,
@@ -637,6 +510,7 @@ fn test_ticket_hashcheck_matrix() {
         Tpm2bDigest::from_bytes(&bad_digest).unwrap(),
     );
     let sign_restricted_corrupt = Sign {
+        key_handle: restricted_key,
         digest: hash_owner_rsp.out_hash,
         in_scheme: None,
         validation: corrupted_ticket,
@@ -644,9 +518,6 @@ fn test_ticket_hashcheck_matrix() {
     let err = execute_sign(
         &mut sim,
         &sign_restricted_corrupt,
-        SignHandles {
-            key_handle: restricted_key,
-        },
         1, // Sign keyHandle needs a session (USER role)
         &[],
         &mut resp_buf,
@@ -660,6 +531,7 @@ fn test_ticket_hashcheck_matrix() {
 // -----------------------------------------------------------------------------
 
 #[test]
+#[allow(deprecated)]
 fn test_ticket_verified_matrix() {
     let mut sim = create_simulator!();
 
@@ -672,17 +544,15 @@ fn test_ticket_verified_matrix() {
 
     // Case 4A: NULL Ticket produced when verifying key is in TPM_RH_NULL
     let sign_null_cmd = Sign {
+        key_handle: null_signer,
         digest: digest_to_sign,
         in_scheme: None,
         validation: TpmtTkHashcheck::default(),
     };
     let mut resp_buf = [0u8; 4096];
-    let (sign_null_rsp, _) = execute_sign(
+    let sign_null_rsp = execute_sign(
         &mut sim,
         &sign_null_cmd,
-        SignHandles {
-            key_handle: null_signer,
-        },
         1, // Sign keyHandle needs a session (USER role)
         &[],
         &mut resp_buf,
@@ -690,19 +560,12 @@ fn test_ticket_verified_matrix() {
     .unwrap();
 
     let verify_null_cmd = VerifySignature {
+        key_handle: null_signer,
         digest: digest_to_sign,
         signature: sign_null_rsp.signature,
     };
-    let (verify_null_rsp, _) = execute_with_password_sessions(
-        &mut sim,
-        &verify_null_cmd,
-        VerifySignatureHandles {
-            key_handle: null_signer,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let verify_null_rsp =
+        execute_with_password_sessions(&mut sim, &verify_null_cmd, 0, &[]).unwrap();
 
     assert_eq!(verify_null_rsp.validation.hierarchy(), Handle::RH_NULL);
     assert_eq!(verify_null_rsp.validation.tag(), TpmSt::VERIFIED.id());
@@ -713,70 +576,46 @@ fn test_ticket_verified_matrix() {
 
     // NULL ticket in TRIAL session is ACCEPTED
     let start_trial = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (_, trial_session) = execute_with_password_sessions(
-        &mut sim,
-        &start_trial,
-        StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let trial_session = execute_with_password_sessions(&mut sim, &start_trial, 0, &[]).unwrap();
 
     let policy_auth_null_ticket = PolicyAuthorize {
+        policy_session: trial_session.session_handle,
         approved_policy: Tpm2bDigest::from_bytes(&[0u8; 32]).unwrap(),
         policy_ref: Tpm2bNonce::default(),
         key_sign: null_signer_name,
         check_ticket: verify_null_rsp.validation,
     };
     assert!(
-        execute_with_password_sessions(
-            &mut sim,
-            &policy_auth_null_ticket,
-            PolicyAuthorizeHandles {
-                policy_session: trial_session.session_handle
-            },
-            0,
-            &[]
-        )
-        .is_ok(),
+        execute_with_password_sessions(&mut sim, &policy_auth_null_ticket, 0, &[]).is_ok(),
         "Trial policy session must accept NULL ticket"
     );
     flush_session(&mut sim, trial_session.session_handle);
 
     // NULL ticket in REGULAR policy session is REJECTED
     let start_policy = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (_, regular_session) = execute_with_password_sessions(
-        &mut sim,
-        &start_policy,
-        StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let regular_session = execute_with_password_sessions(&mut sim, &start_policy, 0, &[]).unwrap();
 
     let err = execute_with_password_sessions(
         &mut sim,
-        &policy_auth_null_ticket,
-        PolicyAuthorizeHandles {
+        &PolicyAuthorize {
             policy_session: regular_session.session_handle,
+            ..policy_auth_null_ticket
         },
         0,
         &[],
@@ -796,17 +635,15 @@ fn test_ticket_verified_matrix() {
         Tpm2bDigest::from_bytes(crate::test_utils::leak_bytes(&hasher.finalize())).unwrap();
 
     let sign_auth_cmd = Sign {
+        key_handle: owner_signer,
         digest: a_hash,
         in_scheme: None,
         validation: TpmtTkHashcheck::default(),
     };
     let mut resp_buf_auth = [0u8; 4096];
-    let (sign_auth_rsp, _) = execute_sign(
+    let sign_auth_rsp = execute_sign(
         &mut sim,
         &sign_auth_cmd,
-        SignHandles {
-            key_handle: owner_signer,
-        },
         1, // Sign keyHandle needs a session (USER role)
         &[],
         &mut resp_buf_auth,
@@ -814,70 +651,35 @@ fn test_ticket_verified_matrix() {
     .unwrap();
 
     let verify_owner_cmd = VerifySignature {
+        key_handle: owner_signer,
         digest: a_hash,
         signature: sign_auth_rsp.signature,
     };
-    let (verify_owner_rsp, _) = execute_with_password_sessions(
-        &mut sim,
-        &verify_owner_cmd,
-        VerifySignatureHandles {
-            key_handle: owner_signer,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let verify_owner_rsp =
+        execute_with_password_sessions(&mut sim, &verify_owner_cmd, 0, &[]).unwrap();
 
     assert_eq!(verify_owner_rsp.validation.hierarchy(), Handle::RH_OWNER);
     assert_eq!(verify_owner_rsp.validation.tag(), TpmSt::VERIFIED.id());
     assert!(!verify_owner_rsp.validation.digest().get_buffer().is_empty());
 
     // Non-NULL ticket in regular policy session is ACCEPTED
-    let (_, regular_session2) = execute_with_password_sessions(
-        &mut sim,
-        &start_policy,
-        StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let regular_session2 = execute_with_password_sessions(&mut sim, &start_policy, 0, &[]).unwrap();
 
     let policy_auth_valid = PolicyAuthorize {
+        policy_session: regular_session2.session_handle,
         approved_policy,
         policy_ref,
         key_sign: owner_signer_name,
         check_ticket: verify_owner_rsp.validation,
     };
     assert!(
-        execute_with_password_sessions(
-            &mut sim,
-            &policy_auth_valid,
-            PolicyAuthorizeHandles {
-                policy_session: regular_session2.session_handle
-            },
-            0,
-            &[]
-        )
-        .is_ok(),
+        execute_with_password_sessions(&mut sim, &policy_auth_valid, 0, &[]).is_ok(),
         "Regular policy session must accept valid non-NULL ticket"
     );
     flush_session(&mut sim, regular_session2.session_handle);
 
     // Case 4C: Corrupted verified ticket is REJECTED
-    let (_, regular_session3) = execute_with_password_sessions(
-        &mut sim,
-        &start_policy,
-        StartAuthSessionHandles {
-            tpm_key: Handle::RH_NULL,
-            bind: Handle::RH_NULL,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let regular_session3 = execute_with_password_sessions(&mut sim, &start_policy, 0, &[]).unwrap();
 
     let mut bad_digest = verify_owner_rsp.validation.digest().get_buffer().to_vec();
     bad_digest[0] ^= 0xaa;
@@ -887,21 +689,14 @@ fn test_ticket_verified_matrix() {
     );
 
     let policy_auth_corrupt = PolicyAuthorize {
+        policy_session: regular_session3.session_handle,
         approved_policy,
         policy_ref,
         key_sign: owner_signer_name,
         check_ticket: bad_verified_ticket,
     };
-    let err = execute_with_password_sessions(
-        &mut sim,
-        &policy_auth_corrupt,
-        PolicyAuthorizeHandles {
-            policy_session: regular_session3.session_handle,
-        },
-        0,
-        &[],
-    )
-    .expect_err("Regular policy session must reject corrupted ticket");
+    let err = execute_with_password_sessions(&mut sim, &policy_auth_corrupt, 0, &[])
+        .expect_err("Regular policy session must reject corrupted ticket");
     assert_eq!(err, TpmRc::VALUE.with(Position::parameter(4)).get());
     flush_session(&mut sim, regular_session3.session_handle);
 }

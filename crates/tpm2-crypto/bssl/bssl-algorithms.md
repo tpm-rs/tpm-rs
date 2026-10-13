@@ -60,7 +60,7 @@ This document audits the cryptographic implementations in [`crates/tpm2-crypto/b
 ## 3. Detailed Component Analysis
 
 ### 3.1 Random Number Generation (`src/lib.rs`)
-- **Current State**: Implements `tpm2::crypto::Rng` on `BsslCryptoProvider` using `bssl_crypto::rand_bytes(dest)`.
+- **Current State**: Implements the provider CSPRNG (`tpm2::crypto::CryptoProvider::get_random`) on `BsslCryptoProvider` using `bssl_crypto::rand_bytes(dest)`; `stir_random` keeps its default (BoringSSL reseeds `RAND_bytes` itself). `tpm2::crypto::Random` is implemented with `type Rng = !` (no RNG factory), and `tpm2::crypto::ConstantTimeEq` uses `bssl_crypto::constant_time_compare` (`CRYPTO_memcmp`).
 - **C BoringSSL vs `bssl-crypto`**:
   - BoringSSL C provides `RAND_bytes` in `<openssl/rand.h>`.
   - `bssl-crypto` safely exposes this as `bssl_crypto::rand_bytes`.
@@ -80,7 +80,8 @@ This document audits the cryptographic implementations in [`crates/tpm2-crypto/b
 - **Current State**:
   - Uses safe wrappers `crate::bssl::{Aes128Cfb, Aes192Cfb, Aes256Cfb}` over BoringSSL's `bssl_sys::AES_set_encrypt_key` and `bssl_sys::AES_cfb128_encrypt`.
   - Supports streaming in-place CFB-128 encryption/decryption and reconstructs exact TPM 2.0 feedback output IVs (`iv_out`) for both block-aligned and partial-block inputs.
-  - Unsupported symmetric ciphers (SM4, Camellia) bind their context types to `!`.
+  - The one-shot `tpm2::crypto::Symmetric::{aes128, aes192, aes256}` methods run a wrapper over the whole buffer and write the feedback IV back into `ModeIv::Cfb`. Other modes (`ModeIv::{Ctr, Ofb, Cbc, Ecb}`) return `CryptoError::Unsupported`.
+  - Unsupported symmetric ciphers (SM4, Camellia) keep the trait's default `CryptoError::Unsupported` methods.
 
 ### 3.5 Asymmetric RSA (`src/asymmetric.rs`, `src/bssl.rs`)
 - **Current State**:
@@ -98,6 +99,12 @@ This document audits the cryptographic implementations in [`crates/tpm2-crypto/b
 - **Current State**:
   - **NIST P-256, P-384, P-521**: All operations (point validation `ec_validate_point`, generator multiplication `ec_point_multiply_generator`, arbitrary point multiplication `ec_point_multiply`, pre-hashed IEEE P1363 ECDSA signing/verification `ecdsa_sign`/`ecdsa_verify`, and deterministic/random key generation `ec_generate_key`) are implemented in `src/bssl.rs` using BoringSSL's `EC_group_p256()`, `EC_group_p384()`, `EC_group_p521()`, `EC_POINT_mul`, `EC_POINT_get_affine_coordinates_GFp`, `ECDSA_sign_p1363`, and `ECDSA_verify_p1363`.
   - **BN-P256**: Implemented 100% via BoringSSL's custom curve APIs (`EC_GROUP_new_curve_GFp` and `EC_GROUP_set_generator`) backed by `EC_GFp_mont_method()` in `src/bssl.rs` (`EcGroup::BnP256` with scoped RAII `EcGroupHandle`). Supports point validation, generator multiplication, arbitrary point multiplication, ECDSA signing/verification, and key generation.
+
+### 3.7 Error Mapping (`src/bssl.rs`, `src/lib.rs`)
+- **Current State**: The safe bindings in `src/bssl.rs` return `BsslError` (`Unsupported`, `InvalidData`, `BufferTooSmall`, `Internal`). The `tpm2::crypto` trait implementations map them to the `tpm2::crypto` conventions:
+  - `InvalidData` (a bad key, signature, point, scalar, ciphertext, padding or label, or a message too large for the key) is a semantic failure reported in the `Ok` value: `Ok(false)` for verification and point validation, `Ok(None)` for signing, encryption, decryption, key import and point multiplication.
+  - `Unsupported` becomes `CryptoError::Unsupported`; `BufferTooSmall` and `Internal` (and `InvalidData` for operations without semantic failures, such as key generation) become `CryptoError::Internal`.
+  - RSA signing (`RSA_sign`, `RSA_sign_pss_mgf1`), RSAES/OAEP encryption (`RSA_encrypt`, `EVP_PKEY_encrypt`) and OAEP decryption (`EVP_PKEY_decrypt`) failures are input-caused (key too small for the digest, message too large, bad padding or label), so they are reported as `InvalidData`.
 
 ---
 

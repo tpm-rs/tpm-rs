@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, EvictControl, EvictControlHandles};
+use tpm2::commands::{CreatePrimary, EvictControl};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
@@ -18,7 +18,10 @@ fn get_ecc_srk_template(unique: u8) -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -47,35 +50,27 @@ fn test_evict_control_stress() {
     let outside_info = Tpm2bData::default();
     let creation_pcr = TpmlPcrSelection::default();
 
-    let create_handles_owner = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
     let create_cmd_owner = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_owner,
         outside_info,
         creation_pcr,
     };
 
-    let (_, rsp_owner) =
-        execute_with_password_sessions(&mut sim, &create_cmd_owner, create_handles_owner, 1, &[])
-            .unwrap();
+    let rsp_owner = execute_with_password_sessions(&mut sim, &create_cmd_owner, 1, &[]).unwrap();
     let owner_transient_handle = rsp_owner.object_handle;
 
     // Create a transient object in Platform hierarchy
     let in_public_plat = tpm2::Tpm2b(get_ecc_srk_template(1));
     let create_cmd_plat = CreatePrimary {
+        primary_handle: Handle::RH_PLATFORM,
         in_sensitive,
         in_public: in_public_plat,
         outside_info,
         creation_pcr,
     };
-    let create_handles_plat = CreatePrimaryHandles {
-        primary_handle: Handle::RH_PLATFORM,
-    };
-    let (_, rsp_plat) =
-        execute_with_password_sessions(&mut sim, &create_cmd_plat, create_handles_plat, 1, &[])
-            .unwrap();
+    let rsp_plat = execute_with_password_sessions(&mut sim, &create_cmd_plat, 1, &[]).unwrap();
     let plat_transient_handle = rsp_plat.object_handle;
 
     // Fuzz inputs
@@ -101,15 +96,13 @@ fn test_evict_control_stress() {
     for &auth in &auth_handles {
         for &obj in &object_handles {
             for &pers in &persistent_handles {
-                let handles = EvictControlHandles {
+                let cmd = EvictControl {
                     auth,
                     object_handle: obj,
-                };
-                let cmd = EvictControl {
                     persistent_handle: pers,
                 };
 
-                let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+                let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
 
                 // Determine expected behavior according to spec
                 let is_obj_loaded = obj == owner_transient_handle || obj == plat_transient_handle;
@@ -167,10 +160,9 @@ fn test_evict_control_stress() {
                         // Once successful, we need to evict it so it doesn't fail on next iteration with NVDefined
                         let evict_res = execute_with_password_sessions(
                             &mut sim,
-                            &cmd,
-                            EvictControlHandles {
-                                auth,
+                            &EvictControl {
                                 object_handle: pers,
+                                ..cmd
                             },
                             1,
                             &[],

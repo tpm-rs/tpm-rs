@@ -7,11 +7,12 @@ use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
-use tpm2::commands::{Command, LoadExternal};
+use tpm2::commands::{Command, LoadExternal, Message, UnmarshalMessage};
 use tpm2::errors::TpmRc;
 use tpm2::{
-    PublicParmsAndId, Tpm2bDigest, Tpm2bSymKey, TpmaObject, TpmiAlgHash, TpmiAlgSymMode,
-    TpmsAuthCommand, TpmtPublic, TpmtSensitive, TpmtSymDefObject, TpmuSensitiveComposite,
+    AlgSym, PublicParmsAndId, Tpm2bDigest, Tpm2bSymKey, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash,
+    TpmiAlgSymMode, TpmsAuthCommand, TpmtPublic, TpmtSensitive, TpmtSymDefObject,
+    TpmuSensitiveComposite,
 };
 use tpm2_impl::{TpmEngine, TpmPlatform};
 
@@ -19,7 +20,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -45,14 +46,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -65,13 +63,10 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        request_buf[offset..offset + 4].copy_from_slice(&handle.0.to_be_bytes());
+        offset += 4;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -111,8 +106,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -124,10 +121,10 @@ where
 
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
-    let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let resp = <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+        .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp)
 }
 
 #[test]
@@ -135,8 +132,8 @@ fn test_load_external_binding_error() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Mismatched unique in inPublic vs sensitive key data in inPrivate
     let sym_key_bytes = [0xAAu8; 16];
@@ -147,7 +144,10 @@ fn test_load_external_binding_error() {
         object_attributes: TpmaObject::USER_WITH_AUTH | TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            },
             Tpm2bDigest::from_bytes(&wrong_unique_bytes).unwrap(),
         ),
     };
@@ -169,7 +169,7 @@ fn test_load_external_binding_error() {
         hierarchy: Handle::RH_NULL,
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &(), &cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]);
     let rc = match res {
         Err(rc) => rc,
         Ok(_) => panic!("expected error from execute_tpm_command"),

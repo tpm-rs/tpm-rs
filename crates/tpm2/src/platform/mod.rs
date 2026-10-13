@@ -31,7 +31,7 @@ where
     C: CryptoProvider,
     S: NvStorage,
     T: TpmTimer,
-    R: Rng + Sync,
+    R: Rng,
 {
     /// Cryptography provider.
     pub crypto: &'a mut C,
@@ -39,8 +39,9 @@ where
     pub storage: &'a mut S,
     /// Monotonic timer.
     pub timer: &'a mut T,
-    /// Random number generator.
-    pub rng: &'a R,
+    /// Platform random number generator ([`Rng::fill_bytes`] draws random bytes and
+    /// [`Rng::reseed`] mixes additional entropy into its state).
+    pub rng: &'a mut R,
 }
 
 impl<'a, C, S, T, R> TpmPlatform<'a, C, S, T, R>
@@ -48,10 +49,10 @@ where
     C: CryptoProvider,
     S: NvStorage,
     T: TpmTimer,
-    R: Rng + Sync,
+    R: Rng,
 {
     /// Constructs a new `TpmPlatform` from mutable references to hardware providers.
-    pub fn new(crypto: &'a mut C, storage: &'a mut S, timer: &'a mut T, rng: &'a R) -> Self {
+    pub fn new(crypto: &'a mut C, storage: &'a mut S, timer: &'a mut T, rng: &'a mut R) -> Self {
         Self {
             crypto,
             storage,

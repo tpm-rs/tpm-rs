@@ -16,8 +16,8 @@ pub struct Args {
     pub pick_ports: bool,
 }
 
+use tpm2::TpmSu;
 use tpm2::commands::{Command, Startup};
-use tpm2::{Marshal, TpmSu, Unmarshal};
 use tpm2_impl::{InternalError, TpmEngine};
 use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform};
 
@@ -152,8 +152,8 @@ impl SimResponse {
 ///
 /// The engine and its state are private: clients interact with the TPM only
 /// through the command interface ([`Simulator::execute`],
-/// [`Simulator::execute_with_handles`], [`Simulator::transact`]) and platform
-/// signals ([`Simulator::signal_platform`]), exactly like a real TPM.
+/// [`Simulator::transact`]) and platform signals
+/// ([`Simulator::signal_platform`]), exactly like a real TPM.
 pub struct Simulator<'a> {
     context: Box<TpmEngine<'a, PlatformCryptoProvider, RamStorageMock<4096>, LinuxTimer, LinuxRng>>,
     global_state: Box<::tpm2_impl::GlobalState>,
@@ -166,7 +166,7 @@ impl<'a> Simulator<'a> {
         crypto: &'a mut PlatformCryptoProvider,
         storage: &'a mut RamStorageMock<4096>,
         timer: &'a mut LinuxTimer,
-        platform_rng: &'a LinuxRng,
+        platform_rng: &'a mut LinuxRng,
     ) -> Result<Self, InternalError> {
         let platform = create_linux_platform(crypto, storage, timer, platform_rng);
         let mut context = Box::new(TpmEngine::new(platform).unwrap());
@@ -410,29 +410,19 @@ impl<'a> Simulator<'a> {
         Ok(false)
     }
 
+    /// Runs `cmd` and returns its response.
+    ///
+    /// The command carries its handles and the response carries its response
+    /// handles. See [`execute::run_command`] for the sessions that are added
+    /// and the errors that can occur.
     pub fn execute<Cmd: Command>(
         &mut self,
         cmd: Cmd,
     ) -> Result<Cmd::Response<'static>, ExecuteError>
     where
-        Cmd::Response<'static>: Unmarshal<'static>,
         for<'d> &'d mut Cmd::MaxBuffer: TryFrom<&'d mut [u8]>,
-        for<'d> &'d mut <Cmd::Handles as Marshal>::MaxBuffer: TryFrom<&'d mut [u8]>,
     {
         execute::run_command(&cmd, self)
-    }
-
-    pub fn execute_with_handles<Cmd: Command>(
-        &mut self,
-        cmd: Cmd,
-        handles: Cmd::Handles,
-    ) -> Result<(Cmd::Response<'static>, Cmd::RespHandles), ExecuteError>
-    where
-        Cmd::Response<'static>: Unmarshal<'static>,
-        for<'d> &'d mut Cmd::MaxBuffer: TryFrom<&'d mut [u8]>,
-        for<'d> &'d mut <Cmd::Handles as Marshal>::MaxBuffer: TryFrom<&'d mut [u8]>,
-    {
-        execute::run_command_with_handles(&cmd, handles, self)
     }
 
     pub fn transact<'b>(
@@ -496,7 +486,7 @@ macro_rules! create_simulator {
         );
         let timer: &'static mut $crate::__private::LinuxTimer =
             ::std::boxed::Box::leak(::std::boxed::Box::new($crate::__private::LinuxTimer::new()));
-        let platform_rng: &'static $crate::__private::LinuxRng =
+        let platform_rng: &'static mut $crate::__private::LinuxRng =
             ::std::boxed::Box::leak(::std::boxed::Box::new($crate::__private::LinuxRng::new()));
         let mut sim = $crate::Simulator::new(crypto, storage, timer, platform_rng)
             .expect("failed to create TPM simulator");

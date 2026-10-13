@@ -1,23 +1,38 @@
 use crate::test_utils::marshal_to_slice;
 use crate::test_utils::{
-    ActiveSession, CmdHeader, RespHeader, execute_with_password_sessions, map_sessions_to_handles,
-    start_auth_session, strip_trailing_zeros,
+    ActiveSession, CmdHeader, RespHandles, RespHeader, execute_with_password_sessions,
+    map_sessions_to_handles, marshal_auth_command, start_auth_session, strip_trailing_zeros,
+    sym_decrypt, sym_encrypt,
 };
 use crate::test_utils::{CLIENT_CRYPTO, entity_name};
 use sha2::{Digest as _, Sha256};
-use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, GetRandom, GetTime, GetTimeHandles, HierarchyChangeAuth,
-    LoadExternal,
-};
-use tpm2::crypto::Rng;
-use tpm2::{Handle, TpmSe, TpmSt};
+use tpm2::commands::{CreatePrimary, GetRandom, GetTime, HierarchyChangeAuth, LoadExternal};
+use tpm2::crypto::CryptoProvider;
+use tpm2::{AlgSym, Handle, TpmSe, TpmSt, UnmarshalMessage};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{
-    Tpm2bAuth, Tpm2bDigest, Tpm2bNonce, Tpm2bSensitiveData, TpmaObject, TpmaSession, TpmiAlgHash,
-    TpmiAlgSymMode, TpmiStCommandTag, TpmsAuthCommand, TpmsAuthResponse, TpmsSensitiveCreate,
-    TpmtPublic, TpmtSensitive, TpmtSymDefObject, TpmuSensitiveComposite,
+    Tpm2bAuth, Tpm2bDigest, Tpm2bNonce, Tpm2bSensitiveData, TpmaObject, TpmaSession,
+    TpmiAlgCipherMode, TpmiAlgHash, TpmiStCommandTag, TpmsAuthCommand, TpmsAuthResponse,
+    TpmsSensitiveCreate, TpmtPublic, TpmtSensitive, TpmtSymDefObject, TpmuSensitiveComposite,
 };
 use tpm2_simulator::{Simulator, create_simulator};
+
+/// AES-CFB symmetric definition with `alg` (exp's `TpmtSymDefObject::AesNNN(Some(CFB))`).
+fn aes_cfb_sym_def(alg: AlgSym) -> TpmtSymDefObject {
+    TpmtSymDefObject {
+        alg,
+        mode: Some(TpmiAlgCipherMode::Cfb.into()),
+    }
+}
+
+/// Marshals the handle area `handles` into `buf` (one big-endian `u32` per
+/// handle, the bytes exp's `XxxHandles` produced) and returns the bytes written.
+fn marshal_handles(handles: &[Handle], buf: &mut [u8]) -> usize {
+    for (i, handle) in handles.iter().enumerate() {
+        buf[i * 4..i * 4 + 4].copy_from_slice(&handle.0.to_be_bytes());
+    }
+    handles.len() * 4
+}
 
 fn reference_kdfa<H: tpm2::crypto::Hmac>(
     crypto: &H,
@@ -27,23 +42,20 @@ fn reference_kdfa<H: tpm2::crypto::Hmac>(
     context_u: &[u8],
     context_v: &[u8],
     bits: u32,
-) -> Vec<u8>
-where
-    H::Error: core::fmt::Debug,
-{
+) -> Vec<u8> {
     let required_bytes = bits.div_ceil(8) as usize;
     let mut out = vec![0u8; required_bytes];
     let mut counter = 1u32;
     let mut generated = 0;
     while generated < required_bytes {
-        let mut state = tpm2::crypto::HmacCtx::new(crypto, auth_hash, key).unwrap();
+        let mut state = tpm2::crypto::HmacStream::new(crypto, auth_hash, key).unwrap();
         state.update(&counter.to_be_bytes()).unwrap();
         state.update(label).unwrap();
         state.update(&[0x00]).unwrap();
         state.update(context_u).unwrap();
         state.update(context_v).unwrap();
         state.update(&bits.to_be_bytes()).unwrap();
-        let mut mac_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+        let mut mac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let digest = state.finalize(&mut mac_buf).unwrap();
         let mac = digest.digest();
         let to_copy = std::cmp::min(mac.len(), required_bytes - generated);
@@ -62,10 +74,7 @@ fn derive_key_and_iv_ref<H: tpm2::crypto::Hmac>(
     context_u: &[u8],
     context_v: &[u8],
     key_size_bytes: usize,
-) -> (Vec<u8>, [u8; 16])
-where
-    H::Error: core::fmt::Debug,
-{
+) -> (Vec<u8>, [u8; 16]) {
     let total_bytes = key_size_bytes + 16;
     let total_bits = (total_bytes * 8) as u32;
     let out_buffer = reference_kdfa(
@@ -81,15 +90,12 @@ fn compute_client_hash<H: tpm2::crypto::Hash>(
     crypto: &H,
     auth_hash: TpmiAlgHash,
     updates: &[&[u8]],
-) -> Vec<u8>
-where
-    H::Error: core::fmt::Debug,
-{
-    let mut state = tpm2::crypto::HashCtx::new(crypto, auth_hash).unwrap();
+) -> Vec<u8> {
+    let mut state = tpm2::crypto::HashStream::new(crypto, auth_hash).unwrap();
     for data in updates {
         state.update(data).unwrap();
     }
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
     state.finalize(&mut out).unwrap().digest().to_vec()
 }
 
@@ -98,28 +104,23 @@ fn compute_client_hmac<H: tpm2::crypto::Hmac>(
     auth_hash: TpmiAlgHash,
     key: &[u8],
     updates: &[&[u8]],
-) -> Vec<u8>
-where
-    H::Error: core::fmt::Debug,
-{
-    let mut state = tpm2::crypto::HmacCtx::new(crypto, auth_hash, key).unwrap();
+) -> Vec<u8> {
+    let mut state = tpm2::crypto::HmacStream::new(crypto, auth_hash, key).unwrap();
     for data in updates {
         state.update(data).unwrap();
     }
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
     state.finalize(&mut out).unwrap().digest().to_vec()
 }
 
 pub fn execute_with_hmac_sessions_custom_raw<CmdT: tpm2::commands::Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
-) -> Result<(Vec<u8>, CmdT::RespHandles), u32>
+) -> Result<(Vec<u8>, RespHandles<CmdT>), u32>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut cmd_buffer = [0u8; 4096];
     let mut cmd_header = CmdHeader {
@@ -133,7 +134,7 @@ where
     };
 
     let mut written = cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
-    written += marshal_to_slice(&(cmd_handles), &mut cmd_buffer[written..]);
+    written += marshal_handles(cmd.handles().as_ref(), &mut cmd_buffer[written..]);
 
     let session_size_pos = written;
     if !sessions.is_empty() {
@@ -201,8 +202,14 @@ where
         let size = u16::from_be_bytes([param_buf[0], param_buf[1]]) as usize;
 
         let bits = match &session.symmetric {
-            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                ..
+            }) => 128 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes256,
+                ..
+            }) => 256 + 128,
             _ => 0,
         };
 
@@ -228,7 +235,7 @@ where
 
             let mut iv = derived_iv;
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((derived_key.len() * 8) as u16).unwrap();
-            tpm2::crypto::encrypt(
+            sym_encrypt(
                 CLIENT_CRYPTO,
                 sym_alg,
                 &derived_key,
@@ -316,13 +323,13 @@ where
             hmac: hmac_val,
         };
 
-        auth_written += marshal_to_slice(&(auth_cmd), &mut auth_buffer[auth_written..]);
+        auth_written += marshal_auth_command(&auth_cmd, &mut auth_buffer[auth_written..]);
     }
 
     // Marshal sessions into cmd_buffer
     if !sessions.is_empty() {
         let size_u32 = auth_written as u32;
-        marshal_to_slice(&(size_u32), &mut cmd_buffer[session_size_pos..]);
+        cmd_buffer[session_size_pos..session_size_pos + 4].copy_from_slice(&size_u32.to_be_bytes());
         cmd_buffer[sessions_start_pos..sessions_start_pos + auth_written]
             .copy_from_slice(&auth_buffer[..auth_written]);
         written = sessions_start_pos + auth_written;
@@ -351,7 +358,10 @@ where
         return Err(resp_header.rc);
     }
 
-    let resp_handles = CmdT::RespHandles::unmarshal(&mut unmarsh).unwrap();
+    let mut resp_handles = RespHandles::<CmdT>::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut unmarsh).unwrap();
+    }
 
     let mut parameter_size = 0;
     if resp_header.tag == TpmSt::SESSIONS {
@@ -388,8 +398,14 @@ where
         let size = u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
 
         let bits = match &session.symmetric {
-            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                ..
+            }) => 128 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes256,
+                ..
+            }) => 256 + 128,
             _ => 0,
         };
 
@@ -415,7 +431,7 @@ where
 
             let mut iv = derived_iv;
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((derived_key.len() * 8) as u16).unwrap();
-            tpm2::crypto::decrypt(
+            sym_decrypt(
                 CLIENT_CRYPTO,
                 sym_alg,
                 &derived_key,
@@ -438,35 +454,29 @@ where
 pub fn execute_with_hmac_sessions_custom_status<CmdT: tpm2::commands::Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
-) -> Result<CmdT::RespHandles, u32>
+) -> Result<RespHandles<CmdT>, u32>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    execute_with_hmac_sessions_custom_raw(tpm, cmd, cmd_handles, sessions, entity_auths)
-        .map(|(_, h)| h)
+    execute_with_hmac_sessions_custom_raw(tpm, cmd, sessions, entity_auths).map(|(_, h)| h)
 }
 
 pub fn execute_with_hmac_sessions_custom<CmdT: tpm2::commands::Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
-) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), u32>
+) -> Result<CmdT::Response<'static>, u32>
 where
-    CmdT::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    let (buf, handles) =
-        execute_with_hmac_sessions_custom_raw(tpm, cmd, cmd_handles, sessions, entity_auths)?;
+    let (buf, handles) = execute_with_hmac_sessions_custom_raw(tpm, cmd, sessions, entity_auths)?;
     let mut resp_unmarsh: &'static [u8] = crate::test_utils::leak_bytes(&buf);
-    let resp_struct = <CmdT::Response<'static>>::unmarshal(&mut resp_unmarsh).unwrap();
-    Ok((resp_struct, handles))
+    let resp_struct =
+        <CmdT::Response<'static>>::unmarshal_with_handles(handles, &mut resp_unmarsh).unwrap();
+    Ok(resp_struct)
 }
 
 #[test]
@@ -491,8 +501,8 @@ fn test_param_crypt_stress_differential() {
             let mut sim = create_simulator!();
 
             let sym_def = match aes_bits {
-                128 => Some(tpm2::TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
-                256 => Some(tpm2::TpmtSymDefObject::Aes256(Some(TpmiAlgSymMode::CFB))),
+                128 => Some(aes_cfb_sym_def(AlgSym::Aes128)),
+                256 => Some(aes_cfb_sym_def(AlgSym::Aes256)),
                 _ => None,
             };
 
@@ -523,19 +533,11 @@ fn test_param_crypt_stress_differential() {
             let new_auth_data = vec![0xEEu8; size];
 
             let cmd = HierarchyChangeAuth {
+                auth_handle: Handle::RH_OWNER,
                 new_auth: Tpm2bAuth::from_bytes(&new_auth_data).unwrap(),
             };
-            let cmd_handles = tpm2::commands::HierarchyChangeAuthHandles {
-                auth_handle: Handle::RH_OWNER,
-            };
 
-            let result = execute_with_hmac_sessions_custom(
-                &mut sim,
-                &cmd,
-                cmd_handles,
-                &mut sessions,
-                &[&[]],
-            );
+            let result = execute_with_hmac_sessions_custom(&mut sim, &cmd, &mut sessions, &[&[]]);
 
             if size == 0 {
                 // C CryptParameterDecryption (CryptUtil.c:966-970) rejects an
@@ -551,7 +553,7 @@ fn test_param_crypt_stress_differential() {
                     size,
                     result.err()
                 );
-                let (_, _) = result.unwrap();
+                result.unwrap();
             }
 
             // 2. Stress Test Response Encryption via GetRandom
@@ -562,13 +564,8 @@ fn test_param_crypt_stress_differential() {
                 bytes_requested: size as u16,
             };
 
-            let result = execute_with_hmac_sessions_custom(
-                &mut sim,
-                &get_random_cmd,
-                (),
-                &mut sessions,
-                &[&[]],
-            );
+            let result =
+                execute_with_hmac_sessions_custom(&mut sim, &get_random_cmd, &mut sessions, &[&[]]);
 
             assert!(
                 result.is_ok(),
@@ -579,7 +576,7 @@ fn test_param_crypt_stress_differential() {
                 result.err()
             );
 
-            let (resp, _) = result.unwrap();
+            let resp = result.unwrap();
             assert_eq!(resp.random_bytes.as_ref().len(), size);
         }
     }
@@ -626,7 +623,7 @@ fn test_parameter_decryption_no_auth_handle() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(aes_cfb_sym_def(AlgSym::Aes128)),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -653,7 +650,7 @@ fn test_parameter_decryption_no_auth_handle() {
 
     // Execute command with DECRYPT attribute session.
     // KDFa key derivation should correctly use Empty Auth because there are no handles.
-    let result = execute_with_hmac_sessions_custom(&mut sim, &cmd, (), &mut sessions, &[&[]]);
+    let result = execute_with_hmac_sessions_custom(&mut sim, &cmd, &mut sessions, &[&[]]);
 
     assert!(
         result.is_ok(),
@@ -672,7 +669,7 @@ fn test_multiple_decrypt_attributes_fails() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(aes_cfb_sym_def(AlgSym::Aes128)),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -683,7 +680,7 @@ fn test_multiple_decrypt_attributes_fails() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(aes_cfb_sym_def(AlgSym::Aes128)),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -708,7 +705,7 @@ fn test_multiple_decrypt_attributes_fails() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let result = execute_with_hmac_sessions_custom(&mut sim, &cmd, (), &mut sessions, &[&[], &[]]);
+    let result = execute_with_hmac_sessions_custom(&mut sim, &cmd, &mut sessions, &[&[], &[]]);
 
     assert!(result.is_err());
     let err = result.err().unwrap();
@@ -731,7 +728,7 @@ fn test_multiple_encrypt_attributes_fails() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(aes_cfb_sym_def(AlgSym::Aes128)),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -742,7 +739,7 @@ fn test_multiple_encrypt_attributes_fails() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(aes_cfb_sym_def(AlgSym::Aes128)),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -752,7 +749,7 @@ fn test_multiple_encrypt_attributes_fails() {
     sessions[1].attributes = TpmaSession::ENCRYPT | TpmaSession::CONTINUE_SESSION;
 
     let cmd = GetRandom { bytes_requested: 8 };
-    let result = execute_with_hmac_sessions_custom(&mut sim, &cmd, (), &mut sessions, &[&[], &[]]);
+    let result = execute_with_hmac_sessions_custom(&mut sim, &cmd, &mut sessions, &[&[], &[]]);
 
     assert!(result.is_err());
     let err = result.err().unwrap();
@@ -785,7 +782,7 @@ fn test_session_encrypt_null_symmetric_fails() {
     sessions[0].attributes = TpmaSession::ENCRYPT | TpmaSession::CONTINUE_SESSION;
 
     let cmd = GetRandom { bytes_requested: 8 };
-    let result = execute_with_hmac_sessions_custom(&mut sim, &cmd, (), &mut sessions, &[&[]]);
+    let result = execute_with_hmac_sessions_custom(&mut sim, &cmd, &mut sessions, &[&[]]);
 
     assert!(result.is_err());
     let err = result.err().unwrap();
@@ -818,7 +815,7 @@ fn test_encrypt_on_third_session_of_multi_session_command() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(aes_cfb_sym_def(AlgSym::Aes128)),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -829,7 +826,7 @@ fn test_encrypt_on_third_session_of_multi_session_command() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(aes_cfb_sym_def(AlgSym::Aes128)),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -848,15 +845,14 @@ fn test_encrypt_on_third_session_of_multi_session_command() {
         hash_alg: TpmiAlgHash::Sha256,
         hierarchy: Handle::RH_NULL,
     };
-    let result =
-        execute_with_hmac_sessions_custom(&mut sim, &cmd, (), &mut sessions, &[&[], &[], &[]]);
+    let result = execute_with_hmac_sessions_custom(&mut sim, &cmd, &mut sessions, &[&[], &[], &[]]);
 
     assert!(
         result.is_ok(),
         "Hash with encrypt on 3rd session failed: {:?}",
         result.err()
     );
-    let (resp, _) = result.unwrap();
+    let resp = result.unwrap();
     assert_eq!(
         resp.out_hash.as_ref(),
         Sha256::digest(b"third session").as_slice()
@@ -893,16 +889,13 @@ fn test_response_encrypt_index_alignment_get_time() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    let sign_handle = create_rsp_handles.object_handle;
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
+    let sign_handle = create_rsp.object_handle;
 
     // 2. Start an unbound session for RH_ENDORSEMENT and a session bound to the signing key
     let admin_session = start_auth_session(
@@ -923,7 +916,7 @@ fn test_response_encrypt_index_alignment_get_time() {
         sign_handle,
         key_auth,
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(aes_cfb_sym_def(AlgSym::Aes128)),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -936,21 +929,14 @@ fn test_response_encrypt_index_alignment_get_time() {
     // Handles: privacy_admin_handle = RH_ENDORSEMENT (index 0, auth required), sign_handle (index 1, auth required)
     // Sessions: session 0 authorizes RH_ENDORSEMENT, session 1 (with ENCRYPT) authorizes sign_handle using key_auth.
     let cmd = GetTime {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle,
         qualifying_data: tpm2::Tpm2bData::default(),
         in_scheme: None,
     };
-    let cmd_handles = GetTimeHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle,
-    };
 
-    let result = execute_with_hmac_sessions_custom_status(
-        &mut sim,
-        &cmd,
-        cmd_handles,
-        &mut sessions,
-        &[&[], key_auth],
-    );
+    let result =
+        execute_with_hmac_sessions_custom_status(&mut sim, &cmd, &mut sessions, &[&[], key_auth]);
 
     assert!(result.is_ok(), "GetTime failed: {:?}", result.err());
 }

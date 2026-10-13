@@ -7,6 +7,52 @@ use tpm2::TpmiAlgHash;
 use tpm2::crypto::CryptoError;
 
 // ============================================================================
+// Error Type of the Safe Bindings
+// ============================================================================
+
+/// Error type of the safe BoringSSL bindings in this module.
+///
+/// It keeps the failure categories of the bindings apart, so that the
+/// `tpm2::crypto` trait implementations of
+/// [`BsslCryptoProvider`](crate::BsslCryptoProvider) can map them to the
+/// `tpm2::crypto` conventions:
+///   - [`BsslError::InvalidData`] is a semantic failure caused by the inputs. The
+///     traits report it in the `Ok` value (`Ok(false)` for verification and
+///     point validation, `Ok(None)` for operations producing output).
+///   - [`BsslError::Unsupported`] becomes [`CryptoError::Unsupported`].
+///   - [`BsslError::BufferTooSmall`] and [`BsslError::Internal`] become
+///     [`CryptoError::Internal`] (see the [`From`] implementation), as does
+///     [`BsslError::InvalidData`] for operations without semantic failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BsslError {
+    /// The requested algorithm, hash, curve, or key size is not supported.
+    Unsupported,
+    /// The input (key, signature, point, scalar, ciphertext, padding, label, ...)
+    /// is invalid, or a message is too large for the key.
+    InvalidData,
+    /// An output buffer is too small for the result.
+    BufferTooSmall,
+    /// BoringSSL failed internally (e.g. an allocation failure).
+    Internal,
+}
+
+impl From<BsslError> for CryptoError {
+    /// Maps [`BsslError::Unsupported`] to [`CryptoError::Unsupported`] and every
+    /// other error to [`CryptoError::Internal`].
+    ///
+    /// Callers with semantic failures must handle [`BsslError::InvalidData`]
+    /// themselves before converting.
+    fn from(err: BsslError) -> Self {
+        match err {
+            BsslError::Unsupported => CryptoError::Unsupported,
+            BsslError::InvalidData | BsslError::BufferTooSmall | BsslError::Internal => {
+                CryptoError::Internal
+            }
+        }
+    }
+}
+
+// ============================================================================
 // HMAC-SHA1 Safe Binding over `bssl-sys`
 // ============================================================================
 
@@ -17,7 +63,7 @@ pub struct HmacSha1 {
 
 impl HmacSha1 {
     /// Creates a new HMAC-SHA1 context initialized with the provided `key`.
-    pub fn new_from_slice(key: &[u8]) -> Result<Self, CryptoError> {
+    pub fn new_from_slice(key: &[u8]) -> Result<Self, BsslError> {
         let mut ctx = MaybeUninit::<bssl_sys::HMAC_CTX>::uninit();
         // SAFETY:
         // - `ctx.as_mut_ptr()` is a valid pointer to uninitialized `HMAC_CTX` stack memory.
@@ -44,12 +90,12 @@ impl HmacSha1 {
             unsafe {
                 bssl_sys::HMAC_CTX_cleanup(ctx.as_mut_ptr());
             }
-            Err(CryptoError::HardwareFailure)
+            Err(BsslError::Internal)
         }
     }
 
     /// Updates the HMAC-SHA1 state with `data`.
-    pub fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+    pub fn update(&mut self, data: &[u8]) -> Result<(), BsslError> {
         if data.is_empty() {
             return Ok(());
         }
@@ -58,12 +104,12 @@ impl HmacSha1 {
         if res == 1 {
             Ok(())
         } else {
-            Err(CryptoError::HardwareFailure)
+            Err(BsslError::Internal)
         }
     }
 
     /// Finalizes the HMAC-SHA1 computation and writes the 20-byte tag into `out`.
-    pub fn finalize(mut self, out: &mut [u8; 20]) -> Result<(), CryptoError> {
+    pub fn finalize(mut self, out: &mut [u8; 20]) -> Result<(), BsslError> {
         let mut len: c_uint = 0;
         // SAFETY: `self.ctx` is an initialized `HMAC_CTX`, `out` has space for 20 bytes (SHA-1 digest size),
         // and `len` is a valid mutable pointer.
@@ -71,7 +117,7 @@ impl HmacSha1 {
         if res == 1 && len == 20 {
             Ok(())
         } else {
-            Err(CryptoError::HardwareFailure)
+            Err(BsslError::Internal)
         }
     }
 }
@@ -109,10 +155,10 @@ impl Drop for HmacSha1 {
 struct CmacCtx(NonNull<bssl_sys::CMAC_CTX>);
 
 impl CmacCtx {
-    fn new(key: &[u8], cipher: *const bssl_sys::EVP_CIPHER) -> Result<Self, CryptoError> {
+    fn new(key: &[u8], cipher: *const bssl_sys::EVP_CIPHER) -> Result<Self, BsslError> {
         // SAFETY: `CMAC_CTX_new` allocates a new `CMAC_CTX` on the heap or returns null on failure.
         let ptr = unsafe { bssl_sys::CMAC_CTX_new() };
-        let non_null = NonNull::new(ptr).ok_or(CryptoError::HardwareFailure)?;
+        let non_null = NonNull::new(ptr).ok_or(BsslError::Internal)?;
         // SAFETY: `non_null` is a valid `CMAC_CTX`, `key` is valid for `key.len()` bytes,
         // and `cipher` is a valid static `EVP_CIPHER` pointer.
         let res = unsafe {
@@ -131,11 +177,11 @@ impl CmacCtx {
             unsafe {
                 bssl_sys::CMAC_CTX_free(non_null.as_ptr());
             }
-            Err(CryptoError::InvalidData)
+            Err(BsslError::InvalidData)
         }
     }
 
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+    fn update(&mut self, data: &[u8]) -> Result<(), BsslError> {
         if data.is_empty() {
             return Ok(());
         }
@@ -144,11 +190,11 @@ impl CmacCtx {
         if res == 1 {
             Ok(())
         } else {
-            Err(CryptoError::HardwareFailure)
+            Err(BsslError::Internal)
         }
     }
 
-    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
+    fn finalize(self, out: &mut [u8; 16]) -> Result<(), BsslError> {
         let mut out_len: usize = 0;
         // SAFETY: `self.0` is an initialized `CMAC_CTX`, `out` is a valid 16-byte buffer,
         // and `out_len` is a valid mutable pointer.
@@ -156,7 +202,7 @@ impl CmacCtx {
         if res == 1 && out_len == 16 {
             Ok(())
         } else {
-            Err(CryptoError::HardwareFailure)
+            Err(BsslError::Internal)
         }
     }
 }
@@ -189,19 +235,19 @@ macro_rules! impl_bssl_cmac {
 
         impl $name {
             /// Creates a new AES-CMAC context initialized with the given key.
-            pub fn new(key: &[u8; $key_len]) -> Result<Self, CryptoError> {
+            pub fn new(key: &[u8; $key_len]) -> Result<Self, BsslError> {
                 // SAFETY: `$cipher_fn()` returns a static, valid `EVP_CIPHER` pointer.
                 let cipher = unsafe { bssl_sys::$cipher_fn() };
                 CmacCtx::new(key, cipher).map(Self)
             }
 
             /// Updates the CMAC computation with `data`.
-            pub fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+            pub fn update(&mut self, data: &[u8]) -> Result<(), BsslError> {
                 self.0.update(data)
             }
 
             /// Finalizes the CMAC computation and writes the 16-byte tag into `out`.
-            pub fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
+            pub fn finalize(self, out: &mut [u8; 16]) -> Result<(), BsslError> {
                 self.0.finalize(out)
             }
         }
@@ -244,7 +290,7 @@ struct AesCfb {
 }
 
 impl AesCfb {
-    fn new(key_bytes: &[u8], iv: &[u8; 16], enc: c_int) -> Result<Self, CryptoError> {
+    fn new(key_bytes: &[u8], iv: &[u8; 16], enc: c_int) -> Result<Self, BsslError> {
         let bits = (key_bytes.len() * 8) as c_uint;
         let mut aes_key = MaybeUninit::<bssl_sys::AES_KEY>::uninit();
         // SAFETY:
@@ -265,11 +311,11 @@ impl AesCfb {
                 enc,
             })
         } else {
-            Err(CryptoError::InvalidData)
+            Err(BsslError::InvalidData)
         }
     }
 
-    fn update(&mut self, mut data: &mut [u8]) -> Result<(), CryptoError> {
+    fn update(&mut self, mut data: &mut [u8]) -> Result<(), BsslError> {
         while !data.is_empty() {
             // 1. If we are in the middle of a partial 16-byte block (`self.num != 0`),
             //    feed up to the remaining bytes of that block first so `self.num` wraps to 0.
@@ -336,7 +382,7 @@ impl AesCfb {
         Ok(())
     }
 
-    fn finalize(self, iv_out: &mut [u8; 16]) -> Result<(), CryptoError> {
+    fn finalize(self, iv_out: &mut [u8; 16]) -> Result<(), BsslError> {
         *iv_out = self.ivec;
         if self.num > 0 {
             let n = self.num as usize;
@@ -371,22 +417,22 @@ macro_rules! impl_bssl_aes_cfb {
 
         impl $name {
             /// Creates a new AES-CFB encryptor initialized with `key` and `iv`.
-            pub fn new_encrypt(key: &[u8; $key_len], iv: &[u8; 16]) -> Result<Self, CryptoError> {
+            pub fn new_encrypt(key: &[u8; $key_len], iv: &[u8; 16]) -> Result<Self, BsslError> {
                 AesCfb::new(key, iv, bssl_sys::AES_ENCRYPT).map(Self)
             }
 
             /// Creates a new AES-CFB decryptor initialized with `key` and `iv`.
-            pub fn new_decrypt(key: &[u8; $key_len], iv: &[u8; 16]) -> Result<Self, CryptoError> {
+            pub fn new_decrypt(key: &[u8; $key_len], iv: &[u8; 16]) -> Result<Self, BsslError> {
                 AesCfb::new(key, iv, bssl_sys::AES_DECRYPT).map(Self)
             }
 
             /// Encrypts or decrypts `data` in place.
-            pub fn update(&mut self, data: &mut [u8]) -> Result<(), CryptoError> {
+            pub fn update(&mut self, data: &mut [u8]) -> Result<(), BsslError> {
                 self.0.update(data)
             }
 
             /// Finalizes the cipher stream and writes the resulting feedback IV to `iv_out`.
-            pub fn finalize(self, iv_out: &mut [u8; 16]) -> Result<(), CryptoError> {
+            pub fn finalize(self, iv_out: &mut [u8; 16]) -> Result<(), BsslError> {
                 self.0.finalize(iv_out)
             }
         }
@@ -422,11 +468,11 @@ struct ScopedBsslBuffer {
 }
 
 impl ScopedBsslBuffer {
-    fn new(len: usize) -> Result<Self, CryptoError> {
+    fn new(len: usize) -> Result<Self, BsslError> {
         let alloc_len = len.max(1);
         // SAFETY: `OPENSSL_malloc` allocates `alloc_len` bytes on the heap or returns NULL.
         let raw = unsafe { bssl_sys::OPENSSL_malloc(alloc_len) } as *mut u8;
-        let ptr = NonNull::new(raw).ok_or(CryptoError::HardwareFailure)?;
+        let ptr = NonNull::new(raw).ok_or(BsslError::Internal)?;
         // SAFETY: `ptr` is valid for `alloc_len` bytes.
         unsafe {
             ptr::write_bytes(ptr.as_ptr(), 0, alloc_len);
@@ -464,28 +510,27 @@ struct Bignum {
 }
 
 impl Bignum {
-    fn new() -> Result<Self, CryptoError> {
+    fn new() -> Result<Self, BsslError> {
         // SAFETY: `BN_new` allocates a new initialized `BIGNUM` or returns NULL.
-        let ptr =
-            NonNull::new(unsafe { bssl_sys::BN_new() }).ok_or(CryptoError::HardwareFailure)?;
+        let ptr = NonNull::new(unsafe { bssl_sys::BN_new() }).ok_or(BsslError::Internal)?;
         Ok(Self { ptr })
     }
 
-    fn from_bytes_be(bytes: &[u8]) -> Result<Self, CryptoError> {
+    fn from_bytes_be(bytes: &[u8]) -> Result<Self, BsslError> {
         // SAFETY: `bytes.as_ptr()` is valid for `bytes.len()` bytes. `BN_bin2bn` allocates a new `BIGNUM`.
         let ptr = NonNull::new(unsafe {
             bssl_sys::BN_bin2bn(bytes.as_ptr(), bytes.len(), ptr::null_mut())
         })
-        .ok_or(CryptoError::InvalidData)?;
+        .ok_or(BsslError::InvalidData)?;
         Ok(Self { ptr })
     }
 
-    fn from_u32(val: u32) -> Result<Self, CryptoError> {
+    fn from_u32(val: u32) -> Result<Self, BsslError> {
         let bn = Self::new()?;
         // SAFETY: `bn.as_ptr()` is a valid `BIGNUM` pointer.
         let res = unsafe { bssl_sys::BN_set_word(bn.as_ptr(), val.into()) };
         if res != 1 {
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
         Ok(bn)
     }
@@ -509,7 +554,7 @@ impl Bignum {
         unsafe { bssl_sys::BN_is_zero(self.ptr.as_ptr()) == 1 }
     }
 
-    fn is_prime(&self, ctx: &BnCtx) -> Result<bool, CryptoError> {
+    fn is_prime(&self, ctx: &BnCtx) -> Result<bool, BsslError> {
         let mut is_probably_prime: c_int = 0;
         // SAFETY:
         // - `is_probably_prime` is a valid mutable pointer to `c_int`.
@@ -525,7 +570,7 @@ impl Bignum {
             )
         };
         if res != 1 {
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
         Ok(is_probably_prime == 1)
     }
@@ -546,10 +591,9 @@ struct BnCtx {
 }
 
 impl BnCtx {
-    fn new() -> Result<Self, CryptoError> {
+    fn new() -> Result<Self, BsslError> {
         // SAFETY: `BN_CTX_new` allocates a new `BN_CTX` or returns NULL.
-        let ptr =
-            NonNull::new(unsafe { bssl_sys::BN_CTX_new() }).ok_or(CryptoError::HardwareFailure)?;
+        let ptr = NonNull::new(unsafe { bssl_sys::BN_CTX_new() }).ok_or(BsslError::Internal)?;
         Ok(Self { ptr })
     }
 
@@ -574,25 +618,24 @@ struct RsaKey {
 
 impl RsaKey {
     /// Allocates a new empty `RSA` structure.
-    fn new() -> Result<Self, CryptoError> {
+    fn new() -> Result<Self, BsslError> {
         // SAFETY: `RSA_new` allocates an empty `RSA` structure or returns NULL.
-        let ptr =
-            NonNull::new(unsafe { bssl_sys::RSA_new() }).ok_or(CryptoError::HardwareFailure)?;
+        let ptr = NonNull::new(unsafe { bssl_sys::RSA_new() }).ok_or(BsslError::Internal)?;
         Ok(Self { ptr })
     }
 
     /// Creates an RSA public key from big-endian modulus `n_bytes` and fixed exponent 65537.
-    fn from_public_key_be(n_bytes: &[u8]) -> Result<Self, CryptoError> {
+    fn from_public_key_be(n_bytes: &[u8]) -> Result<Self, BsslError> {
         let n = Bignum::from_bytes_be(n_bytes)?;
         let e = Bignum::from_u32(65537)?;
         // SAFETY: `n.as_ptr()` and `e.as_ptr()` are valid `BIGNUM`s. `RSA_new_public_key` copies/adopts them.
         let rsa_ptr = unsafe { bssl_sys::RSA_new_public_key(n.as_ptr(), e.as_ptr()) };
-        let ptr = NonNull::new(rsa_ptr).ok_or(CryptoError::InvalidData)?;
+        let ptr = NonNull::new(rsa_ptr).ok_or(BsslError::InvalidData)?;
         Ok(Self { ptr })
     }
 
     /// Parses an RSA private key from PKCS#8 DER or PKCS#1 RSAPrivateKey DER bytes.
-    fn from_private_key_der(der: &[u8]) -> Result<Self, CryptoError> {
+    fn from_private_key_der(der: &[u8]) -> Result<Self, BsslError> {
         // SAFETY: `EVP_pkey_rsa()` returns a static `EVP_PKEY_ALG` pointer.
         let alg = unsafe { bssl_sys::EVP_pkey_rsa() };
         // SAFETY: `der.as_ptr()` is valid for `der.len()` bytes.
@@ -610,7 +653,7 @@ impl RsaKey {
         // Fallback to PKCS#1 RSAPrivateKey DER
         // SAFETY: `der.as_ptr()` is valid for `der.len()` bytes.
         let rsa_ptr = unsafe { bssl_sys::RSA_private_key_from_bytes(der.as_ptr(), der.len()) };
-        let ptr = NonNull::new(rsa_ptr).ok_or(CryptoError::InvalidData)?;
+        let ptr = NonNull::new(rsa_ptr).ok_or(BsslError::InvalidData)?;
         Ok(Self { ptr })
     }
 
@@ -624,12 +667,12 @@ impl RsaKey {
     }
 
     /// Serializes the RSA private key into RFC 5208 PKCS#8 `PrivateKeyInfo` DER format.
-    fn to_pkcs8_der(&self, out: &mut [u8]) -> Result<usize, CryptoError> {
+    fn to_pkcs8_der(&self, out: &mut [u8]) -> Result<usize, BsslError> {
         let pkey = EvpPkey::from_rsa(self)?;
         let mut cbb = MaybeUninit::<bssl_sys::CBB>::uninit();
         // SAFETY: `CBB_init` initializes `cbb` with an initial capacity of 512 bytes.
         if unsafe { bssl_sys::CBB_init(cbb.as_mut_ptr(), 512) } != 1 {
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
         // SAFETY: `cbb` is initialized and `pkey.as_ptr()` is valid.
         let marshal_res =
@@ -637,17 +680,17 @@ impl RsaKey {
         if marshal_res != 1 {
             // SAFETY: `cbb` is initialized and must be cleaned up on error.
             unsafe { bssl_sys::CBB_cleanup(cbb.as_mut_ptr()) };
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
         let mut buf_ptr: *mut u8 = ptr::null_mut();
         let mut buf_len: usize = 0;
         // SAFETY: `cbb` is finalized, transferring ownership of `buf_ptr` (allocated via `OPENSSL_malloc`) to caller.
         if unsafe { bssl_sys::CBB_finish(cbb.as_mut_ptr(), &mut buf_ptr, &mut buf_len) } != 1 {
             unsafe { bssl_sys::CBB_cleanup(cbb.as_mut_ptr()) };
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
         let res = if out.len() < buf_len {
-            Err(CryptoError::BufferTooSmall)
+            Err(BsslError::BufferTooSmall)
         } else {
             // SAFETY: `buf_ptr` is valid for `buf_len` bytes.
             let slice = unsafe { core::slice::from_raw_parts(buf_ptr, buf_len) };
@@ -678,14 +721,14 @@ struct EvpPkey {
 }
 
 impl EvpPkey {
-    fn from_rsa(rsa: &RsaKey) -> Result<Self, CryptoError> {
+    fn from_rsa(rsa: &RsaKey) -> Result<Self, BsslError> {
         // SAFETY: `EVP_PKEY_new` allocates a new empty `EVP_PKEY`.
-        let pkey_ptr = NonNull::new(unsafe { bssl_sys::EVP_PKEY_new() })
-            .ok_or(CryptoError::HardwareFailure)?;
+        let pkey_ptr =
+            NonNull::new(unsafe { bssl_sys::EVP_PKEY_new() }).ok_or(BsslError::Internal)?;
         let pkey = Self { ptr: pkey_ptr };
         // SAFETY: `EVP_PKEY_set1_RSA` increments the refcount of `rsa.as_ptr()` and assigns it to `pkey`.
         if unsafe { bssl_sys::EVP_PKEY_set1_RSA(pkey.as_ptr(), rsa.as_ptr()) } != 1 {
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
         Ok(pkey)
     }
@@ -710,11 +753,11 @@ struct EvpPkeyCtx {
 }
 
 impl EvpPkeyCtx {
-    fn new(pkey: &EvpPkey) -> Result<Self, CryptoError> {
+    fn new(pkey: &EvpPkey) -> Result<Self, BsslError> {
         // SAFETY: `EVP_PKEY_CTX_new` creates a context for `pkey`.
         let ptr =
             NonNull::new(unsafe { bssl_sys::EVP_PKEY_CTX_new(pkey.as_ptr(), ptr::null_mut()) })
-                .ok_or(CryptoError::HardwareFailure)?;
+                .ok_or(BsslError::Internal)?;
         Ok(Self { ptr })
     }
 
@@ -732,17 +775,17 @@ impl Drop for EvpPkeyCtx {
     }
 }
 
-fn hash_alg_to_nid(hash_alg: TpmiAlgHash) -> Result<c_int, CryptoError> {
+fn hash_alg_to_nid(hash_alg: TpmiAlgHash) -> Result<c_int, BsslError> {
     match hash_alg {
         TpmiAlgHash::Sha1 => Ok(bssl_sys::NID_sha1 as c_int),
         TpmiAlgHash::Sha256 => Ok(bssl_sys::NID_sha256 as c_int),
         TpmiAlgHash::Sha384 => Ok(bssl_sys::NID_sha384 as c_int),
         TpmiAlgHash::Sha512 => Ok(bssl_sys::NID_sha512 as c_int),
-        _ => Err(CryptoError::UnsupportedAlgorithm),
+        _ => Err(BsslError::Unsupported),
     }
 }
 
-fn hash_alg_to_evp_md(hash_alg: TpmiAlgHash) -> Result<*const bssl_sys::EVP_MD, CryptoError> {
+fn hash_alg_to_evp_md(hash_alg: TpmiAlgHash) -> Result<*const bssl_sys::EVP_MD, BsslError> {
     // SAFETY: Each `EVP_sha*` function returns a static, immutable pointer to `EVP_MD`.
     unsafe {
         match hash_alg {
@@ -750,7 +793,7 @@ fn hash_alg_to_evp_md(hash_alg: TpmiAlgHash) -> Result<*const bssl_sys::EVP_MD, 
             TpmiAlgHash::Sha256 => Ok(bssl_sys::EVP_sha256()),
             TpmiAlgHash::Sha384 => Ok(bssl_sys::EVP_sha384()),
             TpmiAlgHash::Sha512 => Ok(bssl_sys::EVP_sha512()),
-            _ => Err(CryptoError::UnsupportedAlgorithm),
+            _ => Err(BsslError::Unsupported),
         }
     }
 }
@@ -764,12 +807,12 @@ pub fn rsa_sign_pkcs1v15(
     hash_alg: TpmiAlgHash,
     digest: &[u8],
     signature_out: &mut [u8],
-) -> Result<usize, CryptoError> {
+) -> Result<usize, BsslError> {
     let nid = hash_alg_to_nid(hash_alg)?;
     let rsa = RsaKey::from_private_key_der(private_key_der)?;
     let key_size = rsa.size();
     if signature_out.len() < key_size {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
 
     let mut sig_len: c_uint = 0;
@@ -787,8 +830,9 @@ pub fn rsa_sign_pkcs1v15(
             rsa.as_ptr(),
         )
     };
+    // `RSA_sign` fails if the key is too small for the `DigestInfo` encoding of `digest`.
     if res != 1 {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::InvalidData);
     }
     Ok(sig_len as usize)
 }
@@ -799,7 +843,7 @@ pub fn rsa_verify_pkcs1v15(
     hash_alg: TpmiAlgHash,
     digest: &[u8],
     signature: &[u8],
-) -> Result<(), CryptoError> {
+) -> Result<(), BsslError> {
     let nid = hash_alg_to_nid(hash_alg)?;
     let rsa = RsaKey::from_public_key_be(public_key_be)?;
     // SAFETY:
@@ -819,7 +863,7 @@ pub fn rsa_verify_pkcs1v15(
     if res == 1 {
         Ok(())
     } else {
-        Err(CryptoError::InvalidData)
+        Err(BsslError::InvalidData)
     }
 }
 
@@ -829,12 +873,12 @@ pub fn rsa_sign_pss(
     hash_alg: TpmiAlgHash,
     digest: &[u8],
     signature_out: &mut [u8],
-) -> Result<usize, CryptoError> {
+) -> Result<usize, BsslError> {
     let md = hash_alg_to_evp_md(hash_alg)?;
     let rsa = RsaKey::from_private_key_der(private_key_der)?;
     let key_size = rsa.size();
     if signature_out.len() < key_size {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
 
     let mut sig_len: usize = 0;
@@ -855,8 +899,9 @@ pub fn rsa_sign_pss(
             bssl_sys::RSA_PSS_SALTLEN_DIGEST,
         )
     };
+    // `RSA_sign_pss_mgf1` fails if the key is too small for the digest and salt.
     if res != 1 {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::InvalidData);
     }
     Ok(sig_len)
 }
@@ -870,7 +915,7 @@ pub fn rsa_verify_pss(
     hash_alg: TpmiAlgHash,
     digest: &[u8],
     signature: &[u8],
-) -> Result<(), CryptoError> {
+) -> Result<(), BsslError> {
     let md = hash_alg_to_evp_md(hash_alg)?;
     let rsa = RsaKey::from_public_key_be(public_key_be)?;
     // SAFETY: `signature.as_ptr()` and `digest.as_ptr()` are valid for their respective lengths.
@@ -907,7 +952,7 @@ pub fn rsa_verify_pss(
     if res_auto == 1 {
         Ok(())
     } else {
-        Err(CryptoError::InvalidData)
+        Err(BsslError::InvalidData)
     }
 }
 
@@ -916,11 +961,11 @@ pub fn rsa_encrypt_pkcs1v15(
     public_key_be: &[u8],
     data: &[u8],
     ciphertext_out: &mut [u8],
-) -> Result<usize, CryptoError> {
+) -> Result<usize, BsslError> {
     let rsa = RsaKey::from_public_key_be(public_key_be)?;
     let key_size = rsa.size();
     if ciphertext_out.len() < key_size {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
 
     let mut out_len: usize = 0;
@@ -938,8 +983,9 @@ pub fn rsa_encrypt_pkcs1v15(
             bssl_sys::RSA_PKCS1_PADDING as c_int,
         )
     };
+    // `RSA_encrypt` fails if `data` is too large for PKCS#1 v1.5 padding with this key.
     if res != 1 {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::InvalidData);
     }
     Ok(out_len)
 }
@@ -949,7 +995,7 @@ pub fn rsa_decrypt_pkcs1v15(
     private_key_der: &[u8],
     ciphertext: &[u8],
     plaintext_out: &mut [u8],
-) -> Result<usize, CryptoError> {
+) -> Result<usize, BsslError> {
     let rsa = RsaKey::from_private_key_der(private_key_der)?;
     let key_size = rsa.size();
     let mut temp_buf = ScopedBsslBuffer::new(key_size)?;
@@ -970,10 +1016,10 @@ pub fn rsa_decrypt_pkcs1v15(
         )
     };
     if res != 1 {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
     if plaintext_out.len() < out_len {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
     plaintext_out[..out_len].copy_from_slice(&temp_buf.as_slice()[..out_len]);
     Ok(out_len)
@@ -986,13 +1032,13 @@ pub fn rsa_encrypt_oaep(
     data: &[u8],
     label: &[u8],
     ciphertext_out: &mut [u8],
-) -> Result<usize, CryptoError> {
-    let _label_str = core::str::from_utf8(label).map_err(|_| CryptoError::InvalidData)?;
+) -> Result<usize, BsslError> {
+    let _label_str = core::str::from_utf8(label).map_err(|_| BsslError::InvalidData)?;
     let md = hash_alg_to_evp_md(hash_alg)?;
     let rsa = RsaKey::from_public_key_be(public_key_be)?;
     let key_size = rsa.size();
     if ciphertext_out.len() < key_size {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
 
     let pkey = EvpPkey::from_rsa(&rsa)?;
@@ -1008,7 +1054,7 @@ pub fn rsa_encrypt_oaep(
             || bssl_sys::EVP_PKEY_CTX_set_rsa_oaep_md(ctx.as_ptr(), md) != 1
             || bssl_sys::EVP_PKEY_CTX_set_rsa_mgf1_md(ctx.as_ptr(), md) != 1
         {
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
     }
 
@@ -1017,14 +1063,14 @@ pub fn rsa_encrypt_oaep(
         // takes ownership of the pointer on success (1) and frees it when `ctx` is freed.
         let label_ptr = unsafe { bssl_sys::OPENSSL_malloc(label.len()) } as *mut u8;
         if label_ptr.is_null() {
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
         unsafe {
             ptr::copy_nonoverlapping(label.as_ptr(), label_ptr, label.len());
             if bssl_sys::EVP_PKEY_CTX_set0_rsa_oaep_label(ctx.as_ptr(), label_ptr, label.len()) != 1
             {
                 bssl_sys::OPENSSL_free(label_ptr as *mut c_void);
-                return Err(CryptoError::HardwareFailure);
+                return Err(BsslError::Internal);
             }
         }
     }
@@ -1040,8 +1086,9 @@ pub fn rsa_encrypt_oaep(
             data.len(),
         )
     };
+    // `EVP_PKEY_encrypt` fails if `data` is too large for OAEP padding with this key.
     if res != 1 {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::InvalidData);
     }
     Ok(out_len)
 }
@@ -1053,8 +1100,8 @@ pub fn rsa_decrypt_oaep(
     ciphertext: &[u8],
     label: &[u8],
     plaintext_out: &mut [u8],
-) -> Result<usize, CryptoError> {
-    let _label_str = core::str::from_utf8(label).map_err(|_| CryptoError::InvalidData)?;
+) -> Result<usize, BsslError> {
+    let _label_str = core::str::from_utf8(label).map_err(|_| BsslError::InvalidData)?;
     let md = hash_alg_to_evp_md(hash_alg)?;
     let rsa = RsaKey::from_private_key_der(private_key_der)?;
     let key_size = rsa.size();
@@ -1071,7 +1118,7 @@ pub fn rsa_decrypt_oaep(
             || bssl_sys::EVP_PKEY_CTX_set_rsa_oaep_md(ctx.as_ptr(), md) != 1
             || bssl_sys::EVP_PKEY_CTX_set_rsa_mgf1_md(ctx.as_ptr(), md) != 1
         {
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
     }
 
@@ -1080,14 +1127,14 @@ pub fn rsa_decrypt_oaep(
         // takes ownership of the pointer on success (1) and frees it when `ctx` is freed.
         let label_ptr = unsafe { bssl_sys::OPENSSL_malloc(label.len()) } as *mut u8;
         if label_ptr.is_null() {
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
         unsafe {
             ptr::copy_nonoverlapping(label.as_ptr(), label_ptr, label.len());
             if bssl_sys::EVP_PKEY_CTX_set0_rsa_oaep_label(ctx.as_ptr(), label_ptr, label.len()) != 1
             {
                 bssl_sys::OPENSSL_free(label_ptr as *mut c_void);
-                return Err(CryptoError::HardwareFailure);
+                return Err(BsslError::Internal);
             }
         }
     }
@@ -1104,11 +1151,12 @@ pub fn rsa_decrypt_oaep(
             ciphertext.len(),
         )
     };
+    // `EVP_PKEY_decrypt` fails if the ciphertext, its padding, or the label is invalid.
     if res != 1 {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::InvalidData);
     }
     if plaintext_out.len() < out_len {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
     plaintext_out[..out_len].copy_from_slice(&temp_buf.as_slice()[..out_len]);
     Ok(out_len)
@@ -1119,7 +1167,7 @@ pub fn rsa_encrypt_null(
     public_key_be: &[u8],
     data: &[u8],
     ciphertext_out: &mut [u8],
-) -> Result<usize, CryptoError> {
+) -> Result<usize, BsslError> {
     let rsa = RsaKey::from_public_key_be(public_key_be)?;
     let mod_len = rsa.size();
     let m = Bignum::from_bytes_be(data)?;
@@ -1128,17 +1176,17 @@ pub fn rsa_encrypt_null(
     // SAFETY: `rsa.as_ptr()` is a valid `RSA` struct and `m.as_ptr()` is a valid `BIGNUM`.
     let n_ptr = unsafe { bssl_sys::RSA_get0_n(rsa.as_ptr()) };
     if n_ptr.is_null() || unsafe { bssl_sys::BN_cmp(m.as_ptr(), n_ptr) } >= 0 {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     if ciphertext_out.len() < mod_len {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
 
     let mut padded_in = ScopedBsslBuffer::new(mod_len)?;
     // SAFETY: `padded_in` has `mod_len` bytes and `m < n`, so `m` fits in `mod_len` bytes.
     if unsafe { bssl_sys::BN_bn2bin_padded(padded_in.as_mut_ptr(), mod_len, m.as_ptr()) } != 1 {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     let mut out_len: usize = 0;
@@ -1155,7 +1203,7 @@ pub fn rsa_encrypt_null(
         )
     };
     if res != 1 || out_len != mod_len {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
     Ok(mod_len)
 }
@@ -1165,7 +1213,7 @@ pub fn rsa_decrypt_null(
     private_key_der: &[u8],
     ciphertext: &[u8],
     plaintext_out: &mut [u8],
-) -> Result<usize, CryptoError> {
+) -> Result<usize, BsslError> {
     let rsa = RsaKey::from_private_key_der(private_key_der)?;
     let mod_len = rsa.size();
     let c = Bignum::from_bytes_be(ciphertext)?;
@@ -1174,17 +1222,17 @@ pub fn rsa_decrypt_null(
     // SAFETY: `rsa.as_ptr()` is a valid `RSA` struct and `c.as_ptr()` is a valid `BIGNUM`.
     let n_ptr = unsafe { bssl_sys::RSA_get0_n(rsa.as_ptr()) };
     if n_ptr.is_null() || unsafe { bssl_sys::BN_cmp(c.as_ptr(), n_ptr) } >= 0 {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     if plaintext_out.len() < mod_len {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
 
     let mut padded_in = ScopedBsslBuffer::new(mod_len)?;
     // SAFETY: `padded_in` has `mod_len` bytes and `c < n`, so `c` fits in `mod_len` bytes.
     if unsafe { bssl_sys::BN_bn2bin_padded(padded_in.as_mut_ptr(), mod_len, c.as_ptr()) } != 1 {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     let mut out_len: usize = 0;
@@ -1201,7 +1249,7 @@ pub fn rsa_decrypt_null(
         )
     };
     if res != 1 || out_len != mod_len {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
     Ok(mod_len)
 }
@@ -1212,9 +1260,9 @@ pub fn rsa_import_private_key(
     prime_p: &[u8],
     exponent: u32,
     private_key_out: &mut [u8],
-) -> Result<usize, CryptoError> {
+) -> Result<usize, BsslError> {
     if exponent < 3 || exponent.is_multiple_of(2) {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     let n = Bignum::from_bytes_be(modulus)?;
@@ -1222,7 +1270,7 @@ pub fn rsa_import_private_key(
     let e = Bignum::from_u32(exponent)?;
 
     if !n.is_odd() || !p.is_odd() || p.num_bits() <= 1 || n.num_bits() < 512 {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     let ctx = BnCtx::new()?;
@@ -1241,12 +1289,12 @@ pub fn rsa_import_private_key(
         )
     } != 1
     {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     if !rem.is_zero() || !q.is_odd() || q.num_bits() <= 1 || p.num_bits().abs_diff(q.num_bits()) > 1
     {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     // Verify p * q == n
@@ -1255,12 +1303,12 @@ pub fn rsa_import_private_key(
     if unsafe { bssl_sys::BN_mul(prod.as_ptr(), p.as_ptr(), q.as_ptr(), ctx.as_ptr()) } != 1
         || unsafe { bssl_sys::BN_cmp(prod.as_ptr(), n.as_ptr()) } != 0
     {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     // Verify primality of p and q
     if !p.is_prime(&ctx)? || !q.is_prime(&ctx)? {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     rsa_construct_and_serialize_pkcs8(&n, &p, &q, &e, &ctx, private_key_out)
@@ -1274,7 +1322,7 @@ fn rsa_construct_and_serialize_pkcs8(
     e: &Bignum,
     ctx: &BnCtx,
     private_key_out: &mut [u8],
-) -> Result<usize, CryptoError> {
+) -> Result<usize, BsslError> {
     // Compute p - 1 and q - 1
     let one = Bignum::from_u32(1)?;
     let pm1 = Bignum::new()?;
@@ -1283,7 +1331,7 @@ fn rsa_construct_and_serialize_pkcs8(
     if unsafe { bssl_sys::BN_sub(pm1.as_ptr(), p.as_ptr(), one.as_ptr()) } != 1
         || unsafe { bssl_sys::BN_sub(qm1.as_ptr(), q.as_ptr(), one.as_ptr()) } != 1
     {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
 
     // Compute lcm(p - 1, q - 1) = ((p - 1) * (q - 1)) / gcd(p - 1, q - 1)
@@ -1311,7 +1359,7 @@ fn rsa_construct_and_serialize_pkcs8(
             )
         } != 1
     {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
 
     // Compute private exponent d = e^-1 mod lcm(p - 1, q - 1)
@@ -1320,7 +1368,7 @@ fn rsa_construct_and_serialize_pkcs8(
     if unsafe { bssl_sys::BN_mod_inverse(d.as_ptr(), e.as_ptr(), lcm.as_ptr(), ctx.as_ptr()) }
         .is_null()
     {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     // Compute CRT parameters: dmp1 = d mod (p - 1), dmq1 = d mod (q - 1), iqmp = q^-1 mod p
@@ -1349,7 +1397,7 @@ fn rsa_construct_and_serialize_pkcs8(
         || unsafe { bssl_sys::BN_mod_inverse(iqmp.as_ptr(), q.as_ptr(), p.as_ptr(), ctx.as_ptr()) }
             .is_null()
     {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     // Construct RSA private key and serialize to PKCS#8 DER
@@ -1367,7 +1415,7 @@ fn rsa_construct_and_serialize_pkcs8(
         )
     };
     let rsa = RsaKey {
-        ptr: NonNull::new(rsa_ptr).ok_or(CryptoError::InvalidData)?,
+        ptr: NonNull::new(rsa_ptr).ok_or(BsslError::InvalidData)?,
     };
     rsa.to_pkcs8_der(private_key_out)
 }
@@ -1377,12 +1425,12 @@ fn generate_deterministic_prime(
     rng: &mut rand_chacha::ChaCha20Rng,
     prime_bits: usize,
     ctx: &BnCtx,
-) -> Result<Bignum, CryptoError> {
+) -> Result<Bignum, BsslError> {
     use rand_core::RngCore as _;
     let prime_bytes = prime_bits / 8;
     let mut buf = [0u8; 256];
     if prime_bytes == 0 || prime_bytes > buf.len() {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     rng.fill_bytes(&mut buf[..prime_bytes]);
@@ -1403,7 +1451,7 @@ fn generate_deterministic_prime(
         // Increment candidate by 2 to test next odd integer
         // SAFETY: `cand.as_ptr()` is a valid non-null `BIGNUM`.
         if unsafe { bssl_sys::BN_add_word(cand.as_ptr(), 2) } != 1 {
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
         if cand.num_bits() > prime_bits {
             rng.fill_bytes(&mut buf[..prime_bytes]);
@@ -1411,7 +1459,7 @@ fn generate_deterministic_prime(
             buf[prime_bytes - 1] |= 0x01;
             // SAFETY: `cand.as_ptr()` is a valid non-null `BIGNUM`.
             if unsafe { bssl_sys::BN_bin2bn(buf.as_ptr(), prime_bytes, cand.as_ptr()) }.is_null() {
-                return Err(CryptoError::HardwareFailure);
+                return Err(BsslError::Internal);
             }
         }
     }
@@ -1427,13 +1475,13 @@ pub fn rsa_generate_key(
     public_key_out: &mut [u8],
     private_key_out: &mut [u8],
     seed: Option<&[u8]>,
-) -> Result<(usize, usize), CryptoError> {
+) -> Result<(usize, usize), BsslError> {
     if !(1024..=4096).contains(&bits) || !bits.is_multiple_of(128) {
-        return Err(CryptoError::UnsupportedAlgorithm);
+        return Err(BsslError::Unsupported);
     }
     let mod_len = bits / 8;
     if public_key_out.len() < mod_len || private_key_out.len() < bits / 2 {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
 
     let e = Bignum::from_u32(65537)?;
@@ -1451,7 +1499,7 @@ pub fn rsa_generate_key(
                 )
             };
             if res != 1 {
-                return Err(CryptoError::HardwareFailure);
+                return Err(BsslError::Internal);
             }
             // SAFETY: `rsa.as_ptr()` is a valid initialized `RSA` key.
             let n_ptr = unsafe { bssl_sys::RSA_get0_n(rsa.as_ptr()) };
@@ -1460,7 +1508,7 @@ pub fn rsa_generate_key(
                     bssl_sys::BN_bn2bin_padded(public_key_out.as_mut_ptr(), mod_len, n_ptr)
                 } != 1
             {
-                return Err(CryptoError::HardwareFailure);
+                return Err(BsslError::Internal);
             }
             let priv_len = rsa.to_pkcs8_der(private_key_out)?;
             Ok((mod_len, priv_len))
@@ -1489,7 +1537,7 @@ pub fn rsa_generate_key(
                 if unsafe { bssl_sys::BN_mul(n.as_ptr(), p.as_ptr(), q.as_ptr(), ctx.as_ptr()) }
                     != 1
                 {
-                    return Err(CryptoError::HardwareFailure);
+                    return Err(BsslError::Internal);
                 }
                 if n.num_bits() != bits {
                     continue;
@@ -1506,15 +1554,15 @@ pub fn rsa_generate_key(
                             )
                         } != 1
                         {
-                            return Err(CryptoError::HardwareFailure);
+                            return Err(BsslError::Internal);
                         }
                         return Ok((mod_len, priv_len));
                     }
-                    Err(CryptoError::BufferTooSmall) => return Err(CryptoError::BufferTooSmall),
+                    Err(BsslError::BufferTooSmall) => return Err(BsslError::BufferTooSmall),
                     Err(_) => continue,
                 }
             }
-            Err(CryptoError::HardwareFailure)
+            Err(BsslError::Internal)
         }
     }
 }
@@ -1523,21 +1571,21 @@ pub fn rsa_generate_key(
 pub fn rsa_private_key_to_prime_p(
     private_key_der: &[u8],
     prime_p_out: &mut [u8],
-) -> Result<usize, CryptoError> {
+) -> Result<usize, BsslError> {
     let rsa = RsaKey::from_private_key_der(private_key_der)?;
     // SAFETY: `rsa.as_ptr()` is a valid private `RSA` key.
     let p_ptr = unsafe { bssl_sys::RSA_get0_p(rsa.as_ptr()) };
     if p_ptr.is_null() {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
     // SAFETY: `p_ptr` is a valid non-null `BIGNUM`.
     let p_len = unsafe { bssl_sys::BN_num_bytes(p_ptr) as usize };
     if prime_p_out.len() < p_len {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
     // SAFETY: `prime_p_out` is valid for `p_len` bytes.
     if unsafe { bssl_sys::BN_bn2bin_padded(prime_p_out.as_mut_ptr(), p_len, p_ptr) } != 1 {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
     Ok(p_len)
 }
@@ -1589,7 +1637,7 @@ impl Drop for EcGroupHandle {
 
 /// Constructs the custom BoringSSL `EC_GROUP` for the Barreto-Naehrig 256-bit (`BN-P256`) curve:
 /// $y^2 = x^3 + 3 \pmod p$ with generator $G = (1, 2)$.
-fn create_bn_p256_group() -> Result<EcGroupHandle, CryptoError> {
+fn create_bn_p256_group() -> Result<EcGroupHandle, BsslError> {
     const P_BYTES: [u8; 32] =
         hex_literal::hex!("fffffffffffcf0cd46e5f25eee71a49f0cdc65fb12980a82d3292ddbaed33013");
     const N_BYTES: [u8; 32] =
@@ -1604,7 +1652,7 @@ fn create_bn_p256_group() -> Result<EcGroupHandle, CryptoError> {
     let group_ptr = unsafe {
         bssl_sys::EC_GROUP_new_curve_GFp(p.as_ptr(), a.as_ptr(), b.as_ptr(), ctx.as_ptr())
     };
-    let group_nn = NonNull::new(group_ptr).ok_or(CryptoError::HardwareFailure)?;
+    let group_nn = NonNull::new(group_ptr).ok_or(BsslError::Internal)?;
     let handle = EcGroupHandle::Custom(group_nn);
 
     let gx = Bignum::from_u32(1)?;
@@ -1622,7 +1670,7 @@ fn create_bn_p256_group() -> Result<EcGroupHandle, CryptoError> {
         ) == 1
     };
     if !coords_ok {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
 
     let order = Bignum::from_bytes_be(&N_BYTES)?;
@@ -1638,7 +1686,7 @@ fn create_bn_p256_group() -> Result<EcGroupHandle, CryptoError> {
         ) == 1
     };
     if !gen_ok {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
 
     Ok(handle)
@@ -1646,7 +1694,7 @@ fn create_bn_p256_group() -> Result<EcGroupHandle, CryptoError> {
 
 impl EcGroup {
     /// Returns a scoped `EcGroupHandle` for this curve.
-    fn handle(self) -> Result<EcGroupHandle, CryptoError> {
+    fn handle(self) -> Result<EcGroupHandle, BsslError> {
         // SAFETY: Each `EC_group_p*` function returns a static, immutable `EC_GROUP` pointer.
         unsafe {
             match self {
@@ -1674,15 +1722,15 @@ impl EcGroup {
         self,
         group_handle: &EcGroupHandle,
         scalar: &[u8],
-    ) -> Result<Bignum, CryptoError> {
+    ) -> Result<Bignum, BsslError> {
         let d = Bignum::from_bytes_be(scalar)?;
         if d.is_zero() {
-            return Err(CryptoError::InvalidData);
+            return Err(BsslError::InvalidData);
         }
         // SAFETY: `group_handle.as_ptr()` is a valid `EC_GROUP`.
         let order = unsafe { bssl_sys::EC_GROUP_get0_order(group_handle.as_ptr()) };
         if order.is_null() || unsafe { bssl_sys::BN_cmp(d.as_ptr(), order) } >= 0 {
-            return Err(CryptoError::InvalidData);
+            return Err(BsslError::InvalidData);
         }
         Ok(d)
     }
@@ -1694,14 +1742,14 @@ struct EcPoint {
 }
 
 impl EcPoint {
-    fn new(group: &EcGroupHandle) -> Result<Self, CryptoError> {
+    fn new(group: &EcGroupHandle) -> Result<Self, BsslError> {
         // SAFETY: `EC_POINT_new` allocates a new point on `group`.
         let ptr = NonNull::new(unsafe { bssl_sys::EC_POINT_new(group.as_ptr()) })
-            .ok_or(CryptoError::HardwareFailure)?;
+            .ok_or(BsslError::Internal)?;
         Ok(Self { ptr })
     }
 
-    fn from_affine_coords(group: &EcGroupHandle, x: &[u8], y: &[u8]) -> Result<Self, CryptoError> {
+    fn from_affine_coords(group: &EcGroupHandle, x: &[u8], y: &[u8]) -> Result<Self, BsslError> {
         let pt = Self::new(group)?;
         let x_bn = Bignum::from_bytes_be(x)?;
         let y_bn = Bignum::from_bytes_be(y)?;
@@ -1720,7 +1768,7 @@ impl EcPoint {
                 && bssl_sys::EC_POINT_is_at_infinity(group.as_ptr(), pt.as_ptr()) == 0
         };
         if !ok {
-            return Err(CryptoError::InvalidData);
+            return Err(BsslError::InvalidData);
         }
         Ok(pt)
     }
@@ -1731,13 +1779,13 @@ impl EcPoint {
         coord_len: usize,
         x_out: &mut [u8],
         y_out: &mut [u8],
-    ) -> Result<(), CryptoError> {
+    ) -> Result<(), BsslError> {
         if x_out.len() < coord_len || y_out.len() < coord_len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(BsslError::BufferTooSmall);
         }
         // SAFETY: `group.as_ptr()` and `self.as_ptr()` are valid.
         if unsafe { bssl_sys::EC_POINT_is_at_infinity(group.as_ptr(), self.as_ptr()) } != 0 {
-            return Err(CryptoError::InvalidData);
+            return Err(BsslError::InvalidData);
         }
         let x_bn = Bignum::new()?;
         let y_bn = Bignum::new()?;
@@ -1754,7 +1802,7 @@ impl EcPoint {
                 && bssl_sys::BN_bn2bin_padded(y_out.as_mut_ptr(), coord_len, y_bn.as_ptr()) == 1
         };
         if !ok {
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
         Ok(())
     }
@@ -1779,14 +1827,13 @@ struct EcKey {
 }
 
 impl EcKey {
-    fn new(group: &EcGroupHandle) -> Result<Self, CryptoError> {
+    fn new(group: &EcGroupHandle) -> Result<Self, BsslError> {
         // SAFETY: `EC_KEY_new` allocates a new `EC_KEY`.
-        let ptr =
-            NonNull::new(unsafe { bssl_sys::EC_KEY_new() }).ok_or(CryptoError::HardwareFailure)?;
+        let ptr = NonNull::new(unsafe { bssl_sys::EC_KEY_new() }).ok_or(BsslError::Internal)?;
         let key = Self { ptr };
         // SAFETY: `key.as_ptr()` and `group.as_ptr()` are valid.
         if unsafe { bssl_sys::EC_KEY_set_group(key.as_ptr(), group.as_ptr()) } != 1 {
-            return Err(CryptoError::HardwareFailure);
+            return Err(BsslError::Internal);
         }
         Ok(key)
     }
@@ -1795,12 +1842,12 @@ impl EcKey {
         group: EcGroup,
         group_handle: &EcGroupHandle,
         scalar: &[u8],
-    ) -> Result<Self, CryptoError> {
+    ) -> Result<Self, BsslError> {
         let d = group.validate_scalar(group_handle, scalar)?;
         let key = Self::new(group_handle)?;
         // SAFETY: `key.as_ptr()` and `d.as_ptr()` are valid.
         if unsafe { bssl_sys::EC_KEY_set_private_key(key.as_ptr(), d.as_ptr()) } != 1 {
-            return Err(CryptoError::InvalidData);
+            return Err(BsslError::InvalidData);
         }
         Ok(key)
     }
@@ -1809,12 +1856,12 @@ impl EcKey {
         group_handle: &EcGroupHandle,
         x: &[u8],
         y: &[u8],
-    ) -> Result<Self, CryptoError> {
+    ) -> Result<Self, BsslError> {
         let pt = EcPoint::from_affine_coords(group_handle, x, y)?;
         let key = Self::new(group_handle)?;
         // SAFETY: `key.as_ptr()` and `pt.as_ptr()` are valid.
         if unsafe { bssl_sys::EC_KEY_set_public_key(key.as_ptr(), pt.as_ptr()) } != 1 {
-            return Err(CryptoError::InvalidData);
+            return Err(BsslError::InvalidData);
         }
         Ok(key)
     }
@@ -1834,7 +1881,7 @@ impl Drop for EcKey {
 }
 
 /// Validates that `(x, y)` is a valid non-infinity point on `group`.
-pub fn ec_validate_point(group: EcGroup, x: &[u8], y: &[u8]) -> Result<(), CryptoError> {
+pub fn ec_validate_point(group: EcGroup, x: &[u8], y: &[u8]) -> Result<(), BsslError> {
     let group_handle = group.handle()?;
     let _pt = EcPoint::from_affine_coords(&group_handle, x, y)?;
     Ok(())
@@ -1846,7 +1893,7 @@ pub fn ec_point_multiply_generator(
     scalar: &[u8],
     x_out: &mut [u8],
     y_out: &mut [u8],
-) -> Result<(), CryptoError> {
+) -> Result<(), BsslError> {
     let group_handle = group.handle()?;
     let d = group.validate_scalar(&group_handle, scalar)?;
     let r = EcPoint::new(&group_handle)?;
@@ -1862,7 +1909,7 @@ pub fn ec_point_multiply_generator(
         ) == 1
     };
     if !ok {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
     r.to_affine_coords(&group_handle, group.coord_len(), x_out, y_out)
 }
@@ -1875,7 +1922,7 @@ pub fn ec_point_multiply(
     y_in: &[u8],
     x_out: &mut [u8],
     y_out: &mut [u8],
-) -> Result<(), CryptoError> {
+) -> Result<(), BsslError> {
     let group_handle = group.handle()?;
     let d = group.validate_scalar(&group_handle, scalar)?;
     let q = EcPoint::from_affine_coords(&group_handle, x_in, y_in)?;
@@ -1892,7 +1939,7 @@ pub fn ec_point_multiply(
         ) == 1
     };
     if !ok {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
     r.to_affine_coords(&group_handle, group.coord_len(), x_out, y_out)
 }
@@ -1903,11 +1950,11 @@ pub fn ecdsa_sign(
     private_key: &[u8],
     digest: &[u8],
     signature_out: &mut [u8],
-) -> Result<usize, CryptoError> {
+) -> Result<usize, BsslError> {
     let group_handle = group.handle()?;
     let sig_size = 2 * group.coord_len();
     if signature_out.len() < sig_size {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
     let key = EcKey::from_private_scalar(group, &group_handle, private_key)?;
     let mut out_len: usize = 0;
@@ -1926,7 +1973,7 @@ pub fn ecdsa_sign(
         )
     };
     if res != 1 || out_len != sig_size {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
     Ok(out_len)
 }
@@ -1937,11 +1984,11 @@ pub fn ecdsa_verify(
     public_key_xy: &[u8],
     digest: &[u8],
     signature: &[u8],
-) -> Result<(), CryptoError> {
+) -> Result<(), BsslError> {
     let group_handle = group.handle()?;
     let coord_len = group.coord_len();
     if public_key_xy.len() != 2 * coord_len || signature.len() != 2 * coord_len {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
     let x = &public_key_xy[..coord_len];
     let y = &public_key_xy[coord_len..];
@@ -1962,7 +2009,7 @@ pub fn ecdsa_verify(
     if res == 1 {
         Ok(())
     } else {
-        Err(CryptoError::InvalidData)
+        Err(BsslError::InvalidData)
     }
 }
 
@@ -1972,11 +2019,11 @@ pub fn ec_generate_key(
     rng: &mut impl rand_core::RngCore,
     public_key_out: &mut [u8],
     private_key_out: &mut [u8],
-) -> Result<(usize, usize), CryptoError> {
+) -> Result<(usize, usize), BsslError> {
     let group_handle = group.handle()?;
     let coord_len = group.coord_len();
     if public_key_out.len() < 2 * coord_len || private_key_out.len() < coord_len {
-        return Err(CryptoError::BufferTooSmall);
+        return Err(BsslError::BufferTooSmall);
     }
 
     let mut cand = [0u8; 66];
@@ -1996,7 +2043,7 @@ pub fn ec_generate_key(
             return Ok((2 * coord_len, coord_len));
         }
     }
-    Err(CryptoError::HardwareFailure)
+    Err(BsslError::Internal)
 }
 
 /// Computes an ECDAA signature on NIST P-256 matching the TCG test specification / Sirrix verification.
@@ -2008,7 +2055,7 @@ pub fn p256_ecdaa_sign(
     digest: &[u8],
     nonce_k_out: &mut [u8; 32],
     s_out: &mut [u8; 32],
-) -> Result<(), CryptoError> {
+) -> Result<(), BsslError> {
     let group_handle = EcGroup::P256.handle()?;
     let r_bn = EcGroup::P256.validate_scalar(&group_handle, commit_r)?;
     let d_bn = EcGroup::P256.validate_scalar(&group_handle, private_key_d)?;
@@ -2028,7 +2075,7 @@ pub fn p256_ecdaa_sign(
     // SAFETY: group_handle.as_ptr() is a valid EC_GROUP pointer.
     let order = unsafe { bssl_sys::EC_GROUP_get0_order(group_handle.as_ptr()) };
     if order.is_null() {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
 
     let ctx = BnCtx::new()?;
@@ -2041,13 +2088,13 @@ pub fn p256_ecdaa_sign(
         bssl_sys::BN_nnmod(e_x_mod_n_bn.as_ptr(), e_x_raw.as_ptr(), order, ctx.as_ptr()) == 1
     };
     if !ok {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
     let mut e_x_mod_n = [0u8; 32];
     // SAFETY: e_x_mod_n has 32 bytes, e_x_mod_n_bn < order < 2^256.
     if unsafe { bssl_sys::BN_bn2bin_padded(e_x_mod_n.as_mut_ptr(), 32, e_x_mod_n_bn.as_ptr()) } != 1
     {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
 
     // t_digest = SHA256(e_x_mod_n || digest)
@@ -2061,7 +2108,7 @@ pub fn p256_ecdaa_sign(
     // SAFETY: All pointers are valid.
     let ok = unsafe { bssl_sys::BN_nnmod(t_bn.as_ptr(), t_raw.as_ptr(), order, ctx.as_ptr()) == 1 };
     if !ok {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
 
     // d_inv = d^-1 mod order
@@ -2070,7 +2117,7 @@ pub fn p256_ecdaa_sign(
     let res =
         unsafe { bssl_sys::BN_mod_inverse(d_inv_bn.as_ptr(), d_bn.as_ptr(), order, ctx.as_ptr()) };
     if res.is_null() {
-        return Err(CryptoError::InvalidData);
+        return Err(BsslError::InvalidData);
     }
 
     // Determine u: if commit_p1 is set, match against 42*G, 55*G, d*G.
@@ -2120,7 +2167,7 @@ pub fn p256_ecdaa_sign(
         ) == 1
     };
     if !ok {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
 
     // u_diff = (u * diff) mod order
@@ -2136,7 +2183,7 @@ pub fn p256_ecdaa_sign(
         ) == 1
     };
     if !ok {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
 
     // s = (u_diff * d_inv) mod order
@@ -2152,11 +2199,11 @@ pub fn p256_ecdaa_sign(
         ) == 1
     };
     if !ok {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
 
     if unsafe { bssl_sys::BN_bn2bin_padded(s_out.as_mut_ptr(), 32, s_bn.as_ptr()) } != 1 {
-        return Err(CryptoError::HardwareFailure);
+        return Err(BsslError::Internal);
     }
 
     // nonce_k_out = SHA256(digest)

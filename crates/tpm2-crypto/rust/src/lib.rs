@@ -1,37 +1,44 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
 
-use tpm2::Alg;
-use tpm2::crypto::Rng;
-use tpm2::crypto::{CryptoError, CryptoProvider};
+use tpm2::crypto::{ConstantTimeEq, CryptoError, CryptoProvider, Random};
 
 /// A cryptographic provider implementation using RustCrypto crates (such as `aes`, `rsa`, `p256`, `sha2`, `hmac`).
 ///
 /// This provider supplies all the necessary cryptographic primitives required by the TPM 2.0 stack.
 pub struct RustCryptoProvider;
 
-impl CryptoProvider for RustCryptoProvider {}
-
-impl tpm2::crypto::Base for RustCryptoProvider {
-    type Error = CryptoError;
-
-    fn unimplemented(&self, _alg: Alg) -> Self::Error {
-        CryptoError::UnsupportedAlgorithm
-    }
-}
-
-impl Rng for RustCryptoProvider {
+impl CryptoProvider for RustCryptoProvider {
     /// Fills the destination buffer with high-quality random bytes generated from the operating system's entropy source.
     ///
     /// # Errors
     ///
-    /// Returns `CryptoError::HardwareFailure` if the OS random number generator fails.
+    /// Returns `CryptoError::Internal` if the OS random number generator fails.
     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
         use rand::TryRngCore as _;
         rand::rngs::OsRng
             .try_fill_bytes(dest)
-            .map_err(|_| CryptoError::HardwareFailure)
+            .map_err(|_| CryptoError::Internal)
     }
+
+    // `stir_random` keeps the default implementation, which ignores the data: the operating
+    // system's entropy source is continuously reseeded and cannot be stirred.
+}
+
+impl ConstantTimeEq for RustCryptoProvider {
+    /// Compares `a` and `b` in constant time, using the `subtle` crate (as re-exported by
+    /// `elliptic-curve`): the running time does not depend on the contents of the arrays.
+    fn constant_time_eq<const N: usize>(&self, a: &[u8; N], b: &[u8; N]) -> bool {
+        use p256::elliptic_curve::subtle::ConstantTimeEq as _;
+        a[..].ct_eq(&b[..]).into()
+    }
+}
+
+/// `RustCryptoProvider` does not create RNG instances: the TPM engine draws its randomness from
+/// [`CryptoProvider::get_random`], so [`Random::rng`] and [`Random::rng_seeded`] keep their
+/// default implementations, which return [`CryptoError::Unsupported`].
+impl Random for RustCryptoProvider {
+    type Rng = !;
 }
 
 /// A wrapper enum over different random number generator backends.
@@ -80,4 +87,4 @@ pub mod cmac;
 pub mod ecc;
 pub mod hash;
 pub mod symmetric;
-pub use {cmac::*, ecc::*, hash::*, symmetric::*};
+pub use {cmac::*, ecc::*, hash::*};

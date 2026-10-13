@@ -1,10 +1,12 @@
 use crate::test_utils::*;
-use tpm2::commands::{Commit, CommitHandles, CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::{Commit, CreateLoaded};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_trailing_valid_p1() {
     let mut sim = create_simulator!();
     let password = b"hello";
@@ -38,25 +40,19 @@ fn test_commit_trailing_valid_p1() {
     };
     let in_public = crate::test_utils::make_template(&pub_area);
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001),
-    };
-    let (_rsp_cp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
 
     let commit1 = Commit {
+        sign_handle: rsp_handles.object_handle,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    let commit1_handles = CommitHandles {
-        sign_handle: rsp_handles.object_handle,
-    };
-    let (commit1_rsp, _) =
-        execute_with_password_sessions(&mut sim, &commit1, commit1_handles, 1, password).unwrap();
+    let commit1_rsp = execute_with_password_sessions(&mut sim, &commit1, 1, password).unwrap();
 
     let valid_point = commit1_rsp.e.0;
 
@@ -65,6 +61,7 @@ fn test_commit_trailing_valid_p1() {
     let bad_p1_buf = valid_point_buf[..valid_len + 5].to_vec();
 
     struct BadCommit<'a> {
+        sign_handle: Handle,
         p1_buf: &'a [u8],
         s2: Tpm2bSensitiveData<'a>,
         y2: Tpm2bEccParameter<'a>,
@@ -89,24 +86,25 @@ fn test_commit_trailing_valid_p1() {
             off
         }
     }
+    impl Message for BadCommit<'_> {
+        type Handles = [Handle; 1];
+        fn handles(&self) -> Self::Handles {
+            [self.sign_handle]
+        }
+    }
     impl Command for BadCommit<'_> {
         const CMD_CODE: TpmCc = TpmCc::Commit;
-        type Handles = CommitHandles;
         type Response<'a> = ();
-        type RespHandles = ();
     }
 
     let commit2 = BadCommit {
+        sign_handle: rsp_handles.object_handle,
         p1_buf: &bad_p1_buf,
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    let commit2_handles = CommitHandles {
-        sign_handle: rsp_handles.object_handle,
-    };
 
-    let result =
-        execute_with_password_sessions_status(&mut sim, &commit2, commit2_handles, 1, password);
+    let result = execute_with_password_sessions_status(&mut sim, &commit2, 1, password);
     match result {
         Ok(_) => panic!("VULNERABILITY: Trailing garbage in valid p1 ignored!"),
         Err(e) => println!("Error code: 0x{:x}", e),

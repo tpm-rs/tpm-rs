@@ -1,5 +1,5 @@
 use common::marshal_to_slice;
-use tpm2::commands::{Command, ContextSave};
+use tpm2::commands::{Command, ContextSave, UnmarshalMessage};
 
 use tpm2::Unmarshal;
 mod common;
@@ -14,8 +14,8 @@ fn test_adv_context_save_keystream_reuse() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -74,7 +74,9 @@ fn test_adv_context_save_keystream_reuse() {
 
     // Unmarshal the ContextSave response parameters starting at offset 10
     let mut unmarshal_buf1 = &rsp1[10..rsp1_len];
-    let rsp1_parsed = <ContextSave as Command>::Response::unmarshal(&mut unmarshal_buf1).unwrap();
+    let rsp1_parsed =
+        <ContextSave as Command>::Response::unmarshal_with_handles([], &mut unmarshal_buf1)
+            .unwrap();
 
     let mut rsp2 = [0u8; 4096];
     let rsp2_len = tpm.execute_command_separate(&mut global_state, &req1[..], &mut rsp2[..]);
@@ -85,7 +87,9 @@ fn test_adv_context_save_keystream_reuse() {
 
     // Unmarshal the ContextSave response parameters starting at offset 10
     let mut unmarshal_buf2 = &rsp2[10..rsp2_len];
-    let rsp2_parsed = <ContextSave as Command>::Response::unmarshal(&mut unmarshal_buf2).unwrap();
+    let rsp2_parsed =
+        <ContextSave as Command>::Response::unmarshal_with_handles([], &mut unmarshal_buf2)
+            .unwrap();
 
     let mut data1_unmarshal = rsp1_parsed.context.context_blob.get_buffer();
     let ctx1 = tpm2::TpmsContextData::unmarshal(&mut data1_unmarshal).unwrap();
@@ -109,8 +113,8 @@ fn test_context_save_session_success() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -174,7 +178,8 @@ fn test_context_save_session_success() {
     assert_eq!(u32::from_be_bytes([rsp[6], rsp[7], rsp[8], rsp[9]]), 0); // Success
 
     let mut unmarshal_buf = &rsp[10..rsp_len];
-    let rsp_parsed = <ContextSave as Command>::Response::unmarshal(&mut unmarshal_buf).unwrap();
+    let rsp_parsed =
+        <ContextSave as Command>::Response::unmarshal_with_handles([], &mut unmarshal_buf).unwrap();
 
     assert_eq!(rsp_parsed.context.saved_handle.0, session_handle);
     assert_eq!(rsp_parsed.context.hierarchy, tpm2::Handle::RH_NULL);

@@ -1,9 +1,10 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::manager::StorageManager;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::TpmaNv;
-use tpm2::commands::{PolicyNV, PolicyNVHandles};
+use tpm2::commands::PolicyNV;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmCc, TpmEo, TpmSe};
@@ -29,13 +30,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<PolicyNVHandles>()?;
-        let nv_index = handles.nv_index;
-        let policy_session = handles.policy_session.0;
+        let handles = request.try_unmarshal_handles::<PolicyNV>()?;
+        let [auth_handle, nv_index, policy_session] = handles;
+        check(auth_handle, Tpmi::RhNvAuth, Position::handle(1))?;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(2))?;
+        check(policy_session, Tpmi::ShPolicy, Position::handle(3))?;
+        let policy_session = policy_session.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<PolicyNV>()?;
+        let cmd = request.try_unmarshal_command::<PolicyNV>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -87,7 +91,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if session_type != TpmSe::Trial {
             // Common read access checks (C `NvReadAccessChecks`): READLOCKED, then whether
             // `authHandle` may read the index, then WRITTEN.
-            nv_read_access_checks(handles.auth_handle.0, nv_index.0, nv_public.attributes)?;
+            nv_read_access_checks(auth_handle.0, nv_index.0, nv_public.attributes)?;
 
             // Make sure that offset is within range (`TPM_RCS_VALUE + RC_PolicyNV_offset`), and
             // that the NV data starting at offset is at least as large as operandB

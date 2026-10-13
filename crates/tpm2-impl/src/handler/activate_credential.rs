@@ -1,3 +1,4 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
@@ -5,12 +6,12 @@ use crate::timer::TpmTimer;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
+use tpm2::commands::ActivateCredential;
 use tpm2::commands::responses;
-use tpm2::commands::{ActivateCredential, ActivateCredentialHandles};
-use tpm2::crypto::kdf::kdfa;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Tpm2bDigest, TpmaObject};
+use tpm2::{Tpm2bDigest, TpmaObject, TpmiAlgHash};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -36,13 +37,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<ActivateCredentialHandles>()?;
-        let activate_handle = handles.activate_handle.0;
-        let key_handle = handles.key_handle.0;
+        let handles = request.try_unmarshal_handles::<ActivateCredential>()?;
+        let [activate_handle, key_handle] = handles;
+        check(activate_handle, Tpmi::DhObject, Position::handle(1))?;
+        check(key_handle, Tpmi::DhObject, Position::handle(2))?;
+        let activate_handle = activate_handle.0;
+        let key_handle = key_handle.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<ActivateCredential>()?;
+        let cmd = request.try_unmarshal_command::<ActivateCredential>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -105,7 +109,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut integrity_key = [0u8; 64];
 
         let digest_bits = (digest_size * 8) as u32;
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             name_alg,
             &seed[..seed_len],
@@ -116,7 +120,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &mut sym_key_iv,
         )
         .map_err(|_| TpmRc::FAILURE)?;
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             name_alg,
             &seed[..seed_len],
@@ -136,16 +140,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let encrypted_enc_identity = slice;
 
         // 7. Verify integrity HMAC
-        let mut hmac_ctx =
-            tpm2::crypto::HmacCtx::new(self.crypto(), name_alg, &integrity_key[..digest_size])
-                .map_err(|_| TpmRc::FAILURE)?;
+        let mut hmac_ctx = HmacStream::new(self.crypto(), name_alg, &integrity_key[..digest_size])
+            .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx
             .update(encrypted_enc_identity)
             .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx
             .update(activate_obj.name.get_buffer())
             .map_err(|_| TpmRc::FAILURE)?;
-        let mut hmac_buf = [0u8; 64];
+        let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = hmac_ctx
             .finalize(&mut hmac_buf)
             .map_err(|_| TpmRc::FAILURE)?;
@@ -164,11 +167,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         decrypted_enc_identity[..encrypt_len].copy_from_slice(encrypted_enc_identity);
 
         let mut iv = [0u8; 16];
-        tpm2::crypto::decrypt(
-            self.crypto(),
+        self.sym_encrypt_decrypt(
             sym_alg,
             &sym_key_iv[..outer_key_len],
             &mut iv,
+            Direction::Decrypt,
             &mut decrypted_enc_identity[..encrypt_len],
         )
         .map_err(|_| TpmRc::FAILURE)?;
@@ -184,7 +187,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 9. Write response
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }

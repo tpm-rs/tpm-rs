@@ -1,6 +1,6 @@
 use crate::test_utils::*;
 use p256::{PublicKey, SecretKey, elliptic_curve::sec1::ToEncodedPoint};
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, ECDHZGen, ECDHZGenHandles};
+use tpm2::commands::{CreatePrimary, ECDHZGen};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
@@ -43,16 +43,13 @@ fn test_ecdh() {
     let in_public = tpm2::Tpm2b(pub_area);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (create_rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
 
     // Generate SW P-256 key pair
     let sw_priv = SecretKey::random(&mut rand::thread_rng());
@@ -91,14 +88,11 @@ fn test_ecdh() {
 
     // Compute shared secret in TPM: Z_tpm = d_tpm * Q_sw
     let ecdh_cmd = ECDHZGen {
+        key_handle: create_rsp.object_handle,
         in_point: sw_tpm2b_point,
     };
-    let ecdh_handles = ECDHZGenHandles {
-        key_handle: rsp_handles.object_handle,
-    };
 
-    let (ecdh_rsp, _) =
-        execute_with_password_sessions(&mut sim, &ecdh_cmd, ecdh_handles, 1, &[]).unwrap();
+    let ecdh_rsp = execute_with_password_sessions(&mut sim, &ecdh_cmd, 1, &[]).unwrap();
 
     let out_point_struct = ecdh_rsp.out_point.0;
     let out_x = out_point_struct.x.get_buffer();

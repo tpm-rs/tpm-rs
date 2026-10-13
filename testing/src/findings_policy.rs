@@ -9,24 +9,18 @@
 
 use crate::test_utils::*;
 use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, HierarchyChangeAuth, HierarchyChangeAuthHandles,
-    LoadExternal, NVDefineSpace, NVDefineSpaceHandles, NVWrite, NVWriteHandles, PCRSetAuthValue,
-    PCRSetAuthValueHandles, PolicyAuthorizeNV, PolicyAuthorizeNVHandles, PolicyCommandCode,
-    PolicyCommandCodeHandles, PolicyCounterTimer, PolicyCounterTimerHandles, PolicyCpHash,
-    PolicyCpHashHandles, PolicyDuplicationSelect, PolicyDuplicationSelectHandles, PolicyGetDigest,
-    PolicyGetDigestHandles, PolicyNV, PolicyNVHandles, PolicyNameHash, PolicyNameHashHandles,
-    PolicyOR, PolicyORHandles, PolicyPCR, PolicyPCRHandles, PolicyRestart, PolicyRestartHandles,
-    PolicySecret, PolicySecretHandles, PolicySigned, PolicySignedHandles, PolicyTemplate,
-    PolicyTemplateHandles, PolicyTicket, PolicyTicketHandles, StartAuthSession,
-    StartAuthSessionHandles,
+    CreatePrimary, HierarchyChangeAuth, LoadExternal, NVDefineSpace, NVWrite, PCRSetAuthValue,
+    PolicyAuthorizeNV, PolicyCommandCode, PolicyCounterTimer, PolicyCpHash,
+    PolicyDuplicationSelect, PolicyGetDigest, PolicyNV, PolicyNameHash, PolicyOR, PolicyPCR,
+    PolicyRestart, PolicySecret, PolicySigned, PolicyTemplate, PolicyTicket, StartAuthSession,
 };
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bName, Tpm2bNonce,
-    Tpm2bOperand, Tpm2bSensitiveData, Tpm2bTimeout, TpmCc, TpmEo, TpmNt, TpmSe, TpmaNv, TpmaObject,
-    TpmiAlgHash, TpmiAlgSymMode, TpmlDigest, TpmlPcrSelection, TpmsEccParms, TpmsNvPublic,
-    TpmsPcrSelection, TpmsSensitiveCreate, TpmtEccScheme, TpmtHa, TpmtKeyedHashScheme, TpmtPublic,
-    TpmtSignature, TpmtSymDefObject, TpmtTkAuth,
+    AlgSym, Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bName,
+    Tpm2bNonce, Tpm2bOperand, Tpm2bSensitiveData, Tpm2bTimeout, TpmCc, TpmEo, TpmNt, TpmSe, TpmaNv,
+    TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmlDigest, TpmlPcrSelection, TpmsEccParms,
+    TpmsNvPublic, TpmsPcrSelection, TpmsSensitiveCreate, TpmtEccScheme, TpmtHa,
+    TpmtKeyedHashScheme, TpmtPublic, TpmtSignature, TpmtSymDefObject, TpmtTkAuth,
 };
 use tpm2::{Marshal, Tpm2b};
 use tpm2_simulator::{Simulator, SimulatorPlatformSignal, create_simulator};
@@ -39,28 +33,22 @@ use tpm2_simulator::{Simulator, SimulatorPlatformSignal, create_simulator};
 fn run<C: tpm2::commands::Command>(
     sim: &mut Simulator<'_>,
     cmd: C,
-    handles: C::Handles,
 ) -> Result<C::Response<'static>, u32>
 where
-    C::Response<'static>: tpm2::Unmarshal<'static>,
     for<'b> &'b mut C::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <C::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    execute_with_password_sessions(sim, &cmd, handles, 0, &[]).map(|(rsp, _)| rsp)
+    execute_with_password_sessions(sim, &cmd, 0, &[])
 }
 
 /// Executes a command with one (empty) password session for its first handle.
 fn run_pw<C: tpm2::commands::Command>(
     sim: &mut Simulator<'_>,
     cmd: C,
-    handles: C::Handles,
 ) -> Result<C::Response<'static>, u32>
 where
-    C::Response<'static>: tpm2::Unmarshal<'static>,
     for<'b> &'b mut C::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <C::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    execute_with_password_sessions(sim, &cmd, handles, 1, &[]).map(|(rsp, _)| rsp)
+    execute_with_password_sessions(sim, &cmd, 1, &[])
 }
 
 /// Flushes every loaded authorization session except those in `keep` (the TPM only holds a
@@ -125,8 +113,7 @@ fn start_bound(
 fn policy_digest(sim: &mut Simulator<'_>, session: Handle) -> Vec<u8> {
     let rsp = run(
         sim,
-        PolicyGetDigest {},
-        PolicyGetDigestHandles {
+        PolicyGetDigest {
             policy_session: session,
         },
     )
@@ -139,7 +126,7 @@ fn digest(bytes: &[u8]) -> Tpm2bDigest<'static> {
 }
 
 fn sha(hash: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
-    let mut state = tpm2::crypto::HashCtx::new(CLIENT_CRYPTO, hash).unwrap();
+    let mut state = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, hash).unwrap();
     for part in parts {
         state.update(part).unwrap();
     }
@@ -148,7 +135,7 @@ fn sha(hash: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
 }
 
 fn hmac(hash: TpmiAlgHash, key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut state = tpm2::crypto::HmacCtx::new(CLIENT_CRYPTO, hash, key).unwrap();
+    let mut state = tpm2::crypto::HmacStream::new(CLIENT_CRYPTO, hash, key).unwrap();
     state.update(data).unwrap();
     let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
     state.finalize(&mut out).unwrap().digest().to_vec()
@@ -176,11 +163,9 @@ fn define_nv_with_policy(
     run_pw(
         sim,
         NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: Tpm2b(public),
-        },
-        NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
         },
     )
     .expect("NV_DefineSpace");
@@ -191,12 +176,10 @@ fn write_nv_owner(sim: &mut Simulator<'_>, index: u32, data: &[u8]) {
     run_pw(
         sim,
         NVWrite {
-            data: tpm2::Tpm2bMaxNvBuffer::from_bytes(leak_bytes(data)).unwrap(),
-            offset: 0,
-        },
-        NVWriteHandles {
             auth_handle: Handle::RH_OWNER,
             nv_index: Handle(index),
+            data: tpm2::Tpm2bMaxNvBuffer::from_bytes(leak_bytes(data)).unwrap(),
+            offset: 0,
         },
     )
     .expect("NV_Write");
@@ -212,6 +195,7 @@ fn create_primary_with_data(
     data: &[u8],
 ) -> (Handle, Vec<u8>) {
     let cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::from_bytes(leak_bytes(data)).unwrap(),
@@ -219,17 +203,8 @@ fn create_primary_with_data(
         in_public: Tpm2b(public),
         ..Default::default()
     };
-    let (rsp, handles) = execute_with_password_sessions(
-        sim,
-        &cmd,
-        CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
-        },
-        1,
-        &[],
-    )
-    .expect("CreatePrimary");
-    (handles.object_handle, rsp.name.get_buffer().to_vec())
+    let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary");
+    (rsp.object_handle, rsp.name.get_buffer().to_vec())
 }
 
 fn ecc_signing_template(name_alg: TpmiAlgHash) -> TpmtPublic<'static> {
@@ -279,15 +254,13 @@ fn policy_signed(
     run(
         sim,
         PolicySigned {
+            auth_object,
+            policy_session: session,
             nonce_tpm: Tpm2bNonce::default(),
             cp_hash_a: Tpm2bDigest::default(),
             policy_ref: Tpm2bNonce::default(),
             expiration: 0,
             auth,
-        },
-        PolicySignedHandles {
-            auth_object,
-            policy_session: session,
         },
     )
     .map(|_| ())
@@ -308,14 +281,12 @@ fn policy_secret(
     run_pw(
         sim,
         PolicySecret {
+            auth_handle,
+            policy_session: session.session_handle,
             nonce_tpm,
             cp_hash_a: digest(cp_hash_a),
             policy_ref: Tpm2bNonce::default(),
             expiration,
-        },
-        PolicySecretHandles {
-            auth_handle,
-            policy_session: session.session_handle,
         },
     )
 }
@@ -324,10 +295,8 @@ fn policy_cp_hash(sim: &mut Simulator<'_>, session: Handle, cp_hash: &[u8]) -> R
     run(
         sim,
         PolicyCpHash {
-            cp_hash_a: digest(cp_hash),
-        },
-        PolicyCpHashHandles {
             policy_session: session,
+            cp_hash_a: digest(cp_hash),
         },
     )
     .map(|_| ())
@@ -337,10 +306,8 @@ fn policy_name_hash(sim: &mut Simulator<'_>, session: Handle, name_hash: &[u8]) 
     run(
         sim,
         PolicyNameHash {
-            name_hash: digest(name_hash),
-        },
-        PolicyNameHashHandles {
             policy_session: session,
+            name_hash: digest(name_hash),
         },
     )
     .map(|_| ())
@@ -350,10 +317,8 @@ fn policy_template(sim: &mut Simulator<'_>, session: Handle, hash: &[u8]) -> Res
     run(
         sim,
         PolicyTemplate {
-            template_hash: digest(hash),
-        },
-        PolicyTemplateHandles {
             policy_session: session,
+            template_hash: digest(hash),
         },
     )
     .map(|_| ())
@@ -369,12 +334,10 @@ fn policy_duplication_select(
     run(
         sim,
         PolicyDuplicationSelect {
+            policy_session: session,
             object_name: Tpm2bName::from_bytes(leak_bytes(object_name)).unwrap(),
             new_parent_name: Tpm2bName::from_bytes(leak_bytes(new_parent_name)).unwrap(),
             include_object,
-        },
-        PolicyDuplicationSelectHandles {
-            policy_session: session,
         },
     )
     .map(|_| ())
@@ -391,14 +354,12 @@ fn policy_ticket(
     run(
         sim,
         PolicyTicket {
+            policy_session: session,
             timeout: Tpm2bTimeout::from_bytes(leak_bytes(timeout)).unwrap(),
             cp_hash_a: digest(cp_hash_a),
             policy_ref: Tpm2bNonce::default(),
             auth_name: Tpm2bName::from_bytes(leak_bytes(auth_name)).unwrap(),
             ticket,
-        },
-        PolicyTicketHandles {
-            policy_session: session,
         },
     )
     .map(|_| ())
@@ -413,11 +374,9 @@ fn policy_pcr(
     run(
         sim,
         PolicyPCR {
+            policy_session: session,
             pcr_digest: digest(pcr_digest),
             pcrs: TpmlPcrSelection::from_slice(pcrs).unwrap(),
-        },
-        PolicyPCRHandles {
-            policy_session: session,
         },
     )
     .map(|_| ())
@@ -434,14 +393,12 @@ fn policy_nv(
     run_pw(
         sim,
         PolicyNV {
-            operand_b: Tpm2bOperand::from_bytes(leak_bytes(operand_b)).unwrap(),
-            offset,
-            operation: TpmEo::Eq,
-        },
-        PolicyNVHandles {
             auth_handle,
             nv_index: Handle(nv_index),
             policy_session: session,
+            operand_b: Tpm2bOperand::from_bytes(leak_bytes(operand_b)).unwrap(),
+            offset,
+            operation: TpmEo::Eq,
         },
     )
     .map(|_| ())
@@ -455,8 +412,7 @@ fn policy_authorize_nv(
 ) -> Result<(), u32> {
     run_pw(
         sim,
-        PolicyAuthorizeNV {},
-        PolicyAuthorizeNVHandles {
+        PolicyAuthorizeNV {
             auth_handle,
             nv_index: Handle(nv_index),
             policy_session: session,
@@ -468,9 +424,9 @@ fn policy_authorize_nv(
 fn policy_command_code(sim: &mut Simulator<'_>, session: Handle, code: TpmCc) -> Result<(), u32> {
     run(
         sim,
-        PolicyCommandCode { code },
-        PolicyCommandCodeHandles {
+        PolicyCommandCode {
             policy_session: session,
+            code,
         },
     )
     .map(|_| ())
@@ -559,9 +515,9 @@ fn tpm2_policycphash_policynamehash_union_and_policyor_error_bugs() {
     let err = run(
         &mut sim,
         PolicyOR {
+            policy_session: s,
             p_hash_list: TpmlDigest::from_slice(&[digest(&[1; 32]), digest(&[2; 32])]).unwrap(),
         },
-        PolicyORHandles { policy_session: s },
     )
     .unwrap_err();
     assert_eq!(err, TpmRc::VALUE.with(Position::parameter(1)).get());
@@ -654,9 +610,9 @@ fn tpm2_policyor_error_position_and_sm3_rejection_bugs() {
     let err = run(
         &mut sim,
         PolicyOR {
+            policy_session: s,
             p_hash_list: TpmlDigest::from_slice(&[digest(&[7; 32]), digest(&[8; 32])]).unwrap(),
         },
-        PolicyORHandles { policy_session: s },
     )
     .unwrap_err();
     assert_eq!(err, TpmRc::VALUE.with(Position::parameter(1)).get());
@@ -666,9 +622,9 @@ fn tpm2_policyor_error_position_and_sm3_rejection_bugs() {
     run(
         &mut sim,
         PolicyOR {
+            policy_session: s,
             p_hash_list: TpmlDigest::from_slice(&[digest(&[0; 32]), digest(&[8; 32])]).unwrap(),
         },
-        PolicyORHandles { policy_session: s },
     )
     .unwrap();
 }
@@ -843,8 +799,7 @@ fn policy_session_reset_omits_timeout_and_include_auth() {
     policy_cp_hash(&mut sim, s.session_handle, &[0x11; 32]).unwrap();
     run(
         &mut sim,
-        PolicyRestart {},
-        PolicyRestartHandles {
+        PolicyRestart {
             session_handle: s.session_handle,
         },
     )
@@ -853,8 +808,7 @@ fn policy_session_reset_omits_timeout_and_include_auth() {
         .expect("cpHashA after PolicyRestart");
     run(
         &mut sim,
-        PolicyRestart {},
-        PolicyRestartHandles {
+        PolicyRestart {
             session_handle: s.session_handle,
         },
     )
@@ -877,8 +831,7 @@ fn policy_session_reset_omits_timeout_and_include_auth() {
     std::thread::sleep(std::time::Duration::from_millis(1500));
     run(
         &mut sim,
-        PolicyRestart {},
-        PolicyRestartHandles {
+        PolicyRestart {
             session_handle: s.session_handle,
         },
     )
@@ -887,12 +840,10 @@ fn policy_session_reset_omits_timeout_and_include_auth() {
     execute_with_hmac_sessions(
         &mut sim,
         &NVWrite {
-            data: tpm2::Tpm2bMaxNvBuffer::from_bytes(&[1; 8]).unwrap(),
-            offset: 0,
-        },
-        NVWriteHandles {
             auth_handle: Handle(index),
             nv_index: Handle(index),
+            data: tpm2::Tpm2bMaxNvBuffer::from_bytes(&[1; 8]).unwrap(),
+            offset: 0,
         },
         &[],
         &mut [s],
@@ -952,11 +903,11 @@ fn tpm2_policycountertimer_unsigned_lt_offset_0_divergence() {
         run(
             sim,
             PolicyCounterTimer {
+                policy_session: s,
                 operand_b: Tpm2bOperand::from_bytes(&[0; 8]).unwrap(),
                 offset,
                 operation: TpmEo::UnsignedGE,
             },
-            PolicyCounterTimerHandles { policy_session: s },
         )
         .map(|_| ())
     };
@@ -1117,15 +1068,13 @@ fn expects_object_handle_spurious_ecc_parameters_and_missing_policy_signed() {
     let err = run(
         &mut sim,
         PolicySigned {
+            auth_object: Handle(0x8000_0002),
+            policy_session: policy,
             nonce_tpm: Tpm2bNonce::from_bytes(&[0xEE; 16]).unwrap(),
             cp_hash_a: Tpm2bDigest::default(),
             policy_ref: Tpm2bNonce::default(),
             expiration: 0,
             auth: sig,
-        },
-        PolicySignedHandles {
-            auth_object: Handle(0x8000_0002),
-            policy_session: policy,
         },
     )
     .map(|_| ())
@@ -1164,17 +1113,14 @@ fn load_public_only_hmac_key(sim: &mut Simulator<'_>) -> Handle {
     if let PublicParmsAndId::KeyedHash(_, ref mut unique) = public.parms_and_id {
         *unique = digest(&[0x42; 32]);
     }
-    let (_, handles) = sim
-        .execute_with_handles(
-            LoadExternal {
-                in_private: None,
-                in_public: Tpm2b(public),
-                hierarchy: Handle::RH_NULL,
-            },
-            (),
-        )
+    let rsp = sim
+        .execute(LoadExternal {
+            in_private: None,
+            in_public: Tpm2b(public),
+            hierarchy: Handle::RH_NULL,
+        })
         .expect("LoadExternal (public only)");
-    handles.object_handle
+    rsp.object_handle
 }
 
 /// HMAC over `aHash = SHA256(nonceTPM || expiration || cpHashA || policyRef)` with all fields
@@ -1360,8 +1306,7 @@ fn policy_authorize_nv_with_policy_auth(
     auth.attributes.insert(tpm2::TpmaSession::CONTINUE_SESSION);
     execute_with_hmac_sessions(
         sim,
-        &PolicyAuthorizeNV {},
-        PolicyAuthorizeNVHandles {
+        &PolicyAuthorizeNV {
             auth_handle: Handle(index),
             nv_index: Handle(index),
             policy_session: target,
@@ -1405,8 +1350,7 @@ fn policy_authorize_nv_manual_password_check_omits_session_position_and_bad_auth
     define_nv(&mut sim, owner_index, nv_attrs(TpmaNv::OWNERREAD), 34);
     let err = execute_with_password_sessions(
         &mut sim,
-        &PolicyAuthorizeNV {},
-        PolicyAuthorizeNVHandles {
+        &PolicyAuthorizeNV {
             auth_handle: Handle::RH_OWNER,
             nv_index: Handle(owner_index),
             policy_session: s,
@@ -1433,13 +1377,14 @@ fn start_salted(
     run(
         sim,
         StartAuthSession {
+            tpm_key,
+            bind,
             nonce_caller: Tpm2bNonce::from_bytes(&[1; 16]).unwrap(),
             encrypted_salt: Tpm2bEncryptedSecret::from_bytes(leak_bytes(salt)).unwrap(),
             session_type: TpmSe::HMAC,
             symmetric: None,
             auth_hash: TpmiAlgHash::Sha256,
         },
-        StartAuthSessionHandles { tpm_key, bind },
     )
     .map(|_| ())
 }
@@ -1458,7 +1403,10 @@ fn tpm2_startauthsession_accepts_symcipher_tpmkey_and_omits_bind_validation() {
             | TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgCipherMode::Cfb.into()),
+            },
             Tpm2bDigest::default(),
         ),
     };
@@ -1504,10 +1452,8 @@ fn tpm2_startauthsession_accepts_symcipher_tpmkey_and_omits_bind_validation() {
     run_pw(
         &mut sim,
         PCRSetAuthValue {
-            auth: digest(b"abc"),
-        },
-        PCRSetAuthValueHandles {
             pcr_handle: Handle(20),
+            auth: digest(b"abc"),
         },
     )
     .expect("PCR_SetAuthValue");
@@ -1518,10 +1464,8 @@ fn tpm2_startauthsession_accepts_symcipher_tpmkey_and_omits_bind_validation() {
     execute_with_hmac_sessions(
         &mut sim,
         &HierarchyChangeAuth {
-            new_auth: Tpm2bAuth::default(),
-        },
-        HierarchyChangeAuthHandles {
             auth_handle: Handle::RH_OWNER,
+            new_auth: Tpm2bAuth::default(),
         },
         &[],
         &mut [session],
@@ -1545,10 +1489,8 @@ fn session_bind_sha512_panic_handle_equality_and_policypassword_response_hmac() 
     execute_with_hmac_sessions(
         &mut sim,
         &HierarchyChangeAuth {
-            new_auth: Tpm2bAuth::default(),
-        },
-        HierarchyChangeAuthHandles {
             auth_handle: Handle::RH_OWNER,
+            new_auth: Tpm2bAuth::default(),
         },
         &[],
         &mut [session],

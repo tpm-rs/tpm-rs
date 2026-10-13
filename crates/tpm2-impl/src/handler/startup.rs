@@ -457,14 +457,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.context
                     .platform
                     .rng
-                    .get_random(&mut self.global_state.null_seed[..64])
+                    .fill_bytes(&mut self.global_state.null_seed[..64])
                     .map_err(|_| TpmRc::FAILURE)?;
                 self.global_state.null_seed_size = 64;
 
                 self.context
                     .platform
                     .rng
-                    .get_random(&mut self.global_state.null_proof[..64])
+                    .fill_bytes(&mut self.global_state.null_proof[..64])
                     .map_err(|_| TpmRc::FAILURE)?;
                 self.global_state.null_proof_size = 64;
 
@@ -474,7 +474,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.context
                     .platform
                     .rng
-                    .get_random(&mut self.global_state.commit_nonce)
+                    .fill_bytes(&mut self.global_state.commit_nonce)
                     .map_err(|_| TpmRc::FAILURE)?;
                 self.global_state.commit_counter = 0;
                 self.global_state.commit_array = [0u8; 16];

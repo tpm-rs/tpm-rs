@@ -1,3 +1,4 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
@@ -5,12 +6,14 @@ use crate::timer::TpmTimer;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
+use tpm2::commands::MakeCredential;
 use tpm2::commands::responses;
-use tpm2::commands::{MakeCredential, MakeCredentialHandles};
-use tpm2::crypto::kdf::kdfa;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bIdObject, TpmaObject, TpmsIdObject};
+use tpm2::{
+    Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bIdObject, TpmaObject, TpmiAlgHash, TpmsIdObject,
+};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -35,12 +38,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<MakeCredentialHandles>()?;
-        let handle = handles.handle.0;
+        let handles = request.try_unmarshal_handles::<MakeCredential>()?;
+        let [handle] = handles;
+        check(handle, Tpmi::DhObject, Position::handle(1))?;
+        let handle = handle.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<MakeCredential>()?;
+        let cmd = request.try_unmarshal_command::<MakeCredential>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -101,7 +106,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut integrity_key = [0u8; 64];
 
         let digest_bits = (digest_size * 8) as u32;
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             name_alg,
             &seed[..digest_size],
@@ -112,7 +117,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &mut sym_key_iv,
         )
         .map_err(|_| TpmRc::FAILURE)?;
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             name_alg,
             &seed[..digest_size],
@@ -131,26 +136,25 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let encrypt_len = 2 + cred_len;
 
         let mut iv = [0u8; 16];
-        tpm2::crypto::encrypt(
-            self.crypto(),
+        self.sym_encrypt_decrypt(
             sym_alg,
             &sym_key_iv[..outer_key_len],
             &mut iv,
+            Direction::Encrypt,
             &mut credential_to_encrypt[..encrypt_len],
         )
         .map_err(|_| TpmRc::FAILURE)?;
 
         // 6. Compute integrity HMAC over the encrypted credential (includes encrypted size prefix)
-        let mut hmac_ctx =
-            tpm2::crypto::HmacCtx::new(self.crypto(), name_alg, &integrity_key[..digest_size])
-                .map_err(|_| TpmRc::FAILURE)?;
+        let mut hmac_ctx = HmacStream::new(self.crypto(), name_alg, &integrity_key[..digest_size])
+            .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx
             .update(&credential_to_encrypt[..encrypt_len])
             .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx
             .update(cmd.object_name.get_buffer())
             .map_err(|_| TpmRc::FAILURE)?;
-        let mut hmac_buf = [0u8; 64];
+        let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = hmac_ctx
             .finalize(&mut hmac_buf)
             .map_err(|_| TpmRc::FAILURE)?;
@@ -171,7 +175,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 8. Write response
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }

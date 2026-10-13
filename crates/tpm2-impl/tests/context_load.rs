@@ -1,7 +1,7 @@
 use common::marshal_to_slice;
 use tpm2::errors::{Position, TpmRc};
 
-use tpm2::Unmarshal;
+use tpm2::{Unmarshal, UnmarshalMessage};
 mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
@@ -14,8 +14,8 @@ fn test_adv_context_load_hmac_tampering() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -70,7 +70,8 @@ fn test_adv_context_load_hmac_tampering() {
     // Unmarshal the ContextSave response parameters starting at offset 10
     let mut unmarshal_buf = &rsp1[10..rsp1_len];
     let rsp1_parsed =
-        <tpm2::commands::ContextSave as tpm2::commands::Command>::Response::unmarshal(
+        <tpm2::commands::ContextSave as tpm2::commands::Command>::Response::unmarshal_with_handles(
+            [],
             &mut unmarshal_buf,
         )
         .unwrap();
@@ -121,8 +122,8 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -168,7 +169,8 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
 
     let mut unmarshal_buf = &rsp1[10..rsp1_len];
     let rsp1_parsed =
-        <tpm2::commands::ContextSave as tpm2::commands::Command>::Response::unmarshal(
+        <tpm2::commands::ContextSave as tpm2::commands::Command>::Response::unmarshal_with_handles(
+            [],
             &mut unmarshal_buf,
         )
         .unwrap();
@@ -220,8 +222,8 @@ fn test_context_load_fails_on_total_reset_count_and_st_clear_count_changes() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -269,7 +271,8 @@ fn test_context_load_fails_on_total_reset_count_and_st_clear_count_changes() {
 
     let mut unmarshal_buf = &rsp1[10..rsp1_len];
     let rsp1_parsed =
-        <tpm2::commands::ContextSave as tpm2::commands::Command>::Response::unmarshal(
+        <tpm2::commands::ContextSave as tpm2::commands::Command>::Response::unmarshal_with_handles(
+            [],
             &mut unmarshal_buf,
         )
         .unwrap();

@@ -47,25 +47,20 @@ fn test_corrupt_context_load() {
     let creation_pcr = TpmlPcrSelection::unmarshal(&mut unmarsh).unwrap();
 
     let cp_cmd = CreatePrimary {
+        primary_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr,
     };
-    let cp_handles = CreatePrimaryHandles {
-        primary_handle: Handle(0x40000001),
-    };
 
-    let (_, cp_resp_handles) =
-        execute_with_password_sessions(&mut sim, &cp_cmd, cp_handles, 1, &[]).unwrap();
+    let cp_resp_handles = execute_with_password_sessions(&mut sim, &cp_cmd, 1, &[]).unwrap();
     let cp_handle = cp_resp_handles.object_handle;
 
-    let save_cmd = ContextSave::default();
-    let save_handles = ContextSaveHandles {
+    let save_cmd = ContextSave {
         save_handle: cp_handle,
     };
-    let (mut save_resp, _) =
-        execute_with_password_sessions(&mut sim, &save_cmd, save_handles, 0, &[]).unwrap();
+    let mut save_resp = execute_with_password_sessions(&mut sim, &save_cmd, 0, &[]).unwrap();
 
     // Corrupt the context blob
     let mut blob = save_resp.context.context_blob.get_buffer().to_vec();
@@ -78,7 +73,7 @@ fn test_corrupt_context_load() {
     let load_cmd = ContextLoad {
         context: save_resp.context,
     };
-    let res = execute_with_password_sessions(&mut sim, &load_cmd, (), 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &load_cmd, 0, &[]);
     assert!(res.is_err(), "Context load with corrupt blob should fail");
 
     flush_context(&mut sim, cp_handle).unwrap();

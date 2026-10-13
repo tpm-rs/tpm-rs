@@ -1,6 +1,5 @@
-use tpm2::commands::{Command, ECCParameters, ECDHKeyGen};
+use tpm2::commands::{Command, ECCParameters, ECDHKeyGen, UnmarshalMessage};
 
-use tpm2::Unmarshal;
 mod common;
 
 use common::{FakeRng, FakeStorage, FakeTimer};
@@ -19,7 +18,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -100,8 +99,8 @@ fn test_ecdh_keygen_success() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000001;
     let obj = create_transient_ecc_key(
@@ -126,7 +125,7 @@ fn test_ecdh_keygen_success() {
     );
 
     let mut buf = &response[10..len];
-    let rsp = <ECDHKeyGen as Command>::Response::unmarshal(&mut buf)
+    let rsp = <ECDHKeyGen as Command>::Response::unmarshal_with_handles([], &mut buf)
         .expect("Should unmarshal <ECDHKeyGen as Command>::Response");
 
     let pub_tpms = rsp.pub_point.0;
@@ -135,15 +134,16 @@ fn test_ecdh_keygen_success() {
     pub_raw[..32].copy_from_slice(pub_tpms.x.get_buffer());
     pub_raw[32..64].copy_from_slice(pub_tpms.y.get_buffer());
     assert!(
-        crypto
-            .validate_point(TpmEccCurve::NistP256, &pub_raw)
-            .is_ok(),
+        matches!(
+            crypto.validate_point(TpmEccCurve::NistP256, &pub_raw),
+            Ok(true)
+        ),
         "pubPoint must lie on NIST P-256 curve"
     );
 
     // Check zPoint coordinates match expected ECDH scalar multiplication: Z = [d_s] Q_e
     let mut expected_z_raw = [0u8; 64];
-    crypto
+    let expected_z_len = crypto
         .point_multiply(
             TpmEccCurve::NistP256,
             &priv_bytes[..priv_len],
@@ -151,6 +151,10 @@ fn test_ecdh_keygen_success() {
             &mut expected_z_raw,
         )
         .expect("Scalar multiplication [d_s] Q_e should succeed");
+    assert!(
+        expected_z_len.is_some(),
+        "Scalar multiplication [d_s] Q_e should succeed"
+    );
 
     let z_tpms = rsp.z_point.0;
     let mut z_raw = [0u8; 64];
@@ -168,8 +172,8 @@ fn test_ecc_parameters_p256() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Call TPM2_ECC_Parameters(TPM_ECC_BN_P256) exactly as requested in task 3.2
     // Tag: 0x8001 (2 bytes), Size: 0x0000000C (4 bytes), CC: 0x00000178 (4 bytes), CurveID: 0x0010 (2 bytes for BNP256)
@@ -183,7 +187,7 @@ fn test_ecc_parameters_p256() {
     );
 
     let mut buf = &response[10..len];
-    let rsp = <ECCParameters as Command>::Response::unmarshal(&mut buf)
+    let rsp = <ECCParameters as Command>::Response::unmarshal_with_handles([], &mut buf)
         .expect("Should unmarshal <ECCParameters as Command>::Response");
     assert_eq!(rsp.parameters.key_size, 256);
     assert_eq!(rsp.parameters.kdf, None);
@@ -200,7 +204,7 @@ fn test_ecc_parameters_p256() {
     );
 
     let mut buf = &response[10..len];
-    let rsp = <ECCParameters as Command>::Response::unmarshal(&mut buf)
+    let rsp = <ECCParameters as Command>::Response::unmarshal_with_handles([], &mut buf)
         .expect("Should unmarshal <ECCParameters as Command>::Response");
     assert_eq!(rsp.parameters.key_size, 256);
     // C CryptEccData.c: NIST P-256 carries {TPM_ALG_KDF1_SP800_56A, SHA256} as its KDF.

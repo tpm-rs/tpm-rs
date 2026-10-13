@@ -4,8 +4,8 @@
 //! TCG EK Credential Profile For TPM Family 2.0; Level 0, Version 2.7
 
 use crate::test_utils::*;
-use tpm2::commands::PolicySecretHandles;
-use tpm2::commands::{Create, CreateHandles, CreatePrimary, CreatePrimaryHandles, PolicySecret};
+use tpm2::commands::{Create, CreatePrimary, PolicySecret};
+use tpm2::{AlgSym, TpmiAlgCipherMode};
 use tpm2::{Handle, TpmSe, TpmaSession};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce, Tpm2bPublicKeyRsa,
@@ -318,16 +318,14 @@ fn go_ecc_ek_template() -> TpmtPublic<'static> {
 /// on the given policy session.
 fn ek_policy(sim: &mut Simulator<'_>, handle: Handle, nonce_tpm: Tpm2bNonce<'static>) {
     let cmd = PolicySecret {
+        auth_handle: Handle::RH_ENDORSEMENT,
+        policy_session: handle,
         nonce_tpm,
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         expiration: 0,
     };
-    let handles = PolicySecretHandles {
-        auth_handle: Handle::RH_ENDORSEMENT,
-        policy_session: handle,
-    };
-    execute_with_password_sessions(sim, &cmd, handles, 1, &[]).expect("executing EK policy");
+    execute_with_password_sessions(sim, &cmd, 1, &[]).expect("executing EK policy");
 }
 
 /// Starts an auth session like go-tpm's `Init`: 16-byte nonceCaller,
@@ -345,7 +343,7 @@ fn start_session(
     bind: Handle,
     salt: Option<(Handle, &TpmtPublic)>,
 ) -> ActiveSession {
-    use tpm2::crypto::Rng;
+    use tpm2::crypto::CryptoProvider;
 
     let mut nonce_bytes = [0u8; 16];
     CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
@@ -411,7 +409,7 @@ fn start_session(
                         ek_public.as_affine(),
                     );
                     let mut derived = [0u8; 32];
-                    tpm2::crypto::kdf::kdfe(
+                    tpm2::crypto::kdf::kdfe_bits(
                         CLIENT_CRYPTO,
                         TpmiAlgHash::Sha256,
                         shared.raw_secret_bytes(),
@@ -431,14 +429,15 @@ fn start_session(
     };
 
     let cmd = tpm2::commands::StartAuthSession {
+        tpm_key,
+        bind,
         nonce_caller,
         encrypted_salt,
         session_type,
         symmetric: symmetric.map(tpm2::TpmtSymDef::from),
         auth_hash,
     };
-    let handles = tpm2::commands::StartAuthSessionHandles { tpm_key, bind };
-    let (resp, resp_handles) = execute_with_password_sessions(tpm, &cmd, handles, 0, &[])
+    let resp = execute_with_password_sessions(tpm, &cmd, 0, &[])
         .expect("creating session (TPM2_StartAuthSession)");
 
     let session_key = if bind != Handle::RH_NULL || !salt_value.is_empty() {
@@ -461,7 +460,7 @@ fn start_session(
     };
 
     ActiveSession {
-        session_handle: resp_handles.session_handle,
+        session_handle: resp.session_handle,
         nonce_caller,
         nonce_tpm: resp.nonce_tpm,
         session_key,
@@ -521,7 +520,6 @@ struct PolicySessionParams<'a> {
 fn execute_create_blob(
     sim: &mut Simulator<'_>,
     create_cmd: &Create<'_>,
-    ek_handle: Handle,
     ek_name: &Tpm2bName<'_>,
     case: EkTestCase,
     params: &PolicySessionParams<'_>,
@@ -549,7 +547,10 @@ fn execute_create_blob(
             sim,
             TpmSe::HMAC,
             TpmiAlgHash::Sha1,
-            Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            }),
             Handle::RH_NULL,
             None,
         );
@@ -561,9 +562,6 @@ fn execute_create_blob(
     let res = execute_with_hmac_sessions(
         sim,
         create_cmd,
-        CreateHandles {
-            parent_handle: ek_handle,
-        },
         &[ek_name.get_buffer()],
         &mut sessions,
         &entity_auths,
@@ -602,6 +600,7 @@ fn ek_test(ek_template: TpmtPublic<'static>, case: EkTestCase) {
 
     // Create the EK
     let create_ek_cmd = CreatePrimary {
+        primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -610,17 +609,9 @@ fn ek_test(ek_template: TpmtPublic<'static>, case: EkTestCase) {
         outside_info: Tpm2bData::default(),
         creation_pcr: tpm2::TpmlPcrSelection::default(),
     };
-    let (create_ek_rsp, create_ek_rsp_handles) = execute_with_password_sessions(
-        &mut sim,
-        &create_ek_cmd,
-        CreatePrimaryHandles {
-            primary_handle: Handle::RH_ENDORSEMENT,
-        },
-        1,
-        &[],
-    )
-    .expect("CreatePrimary (EK)");
-    let ek_handle = create_ek_rsp_handles.object_handle;
+    let create_ek_rsp = execute_with_password_sessions(&mut sim, &create_ek_cmd, 1, &[])
+        .expect("CreatePrimary (EK)");
+    let ek_handle = create_ek_rsp.object_handle;
     let ek_name = create_ek_rsp.name;
     let out_pub = create_ek_rsp
         .out_public
@@ -641,6 +632,7 @@ fn ek_test(ek_template: TpmtPublic<'static>, case: EkTestCase) {
     // by creating an object under it
     let data: &[u8] = b"secrets";
     let create_blob_cmd = Create {
+        parent_handle: ek_handle,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::from_bytes(data).unwrap(),
@@ -666,7 +658,10 @@ fn ek_test(ek_template: TpmtPublic<'static>, case: EkTestCase) {
         salt: None,
     };
     if case.decrypt_policy_session {
-        params.symmetric = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+        params.symmetric = Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        });
         params.attributes |= TpmaSession::DECRYPT;
     }
     if case.bound {
@@ -696,7 +691,6 @@ fn ek_test(ek_template: TpmtPublic<'static>, case: EkTestCase) {
     execute_create_blob(
         &mut sim,
         &create_blob_cmd,
-        ek_handle,
         &ek_name,
         case,
         &params,
@@ -715,7 +709,6 @@ fn ek_test(ek_template: TpmtPublic<'static>, case: EkTestCase) {
     execute_create_blob(
         &mut sim,
         &create_blob_cmd,
-        ek_handle,
         &ek_name,
         case,
         &params,
@@ -731,7 +724,6 @@ fn ek_test(ek_template: TpmtPublic<'static>, case: EkTestCase) {
         let rc = execute_create_blob(
             &mut sim,
             &create_blob_cmd,
-            ek_handle,
             &ek_name,
             case,
             &params,

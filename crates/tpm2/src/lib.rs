@@ -28,6 +28,37 @@
 //!
 //! [TPM2 Specification]: https://trustedcomputinggroup.org/work-groups/trusted-platform-module/
 //!
+//! ## Algorithm Feature Flags
+//!
+//! Cargo features control which cryptographic algorithms and modes are enabled
+//! in types (like [`TpmiAlgHash`], [`TpmtHa`], [`AlgSym`], [`TpmiAlgSymMode`],
+//! and [`TpmiAlgCipherMode`]), size limits (like
+//! [`TpmiAlgHash::MAX_DIGEST_BYTES`] and [`AlgSym::MAX_KEY_BYTES`]), and
+//! [`crypto`] wrappers. All hash, symmetric cipher, and symmetric mode
+//! features are enabled by default, together with RSA-2048 and larger
+//! (`rsa2048`, `rsa3072`, `rsa4096`, `rsassa`, `rsapss`, `rsaes`, `oaep`) and
+//! NIST P-256 and larger ECC (`ecc_curve_nist_p256`, `ecc_curve_nist_p384`,
+//! `ecc_curve_nist_p521`, `nist_p256`, `nist_p384`, `nist_p521`, `ecdsa`,
+//! `ecdh`, `ecdaa`). Constrained builds can set `default-features = false` and
+//! enable a subset:
+//!
+//! - **Hash algorithms** (at least one required): `sha1`, `sha256`, `sha384`,
+//!   `sha512`, `sm3_256`, `sha3_256`, `sha3_384`, `sha3_512`
+//! - **Symmetric ciphers** (at least one required): `aes128`, `aes192`,
+//!   `aes256`, `sm4_128`, `camellia128`, `camellia192`, `camellia256`
+//! - **Symmetric modes** (`CFB` is always enabled): `cmac`, `ctr`, `ofb`,
+//!   `cbc`, `ecb`
+//! - **RSA** (each feature implies `rsa`): key sizes `rsa1024`, `rsa2048`,
+//!   `rsa3072`, `rsa4096`; schemes `rsassa`, `rsapss`, `rsaes`, `oaep`
+//! - **ECC** (each feature implies `ecc`): curves `ecc_curve_nist_p192`,
+//!   `ecc_curve_nist_p224`, `ecc_curve_nist_p256`, `ecc_curve_nist_p384`,
+//!   `ecc_curve_nist_p521`, `ecc_curve_bn_p256`, `ecc_curve_bn_p638`,
+//!   `ecc_curve_sm2_p256`, `ecc_curve_bp_p256_r1`, `ecc_curve_bp_p384_r1`,
+//!   `ecc_curve_bp_p512_r1`, `ecc_curve_curve25519`, `ecc_curve_curve448`
+//!   (with the shorthands `nist_p224`, `nist_p256`, `nist_p384`, `nist_p521`,
+//!   `bn_p256`, `sm2_p256`); schemes `ecdsa`, `ecdh`, `ecdaa`, `sm2`,
+//!   `ecschnorr`, `ecmqv`
+//!
 //! ## Platform Support and Abstraction
 //!
 //! The core TPM 2.0 library is designed to execute in a wide variety of environments—ranging
@@ -95,33 +126,17 @@ pub mod platform;
 mod std;
 mod structures;
 
+pub use commands::{Command, Message, UnmarshalMessage};
 pub use constants::*;
 pub use marshal::{Marshal, Unmarshal};
 pub use structures::*;
-
-/// Trait for a TPM command transaction.
-pub trait Command: Marshal
-where
-    for<'a> &'a mut Self::MaxBuffer: TryFrom<&'a mut [u8]>,
-    for<'a> &'a mut <Self::Handles as Marshal>::MaxBuffer: TryFrom<&'a mut [u8]>,
-{
-    /// The command code.
-    const CMD_CODE: TpmCc;
-    /// The command handles type.
-    type Handles: Marshal + for<'a> Unmarshal<'a> + Default;
-    /// The response parameters type.
-    type Response<'a>: Marshal + Unmarshal<'a>;
-    /// The response handles type.
-    type RespHandles: Marshal + for<'a> Unmarshal<'a>;
-}
 
 /// Common trait for communicating with a TPM.
 pub trait Connection {
     /// The type returned if [`Connection::transact`] fails.
     ///
     /// This type does not include `TPM_RC` errors, only errors related to the
-    /// connection itself. If the connection can never fail, this can be
-    /// [`Infallible`](core::convert::Infallible).
+    /// connection itself. If the connection can never fail, this can be [`!`].
     type Error: core::error::Error;
 
     /// Perform a command/response transaction with the TPM.

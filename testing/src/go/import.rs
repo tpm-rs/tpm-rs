@@ -8,11 +8,8 @@ use p256::elliptic_curve::sec1::FromEncodedPoint as _;
 use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 use sha1::Sha1;
 use sha2::{Digest as _, Sha256};
-use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, Import, ImportHandles, Load, LoadHandles, Unseal,
-    UnsealHandles,
-};
-use tpm2::crypto::kdf::{kdfa, kdfe};
+use tpm2::commands::{CreatePrimary, Import, Load, Unseal};
+use tpm2::crypto::kdf::{kdfa_bits, kdfe_bits};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_platform_linux::PlatformCryptoProvider;
@@ -34,7 +31,10 @@ fn get_ecc_srk_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -63,7 +63,10 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Rsa(
             TpmsRsaParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 key_bits: TpmiRsaKeyBits(2048),
                 exponent: 0,
@@ -80,8 +83,9 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
 fn create_primary_owner(
     sim: &mut Simulator<'_>,
     template: TpmtPublic<'static>,
-) -> (tpm2::commands::CreatePrimaryRsp<'static>, Handle) {
+) -> (tpm2::commands::responses::CreatePrimary<'static>, Handle) {
     let cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -90,12 +94,8 @@ fn create_primary_owner(
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &cmd, handles, 1, &[]).expect("CreatePrimary() failed");
-    (rsp, rsp_handles.object_handle)
+    let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary() failed");
+    (rsp, rsp.object_handle)
 }
 
 fn make_sealed_blob(
@@ -256,7 +256,7 @@ fn create_duplicate(
 
             // KDFe derivation
             let mut secret_derived = [0u8; 32];
-            kdfe(
+            kdfe_bits(
                 &crypto,
                 TpmiAlgHash::Sha256,
                 z.as_slice(),
@@ -310,14 +310,23 @@ fn create_duplicate(
     let (sym_alg, sym_key_bits, sym_mode) = match key {
         EncapsulationKey::Ecc { sym_def, .. } | EncapsulationKey::Rsa { sym_def, .. } => {
             match sym_def {
-                Some(TpmtSymDefObject::Aes128(mode)) => (Alg::AES, 128, *mode),
-                Some(TpmtSymDefObject::Aes256(mode)) => (Alg::AES, 256, *mode),
+                Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode,
+                }) => (Alg::AES, 128, *mode),
+                Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes256,
+                    mode,
+                }) => (Alg::AES, 256, *mode),
                 _ => panic!("Unsupported symmetric algorithm"),
             }
         }
     };
     assert_eq!(sym_alg, Alg::AES);
-    assert_eq!(sym_mode.unwrap(), TpmiAlgSymMode::CFB);
+    assert_eq!(
+        sym_mode.unwrap(),
+        TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)
+    );
 
     // 3. Marshal sensitive structure to TPM2B_SENSITIVE (2B wrapper)
     let mut sensitive_2b = vec![0u8; 2 + sensitive.len()];
@@ -326,7 +335,7 @@ fn create_duplicate(
 
     // 4. Derive AES CFB key using KDFa
     let mut derived_aes_key = vec![0u8; (sym_key_bits / 8) as usize];
-    kdfa(
+    kdfa_bits(
         &crypto,
         TpmiAlgHash::Sha256,
         &secret,
@@ -357,7 +366,7 @@ fn create_duplicate(
 
     // 6. Compute HMAC of (dupSensitive || name)
     let mut hmac_key = vec![0u8; 32];
-    kdfa(
+    kdfa_bits(
         &crypto,
         TpmiAlgHash::Sha256,
         &secret,
@@ -439,17 +448,14 @@ fn test_cleartext_import() {
 
     // 5. Execute Import (parent authorized with an empty password).
     let import_cmd = Import {
+        parent_handle: srk_handle,
         encryption_key: Tpm2bData::default(),
         object_public,
         duplicate,
         in_sym_seed: Tpm2bEncryptedSecret::default(),
         symmetric_alg: None,
     };
-    let import_handles = ImportHandles {
-        parent_handle: srk_handle,
-    };
-    execute_with_password_sessions(&mut sim, &import_cmd, import_handles, 1, &[])
-        .expect("could not import");
+    execute_with_password_sessions(&mut sim, &import_cmd, 1, &[]).expect("could not import");
 
     // Deferred cleanup in Go: flushing the SRK must succeed.
     flush_context(&mut sim, srk_handle).expect("could not flush SRK");
@@ -479,38 +485,29 @@ fn run_sw_duplicate_import(sim: &mut Simulator<'_>, pub_template: TpmtPublic<'st
 
     // 5. Execute Import under primary parent key
     let import_cmd = Import {
+        parent_handle: primary_handle,
         encryption_key: Tpm2bData::default(),
         object_public: tpm2::Tpm2b(sealed_pub),
         duplicate: Tpm2bPrivate::from_bytes(&duplicate).unwrap(),
         in_sym_seed: Tpm2bEncryptedSecret::from_bytes(&enc_secret).unwrap(),
         symmetric_alg: None,
     };
-    let import_handles = ImportHandles {
-        parent_handle: primary_handle,
-    };
-    let (impo, _) = execute_with_password_sessions(sim, &import_cmd, import_handles, 1, &[])
-        .expect("Import() failed");
+    let impo = execute_with_password_sessions(sim, &import_cmd, 1, &[]).expect("Import() failed");
 
     // 6. Load the imported private key
     let load_cmd = Load {
+        parent_handle: primary_handle,
         in_private: impo.out_private,
         in_public: tpm2::Tpm2b(sealed_pub),
     };
-    let load_handles = LoadHandles {
-        parent_handle: primary_handle,
-    };
-    let (_, load_resp_handles) =
-        execute_with_password_sessions(sim, &load_cmd, load_handles, 1, &[])
-            .expect("Load() failed");
-    let loaded_handle = load_resp_handles.object_handle;
+    let load_resp = execute_with_password_sessions(sim, &load_cmd, 1, &[]).expect("Load() failed");
+    let loaded_handle = load_resp.object_handle;
 
     // 7. Unseal the plaintext contents
-    let unseal_cmd = Unseal {};
-    let unseal_handles = UnsealHandles {
+    let unseal_cmd = Unseal {
         item_handle: loaded_handle,
     };
-    let (unseal, _) = execute_with_password_sessions(sim, &unseal_cmd, unseal_handles, 1, &[])
-        .expect("Unseal() failed");
+    let unseal = execute_with_password_sessions(sim, &unseal_cmd, 1, &[]).expect("Unseal() failed");
 
     assert_eq!(
         unseal.out_data.get_buffer(),

@@ -7,11 +7,11 @@ use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
-use tpm2::commands::{Command, CreatePrimary, CreatePrimaryHandles, Import, ImportHandles};
+use tpm2::commands::{Command, CreatePrimary, Import, Message, UnmarshalMessage};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    PublicParmsAndId, Tpm2bData, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bPrivate,
-    Tpm2bPublicKeyRsa, TpmaObject, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsAuthCommand,
+    AlgSym, PublicParmsAndId, Tpm2bData, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bPrivate,
+    Tpm2bPublicKeyRsa, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiRsaKeyBits, TpmsAuthCommand,
     TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2_impl::{TpmEngine, TpmPlatform};
@@ -20,7 +20,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -46,14 +46,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -66,13 +63,15 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        let handle_len = handle.marshal(handle_slice);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -112,8 +111,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -126,9 +127,10 @@ where
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
     let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+        <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+            .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp_params)
 }
 
 #[test]
@@ -136,8 +138,8 @@ fn test_import_size_over_attributes_priority() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Create primary RSA storage key
     let primary_pub = TpmtPublic {
@@ -151,7 +153,10 @@ fn test_import_size_over_attributes_priority() {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Rsa(
             TpmsRsaParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 key_bits: TpmiRsaKeyBits(2048),
                 exponent: 0,
@@ -161,6 +166,7 @@ fn test_import_size_over_attributes_priority() {
     };
 
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: tpm2::Tpm2bAuth::default(),
             data: tpm2::Tpm2bSensitiveData::default(),
@@ -169,19 +175,15 @@ fn test_import_size_over_attributes_priority() {
         outside_info: Tpm2bData::default(),
         creation_pcr: tpm2::TpmlPcrSelection::default(),
     };
-    let create_primary_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (resp_handles, _) = execute_tpm_command(
+    let create_primary_rsp = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &create_primary_handles,
         &create_primary_cmd,
         &[common::password_auth(b"")],
     )
     .unwrap();
-    let parent_handle = resp_handles.object_handle;
+    let parent_handle = create_primary_rsp.object_handle;
 
     // 2. Prepare import command where object_public has FIXED_TPM (attributes error on Pos2)
     // AND in_sym_seed is 512 bytes while parent is 2048-bit (size error on Pos4).
@@ -194,24 +196,26 @@ fn test_import_size_over_attributes_priority() {
             | TpmaObject::FIXED_TPM, // FIXED_TPM triggers TPM_RC_ATTRIBUTES if reached
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgCipherMode::Cfb.into()),
+            },
             Tpm2bDigest::default(),
         ),
     };
 
     let import_cmd = Import {
+        parent_handle,
         encryption_key: Tpm2bData::default(),
         object_public: tpm2::Tpm2b(target_pub),
         duplicate: Tpm2bPrivate::from_bytes(&[0u8; 10]).unwrap(),
         in_sym_seed: Tpm2bEncryptedSecret::from_bytes(&[0x55u8; 512]).unwrap(), // 512 bytes > 256
         symmetric_alg: None,
     };
-    let import_handles = ImportHandles { parent_handle };
 
     let rc = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &import_handles,
         &import_cmd,
         &[common::password_auth(b"")],
     )

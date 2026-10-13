@@ -1,9 +1,6 @@
 #![allow(unused_imports, dead_code)]
 use crate::test_utils::*;
-use tpm2::commands::{
-    Create, CreateHandles, CreatePrimary, CreatePrimaryHandles, PolicyGetDigest,
-    PolicyGetDigestHandles, PolicySecret, PolicySecretHandles, ReadPublic, ReadPublicHandles,
-};
+use tpm2::commands::{Create, CreatePrimary, PolicyGetDigest, PolicySecret, ReadPublic};
 use tpm2::{Handle, TpmSe};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce,
@@ -87,24 +84,16 @@ fn test_policy_digest_reset_on_continue() {
     };
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: tpm2::TpmlPcrSelection::default(),
     };
-    let create_primary_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_ENDORSEMENT,
-    };
-    let (create_primary_resp, create_primary_resp_handles) = execute_with_password_sessions(
-        &mut sim,
-        &create_primary_cmd,
-        create_primary_handles,
-        1,
-        &[],
-    )
-    .unwrap();
+    let create_primary_resp =
+        execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[]).unwrap();
 
-    let ek_handle = create_primary_resp_handles.object_handle;
+    let ek_handle = create_primary_resp.object_handle;
     let ek_name = create_primary_resp.name;
 
     let mut session = start_auth_session(
@@ -121,32 +110,26 @@ fn test_policy_digest_reset_on_continue() {
     session.attributes = tpm2::TpmaSession::from_bits_retain(1);
 
     let policy_secret_cmd = PolicySecret {
+        auth_handle: Handle::RH_ENDORSEMENT,
+        policy_session: session.session_handle,
         nonce_tpm: session.nonce_tpm,
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         expiration: 0,
     };
-    let policy_secret_handles = PolicySecretHandles {
-        auth_handle: Handle::RH_ENDORSEMENT,
-        policy_session: session.session_handle,
-    };
-    let _ =
-        execute_with_password_sessions(&mut sim, &policy_secret_cmd, policy_secret_handles, 1, &[])
-            .unwrap();
+    let _ = execute_with_password_sessions(&mut sim, &policy_secret_cmd, 1, &[]).unwrap();
 
-    let get_digest_cmd = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest_cmd = PolicyGetDigest {
         policy_session: session.session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest_cmd, get_digest_handles, 0, &[])
-            .unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest_cmd, 0, &[]).unwrap();
     assert_eq!(
         get_digest_rsp.policy_digest.get_buffer(),
         ek_template.auth_policy.get_buffer()
     );
 
     let create_cmd = Create {
+        parent_handle: ek_handle,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::from_bytes(b"secrets").unwrap(),
@@ -163,15 +146,11 @@ fn test_policy_digest_reset_on_continue() {
         outside_info: Tpm2bData::default(),
         creation_pcr: tpm2::TpmlPcrSelection::default(),
     };
-    let create_handles = CreateHandles {
-        parent_handle: ek_handle,
-    };
 
     let mut sessions = [session.clone()];
     let _ = execute_with_hmac_sessions(
         &mut sim,
         &create_cmd,
-        create_handles,
         &[ek_name.get_buffer()],
         &mut sessions,
         &[&[]],
@@ -180,10 +159,9 @@ fn test_policy_digest_reset_on_continue() {
 
     let updated_session = &sessions[0];
 
-    let (get_digest_rsp2, _) = execute_with_password_sessions(
+    let get_digest_rsp2 = execute_with_password_sessions(
         &mut sim,
-        &get_digest_cmd,
-        PolicyGetDigestHandles {
+        &PolicyGetDigest {
             policy_session: updated_session.session_handle,
         },
         0,
@@ -213,24 +191,16 @@ fn test_policy_digest_reset_on_format1_failure() {
     };
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: tpm2::TpmlPcrSelection::default(),
     };
-    let create_primary_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_ENDORSEMENT,
-    };
-    let (create_primary_resp, create_primary_resp_handles) = execute_with_password_sessions(
-        &mut sim,
-        &create_primary_cmd,
-        create_primary_handles,
-        1,
-        &[],
-    )
-    .unwrap();
+    let create_primary_resp =
+        execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[]).unwrap();
 
-    let ek_handle = create_primary_resp_handles.object_handle;
+    let ek_handle = create_primary_resp.object_handle;
     let ek_name = create_primary_resp.name;
 
     let mut session = start_auth_session(
@@ -247,24 +217,19 @@ fn test_policy_digest_reset_on_format1_failure() {
     session.attributes = tpm2::TpmaSession::from_bits_retain(1); // CONTINUE_SESSION
 
     let policy_secret_cmd = PolicySecret {
+        auth_handle: Handle::RH_ENDORSEMENT,
+        policy_session: session.session_handle,
         nonce_tpm: session.nonce_tpm,
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         expiration: 0,
     };
-    let policy_secret_handles = PolicySecretHandles {
-        auth_handle: Handle::RH_ENDORSEMENT,
-        policy_session: session.session_handle,
-    };
-    let _ =
-        execute_with_password_sessions(&mut sim, &policy_secret_cmd, policy_secret_handles, 1, &[])
-            .unwrap();
+    let _ = execute_with_password_sessions(&mut sim, &policy_secret_cmd, 1, &[]).unwrap();
 
     // Policy digest after PolicySecret, before the failing command.
-    let (digest_before, _) = execute_with_password_sessions(
+    let digest_before = execute_with_password_sessions(
         &mut sim,
-        &PolicyGetDigest {},
-        PolicyGetDigestHandles {
+        &PolicyGetDigest {
             policy_session: session.session_handle,
         },
         0,
@@ -274,6 +239,7 @@ fn test_policy_digest_reset_on_format1_failure() {
 
     // Create an invalid command that will fail validation in the handler (Format 1 error: TPM_RC_ATTRIBUTES)
     let create_cmd = Create {
+        parent_handle: ek_handle,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::from_bytes(b"secrets").unwrap(),
@@ -289,15 +255,11 @@ fn test_policy_digest_reset_on_format1_failure() {
         outside_info: Tpm2bData::default(),
         creation_pcr: tpm2::TpmlPcrSelection::default(),
     };
-    let create_handles = CreateHandles {
-        parent_handle: ek_handle,
-    };
 
     let mut sessions = [session.clone()];
     let res = execute_with_hmac_sessions(
         &mut sim,
         &create_cmd,
-        create_handles,
         &[ek_name.get_buffer()],
         &mut sessions,
         &[&[]],
@@ -308,17 +270,11 @@ fn test_policy_digest_reset_on_format1_failure() {
     let updated_session = &sessions[0];
 
     // Query policy digest again - it must have been reset to zero!
-    let get_digest_cmd = PolicyGetDigest {};
-    let (get_digest_rsp2, _) = execute_with_password_sessions(
-        &mut sim,
-        &get_digest_cmd,
-        PolicyGetDigestHandles {
-            policy_session: updated_session.session_handle,
-        },
-        0,
-        &[],
-    )
-    .unwrap();
+    let get_digest_cmd = PolicyGetDigest {
+        policy_session: updated_session.session_handle,
+    };
+    let get_digest_rsp2 =
+        execute_with_password_sessions(&mut sim, &get_digest_cmd, 0, &[]).unwrap();
 
     // C only resets policy data when the nonce rolls in a successful response
     // (SessionProcess.c UpdateInternalSession, called from BuildResponseSession);
@@ -350,13 +306,11 @@ fn test_policy_secret_with_nv_index() {
     let nv_auth = Tpm2bAuth::default();
 
     let define_cmd = tpm2::commands::NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         public_info,
         auth: nv_auth,
     };
-    let define_handles = tpm2::commands::NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &define_cmd, define_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &define_cmd, 1, &[]).unwrap();
 
     // 2. Start policy session
     let session = start_auth_session(
@@ -372,29 +326,23 @@ fn test_policy_secret_with_nv_index() {
 
     // 3. Execute PolicySecret using NV Index as auth_handle
     let policy_secret_cmd = PolicySecret {
+        auth_handle: Handle(nv_index_val),
+        policy_session: session.session_handle,
         nonce_tpm: session.nonce_tpm,
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         expiration: 0,
     };
-    let policy_secret_handles = PolicySecretHandles {
-        auth_handle: Handle(nv_index_val),
-        policy_session: session.session_handle,
-    };
 
     // Auth session 1 is for the NV Index (password session with empty auth)
-    let res =
-        execute_with_password_sessions(&mut sim, &policy_secret_cmd, policy_secret_handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &policy_secret_cmd, 1, &[]);
     assert!(res.is_ok(), "PolicySecret failed: {:?}", res.err());
 
     // 4. Get policy digest
-    let get_digest_cmd = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest_cmd = PolicyGetDigest {
         policy_session: session.session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest_cmd, get_digest_handles, 0, &[])
-            .unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest_cmd, 0, &[]).unwrap();
 
     // 5. Compute expected digest
     // expected_digest = H( H(0_size || TPM_CC_PolicySecret || nv_name) || policyRef )

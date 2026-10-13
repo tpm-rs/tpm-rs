@@ -1,10 +1,12 @@
 use crate::test_utils::*;
-use tpm2::commands::{CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::CreateLoaded;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_create_loaded_trailing_garbage_public() {
     let mut sim = create_simulator!();
 
@@ -48,14 +50,12 @@ fn test_create_loaded_trailing_garbage_public() {
     let in_public = Tpm2bTemplate::from_bytes(&bad_buf).unwrap();
 
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPM_RH_OWNER
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPM_RH_OWNER
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &create, 1, &[]);
     match res {
         Ok(_) => panic!("BUG: CreateLoaded succeeded with trailing garbage in in_public!"),
         Err(e) => {

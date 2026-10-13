@@ -12,12 +12,12 @@
 #![allow(unused_imports)]
 
 use crate::test_utils::*;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles};
-use tpm2::crypto::Rng;
+use tpm2::commands::CreatePrimary;
+use tpm2::crypto::CryptoProvider;
 use tpm2::{
-    Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bSensitiveData, TpmCc, TpmPt, TpmSe,
-    TpmaObject, TpmiAlgHash, TpmiAlgSymMode, TpmsSensitiveCreate, TpmtHa, TpmtKeyedHashScheme,
-    TpmtPublic, TpmtSymDefObject,
+    AlgSym, Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bSensitiveData, TpmCc, TpmPt,
+    TpmSe, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmsSensitiveCreate, TpmtHa,
+    TpmtKeyedHashScheme, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2_simulator::{Simulator, SimulatorPlatformSignal, create_simulator};
 
@@ -139,7 +139,7 @@ fn rc(
 }
 
 fn sha256(parts: &[&[u8]]) -> Vec<u8> {
-    let mut state = tpm2::crypto::HashCtx::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
+    let mut state = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
     for part in parts {
         state.update(part).unwrap();
     }
@@ -148,7 +148,7 @@ fn sha256(parts: &[&[u8]]) -> Vec<u8> {
 }
 
 fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
-    let mut state = tpm2::crypto::HmacCtx::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256, key).unwrap();
+    let mut state = tpm2::crypto::HmacStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256, key).unwrap();
     for part in parts {
         state.update(part).unwrap();
     }
@@ -270,6 +270,7 @@ fn create_primary_obj(
     data: &[u8],
 ) -> u32 {
     let cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::from_bytes(leak_bytes(auth)).unwrap(),
             data: Tpm2bSensitiveData::from_bytes(leak_bytes(data)).unwrap(),
@@ -277,12 +278,8 @@ fn create_primary_obj(
         in_public: tpm2::Tpm2b(public),
         ..Default::default()
     };
-    let handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, rsp_handles) =
-        execute_with_password_sessions(sim, &cmd, handles, 1, &[]).expect("CreatePrimary");
-    rsp_handles.object_handle.0
+    let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary");
+    rsp.object_handle.0
 }
 
 /// Creates a sealed-data primary object.
@@ -820,7 +817,10 @@ fn unassociated_session_policy_and_empty_hmac_bugs() {
         Handle::RH_NULL,
         &[],
         TpmSe::Policy,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -1153,7 +1153,10 @@ fn public_only_sym_key(sim: &mut Simulator<'_>) -> u32 {
             | TpmaObject::NO_DA,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgCipherMode::Cfb.into()),
+            },
             Tpm2bDigest::from_bytes(leak_bytes(&[9; 32])).unwrap(),
         ),
     };

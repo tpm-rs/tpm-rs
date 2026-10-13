@@ -5,10 +5,7 @@ use rand::{RngCore, thread_rng};
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha384, Sha512};
 use tpm2::Handle;
-use tpm2::commands::{
-    Hash, HashSequenceStart, SequenceComplete, SequenceCompleteHandles, SequenceUpdate,
-    SequenceUpdateHandles,
-};
+use tpm2::commands::{Hash, HashSequenceStart, SequenceComplete, SequenceUpdate};
 use tpm2::{Tpm2bAuth, Tpm2bMaxBuffer, TpmiAlgHash};
 use tpm2_simulator::{Simulator, create_simulator};
 
@@ -74,7 +71,7 @@ fn run_hash_sequence(
         hash_alg: Some(hash_alg),
     };
 
-    let (_, resp_start_handles) = sim.execute_with_handles(cmd_start, ()).unwrap();
+    let resp_start_handles = sim.execute(cmd_start).unwrap();
     let sequence_handle = resp_start_handles.sequence_handle;
 
     let mut data = vec![0u8; buffer_size];
@@ -91,22 +88,21 @@ fn run_hash_sequence(
     while remaining_data.len() > max_digest_buffer {
         let chunk = &remaining_data[..max_digest_buffer];
         let cmd_update = SequenceUpdate {
+            sequence_handle,
             buffer: Tpm2bMaxBuffer::from_bytes(chunk).unwrap(),
         };
-        let cmd_handles = SequenceUpdateHandles { sequence_handle };
-        let _ = execute_with_password_sessions(sim, &cmd_update, cmd_handles, 1, auth_bytes)
+        execute_with_password_sessions(sim, &cmd_update, 1, auth_bytes)
             .expect("SequenceUpdate failed");
         remaining_data = &remaining_data[max_digest_buffer..];
     }
 
     let cmd_complete = SequenceComplete {
+        sequence_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(remaining_data).unwrap(),
         hierarchy,
     };
-    let cmd_handles = SequenceCompleteHandles { sequence_handle };
-    let (resp_complete, _) =
-        execute_with_password_sessions(sim, &cmd_complete, cmd_handles, 1, auth_bytes)
-            .expect("SequenceComplete failed");
+    let resp_complete = execute_with_password_sessions(sim, &cmd_complete, 1, auth_bytes)
+        .expect("SequenceComplete failed");
 
     assert_eq!(resp_complete.result.as_ref(), expected_digest.as_slice());
 }

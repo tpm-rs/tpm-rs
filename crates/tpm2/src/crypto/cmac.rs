@@ -1,209 +1,172 @@
-use crate::{
-    Alg, TpmtSymDefObject,
-    crypto::{Base, Finalize, Update},
-};
+use super::{CryptoError, Finalize, SymmetricKey, Update};
 
 /// Cryptographic CMAC interfaces for TPM implementations and clients.
 ///
-/// Supported algorithms define a concrete `*Ctx` type and implement:
-///   - A method creating/initializing the context with a fixed-size key (e.g. [`Cmac::aes128()`])
-///   - [`Update<Error>`] for `*Ctx`
-///   - [`Finalize<16, Error>`] for `*Ctx`
+/// This is extremely similar to [`Hash`](super::Hash) and [`Hmac`](super::Hmac)
+/// except that the context constructors (like [`Cmac::aes128`]) take a
+/// fixed-size block cipher key and always produce a 16-byte MAC.
 ///
-/// Unimplemented algorithms bind their context type to [`!`] and
-/// omit the method, keeping the default body of
-/// [`Err(self.unimplemented(...))`](Base::unimplemented).
-///
-/// # Example
+/// ### Example
 ///
 /// ```
-/// # use tpm2::{crypto::{Base, Cmac, Finalize, Update}, Alg};
+/// # use tpm2::crypto::{Cmac, CryptoError, Finalize, Update};
 /// # struct MyBackend;
-/// # struct MyError;
-/// # impl Base for MyBackend {
-/// #   type Error = MyError;
-/// #   fn unimplemented(&self, _: Alg) -> MyError { MyError }
-/// # }
 /// # struct MyCmacAes128;
 /// impl Cmac for MyBackend {
-///     fn invalid_key(&self) -> MyError { MyError }
-///
-///     type Aes128Ctx = MyCmacAes128;
-///     fn aes128(&self, key: &[u8; 16]) -> Result<MyCmacAes128, MyError> { todo!() }
+///     type Aes128Context = MyCmacAes128;
+///     fn aes128(&self, key: &[u8; 16]) -> Result<MyCmacAes128, CryptoError> { todo!() }
 ///
 ///     // Unsupported algorithms use `!` and default methods:
-///     type Aes192Ctx = !;
-///     type Aes256Ctx = !;
-///     type Sm4_128Ctx = !;
-///     type Camellia128Ctx = !;
-///     type Camellia192Ctx = !;
-///     type Camellia256Ctx = !;
+///     type Aes192Context = !;
+///     type Aes256Context = !;
+///     type Sm4_128Context = !;
+///     type Camellia128Context = !;
+///     type Camellia192Context = !;
+///     type Camellia256Context = !;
 /// }
 ///
-/// impl Update<MyError> for MyCmacAes128 {
-///     fn update(&mut self, data: &[u8]) -> Result<(), MyError> { todo!() }
+/// impl Update for MyCmacAes128 {
+///     fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> { todo!() }
 /// }
-/// impl Finalize<16, MyError> for MyCmacAes128 {
-///     fn finalize(self, out: &mut [u8; 16]) -> Result<(), MyError> { todo!() }
+/// impl Finalize<16> for MyCmacAes128 {
+///     fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> { todo!() }
 /// }
 /// ```
-pub trait Cmac: Base {
-    /// Returns the error value for invalid key length.
-    fn invalid_key(&self) -> Self::Error;
-
-    type Aes128Ctx: Update<Self::Error> + Finalize<16, Self::Error>;
-    fn aes128(&self, key: &[u8; 16]) -> Result<Self::Aes128Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::AES))
+#[allow(unused_variables)]
+pub trait Cmac {
+    type Aes128Context: Update + Finalize<16>;
+    fn aes128(&self, key: &[u8; 16]) -> Result<Self::Aes128Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Aes192Ctx: Update<Self::Error> + Finalize<16, Self::Error>;
-    fn aes192(&self, key: &[u8; 24]) -> Result<Self::Aes192Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::AES))
+    type Aes192Context: Update + Finalize<16>;
+    fn aes192(&self, key: &[u8; 24]) -> Result<Self::Aes192Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Aes256Ctx: Update<Self::Error> + Finalize<16, Self::Error>;
-    fn aes256(&self, key: &[u8; 32]) -> Result<Self::Aes256Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::AES))
+    type Aes256Context: Update + Finalize<16>;
+    fn aes256(&self, key: &[u8; 32]) -> Result<Self::Aes256Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Sm4_128Ctx: Update<Self::Error> + Finalize<16, Self::Error>;
-    fn sm4_128(&self, key: &[u8; 16]) -> Result<Self::Sm4_128Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::SM4))
+    type Sm4_128Context: Update + Finalize<16>;
+    fn sm4_128(&self, key: &[u8; 16]) -> Result<Self::Sm4_128Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Camellia128Ctx: Update<Self::Error> + Finalize<16, Self::Error>;
-    fn camellia128(&self, key: &[u8; 16]) -> Result<Self::Camellia128Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::CAMELLIA))
+    type Camellia128Context: Update + Finalize<16>;
+    fn camellia128(&self, key: &[u8; 16]) -> Result<Self::Camellia128Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Camellia192Ctx: Update<Self::Error> + Finalize<16, Self::Error>;
-    fn camellia192(&self, key: &[u8; 24]) -> Result<Self::Camellia192Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::CAMELLIA))
+    type Camellia192Context: Update + Finalize<16>;
+    fn camellia192(&self, key: &[u8; 24]) -> Result<Self::Camellia192Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
-    type Camellia256Ctx: Update<Self::Error> + Finalize<16, Self::Error>;
-    fn camellia256(&self, key: &[u8; 32]) -> Result<Self::Camellia256Ctx, Self::Error> {
-        let _ = key;
-        Err(self.unimplemented(Alg::CAMELLIA))
+    type Camellia256Context: Update + Finalize<16>;
+    fn camellia256(&self, key: &[u8; 32]) -> Result<Self::Camellia256Context, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 }
 
-/// Dynamic CMAC context wrapping algorithm-specific streams.
-pub enum CmacCtx<C: Cmac> {
+/// Dynamic CMAC context wrapping algorithm-specific contexts.
+///
+/// This is for streaming CMAC calculation. One-shot users should use [`cmac`].
+///
+/// While a [`Cmac`] implementation can implement whichever algorithms it
+/// wants, the variants of this enum will only exist if the corresponding
+/// symmetric cipher [crate feature](crate#algorithm-feature-flags) is enabled.
+pub enum CmacStream<C: Cmac> {
     #[cfg(feature = "aes128")]
-    Aes128(C::Aes128Ctx),
+    Aes128(C::Aes128Context),
     #[cfg(feature = "aes192")]
-    Aes192(C::Aes192Ctx),
+    Aes192(C::Aes192Context),
     #[cfg(feature = "aes256")]
-    Aes256(C::Aes256Ctx),
+    Aes256(C::Aes256Context),
     #[cfg(feature = "sm4_128")]
-    Sm4_128(C::Sm4_128Ctx),
+    Sm4_128(C::Sm4_128Context),
     #[cfg(feature = "camellia128")]
-    Camellia128(C::Camellia128Ctx),
+    Camellia128(C::Camellia128Context),
     #[cfg(feature = "camellia192")]
-    Camellia192(C::Camellia192Ctx),
+    Camellia192(C::Camellia192Context),
     #[cfg(feature = "camellia256")]
-    Camellia256(C::Camellia256Ctx),
+    Camellia256(C::Camellia256Context),
 }
 
-impl<C: Cmac> CmacCtx<C> {
-    /// Initializes a CMAC context for `alg` using backend `c` and `key`.
-    pub fn new(c: &C, alg: TpmtSymDefObject, key: &[u8]) -> Result<Self, C::Error> {
-        match alg {
+impl<C: Cmac> CmacStream<C> {
+    /// Initializes a CMAC context for `key` using backend `c`.
+    pub fn new(c: &C, key: SymmetricKey<'_>) -> Result<Self, CryptoError> {
+        match key {
             #[cfg(feature = "aes128")]
-            TpmtSymDefObject::Aes128(_) => {
-                let key: &[u8; 16] = key.try_into().map_err(|_| c.invalid_key())?;
-                c.aes128(key).map(CmacCtx::Aes128)
-            }
+            SymmetricKey::Aes128(key) => c.aes128(key).map(CmacStream::Aes128),
             #[cfg(feature = "aes192")]
-            TpmtSymDefObject::Aes192(_) => {
-                let key: &[u8; 24] = key.try_into().map_err(|_| c.invalid_key())?;
-                c.aes192(key).map(CmacCtx::Aes192)
-            }
+            SymmetricKey::Aes192(key) => c.aes192(key).map(CmacStream::Aes192),
             #[cfg(feature = "aes256")]
-            TpmtSymDefObject::Aes256(_) => {
-                let key: &[u8; 32] = key.try_into().map_err(|_| c.invalid_key())?;
-                c.aes256(key).map(CmacCtx::Aes256)
-            }
+            SymmetricKey::Aes256(key) => c.aes256(key).map(CmacStream::Aes256),
             #[cfg(feature = "sm4_128")]
-            TpmtSymDefObject::Sm4_128(_) => {
-                let key: &[u8; 16] = key.try_into().map_err(|_| c.invalid_key())?;
-                c.sm4_128(key).map(CmacCtx::Sm4_128)
-            }
+            SymmetricKey::Sm4_128(key) => c.sm4_128(key).map(CmacStream::Sm4_128),
             #[cfg(feature = "camellia128")]
-            TpmtSymDefObject::Camellia128(_) => {
-                let key: &[u8; 16] = key.try_into().map_err(|_| c.invalid_key())?;
-                c.camellia128(key).map(CmacCtx::Camellia128)
-            }
+            SymmetricKey::Camellia128(key) => c.camellia128(key).map(CmacStream::Camellia128),
             #[cfg(feature = "camellia192")]
-            TpmtSymDefObject::Camellia192(_) => {
-                let key: &[u8; 24] = key.try_into().map_err(|_| c.invalid_key())?;
-                c.camellia192(key).map(CmacCtx::Camellia192)
-            }
+            SymmetricKey::Camellia192(key) => c.camellia192(key).map(CmacStream::Camellia192),
             #[cfg(feature = "camellia256")]
-            TpmtSymDefObject::Camellia256(_) => {
-                let key: &[u8; 32] = key.try_into().map_err(|_| c.invalid_key())?;
-                c.camellia256(key).map(CmacCtx::Camellia256)
-            }
+            SymmetricKey::Camellia256(key) => c.camellia256(key).map(CmacStream::Camellia256),
         }
     }
 
     /// Feeds `data` into the active CMAC stream.
-    pub fn update(&mut self, data: &[u8]) -> Result<(), C::Error> {
+    pub fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
         match self {
             #[cfg(feature = "aes128")]
-            CmacCtx::Aes128(ctx) => ctx.update(data),
+            CmacStream::Aes128(ctx) => ctx.update(data),
             #[cfg(feature = "aes192")]
-            CmacCtx::Aes192(ctx) => ctx.update(data),
+            CmacStream::Aes192(ctx) => ctx.update(data),
             #[cfg(feature = "aes256")]
-            CmacCtx::Aes256(ctx) => ctx.update(data),
+            CmacStream::Aes256(ctx) => ctx.update(data),
             #[cfg(feature = "sm4_128")]
-            CmacCtx::Sm4_128(ctx) => ctx.update(data),
+            CmacStream::Sm4_128(ctx) => ctx.update(data),
             #[cfg(feature = "camellia128")]
-            CmacCtx::Camellia128(ctx) => ctx.update(data),
+            CmacStream::Camellia128(ctx) => ctx.update(data),
             #[cfg(feature = "camellia192")]
-            CmacCtx::Camellia192(ctx) => ctx.update(data),
+            CmacStream::Camellia192(ctx) => ctx.update(data),
             #[cfg(feature = "camellia256")]
-            CmacCtx::Camellia256(ctx) => ctx.update(data),
+            CmacStream::Camellia256(ctx) => ctx.update(data),
         }
     }
 
     /// Finalizes the MAC into `out`.
-    pub fn finalize(self, out: &mut [u8; 16]) -> Result<(), C::Error> {
+    pub fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
         match self {
             #[cfg(feature = "aes128")]
-            CmacCtx::Aes128(ctx) => ctx.finalize(out),
+            CmacStream::Aes128(ctx) => ctx.finalize(out),
             #[cfg(feature = "aes192")]
-            CmacCtx::Aes192(ctx) => ctx.finalize(out),
+            CmacStream::Aes192(ctx) => ctx.finalize(out),
             #[cfg(feature = "aes256")]
-            CmacCtx::Aes256(ctx) => ctx.finalize(out),
+            CmacStream::Aes256(ctx) => ctx.finalize(out),
             #[cfg(feature = "sm4_128")]
-            CmacCtx::Sm4_128(ctx) => ctx.finalize(out),
+            CmacStream::Sm4_128(ctx) => ctx.finalize(out),
             #[cfg(feature = "camellia128")]
-            CmacCtx::Camellia128(ctx) => ctx.finalize(out),
+            CmacStream::Camellia128(ctx) => ctx.finalize(out),
             #[cfg(feature = "camellia192")]
-            CmacCtx::Camellia192(ctx) => ctx.finalize(out),
+            CmacStream::Camellia192(ctx) => ctx.finalize(out),
             #[cfg(feature = "camellia256")]
-            CmacCtx::Camellia256(ctx) => ctx.finalize(out),
+            CmacStream::Camellia256(ctx) => ctx.finalize(out),
         }
     }
 }
 
-/// Computes a CMAC in a stack-allocated buffer using [`CmacCtx`].
-pub fn cmac<C: Cmac>(
-    c: &C,
-    alg: TpmtSymDefObject,
-    key: &[u8],
+/// Write a CMAC into a caller-provided buffer.
+///
+/// This is for one-shot CMAC calculation. [`CmacStream`] allows for streaming
+/// CMAC calculation.
+pub fn cmac(
+    c: &impl Cmac,
+    key: SymmetricKey<'_>,
     data: &[u8],
     out: &mut [u8; 16],
-) -> Result<(), C::Error> {
-    let mut ctx = CmacCtx::new(c, alg, key)?;
+) -> Result<(), CryptoError> {
+    let mut ctx = CmacStream::new(c, key)?;
     ctx.update(data)?;
     ctx.finalize(out)
 }

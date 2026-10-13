@@ -1,4 +1,5 @@
 use super::KeyDerivationArgs;
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -6,8 +7,8 @@ use tpm2::Handle;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
+use tpm2::commands::Create;
 use tpm2::commands::responses;
-use tpm2::commands::{Create, CreateHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -36,8 +37,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn create(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<CreateHandles>()?;
-        let parent_handle = handles.parent_handle.0;
+        let handles = request.try_unmarshal_handles::<Create>()?;
+        let [parent_handle] = handles;
+        check(parent_handle, Tpmi::DhObject, Position::handle(1))?;
+        let parent_handle = parent_handle.0;
 
         if (0x40000000..=0x40FFFFFF).contains(&parent_handle) {
             // `parentHandle` is a `TPMI_DH_OBJECT`: permanent handles are invalid values.
@@ -46,7 +49,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = match request.try_unmarshal::<Create>() {
+        let cmd = match request.try_unmarshal_command::<Create>(handles) {
             Ok(cmd) => cmd,
             Err(e) => {
                 let remaining = request.remaining_slice();
@@ -307,7 +310,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 8. Write the response
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }

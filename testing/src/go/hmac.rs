@@ -6,14 +6,12 @@ use hmac::{Hmac as RustHmac, Mac};
 use rand::{RngCore, thread_rng};
 use sha2::{Digest as ShaDigest, Sha256};
 use tpm2::Handle;
-use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, EvictControl, EvictControlHandles, Hmac, HmacHandles,
-    Import, ImportHandles,
-};
+use tpm2::commands::{CreatePrimary, EvictControl, HMAC, Import};
 use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bPrivate, Tpm2bPublicKeyRsa, Tpm2bSensitiveData,
-    TpmaObject, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsRsaParms, TpmsSensitiveCreate,
-    TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive, TpmtSymDefObject, TpmuSensitiveComposite,
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bPrivate, Tpm2bPublicKeyRsa,
+    Tpm2bSensitiveData, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits,
+    TpmsRsaParms, TpmsSensitiveCreate, TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive,
+    TpmtSymDefObject, TpmuSensitiveComposite,
 };
 use tpm2_simulator::create_simulator;
 
@@ -31,7 +29,10 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Rsa(
             TpmsRsaParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 key_bits: TpmiRsaKeyBits(2048),
                 exponent: 0,
@@ -41,10 +42,11 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
     }
 }
 
-/// Builds a `TPM2_CreatePrimary` command with an empty sensitive area and the
-/// given public template.
+/// Builds a `TPM2_CreatePrimary` command under the owner hierarchy with an
+/// empty sensitive area and the given public template.
 fn create_primary_cmd(pub_area: TpmtPublic<'static>) -> CreatePrimary<'static> {
     CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -72,29 +74,23 @@ fn test_hmac() {
         parms_and_id: PublicParmsAndId::KeyedHash(hmac_scheme, Tpm2bDigest::default()),
     };
     let create_cmd = create_primary_cmd(pub_area);
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[])
-            .expect("CreatePrimary HMAC key failed");
-    let hmac_key_handle = create_rsp_handles.object_handle;
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[])
+        .expect("CreatePrimary HMAC key failed");
+    let hmac_key_handle = create_rsp.object_handle;
 
-    let hmac_cmd = Hmac {
+    let hmac_cmd = HMAC {
+        handle: hmac_key_handle,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(b"test").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
-    };
-    let hmac_handles = HmacHandles {
-        handle: hmac_key_handle,
     };
 
     // HMAC Key is not exportable and cannot be known.
     // Calculate HMAC twice and confirm they are the same.
-    let (hmac1, _) = execute_with_password_sessions(&mut sim, &hmac_cmd, hmac_handles, 1, &[])
-        .expect("TPM2_HMAC failed");
-    let (hmac2, _) = execute_with_password_sessions(&mut sim, &hmac_cmd, hmac_handles, 1, &[])
-        .expect("TPM2_HMAC failed");
+    let hmac1 =
+        execute_with_password_sessions(&mut sim, &hmac_cmd, 1, &[]).expect("TPM2_HMAC failed");
+    let hmac2 =
+        execute_with_password_sessions(&mut sim, &hmac_cmd, 1, &[]).expect("TPM2_HMAC failed");
     assert_eq!(
         hmac1.out_hmac.as_ref(),
         hmac2.out_hmac.as_ref(),
@@ -116,13 +112,9 @@ fn test_imported_hmac_key() {
 
     // create primary key
     let create_srk_cmd = create_primary_cmd(get_rsa_srk_template());
-    let create_srk_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, srk_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_srk_cmd, create_srk_handles, 1, &[])
-            .expect("could not generate SRK");
-    let srk_handle = srk_resp_handles.object_handle;
+    let srk_resp = execute_with_password_sessions(&mut sim, &create_srk_cmd, 1, &[])
+        .expect("could not generate SRK");
+    let srk_handle = srk_resp.object_handle;
 
     // hmac template
     let mut sv = [0u8; 32];
@@ -165,40 +157,35 @@ fn test_imported_hmac_key() {
 
     // import hmac key
     let import_cmd = Import {
+        parent_handle: srk_handle,
         encryption_key: tpm2::Tpm2bData::default(),
         object_public,
         duplicate,
         in_sym_seed: tpm2::Tpm2bEncryptedSecret::default(),
         symmetric_alg: None,
     };
-    let import_handles = ImportHandles {
-        parent_handle: srk_handle,
-    };
-    let import_resp = execute_with_password_sessions(&mut sim, &import_cmd, import_handles, 1, &[])
+    let import_resp = execute_with_password_sessions(&mut sim, &import_cmd, 1, &[])
         .expect("could not import hmac key");
 
     // load hmac key
     let load_cmd = tpm2::commands::Load {
-        in_private: import_resp.0.out_private,
+        parent_handle: srk_handle,
+        in_private: import_resp.out_private,
         in_public: object_public,
     };
-    let load_handles = tpm2::commands::LoadHandles {
-        parent_handle: srk_handle,
-    };
-    let (_, load_resp_handles) =
-        execute_with_password_sessions(&mut sim, &load_cmd, load_handles, 1, &[])
-            .expect("could not load hmac key");
-    let hmac_key_handle = load_resp_handles.object_handle;
+    let load_resp = execute_with_password_sessions(&mut sim, &load_cmd, 1, &[])
+        .expect("could not load hmac key");
+    let hmac_key_handle = load_resp.object_handle;
 
     let _ = flush_context(&mut sim, srk_handle);
 
     // persist hmac key
-    let evict_cmd = EvictControl { persistent_handle };
-    let evict_handles = EvictControlHandles {
+    let evict_cmd = EvictControl {
         auth: Handle::RH_OWNER,
         object_handle: hmac_key_handle,
+        persistent_handle,
     };
-    execute_with_password_sessions(&mut sim, &evict_cmd, evict_handles, 1, &[])
+    execute_with_password_sessions(&mut sim, &evict_cmd, 1, &[])
         .expect("could not persist hmac key");
 
     let _ = flush_context(&mut sim, hmac_key_handle);
@@ -206,16 +193,14 @@ fn test_imported_hmac_key() {
     // calculate hmac using TPM
     // Go resolves the name via ReadPublicName (TPM2_ReadPublic) before HMAC.
     let _name = read_public_name(&mut sim, persistent_handle);
-    let hmac_cmd = Hmac {
+    let hmac_cmd = HMAC {
+        handle: persistent_handle,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(data).unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = HmacHandles {
-        handle: persistent_handle,
-    };
 
-    let (resp, _) = execute_with_password_sessions(&mut sim, &hmac_cmd, hmac_handles, 1, &[])
-        .expect("TPM2_HMAC failed");
+    let resp =
+        execute_with_password_sessions(&mut sim, &hmac_cmd, 1, &[]).expect("TPM2_HMAC failed");
 
     // calculate hmac in usual way
     type HmacSha256 = RustHmac<Sha256>;

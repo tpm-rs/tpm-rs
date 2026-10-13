@@ -1,10 +1,12 @@
 use crate::test_utils::*;
-use tpm2::commands::{CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::CreateLoaded;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_create_loaded_auth_larger_than_name_alg_digest_fails() {
     let mut sim = create_simulator!();
     let password = [0x41u8; 40]; // 40 bytes, > SHA256 (32 bytes)
@@ -35,14 +37,12 @@ fn test_create_loaded_auth_larger_than_name_alg_digest_fails() {
     };
 
     let create = CreateLoaded {
+        parent_handle: Handle(tpm2::Handle::RH_OWNER.0),
         in_sensitive,
         in_public: crate::test_utils::make_template(&pub_area),
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(tpm2::Handle::RH_OWNER.0),
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &create, 1, &[]);
 
     // It should fail with TPM_RC_SIZE because the auth size > nameAlg digest size.
     assert!(

@@ -57,16 +57,20 @@ use crate::req_resp::RequestResponseCursor;
 use crate::storage::manager::StorageManager;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
-use tpm2::crypto::kdf::kdfa;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::{CryptoProvider, Direction, HashStream, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::platform::PcrState;
 use tpm2::{CommandHeader, Handle, ResponseHeader, TpmCc, TpmHt, TpmSe, TpmSt};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{
-    Tpm2bAuth, Tpm2bNonce, TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmiStCommandTag,
-    TpmsAuthCommand, TpmsAuthResponse,
+    Tpm2bAuth, Tpm2bNonce, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
+    TpmiStCommandTag, TpmsAuthCommand, TpmsAuthResponse,
 };
+
+/// The only symmetric block cipher mode allowed for session parameter encryption (TPM 2.0
+/// Part 1, Section 21.3, "CFB Mode Parameter Encryption"); exp's `TpmiAlgSymMode::CFB`.
+const CFB_MODE: TpmiAlgSymMode = TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb);
 
 #[allow(clippy::large_enum_variant)]
 /// The object that processes incoming TPM requests and produces the corresponding TPM response.
@@ -169,12 +173,15 @@ impl DrbgState {
     }
 
     /// Instantiates a fresh DRBG state (`DRBG_Instantiate`), drawing fresh entropy from `rng`.
-    pub fn instantiate<R: tpm2::crypto::Rng>(&mut self, rng: &R) -> Result<(), TpmRc> {
+    ///
+    /// Draws 48 bytes of seed material from `rng` ([`Rng::fill_bytes`]), then 16 bytes for the
+    /// continuous health test history (`last_value`).
+    pub fn instantiate<R: tpm2::crypto::Rng>(&mut self, rng: &mut R) -> Result<(), TpmRc> {
         self.magic = DRBG_MAGIC;
         self.reseed_counter = 1;
-        rng.get_random(&mut self.seed).map_err(|_| TpmRc::FAILURE)?;
+        rng.fill_bytes(&mut self.seed).map_err(|_| TpmRc::FAILURE)?;
         let mut last_bytes = [0u8; 16];
-        rng.get_random(&mut last_bytes)
+        rng.fill_bytes(&mut last_bytes)
             .map_err(|_| TpmRc::FAILURE)?;
         for (i, val) in self.last_value.iter_mut().enumerate() {
             let off = i * 4;
@@ -189,9 +196,11 @@ impl DrbgState {
     }
 
     /// Reseeds an existing DRBG state (`DRBG_Reseed`), mixing fresh platform entropy into `seed`.
-    pub fn reseed<R: tpm2::crypto::Rng>(&mut self, rng: &R) -> Result<(), TpmRc> {
+    ///
+    /// Draws 48 bytes of fresh entropy from `rng` ([`Rng::fill_bytes`]).
+    pub fn reseed<R: tpm2::crypto::Rng>(&mut self, rng: &mut R) -> Result<(), TpmRc> {
         let mut entropy = [0u8; 48];
-        rng.get_random(&mut entropy).map_err(|_| TpmRc::FAILURE)?;
+        rng.fill_bytes(&mut entropy).map_err(|_| TpmRc::FAILURE)?;
         for (s, e) in self.seed.iter_mut().zip(entropy.iter()) {
             *s ^= *e;
         }
@@ -3015,7 +3024,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 .ok_or(TpmRc::HANDLE.with(pos))?;
             match session_state.symmetric {
                 Some(tpm2::TpmtSymDef::Cipher(sym_obj)) => {
-                    if sym_obj.mode() != Some(TpmiAlgSymMode::CFB) {
+                    if sym_obj.mode() != Some(CFB_MODE) {
                         return Err(TpmRc::MODE.with(pos));
                     }
                 }
@@ -3087,7 +3096,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             };
             let (is_xor, key_bits, sym_obj) = match symmetric {
                 Some(tpm2::TpmtSymDef::Cipher(sym_obj)) => {
-                    if sym_obj.mode() != Some(TpmiAlgSymMode::CFB) {
+                    if sym_obj.mode() != Some(CFB_MODE) {
                         return Err(TpmRc::MODE.with(pos));
                     }
                     (false, sym_obj.key_bits(), Some(sym_obj))
@@ -3156,11 +3165,12 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     )?;
 
                     let mut iv = derived_iv;
-                    tpm2::crypto::decrypt(
+                    crate::handler::sym_encrypt_decrypt(
                         self.platform.crypto,
                         sym_obj,
                         &derived_key[..(key_bits / 8) as usize],
                         &mut iv,
+                        Direction::Decrypt,
                         &mut decrypt_buf[2..2 + param_size],
                     )
                     .map_err(|_| TpmRc::SYMMETRIC.with(pos))?;
@@ -4188,7 +4198,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
                 let (is_xor, key_bits, sym_obj) = match symmetric {
                     Some(tpm2::TpmtSymDef::Cipher(sym_obj)) => {
-                        if sym_obj.mode() != Some(TpmiAlgSymMode::CFB) {
+                        if sym_obj.mode() != Some(CFB_MODE) {
                             return Err(TpmRc::MODE.with(Position::session(1)));
                         }
                         (false, sym_obj.key_bits(), Some(sym_obj))
@@ -4259,11 +4269,12 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     )?;
 
                     let mut iv = derived_iv;
-                    tpm2::crypto::encrypt(
+                    crate::handler::sym_encrypt_decrypt(
                         self.platform.crypto,
                         sym_obj,
                         &derived_key[..(key_bits / 8) as usize],
                         &mut iv,
+                        Direction::Encrypt,
                         &mut resp_params[2..2 + first_param_size],
                     )
                     .map_err(|_| TpmRc::SYMMETRIC.with(Position::session(1)))?;
@@ -4598,7 +4609,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
             let (is_xor, key_bits, sym_obj) = match symmetric {
                 Some(tpm2::TpmtSymDef::Cipher(sym_obj)) => {
-                    if sym_obj.mode() != Some(TpmiAlgSymMode::CFB) {
+                    if sym_obj.mode() != Some(CFB_MODE) {
                         return Err(TpmRc::MODE.with(Position::session(1)));
                     }
                     (false, sym_obj.key_bits(), Some(sym_obj))
@@ -4665,11 +4676,12 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 )?;
 
                 let mut iv = derived_iv;
-                tpm2::crypto::encrypt(
+                crate::handler::sym_encrypt_decrypt(
                     self.platform.crypto,
                     sym_obj,
                     &derived_key[..(key_bits / 8) as usize],
                     &mut iv,
+                    Direction::Encrypt,
                     &mut resp_params[2..2 + first_param_size],
                 )
                 .map_err(|_| TpmRc::SYMMETRIC.with(Position::session(1)))?;
@@ -6371,8 +6383,7 @@ fn compute_hash_and_hmac(
     hash_out: &mut [u8],
     hmac_out: &mut [u8],
 ) -> Result<(usize, usize), TpmRc> {
-    let mut hash_ctx =
-        tpm2::crypto::HashCtx::new(crypto, auth_hash).map_err(|_| TpmRc::HASH.to_rc())?;
+    let mut hash_ctx = HashStream::new(crypto, auth_hash).map_err(|_| TpmRc::HASH.to_rc())?;
     for data in updates_hash {
         hash_ctx.update(data).map_err(|_| TpmRc::HASH.to_rc())?;
     }
@@ -6383,7 +6394,7 @@ fn compute_hash_and_hmac(
     let digest_slice = digest.digest();
 
     let mut hmac_state =
-        tpm2::crypto::HmacCtx::new(crypto, auth_hash, key).map_err(|_| TpmRc::HASH.to_rc())?;
+        HmacStream::new(crypto, auth_hash, key).map_err(|_| TpmRc::HASH.to_rc())?;
     hmac_state
         .update(digest_slice)
         .map_err(|_| TpmRc::HASH.to_rc())?;
@@ -6422,7 +6433,9 @@ fn derive_key_and_iv(
     let total_bits = (total_bytes * 8) as u32;
     let mut out_buffer = [0u8; 128];
 
-    kdfa(
+    // `kdfa_bits` keeps exp's KDFa semantics (raw byte label, explicit `bits`), so the derived
+    // key and IV are byte-identical to exp's `kdf::kdfa`.
+    kdfa_bits(
         crypto,
         auth_hash,
         key,
@@ -6467,7 +6480,8 @@ fn xor_obfuscation(
         return Err(TpmRc::SIZE.to_rc());
     }
     let mask_buf = &mut mask[..data_len];
-    kdfa(
+    // `kdfa_bits` keeps exp's KDFa semantics (raw byte label, explicit `bits`).
+    kdfa_bits(
         crypto, auth_hash, key, b"XOR", context_u, context_v, total_bits, mask_buf,
     )
     .map_err(|_| TpmRc::HASH.to_rc())?;
@@ -6500,7 +6514,7 @@ fn compute_response_hmac(
     hmac_out: &mut [u8],
 ) -> Result<usize, TpmRc> {
     let mut hmac_state =
-        tpm2::crypto::HmacCtx::new(crypto, auth_hash, key).map_err(|_| TpmRc::HASH.to_rc())?;
+        HmacStream::new(crypto, auth_hash, key).map_err(|_| TpmRc::HASH.to_rc())?;
     for data in updates_hmac {
         hmac_state.update(data).map_err(|_| TpmRc::HASH.to_rc())?;
     }

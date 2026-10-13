@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
-use tpm2::commands::{CreateLoaded, CreateLoadedHandles, CreatePrimary, CreatePrimaryHandles};
-use tpm2::commands::{EvictControl, EvictControlHandles};
+use tpm2::commands::EvictControl;
+#[allow(deprecated)]
+use tpm2::commands::{CreateLoaded, CreatePrimary};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
@@ -18,7 +19,10 @@ fn get_ecc_srk_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -32,6 +36,7 @@ fn get_ecc_srk_template() -> TpmtPublic<'static> {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_evict_control_stclear_ancestor() {
     let mut sim = create_simulator!();
 
@@ -48,18 +53,15 @@ fn test_evict_control_stclear_ancestor() {
     let in_sensitive = tpm2::Tpm2b(t_sens);
     let in_public = tpm2::Tpm2b(primary_public);
 
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
 
-    let (_, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
 
     let primary_handle = rsp_handles.object_handle;
 
@@ -67,32 +69,26 @@ fn test_evict_control_stclear_ancestor() {
     let child_public = get_ecc_srk_template(); // Child has NO stClear
     let in_public_child = crate::test_utils::make_template(&child_public);
 
-    let create_loaded_handles = CreateLoadedHandles {
-        parent_handle: primary_handle,
-    };
     let create_loaded_cmd = CreateLoaded {
+        parent_handle: primary_handle,
         in_sensitive,
         in_public: in_public_child,
     };
 
-    let (_, rsp_child) =
-        execute_with_password_sessions(&mut sim, &create_loaded_cmd, create_loaded_handles, 1, &[])
-            .unwrap();
+    let rsp_child = execute_with_password_sessions(&mut sim, &create_loaded_cmd, 1, &[]).unwrap();
 
     let child_handle = rsp_child.object_handle;
 
     // 3. Try to EvictControl the child key.
     // The child key doesn't have stClear, BUT its ancestor (the primary key) does.
     // The TPM 2.0 spec says this MUST return TPM_RC_ATTRIBUTES.
-    let evict_handles = EvictControlHandles {
+    let evict_cmd = EvictControl {
         auth: Handle::RH_OWNER,
         object_handle: child_handle,
-    };
-    let evict_cmd = EvictControl {
         persistent_handle: Handle(0x81000001),
     };
 
-    let res = execute_with_password_sessions(&mut sim, &evict_cmd, evict_handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &evict_cmd, 1, &[]);
 
     assert!(
         res.is_err(),

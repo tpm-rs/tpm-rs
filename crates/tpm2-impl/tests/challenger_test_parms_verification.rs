@@ -10,9 +10,9 @@ use tpm2::TpmEccCurve;
 use tpm2::commands::{Command, TestParms};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    TpmiAlgHash, TpmiAlgKdf, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsEccParms, TpmsRsaParms,
-    TpmsSchemeXor, TpmtEccScheme, TpmtKdfScheme, TpmtKeyedHashScheme, TpmtPublicParms,
-    TpmtRsaScheme, TpmtSymDefObject,
+    AlgSym, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgKdf, TpmiAlgSymMode, TpmiRsaKeyBits,
+    TpmsEccParms, TpmsRsaParms, TpmsSchemeXor, TpmtEccScheme, TpmtKdfScheme, TpmtKeyedHashScheme,
+    TpmtPublicParms, TpmtRsaScheme, TpmtSymDefObject,
 };
 use tpm2_impl::TpmEngine;
 use tpm2_impl::TpmPlatform;
@@ -21,49 +21,50 @@ use tpm2::crypto::{Asymmetric, AsymmetricSign};
 
 use tpm2::crypto::{CryptoError, CryptoProvider};
 
-use tpm2::crypto::Rng;
-
 struct TestCrypto;
 
 impl_fake_hash!(TestCrypto);
 
 impl AsymmetricSign for TestCrypto {
+    /// Fills the signature with `0xee` bytes (64 for ECDSA, 256 otherwise). A `signature_out`
+    /// that is too small fails with [`CryptoError::Internal`] (formerly `BufferTooSmall`).
     fn sign_inner(
         &self,
         sign_alg: tpm2::Alg,
         _private_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         let len = match sign_alg {
             tpm2::Alg::ECDSA => {
                 if signature_out.len() < 64 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..64].fill(0xee);
                 64
             }
             _ => {
                 if signature_out.len() < 256 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..256].fill(0xee);
                 256
             }
         };
-        Ok(len)
+        Ok(Some(len))
     }
 }
 
 impl Asymmetric for TestCrypto {
+    /// Accepts every signature (formerly `Ok(())`).
     fn verify_inner(
         &self,
         _sign_alg: tpm2::Alg,
         _public_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         _signature: &[u8],
-    ) -> Result<(), CryptoError> {
-        Ok(())
+    ) -> Result<bool, CryptoError> {
+        Ok(true)
     }
     fn encrypt(
         &self,
@@ -73,9 +74,12 @@ impl Asymmetric for TestCrypto {
         _data: &[u8],
         _ciphertext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
-        Ok(0)
+    ) -> Result<Option<usize>, CryptoError> {
+        Ok(Some(0))
     }
+    /// Copies `ciphertext` to `plaintext`. An empty private key fails with
+    /// [`CryptoError::Internal`] (formerly `HardwareFailure`), and so does a `plaintext` buffer
+    /// that is too small (formerly `BufferTooSmall`).
     fn decrypt(
         &self,
         _scheme: tpm2::Alg,
@@ -84,16 +88,16 @@ impl Asymmetric for TestCrypto {
         ciphertext: &[u8],
         plaintext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         if private_key.is_empty() {
-            return Err(CryptoError::HardwareFailure);
+            return Err(CryptoError::Internal);
         }
         let len = ciphertext.len();
         if plaintext.len() < len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         plaintext[..len].copy_from_slice(ciphertext);
-        Ok(len)
+        Ok(Some(len))
     }
     fn generate_key(
         &self,
@@ -114,25 +118,24 @@ impl Asymmetric for TestCrypto {
                 private_key[..32].fill(0xdd);
                 Ok((64, 32))
             }
-            _ => Err(CryptoError::HardwareFailure),
+            _ => Err(CryptoError::Internal),
         }
     }
 }
 
-impl Rng for TestCrypto {
+impl CryptoProvider for TestCrypto {
+    /// The provider CSPRNG: fills `dest` with `0xaa` bytes.
     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
         dest.fill(0xaa);
         Ok(())
     }
 }
 
-impl CryptoProvider for TestCrypto {}
-
 fn setup_tpm<'a>(
     crypto: &'a mut TestCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -224,8 +227,8 @@ fn test_parms_rsa_valid() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Valid RSA parameters
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
@@ -244,8 +247,8 @@ fn test_parms_rsa_invalid_key_bits() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Invalid RSA key bits
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
@@ -264,8 +267,8 @@ fn test_parms_rsa_invalid_exponent() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,
@@ -283,12 +286,15 @@ fn test_parms_rsa_invalid_symmetric() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // RSA with invalid symmetric block cipher key bits (999)
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
-        symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        symmetric: Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         scheme: None,
         key_bits: TpmiRsaKeyBits(2048),
         exponent: 0,
@@ -305,8 +311,8 @@ fn test_parms_rsa_invalid_scheme() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // RSA with ECDSA scheme (invalid for RSA)
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
@@ -327,8 +333,8 @@ fn test_parms_ecc_valid() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
         symmetric: None,
@@ -346,12 +352,15 @@ fn test_parms_ecc_invalid_symmetric() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // ECC with invalid symmetric cipher key bits
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
-        symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        symmetric: Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         scheme: None,
         curve_id: TpmEccCurve::NistP256,
         kdf: None,
@@ -368,8 +377,8 @@ fn test_parms_ecc_invalid_scheme() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // ECC with RSAPSS scheme (invalid for ECC)
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
@@ -391,8 +400,8 @@ fn test_parms_ecc_invalid_kdf() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
         symmetric: None,
@@ -410,8 +419,8 @@ fn test_parms_keyed_hash_hmac_invalid_hash() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // KeyedHash HMAC with invalid hash (SHA3256)
     let kh_parms = TpmtPublicParms::KeyedHash(Some(TpmtKeyedHashScheme::Hmac(TpmiAlgHash::Sha256)));
@@ -427,8 +436,8 @@ fn test_parms_keyed_hash_xor_invalid_hash() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // KeyedHash XOR with invalid hash (SHA3256)
     let kh_parms =
@@ -448,8 +457,8 @@ fn test_parms_keyed_hash_xor_invalid_kdf() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let kh_parms =
         TpmtPublicParms::KeyedHash(Some(TpmtKeyedHashScheme::ExclusiveOr(TpmsSchemeXor {
@@ -468,10 +477,13 @@ fn test_parms_sym_invalid_key_size() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
-    let sym_parms = TpmtPublicParms::Sym(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+    let sym_parms = TpmtPublicParms::Sym(TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+    });
 
     let res = execute_test_parms_corrupted(&mut tpm, &mut global_state, sym_parms, |buf| {
         buf[4..6].copy_from_slice(&999u16.to_be_bytes());
@@ -484,12 +496,15 @@ fn test_parms_sym_invalid_mode() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // CBC is an implemented mode and TestParms only unmarshals (C TestParms.c), so use an
     // undefined mode value instead (C TPMI_ALG_SYM_MODE_Unmarshal -> TPM_RC_MODE).
-    let sym_parms = TpmtPublicParms::Sym(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+    let sym_parms = TpmtPublicParms::Sym(TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+    });
 
     let res = execute_test_parms_corrupted(&mut tpm, &mut global_state, sym_parms, |buf| {
         buf[6..8].copy_from_slice(&0x0099u16.to_be_bytes());
@@ -502,10 +517,13 @@ fn test_parms_sym_invalid_type() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
-    let sym_parms = TpmtPublicParms::Sym(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+    let sym_parms = TpmtPublicParms::Sym(TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+    });
 
     let res = execute_test_parms_corrupted(&mut tpm, &mut global_state, sym_parms, |buf| {
         buf[2..4].copy_from_slice(&0x0010u16.to_be_bytes());
@@ -522,8 +540,8 @@ fn test_parms_rsa_invalid_scheme_hash() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,
@@ -543,8 +561,8 @@ fn test_parms_ecc_invalid_scheme_hash() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
         symmetric: None,
@@ -564,8 +582,8 @@ fn test_parms_ecc_invalid_kdf_hash() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
         symmetric: None,
@@ -585,8 +603,8 @@ fn test_parms_rsa_invalid_symmetric_xor() {
     let mut crypto = TestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,

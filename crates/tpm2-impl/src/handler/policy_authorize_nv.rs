@@ -1,9 +1,10 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::manager::StorageManager;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::TpmiAlgHash;
-use tpm2::commands::{PolicyAuthorizeNV, PolicyAuthorizeNVHandles};
+use tpm2::commands::PolicyAuthorizeNV;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmCc, TpmSe};
@@ -31,14 +32,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<PolicyAuthorizeNVHandles>()?;
-        let auth_handle = handles.auth_handle;
-        let nv_index = handles.nv_index.0;
-        let policy_session = handles.policy_session.0;
+        let handles = request.try_unmarshal_handles::<PolicyAuthorizeNV>()?;
+        let [auth_handle, nv_index, policy_session] = handles;
+        check(auth_handle, Tpmi::RhNvAuth, Position::handle(1))?;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(2))?;
+        check(policy_session, Tpmi::ShPolicy, Position::handle(3))?;
+        let nv_index = nv_index.0;
+        let policy_session = policy_session.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<PolicyAuthorizeNV>()?;
+        let _cmd = request.try_unmarshal_command::<PolicyAuthorizeNV>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }

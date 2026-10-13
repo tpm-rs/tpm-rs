@@ -1,10 +1,11 @@
 use crate::test_utils::*;
 use tpm2::TpmEccCurve;
-use tpm2::commands::{Commit, CommitHandles};
+use tpm2::commands::Commit;
 use tpm2::*;
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_s2_size_check() {
     let mut sim = create_simulator!();
 
@@ -40,30 +41,25 @@ fn test_commit_s2_size_check() {
     };
 
     let create = tpm2::commands::CreateLoaded {
+        parent_handle: tpm2::Handle(0x40000001),
         in_sensitive,
         in_public: crate::test_utils::make_template(&pub_area),
     };
-    let create_handles = tpm2::commands::CreateLoadedHandles {
-        parent_handle: tpm2::Handle(0x40000001),
-    };
 
-    let (_, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
     let key_handle = rsp_handles.object_handle;
 
     // Test with s2 = 40 bytes (max allowed is 32 for SHA256)
     let s2_bytes = [0xBB; 40];
     let s2 = Tpm2bSensitiveData::from_bytes(&s2_bytes).unwrap();
     let commit = Commit {
+        sign_handle: key_handle,
         p1: Tpm2bEccPoint::default(),
         s2,
         y2: Tpm2bEccParameter::default(),
     };
-    let commit_handles = CommitHandles {
-        sign_handle: key_handle,
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &commit, commit_handles, 1, b"password");
+    let res = execute_with_password_sessions(&mut sim, &commit, 1, b"password");
     match res {
         Err(e) => {
             // TPM_RC_SIZE (0x095) with possible parameter info

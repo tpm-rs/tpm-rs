@@ -1,10 +1,11 @@
 #[allow(unused_imports)]
 use tpm2::TpmCc;
+use tpm2::commands::Unseal;
 use tpm2::commands::responses;
-use tpm2::commands::{Unseal, UnsealHandles};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bSensitiveData, TpmaObject};
 
+use crate::handle_checks::{Tpmi, check};
 use crate::owned::OwnedPublicParmsAndId;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
@@ -30,12 +31,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn unseal(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<UnsealHandles>()?;
-        let item_handle = handles.item_handle.0;
+        let handles = request.try_unmarshal_handles::<Unseal>()?;
+        let [item_handle] = handles;
+        check(item_handle, Tpmi::DhObject, Position::handle(1))?;
+        let item_handle = item_handle.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<Unseal>()?;
+        let _cmd = request.try_unmarshal_command::<Unseal>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -91,7 +94,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 5. Write the response
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }

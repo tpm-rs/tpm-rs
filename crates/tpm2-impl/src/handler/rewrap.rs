@@ -1,3 +1,5 @@
+use super::encrypt_decrypt::{crypto_check, crypto_len};
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::{CommandHandler, TransientObject};
 use crate::owned::OwnedPublicParmsAndId;
 use crate::req_resp::RequestThenResponse;
@@ -8,10 +10,9 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
-use tpm2::commands::responses;
-use tpm2::commands::{Rewrap, RewrapHandles};
-use tpm2::crypto::kdf::kdfa;
-use tpm2::crypto::{CryptoProvider, KeyParams, Rng};
+use tpm2::commands::{Rewrap, responses};
+use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::{CryptoProvider, Direction, HmacStream, KeyParams, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bPrivate, TpmEccCurve, TpmaObject,
@@ -96,13 +97,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn rewrap(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<RewrapHandles>()?;
-        let old_parent_handle = handles.old_parent.0;
-        let new_parent_handle = handles.new_parent.0;
+        let handles = request.try_unmarshal_handles::<Rewrap>()?;
+        let [old_parent, new_parent] = handles;
+        check(old_parent, Tpmi::DhObjectOrNull, Position::handle(1))?;
+        check(new_parent, Tpmi::DhObjectOrNull, Position::handle(2))?;
+        let old_parent_handle = old_parent.0;
+        let new_parent_handle = new_parent.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<Rewrap>()?;
+        let cmd = request.try_unmarshal_command::<Rewrap>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -153,7 +157,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .public
                 .name_alg
                 .ok_or(TpmRc::TYPE.with(Position::handle(1)))?;
-            let mut computed_mac = [0u8; 64];
+            let mut computed_mac = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
             let computed_mac_len = self.compute_outer_integrity(
                 old_name_alg,
                 &seed[..seed_len],
@@ -224,7 +228,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 true,
             )?;
 
-            let mut outer_mac = [0u8; 64];
+            let mut outer_mac = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
             let outer_mac_len = self.compute_outer_integrity(
                 new_name_alg,
                 &seed[..seed_len],
@@ -250,7 +254,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_all(response, &(), &resp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &resp, &session_responses[..num_sessions])?;
         Ok(())
     }
 
@@ -277,11 +281,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         seed: &[u8],
         data: &[u8],
         name: &[u8],
-        out: &mut [u8; 64],
+        out: &mut [u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES],
     ) -> Result<usize, TpmRc> {
         let digest_size = hash_alg.digest_size();
         let mut integrity_key = [0u8; 64];
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             hash_alg,
             seed,
@@ -292,9 +296,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &mut integrity_key,
         )
         .map_err(|_| TpmRc::FAILURE)?;
-        let mut hmac_ctx =
-            tpm2::crypto::HmacCtx::new(self.crypto(), hash_alg, &integrity_key[..digest_size])
-                .map_err(|_| TpmRc::FAILURE)?;
+        let mut hmac_ctx = HmacStream::new(self.crypto(), hash_alg, &integrity_key[..digest_size])
+            .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(data).map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(name).map_err(|_| TpmRc::FAILURE)?;
         let res = hmac_ctx.finalize(out).map_err(|_| TpmRc::FAILURE)?;
@@ -315,7 +318,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let key_len = (sym_bits / 8) as usize;
         let mut key = [0u8; 32];
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             hash_alg,
             seed,
@@ -329,12 +332,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut iv = [0u8; 16];
         let sym_alg =
             tpm2::TpmtSymDefObject::aes_cfb(sym_bits as u16).map_err(|_| TpmRc::FAILURE)?;
-        if encrypt {
-            tpm2::crypto::encrypt(self.crypto(), sym_alg, &key[..key_len], &mut iv, data)
+        let direction = if encrypt {
+            Direction::Encrypt
         } else {
-            tpm2::crypto::decrypt(self.crypto(), sym_alg, &key[..key_len], &mut iv, data)
-        }
-        .map_err(|_| TpmRc::FAILURE)
+            Direction::Decrypt
+        };
+        self.sym_encrypt_decrypt(sym_alg, &key[..key_len], &mut iv, direction, data)
+            .map_err(|_| TpmRc::FAILURE)
     }
 
     /// Recovers a seed from `secret` with the private key of `parent` (C `CryptSecretDecrypt`
@@ -354,17 +358,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             OwnedPublicParmsAndId::Rsa(_, _) => {
                 let mut label_buf = [0u8; 32];
                 let label_len = oaep_label(label, &mut label_buf);
-                let len = self
-                    .crypto()
-                    .decrypt(
+                let len = crypto_len(
+                    self.crypto().decrypt(
                         Alg::OAEP,
                         Alg::from(name_alg),
                         &parent.private[..parent.private_len],
                         secret,
                         seed,
                         &label_buf[..label_len],
-                    )
-                    .map_err(|_| TpmRc::VALUE.to_rc())?;
+                    ),
+                    TpmRc::VALUE.to_rc(),
+                )?;
                 // The recovered seed may not be larger than the nameAlg digest.
                 if len > name_alg.digest_size() {
                     return Err(TpmRc::VALUE.to_rc());
@@ -386,18 +390,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     param_size,
                     &mut eph[param_size..param_size * 2],
                 )?;
-                self.crypto()
-                    .validate_point(curve, &eph[..param_size * 2])
-                    .map_err(|_| TpmRc::ECC_POINT.to_rc())?;
+                crypto_check(
+                    self.crypto().validate_point(curve, &eph[..param_size * 2]),
+                    TpmRc::ECC_POINT.to_rc(),
+                )?;
                 let mut z = [0u8; 256];
-                self.crypto()
-                    .point_multiply(
+                crypto_len(
+                    self.crypto().point_multiply(
                         curve,
                         &parent.private[..parent.private_len],
                         &eph[..param_size * 2],
                         &mut z,
-                    )
-                    .map_err(|_| TpmRc::ECC_POINT.to_rc())?;
+                    ),
+                    TpmRc::ECC_POINT.to_rc(),
+                )?;
                 let mut parent_x = [0u8; 66];
                 pad_coordinate(
                     unique.x.get_buffer(),
@@ -405,7 +411,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     &mut parent_x[..param_size],
                 )?;
                 let digest_size = name_alg.digest_size();
-                tpm2::crypto::kdf::kdfe(
+                tpm2::crypto::kdf::kdfe_bits(
                     self.crypto(),
                     name_alg,
                     &z[..param_size],
@@ -444,17 +450,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .map_err(|_| TpmRc::FAILURE)?;
                 let mut label_buf = [0u8; 32];
                 let label_len = oaep_label(label, &mut label_buf);
-                let secret_len = self
-                    .crypto()
-                    .encrypt(
+                let secret_len = crypto_len(
+                    self.crypto().encrypt(
                         Alg::OAEP,
                         Alg::from(name_alg),
                         unique.get_buffer(),
                         &seed[..digest_size],
                         secret_out,
                         &label_buf[..label_len],
-                    )
-                    .map_err(|_| TpmRc::VALUE.to_rc())?;
+                    ),
+                    TpmRc::VALUE.to_rc(),
+                )?;
                 Ok((digest_size, secret_len))
             }
             OwnedPublicParmsAndId::Ecc(parms, unique) => {
@@ -486,15 +492,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     )
                     .map_err(|_| TpmRc::FAILURE)?;
                 let mut z = [0u8; 256];
-                self.crypto()
-                    .point_multiply(
+                crypto_len(
+                    self.crypto().point_multiply(
                         curve,
                         &eph_priv[..priv_len],
                         &parent_point[..param_size * 2],
                         &mut z,
-                    )
-                    .map_err(|_| TpmRc::KEY.to_rc())?;
-                tpm2::crypto::kdf::kdfe(
+                    ),
+                    TpmRc::KEY.to_rc(),
+                )?;
+                tpm2::crypto::kdf::kdfe_bits(
                     self.crypto(),
                     name_alg,
                     &z[..param_size],

@@ -7,8 +7,7 @@ use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::commands::{
-    Command, PolicyGetDigest, PolicyGetDigestHandles, PolicyTemplate, PolicyTemplateHandles,
-    StartAuthSession, StartAuthSessionHandles,
+    Command, Message, PolicyGetDigest, PolicyTemplate, StartAuthSession, UnmarshalMessage,
 };
 use tpm2::crypto::{Finalize as _, Hash as _, Update as _};
 use tpm2::{Handle, TpmCc, TpmSe};
@@ -19,7 +18,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -46,14 +45,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -66,13 +62,15 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        let handle_len = handle.marshal(handle_slice);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -111,7 +109,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..];
     let before_handles = handles_slice.len();
-    let resp_handles = C::RespHandles::unmarshal(&mut handles_slice).unwrap();
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).unwrap();
+    }
     resp_offset += before_handles - handles_slice.len();
 
     if !auths.is_empty() {
@@ -123,13 +124,15 @@ where
         resp_offset += 4;
         let mut param_slice: &'static [u8] =
             std::vec::Vec::leak(response_buf[resp_offset..resp_offset + param_size].to_vec());
-        let resp = <C::Response<'static>>::unmarshal(&mut param_slice).unwrap();
-        Ok((resp_handles, resp))
+        let resp =
+            <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut param_slice).unwrap();
+        Ok(resp)
     } else {
         let mut param_slice: &'static [u8] =
             std::vec::Vec::leak(response_buf[resp_offset..].to_vec());
-        let resp = <C::Response<'static>>::unmarshal(&mut param_slice).unwrap();
-        Ok((resp_handles, resp))
+        let resp =
+            <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut param_slice).unwrap();
+        Ok(resp)
     }
 }
 
@@ -138,48 +141,37 @@ fn test_policy_template_digest() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Start a trial/policy session
-    let start_session_handles = StartAuthSessionHandles {
+    let start_session_cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
         bind: Handle::RH_NULL,
-    };
-    let start_session_cmd = StartAuthSession {
         nonce_caller: Tpm2bNonce::from_bytes(&[1u8; 32]).unwrap(),
         encrypted_salt: Default::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (session_handles, _) = execute_tpm_command::<StartAuthSession>(
+    let start_session_rsp = execute_tpm_command::<StartAuthSession>(
         &mut tpm,
         &mut global_state,
-        &start_session_handles,
         &start_session_cmd,
         &[],
     )
     .expect("StartAuthSession failed");
 
-    let session_handle = session_handles.session_handle;
+    let session_handle = start_session_rsp.session_handle;
 
     // 2. Define a template hash
     let template_hash = [0x5au8; 32];
-    let policy_template_handles = PolicyTemplateHandles {
-        policy_session: session_handle,
-    };
     let policy_template_cmd = PolicyTemplate {
+        policy_session: session_handle,
         template_hash: Tpm2bDigest::from_bytes(&template_hash).unwrap(),
     };
-    execute_tpm_command::<PolicyTemplate>(
-        &mut tpm,
-        &mut global_state,
-        &policy_template_handles,
-        &policy_template_cmd,
-        &[],
-    )
-    .expect("PolicyTemplate command failed");
+    execute_tpm_command::<PolicyTemplate>(&mut tpm, &mut global_state, &policy_template_cmd, &[])
+        .expect("PolicyTemplate command failed");
 
     // 3. Compute expected policy digest: Sha256(0[32] || TPM_CC_PolicyTemplate (0x00000190) || template_hash)
     let mut hasher = TestCryptoProvider.sha256().unwrap();
@@ -192,18 +184,12 @@ fn test_policy_template_digest() {
     hasher.finalize(&mut expected_digest).unwrap();
 
     // 4. Query policy digest with PolicyGetDigest
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest_cmd = PolicyGetDigest {
         policy_session: session_handle,
     };
-    let get_digest_cmd = PolicyGetDigest {};
-    let (_, digest_resp) = execute_tpm_command::<PolicyGetDigest>(
-        &mut tpm,
-        &mut global_state,
-        &get_digest_handles,
-        &get_digest_cmd,
-        &[],
-    )
-    .expect("PolicyGetDigest failed");
+    let digest_resp =
+        execute_tpm_command::<PolicyGetDigest>(&mut tpm, &mut global_state, &get_digest_cmd, &[])
+            .expect("PolicyGetDigest failed");
 
     assert_eq!(
         digest_resp.policy_digest.get_buffer(),

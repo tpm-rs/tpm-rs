@@ -1,7 +1,7 @@
 use crate::test_utils::marshal_to_slice;
 use crate::test_utils::*;
 use tpm2::Handle;
-use tpm2::commands::{Commit, CommitHandles};
+use tpm2::commands::Commit;
 use tpm2::{
     PublicParmsAndId, Tpm2bDigest, Tpm2bEccParameter, Tpm2bEccPoint, Tpm2bTemplate, TpmEccCurve,
     TpmaObject, TpmiAlgHash, TpmsEccParms, TpmsEccPoint, TpmsSchemeEcdaa, TpmtEccScheme,
@@ -10,6 +10,7 @@ use tpm2::{
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_s2_empty_y2_not_empty() {
     let mut sim = create_simulator!();
     let auth = b"secret";
@@ -53,17 +54,13 @@ fn test_commit_s2_empty_y2_not_empty() {
     let _in_sens_len = marshal_to_slice(&in_sens, &mut in_sens_buf);
 
     let create_cmd = tpm2::commands::CreateLoaded {
+        parent_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(in_sens),
         in_public: Tpm2bTemplate::from_bytes(&pub_buf[..pub_len]).unwrap(),
     };
 
-    let handles = tpm2::commands::CreateLoadedHandles {
-        parent_handle: Handle::RH_OWNER,
-    };
-
-    let (_rsp, resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, handles, 1, &[])
-            .expect("CreateLoaded failed");
+    let resp_handles =
+        execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).expect("CreateLoaded failed");
 
     let key_handle = resp_handles.object_handle;
 
@@ -81,16 +78,9 @@ fn test_commit_s2_empty_y2_not_empty() {
 
     commit_cmd.s2 = tpm2::Tpm2bSensitiveData::default(); // Empty
     commit_cmd.y2 = Tpm2bEccParameter::from_bytes(&[3u8; 32]).unwrap(); // Not empty
+    commit_cmd.sign_handle = key_handle;
 
-    let res = execute_with_password_sessions(
-        &mut sim,
-        &commit_cmd,
-        CommitHandles {
-            sign_handle: key_handle,
-        },
-        1,
-        &[],
-    );
+    let res = execute_with_password_sessions(&mut sim, &commit_cmd, 1, &[]);
 
     assert!(
         res.is_err(),

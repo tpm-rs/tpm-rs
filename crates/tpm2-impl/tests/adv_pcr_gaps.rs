@@ -7,10 +7,9 @@ use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
 use tpm2::commands::{
-    Command, PCREvent, PCREventHandles, PCRExtend, PCRExtendHandles, PCRRead, PCRReset,
-    PCRResetHandles,
+    Command, Message, PCREvent, PCRExtend, PCRRead, PCRReset, UnmarshalMessage, responses,
 };
-use tpm2::crypto::HashCtx;
+use tpm2::crypto::HashStream;
 use tpm2::{
     Tpm2bEvent, TpmiAlgHash, TpmlDigestValues, TpmlPcrSelection, TpmsAuthCommand, TpmsPcrSelection,
     TpmtHa,
@@ -22,7 +21,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -61,14 +60,11 @@ fn pw() -> tpm2::TpmsAuthCommand<'static> {
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -81,13 +77,15 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut <tpm2::Handle as Marshal>::MaxBuffer = (&mut request_buf
+            [offset..offset + tpm2::Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        let handle_len = handle.marshal(handle_slice);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -127,8 +125,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = tpm2::Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -140,10 +140,13 @@ where
 
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
-    let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let resp_params = <C::Response<'static> as UnmarshalMessage>::unmarshal_with_handles(
+        resp_handles,
+        &mut params_slice,
+    )
+    .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp_params)
 }
 
 fn compute_expected_extend(
@@ -152,7 +155,7 @@ fn compute_expected_extend(
     old: &[u8],
     new: &[u8],
 ) -> [u8; 64] {
-    let mut ctx = HashCtx::new(crypto, alg).unwrap();
+    let mut ctx = HashStream::new(crypto, alg).unwrap();
     ctx.update(old).unwrap();
     ctx.update(new).unwrap();
     let mut out = [0u8; 64];
@@ -165,8 +168,8 @@ fn adv_pcr_read_unsupported_bank() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Create selection containing unsupported SHA-512 bank
     let mut pcr_selection_in = TpmlPcrSelection::default();
@@ -176,7 +179,7 @@ fn adv_pcr_read_unsupported_bank() {
         .unwrap();
 
     let read_cmd = PCRRead { pcr_selection_in };
-    let (_, resp) = execute_tpm_command(&mut tpm, &mut global_state, &(), &read_cmd, &[]).unwrap();
+    let resp = execute_tpm_command(&mut tpm, &mut global_state, &read_cmd, &[]).unwrap();
 
     // The output selection count should match (contains the bank we requested)
     assert_eq!(resp.pcr_selection_out.count(), 1);
@@ -195,8 +198,8 @@ fn adv_pcr_extend_rh_null() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Keep track of some baseline PCR values (e.g. PCR 5)
     let pcr_idx = 5usize;
@@ -207,18 +210,11 @@ fn adv_pcr_extend_rh_null() {
     digests.add(&TpmtHa::Sha256(&extend_val_sha256)).unwrap();
 
     // Call PCR_Extend with TPM_RH_NULL
-    let extend_handles = PCRExtendHandles {
+    let extend_cmd = PCRExtend {
         pcr_handle: Handle::RH_NULL,
+        digests,
     };
-    let extend_cmd = PCRExtend { digests };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &extend_handles,
-        &extend_cmd,
-        &[pw()],
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &extend_cmd, &[pw()]).unwrap();
 
     // Verify that the PCR 5 value did not change
     assert_eq!(global_state.pcrs.sha256[pcr_idx], baseline_sha256);
@@ -227,19 +223,20 @@ fn adv_pcr_extend_rh_null() {
 fn execute_tpm_event<'a>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &PCREventHandles,
     cmd: &PCREvent,
     response_buf: &'a mut [u8],
-) -> Result<<PCREvent<'static> as Command>::Response<'a>, u32> {
+) -> Result<responses::PCREvent<'a>, u32> {
     let mut request_buf = [0u8; 16384];
     request_buf[0..2].copy_from_slice(&0x8002u16.to_be_bytes());
     request_buf[6..10].copy_from_slice(&(PCREvent::CMD_CODE.code()).to_be_bytes());
 
     let mut offset = 10;
-    let mut handles_buf = [0u8; PCREventHandles::MAX_SIZE];
-    let handles_len = handles.marshal(&mut handles_buf);
-    request_buf[offset..offset + handles_len].copy_from_slice(&handles_buf.as_ref()[..handles_len]);
-    offset += handles_len;
+    for handle in cmd.handles() {
+        let mut handle_buf = [0u8; Handle::MAX_SIZE];
+        let handle_len = handle.marshal(&mut handle_buf);
+        request_buf[offset..offset + handle_len].copy_from_slice(&handle_buf[..handle_len]);
+        offset += handle_len;
+    }
 
     // pcrHandle has the USER auth role, so C requires a session even for an empty authValue
     // (TPM_RC_AUTH_MISSING otherwise, SessionProcess.c CheckAuthNoSession). authSize = 9,
@@ -263,7 +260,8 @@ fn execute_tpm_event<'a>(
 
     // Skip the parameterSize field of the TPM_ST_SESSIONS response.
     let mut param_slice: &'static [u8] = std::vec::Vec::leak(response_buf[14..].to_vec());
-    Unmarshal::unmarshal(&mut param_slice).map_err(|_| TpmRc::FAILURE.get())
+    responses::PCREvent::unmarshal_with_handles([], &mut param_slice)
+        .map_err(|_| TpmRc::FAILURE.get())
 }
 
 #[test]
@@ -271,8 +269,8 @@ fn adv_pcr_event_empty_data() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let pcr_idx = 5usize;
     let initial_sha1 = global_state.pcrs.sha1[pcr_idx];
@@ -281,19 +279,13 @@ fn adv_pcr_event_empty_data() {
 
     // Empty event data
     let event_data = Tpm2bEvent::from_bytes(&[]).unwrap();
-    let event_handles = PCREventHandles {
+    let event_cmd = PCREvent {
         pcr_handle: Handle(pcr_idx as u32),
+        event_data,
     };
-    let event_cmd = PCREvent { event_data };
     let mut response_buf = [0u8; 16384];
-    let resp = execute_tpm_event(
-        &mut tpm,
-        &mut global_state,
-        &event_handles,
-        &event_cmd,
-        &mut response_buf,
-    )
-    .unwrap();
+    let resp =
+        execute_tpm_event(&mut tpm, &mut global_state, &event_cmd, &mut response_buf).unwrap();
 
     // Calculate empty data hashes
     let mut out1 = [0u8; TpmtHa::MAX_DIGEST_SIZE];
@@ -372,14 +364,13 @@ fn adv_pcr_reset_rh_null() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
-    let reset_handles = PCRResetHandles {
+    let reset_cmd = PCRReset {
         pcr_handle: Handle::RH_NULL,
     };
-    let reset_cmd = PCRReset {};
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &reset_handles, &reset_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &reset_cmd, &[]);
     assert_eq!(
         res,
         Err(TpmRc::VALUE.with(tpm2::errors::Position::handle(1)).get())
@@ -391,61 +382,36 @@ fn test_pcr_locality_enforcement() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Extend PCR 17 at locality 0 (should fail, 17 expects 2, 3, 4)
     global_state.locality = 0;
-    let extend_handles = PCRExtendHandles {
-        pcr_handle: Handle(17),
-    };
     let mut digests = TpmlDigestValues::default();
     digests.add(&TpmtHa::Sha1(&[0xbb; 20])).unwrap();
-    let extend_cmd = PCRExtend { digests };
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &extend_handles,
-        &extend_cmd,
-        &[pw()],
-    );
+    let extend_cmd = PCRExtend {
+        pcr_handle: Handle(17),
+        digests,
+    };
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &extend_cmd, &[pw()]);
     assert_eq!(res, Err(TpmRc::LOCALITY.get()));
 
     // 2. Extend PCR 17 at locality 3 (should succeed)
     global_state.locality = 3;
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &extend_handles,
-        &extend_cmd,
-        &[pw()],
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &extend_cmd, &[pw()]);
     assert!(res.is_ok());
 
     // 3. Reset PCR 16 at locality 4 (should fail, 16 expects 0, 1, 2, 3)
     global_state.locality = 4;
-    let reset_handles = PCRResetHandles {
+    let reset_cmd = PCRReset {
         pcr_handle: Handle(16),
     };
-    let reset_cmd = PCRReset {};
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &reset_handles,
-        &reset_cmd,
-        &[pw()],
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &reset_cmd, &[pw()]);
     assert_eq!(res, Err(TpmRc::LOCALITY.get()));
 
     // 4. Reset PCR 16 at locality 0 (should succeed)
     global_state.locality = 0;
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &reset_handles,
-        &reset_cmd,
-        &[pw()],
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &reset_cmd, &[pw()]);
     assert!(res.is_ok());
 }
 
@@ -454,54 +420,39 @@ fn test_pcr_invalid_handles() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Extend on PCR 24
-    let extend_handles = PCRExtendHandles {
-        pcr_handle: Handle(24),
-    };
     let mut digests = TpmlDigestValues::default();
     digests.add(&TpmtHa::Sha1(&[0xcc; 20])).unwrap();
-    let extend_cmd = PCRExtend { digests };
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &extend_handles,
-        &extend_cmd,
-        &[],
-    );
+    let extend_cmd = PCRExtend {
+        pcr_handle: Handle(24),
+        digests,
+    };
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &extend_cmd, &[]);
     assert_eq!(
         res,
         Err(TpmRc::VALUE.with(tpm2::errors::Position::handle(1)).get())
     );
 
     // 2. Event on PCR 24
-    let event_handles = PCREventHandles {
-        pcr_handle: Handle(24),
-    };
     let event_cmd = PCREvent {
+        pcr_handle: Handle(24),
         event_data: Tpm2bEvent::from_bytes(b"test").unwrap(),
     };
     let mut response_buf = [0u8; 16384];
-    let res = execute_tpm_event(
-        &mut tpm,
-        &mut global_state,
-        &event_handles,
-        &event_cmd,
-        &mut response_buf,
-    );
+    let res = execute_tpm_event(&mut tpm, &mut global_state, &event_cmd, &mut response_buf);
     assert_eq!(
         res,
         Err(TpmRc::VALUE.with(tpm2::errors::Position::handle(1)).get())
     );
 
     // 3. Reset on PCR 24
-    let reset_handles = PCRResetHandles {
+    let reset_cmd = PCRReset {
         pcr_handle: Handle(24),
     };
-    let reset_cmd = PCRReset {};
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &reset_handles, &reset_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &reset_cmd, &[]);
     assert_eq!(
         res,
         Err(TpmRc::VALUE.with(tpm2::errors::Position::handle(1)).get())
@@ -513,53 +464,38 @@ fn test_pcr_update_counter() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Read baseline update counter
     let read_cmd = PCRRead {
         pcr_selection_in: TpmlPcrSelection::default(),
     };
-    let (_, resp) = execute_tpm_command(&mut tpm, &mut global_state, &(), &read_cmd, &[]).unwrap();
+    let resp = execute_tpm_command(&mut tpm, &mut global_state, &read_cmd, &[]).unwrap();
     let initial_counter = resp.pcr_update_counter;
 
     // 1. Extend PCR 16
-    let extend_handles = PCRExtendHandles {
-        pcr_handle: Handle(16),
-    };
     let mut digests = TpmlDigestValues::default();
     digests.add(&TpmtHa::Sha1(&[0xdd; 20])).unwrap();
-    let extend_cmd = PCRExtend { digests };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &extend_handles,
-        &extend_cmd,
-        &[pw()],
-    )
-    .unwrap();
+    let extend_cmd = PCRExtend {
+        pcr_handle: Handle(16),
+        digests,
+    };
+    execute_tpm_command(&mut tpm, &mut global_state, &extend_cmd, &[pw()]).unwrap();
 
     // Read counter again
-    let (_, resp) = execute_tpm_command(&mut tpm, &mut global_state, &(), &read_cmd, &[]).unwrap();
+    let resp = execute_tpm_command(&mut tpm, &mut global_state, &read_cmd, &[]).unwrap();
     let after_extend_counter = resp.pcr_update_counter;
     assert_eq!(after_extend_counter, initial_counter + 1);
 
     // 2. Reset PCR 16
-    let reset_handles = PCRResetHandles {
+    let reset_cmd = PCRReset {
         pcr_handle: Handle(16),
     };
-    let reset_cmd = PCRReset {};
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &reset_handles,
-        &reset_cmd,
-        &[pw()],
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &reset_cmd, &[pw()]).unwrap();
 
     // Read counter again
-    let (_, resp) = execute_tpm_command(&mut tpm, &mut global_state, &(), &read_cmd, &[]).unwrap();
+    let resp = execute_tpm_command(&mut tpm, &mut global_state, &read_cmd, &[]).unwrap();
     let after_reset_counter = resp.pcr_update_counter;
     assert_eq!(after_reset_counter, after_extend_counter + 1);
 }
@@ -569,8 +505,8 @@ fn test_pcr_update_counter_wrap_around() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     global_state.pcrs.update_counter = u32::MAX; // set to maximum value AFTER startup
 
@@ -578,27 +514,20 @@ fn test_pcr_update_counter_wrap_around() {
     let read_cmd = PCRRead {
         pcr_selection_in: TpmlPcrSelection::default(),
     };
-    let (_, resp) = execute_tpm_command(&mut tpm, &mut global_state, &(), &read_cmd, &[]).unwrap();
+    let resp = execute_tpm_command(&mut tpm, &mut global_state, &read_cmd, &[]).unwrap();
     assert_eq!(resp.pcr_update_counter, u32::MAX);
 
     // Extend PCR 16 to trigger update_counter increment
-    let extend_handles = PCRExtendHandles {
-        pcr_handle: Handle(16),
-    };
     let mut digests = TpmlDigestValues::default();
     digests.add(&TpmtHa::Sha1(&[0xdd; 20])).unwrap();
-    let extend_cmd = PCRExtend { digests };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &extend_handles,
-        &extend_cmd,
-        &[pw()],
-    )
-    .unwrap();
+    let extend_cmd = PCRExtend {
+        pcr_handle: Handle(16),
+        digests,
+    };
+    execute_tpm_command(&mut tpm, &mut global_state, &extend_cmd, &[pw()]).unwrap();
 
     // Read counter again
-    let (_, resp) = execute_tpm_command(&mut tpm, &mut global_state, &(), &read_cmd, &[]).unwrap();
+    let resp = execute_tpm_command(&mut tpm, &mut global_state, &read_cmd, &[]).unwrap();
     assert_eq!(resp.pcr_update_counter, 0);
 }
 
@@ -607,8 +536,8 @@ fn test_pcr_read_sort_order() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Build selection: SHA256 first, then SHA1.
     // Select PCR 0..6 (6 PCRs) for each.
@@ -623,7 +552,7 @@ fn test_pcr_read_sort_order() {
         .unwrap();
 
     let read_cmd = PCRRead { pcr_selection_in };
-    let (_, resp) = execute_tpm_command(&mut tpm, &mut global_state, &(), &read_cmd, &[]).unwrap();
+    let resp = execute_tpm_command(&mut tpm, &mut global_state, &read_cmd, &[]).unwrap();
 
     // Total returned digests must be exactly 8 (the limit)
     assert_eq!(resp.pcr_values.count(), 8);

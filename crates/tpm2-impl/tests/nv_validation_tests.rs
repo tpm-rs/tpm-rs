@@ -8,10 +8,8 @@ mod common;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::commands::{
-    Command, NVCertify, NVCertifyHandles, NVDefineSpace, NVDefineSpaceHandles, NVIncrement,
-    NVIncrementHandles, NVRead, NVReadHandles, NVReadLock, NVReadLockHandles, NVReadPublic,
-    NVReadPublicHandles, NVUndefineSpace, NVUndefineSpaceHandles, NVWrite, NVWriteHandles,
-    NVWriteLock, NVWriteLockHandles,
+    Command, Message, NVCertify, NVDefineSpace, NVIncrement, NVRead, NVReadLock, NVReadPublic,
+    NVUndefineSpace, NVWrite, NVWriteLock, UnmarshalMessage,
 };
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -26,49 +24,50 @@ use tpm2::crypto::{Asymmetric, AsymmetricSign};
 
 use tpm2::crypto::{CryptoError, CryptoProvider};
 
-use tpm2::crypto::Rng;
-
 struct StressTestCrypto;
 
 impl_fake_hash!(StressTestCrypto);
 
 impl AsymmetricSign for StressTestCrypto {
+    /// Fills the signature with `0xee` bytes (64 for ECDSA, 256 otherwise). A `signature_out`
+    /// that is too small fails with [`CryptoError::Internal`] (formerly `BufferTooSmall`).
     fn sign_inner(
         &self,
         sign_alg: tpm2::Alg,
         _private_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         let len = match sign_alg {
             tpm2::Alg::ECDSA => {
                 if signature_out.len() < 64 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..64].fill(0xee);
                 64
             }
             _ => {
                 if signature_out.len() < 256 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..256].fill(0xee);
                 256
             }
         };
-        Ok(len)
+        Ok(Some(len))
     }
 }
 
 impl Asymmetric for StressTestCrypto {
+    /// Accepts every signature (formerly `Ok(())`).
     fn verify_inner(
         &self,
         _sign_alg: tpm2::Alg,
         _public_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         _signature: &[u8],
-    ) -> Result<(), CryptoError> {
-        Ok(())
+    ) -> Result<bool, CryptoError> {
+        Ok(true)
     }
     fn encrypt(
         &self,
@@ -78,9 +77,12 @@ impl Asymmetric for StressTestCrypto {
         _data: &[u8],
         _ciphertext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
-        Ok(0)
+    ) -> Result<Option<usize>, CryptoError> {
+        Ok(Some(0))
     }
+    /// Copies `ciphertext` to `plaintext`. An empty private key fails with
+    /// [`CryptoError::Internal`] (formerly `HardwareFailure`), and so does a `plaintext` buffer
+    /// that is too small (formerly `BufferTooSmall`).
     fn decrypt(
         &self,
         _scheme: tpm2::Alg,
@@ -89,16 +91,16 @@ impl Asymmetric for StressTestCrypto {
         ciphertext: &[u8],
         plaintext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         if private_key.is_empty() {
-            return Err(CryptoError::HardwareFailure);
+            return Err(CryptoError::Internal);
         }
         let len = ciphertext.len();
         if plaintext.len() < len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         plaintext[..len].copy_from_slice(ciphertext);
-        Ok(len)
+        Ok(Some(len))
     }
     fn generate_key(
         &self,
@@ -119,25 +121,24 @@ impl Asymmetric for StressTestCrypto {
                 private_key[..32].fill(0xdd);
                 Ok((64, 32))
             }
-            _ => Err(CryptoError::HardwareFailure),
+            _ => Err(CryptoError::Internal),
         }
     }
 }
 
-impl Rng for StressTestCrypto {
+impl CryptoProvider for StressTestCrypto {
+    /// The provider CSPRNG: fills `dest` with `0xaa` bytes.
     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
         dest.fill(0xaa);
         Ok(())
     }
 }
 
-impl CryptoProvider for StressTestCrypto {}
-
 fn setup_tpm<'a>(
     crypto: &'a mut StressTestCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -164,14 +165,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command_with_auths<C: Command>(
     tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -186,13 +184,15 @@ where
     // Command code
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        let handle_len = handle.marshal(handle_slice);
+        offset += handle_len;
+    }
 
     // Marshal auth area if tag is 0x8002
     if !auths.is_empty() {
@@ -232,24 +232,31 @@ where
         return Err(rc);
     }
 
+    // Response handles follow the header (10).
+    let mut handles_buf = &response_buf[10..resp_size];
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_buf).map_err(|_| TpmRc::FAILURE.get())?;
+    }
+    let handles_len = (resp_size - 10) - handles_buf.len();
+
     let resp_tag = u16::from_be_bytes([response_buf[0], response_buf[1]]);
     let params_offset = if resp_tag == 0x8002 {
-        14 // Skip header (10) and parameter size (4)
+        14 + handles_len // Skip header (10), response handles and parameter size (4)
     } else {
-        10 // Skip header (10)
+        10 + handles_len // Skip header (10) and response handles
     };
 
     let mut unmarshal_buf: &'static [u8] =
         std::vec::Vec::leak(response_buf[params_offset..resp_size].to_vec());
-    let resp =
-        <C::Response<'static>>::unmarshal(&mut unmarshal_buf).map_err(|_| TpmRc::FAILURE.get())?;
+    let resp = <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut unmarshal_buf)
+        .map_err(|_| TpmRc::FAILURE.get())?;
     Ok(resp)
 }
 
 fn execute_tpm_nv_certify<'a>(
     tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &NVCertifyHandles,
     cmd: &NVCertify,
     auths: &[TpmsAuthCommand],
     response_buf: &'a mut [u8; 16384],
@@ -264,7 +271,9 @@ fn execute_tpm_nv_certify<'a>(
     }
 
     request_buf[6..10].copy_from_slice(&(NVCertify::CMD_CODE.code()).to_be_bytes());
-    offset += marshal_to_slice(handles, &mut request_buf[offset..]);
+    for handle in cmd.handles().as_ref() {
+        offset += marshal_to_slice(handle, &mut request_buf[offset..]);
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -294,11 +303,13 @@ fn execute_tpm_nv_certify<'a>(
         return Err(rc);
     }
 
+    // `TPM2_NV_Certify` has no response handles.
     let resp_tag = u16::from_be_bytes([response_buf[0], response_buf[1]]);
     let params_offset = if resp_tag == 0x8002 { 14 } else { 10 };
     let mut unmarshal_buf: &'static [u8] =
         std::vec::Vec::leak(response_buf[params_offset..resp_size].to_vec());
-    Unmarshal::unmarshal(&mut unmarshal_buf).map_err(|_| TpmRc::FAILURE.get())
+    UnmarshalMessage::unmarshal_with_handles([], &mut unmarshal_buf)
+        .map_err(|_| TpmRc::FAILURE.get())
 }
 
 fn make_auth_session(hmac: &[u8]) -> TpmsAuthCommand<'_> {
@@ -316,8 +327,8 @@ fn test_write_to_counter_bits_extend_fails() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let auth_session = make_auth_session(&[]);
 
@@ -333,35 +344,29 @@ fn test_write_to_counter_bits_extend_fails() {
         data_size: 8,
     });
 
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info: public_counter,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define Counter NV space");
 
     // Write to Counter index (should fail with TPM_RC_ATTRIBUTES)
-    let write_handles = NVWriteHandles {
+    let write_cmd = NVWrite {
         auth_handle: nv_index_counter,
         nv_index: nv_index_counter,
-    };
-    let write_cmd = NVWrite {
         data: Tpm2bMaxNvBuffer::from_bytes(&[1, 2, 3, 4, 5, 6, 7, 8]).unwrap(),
         offset: 0,
     };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &write_handles,
         &write_cmd,
         core::slice::from_ref(&auth_session),
     );
@@ -379,28 +384,28 @@ fn test_write_to_counter_bits_extend_fails() {
         data_size: 8,
     });
     let define_cmd_bits = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info: public_bits,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd_bits,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define Bits NV space");
 
     // Write to Bits index (should fail with TPM_RC_ATTRIBUTES)
-    let write_handles_bits = NVWriteHandles {
+    let write_cmd_bits = NVWrite {
         auth_handle: nv_index_bits,
         nv_index: nv_index_bits,
+        ..write_cmd
     };
     let res_bits = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &write_handles_bits,
-        &write_cmd,
+        &write_cmd_bits,
         core::slice::from_ref(&auth_session),
     );
     assert_eq!(res_bits.err(), Some(TpmRc::ATTRIBUTES.get()));
@@ -417,31 +422,28 @@ fn test_write_to_counter_bits_extend_fails() {
         data_size: 32,
     });
     let define_cmd_extend = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info: public_extend,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd_extend,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define Extend NV space");
 
     // Write to Extend index (should fail with TPM_RC_ATTRIBUTES)
-    let write_handles_extend = NVWriteHandles {
+    let write_cmd_extend = NVWrite {
         auth_handle: nv_index_extend,
         nv_index: nv_index_extend,
-    };
-    let write_cmd_extend = NVWrite {
         data: Tpm2bMaxNvBuffer::from_bytes(&[0u8; 32]).unwrap(),
         offset: 0,
     };
     let res_extend = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &write_handles_extend,
         &write_cmd_extend,
         core::slice::from_ref(&auth_session),
     );
@@ -454,8 +456,8 @@ fn test_write_partial_to_writeall_index_fails() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let auth_session = make_auth_session(&[]);
 
@@ -471,35 +473,29 @@ fn test_write_partial_to_writeall_index_fails() {
         data_size: 32,
     });
 
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define WRITEALL Ordinary NV space");
 
     // Write partial size (16 bytes instead of 32 bytes)
-    let write_handles = NVWriteHandles {
+    let write_cmd = NVWrite {
         auth_handle: nv_index,
         nv_index,
-    };
-    let write_cmd = NVWrite {
         data: Tpm2bMaxNvBuffer::from_bytes(&[1u8; 16]).unwrap(),
         offset: 0,
     };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &write_handles,
         &write_cmd,
         core::slice::from_ref(&auth_session),
     );
@@ -507,13 +503,14 @@ fn test_write_partial_to_writeall_index_fails() {
 
     // Write complete size (32 bytes) should succeed
     let write_cmd_full = NVWrite {
+        auth_handle: nv_index,
+        nv_index,
         data: Tpm2bMaxNvBuffer::from_bytes(&[1u8; 32]).unwrap(),
         offset: 0,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &write_handles,
         &write_cmd_full,
         core::slice::from_ref(&auth_session),
     )
@@ -526,8 +523,8 @@ fn test_certify_unwritten_index_fails() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let auth_session = make_auth_session(&[]);
 
@@ -542,29 +539,24 @@ fn test_certify_unwritten_index_fails() {
         data_size: 16,
     });
 
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define Ordinary NV space");
 
     // Certify the NV index (unwritten)
-    let certify_handles = NVCertifyHandles {
+    let certify_cmd = NVCertify {
         sign_handle: Handle(0x40000007),
         auth_handle: nv_index,
         nv_index,
-    };
-    let certify_cmd = NVCertify {
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         size: 16,
@@ -575,7 +567,6 @@ fn test_certify_unwritten_index_fails() {
     let res = execute_tpm_nv_certify(
         &mut tpm,
         &mut global_state,
-        &certify_handles,
         &certify_cmd,
         // One session per authorization handle, incl. the TPM_RH_NULL signHandle.
         &[auth_session, auth_session],
@@ -590,8 +581,8 @@ fn test_written_attribute_and_certify_success() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let auth_session = make_auth_session(&[]);
 
@@ -606,73 +597,54 @@ fn test_written_attribute_and_certify_success() {
         data_size: 16,
     });
 
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define Ordinary NV space");
 
     // Check that WRITTEN is NOT set originally
-    let read_pub_handles = NVReadPublicHandles { nv_index };
-    let read_pub_cmd = NVReadPublic {};
-    let read_pub_resp = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &read_pub_handles,
-        &read_pub_cmd,
-        &[],
-    )
-    .expect("Failed to read public info of unwritten index");
+    let read_pub_cmd = NVReadPublic { nv_index };
+    let read_pub_resp =
+        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &read_pub_cmd, &[])
+            .expect("Failed to read public info of unwritten index");
     let initial_pub = read_pub_resp.nv_public.0;
     assert!(!initial_pub.attributes.contains(TpmaNv::WRITTEN));
 
     // Write data to the NV index
-    let write_handles = NVWriteHandles {
+    let write_cmd = NVWrite {
         auth_handle: nv_index,
         nv_index,
-    };
-    let write_cmd = NVWrite {
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xaau8; 16]).unwrap(),
         offset: 0,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &write_handles,
         &write_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to write data to NV index");
 
     // Check that WRITTEN is now set
-    let read_pub_resp_after = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &read_pub_handles,
-        &read_pub_cmd,
-        &[],
-    )
-    .expect("Failed to read public info of written index");
+    let read_pub_resp_after =
+        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &read_pub_cmd, &[])
+            .expect("Failed to read public info of written index");
     let after_pub = read_pub_resp_after.nv_public.0;
     assert!(after_pub.attributes.contains(TpmaNv::WRITTEN));
 
     // Certify the NV index should now succeed
-    let certify_handles = NVCertifyHandles {
+    let certify_cmd = NVCertify {
         sign_handle: Handle(0x40000007),
         auth_handle: nv_index,
         nv_index,
-    };
-    let certify_cmd = NVCertify {
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         size: 16,
@@ -683,7 +655,6 @@ fn test_written_attribute_and_certify_success() {
     let certify_resp = execute_tpm_nv_certify(
         &mut tpm,
         &mut global_state,
-        &certify_handles,
         &certify_cmd,
         // One session per authorization handle, incl. the TPM_RH_NULL signHandle.
         &[auth_session, auth_session],
@@ -707,8 +678,8 @@ fn test_nv_read_success_and_errors() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let auth_session = make_auth_session(&[]);
 
@@ -724,54 +695,45 @@ fn test_nv_read_success_and_errors() {
         data_size: 16,
     });
 
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define Ordinary NV space");
 
     // 2. Try to read unwritten index (should fail with NvUninitialized)
-    let read_handles = NVReadHandles {
+    let read_cmd = NVRead {
         auth_handle: nv_index,
         nv_index,
-    };
-    let read_cmd = NVRead {
         size: 16,
         offset: 0,
     };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &read_handles,
         &read_cmd,
         core::slice::from_ref(&auth_session),
     );
     assert_eq!(res.err(), Some(TpmRc::NV_UNINITIALIZED.get()));
 
     // 3. Write data
-    let write_handles = NVWriteHandles {
-        auth_handle: nv_index,
-        nv_index,
-    };
     let write_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let write_cmd = NVWrite {
+        auth_handle: nv_index,
+        nv_index,
         data: Tpm2bMaxNvBuffer::from_bytes(&write_data).unwrap(),
         offset: 0,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &write_handles,
         &write_cmd,
         core::slice::from_ref(&auth_session),
     )
@@ -781,7 +743,6 @@ fn test_nv_read_success_and_errors() {
     let read_resp = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &read_handles,
         &read_cmd,
         core::slice::from_ref(&auth_session),
     )
@@ -791,13 +752,14 @@ fn test_nv_read_success_and_errors() {
 
     // 5. Try reading out of bounds (should fail with NvRange)
     let read_cmd_oob = NVRead {
+        auth_handle: nv_index,
+        nv_index,
         size: 8,
         offset: 10,
     };
     let res_oob = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &read_handles,
         &read_cmd_oob,
         core::slice::from_ref(&auth_session),
     );
@@ -809,8 +771,8 @@ fn test_nv_increment_success_and_errors() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let auth_session = make_auth_session(&[]);
 
@@ -826,47 +788,42 @@ fn test_nv_increment_success_and_errors() {
         data_size: 8,
     });
 
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define Counter NV space");
 
     // 2. Call NV_Increment (first time, starts at 0, should become 1)
-    let inc_handles = NVIncrementHandles {
+    let inc_cmd = NVIncrement {
         auth_handle: nv_counter,
         nv_index: nv_counter,
     };
-    let inc_cmd = NVIncrement {};
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &inc_handles,
         &inc_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to increment counter");
 
     // Read counter using NV_Read and verify it is 1
-    let read_handles = NVReadHandles {
+    let read_cmd = NVRead {
         auth_handle: nv_counter,
         nv_index: nv_counter,
+        size: 8,
+        offset: 0,
     };
-    let read_cmd = NVRead { size: 8, offset: 0 };
     let read_resp = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &read_handles,
         &read_cmd,
         core::slice::from_ref(&auth_session),
     )
@@ -878,7 +835,6 @@ fn test_nv_increment_success_and_errors() {
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &inc_handles,
         &inc_cmd,
         core::slice::from_ref(&auth_session),
     )
@@ -887,7 +843,6 @@ fn test_nv_increment_success_and_errors() {
     let read_resp2 = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &read_handles,
         &read_cmd,
         core::slice::from_ref(&auth_session),
     )
@@ -907,27 +862,26 @@ fn test_nv_increment_success_and_errors() {
         data_size: 16,
     });
     let define_ordinary_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info: ordinary_public_info,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_ordinary_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define Ordinary NV space");
 
-    let inc_handles_ord = NVIncrementHandles {
+    let inc_cmd_ord = NVIncrement {
         auth_handle: nv_ordinary,
         nv_index: nv_ordinary,
     };
     let res_ord = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &inc_handles_ord,
-        &inc_cmd,
+        &inc_cmd_ord,
         core::slice::from_ref(&auth_session),
     );
     assert_eq!(
@@ -941,8 +895,8 @@ fn test_nv_write_lock() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let auth_session = make_auth_session(&[]);
 
@@ -960,50 +914,42 @@ fn test_nv_write_lock() {
         data_size: 16,
     });
 
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define Ordinary NV space");
 
     // Write data initially
-    let write_handles = NVWriteHandles {
+    let write_cmd = NVWrite {
         auth_handle: nv_index,
         nv_index,
-    };
-    let write_cmd = NVWrite {
         data: Tpm2bMaxNvBuffer::from_bytes(&[1u8; 16]).unwrap(),
         offset: 0,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &write_handles,
         &write_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to write data");
 
     // 2. Call NV_WriteLock
-    let lock_handles = NVWriteLockHandles {
+    let lock_cmd = NVWriteLock {
         auth_handle: nv_index,
         nv_index,
     };
-    let lock_cmd = NVWriteLock {};
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &lock_handles,
         &lock_cmd,
         core::slice::from_ref(&auth_session),
     )
@@ -1013,7 +959,6 @@ fn test_nv_write_lock() {
     let res_write = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &write_handles,
         &write_cmd,
         core::slice::from_ref(&auth_session),
     );
@@ -1031,27 +976,26 @@ fn test_nv_write_lock() {
         data_size: 16,
     });
     let define_no_lock_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info: public_no_lock,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_no_lock_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define Ordinary NV space");
 
-    let lock_handles_no_lock = NVWriteLockHandles {
+    let lock_cmd_no_lock = NVWriteLock {
         auth_handle: nv_no_lock,
         nv_index: nv_no_lock,
     };
     let res_no_lock = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &lock_handles_no_lock,
-        &lock_cmd,
+        &lock_cmd_no_lock,
         core::slice::from_ref(&auth_session),
     );
     // TPM_RC_ATTRIBUTES + RC_NV_WriteLock_nvIndex (H2).
@@ -1070,8 +1014,8 @@ fn test_nv_read_lock() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let auth_session = make_auth_session(&[]);
 
@@ -1089,68 +1033,57 @@ fn test_nv_read_lock() {
         data_size: 16,
     });
 
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define Ordinary NV space");
 
     // Write data initially
-    let write_handles = NVWriteHandles {
+    let write_cmd = NVWrite {
         auth_handle: nv_index,
         nv_index,
-    };
-    let write_cmd = NVWrite {
         data: Tpm2bMaxNvBuffer::from_bytes(&[1u8; 16]).unwrap(),
         offset: 0,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &write_handles,
         &write_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to write data");
 
     // Read initially (should succeed)
-    let read_handles = NVReadHandles {
+    let read_cmd = NVRead {
         auth_handle: nv_index,
         nv_index,
-    };
-    let read_cmd = NVRead {
         size: 16,
         offset: 0,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &read_handles,
         &read_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to read NV index initially");
 
     // 2. Call NV_ReadLock
-    let lock_handles = NVReadLockHandles {
+    let lock_cmd = NVReadLock {
         auth_handle: nv_index,
         nv_index,
     };
-    let lock_cmd = NVReadLock {};
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &lock_handles,
         &lock_cmd,
         core::slice::from_ref(&auth_session),
     )
@@ -1160,7 +1093,6 @@ fn test_nv_read_lock() {
     let res_read = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &read_handles,
         &read_cmd,
         core::slice::from_ref(&auth_session),
     );
@@ -1172,22 +1104,20 @@ fn test_nv_undefine_space() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let auth_session = make_auth_session(&[]);
 
     // 1. Try to undefine a non-existent index (should fail with Handle)
     let non_existent_index = Handle(0x01000007);
-    let undef_handles = NVUndefineSpaceHandles {
+    let undef_cmd = NVUndefineSpace {
         auth_handle: Handle::RH_OWNER,
         nv_index: non_existent_index,
     };
-    let undef_cmd = NVUndefineSpace {};
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &undef_handles,
         &undef_cmd,
         core::slice::from_ref(&auth_session),
     );
@@ -1207,17 +1137,14 @@ fn test_nv_undefine_space() {
         auth_policy: Tpm2bDigest::default(),
         data_size: 16,
     });
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd,
         core::slice::from_ref(&auth_session),
     )
@@ -1235,17 +1162,14 @@ fn test_nv_undefine_space() {
         data_size: 16,
     });
 
-    let define_handles_plat = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
     let define_cmd_plat = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM,
         auth: Tpm2bAuth::default(),
         public_info: public_info_plat,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles_plat,
         &define_cmd_plat,
         core::slice::from_ref(&auth_session),
     )
@@ -1266,42 +1190,40 @@ fn test_nv_undefine_space() {
     });
 
     let define_cmd_del = NVDefineSpace {
+        auth_handle: Handle::RH_PLATFORM, // platform auth
         auth: Tpm2bAuth::default(),
         public_info: public_info_del,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles_plat, // platform auth
         &define_cmd_del,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to define POLICY_DELETE space");
 
     // 5. Undefine Platform-created index under Owner Auth (should fail with NvAuthorization)
-    let undef_plat_by_owner_handles = NVUndefineSpaceHandles {
+    let undef_plat_by_owner_cmd = NVUndefineSpace {
         auth_handle: Handle::RH_OWNER,
         nv_index: platform_index,
     };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &undef_plat_by_owner_handles,
-        &undef_cmd,
+        &undef_plat_by_owner_cmd,
         core::slice::from_ref(&auth_session),
     );
     assert_eq!(res.err(), Some(TpmRc::NV_AUTHORIZATION.get()));
 
     // 6. Undefine Owner-created index under Owner Auth -> Success
-    let undef_owner_by_owner_handles = NVUndefineSpaceHandles {
+    let undef_owner_by_owner_cmd = NVUndefineSpace {
         auth_handle: Handle::RH_OWNER,
         nv_index: owner_index,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &undef_owner_by_owner_handles,
-        &undef_cmd,
+        &undef_owner_by_owner_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to undefine Owner-created index under Owner Auth");
@@ -1310,22 +1232,20 @@ fn test_nv_undefine_space() {
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to re-define Owner-created space");
 
     // 7. Undefine Owner-created index under Platform Auth when sh_enable is true -> Success
-    let undef_owner_by_plat_handles = NVUndefineSpaceHandles {
+    let undef_owner_by_plat_cmd = NVUndefineSpace {
         auth_handle: Handle::RH_PLATFORM,
         nv_index: owner_index,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &undef_owner_by_plat_handles,
-        &undef_cmd,
+        &undef_owner_by_plat_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to undefine Owner-created index under Platform Auth when sh_enable is true");
@@ -1334,7 +1254,6 @@ fn test_nv_undefine_space() {
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &define_handles,
         &define_cmd,
         core::slice::from_ref(&auth_session),
     )
@@ -1347,8 +1266,7 @@ fn test_nv_undefine_space() {
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &undef_owner_by_plat_handles,
-        &undef_cmd,
+        &undef_owner_by_plat_cmd,
         core::slice::from_ref(&auth_session),
     );
     // C `NvIndexIsAccessible`: TPM_RC_HANDLE + RC_H2 for nvIndex.
@@ -1361,29 +1279,27 @@ fn test_nv_undefine_space() {
     global_state.sh_enable = true;
 
     // 9. Undefine Platform-created index under Platform Auth -> Success
-    let undef_plat_by_plat_handles = NVUndefineSpaceHandles {
+    let undef_plat_by_plat_cmd = NVUndefineSpace {
         auth_handle: Handle::RH_PLATFORM,
         nv_index: platform_index,
     };
     execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &undef_plat_by_plat_handles,
-        &undef_cmd,
+        &undef_plat_by_plat_cmd,
         core::slice::from_ref(&auth_session),
     )
     .expect("Failed to undefine Platform-created index under Platform Auth");
 
     // 10. Undefine index with POLICY_DELETE set under Platform Auth -> should fail with Attributes
-    let undef_del_by_plat_handles = NVUndefineSpaceHandles {
+    let undef_del_by_plat_cmd = NVUndefineSpace {
         auth_handle: Handle::RH_PLATFORM,
         nv_index: policy_del_index,
     };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &undef_del_by_plat_handles,
-        &undef_cmd,
+        &undef_del_by_plat_cmd,
         core::slice::from_ref(&auth_session),
     );
     assert_eq!(

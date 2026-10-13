@@ -15,7 +15,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .rng
-            .get_random(buffer)
+            .fill_bytes(buffer)
             .map_err(|_| InternalError::HardwareError)
     }
 
@@ -35,7 +35,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        let cmd = request.try_unmarshal::<tpm2::commands::GetRandom>()?;
+        let cmd = request.try_unmarshal_command::<tpm2::commands::GetRandom>([])?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -74,7 +74,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         request_response: RequestThenResponse<'_, '_>,
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
-        let cmd = request.try_unmarshal::<StirRandom>()?;
+        let cmd = request.try_unmarshal_command::<StirRandom>([])?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -87,11 +87,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.crypto()
             .stir_random(cmd.in_data.get_buffer())
             .map_err(|_| TpmRc::FAILURE)?;
-        let _ = self
-            .context
-            .platform
-            .rng
-            .stir_random(cmd.in_data.get_buffer());
+        let _ = self.context.platform.rng.reseed(cmd.in_data.get_buffer());
 
         let _response = request.into_response();
         Ok(())

@@ -1,5 +1,5 @@
 use tpm2::errors::TpmRc;
-use tpm2::{Marshal, Unmarshal};
+use tpm2::{Marshal, Message, UnmarshalMessage};
 extern crate alloc;
 
 mod common;
@@ -8,7 +8,7 @@ use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
-use tpm2::commands::{Command, GetCommandAuditDigest, GetCommandAuditDigestHandles};
+use tpm2::commands::{Command, GetCommandAuditDigest};
 use tpm2::{Tpm2bAuth, Tpm2bData, Tpm2bNonce, TpmaSession, TpmsAuthCommand};
 use tpm2_impl::{TpmEngine, TpmPlatform};
 
@@ -16,7 +16,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -43,7 +43,6 @@ fn setup_tpm<'a>(
 fn execute_tpm_get_command_audit_digest<'a>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &GetCommandAuditDigestHandles,
     cmd: &GetCommandAuditDigest,
     auths: &[TpmsAuthCommand],
     response_buf: &'a mut [u8],
@@ -59,10 +58,12 @@ fn execute_tpm_get_command_audit_digest<'a>(
 
     request_buf[6..10].copy_from_slice(&(GetCommandAuditDigest::CMD_CODE.code()).to_be_bytes());
 
-    let mut handles_buf = [0u8; GetCommandAuditDigestHandles::MAX_SIZE];
-    let handles_len = handles.marshal(&mut handles_buf);
-    request_buf[offset..offset + handles_len].copy_from_slice(&handles_buf.as_ref()[..handles_len]);
-    offset += handles_len;
+    for handle in cmd.handles() {
+        let mut handle_buf = [0u8; Handle::MAX_SIZE];
+        let handle_len = handle.marshal(&mut handle_buf);
+        request_buf[offset..offset + handle_len].copy_from_slice(&handle_buf[..handle_len]);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -104,11 +105,13 @@ fn execute_tpm_get_command_audit_digest<'a>(
         resp_offset += 4;
         let mut param_slice: &'static [u8] =
             std::vec::Vec::leak(response_buf[resp_offset..resp_offset + param_size].to_vec());
-        Unmarshal::unmarshal(&mut param_slice).map_err(|_| TpmRc::FAILURE.get())
+        UnmarshalMessage::unmarshal_with_handles([], &mut param_slice)
+            .map_err(|_| TpmRc::FAILURE.get())
     } else {
         let mut param_slice: &'static [u8] =
             std::vec::Vec::leak(response_buf[resp_offset..].to_vec());
-        Unmarshal::unmarshal(&mut param_slice).map_err(|_| TpmRc::FAILURE.get())
+        UnmarshalMessage::unmarshal_with_handles([], &mut param_slice)
+            .map_err(|_| TpmRc::FAILURE.get())
     }
 }
 
@@ -117,15 +120,13 @@ fn test_get_command_audit_digest() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Call GetCommandAuditDigest with sign_handle: RHNull
-    let audit_handles = GetCommandAuditDigestHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: Handle::RH_NULL,
-    };
     let audit_cmd = GetCommandAuditDigest {
+        privacy_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: Handle::RH_NULL,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
@@ -144,7 +145,6 @@ fn test_get_command_audit_digest() {
     let resp = execute_tpm_get_command_audit_digest(
         &mut tpm,
         &mut global_state,
-        &audit_handles,
         &audit_cmd,
         &auths,
         &mut response_buf,
@@ -166,8 +166,8 @@ fn test_get_command_audit_digest_with_rsa_signing_key() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -256,8 +256,8 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();

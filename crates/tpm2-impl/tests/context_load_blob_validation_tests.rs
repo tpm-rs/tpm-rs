@@ -21,14 +21,14 @@ use common::{
     password_auth, setup_real_crypto_tpm,
 };
 use tpm2::commands::{
-    ContextLoad, ContextSave, ContextSaveHandles, CreatePrimary, CreatePrimaryHandles,
-    FlushContext, ReadPublic, ReadPublicHandles, StartAuthSession, StartAuthSessionHandles,
+    ContextLoad, ContextSave, CreatePrimary, FlushContext, ReadPublic, StartAuthSession,
 };
+use tpm2::crypto::{HmacStream, ModeIv, SymmetricKey};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bContextData, Tpm2bDigest, Tpm2bEncryptedSecret,
-    Tpm2bNonce, Tpm2bSensitiveData, TpmEccCurve, TpmSe, TpmaObject, TpmiAlgHash, TpmiAlgSymMode,
-    TpmsContext, TpmsEccParms, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
+    AlgSym, Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bContextData, Tpm2bDigest,
+    Tpm2bEncryptedSecret, Tpm2bNonce, Tpm2bSensitiveData, TpmEccCurve, TpmSe, TpmaObject,
+    TpmiAlgHash, TpmsContext, TpmsEccParms, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic,
 };
 
 /// Offset of `encrypted.size` in the blob: `integrity.size (2) || integrity (32)`.
@@ -43,6 +43,7 @@ fn save_object_context(
     gs: &mut tpm2_impl::GlobalState,
 ) -> TpmsContext<'static> {
     let create = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::from_bytes(b"pass").unwrap(),
             data: Tpm2bSensitiveData::default(),
@@ -67,27 +68,18 @@ fn save_object_context(
         }),
         ..Default::default()
     };
-    let (handles, _) = execute_command(
+    let created =
+        execute_command(tpm, gs, &create, &[password_auth(b"")]).expect("CreatePrimary failed");
+    let save = execute_command(
         tpm,
         gs,
-        &CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
+        &ContextSave {
+            save_handle: created.object_handle,
         },
-        &create,
-        &[password_auth(b"")],
-    )
-    .expect("CreatePrimary failed");
-    let (_, save) = execute_command(
-        tpm,
-        gs,
-        &ContextSaveHandles {
-            save_handle: handles.object_handle,
-        },
-        &ContextSave {},
         &[],
     )
     .expect("ContextSave failed");
-    flush(tpm, gs, handles.object_handle);
+    flush(tpm, gs, created.object_handle);
     save.context
 }
 
@@ -95,7 +87,6 @@ fn flush(tpm: &mut RealCryptoEngine<'_>, gs: &mut tpm2_impl::GlobalState, handle
     execute_command(
         tpm,
         gs,
-        &(),
         &FlushContext {
             flush_handle: handle,
         },
@@ -109,7 +100,7 @@ fn load(
     gs: &mut tpm2_impl::GlobalState,
     context: TpmsContext<'static>,
 ) -> Result<Handle, u32> {
-    execute_command(tpm, gs, &(), &ContextLoad { context }, &[]).map(|(h, _)| h.loaded_handle)
+    execute_command(tpm, gs, &ContextLoad { context }, &[]).map(|rsp| rsp.loaded_handle)
 }
 
 /// Returns `context` with its blob replaced by `blob`.
@@ -143,9 +134,9 @@ macro_rules! setup {
         let mut crypto = TestCryptoProvider;
         let mut storage = FakeStorage::default();
         let mut timer = FakeTimer;
-        let rng = FakeRng::new();
+        let mut rng = FakeRng::new();
         let (mut $tpm, mut $gs) =
-            setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+            setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
     };
 }
 
@@ -166,10 +157,9 @@ fn context_load_untouched_object_context_round_trips() {
     execute_command(
         &mut tpm,
         &mut gs,
-        &ReadPublicHandles {
+        &ReadPublic {
             object_handle: handle,
         },
-        &ReadPublic {},
         &[],
     )
     .expect("loaded object must be usable");
@@ -178,14 +168,12 @@ fn context_load_untouched_object_context_round_trips() {
 #[test]
 fn context_load_untouched_session_context_round_trips() {
     setup!(tpm, gs);
-    let (session, _) = execute_command(
+    let session = execute_command(
         &mut tpm,
         &mut gs,
-        &StartAuthSessionHandles {
+        &StartAuthSession {
             tpm_key: Handle::RH_NULL,
             bind: Handle::RH_NULL,
-        },
-        &StartAuthSession {
             nonce_caller: Tpm2bNonce::from_bytes(&[7; 16]).unwrap(),
             encrypted_salt: Tpm2bEncryptedSecret::default(),
             session_type: TpmSe::HMAC,
@@ -195,13 +183,12 @@ fn context_load_untouched_session_context_round_trips() {
         &[],
     )
     .expect("StartAuthSession failed");
-    let (_, save) = execute_command(
+    let save = execute_command(
         &mut tpm,
         &mut gs,
-        &ContextSaveHandles {
+        &ContextSave {
             save_handle: session.session_handle,
         },
-        &ContextSave {},
         &[],
     )
     .expect("ContextSave of session failed");
@@ -332,7 +319,7 @@ fn forge_integrity(
 ) -> Vec<u8> {
     let crypto = TestCryptoProvider;
     let proof = &gs.sh_proof[..gs.sh_proof_size as usize];
-    let mut hmac = tpm2::crypto::HmacCtx::new(&crypto, TpmiAlgHash::Sha256, proof).unwrap();
+    let mut hmac = HmacStream::new(&crypto, TpmiAlgHash::Sha256, proof).unwrap();
     hmac.update(&gs.total_reset_count.to_be_bytes()).unwrap();
     hmac.update(&context.sequence.to_be_bytes()).unwrap();
     hmac.update(&context.saved_handle.0.to_be_bytes()).unwrap();
@@ -366,7 +353,7 @@ fn context_cfb(
     let crypto = TestCryptoProvider;
     let proof = &gs.sh_proof[..gs.sh_proof_size as usize];
     let mut key_iv = [0u8; 32];
-    tpm2::crypto::kdf::kdfa(
+    tpm2::crypto::kdf::kdfa_bits(
         &crypto,
         TpmiAlgHash::Sha256,
         proof,
@@ -379,11 +366,11 @@ fn context_cfb(
     .unwrap();
     let mut iv = [0u8; 16];
     iv.copy_from_slice(&key_iv[16..]);
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
+    let key = SymmetricKey::new(AlgSym::Aes128, &key_iv[..16]).unwrap();
     if encrypt {
-        tpm2::crypto::encrypt(&crypto, alg, &key_iv[..16], &mut iv, data).unwrap();
+        tpm2::crypto::encrypt(&crypto, key, ModeIv::Cfb(&mut iv), data).unwrap();
     } else {
-        tpm2::crypto::decrypt(&crypto, alg, &key_iv[..16], &mut iv, data).unwrap();
+        tpm2::crypto::decrypt(&crypto, key, ModeIv::Cfb(&mut iv), data).unwrap();
     }
 }
 

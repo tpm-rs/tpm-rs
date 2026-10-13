@@ -1,11 +1,12 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, owned::OwnedPublicParmsAndId, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::TpmEccCurve;
+use tpm2::commands::ECDHKeyGen;
 use tpm2::commands::responses;
-use tpm2::commands::{ECDHKeyGen, ECDHKeyGenHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bEccParameter, TpmsEccPoint};
@@ -27,15 +28,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<ECDHKeyGenHandles>()?;
+        let handles = request.try_unmarshal_handles::<ECDHKeyGen>()?;
+        let [key_handle] = handles;
+        check(key_handle, Tpmi::DhObject, Position::handle(1))?;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let _cmd = request.try_unmarshal::<ECDHKeyGen>()?;
+        let _cmd = request.try_unmarshal_command::<ECDHKeyGen>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        let obj = self.resolve_object(handles.key_handle.0, Position::handle(1))?;
+        let obj = self.resolve_object(key_handle.0, Position::handle(1))?;
 
         // Only the public point of `keyHandle` is used, so the only requirement is that it is
         // a loaded ECC key (`ECDH_KeyGen.c`); its attributes are not checked.
@@ -86,16 +89,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .map_err(|_| TpmRc::FAILURE)?;
 
         let mut z_raw = [0u8; 256];
-        if self
-            .crypto()
-            .point_multiply(
+        // Any failure, a point at infinity / invalid point (`Ok(None)`) or a crypto error, is
+        // `TPM_RC_KEY` on `keyHandle`, as in exp.
+        if !matches!(
+            self.crypto().point_multiply(
                 curve,
                 &de_buf[..priv_len],
                 &qs_bytes[..2 * param_size],
                 &mut z_raw[..2 * param_size],
-            )
-            .is_err()
-        {
+            ),
+            Ok(Some(_))
+        ) {
             return Err(TpmRc::KEY.with(Position::handle(1)));
         }
 
@@ -114,7 +118,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let rsp = responses::ECDHKeyGen { z_point, pub_point };
 
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
 }

@@ -12,10 +12,8 @@ use crate::test_utils::*;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use tpm2::commands::{
-    Certify, CertifyCreation, CertifyCreationHandles, CertifyHandles, CreatePrimary,
-    CreatePrimaryHandles, EvictControl, EvictControlHandles, GetCommandAuditDigest,
-    GetCommandAuditDigestHandles, GetSessionAuditDigest, GetSessionAuditDigestHandles, GetTime,
-    GetTimeHandles, LoadExternal, Quote, QuoteHandles, Shutdown,
+    Certify, CertifyCreation, CreatePrimary, EvictControl, GetCommandAuditDigest,
+    GetSessionAuditDigest, GetTime, LoadExternal, Quote, Shutdown,
 };
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bPublicKeyRsa,
@@ -63,6 +61,7 @@ fn create_primary_full(
     data: &'static [u8],
 ) -> (tpm2::commands::responses::CreatePrimary<'static>, Handle) {
     let cmd = CreatePrimary {
+        primary_handle: hierarchy,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::from_bytes(data).unwrap(),
@@ -70,12 +69,8 @@ fn create_primary_full(
         in_public: tpm2::Tpm2b(public),
         ..Default::default()
     };
-    let handles = CreatePrimaryHandles {
-        primary_handle: hierarchy,
-    };
-    let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &cmd, handles, 1, &[]).expect("CreatePrimary failed");
-    (rsp, rsp_handles.object_handle)
+    let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary failed");
+    (rsp, rsp.object_handle)
 }
 
 /// Creates a primary object and returns only its handle.
@@ -171,14 +166,12 @@ fn get_time(
     num_sessions: usize,
 ) -> Result<tpm2::commands::responses::GetTime<'static>, u32> {
     let cmd = GetTime {
+        privacy_admin_handle,
+        sign_handle,
         qualifying_data: Tpm2bData::from_bytes(b"attest-findings").unwrap(),
         in_scheme,
     };
-    let handles = GetTimeHandles {
-        privacy_admin_handle,
-        sign_handle,
-    };
-    execute_with_password_sessions(sim, &cmd, handles, num_sessions, &[]).map(|(rsp, _)| rsp)
+    execute_with_password_sessions(sim, &cmd, num_sessions, &[])
 }
 
 /// Runs `TPM2_Certify` with password sessions.
@@ -189,17 +182,15 @@ fn certify(
     in_scheme: Option<TpmtSigScheme>,
 ) -> Result<tpm2::commands::responses::Certify<'static>, u32> {
     let cmd = Certify {
-        qualifying_data: Tpm2bData::from_bytes(b"nonce").unwrap(),
-        in_scheme,
-    };
-    let handles = CertifyHandles {
         object_handle,
         sign_handle,
+        qualifying_data: Tpm2bData::from_bytes(b"nonce").unwrap(),
+        in_scheme,
     };
     // Every handle with an authorization role needs a session, even TPM_RH_NULL (C
     // ParseSessionBuffer); TPM_RH_NULL has an empty authValue.
     let sessions = 2;
-    execute_with_password_sessions(sim, &cmd, handles, sessions, &[]).map(|(rsp, _)| rsp)
+    execute_with_password_sessions(sim, &cmd, sessions, &[])
 }
 
 /// Runs `TPM2_Quote` (empty PCR selection) with password sessions.
@@ -209,14 +200,14 @@ fn quote(
     in_scheme: Option<TpmtSigScheme>,
 ) -> Result<tpm2::commands::responses::Quote<'static>, u32> {
     let cmd = Quote {
+        sign_handle,
         qualifying_data: Tpm2bData::from_bytes(b"nonce").unwrap(),
         in_scheme,
         pcr_select: TpmlPcrSelection::default(),
     };
-    let handles = QuoteHandles { sign_handle };
     // signHandle has the USER role, so a session is needed even for TPM_RH_NULL.
     let sessions = 1;
-    execute_with_password_sessions(sim, &cmd, handles, sessions, &[]).map(|(rsp, _)| rsp)
+    execute_with_password_sessions(sim, &cmd, sessions, &[])
 }
 
 /// Runs `TPM2_CertifyCreation` with password sessions.
@@ -229,18 +220,16 @@ fn certify_creation(
     in_scheme: Option<TpmtSigScheme>,
 ) -> Result<tpm2::commands::responses::CertifyCreation<'static>, u32> {
     let cmd = CertifyCreation {
+        sign_handle,
+        object_handle,
         qualifying_data: Tpm2bData::default(),
         creation_hash,
         in_scheme,
         creation_ticket,
     };
-    let handles = CertifyCreationHandles {
-        sign_handle,
-        object_handle,
-    };
     // signHandle has the USER role, so a session is needed even for TPM_RH_NULL.
     let sessions = 1;
-    execute_with_password_sessions(sim, &cmd, handles, sessions, &[]).map(|(rsp, _)| rsp)
+    execute_with_password_sessions(sim, &cmd, sessions, &[])
 }
 
 /// Returns the attested `TPMS_TIME_ATTEST_INFO` of a `TPM2_GetTime` response.
@@ -274,15 +263,13 @@ fn tpm2_gettime_tpm2_getsessionauditdigest_and_tpm2_getcommandauditdigest_gcad_o
     let mut sim = create_simulator!();
     for admin in [Handle::RH_OWNER, Handle::RH_PLATFORM] {
         let cmd = GetCommandAuditDigest {
+            privacy_handle: admin,
+            sign_handle: Handle::RH_NULL,
             qualifying_data: Tpm2bData::default(),
             in_scheme: None,
         };
-        let handles = GetCommandAuditDigestHandles {
-            privacy_admin_handle: admin,
-            sign_handle: Handle::RH_NULL,
-        };
         assert_eq!(
-            execute_with_password_sessions_status(&mut sim, &cmd, handles, 2, &[]).err(),
+            execute_with_password_sessions_status(&mut sim, &cmd, 2, &[]).err(),
             Some(RC_VALUE_H1),
             "privacyAdminHandle {admin:?}"
         );
@@ -301,14 +288,11 @@ fn tpm2_gettime_tpm2_getsessionauditdigest_and_tpm2_getcommandauditdigest_persis
     );
     let persistent = Handle(0x8100_0A77);
     let evict = EvictControl {
-        persistent_handle: persistent,
-    };
-    let evict_handles = EvictControlHandles {
         auth: Handle::RH_OWNER,
         object_handle: key,
+        persistent_handle: persistent,
     };
-    execute_with_password_sessions_status(&mut sim, &evict, evict_handles, 1, &[])
-        .expect("EvictControl failed");
+    execute_with_password_sessions_status(&mut sim, &evict, 1, &[]).expect("EvictControl failed");
 
     let rsp = get_time(&mut sim, Handle::RH_ENDORSEMENT, persistent, None, 2)
         .expect("GetTime with a persistent signing key failed");
@@ -480,7 +464,7 @@ fn tpm2_certify_and_tpm2_certifycreation_omit_required_ticket_hierarchy_not_obje
         in_public: created.out_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, loaded) = execute_with_password_sessions(&mut sim, &load, (), 0, &[])
+    let loaded = execute_with_password_sessions(&mut sim, &load, 0, &[])
         .expect("LoadExternal of the public area failed");
 
     certify_creation(
@@ -614,7 +598,6 @@ fn attestation_missing_privacy_obfuscation_and_keyedhash_sm2_ecschnorr_support_n
         &Shutdown {
             shutdown_type: TpmSu::State,
         },
-        (),
         0,
         &[],
     )
@@ -651,18 +634,16 @@ fn get_session_command_audit_digest_and_get_time_missing_issigningobject_and_val
 
     let gsad = |sim: &mut Simulator<'_>, sign_handle: Handle| {
         let cmd = GetSessionAuditDigest {
-            qualifying_data: Tpm2bData::default(),
-            in_scheme: None,
-        };
-        let handles = GetSessionAuditDigestHandles {
             privacy_admin_handle: Handle::RH_ENDORSEMENT,
             sign_handle,
             session_handle: session.session_handle,
+            qualifying_data: Tpm2bData::default(),
+            in_scheme: None,
         };
         // Every handle with an authorization role needs a session, even TPM_RH_NULL (C
         // ParseSessionBuffer); TPM_RH_NULL has an empty authValue.
         let sessions = 2;
-        execute_with_password_sessions_status(sim, &cmd, handles, sessions, &[]).err()
+        execute_with_password_sessions_status(sim, &cmd, sessions, &[]).err()
     };
 
     // Not an audit session, but the key error comes first.
@@ -731,15 +712,13 @@ fn attestation_resolve_scheme_keyedhash_ecdaa_and_position_bugs_scheme_positions
     assert_eq!(quote(&mut sim, key, wrong).err(), Some(RC_SCHEME_P2));
 
     let cmd = GetCommandAuditDigest {
+        privacy_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: key,
         qualifying_data: Tpm2bData::default(),
         in_scheme: wrong,
     };
-    let handles = GetCommandAuditDigestHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: key,
-    };
     assert_eq!(
-        execute_with_password_sessions_status(&mut sim, &cmd, handles, 2, &[]).err(),
+        execute_with_password_sessions_status(&mut sim, &cmd, 2, &[]).err(),
         Some(RC_SCHEME_P2)
     );
 
@@ -798,7 +777,6 @@ fn attestation_obfuscate_kdf_nv_clear_orderly_and_hmac_signer_bugs_quote_nv_clea
         &Shutdown {
             shutdown_type: TpmSu::State,
         },
-        (),
         0,
         &[],
     )
@@ -826,18 +804,13 @@ fn attestation_resolve_scheme_keyedhash_ecdaa_and_position_bugs_ecdaa_commit_con
         }))),
     );
     let commit = tpm2::commands::Commit {
+        sign_handle: key,
         p1: tpm2::Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: tpm2::Tpm2bEccParameter::default(),
     };
-    let (commit_rsp, _) = execute_with_password_sessions(
-        &mut sim,
-        &commit,
-        tpm2::commands::CommitHandles { sign_handle: key },
-        1,
-        &[],
-    )
-    .expect("Commit failed");
+    let commit_rsp =
+        execute_with_password_sessions(&mut sim, &commit, 1, &[]).expect("Commit failed");
     let scheme = |count| {
         Some(TpmtSigScheme::Ecdaa(TpmsSchemeEcdaa {
             hash_alg: TpmiAlgHash::Sha256,

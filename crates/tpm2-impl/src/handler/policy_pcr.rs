@@ -1,9 +1,10 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use tpm2::TpmiAlgHash;
-use tpm2::commands::{PolicyPCR, PolicyPCRHandles};
+use tpm2::commands::PolicyPCR;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Marshal, Unmarshal};
@@ -32,11 +33,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<PolicyPCRHandles>()?;
-        let policy_session = handles.policy_session.0;
+        let handles = request.try_unmarshal_handles::<PolicyPCR>()?;
+        let [policy_session] = handles;
+        check(policy_session, Tpmi::ShPolicy, Position::handle(1))?;
+        let policy_session = policy_session.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let cmd = match request.try_unmarshal::<PolicyPCR>() {
+        let cmd = match request.try_unmarshal_command::<PolicyPCR>(handles) {
             Ok(cmd) => cmd,
             Err(e) => {
                 let mut slice = request.remaining_slice();

@@ -1,9 +1,12 @@
 use crate::test_utils::CLIENT_CRYPTO;
-use crate::test_utils::{execute_with_hmac_sessions, start_auth_session};
+use crate::test_utils::{execute_with_hmac_sessions, start_auth_session, sym_decrypt, sym_encrypt};
 use tpm2::Unmarshal;
-use tpm2::commands::{Clear, ClearHandles, HierarchyChangeAuth, HierarchyChangeAuthHandles};
+use tpm2::commands::{Clear, HierarchyChangeAuth};
+use tpm2::{
+    AlgSym, Tpm2bAuth, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
+    TpmtSymDefObject,
+};
 use tpm2::{Handle, TpmSe};
-use tpm2::{Tpm2bAuth, TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmtSymDefObject};
 use tpm2_simulator::create_simulator;
 
 #[test]
@@ -18,9 +21,12 @@ fn test_cfb_direct() {
     for size in 0..64 {
         let mut data = vec![0xABu8; size];
         let mut iv_enc = original_iv;
-        tpm2::crypto::encrypt(
+        sym_encrypt(
             *crypto,
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            },
             &key,
             &mut iv_enc,
             &mut data,
@@ -28,9 +34,12 @@ fn test_cfb_direct() {
         .unwrap();
 
         let mut iv_dec = original_iv;
-        tpm2::crypto::decrypt(
+        sym_decrypt(
             *crypto,
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            },
             &key,
             &mut iv_dec,
             &mut data,
@@ -56,7 +65,10 @@ fn test_decryption_boundaries_hierarchy_change_auth() {
             Handle::RH_NULL,
             &[],
             TpmSe::HMAC,
-            Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            }),
             TpmiAlgHash::Sha256,
         )
         .unwrap();
@@ -64,14 +76,11 @@ fn test_decryption_boundaries_hierarchy_change_auth() {
 
         let new_auth_data = vec![0xABu8; size];
         let cmd = HierarchyChangeAuth {
+            auth_handle: Handle::RH_OWNER,
             new_auth: Tpm2bAuth::from_bytes(&new_auth_data).unwrap(),
         };
-        let handles = HierarchyChangeAuthHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
 
-        let result =
-            execute_with_hmac_sessions(&mut sim, &cmd, handles, &[], &mut [session], &[&[]]);
+        let result = execute_with_hmac_sessions(&mut sim, &cmd, &[], &mut [session], &[&[]]);
 
         if size == 0 {
             // C CryptParameterDecryption (CryptUtil.c:966-970) rejects an empty
@@ -106,7 +115,10 @@ fn test_decryption_parameter_size_overflow() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -178,25 +190,20 @@ fn test_decryption_no_decryptable_parameters() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::DECRYPT);
 
-    let read_cmd = tpm2::commands::ReadPublic {};
-    let read_handles = tpm2::commands::ReadPublicHandles {
+    let read_cmd = tpm2::commands::ReadPublic {
         object_handle: Handle::RH_NULL, // invalid key but handles session validation first
     };
 
-    let result = execute_with_hmac_sessions(
-        &mut sim,
-        &read_cmd,
-        read_handles,
-        &[],
-        &mut [session],
-        &[&[]],
-    );
+    let result = execute_with_hmac_sessions(&mut sim, &read_cmd, &[], &mut [session], &[&[]]);
 
     // Note: TPM 2.0 Spec Part 1 Sec 21 states that TPM shall return TPM_RC_ATTRIBUTES
     // if decrypt attribute is set in a command session for a command with no decryptable parameter.
@@ -221,18 +228,20 @@ fn test_encryption_no_encryptable_parameters() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
     session.attributes.insert(TpmaSession::ENCRYPT);
 
-    let cmd = Clear {};
-    let handles = ClearHandles {
+    let cmd = Clear {
         auth_handle: Handle::RH_LOCKOUT,
     };
 
-    let result = execute_with_hmac_sessions(&mut sim, &cmd, handles, &[], &mut [session], &[&[]]);
+    let result = execute_with_hmac_sessions(&mut sim, &cmd, &[], &mut [session], &[&[]]);
 
     // Note: TPM 2.0 Spec Part 1 Sec 21 states that TPM shall return TPM_RC_ATTRIBUTES
     // if encrypt attribute is set in a command session for a command with no encryptable response parameter.
@@ -249,7 +258,10 @@ fn test_get_random_response_encryption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -259,13 +271,13 @@ fn test_get_random_response_encryption() {
         bytes_requested: 32,
     };
 
-    let result = execute_with_hmac_sessions(&mut sim, &cmd, (), &[], &mut [session], &[&[]]);
+    let result = execute_with_hmac_sessions(&mut sim, &cmd, &[], &mut [session], &[&[]]);
 
     assert!(
         result.is_ok(),
         "GetRandom with encrypt session failed: {:?}",
         result.err()
     );
-    let (resp, _) = result.unwrap();
+    let resp = result.unwrap();
     assert_eq!(resp.random_bytes.as_ref().len(), 32);
 }

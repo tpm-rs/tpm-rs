@@ -60,6 +60,11 @@ impl TpmTimer for LinuxTimer {
 static URANDOM_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 
 /// Linux-specific random number generator reading from OS entropy source.
+///
+/// Implements the platform [`Rng`] of [`TpmPlatform`]: [`Rng::fill_bytes`]
+/// draws from the [`PlatformCryptoProvider`]'s CSPRNG (the `getrandom`
+/// syscall), falling back to `/dev/urandom`. [`Rng::reseed`] is a no-op,
+/// because the OS entropy source cannot be stirred.
 pub struct LinuxRng;
 
 impl LinuxRng {
@@ -80,7 +85,12 @@ impl LinuxRng {
 }
 
 impl Rng for LinuxRng {
-    fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
+    /// Fills `dest` with random bytes from the OS entropy source.
+    ///
+    /// # Errors
+    /// * [`CryptoError::Internal`] - Neither the `getrandom` syscall nor
+    ///   `/dev/urandom` produced `dest.len()` bytes.
+    fn fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), CryptoError> {
         // 1. Try PlatformCryptoProvider (getrandom syscall) in a loop to handle EINTR.
         for _ in 0..10_000 {
             if PlatformCryptoProvider.get_random(dest).is_ok() {
@@ -147,7 +157,13 @@ impl Rng for LinuxRng {
             }
         }
 
-        Err(CryptoError::HardwareFailure)
+        Err(CryptoError::Internal)
+    }
+
+    /// Ignores `data`: the OS entropy source cannot be stirred, so
+    /// `TPM2_StirRandom` input has no effect on the platform RNG.
+    fn reseed(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
+        Ok(())
     }
 }
 
@@ -156,7 +172,7 @@ pub fn create_linux_platform<'a, C, S>(
     crypto: &'a mut C,
     storage: &'a mut S,
     timer: &'a mut LinuxTimer,
-    platform_rng: &'a LinuxRng,
+    platform_rng: &'a mut LinuxRng,
 ) -> TpmPlatform<'a, C, S, LinuxTimer, LinuxRng>
 where
     C: CryptoProvider,

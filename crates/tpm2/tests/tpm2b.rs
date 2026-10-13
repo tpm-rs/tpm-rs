@@ -360,7 +360,7 @@ fn test_try_unmarshal_tpm2b_nv_public() {
 
 #[test]
 fn test_tpm2b_nv_public_2_spec_structures_and_bounds() {
-    use tpm2::commands::{NVDefineSpace2, NVReadPublic2Rsp};
+    use tpm2::commands::{NVDefineSpace2, responses};
 
     // Verify MAX_SIZE and CAP constants per TPM 2.0 Part 2 Tables 229-232:
     // - TpmsNvPublic::MAX_SIZE = 78 bytes (4 + 2 + 4 + 66 + 2)
@@ -498,13 +498,15 @@ fn test_tpm2b_nv_public_2_spec_structures_and_bounds() {
 
     // 10. NVDefineSpace2 command and NVReadPublic2Rsp response round-trip and parameter error tagging
     let cmd = NVDefineSpace2 {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::new(&[0x11, 0x22, 0x33, 0x44]).unwrap(),
         public_info: wrapped_exp,
     };
     let mut cmd_buf = [0u8; NVDefineSpace2::MAX_SIZE];
     let cmd_len = cmd.marshal(&mut cmd_buf);
     let mut cmd_slice = &cmd_buf[..cmd_len];
-    let unmarshaled_cmd = NVDefineSpace2::unmarshal(&mut cmd_slice).unwrap();
+    let unmarshaled_cmd =
+        NVDefineSpace2::unmarshal_with_handles(cmd.handles(), &mut cmd_slice).unwrap();
     assert!(cmd_slice.is_empty());
     assert_eq!(unmarshaled_cmd, cmd);
 
@@ -514,18 +516,19 @@ fn test_tpm2b_nv_public_2_spec_structures_and_bounds() {
     bad_cmd_buf[8] = 0xFF;
     let mut bad_cmd_slice = &bad_cmd_buf[..cmd_len];
     assert_eq!(
-        NVDefineSpace2::unmarshal(&mut bad_cmd_slice),
+        NVDefineSpace2::unmarshal_with_handles(cmd.handles(), &mut bad_cmd_slice),
         Err(tpm2::errors::UnmarshalError::SELECTOR.in_parameter(2))
     );
 
-    let rsp = NVReadPublic2Rsp {
+    let rsp = responses::NVReadPublic2 {
         nv_public: wrapped_exp,
         nv_name: Tpm2bName::new(&[0x00, 0x0B, 0xAA, 0xBB]).unwrap(),
     };
-    let mut rsp_buf = [0u8; NVReadPublic2Rsp::MAX_SIZE];
+    let mut rsp_buf = [0u8; responses::NVReadPublic2::MAX_SIZE];
     let rsp_len = rsp.marshal(&mut rsp_buf);
     let mut rsp_slice = &rsp_buf[..rsp_len];
-    let unmarshaled_rsp = NVReadPublic2Rsp::unmarshal(&mut rsp_slice).unwrap();
+    let unmarshaled_rsp =
+        responses::NVReadPublic2::unmarshal_with_handles(rsp.handles(), &mut rsp_slice).unwrap();
     assert!(rsp_slice.is_empty());
     assert_eq!(unmarshaled_rsp, rsp);
 }

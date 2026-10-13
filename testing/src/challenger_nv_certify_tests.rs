@@ -3,12 +3,11 @@ use tpm2::errors::TpmRc;
 
 use crate::test_utils::{execute_with_password_sessions, execute_with_password_sessions_status};
 use tpm2::Handle;
+use tpm2::Message;
 use tpm2::TpmiAlgHash;
 use tpm2::Unmarshal;
 use tpm2::commands::{
-    CertifyCreation, CertifyCreationHandles, CreatePrimary, CreatePrimaryHandles, NVCertify,
-    NVCertifyHandles, NVDefineSpace, NVDefineSpaceHandles, NVReadLock, NVReadLockHandles, NVWrite,
-    NVWriteHandles, NVWriteLock, NVWriteLockHandles,
+    CertifyCreation, CreatePrimary, NVCertify, NVDefineSpace, NVReadLock, NVWrite, NVWriteLock,
 };
 use tpm2::{
     Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bMaxNvBuffer, Tpm2bSensitiveData, TpmaNv, TpmsNvPublic,
@@ -22,7 +21,6 @@ use tpm2_simulator::create_simulator;
 fn nv_certify_pw(
     sim: &mut tpm2_simulator::Simulator<'_>,
     cmd: &NVCertify<'_>,
-    handles: NVCertifyHandles,
     sign_auth: &[u8],
     nv_auth: &[u8],
 ) -> Result<(), u32> {
@@ -36,7 +34,10 @@ fn nv_certify_pw(
             hmac: Tpm2bAuth::from_bytes(auth).unwrap(),
         }));
     }
-    let mut body = marshal_to_vec(&handles);
+    let mut body = Vec::new();
+    for handle in cmd.handles() {
+        body.extend_from_slice(&marshal_to_vec(&handle));
+    }
     body.extend_from_slice(&(auth_area.len() as u32).to_be_bytes());
     body.extend_from_slice(&auth_area);
     body.extend_from_slice(&marshal_to_vec(cmd));
@@ -64,38 +65,38 @@ fn test_nv_write_boundaries() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     // 1. Normal write (offset = 0, size = 10)
     let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 10]).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
 
     // 2. Normal write at boundary (offset = 54, size = 10)
     let write_cmd_boundary = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xBB; 10]).unwrap(),
         offset: 54,
     };
-    execute_with_password_sessions(&mut sim, &write_cmd_boundary, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd_boundary, 1, &[]).unwrap();
 
     // 3. Out of bounds write (offset = 55, size = 10)
     let write_cmd_oob = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xCC; 10]).unwrap(),
         offset: 55,
     };
-    let res = execute_with_password_sessions(&mut sim, &write_cmd_oob, write_handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &write_cmd_oob, 1, &[]);
     match res {
         Err(err) => assert_eq!(err, TpmRc::NV_RANGE.get()),
         Ok(_) => panic!("Expected Size error, but command succeeded"),
@@ -115,26 +116,22 @@ fn test_nv_write_overflow() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     // 4. Wrapping overflow write: offset = 65530, size = 10 -> offset + size = 65540 -> wraps to 4.
     let write_cmd_overflow = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xDD; 10]).unwrap(),
         offset: 65530,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
 
     // This is expected to return TpmRc::SIZE. Instead, it currently panics (in debug) or wraps (in release).
-    let res = execute_with_password_sessions(&mut sim, &write_cmd_overflow, write_handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &write_cmd_overflow, 1, &[]);
     match res {
         // offset > dataSize: TPM_RC_VALUE + RC_NV_Write_offset (C `TPM2_NV_Write`).
         Err(err) => assert_eq!(
@@ -162,57 +159,57 @@ fn test_nv_certify_boundaries() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 64]).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
 
     // Certify command definition
     let certify_cmd = NVCertify {
+        sign_handle: Handle(0x40000007), // TPM_RH_NULL
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         size: 10,
         offset: 0,
     };
-    let certify_handles = NVCertifyHandles {
-        sign_handle: Handle(0x40000007), // TPM_RH_NULL
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
 
     // 1. Normal certify (offset = 0, size = 10)
-    nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], &[]).unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd, &[], &[]).unwrap();
 
     // 2. Normal certify at boundary (offset = 54, size = 10)
     let certify_cmd_boundary = NVCertify {
+        sign_handle: Handle(0x40000007), // TPM_RH_NULL
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         size: 10,
         offset: 54,
     };
-    nv_certify_pw(&mut sim, &certify_cmd_boundary, certify_handles, &[], &[]).unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd_boundary, &[], &[]).unwrap();
 
     // 3. Out of bounds certify (offset = 55, size = 10)
     let certify_cmd_oob = NVCertify {
+        sign_handle: Handle(0x40000007), // TPM_RH_NULL
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         size: 10,
         offset: 55,
     };
-    let res = nv_certify_pw(&mut sim, &certify_cmd_oob, certify_handles, &[], &[]);
+    let res = nv_certify_pw(&mut sim, &certify_cmd_oob, &[], &[]);
     match res {
         Err(err) => assert_eq!(err, TpmRc::NV_RANGE.get()),
         Ok(_) => panic!("Expected Size error, but command succeeded"),
@@ -232,39 +229,33 @@ fn test_nv_certify_overflow() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 64]).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
 
     // 4. Wrapping overflow certify: offset = 65530, size = 10 -> offset + size = 65540 -> wraps to 4.
     let certify_cmd_overflow = NVCertify {
+        sign_handle: Handle(0x40000007),
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         size: 10,
         offset: 65530,
     };
-    let certify_handles = NVCertifyHandles {
-        sign_handle: Handle(0x40000007),
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
 
     // This is expected to return TpmRc::SIZE. Instead, it currently panics (in debug) or wraps (in release).
-    let res = nv_certify_pw(&mut sim, &certify_cmd_overflow, certify_handles, &[], &[]);
+    let res = nv_certify_pw(&mut sim, &certify_cmd_overflow, &[], &[]);
     match res {
         Err(err) => assert_eq!(err, TpmRc::NV_RANGE.get()),
         Ok(_) => {
@@ -300,38 +291,33 @@ fn test_certify_creation_validation() {
     let in_sensitive = tpm2::Tpm2b(tpmt_sensitive);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: tpm2::TpmlPcrSelection::default(),
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (resp, resp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    let object_handle = resp_handles.object_handle;
+    let resp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
+    let object_handle = resp.object_handle;
 
     // Normal ticket that we received
     let ticket = resp.creation_ticket;
     let creation_hash = resp.creation_hash;
 
-    let cert_handles = CertifyCreationHandles {
-        sign_handle: Handle(0x40000007), // TPM_RH_NULL
-        object_handle,
-    };
     // signHandle has the USER role, so even TPM_RH_NULL needs a (password) session; C returns
     // TPM_RC_AUTH_MISSING otherwise (SessionProcess.c ParseSessionBuffer).
 
     // 2. Verify mismatching ticket hierarchy (should fail with Ticket error)
     let bad_hier_ticket = TpmtTkCreation::Creation(Handle::RH_PLATFORM, *ticket.digest());
     let cert_cmd_hier = CertifyCreation {
+        sign_handle: Handle(0x40000007), // TPM_RH_NULL
+        object_handle,
         qualifying_data: Tpm2bData::default(),
         creation_hash,
         in_scheme: None,
         creation_ticket: bad_hier_ticket,
     };
-    let res = execute_with_password_sessions_status(&mut sim, &cert_cmd_hier, cert_handles, 1, &[]);
+    let res = execute_with_password_sessions_status(&mut sim, &cert_cmd_hier, 1, &[]);
     match res {
         // TPM_RC_TICKET + RC_CertifyCreation_creationTicket (P4).
         Err(err) => assert_eq!(err, 0x4E0),
@@ -345,13 +331,14 @@ fn test_certify_creation_validation() {
         Tpm2bDigest::from_bytes(&[0xAA; 32]).unwrap(),
     );
     let cert_cmd_digest = CertifyCreation {
+        sign_handle: Handle(0x40000007), // TPM_RH_NULL
+        object_handle,
         qualifying_data: Tpm2bData::default(),
         creation_hash,
         in_scheme: None,
         creation_ticket: bad_digest_ticket,
     };
-    let res_digest =
-        execute_with_password_sessions_status(&mut sim, &cert_cmd_digest, cert_handles, 1, &[]);
+    let res_digest = execute_with_password_sessions_status(&mut sim, &cert_cmd_digest, 1, &[]);
 
     // We expect this to fail with Ticket error (since the digest is wrong).
     let err_digest = match res_digest {
@@ -416,52 +403,46 @@ fn test_nv_password_auth_write_read() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::from_bytes(b"nvpassword").unwrap(),
         public_info,
     };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     // 1. Try writing with NV Index auth but incorrect password
     let write_cmd = NVWrite {
+        auth_handle: Handle(nv_index_val),
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 10]).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle(nv_index_val),
-        nv_index: Handle(nv_index_val),
-    };
-    let res = execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, b"wrongpass");
+    let res = execute_with_password_sessions(&mut sim, &write_cmd, 1, b"wrongpass");
     match res {
         Err(err) => assert_eq!(err, 0x9A2), // BadAuth for session 1
         Ok(_) => panic!("Expected BadAuth error, but command succeeded"),
     }
 
     // 2. Try writing with NV Index auth and correct password
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, b"nvpassword").unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, b"nvpassword").unwrap();
 
     // 3. Try certifying with NV Index auth but incorrect password
     let certify_cmd = NVCertify {
+        sign_handle: Handle(0x40000007), // TPM_RH_NULL
+        auth_handle: Handle(nv_index_val),
+        nv_index: Handle(nv_index_val),
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         size: 10,
         offset: 0,
     };
-    let certify_handles = NVCertifyHandles {
-        sign_handle: Handle(0x40000007), // TPM_RH_NULL
-        auth_handle: Handle(nv_index_val),
-        nv_index: Handle(nv_index_val),
-    };
-    let res_cert = nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], b"wrongpass");
+    let res_cert = nv_certify_pw(&mut sim, &certify_cmd, &[], b"wrongpass");
     match res_cert {
         Err(err) => assert_eq!(err, 0xAA2), // BadAuth for session 2 (authHandle)
         Ok(_) => panic!("Expected BadAuth error, but command succeeded"),
     }
 
     // 4. Try certifying with NV Index auth and correct password
-    nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], b"nvpassword").unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd, &[], b"nvpassword").unwrap();
 }
 
 #[test]
@@ -478,34 +459,30 @@ fn test_nv_write_writelocked() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     // Normal write -> success
     let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 10]).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
 
     // Set TPMA_NV_WRITELOCKED through the TPM interface.
-    let lock_handles = NVWriteLockHandles {
+    let lock_cmd = NVWriteLock {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
     };
-    execute_with_password_sessions(&mut sim, &NVWriteLock {}, lock_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &lock_cmd, 1, &[]).unwrap();
 
     // Try writing again -> should fail with NvLocked (0x14F)
-    let res = execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]);
     match res {
         Err(err) => assert_eq!(err, TpmRc::NV_LOCKED.get()),
         Ok(_) => panic!("Expected NvLocked error, but write succeeded on WRITELOCKED index"),
@@ -527,26 +504,26 @@ fn test_nv_write_role_authorization() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::from_bytes(b"nvpass").unwrap(),
         public_info,
     };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     let write_cmd = NVWrite {
+        auth_handle: Handle(nv_index_val),
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 10]).unwrap(),
         offset: 0,
     };
 
     // Try writing with AUTHWRITE (using nv_index_val auth handle) -> should fail with NvAuthorization (0x14B)
-    let write_handles_auth = NVWriteHandles {
+    let write_cmd_auth = NVWrite {
         auth_handle: Handle(nv_index_val),
         nv_index: Handle(nv_index_val),
+        ..write_cmd
     };
-    let res_auth =
-        execute_with_password_sessions(&mut sim, &write_cmd, write_handles_auth, 1, b"nvpass");
+    let res_auth = execute_with_password_sessions(&mut sim, &write_cmd_auth, 1, b"nvpass");
     match res_auth {
         // AUTHWRITE is clear: the authValue is unavailable (C IsAuthValueAvailable).
         Err(err) => assert_eq!(err, TpmRc::AUTH_UNAVAILABLE.get()),
@@ -554,22 +531,24 @@ fn test_nv_write_role_authorization() {
     }
 
     // Try writing with PPWRITE (using RHPlatform auth handle) -> should fail with NvAuthorization (0x14B)
-    let write_handles_pp = NVWriteHandles {
+    let write_cmd_pp = NVWrite {
         auth_handle: Handle::RH_PLATFORM,
         nv_index: Handle(nv_index_val),
+        ..write_cmd
     };
-    let res_pp = execute_with_password_sessions(&mut sim, &write_cmd, write_handles_pp, 1, &[]);
+    let res_pp = execute_with_password_sessions(&mut sim, &write_cmd_pp, 1, &[]);
     match res_pp {
         Err(err) => assert_eq!(err, TpmRc::NV_AUTHORIZATION.get()),
         Ok(_) => panic!("Expected NvAuthorization error for PPWRITE, but write succeeded"),
     }
 
     // Try writing with OWNERWRITE (using RHOwner auth handle) -> success
-    let write_handles_owner = NVWriteHandles {
+    let write_cmd_owner = NVWrite {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
+        ..write_cmd
     };
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles_owner, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd_owner, 1, &[]).unwrap();
 
     // 2. Define another index with AUTHWRITE | OWNERREAD only (no OWNERWRITE)
     let nv_index_val_2 = 0x01500032;
@@ -582,35 +561,38 @@ fn test_nv_write_role_authorization() {
     };
     let public_info_2 = tpm2::Tpm2b(nv_public_struct_2);
     let cmd_2 = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::from_bytes(b"nvpass2").unwrap(),
         public_info: public_info_2,
     };
-    execute_with_password_sessions(&mut sim, &cmd_2, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd_2, 1, &[]).unwrap();
 
     let write_cmd_2 = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val_2),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xBB; 10]).unwrap(),
         offset: 0,
     };
 
     // Try writing with OWNERWRITE (using RHOwner auth handle) -> should fail with NvAuthorization (0x14B)
-    let write_handles_owner_2 = NVWriteHandles {
+    let write_cmd_owner_2 = NVWrite {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val_2),
+        ..write_cmd_2
     };
-    let res_owner_2 =
-        execute_with_password_sessions(&mut sim, &write_cmd_2, write_handles_owner_2, 1, &[]);
+    let res_owner_2 = execute_with_password_sessions(&mut sim, &write_cmd_owner_2, 1, &[]);
     match res_owner_2 {
         Err(err) => assert_eq!(err, TpmRc::NV_AUTHORIZATION.get()),
         Ok(_) => panic!("Expected NvAuthorization error for OWNERWRITE, but write succeeded"),
     }
 
     // Try writing with AUTHWRITE (using nv_index_val_2 auth handle) -> success
-    let write_handles_auth_2 = NVWriteHandles {
+    let write_cmd_auth_2 = NVWrite {
         auth_handle: Handle(nv_index_val_2),
         nv_index: Handle(nv_index_val_2),
+        ..write_cmd_2
     };
-    execute_with_password_sessions(&mut sim, &write_cmd_2, write_handles_auth_2, 1, b"nvpass2")
-        .unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd_auth_2, 1, b"nvpass2").unwrap();
 }
 
 #[test]
@@ -627,47 +609,41 @@ fn test_nv_certify_readlocked() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 64]).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
 
     // Normal certify -> success
     let certify_cmd = NVCertify {
+        sign_handle: Handle(0x40000007), // TPM_RH_NULL
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         size: 10,
         offset: 0,
     };
-    let certify_handles = NVCertifyHandles {
-        sign_handle: Handle(0x40000007), // TPM_RH_NULL
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], &[]).unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd, &[], &[]).unwrap();
 
     // Set TPMA_NV_READLOCKED through the TPM interface.
-    let lock_handles = NVReadLockHandles {
+    let lock_cmd = NVReadLock {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
     };
-    execute_with_password_sessions(&mut sim, &NVReadLock {}, lock_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &lock_cmd, 1, &[]).unwrap();
 
     // Try certifying again -> should fail with NvLocked (0x14F)
-    let res = nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], &[]);
+    let res = nv_certify_pw(&mut sim, &certify_cmd, &[], &[]);
     match res {
         Err(err) => assert_eq!(err, TpmRc::NV_LOCKED.get()),
         Ok(_) => panic!("Expected NvLocked error, but certify succeeded on READLOCKED index"),
@@ -689,25 +665,24 @@ fn test_nv_certify_role_authorization() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::from_bytes(b"nvpass").unwrap(),
         public_info,
     };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 64]).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
 
     let certify_cmd = NVCertify {
+        sign_handle: Handle(0x40000007),
+        auth_handle: Handle(nv_index_val),
+        nv_index: Handle(nv_index_val),
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         size: 10,
@@ -715,12 +690,13 @@ fn test_nv_certify_role_authorization() {
     };
 
     // Try certifying with AUTHREAD (using nv_index_val auth handle) -> should fail with NvAuthorization (0x14B)
-    let certify_handles_auth = NVCertifyHandles {
+    let certify_cmd_auth = NVCertify {
         sign_handle: Handle(0x40000007),
         auth_handle: Handle(nv_index_val),
         nv_index: Handle(nv_index_val),
+        ..certify_cmd
     };
-    let res_auth = nv_certify_pw(&mut sim, &certify_cmd, certify_handles_auth, &[], b"nvpass");
+    let res_auth = nv_certify_pw(&mut sim, &certify_cmd_auth, &[], b"nvpass");
     match res_auth {
         // AUTHREAD is clear: the authValue is unavailable (C IsAuthValueAvailable).
         Err(err) => assert_eq!(err, TpmRc::AUTH_UNAVAILABLE.get()),
@@ -728,24 +704,26 @@ fn test_nv_certify_role_authorization() {
     }
 
     // Try certifying with PPREAD (using RHPlatform auth handle) -> should fail with NvAuthorization (0x14B)
-    let certify_handles_pp = NVCertifyHandles {
+    let certify_cmd_pp = NVCertify {
         sign_handle: Handle(0x40000007),
         auth_handle: Handle::RH_PLATFORM,
         nv_index: Handle(nv_index_val),
+        ..certify_cmd
     };
-    let res_pp = nv_certify_pw(&mut sim, &certify_cmd, certify_handles_pp, &[], &[]);
+    let res_pp = nv_certify_pw(&mut sim, &certify_cmd_pp, &[], &[]);
     match res_pp {
         Err(err) => assert_eq!(err, TpmRc::NV_AUTHORIZATION.get()),
         Ok(_) => panic!("Expected NvAuthorization error for PPREAD, but certify succeeded"),
     }
 
     // Try certifying with OWNERREAD (using RHOwner auth handle) -> success
-    let certify_handles_owner = NVCertifyHandles {
+    let certify_cmd_owner = NVCertify {
         sign_handle: Handle(0x40000007),
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
+        ..certify_cmd
     };
-    nv_certify_pw(&mut sim, &certify_cmd, certify_handles_owner, &[], &[]).unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd_owner, &[], &[]).unwrap();
 
     // 2. Define another index with OWNERWRITE | AUTHREAD only (no OWNERREAD)
     let nv_index_val_2 = 0x01500035;
@@ -758,47 +736,41 @@ fn test_nv_certify_role_authorization() {
     };
     let public_info_2 = tpm2::Tpm2b(nv_public_struct_2);
     let cmd_2 = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::from_bytes(b"nvpass2").unwrap(),
         public_info: public_info_2,
     };
-    execute_with_password_sessions(&mut sim, &cmd_2, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd_2, 1, &[]).unwrap();
 
     let write_cmd_2 = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val_2),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 64]).unwrap(),
         offset: 0,
     };
-    let write_handles_2 = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val_2),
-    };
-    execute_with_password_sessions(&mut sim, &write_cmd_2, write_handles_2, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd_2, 1, &[]).unwrap();
 
     // Try certifying with OWNERREAD (using RHOwner auth handle) -> should fail with NvAuthorization (0x14B)
-    let certify_handles_owner_2 = NVCertifyHandles {
+    let certify_cmd_owner_2 = NVCertify {
         sign_handle: Handle(0x40000007),
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val_2),
+        ..certify_cmd
     };
-    let res_owner_2 = nv_certify_pw(&mut sim, &certify_cmd, certify_handles_owner_2, &[], &[]);
+    let res_owner_2 = nv_certify_pw(&mut sim, &certify_cmd_owner_2, &[], &[]);
     match res_owner_2 {
         Err(err) => assert_eq!(err, TpmRc::NV_AUTHORIZATION.get()),
         Ok(_) => panic!("Expected NvAuthorization error for OWNERREAD, but certify succeeded"),
     }
 
     // Try certifying with AUTHREAD (using nv_index_val_2 auth handle) -> success
-    let certify_handles_auth_2 = NVCertifyHandles {
+    let certify_cmd_auth_2 = NVCertify {
         sign_handle: Handle(0x40000007),
         auth_handle: Handle(nv_index_val_2),
         nv_index: Handle(nv_index_val_2),
+        ..certify_cmd
     };
-    nv_certify_pw(
-        &mut sim,
-        &certify_cmd,
-        certify_handles_auth_2,
-        &[],
-        b"nvpass2",
-    )
-    .unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd_auth_2, &[], b"nvpass2").unwrap();
 }
 
 #[test]
@@ -814,42 +786,36 @@ fn test_nv_written_validation() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     // 1. Try certifying before writing -> must fail with NvUninitialized (0x14A)
     let certify_cmd = NVCertify {
+        sign_handle: Handle(0x40000007),
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         size: 0,
         offset: 0,
     };
-    let certify_handles = NVCertifyHandles {
-        sign_handle: Handle(0x40000007),
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    let err_cert = nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], &[]).unwrap_err();
+    let err_cert = nv_certify_pw(&mut sim, &certify_cmd, &[], &[]).unwrap_err();
     assert_eq!(err_cert, TpmRc::NV_UNINITIALIZED.get());
 
     // 2. Write data -> should set WRITTEN
     let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0x55; 8]).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
 
     // 3. Certify after writing -> should succeed
-    nv_certify_pw(&mut sim, &certify_cmd, certify_handles, &[], &[]).unwrap();
+    nv_certify_pw(&mut sim, &certify_cmd, &[], &[]).unwrap();
 }
 
 #[test]
@@ -869,24 +835,19 @@ fn test_nv_write_invalid_types() {
             data_size: 8,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
         let write_cmd = NVWrite {
+            auth_handle: Handle::RH_OWNER,
+            nv_index: Handle(nv_index_val),
             data: Tpm2bMaxNvBuffer::from_bytes(&[0x11; 8]).unwrap(),
             offset: 0,
         };
-        let write_handles = NVWriteHandles {
-            auth_handle: Handle::RH_OWNER,
-            nv_index: Handle(nv_index_val),
-        };
-        let err = execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[])
-            .unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.get());
     }
 
@@ -903,24 +864,19 @@ fn test_nv_write_invalid_types() {
             data_size: 8,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
         let write_cmd = NVWrite {
+            auth_handle: Handle::RH_OWNER,
+            nv_index: Handle(nv_index_val),
             data: Tpm2bMaxNvBuffer::from_bytes(&[0x11; 8]).unwrap(),
             offset: 0,
         };
-        let write_handles = NVWriteHandles {
-            auth_handle: Handle::RH_OWNER,
-            nv_index: Handle(nv_index_val),
-        };
-        let err = execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[])
-            .unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.get());
     }
 
@@ -937,24 +893,19 @@ fn test_nv_write_invalid_types() {
             data_size: 32,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+        execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
         let write_cmd = NVWrite {
+            auth_handle: Handle::RH_OWNER,
+            nv_index: Handle(nv_index_val),
             data: Tpm2bMaxNvBuffer::from_bytes(&[0x11; 32]).unwrap(),
             offset: 0,
         };
-        let write_handles = NVWriteHandles {
-            auth_handle: Handle::RH_OWNER,
-            nv_index: Handle(nv_index_val),
-        };
-        let err = execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[])
-            .unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.get());
     }
 }
@@ -972,32 +923,28 @@ fn test_nv_write_writeall() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
-
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
     // 1. Partial write (size = 8 != 16) -> must fail with NvRange (0x146)
     let write_cmd_partial = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 8]).unwrap(),
         offset: 0,
     };
-    let err = execute_with_password_sessions(&mut sim, &write_cmd_partial, write_handles, 1, &[])
-        .unwrap_err();
+    let err = execute_with_password_sessions(&mut sim, &write_cmd_partial, 1, &[]).unwrap_err();
     assert_eq!(err, TpmRc::NV_RANGE.get());
 
     // 2. Full write (size = 16) -> success
     let write_cmd_full = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 16]).unwrap(),
         offset: 0,
     };
-    execute_with_password_sessions(&mut sim, &write_cmd_full, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd_full, 1, &[]).unwrap();
 }

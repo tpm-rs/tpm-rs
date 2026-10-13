@@ -4,17 +4,16 @@ use crate::test_utils::{
     execute_sign, execute_with_hmac_sessions, execute_with_password_sessions, flush_context,
     start_auth_session,
 };
-use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, HierarchyChangeAuth, HierarchyChangeAuthHandles,
-    VerifySignature, VerifySignatureHandles,
-};
+#[allow(deprecated)]
+use tpm2::commands::VerifySignature;
+use tpm2::commands::{CreatePrimary, HierarchyChangeAuth};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, TpmEccCurve, TpmSe};
 use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bSensitiveData, TpmaObject,
-    TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmsEccParms, TpmsEccPoint, TpmsSensitiveCreate,
-    TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bSensitiveData,
+    TpmaObject, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmsEccParms,
+    TpmsEccPoint, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSymDefObject,
 };
+use tpm2::{Handle, TpmEccCurve, TpmSe};
 use tpm2_simulator::{Simulator, create_simulator};
 
 fn create_ecc_key(sim: &mut Simulator<'_>, auth: &[u8]) -> Handle {
@@ -48,19 +47,18 @@ fn create_ecc_key(sim: &mut Simulator<'_>, auth: &[u8]) -> Handle {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_ENDORSEMENT,
-    };
-    let (_, rsp_handles) = execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[])
-        .expect("could not generate key");
+    let rsp_handles =
+        execute_with_password_sessions(sim, &create_cmd, 1, &[]).expect("could not generate key");
     rsp_handles.object_handle
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_decryption_handle_no_auth_requirement() {
     let mut sim = create_simulator!();
 
@@ -75,7 +73,10 @@ fn test_decryption_handle_no_auth_requirement() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -83,34 +84,27 @@ fn test_decryption_handle_no_auth_requirement() {
 
     let digest = Tpm2bDigest::from_bytes(&[0xBB; 32]).unwrap();
     let sign_cmd = tpm2::commands::Sign {
+        key_handle,
         digest,
         in_scheme: None,
         validation: tpm2::TpmtTkHashcheck::default(),
     };
     let mut resp_buffer = [0u8; 4096];
-    let (sign_rsp, _) = execute_sign(
-        &mut sim,
-        &sign_cmd,
-        tpm2::commands::SignHandles { key_handle },
-        1,
-        key_auth,
-        &mut resp_buffer,
-    )
-    .expect("could not sign digest");
+    let sign_rsp = execute_sign(&mut sim, &sign_cmd, 1, key_auth, &mut resp_buffer)
+        .expect("could not sign digest");
 
     // VerifySignature parameter: digest (to be decrypted)
     let verify_cmd = VerifySignature {
+        key_handle,
         digest,
         signature: sign_rsp.signature,
     };
-    let verify_handles = VerifySignatureHandles { key_handle };
 
     // Case A: Client uses Empty Auth (&[]). This must SUCCEED.
     let session_a = session.clone();
     let result_a = execute_with_hmac_sessions(
         &mut sim,
         &verify_cmd,
-        verify_handles,
         &[],
         &mut [session_a],
         &[&[]], // Empty Auth
@@ -126,7 +120,6 @@ fn test_decryption_handle_no_auth_requirement() {
     let result_b = execute_with_hmac_sessions(
         &mut sim,
         &verify_cmd,
-        verify_handles,
         &[],
         &mut [session_b.clone()],
         &[key_auth], // Wrong Auth (for this decrypt-only session KDFa key derivation)
@@ -157,7 +150,10 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
         .unwrap()
     };
 
-    let aes_cfb = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+    let aes_cfb = Some(TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+    });
     let sym_null = None;
 
     // Setup CreatePrimary parameters
@@ -191,12 +187,10 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
-    };
-    let handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
     };
 
     let err_pos3 = TpmRc::ATTRIBUTES.with(Position::session(3)).get();
@@ -220,7 +214,6 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
         let res = execute_with_hmac_sessions(
             &mut sim,
             &cmd,
-            handles.clone(),
             &[],
             &mut [s1.clone(), s2.clone(), s3.clone()],
             &[&[], &[], &[]],
@@ -251,7 +244,6 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
         let res = execute_with_hmac_sessions(
             &mut sim,
             &cmd,
-            handles.clone(),
             &[],
             &mut [s1.clone(), s2.clone(), s3.clone()],
             &[&[], &[], &[]],
@@ -283,7 +275,6 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
         let res = execute_with_hmac_sessions(
             &mut sim,
             &cmd,
-            handles.clone(),
             &[],
             &mut [s1.clone(), s2.clone(), s3.clone()],
             &[&[], &[], &[]],
@@ -293,8 +284,8 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
             "Valid Decrypt (1st) + Encrypt (3rd) failed: {:?}",
             res.err()
         );
-        if let Ok((_, resp_handles)) = res {
-            flush_context(&mut sim, resp_handles.object_handle).unwrap();
+        if let Ok(resp) = res {
+            flush_context(&mut sim, resp.object_handle).unwrap();
         }
         flush_context(&mut sim, s1.session_handle).unwrap();
         flush_context(&mut sim, s2.session_handle).unwrap();
@@ -312,7 +303,6 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
         let res = execute_with_hmac_sessions(
             &mut sim,
             &cmd,
-            handles.clone(),
             &[],
             &mut [s1.clone(), s2.clone(), s3.clone()],
             &[&[], &[], &[]],
@@ -337,7 +327,6 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
         let res = execute_with_hmac_sessions(
             &mut sim,
             &cmd,
-            handles.clone(),
             &[],
             &mut [s1.clone(), s2.clone(), s3.clone()],
             &[&[], &[], &[]],
@@ -362,7 +351,6 @@ fn test_multiple_sessions_attributes_and_symmetric_constraints() {
         let res = execute_with_hmac_sessions(
             &mut sim,
             &cmd,
-            handles.clone(),
             &[],
             &mut [s1.clone(), s2.clone(), s3.clone()],
             &[&[], &[], &[]],
@@ -385,14 +373,15 @@ fn test_response_encryption_key_derivation_index_alignment_3_sessions() {
 
     // Set owner auth
     let cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(owner_auth_value).unwrap(),
     };
-    let handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 
-    let aes_cfb = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+    let aes_cfb = Some(TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+    });
     let sym_default = None;
 
     // Session 1: HMAC session, authorizes RHOwner
@@ -470,12 +459,10 @@ fn test_response_encryption_key_derivation_index_alignment_3_sessions() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
-    };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
     };
 
     // Case A: Client uses empty auth for session 3 (correct index 2 alignment). This must SUCCEED.
@@ -485,7 +472,6 @@ fn test_response_encryption_key_derivation_index_alignment_3_sessions() {
     let result_a = execute_with_hmac_sessions(
         &mut sim,
         &create_cmd,
-        create_handles.clone(),
         &[],
         &mut [s1.clone(), s2.clone(), s3.clone()],
         &[owner_auth_value, &[], &[]],
@@ -495,14 +481,13 @@ fn test_response_encryption_key_derivation_index_alignment_3_sessions() {
         "CreatePrimary with 3 sessions should succeed: {:?}",
         result_a.err()
     );
-    let (_, resp_handles) = result_a.unwrap();
+    let resp_handles = result_a.unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 
     // Case B: Client uses owner_auth_value for session 3 (incorrect index alignment derivation). This must FAIL.
     let result_b = execute_with_hmac_sessions(
         &mut sim,
         &create_cmd,
-        create_handles,
         &[],
         &mut [s1, s2, s3],
         &[owner_auth_value, &[], owner_auth_value], // Client derives using owner_auth_value for session 3

@@ -9,7 +9,7 @@ use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
-use tpm2::commands::Command;
+use tpm2::commands::{Command, Message, UnmarshalMessage};
 use tpm2::crypto::Asymmetric;
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bName,
@@ -24,7 +24,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -51,14 +51,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -71,13 +68,15 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut <tpm2::Handle as Marshal>::MaxBuffer = (&mut request_buf
+            [offset..offset + tpm2::Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        let handle_len = handle.marshal(handle_slice);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -117,8 +116,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = tpm2::Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -130,10 +131,13 @@ where
 
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
-    let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let resp_params = <C::Response<'static> as UnmarshalMessage>::unmarshal_with_handles(
+        resp_handles,
+        &mut params_slice,
+    )
+    .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp_params)
 }
 
 fn compute_key_name(crypto: &TestCryptoProvider, public: &TpmtPublic) -> Tpm2bName<'static> {
@@ -308,9 +312,9 @@ fn test_exhaustive_combinations_debug() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
 
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let parent_hash = TpmiAlgHash::Sha1;
     let sym_alg = None;
@@ -332,25 +336,17 @@ fn test_exhaustive_combinations_debug() {
     );
     global_state.transient_objects[1] = Some(target.clone());
 
-    use tpm2::commands::{Duplicate, DuplicateHandles};
-    let dup_handles = DuplicateHandles {
+    use tpm2::commands::Duplicate;
+    let dup_cmd = Duplicate {
         object_handle: Handle(0x80000002),
         new_parent_handle: Handle(0x80000001),
-    };
-    let dup_cmd = Duplicate {
         encryption_key_in: Tpm2bData::default(),
         symmetric_alg: sym_alg,
     };
 
     let dup_auth = dup_policy_auth(&mut global_state);
 
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &dup_handles,
-        &dup_cmd,
-        &[dup_auth],
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &dup_cmd, &[dup_auth]);
     assert!(res.is_ok());
 }
 
@@ -365,9 +361,8 @@ fn expected_inner_wrapper_rc(crypto: &TestCryptoProvider, key: &[u8], duplicate:
     let mut iv = [0u8; 16];
     tpm2::crypto::decrypt(
         crypto,
-        TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)),
-        key,
-        &mut iv,
+        tpm2::crypto::SymmetricKey::new(tpm2::AlgSym::Aes128, key).unwrap(),
+        tpm2::crypto::ModeIv::new(tpm2::TpmiAlgCipherMode::Cfb, &mut iv).unwrap(),
         &mut data,
     )
     .unwrap();
@@ -391,8 +386,8 @@ fn test_import_malformed_inner_blob_size() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Setup parent storage key (handle 0x80000001)
     let parent = create_transient_key(
@@ -411,38 +406,27 @@ fn test_import_malformed_inner_blob_size() {
     global_state.transient_objects[1] = Some(target.clone());
 
     // 3. Generate a valid duplicate output to get the correct seed/HMAC/etc.
-    use tpm2::commands::{Duplicate, DuplicateHandles};
-    let dup_handles = DuplicateHandles {
+    use tpm2::commands::Duplicate;
+    let dup_cmd = Duplicate {
         object_handle: Handle(0x80000002),
         new_parent_handle: Handle(0x80000001),
-    };
-    let dup_cmd = Duplicate {
         encryption_key_in: Tpm2bData::default(),
         symmetric_alg: None,
     };
     let dup_auth = dup_policy_auth(&mut global_state);
-    let (_, dup_resp) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &dup_handles,
-        &dup_cmd,
-        &[dup_auth],
-    )
-    .unwrap();
+    let dup_resp = execute_tpm_command(&mut tpm, &mut global_state, &dup_cmd, &[dup_auth]).unwrap();
 
     let mut pub_buf = [0u8; 1024];
     let pub_len = marshal_to_slice(&target.public, &mut pub_buf);
     let object_public = Tpm2bPublic::from_bytes(&pub_buf[..pub_len]).unwrap();
 
-    use tpm2::commands::{Import, ImportHandles};
-    let imp_handles = ImportHandles {
-        parent_handle: Handle(0x80000001),
-    };
+    use tpm2::commands::Import;
 
     // Scenario A: No inner wrapper, duplicate_bytes length < 2 (only 1 byte)
     {
         let bad_duplicate_1 = Tpm2bPrivate::from_bytes(&[0x00]).unwrap();
         let imp_cmd = Import {
+            parent_handle: Handle(0x80000001),
             encryption_key: Tpm2bData::default(),
             object_public,
             duplicate: bad_duplicate_1,
@@ -452,7 +436,6 @@ fn test_import_malformed_inner_blob_size() {
         let res = execute_tpm_command(
             &mut tpm,
             &mut global_state,
-            &imp_handles,
             &imp_cmd,
             &[common::password_auth(b"")],
         );
@@ -474,6 +457,7 @@ fn test_import_malformed_inner_blob_size() {
         // sensitive_size = 256 (0x0100), but total length is only 3 bytes
         let bad_duplicate_2 = Tpm2bPrivate::from_bytes(&[0x01, 0x00, 0x99]).unwrap();
         let imp_cmd = Import {
+            parent_handle: Handle(0x80000001),
             encryption_key: Tpm2bData::default(),
             object_public,
             duplicate: bad_duplicate_2,
@@ -483,7 +467,6 @@ fn test_import_malformed_inner_blob_size() {
         let res = execute_tpm_command(
             &mut tpm,
             &mut global_state,
-            &imp_handles,
             &imp_cmd,
             &[common::password_auth(b"")],
         );
@@ -502,8 +485,12 @@ fn test_import_malformed_inner_blob_size() {
     {
         let encryption_key = Tpm2bData::from_bytes(&[0u8; 16]).unwrap();
         let bad_duplicate_3 = Tpm2bPrivate::from_bytes(&[0xaa]).unwrap();
-        let sym_alg = Some(TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)));
+        let sym_alg = Some(TpmtSymDefObject {
+            alg: tpm2::AlgSym::Aes128,
+            mode: Some(tpm2::TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)),
+        });
         let imp_cmd = Import {
+            parent_handle: Handle(0x80000001),
             encryption_key,
             object_public,
             duplicate: bad_duplicate_3,
@@ -513,7 +500,6 @@ fn test_import_malformed_inner_blob_size() {
         let res = execute_tpm_command(
             &mut tpm,
             &mut global_state,
-            &imp_handles,
             &imp_cmd,
             &[common::password_auth(b"")],
         );
@@ -540,8 +526,12 @@ fn test_import_malformed_inner_blob_size() {
             *byte ^= 0x55; // XOR with the key byte to compute ciphertext
         }
         let bad_duplicate_4 = Tpm2bPrivate::from_bytes(&plaintext).unwrap();
-        let sym_alg = Some(TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)));
+        let sym_alg = Some(TpmtSymDefObject {
+            alg: tpm2::AlgSym::Aes128,
+            mode: Some(tpm2::TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)),
+        });
         let imp_cmd = Import {
+            parent_handle: Handle(0x80000001),
             encryption_key,
             object_public,
             duplicate: bad_duplicate_4,
@@ -551,7 +541,6 @@ fn test_import_malformed_inner_blob_size() {
         let res = execute_tpm_command(
             &mut tpm,
             &mut global_state,
-            &imp_handles,
             &imp_cmd,
             &[common::password_auth(b"")],
         );
@@ -576,8 +565,12 @@ fn test_import_malformed_inner_blob_size() {
             *byte ^= 0xcc;
         }
         let bad_duplicate_5 = Tpm2bPrivate::from_bytes(&plaintext).unwrap();
-        let sym_alg = Some(TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)));
+        let sym_alg = Some(TpmtSymDefObject {
+            alg: tpm2::AlgSym::Aes128,
+            mode: Some(tpm2::TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)),
+        });
         let imp_cmd = Import {
+            parent_handle: Handle(0x80000001),
             encryption_key,
             object_public,
             duplicate: bad_duplicate_5,
@@ -587,7 +580,6 @@ fn test_import_malformed_inner_blob_size() {
         let res = execute_tpm_command(
             &mut tpm,
             &mut global_state,
-            &imp_handles,
             &imp_cmd,
             &[common::password_auth(b"")],
         );
@@ -607,8 +599,12 @@ fn test_import_malformed_inner_blob_size() {
             *byte ^= 0x11;
         }
         let bad_duplicate_6 = Tpm2bPrivate::from_bytes(&plaintext).unwrap();
-        let sym_alg = Some(TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)));
+        let sym_alg = Some(TpmtSymDefObject {
+            alg: tpm2::AlgSym::Aes128,
+            mode: Some(tpm2::TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)),
+        });
         let imp_cmd = Import {
+            parent_handle: Handle(0x80000001),
             encryption_key,
             object_public,
             duplicate: bad_duplicate_6,
@@ -618,7 +614,6 @@ fn test_import_malformed_inner_blob_size() {
         let res = execute_tpm_command(
             &mut tpm,
             &mut global_state,
-            &imp_handles,
             &imp_cmd,
             &[common::password_auth(b"")],
         );
@@ -633,8 +628,8 @@ fn test_duplicate_invalid_parent_coordinates_zero_size() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Create a parent ECC storage key at 0x80000001
     let mut parent = create_transient_ecc_key(
@@ -647,7 +642,10 @@ fn test_duplicate_invalid_parent_coordinates_zero_size() {
     // Also set its symmetric algorithm to be non-Null so that outer wrapper encryption is performed.
     let mut pub_t = parent.public.as_tpmt();
     if let PublicParmsAndId::Ecc(ref mut parms, ref mut point) = pub_t.parms_and_id {
-        parms.symmetric = Some(TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)));
+        parms.symmetric = Some(TpmtSymDefObject {
+            alg: tpm2::AlgSym::Aes128,
+            mode: Some(tpm2::TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)),
+        });
         point.x = tpm2::Tpm2bEccParameter::default(); // 0 size!
         point.y = tpm2::Tpm2bEccParameter::default(); // 0 size!
     }
@@ -663,24 +661,16 @@ fn test_duplicate_invalid_parent_coordinates_zero_size() {
     global_state.transient_objects[1] = Some(target.clone());
 
     // 3. Call Duplicate on target under the tampered parent key
-    use tpm2::commands::{Duplicate, DuplicateHandles};
-    let dup_handles = DuplicateHandles {
+    use tpm2::commands::Duplicate;
+    let dup_cmd = Duplicate {
         object_handle: Handle(0x80000002),
         new_parent_handle: Handle(0x80000001),
-    };
-    let dup_cmd = Duplicate {
         encryption_key_in: Tpm2bData::default(),
         symmetric_alg: None,
     };
 
     // This should not panic or underflow. It should return Failure because ECDH point multiply fails with invalid coordinates
     let dup_auth = dup_policy_auth(&mut global_state);
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &dup_handles,
-        &dup_cmd,
-        &[dup_auth],
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &dup_cmd, &[dup_auth]);
     assert_eq!(res.err(), Some(TpmRc::FAILURE.get()));
 }

@@ -1,12 +1,13 @@
+use super::encrypt_decrypt::{crypto_check, crypto_len};
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::commands::responses;
-use tpm2::commands::{Commit, CommitHandles};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::commands::{Commit, responses};
+use tpm2::crypto::{CryptoProvider, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bEccParameter, TpmEccCurve, TpmaObject, TpmsEccPoint};
 
@@ -30,20 +31,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn commit(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<CommitHandles>()?;
+        let handles = request.try_unmarshal_handles::<Commit>()?;
+        let [sign_handle] = handles;
+        check(sign_handle, Tpmi::DhObject, Position::handle(1))?;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
         // Parameters are unmarshaled before any command-specific validation (as in C, where
         // `Commit_In_Unmarshal` runs before `TPM2_Commit`).
-        let cmd = request.try_unmarshal::<Commit>()?;
+        let cmd = request.try_unmarshal_command::<Commit>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
 
         // 1. Lookup signing key and validate attributes
         let (in_public, actual_private_key, curve, hash_alg, key_name) =
-            self.validate_commit_object_attributes(handles.sign_handle, num_sessions)?;
+            self.validate_commit_object_attributes(cmd.sign_handle, num_sessions)?;
 
         // 2. Validate input point P1 and parameters S2/Y2
         let param_size = match curve {
@@ -132,7 +135,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -232,9 +235,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             p1_buf[param_size - p1_x.len()..param_size].copy_from_slice(p1_x);
             p1_buf[param_size * 2 - p1_y.len()..param_size * 2].copy_from_slice(p1_y);
 
-            self.crypto()
-                .validate_point(curve, &p1_buf[..param_size * 2])
-                .map_err(|_| TpmRc::ECC_POINT.with(Position::parameter(1)))?;
+            crypto_check(
+                self.crypto()
+                    .validate_point(curve, &p1_buf[..param_size * 2]),
+                TpmRc::ECC_POINT.with(Position::parameter(1)),
+            )?;
         }
 
         let s2_buf = cmd.s2.get_buffer();
@@ -257,9 +262,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             xy2[param_size * 2 - y2_buf.len()..param_size * 2].copy_from_slice(y2_buf);
 
-            self.crypto()
-                .validate_point(curve, &xy2[..param_size * 2])
-                .map_err(|_| TpmRc::ECC_POINT.with(Position::parameter(3)))?;
+            crypto_check(
+                self.crypto().validate_point(curve, &xy2[..param_size * 2]),
+                TpmRc::ECC_POINT.with(Position::parameter(3)),
+            )?;
 
             Some(xy2)
         } else {
@@ -294,53 +300,67 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let r = &r_buf[..param_size];
 
         if let Some(xy2) = xy2_opt {
-            self.crypto()
-                .point_multiply(
+            crypto_len(
+                self.crypto().point_multiply(
                     curve,
                     &actual_private_key[..param_size],
                     &xy2[..param_size * 2],
                     &mut k_buf[..param_size * 2],
-                )
-                .map_err(|_| TpmRc::NO_RESULT)?;
+                ),
+                TpmRc::NO_RESULT,
+            )?;
 
-            self.crypto()
-                .point_multiply(
+            crypto_len(
+                self.crypto().point_multiply(
                     curve,
                     &r[..param_size],
                     &xy2[..param_size * 2],
                     &mut l_buf[..param_size * 2],
-                )
-                .map_err(|_| TpmRc::NO_RESULT)?;
+                ),
+                TpmRc::NO_RESULT,
+            )?;
         } else {
             if !p1_is_empty {
-                self.crypto()
-                    .point_multiply(
+                crypto_len(
+                    self.crypto().point_multiply(
                         curve,
                         &actual_private_key[..param_size],
                         &p1_buf[..param_size * 2],
                         &mut k_buf[..param_size * 2],
-                    )
-                    .map_err(|_| TpmRc::NO_RESULT)?;
+                    ),
+                    TpmRc::NO_RESULT,
+                )?;
             }
 
-            self.crypto()
-                .point_multiply_generator(curve, &r[..param_size], &mut l_buf[..param_size * 2])
-                .map_err(|_| TpmRc::NO_RESULT)?;
+            crypto_len(
+                self.crypto().point_multiply_generator(
+                    curve,
+                    &r[..param_size],
+                    &mut l_buf[..param_size * 2],
+                ),
+                TpmRc::NO_RESULT,
+            )?;
         }
 
         if !p1_is_empty {
-            self.crypto()
-                .point_multiply(
+            crypto_len(
+                self.crypto().point_multiply(
                     curve,
                     &r[..param_size],
                     &p1_buf[..param_size * 2],
                     &mut e_buf[..param_size * 2],
-                )
-                .map_err(|_| TpmRc::NO_RESULT)?;
+                ),
+                TpmRc::NO_RESULT,
+            )?;
         } else {
-            self.crypto()
-                .point_multiply_generator(curve, &r[..param_size], &mut e_buf[..param_size * 2])
-                .map_err(|_| TpmRc::NO_RESULT)?;
+            crypto_len(
+                self.crypto().point_multiply_generator(
+                    curve,
+                    &r[..param_size],
+                    &mut e_buf[..param_size * 2],
+                ),
+                TpmRc::NO_RESULT,
+            )?;
         }
         Ok(())
     }
@@ -433,7 +453,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut generated = 0;
             while generated < n_len {
                 iterations += 1;
-                let mut hmac = tpm2::crypto::HmacCtx::new(
+                let mut hmac = HmacStream::new(
                     self.crypto(),
                     COMMIT_KDF_HASH,
                     &self.global_state.commit_nonce,
@@ -444,7 +464,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 hmac.update(name).ok()?;
                 hmac.update(&cntr).ok()?;
                 hmac.update(&size_in_bits.to_be_bytes()).ok()?;
-                let mut mac_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+                let mut mac_buf = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
                 let mac = hmac.finalize(&mut mac_buf).ok()?;
                 let take = digest_size.min(n_len - generated);
                 r[generated..generated + take].copy_from_slice(&mac.digest()[..take]);

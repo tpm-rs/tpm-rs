@@ -6,7 +6,7 @@
 //! interface.
 
 use crate::test_utils::{CLIENT_CRYPTO, entity_name, marshal_to_vec, start_auth_session};
-use tpm2::crypto::Rng;
+use tpm2::crypto::CryptoProvider;
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bSensitiveData,
     TpmEccCurve, TpmSe, TpmaObject, TpmiAlgHash, TpmsEccParms, TpmsEccPoint, TpmsSensitiveCreate,
@@ -221,7 +221,7 @@ pub struct Resp {
 }
 
 fn sha256(parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HashCtx::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
+    let mut ctx = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }
@@ -230,7 +230,7 @@ fn sha256(parts: &[&[u8]]) -> Vec<u8> {
 }
 
 fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HmacCtx::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256, key).unwrap();
+    let mut ctx = tpm2::crypto::HmacStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256, key).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }

@@ -2,9 +2,10 @@ use hex_literal::hex;
 use tpm2::crypto::CryptoError;
 use tpm2::crypto::asymmetric::{Asymmetric, AsymmetricSign, TpmiRsaKeyBits};
 use tpm2::crypto::ecc::{Ecc, TpmEccCurve};
-use tpm2::crypto::rng::Rng;
+use tpm2::crypto::{ConstantTimeEq as _, CryptoProvider};
 use tpm2::crypto::{Finalize as _, Hash as _, Update as _};
-use tpm2::{Alg, TpmiAlgHash, TpmiAlgSymMode, TpmtHa, TpmtSymDefObject};
+use tpm2::crypto::{ModeIv, SymmetricKey};
+use tpm2::{Alg, AlgSym, TpmiAlgCipherMode, TpmiAlgHash, TpmtHa};
 use tpm2_crypto_tests::TestProvider;
 
 // ==========================================
@@ -14,7 +15,7 @@ use tpm2_crypto_tests::TestProvider;
 #[test]
 fn test_sha1_kat() {
     let provider = TestProvider;
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
 
     // Empty input
     let digest = tpm2::crypto::hash(&provider, tpm2::TpmiAlgHash::Sha1, b"", &mut out).unwrap();
@@ -34,7 +35,7 @@ fn test_sha1_kat() {
 #[test]
 fn test_sha256_kat() {
     let provider = TestProvider;
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
 
     // Empty input
     let digest = tpm2::crypto::hash(&provider, tpm2::TpmiAlgHash::Sha256, b"", &mut out).unwrap();
@@ -55,7 +56,7 @@ fn test_sha256_kat() {
 #[test]
 fn test_sha384_kat() {
     let provider = TestProvider;
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
 
     // Empty input
     let digest = tpm2::crypto::hash(&provider, tpm2::TpmiAlgHash::Sha384, b"", &mut out).unwrap();
@@ -80,7 +81,7 @@ fn test_sha384_kat() {
 #[test]
 fn test_sha512_kat() {
     let provider = TestProvider;
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
 
     // Empty input
     let digest = tpm2::crypto::hash(&provider, tpm2::TpmiAlgHash::Sha512, b"", &mut out).unwrap();
@@ -114,7 +115,7 @@ fn test_hash_incremental() {
     let mut digest = [0u8; 32];
     state.finalize(&mut digest).unwrap();
 
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
     let expected = tpm2::crypto::hash(
         &provider,
         tpm2::TpmiAlgHash::Sha256,
@@ -135,7 +136,7 @@ fn test_hash_large_buffer() {
         *val = (i % 251) as u8;
     }
 
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
     let digest =
         tpm2::crypto::hash(&provider, tpm2::TpmiAlgHash::Sha256, &large_buf, &mut out).unwrap();
 
@@ -230,7 +231,7 @@ fn test_hmac_incremental() {
     let provider = TestProvider;
 
     let key = b"secret_key_data";
-    let mut ctx = tpm2::crypto::HmacCtx::new(&provider, TpmiAlgHash::Sha256, key).unwrap();
+    let mut ctx = tpm2::crypto::HmacStream::new(&provider, TpmiAlgHash::Sha256, key).unwrap();
     ctx.update(b"hello ").unwrap();
     ctx.update(b"world!").unwrap();
     let mut out1 = [0u8; 64];
@@ -291,20 +292,31 @@ fn test_hmac_large_data() {
 #[test]
 fn test_aes128_cfb_encrypt_decrypt() {
     let provider = TestProvider;
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
 
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
     let mut data = *b"plaintext_16byte";
 
     // Encrypt
-    tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::encrypt(
+        &provider,
+        SymmetricKey::Aes128(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    )
+    .unwrap();
     let ciphertext = data;
 
     // Reset IV
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
     // Decrypt
-    tpm2::crypto::decrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::decrypt(
+        &provider,
+        SymmetricKey::Aes128(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    )
+    .unwrap();
     assert_eq!(&data[..], b"plaintext_16byte");
     assert_ne!(ciphertext, data);
 }
@@ -312,18 +324,29 @@ fn test_aes128_cfb_encrypt_decrypt() {
 #[test]
 fn test_aes128_cfb_multi_block() {
     let provider = TestProvider;
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
 
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
     let mut data = [0xAAu8; 48];
     let original = data;
 
-    tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::encrypt(
+        &provider,
+        SymmetricKey::Aes128(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    )
+    .unwrap();
     let ciphertext = data;
 
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
-    tpm2::crypto::decrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::decrypt(
+        &provider,
+        SymmetricKey::Aes128(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    )
+    .unwrap();
     assert_eq!(data, original);
     assert_ne!(ciphertext, original);
 }
@@ -331,17 +354,28 @@ fn test_aes128_cfb_multi_block() {
 #[test]
 fn test_aes256_cfb_encrypt_decrypt() {
     let provider = TestProvider;
-    let alg = TpmtSymDefObject::Aes256(Some(TpmiAlgSymMode::CFB));
 
     let key = hex!("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914df1a");
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
     let mut data = *b"plaintext_16byte";
 
-    tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::encrypt(
+        &provider,
+        SymmetricKey::Aes256(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    )
+    .unwrap();
     let ciphertext = data;
 
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
-    tpm2::crypto::decrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::decrypt(
+        &provider,
+        SymmetricKey::Aes256(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    )
+    .unwrap();
     assert_eq!(&data[..], b"plaintext_16byte");
     assert_ne!(ciphertext, data);
 }
@@ -349,18 +383,29 @@ fn test_aes256_cfb_encrypt_decrypt() {
 #[test]
 fn test_aes256_cfb_multi_block() {
     let provider = TestProvider;
-    let alg = TpmtSymDefObject::Aes256(Some(TpmiAlgSymMode::CFB));
 
     let key = hex!("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914df1a");
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
     let mut data = [0x55u8; 80];
     let original = data;
 
-    tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::encrypt(
+        &provider,
+        SymmetricKey::Aes256(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    )
+    .unwrap();
     let ciphertext = data;
 
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
-    tpm2::crypto::decrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::decrypt(
+        &provider,
+        SymmetricKey::Aes256(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    )
+    .unwrap();
     assert_eq!(data, original);
     assert_ne!(ciphertext, original);
 }
@@ -368,7 +413,6 @@ fn test_aes256_cfb_multi_block() {
 #[test]
 fn test_aes_cfb_non_zero_iv() {
     let provider = TestProvider;
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
 
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let mut iv1 = hex!("000102030405060708090a0b0c0d0e0f");
@@ -376,8 +420,20 @@ fn test_aes_cfb_non_zero_iv() {
     let mut data1 = *b"plaintext_16byte";
     let mut data2 = *b"plaintext_16byte";
 
-    tpm2::crypto::encrypt(&provider, alg, &key, &mut iv1, &mut data1).unwrap();
-    tpm2::crypto::encrypt(&provider, alg, &key, &mut iv2, &mut data2).unwrap();
+    tpm2::crypto::encrypt(
+        &provider,
+        SymmetricKey::Aes128(&key),
+        ModeIv::Cfb(&mut iv1),
+        &mut data1,
+    )
+    .unwrap();
+    tpm2::crypto::encrypt(
+        &provider,
+        SymmetricKey::Aes128(&key),
+        ModeIv::Cfb(&mut iv2),
+        &mut data2,
+    )
+    .unwrap();
 
     // Verify dependency on IV (outputs must be different)
     assert_ne!(data1, data2);
@@ -386,59 +442,171 @@ fn test_aes_cfb_non_zero_iv() {
 #[test]
 fn test_aes_empty_data() {
     let provider = TestProvider;
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
 
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
     let mut data = [];
 
-    let res = tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data);
+    let res = tpm2::crypto::encrypt(
+        &provider,
+        SymmetricKey::Aes128(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    );
     assert!(res.is_ok());
 }
 
 #[test]
 fn test_aes_key_too_small() {
-    let provider = TestProvider;
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
-
     let key = [0u8; 10]; // too small
-    let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
-    let mut data = [0u8; 16];
 
-    let res = tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    // The key length is validated when the `SymmetricKey` is built, before any backend call
+    // (exp: `encrypt` returned `CryptoError::InvalidData`).
+    assert_eq!(SymmetricKey::new(AlgSym::Aes128, &key), None);
 }
 
 #[test]
 fn test_aes_iv_too_small() {
-    let provider = TestProvider;
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
-
-    let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let mut iv = [0u8; 10]; // too small
-    let mut data = [0u8; 16];
 
-    let res = tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    // The IV length is validated when the `ModeIv` is built, before any backend call
+    // (exp: `encrypt` returned `CryptoError::InvalidData`).
+    assert_eq!(ModeIv::new(TpmiAlgCipherMode::Cfb, &mut iv), None);
 }
 
 #[test]
 fn test_aes_corrupted_ciphertext() {
     let provider = TestProvider;
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
 
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
     let mut data = *b"plaintext_16byte";
 
-    tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::encrypt(
+        &provider,
+        SymmetricKey::Aes128(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    )
+    .unwrap();
     // Corrupt ciphertext
     data[5] ^= 0xFF;
 
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
-    tpm2::crypto::decrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::decrypt(
+        &provider,
+        SymmetricKey::Aes128(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    )
+    .unwrap();
     // Verify it decrypts to garbage (not matching original plaintext)
     assert_ne!(&data[..], b"plaintext_16byte");
+}
+
+/// Plaintext of the NIST SP 800-38A, Appendix F.3 (CFB128) example vectors.
+const SP800_38A_PLAINTEXT: [u8; 64] = hex!(
+    "6bc1bee22e409f96e93d7e117393172a"
+    "ae2d8a571e03ac9c9eb76fac45af8e51"
+    "30c81c46a35ce411e5fbc1191a0a52ef"
+    "f69f2445df4f9b17ad2b417be66c3710"
+);
+
+/// Initialization vector of the NIST SP 800-38A, Appendix F.3 (CFB128) example vectors.
+const SP800_38A_IV: [u8; 16] = hex!("000102030405060708090a0b0c0d0e0f");
+
+/// Encrypts and then decrypts [`SP800_38A_PLAINTEXT`] in CFB mode with `key` in one call each,
+/// checking the output against `ciphertext` and the IV written back by each call (`ivOut`),
+/// which is the last ciphertext block for block-aligned data.
+fn check_aes_cfb_sp800_38a(key: SymmetricKey<'_>, ciphertext: &[u8; 64]) {
+    let provider = TestProvider;
+
+    let mut data = SP800_38A_PLAINTEXT;
+    let mut iv = SP800_38A_IV;
+    tpm2::crypto::encrypt(&provider, key, ModeIv::Cfb(&mut iv), &mut data).unwrap();
+    assert_eq!(&data, ciphertext, "{:?} encryption", key.alg());
+    assert_eq!(
+        &iv[..],
+        &ciphertext[48..],
+        "{:?} encryption ivOut",
+        key.alg()
+    );
+
+    let mut iv = SP800_38A_IV;
+    tpm2::crypto::decrypt(&provider, key, ModeIv::Cfb(&mut iv), &mut data).unwrap();
+    assert_eq!(data, SP800_38A_PLAINTEXT, "{:?} decryption", key.alg());
+    assert_eq!(
+        &iv[..],
+        &ciphertext[48..],
+        "{:?} decryption ivOut",
+        key.alg()
+    );
+}
+
+#[test]
+fn test_aes_cfb_sp800_38a_kat() {
+    // F.3.13 / F.3.14: CFB128-AES128.Encrypt / Decrypt
+    check_aes_cfb_sp800_38a(
+        SymmetricKey::Aes128(&hex!("2b7e151628aed2a6abf7158809cf4f3c")),
+        &hex!(
+            "3b3fd92eb72dad20333449f8e83cfb4a"
+            "c8a64537a0b3a93fcde3cdad9f1ce58b"
+            "26751f67a3cbb140b1808cf187a4f4df"
+            "c04b05357c5d1c0eeac4c66f9ff7f2e6"
+        ),
+    );
+
+    // F.3.15 / F.3.16: CFB128-AES192.Encrypt / Decrypt
+    check_aes_cfb_sp800_38a(
+        SymmetricKey::Aes192(&hex!("8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b")),
+        &hex!(
+            "cdc80d6fddf18cab34c25909c99a4174"
+            "67ce7f7f81173621961a2b70171d3d7a"
+            "2e1e8a1dd59b88b1c8e60fed1efac4c9"
+            "c05f9f9ca9834fa042ae8fba584b09ff"
+        ),
+    );
+
+    // F.3.17 / F.3.18: CFB128-AES256.Encrypt / Decrypt
+    check_aes_cfb_sp800_38a(
+        SymmetricKey::Aes256(&hex!(
+            "603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4"
+        )),
+        &hex!(
+            "dc7e84bfda79164b7ecd8486985d3860"
+            "39ffed143b28b1c832113c6331e5407b"
+            "df10132415e54b92a13ed0a8267ae2f9"
+            "75a385741ab9cef82031623d55b1e471"
+        ),
+    );
+}
+
+#[test]
+fn test_aes_cfb_iv_chaining() {
+    let provider = TestProvider;
+    let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
+    let key = SymmetricKey::Aes128(&key);
+
+    // One call over the whole message.
+    let mut whole = SP800_38A_PLAINTEXT;
+    let mut iv = SP800_38A_IV;
+    tpm2::crypto::encrypt(&provider, key, ModeIv::Cfb(&mut iv), &mut whole).unwrap();
+
+    // The IV written back by a call continues the stream: two block-aligned calls give the
+    // same ciphertext as one call.
+    let mut parts = SP800_38A_PLAINTEXT;
+    let mut iv = SP800_38A_IV;
+    let (first, second) = parts.split_at_mut(32);
+    tpm2::crypto::encrypt(&provider, key, ModeIv::Cfb(&mut iv), first).unwrap();
+    tpm2::crypto::encrypt(&provider, key, ModeIv::Cfb(&mut iv), second).unwrap();
+    assert_eq!(parts, whole);
+
+    // The same holds for decryption, with a different split.
+    let mut iv = SP800_38A_IV;
+    let (first, second) = parts.split_at_mut(16);
+    tpm2::crypto::decrypt(&provider, key, ModeIv::Cfb(&mut iv), first).unwrap();
+    tpm2::crypto::decrypt(&provider, key, ModeIv::Cfb(&mut iv), second).unwrap();
+    assert_eq!(parts, SP800_38A_PLAINTEXT);
 }
 
 // ==========================================
@@ -451,14 +619,7 @@ fn test_cmac_aes128_empty() {
 
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let mut mac = [0u8; 16];
-    tpm2::crypto::cmac(
-        &provider,
-        tpm2::TpmtSymDefObject::Aes128(None),
-        &key,
-        b"",
-        &mut mac,
-    )
-    .unwrap();
+    tpm2::crypto::cmac(&provider, SymmetricKey::Aes128(&key), b"", &mut mac).unwrap();
     assert_eq!(&mac[..], &hex!("bb1d6929e95937287fa37d129b756746")[..]);
 }
 
@@ -469,14 +630,7 @@ fn test_cmac_aes128_16bytes() {
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let data = hex!("6bc1bee22e409f96e93d7e117393172a");
     let mut mac = [0u8; 16];
-    tpm2::crypto::cmac(
-        &provider,
-        tpm2::TpmtSymDefObject::Aes128(None),
-        &key,
-        &data,
-        &mut mac,
-    )
-    .unwrap();
+    tpm2::crypto::cmac(&provider, SymmetricKey::Aes128(&key), &data, &mut mac).unwrap();
     assert_eq!(&mac[..], &hex!("070a16b46b4d4144f79bdd9dd04a287c")[..]);
 }
 
@@ -488,14 +642,7 @@ fn test_cmac_aes128_40bytes() {
     let data =
         hex!("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411");
     let mut mac = [0u8; 16];
-    tpm2::crypto::cmac(
-        &provider,
-        tpm2::TpmtSymDefObject::Aes128(None),
-        &key,
-        &data,
-        &mut mac,
-    )
-    .unwrap();
+    tpm2::crypto::cmac(&provider, SymmetricKey::Aes128(&key), &data, &mut mac).unwrap();
     assert_eq!(&mac[..], &hex!("dfa66747de9ae63030ca32611497c827")[..]);
 }
 
@@ -505,14 +652,7 @@ fn test_cmac_aes256_empty() {
 
     let key = hex!("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914df1a");
     let mut mac = [0u8; 16];
-    tpm2::crypto::cmac(
-        &provider,
-        tpm2::TpmtSymDefObject::Aes256(None),
-        &key,
-        b"",
-        &mut mac,
-    )
-    .unwrap();
+    tpm2::crypto::cmac(&provider, SymmetricKey::Aes256(&key), b"", &mut mac).unwrap();
     assert_eq!(&mac[..], &hex!("5f6844eb8d79e76cd244c07ad1003bce")[..]);
 }
 
@@ -523,31 +663,17 @@ fn test_cmac_aes256_16bytes() {
     let key = hex!("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914df1a");
     let data = hex!("6bc1bee22e409f96e93d7e117393172a");
     let mut mac = [0u8; 16];
-    tpm2::crypto::cmac(
-        &provider,
-        tpm2::TpmtSymDefObject::Aes256(None),
-        &key,
-        &data,
-        &mut mac,
-    )
-    .unwrap();
+    tpm2::crypto::cmac(&provider, SymmetricKey::Aes256(&key), &data, &mut mac).unwrap();
     assert_eq!(&mac[..], &hex!("22c2ef5b01082373365b34de01a7de91")[..]);
 }
 
 #[test]
 fn test_cmac_key_too_small() {
-    let provider = TestProvider;
-
     let key = [0u8; 10]; // too small
-    let mut mac = [0u8; 16];
-    let res = tpm2::crypto::cmac(
-        &provider,
-        tpm2::TpmtSymDefObject::Aes128(None),
-        &key,
-        b"",
-        &mut mac,
-    );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+
+    // The key length is validated when the `SymmetricKey` is built, before any backend call
+    // (exp: `cmac` returned `CryptoError::InvalidData`).
+    assert_eq!(SymmetricKey::new(AlgSym::Aes128, &key), None);
 }
 
 #[test]
@@ -560,13 +686,7 @@ fn test_cmac_large_message() {
         *val = (i % 251) as u8;
     }
     let mut mac = [0u8; 16];
-    let res = tpm2::crypto::cmac(
-        &provider,
-        tpm2::TpmtSymDefObject::Aes128(None),
-        &key,
-        &data,
-        &mut mac,
-    );
+    let res = tpm2::crypto::cmac(&provider, SymmetricKey::Aes128(&key), &data, &mut mac);
     assert!(res.is_ok());
 }
 
@@ -652,6 +772,7 @@ fn test_rsa_oaep_encrypt_decrypt() {
             &mut ciphertext,
             &[],
         )
+        .unwrap()
         .unwrap();
 
     // Decrypt using provider
@@ -665,6 +786,7 @@ fn test_rsa_oaep_encrypt_decrypt() {
             &mut decrypted,
             &[],
         )
+        .unwrap()
         .unwrap();
 
     assert_eq!(&decrypted[..dec_len], plaintext);
@@ -700,6 +822,7 @@ fn test_rsa_pss_sign_verify() {
             TpmtHa::Sha256(&digest),
             &mut signature,
         )
+        .unwrap()
         .unwrap();
 
     // provider.verify_inner should succeed
@@ -709,7 +832,7 @@ fn test_rsa_pss_sign_verify() {
         TpmtHa::Sha256(&digest),
         &signature[..sig_len],
     );
-    assert!(res.is_ok());
+    assert_eq!(res, Ok(true));
 
     // Verify using rsa crate directly
     let pub_key = rsa::RsaPublicKey::new(
@@ -756,6 +879,7 @@ fn test_rsa_pkcs1v15_sign_verify() {
             TpmtHa::Sha256(&digest),
             &mut signature,
         )
+        .unwrap()
         .unwrap();
 
     // provider.verify_inner should succeed
@@ -765,7 +889,7 @@ fn test_rsa_pkcs1v15_sign_verify() {
         TpmtHa::Sha256(&digest),
         &signature[..sig_len],
     );
-    assert!(res.is_ok());
+    assert_eq!(res, Ok(true));
 
     // Verify using rsa crate directly
     let pub_key = rsa::RsaPublicKey::new(
@@ -813,6 +937,7 @@ fn test_rsa_import_and_raw_decrypt() {
     let mut imported_private_key = [0u8; 2048];
     let imported_len = provider
         .rsa_import_private_key(&modulus, &prime_p, exponent, &mut imported_private_key)
+        .unwrap()
         .unwrap();
 
     // Raw decrypt using imported private key
@@ -830,6 +955,7 @@ fn test_rsa_import_and_raw_decrypt() {
             &mut plaintext,
             &[],
         )
+        .unwrap()
         .unwrap();
 
     assert_eq!(decrypted_len, 256);
@@ -848,7 +974,7 @@ fn test_rsa_import_p_zero() {
     let mut private_key_out = [0u8; 1024];
 
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 }
 
 #[test]
@@ -860,7 +986,7 @@ fn test_rsa_import_modulus_zero_p_nonzero() {
     let mut private_key_out = [0u8; 1024];
 
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 }
 
 #[test]
@@ -873,7 +999,7 @@ fn test_rsa_import_invalid_primes() {
     let mut private_key_out = [0u8; 1024];
 
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 }
 
 #[test]
@@ -917,7 +1043,8 @@ fn test_rsa_oaep_decrypt_corrupted() {
         &mut decrypted,
         &[],
     );
-    assert_eq!(res.unwrap_err(), CryptoError::HardwareFailure);
+    // A bad OAEP padding is an invalid ciphertext: `Ok(None)` (exp: `HardwareFailure`).
+    assert_eq!(res, Ok(None));
 }
 
 #[test]
@@ -925,7 +1052,7 @@ fn test_rsa_oaep_decrypt_corrupted() {
 fn test_rsa_pss_verify_corrupted() {
     let provider = TestProvider;
 
-    // Since verify_inner is supported, checking corrupted signature should return InvalidData.
+    // Since verify_inner is supported, checking corrupted signature should return Ok(false).
     let public_key = [0u8; 256];
     let digest = [0u8; 32];
     let signature = [0u8; 256];
@@ -936,7 +1063,7 @@ fn test_rsa_pss_verify_corrupted() {
         TpmtHa::Sha256(&digest),
         &signature,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
 }
 
 #[test]
@@ -977,7 +1104,7 @@ fn test_rsa_decrypt_buffer_too_small() {
         &mut decrypted,
         &[],
     );
-    assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+    assert_eq!(res.unwrap_err(), CryptoError::Internal);
 }
 
 // ==========================================
@@ -1035,17 +1162,19 @@ fn test_ecdsa_sign_verify() {
             TpmtHa::Sha256(&digest),
             &mut signature,
         )
+        .unwrap()
         .unwrap();
     assert_eq!(sig_len, 64);
 
-    provider
-        .verify_inner(
+    assert_eq!(
+        provider.verify_inner(
             Alg::ECDSA,
             &ecc_pub[..ecc_pub_len],
             TpmtHa::Sha256(&digest),
             &signature[..sig_len],
-        )
-        .unwrap();
+        ),
+        Ok(true)
+    );
 }
 
 #[test]
@@ -1068,21 +1197,23 @@ fn test_ecc_validate_point() {
         .unwrap();
 
     // Validate generated key
-    provider
-        .validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &public_key)
-        .unwrap();
+    assert_eq!(
+        provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &public_key),
+        Ok(true)
+    );
 
     // Uncompressed generator point (X and Y coordinates, 64 bytes)
     let generator_uncompressed = hex!(
         "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
         "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
     );
-    provider
-        .validate_point(
+    assert_eq!(
+        provider.validate_point(
             tpm2::crypto::ecc::TpmEccCurve::NistP256,
             &generator_uncompressed,
-        )
-        .unwrap();
+        ),
+        Ok(true)
+    );
 }
 
 #[test]
@@ -1119,24 +1250,26 @@ fn test_ecdh_shared_secret() {
         .unwrap();
 
     let mut secret_a = [0u8; 64];
-    provider
-        .point_multiply(
+    assert_eq!(
+        provider.point_multiply(
             tpm2::crypto::ecc::TpmEccCurve::NistP256,
             &priv_a,
             &pub_b,
             &mut secret_a,
-        )
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
 
     let mut secret_b = [0u8; 64];
-    provider
-        .point_multiply(
+    assert_eq!(
+        provider.point_multiply(
             tpm2::crypto::ecc::TpmEccCurve::NistP256,
             &priv_b,
             &pub_a,
             &mut secret_b,
-        )
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
 
     assert_eq!(secret_a, secret_b);
 }
@@ -1169,6 +1302,7 @@ fn test_ecdsa_verify_corrupted_signature() {
             TpmtHa::Sha256(&digest),
             &mut signature,
         )
+        .unwrap()
         .unwrap();
 
     // Corrupt signature
@@ -1180,7 +1314,7 @@ fn test_ecdsa_verify_corrupted_signature() {
         TpmtHa::Sha256(&digest),
         &signature[..sig_len],
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
 }
 
 #[test]
@@ -1225,6 +1359,7 @@ fn test_ecdsa_verify_mismatched_key() {
             TpmtHa::Sha256(&digest),
             &mut signature,
         )
+        .unwrap()
         .unwrap();
 
     let res = provider.verify_inner(
@@ -1233,7 +1368,7 @@ fn test_ecdsa_verify_mismatched_key() {
         TpmtHa::Sha256(&digest),
         &signature[..sig_len],
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
 }
 
 #[test]
@@ -1244,7 +1379,7 @@ fn test_ecc_validate_invalid_point() {
     // All zeros
     let pt = [0u8; 64];
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &pt);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
 }
 
 #[test]
@@ -1287,7 +1422,7 @@ fn test_ecdh_output_buffer_too_small() {
         &pub_b,
         &mut small_secret,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+    assert_eq!(res.unwrap_err(), CryptoError::Internal);
 }
 
 // ==========================================
@@ -1350,6 +1485,23 @@ fn test_rng_multiple_requests() {
     }
 }
 
+#[test]
+fn test_rng_stir_random() {
+    let provider = TestProvider;
+
+    // `TPM2_StirRandom` input (including an empty one) is accepted, and the generator keeps
+    // producing output afterwards.
+    provider.stir_random(b"additional input").unwrap();
+    provider.stir_random(&[]).unwrap();
+
+    let mut buf1 = [0u8; 64];
+    let mut buf2 = [0u8; 64];
+    provider.get_random(&mut buf1).unwrap();
+    provider.get_random(&mut buf2).unwrap();
+    assert!(!buf1.iter().all(|&x| x == 0));
+    assert_ne!(buf1, buf2);
+}
+
 // ==========================================
 // TIER 3: Cross-Feature Combinations
 // ==========================================
@@ -1390,6 +1542,7 @@ fn test_combo_rsa_keygen_sign_verify() {
             TpmtHa::Sha256(&digest_bytes),
             &mut signature,
         )
+        .unwrap()
         .unwrap();
 
     // 4. Verify signature using rsa crate directly
@@ -1443,17 +1596,19 @@ fn test_combo_ecc_keygen_sign_verify() {
             TpmtHa::Sha256(&digest_bytes),
             &mut signature,
         )
+        .unwrap()
         .unwrap();
 
     // 4. Verify signature
-    provider
-        .verify_inner(
+    assert_eq!(
+        provider.verify_inner(
             Alg::ECDSA,
             &public_key[..pub_len],
             TpmtHa::Sha256(&digest_bytes),
             &signature[..sig_len],
-        )
-        .unwrap();
+        ),
+        Ok(true)
+    );
 }
 
 #[test]
@@ -1491,24 +1646,26 @@ fn test_combo_ecdh_exchange_aes_cfb() {
         .unwrap();
 
     let mut secret_a = [0u8; 64];
-    provider
-        .point_multiply(
+    assert_eq!(
+        provider.point_multiply(
             tpm2::crypto::ecc::TpmEccCurve::NistP256,
             &priv_a,
             &pub_b,
             &mut secret_a,
-        )
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
 
     let mut secret_b = [0u8; 64];
-    provider
-        .point_multiply(
+    assert_eq!(
+        provider.point_multiply(
             tpm2::crypto::ecc::TpmEccCurve::NistP256,
             &priv_b,
             &pub_a,
             &mut secret_b,
-        )
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
     assert_eq!(secret_a, secret_b);
 
     // 2. Derive AES key from shared secret (using first 32 bytes)
@@ -1517,13 +1674,13 @@ fn test_combo_ecdh_exchange_aes_cfb() {
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
     let mut data = *b"super_secret_payload_from_ecdh_kdf_etc.";
     let original = data;
-    let alg = TpmtSymDefObject::Aes256(Some(TpmiAlgSymMode::CFB));
+    let key = SymmetricKey::new(AlgSym::Aes256, aes_key).unwrap();
 
-    tpm2::crypto::encrypt(&provider, alg, aes_key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::encrypt(&provider, key, ModeIv::Cfb(&mut iv), &mut data).unwrap();
     let ciphertext = data;
 
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
-    tpm2::crypto::decrypt(&provider, alg, aes_key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::decrypt(&provider, key, ModeIv::Cfb(&mut iv), &mut data).unwrap();
 
     assert_eq!(data, original);
     assert_ne!(ciphertext, original);
@@ -1564,6 +1721,7 @@ fn test_combo_keygen_save_load() {
     let mut imported_private_key = [0u8; 2048];
     let imported_len = provider
         .rsa_import_private_key(&modulus, &prime_p, exponent, &mut imported_private_key)
+        .unwrap()
         .unwrap();
 
     // Perform decrypt with loaded key
@@ -1581,6 +1739,7 @@ fn test_combo_keygen_save_load() {
             &mut plaintext,
             &[],
         )
+        .unwrap()
         .unwrap();
 
     assert_eq!(decrypted_len, 256);
@@ -1664,7 +1823,7 @@ fn oracle_hmac(alg: Alg, key: &[u8], data: &[u8]) -> Vec<u8> {
 fn test_rust_crypto_provider_hash_differential() {
     let provider = TestProvider;
     let sizes = [0, 1, 2, 10, 63, 64, 65, 127, 128, 129, 1024, 4096, 10000];
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
 
     // Test SHA-1
     for &size in &sizes {
@@ -1814,7 +1973,7 @@ fn test_rust_crypto_provider_hmac_differential() {
 
                 // Incremental
                 let mut ctx =
-                    tpm2::crypto::HmacCtx::new(&provider, TpmiAlgHash::Sha1, &key).unwrap();
+                    tpm2::crypto::HmacStream::new(&provider, TpmiAlgHash::Sha1, &key).unwrap();
                 if data_size > 0 {
                     let half = data_size / 2;
                     ctx.update(&data[..half]).unwrap();
@@ -1847,7 +2006,7 @@ fn test_rust_crypto_provider_hmac_differential() {
 
                 // Incremental
                 let mut ctx =
-                    tpm2::crypto::HmacCtx::new(&provider, TpmiAlgHash::Sha256, &key).unwrap();
+                    tpm2::crypto::HmacStream::new(&provider, TpmiAlgHash::Sha256, &key).unwrap();
                 if data_size > 0 {
                     let half = data_size / 2;
                     ctx.update(&data[..half]).unwrap();
@@ -1880,7 +2039,7 @@ fn test_rust_crypto_provider_hmac_differential() {
 
                 // Incremental
                 let mut ctx =
-                    tpm2::crypto::HmacCtx::new(&provider, TpmiAlgHash::Sha384, &key).unwrap();
+                    tpm2::crypto::HmacStream::new(&provider, TpmiAlgHash::Sha384, &key).unwrap();
                 if data_size > 0 {
                     let half = data_size / 2;
                     ctx.update(&data[..half]).unwrap();
@@ -1913,7 +2072,7 @@ fn test_rust_crypto_provider_hmac_differential() {
 
                 // Incremental
                 let mut ctx =
-                    tpm2::crypto::HmacCtx::new(&provider, TpmiAlgHash::Sha512, &key).unwrap();
+                    tpm2::crypto::HmacStream::new(&provider, TpmiAlgHash::Sha512, &key).unwrap();
                 if data_size > 0 {
                     let half = data_size / 2;
                     ctx.update(&data[..half]).unwrap();
@@ -1980,7 +2139,7 @@ fn test_rust_crypto_provider_rng_properties() {
 
 #[test]
 fn test_kdfa_boundary_conditions() {
-    use tpm2::crypto::kdf::kdfa;
+    use tpm2::crypto::kdf::kdfa_bits;
     let provider = TestProvider;
 
     let key = b"my_secret_kdf_key_that_is_long";
@@ -1990,7 +2149,7 @@ fn test_kdfa_boundary_conditions() {
 
     // 1. Verify buffer too small triggers error
     let mut out_small = [0u8; 10];
-    let err = kdfa(
+    let err = kdfa_bits(
         &provider,
         TpmiAlgHash::Sha256,
         key,
@@ -2001,11 +2160,11 @@ fn test_kdfa_boundary_conditions() {
         &mut out_small,
     )
     .unwrap_err();
-    assert_eq!(err, CryptoError::BufferTooSmall);
+    assert_eq!(err, CryptoError::Internal);
 
     // 2. Exact buffer size works
     let mut out_exact = [0u8; 16];
-    let len = kdfa(
+    let len = kdfa_bits(
         &provider,
         TpmiAlgHash::Sha256,
         key,
@@ -2020,7 +2179,7 @@ fn test_kdfa_boundary_conditions() {
 
     // 3. Larger buffer size works, only populates required bytes
     let mut out_large = [0u8; 32];
-    let len = kdfa(
+    let len = kdfa_bits(
         &provider,
         TpmiAlgHash::Sha256,
         key,
@@ -2036,7 +2195,7 @@ fn test_kdfa_boundary_conditions() {
 
     // 4. Test bits not divisible by 8 (e.g., 13 bits) -> div_ceil(13, 8) = 2 bytes
     let mut out_non_div = [0u8; 5];
-    let len = kdfa(
+    let len = kdfa_bits(
         &provider,
         TpmiAlgHash::Sha256,
         key,
@@ -2050,7 +2209,7 @@ fn test_kdfa_boundary_conditions() {
     assert_eq!(len, 2);
     assert_eq!(out_non_div[0] & 0xE0, 0);
     // Verify against raw HMAC digest with bits=13 that upper 3 bits are masked and lower bits preserved
-    let mut raw_ctx = tpm2::crypto::HmacCtx::new(&provider, TpmiAlgHash::Sha256, key).unwrap();
+    let mut raw_ctx = tpm2::crypto::HmacStream::new(&provider, TpmiAlgHash::Sha256, key).unwrap();
     raw_ctx.update(&1u32.to_be_bytes()).unwrap();
     raw_ctx.update(label).unwrap();
     raw_ctx.update(&[0x00]).unwrap();
@@ -2064,7 +2223,7 @@ fn test_kdfa_boundary_conditions() {
 
     // 4b. Verify label with trailing NUL byte produces identical output
     let mut out_nul_label = [0u8; 16];
-    let len_nul = kdfa(
+    let len_nul = kdfa_bits(
         &provider,
         TpmiAlgHash::Sha256,
         key,
@@ -2080,7 +2239,7 @@ fn test_kdfa_boundary_conditions() {
 
     // 5. Test different hash algorithms (Sha1, Sha256, Sha384, Sha512)
     let mut out_sha1 = [0u8; 20];
-    let len1 = kdfa(
+    let len1 = kdfa_bits(
         &provider,
         TpmiAlgHash::Sha1,
         key,
@@ -2094,7 +2253,7 @@ fn test_kdfa_boundary_conditions() {
     assert_eq!(len1, 20);
 
     let mut out_sha384 = [0u8; 48];
-    let len3 = kdfa(
+    let len3 = kdfa_bits(
         &provider,
         TpmiAlgHash::Sha384,
         key,
@@ -2108,7 +2267,7 @@ fn test_kdfa_boundary_conditions() {
     assert_eq!(len3, 48);
 
     let mut out_sha512 = [0u8; 64];
-    let len5 = kdfa(
+    let len5 = kdfa_bits(
         &provider,
         TpmiAlgHash::Sha512,
         key,
@@ -2123,7 +2282,7 @@ fn test_kdfa_boundary_conditions() {
 
     // 6. Test very large bit generation (multiple iterations of KDF loop)
     let mut out_huge = [0u8; 512];
-    let len_huge = kdfa(
+    let len_huge = kdfa_bits(
         &provider,
         TpmiAlgHash::Sha256,
         key,
@@ -2138,7 +2297,7 @@ fn test_kdfa_boundary_conditions() {
 
     // 7. Empty inputs
     let mut out_empty = [0u8; 32];
-    let len_empty = kdfa(
+    let len_empty = kdfa_bits(
         &provider,
         TpmiAlgHash::Sha256,
         &[],
@@ -2154,7 +2313,7 @@ fn test_kdfa_boundary_conditions() {
 
 #[test]
 fn test_kdfe_boundary_conditions() {
-    use tpm2::crypto::kdf::kdfe;
+    use tpm2::crypto::kdf::kdfe_bits;
     let provider = TestProvider;
 
     let z = b"shared_secret_z_value_for_kdfe";
@@ -2164,7 +2323,7 @@ fn test_kdfe_boundary_conditions() {
 
     // 1. Verify buffer too small triggers error
     let mut out_small = [0u8; 10];
-    let err = kdfe(
+    let err = kdfe_bits(
         &provider,
         TpmiAlgHash::Sha256,
         z,
@@ -2175,11 +2334,11 @@ fn test_kdfe_boundary_conditions() {
         &mut out_small,
     )
     .unwrap_err();
-    assert_eq!(err, CryptoError::BufferTooSmall);
+    assert_eq!(err, CryptoError::Internal);
 
     // 2. Exact buffer size works
     let mut out_exact = [0u8; 16];
-    let len = kdfe(
+    let len = kdfe_bits(
         &provider,
         TpmiAlgHash::Sha256,
         z,
@@ -2194,7 +2353,7 @@ fn test_kdfe_boundary_conditions() {
 
     // 3. Larger buffer size works, only populates required bytes
     let mut out_large = [0u8; 32];
-    let len = kdfe(
+    let len = kdfe_bits(
         &provider,
         TpmiAlgHash::Sha256,
         z,
@@ -2210,7 +2369,7 @@ fn test_kdfe_boundary_conditions() {
 
     // 4. Test bits not divisible by 8 (e.g., 13 bits) -> div_ceil(13, 8) = 2 bytes
     let mut out_non_div = [0u8; 5];
-    let len = kdfe(
+    let len = kdfe_bits(
         &provider,
         TpmiAlgHash::Sha256,
         z,
@@ -2228,7 +2387,7 @@ fn test_kdfe_boundary_conditions() {
 
     // 4b. Verify label with trailing NUL byte produces identical output
     let mut out_nul_label = [0u8; 16];
-    let len_nul = kdfe(
+    let len_nul = kdfe_bits(
         &provider,
         TpmiAlgHash::Sha256,
         z,
@@ -2244,7 +2403,7 @@ fn test_kdfe_boundary_conditions() {
 
     // 5. Test different hash algorithms (Sha1, Sha256, Sha384, Sha512)
     let mut out_sha1 = [0u8; 20];
-    let len1 = kdfe(
+    let len1 = kdfe_bits(
         &provider,
         TpmiAlgHash::Sha1,
         z,
@@ -2258,7 +2417,7 @@ fn test_kdfe_boundary_conditions() {
     assert_eq!(len1, 20);
 
     let mut out_sha384 = [0u8; 48];
-    let len3 = kdfe(
+    let len3 = kdfe_bits(
         &provider,
         TpmiAlgHash::Sha384,
         z,
@@ -2272,7 +2431,7 @@ fn test_kdfe_boundary_conditions() {
     assert_eq!(len3, 48);
 
     let mut out_sha512 = [0u8; 64];
-    let len5 = kdfe(
+    let len5 = kdfe_bits(
         &provider,
         TpmiAlgHash::Sha512,
         z,
@@ -2287,7 +2446,7 @@ fn test_kdfe_boundary_conditions() {
 
     // 6. Test very large bit generation (multiple iterations of KDFe loop)
     let mut out_huge = [0u8; 512];
-    let len_huge = kdfe(
+    let len_huge = kdfe_bits(
         &provider,
         TpmiAlgHash::Sha256,
         z,
@@ -2302,7 +2461,7 @@ fn test_kdfe_boundary_conditions() {
 
     // 7. Empty inputs
     let mut out_empty = [0u8; 32];
-    let len_empty = kdfe(
+    let len_empty = kdfe_bits(
         &provider,
         TpmiAlgHash::Sha256,
         &[],
@@ -2314,4 +2473,42 @@ fn test_kdfe_boundary_conditions() {
     )
     .unwrap();
     assert_eq!(len_empty, 32);
+}
+
+// ==========================================
+// FEATURE 11: Constant-time comparison
+// ==========================================
+
+#[test]
+fn test_constant_time_eq() {
+    let provider = TestProvider;
+
+    let a = [0x5Au8; 32];
+    assert!(provider.constant_time_eq(&a, &a));
+    assert!(provider.constant_time_eq::<0>(&[], &[]));
+
+    // A difference in the first or in the last byte is detected.
+    let mut first = a;
+    first[0] ^= 0x01;
+    assert!(!provider.constant_time_eq(&a, &first));
+    let mut last = a;
+    last[31] ^= 0x80;
+    assert!(!provider.constant_time_eq(&a, &last));
+
+    // `digest_eq` compares tagged digests: both the algorithm and the digest must match.
+    assert!(tpm2::crypto::digest_eq(
+        &provider,
+        TpmtHa::Sha256(&a),
+        TpmtHa::Sha256(&a)
+    ));
+    assert!(!tpm2::crypto::digest_eq(
+        &provider,
+        TpmtHa::Sha256(&a),
+        TpmtHa::Sha256(&last)
+    ));
+    assert!(!tpm2::crypto::digest_eq(
+        &provider,
+        TpmtHa::Sha256(&a),
+        TpmtHa::Sm3_256(&a)
+    ));
 }

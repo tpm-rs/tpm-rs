@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
 use tpm2::Alg;
+#[allow(deprecated)]
+use tpm2::commands::CreateLoaded;
 use tpm2::commands::{
-    Create, CreateHandles, CreateLoaded, CreateLoadedHandles, NVDefineSpace, NVDefineSpaceHandles,
-    NVWrite, NVWriteHandles, PolicyAuthorizeNV, PolicyAuthorizeNVHandles, PolicyGetDigest,
-    PolicyGetDigestHandles, PolicyOR, PolicyORHandles,
+    Create, NVDefineSpace, NVWrite, PolicyAuthorizeNV, PolicyGetDigest, PolicyOR,
 };
 use tpm2::errors::TpmRc;
 use tpm2::*;
@@ -39,14 +39,12 @@ fn write_digest_to_nv(sim: &mut Simulator<'_>, nv_index_val: u32, alg: TpmiAlgHa
     data.extend_from_slice(digest);
 
     let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&data).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(sim, &write_cmd, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(sim, &write_cmd, 1, &[]).unwrap();
 }
 
 #[test]
@@ -62,16 +60,14 @@ fn test_create_invalid_parent() {
     let in_public = tpm2::Tpm2b(pub_area);
 
     let cmd = Create {
+        parent_handle: Handle(0x80000099), // Invalid transient handle
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let handles = CreateHandles {
-        parent_handle: Handle(0x80000099), // Invalid transient handle
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     assert!(
         res.is_err(),
         "BUG: Create succeeded with invalid parent handle!"
@@ -79,6 +75,7 @@ fn test_create_invalid_parent() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_create_non_decrypt_parent() {
     let mut sim = create_simulator!();
 
@@ -92,29 +89,24 @@ fn test_create_non_decrypt_parent() {
     let in_public_template = crate::test_utils::make_template(&pub_area);
 
     let load_cmd = CreateLoaded {
+        parent_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_template,
     };
-    let load_handles = CreateLoadedHandles {
-        parent_handle: Handle::RH_OWNER,
-    };
-    let (_, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &load_cmd, load_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &load_cmd, 1, &[]).unwrap();
     let bad_parent_handle = rsp_handles.object_handle;
 
     // 2. Try to create a new key under this non-decrypt parent
     let in_public = tpm2::Tpm2b(pub_area);
     let cmd = Create {
+        parent_handle: bad_parent_handle,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let handles = CreateHandles {
-        parent_handle: bad_parent_handle,
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     assert!(
         res.is_err(),
         "BUG: Create succeeded using a non-decrypt / non-parent key as parent!"
@@ -138,12 +130,12 @@ fn test_policy_or_empty_list() {
     .unwrap();
 
     let p_hash_list = TpmlDigest::from_slice(&[]).unwrap(); // Empty list!
-    let cmd = PolicyOR { p_hash_list };
-    let handles = PolicyORHandles {
+    let cmd = PolicyOR {
         policy_session: trial_session.session_handle,
+        p_hash_list,
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert!(
         res.is_err(),
         "BUG: PolicyOR succeeded with an empty digest list! Spec requires size >= 2."
@@ -168,12 +160,12 @@ fn test_policy_or_single_list() {
 
     let digest = Tpm2bDigest::from_bytes(&[0u8; 32]).unwrap();
     let p_hash_list = TpmlDigest::from_slice(&[digest]).unwrap(); // Single element!
-    let cmd = PolicyOR { p_hash_list };
-    let handles = PolicyORHandles {
+    let cmd = PolicyOR {
         policy_session: trial_session.session_handle,
+        p_hash_list,
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert!(
         res.is_err(),
         "BUG: PolicyOR succeeded with a single digest list! Spec requires size >= 2."
@@ -202,12 +194,12 @@ fn test_policy_or_working_flow() {
 
     // 1. Call PolicyOR with list containing zero_digest and dummy_digest. Should succeed.
     let p_hash_list = TpmlDigest::from_slice(&[zero_digest, dummy_digest]).unwrap();
-    let cmd = PolicyOR { p_hash_list };
-    let handles = PolicyORHandles {
+    let cmd = PolicyOR {
         policy_session: policy_session.session_handle,
+        p_hash_list,
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert!(
         res.is_ok(),
         "PolicyOR failed with valid digest list containing current digest"
@@ -217,9 +209,10 @@ fn test_policy_or_working_flow() {
     // If we call PolicyOR with a list NOT containing this new digest, it should fail.
     let bad_list = TpmlDigest::from_slice(&[zero_digest, dummy_digest]).unwrap();
     let cmd_bad = PolicyOR {
+        policy_session: policy_session.session_handle,
         p_hash_list: bad_list,
     };
-    let res_bad = execute_with_password_sessions(&mut sim, &cmd_bad, handles, 0, &[]);
+    let res_bad = execute_with_password_sessions(&mut sim, &cmd_bad, 0, &[]);
     assert!(
         res_bad.is_err(),
         "BUG/Anomaly: PolicyOR did not fail when current digest is missing from list"
@@ -241,13 +234,11 @@ fn test_policy_authorize_nv_unwritten() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &define_cmd, define_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &define_cmd, 1, &[]).unwrap();
 
     // Start Policy session
     let policy_session = start_auth_session(
@@ -261,15 +252,14 @@ fn test_policy_authorize_nv_unwritten() {
     )
     .unwrap();
 
-    let cmd = PolicyAuthorizeNV {};
-    let handles = PolicyAuthorizeNVHandles {
+    let cmd = PolicyAuthorizeNV {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
         policy_session: policy_session.session_handle,
     };
 
     // Execute PolicyAuthorizeNV. Should fail because NV space is unwritten.
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     assert!(
         res.is_err(),
         "BUG: PolicyAuthorizeNV succeeded on an unwritten NV index!"
@@ -291,19 +281,11 @@ fn test_policy_authorize_nv_wrong_hash() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    execute_with_password_sessions(
-        &mut sim,
-        &define_cmd,
-        NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        },
-        1,
-        &[],
-    )
-    .unwrap();
+    execute_with_password_sessions(&mut sim, &define_cmd, 1, &[]).unwrap();
 
     // Write SHA1 digest (different hash alg from session's SHA256)
     write_digest_to_nv(&mut sim, nv_index_val, TpmiAlgHash::Sha1, &[0u8; 20]);
@@ -320,14 +302,13 @@ fn test_policy_authorize_nv_wrong_hash() {
     )
     .unwrap();
 
-    let cmd = PolicyAuthorizeNV {};
-    let handles = PolicyAuthorizeNVHandles {
+    let cmd = PolicyAuthorizeNV {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
         policy_session: policy_session.session_handle,
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     assert!(
         res.is_err(),
         "BUG: PolicyAuthorizeNV succeeded with incorrect hash algorithm in NV index!"
@@ -349,19 +330,11 @@ fn test_policy_authorize_nv_wrong_digest() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    execute_with_password_sessions(
-        &mut sim,
-        &define_cmd,
-        NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        },
-        1,
-        &[],
-    )
-    .unwrap();
+    execute_with_password_sessions(&mut sim, &define_cmd, 1, &[]).unwrap();
 
     // Write a dummy SHA256 digest (e.g. all 1s, which differs from session's zero digest)
     write_digest_to_nv(&mut sim, nv_index_val, TpmiAlgHash::Sha256, &[1u8; 32]);
@@ -378,14 +351,13 @@ fn test_policy_authorize_nv_wrong_digest() {
     )
     .unwrap();
 
-    let cmd = PolicyAuthorizeNV {};
-    let handles = PolicyAuthorizeNVHandles {
+    let cmd = PolicyAuthorizeNV {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
         policy_session: policy_session.session_handle,
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     assert!(
         res.is_err(),
         "BUG: PolicyAuthorizeNV succeeded with mismatching digest in NV index!"
@@ -407,19 +379,11 @@ fn test_policy_authorize_nv_working_flow() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    execute_with_password_sessions(
-        &mut sim,
-        &define_cmd,
-        NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        },
-        1,
-        &[],
-    )
-    .unwrap();
+    execute_with_password_sessions(&mut sim, &define_cmd, 1, &[]).unwrap();
 
     // Initial policy digest is Zero Digest (32 bytes of 0)
     let zero_digest = [0u8; 32];
@@ -437,15 +401,14 @@ fn test_policy_authorize_nv_working_flow() {
     )
     .unwrap();
 
-    let cmd = PolicyAuthorizeNV {};
-    let handles = PolicyAuthorizeNVHandles {
+    let cmd = PolicyAuthorizeNV {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
         policy_session: policy_session.session_handle,
     };
 
     // Should succeed because NV digest matches session's zero digest!
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     assert!(
         res.is_ok(),
         "PolicyAuthorizeNV failed with correct matching digest and authorization: {:?}",
@@ -472,21 +435,18 @@ fn test_policy_or_trial_digest_update() {
     let digest1 = Tpm2bDigest::from_bytes(&[1u8; 32]).unwrap();
     let digest2 = Tpm2bDigest::from_bytes(&[2u8; 32]).unwrap();
     let p_hash_list = TpmlDigest::from_slice(&[digest1, digest2]).unwrap();
-    let cmd = PolicyOR { p_hash_list };
-    let handles = PolicyORHandles {
+    let cmd = PolicyOR {
         policy_session: trial_session.session_handle,
+        p_hash_list,
     };
 
-    execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 0, &[]).unwrap();
 
     // Verify policy digest is updated to H(0 || TPM_CC_PolicyOR || p_hash_list)
-    let get_digest_cmd = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest_cmd = PolicyGetDigest {
         policy_session: trial_session.session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest_cmd, get_digest_handles, 0, &[])
-            .unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest_cmd, 0, &[]).unwrap();
 
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -521,13 +481,11 @@ fn test_policy_authorize_nv_trial_session() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &define_cmd, define_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &define_cmd, 1, &[]).unwrap();
 
     // Start a Trial session
     let trial_session = start_auth_session(
@@ -541,8 +499,7 @@ fn test_policy_authorize_nv_trial_session() {
     )
     .unwrap();
 
-    let cmd = PolicyAuthorizeNV {};
-    let handles = PolicyAuthorizeNVHandles {
+    let cmd = PolicyAuthorizeNV {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
         policy_session: trial_session.session_handle,
@@ -550,7 +507,7 @@ fn test_policy_authorize_nv_trial_session() {
 
     // Execute PolicyAuthorizeNV. Should succeed because it is a Trial session
     // even though the NV Index has not been written yet!
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     assert!(
         res.is_ok(),
         "PolicyAuthorizeNV failed on Trial session: {:?}",
@@ -558,13 +515,10 @@ fn test_policy_authorize_nv_trial_session() {
     );
 
     // Verify trial session digest: H(zero_digest || TPM_CC_PolicyAuthorizeNV || nvIndex->Name)
-    let get_digest_cmd = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest_cmd = PolicyGetDigest {
         policy_session: trial_session.session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest_cmd, get_digest_handles, 0, &[])
-            .unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest_cmd, 0, &[]).unwrap();
 
     // Let's compute the expected digest
     // nvIndex->Name is sha256(public_info_marshalled) prefixed with AlgId::SHA256 (0x000b)
@@ -611,13 +565,11 @@ fn test_policy_authorize_nv_insufficient_size() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &define_cmd, define_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &define_cmd, 1, &[]).unwrap();
 
     // Write a truncated TPMT_HA (SHA-256 algorithm ID + 8 digest bytes) so the index is
     // initialized; C TPMT_HA_Unmarshal then fails with TPM_RC_INSUFFICIENT (an all-zero algorithm
@@ -625,14 +577,12 @@ fn test_policy_authorize_nv_insufficient_size() {
     let mut truncated_ha = [0u8; 10];
     truncated_ha[..2].copy_from_slice(&[0x00, 0x0B]);
     let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&truncated_ha).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
 
     // Start Policy session
     let policy_session = start_auth_session(
@@ -646,14 +596,13 @@ fn test_policy_authorize_nv_insufficient_size() {
     )
     .unwrap();
 
-    let cmd = PolicyAuthorizeNV {};
-    let handles = PolicyAuthorizeNVHandles {
+    let cmd = PolicyAuthorizeNV {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
         policy_session: policy_session.session_handle,
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     // Should return Insufficient error because 10 < 34
     assert_eq!(res.err(), Some(TpmRc::INSUFFICIENT.get()));
 }
@@ -673,27 +622,23 @@ fn test_policy_authorize_nv_no_read_privilege() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &define_cmd, define_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &define_cmd, 1, &[]).unwrap();
 
     // Write some data (SHA256 alg ID + 32-byte zero digest)
     let mut data = Vec::new();
     data.extend_from_slice(&Alg::from(TpmiAlgHash::Sha256).id().to_be_bytes());
     data.extend_from_slice(&[0u8; 32]);
     let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&data).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
 
     // Start Policy session
     let policy_session = start_auth_session(
@@ -707,14 +652,13 @@ fn test_policy_authorize_nv_no_read_privilege() {
     )
     .unwrap();
 
-    let cmd = PolicyAuthorizeNV {};
-    let handles = PolicyAuthorizeNVHandles {
+    let cmd = PolicyAuthorizeNV {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
         policy_session: policy_session.session_handle,
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     // Should fail with NvAuthorization error because OWNERREAD is not set
     assert_eq!(res.err(), Some(TpmRc::NV_AUTHORIZATION.get()));
 }
@@ -729,7 +673,10 @@ fn get_ecc_decrypt_parent_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -742,6 +689,7 @@ fn get_ecc_decrypt_parent_template() -> TpmtPublic<'static> {
     }
 }
 
+#[allow(deprecated)]
 fn create_ecc_parent_key(sim: &mut Simulator<'_>) -> Handle {
     let t_sens = TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::default(),
@@ -752,14 +700,11 @@ fn create_ecc_parent_key(sim: &mut Simulator<'_>) -> Handle {
     let in_public_template = crate::test_utils::make_template(&pub_area);
 
     let load_cmd = CreateLoaded {
+        parent_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_template,
     };
-    let load_handles = CreateLoadedHandles {
-        parent_handle: Handle::RH_OWNER,
-    };
-    let (_, rsp_handles) =
-        execute_with_password_sessions(sim, &load_cmd, load_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(sim, &load_cmd, 1, &[]).unwrap();
     rsp_handles.object_handle
 }
 
@@ -776,16 +721,14 @@ fn test_create_parent_hierarchy() {
     let in_public = tpm2::Tpm2b(pub_area);
 
     let cmd = Create {
+        parent_handle: Handle::RH_OWNER, // Hierarchy handle!
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let handles = CreateHandles {
-        parent_handle: Handle::RH_OWNER, // Hierarchy handle!
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     // parentHandle is TPMI_DH_OBJECT, so C rejects RH_OWNER at handle unmarshal
     // with TPM_RC_VALUE + H1 (0x184).
     assert_eq!(
@@ -815,12 +758,12 @@ fn test_policy_or_mismatch_sizes() {
     let digest1 = Tpm2bDigest::from_bytes(&[1u8; 20]).unwrap();
     let digest2 = Tpm2bDigest::from_bytes(&[2u8; 32]).unwrap();
     let p_hash_list = TpmlDigest::from_slice(&[digest1, digest2]).unwrap();
-    let cmd = PolicyOR { p_hash_list };
-    let handles = PolicyORHandles {
+    let cmd = PolicyOR {
         policy_session: trial_session.session_handle,
+        p_hash_list,
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert!(
         res.is_ok(),
         "Trial session should succeed when digest sizes are mismatching"
@@ -837,10 +780,11 @@ fn test_policy_or_mismatch_sizes() {
         TpmiAlgHash::Sha256,
     )
     .unwrap();
-    let handles_policy = PolicyORHandles {
+    let cmd_policy = PolicyOR {
         policy_session: policy_session.session_handle,
+        ..cmd
     };
-    let res_policy = execute_with_password_sessions(&mut sim, &cmd, handles_policy, 0, &[]);
+    let res_policy = execute_with_password_sessions(&mut sim, &cmd_policy, 0, &[]);
     // TPM_RCS_VALUE + RC_PolicyOR_pHashList (C PolicyOR.c).
     assert_eq!(
         res_policy.err(),
@@ -863,27 +807,23 @@ fn test_policy_authorize_nv_endorsement_handle() {
     };
     let public_info = tpm2::Tpm2b(nv_public_struct);
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &define_cmd, define_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &define_cmd, 1, &[]).unwrap();
 
     // Write some data (SHA256 alg ID + 32-byte zero digest)
     let mut data = Vec::new();
     data.extend_from_slice(&Alg::from(TpmiAlgHash::Sha256).id().to_be_bytes());
     data.extend_from_slice(&[0u8; 32]);
     let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
         data: Tpm2bMaxNvBuffer::from_bytes(&data).unwrap(),
         offset: 0,
     };
-    let write_handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(nv_index_val),
-    };
-    execute_with_password_sessions(&mut sim, &write_cmd, write_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
 
     // Start Policy session
     let policy_session = start_auth_session(
@@ -897,14 +837,13 @@ fn test_policy_authorize_nv_endorsement_handle() {
     )
     .unwrap();
 
-    let cmd = PolicyAuthorizeNV {};
-    let handles = PolicyAuthorizeNVHandles {
+    let cmd = PolicyAuthorizeNV {
         auth_handle: Handle::RH_ENDORSEMENT, // Invalid auth handle type!
         nv_index: Handle(nv_index_val),
         policy_session: policy_session.session_handle,
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::VALUE.with(tpm2::errors::Position::handle(1)).get()),
@@ -927,14 +866,14 @@ fn test_create_unsupported_name_alg_sm3256() {
     let in_public = tpm2::Tpm2b(pub_area);
 
     let cmd = Create {
+        parent_handle,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let handles = CreateHandles { parent_handle };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     // C TPMI_ALG_HASH unmarshal of nameAlg in inPublic returns TPM_RC_HASH,
     // reported as HASH+P2 (0x2C3).
     assert_eq!(

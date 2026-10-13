@@ -12,9 +12,171 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use tpm2::commands::responses::FieldUpgradeData as FieldUpgradeDataRsp;
 use tpm2::commands::*;
 use tpm2::errors::{Position, TpmRc, UnmarshalError};
 use tpm2::*;
+
+/// Defines a typed view of a command's handle area, as validated by the TPM.
+///
+/// Command structs hold plain [`Handle`]s. The TPM checks each handle of the handle area
+/// against its `TPMI_*` interface type, in handle order, and attributes a failure to that
+/// handle (`UnmarshalError::in_handle(n)`). `unmarshal` performs exactly these checks with
+/// the `tpm2` interface types. The fields must be the command's handles, in handle order;
+/// their number is checked at compile time against `<$cmd as Message>::Handles`.
+macro_rules! command_handle_area {
+    ($name:ident for $cmd:ty { $($field:ident: $tpmi:ty),+ $(,)? }) => {
+        #[allow(dead_code)] // Some fields are only compared through `PartialEq`/`Debug`.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        struct $name {
+            $($field: Handle),+
+        }
+
+        impl $name {
+            #[allow(deprecated)] // Some of the commands are deprecated.
+            fn unmarshal(src: &mut &[u8]) -> Result<Self, UnmarshalError> {
+                let mut position = 0u8;
+                $(
+                    position += 1;
+                    let $field: Handle =
+                        <$tpmi>::unmarshal(src).map_err(|e| e.in_handle(position))?.into();
+                )+
+                let _: <$cmd as Message>::Handles = [$($field),+];
+                Ok(Self { $($field),+ })
+            }
+        }
+    };
+}
+
+/// Like [`command_handle_area`], for a response handle area: each handle is checked
+/// against its `TPMI_*` interface type, and failures carry no handle position.
+macro_rules! response_handle_area {
+    ($name:ident for $rsp:ty { $($field:ident: $tpmi:ty),+ $(,)? }) => {
+        #[allow(dead_code)] // Some fields are only compared through `PartialEq`/`Debug`.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        struct $name {
+            $($field: Handle),+
+        }
+
+        impl $name {
+            #[allow(deprecated)] // Some of the responses are deprecated.
+            fn unmarshal(src: &mut &[u8]) -> Result<Self, UnmarshalError> {
+                $(
+                    let $field: Handle = <$tpmi>::unmarshal(src)?.into();
+                )+
+                let _: <$rsp as Message>::Handles = [$($field),+];
+                Ok(Self { $($field),+ })
+            }
+        }
+    };
+}
+
+command_handle_area!(HMACHandles for HMAC<'_> { handle: TpmiDhObject<false> });
+command_handle_area!(ZGen2PhaseHandles for ZGen2Phase<'_> { key_a: TpmiDhObject<false> });
+command_handle_area!(ECCEncryptHandles for ECCEncrypt<'_> { key_handle: TpmiDhObject<false> });
+command_handle_area!(ECCDecryptHandles for ECCDecrypt<'_> { key_handle: TpmiDhObject<false> });
+command_handle_area!(EncapsulateHandles for Encapsulate { key_handle: TpmiDhObject<false> });
+command_handle_area!(DecapsulateHandles for Decapsulate<'_> { key_handle: TpmiDhObject<false> });
+command_handle_area!(HMACStartHandles for HMACStart<'_> { handle: TpmiDhObject<false> });
+command_handle_area!(SignSequenceStartHandles for SignSequenceStart<'_> {
+    key_handle: TpmiDhObject<false>,
+});
+command_handle_area!(VerifySequenceStartHandles for VerifySequenceStart<'_> {
+    key_handle: TpmiDhObject<false>,
+});
+command_handle_area!(VerifyDigestSignatureHandles for VerifyDigestSignature<'_> {
+    key_handle: TpmiDhObject<false>,
+});
+command_handle_area!(SignDigestHandles for SignDigest<'_> { key_handle: TpmiDhObject<false> });
+command_handle_area!(VerifySequenceCompleteHandles for VerifySequenceComplete<'_> {
+    sequence_handle: TpmiDhObject<false>,
+    key_handle: TpmiDhObject<false>,
+});
+command_handle_area!(SignSequenceCompleteHandles for SignSequenceComplete<'_> {
+    sequence_handle: TpmiDhObject<false>,
+    key_handle: TpmiDhObject<false>,
+});
+command_handle_area!(CertifyX509Handles for CertifyX509<'_> {
+    object_handle: TpmiDhObject<false>,
+    sign_handle: TpmiDhObject<false>,
+});
+command_handle_area!(LoadHandles for Load<'_> { parent_handle: TpmiDhObject<false> });
+command_handle_area!(ObjectChangeAuthHandles for ObjectChangeAuth<'_> {
+    object_handle: TpmiDhObject<false>,
+    parent_handle: TpmiDhObject<false>,
+});
+command_handle_area!(ReadOnlyControlHandles for ReadOnlyControl { auth_handle: TpmiRhPlatform });
+command_handle_area!(PPCommandsHandles for PPCommands { auth: TpmiRhPlatform });
+command_handle_area!(SetAlgorithmSetHandles for SetAlgorithmSet { auth_handle: TpmiRhPlatform });
+command_handle_area!(FieldUpgradeStartHandles for FieldUpgradeStart<'_> {
+    authorization: TpmiRhPlatform,
+    key_handle: TpmiDhObject<false>,
+});
+command_handle_area!(SetCapabilityHandles for SetCapability<'_> {
+    auth_handle: TpmiRhHierarchyAuth<true>,
+});
+command_handle_area!(SetCommandCodeAuditStatusHandles for SetCommandCodeAuditStatus {
+    auth: TpmiRhProvision,
+});
+command_handle_area!(NVDefineSpace2Handles for NVDefineSpace2<'_> { auth_handle: TpmiRhProvision });
+command_handle_area!(NVReadPublic2Handles for NVReadPublic2 { nv_index: TpmiRhNvIndex });
+command_handle_area!(ACTSetTimeoutHandles for ACTSetTimeout { act_handle: TpmiRhAct });
+command_handle_area!(ACGetCapabilityHandles for ACGetCapability { ac: TpmiRhAc });
+command_handle_area!(ACSendHandles for ACSend<'_> {
+    send_object: TpmiDhObject<false>,
+    auth_handle: TpmiRhNvAuth,
+    ac: TpmiRhAc,
+});
+command_handle_area!(PolicyACSendSelectHandles for PolicyACSendSelect<'_> {
+    policy_session: TpmiShPolicy,
+});
+command_handle_area!(PolicyPhysicalPresenceHandles for PolicyPhysicalPresence {
+    policy_session: TpmiShPolicy,
+});
+command_handle_area!(PolicyCapabilityHandles for PolicyCapability<'_> {
+    policy_session: TpmiShPolicy,
+});
+command_handle_area!(PolicyParametersHandles for PolicyParameters<'_> {
+    policy_session: TpmiShPolicy,
+});
+command_handle_area!(PolicyTransportSPDMHandles for PolicyTransportSPDM<'_> {
+    policy_session: TpmiShPolicy,
+});
+command_handle_area!(PolicySecretHandles for PolicySecret<'_> {
+    auth_handle: TpmiDhEntity<false>,
+    policy_session: TpmiShPolicy,
+});
+
+response_handle_area!(ContextLoadRespHandles for responses::ContextLoad {
+    loaded_handle: TpmiDhContext,
+});
+response_handle_area!(StartAuthSessionRespHandles for responses::StartAuthSession<'_> {
+    session_handle: TpmiShAuthSession<false>,
+});
+response_handle_area!(HMACStartRespHandles for responses::HMACStart {
+    sequence_handle: TpmiDhObject<false>,
+});
+response_handle_area!(HashSequenceStartRespHandles for responses::HashSequenceStart {
+    sequence_handle: TpmiDhObject<false>,
+});
+response_handle_area!(SignSequenceStartRespHandles for responses::SignSequenceStart {
+    sequence_handle: TpmiDhObject<false>,
+});
+response_handle_area!(VerifySequenceStartRespHandles for responses::VerifySequenceStart {
+    sequence_handle: TpmiDhObject<false>,
+});
+response_handle_area!(CreatePrimaryRespHandles for responses::CreatePrimary<'_> {
+    object_handle: TpmiDhObject<false>,
+});
+response_handle_area!(LoadRespHandles for responses::Load<'_> {
+    object_handle: TpmiDhObject<false>,
+});
+response_handle_area!(LoadExternalRespHandles for responses::LoadExternal<'_> {
+    object_handle: TpmiDhObject<false>,
+});
+response_handle_area!(CreateLoadedRespHandles for responses::CreateLoaded<'_> {
+    object_handle: TpmiDhObject<false>,
+});
 
 // --- From commands/mod.rs ---
 
@@ -34,11 +196,11 @@ fn test_command_handles_validate_tpmi_interface_types() {
 
     // 1. Single non-null object handles (TPMI_DH_OBJECT)
     assert_eq!(
-        MACHandles::unmarshal(&mut &transient[..]).unwrap().handle,
+        HMACHandles::unmarshal(&mut &transient[..]).unwrap().handle,
         Handle(0x8000_0001)
     );
     assert_eq!(
-        MACHandles::unmarshal(&mut &rh_null[..]).unwrap_err(),
+        HMACHandles::unmarshal(&mut &rh_null[..]).unwrap_err(),
         UnmarshalError::VALUE.in_handle(1)
     );
 
@@ -98,13 +260,13 @@ fn test_command_handles_validate_tpmi_interface_types() {
     );
 
     assert_eq!(
-        MACStartHandles::unmarshal(&mut &transient[..])
+        HMACStartHandles::unmarshal(&mut &transient[..])
             .unwrap()
             .handle,
         Handle(0x8000_0001)
     );
     assert_eq!(
-        MACStartHandles::unmarshal(&mut &rh_null[..]).unwrap_err(),
+        HMACStartHandles::unmarshal(&mut &rh_null[..]).unwrap_err(),
         UnmarshalError::VALUE.in_handle(1)
     );
 
@@ -415,17 +577,17 @@ fn test_response_handles_validate_types_without_command_handle_modifier() {
 
     // Object / sequence response handles (TPMI_DH_OBJECT::<false>)
     assert_eq!(
-        HmacStartRespHandles::unmarshal(&mut &transient[..])
+        HMACStartRespHandles::unmarshal(&mut &transient[..])
             .unwrap()
             .sequence_handle,
         Handle(0x8000_0001)
     );
     assert_eq!(
-        HmacStartRespHandles::unmarshal(&mut &rh_null[..]).unwrap_err(),
+        HMACStartRespHandles::unmarshal(&mut &rh_null[..]).unwrap_err(),
         UnmarshalError::VALUE
     );
     assert_eq!(
-        MACStartRespHandles::unmarshal(&mut &rh_null[..]).unwrap_err(),
+        HMACStartRespHandles::unmarshal(&mut &rh_null[..]).unwrap_err(),
         UnmarshalError::VALUE
     );
     assert_eq!(
@@ -483,7 +645,7 @@ fn test_field_upgrade_data_rsp_marshal_unmarshal_with_next_digest() {
     assert_eq!(&buf[36..68], &first_bytes);
 
     let mut src = &buf[..len];
-    let decoded = FieldUpgradeDataRsp::unmarshal(&mut src).unwrap();
+    let decoded = FieldUpgradeDataRsp::unmarshal_with_handles([], &mut src).unwrap();
     assert!(src.is_empty());
     assert_eq!(decoded, rsp);
 }
@@ -505,7 +667,7 @@ fn test_field_upgrade_data_rsp_marshal_unmarshal_null_next_digest() {
     assert_eq!(&buf[4..36], &first_bytes);
 
     let mut src = &buf[..len];
-    let decoded = FieldUpgradeDataRsp::unmarshal(&mut src).unwrap();
+    let decoded = FieldUpgradeDataRsp::unmarshal_with_handles([], &mut src).unwrap();
     assert!(src.is_empty());
     assert_eq!(decoded, rsp);
 }
@@ -518,7 +680,7 @@ fn test_field_upgrade_data_rsp_rejects_null_first_digest() {
     buf[2..4].copy_from_slice(&Alg::NULL.id().to_be_bytes());
 
     let mut src = &buf[..];
-    let err = FieldUpgradeDataRsp::unmarshal(&mut src).unwrap_err();
+    let err = FieldUpgradeDataRsp::unmarshal_with_handles([], &mut src).unwrap_err();
     assert_eq!(err, UnmarshalError::HASH);
     // Verify nextDigest (first 2 bytes) was parsed as None before firstDigest failed
     assert!(src.is_empty());
@@ -529,11 +691,11 @@ fn test_field_upgrade_data_rsp_rejects_null_first_digest() {
 #[test]
 fn test_flush_context_models_flush_handle_as_parameter() {
     // Verify zero command handles and zero response handles/parameters
-    assert_eq!(<<FlushContext as Command>::Handles as Marshal>::MAX_SIZE, 0);
-    assert_eq!(
-        <<FlushContext as Command>::RespHandles as Marshal>::MAX_SIZE,
-        0
-    );
+    let no_handles: [Handle; 0] = <FlushContext as Message>::Handles::default();
+    assert_eq!(no_handles.len(), 0);
+    let no_resp_handles: [Handle; 0] =
+        <<FlushContext as Command>::Response<'static> as Message>::Handles::default();
+    assert_eq!(no_resp_handles.len(), 0);
     assert_eq!(
         <<FlushContext as Command>::Response<'static> as Marshal>::MAX_SIZE,
         0
@@ -553,7 +715,7 @@ fn test_flush_context_models_flush_handle_as_parameter() {
         let len = cmd.marshal(&mut buf);
         assert_eq!(len, 4);
         let mut slice = &buf[..];
-        let unmarshalled = FlushContext::unmarshal(&mut slice).unwrap();
+        let unmarshalled = FlushContext::unmarshal_with_handles([], &mut slice).unwrap();
         assert_eq!(unmarshalled, cmd);
         assert!(slice.is_empty());
     }
@@ -561,7 +723,7 @@ fn test_flush_context_models_flush_handle_as_parameter() {
     // Verify truncated buffer returns INSUFFICIENT with parameter(1) modifier (not handle(1))
     let short = [0x80u8, 0x00, 0x00];
     let mut slice = &short[..];
-    let err = FlushContext::unmarshal(&mut slice).unwrap_err();
+    let err = FlushContext::unmarshal_with_handles([], &mut slice).unwrap_err();
     assert_eq!(err, UnmarshalError::INSUFFICIENT.in_parameter(1));
     assert_eq!(err.position, Some(Position::parameter(1)));
 
@@ -577,7 +739,7 @@ fn test_flush_context_models_flush_handle_as_parameter() {
     ] {
         let bytes = invalid.to_be_bytes();
         let mut slice = &bytes[..];
-        let err = FlushContext::unmarshal(&mut slice).unwrap_err();
+        let err = FlushContext::unmarshal_with_handles([], &mut slice).unwrap_err();
         assert_eq!(err, UnmarshalError::VALUE.in_parameter(1));
         assert_eq!(err.position, Some(Position::parameter(1)));
     }
@@ -595,7 +757,7 @@ fn test_incremental_self_test_unmarshal_accepts_reserved_algs_and_preserves_trai
         buf[6] = 0xAA;
 
         let mut slice = &buf[..];
-        let cmd = IncrementalSelfTest::unmarshal(&mut slice)
+        let cmd = IncrementalSelfTest::unmarshal_with_handles([], &mut slice)
             .expect("IncrementalSelfTest::unmarshal should accept reserved TPM_ALG_ID values");
         assert_eq!(cmd.to_test.count(), 1);
         assert_eq!(cmd.to_test.algorithms()[0].id(), reserved_id);
@@ -618,7 +780,7 @@ fn test_incremental_self_test_unmarshal_truncated_after_reserved_alg_returns_ins
         assert_eq!(err_tpml, UnmarshalError::INSUFFICIENT);
 
         let mut slice = &buf[..];
-        let err = IncrementalSelfTest::unmarshal(&mut slice).unwrap_err();
+        let err = IncrementalSelfTest::unmarshal_with_handles([], &mut slice).unwrap_err();
         assert_eq!(err, UnmarshalError::INSUFFICIENT.in_parameter(1));
     }
 }
@@ -634,15 +796,17 @@ fn test_set_capability_handles_validation() {
         Handle::RH_LOCKOUT,
         Handle::RH_NULL,
     ] {
-        let handles = SetCapabilityHandles {
+        let cmd = SetCapability {
             auth_handle: valid_handle,
+            ..Default::default()
         };
-        let mut buf = [0u8; SetCapabilityHandles::MAX_SIZE];
-        let written = handles.marshal(&mut buf);
+        let [auth_handle] = cmd.handles();
+        let mut buf = [0u8; Handle::MAX_SIZE];
+        let written = auth_handle.marshal(&mut buf);
         assert_eq!(written, 4);
         let mut slice = &buf[..];
         let unmarshaled = SetCapabilityHandles::unmarshal(&mut slice).unwrap();
-        assert_eq!(unmarshaled, handles);
+        assert_eq!(unmarshaled, SetCapabilityHandles { auth_handle });
         assert!(slice.is_empty());
     }
 
@@ -665,6 +829,7 @@ fn test_set_capability_handles_validation() {
 #[test]
 fn test_set_capability_marshal_includes_tpm2b_size_prefix() {
     let cmd = SetCapability {
+        auth_handle: Handle::RH_OWNER,
         set_capability_data: Tpm2bSetCapabilityData::new(TpmsSetCapabilityData {
             set_capability: TpmCap::Algs,
             data: TpmuSetCapabilities::new(&[0x11, 0x22, 0x33, 0x44]),
@@ -683,7 +848,7 @@ fn test_set_capability_marshal_includes_tpm2b_size_prefix() {
     // then rejects TpmCap::Algs in TPMU_SET_CAPABILITIES with TPM_RC_SELECTOR + TPM_RC_P + 1.
     let mut slice = &buf[..written];
     assert_eq!(
-        SetCapability::unmarshal(&mut slice),
+        SetCapability::unmarshal_with_handles(Default::default(), &mut slice),
         Err(UnmarshalError::SELECTOR.in_parameter(1))
     );
 }
@@ -694,7 +859,7 @@ fn test_set_capability_unmarshal_rejects_zero_size_and_invalid_selectors() {
     let zero_size_wire = [0x00u8, 0x00];
     let mut slice = &zero_size_wire[..];
     assert_eq!(
-        SetCapability::unmarshal(&mut slice),
+        SetCapability::unmarshal_with_handles(Default::default(), &mut slice),
         Err(UnmarshalError::SIZE.in_parameter(1))
     );
 
@@ -702,7 +867,7 @@ fn test_set_capability_unmarshal_rejects_zero_size_and_invalid_selectors() {
     let short_wire = [0x00u8];
     let mut slice = &short_wire[..];
     assert_eq!(
-        SetCapability::unmarshal(&mut slice),
+        SetCapability::unmarshal_with_handles(Default::default(), &mut slice),
         Err(UnmarshalError::INSUFFICIENT.in_parameter(1))
     );
 
@@ -710,7 +875,7 @@ fn test_set_capability_unmarshal_rejects_zero_size_and_invalid_selectors() {
     let invalid_cap_wire = [0x00u8, 0x04, 0xFF, 0xFF, 0xFF, 0xFF];
     let mut slice = &invalid_cap_wire[..];
     assert_eq!(
-        SetCapability::unmarshal(&mut slice),
+        SetCapability::unmarshal_with_handles(Default::default(), &mut slice),
         Err(UnmarshalError::VALUE.in_parameter(1))
     );
 
@@ -738,7 +903,7 @@ fn test_set_capability_unmarshal_rejects_zero_size_and_invalid_selectors() {
         wire[6..10].copy_from_slice(&0u32.to_be_bytes());
         let mut slice = &wire[..];
         assert_eq!(
-            SetCapability::unmarshal(&mut slice),
+            SetCapability::unmarshal_with_handles(Default::default(), &mut slice),
             Err(UnmarshalError::SELECTOR.in_parameter(1))
         );
     }
@@ -770,7 +935,7 @@ fn test_rsa_encrypt_and_decrypt_reject_signature_schemes_on_unmarshal() {
 
         let mut src_enc = &buf[..];
         assert_eq!(
-            RSAEncrypt::unmarshal(&mut src_enc),
+            RSAEncrypt::unmarshal_with_handles(Default::default(), &mut src_enc),
             Err(UnmarshalError::VALUE.in_parameter(2)),
             "RSAEncrypt should reject scheme {:?} with VALUE in parameter 2",
             invalid_alg
@@ -778,7 +943,7 @@ fn test_rsa_encrypt_and_decrypt_reject_signature_schemes_on_unmarshal() {
 
         let mut src_dec = &buf[..];
         assert_eq!(
-            RSADecrypt::unmarshal(&mut src_dec),
+            RSADecrypt::unmarshal_with_handles(Default::default(), &mut src_dec),
             Err(UnmarshalError::VALUE.in_parameter(2)),
             "RSADecrypt should reject scheme {:?} with VALUE in parameter 2",
             invalid_alg
@@ -795,12 +960,12 @@ fn test_rsa_encrypt_and_decrypt_reject_signature_schemes_on_unmarshal() {
 
     let mut src_enc = &buf[..];
     assert_eq!(
-        RSAEncrypt::unmarshal(&mut src_enc),
+        RSAEncrypt::unmarshal_with_handles(Default::default(), &mut src_enc),
         Err(UnmarshalError::HASH.in_parameter(2))
     );
     let mut src_dec = &buf[..];
     assert_eq!(
-        RSADecrypt::unmarshal(&mut src_dec),
+        RSADecrypt::unmarshal_with_handles(Default::default(), &mut src_dec),
         Err(UnmarshalError::HASH.in_parameter(2))
     );
 
@@ -811,6 +976,7 @@ fn test_rsa_encrypt_and_decrypt_reject_signature_schemes_on_unmarshal() {
         Some(TpmtRsaDecrypt::Oaep(TpmiAlgHash::Sha256)),
     ] {
         let enc = RSAEncrypt {
+            key_handle: Handle(0x8000_0001),
             message: Tpm2bPublicKeyRsa::from_bytes(&[0xAA, 0xBB]).unwrap(),
             in_scheme: scheme,
             label: Tpm2bData::default(),
@@ -818,10 +984,14 @@ fn test_rsa_encrypt_and_decrypt_reject_signature_schemes_on_unmarshal() {
         let mut dst = [0u8; RSAEncrypt::MAX_SIZE];
         let len = enc.marshal(&mut dst);
         let mut src = &dst[..len];
-        assert_eq!(RSAEncrypt::unmarshal(&mut src), Ok(enc));
+        assert_eq!(
+            RSAEncrypt::unmarshal_with_handles(enc.handles(), &mut src),
+            Ok(enc)
+        );
         assert!(src.is_empty());
 
         let dec = RSADecrypt {
+            key_handle: Handle(0x8000_0001),
             cipher_text: Tpm2bPublicKeyRsa::from_bytes(&[0xCC, 0xDD]).unwrap(),
             in_scheme: scheme,
             label: Tpm2bData::default(),
@@ -829,7 +999,10 @@ fn test_rsa_encrypt_and_decrypt_reject_signature_schemes_on_unmarshal() {
         let mut dst = [0u8; RSADecrypt::MAX_SIZE];
         let len = dec.marshal(&mut dst);
         let mut src = &dst[..len];
-        assert_eq!(RSADecrypt::unmarshal(&mut src), Ok(dec));
+        assert_eq!(
+            RSADecrypt::unmarshal_with_handles(dec.handles(), &mut src),
+            Ok(dec)
+        );
         assert!(src.is_empty());
     }
 }
@@ -856,6 +1029,7 @@ fn test_zgen_2phase_in_scheme_rejects_null_and_roundtrips_valid_schemes() {
     ];
     for &valid_scheme in valid_schemes {
         let cmd = ZGen2Phase {
+            key_a: Handle(0x8000_0001),
             in_qs_b: point_a,
             in_qe_b: point_b,
             in_scheme: valid_scheme,
@@ -864,13 +1038,17 @@ fn test_zgen_2phase_in_scheme_rejects_null_and_roundtrips_valid_schemes() {
         let mut dst = [0u8; ZGen2Phase::MAX_SIZE];
         let len = cmd.marshal(&mut dst);
         let mut src = &dst[..len];
-        assert_eq!(ZGen2Phase::unmarshal(&mut src), Ok(cmd));
+        assert_eq!(
+            ZGen2Phase::unmarshal_with_handles(cmd.handles(), &mut src),
+            Ok(cmd)
+        );
         assert!(src.is_empty());
     }
 
     // Verify TPM_ALG_NULL (0x0010) and other invalid schemes are rejected with
     // TPM_RC_SCHEME + TPM_RC_P + TPM_RC_3.
     let base_cmd = ZGen2Phase {
+        key_a: Handle(0x8000_0001),
         in_qs_b: point_a,
         in_qe_b: point_b,
         in_scheme: TpmiEccKeyExchange::Ecdh,
@@ -892,7 +1070,7 @@ fn test_zgen_2phase_in_scheme_rejects_null_and_roundtrips_valid_schemes() {
     ] {
         dst[scheme_offset..scheme_offset + 2].copy_from_slice(&invalid_alg.id().to_be_bytes());
         let mut src = &dst[..len];
-        let err = ZGen2Phase::unmarshal(&mut src).unwrap_err();
+        let err = ZGen2Phase::unmarshal_with_handles(base_cmd.handles(), &mut src).unwrap_err();
         assert_eq!(
             err,
             UnmarshalError::SCHEME.in_parameter(3),

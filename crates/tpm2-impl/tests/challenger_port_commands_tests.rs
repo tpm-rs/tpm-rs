@@ -7,20 +7,18 @@ extern crate alloc;
 mod common;
 
 use common::{FakeRng, FakeStorage, FakeTimer};
-use tpm2::commands::{
-    Command, PolicyCommandCode, PolicyCommandCodeHandles, PolicyGetDigest, PolicyGetDigestHandles,
+use tpm2::commands::{Command, Message, PolicyCommandCode, PolicyGetDigest, UnmarshalMessage};
+use tpm2::{
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce,
+    Tpm2bPrivate, Tpm2bPublicKeyRsa, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmsAuthCommand,
+    TpmtPublic, TpmtSymDefObject,
 };
 use tpm2::{Handle, Marshal, TpmCc};
-use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce, Tpm2bPrivate,
-    Tpm2bPublicKeyRsa, TpmaObject, TpmiAlgHash, TpmsAuthCommand, TpmtPublic, TpmtSymDefObject,
-};
 use tpm2_impl::TpmEngine;
 use tpm2_impl::TpmPlatform;
 use tpm2_impl::handler::TransientObject;
 
 use hex_literal::hex;
-use tpm2::crypto::Rng;
 use tpm2::crypto::{Asymmetric, AsymmetricSign};
 use tpm2::crypto::{CryptoError, CryptoProvider};
 
@@ -35,24 +33,24 @@ impl AsymmetricSign for StressTestCrypto {
         _private_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         let len = match sign_alg {
             tpm2::Alg::ECDSA => {
                 if signature_out.len() < 64 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..64].fill(0xee);
                 64
             }
             _ => {
                 if signature_out.len() < 256 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..256].fill(0xee);
                 256
             }
         };
-        Ok(len)
+        Ok(Some(len))
     }
 }
 
@@ -63,8 +61,8 @@ impl Asymmetric for StressTestCrypto {
         _public_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         _signature: &[u8],
-    ) -> Result<(), CryptoError> {
-        Ok(())
+    ) -> Result<bool, CryptoError> {
+        Ok(true)
     }
     fn encrypt(
         &self,
@@ -74,7 +72,7 @@ impl Asymmetric for StressTestCrypto {
         data: &[u8],
         ciphertext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         let len = data.len();
         let out_len = if scheme == tpm2::Alg::OAEP && !public_key.is_empty() {
             public_key.len()
@@ -82,13 +80,13 @@ impl Asymmetric for StressTestCrypto {
             len
         };
         if ciphertext.len() < out_len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         ciphertext[..len].copy_from_slice(data);
         if out_len > len {
             ciphertext[len..out_len].fill(0);
         }
-        Ok(out_len)
+        Ok(Some(out_len))
     }
     fn decrypt(
         &self,
@@ -98,9 +96,9 @@ impl Asymmetric for StressTestCrypto {
         ciphertext: &[u8],
         plaintext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         if private_key.is_empty() {
-            return Err(CryptoError::HardwareFailure);
+            return Err(CryptoError::Internal);
         }
         let len = if scheme == tpm2::Alg::OAEP && ciphertext.len() > 32 {
             32
@@ -108,10 +106,10 @@ impl Asymmetric for StressTestCrypto {
             ciphertext.len()
         };
         if plaintext.len() < len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         plaintext[..len].copy_from_slice(&ciphertext[..len]);
-        Ok(len)
+        Ok(Some(len))
     }
     fn generate_key(
         &self,
@@ -132,7 +130,7 @@ impl Asymmetric for StressTestCrypto {
                 private_key[..32].fill(0xdd);
                 Ok((64, 32))
             }
-            _ => Err(CryptoError::HardwareFailure),
+            _ => Err(CryptoError::Internal),
         }
     }
     fn rsa_import_private_key(
@@ -141,44 +139,42 @@ impl Asymmetric for StressTestCrypto {
         prime_p: &[u8],
         exponent: u32,
         private_key_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         let _ = modulus;
         let _ = exponent;
         if private_key_out.len() < prime_p.len() * 2 {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         private_key_out[..prime_p.len()].copy_from_slice(prime_p);
         private_key_out[prime_p.len()..prime_p.len() * 2].copy_from_slice(prime_p);
-        Ok(prime_p.len() * 2)
+        Ok(Some(prime_p.len() * 2))
     }
     fn rsa_private_key_to_prime_p(
         &self,
         private_key: &[u8],
         prime_p_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         let half_len = private_key.len() / 2;
         if prime_p_out.len() < half_len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         prime_p_out[..half_len].copy_from_slice(&private_key[..half_len]);
-        Ok(half_len)
+        Ok(Some(half_len))
     }
 }
 
-impl Rng for StressTestCrypto {
+impl CryptoProvider for StressTestCrypto {
     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
         dest.fill(0xaa);
         Ok(())
     }
 }
 
-impl CryptoProvider for StressTestCrypto {}
-
 fn setup_tpm<'a>(
     crypto: &'a mut StressTestCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -205,14 +201,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command_with_auths<C: Command>(
     tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -227,13 +220,14 @@ where
     // Command code
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        offset += handle.marshal(handle_slice);
+    }
 
     // Marshal auth area if tag is 0x8002
     if !auths.is_empty() {
@@ -272,30 +266,20 @@ where
         return Err(rc);
     }
 
-    fn resp_handles_size(cc: tpm2::TpmCc) -> usize {
-        match cc {
-            tpm2::TpmCc::CreatePrimary
-            | tpm2::TpmCc::StartAuthSession
-            | tpm2::TpmCc::ContextLoad
-            | tpm2::TpmCc::CreateLoaded
-            | tpm2::TpmCc::LoadExternal
-            | tpm2::TpmCc::Load => 4,
-            _ => 0,
-        }
-    }
-
     let resp_tag = u16::from_be_bytes([response_buf[0], response_buf[1]]);
-    let handles_size = resp_handles_size(C::CMD_CODE);
-    let params_offset = if resp_tag == 0x8002 {
-        10 + handles_size + 4 // Skip header (10), handles, and parameter size (4)
-    } else {
-        10 + handles_size // Skip header (10) and handles
-    };
-
+    // Skip the header (10), then read the response handles.
     let mut unmarshal_buf: &'static [u8] =
-        std::vec::Vec::leak(response_buf[params_offset..resp_size].to_vec());
-    let resp =
-        <C::Response<'static>>::unmarshal(&mut unmarshal_buf).map_err(|_| TpmRc::FAILURE.get())?;
+        std::vec::Vec::leak(response_buf[10..resp_size].to_vec());
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut unmarshal_buf).map_err(|_| TpmRc::FAILURE.get())?;
+    }
+    if resp_tag == 0x8002 {
+        // Skip the parameter size (4).
+        unmarshal_buf = &unmarshal_buf[4..];
+    }
+    let resp = <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut unmarshal_buf)
+        .map_err(|_| TpmRc::FAILURE.get())?;
     Ok(resp)
 }
 
@@ -304,19 +288,17 @@ fn test_policy_command_code_success_and_errors() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Session not found -> returns TpmRc::HANDLE (0x80)
     let cmd = PolicyCommandCode {
-        code: TpmCc::Duplicate,
-    };
-    let handles = PolicyCommandCodeHandles {
         policy_session: Handle(0x03000009),
+        code: TpmCc::Duplicate,
     };
     // 0x03000009 is a valid TPMI_SH_POLICY value that is not loaded: C EntityGetLoadStatus
     // returns TPM_RC_REFERENCE_H0.
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]);
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
 
     // 2. Create an HMAC session instead of Policy session and check handle error
@@ -358,10 +340,11 @@ fn test_policy_command_code_success_and_errors() {
     };
     global_state.add_session(hmac_session).unwrap();
 
-    let handles = PolicyCommandCodeHandles {
+    let cmd = PolicyCommandCode {
         policy_session: Handle(0x02000001),
+        ..cmd
     };
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::VALUE.with(Position::handle(1)).get())
@@ -409,18 +392,10 @@ fn test_policy_command_code_success_and_errors() {
 
     // 4. Unsupported command code (e.g. TpmCc::PPCommands) -> returns TpmRc::POLICY_CC (0x120)
     let cmd_unsupported = PolicyCommandCode {
+        policy_session: Handle(0x03000002),
         code: TpmCc::PPCommands,
     };
-    let handles = PolicyCommandCodeHandles {
-        policy_session: Handle(0x03000002),
-    };
-    let res = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &handles,
-        &cmd_unsupported,
-        &[],
-    );
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd_unsupported, &[]);
     // C TPM2_PolicyCommandCode: TPM_RCS_POLICY_CC + RC_PolicyCommandCode_code (+P1).
     assert_eq!(
         res.err(),
@@ -429,9 +404,10 @@ fn test_policy_command_code_success_and_errors() {
 
     // 5. Valid command code (e.g. TpmCc::Duplicate) -> returns Ok(())
     let cmd = PolicyCommandCode {
+        policy_session: Handle(0x03000002),
         code: TpmCc::Duplicate,
     };
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]);
     assert!(res.is_ok());
 
     // Verify policy_digest updated and command_code set
@@ -446,10 +422,10 @@ fn test_policy_command_code_success_and_errors() {
 
     // 6. Calling again with a different command code (e.g. TpmCc::Import) -> returns TpmRc::VALUE (0x44)
     let cmd_different = PolicyCommandCode {
+        policy_session: Handle(0x03000002),
         code: TpmCc::Import,
     };
-    let res =
-        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd_different, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd_different, &[]);
     // C TPM2_PolicyCommandCode: TPM_RCS_VALUE + RC_PolicyCommandCode_code (+P1).
     assert_eq!(
         res.err(),
@@ -462,17 +438,16 @@ fn test_policy_get_digest() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Session not found -> returns TpmRc::HANDLE
-    let cmd = PolicyGetDigest {};
-    let handles = PolicyGetDigestHandles {
+    let cmd = PolicyGetDigest {
         policy_session: Handle(0x03000009),
     };
     // 0x03000009 is a valid TPMI_SH_POLICY value that is not loaded: C EntityGetLoadStatus
     // returns TPM_RC_REFERENCE_H0.
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]);
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
 
     // 2. Create an HMAC session instead of Policy session and check handle error
@@ -514,10 +489,10 @@ fn test_policy_get_digest() {
     };
     global_state.add_session(hmac_session).unwrap();
 
-    let handles = PolicyGetDigestHandles {
+    let cmd = PolicyGetDigest {
         policy_session: Handle(0x02000001),
     };
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::VALUE.with(Position::handle(1)).get())
@@ -564,10 +539,10 @@ fn test_policy_get_digest() {
     };
     global_state.add_session(policy_session).unwrap();
 
-    let handles = PolicyGetDigestHandles {
+    let cmd = PolicyGetDigest {
         policy_session: Handle(0x03000002),
     };
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[]);
     assert!(res.is_ok());
     let resp = res.unwrap();
     assert_eq!(resp.policy_digest.get_buffer(), &[0xa5; 32]);
@@ -605,8 +580,8 @@ fn test_duplicate_import_load_roundtrip() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Setup target object (the key to duplicate)
     let target_handle = 0x80000001;
@@ -678,7 +653,10 @@ fn test_duplicate_import_load_roundtrip() {
             auth_policy: Tpm2bDigest::default(),
             parms_and_id: PublicParmsAndId::Rsa(
                 tpm2::TpmsRsaParms {
-                    symmetric: Some(TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB))),
+                    symmetric: Some(TpmtSymDefObject {
+                        alg: AlgSym::Aes128,
+                        mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                    }),
                     scheme: None,
                     key_bits: tpm2::TpmiRsaKeyBits(2048),
                     exponent: 0,
@@ -697,21 +675,17 @@ fn test_duplicate_import_load_roundtrip() {
 
     // 3. Test Duplicate Edge Cases:
     // A. Invalid target object handle -> returns TpmRc::HANDLE.with(Position::handle(1))
-    let dup_handles_bad = tpm2::commands::DuplicateHandles {
-        object_handle: Handle(0x80000009),
-        new_parent_handle: Handle(parent_handle),
-    };
     let dup_cmd = tpm2::commands::Duplicate {
+        object_handle: Handle(target_handle),
+        new_parent_handle: Handle(parent_handle),
         encryption_key_in: Tpm2bData::default(),
         symmetric_alg: None,
     };
-    let res = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &dup_handles_bad,
-        &dup_cmd,
-        &[],
-    );
+    let dup_cmd_bad = tpm2::commands::Duplicate {
+        object_handle: Handle(0x80000009),
+        ..dup_cmd
+    };
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_cmd_bad, &[]);
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
 
     // B. Target object has fixedParent attribute -> returns TpmRc::ATTRIBUTES.with(Position::handle(1))
@@ -721,18 +695,8 @@ fn test_duplicate_import_load_roundtrip() {
         .public
         .object_attributes
         .insert(TpmaObject::FIXED_PARENT);
-    let dup_handles = tpm2::commands::DuplicateHandles {
-        object_handle: Handle(target_handle),
-        new_parent_handle: Handle(parent_handle),
-    };
     let dup_auth = dup_policy_auth(&mut global_state);
-    let res = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &dup_handles,
-        &dup_cmd,
-        &[dup_auth],
-    );
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_cmd, &[dup_auth]);
     assert_eq!(
         res.err(),
         Some(TpmRc::ATTRIBUTES.with(Position::handle(1)).get())
@@ -746,17 +710,11 @@ fn test_duplicate_import_load_roundtrip() {
         .remove(TpmaObject::FIXED_PARENT);
 
     // C. New parent handle not found -> returns TpmRc::HANDLE.with(Position::handle(2))
-    let dup_handles_bad_parent = tpm2::commands::DuplicateHandles {
-        object_handle: Handle(target_handle),
+    let dup_cmd_bad_parent = tpm2::commands::Duplicate {
         new_parent_handle: Handle(0x80000009),
+        ..dup_cmd
     };
-    let res = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &dup_handles_bad_parent,
-        &dup_cmd,
-        &[],
-    );
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_cmd_bad_parent, &[]);
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H1.get()));
 
     // D. New parent is not asymmetric -> returns TpmRc::TYPE.with(Position::handle(2))
@@ -773,7 +731,10 @@ fn test_duplicate_import_load_roundtrip() {
             object_attributes: TpmaObject::DECRYPT,
             auth_policy: Tpm2bDigest::default(),
             parms_and_id: PublicParmsAndId::Sym(
-                TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)),
+                TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                },
                 Tpm2bDigest::default(),
             ),
         })
@@ -785,36 +746,31 @@ fn test_duplicate_import_load_roundtrip() {
         st_clear: false,
     };
     global_state.transient_objects[2] = Some(bad_parent_obj);
-    let dup_handles_bad_type = tpm2::commands::DuplicateHandles {
-        object_handle: Handle(target_handle),
+    let dup_cmd_bad_type = tpm2::commands::Duplicate {
         new_parent_handle: Handle(0x80000003),
+        ..dup_cmd
     };
     let dup_auth = dup_policy_auth(&mut global_state);
-    let res = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &dup_handles_bad_type,
-        &dup_cmd,
-        &[dup_auth],
-    );
+    let res =
+        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_cmd_bad_type, &[dup_auth]);
     assert_eq!(res.err(), Some(TpmRc::TYPE.with(Position::handle(2)).get()));
     global_state.transient_objects[2] = None;
 
     // 4. Success Duplicate with inner wrapper (AES-128 CFB)
-    let sym_alg = TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB));
+    let sym_alg = TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: Some(TpmiAlgCipherMode::Cfb.into()),
+    };
     let dup_cmd_sym = tpm2::commands::Duplicate {
+        object_handle: Handle(target_handle),
+        new_parent_handle: Handle(parent_handle),
         encryption_key_in: Tpm2bData::default(), // TPM should generate one
         symmetric_alg: Some(sym_alg),
     };
     let dup_auth = dup_policy_auth(&mut global_state);
-    let dup_resp = execute_tpm_command_with_auths(
-        &mut tpm,
-        &mut global_state,
-        &dup_handles,
-        &dup_cmd_sym,
-        &[dup_auth],
-    )
-    .expect("Duplicate failed");
+    let dup_resp =
+        execute_tpm_command_with_auths(&mut tpm, &mut global_state, &dup_cmd_sym, &[dup_auth])
+            .expect("Duplicate failed");
     assert!(dup_resp.encryption_key_out.get_size() > 0);
     assert!(dup_resp.duplicate.get_size() > 0);
     assert!(dup_resp.out_sym_seed.get_size() > 0);
@@ -827,10 +783,8 @@ fn test_duplicate_import_load_roundtrip() {
         .object_attributes
         .insert(TpmaObject::FIXED_TPM);
     let bad_object_public_2b = tpm2::Tpm2b(bad_target_public);
-    let import_handles = tpm2::commands::ImportHandles {
-        parent_handle: Handle(parent_handle),
-    };
     let import_cmd_bad = tpm2::commands::Import {
+        parent_handle: Handle(parent_handle),
         encryption_key: dup_resp.encryption_key_out,
         object_public: bad_object_public_2b,
         duplicate: dup_resp.duplicate,
@@ -840,7 +794,6 @@ fn test_duplicate_import_load_roundtrip() {
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &import_handles,
         &import_cmd_bad,
         &[common::password_auth(b"")],
     );
@@ -851,6 +804,7 @@ fn test_duplicate_import_load_roundtrip() {
 
     // B. Encryption key size mismatch -> returns TpmRc::SIZE.with(Position::parameter(1))
     let import_cmd_bad_key = tpm2::commands::Import {
+        parent_handle: Handle(parent_handle),
         encryption_key: Tpm2bData::from_bytes(&[0u8; 32]).unwrap(), // 32 bytes instead of 16
         object_public: object_public_2b,
         duplicate: dup_resp.duplicate,
@@ -860,7 +814,6 @@ fn test_duplicate_import_load_roundtrip() {
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &import_handles,
         &import_cmd_bad_key,
         &[common::password_auth(b"")],
     );
@@ -875,6 +828,7 @@ fn test_duplicate_import_load_roundtrip() {
     tampered_bytes[last_idx] ^= 1; // Tamper with the duplicate bytes
     let tampered_duplicate = Tpm2bPrivate::from_bytes(&tampered_bytes).unwrap();
     let import_cmd_bad_hmac = tpm2::commands::Import {
+        parent_handle: Handle(parent_handle),
         encryption_key: dup_resp.encryption_key_out,
         object_public: object_public_2b,
         duplicate: tampered_duplicate,
@@ -884,7 +838,6 @@ fn test_duplicate_import_load_roundtrip() {
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &import_handles,
         &import_cmd_bad_hmac,
         &[common::password_auth(b"")],
     );
@@ -897,6 +850,7 @@ fn test_duplicate_import_load_roundtrip() {
 
     // 6. Success Import
     let import_cmd = tpm2::commands::Import {
+        parent_handle: Handle(parent_handle),
         encryption_key: dup_resp.encryption_key_out,
         object_public: object_public_2b,
         duplicate: dup_resp.duplicate,
@@ -906,7 +860,6 @@ fn test_duplicate_import_load_roundtrip() {
     let import_resp = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &import_handles,
         &import_cmd,
         &[common::password_auth(b"")],
     )
@@ -915,18 +868,19 @@ fn test_duplicate_import_load_roundtrip() {
 
     // 7. Test Load Edge Cases:
     // A. Parent transient object not found -> returns TpmRc::HANDLE
-    let load_handles_bad = tpm2::commands::LoadHandles {
-        parent_handle: Handle(0x80000009),
-    };
     let load_cmd = tpm2::commands::Load {
+        parent_handle: Handle(parent_handle),
         in_private: import_resp.out_private,
         in_public: object_public_2b,
+    };
+    let load_cmd_bad = tpm2::commands::Load {
+        parent_handle: Handle(0x80000009),
+        ..load_cmd
     };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &load_handles_bad,
-        &load_cmd,
+        &load_cmd_bad,
         &[common::password_auth(b"")],
     );
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
@@ -939,13 +893,9 @@ fn test_duplicate_import_load_roundtrip() {
         .public
         .object_attributes
         .remove(TpmaObject::RESTRICTED);
-    let load_handles = tpm2::commands::LoadHandles {
-        parent_handle: Handle(parent_handle),
-    };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &load_handles,
         &load_cmd,
         &[common::password_auth(b"")],
     );
@@ -964,13 +914,13 @@ fn test_duplicate_import_load_roundtrip() {
     tampered_bytes[last_idx] ^= 1; // Tamper with the private bytes
     let tampered_private = Tpm2bPrivate::from_bytes(&tampered_bytes).unwrap();
     let load_cmd_bad_hmac = tpm2::commands::Load {
+        parent_handle: Handle(parent_handle),
         in_private: tampered_private,
         in_public: object_public_2b,
     };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &load_handles,
         &load_cmd_bad_hmac,
         &[common::password_auth(b"")],
     );
@@ -986,13 +936,13 @@ fn test_duplicate_import_load_roundtrip() {
     bad_name_alg_public.name_alg = Some(TpmiAlgHash::Sm3_256);
     let bad_name_alg_public_2b = tpm2::Tpm2b(bad_name_alg_public);
     let load_cmd_bad_alg = tpm2::commands::Load {
+        parent_handle: Handle(parent_handle),
         in_private: import_resp.out_private,
         in_public: bad_name_alg_public_2b,
     };
     let res = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &load_handles,
         &load_cmd_bad_alg,
         &[common::password_auth(b"")],
     );
@@ -1007,7 +957,6 @@ fn test_duplicate_import_load_roundtrip() {
     let load_resp = execute_tpm_command_with_auths(
         &mut tpm,
         &mut global_state,
-        &load_handles,
         &load_cmd,
         &[common::password_auth(b"")],
     )

@@ -1,204 +1,97 @@
 use crate::RustCryptoProvider;
-use aes::cipher::KeyInit as _;
-use tpm2::TpmiAlgSymMode;
-use tpm2::crypto::{CryptoError, Finalize, Symmetric, UpdateInPlace};
+use aes::cipher::{BlockEncrypt, KeyInit};
+use tpm2::crypto::{CryptoError, Direction, ModeIv, Symmetric};
 
-/// Generic CFB-128 streaming encryptor over a 128-bit block cipher.
-pub struct CfbEncryptor<C> {
-    cipher: C,
-    iv: [u8; 16],
-    keystream: [u8; 16],
-    pos: usize,
-}
-
-impl<C: aes::cipher::BlockEncrypt> CfbEncryptor<C> {
-    fn new(cipher: C, iv: &[u8; 16]) -> Self {
-        Self {
-            cipher,
-            iv: *iv,
-            keystream: [0u8; 16],
-            pos: 16,
+/// Encrypts or decrypts `data` in place with CFB-128 (full-block cipher feedback) over the
+/// 128-bit block cipher `cipher`, starting from the chaining value `iv`.
+///
+/// The keystream for each 16-byte block is `E_K(iv)`, where `iv` is the previous ciphertext block
+/// (or the input IV for the first block), so both directions only use the cipher's encryption
+/// function. The ciphertext bytes are fed back into `iv` as they are produced (encryption) or
+/// consumed (decryption).
+///
+/// On return, `iv` holds the output chaining value (`ivOut`): if `data` ends on a block boundary,
+/// it is the last ciphertext block; if the final block is partial (`n` bytes), its `n` ciphertext
+/// bytes replace the first `n` bytes of the previous chaining value (`[c[..n], prev[n..]]`). Empty
+/// `data` leaves `iv` unchanged.
+fn cfb128<C: BlockEncrypt>(cipher: &C, iv: &mut [u8; 16], dir: Direction, data: &mut [u8]) {
+    let mut keystream = [0u8; 16];
+    let mut pos = 16;
+    for byte in data.iter_mut() {
+        if pos == 16 {
+            let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(iv);
+            cipher.encrypt_block(&mut block);
+            keystream.copy_from_slice(&block);
+            pos = 0;
         }
-    }
-}
-
-impl<C: aes::cipher::BlockEncrypt> UpdateInPlace<CryptoError> for CfbEncryptor<C> {
-    fn update(&mut self, data: &mut [u8]) -> Result<(), CryptoError> {
-        for byte in data.iter_mut() {
-            if self.pos == 16 {
-                let mut block =
-                    aes::cipher::generic_array::GenericArray::clone_from_slice(&self.iv);
-                self.cipher.encrypt_block(&mut block);
-                self.keystream.copy_from_slice(&block);
-                self.pos = 0;
+        match dir {
+            Direction::Encrypt => {
+                let c = *byte ^ keystream[pos];
+                iv[pos] = c;
+                *byte = c;
             }
-            let c = *byte ^ self.keystream[self.pos];
-            self.iv[self.pos] = c;
-            *byte = c;
-            self.pos += 1;
-        }
-        Ok(())
-    }
-}
-
-impl<C> Finalize<16, CryptoError> for CfbEncryptor<C> {
-    fn finalize(self, iv_out: &mut [u8; 16]) -> Result<(), CryptoError> {
-        *iv_out = self.iv;
-        Ok(())
-    }
-}
-
-/// Generic CFB-128 streaming decryptor over a 128-bit block cipher.
-pub struct CfbDecryptor<C> {
-    cipher: C,
-    iv: [u8; 16],
-    keystream: [u8; 16],
-    pos: usize,
-}
-
-impl<C: aes::cipher::BlockEncrypt> CfbDecryptor<C> {
-    fn new(cipher: C, iv: &[u8; 16]) -> Self {
-        Self {
-            cipher,
-            iv: *iv,
-            keystream: [0u8; 16],
-            pos: 16,
-        }
-    }
-}
-
-impl<C: aes::cipher::BlockEncrypt> UpdateInPlace<CryptoError> for CfbDecryptor<C> {
-    fn update(&mut self, data: &mut [u8]) -> Result<(), CryptoError> {
-        for byte in data.iter_mut() {
-            if self.pos == 16 {
-                let mut block =
-                    aes::cipher::generic_array::GenericArray::clone_from_slice(&self.iv);
-                self.cipher.encrypt_block(&mut block);
-                self.keystream.copy_from_slice(&block);
-                self.pos = 0;
+            Direction::Decrypt => {
+                let c = *byte;
+                iv[pos] = c;
+                *byte = c ^ keystream[pos];
             }
-            let c = *byte;
-            let p = c ^ self.keystream[self.pos];
-            self.iv[self.pos] = c;
-            *byte = p;
-            self.pos += 1;
         }
-        Ok(())
+        pos += 1;
     }
 }
 
-impl<C> Finalize<16, CryptoError> for CfbDecryptor<C> {
-    fn finalize(self, iv_out: &mut [u8; 16]) -> Result<(), CryptoError> {
-        *iv_out = self.iv;
-        Ok(())
-    }
+/// Encrypts or decrypts `data` in place with the block cipher `C` keyed with `key`.
+///
+/// Only the CFB mode is supported ([`cfb128`], which updates the mode's IV in place); every other
+/// mode returns `Err(CryptoError::Unsupported)`.
+fn cfb_only<C: BlockEncrypt + KeyInit>(
+    key: &[u8],
+    mode: ModeIv<'_>,
+    dir: Direction,
+    data: &mut [u8],
+) -> Result<(), CryptoError> {
+    let ModeIv::Cfb(iv) = mode else {
+        return Err(CryptoError::Unsupported);
+    };
+    // `key` always has the cipher's key length (the `Symmetric` methods take key arrays), so this
+    // cannot fail; if it did, that would be an internal error.
+    let cipher = C::new_from_slice(key).map_err(|_| CryptoError::Internal)?;
+    cfb128(&cipher, iv, dir, data);
+    Ok(())
 }
 
+/// AES-128, AES-192 and AES-256 in CFB mode.
+///
+/// The other modes (CTR, OFB, CBC and ECB) and the other block ciphers (SM4 and Camellia) are not
+/// supported and return `Err(CryptoError::Unsupported)`.
 impl Symmetric for RustCryptoProvider {
-    fn invalid_key(&self) -> CryptoError {
-        CryptoError::InvalidData
-    }
-
-    fn invalid_iv(&self) -> CryptoError {
-        CryptoError::InvalidData
-    }
-
-    type Aes128EncryptCtx = CfbEncryptor<aes::Aes128>;
-    fn aes128_encrypt(
+    fn aes128(
         &self,
-        mode: TpmiAlgSymMode,
         key: &[u8; 16],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes128EncryptCtx, CryptoError> {
-        if mode != TpmiAlgSymMode::CFB {
-            return Err(CryptoError::UnsupportedAlgorithm);
-        }
-        aes::Aes128::new_from_slice(key)
-            .map(|c| CfbEncryptor::new(c, iv))
-            .map_err(|_| CryptoError::InvalidData)
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        cfb_only::<aes::Aes128>(key, mode, dir, data)
     }
 
-    type Aes128DecryptCtx = CfbDecryptor<aes::Aes128>;
-    fn aes128_decrypt(
+    fn aes192(
         &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 16],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes128DecryptCtx, CryptoError> {
-        if mode != TpmiAlgSymMode::CFB {
-            return Err(CryptoError::UnsupportedAlgorithm);
-        }
-        aes::Aes128::new_from_slice(key)
-            .map(|c| CfbDecryptor::new(c, iv))
-            .map_err(|_| CryptoError::InvalidData)
-    }
-
-    type Aes192EncryptCtx = CfbEncryptor<aes::Aes192>;
-    fn aes192_encrypt(
-        &self,
-        mode: TpmiAlgSymMode,
         key: &[u8; 24],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes192EncryptCtx, CryptoError> {
-        if mode != TpmiAlgSymMode::CFB {
-            return Err(CryptoError::UnsupportedAlgorithm);
-        }
-        aes::Aes192::new_from_slice(key)
-            .map(|c| CfbEncryptor::new(c, iv))
-            .map_err(|_| CryptoError::InvalidData)
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        cfb_only::<aes::Aes192>(key, mode, dir, data)
     }
 
-    type Aes192DecryptCtx = CfbDecryptor<aes::Aes192>;
-    fn aes192_decrypt(
+    fn aes256(
         &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 24],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes192DecryptCtx, CryptoError> {
-        if mode != TpmiAlgSymMode::CFB {
-            return Err(CryptoError::UnsupportedAlgorithm);
-        }
-        aes::Aes192::new_from_slice(key)
-            .map(|c| CfbDecryptor::new(c, iv))
-            .map_err(|_| CryptoError::InvalidData)
-    }
-
-    type Aes256EncryptCtx = CfbEncryptor<aes::Aes256>;
-    fn aes256_encrypt(
-        &self,
-        mode: TpmiAlgSymMode,
         key: &[u8; 32],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes256EncryptCtx, CryptoError> {
-        if mode != TpmiAlgSymMode::CFB {
-            return Err(CryptoError::UnsupportedAlgorithm);
-        }
-        aes::Aes256::new_from_slice(key)
-            .map(|c| CfbEncryptor::new(c, iv))
-            .map_err(|_| CryptoError::InvalidData)
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        cfb_only::<aes::Aes256>(key, mode, dir, data)
     }
-
-    type Aes256DecryptCtx = CfbDecryptor<aes::Aes256>;
-    fn aes256_decrypt(
-        &self,
-        mode: TpmiAlgSymMode,
-        key: &[u8; 32],
-        iv: &[u8; 16],
-    ) -> Result<Self::Aes256DecryptCtx, CryptoError> {
-        if mode != TpmiAlgSymMode::CFB {
-            return Err(CryptoError::UnsupportedAlgorithm);
-        }
-        aes::Aes256::new_from_slice(key)
-            .map(|c| CfbDecryptor::new(c, iv))
-            .map_err(|_| CryptoError::InvalidData)
-    }
-
-    type Sm4_128EncryptCtx = !;
-    type Sm4_128DecryptCtx = !;
-    type Camellia128EncryptCtx = !;
-    type Camellia128DecryptCtx = !;
-    type Camellia192EncryptCtx = !;
-    type Camellia192DecryptCtx = !;
-    type Camellia256EncryptCtx = !;
-    type Camellia256DecryptCtx = !;
 }

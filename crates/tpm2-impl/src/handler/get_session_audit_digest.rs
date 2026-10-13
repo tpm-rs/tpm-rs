@@ -1,3 +1,4 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -5,8 +6,8 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::TpmGenerated;
+use tpm2::commands::GetSessionAuditDigest;
 use tpm2::commands::responses;
-use tpm2::commands::{GetSessionAuditDigest, GetSessionAuditDigestHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bDigest, TpmsAttest, TpmsSessionAuditInfo, TpmuAttest};
@@ -33,10 +34,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<GetSessionAuditDigestHandles>()?;
-        let privacy_admin_handle = handles.privacy_admin_handle;
-        let sign_handle = handles.sign_handle;
-        let session_handle = handles.session_handle;
+        let handles = request.try_unmarshal_handles::<GetSessionAuditDigest>()?;
+        let [privacy_admin_handle, sign_handle, session_handle] = handles;
+        check(
+            privacy_admin_handle,
+            Tpmi::RhEndorsement,
+            Position::handle(1),
+        )?;
+        check(sign_handle, Tpmi::DhObjectOrNull, Position::handle(2))?;
+        check(session_handle, Tpmi::ShHmac, Position::handle(3))?;
 
         // TPMI_RH_ENDORSEMENT (no `+`): only TPM_RH_ENDORSEMENT is a valid value.
         if privacy_admin_handle.0 != tpm2::Handle::RH_ENDORSEMENT.0 {
@@ -45,7 +51,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<GetSessionAuditDigest>()?;
+        let cmd = request.try_unmarshal_command::<GetSessionAuditDigest>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -137,7 +143,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }

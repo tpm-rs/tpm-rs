@@ -8,8 +8,8 @@ fn test_invalid_platform_signal() {
     let mut crypto = PlatformCryptoProvider;
     let mut storage = RamStorageMock::<4096>::new();
     let mut timer = LinuxTimer::new();
-    let rng = LinuxRng::new();
-    let mut sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &rng).unwrap();
+    let mut rng = LinuxRng::new();
+    let mut sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng).unwrap();
 
     let mut stream = Cursor::new(Vec::new());
     // 99 is invalid platform signal
@@ -22,8 +22,8 @@ fn test_oversized_tpm_command() {
     let mut crypto = PlatformCryptoProvider;
     let mut storage = RamStorageMock::<4096>::new();
     let mut timer = LinuxTimer::new();
-    let rng = LinuxRng::new();
-    let mut sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &rng).unwrap();
+    let mut rng = LinuxRng::new();
+    let mut sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng).unwrap();
 
     // TPM_SEND_COMMAND = 8
     // Payload length = 8193 (oversized)

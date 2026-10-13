@@ -1,9 +1,10 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
-use tpm2::commands::{PolicyAuthorize, PolicyAuthorizeHandles};
+use tpm2::commands::PolicyAuthorize;
 use tpm2::errors::{Position, TpmRc};
 
 use crate::storage::NvStorage;
@@ -34,12 +35,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<PolicyAuthorizeHandles>()?;
-        let policy_session = handles.policy_session.0;
+        let handles = request.try_unmarshal_handles::<PolicyAuthorize>()?;
+        let [policy_session] = handles;
+        check(policy_session, Tpmi::ShPolicy, Position::handle(1))?;
+        let policy_session = policy_session.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<PolicyAuthorize>()?;
+        let cmd = request.try_unmarshal_command::<PolicyAuthorize>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }

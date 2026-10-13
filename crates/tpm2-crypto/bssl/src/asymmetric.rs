@@ -4,7 +4,7 @@ use crate::bssl::{
     rsa_generate_key, rsa_import_private_key, rsa_private_key_to_prime_p, rsa_sign_pkcs1v15,
     rsa_sign_pss, rsa_verify_pkcs1v15, rsa_verify_pss,
 };
-use crate::{BsslCryptoProvider, RngWrapper};
+use crate::{BsslCryptoProvider, RngWrapper, output, verified};
 use tpm2::crypto::{Asymmetric, AsymmetricSign, CryptoError, TpmiRsaKeyBits};
 use tpm2::{TpmEccCurve, TpmiAlgHash, TpmtHa};
 
@@ -14,13 +14,13 @@ impl AsymmetricSign for BsslCryptoProvider {
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        rsa_sign_pkcs1v15(
+    ) -> Result<Option<usize>, CryptoError> {
+        output(rsa_sign_pkcs1v15(
             private_key,
             digest.hash_alg(),
             digest.digest(),
             signature_out,
-        )
+        ))
     }
 
     fn rsapss_sign(
@@ -28,13 +28,13 @@ impl AsymmetricSign for BsslCryptoProvider {
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        rsa_sign_pss(
+    ) -> Result<Option<usize>, CryptoError> {
+        output(rsa_sign_pss(
             private_key,
             digest.hash_alg(),
             digest.digest(),
             signature_out,
-        )
+        ))
     }
 
     fn ecdsa_sign(
@@ -42,14 +42,21 @@ impl AsymmetricSign for BsslCryptoProvider {
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        match private_key.len() {
-            28 => ecdsa_sign(EcGroup::P224, private_key, digest.digest(), signature_out),
-            32 => ecdsa_sign(EcGroup::P256, private_key, digest.digest(), signature_out),
-            48 => ecdsa_sign(EcGroup::P384, private_key, digest.digest(), signature_out),
-            66 => ecdsa_sign(EcGroup::P521, private_key, digest.digest(), signature_out),
-            _ => Err(CryptoError::InvalidData),
-        }
+    ) -> Result<Option<usize>, CryptoError> {
+        let group = match private_key.len() {
+            28 => EcGroup::P224,
+            32 => EcGroup::P256,
+            48 => EcGroup::P384,
+            66 => EcGroup::P521,
+            // A private scalar of any other length is not a key of a supported curve.
+            _ => return Ok(None),
+        };
+        output(ecdsa_sign(
+            group,
+            private_key,
+            digest.digest(),
+            signature_out,
+        ))
     }
 }
 
@@ -59,8 +66,13 @@ impl Asymmetric for BsslCryptoProvider {
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), CryptoError> {
-        rsa_verify_pkcs1v15(public_key, digest.hash_alg(), digest.digest(), signature)
+    ) -> Result<bool, CryptoError> {
+        verified(rsa_verify_pkcs1v15(
+            public_key,
+            digest.hash_alg(),
+            digest.digest(),
+            signature,
+        ))
     }
 
     fn rsapss_verify(
@@ -68,8 +80,13 @@ impl Asymmetric for BsslCryptoProvider {
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), CryptoError> {
-        rsa_verify_pss(public_key, digest.hash_alg(), digest.digest(), signature)
+    ) -> Result<bool, CryptoError> {
+        verified(rsa_verify_pss(
+            public_key,
+            digest.hash_alg(),
+            digest.digest(),
+            signature,
+        ))
     }
 
     fn ecdsa_verify(
@@ -77,14 +94,16 @@ impl Asymmetric for BsslCryptoProvider {
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), CryptoError> {
-        match public_key.len() {
-            56 => ecdsa_verify(EcGroup::P224, public_key, digest.digest(), signature),
-            64 => ecdsa_verify(EcGroup::P256, public_key, digest.digest(), signature),
-            96 => ecdsa_verify(EcGroup::P384, public_key, digest.digest(), signature),
-            132 => ecdsa_verify(EcGroup::P521, public_key, digest.digest(), signature),
-            _ => Err(CryptoError::InvalidData),
-        }
+    ) -> Result<bool, CryptoError> {
+        let group = match public_key.len() {
+            56 => EcGroup::P224,
+            64 => EcGroup::P256,
+            96 => EcGroup::P384,
+            132 => EcGroup::P521,
+            // A public point of any other length is not a key of a supported curve.
+            _ => return Ok(false),
+        };
+        verified(ecdsa_verify(group, public_key, digest.digest(), signature))
     }
 
     fn rsaes_encrypt(
@@ -92,8 +111,8 @@ impl Asymmetric for BsslCryptoProvider {
         public_key: &[u8],
         data: &[u8],
         ciphertext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        rsa_encrypt_pkcs1v15(public_key, data, ciphertext)
+    ) -> Result<Option<usize>, CryptoError> {
+        output(rsa_encrypt_pkcs1v15(public_key, data, ciphertext))
     }
 
     fn oaep_encrypt(
@@ -103,8 +122,10 @@ impl Asymmetric for BsslCryptoProvider {
         data: &[u8],
         label: &[u8],
         ciphertext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        rsa_encrypt_oaep(hash_alg, public_key, data, label, ciphertext)
+    ) -> Result<Option<usize>, CryptoError> {
+        output(rsa_encrypt_oaep(
+            hash_alg, public_key, data, label, ciphertext,
+        ))
     }
 
     fn rsa_null_encrypt(
@@ -112,8 +133,8 @@ impl Asymmetric for BsslCryptoProvider {
         public_key: &[u8],
         data: &[u8],
         ciphertext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        rsa_encrypt_null(public_key, data, ciphertext)
+    ) -> Result<Option<usize>, CryptoError> {
+        output(rsa_encrypt_null(public_key, data, ciphertext))
     }
 
     fn rsaes_decrypt(
@@ -121,8 +142,8 @@ impl Asymmetric for BsslCryptoProvider {
         private_key: &[u8],
         ciphertext: &[u8],
         plaintext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        rsa_decrypt_pkcs1v15(private_key, ciphertext, plaintext)
+    ) -> Result<Option<usize>, CryptoError> {
+        output(rsa_decrypt_pkcs1v15(private_key, ciphertext, plaintext))
     }
 
     fn oaep_decrypt(
@@ -132,8 +153,14 @@ impl Asymmetric for BsslCryptoProvider {
         ciphertext: &[u8],
         label: &[u8],
         plaintext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        rsa_decrypt_oaep(hash_alg, private_key, ciphertext, label, plaintext)
+    ) -> Result<Option<usize>, CryptoError> {
+        output(rsa_decrypt_oaep(
+            hash_alg,
+            private_key,
+            ciphertext,
+            label,
+            plaintext,
+        ))
     }
 
     fn rsa_null_decrypt(
@@ -141,8 +168,8 @@ impl Asymmetric for BsslCryptoProvider {
         private_key: &[u8],
         ciphertext: &[u8],
         plaintext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        rsa_decrypt_null(private_key, ciphertext, plaintext)
+    ) -> Result<Option<usize>, CryptoError> {
+        output(rsa_decrypt_null(private_key, ciphertext, plaintext))
     }
 
     fn rsa_generate_key(
@@ -153,7 +180,7 @@ impl Asymmetric for BsslCryptoProvider {
         seed: Option<&[u8]>,
     ) -> Result<(usize, usize), CryptoError> {
         let bit_size = usize::from(u16::from(key_bits));
-        rsa_generate_key(bit_size, public_key, private_key, seed)
+        rsa_generate_key(bit_size, public_key, private_key, seed).map_err(Into::into)
     }
 
     fn ecc_generate_key(
@@ -172,24 +199,15 @@ impl Asymmetric for BsslCryptoProvider {
             None => RngWrapper::Bssl(crate::BsslRng),
         };
 
-        match curve {
-            TpmEccCurve::NistP224 => {
-                ec_generate_key(EcGroup::P224, &mut rng, public_key, private_key)
-            }
-            TpmEccCurve::NistP256 => {
-                ec_generate_key(EcGroup::P256, &mut rng, public_key, private_key)
-            }
-            TpmEccCurve::NistP384 => {
-                ec_generate_key(EcGroup::P384, &mut rng, public_key, private_key)
-            }
-            TpmEccCurve::NistP521 => {
-                ec_generate_key(EcGroup::P521, &mut rng, public_key, private_key)
-            }
-            TpmEccCurve::BNP256 => {
-                ec_generate_key(EcGroup::BnP256, &mut rng, public_key, private_key)
-            }
-            _ => Err(CryptoError::UnsupportedAlgorithm),
-        }
+        let group = match curve {
+            TpmEccCurve::NistP224 => EcGroup::P224,
+            TpmEccCurve::NistP256 => EcGroup::P256,
+            TpmEccCurve::NistP384 => EcGroup::P384,
+            TpmEccCurve::NistP521 => EcGroup::P521,
+            TpmEccCurve::BNP256 => EcGroup::BnP256,
+            _ => return Err(CryptoError::Unsupported),
+        };
+        ec_generate_key(group, &mut rng, public_key, private_key).map_err(Into::into)
     }
 
     fn rsa_import_private_key(
@@ -198,15 +216,20 @@ impl Asymmetric for BsslCryptoProvider {
         prime_p: &[u8],
         exponent: u32,
         private_key_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        rsa_import_private_key(modulus, prime_p, exponent, private_key_out)
+    ) -> Result<Option<usize>, CryptoError> {
+        output(rsa_import_private_key(
+            modulus,
+            prime_p,
+            exponent,
+            private_key_out,
+        ))
     }
 
     fn rsa_private_key_to_prime_p(
         &self,
         private_key: &[u8],
         prime_p_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        rsa_private_key_to_prime_p(private_key, prime_p_out)
+    ) -> Result<Option<usize>, CryptoError> {
+        output(rsa_private_key_to_prime_p(private_key, prime_p_out))
     }
 }

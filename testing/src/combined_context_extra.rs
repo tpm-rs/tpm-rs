@@ -3,9 +3,7 @@
 use crate::test_utils::marshal_to_slice;
 use tpm2::Handle;
 use tpm2::Unmarshal;
-use tpm2::commands::{
-    ContextLoad, ContextSave, ContextSaveHandles, CreatePrimary, CreatePrimaryHandles,
-};
+use tpm2::commands::{ContextLoad, ContextSave, CreatePrimary};
 use tpm2::*;
 #[rustfmt::skip]
 use tpm2_simulator::create_simulator;
@@ -57,25 +55,20 @@ fn test_combined_context_stress() {
     let creation_pcr = TpmlPcrSelection::unmarshal(&mut unmarsh).unwrap();
 
     let cp_cmd = CreatePrimary {
+        primary_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr,
     };
-    let cp_handles = CreatePrimaryHandles {
-        primary_handle: Handle(0x40000001),
-    };
 
-    let (cp_resp, cp_resp_handles) =
-        execute_with_password_sessions(&mut sim, &cp_cmd, cp_handles, 1, &[]).unwrap();
-    let cp_handle = cp_resp_handles.object_handle;
+    let cp_resp = execute_with_password_sessions(&mut sim, &cp_cmd, 1, &[]).unwrap();
+    let cp_handle = cp_resp.object_handle;
 
-    let save_cmd = ContextSave::default();
-    let save_handles = ContextSaveHandles {
+    let save_cmd = ContextSave {
         save_handle: cp_handle,
     };
-    let (save_resp, _) =
-        execute_with_password_sessions(&mut sim, &save_cmd, save_handles, 0, &[]).unwrap();
+    let save_resp = execute_with_password_sessions(&mut sim, &save_cmd, 0, &[]).unwrap();
 
     let cp_name = read_public_name(&mut sim, cp_handle);
     let _ = flush_context(&mut sim, cp_handle);
@@ -89,27 +82,24 @@ fn test_combined_context_stress() {
     if let Ok(bad_ctx) = TpmsContext::unmarshal(&mut unmarsh) {
         let bad_cmd = ContextLoad { context: bad_ctx };
         assert!(
-            execute_with_password_sessions(&mut sim, &bad_cmd, (), 0, &[]).is_err(),
+            execute_with_password_sessions(&mut sim, &bad_cmd, 0, &[]).is_err(),
             "Corrupted context should fail to load"
         );
     }
 
     // Stress-test: Save a flushed handle
-    let save_flushed_cmd = ContextSave::default();
-    let save_flushed_handles = ContextSaveHandles {
+    let save_flushed_cmd = ContextSave {
         save_handle: cp_handle,
     };
     assert!(
-        execute_with_password_sessions(&mut sim, &save_flushed_cmd, save_flushed_handles, 0, &[])
-            .is_err(),
+        execute_with_password_sessions(&mut sim, &save_flushed_cmd, 0, &[]).is_err(),
         "ContextSave on a flushed handle should fail"
     );
 
     let load_cmd = ContextLoad {
         context: save_resp.context,
     };
-    let (_, load_resp_handles) =
-        execute_with_password_sessions(&mut sim, &load_cmd, (), 0, &[]).unwrap();
+    let load_resp_handles = execute_with_password_sessions(&mut sim, &load_cmd, 0, &[]).unwrap();
     let cl_handle = load_resp_handles.loaded_handle;
 
     let cl_name = read_public_name(&mut sim, cl_handle);
@@ -138,8 +128,7 @@ fn test_combined_context_stress() {
 
     let _ = flush_context(&mut sim, cl_handle);
 
-    let (_, load_resp_handles2) =
-        execute_with_password_sessions(&mut sim, &load_cmd, (), 0, &[]).unwrap();
+    let load_resp_handles2 = execute_with_password_sessions(&mut sim, &load_cmd, 0, &[]).unwrap();
     let cl_handle2 = load_resp_handles2.loaded_handle;
     assert_eq!(
         cl_handle, cl_handle2,

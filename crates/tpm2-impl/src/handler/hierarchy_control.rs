@@ -1,10 +1,11 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::commands::{HierarchyControl, HierarchyControlHandles};
+use tpm2::commands::HierarchyControl;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 
@@ -24,8 +25,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<HierarchyControlHandles>()?;
-        let auth_handle = handles.auth_handle.0;
+        let handles = request.try_unmarshal_handles::<HierarchyControl>()?;
+        let [auth_handle] = handles;
+        check(auth_handle, Tpmi::RhBaseHierarchy, Position::handle(1))?;
+        let auth_handle = auth_handle.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
@@ -36,7 +39,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
 
-        let cmd = request.try_unmarshal::<HierarchyControl>()?;
+        let cmd = request.try_unmarshal_command::<HierarchyControl>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());

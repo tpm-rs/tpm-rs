@@ -30,7 +30,7 @@ fn test_hash_cmd_layout_and_big_endian() {
 
     // Roundtrip verification
     let mut slice = &buf[..len];
-    let unmarshaled = Hash::unmarshal(&mut slice).unwrap();
+    let unmarshaled = Hash::unmarshal_with_handles([], &mut slice).unwrap();
     assert_eq!(unmarshaled, cmd);
     assert!(slice.is_empty());
 }
@@ -61,7 +61,7 @@ fn test_hash_sequence_start_cmd_layout_and_big_endian() {
 
     // Roundtrip verification
     let mut slice = &buf[..len];
-    let unmarshaled = HashSequenceStart::unmarshal(&mut slice).unwrap();
+    let unmarshaled = HashSequenceStart::unmarshal_with_handles([], &mut slice).unwrap();
     assert_eq!(unmarshaled, cmd);
     assert!(slice.is_empty());
 }
@@ -73,6 +73,7 @@ fn test_sequence_update_cmd_layout_and_big_endian() {
 
     let data_bytes = [0x99, 0x88];
     let cmd = SequenceUpdate {
+        sequence_handle: Handle(0x80000001),
         buffer: Tpm2bMaxBuffer::from_bytes(&data_bytes).unwrap(),
     };
 
@@ -89,7 +90,7 @@ fn test_sequence_update_cmd_layout_and_big_endian() {
 
     // Roundtrip verification
     let mut slice = &buf[..len];
-    let unmarshaled = SequenceUpdate::unmarshal(&mut slice).unwrap();
+    let unmarshaled = SequenceUpdate::unmarshal_with_handles(cmd.handles(), &mut slice).unwrap();
     assert_eq!(unmarshaled, cmd);
     assert!(slice.is_empty());
 }
@@ -102,6 +103,7 @@ fn test_sequence_complete_cmd_layout_and_big_endian() {
 
     let data_bytes = [0x55, 0x66, 0x77];
     let cmd = SequenceComplete {
+        sequence_handle: Handle(0x80000001),
         buffer: Tpm2bMaxBuffer::from_bytes(&data_bytes).unwrap(),
         hierarchy: Handle::RH_OWNER, // 0x40000001
     };
@@ -120,7 +122,7 @@ fn test_sequence_complete_cmd_layout_and_big_endian() {
 
     // Roundtrip verification
     let mut slice = &buf[..len];
-    let unmarshaled = SequenceComplete::unmarshal(&mut slice).unwrap();
+    let unmarshaled = SequenceComplete::unmarshal_with_handles(cmd.handles(), &mut slice).unwrap();
     assert_eq!(unmarshaled, cmd);
     assert!(slice.is_empty());
 }
@@ -144,7 +146,10 @@ fn test_marshalling_stress_buffer_sizes() {
         let mut buf1 = [0u8; Hash::MAX_SIZE];
         let len1 = hash_cmd.marshal(&mut buf1);
         let mut slice1 = &buf1[..len1];
-        assert_eq!(Hash::unmarshal(&mut slice1).unwrap(), hash_cmd);
+        assert_eq!(
+            Hash::unmarshal_with_handles([], &mut slice1).unwrap(),
+            hash_cmd
+        );
         assert!(slice1.is_empty());
 
         // 2. HashSequenceStart
@@ -156,21 +161,28 @@ fn test_marshalling_stress_buffer_sizes() {
         let len2 = start_cmd.marshal(&mut buf2);
         let mut slice2 = &buf2[..len2];
         assert_eq!(
-            HashSequenceStart::unmarshal(&mut slice2).unwrap(),
+            HashSequenceStart::unmarshal_with_handles([], &mut slice2).unwrap(),
             start_cmd
         );
         assert!(slice2.is_empty());
 
         // 3. SequenceUpdate
-        let update_cmd = SequenceUpdate { buffer: max_buffer };
+        let update_cmd = SequenceUpdate {
+            sequence_handle: Handle(0x80000001),
+            buffer: max_buffer,
+        };
         let mut buf3 = [0u8; SequenceUpdate::MAX_SIZE];
         let len3 = update_cmd.marshal(&mut buf3);
         let mut slice3 = &buf3[..len3];
-        assert_eq!(SequenceUpdate::unmarshal(&mut slice3).unwrap(), update_cmd);
+        assert_eq!(
+            SequenceUpdate::unmarshal_with_handles(update_cmd.handles(), &mut slice3).unwrap(),
+            update_cmd
+        );
         assert!(slice3.is_empty());
 
         // 4. SequenceComplete
         let complete_cmd = SequenceComplete {
+            sequence_handle: Handle(0x80000001),
             buffer: max_buffer,
             hierarchy: Handle::RH_NULL,
         };
@@ -178,7 +190,7 @@ fn test_marshalling_stress_buffer_sizes() {
         let len4 = complete_cmd.marshal(&mut buf4);
         let mut slice4 = &buf4[..len4];
         assert_eq!(
-            SequenceComplete::unmarshal(&mut slice4).unwrap(),
+            SequenceComplete::unmarshal_with_handles(complete_cmd.handles(), &mut slice4).unwrap(),
             complete_cmd
         );
         assert!(slice4.is_empty());
@@ -204,7 +216,7 @@ fn test_stress_handles() {
         let mut buf = [0u8; Hash::MAX_SIZE];
         let len = hash_cmd.marshal(&mut buf);
         let mut slice = &buf[..len];
-        let unmarshaled = Hash::unmarshal(&mut slice).unwrap();
+        let unmarshaled = Hash::unmarshal_with_handles([], &mut slice).unwrap();
         assert_eq!(unmarshaled.hierarchy, handle);
     }
 
@@ -226,7 +238,7 @@ fn test_stress_handles() {
         let len = hash_cmd.marshal(&mut buf);
         let mut slice = &buf[..len];
         assert_eq!(
-            Hash::unmarshal(&mut slice).unwrap_err(),
+            Hash::unmarshal_with_handles([], &mut slice).unwrap_err(),
             tpm2::errors::UnmarshalError::VALUE.in_parameter(3)
         );
     }
@@ -239,7 +251,7 @@ fn test_unmarshal_errors_and_panic_safety() {
         let buf = [0u8; 1];
         let mut slice = &buf[..];
         assert_eq!(
-            Hash::unmarshal(&mut slice).unwrap_err(),
+            Hash::unmarshal_with_handles([], &mut slice).unwrap_err(),
             tpm2::errors::UnmarshalError::INSUFFICIENT.in_parameter(1)
         );
     }
@@ -249,7 +261,7 @@ fn test_unmarshal_errors_and_panic_safety() {
         let buf = [0x00, 0x05, 0xAA, 0xBB]; // declared size 5, only 2 bytes of data
         let mut slice = &buf[..];
         assert_eq!(
-            SequenceUpdate::unmarshal(&mut slice).unwrap_err(),
+            SequenceUpdate::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err(),
             tpm2::errors::UnmarshalError::INSUFFICIENT.in_parameter(1)
         );
     }
@@ -262,7 +274,7 @@ fn test_unmarshal_errors_and_panic_safety() {
         buf[0..2].copy_from_slice(&large_size.to_be_bytes());
         let mut slice = buf.as_slice();
         assert_eq!(
-            SequenceUpdate::unmarshal(&mut slice).unwrap_err(),
+            SequenceUpdate::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err(),
             tpm2::errors::UnmarshalError::SIZE.in_parameter(1)
         );
     }
@@ -273,7 +285,7 @@ fn test_unmarshal_errors_and_panic_safety() {
         buf[0..2].copy_from_slice(&large_size.to_be_bytes());
         let mut slice = buf.as_slice();
         assert_eq!(
-            SequenceUpdate::unmarshal(&mut slice).unwrap_err(),
+            SequenceUpdate::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err(),
             tpm2::errors::UnmarshalError::SIZE.in_parameter(1)
         );
     }
@@ -289,7 +301,7 @@ fn test_unmarshal_errors_and_panic_safety() {
         // Omit hash_alg and hierarchy
         let mut slice = buf.as_slice();
         assert_eq!(
-            Hash::unmarshal(&mut slice).unwrap_err(),
+            Hash::unmarshal_with_handles([], &mut slice).unwrap_err(),
             tpm2::errors::UnmarshalError::INSUFFICIENT.in_parameter(2)
         );
     }
@@ -304,7 +316,7 @@ fn test_unmarshal_errors_and_panic_safety() {
         // Omit hierarchy
         let mut slice = buf.as_slice();
         assert_eq!(
-            Hash::unmarshal(&mut slice).unwrap_err(),
+            Hash::unmarshal_with_handles([], &mut slice).unwrap_err(),
             tpm2::errors::UnmarshalError::INSUFFICIENT.in_parameter(3)
         );
     }
@@ -318,7 +330,7 @@ fn test_unmarshal_errors_and_panic_safety() {
         // Omit hierarchy
         let mut slice = buf.as_slice();
         assert_eq!(
-            SequenceComplete::unmarshal(&mut slice).unwrap_err(),
+            SequenceComplete::unmarshal_with_handles(Default::default(), &mut slice).unwrap_err(),
             tpm2::errors::UnmarshalError::INSUFFICIENT.in_parameter(2)
         );
     }
@@ -328,6 +340,7 @@ fn test_unmarshal_errors_and_panic_safety() {
 fn test_unmarshal_with_trailing_data() {
     let data_bytes = [0x11, 0x22];
     let cmd = SequenceUpdate {
+        sequence_handle: Handle(0x80000001),
         buffer: Tpm2bMaxBuffer::from_bytes(&data_bytes).unwrap(),
     };
 
@@ -338,7 +351,7 @@ fn test_unmarshal_with_trailing_data() {
     buf.extend_from_slice(&[0x99, 0x99, 0x99]);
 
     let mut slice = buf.as_slice();
-    let unmarshaled = SequenceUpdate::unmarshal(&mut slice).unwrap();
+    let unmarshaled = SequenceUpdate::unmarshal_with_handles(cmd.handles(), &mut slice).unwrap();
     assert_eq!(unmarshaled, cmd);
 
     // Trailing bytes should still be in the slice

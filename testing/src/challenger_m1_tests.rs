@@ -10,8 +10,7 @@ use crate::test_utils::{
 use tpm2::Marshal;
 use tpm2::Unmarshal;
 use tpm2::commands::{
-    Certify, CertifyHandles, Command, CreatePrimary, CreatePrimaryHandles, GetCapability,
-    GetSessionAuditDigest, GetSessionAuditDigestHandles,
+    Certify, Command, CreatePrimary, GetCapability, GetSessionAuditDigest, Message,
 };
 use tpm2::{Handle, TpmCap, TpmCc, TpmEccCurve, TpmPt, TpmSe};
 use tpm2::{
@@ -87,19 +86,16 @@ fn create_signing_key_ecc_with_unique(
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
 
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[])
-            .expect("could not generate ECC signing key");
+    let rsp = execute_with_password_sessions(sim, &create_cmd, 1, &[])
+        .expect("could not generate ECC signing key");
 
-    (rsp_handles.object_handle, rsp.name)
+    (rsp.object_handle, rsp.name)
 }
 
 fn create_non_signing_key_rsa(sim: &mut Simulator<'_>) -> (Handle, tpm2::Tpm2bName<'static>) {
@@ -131,19 +127,16 @@ fn create_non_signing_key_rsa(sim: &mut Simulator<'_>) -> (Handle, tpm2::Tpm2bNa
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
 
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[])
-            .expect("could not generate RSA non-signing key");
+    let rsp = execute_with_password_sessions(sim, &create_cmd, 1, &[])
+        .expect("could not generate RSA non-signing key");
 
-    (rsp_handles.object_handle, rsp.name)
+    (rsp.object_handle, rsp.name)
 }
 
 // =========================================================================
@@ -161,7 +154,7 @@ fn test_get_capability_unknown_capability() {
         property_count: 1,
     };
 
-    let resp = execute_with_corrupted_bytes_status(&mut sim, &get_cmd, (), 0, &[], |buf| {
+    let resp = execute_with_corrupted_bytes_status(&mut sim, &get_cmd, 0, &[], |buf| {
         buf[0..4].copy_from_slice(&0x9999u32.to_be_bytes());
     });
     // Invalid capability fails unmarshalling with TPM_RC_VALUE + TPM_RC_P + TPM_RC_1
@@ -186,7 +179,7 @@ fn test_get_capability_property_count_zero() {
     };
 
     let mut resp_buffer = [0u8; 4096];
-    let (get_resp, _) = execute_get_capability(&mut sim, &get_cmd, (), 0, &[], &mut resp_buffer)
+    let get_resp = execute_get_capability(&mut sim, &get_cmd, 0, &[], &mut resp_buffer)
         .expect("property_count = 0 should succeed and return more_data = YES per TPM 2.0 Spec");
     assert!(get_resp.more_data);
 }
@@ -202,7 +195,7 @@ fn test_get_capability_property_count_huge() {
     };
 
     let mut resp_buffer = [0u8; 4096];
-    let (rsp, _) = execute_get_capability(&mut sim, &get_cmd, (), 0, &[], &mut resp_buffer)
+    let rsp = execute_get_capability(&mut sim, &get_cmd, 0, &[], &mut resp_buffer)
         .expect("Should handle property_count = u32::MAX gracefully");
     // It should have returned properties without panicking
     assert!(!rsp.more_data);
@@ -265,19 +258,16 @@ fn test_get_session_audit_digest_invalid_privacy_admin() {
     .unwrap();
 
     let get_audit_cmd = GetSessionAuditDigest {
+        privacy_admin_handle: Handle(0x80000000),
+        sign_handle: ak_handle,
+        session_handle: sess.session_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
 
     // Use invalid privacy admin handle (e.g. transient 0x80000000)
-    let get_audit_handles = GetSessionAuditDigestHandles {
-        privacy_admin_handle: Handle(0x80000000),
-        sign_handle: ak_handle,
-        session_handle: sess.session_handle,
-    };
 
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &get_audit_cmd, get_audit_handles, 2, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &get_audit_cmd, 2, &[]);
     // SPEC EXPECTS: TPM_RC_VALUE for handle 1 (0x184)
     assert_eq!(resp.err(), Some(0x184));
 
@@ -300,19 +290,16 @@ fn test_get_session_audit_digest_non_existent_signer() {
     .unwrap();
 
     let get_audit_cmd = GetSessionAuditDigest {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: Handle(0x8000000E),
+        session_handle: sess.session_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
 
     // Use non-existent sign key handle 0x80ffffff
-    let get_audit_handles = GetSessionAuditDigestHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: Handle(0x8000000E),
-        session_handle: sess.session_handle,
-    };
 
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &get_audit_cmd, get_audit_handles, 2, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &get_audit_cmd, 2, &[]);
     // SPEC EXPECTS: TPM_RC_REFERENCE_Hx for invalid transient sign_handle (ReferenceH1 = 2321)
     assert_eq!(resp.err(), Some(2321));
 }
@@ -335,18 +322,14 @@ fn test_get_session_audit_digest_incorrect_signer_type() {
     .unwrap();
 
     let get_audit_cmd = GetSessionAuditDigest {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: non_sign_handle,
+        session_handle: sess.session_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
 
-    let get_audit_handles = GetSessionAuditDigestHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: non_sign_handle,
-        session_handle: sess.session_handle,
-    };
-
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &get_audit_cmd, get_audit_handles, 2, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &get_audit_cmd, 2, &[]);
     assert!(resp.is_err());
 
     flush_context(&mut sim, non_sign_handle).unwrap();
@@ -358,19 +341,16 @@ fn test_get_session_audit_digest_non_existent_session() {
     let (ak_handle, _) = create_signing_key_ecc(&mut sim, &[]);
 
     let get_audit_cmd = GetSessionAuditDigest {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: ak_handle,
+        session_handle: Handle(0x0200000e),
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
 
     // Use non-existent session handle 0x0200000e
-    let get_audit_handles = GetSessionAuditDigestHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: ak_handle,
-        session_handle: Handle(0x0200000e),
-    };
 
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &get_audit_cmd, get_audit_handles, 2, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &get_audit_cmd, 2, &[]);
     // C EntityGetLoadStatus: an unloaded HMAC session handle yields
     // TPM_RC_REFERENCE_H0 + 2 (0x912) for the third handle (Entity.c:146-149).
     assert_eq!(resp.err(), Some(0x912));
@@ -395,19 +375,15 @@ fn test_get_session_audit_digest_missing_auth() {
     .unwrap();
 
     let get_audit_cmd = GetSessionAuditDigest {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: ak_handle,
+        session_handle: sess.session_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
 
-    let get_audit_handles = GetSessionAuditDigestHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: ak_handle,
-        session_handle: sess.session_handle,
-    };
-
     // Provide only 1 authorization session instead of 2
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &get_audit_cmd, get_audit_handles, 1, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &get_audit_cmd, 1, &[]);
     // Expect TPM_RC_AUTH_MISSING (0x125)
     assert_eq!(resp.err(), Some(0x125));
 
@@ -424,18 +400,15 @@ fn test_certify_non_existent_object() {
     let (ak_handle, _) = create_signing_key_ecc(&mut sim, &[]);
 
     let certify_cmd = Certify {
+        object_handle: Handle(0x8000000E),
+        sign_handle: ak_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
 
     // Use non-existent object handle 0x80ffffff (handle 1)
-    let certify_handles = CertifyHandles {
-        object_handle: Handle(0x8000000E),
-        sign_handle: ak_handle,
-    };
 
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 2, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &certify_cmd, 2, &[]);
     // SPEC EXPECTS: TPM_RC_REFERENCE_Hx for invalid transient object_handle (ReferenceH0 = 2320)
     assert_eq!(resp.err(), Some(2320));
 
@@ -448,18 +421,15 @@ fn test_certify_non_existent_signer() {
     let (obj_handle, _) = create_signing_key_ecc(&mut sim, &[]);
 
     let certify_cmd = Certify {
+        object_handle: obj_handle,
+        sign_handle: Handle(0x8000000E),
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
 
     // Use non-existent sign handle 0x8000000E (handle 2)
-    let certify_handles = CertifyHandles {
-        object_handle: obj_handle,
-        sign_handle: Handle(0x8000000E),
-    };
 
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 2, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &certify_cmd, 2, &[]);
     // SPEC EXPECTS: TPM_RC_REFERENCE_Hx for invalid transient sign_handle (ReferenceH1 = 2321)
     assert_eq!(resp.err(), Some(2321));
 
@@ -473,17 +443,13 @@ fn test_certify_incorrect_signer_type() {
     let (non_sign_handle, _) = create_non_signing_key_rsa(&mut sim);
 
     let certify_cmd = Certify {
+        object_handle: obj_handle,
+        sign_handle: non_sign_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
 
-    let certify_handles = CertifyHandles {
-        object_handle: obj_handle,
-        sign_handle: non_sign_handle,
-    };
-
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 2, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &certify_cmd, 2, &[]);
     assert!(resp.is_err());
 
     flush_context(&mut sim, obj_handle).unwrap();
@@ -497,18 +463,14 @@ fn test_certify_missing_auth() {
     let (ak_handle, _) = create_signing_key_ecc_with_unique(&mut sim, &[], 1);
 
     let certify_cmd = Certify {
+        object_handle: obj_handle,
+        sign_handle: ak_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
 
-    let certify_handles = CertifyHandles {
-        object_handle: obj_handle,
-        sign_handle: ak_handle,
-    };
-
     // Provide only 1 authorization session instead of 2
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 1, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &certify_cmd, 1, &[]);
     // Expect TPM_RC_AUTH_MISSING (0x125)
     assert_eq!(resp.err(), Some(0x125));
 
@@ -528,17 +490,13 @@ fn test_certify_scheme_mismatch_ecc_with_rsa_scheme() {
 
     // Signer key is ECC (ECDSA), but we request RSASSA signature scheme!
     let certify_cmd = Certify {
+        object_handle: obj_handle,
+        sign_handle: ak_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
     };
 
-    let certify_handles = CertifyHandles {
-        object_handle: obj_handle,
-        sign_handle: ak_handle,
-    };
-
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &certify_cmd, certify_handles, 2, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &certify_cmd, 2, &[]);
     assert!(resp.is_err());
     let err = resp.err().unwrap();
     // TPM_RC_SCHEME + RC_Certify_inScheme (P2).
@@ -614,30 +572,21 @@ fn test_audit_reset_behavior() {
     };
     let mut sessions = [sess.clone()];
     let (_get_rsp_1, _) =
-        execute_with_hmac_sessions_raw(&mut sim, &get_cmd_1, (), &[], &mut sessions, &[&[]])
-            .unwrap();
+        execute_with_hmac_sessions_raw(&mut sim, &get_cmd_1, &[], &mut sessions, &[&[]]).unwrap();
     sess = sessions[0].clone();
 
     // Verify audit digest is non-zero
     let get_audit_cmd = GetSessionAuditDigest {
-        qualifying_data: Tpm2bData::default(),
-        in_scheme: None,
-    };
-    let get_audit_handles = GetSessionAuditDigestHandles {
         privacy_admin_handle: Handle::RH_ENDORSEMENT,
         sign_handle: ak_handle,
         session_handle: sess.session_handle,
+        qualifying_data: Tpm2bData::default(),
+        in_scheme: None,
     };
     let mut resp_buffer_1 = [0u8; 4096];
-    let (get_audit_rsp_1, _) = execute_get_session_audit_digest(
-        &mut sim,
-        &get_audit_cmd,
-        get_audit_handles,
-        2,
-        &[],
-        &mut resp_buffer_1,
-    )
-    .unwrap();
+    let get_audit_rsp_1 =
+        execute_get_session_audit_digest(&mut sim, &get_audit_cmd, 2, &[], &mut resp_buffer_1)
+            .unwrap();
     let attest_1 = get_audit_rsp_1.audit_info.0;
     let aud_info_1 = match attest_1.attested {
         tpm2::TpmuAttest::SessionAudit(info) => info,
@@ -655,20 +604,13 @@ fn test_audit_reset_behavior() {
     };
     let mut sessions = [sess.clone()];
     let (_get_rsp_2, _) =
-        execute_with_hmac_sessions_raw(&mut sim, &get_cmd_2, (), &[], &mut sessions, &[&[]])
-            .unwrap();
+        execute_with_hmac_sessions_raw(&mut sim, &get_cmd_2, &[], &mut sessions, &[&[]]).unwrap();
     sess = sessions[0].clone();
 
     let mut resp_buffer_2 = [0u8; 4096];
-    let (get_audit_rsp_2, _) = execute_get_session_audit_digest(
-        &mut sim,
-        &get_audit_cmd,
-        get_audit_handles,
-        2,
-        &[],
-        &mut resp_buffer_2,
-    )
-    .unwrap();
+    let get_audit_rsp_2 =
+        execute_get_session_audit_digest(&mut sim, &get_audit_cmd, 2, &[], &mut resp_buffer_2)
+            .unwrap();
     let attest_2 = get_audit_rsp_2.audit_info.0;
     let aud_info_2 = match attest_2.attested {
         tpm2::TpmuAttest::SessionAudit(info) => info,
@@ -683,20 +625,13 @@ fn test_audit_reset_behavior() {
     sess.attributes = TpmaSession::AUDIT | TpmaSession::AUDIT_RESET | TpmaSession::CONTINUE_SESSION;
     let mut sessions = [sess.clone()];
     let (get_rsp_3_bytes, _) =
-        execute_with_hmac_sessions_raw(&mut sim, &get_cmd_2, (), &[], &mut sessions, &[&[]])
-            .unwrap();
+        execute_with_hmac_sessions_raw(&mut sim, &get_cmd_2, &[], &mut sessions, &[&[]]).unwrap();
     sess = sessions[0].clone();
 
     let mut resp_buffer_3 = [0u8; 4096];
-    let (get_audit_rsp_3, _) = execute_get_session_audit_digest(
-        &mut sim,
-        &get_audit_cmd,
-        get_audit_handles,
-        2,
-        &[],
-        &mut resp_buffer_3,
-    )
-    .unwrap();
+    let get_audit_rsp_3 =
+        execute_get_session_audit_digest(&mut sim, &get_audit_cmd, 2, &[], &mut resp_buffer_3)
+            .unwrap();
     let attest_3 = get_audit_rsp_3.audit_info.0;
     let aud_info_3 = match attest_3.attested {
         tpm2::TpmuAttest::SessionAudit(info) => info,
@@ -730,20 +665,13 @@ fn test_audit_reset_behavior() {
     sess.attributes = TpmaSession::AUDIT | TpmaSession::CONTINUE_SESSION;
     let mut sessions = [sess.clone()];
     let (get_rsp_4_bytes, _) =
-        execute_with_hmac_sessions_raw(&mut sim, &get_cmd_2, (), &[], &mut sessions, &[&[]])
-            .unwrap();
+        execute_with_hmac_sessions_raw(&mut sim, &get_cmd_2, &[], &mut sessions, &[&[]]).unwrap();
     let _final_sess = sessions[0].clone();
 
     let mut resp_buffer_4 = [0u8; 4096];
-    let (get_audit_rsp_4, _) = execute_get_session_audit_digest(
-        &mut sim,
-        &get_audit_cmd,
-        get_audit_handles,
-        2,
-        &[],
-        &mut resp_buffer_4,
-    )
-    .unwrap();
+    let get_audit_rsp_4 =
+        execute_get_session_audit_digest(&mut sim, &get_audit_cmd, 2, &[], &mut resp_buffer_4)
+            .unwrap();
     let attest_4 = get_audit_rsp_4.audit_info.0;
     let aud_info_4 = match attest_4.attested {
         tpm2::TpmuAttest::SessionAudit(info) => info,
@@ -787,11 +715,13 @@ fn test_get_session_audit_digest_parameter_errors() {
     )
     .unwrap();
 
-    let get_audit_handles = GetSessionAuditDigestHandles {
+    let get_audit_handles = GetSessionAuditDigest {
         privacy_admin_handle: Handle::RH_ENDORSEMENT,
         sign_handle: ak_handle,
         session_handle: sess.session_handle,
-    };
+        ..Default::default()
+    }
+    .handles();
 
     // Construct raw transaction bytes:
     let mut cmd_buffer = [0u8; 4096];
@@ -801,7 +731,9 @@ fn test_get_session_audit_digest_parameter_errors() {
         code: TpmCc::GetSessionAuditDigest,
     };
     let mut written = cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
-    written += marshal_to_slice(&(get_audit_handles), &mut cmd_buffer[written..]);
+    for handle in get_audit_handles {
+        written += marshal_to_slice(&handle, &mut cmd_buffer[written..]);
+    }
 
     // 2 password sessions
     let auth_cmd = TpmsAuthCommand {
@@ -872,23 +804,19 @@ fn test_get_session_audit_digest_scheme_mismatch() {
         property_count: 1,
     };
     let mut sessions = [sess.clone()];
-    execute_with_hmac_sessions_status(&mut sim, &get_cmd, (), &[], &mut sessions, &[&[]]).unwrap();
+    execute_with_hmac_sessions_status(&mut sim, &get_cmd, &[], &mut sessions, &[&[]]).unwrap();
     let sess = &sessions[0];
 
     // Signer key is ECC (ECDSA), but we request RSASSA signature scheme!
     let get_audit_cmd = GetSessionAuditDigest {
+        privacy_admin_handle: Handle::RH_ENDORSEMENT,
+        sign_handle: ak_handle,
+        session_handle: sess.session_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
     };
 
-    let get_audit_handles = GetSessionAuditDigestHandles {
-        privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        sign_handle: ak_handle,
-        session_handle: sess.session_handle,
-    };
-
-    let resp =
-        execute_with_password_sessions_status(&mut sim, &get_audit_cmd, get_audit_handles, 2, &[]);
+    let resp = execute_with_password_sessions_status(&mut sim, &get_audit_cmd, 2, &[]);
     assert!(resp.is_err());
     let err = resp.err().unwrap();
     // Signer key scheme mismatch.
@@ -904,10 +832,12 @@ fn test_certify_parameter_errors() {
     let (obj_handle, _) = create_signing_key_ecc_with_unique(&mut sim, &[], 0);
     let (ak_handle, _) = create_signing_key_ecc_with_unique(&mut sim, &[], 1);
 
-    let certify_handles = CertifyHandles {
+    let certify_handles = Certify {
         object_handle: obj_handle,
         sign_handle: ak_handle,
-    };
+        ..Default::default()
+    }
+    .handles();
 
     // Construct raw transaction bytes:
     let mut cmd_buffer = [0u8; 4096];
@@ -917,7 +847,9 @@ fn test_certify_parameter_errors() {
         code: TpmCc::Certify,
     };
     let mut written = cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
-    written += marshal_to_slice(&(certify_handles), &mut cmd_buffer[written..]);
+    for handle in certify_handles {
+        written += marshal_to_slice(&handle, &mut cmd_buffer[written..]);
+    }
 
     // 2 password sessions
     let auth_cmd = TpmsAuthCommand {

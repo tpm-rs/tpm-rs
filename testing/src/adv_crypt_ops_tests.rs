@@ -4,17 +4,16 @@ use crate::test_utils::{
     execute_with_password_sessions, execute_with_password_sessions_status, flush_context,
 };
 use sha2::{Digest as _, Sha256};
-use tpm2::commands::{
-    Command, LoadExternal, Sign, SignHandles, VerifySignature, VerifySignatureHandles,
-};
-use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, TpmCc, TpmEccCurve};
-use tpm2::{Marshal, Tpm2bPrivateKeyRsa, Tpm2bSymKey, TpmiAlgKdf, TpmsSchemeXor, Unmarshal};
+#[allow(deprecated)] // TPM2_Sign and TPM2_VerifySignature are deprecated upstream.
+use tpm2::commands::{Command, LoadExternal, Sign, VerifySignature};
+use tpm2::errors::{Position, TpmRc, UnmarshalError};
+use tpm2::{AlgSym, Tpm2bPrivateKeyRsa, Tpm2bSymKey, TpmiAlgKdf, TpmsSchemeXor, Unmarshal};
+use tpm2::{Handle, Message, TpmCc, TpmEccCurve, UnmarshalMessage};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bLabel, Tpm2bMaxBuffer,
-    Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmaObject, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits,
-    TpmsEccParms, TpmsEccPoint, TpmsRsaParms, TpmtKeyedHashScheme, TpmtPublic, TpmtRsaScheme,
-    TpmtSensitive, TpmtSigScheme, TpmtSignature, TpmtSymDefObject, TpmtTkHashcheck,
+    Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash,
+    TpmiRsaKeyBits, TpmsEccParms, TpmsEccPoint, TpmsRsaParms, TpmtKeyedHashScheme, TpmtPublic,
+    TpmtRsaScheme, TpmtSensitive, TpmtSigScheme, TpmtSignature, TpmtSymDefObject, TpmtTkHashcheck,
     TpmuSensitiveComposite,
 };
 use tpm2_simulator::{Simulator, create_simulator};
@@ -54,8 +53,10 @@ pub const RSA_N: &[u8] = &[
 
 // Local Command Structures
 
+/// `TPM2_MAC` (`TPM_CC_MAC`, the exp name of `TPM2_HMAC`), with its handle first.
 #[derive(Clone, PartialEq, Default, Debug)]
 pub struct LocalHmacCmd {
+    pub handle: Handle,
     pub in_buffer: Tpm2bMaxBuffer<'static>,
     pub hash_alg: Option<TpmiAlgHash>,
 }
@@ -75,48 +76,29 @@ impl tpm2::Marshal for LocalHmacCmd {
         offset
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalHmacCmd {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
+impl Message for LocalHmacCmd {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.handle]
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalHmacCmd {
+    fn unmarshal_with_handles(
+        [handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         let orig_len = src.len();
         let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
-        let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
+        let res = (|| -> Result<Self, UnmarshalError> {
             let src = &mut leaked;
 
             let in_buffer = Tpm2bMaxBuffer::unmarshal(src)?;
             let hash_alg = <Option<TpmiAlgHash>>::unmarshal(src)?;
             Ok(Self {
+                handle,
                 in_buffer,
                 hash_alg,
             })
-        })();
-        if res.is_ok() {
-            let consumed = orig_len - leaked.len();
-            *src = &src[consumed..];
-        }
-        res
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub struct LocalMacHandles {
-    pub handle: Handle,
-}
-impl tpm2::Marshal for LocalMacHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.handle.marshal(dst)
-    }
-}
-impl<'a> tpm2::Unmarshal<'a> for LocalMacHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
-        let orig_len = src.len();
-        let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
-        let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
-            let src = &mut leaked;
-
-            let handle = Handle::unmarshal(src)?;
-            Ok(Self { handle })
         })();
         if res.is_ok() {
             let consumed = orig_len - leaked.len();
@@ -137,11 +119,20 @@ impl tpm2::Marshal for LocalMacRsp {
         self.out_hmac.marshal(dst)
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalMacRsp {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
+impl Message for LocalMacRsp {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalMacRsp {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         let orig_len = src.len();
         let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
-        let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
+        let res = (|| -> Result<Self, UnmarshalError> {
             let src = &mut leaked;
 
             let out_hmac = Tpm2bDigest::unmarshal(src)?;
@@ -157,13 +148,13 @@ impl<'a> tpm2::Unmarshal<'a> for LocalMacRsp {
 
 impl Command for LocalHmacCmd {
     const CMD_CODE: TpmCc = TpmCc::MAC;
-    type Handles = LocalMacHandles;
     type Response<'a> = LocalMacRsp;
-    type RespHandles = ();
 }
 
+/// `TPM2_RSA_Decrypt`, with its key handle first.
 #[derive(Clone, PartialEq, Debug)]
 pub struct LocalRSADecryptCmd {
+    pub key_handle: Handle,
     pub cipher_text: Tpm2bPublicKeyRsa<'static>,
     pub in_scheme: Option<TpmtRsaScheme>,
     pub label: Tpm2bLabel<'static>,
@@ -193,50 +184,31 @@ impl tpm2::Marshal for LocalRSADecryptCmd {
         offset
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalRSADecryptCmd {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
+impl Message for LocalRSADecryptCmd {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalRSADecryptCmd {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         let orig_len = src.len();
         let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
-        let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
+        let res = (|| -> Result<Self, UnmarshalError> {
             let src = &mut leaked;
 
             let cipher_text = Tpm2bPublicKeyRsa::unmarshal(src)?;
             let in_scheme = <Option<tpm2::TpmtRsaScheme>>::unmarshal(src)?;
             let label = Tpm2bLabel::unmarshal(src)?;
             Ok(Self {
+                key_handle,
                 cipher_text,
                 in_scheme,
                 label,
             })
-        })();
-        if res.is_ok() {
-            let consumed = orig_len - leaked.len();
-            *src = &src[consumed..];
-        }
-        res
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub struct LocalRSADecryptHandles {
-    pub key_handle: Handle,
-}
-impl tpm2::Marshal for LocalRSADecryptHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.key_handle.marshal(dst)
-    }
-}
-impl<'a> tpm2::Unmarshal<'a> for LocalRSADecryptHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
-        let orig_len = src.len();
-        let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
-        let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
-            let src = &mut leaked;
-
-            let key_handle = Handle::unmarshal(src)?;
-            Ok(Self { key_handle })
         })();
         if res.is_ok() {
             let consumed = orig_len - leaked.len();
@@ -257,11 +229,20 @@ impl tpm2::Marshal for LocalRSADecryptRsp {
         self.message.marshal(dst)
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalRSADecryptRsp {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
+impl Message for LocalRSADecryptRsp {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalRSADecryptRsp {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         let orig_len = src.len();
         let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
-        let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
+        let res = (|| -> Result<Self, UnmarshalError> {
             let src = &mut leaked;
 
             let message = Tpm2bPublicKeyRsa::unmarshal(src)?;
@@ -277,9 +258,7 @@ impl<'a> tpm2::Unmarshal<'a> for LocalRSADecryptRsp {
 
 impl Command for LocalRSADecryptCmd {
     const CMD_CODE: TpmCc = TpmCc::RSADecrypt;
-    type Handles = LocalRSADecryptHandles;
     type Response<'a> = LocalRSADecryptRsp;
-    type RespHandles = ();
 }
 
 // Helpers for public areas
@@ -379,17 +358,11 @@ impl RawRc {
 /// Executes `cmd` with one empty password session. TPM2_HMAC, TPM2_RSA_Decrypt and TPM2_Sign
 /// require USER authorization of their key handle, so C rejects them without a session
 /// (TPM_RC_AUTH_MISSING); the session makes the command reach the checks under test.
-fn exec_pw<C: Command>(
-    sim: &mut Simulator<'_>,
-    cmd: C,
-    handles: C::Handles,
-) -> Result<(C::Response<'static>, C::RespHandles), RawRc>
+fn exec_pw<C: Command>(sim: &mut Simulator<'_>, cmd: C) -> Result<C::Response<'static>, RawRc>
 where
-    C::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut C::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <C::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    execute_with_password_sessions(sim, &cmd, handles, 1, &[]).map_err(RawRc)
+    execute_with_password_sessions(sim, &cmd, 1, &[]).map_err(RawRc)
 }
 
 /// Loads `public` with its sensitive area into the NULL hierarchy.
@@ -408,15 +381,13 @@ fn load_with_private(
         in_public: tpm2::Tpm2b(public),
         hierarchy: Handle::RH_NULL,
     };
-    sim.execute_with_handles(load_cmd, ())
-        .unwrap()
-        .1
-        .object_handle
+    sim.execute(load_cmd).unwrap().object_handle
 }
 
 /// Creates a primary object from `public` in the NULL hierarchy (empty password session).
 fn create_primary_null(sim: &mut Simulator<'_>, public: TpmtPublic<'static>) -> Handle {
     let cmd = tpm2::commands::CreatePrimary {
+        primary_handle: Handle::RH_NULL,
         in_sensitive: tpm2::Tpm2b(tpm2::TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -424,12 +395,8 @@ fn create_primary_null(sim: &mut Simulator<'_>, public: TpmtPublic<'static>) -> 
         in_public: tpm2::Tpm2b(public),
         ..Default::default()
     };
-    let handles = tpm2::commands::CreatePrimaryHandles {
-        primary_handle: Handle::RH_NULL,
-    };
-    execute_with_password_sessions(sim, &cmd, handles, 1, &[])
+    execute_with_password_sessions(sim, &cmd, 1, &[])
         .expect("CreatePrimary failed")
-        .1
         .object_handle
 }
 
@@ -472,13 +439,11 @@ fn load_ecc_with_private(sim: &mut Simulator<'_>, attrs: TpmaObject) -> Handle {
 fn adv_mac_invalid_handle() {
     let mut sim = create_simulator!();
     let cmd = LocalHmacCmd {
+        handle: Handle(0x8000000E), // Arbitrary unused handle
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let handles = LocalMacHandles {
-        handle: Handle(0x8000000E), // Arbitrary unused handle
-    };
-    let res = sim.execute_with_handles(cmd, handles);
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     assert_eq!(err.get(), TpmRc::REFERENCE_H0.get());
@@ -510,17 +475,15 @@ fn adv_mac_unsupported_hash_alg() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     // Send MAC command with SM3256 hash alg (unsupported)
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sm3_256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     assert_eq!(err.get(), TpmRc::HASH.with(Position::parameter(2)).get());
@@ -553,16 +516,14 @@ fn adv_mac_missing_sign_attribute() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(
         res.is_err(),
         "MAC should fail when the key does not have the sign attribute"
@@ -593,16 +554,17 @@ fn adv_mac_restricted_key() {
                 | TpmaObject::SENSITIVE_DATA_ORIGIN,
         ),
     );
-    let resp_handles = tpm2::commands::LoadExternalRespHandles { object_handle };
+    let resp_handles = tpm2::commands::responses::LoadExternal {
+        object_handle,
+        ..Default::default()
+    };
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(res.is_err(), "MAC should fail for a restricted key");
     let err = res.err().unwrap();
     assert_eq!(err.get(), TpmRc::ATTRIBUTES.with(Position::handle(1)).get());
@@ -619,17 +581,18 @@ fn adv_mac_invalid_key_type() {
 
     // Private part loaded so that authorization succeeds and the type check is reached.
     let object_handle = load_rsa_with_private(&mut sim, TpmaObject::SIGN_ENCRYPT, None);
-    let resp_handles = tpm2::commands::LoadExternalRespHandles { object_handle };
+    let resp_handles = tpm2::commands::responses::LoadExternal {
+        object_handle,
+        ..Default::default()
+    };
 
     // Try to perform MAC using the RSA key
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(
         res.is_err(),
         "MAC should fail for non-keyedhash/non-symcipher key types"
@@ -657,16 +620,14 @@ fn adv_mac_public_only_key() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(
         res.is_err(),
         "MAC should fail when sensitive area is missing"
@@ -702,16 +663,14 @@ fn adv_mac_empty_buffer() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::default(), // 0-length buffer
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(
         res.is_ok(),
         "MAC calculation on empty buffer should succeed"
@@ -744,17 +703,15 @@ fn adv_mac_max_buffer() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let max_data = [0x55u8; 1024];
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(crate::test_utils::leak_bytes(&max_data)).unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(
         res.is_ok(),
         "MAC calculation on maximum buffer size should succeed"
@@ -785,17 +742,15 @@ fn adv_rsa_decrypt_invalid_key_type() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let decrypt_cmd = LocalRSADecryptCmd {
+        key_handle: resp_handles.object_handle,
         cipher_text: Tpm2bPublicKeyRsa::from_bytes(&[0x01; 256]).unwrap(),
         in_scheme: None,
         label: Tpm2bLabel::default(),
     };
-    let decrypt_handles = LocalRSADecryptHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, decrypt_cmd, decrypt_handles);
+    let res = exec_pw(&mut sim, decrypt_cmd);
     assert!(
         res.is_err(),
         "RSADecrypt should fail when key type is not RSA"
@@ -814,14 +769,12 @@ fn adv_rsa_decrypt_invalid_key_type() {
 fn adv_rsa_decrypt_invalid_handle() {
     let mut sim = create_simulator!();
     let decrypt_cmd = LocalRSADecryptCmd {
+        key_handle: Handle(0x8000000E),
         cipher_text: Tpm2bPublicKeyRsa::from_bytes(&[0x01; 256]).unwrap(),
         in_scheme: None,
         label: Tpm2bLabel::default(),
     };
-    let decrypt_handles = LocalRSADecryptHandles {
-        key_handle: Handle(0x8000000E),
-    };
-    let res = exec_pw(&mut sim, decrypt_cmd, decrypt_handles);
+    let res = exec_pw(&mut sim, decrypt_cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     assert_eq!(err.get(), TpmRc::REFERENCE_H0.get());
@@ -831,17 +784,16 @@ fn adv_rsa_decrypt_invalid_handle() {
 ///
 /// Expected: TPM_RC_HANDLE.
 #[test]
+#[allow(deprecated)] // TPM2_Sign / TPM2_VerifySignature are deprecated upstream.
 fn adv_sign_invalid_handle() {
     let mut sim = create_simulator!();
     let sign_cmd = Sign {
+        key_handle: Handle(0x8000000E),
         digest: Tpm2bDigest::default(),
         in_scheme: None,
         validation: TpmtTkHashcheck::default(),
     };
-    let sign_handles = SignHandles {
-        key_handle: Handle(0x8000000E),
-    };
-    let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, sign_handles, 1, &[]);
+    let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, 1, &[]);
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
 }
 
@@ -849,6 +801,7 @@ fn adv_sign_invalid_handle() {
 ///
 /// Expected: TPM_RC_SCHEME.
 #[test]
+#[allow(deprecated)] // TPM2_Sign / TPM2_VerifySignature are deprecated upstream.
 fn adv_sign_unsupported_scheme() {
     let mut sim = create_simulator!();
 
@@ -865,17 +818,15 @@ fn adv_sign_unsupported_scheme() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let sign_cmd = Sign {
+        key_handle: resp_handles.object_handle,
         digest: Tpm2bDigest::from_bytes(&[0x01; 32]).unwrap(),
         in_scheme: Some(TpmtSigScheme::Sm2(TpmiAlgHash::Sha256)),
         validation: TpmtTkHashcheck::default(),
     };
-    let sign_handles = SignHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, sign_handles, 1, &[]);
+    let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, 1, &[]);
     // Sign.c: TPM_RCS_SCHEME + RC_Sign_inScheme (SM2 is not implemented).
     assert_eq!(
         res.err(),
@@ -889,6 +840,7 @@ fn adv_sign_unsupported_scheme() {
 ///
 /// Expected: TPM_RC_SCHEME.
 #[test]
+#[allow(deprecated)] // TPM2_Sign / TPM2_VerifySignature are deprecated upstream.
 fn adv_verify_signature_unsupported_scheme() {
     let mut sim = create_simulator!();
 
@@ -905,9 +857,10 @@ fn adv_verify_signature_unsupported_scheme() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let verify_cmd = VerifySignature {
+        key_handle: resp_handles.object_handle,
         digest: Tpm2bDigest::from_bytes(&[0x01; 32]).unwrap(),
         signature: TpmtSignature::Sm2(tpm2::TpmsSignatureEcc {
             hash: TpmiAlgHash::Sha256,
@@ -915,10 +868,7 @@ fn adv_verify_signature_unsupported_scheme() {
             signature_s: Tpm2bEccParameter::default(),
         }),
     };
-    let verify_handles = VerifySignatureHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let res = sim.execute_with_handles(verify_cmd, verify_handles);
+    let res = sim.execute(verify_cmd);
     assert!(
         res.is_err(),
         "VerifySignature should fail for non-Null signature schemes"
@@ -947,20 +897,24 @@ fn adv_rsa_decrypt_restricted_key() {
             | TpmaObject::SENSITIVE_DATA_ORIGIN,
     );
     if let PublicParmsAndId::Rsa(parms, _) = &mut public.parms_and_id {
-        parms.symmetric = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+        parms.symmetric = Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        });
     }
     let object_handle = create_primary_null(&mut sim, public);
-    let resp_handles = tpm2::commands::LoadExternalRespHandles { object_handle };
+    let resp_handles = tpm2::commands::responses::LoadExternal {
+        object_handle,
+        ..Default::default()
+    };
 
     let decrypt_cmd = LocalRSADecryptCmd {
+        key_handle: resp_handles.object_handle,
         cipher_text: Tpm2bPublicKeyRsa::from_bytes(&[0x01; 256]).unwrap(),
         in_scheme: None,
         label: Tpm2bLabel::default(),
     };
-    let decrypt_handles = LocalRSADecryptHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, decrypt_cmd, decrypt_handles);
+    let res = exec_pw(&mut sim, decrypt_cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     // RSA_Decrypt.c: TPM_RCS_ATTRIBUTES + RC_RSA_Decrypt_keyHandle.
@@ -975,17 +929,18 @@ fn adv_rsa_decrypt_signing_only() {
     let mut sim = create_simulator!();
 
     let object_handle = load_rsa_with_private(&mut sim, TpmaObject::SIGN_ENCRYPT, None);
-    let resp_handles = tpm2::commands::LoadExternalRespHandles { object_handle };
+    let resp_handles = tpm2::commands::responses::LoadExternal {
+        object_handle,
+        ..Default::default()
+    };
 
     let decrypt_cmd = LocalRSADecryptCmd {
+        key_handle: resp_handles.object_handle,
         cipher_text: Tpm2bPublicKeyRsa::from_bytes(&[0x01; 256]).unwrap(),
         in_scheme: None,
         label: Tpm2bLabel::default(),
     };
-    let decrypt_handles = LocalRSADecryptHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, decrypt_cmd, decrypt_handles);
+    let res = exec_pw(&mut sim, decrypt_cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     // RSA_Decrypt.c: restricted || !decrypt -> TPM_RCS_ATTRIBUTES + RC_RSA_Decrypt_keyHandle.
@@ -996,21 +951,23 @@ fn adv_rsa_decrypt_signing_only() {
 
 /// Test Sign fails with TPM_RC_KEY if key lacks SIGN_ENCRYPT attribute.
 #[test]
+#[allow(deprecated)] // TPM2_Sign / TPM2_VerifySignature are deprecated upstream.
 fn adv_sign_storage_only() {
     let mut sim = create_simulator!();
 
     let object_handle = load_rsa_with_private(&mut sim, TpmaObject::DECRYPT, None);
-    let resp_handles = tpm2::commands::LoadExternalRespHandles { object_handle };
+    let resp_handles = tpm2::commands::responses::LoadExternal {
+        object_handle,
+        ..Default::default()
+    };
 
     let sign_cmd = Sign {
+        key_handle: resp_handles.object_handle,
         digest: Tpm2bDigest::from_bytes(&[0x01; 32]).unwrap(),
         in_scheme: None,
         validation: TpmtTkHashcheck::default(),
     };
-    let sign_handles = SignHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, sign_handles, 1, &[]);
+    let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, 1, &[]);
     // Sign.c: !IsSigningObject -> TPM_RCS_KEY + RC_Sign_keyHandle.
     assert_eq!(res.err(), Some(TpmRc::KEY.with(Position::handle(1)).get()));
 
@@ -1019,6 +976,7 @@ fn adv_sign_storage_only() {
 
 /// Test VerifySignature fails with TPM_RC_ATTRIBUTES if key lacks SIGN_ENCRYPT.
 #[test]
+#[allow(deprecated)] // TPM2_Sign / TPM2_VerifySignature are deprecated upstream.
 fn adv_verify_signature_missing_sign_attribute() {
     let mut sim = create_simulator!();
 
@@ -1032,19 +990,17 @@ fn adv_verify_signature_missing_sign_attribute() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let verify_cmd = VerifySignature {
+        key_handle: resp_handles.object_handle,
         digest: Tpm2bDigest::from_bytes(&[0x01; 32]).unwrap(),
         signature: TpmtSignature::Rsassa(tpm2::TpmsSignatureRsa {
             hash: TpmiAlgHash::Sha256,
             sig: tpm2::Tpm2bPublicKeyRsa::default(),
         }),
     };
-    let verify_handles = VerifySignatureHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let res = sim.execute_with_handles(verify_cmd, verify_handles);
+    let res = sim.execute(verify_cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     // VerifySignature.c: TPM_RCS_ATTRIBUTES + RC_VerifySignature_keyHandle.
@@ -1055,6 +1011,7 @@ fn adv_verify_signature_missing_sign_attribute() {
 
 /// Test VerifySignature fails with TPM_RC_HANDLE if KeyedHash key is public-only.
 #[test]
+#[allow(deprecated)] // TPM2_Sign / TPM2_VerifySignature are deprecated upstream.
 fn adv_verify_signature_keyed_hash_public_only() {
     let mut sim = create_simulator!();
 
@@ -1067,19 +1024,17 @@ fn adv_verify_signature_keyed_hash_public_only() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let verify_cmd = VerifySignature {
+        key_handle: resp_handles.object_handle,
         digest: Tpm2bDigest::from_bytes(&[0x01; 32]).unwrap(),
         signature: TpmtSignature::Rsassa(tpm2::TpmsSignatureRsa {
             hash: TpmiAlgHash::Sha256,
             sig: tpm2::Tpm2bPublicKeyRsa::default(),
         }),
     };
-    let verify_handles = VerifySignatureHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let res = sim.execute_with_handles(verify_cmd, verify_handles);
+    let res = sim.execute(verify_cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     // CryptValidateSignature: TPM_RCS_HANDLE, + RC_VerifySignature_signature.
@@ -1122,16 +1077,14 @@ fn adv_mac_xor_key_scheme() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     // HMAC.c: the key is a keyed hash (no TYPE error) but lacks `sign` -> TPM_RCS_KEY + H1.
@@ -1170,16 +1123,14 @@ fn adv_mac_mismatched_command() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha384), // Mismatched command hash alg
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     assert_eq!(err.get(), TpmRc::VALUE.with(Position::parameter(2)).get());
@@ -1213,16 +1164,14 @@ fn adv_mac_null_scheme_null_command() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: None, // Null command hash alg
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     assert_eq!(err.get(), TpmRc::VALUE.with(Position::parameter(2)).get());
@@ -1256,16 +1205,14 @@ fn adv_mac_null_scheme_unsupported_hash() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sm3_256), // SM3256 is unsupported by MAC command handler in code
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     assert_eq!(err.get(), TpmRc::HASH.with(Position::parameter(2)).get());
@@ -1304,38 +1251,37 @@ fn adv_mac_null_scheme_success_multiple_hashes() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let data = b"some message to hmac";
 
     // Test with SHA256
     let hmac_cmd_256 = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(data).unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res_256 = exec_pw(&mut sim, hmac_cmd_256, hmac_handles).unwrap();
+    let res_256 = exec_pw(&mut sim, hmac_cmd_256).unwrap();
 
     type HmacSha256 = Hmac<Sha256>;
     let mut mac_256 = HmacSha256::new_from_slice(key_bytes).unwrap();
     mac_256.update(data);
     let expected_256 = mac_256.finalize().into_bytes();
-    assert_eq!(expected_256.as_slice(), res_256.0.out_hmac.as_ref());
+    assert_eq!(expected_256.as_slice(), res_256.out_hmac.as_ref());
 
     // Test with SHA384
     let hmac_cmd_384 = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(data).unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha384),
     };
-    let res_384 = exec_pw(&mut sim, hmac_cmd_384, hmac_handles).unwrap();
+    let res_384 = exec_pw(&mut sim, hmac_cmd_384).unwrap();
 
     type HmacSha384 = Hmac<Sha384>;
     let mut mac_384 = HmacSha384::new_from_slice(key_bytes).unwrap();
     mac_384.update(data);
     let expected_384 = mac_384.finalize().into_bytes();
-    assert_eq!(expected_384.as_slice(), res_384.0.out_hmac.as_ref());
+    assert_eq!(expected_384.as_slice(), res_384.out_hmac.as_ref());
 
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
@@ -1358,16 +1304,17 @@ fn adv_mac_invalid_key_type_ecc() {
     let mut sim = create_simulator!();
 
     let object_handle = load_ecc_with_private(&mut sim, TpmaObject::SIGN_ENCRYPT);
-    let resp_handles = tpm2::commands::LoadExternalRespHandles { object_handle };
+    let resp_handles = tpm2::commands::responses::LoadExternal {
+        object_handle,
+        ..Default::default()
+    };
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(
         res.is_err(),
         "MAC should fail for non-keyedhash/non-symcipher key types (ECC)"
@@ -1391,7 +1338,10 @@ fn adv_mac_invalid_key_type_sym() {
         object_attributes: TpmaObject::DECRYPT | TpmaObject::USER_WITH_AUTH,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgCipherMode::Cfb.into()),
+            },
             get_bound_unique(crate::test_utils::leak_bytes(&key)),
         ),
     };
@@ -1403,16 +1353,17 @@ fn adv_mac_invalid_key_type_sym() {
         ),
         &[0x02; 32],
     );
-    let resp_handles = tpm2::commands::LoadExternalRespHandles { object_handle };
+    let resp_handles = tpm2::commands::responses::LoadExternal {
+        object_handle,
+        ..Default::default()
+    };
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(
         res.is_err(),
         "MAC should fail for non-keyedhash key types (symmetric cipher)"
@@ -1453,16 +1404,14 @@ fn adv_mac_key_default_scheme_match_cmd_null() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: None, // Null command hash
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(
         res.is_ok(),
         "MAC should succeed using key's default scheme when command hash is Null: {:?}",
@@ -1504,16 +1453,14 @@ fn adv_mac_key_xor_scheme() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let res = exec_pw(&mut sim, hmac_cmd, hmac_handles);
+    let res = exec_pw(&mut sim, hmac_cmd);
     assert!(
         res.is_err(),
         "MAC should fail for KeyedHash keys with XOR scheme"
@@ -1543,7 +1490,7 @@ fn adv_verify_signature_and_policy_signed_reject_tpm_alg_null() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
     let key_handle = resp_handles.object_handle;
 
     // 1. Raw VerifySignature with TPM_ALG_NULL (0x0010) signature parameter -> TPM_RC_SCHEME + P + 2

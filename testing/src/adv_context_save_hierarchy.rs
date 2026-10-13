@@ -1,10 +1,12 @@
 use crate::test_utils::*;
-use tpm2::commands::{ContextSave, ContextSaveHandles, CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::{ContextSave, CreateLoaded};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_context_save_hierarchy_bug() {
     let mut sim = create_simulator!();
 
@@ -41,24 +43,20 @@ fn test_context_save_hierarchy_bug() {
     };
     let in_public = crate::test_utils::make_template(&pub_area);
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001),
-    }; // TPM_RH_OWNER
+    // TPM_RH_OWNER
 
-    let (_create_resp, create_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let create_resp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
     let object_handle = create_resp_handles.object_handle;
 
     // 2. ContextSave
-    let save = ContextSave {};
-    let save_handles = ContextSaveHandles {
+    let save = ContextSave {
         save_handle: object_handle,
     };
-    let (save_resp, _) =
-        execute_with_password_sessions(&mut sim, &save, save_handles, 0, &[]).unwrap();
+    let save_resp = execute_with_password_sessions(&mut sim, &save, 0, &[]).unwrap();
 
     // Bug 1: Hierarchy is hardcoded to 0 instead of TPM_RH_OWNER (0x40000001)
     assert_ne!(

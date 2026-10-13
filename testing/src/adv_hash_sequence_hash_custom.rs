@@ -4,10 +4,7 @@ use rand::{RngCore, thread_rng};
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha384, Sha512};
 use tpm2::Handle;
-use tpm2::commands::{
-    Hash, HashSequenceStart, SequenceComplete, SequenceCompleteHandles, SequenceUpdate,
-    SequenceUpdateHandles,
-};
+use tpm2::commands::{Hash, HashSequenceStart, SequenceComplete, SequenceUpdate};
 use tpm2::errors::TpmRc;
 use tpm2::{Tpm2bAuth, Tpm2bMaxBuffer, TpmiAlgHash};
 use tpm2_simulator::{Simulator, create_simulator};
@@ -19,7 +16,7 @@ fn test_hash_sequence_unsupported_alg() {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sm3_256),
     };
-    let err = sim.execute_with_handles(cmd_start, ()).unwrap_err();
+    let err = sim.execute(cmd_start).unwrap_err();
     // C rejects an unimplemented hashAlg while unmarshaling: TPM_RC_HASH + RC_HashSequenceStart_hashAlg.
     assert_eq!(
         err.get(),

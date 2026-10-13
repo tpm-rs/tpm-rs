@@ -1,7 +1,6 @@
 use common::marshal_to_slice;
-use tpm2::commands::{Command, ECCParameters};
+use tpm2::commands::{Command, ECCParameters, UnmarshalMessage};
 
-use tpm2::Unmarshal;
 mod common;
 
 use common::{FakeRng, FakeStorage, FakeTimer};
@@ -20,7 +19,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -43,8 +42,8 @@ fn test_ecc_parameters_exact_curve_details() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Call TPM2_ECC_Parameters(TPM_ECC_BN_P256)
     let request_bnp256 = hex!("8001 0000000c 00000178 0010");
@@ -57,7 +56,7 @@ fn test_ecc_parameters_exact_curve_details() {
     );
 
     let mut buf = &response[10..len];
-    let rsp = <ECCParameters as Command>::Response::unmarshal(&mut buf)
+    let rsp = <ECCParameters as Command>::Response::unmarshal_with_handles([], &mut buf)
         .expect("Should unmarshal <ECCParameters as Command>::Response");
     assert_eq!(rsp.parameters.key_size, 256);
     assert_eq!(rsp.parameters.curve_id, TpmEccCurve::BNP256);
@@ -95,8 +94,8 @@ fn test_verify_signature_scheme_null_validation() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000001;
     let public_area = tpm2::TpmtPublic {
@@ -161,13 +160,15 @@ fn test_verify_signature_scheme_null_validation() {
     );
 }
 
+// `TPM2_Sign` and its response are `#[deprecated]` upstream.
+#[allow(deprecated)]
 #[test]
 fn test_sign_and_verify_signature_hmac() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000001;
     let public_area = tpm2::TpmtPublic {
@@ -228,8 +229,11 @@ fn test_sign_and_verify_signature_hmac() {
     // TPM_ST_SESSIONS response: header || parameterSize || parameters || sessions.
     let mut unmarshal_buf = &response[14..len];
     let sign_rsp =
-        <tpm2::commands::Sign as tpm2::commands::Command>::Response::unmarshal(&mut unmarshal_buf)
-            .expect("Should unmarshal <Sign<'static> as Command>::Response");
+        <tpm2::commands::Sign as tpm2::commands::Command>::Response::unmarshal_with_handles(
+            [],
+            &mut unmarshal_buf,
+        )
+        .expect("Should unmarshal <Sign<'static> as Command>::Response");
 
     // Now call VerifySignature command (0x00000177)
     let mut offset = 0;

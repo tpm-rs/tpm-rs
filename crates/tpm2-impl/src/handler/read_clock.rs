@@ -26,9 +26,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        request.try_unmarshal::<()>()?;
+        let handles = request.try_unmarshal_handles::<ReadClock>()?;
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let _cmd = request.try_unmarshal::<ReadClock>()?;
+        let _cmd = request.try_unmarshal_command::<ReadClock>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -39,7 +39,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let rsp = responses::ReadClock { current_time };
 
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
 }

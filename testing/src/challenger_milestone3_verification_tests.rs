@@ -1,10 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::test_utils::*;
-use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, NVDefineSpace, NVDefineSpaceHandles, PolicyGetDigest,
-    PolicyGetDigestHandles, PolicyOR, PolicyORHandles, PolicySecret, PolicySecretHandles,
-};
+use tpm2::commands::{CreatePrimary, NVDefineSpace, PolicyGetDigest, PolicyOR, PolicySecret};
 use tpm2::*;
 use tpm2::{Handle, TpmSe};
 use tpm2_simulator::create_simulator;
@@ -77,24 +74,15 @@ fn test_milestone3_integration_and_stress() {
     };
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let create_primary_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_ENDORSEMENT,
-    };
-    let (cp_resp, cp_resp_handles) = execute_with_password_sessions(
-        &mut sim,
-        &create_primary_cmd,
-        create_primary_handles,
-        1,
-        &[],
-    )
-    .unwrap();
+    let cp_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[]).unwrap();
 
-    let ek_handle = cp_resp_handles.object_handle;
+    let ek_handle = cp_resp.object_handle;
     let _ek_public_struct = cp_resp.out_public.0;
 
     // -------------------------------------------------------------
@@ -110,13 +98,11 @@ fn test_milestone3_integration_and_stress() {
     };
     let public_info = tpm2::Tpm2b(nv_pub);
     let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         public_info,
         auth: Tpm2bAuth::default(),
     };
-    let define_handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &define_cmd, define_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &define_cmd, 1, &[]).unwrap();
 
     // -------------------------------------------------------------
     // Step 3: Start a salted policy session using the ECC EK (ECC KDFe Salting)
@@ -145,46 +131,37 @@ fn test_milestone3_integration_and_stress() {
     // Start auth session command
     let nonce_caller = Tpm2bNonce::from_bytes(&[5u8; 32]).unwrap();
     let start_sess_cmd = tpm2::commands::StartAuthSession {
+        tpm_key: ek_handle,
+        bind: Handle::RH_NULL,
         nonce_caller,
         encrypted_salt,
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let start_sess_handles = tpm2::commands::StartAuthSessionHandles {
-        tpm_key: ek_handle,
-        bind: Handle::RH_NULL,
-    };
-    let (start_sess_resp, start_sess_resp_handles) =
-        execute_with_password_sessions(&mut sim, &start_sess_cmd, start_sess_handles, 0, &[])
-            .unwrap();
+    let start_sess_resp =
+        execute_with_password_sessions(&mut sim, &start_sess_cmd, 0, &[]).unwrap();
 
-    let policy_session_handle = start_sess_resp_handles.session_handle;
+    let policy_session_handle = start_sess_resp.session_handle;
 
     // -------------------------------------------------------------
     // Step 4: Execute PolicySecret with NV Index handle as auth_handle
     // -------------------------------------------------------------
     let policy_secret_cmd = PolicySecret {
+        auth_handle: Handle(nv_index_val),
+        policy_session: policy_session_handle,
         nonce_tpm: start_sess_resp.nonce_tpm,
         cp_hash_a: Tpm2bDigest::default(),
         policy_ref: Tpm2bNonce::default(),
         expiration: 0,
     };
-    let policy_secret_handles = PolicySecretHandles {
-        auth_handle: Handle(nv_index_val),
-        policy_session: policy_session_handle,
-    };
-    execute_with_password_sessions(&mut sim, &policy_secret_cmd, policy_secret_handles, 1, &[])
-        .unwrap();
+    execute_with_password_sessions(&mut sim, &policy_secret_cmd, 1, &[]).unwrap();
 
     // Get current policy digest after PolicySecret
-    let get_digest_cmd = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest_cmd = PolicyGetDigest {
         policy_session: policy_session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest_cmd, get_digest_handles, 0, &[])
-            .unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest_cmd, 0, &[]).unwrap();
 
     // Calculate expected digest after PolicySecret
     let nv_name = nv_name(&nv_pub);
@@ -204,19 +181,15 @@ fn test_milestone3_integration_and_stress() {
     let dummy_digest = Tpm2bDigest::from_bytes(&[8u8; 32]).unwrap();
 
     let p_hash_list = TpmlDigest::from_slice(&[current_digest, dummy_digest]).unwrap();
-    let policy_or_cmd = PolicyOR { p_hash_list };
-    let policy_or_handles = PolicyORHandles {
+    let policy_or_cmd = PolicyOR {
         policy_session: policy_session_handle,
+        p_hash_list,
     };
-    execute_with_password_sessions(&mut sim, &policy_or_cmd, policy_or_handles, 0, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &policy_or_cmd, 0, &[]).unwrap();
 
     // Get policy digest after PolicyOR
-    let get_digest_handles_2 = PolicyGetDigestHandles {
-        policy_session: policy_session_handle,
-    };
-    let (get_digest_rsp_2, _) =
-        execute_with_password_sessions(&mut sim, &get_digest_cmd, get_digest_handles_2, 0, &[])
-            .unwrap();
+    let get_digest_rsp_2 =
+        execute_with_password_sessions(&mut sim, &get_digest_cmd, 0, &[]).unwrap();
 
     let expected_or = policy_or_expected(
         TpmiAlgHash::Sha256,
@@ -251,12 +224,12 @@ fn test_milestone3_trial_session_bypass() {
     let digest2 = Tpm2bDigest::from_bytes(&[20u8; 32]).unwrap();
 
     let p_hash_list = TpmlDigest::from_slice(&[digest1, digest2]).unwrap();
-    let policy_or_cmd = PolicyOR { p_hash_list };
-    let policy_or_handles = PolicyORHandles {
+    let policy_or_cmd = PolicyOR {
         policy_session: trial_session.session_handle,
+        p_hash_list,
     };
     // This should succeed even though the current policy digest is NOT in the list!
-    let res = execute_with_password_sessions(&mut sim, &policy_or_cmd, policy_or_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &policy_or_cmd, 0, &[]);
     assert!(
         res.is_ok(),
         "PolicyOR on Trial session should bypass checks and succeed, got: {:?}",
@@ -264,13 +237,10 @@ fn test_milestone3_trial_session_bypass() {
     );
 
     // Get policy digest after PolicyOR
-    let get_digest_cmd = PolicyGetDigest {};
-    let get_digest_handles = PolicyGetDigestHandles {
+    let get_digest_cmd = PolicyGetDigest {
         policy_session: trial_session.session_handle,
     };
-    let (get_digest_rsp, _) =
-        execute_with_password_sessions(&mut sim, &get_digest_cmd, get_digest_handles, 0, &[])
-            .unwrap();
+    let get_digest_rsp = execute_with_password_sessions(&mut sim, &get_digest_cmd, 0, &[]).unwrap();
 
     let expected_or = policy_or_expected(
         TpmiAlgHash::Sha256,

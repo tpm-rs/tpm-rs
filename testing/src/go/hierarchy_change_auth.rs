@@ -1,7 +1,7 @@
 use crate::test_utils::*;
 use tpm2::Handle;
 use tpm2::Tpm2bAuth;
-use tpm2::commands::{HierarchyChangeAuth, HierarchyChangeAuthHandles};
+use tpm2::commands::HierarchyChangeAuth;
 use tpm2::errors::TpmRc;
 use tpm2_simulator::{Simulator, create_simulator};
 
@@ -17,13 +17,11 @@ const NEW_AUTH_KEY: &[u8] = b"newAuthKey";
 /// auth to `AUTH_KEY` using an empty password session.
 fn hierarchy_change_auth_owner(sim: &mut Simulator<'_>) {
     let hca = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(AUTH_KEY).unwrap(),
     };
-    let hca_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
 
-    let resp = execute_with_password_sessions(sim, &hca, hca_handles, 1, &[]);
+    let resp = execute_with_password_sessions(sim, &hca, 1, &[]);
     assert!(resp.is_ok(), "failed HierarchyChangeAuth: {:?}", resp.err());
 }
 
@@ -32,13 +30,11 @@ fn hierarchy_change_auth_owner(sim: &mut Simulator<'_>) {
 /// `TPM_RC_BAD_AUTH`.
 fn hierarchy_change_auth_owner_unauth(sim: &mut Simulator<'_>) {
     let hca = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(NEW_AUTH_KEY).unwrap(),
     };
-    let hca_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
 
-    let resp = execute_with_password_sessions(sim, &hca, hca_handles, 1, &[]);
+    let resp = execute_with_password_sessions(sim, &hca, 1, &[]);
     // Go's `errors.Is(err, TPMRCBadAuth)` compares the canonical format-1
     // error code, ignoring the handle/parameter/session index.
     let canonical = resp
@@ -59,13 +55,11 @@ fn hierarchy_change_auth_owner_unauth(sim: &mut Simulator<'_>) {
 /// the owner auth to `NEW_AUTH_KEY` using the correct password `AUTH_KEY`.
 fn hierarchy_change_auth_owner_auth(sim: &mut Simulator<'_>) {
     let hca = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(NEW_AUTH_KEY).unwrap(),
     };
-    let hca_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
 
-    let resp = execute_with_password_sessions(sim, &hca, hca_handles, 1, AUTH_KEY);
+    let resp = execute_with_password_sessions(sim, &hca, 1, AUTH_KEY);
     assert!(
         resp.is_ok(),
         "failed HierarchyChangeAuthWithAuth: {:?}",

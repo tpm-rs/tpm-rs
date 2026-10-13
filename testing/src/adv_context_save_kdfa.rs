@@ -1,15 +1,14 @@
 use crate::test_utils::*;
 use tpm2::Unmarshal;
-use tpm2::commands::{
-    ContextLoad, ContextSave, ContextSaveHandles, CreateLoaded, CreateLoadedHandles, ReadPublic,
-    ReadPublicHandles,
-};
+#[allow(deprecated)]
+use tpm2::commands::{ContextLoad, ContextSave, CreateLoaded, ReadPublic};
 use tpm2::errors::TpmRc;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_context_load_rejects_tampered_blob() {
     let mut sim = create_simulator!();
 
@@ -45,23 +44,18 @@ fn test_context_load_rejects_tampered_blob() {
     };
     let in_public = crate::test_utils::make_template(&pub_area);
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001),
-    };
 
-    let (_create_resp, create_resp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let create_resp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
     let object_handle = create_resp_handles.object_handle;
 
-    let save = ContextSave {};
-    let save_handles = ContextSaveHandles {
+    let save = ContextSave {
         save_handle: object_handle,
     };
-    let (save_resp, _) =
-        execute_with_password_sessions(&mut sim, &save, save_handles, 0, &[]).unwrap();
+    let save_resp = execute_with_password_sessions(&mut sim, &save, 0, &[]).unwrap();
 
     // The context integrity HMAC is keyed with a TPM-internal proof value, so
     // it cannot be recomputed by a black-box client. Instead, verify that the
@@ -111,7 +105,6 @@ fn test_context_load_rejects_tampered_blob() {
             &ContextLoad {
                 context: tampered_context,
             },
-            (),
             0,
             &[],
         );
@@ -127,13 +120,11 @@ fn test_context_load_rejects_tampered_blob() {
     }
 
     // The untouched context must still load and yield a usable object.
-    let (_, load_handles) =
-        execute_with_password_sessions(&mut sim, &ContextLoad { context }, (), 0, &[])
-            .expect("ContextLoad of untouched context failed");
-    let (read_pub, _) = execute_with_password_sessions(
+    let load_handles = execute_with_password_sessions(&mut sim, &ContextLoad { context }, 0, &[])
+        .expect("ContextLoad of untouched context failed");
+    let read_pub = execute_with_password_sessions(
         &mut sim,
-        &ReadPublic {},
-        ReadPublicHandles {
+        &ReadPublic {
             object_handle: load_handles.loaded_handle,
         },
         0,

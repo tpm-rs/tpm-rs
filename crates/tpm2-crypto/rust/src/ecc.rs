@@ -5,27 +5,15 @@ use tpm2::crypto::{CryptoError, Ecc, EccCurve};
 /// NIST P-224 context for `RustCryptoProvider`.
 pub struct RustCryptoEccNistP224;
 
-impl EccCurve<28, CryptoError> for RustCryptoEccNistP224 {
-    fn invalid_data(&self) -> CryptoError {
-        CryptoError::InvalidData
-    }
-
-    fn buffer_too_small(&self) -> CryptoError {
-        CryptoError::BufferTooSmall
-    }
-
-    fn validate_point(&self, x: &[u8; 28], y: &[u8; 28]) -> Result<(), CryptoError> {
+impl EccCurve<28> for RustCryptoEccNistP224 {
+    fn validate_point(&self, x: &[u8; 28], y: &[u8; 28]) -> Result<bool, CryptoError> {
         let p224 = NistP224::new();
         let x_bn = rsa::BigUint::from_bytes_be(x);
         let y_bn = rsa::BigUint::from_bytes_be(y);
         if x_bn >= p224.p || y_bn >= p224.p {
-            return Err(CryptoError::InvalidData);
+            return Ok(false);
         }
-        if p224.is_on_curve(&x_bn, &y_bn) {
-            Ok(())
-        } else {
-            Err(CryptoError::InvalidData)
-        }
+        Ok(p224.is_on_curve(&x_bn, &y_bn))
     }
 
     fn point_multiply_generator(
@@ -33,11 +21,11 @@ impl EccCurve<28, CryptoError> for RustCryptoEccNistP224 {
         scalar: &[u8; 28],
         x_out: &mut [u8; 28],
         y_out: &mut [u8; 28],
-    ) -> Result<(), CryptoError> {
+    ) -> Result<Option<()>, CryptoError> {
         let p224 = NistP224::new();
         let k = rsa::BigUint::from_bytes_be(scalar);
         if k == rsa::BigUint::from(0u32) || k >= p224.n {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         let gx = rsa::BigUint::from_bytes_be(&hex_literal::hex!(
             "b70e0cbd6bb4bf7f321390b94a03c1d356c21122343280d6115c1d21"
@@ -45,9 +33,9 @@ impl EccCurve<28, CryptoError> for RustCryptoEccNistP224 {
         let gy = rsa::BigUint::from_bytes_be(&hex_literal::hex!(
             "bd376388b5f723fb4c22dfe6cd4375a05a07476444d5819985007e34"
         ));
-        let q = p224
-            .multiply(&k, (gx, gy))
-            .ok_or(CryptoError::InvalidData)?;
+        let Some(q) = p224.multiply(&k, (gx, gy)) else {
+            return Ok(None);
+        };
         let q_x = q.0.to_bytes_be();
         let q_y = q.1.to_bytes_be();
 
@@ -59,7 +47,7 @@ impl EccCurve<28, CryptoError> for RustCryptoEccNistP224 {
         if q_y.len() <= 28 {
             y_out[28 - q_y.len()..].copy_from_slice(&q_y);
         }
-        Ok(())
+        Ok(Some(()))
     }
 
     fn point_multiply(
@@ -69,16 +57,16 @@ impl EccCurve<28, CryptoError> for RustCryptoEccNistP224 {
         y_in: &[u8; 28],
         x_out: &mut [u8; 28],
         y_out: &mut [u8; 28],
-    ) -> Result<(), CryptoError> {
+    ) -> Result<Option<()>, CryptoError> {
         let p224 = NistP224::new();
         let x = rsa::BigUint::from_bytes_be(x_in);
         let y = rsa::BigUint::from_bytes_be(y_in);
         if x >= p224.p || y >= p224.p {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         let k = rsa::BigUint::from_bytes_be(scalar);
         if k == rsa::BigUint::from(0u32) || k >= p224.n {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         if p224.is_on_curve(&x, &y)
             && let Some((rx, ry)) = p224.multiply(&k, (x, y))
@@ -94,9 +82,9 @@ impl EccCurve<28, CryptoError> for RustCryptoEccNistP224 {
             if ry_bytes.len() <= 28 {
                 y_out[28 - ry_bytes.len()..].copy_from_slice(&ry_bytes);
             }
-            return Ok(());
+            return Ok(Some(()));
         }
-        Err(CryptoError::InvalidData)
+        Ok(None)
     }
 
     fn ecdaa_sign(
@@ -108,33 +96,21 @@ impl EccCurve<28, CryptoError> for RustCryptoEccNistP224 {
         _digest: &[u8],
         _nonce_k_out: &mut [u8; 28],
         _s_out: &mut [u8; 28],
-    ) -> Result<(), CryptoError> {
-        Err(CryptoError::UnsupportedAlgorithm)
+    ) -> Result<Option<()>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 }
 
 /// NIST P-256 context for `RustCryptoProvider`.
 pub struct RustCryptoEccNistP256;
 
-impl EccCurve<32, CryptoError> for RustCryptoEccNistP256 {
-    fn invalid_data(&self) -> CryptoError {
-        CryptoError::InvalidData
-    }
-
-    fn buffer_too_small(&self) -> CryptoError {
-        CryptoError::BufferTooSmall
-    }
-
-    fn validate_point(&self, x: &[u8; 32], y: &[u8; 32]) -> Result<(), CryptoError> {
+impl EccCurve<32> for RustCryptoEccNistP256 {
+    fn validate_point(&self, x: &[u8; 32], y: &[u8; 32]) -> Result<bool, CryptoError> {
         let mut sec1 = [0u8; 65];
         sec1[0] = 0x04;
         sec1[1..33].copy_from_slice(x);
         sec1[33..65].copy_from_slice(y);
-        if p256::PublicKey::from_sec1_bytes(&sec1).is_ok() {
-            Ok(())
-        } else {
-            Err(CryptoError::InvalidData)
-        }
+        Ok(p256::PublicKey::from_sec1_bytes(&sec1).is_ok())
     }
 
     fn point_multiply_generator(
@@ -142,18 +118,19 @@ impl EccCurve<32, CryptoError> for RustCryptoEccNistP256 {
         scalar: &[u8; 32],
         x_out: &mut [u8; 32],
         y_out: &mut [u8; 32],
-    ) -> Result<(), CryptoError> {
-        let secret_key =
-            p256::SecretKey::from_slice(scalar).map_err(|_| CryptoError::InvalidData)?;
+    ) -> Result<Option<()>, CryptoError> {
+        let Ok(secret_key) = p256::SecretKey::from_slice(scalar) else {
+            return Ok(None);
+        };
         let public_key = secret_key.public_key();
         let encoded_point = public_key.to_encoded_point(false);
         let public_sec1 = encoded_point.as_bytes();
         if public_sec1.len() != 65 || public_sec1[0] != 0x04 {
-            return Err(CryptoError::HardwareFailure);
+            return Err(CryptoError::Internal);
         }
         x_out.copy_from_slice(&public_sec1[1..33]);
         y_out.copy_from_slice(&public_sec1[33..65]);
-        Ok(())
+        Ok(Some(()))
     }
 
     fn point_multiply(
@@ -163,30 +140,33 @@ impl EccCurve<32, CryptoError> for RustCryptoEccNistP256 {
         y_in: &[u8; 32],
         x_out: &mut [u8; 32],
         y_out: &mut [u8; 32],
-    ) -> Result<(), CryptoError> {
+    ) -> Result<Option<()>, CryptoError> {
         let mut sec1 = [0u8; 65];
         sec1[0] = 0x04;
         sec1[1..33].copy_from_slice(x_in);
         sec1[33..65].copy_from_slice(y_in);
-        let public_key =
-            p256::PublicKey::from_sec1_bytes(&sec1).map_err(|_| CryptoError::InvalidData)?;
+        let Ok(public_key) = p256::PublicKey::from_sec1_bytes(&sec1) else {
+            return Ok(None);
+        };
         let affine_point = public_key.as_affine();
         let projective_point = p256::ProjectivePoint::from(*affine_point);
 
-        let secret_key =
-            p256::SecretKey::from_slice(scalar).map_err(|_| CryptoError::InvalidData)?;
+        let Ok(secret_key) = p256::SecretKey::from_slice(scalar) else {
+            return Ok(None);
+        };
         let scalar_val = secret_key.to_nonzero_scalar();
         let result_projective = projective_point * scalar_val.as_ref();
-        let result_public = p256::PublicKey::from_affine(result_projective.to_affine())
-            .map_err(|_| CryptoError::InvalidData)?;
+        let Ok(result_public) = p256::PublicKey::from_affine(result_projective.to_affine()) else {
+            return Ok(None);
+        };
         let encoded_point = result_public.to_encoded_point(false);
         let result_sec1 = encoded_point.as_bytes();
         if result_sec1.len() == 65 && result_sec1[0] == 0x04 {
             x_out.copy_from_slice(&result_sec1[1..33]);
             y_out.copy_from_slice(&result_sec1[33..65]);
-            Ok(())
+            Ok(Some(()))
         } else {
-            Err(CryptoError::HardwareFailure)
+            Err(CryptoError::Internal)
         }
     }
 
@@ -199,11 +179,14 @@ impl EccCurve<32, CryptoError> for RustCryptoEccNistP256 {
         digest: &[u8],
         nonce_k_out: &mut [u8; 32],
         s_out: &mut [u8; 32],
-    ) -> Result<(), CryptoError> {
-        let r_sk = p256::SecretKey::from_slice(commit_r).map_err(|_| CryptoError::InvalidData)?;
+    ) -> Result<Option<()>, CryptoError> {
+        let Ok(r_sk) = p256::SecretKey::from_slice(commit_r) else {
+            return Ok(None);
+        };
         let r_scalar = *r_sk.to_nonzero_scalar().as_ref();
-        let d_sk =
-            p256::SecretKey::from_slice(private_key_d).map_err(|_| CryptoError::InvalidData)?;
+        let Ok(d_sk) = p256::SecretKey::from_slice(private_key_d) else {
+            return Ok(None);
+        };
         let d_scalar = *d_sk.to_nonzero_scalar().as_ref();
 
         let mut l_x = [0u8; 32];
@@ -212,7 +195,12 @@ impl EccCurve<32, CryptoError> for RustCryptoEccNistP256 {
             let len = commit_x.len().min(32);
             &commit_x[..len]
         } else {
-            self.point_multiply_generator(commit_r, &mut l_x, &mut l_y)?;
+            if self
+                .point_multiply_generator(commit_r, &mut l_x, &mut l_y)?
+                .is_none()
+            {
+                return Ok(None);
+            }
             &l_x[..]
         };
 
@@ -230,8 +218,9 @@ impl EccCurve<32, CryptoError> for RustCryptoEccNistP256 {
 
         let t_scalar = <p256::Scalar as Reduce<p256::U256>>::reduce_bytes(&t_digest);
 
-        let d_inv =
-            Option::<p256::Scalar>::from(d_scalar.invert()).ok_or(CryptoError::InvalidData)?;
+        let Some(d_inv) = Option::<p256::Scalar>::from(d_scalar.invert()) else {
+            return Ok(None);
+        };
 
         let mut u_scalar = p256::Scalar::ONE;
         if !commit_p1.is_empty() && commit_p1.iter().any(|&b| b != 0) {
@@ -267,32 +256,20 @@ impl EccCurve<32, CryptoError> for RustCryptoEccNistP256 {
 
         nonce_k_out.copy_from_slice(&sirrix_digest);
         s_out.copy_from_slice(&s_scalar.to_bytes());
-        Ok(())
+        Ok(Some(()))
     }
 }
 
 /// NIST P-384 context for `RustCryptoProvider`.
 pub struct RustCryptoEccNistP384;
 
-impl EccCurve<48, CryptoError> for RustCryptoEccNistP384 {
-    fn invalid_data(&self) -> CryptoError {
-        CryptoError::InvalidData
-    }
-
-    fn buffer_too_small(&self) -> CryptoError {
-        CryptoError::BufferTooSmall
-    }
-
-    fn validate_point(&self, x: &[u8; 48], y: &[u8; 48]) -> Result<(), CryptoError> {
+impl EccCurve<48> for RustCryptoEccNistP384 {
+    fn validate_point(&self, x: &[u8; 48], y: &[u8; 48]) -> Result<bool, CryptoError> {
         let mut sec1 = [0u8; 97];
         sec1[0] = 0x04;
         sec1[1..49].copy_from_slice(x);
         sec1[49..97].copy_from_slice(y);
-        if p384::PublicKey::from_sec1_bytes(&sec1).is_ok() {
-            Ok(())
-        } else {
-            Err(CryptoError::InvalidData)
-        }
+        Ok(p384::PublicKey::from_sec1_bytes(&sec1).is_ok())
     }
 
     fn point_multiply_generator(
@@ -300,18 +277,19 @@ impl EccCurve<48, CryptoError> for RustCryptoEccNistP384 {
         scalar: &[u8; 48],
         x_out: &mut [u8; 48],
         y_out: &mut [u8; 48],
-    ) -> Result<(), CryptoError> {
-        let secret_key =
-            p384::SecretKey::from_slice(scalar).map_err(|_| CryptoError::InvalidData)?;
+    ) -> Result<Option<()>, CryptoError> {
+        let Ok(secret_key) = p384::SecretKey::from_slice(scalar) else {
+            return Ok(None);
+        };
         let public_key = secret_key.public_key();
         let encoded_point = public_key.to_encoded_point(false);
         let public_sec1 = encoded_point.as_bytes();
         if public_sec1.len() != 97 || public_sec1[0] != 0x04 {
-            return Err(CryptoError::HardwareFailure);
+            return Err(CryptoError::Internal);
         }
         x_out.copy_from_slice(&public_sec1[1..49]);
         y_out.copy_from_slice(&public_sec1[49..97]);
-        Ok(())
+        Ok(Some(()))
     }
 
     fn point_multiply(
@@ -321,30 +299,33 @@ impl EccCurve<48, CryptoError> for RustCryptoEccNistP384 {
         y_in: &[u8; 48],
         x_out: &mut [u8; 48],
         y_out: &mut [u8; 48],
-    ) -> Result<(), CryptoError> {
+    ) -> Result<Option<()>, CryptoError> {
         let mut sec1 = [0u8; 97];
         sec1[0] = 0x04;
         sec1[1..49].copy_from_slice(x_in);
         sec1[49..97].copy_from_slice(y_in);
-        let public_key =
-            p384::PublicKey::from_sec1_bytes(&sec1).map_err(|_| CryptoError::InvalidData)?;
+        let Ok(public_key) = p384::PublicKey::from_sec1_bytes(&sec1) else {
+            return Ok(None);
+        };
         let affine_point = public_key.as_affine();
         let projective_point = p384::ProjectivePoint::from(*affine_point);
 
-        let secret_key =
-            p384::SecretKey::from_slice(scalar).map_err(|_| CryptoError::InvalidData)?;
+        let Ok(secret_key) = p384::SecretKey::from_slice(scalar) else {
+            return Ok(None);
+        };
         let scalar_val = secret_key.to_nonzero_scalar();
         let result_projective = projective_point * scalar_val.as_ref();
-        let result_public = p384::PublicKey::from_affine(result_projective.to_affine())
-            .map_err(|_| CryptoError::InvalidData)?;
+        let Ok(result_public) = p384::PublicKey::from_affine(result_projective.to_affine()) else {
+            return Ok(None);
+        };
         let encoded_point = result_public.to_encoded_point(false);
         let result_sec1 = encoded_point.as_bytes();
         if result_sec1.len() == 97 && result_sec1[0] == 0x04 {
             x_out.copy_from_slice(&result_sec1[1..49]);
             y_out.copy_from_slice(&result_sec1[49..97]);
-            Ok(())
+            Ok(Some(()))
         } else {
-            Err(CryptoError::HardwareFailure)
+            Err(CryptoError::Internal)
         }
     }
 
@@ -357,33 +338,21 @@ impl EccCurve<48, CryptoError> for RustCryptoEccNistP384 {
         _digest: &[u8],
         _nonce_k_out: &mut [u8; 48],
         _s_out: &mut [u8; 48],
-    ) -> Result<(), CryptoError> {
-        Err(CryptoError::UnsupportedAlgorithm)
+    ) -> Result<Option<()>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 }
 
 /// NIST P-521 context for `RustCryptoProvider`.
 pub struct RustCryptoEccNistP521;
 
-impl EccCurve<66, CryptoError> for RustCryptoEccNistP521 {
-    fn invalid_data(&self) -> CryptoError {
-        CryptoError::InvalidData
-    }
-
-    fn buffer_too_small(&self) -> CryptoError {
-        CryptoError::BufferTooSmall
-    }
-
-    fn validate_point(&self, x: &[u8; 66], y: &[u8; 66]) -> Result<(), CryptoError> {
+impl EccCurve<66> for RustCryptoEccNistP521 {
+    fn validate_point(&self, x: &[u8; 66], y: &[u8; 66]) -> Result<bool, CryptoError> {
         let mut sec1 = [0u8; 133];
         sec1[0] = 0x04;
         sec1[1..67].copy_from_slice(x);
         sec1[67..133].copy_from_slice(y);
-        if p521::PublicKey::from_sec1_bytes(&sec1).is_ok() {
-            Ok(())
-        } else {
-            Err(CryptoError::InvalidData)
-        }
+        Ok(p521::PublicKey::from_sec1_bytes(&sec1).is_ok())
     }
 
     fn point_multiply_generator(
@@ -391,18 +360,19 @@ impl EccCurve<66, CryptoError> for RustCryptoEccNistP521 {
         scalar: &[u8; 66],
         x_out: &mut [u8; 66],
         y_out: &mut [u8; 66],
-    ) -> Result<(), CryptoError> {
-        let secret_key =
-            p521::SecretKey::from_slice(scalar).map_err(|_| CryptoError::InvalidData)?;
+    ) -> Result<Option<()>, CryptoError> {
+        let Ok(secret_key) = p521::SecretKey::from_slice(scalar) else {
+            return Ok(None);
+        };
         let public_key = secret_key.public_key();
         let encoded_point = public_key.to_encoded_point(false);
         let public_sec1 = encoded_point.as_bytes();
         if public_sec1.len() != 133 || public_sec1[0] != 0x04 {
-            return Err(CryptoError::HardwareFailure);
+            return Err(CryptoError::Internal);
         }
         x_out.copy_from_slice(&public_sec1[1..67]);
         y_out.copy_from_slice(&public_sec1[67..133]);
-        Ok(())
+        Ok(Some(()))
     }
 
     fn point_multiply(
@@ -412,30 +382,33 @@ impl EccCurve<66, CryptoError> for RustCryptoEccNistP521 {
         y_in: &[u8; 66],
         x_out: &mut [u8; 66],
         y_out: &mut [u8; 66],
-    ) -> Result<(), CryptoError> {
+    ) -> Result<Option<()>, CryptoError> {
         let mut sec1 = [0u8; 133];
         sec1[0] = 0x04;
         sec1[1..67].copy_from_slice(x_in);
         sec1[67..133].copy_from_slice(y_in);
-        let public_key =
-            p521::PublicKey::from_sec1_bytes(&sec1).map_err(|_| CryptoError::InvalidData)?;
+        let Ok(public_key) = p521::PublicKey::from_sec1_bytes(&sec1) else {
+            return Ok(None);
+        };
         let affine_point = public_key.as_affine();
         let projective_point = p521::ProjectivePoint::from(*affine_point);
 
-        let secret_key =
-            p521::SecretKey::from_slice(scalar).map_err(|_| CryptoError::InvalidData)?;
+        let Ok(secret_key) = p521::SecretKey::from_slice(scalar) else {
+            return Ok(None);
+        };
         let scalar_val = secret_key.to_nonzero_scalar();
         let result_projective = projective_point * scalar_val.as_ref();
-        let result_public = p521::PublicKey::from_affine(result_projective.to_affine())
-            .map_err(|_| CryptoError::InvalidData)?;
+        let Ok(result_public) = p521::PublicKey::from_affine(result_projective.to_affine()) else {
+            return Ok(None);
+        };
         let encoded_point = result_public.to_encoded_point(false);
         let result_sec1 = encoded_point.as_bytes();
         if result_sec1.len() == 133 && result_sec1[0] == 0x04 {
             x_out.copy_from_slice(&result_sec1[1..67]);
             y_out.copy_from_slice(&result_sec1[67..133]);
-            Ok(())
+            Ok(Some(()))
         } else {
-            Err(CryptoError::HardwareFailure)
+            Err(CryptoError::Internal)
         }
     }
 
@@ -448,35 +421,23 @@ impl EccCurve<66, CryptoError> for RustCryptoEccNistP521 {
         _digest: &[u8],
         _nonce_k_out: &mut [u8; 66],
         _s_out: &mut [u8; 66],
-    ) -> Result<(), CryptoError> {
-        Err(CryptoError::UnsupportedAlgorithm)
+    ) -> Result<Option<()>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 }
 
 /// BN-P256 context for `RustCryptoProvider`.
 pub struct RustCryptoEccBnP256;
 
-impl EccCurve<32, CryptoError> for RustCryptoEccBnP256 {
-    fn invalid_data(&self) -> CryptoError {
-        CryptoError::InvalidData
-    }
-
-    fn buffer_too_small(&self) -> CryptoError {
-        CryptoError::BufferTooSmall
-    }
-
-    fn validate_point(&self, x: &[u8; 32], y: &[u8; 32]) -> Result<(), CryptoError> {
+impl EccCurve<32> for RustCryptoEccBnP256 {
+    fn validate_point(&self, x: &[u8; 32], y: &[u8; 32]) -> Result<bool, CryptoError> {
         let bn = BNP256::new();
         let x_bn = rsa::BigUint::from_bytes_be(x);
         let y_bn = rsa::BigUint::from_bytes_be(y);
         if x_bn >= bn.p || y_bn >= bn.p {
-            return Err(CryptoError::InvalidData);
+            return Ok(false);
         }
-        if bn.is_on_curve(&x_bn, &y_bn) {
-            Ok(())
-        } else {
-            Err(CryptoError::InvalidData)
-        }
+        Ok(bn.is_on_curve(&x_bn, &y_bn))
     }
 
     fn point_multiply_generator(
@@ -484,14 +445,16 @@ impl EccCurve<32, CryptoError> for RustCryptoEccBnP256 {
         scalar: &[u8; 32],
         x_out: &mut [u8; 32],
         y_out: &mut [u8; 32],
-    ) -> Result<(), CryptoError> {
+    ) -> Result<Option<()>, CryptoError> {
         let bn = BNP256::new();
         let k = rsa::BigUint::from_bytes_be(scalar);
         if k == rsa::BigUint::from(0u32) || k >= bn.n {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         let g = (rsa::BigUint::from(1u32), rsa::BigUint::from(2u32));
-        let q = bn.multiply(&k, g).ok_or(CryptoError::InvalidData)?;
+        let Some(q) = bn.multiply(&k, g) else {
+            return Ok(None);
+        };
         let q_x = q.0.to_bytes_be();
         let q_y = q.1.to_bytes_be();
 
@@ -503,7 +466,7 @@ impl EccCurve<32, CryptoError> for RustCryptoEccBnP256 {
         if q_y.len() <= 32 {
             y_out[32 - q_y.len()..].copy_from_slice(&q_y);
         }
-        Ok(())
+        Ok(Some(()))
     }
 
     fn point_multiply(
@@ -513,16 +476,16 @@ impl EccCurve<32, CryptoError> for RustCryptoEccBnP256 {
         y_in: &[u8; 32],
         x_out: &mut [u8; 32],
         y_out: &mut [u8; 32],
-    ) -> Result<(), CryptoError> {
+    ) -> Result<Option<()>, CryptoError> {
         let bn = BNP256::new();
         let x = rsa::BigUint::from_bytes_be(x_in);
         let y = rsa::BigUint::from_bytes_be(y_in);
         if x >= bn.p || y >= bn.p {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         let k = rsa::BigUint::from_bytes_be(scalar);
         if k == rsa::BigUint::from(0u32) || k >= bn.n {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         if bn.is_on_curve(&x, &y)
             && let Some((rx, ry)) = bn.multiply(&k, (x, y))
@@ -538,9 +501,9 @@ impl EccCurve<32, CryptoError> for RustCryptoEccBnP256 {
             if ry_bytes.len() <= 32 {
                 y_out[32 - ry_bytes.len()..].copy_from_slice(&ry_bytes);
             }
-            return Ok(());
+            return Ok(Some(()));
         }
-        Err(CryptoError::InvalidData)
+        Ok(None)
     }
 
     fn ecdaa_sign(
@@ -552,45 +515,45 @@ impl EccCurve<32, CryptoError> for RustCryptoEccBnP256 {
         _digest: &[u8],
         _nonce_k_out: &mut [u8; 32],
         _s_out: &mut [u8; 32],
-    ) -> Result<(), CryptoError> {
-        Err(CryptoError::UnsupportedAlgorithm)
+    ) -> Result<Option<()>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 }
 
 impl Ecc for RustCryptoProvider {
-    type NistP224Ctx = RustCryptoEccNistP224;
-    fn nist_p224(&self) -> Result<Self::NistP224Ctx, CryptoError> {
+    type NistP224Context = RustCryptoEccNistP224;
+    fn nist_p224(&self) -> Result<Self::NistP224Context, CryptoError> {
         Ok(RustCryptoEccNistP224)
     }
 
-    type NistP256Ctx = RustCryptoEccNistP256;
-    fn nist_p256(&self) -> Result<Self::NistP256Ctx, CryptoError> {
+    type NistP256Context = RustCryptoEccNistP256;
+    fn nist_p256(&self) -> Result<Self::NistP256Context, CryptoError> {
         Ok(RustCryptoEccNistP256)
     }
 
-    type NistP384Ctx = RustCryptoEccNistP384;
-    fn nist_p384(&self) -> Result<Self::NistP384Ctx, CryptoError> {
+    type NistP384Context = RustCryptoEccNistP384;
+    fn nist_p384(&self) -> Result<Self::NistP384Context, CryptoError> {
         Ok(RustCryptoEccNistP384)
     }
 
-    type NistP521Ctx = RustCryptoEccNistP521;
-    fn nist_p521(&self) -> Result<Self::NistP521Ctx, CryptoError> {
+    type NistP521Context = RustCryptoEccNistP521;
+    fn nist_p521(&self) -> Result<Self::NistP521Context, CryptoError> {
         Ok(RustCryptoEccNistP521)
     }
 
-    type BnP256Ctx = RustCryptoEccBnP256;
-    fn bn_p256(&self) -> Result<Self::BnP256Ctx, CryptoError> {
+    type BnP256Context = RustCryptoEccBnP256;
+    fn bn_p256(&self) -> Result<Self::BnP256Context, CryptoError> {
         Ok(RustCryptoEccBnP256)
     }
 
-    type NistP192Ctx = !;
-    type BnP638Ctx = !;
-    type Sm2P256Ctx = !;
-    type BpP256R1Ctx = !;
-    type BpP384R1Ctx = !;
-    type BpP512R1Ctx = !;
-    type Curve25519Ctx = !;
-    type Curve448Ctx = !;
+    type NistP192Context = !;
+    type BnP638Context = !;
+    type Sm2P256Context = !;
+    type BpP256R1Context = !;
+    type BpP384R1Context = !;
+    type BpP512R1Context = !;
+    type Curve25519Context = !;
+    type Curve448Context = !;
 }
 
 /// A software implementation of the Barreto-Naehrig 256-bit (BNP256) elliptic curve over a prime field.

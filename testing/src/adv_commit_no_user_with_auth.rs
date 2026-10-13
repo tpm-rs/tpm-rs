@@ -1,10 +1,12 @@
 use crate::test_utils::*;
-use tpm2::commands::{Commit, CommitHandles, CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::{Commit, CreateLoaded};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_no_user_with_auth_bypass() {
     let mut sim = create_simulator!();
 
@@ -43,29 +45,22 @@ fn test_commit_no_user_with_auth_bypass() {
     let in_public = crate::test_utils::make_template(&pub_area);
 
     let create = CreateLoaded {
+        parent_handle: Handle(tpm2::Handle::RH_OWNER.0),
         in_sensitive,
         in_public,
     };
 
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(tpm2::Handle::RH_OWNER.0),
-    };
-
-    let (_rsp_cp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
 
     let commit = Commit {
+        sign_handle: rsp_handles.object_handle,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
 
-    let commit_handles = CommitHandles {
-        sign_handle: rsp_handles.object_handle,
-    };
-
     // Attempt to authorize using the password
-    let result = execute_with_password_sessions(&mut sim, &commit, commit_handles, 1, password);
+    let result = execute_with_password_sessions(&mut sim, &commit, 1, password);
     if result.is_ok() {
         panic!(
             "VULNERABILITY: Commit allowed password authorization even though USER_WITH_AUTH was 0!"

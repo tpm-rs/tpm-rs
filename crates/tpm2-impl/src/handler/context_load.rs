@@ -21,14 +21,14 @@ struct TransientObjectFields {
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
-use tpm2::commands::ContextLoadRespHandles;
-use tpm2::crypto::kdf::kdfa;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::commands::responses;
+use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt, TpmiAlgSymMode, TpmtSymDefObject};
+use tpm2::{Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt};
 use tpm2::{TpmSe, TpmiAlgHash};
 
-use super::context_save::CONTEXT_FINGERPRINT_SIZE;
+use super::context_save::{CONTEXT_ENCRYPTION_ALG, CONTEXT_FINGERPRINT_SIZE};
 
 /// Size of the context integrity HMAC (SHA-256).
 const CONTEXT_INTEGRITY_DIGEST_SIZE: usize = 32;
@@ -250,12 +250,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             handle
         };
 
-        let handles_rsp = ContextLoadRespHandles {
+        let rsp = responses::ContextLoad {
             loaded_handle: Handle(loaded_handle),
         };
 
         let response = request.into_response();
-        self.write_response_handles(response, &handles_rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -273,7 +273,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         protected_data: &[u8],
         expected_mac: &[u8],
     ) -> Result<(), TpmRc> {
-        let mut mac_ctx = tpm2::crypto::HmacCtx::new(self.crypto(), TpmiAlgHash::Sha256, proof)
+        let mut mac_ctx = HmacStream::new(self.crypto(), TpmiAlgHash::Sha256, proof)
             .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx
             .update(&self.global_state.total_reset_count.to_be_bytes())
@@ -290,7 +290,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .update(&saved_handle.0.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx.update(protected_data).map_err(|_| TpmRc::FAILURE)?;
-        let mut mac_buf = [0u8; 64];
+        let mut mac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let mac = mac_ctx.finalize(&mut mac_buf).map_err(|_| TpmRc::FAILURE)?;
 
         if mac.digest() != expected_mac {
@@ -311,7 +311,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let sequence_bytes = sequence.to_be_bytes();
         let handle_bytes = saved_handle.0.to_be_bytes();
         let mut sym_key_iv = [0u8; 32];
-        kdfa(
+        kdfa_bits(
             self.crypto(),
             TpmiAlgHash::Sha256,
             proof,
@@ -331,11 +331,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let enc_len = encrypted_data.len();
         sensitive_buf[..enc_len].copy_from_slice(encrypted_data);
 
-        tpm2::crypto::decrypt(
-            self.crypto(),
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+        self.sym_encrypt_decrypt(
+            CONTEXT_ENCRYPTION_ALG,
             &sym_key,
             &mut iv,
+            Direction::Decrypt,
             &mut sensitive_buf[..enc_len],
         )
         .map_err(|_| TpmRc::FAILURE)?;

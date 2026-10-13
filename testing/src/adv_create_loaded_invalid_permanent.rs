@@ -1,10 +1,12 @@
 use crate::test_utils::*;
-use tpm2::commands::{CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::CreateLoaded;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_create_loaded_invalid_permanent_handle() {
     let mut sim = create_simulator!();
 
@@ -42,13 +44,11 @@ fn test_create_loaded_invalid_permanent_handle() {
     let in_public = crate::test_utils::make_template(&pub_area);
 
     let create = CreateLoaded {
+        parent_handle: Handle(0xFFFFFFFF), // Invalid permanent handle
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0xFFFFFFFF), // Invalid permanent handle
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &create, 1, &[]);
     assert!(res.is_err(), "CreateLoaded with 0xFFFFFFFF should fail");
 }

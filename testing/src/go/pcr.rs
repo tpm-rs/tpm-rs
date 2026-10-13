@@ -1,9 +1,7 @@
 //! Rust port of the Go E2E test file `pcr_test.go`.
 
 use crate::test_utils::{execute_with_password_sessions, execute_with_password_sessions_status};
-use tpm2::commands::{
-    PCREvent, PCREventHandles, PCRExtend, PCRExtendHandles, PCRRead, PCRReset, PCRResetHandles,
-};
+use tpm2::commands::{PCREvent, PCRExtend, PCRRead, PCRReset};
 use tpm2::{
     Handle, Tpm2bEvent, TpmiAlgHash, TpmlDigestValues, TpmlPcrSelection, TpmsPcrSelection, TpmtHa,
 };
@@ -131,11 +129,11 @@ fn pcr_reset_case(hash: TpmiAlgHash) {
     for digest in extends_tpm2(hash) {
         let mut digests = TpmlDigestValues::default();
         digests.add(&digest).unwrap();
-        let extend_cmd = PCRExtend { digests };
-        let extend_handles = PCRExtendHandles {
+        let extend_cmd = PCRExtend {
             pcr_handle: auth_handle,
+            digests,
         };
-        execute_with_password_sessions(&mut sim, &extend_cmd, extend_handles, 1, &[])
+        execute_with_password_sessions(&mut sim, &extend_cmd, 1, &[])
             .expect("failed to extend pcr for test");
     }
 
@@ -152,12 +150,10 @@ fn pcr_reset_case(hash: TpmiAlgHash) {
     );
 
     // Resetting PCR 16
-    let reset_cmd = PCRReset {};
-    let reset_handles = PCRResetHandles {
+    let reset_cmd = PCRReset {
         pcr_handle: auth_handle,
     };
-    execute_with_password_sessions(&mut sim, &reset_cmd, reset_handles, 1, &[])
-        .expect("pcrReset failed");
+    execute_with_password_sessions(&mut sim, &reset_cmd, 1, &[]).expect("pcrReset failed");
     let read_resp = sim.execute(pcr_read).expect("failed to read PCRs");
     let post_reset_pcr16 = read_resp.pcr_values.digests()[0];
     assert!(
@@ -196,12 +192,10 @@ fn pcr_event_case(hash: TpmiAlgHash, pcr: u32) {
     };
 
     let event_cmd = PCREvent {
+        pcr_handle: Handle(pcr),
         event_data: Tpm2bEvent::from_bytes(b"hello").unwrap(),
     };
-    let event_handles = PCREventHandles {
-        pcr_handle: Handle(pcr),
-    };
-    execute_with_password_sessions_status(&mut sim, &event_cmd, event_handles, 1, &[])
+    execute_with_password_sessions_status(&mut sim, &event_cmd, 1, &[])
         .expect("failed to extend pcr for test");
 
     let read_resp = sim.execute(pcr_read).expect("failed to read PCRs");

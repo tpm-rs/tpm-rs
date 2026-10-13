@@ -1,4 +1,5 @@
 use super::{KeyDerivationArgs, TransientObject};
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -6,8 +7,8 @@ use tpm2::Handle;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
+use tpm2::commands::CreatePrimary;
 use tpm2::commands::responses;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, CreatePrimaryRespHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Alg, Tpm2bDigest, Tpm2bName, TpmaLocality, TpmsCreationData, TpmtTkCreation};
@@ -36,8 +37,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<CreatePrimaryHandles>()?;
-        let primary_handle = handles.primary_handle;
+        let handles = request.try_unmarshal_handles::<CreatePrimary>()?;
+        let [primary_handle] = handles;
+        check(primary_handle, Tpmi::RhHierarchy, Position::handle(1))?;
 
         if primary_handle.0 != Handle::RH_OWNER.0
             && primary_handle.0 != Handle::RH_ENDORSEMENT.0
@@ -49,7 +51,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<CreatePrimary>()?;
+        let cmd = request.try_unmarshal_command::<CreatePrimary>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -131,9 +133,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let out_public = _in_public_struct.as_tpm2b();
 
-        let resp_handles = CreatePrimaryRespHandles {
-            object_handle: Handle(handle),
-        };
         let primary_handle_bytes = primary_handle.0.to_be_bytes();
         let parent_name =
             Tpm2bName::from_bytes(&primary_handle_bytes).map_err(|_| TpmRc::FAILURE)?;
@@ -179,6 +178,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         );
 
         let rsp = responses::CreatePrimary {
+            object_handle: Handle(handle),
             out_public,
             creation_data,
             creation_hash,
@@ -187,12 +187,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_all(
-            response,
-            &resp_handles,
-            &rsp,
-            &session_responses[..num_sessions],
-        )?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         let mut hierarchy_name = [0u8; 4];
         hierarchy_name.copy_from_slice(&primary_handle.0.to_be_bytes());

@@ -9,10 +9,8 @@ mod common;
 use alloc::vec::Vec;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use tpm2::commands::{
-    Certify, CertifyHandles, Command, EvictControl, EvictControlHandles, GetCapability,
-    GetSessionAuditDigest, GetSessionAuditDigestHandles,
+    Certify, Command, EvictControl, GetCapability, GetSessionAuditDigest, Message, UnmarshalMessage,
 };
-use tpm2::crypto::Rng;
 use tpm2::crypto::{Asymmetric, AsymmetricSign};
 use tpm2::crypto::{CryptoError, CryptoProvider};
 use tpm2::{Handle, TpmCap, TpmPt, TpmSe};
@@ -35,24 +33,24 @@ impl AsymmetricSign for StressTestCrypto {
         _private_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         let len = match sign_alg {
             tpm2::Alg::ECDSA => {
                 if signature_out.len() < 64 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..64].fill(0xee);
                 64
             }
             _ => {
                 if signature_out.len() < 256 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..256].fill(0xee);
                 256
             }
         };
-        Ok(len)
+        Ok(Some(len))
     }
 }
 
@@ -63,8 +61,8 @@ impl Asymmetric for StressTestCrypto {
         _public_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         _signature: &[u8],
-    ) -> Result<(), CryptoError> {
-        Ok(())
+    ) -> Result<bool, CryptoError> {
+        Ok(true)
     }
     fn encrypt(
         &self,
@@ -74,8 +72,8 @@ impl Asymmetric for StressTestCrypto {
         _data: &[u8],
         _ciphertext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
-        Ok(0)
+    ) -> Result<Option<usize>, CryptoError> {
+        Ok(Some(0))
     }
     fn decrypt(
         &self,
@@ -85,16 +83,16 @@ impl Asymmetric for StressTestCrypto {
         ciphertext: &[u8],
         plaintext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         if private_key.is_empty() {
-            return Err(CryptoError::HardwareFailure);
+            return Err(CryptoError::Internal);
         }
         let len = ciphertext.len();
         if plaintext.len() < len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         plaintext[..len].copy_from_slice(ciphertext);
-        Ok(len)
+        Ok(Some(len))
     }
     fn generate_key(
         &self,
@@ -115,25 +113,23 @@ impl Asymmetric for StressTestCrypto {
                 private_key[..32].fill(0xdd);
                 Ok((64, 32))
             }
-            _ => Err(CryptoError::HardwareFailure),
+            _ => Err(CryptoError::Internal),
         }
     }
 }
 
-impl Rng for StressTestCrypto {
+impl CryptoProvider for StressTestCrypto {
     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
         dest.fill(0xaa);
         Ok(())
     }
 }
 
-impl CryptoProvider for StressTestCrypto {}
-
 fn setup_tpm<'a>(
     crypto: &'a mut StressTestCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -168,16 +164,24 @@ fn command_resp_handles_size(cc: tpm2::TpmCc) -> usize {
     }
 }
 
+/// Marshals the handle area of `cmd` (`cmd.handles()`, each handle as a big-endian `u32`) into
+/// `buf`, returning the number of bytes written.
+fn marshal_handles<C: Message>(cmd: &C, buf: &mut [u8]) -> usize {
+    let mut offset = 0;
+    for handle in cmd.handles().as_ref() {
+        offset += marshal_to_slice(handle, &mut buf[offset..]);
+    }
+    offset
+}
+
 fn execute_tpm_command_with_auths_get_resp<C: Command>(
     tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<Vec<tpm2::TpmsAuthResponse<'static>>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -192,12 +196,7 @@ where
     // Command code
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
+    let handles_len = marshal_handles(cmd, &mut request_buf[offset..]);
     offset += handles_len;
 
     // Marshal auth area if tag is 0x8002
@@ -265,7 +264,6 @@ where
 fn execute_tpm_get_session_audit_digest<'a>(
     tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &GetSessionAuditDigestHandles,
     cmd: &GetSessionAuditDigest,
     auths: &[TpmsAuthCommand],
     response_buf: &'a mut [u8],
@@ -280,7 +278,7 @@ fn execute_tpm_get_session_audit_digest<'a>(
     }
 
     request_buf[6..10].copy_from_slice(&(GetSessionAuditDigest::CMD_CODE.code()).to_be_bytes());
-    offset += marshal_to_slice(handles, &mut request_buf[offset..]);
+    offset += marshal_handles(cmd, &mut request_buf[offset..]);
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -314,7 +312,9 @@ fn execute_tpm_get_session_audit_digest<'a>(
     let params_offset = if resp_tag == 0x8002 { 14 } else { 10 };
     let mut unmarshal_buf: &'static [u8] =
         std::vec::Vec::leak(response_buf[params_offset..resp_size].to_vec());
-    Unmarshal::unmarshal(&mut unmarshal_buf).map_err(|_| TpmRc::FAILURE.get())
+    // `TPM2_GetSessionAuditDigest` has no response handles.
+    UnmarshalMessage::unmarshal_with_handles([], &mut unmarshal_buf)
+        .map_err(|_| TpmRc::FAILURE.get())
 }
 
 fn compute_mock_hmac(attributes: u8, nonce_tpm: &[u8]) -> Tpm2bAuth<'_> {
@@ -346,8 +346,8 @@ fn test_response_session_attributes_audit_and_exclusivity() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle_1 = 0x02000001;
     let session_handle_2 = 0x02000002;
@@ -446,7 +446,7 @@ fn test_response_session_attributes_audit_and_exclusivity() {
     };
 
     let res_sessions_1 =
-        execute_tpm_command_with_auths_get_resp(&mut tpm, &mut global_state, &(), &cmd, &[auth_1])
+        execute_tpm_command_with_auths_get_resp(&mut tpm, &mut global_state, &cmd, &[auth_1])
             .unwrap();
     assert_eq!(res_sessions_1.len(), 1);
     // Attributes in response: audit (0x80) and auditExclusive (0x02) must be set, auditReset (0x04) must NOT be set
@@ -478,7 +478,7 @@ fn test_response_session_attributes_audit_and_exclusivity() {
     };
 
     let res_sessions_2 =
-        execute_tpm_command_with_auths_get_resp(&mut tpm, &mut global_state, &(), &cmd, &[auth_2])
+        execute_tpm_command_with_auths_get_resp(&mut tpm, &mut global_state, &cmd, &[auth_2])
             .unwrap();
     assert_eq!(res_sessions_2.len(), 1);
     let attrs_2 = res_sessions_2[0].session_attributes.0;
@@ -495,14 +495,9 @@ fn test_response_session_attributes_audit_and_exclusivity() {
         hmac: hmac_1_again,
     };
 
-    let res_sessions_1_again = execute_tpm_command_with_auths_get_resp(
-        &mut tpm,
-        &mut global_state,
-        &(),
-        &cmd,
-        &[auth_1_again],
-    )
-    .unwrap();
+    let res_sessions_1_again =
+        execute_tpm_command_with_auths_get_resp(&mut tpm, &mut global_state, &cmd, &[auth_1_again])
+            .unwrap();
     assert_eq!(res_sessions_1_again.len(), 1);
     let attrs_1_again = res_sessions_1_again[0].session_attributes.0;
     assert_eq!(attrs_1_again & 0x80, 0x80);
@@ -519,8 +514,8 @@ fn test_get_session_audit_digest_field_verification() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let audit_session_handle = 0x02000001;
 
@@ -577,8 +572,7 @@ fn test_get_session_audit_digest_field_verification() {
         hmac: hmac_1,
     };
 
-    execute_tpm_command_with_auths_get_resp(&mut tpm, &mut global_state, &(), &cmd, &[auth_1])
-        .unwrap();
+    execute_tpm_command_with_auths_get_resp(&mut tpm, &mut global_state, &cmd, &[auth_1]).unwrap();
 
     // Get target audit session digest value in TPM state
     let digest_before = global_state
@@ -593,13 +587,11 @@ fn test_get_session_audit_digest_field_verification() {
 
     // Execute GetSessionAuditDigest on this session
     let get_audit_cmd = GetSessionAuditDigest {
-        qualifying_data: Tpm2bData::from_bytes(&[9, 9, 9]).unwrap(),
-        in_scheme: None,
-    };
-    let get_audit_handles = GetSessionAuditDigestHandles {
         privacy_admin_handle: Handle::RH_ENDORSEMENT,
         sign_handle: Handle(0x40000007), // RHNull
         session_handle: Handle(audit_session_handle),
+        qualifying_data: Tpm2bData::from_bytes(&[9, 9, 9]).unwrap(),
+        in_scheme: None,
     };
     let admin_auth = TpmsAuthCommand {
         session_handle: Handle::RS_PW,
@@ -612,7 +604,6 @@ fn test_get_session_audit_digest_field_verification() {
     let resp = execute_tpm_get_session_audit_digest(
         &mut tpm,
         &mut global_state,
-        &get_audit_handles,
         &get_audit_cmd,
         // signHandle (TPM_RH_NULL) also has the USER auth role, so C needs a second session
         // (SessionProcess.c:1641-1651, otherwise TPM_RC_AUTH_MISSING).
@@ -647,8 +638,8 @@ fn test_persistent_object_handle_name_mismatch() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000001;
     let persistent_handle = 0x81000001;
@@ -687,11 +678,9 @@ fn test_persistent_object_handle_name_mismatch() {
     global_state.transient_objects[0] = Some(transient_obj);
 
     // 2. Persist the key to persistent_handle (0x81000001) using EvictControl command
-    let evict_handles = EvictControlHandles {
+    let evict_cmd = EvictControl {
         auth: Handle::RH_OWNER,
         object_handle: Handle(key_handle),
-    };
-    let evict_cmd = EvictControl {
         persistent_handle: Handle(persistent_handle),
     };
     // Owner hierarchy auth is empty by default, so empty auth command
@@ -701,14 +690,8 @@ fn test_persistent_object_handle_name_mismatch() {
         session_attributes: TpmaSession(1),
         hmac: Tpm2bAuth::default(),
     };
-    execute_tpm_command_with_auths_get_resp(
-        &mut tpm,
-        &mut global_state,
-        &evict_handles,
-        &evict_cmd,
-        &[owner_auth],
-    )
-    .unwrap();
+    execute_tpm_command_with_auths_get_resp(&mut tpm, &mut global_state, &evict_cmd, &[owner_auth])
+        .unwrap();
 
     // 3. Remove/flush the transient key so it's only accessible via persistent_handle
     global_state.transient_objects[0] = None;
@@ -758,6 +741,8 @@ fn test_persistent_object_handle_name_mismatch() {
 
     // Let's run Certify using the persistent key as the certified object_handle.
     let certify_cmd = Certify {
+        object_handle: Handle(persistent_handle), // Authorizing handle index 0
+        sign_handle: Handle(0x40000007),          // RHNull
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
@@ -768,11 +753,6 @@ fn test_persistent_object_handle_name_mismatch() {
         param_len,
         &param_buf[..param_len]
     );
-
-    let certify_handles = CertifyHandles {
-        object_handle: Handle(persistent_handle), // Authorizing handle index 0
-        sign_handle: Handle(0x40000007),          // RHNull
-    };
 
     // If the client computes the HMAC using the key's REAL name (real_name):
     // Let's see: computed hmac inputs include the authorizing key name.
@@ -845,7 +825,6 @@ fn test_persistent_object_handle_name_mismatch() {
     let res_real = execute_tpm_command_with_auths_get_resp(
         &mut tpm,
         &mut global_state,
-        &certify_handles,
         &certify_cmd,
         // signHandle (TPM_RH_NULL) has the USER auth role, so C needs a second session
         // (SessionProcess.c:1641-1651, otherwise TPM_RC_AUTH_MISSING).
@@ -880,7 +859,6 @@ fn test_persistent_object_handle_name_mismatch() {
     let res_wrong = execute_tpm_command_with_auths_get_resp(
         &mut tpm,
         &mut global_state,
-        &certify_handles,
         &certify_cmd,
         &[wrong_auth, common::password_auth(b"")],
     );

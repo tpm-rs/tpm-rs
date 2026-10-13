@@ -1,7 +1,7 @@
 use crate::test_utils::*;
 use tpm2::Handle;
 use tpm2::Tpm2bAuth;
-use tpm2::commands::{HierarchyChangeAuth, HierarchyChangeAuthHandles};
+use tpm2::commands::HierarchyChangeAuth;
 use tpm2_simulator::create_simulator;
 
 #[test]
@@ -13,20 +13,19 @@ fn test_hierarchy_change_auth_max_size() {
     let valid_auth = vec![1u8; 32];
 
     let hca_cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(&valid_auth).unwrap(),
     };
-    let hca_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    let resp = execute_with_password_sessions(&mut sim, &hca_cmd, hca_handles.clone(), 1, &[]);
+    let resp = execute_with_password_sessions(&mut sim, &hca_cmd, 1, &[]);
     assert!(resp.is_ok(), "32 byte auth should be valid");
 
     // Try a 33-byte auth. This should FAIL with TPM_RC_SIZE.
     let invalid_auth = vec![2u8; 33];
     let hca_cmd2 = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(&invalid_auth).unwrap(),
     };
-    let resp2 = execute_with_password_sessions(&mut sim, &hca_cmd2, hca_handles, 1, &valid_auth);
+    let resp2 = execute_with_password_sessions(&mut sim, &hca_cmd2, 1, &valid_auth);
 
     println!("Response for 33 bytes: {:?}", resp2);
     // The test SHOULD enforce that it fails

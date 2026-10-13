@@ -36,7 +36,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut request = request_response;
 
         // Parameters are unmarshaled (and trailing bytes rejected) before the command action runs.
-        let cmd = request.try_unmarshal::<Shutdown>()?;
+        let cmd = request.try_unmarshal_command::<Shutdown>([])?;
         let shutdown_type = cmd.shutdown_type as u16;
 
         if request.remaining_bytes() != 0 {

@@ -20,11 +20,11 @@ use tpm2_simulator::{Simulator, SimulatorPlatformSignal, create_simulator};
 
 /// SHA-256 digest of the concatenation of `parts`.
 fn sha256(parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HashCtx::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
+    let mut ctx = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
     for part in parts {
         ctx.update(part).unwrap();
     }
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
     ctx.finalize(&mut out).unwrap().digest().to_vec()
 }
 
@@ -65,11 +65,11 @@ fn try_define(
     public: TpmsNvPublic<'static>,
 ) -> Result<(), u32> {
     let cmd = NVDefineSpace {
+        auth_handle,
         auth: Tpm2bAuth::from_bytes(leak_bytes(auth)).unwrap(),
         public_info: Tpm2b(public),
     };
-    execute_with_password_sessions(sim, &cmd, NVDefineSpaceHandles { auth_handle }, 1, &[])
-        .map(|_| ())
+    execute_with_password_sessions(sim, &cmd, 1, &[]).map(|_| ())
 }
 
 /// Defines an owner index with an empty authValue.
@@ -101,30 +101,22 @@ fn define_platform(
 }
 
 /// Runs `cmd` with `n` empty password sessions and returns the response code.
-fn pw<C: Command>(
-    sim: &mut Simulator<'_>,
-    cmd: &C,
-    handles: C::Handles,
-    n: usize,
-) -> Result<(), u32>
+fn pw<C: Command>(sim: &mut Simulator<'_>, cmd: &C, n: usize) -> Result<(), u32>
 where
     for<'b> &'b mut C::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <C::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    execute_with_password_sessions_status(sim, cmd, handles, n, &[]).map(|_| ())
+    execute_with_password_sessions_status(sim, cmd, n, &[]).map(|_| ())
 }
 
 /// `TPM2_NV_Write` of `data` at `offset`, authorized by `TPM_RH_OWNER`.
 fn owner_write(sim: &mut Simulator<'_>, index: u32, offset: u16, data: &[u8]) -> Result<(), u32> {
     let cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(index),
         data: Tpm2bMaxNvBuffer::from_bytes(leak_bytes(data)).unwrap(),
         offset,
     };
-    let handles = NVWriteHandles {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: Handle(index),
-    };
-    pw(sim, &cmd, handles, 1)
+    pw(sim, &cmd, 1)
 }
 
 /// `TPM2_NV_Read`, authorized by `auth_handle` with an empty password.
@@ -135,24 +127,21 @@ fn read_as(
     offset: u16,
     size: u16,
 ) -> Result<Vec<u8>, u32> {
-    let cmd = NVRead { size, offset };
-    let handles = NVReadHandles {
+    let cmd = NVRead {
         auth_handle,
         nv_index: Handle(index),
+        size,
+        offset,
     };
-    execute_with_password_sessions(sim, &cmd, handles, 1, &[])
-        .map(|(rsp, _)| rsp.data.get_buffer().to_vec())
+    execute_with_password_sessions(sim, &cmd, 1, &[]).map(|rsp| rsp.data.get_buffer().to_vec())
 }
 
 /// Reads the current Name of an NV Index (it changes when TPMA_NV_WRITTEN is set).
 fn nv_index_name(sim: &mut Simulator<'_>, index: u32) -> Vec<u8> {
-    let (rsp, _) = sim
-        .execute_with_handles(
-            NVReadPublic {},
-            NVReadPublicHandles {
-                nv_index: Handle(index),
-            },
-        )
+    let rsp = sim
+        .execute(NVReadPublic {
+            nv_index: Handle(index),
+        })
         .expect("NV_ReadPublic failed");
     rsp.nv_name.get_buffer().to_vec()
 }
@@ -175,12 +164,10 @@ fn start_session(sim: &mut Simulator<'_>, session_type: TpmSe) -> ActiveSession 
 
 /// Runs `TPM2_PolicyCommandCode(cc)` on `session`.
 fn policy_command_code(sim: &mut Simulator<'_>, session: &ActiveSession, cc: TpmCc) {
-    sim.execute_with_handles(
-        PolicyCommandCode { code: cc },
-        PolicyCommandCodeHandles {
-            policy_session: session.session_handle,
-        },
-    )
+    sim.execute(PolicyCommandCode {
+        policy_session: session.session_handle,
+        code: cc,
+    })
     .expect("PolicyCommandCode failed");
 }
 
@@ -189,23 +176,14 @@ fn policy_command_code(sim: &mut Simulator<'_>, session: &ActiveSession, cc: Tpm
 fn with_session<C: Command>(
     sim: &mut Simulator<'_>,
     cmd: &C,
-    handles: C::Handles,
     names: &[&[u8]],
     session: &mut ActiveSession,
 ) -> Result<(), u32>
 where
     for<'b> &'b mut C::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <C::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    execute_with_hmac_sessions_status(
-        sim,
-        cmd,
-        handles,
-        names,
-        core::slice::from_mut(session),
-        &[&[]],
-    )
-    .map(|_| ())
+    execute_with_hmac_sessions_status(sim, cmd, names, core::slice::from_mut(session), &[&[]])
+        .map(|_| ())
 }
 
 /// The Name of a permanent handle (the handle value).
@@ -232,6 +210,7 @@ fn create_signing_key(sim: &mut Simulator<'_>) -> Handle {
         parms_and_id: PublicParmsAndId::Ecc(ecc_parms, TpmsEccPoint::default()),
     };
     let cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -239,36 +218,37 @@ fn create_signing_key(sim: &mut Simulator<'_>) -> Handle {
         in_public: Tpm2b(public_area),
         ..Default::default()
     };
-    let (_, handles) = execute_with_password_sessions(
-        sim,
-        &cmd,
-        CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
-        },
-        1,
-        &[],
-    )
-    .expect("CreatePrimary failed");
-    handles.object_handle
+    let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary failed");
+    rsp.object_handle
+}
+
+/// The handles of a `TPM2_NV_Certify` command (see [`nv_certify`]).
+#[derive(Clone, Copy)]
+struct CertifyHandles {
+    sign_handle: Handle,
+    auth_handle: Handle,
+    nv_index: Handle,
 }
 
 /// `TPM2_NV_Certify` with password sessions; returns the attestation structure.
 fn nv_certify(
     sim: &mut Simulator<'_>,
-    handles: NVCertifyHandles,
+    handles: CertifyHandles,
     in_scheme: Option<TpmtSigScheme>,
     size: u16,
     offset: u16,
     sessions: usize,
 ) -> Result<TpmsAttest<'static>, u32> {
     let cmd = NVCertify {
+        sign_handle: handles.sign_handle,
+        auth_handle: handles.auth_handle,
+        nv_index: handles.nv_index,
         qualifying_data: Tpm2bData::default(),
         in_scheme,
         size,
         offset,
     };
-    execute_with_password_sessions(sim, &cmd, handles, sessions, &[])
-        .map(|(rsp, _)| rsp.certify_info.0)
+    execute_with_password_sessions(sim, &cmd, sessions, &[]).map(|rsp| rsp.certify_info.0)
 }
 
 const OWNER_RW: TpmaNv = TpmaNv::OWNERREAD.union(TpmaNv::OWNERWRITE);
@@ -290,7 +270,7 @@ fn tpm2_nv_certify_omits_nv_digest_format_digest_attestation() {
 
     // Signed with an ECDSA/SHA-256 key.
     let key = create_signing_key(&mut sim);
-    let handles = NVCertifyHandles {
+    let handles = CertifyHandles {
         sign_handle: key,
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(index),
@@ -305,7 +285,7 @@ fn tpm2_nv_certify_omits_nv_digest_format_digest_attestation() {
     }
 
     // Unsigned (TPM_RH_NULL): the scheme hash is TPM_ALG_NULL, so the digest is empty.
-    let handles = NVCertifyHandles {
+    let handles = CertifyHandles {
         sign_handle: Handle::RH_NULL,
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(index),
@@ -325,7 +305,7 @@ fn tpm2_nv_certify_omits_nv_digest_format_scheme_checked_first() {
     let index = 0x0150_0101;
     define(&mut sim, index, OWNER_RW, 16, &[]);
     let key = create_signing_key(&mut sim);
-    let handles = NVCertifyHandles {
+    let handles = CertifyHandles {
         sign_handle: key,
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(index),
@@ -365,21 +345,18 @@ fn tpm2_nv_certify_omits_nv_digest_format_policyread() {
     let policy = start_session(&mut sim, TpmSe::Policy);
     let mut sessions = [hmac, policy];
     let cmd = NVCertify {
+        sign_handle: Handle::RH_NULL,
+        auth_handle: Handle(index),
+        nv_index: Handle(index),
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         size: 4,
         offset: 0,
     };
-    let handles = NVCertifyHandles {
-        sign_handle: Handle::RH_NULL,
-        auth_handle: Handle(index),
-        nv_index: Handle(index),
-    };
     let null_name = handle_name(Handle::RH_NULL);
     execute_with_hmac_sessions_status(
         &mut sim,
         &cmd,
-        handles,
         &[&null_name, &name, &name],
         &mut sessions,
         &[&[], &[]],
@@ -394,7 +371,7 @@ fn tpm2_nv_certify_omits_nv_digest_format_size_value() {
     let index = 0x0150_0103;
     define(&mut sim, index, OWNER_RW, 1100, &[]);
     owner_write(&mut sim, index, 0, &[0x11; 1024]).unwrap();
-    let handles = NVCertifyHandles {
+    let handles = CertifyHandles {
         sign_handle: Handle::RH_NULL,
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(index),
@@ -540,11 +517,11 @@ fn tpm2_nv_definespace_and_undefinespacespecial_validation_bugs_special_platform
         8,
         &command_code_policy(TpmCc::NVUndefineSpaceSpecial),
     );
-    let handles = NVUndefineSpaceSpecialHandles {
+    let cmd = NVUndefineSpaceSpecial {
         nv_index: Handle(index),
         platform: Handle::RH_OWNER,
     };
-    let rc = pw(&mut sim, &NVUndefineSpaceSpecial {}, handles, 2).unwrap_err();
+    let rc = pw(&mut sim, &cmd, 2).unwrap_err();
     assert_eq!(rc, TpmRc::VALUE.with(Position::handle(2)).get());
 }
 
@@ -564,8 +541,9 @@ fn define_change_auth_index(sim: &mut Simulator<'_>, index: u32, size: u16) {
     );
 }
 
-fn change_auth_cmd(new_auth: &[u8]) -> NVChangeAuth<'static> {
+fn change_auth_cmd(index: u32, new_auth: &[u8]) -> NVChangeAuth<'static> {
     NVChangeAuth {
+        nv_index: Handle(index),
         new_auth: Tpm2bAuth::from_bytes(leak_bytes(new_auth)).unwrap(),
     }
 }
@@ -579,10 +557,7 @@ fn auth_role_dup_admin_and_policy_commandcode_bypass_nv_change_auth_hmac() {
     let mut session = start_session(&mut sim, TpmSe::HMAC);
     let rc = with_session(
         &mut sim,
-        &change_auth_cmd(b"new"),
-        NVChangeAuthHandles {
-            nv_index: Handle(index),
-        },
+        &change_auth_cmd(index, b"new"),
         &[&name],
         &mut session,
     )
@@ -604,28 +579,18 @@ fn nv_change_auth_hmac_session_bypass_and_command_code_bugs() {
         &EMPTY_POLICY,
     );
     let name = nv_index_name(&mut sim, index);
-    let handles = NVChangeAuthHandles {
-        nv_index: Handle(index),
-    };
 
     // HMAC sessions can't provide ADMIN authorization of an NV Index.
     let mut hmac = start_session(&mut sim, TpmSe::HMAC);
-    let rc = with_session(
-        &mut sim,
-        &change_auth_cmd(b"x"),
-        handles,
-        &[&name],
-        &mut hmac,
-    )
-    .unwrap_err();
+    let rc =
+        with_session(&mut sim, &change_auth_cmd(index, b"x"), &[&name], &mut hmac).unwrap_err();
     assert_eq!(rc, TpmRc::AUTH_TYPE.get());
 
     // A policy session that never ran TPM2_PolicyCommandCode fails with POLICY_FAIL.
     let mut policy = start_session(&mut sim, TpmSe::Policy);
     let rc = with_session(
         &mut sim,
-        &change_auth_cmd(b"x"),
-        handles,
+        &change_auth_cmd(index, b"x"),
         &[&name],
         &mut policy,
     )
@@ -655,13 +620,11 @@ fn tpm2_nv_access_commands_reject_policywrite_policyread_and_wrong_errors_policy
     let name = nv_index_name(&mut sim, ext);
     let mut session = start_session(&mut sim, TpmSe::Policy);
     let cmd = NVExtend {
-        data: Tpm2bMaxNvBuffer::from_bytes(&[0xaa; 8]).unwrap(),
-    };
-    let handles = NVExtendHandles {
         auth_handle: Handle(ext),
         nv_index: Handle(ext),
+        data: Tpm2bMaxNvBuffer::from_bytes(&[0xaa; 8]).unwrap(),
     };
-    with_session(&mut sim, &cmd, handles, &[&name, &name], &mut session)
+    with_session(&mut sim, &cmd, &[&name, &name], &mut session)
         .expect("NV_Extend with a POLICYWRITE policy session failed");
 
     let bits = 0x0150_0401;
@@ -673,18 +636,13 @@ fn tpm2_nv_access_commands_reject_policywrite_policyread_and_wrong_errors_policy
         &EMPTY_POLICY,
     );
     let name = nv_index_name(&mut sim, bits);
-    let handles = NVSetBitsHandles {
+    let cmd = NVSetBits {
         auth_handle: Handle(bits),
         nv_index: Handle(bits),
+        bits: 1,
     };
-    with_session(
-        &mut sim,
-        &NVSetBits { bits: 1 },
-        handles,
-        &[&name, &name],
-        &mut session,
-    )
-    .expect("NV_SetBits with a POLICYWRITE policy session failed");
+    with_session(&mut sim, &cmd, &[&name, &name], &mut session)
+        .expect("NV_SetBits with a POLICYWRITE policy session failed");
 
     let locks = 0x0150_0402;
     define(
@@ -695,31 +653,19 @@ fn tpm2_nv_access_commands_reject_policywrite_policyread_and_wrong_errors_policy
         &EMPTY_POLICY,
     );
     let name = nv_index_name(&mut sim, locks);
-    let handles = NVWriteLockHandles {
+    let cmd = NVWriteLock {
         auth_handle: Handle(locks),
         nv_index: Handle(locks),
     };
-    with_session(
-        &mut sim,
-        &NVWriteLock {},
-        handles,
-        &[&name, &name],
-        &mut session,
-    )
-    .expect("NV_WriteLock with a POLICYWRITE policy session failed");
+    with_session(&mut sim, &cmd, &[&name, &name], &mut session)
+        .expect("NV_WriteLock with a POLICYWRITE policy session failed");
     let name = nv_index_name(&mut sim, locks);
-    let handles = NVReadLockHandles {
+    let cmd = NVReadLock {
         auth_handle: Handle(locks),
         nv_index: Handle(locks),
     };
-    with_session(
-        &mut sim,
-        &NVReadLock {},
-        handles,
-        &[&name, &name],
-        &mut session,
-    )
-    .expect("NV_ReadLock with a POLICYREAD policy session failed");
+    with_session(&mut sim, &cmd, &[&name, &name], &mut session)
+        .expect("NV_ReadLock with a POLICYREAD policy session failed");
 }
 
 /// Owner/platform authorization without the matching attribute is `TPM_RC_NV_AUTHORIZATION`.
@@ -734,26 +680,25 @@ fn tpm2_nv_access_commands_reject_policywrite_policyread_and_wrong_errors_nv_aut
         32,
         &[],
     );
-    let handles = NVExtendHandles {
+    let cmd = NVExtend {
         auth_handle: Handle::RH_PLATFORM,
         nv_index: Handle(ext),
-    };
-    let cmd = NVExtend {
         data: Tpm2bMaxNvBuffer::from_bytes(&[1]).unwrap(),
     };
     assert_eq!(
-        pw(&mut sim, &cmd, handles, 1).unwrap_err(),
+        pw(&mut sim, &cmd, 1).unwrap_err(),
         TpmRc::NV_AUTHORIZATION.get()
     );
 
     let bits = 0x0150_0411;
     define(&mut sim, bits, TpmaNv::from(TpmNt::Bits) | OWNER_RW, 8, &[]);
-    let handles = NVSetBitsHandles {
+    let cmd = NVSetBits {
         auth_handle: Handle::RH_PLATFORM,
         nv_index: Handle(bits),
+        bits: 1,
     };
     assert_eq!(
-        pw(&mut sim, &NVSetBits { bits: 1 }, handles, 1).unwrap_err(),
+        pw(&mut sim, &cmd, 1).unwrap_err(),
         TpmRc::NV_AUTHORIZATION.get()
     );
 
@@ -770,20 +715,20 @@ fn tpm2_nv_access_commands_reject_policywrite_policyread_and_wrong_errors_nv_aut
         8,
         &[],
     );
-    let handles = NVWriteLockHandles {
+    let cmd = NVWriteLock {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(locks),
     };
     assert_eq!(
-        pw(&mut sim, &NVWriteLock {}, handles, 1).unwrap_err(),
+        pw(&mut sim, &cmd, 1).unwrap_err(),
         TpmRc::NV_AUTHORIZATION.get()
     );
-    let handles = NVReadLockHandles {
+    let cmd = NVReadLock {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(locks),
     };
     assert_eq!(
-        pw(&mut sim, &NVReadLock {}, handles, 1).unwrap_err(),
+        pw(&mut sim, &cmd, 1).unwrap_err(),
         TpmRc::NV_AUTHORIZATION.get()
     );
 }
@@ -795,66 +740,60 @@ fn tpm2_nv_access_commands_reject_policywrite_policyread_and_wrong_errors_order_
     let mut sim = create_simulator!();
     let ordinary = 0x0150_0420;
     define(&mut sim, ordinary, OWNER_RW | TpmaNv::WRITEDEFINE, 8, &[]);
-    let lock = NVWriteLockHandles {
+    let lock = NVWriteLock {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(ordinary),
     };
-    pw(&mut sim, &NVWriteLock {}, lock, 1).unwrap();
+    pw(&mut sim, &lock, 1).unwrap();
 
-    let ext = NVExtendHandles {
+    let cmd = NVExtend {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(ordinary),
-    };
-    let cmd = NVExtend {
         data: Tpm2bMaxNvBuffer::from_bytes(&[1]).unwrap(),
     };
-    assert_eq!(
-        pw(&mut sim, &cmd, ext, 1).unwrap_err(),
-        TpmRc::NV_LOCKED.get()
-    );
-    let bits = NVSetBitsHandles {
+    assert_eq!(pw(&mut sim, &cmd, 1).unwrap_err(), TpmRc::NV_LOCKED.get());
+    let bits = NVSetBits {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(ordinary),
+        bits: 1,
     };
-    assert_eq!(
-        pw(&mut sim, &NVSetBits { bits: 1 }, bits, 1).unwrap_err(),
-        TpmRc::NV_LOCKED.get()
-    );
+    assert_eq!(pw(&mut sim, &bits, 1).unwrap_err(), TpmRc::NV_LOCKED.get());
 
     // Unlocked ordinary index: the type error is ATTRIBUTES + RC_H2.
     let other = 0x0150_0421;
     define(&mut sim, other, OWNER_RW, 8, &[]);
-    let ext = NVExtendHandles {
-        auth_handle: Handle::RH_OWNER,
+    let ext = NVExtend {
         nv_index: Handle(other),
+        ..cmd
     };
     assert_eq!(
-        pw(&mut sim, &cmd, ext, 1).unwrap_err(),
+        pw(&mut sim, &ext, 1).unwrap_err(),
         TpmRc::ATTRIBUTES.with(Position::handle(2)).get()
     );
-    let bits = NVSetBitsHandles {
+    let bits = NVSetBits {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(other),
+        bits: 1,
     };
     assert_eq!(
-        pw(&mut sim, &NVSetBits { bits: 1 }, bits, 1).unwrap_err(),
+        pw(&mut sim, &bits, 1).unwrap_err(),
         TpmRc::ATTRIBUTES.with(Position::handle(2)).get()
     );
     // No WRITEDEFINE/WRITE_STCLEAR or READ_STCLEAR.
-    let lock = NVWriteLockHandles {
+    let lock = NVWriteLock {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(other),
     };
     assert_eq!(
-        pw(&mut sim, &NVWriteLock {}, lock, 1).unwrap_err(),
+        pw(&mut sim, &lock, 1).unwrap_err(),
         TpmRc::ATTRIBUTES.with(Position::handle(2)).get()
     );
-    let lock = NVReadLockHandles {
+    let lock = NVReadLock {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(other),
     };
     assert_eq!(
-        pw(&mut sim, &NVReadLock {}, lock, 1).unwrap_err(),
+        pw(&mut sim, &lock, 1).unwrap_err(),
         TpmRc::ATTRIBUTES.with(Position::handle(2)).get()
     );
 }
@@ -879,10 +818,7 @@ fn nv_write_read_changeauth_partial_write_and_truncation_bugs_change_auth_keeps_
     policy_command_code(&mut sim, &session, TpmCc::NVChangeAuth);
     with_session(
         &mut sim,
-        &change_auth_cmd(&[0x77; 20]),
-        NVChangeAuthHandles {
-            nv_index: Handle(index),
-        },
+        &change_auth_cmd(index, &[0x77; 20]),
         &[&name],
         &mut session,
     )
@@ -900,11 +836,11 @@ fn nv_write_read_changeauth_partial_write_and_truncation_bugs_partial_write_clea
     let index = 0x0150_0501;
     define(&mut sim, index, OWNER_RW, 64, &[]);
     owner_write(&mut sim, index, 0, &[0xAA; 64]).unwrap();
-    let undefine = NVUndefineSpaceHandles {
+    let undefine = NVUndefineSpace {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(index),
     };
-    pw(&mut sim, &NVUndefineSpace {}, undefine, 1).unwrap();
+    pw(&mut sim, &undefine, 1).unwrap();
 
     // The new index reuses the storage of the deleted one.
     define(&mut sim, index, OWNER_RW, 64, &[]);
@@ -949,16 +885,14 @@ fn nv_write_read_changeauth_partial_write_and_truncation_bugs_validation_order()
     );
 
     // NV_Write by platform on an owner-only index: NV_AUTHORIZATION before the type check.
-    let handles = NVWriteHandles {
+    let cmd = NVWrite {
         auth_handle: Handle::RH_PLATFORM,
         nv_index: Handle(index),
-    };
-    let cmd = NVWrite {
         data: Tpm2bMaxNvBuffer::from_bytes(&[1; 32]).unwrap(),
         offset: 0,
     };
     assert_eq!(
-        pw(&mut sim, &cmd, handles, 1).unwrap_err(),
+        pw(&mut sim, &cmd, 1).unwrap_err(),
         TpmRc::NV_AUTHORIZATION.get()
     );
 }
@@ -971,12 +905,9 @@ fn nv_write_read_changeauth_partial_write_and_truncation_bugs_validation_order()
 fn nv_index_accessibility_hierarchy_and_handle_error_omissions_read_public() {
     let mut sim = create_simulator!();
     let missing = sim
-        .execute_with_handles(
-            NVReadPublic {},
-            NVReadPublicHandles {
-                nv_index: Handle(0x0150_0600),
-            },
-        )
+        .execute(NVReadPublic {
+            nv_index: Handle(0x0150_0600),
+        })
         .unwrap_err();
     assert_eq!(missing.get(), TpmRc::HANDLE.with(Position::handle(1)).get());
 
@@ -984,12 +915,9 @@ fn nv_index_accessibility_hierarchy_and_handle_error_omissions_read_public() {
     define(&mut sim, index, OWNER_RW, 8, &[]);
     set_hierarchy_enabled(&mut sim, Handle::RH_OWNER, false);
     let hidden = sim
-        .execute_with_handles(
-            NVReadPublic {},
-            NVReadPublicHandles {
-                nv_index: Handle(index),
-            },
-        )
+        .execute(NVReadPublic {
+            nv_index: Handle(index),
+        })
         .unwrap_err();
     assert_eq!(hidden.get(), TpmRc::HANDLE.with(Position::handle(1)).get());
 }
@@ -1008,12 +936,12 @@ fn nv_index_accessibility_hierarchy_and_handle_error_omissions_undefine_order() 
         &EMPTY_POLICY,
     );
     set_hierarchy_enabled(&mut sim, Handle::RH_PLATFORM_NV, false);
-    let handles = NVUndefineSpaceHandles {
+    let cmd = NVUndefineSpace {
         auth_handle: Handle::RH_PLATFORM,
         nv_index: Handle(index),
     };
     assert_eq!(
-        pw(&mut sim, &NVUndefineSpace {}, handles, 1).unwrap_err(),
+        pw(&mut sim, &cmd, 1).unwrap_err(),
         TpmRc::HANDLE.with(Position::handle(2)).get()
     );
 }
@@ -1027,17 +955,15 @@ fn nv_index_accessibility_hierarchy_and_handle_error_omissions_policy_nv() {
     set_hierarchy_enabled(&mut sim, Handle::RH_OWNER, false);
     let session = start_session(&mut sim, TpmSe::Policy);
     let cmd = PolicyNV {
+        auth_handle: Handle(index),
+        nv_index: Handle(index),
+        policy_session: session.session_handle,
         operand_b: Tpm2bOperand::from_bytes(&[0]).unwrap(),
         offset: 0,
         operation: TpmEo::Eq,
     };
-    let handles = PolicyNVHandles {
-        auth_handle: Handle(index),
-        nv_index: Handle(index),
-        policy_session: session.session_handle,
-    };
     assert_eq!(
-        pw(&mut sim, &cmd, handles, 1).unwrap_err(),
+        pw(&mut sim, &cmd, 1).unwrap_err(),
         TpmRc::HANDLE.with(Position::handle(1)).get()
     );
 }
@@ -1068,18 +994,18 @@ fn tpm2_hash_and_nv_globalwritelock_ticket_and_nv_availability_bugs() {
     let mut sim = create_simulator!();
     let index = 0x0150_0700;
     define(&mut sim, index, OWNER_RW | TpmaNv::GLOBALLOCK, 8, &[]);
-    let handles = NVGlobalWriteLockHandles {
+    let cmd = NVGlobalWriteLock {
         auth_handle: Handle::RH_OWNER,
     };
     sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     assert_eq!(
-        pw(&mut sim, &NVGlobalWriteLock {}, handles, 1).unwrap_err(),
+        pw(&mut sim, &cmd, 1).unwrap_err(),
         TpmRc::NV_UNAVAILABLE.get()
     );
     sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
     // The index was not locked.
     owner_write(&mut sim, index, 0, &[1; 8]).unwrap();
-    pw(&mut sim, &NVGlobalWriteLock {}, handles, 1).unwrap();
+    pw(&mut sim, &cmd, 1).unwrap();
     assert_eq!(
         owner_write(&mut sim, index, 0, &[2; 8]).unwrap_err(),
         TpmRc::NV_LOCKED.get()
@@ -1106,12 +1032,12 @@ fn nv_storage_commands_omit_nv_available_checks_and_globallock_cap() {
         owner_write(&mut sim, index, 0, &[2; 8]).unwrap_err(),
         TpmRc::NV_UNAVAILABLE.get()
     );
-    let undefine = NVUndefineSpaceHandles {
+    let undefine = NVUndefineSpace {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(index),
     };
     assert_eq!(
-        pw(&mut sim, &NVUndefineSpace {}, undefine, 1).unwrap_err(),
+        pw(&mut sim, &undefine, 1).unwrap_err(),
         TpmRc::NV_UNAVAILABLE.get()
     );
     sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
@@ -1133,38 +1059,17 @@ fn nv_storage_commands_omit_nv_available_checks_and_globallock_cap() {
 fn nv_global_write_lock_hierarchy_enable_orderly_dirty_flag_and_auth_error_bugs() {
     let mut sim = create_simulator!();
     let change = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(b"abcd").unwrap(),
     };
-    pw(
-        &mut sim,
-        &change,
-        HierarchyChangeAuthHandles {
-            auth_handle: Handle::RH_OWNER,
-        },
-        1,
-    )
-    .unwrap();
-    let rc = execute_with_password_sessions_status(
-        &mut sim,
-        &NVGlobalWriteLock {},
-        NVGlobalWriteLockHandles {
-            auth_handle: Handle::RH_OWNER,
-        },
-        1,
-        b"ab",
-    )
-    .unwrap_err();
+    pw(&mut sim, &change, 1).unwrap();
+    let lock = NVGlobalWriteLock {
+        auth_handle: Handle::RH_OWNER,
+    };
+    let rc = execute_with_password_sessions_status(&mut sim, &lock, 1, b"ab").unwrap_err();
     assert_eq!(rc, TpmRc::BAD_AUTH.with(Position::session(1)).get());
-    execute_with_password_sessions_status(
-        &mut sim,
-        &NVGlobalWriteLock {},
-        NVGlobalWriteLockHandles {
-            auth_handle: Handle::RH_OWNER,
-        },
-        1,
-        b"abcd",
-    )
-    .expect("NV_GlobalWriteLock with the owner password failed");
+    execute_with_password_sessions_status(&mut sim, &lock, 1, b"abcd")
+        .expect("NV_GlobalWriteLock with the owner password failed");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1175,18 +1080,16 @@ fn nv_global_write_lock_hierarchy_enable_orderly_dirty_flag_and_auth_error_bugs(
 fn quote_and_nv_certify_handle_null_and_validation_order_bugs_quote_null() {
     let mut sim = create_simulator!();
     let cmd = Quote {
+        sign_handle: Handle::RH_NULL,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
         pcr_select: TpmlPcrSelection::default(),
-    };
-    let handles = QuoteHandles {
-        sign_handle: Handle::RH_NULL,
     };
     // `signHandle` is a `TPMI_DH_OBJECT+`, so TPM_RH_NULL passes handle validation (it used to
     // fail with TPM_RC_VALUE + RC_H1). The C command action then rejects the NULL scheme's
     // TPM_ALG_NULL hash with TPM_RC_SCHEME + RC_P2 (`Quote.c`).
     assert_eq!(
-        pw(&mut sim, &cmd, handles, 1).unwrap_err(),
+        pw(&mut sim, &cmd, 1).unwrap_err(),
         TpmRc::SCHEME.with(Position::parameter(2)).get()
     );
 }
@@ -1195,7 +1098,7 @@ fn quote_and_nv_certify_handle_null_and_validation_order_bugs_quote_null() {
 fn quote_and_nv_certify_handle_null_and_validation_order_bugs_nv_certify_handles() {
     let mut sim = create_simulator!();
     // Unloaded signHandle and undefined nvIndex: handle 1 is reported first.
-    let handles = NVCertifyHandles {
+    let handles = CertifyHandles {
         sign_handle: Handle(0x8000_0042),
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(0x0150_0800),
@@ -1208,7 +1111,7 @@ fn quote_and_nv_certify_handle_null_and_validation_order_bugs_nv_certify_handles
     // authHandle must be a TPMI_RH_NV_AUTH.
     let index = 0x0150_0801;
     define(&mut sim, index, OWNER_RW, 8, &[]);
-    let handles = NVCertifyHandles {
+    let handles = CertifyHandles {
         sign_handle: Handle::RH_NULL,
         auth_handle: Handle::RH_ENDORSEMENT,
         nv_index: Handle(index),
@@ -1219,7 +1122,7 @@ fn quote_and_nv_certify_handle_null_and_validation_order_bugs_nv_certify_handles
     );
 
     // A valid index but an unloaded signing key: the key is resolved before NV checks.
-    let handles = NVCertifyHandles {
+    let handles = CertifyHandles {
         sign_handle: Handle(0x8000_0042),
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(index),
@@ -1272,23 +1175,23 @@ fn nv_define_space_undefine_space_and_special_auth_order_unmarshal_failure_and_e
         8,
         &command_code_policy(TpmCc::NVUndefineSpaceSpecial),
     );
-    let handles = NVUndefineSpaceHandles {
+    let cmd = NVUndefineSpace {
         auth_handle: Handle::RH_PLATFORM,
         nv_index: Handle(index),
     };
     assert_eq!(
-        pw(&mut sim, &NVUndefineSpace {}, handles, 0).unwrap_err(),
+        pw(&mut sim, &cmd, 0).unwrap_err(),
         TpmRc::AUTH_MISSING.get()
     );
 
     let owner_index = 0x0150_0901;
     define(&mut sim, owner_index, OWNER_RW, 8, &[]);
-    let handles = NVUndefineSpaceSpecialHandles {
+    let cmd = NVUndefineSpaceSpecial {
         nv_index: Handle(owner_index),
         platform: Handle::RH_PLATFORM,
     };
     assert_eq!(
-        pw(&mut sim, &NVUndefineSpaceSpecial {}, handles, 0).unwrap_err(),
+        pw(&mut sim, &cmd, 0).unwrap_err(),
         TpmRc::AUTH_MISSING.get()
     );
 }
@@ -1306,12 +1209,12 @@ fn nv_increment_unpositioned_auth_errors_and_missing_policywrite_and_orderly_rol
     let mut sim = create_simulator!();
     let index = 0x0150_0a00;
     define(&mut sim, index, counter_attrs() | OWNER_RW, 8, &[]);
-    let handles = NVIncrementHandles {
+    let cmd = NVIncrement {
         auth_handle: Handle::RH_PLATFORM,
         nv_index: Handle(index),
     };
     assert_eq!(
-        pw(&mut sim, &NVIncrement {}, handles, 1).unwrap_err(),
+        pw(&mut sim, &cmd, 1).unwrap_err(),
         TpmRc::NV_AUTHORIZATION.get()
     );
 }
@@ -1330,18 +1233,12 @@ fn nv_increment_unpositioned_auth_errors_and_missing_policywrite_and_orderly_rol
     );
     let name = nv_index_name(&mut sim, index);
     let mut session = start_session(&mut sim, TpmSe::Policy);
-    let handles = NVIncrementHandles {
+    let cmd = NVIncrement {
         auth_handle: Handle(index),
         nv_index: Handle(index),
     };
-    with_session(
-        &mut sim,
-        &NVIncrement {},
-        handles,
-        &[&name, &name],
-        &mut session,
-    )
-    .expect("NV_Increment with a POLICYWRITE policy session failed");
+    with_session(&mut sim, &cmd, &[&name, &name], &mut session)
+        .expect("NV_Increment with a POLICYWRITE policy session failed");
     assert_eq!(
         read_as(&mut sim, Handle::RH_OWNER, index, 0, 8).unwrap(),
         1u64.to_be_bytes().to_vec()
@@ -1357,11 +1254,11 @@ fn nv_increment_unpositioned_auth_errors_and_missing_policywrite_and_orderly_rol
     let first = 0x0150_0a02;
     define(&mut sim, first, counter_attrs() | OWNER_RW, 8, &[]);
     let inc = |sim: &mut Simulator<'_>, index: u32| {
-        let handles = NVIncrementHandles {
+        let cmd = NVIncrement {
             auth_handle: Handle::RH_OWNER,
             nv_index: Handle(index),
         };
-        pw(sim, &NVIncrement {}, handles, 1).unwrap();
+        pw(sim, &cmd, 1).unwrap();
     };
     for _ in 0..5 {
         inc(&mut sim, first);
@@ -1375,11 +1272,11 @@ fn nv_increment_unpositioned_auth_errors_and_missing_policywrite_and_orderly_rol
     );
 
     // Deleting the first counter makes its value the floor for new counters.
-    let undefine = NVUndefineSpaceHandles {
+    let undefine = NVUndefineSpace {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(first),
     };
-    pw(&mut sim, &NVUndefineSpace {}, undefine, 1).unwrap();
+    pw(&mut sim, &undefine, 1).unwrap();
     let third = 0x0150_0a04;
     define(&mut sim, third, counter_attrs() | OWNER_RW, 8, &[]);
     inc(&mut sim, third);
@@ -1397,9 +1294,6 @@ fn nv_storage_commands_omit_nv_available_checks_and_globallock_cap_change_auth()
     let index = 0x0150_0703;
     define_change_auth_index(&mut sim, index, 8);
     let name = nv_index_name(&mut sim, index);
-    let handles = NVChangeAuthHandles {
-        nv_index: Handle(index),
-    };
     sim.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
 
     // Same (empty) authValue: nothing to write.
@@ -1407,8 +1301,7 @@ fn nv_storage_commands_omit_nv_available_checks_and_globallock_cap_change_auth()
     policy_command_code(&mut sim, &session, TpmCc::NVChangeAuth);
     with_session(
         &mut sim,
-        &change_auth_cmd(&[]),
-        handles,
+        &change_auth_cmd(index, &[]),
         &[&name],
         &mut session,
     )
@@ -1418,8 +1311,7 @@ fn nv_storage_commands_omit_nv_available_checks_and_globallock_cap_change_auth()
     policy_command_code(&mut sim, &session, TpmCc::NVChangeAuth);
     let rc = with_session(
         &mut sim,
-        &change_auth_cmd(b"new"),
-        handles,
+        &change_auth_cmd(index, b"new"),
         &[&name],
         &mut session,
     )
@@ -1433,14 +1325,12 @@ fn nv_storage_commands_omit_nv_available_checks_and_globallock_cap_change_auth()
 fn nv_index_accessibility_hierarchy_and_handle_error_omissions_object_slot() {
     let mut sim = create_simulator!();
     let cmd = ObjectChangeAuth {
-        new_auth: Tpm2bAuth::default(),
-    };
-    let handles = ObjectChangeAuthHandles {
         object_handle: Handle(0x0150_0605),
         parent_handle: Handle::RH_OWNER,
+        new_auth: Tpm2bAuth::default(),
     };
     assert_eq!(
-        pw(&mut sim, &cmd, handles, 1).unwrap_err(),
+        pw(&mut sim, &cmd, 1).unwrap_err(),
         TpmRc::VALUE.with(Position::handle(1)).get()
     );
 }

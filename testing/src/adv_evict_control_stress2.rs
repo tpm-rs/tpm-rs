@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 use crate::test_utils::*;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, EvictControl, EvictControlHandles};
+use tpm2::commands::{CreatePrimary, EvictControl};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
@@ -18,7 +18,10 @@ fn get_ecc_srk_template(unique: u8) -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -52,14 +55,13 @@ fn test_evict_control_comprehensive_stress() {
     for (i, &h) in hierarchies.iter().enumerate() {
         let in_public = tpm2::Tpm2b(get_ecc_srk_template(i as u8));
         let create_cmd = CreatePrimary {
+            primary_handle: h,
             in_sensitive,
             in_public,
             outside_info: Tpm2bData::default(),
             creation_pcr: TpmlPcrSelection::default(),
         };
-        let handles = CreatePrimaryHandles { primary_handle: h };
-        let (_, rsp) =
-            execute_with_password_sessions(&mut sim, &create_cmd, handles, 1, &[]).unwrap();
+        let rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
         transient_handles.push(rsp.object_handle);
     }
 
@@ -74,15 +76,13 @@ fn test_evict_control_comprehensive_stress() {
         for (i, &obj_hier) in hierarchies.iter().enumerate() {
             let obj = transient_handles[i];
             for &pers in &persistent_handles {
-                let handles = EvictControlHandles {
+                let cmd = EvictControl {
                     auth,
                     object_handle: obj,
-                };
-                let cmd = EvictControl {
                     persistent_handle: pers,
                 };
 
-                let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]);
+                let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
 
                 let mut expected_err = 0;
 
@@ -135,10 +135,9 @@ fn test_evict_control_comprehensive_stress() {
                     // Cleanup so next iteration won't fail with NvDefined
                     let evict_res = execute_with_password_sessions(
                         &mut sim,
-                        &cmd,
-                        EvictControlHandles {
-                            auth,
+                        &EvictControl {
                             object_handle: pers,
+                            ..cmd
                         },
                         1,
                         &[],

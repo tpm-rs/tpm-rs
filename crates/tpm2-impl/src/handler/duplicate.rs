@@ -1,3 +1,5 @@
+use super::encrypt_decrypt::crypto_len;
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::owned::OwnedPublicParmsAndId;
 use crate::req_resp::RequestThenResponse;
@@ -9,11 +11,10 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::TpmEccCurve;
-use tpm2::commands::responses;
-use tpm2::commands::{Duplicate, DuplicateHandles};
+use tpm2::commands::{Duplicate, responses};
 use tpm2::crypto::asymmetric::KeyParams;
-use tpm2::crypto::kdf::kdfa;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bData, Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bPrivate,
@@ -43,13 +44,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<DuplicateHandles>()?;
-        let object_handle = handles.object_handle.0;
-        let new_parent_handle = handles.new_parent_handle.0;
+        let handles = request.try_unmarshal_handles::<Duplicate>()?;
+        let [object, new_parent] = handles;
+        check(object, Tpmi::DhObject, Position::handle(1))?;
+        check(new_parent, Tpmi::DhObjectOrNull, Position::handle(2))?;
+        let object_handle = object.0;
+        let new_parent_handle = new_parent.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<Duplicate>()?;
+        let cmd = request.try_unmarshal_command::<Duplicate>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -204,13 +208,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .unwrap(),
             ),
             OwnedPublicParmsAndId::Rsa(_, _) => {
-                let prime_p_len = self
-                    .crypto()
-                    .rsa_private_key_to_prime_p(
+                let prime_p_len = crypto_len(
+                    self.crypto().rsa_private_key_to_prime_p(
                         &target_obj.private[..target_obj.private_len],
                         &mut prime_p,
-                    )
-                    .map_err(|_| TpmRc::FAILURE)?;
+                    ),
+                    TpmRc::FAILURE,
+                )?;
                 TpmuSensitiveComposite::Rsa(
                     Tpm2bPrivateKeyRsa::from_bytes(&prime_p[..prime_p_len]).unwrap(),
                 )
@@ -310,11 +314,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut iv = [0u8; 16];
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((sym_key_len * 8) as u16)
                 .map_err(|_| TpmRc::FAILURE)?;
-            tpm2::crypto::encrypt(
-                self.crypto(),
+            self.sym_encrypt_decrypt(
                 sym_alg,
                 &sym_key[..sym_key_len],
                 &mut iv,
+                Direction::Encrypt,
                 &mut unencrypted_inner[..unencrypted_inner_len],
             )
             .map_err(|_| TpmRc::FAILURE)?;
@@ -369,14 +373,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
                 // 2. Perform ECDH point multiplication
                 let mut ecdh_point = [0u8; 256];
-                self.crypto()
-                    .point_multiply(
+                crypto_len(
+                    self.crypto().point_multiply(
                         curve,
                         &eph_priv[..priv_len],
                         &parent_ecc_pub_point[..param_size * 2],
                         &mut ecdh_point,
-                    )
-                    .map_err(|_| TpmRc::FAILURE)?;
+                    ),
+                    TpmRc::FAILURE,
+                )?;
 
                 // 3. Reconstruct ephemeral public point as TpmsEccPoint
                 let mut ex = [0u8; 128];
@@ -399,7 +404,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let digest_size = parent_name_alg.digest_size();
                 let total_bits = (digest_size * 8) as u32;
 
-                tpm2::crypto::kdf::kdfe(
+                tpm2::crypto::kdf::kdfe_bits(
                     self.crypto(),
                     parent_name_alg,
                     &ecdh_point[..param_size],
@@ -420,17 +425,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .map_err(|_| TpmRc::FAILURE)?;
 
                 // RSA seed encryption
-                let encrypted_seed_len = self
-                    .crypto()
-                    .encrypt(
+                let encrypted_seed_len = crypto_len(
+                    self.crypto().encrypt(
                         Alg::OAEP,
                         Alg::from(parent_name_alg),
                         &parent_pub_modulus[..parent_pub_modulus_len],
                         &seed[..digest_size],
                         &mut encrypted_seed,
                         b"DUPLICATE\0",
-                    )
-                    .map_err(|_| TpmRc::FAILURE)?;
+                    ),
+                    TpmRc::FAILURE,
+                )?;
                 out_sym_seed =
                     Tpm2bEncryptedSecret::from_bytes(&encrypted_seed[..encrypted_seed_len])
                         .unwrap();
@@ -454,14 +459,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
             let mut sym_key_iv = [0u8; 64];
             let mut integrity_key = [0u8; 64];
-            let mut hmac_bytes = [0u8; 64];
+            let mut hmac_bytes = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
 
             // 1. Compute KDFs. The outer wrapper uses the new parent's nameAlg
             // (`outerHash` in `SensitiveToDuplicate`), not the duplicated object's.
             let target_name_alg = parent_name_alg;
             let target_digest_size = target_name_alg.digest_size();
             let target_bits = (target_digest_size * 8) as u32;
-            kdfa(
+            kdfa_bits(
                 self.crypto(),
                 target_name_alg,
                 &seed[..seed_len],
@@ -472,7 +477,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 &mut sym_key_iv,
             )
             .map_err(|_| TpmRc::FAILURE)?;
-            kdfa(
+            kdfa_bits(
                 self.crypto(),
                 target_name_alg,
                 &seed[..seed_len],
@@ -491,17 +496,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((outer_key_len * 8) as u16)
                 .map_err(|_| TpmRc::FAILURE)?;
-            tpm2::crypto::encrypt(
-                self.crypto(),
+            self.sym_encrypt_decrypt(
                 sym_alg,
                 &outer_key[..outer_key_len],
                 &mut outer_iv,
+                Direction::Encrypt,
                 &mut inner_blob[..inner_blob_len],
             )
             .map_err(|_| TpmRc::FAILURE)?;
 
             // 3. Compute outer HMAC dynamically over the ENCRYPTED inner_blob ciphertext
-            let mut hmac_ctx = tpm2::crypto::HmacCtx::new(
+            let mut hmac_ctx = HmacStream::new(
                 self.crypto(),
                 target_name_alg,
                 &integrity_key[..target_digest_size],
@@ -540,7 +545,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // Write response
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
 }

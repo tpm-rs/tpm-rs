@@ -1,21 +1,20 @@
 use tpm2::commands::{
-    Certify, CertifyCreation, Command, FlushContext, GetCapability, GetSessionAuditDigest, GetTime,
-    NVCertify, PCREvent, ReadPublic, ReadPublicHandles, Sign, StartAuthSession,
-    StartAuthSessionHandles,
+    Command, FlushContext, GetCapability, Message, ReadPublic, StartAuthSession, UnmarshalMessage,
+    responses,
 };
 use tpm2::{Handle, TpmCc, TpmEccCurve, TpmSe, TpmSt};
 use tpm2::{Marshal, Unmarshal};
 
-use tpm2::crypto::Rng;
-use tpm2::crypto::kdf::kdfa;
+use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::{CryptoError, CryptoProvider, Direction, ModeIv, Symmetric, SymmetricKey};
 
 use tpm2::Tpm2b;
 use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bName, Tpm2bNonce,
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bName, Tpm2bNonce,
     Tpm2bPublicKeyRsa, Tpm2bSensitiveCreate, Tpm2bSensitiveData, Tpm2bTemplate, TpmaObject,
-    TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmiStCommandTag, TpmsAuthCommand,
-    TpmsAuthResponse, TpmsEccParms, TpmsNvPublic, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic,
-    TpmtRsaScheme, TpmtSymDefObject,
+    TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmiStCommandTag,
+    TpmsAuthCommand, TpmsAuthResponse, TpmsEccParms, TpmsNvPublic, TpmsRsaParms,
+    TpmsSensitiveCreate, TpmtPublic, TpmtRsaScheme, TpmtSymDefObject,
 };
 
 pub fn leak_bytes(bytes: &[u8]) -> &'static [u8] {
@@ -85,368 +84,54 @@ where
     }
 }
 
-pub fn execute_with_password_sessions_raw<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
-    cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
-    num_sessions: usize,
-    auth_value: &[u8],
-    resp_buffer: &mut [u8],
-) -> Result<(usize, usize, CmdT::RespHandles), u32>
-where
-    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-{
-    let mut cmd_buffer = [0u8; 16384];
-    let mut cmd_header = CmdHeader {
-        tag: if num_sessions > 0 {
-            TpmiStCommandTag::Sessions
-        } else {
-            TpmiStCommandTag::NoSessions
-        },
-        size: 0,
-        code: CmdT::CMD_CODE,
-    };
-    let mut written = cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
-    let handles_len = marshal_to_slice(&cmd_handles, &mut cmd_buffer[written..]);
-    written += handles_len;
-
-    let mut auth_val = Tpm2bAuth::default();
-    if !auth_value.is_empty() {
-        auth_val = Tpm2bAuth::from_bytes(auth_value).unwrap();
-    }
-
-    let auth_cmd = TpmsAuthCommand {
-        session_handle: Handle::RS_PW,
-        nonce: Tpm2bNonce::default(),
-        session_attributes: TpmaSession(1),
-        hmac: auth_val,
-    };
-
-    let mut auth_buffer = [0u8; 1024];
-    let mut auth_written = 0;
-    for _ in 0..num_sessions {
-        auth_written += marshal_to_slice(&auth_cmd, &mut auth_buffer[auth_written..]);
-    }
-
-    if num_sessions > 0 {
-        written += (auth_written as u32)
-            .marshal((&mut cmd_buffer[written..written + 4]).try_into().unwrap());
-        cmd_buffer[written..written + auth_written].copy_from_slice(&auth_buffer[..auth_written]);
-        written += auth_written;
-    }
-
-    let cmd_len = marshal_to_slice(cmd, &mut cmd_buffer[written..]);
-    written += cmd_len;
-
-    let mut header_buf = [0u8; 10];
-    cmd_header.size = written as u32;
-    cmd_header.marshal((&mut header_buf[0..10]).try_into().unwrap());
-    cmd_buffer[..10].copy_from_slice(&header_buf[..10]);
-
-    tpm.transact(&cmd_buffer[..written], resp_buffer).unwrap();
-
-    let mut slice = &resp_buffer[..];
-    let resp_header = RespHeader::unmarshal(&mut slice).unwrap();
-    if resp_header.rc != 0 {
-        return Err(resp_header.rc);
-    }
-
-    let orig_handles_len = slice.len();
-    let resp_handles = CmdT::RespHandles::unmarshal(&mut slice).unwrap();
-    let handles_consumed = orig_handles_len - slice.len();
-    let mut param_start = 10 + handles_consumed;
-    if resp_header.tag == TpmSt::SESSIONS {
-        let _param_size = u32::unmarshal(&mut slice).unwrap();
-        param_start += 4;
-    }
-
-    let resp_size = resp_header.size as usize;
-    Ok((param_start, resp_size, resp_handles))
-}
-
-pub fn execute_with_password_sessions_status<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
-    cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
-    num_sessions: usize,
-    auth_value: &[u8],
-) -> Result<CmdT::RespHandles, u32>
-where
-    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-{
-    let mut resp_buffer = [0u8; 16384];
-    execute_with_password_sessions_raw(
-        tpm,
-        cmd,
-        cmd_handles,
-        num_sessions,
-        auth_value,
-        &mut resp_buffer,
-    )
-    .map(|(_, _, handles)| handles)
-}
-
-pub fn execute_with_password_sessions<CmdT: Command>(
-    tpm: &mut Simulator<'_>,
-    cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
-    num_sessions: usize,
-    auth_value: &[u8],
-) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), u32>
-where
-    CmdT::Response<'static>: Unmarshal<'static>,
-    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-{
-    let mut resp_buffer = [0u8; 16384];
-    let (param_start, resp_size, resp_handles) = execute_with_password_sessions_raw(
-        tpm,
-        cmd,
-        cmd_handles,
-        num_sessions,
-        auth_value,
-        &mut resp_buffer,
-    )?;
-    let mut slice: &'static [u8] = leak_bytes(&resp_buffer[param_start..resp_size]);
-    let resp = <CmdT::Response<'static>>::unmarshal(&mut slice).unwrap();
-    Ok((resp, resp_handles))
-}
-
-pub fn execute_sign<'a>(
-    tpm: &mut Simulator<'_>,
-    cmd: &tpm2::commands::Sign<'_>,
-    cmd_handles: tpm2::commands::SignHandles,
-    num_sessions: usize,
-    auth_value: &[u8],
-    resp_buffer: &'a mut [u8; 4096],
-) -> Result<(<Sign<'static> as Command>::Response<'a>, ()), u32> {
-    let (param_start, resp_size, handles) = execute_with_password_sessions_raw(
-        tpm,
-        cmd,
-        cmd_handles,
-        num_sessions,
-        auth_value,
-        resp_buffer,
-    )?;
-    let mut slice = &resp_buffer[param_start..resp_size];
-    let resp = Unmarshal::unmarshal(&mut slice).unwrap();
-    Ok((resp, handles))
-}
-
-pub fn execute_certify<'a>(
-    tpm: &mut Simulator<'_>,
-    cmd: &tpm2::commands::Certify<'_>,
-    cmd_handles: tpm2::commands::CertifyHandles,
-    num_sessions: usize,
-    auth_value: &[u8],
-    resp_buffer: &'a mut [u8; 4096],
-) -> Result<(<Certify<'static> as Command>::Response<'a>, ()), u32> {
-    let (param_start, resp_size, handles) = execute_with_password_sessions_raw(
-        tpm,
-        cmd,
-        cmd_handles,
-        num_sessions,
-        auth_value,
-        resp_buffer,
-    )?;
-    let mut slice = &resp_buffer[param_start..resp_size];
-    let resp = Unmarshal::unmarshal(&mut slice).unwrap();
-    Ok((resp, handles))
-}
-
-pub fn execute_nv_certify<'a>(
-    tpm: &mut Simulator<'_>,
-    cmd: &tpm2::commands::NVCertify<'_>,
-    cmd_handles: tpm2::commands::NVCertifyHandles,
-    num_sessions: usize,
-    auth_value: &[u8],
-    resp_buffer: &'a mut [u8; 4096],
-) -> Result<(<NVCertify<'static> as Command>::Response<'a>, ()), u32> {
-    let (param_start, resp_size, handles) = execute_with_password_sessions_raw(
-        tpm,
-        cmd,
-        cmd_handles,
-        num_sessions,
-        auth_value,
-        resp_buffer,
-    )?;
-    let mut slice = &resp_buffer[param_start..resp_size];
-    let resp = Unmarshal::unmarshal(&mut slice).unwrap();
-    Ok((resp, handles))
-}
-
-pub fn execute_certify_creation<'a>(
-    tpm: &mut Simulator<'_>,
-    cmd: &tpm2::commands::CertifyCreation<'_>,
-    cmd_handles: tpm2::commands::CertifyCreationHandles,
-    num_sessions: usize,
-    auth_value: &[u8],
-    resp_buffer: &'a mut [u8; 4096],
-) -> Result<(<CertifyCreation<'static> as Command>::Response<'a>, ()), u32> {
-    let (param_start, resp_size, handles) = execute_with_password_sessions_raw(
-        tpm,
-        cmd,
-        cmd_handles,
-        num_sessions,
-        auth_value,
-        resp_buffer,
-    )?;
-    let mut slice = &resp_buffer[param_start..resp_size];
-    let resp = Unmarshal::unmarshal(&mut slice).unwrap();
-    Ok((resp, handles))
-}
-
-pub fn execute_get_time<'a>(
-    tpm: &mut Simulator<'_>,
-    cmd: &tpm2::commands::GetTime<'_>,
-    cmd_handles: tpm2::commands::GetTimeHandles,
-    num_sessions: usize,
-    auth_value: &[u8],
-    resp_buffer: &'a mut [u8; 4096],
-) -> Result<(<GetTime<'static> as Command>::Response<'a>, ()), u32> {
-    let (param_start, resp_size, handles) = execute_with_password_sessions_raw(
-        tpm,
-        cmd,
-        cmd_handles,
-        num_sessions,
-        auth_value,
-        resp_buffer,
-    )?;
-    let mut slice = &resp_buffer[param_start..resp_size];
-    let resp = Unmarshal::unmarshal(&mut slice).unwrap();
-    Ok((resp, handles))
-}
-
-pub fn execute_get_session_audit_digest<'a>(
-    tpm: &mut Simulator<'_>,
-    cmd: &tpm2::commands::GetSessionAuditDigest<'_>,
-    cmd_handles: tpm2::commands::GetSessionAuditDigestHandles,
-    num_sessions: usize,
-    auth_value: &[u8],
-    resp_buffer: &'a mut [u8; 4096],
-) -> Result<
-    (
-        <GetSessionAuditDigest<'static> as Command>::Response<'a>,
-        (),
-    ),
-    u32,
-> {
-    let (param_start, resp_size, handles) = execute_with_password_sessions_raw(
-        tpm,
-        cmd,
-        cmd_handles,
-        num_sessions,
-        auth_value,
-        resp_buffer,
-    )?;
-    let mut slice = &resp_buffer[param_start..resp_size];
-    let resp = Unmarshal::unmarshal(&mut slice).unwrap();
-    Ok((resp, handles))
-}
-
-pub fn execute_get_capability<'a>(
-    tpm: &mut Simulator<'_>,
-    cmd: &tpm2::commands::GetCapability,
-    cmd_handles: (),
-    num_sessions: usize,
-    auth_value: &[u8],
-    resp_buffer: &'a mut [u8; 4096],
-) -> Result<(<GetCapability as Command>::Response<'a>, ()), u32> {
-    let (param_start, resp_size, handles) = execute_with_password_sessions_raw(
-        tpm,
-        cmd,
-        cmd_handles,
-        num_sessions,
-        auth_value,
-        resp_buffer,
-    )?;
-    let mut slice = &resp_buffer[param_start..resp_size];
-    let resp = Unmarshal::unmarshal(&mut slice).unwrap();
-    Ok((resp, handles))
-}
-
-/// Reads a single fixed/variable TPM property with
-/// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES, property, 1)`.
+/// The response handle area of command `C`: one [`Handle`] per response handle
+/// of `C`'s response (`[Handle; N]`, e.g. `[object_handle]` for
+/// `TPM2_CreatePrimary` and `[]` for most commands).
 ///
-/// Panics if the TPM does not report the requested property.
-pub fn get_tpm_property(tpm: &mut Simulator<'_>, property: tpm2::TpmPt) -> u32 {
-    let cmd = GetCapability {
-        capability: tpm2::TpmCap::TPMProperties,
-        property: property.0,
-        property_count: 1,
-    };
-    let (resp, _) = tpm
-        .execute_with_handles(cmd, ())
-        .expect("TPM2_GetCapability failed");
-    match resp.capability_data {
-        tpm2::TpmsCapabilityData::TpmProperties(props) => {
-            props
-                .as_ref()
-                .iter()
-                .find(|p| p.property == property)
-                .unwrap_or_else(|| panic!("TPM did not report property {property:?}"))
-                .value
-        }
-        other => panic!("unexpected capability data: {other:?}"),
+/// The `*_status` and `*_raw` helpers return it where exp's helpers returned
+/// `C::RespHandles`. The other helpers return the full response, which carries
+/// the same handles in its fields (e.g. `rsp.object_handle`).
+pub type RespHandles<C> = <<C as Command>::Response<'static> as Message>::Handles;
+
+/// Marshals the handle area `handles` into `buf` (one big-endian `u32` per
+/// handle, the same bytes exp's `XxxHandles` produced) and returns the number
+/// of bytes written.
+fn marshal_handles(handles: &[Handle], buf: &mut [u8]) -> usize {
+    let mut written = 0;
+    for handle in handles {
+        written += marshal_to_slice(handle, &mut buf[written..]);
     }
+    written
 }
 
-/// Number of authorization sessions that can be loaded at the same time, as
-/// reported by the TPM (`TPM_PT_HR_LOADED_MIN`).
-pub fn max_loaded_sessions(tpm: &mut Simulator<'_>) -> usize {
-    get_tpm_property(tpm, tpm2::TpmPt::HR_LOADED_MIN) as usize
+/// Unmarshals the handle area of message `M` (`M::Handles`) from `src`.
+///
+/// Panics if `src` is too short.
+fn unmarshal_handles<M: Message>(src: &mut &[u8]) -> M::Handles {
+    let mut handles = M::Handles::default();
+    for handle in handles.as_mut() {
+        *handle = Handle::unmarshal(src).unwrap();
+    }
+    handles
 }
 
-/// Enables or disables `hierarchy` (`TPM_RH_OWNER`, `TPM_RH_ENDORSEMENT`,
-/// ...) with `TPM2_HierarchyControl`, authorized by the platform hierarchy
-/// using its (default, empty) password.
-pub fn set_hierarchy_enabled(tpm: &mut Simulator<'_>, hierarchy: Handle, state: bool) {
-    let cmd = tpm2::commands::HierarchyControl {
-        enable: hierarchy,
-        state,
-    };
-    let handles = tpm2::commands::HierarchyControlHandles {
-        auth_handle: Handle::RH_PLATFORM,
-    };
-    execute_with_password_sessions(tpm, &cmd, handles, 1, &[])
-        .unwrap_or_else(|rc| panic!("TPM2_HierarchyControl failed: {rc:#x}"));
-}
-
-pub fn execute_pcr_event<'a>(
-    tpm: &mut Simulator<'_>,
-    cmd: &tpm2::commands::PCREvent<'_>,
-    cmd_handles: tpm2::commands::PCREventHandles,
-    num_sessions: usize,
-    auth_value: &[u8],
-    resp_buffer: &'a mut [u8; 4096],
-) -> Result<(<PCREvent<'static> as Command>::Response<'a>, ()), u32> {
-    let (param_start, resp_size, handles) = execute_with_password_sessions_raw(
-        tpm,
-        cmd,
-        cmd_handles,
-        num_sessions,
-        auth_value,
-        resp_buffer,
-    )?;
-    let mut slice = &resp_buffer[param_start..resp_size];
-    let resp = Unmarshal::unmarshal(&mut slice).unwrap();
-    Ok((resp, handles))
-}
-
-pub fn execute_with_corrupted_bytes_raw<CmdT: Command>(
+/// Marshals `cmd` (header, the command's handle area, `num_sessions` password
+/// sessions carrying `auth_value`, parameter area), lets `corrupt_fn` modify
+/// the marshalled parameter area, sends the command to the TPM and checks the
+/// response code.
+///
+/// Returns the response header; the response itself is left in `resp_buffer`.
+/// A non-success response code is returned as `Err(rc)`.
+fn transact_with_password_sessions<CmdT: Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     num_sessions: usize,
     auth_value: &[u8],
     corrupt_fn: impl FnOnce(&mut [u8]),
     resp_buffer: &mut [u8],
-) -> Result<(usize, usize, CmdT::RespHandles), u32>
+) -> Result<RespHeader, u32>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut cmd_buffer = [0u8; 16384];
     let mut cmd_header = CmdHeader {
@@ -459,7 +144,7 @@ where
         code: CmdT::CMD_CODE,
     };
     let mut written = cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
-    let handles_len = marshal_to_slice(&cmd_handles, &mut cmd_buffer[written..]);
+    let handles_len = marshal_handles(cmd.handles().as_ref(), &mut cmd_buffer[written..]);
     written += handles_len;
 
     let mut auth_val = Tpm2bAuth::default();
@@ -477,7 +162,7 @@ where
     let mut auth_buffer = [0u8; 1024];
     let mut auth_written = 0;
     for _ in 0..num_sessions {
-        auth_written += marshal_to_slice(&auth_cmd, &mut auth_buffer[auth_written..]);
+        auth_written += marshal_auth_command(&auth_cmd, &mut auth_buffer[auth_written..]);
     }
 
     if num_sessions > 0 {
@@ -505,37 +190,302 @@ where
     if resp_header.rc != 0 {
         return Err(resp_header.rc);
     }
+    Ok(resp_header)
+}
 
+/// Reads the response handles of response message `M` from the successful
+/// response in `resp_buffer` (described by `resp_header`), skipping
+/// `parameterSize` if the response has sessions.
+///
+/// Returns the handles and the offset of the response parameter area.
+fn parse_response_handles<M: Message>(
+    resp_buffer: &[u8],
+    resp_header: &RespHeader,
+) -> (M::Handles, usize) {
+    let mut slice = &resp_buffer[10..];
     let orig_handles_len = slice.len();
-    let resp_handles = CmdT::RespHandles::unmarshal(&mut slice).unwrap();
+    let resp_handles = unmarshal_handles::<M>(&mut slice);
     let handles_consumed = orig_handles_len - slice.len();
     let mut param_start = 10 + handles_consumed;
     if resp_header.tag == TpmSt::SESSIONS {
         let _param_size = u32::unmarshal(&mut slice).unwrap();
         param_start += 4;
     }
+    (resp_handles, param_start)
+}
 
+/// Runs `cmd` like [`execute_with_password_sessions`], but unmarshals the
+/// response from `resp_buffer`, so that it borrows `resp_buffer` instead of
+/// leaked memory.
+fn execute_with_password_sessions_into<'a, CmdT: Command>(
+    tpm: &mut Simulator<'_>,
+    cmd: &CmdT,
+    num_sessions: usize,
+    auth_value: &[u8],
+    resp_buffer: &'a mut [u8; 4096],
+) -> Result<CmdT::Response<'a>, u32>
+where
+    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
+{
+    let resp_header =
+        transact_with_password_sessions(tpm, cmd, num_sessions, auth_value, |_| {}, resp_buffer)?;
+    let resp_buffer: &'a [u8] = resp_buffer;
+    let (resp_handles, param_start) =
+        parse_response_handles::<CmdT::Response<'a>>(resp_buffer, &resp_header);
+    let mut slice = &resp_buffer[param_start..resp_header.size as usize];
+    Ok(<CmdT::Response<'a>>::unmarshal_with_handles(resp_handles, &mut slice).unwrap())
+}
+
+/// Marshals one authorization session (`TPMS_AUTH_COMMAND`) into `buf` and
+/// returns the number of bytes written.
+///
+/// Deliberately non-generic: inside a function bounded by
+/// `for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>`, calling the generic
+/// [`marshal_to_slice`] on a type with a lifetime (such as
+/// `TpmsAuthCommand<'_>`) makes rustc select that bound and fail with E0271.
+pub fn marshal_auth_command(auth_cmd: &TpmsAuthCommand<'_>, buf: &mut [u8]) -> usize {
+    marshal_to_slice(auth_cmd, buf)
+}
+
+/// Runs `cmd` with `num_sessions` password sessions (`TPM_RS_PW`, each
+/// carrying `auth_value`) and returns the layout of the response left in
+/// `resp_buffer`: `(param_start, resp_size, resp_handles)`, where the response
+/// parameters are `resp_buffer[param_start..resp_size]`.
+///
+/// The command's handles (`cmd.handles()`) are sent in the handle area. A
+/// non-success response code is returned as `Err(rc)`.
+pub fn execute_with_password_sessions_raw<CmdT: Command>(
+    tpm: &mut Simulator<'_>,
+    cmd: &CmdT,
+    num_sessions: usize,
+    auth_value: &[u8],
+    resp_buffer: &mut [u8],
+) -> Result<(usize, usize, RespHandles<CmdT>), u32>
+where
+    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
+{
+    execute_with_corrupted_bytes_raw(tpm, cmd, num_sessions, auth_value, |_| {}, resp_buffer)
+}
+
+/// Runs `cmd` like [`execute_with_password_sessions`], but only returns the
+/// response handles (or the response code).
+pub fn execute_with_password_sessions_status<CmdT: Command>(
+    tpm: &mut Simulator<'_>,
+    cmd: &CmdT,
+    num_sessions: usize,
+    auth_value: &[u8],
+) -> Result<RespHandles<CmdT>, u32>
+where
+    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
+{
+    let mut resp_buffer = [0u8; 16384];
+    execute_with_password_sessions_raw(tpm, cmd, num_sessions, auth_value, &mut resp_buffer)
+        .map(|(_, _, handles)| handles)
+}
+
+/// Runs `cmd` with `num_sessions` password sessions (`TPM_RS_PW`, each
+/// carrying `auth_value`) and returns its response, which carries the
+/// response handles. A non-success response code is returned as `Err(rc)`.
+pub fn execute_with_password_sessions<CmdT: Command>(
+    tpm: &mut Simulator<'_>,
+    cmd: &CmdT,
+    num_sessions: usize,
+    auth_value: &[u8],
+) -> Result<CmdT::Response<'static>, u32>
+where
+    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
+{
+    let mut resp_buffer = [0u8; 16384];
+    let (param_start, resp_size, resp_handles) =
+        execute_with_password_sessions_raw(tpm, cmd, num_sessions, auth_value, &mut resp_buffer)?;
+    let mut slice: &'static [u8] = leak_bytes(&resp_buffer[param_start..resp_size]);
+    let resp = <CmdT::Response<'static>>::unmarshal_with_handles(resp_handles, &mut slice).unwrap();
+    Ok(resp)
+}
+
+/// Runs `TPM2_Sign` with `num_sessions` password sessions; the response
+/// borrows `resp_buffer`.
+#[allow(deprecated)] // TPM2_Sign is deprecated upstream, but the TPM implements it.
+pub fn execute_sign<'a>(
+    tpm: &mut Simulator<'_>,
+    cmd: &tpm2::commands::Sign<'_>,
+    num_sessions: usize,
+    auth_value: &[u8],
+    resp_buffer: &'a mut [u8; 4096],
+) -> Result<responses::Sign<'a>, u32> {
+    execute_with_password_sessions_into(tpm, cmd, num_sessions, auth_value, resp_buffer)
+}
+
+/// Runs `TPM2_Certify` with `num_sessions` password sessions; the response
+/// borrows `resp_buffer`.
+pub fn execute_certify<'a>(
+    tpm: &mut Simulator<'_>,
+    cmd: &tpm2::commands::Certify<'_>,
+    num_sessions: usize,
+    auth_value: &[u8],
+    resp_buffer: &'a mut [u8; 4096],
+) -> Result<responses::Certify<'a>, u32> {
+    execute_with_password_sessions_into(tpm, cmd, num_sessions, auth_value, resp_buffer)
+}
+
+/// Runs `TPM2_NV_Certify` with `num_sessions` password sessions; the response
+/// borrows `resp_buffer`.
+pub fn execute_nv_certify<'a>(
+    tpm: &mut Simulator<'_>,
+    cmd: &tpm2::commands::NVCertify<'_>,
+    num_sessions: usize,
+    auth_value: &[u8],
+    resp_buffer: &'a mut [u8; 4096],
+) -> Result<responses::NVCertify<'a>, u32> {
+    execute_with_password_sessions_into(tpm, cmd, num_sessions, auth_value, resp_buffer)
+}
+
+/// Runs `TPM2_CertifyCreation` with `num_sessions` password sessions; the
+/// response borrows `resp_buffer`.
+pub fn execute_certify_creation<'a>(
+    tpm: &mut Simulator<'_>,
+    cmd: &tpm2::commands::CertifyCreation<'_>,
+    num_sessions: usize,
+    auth_value: &[u8],
+    resp_buffer: &'a mut [u8; 4096],
+) -> Result<responses::CertifyCreation<'a>, u32> {
+    execute_with_password_sessions_into(tpm, cmd, num_sessions, auth_value, resp_buffer)
+}
+
+/// Runs `TPM2_GetTime` with `num_sessions` password sessions; the response
+/// borrows `resp_buffer`.
+pub fn execute_get_time<'a>(
+    tpm: &mut Simulator<'_>,
+    cmd: &tpm2::commands::GetTime<'_>,
+    num_sessions: usize,
+    auth_value: &[u8],
+    resp_buffer: &'a mut [u8; 4096],
+) -> Result<responses::GetTime<'a>, u32> {
+    execute_with_password_sessions_into(tpm, cmd, num_sessions, auth_value, resp_buffer)
+}
+
+/// Runs `TPM2_GetSessionAuditDigest` with `num_sessions` password sessions;
+/// the response borrows `resp_buffer`.
+pub fn execute_get_session_audit_digest<'a>(
+    tpm: &mut Simulator<'_>,
+    cmd: &tpm2::commands::GetSessionAuditDigest<'_>,
+    num_sessions: usize,
+    auth_value: &[u8],
+    resp_buffer: &'a mut [u8; 4096],
+) -> Result<responses::GetSessionAuditDigest<'a>, u32> {
+    execute_with_password_sessions_into(tpm, cmd, num_sessions, auth_value, resp_buffer)
+}
+
+/// Runs `TPM2_GetCapability` with `num_sessions` password sessions; the
+/// response borrows `resp_buffer`.
+pub fn execute_get_capability<'a>(
+    tpm: &mut Simulator<'_>,
+    cmd: &tpm2::commands::GetCapability,
+    num_sessions: usize,
+    auth_value: &[u8],
+    resp_buffer: &'a mut [u8; 4096],
+) -> Result<responses::GetCapability<'a>, u32> {
+    execute_with_password_sessions_into(tpm, cmd, num_sessions, auth_value, resp_buffer)
+}
+
+/// Reads a single fixed/variable TPM property with
+/// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES, property, 1)`.
+///
+/// Panics if the TPM does not report the requested property.
+pub fn get_tpm_property(tpm: &mut Simulator<'_>, property: tpm2::TpmPt) -> u32 {
+    let cmd = GetCapability {
+        capability: tpm2::TpmCap::TPMProperties,
+        property: property.0,
+        property_count: 1,
+    };
+    let resp = tpm.execute(cmd).expect("TPM2_GetCapability failed");
+    match resp.capability_data {
+        tpm2::TpmsCapabilityData::TpmProperties(props) => {
+            props
+                .as_ref()
+                .iter()
+                .find(|p| p.property == property)
+                .unwrap_or_else(|| panic!("TPM did not report property {property:?}"))
+                .value
+        }
+        other => panic!("unexpected capability data: {other:?}"),
+    }
+}
+
+/// Number of authorization sessions that can be loaded at the same time, as
+/// reported by the TPM (`TPM_PT_HR_LOADED_MIN`).
+pub fn max_loaded_sessions(tpm: &mut Simulator<'_>) -> usize {
+    get_tpm_property(tpm, tpm2::TpmPt::HR_LOADED_MIN) as usize
+}
+
+/// Enables or disables `hierarchy` (`TPM_RH_OWNER`, `TPM_RH_ENDORSEMENT`,
+/// ...) with `TPM2_HierarchyControl`, authorized by the platform hierarchy
+/// using its (default, empty) password.
+pub fn set_hierarchy_enabled(tpm: &mut Simulator<'_>, hierarchy: Handle, state: bool) {
+    let cmd = tpm2::commands::HierarchyControl {
+        auth_handle: Handle::RH_PLATFORM,
+        enable: hierarchy,
+        state,
+    };
+    execute_with_password_sessions(tpm, &cmd, 1, &[])
+        .unwrap_or_else(|rc| panic!("TPM2_HierarchyControl failed: {rc:#x}"));
+}
+
+/// Runs `TPM2_PCR_Event` with `num_sessions` password sessions; the response
+/// borrows `resp_buffer`.
+pub fn execute_pcr_event<'a>(
+    tpm: &mut Simulator<'_>,
+    cmd: &tpm2::commands::PCREvent<'_>,
+    num_sessions: usize,
+    auth_value: &[u8],
+    resp_buffer: &'a mut [u8; 4096],
+) -> Result<responses::PCREvent<'a>, u32> {
+    execute_with_password_sessions_into(tpm, cmd, num_sessions, auth_value, resp_buffer)
+}
+
+/// Like [`execute_with_password_sessions_raw`], but lets `corrupt_fn` modify
+/// the marshalled parameter area before the command is sent.
+pub fn execute_with_corrupted_bytes_raw<CmdT: Command>(
+    tpm: &mut Simulator<'_>,
+    cmd: &CmdT,
+    num_sessions: usize,
+    auth_value: &[u8],
+    corrupt_fn: impl FnOnce(&mut [u8]),
+    resp_buffer: &mut [u8],
+) -> Result<(usize, usize, RespHandles<CmdT>), u32>
+where
+    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
+{
+    let resp_header = transact_with_password_sessions(
+        tpm,
+        cmd,
+        num_sessions,
+        auth_value,
+        corrupt_fn,
+        resp_buffer,
+    )?;
+    let (resp_handles, param_start) =
+        parse_response_handles::<CmdT::Response<'static>>(resp_buffer, &resp_header);
     let resp_size = resp_header.size as usize;
     Ok((param_start, resp_size, resp_handles))
 }
 
+/// Like [`execute_with_password_sessions_status`], but lets `corrupt_fn`
+/// modify the marshalled parameter area before the command is sent.
 pub fn execute_with_corrupted_bytes_status<CmdT: Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     num_sessions: usize,
     auth_value: &[u8],
     corrupt_fn: impl FnOnce(&mut [u8]),
-) -> Result<CmdT::RespHandles, u32>
+) -> Result<RespHandles<CmdT>, u32>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut resp_buffer = [0u8; 16384];
     execute_with_corrupted_bytes_raw(
         tpm,
         cmd,
-        cmd_handles,
         num_sessions,
         auth_value,
         corrupt_fn,
@@ -544,47 +494,44 @@ where
     .map(|(_, _, handles)| handles)
 }
 
+/// Like [`execute_with_password_sessions`], but lets `corrupt_fn` modify the
+/// marshalled parameter area before the command is sent.
 pub fn execute_with_corrupted_bytes<CmdT: Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     num_sessions: usize,
     auth_value: &[u8],
     corrupt_fn: impl FnOnce(&mut [u8]),
-) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), u32>
+) -> Result<CmdT::Response<'static>, u32>
 where
-    CmdT::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut resp_buffer = [0u8; 16384];
     let (param_start, resp_size, resp_handles) = execute_with_corrupted_bytes_raw(
         tpm,
         cmd,
-        cmd_handles,
         num_sessions,
         auth_value,
         corrupt_fn,
         &mut resp_buffer,
     )?;
     let mut slice: &'static [u8] = leak_bytes(&resp_buffer[param_start..resp_size]);
-    let resp = <CmdT::Response<'static>>::unmarshal(&mut slice).unwrap();
-    Ok((resp, resp_handles))
+    let resp = <CmdT::Response<'static>>::unmarshal_with_handles(resp_handles, &mut slice).unwrap();
+    Ok(resp)
 }
 
 pub fn flush_context(tpm: &mut Simulator<'_>, handle: Handle) -> Result<(), u32> {
     let cmd = FlushContext {
         flush_handle: handle,
     };
-    execute_with_password_sessions(tpm, &cmd, (), 0, &[]).map(|_| ())
+    execute_with_password_sessions(tpm, &cmd, 0, &[]).map(|_| ())
 }
 
 pub fn read_public_name(tpm: &mut Simulator<'_>, handle: Handle) -> Tpm2bName<'static> {
-    let cmd = ReadPublic::default();
-    let handles = ReadPublicHandles {
+    let cmd = ReadPublic {
         object_handle: handle,
     };
-    let (resp, _) = execute_with_password_sessions(tpm, &cmd, handles, 0, &[]).unwrap();
+    let resp = execute_with_password_sessions(tpm, &cmd, 0, &[]).unwrap();
     resp.name
 }
 
@@ -672,7 +619,7 @@ fn kdfa_sha256(
     bits: u32,
     out: &mut [u8],
 ) {
-    kdfa(
+    kdfa_bits(
         crypto,
         TpmiAlgHash::Sha256,
         key,
@@ -690,11 +637,11 @@ fn compute_client_hash(
     auth_hash: TpmiAlgHash,
     updates: &[&[u8]],
 ) -> Vec<u8> {
-    let mut state = tpm2::crypto::HashCtx::new(crypto, auth_hash).unwrap();
+    let mut state = tpm2::crypto::HashStream::new(crypto, auth_hash).unwrap();
     for data in updates {
         state.update(data).unwrap();
     }
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
     state.finalize(&mut out).unwrap().digest().to_vec()
 }
 
@@ -704,11 +651,11 @@ fn compute_client_hmac(
     key: &[u8],
     updates: &[&[u8]],
 ) -> Vec<u8> {
-    let mut state = tpm2::crypto::HmacCtx::new(crypto, auth_hash, key).unwrap();
+    let mut state = tpm2::crypto::HmacStream::new(crypto, auth_hash, key).unwrap();
     for data in updates {
         state.update(data).unwrap();
     }
-    let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
     state.finalize(&mut out).unwrap().digest().to_vec()
 }
 
@@ -726,15 +673,16 @@ pub fn start_auth_session(
     let nonce_caller = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
 
     let cmd = StartAuthSession {
+        tpm_key,
+        bind,
         nonce_caller,
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type,
         symmetric: symmetric.map(tpm2::TpmtSymDef::from),
         auth_hash,
     };
-    let handles = StartAuthSessionHandles { tpm_key, bind };
 
-    let (resp, resp_handles) = execute_with_password_sessions(tpm, &cmd, handles, 0, &[])?;
+    let resp = execute_with_password_sessions(tpm, &cmd, 0, &[])?;
 
     let session_key = if bind == Handle::RH_NULL && tpm_key == Handle::RH_NULL {
         Vec::new()
@@ -764,7 +712,7 @@ pub fn start_auth_session(
     };
 
     Ok(ActiveSession {
-        session_handle: resp_handles.session_handle,
+        session_handle: resp.session_handle,
         nonce_caller,
         nonce_tpm: resp.nonce_tpm,
         session_key,
@@ -787,21 +735,15 @@ pub fn start_auth_session(
 /// used.
 pub fn entity_name(tpm: &mut Simulator<'_>, handle: Handle) -> Vec<u8> {
     if (handle.0 >> 24 == 0x80 || handle.0 >> 24 == 0x81)
-        && let Ok((resp, _)) = tpm.execute_with_handles(
-            ReadPublic {},
-            ReadPublicHandles {
-                object_handle: handle,
-            },
-        )
+        && let Ok(resp) = tpm.execute(ReadPublic {
+            object_handle: handle,
+        })
     {
         return resp.name.get_buffer().to_vec();
     }
     // NV Indices are named by nameAlg || H(nvPublic), as reported by TPM2_NV_ReadPublic.
     if handle.0 >> 24 == 0x01
-        && let Ok((resp, _)) = tpm.execute_with_handles(
-            tpm2::commands::NVReadPublic {},
-            tpm2::commands::NVReadPublicHandles { nv_index: handle },
-        )
+        && let Ok(resp) = tpm.execute(tpm2::commands::NVReadPublic { nv_index: handle })
     {
         return resp.nv_name.get_buffer().to_vec();
     }
@@ -868,14 +810,12 @@ fn session_hmac_key(session: &ActiveSession, entity_auth: &[u8], include_auth: b
 pub fn execute_with_hmac_sessions_raw<CmdT: Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     _handle_names: &[&[u8]],
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
-) -> Result<(Vec<u8>, CmdT::RespHandles), u32>
+) -> Result<(Vec<u8>, RespHandles<CmdT>), u32>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut cmd_buffer = [0u8; 16384];
     let mut cmd_header = CmdHeader {
@@ -889,7 +829,7 @@ where
     };
 
     let mut written = cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
-    let handles_len = marshal_to_slice(&cmd_handles, &mut cmd_buffer[written..]);
+    let handles_len = marshal_handles(cmd.handles().as_ref(), &mut cmd_buffer[written..]);
     written += handles_len;
 
     let session_size_pos = written;
@@ -994,8 +934,14 @@ where
         let size = u16::from_be_bytes([param_buf[0], param_buf[1]]) as usize;
 
         let bits = match &session.symmetric {
-            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                ..
+            }) => 128 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes256,
+                ..
+            }) => 256 + 128,
             _ => 0,
         };
 
@@ -1023,7 +969,7 @@ where
             let key_size = (bits - 128) as usize / 8;
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
-            tpm2::crypto::encrypt(
+            sym_encrypt(
                 CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
@@ -1093,7 +1039,7 @@ where
             hmac: hmac_val,
         };
 
-        auth_written += marshal_to_slice(&auth_cmd, &mut auth_buffer[auth_written..]);
+        auth_written += marshal_auth_command(&auth_cmd, &mut auth_buffer[auth_written..]);
     }
 
     // Marshal sessions into cmd_buffer
@@ -1132,7 +1078,7 @@ where
         return Err(resp_header.rc);
     }
 
-    let resp_handles = CmdT::RespHandles::unmarshal(&mut slice).unwrap();
+    let resp_handles = unmarshal_handles::<CmdT::Response<'static>>(&mut slice);
 
     let mut parameter_size = 0;
     if resp_header.tag == TpmSt::SESSIONS {
@@ -1167,8 +1113,14 @@ where
         let size = u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
 
         let bits = match &session.symmetric {
-            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                ..
+            }) => 128 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes256,
+                ..
+            }) => 256 + 128,
             _ => 0,
         };
 
@@ -1194,7 +1146,7 @@ where
             let key_size = (bits - 128) as usize / 8;
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
-            tpm2::crypto::decrypt(
+            sym_decrypt(
                 CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
@@ -1262,43 +1214,32 @@ where
 pub fn execute_with_hmac_sessions_status<CmdT: Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     handle_names: &[&[u8]],
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
-) -> Result<CmdT::RespHandles, u32>
+) -> Result<RespHandles<CmdT>, u32>
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    execute_with_hmac_sessions_raw(tpm, cmd, cmd_handles, handle_names, sessions, entity_auths)
-        .map(|(_, h)| h)
+    execute_with_hmac_sessions_raw(tpm, cmd, handle_names, sessions, entity_auths).map(|(_, h)| h)
 }
 
 pub fn execute_with_hmac_sessions<CmdT: Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     handle_names: &[&[u8]],
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
-) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), u32>
+) -> Result<CmdT::Response<'static>, u32>
 where
-    CmdT::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
-    let (decrypted_param_buf, resp_handles) = execute_with_hmac_sessions_raw(
-        tpm,
-        cmd,
-        cmd_handles,
-        handle_names,
-        sessions,
-        entity_auths,
-    )?;
+    let (decrypted_param_buf, resp_handles) =
+        execute_with_hmac_sessions_raw(tpm, cmd, handle_names, sessions, entity_auths)?;
     let mut slice_params: &'static [u8] = leak_bytes(&decrypted_param_buf);
-    let resp = <CmdT::Response<'static>>::unmarshal(&mut slice_params).unwrap();
-    Ok((resp, resp_handles))
+    let resp =
+        <CmdT::Response<'static>>::unmarshal_with_handles(resp_handles, &mut slice_params).unwrap();
+    Ok(resp)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1311,15 +1252,12 @@ pub enum ResponseCorruption {
 pub fn execute_with_hmac_sessions_mismatch_nonce<CmdT: Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     _handle_names: &[&[u8]],
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
-) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), u32>
+) -> Result<CmdT::Response<'static>, u32>
 where
-    CmdT::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut cmd_buffer = [0u8; 16384];
     let mut cmd_header = CmdHeader {
@@ -1333,7 +1271,7 @@ where
     };
 
     let mut written = cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
-    let handles_len = marshal_to_slice(&cmd_handles, &mut cmd_buffer[written..]);
+    let handles_len = marshal_handles(cmd.handles().as_ref(), &mut cmd_buffer[written..]);
     written += handles_len;
 
     let session_size_pos = written;
@@ -1424,8 +1362,14 @@ where
         let size = u16::from_be_bytes([param_buf[0], param_buf[1]]) as usize;
 
         let bits = match &session.symmetric {
-            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                ..
+            }) => 128 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes256,
+                ..
+            }) => 256 + 128,
             _ => 0,
         };
 
@@ -1454,7 +1398,7 @@ where
             let key_size = (bits - 128) as usize / 8;
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
-            tpm2::crypto::encrypt(
+            sym_encrypt(
                 CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
@@ -1547,7 +1491,7 @@ where
             hmac: hmac_val,
         };
 
-        auth_written += marshal_to_slice(&auth_cmd, &mut auth_buffer[auth_written..]);
+        auth_written += marshal_auth_command(&auth_cmd, &mut auth_buffer[auth_written..]);
     }
 
     // Marshal sessions into cmd_buffer
@@ -1586,7 +1530,7 @@ where
         return Err(resp_header.rc);
     }
 
-    let resp_handles = CmdT::RespHandles::unmarshal(&mut slice).unwrap();
+    let resp_handles = unmarshal_handles::<CmdT::Response<'static>>(&mut slice);
 
     let mut parameter_size = 0;
     if resp_header.tag == TpmSt::SESSIONS {
@@ -1621,8 +1565,14 @@ where
         let size = u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
 
         let bits = match &session.symmetric {
-            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                ..
+            }) => 128 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes256,
+                ..
+            }) => 256 + 128,
             _ => 0,
         };
 
@@ -1651,7 +1601,7 @@ where
             let key_size = (bits - 128) as usize / 8;
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
-            tpm2::crypto::decrypt(
+            sym_decrypt(
                 CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
@@ -1728,24 +1678,22 @@ where
 
     // Unmarshal final response from decrypted parameters
     let mut slice_params: &'static [u8] = leak_bytes(&decrypted_param_buf[..parameter_size]);
-    let resp = <CmdT::Response<'static>>::unmarshal(&mut slice_params).unwrap();
+    let resp =
+        <CmdT::Response<'static>>::unmarshal_with_handles(resp_handles, &mut slice_params).unwrap();
 
-    Ok((resp, resp_handles))
+    Ok(resp)
 }
 
 pub fn execute_with_hmac_sessions_corrupt_response<CmdT: Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     _handle_names: &[&[u8]],
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
     corruption: ResponseCorruption,
-) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), u32>
+) -> Result<CmdT::Response<'static>, u32>
 where
-    CmdT::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut cmd_buffer = [0u8; 16384];
     let mut cmd_header = CmdHeader {
@@ -1759,7 +1707,7 @@ where
     };
 
     let mut written = cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
-    let handles_len = marshal_to_slice(&cmd_handles, &mut cmd_buffer[written..]);
+    let handles_len = marshal_handles(cmd.handles().as_ref(), &mut cmd_buffer[written..]);
     written += handles_len;
 
     let session_size_pos = written;
@@ -1850,8 +1798,14 @@ where
         let size = u16::from_be_bytes([param_buf[0], param_buf[1]]) as usize;
 
         let bits = match &session.symmetric {
-            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                ..
+            }) => 128 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes256,
+                ..
+            }) => 256 + 128,
             _ => 0,
         };
 
@@ -1880,7 +1834,7 @@ where
             let key_size = (bits - 128) as usize / 8;
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
-            tpm2::crypto::encrypt(
+            sym_encrypt(
                 CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
@@ -1968,7 +1922,7 @@ where
             hmac: hmac_val,
         };
 
-        auth_written += marshal_to_slice(&auth_cmd, &mut auth_buffer[auth_written..]);
+        auth_written += marshal_auth_command(&auth_cmd, &mut auth_buffer[auth_written..]);
     }
 
     // Marshal sessions into cmd_buffer
@@ -2007,7 +1961,7 @@ where
         return Err(resp_header.rc);
     }
 
-    let resp_handles = CmdT::RespHandles::unmarshal(&mut slice).unwrap();
+    let resp_handles = unmarshal_handles::<CmdT::Response<'static>>(&mut slice);
 
     let mut parameter_size = 0;
     if resp_header.tag == TpmSt::SESSIONS {
@@ -2069,8 +2023,14 @@ where
         let size = u16::from_be_bytes([decrypted_param_buf[0], decrypted_param_buf[1]]) as usize;
 
         let bits = match &session.symmetric {
-            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                ..
+            }) => 128 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes256,
+                ..
+            }) => 256 + 128,
             _ => 0,
         };
 
@@ -2099,7 +2059,7 @@ where
             let key_size = (bits - 128) as usize / 8;
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((key_size * 8) as u16).unwrap();
-            tpm2::crypto::decrypt(
+            sym_decrypt(
                 CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
@@ -2190,9 +2150,10 @@ where
 
     // Unmarshal final response from decrypted parameters
     let mut slice_params: &'static [u8] = leak_bytes(&decrypted_param_buf[..parameter_size]);
-    let resp = <CmdT::Response<'static>>::unmarshal(&mut slice_params).unwrap();
+    let resp =
+        <CmdT::Response<'static>>::unmarshal_with_handles(resp_handles, &mut slice_params).unwrap();
 
-    Ok((resp, resp_handles))
+    Ok(resp)
 }
 
 pub struct PolicyCalculator {
@@ -2452,7 +2413,10 @@ pub fn rsa_ek_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::from_bytes(&AUTH_POLICY).unwrap(),
         parms_and_id: PublicParmsAndId::Rsa(
             TpmsRsaParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 key_bits: TpmiRsaKeyBits(2048),
                 exponent: 0,
@@ -2479,7 +2443,10 @@ pub fn ecc_ek_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::from_bytes(&AUTH_POLICY).unwrap(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -2511,10 +2478,64 @@ pub fn kdfa_by_alg(
     bits: u32,
     out: &mut [u8],
 ) {
-    kdfa(
+    kdfa_bits(
         crypto, auth_hash, key, label, context_u, context_v, bits, out,
     )
     .unwrap();
+}
+
+/// Encrypts or decrypts (`dir`) `data` in place with the symmetric algorithm,
+/// key size and cipher mode of `alg` (e.g. AES-128-CFB), updating `iv` in
+/// place (`ivOut`, for chaining).
+///
+/// This is exp's `tpm2::crypto::encrypt_decrypt(s, alg, key, iv, is_decrypt,
+/// data)` on top of the upstream one-shot [`tpm2::crypto::encrypt_decrypt`].
+///
+/// # Errors
+/// * [`CryptoError::Unsupported`] - `alg` has no cipher mode (`mode` is `None`
+///   or CMAC), or `s` does not implement the algorithm/mode.
+/// * [`CryptoError::Internal`] - `key` does not have `alg`'s key size, or `iv`
+///   does not have the length the mode needs (16 bytes, 0 for ECB).
+pub fn sym_encrypt_decrypt(
+    s: &impl Symmetric,
+    alg: TpmtSymDefObject,
+    key: &[u8],
+    iv: &mut [u8],
+    dir: Direction,
+    data: &mut [u8],
+) -> Result<(), CryptoError> {
+    let Some(TpmiAlgSymMode::Cipher(mode)) = alg.mode else {
+        return Err(CryptoError::Unsupported);
+    };
+    let key = SymmetricKey::new(alg.alg, key).ok_or(CryptoError::Internal)?;
+    let mode = ModeIv::new(mode, iv).ok_or(CryptoError::Internal)?;
+    tpm2::crypto::encrypt_decrypt(s, key, mode, dir, data)
+}
+
+/// Encrypts `data` in place with `alg` (see [`sym_encrypt_decrypt`]),
+/// updating `iv` in place. Drop-in replacement for exp's
+/// `tpm2::crypto::encrypt(s, alg, key, iv, data)`.
+pub fn sym_encrypt(
+    s: &impl Symmetric,
+    alg: TpmtSymDefObject,
+    key: &[u8],
+    iv: &mut [u8],
+    data: &mut [u8],
+) -> Result<(), CryptoError> {
+    sym_encrypt_decrypt(s, alg, key, iv, Direction::Encrypt, data)
+}
+
+/// Decrypts `data` in place with `alg` (see [`sym_encrypt_decrypt`]),
+/// updating `iv` in place. Drop-in replacement for exp's
+/// `tpm2::crypto::decrypt(s, alg, key, iv, data)`.
+pub fn sym_decrypt(
+    s: &impl Symmetric,
+    alg: TpmtSymDefObject,
+    key: &[u8],
+    iv: &mut [u8],
+    data: &mut [u8],
+) -> Result<(), CryptoError> {
+    sym_encrypt_decrypt(s, alg, key, iv, Direction::Decrypt, data)
 }
 
 pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {

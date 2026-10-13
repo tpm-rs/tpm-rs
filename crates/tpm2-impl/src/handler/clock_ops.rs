@@ -1,12 +1,13 @@
 use crate::engine::{
     CLOCK_ADJUST_COARSE, CLOCK_ADJUST_FINE, CLOCK_ADJUST_LIMIT, CLOCK_ADJUST_MEDIUM, CLOCK_NOMINAL,
 };
+use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::commands::{ClockRateAdjust, ClockRateAdjustHandles, ClockSet, ClockSetHandles};
+use tpm2::commands::{ClockRateAdjust, ClockSet};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 
@@ -26,8 +27,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<ClockSetHandles>()?;
-        let auth_handle = handles.auth.0;
+        let handles = request.try_unmarshal_handles::<ClockSet>()?;
+        let [auth] = handles;
+        check(auth, Tpmi::RhProvision, Position::handle(1))?;
+        let auth_handle = auth.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
         let provided_auth = self.global_state.parsed_auths[..self.global_state.parsed_auths_len]
@@ -36,7 +39,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         self.validate_provision_auth(auth_handle, provided_auth)?;
 
-        let cmd = request.try_unmarshal::<ClockSet>()?;
+        let cmd = request.try_unmarshal_command::<ClockSet>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -77,8 +80,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<ClockRateAdjustHandles>()?;
-        let auth_handle = handles.auth.0;
+        let handles = request.try_unmarshal_handles::<ClockRateAdjust>()?;
+        let [auth] = handles;
+        check(auth, Tpmi::RhProvision, Position::handle(1))?;
+        let auth_handle = auth.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
         let provided_auth = self.global_state.parsed_auths[..self.global_state.parsed_auths_len]
@@ -87,7 +92,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         self.validate_provision_auth(auth_handle, provided_auth)?;
 
-        let cmd = request.try_unmarshal::<ClockRateAdjust>()?;
+        let cmd = request.try_unmarshal_command::<ClockRateAdjust>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());

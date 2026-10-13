@@ -8,9 +8,8 @@ use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
 use tpm2::commands::{
-    Command, EventSequenceComplete, EventSequenceCompleteHandles, FlushContext, Hash,
-    HashSequenceStart, SequenceComplete, SequenceCompleteHandles, SequenceUpdate,
-    SequenceUpdateHandles,
+    Command, EventSequenceComplete, FlushContext, Hash, HashSequenceStart, Message,
+    SequenceComplete, SequenceUpdate, UnmarshalMessage,
 };
 
 use common::TestCryptoProvider;
@@ -44,7 +43,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -67,14 +66,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 32768];
     let mut offset = 10;
@@ -87,13 +83,15 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        let handle_len = handle.marshal(handle_slice);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -133,8 +131,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -147,15 +147,15 @@ where
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
     let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+        <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+            .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp_params)
 }
 
 fn execute_tpm_event_sequence_complete<'a>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &EventSequenceCompleteHandles,
     cmd: &EventSequenceComplete,
     auths: &[TpmsAuthCommand],
     response_buf: &'a mut [u8; 32768],
@@ -171,10 +171,13 @@ fn execute_tpm_event_sequence_complete<'a>(
 
     request_buf[6..10].copy_from_slice(&(EventSequenceComplete::CMD_CODE.code()).to_be_bytes());
 
-    let mut handles_buf = [0u8; EventSequenceCompleteHandles::MAX_SIZE];
-    let handles_len = handles.marshal(&mut handles_buf);
-    request_buf[offset..offset + handles_len].copy_from_slice(&handles_buf.as_ref()[..handles_len]);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let mut handle_buf = [0u8; Handle::MAX_SIZE];
+        let handle_len = handle.marshal(&mut handle_buf);
+        request_buf[offset..offset + handle_len]
+            .copy_from_slice(&handle_buf.as_ref()[..handle_len]);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -214,21 +217,19 @@ fn execute_tpm_event_sequence_complete<'a>(
     }
 
     let mut params_slice = &response_buf[resp_offset..resp_size];
-    Unmarshal::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())
+    UnmarshalMessage::unmarshal_with_handles([], &mut params_slice)
+        .map_err(|_| TpmRc::FAILURE.get())
 }
 
 fn execute_tpm_command_with_corrupted_bytes<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
     corrupt_fn: impl FnOnce(&mut [u8]),
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 32768];
     let mut offset = 10;
@@ -241,7 +242,14 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    offset += marshal_to_slice(handles, &mut request_buf[offset..]);
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        offset += handle.marshal(handle_slice);
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -279,8 +287,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -293,9 +303,10 @@ where
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
     let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+        <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+            .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp_params)
 }
 
 #[test]
@@ -303,52 +314,34 @@ fn test_sequence_hashing_basic_sha256() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. HashSequenceStart
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-    let seq_handle = start_resp_handles.sequence_handle;
+    let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+    let seq_handle = start_resp.sequence_handle;
 
     // 2. SequenceUpdate
     let data1 = b"Hello, ";
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: seq_handle,
-    };
     let update_cmd = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(data1).unwrap(),
     };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd,
-        &[pw()],
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &update_cmd, &[pw()]).unwrap();
 
     // 3. SequenceComplete
     let data2 = b"World!";
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: seq_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(data2).unwrap(),
         hierarchy: Handle::RH_NULL,
     };
-    let (_, complete_resp) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &[pw()],
-    )
-    .unwrap();
+    let complete_resp =
+        execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &[pw()]).unwrap();
 
     // Verify hash output
     let digest = compute_sha256(&crypto, b"Hello, World!");
@@ -360,8 +353,8 @@ fn test_sequence_hashing_algorithms() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let test_cases = [
         (TpmiAlgHash::Sha1, 20),
@@ -375,25 +368,16 @@ fn test_sequence_hashing_algorithms() {
             auth: Tpm2bAuth::default(),
             hash_alg: Some(alg),
         };
-        let (start_resp_handles, _) =
-            execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-        let seq_handle = start_resp_handles.sequence_handle;
+        let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+        let seq_handle = start_resp.sequence_handle;
 
-        let complete_handles = SequenceCompleteHandles {
-            sequence_handle: seq_handle,
-        };
         let complete_cmd = SequenceComplete {
+            sequence_handle: seq_handle,
             buffer: Tpm2bMaxBuffer::from_bytes(b"test").unwrap(),
             hierarchy: Handle::RH_NULL,
         };
-        let (_, complete_resp) = execute_tpm_command(
-            &mut tpm,
-            &mut global_state,
-            &complete_handles,
-            &complete_cmd,
-            &[pw()],
-        )
-        .unwrap();
+        let complete_resp =
+            execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &[pw()]).unwrap();
         assert_eq!(complete_resp.result.get_size() as usize, expected_len);
     }
 
@@ -405,7 +389,6 @@ fn test_sequence_hashing_algorithms() {
     let start_res = execute_tpm_command_with_corrupted_bytes::<HashSequenceStart>(
         &mut tpm,
         &mut global_state,
-        &(),
         &invalid_start_cmd,
         &[],
         |buf| {
@@ -423,32 +406,23 @@ fn test_sequence_hashing_empty_input() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-    let seq_handle = start_resp_handles.sequence_handle;
+    let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+    let seq_handle = start_resp.sequence_handle;
 
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: seq_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
-    let (_, complete_resp) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &[pw()],
-    )
-    .unwrap();
+    let complete_resp =
+        execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &[pw()]).unwrap();
 
     let digest = compute_sha256(&crypto, b"");
     assert_eq!(complete_resp.result.get_buffer(), &digest);
@@ -459,8 +433,8 @@ fn test_sequence_hashing_limits() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // ActiveSequence buffer is 4096 bytes.
     // Let's fill it to 4096 bytes.
@@ -468,59 +442,36 @@ fn test_sequence_hashing_limits() {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-    let seq_handle = start_resp_handles.sequence_handle;
+    let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+    let seq_handle = start_resp.sequence_handle;
 
     let chunk = [0u8; 1024];
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: seq_handle,
-    };
     let update_cmd = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(&chunk).unwrap(),
     };
 
     // Update 4 times -> 4096 bytes
     for _ in 0..4 {
-        execute_tpm_command(
-            &mut tpm,
-            &mut global_state,
-            &update_handles,
-            &update_cmd,
-            &[pw()],
-        )
-        .unwrap();
+        execute_tpm_command(&mut tpm, &mut global_state, &update_cmd, &[pw()]).unwrap();
     }
 
     // Update 1 more byte. C streams sequence data into the hash state and has no
     // buffer limit (SequenceUpdate.c returns only MODE/auth errors), so this succeeds.
     let update_cmd_small = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(&[1]).unwrap(),
     };
-    let update_res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd_small,
-        &[pw()],
-    );
+    let update_res = execute_tpm_command(&mut tpm, &mut global_state, &update_cmd_small, &[pw()]);
     assert!(update_res.is_ok());
 
     // Verify we can still complete the sequence
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: seq_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
-    let complete_res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &[pw()],
-    );
+    let complete_res = execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &[pw()]);
     assert!(complete_res.is_ok());
 }
 
@@ -529,8 +480,8 @@ fn test_sequence_hashing_concurrent_slots() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
@@ -540,36 +491,26 @@ fn test_sequence_hashing_concurrent_slots() {
     let mut handles = Vec::new();
     // Start up to MAX_ACTIVE_SEQUENCES sequences
     for _ in 0..tpm2_impl::MAX_ACTIVE_SEQUENCES {
-        let (start_resp_handles, _) =
-            execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-        handles.push(start_resp_handles.sequence_handle);
+        let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+        handles.push(start_resp.sequence_handle);
     }
 
     // Attempting one more should fail with TPM_RC_OBJECT_MEMORY (0x902)
-    let start_res = execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]);
+    let start_res = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]);
     assert!(start_res.is_err());
     let rc = start_res.unwrap_err();
     assert_eq!(rc & 0xFF, 0x02); // TPM_RC_OBJECT_MEMORY is 0x902 (lower byte is 0x02)
 
     // Complete one sequence
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: handles[0],
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: handles[0],
         buffer: Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &[pw()],
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &[pw()]).unwrap();
 
     // Now starting a 5th sequence should succeed!
-    let start_res_ok = execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]);
+    let start_res_ok = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]);
     assert!(start_res_ok.is_ok());
 }
 
@@ -578,8 +519,8 @@ fn test_sequence_hashing_authorization() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. HashSequenceStart with a non-empty authorization value.
     let sequence_auth = b"SecretAuthPassword123";
@@ -587,9 +528,8 @@ fn test_sequence_hashing_authorization() {
         auth: Tpm2bAuth::from_bytes(sequence_auth).unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-    let seq_handle = start_resp_handles.sequence_handle;
+    let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+    let seq_handle = start_resp.sequence_handle;
 
     // 2. SequenceUpdate with a session containing the WRONG password.
     // The implementation MUST reject this with TPM_RC_BAD_AUTH for session 1 (0x9A2).
@@ -600,16 +540,13 @@ fn test_sequence_hashing_authorization() {
         hmac: Tpm2bAuth::from_bytes(b"WrongPassword123").unwrap(),
     };
 
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: seq_handle,
-    };
     let update_cmd = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
     };
     let update_res_wrong = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &update_handles,
         &update_cmd,
         &[wrong_auth_session],
     );
@@ -625,17 +562,14 @@ fn test_sequence_hashing_authorization() {
     let update_res_correct = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &update_handles,
         &update_cmd,
         &[correct_auth_session],
     );
     assert!(update_res_correct.is_ok());
 
     // 4. SequenceComplete with a session containing the WRONG password -> should fail.
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: seq_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
@@ -648,7 +582,6 @@ fn test_sequence_hashing_authorization() {
     let complete_res_wrong = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &complete_handles,
         &complete_cmd,
         &[wrong_auth_session_2],
     );
@@ -658,7 +591,6 @@ fn test_sequence_hashing_authorization() {
     let complete_res_correct = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &complete_handles,
         &complete_cmd,
         &[correct_auth_session],
     );
@@ -668,13 +600,11 @@ fn test_sequence_hashing_authorization() {
 fn execute_tpm_command_with_trailing<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<(), u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut request_buf = [0u8; 32768];
     let mut offset = 10;
@@ -687,13 +617,15 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut [u8; Handle::MAX_SIZE] = (&mut request_buf
+            [offset..offset + Handle::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        let handle_len = handle.marshal(handle_slice);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -742,8 +674,8 @@ fn adv_hash_command_exhaustive() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let test_cases = [
         (TpmiAlgHash::Sha1, 20),
@@ -774,8 +706,8 @@ fn adv_hash_command_exhaustive() {
                     hash_alg: alg,
                     hierarchy,
                 };
-                let (_, resp) =
-                    execute_tpm_command(&mut tpm, &mut global_state, &(), &hash_cmd, &[]).unwrap();
+                let resp =
+                    execute_tpm_command(&mut tpm, &mut global_state, &hash_cmd, &[]).unwrap();
                 assert_eq!(resp.out_hash.get_size() as usize, expected_len);
                 assert_eq!(resp.validation.tag(), 0x8024);
                 assert_eq!(resp.validation.hierarchy(), hierarchy);
@@ -798,7 +730,6 @@ fn adv_hash_command_exhaustive() {
     let res = execute_tpm_command_with_corrupted_bytes::<Hash>(
         &mut tpm,
         &mut global_state,
-        &(),
         &invalid_hash_cmd,
         &[],
         |buf| {
@@ -816,7 +747,7 @@ fn adv_hash_command_exhaustive() {
         hash_alg: TpmiAlgHash::Sha256,
         hierarchy: Handle(1), // Invalid hierarchy handle (e.g. PCR1)
     };
-    let res2 = execute_tpm_command(&mut tpm, &mut global_state, &(), &invalid_hier_cmd, &[]);
+    let res2 = execute_tpm_command(&mut tpm, &mut global_state, &invalid_hier_cmd, &[]);
     assert!(res2.is_err());
     let rc2 = res2.unwrap_err();
     assert_eq!(rc2, TpmRc::VALUE.with(Position::parameter(3)).get());
@@ -827,64 +758,44 @@ fn adv_sequence_handle_validation() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Start a valid sequence to have a reference handle
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-    let seq_handle = start_resp_handles.sequence_handle;
+    let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+    let seq_handle = start_resp.sequence_handle;
 
     // 1. SequenceUpdate with invalid sequence handle
     let invalid_handle = Handle(seq_handle.0 + 1);
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: invalid_handle,
-    };
     let update_cmd = SequenceUpdate {
+        sequence_handle: invalid_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
     };
-    let update_res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd,
-        &[],
-    );
+    let update_res = execute_tpm_command(&mut tpm, &mut global_state, &update_cmd, &[]);
     assert_eq!(update_res, Err(TpmRc::REFERENCE_H0.get()));
 
     // 2. SequenceComplete with invalid sequence handle
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: invalid_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: invalid_handle,
         buffer: Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
-    let complete_res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &[],
-    );
+    let complete_res = execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &[]);
     assert_eq!(complete_res, Err(TpmRc::REFERENCE_H0.get()));
 
     // 3. SequenceComplete with invalid hierarchy (hierarchy is first parameter of cmd)
-    let complete_handles_valid = SequenceCompleteHandles {
-        sequence_handle: seq_handle,
-    };
     let complete_cmd_invalid_hier = SequenceComplete {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::default(),
         hierarchy: Handle(0), // Invalid hierarchy
     };
     let complete_res2 = execute_tpm_command(
         &mut tpm,
         &mut global_state,
-        &complete_handles_valid,
         &complete_cmd_invalid_hier,
         &[pw()],
     );
@@ -897,39 +808,25 @@ fn adv_sequence_handle_validation() {
 
     // 4. Complete sequence successfully
     let complete_cmd_valid = SequenceComplete {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
-    let complete_res_ok = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles_valid,
-        &complete_cmd_valid,
-        &[pw()],
-    );
+    let complete_res_ok =
+        execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd_valid, &[pw()]);
     assert!(complete_res_ok.is_ok());
 
     // 5. SequenceUpdate reuse
-    let update_handles_valid = SequenceUpdateHandles {
+    let update_cmd_valid = SequenceUpdate {
         sequence_handle: seq_handle,
+        ..update_cmd
     };
-    let update_res2 = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles_valid,
-        &update_cmd,
-        &[pw()],
-    );
+    let update_res2 = execute_tpm_command(&mut tpm, &mut global_state, &update_cmd_valid, &[pw()]);
     assert_eq!(update_res2, Err(TpmRc::REFERENCE_H0.get()));
 
     // 6. SequenceComplete reuse
-    let complete_res_reuse = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles_valid,
-        &complete_cmd_valid,
-        &[pw()],
-    );
+    let complete_res_reuse =
+        execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd_valid, &[pw()]);
     assert_eq!(complete_res_reuse, Err(TpmRc::REFERENCE_H0.get()));
 }
 
@@ -938,41 +835,32 @@ fn adv_sequence_abort_flush() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Start a sequence, then abort it via FlushContext
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-    let seq_handle = start_resp_handles.sequence_handle;
+    let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+    let seq_handle = start_resp.sequence_handle;
 
     let flush_cmd = FlushContext {
         flush_handle: seq_handle,
     };
-    execute_tpm_command(&mut tpm, &mut global_state, &(), &flush_cmd, &[]).unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &flush_cmd, &[]).unwrap();
 
     // Verify it is aborted (SequenceUpdate returns ReferenceH0)
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: seq_handle,
-    };
     let update_cmd = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
     };
-    let update_res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd,
-        &[],
-    );
+    let update_res = execute_tpm_command(&mut tpm, &mut global_state, &update_cmd, &[]);
     assert_eq!(update_res, Err(TpmRc::REFERENCE_H0.get()));
 
     // Double flush should fail with ReferenceH0
-    let flush_res_double = execute_tpm_command(&mut tpm, &mut global_state, &(), &flush_cmd, &[]);
+    let flush_res_double = execute_tpm_command(&mut tpm, &mut global_state, &flush_cmd, &[]);
     // C: TPM_RCS_HANDLE + RC_FlushContext_flushHandle (0x1CB), FlushContext.c:22.
     assert_eq!(
         flush_res_double,
@@ -983,23 +871,22 @@ fn adv_sequence_abort_flush() {
     let mut handles = Vec::new();
     // Fill all available slots
     for _ in 0..tpm2_impl::MAX_ACTIVE_SEQUENCES {
-        let (resp_h, _) =
-            execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
+        let resp_h = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
         handles.push(resp_h.sequence_handle);
     }
 
     // Attempting one more fails with ObjectMemory (0x902)
-    let start_res_fail = execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]);
+    let start_res_fail = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]);
     assert_eq!(start_res_fail.unwrap_err() & 0xFF, 0x02);
 
     // Flush one sequence
     let flush_cmd_recycle = FlushContext {
         flush_handle: handles[2],
     };
-    execute_tpm_command(&mut tpm, &mut global_state, &(), &flush_cmd_recycle, &[]).unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &flush_cmd_recycle, &[]).unwrap();
 
     // 17th start should now succeed
-    let start_res_retry = execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]);
+    let start_res_retry = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]);
     assert!(start_res_retry.is_ok());
 }
 
@@ -1008,8 +895,8 @@ fn adv_sequence_trailing_bytes() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Hash command with trailing bytes
     let hash_cmd = Hash {
@@ -1017,7 +904,7 @@ fn adv_sequence_trailing_bytes() {
         hash_alg: TpmiAlgHash::Sha256,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_tpm_command_with_trailing(&mut tpm, &mut global_state, &(), &hash_cmd, &[]);
+    let res = execute_tpm_command_with_trailing(&mut tpm, &mut global_state, &hash_cmd, &[]);
     assert_eq!(res, Err(TpmRc::SIZE.get()));
 
     // 2. HashSequenceStart command with trailing bytes
@@ -1025,44 +912,28 @@ fn adv_sequence_trailing_bytes() {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let res2 = execute_tpm_command_with_trailing(&mut tpm, &mut global_state, &(), &start_cmd, &[]);
+    let res2 = execute_tpm_command_with_trailing(&mut tpm, &mut global_state, &start_cmd, &[]);
     assert_eq!(res2, Err(TpmRc::SIZE.get()));
 
     // 3. SequenceUpdate command with trailing bytes
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-    let seq_handle = start_resp_handles.sequence_handle;
+    let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+    let seq_handle = start_resp.sequence_handle;
 
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: seq_handle,
-    };
     let update_cmd = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
     };
-    let res3 = execute_tpm_command_with_trailing(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd,
-        &[pw()],
-    );
+    let res3 = execute_tpm_command_with_trailing(&mut tpm, &mut global_state, &update_cmd, &[pw()]);
     assert_eq!(res3, Err(TpmRc::SIZE.get()));
 
     // 4. SequenceComplete command with trailing bytes
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: seq_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
-    let res4 = execute_tpm_command_with_trailing(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &[pw()],
-    );
+    let res4 =
+        execute_tpm_command_with_trailing(&mut tpm, &mut global_state, &complete_cmd, &[pw()]);
     assert_eq!(res4, Err(TpmRc::SIZE.get()));
 
     // 5. EventSequenceComplete command with trailing bytes
@@ -1070,21 +941,18 @@ fn adv_sequence_trailing_bytes() {
         auth: Tpm2bAuth::default(),
         hash_alg: None,
     };
-    let (start_event_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_event_cmd, &[]).unwrap();
-    let event_seq_handle = start_event_resp_handles.sequence_handle;
+    let start_event_resp =
+        execute_tpm_command(&mut tpm, &mut global_state, &start_event_cmd, &[]).unwrap();
+    let event_seq_handle = start_event_resp.sequence_handle;
 
-    let event_complete_handles = EventSequenceCompleteHandles {
+    let event_complete_cmd = EventSequenceComplete {
         pcr_handle: Handle::RH_NULL,
         sequence_handle: event_seq_handle,
-    };
-    let event_complete_cmd = EventSequenceComplete {
         buffer: Tpm2bMaxBuffer::default(),
     };
     let res5 = execute_tpm_command_with_trailing(
         &mut tpm,
         &mut global_state,
-        &event_complete_handles,
         &event_complete_cmd,
         &[pw(), pw()],
     );
@@ -1096,42 +964,30 @@ fn test_event_sequence_complete_pcr_extend() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. HashSequenceStart with Null hash algorithm (Event sequence)
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: None,
     };
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-    let seq_handle = start_resp_handles.sequence_handle;
+    let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+    let seq_handle = start_resp.sequence_handle;
 
     // 2. SequenceUpdate with partial data
     let partial_data = b"partial data ";
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: seq_handle,
-    };
     let update_cmd = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(partial_data).unwrap(),
     };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd,
-        &[pw()],
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &update_cmd, &[pw()]).unwrap();
 
     // 3. EventSequenceComplete with pcrHandle=0, buffer=final_data
     let final_data = b"final data";
-    let complete_handles = EventSequenceCompleteHandles {
+    let complete_cmd = EventSequenceComplete {
         pcr_handle: Handle(0),
         sequence_handle: seq_handle,
-    };
-    let complete_cmd = EventSequenceComplete {
         buffer: Tpm2bMaxBuffer::from_bytes(final_data).unwrap(),
     };
     let mut complete_response_buf = [0u8; 32768];
@@ -1139,7 +995,6 @@ fn test_event_sequence_complete_pcr_extend() {
     let complete_resp = execute_tpm_event_sequence_complete(
         &mut tpm,
         &mut global_state,
-        &complete_handles,
         &complete_cmd,
         &[pw(), pw()],
         &mut complete_response_buf,
@@ -1167,34 +1022,23 @@ fn test_event_sequence_complete_pcr_extend() {
     );
 
     // Verify the sequence handle is flushed (`ReferenceH0` on subsequent use as handle 0)
-    let bad_update_handles = SequenceUpdateHandles {
-        sequence_handle: seq_handle,
-    };
     let bad_update_cmd = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(b"more").unwrap(),
     };
-    let err = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &bad_update_handles,
-        &bad_update_cmd,
-        &[],
-    );
+    let err = execute_tpm_command(&mut tpm, &mut global_state, &bad_update_cmd, &[]);
     assert_eq!(err, Err(TpmRc::REFERENCE_H0.get()));
 
     // Also verify that subsequent use in EventSequenceComplete (handle 1) gives `ReferenceH1`
-    let bad_complete_handles = EventSequenceCompleteHandles {
+    let bad_complete_cmd = EventSequenceComplete {
         pcr_handle: Handle(0),
         sequence_handle: seq_handle,
-    };
-    let bad_complete_cmd = EventSequenceComplete {
         buffer: Tpm2bMaxBuffer::from_bytes(b"more").unwrap(),
     };
     let mut response_buf = [0u8; 32768];
     let err2 = execute_tpm_event_sequence_complete(
         &mut tpm,
         &mut global_state,
-        &bad_complete_handles,
         &bad_complete_cmd,
         &[],
         &mut response_buf,
@@ -1207,31 +1051,27 @@ fn test_event_sequence_complete_mode_error() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. HashSequenceStart with SHA256 (Hash sequence instead of Event sequence)
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-    let seq_handle = start_resp_handles.sequence_handle;
+    let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+    let seq_handle = start_resp.sequence_handle;
 
     // 2. EventSequenceComplete must return TPM_RC_MODE when called on a Hash sequence
-    let complete_handles = EventSequenceCompleteHandles {
+    let complete_cmd = EventSequenceComplete {
         pcr_handle: Handle(0),
         sequence_handle: seq_handle,
-    };
-    let complete_cmd = EventSequenceComplete {
         buffer: Tpm2bMaxBuffer::from_bytes(b"final data").unwrap(),
     };
     let mut response_buf = [0u8; 32768];
     let res = execute_tpm_event_sequence_complete(
         &mut tpm,
         &mut global_state,
-        &complete_handles,
         &complete_cmd,
         &[pw(), pw()],
         &mut response_buf,
@@ -1243,79 +1083,60 @@ fn test_event_sequence_complete_mode_error() {
 
 #[test]
 fn test_sequence_context_save_load_mid_flight_streaming_state() {
-    use tpm2::commands::{ContextLoad, ContextSave, ContextSaveHandles, FlushContext};
+    use tpm2::commands::{ContextLoad, ContextSave, FlushContext};
 
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // 1. Start a SHA-256 hash sequence
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_resp_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
-    let seq_handle = start_resp_handles.sequence_handle;
+    let start_resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
+    let seq_handle = start_resp.sequence_handle;
 
     // 2. Feed > 1 block (100 bytes) of data via SequenceUpdate
     let part1 = [0x42u8; 100];
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: seq_handle,
-    };
     let update_cmd = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(&part1).unwrap(),
     };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd,
-        &[pw()],
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &update_cmd, &[pw()]).unwrap();
 
     // 3. ContextSave the in-flight sequence (which serializes the live StreamingHashState registers)
-    let save_handles = ContextSaveHandles {
+    let save_cmd = ContextSave {
         save_handle: seq_handle,
     };
-    let save_cmd = ContextSave {};
-    let (_, save_rsp): ((), tpm2::commands::responses::ContextSave) =
-        execute_tpm_command(&mut tpm, &mut global_state, &save_handles, &save_cmd, &[]).unwrap();
+    let save_rsp: tpm2::commands::responses::ContextSave =
+        execute_tpm_command(&mut tpm, &mut global_state, &save_cmd, &[]).unwrap();
 
     // 4. Flush the sequence handle from active memory
     let flush_cmd = FlushContext {
         flush_handle: seq_handle,
     };
-    execute_tpm_command(&mut tpm, &mut global_state, &(), &flush_cmd, &[]).unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &flush_cmd, &[]).unwrap();
 
     // 5. ContextLoad the saved sequence context blob
     let load_cmd = ContextLoad {
         context: save_rsp.context,
     };
-    let (load_resp_handles, _): (tpm2::commands::ContextLoadRespHandles, ()) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &load_cmd, &[]).unwrap();
-    let restored_handle = load_resp_handles.loaded_handle;
+    let load_resp: tpm2::commands::responses::ContextLoad =
+        execute_tpm_command(&mut tpm, &mut global_state, &load_cmd, &[]).unwrap();
+    let restored_handle = load_resp.loaded_handle;
 
     // 6. Complete the sequence with part2 (50 bytes)
     let part2 = [0x99u8; 50];
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: restored_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: restored_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(&part2).unwrap(),
         hierarchy: Handle::RH_NULL,
     };
-    let (_, complete_rsp): ((), tpm2::commands::responses::SequenceComplete) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &[pw()],
-    )
-    .unwrap();
+    let complete_rsp: tpm2::commands::responses::SequenceComplete =
+        execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &[pw()]).unwrap();
 
     // 7. Verify the digest matches hashing (part1 || part2) in a single pass
     let mut combined = [0u8; 150];
@@ -1330,8 +1151,8 @@ fn test_sequence_transient_shared_handle_namespace_parity() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Start 3 sequences -> handles should be strictly 0x80000000, 0x80000001, 0x80000002
     let start_cmd = HashSequenceStart {
@@ -1340,13 +1161,12 @@ fn test_sequence_transient_shared_handle_namespace_parity() {
     };
     let mut handles = [0u32; 3];
     for h in &mut handles {
-        let (resp, _) =
-            execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
+        let resp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
         *h = resp.sequence_handle.0;
     }
     assert_eq!(handles, [0x80000000, 0x80000001, 0x80000002]);
 
     // Attempting a 4th sequence should fail with OBJECT_MEMORY because s_objects capacity (3) is full
-    let fourth_res = execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]);
+    let fourth_res = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]);
     assert!(fourth_res.is_err());
 }

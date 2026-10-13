@@ -3,12 +3,13 @@ use tpm2::Alg;
 // Ported from tpm-go/tpm2/test/names_test.go
 
 use tpm2::Handle;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles};
+use tpm2::commands::CreatePrimary;
 
 use crate::test_utils::*;
 use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bName, TpmaNv, TpmaObject, TpmiAlgHash,
-    TpmiAlgSymMode, TpmsEccParms, TpmsNvPublic, TpmtPublic, TpmtSymDefObject,
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bName, TpmaNv, TpmaObject,
+    TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmsEccParms, TpmsNvPublic, TpmtPublic,
+    TpmtSymDefObject,
 };
 use tpm2_simulator::create_simulator;
 
@@ -34,7 +35,10 @@ fn test_object_name() {
     ];
 
     let ecc_parms = TpmsEccParms {
-        symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        symmetric: Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         scheme: None,
         curve_id: tpm2::TpmEccCurve::NistP256,
         kdf: None,
@@ -67,17 +71,14 @@ fn test_object_name() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_primary = CreatePrimary {
+        primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_ENDORSEMENT,
-    };
 
-    let (rsp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_primary, create_handles, 1, &[])
-            .expect("could not call TPM2_CreatePrimary");
+    let rsp = execute_with_password_sessions(&mut sim, &create_primary, 1, &[])
+        .expect("could not call TPM2_CreatePrimary");
 
     let public_struct = rsp
         .out_public
@@ -104,7 +105,7 @@ fn test_object_name() {
     assert_eq!(rsp.name.get_buffer(), name.get_buffer());
 
     // Deferred FlushContext in Go.
-    let _ = flush_context(&mut sim, rsp_handles.object_handle);
+    let _ = flush_context(&mut sim, rsp.object_handle);
 }
 
 // Original Go test: names_test.go - TestNVName
@@ -125,22 +126,19 @@ fn test_nv_name() {
     let public_info = tpm2::Tpm2b(public_info_struct);
 
     let define_space = tpm2::commands::NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: tpm2::Tpm2bAuth::default(),
         public_info,
     };
-    let define_handles = tpm2::commands::NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
 
-    execute_with_password_sessions(&mut sim, &define_space, define_handles, 1, &[])
+    execute_with_password_sessions(&mut sim, &define_space, 1, &[])
         .expect("could not call TPM2_DefineSpace");
 
-    let read_public = tpm2::commands::NVReadPublic {};
-    let read_handles = tpm2::commands::NVReadPublicHandles {
+    let read_public = tpm2::commands::NVReadPublic {
         nv_index: Handle(0x0180000F),
     };
 
-    let (rsp, _) = execute_with_password_sessions(&mut sim, &read_public, read_handles, 0, &[])
+    let rsp = execute_with_password_sessions(&mut sim, &read_public, 0, &[])
         .expect("could not call TPM2_ReadPublic");
 
     let mut pub_buf = [0u8; 1024];

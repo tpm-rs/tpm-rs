@@ -97,14 +97,16 @@ use crate::timer::TpmTimer;
 use crate::{GlobalState, TpmEngine};
 use tpm2::Alg;
 use tpm2::crypto::asymmetric::KeyParams;
-use tpm2::crypto::kdf::kdfa;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::{
+    CryptoError, CryptoProvider, Direction, HashStream, ModeIv, Rng, Symmetric, SymmetricKey,
+};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmSe};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{
-    Tpm2bAuth, Tpm2bDigest, Tpm2bNonce, TpmaObject, TpmaSession, TpmiAlgHash, TpmlPcrSelection,
-    TpmsAuthResponse, TpmsEccParms, TpmsRsaParms, TpmtSymDef,
+    Tpm2bAuth, Tpm2bDigest, Tpm2bNonce, TpmaObject, TpmaSession, TpmiAlgHash, TpmiAlgSymMode,
+    TpmlPcrSelection, TpmsAuthResponse, TpmsEccParms, TpmsRsaParms, TpmtSymDef, TpmtSymDefObject,
 };
 
 /// The `qualifiedSigner` reported in attestation structures when `signHandle` is `TPM_RH_NULL`.
@@ -262,6 +264,40 @@ pub struct KeyDerivationArgs<'a> {
     pub obj_seed: &'a [u8],
     pub get_random_fallback: bool,
     pub fallback_sensitive_data: Option<&'a [u8]>,
+}
+
+/// Encrypts or decrypts `data` in place with the symmetric algorithm and block cipher mode of
+/// `alg`, the key `key` and the IV `iv`. `iv` is updated in place with the chaining value for a
+/// following call (`ivOut` of `TPM2_EncryptDecrypt`).
+///
+/// PORTING: this is exp's `tpm2::crypto::{encrypt, decrypt, encrypt_decrypt}(s, alg, key, iv,
+/// ..)` on top of the upstream one-shot [`tpm2::crypto::encrypt_decrypt`]. It fails in the same
+/// cases as exp (every caller maps any failure to its own response code), checked in exp's order
+/// before `data` is touched:
+/// - `alg.mode` is `None` or not a block cipher mode (`TPM_ALG_CMAC`):
+///   [`CryptoError::Unsupported`] (exp: `unimplemented(TPM_ALG_NULL)` / an unsupported mode).
+/// - `iv` is not exactly one block (16 bytes) long, or not empty for ECB:
+///   [`CryptoError::Internal`] (exp: `invalid_iv()`).
+/// - `key` does not have the key size of `alg.alg`: [`CryptoError::Internal`] (exp:
+///   `invalid_key()`).
+///
+/// Errors of the backend itself (for example [`CryptoError::Unsupported`] for an algorithm or
+/// mode it does not implement) are passed through.
+pub fn sym_encrypt_decrypt(
+    s: &impl Symmetric,
+    alg: TpmtSymDefObject,
+    key: &[u8],
+    iv: &mut [u8],
+    dir: Direction,
+    data: &mut [u8],
+) -> Result<(), CryptoError> {
+    let mode = match alg.mode {
+        Some(TpmiAlgSymMode::Cipher(mode)) => mode,
+        _ => return Err(CryptoError::Unsupported),
+    };
+    let mode_iv = ModeIv::new(mode, iv).ok_or(CryptoError::Internal)?;
+    let key = SymmetricKey::new(alg.alg, key).ok_or(CryptoError::Internal)?;
+    tpm2::crypto::encrypt_decrypt(s, key, mode_iv, dir, data)
 }
 
 /// The context that all command handler functions are given access to in order for them to process
@@ -547,23 +583,60 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.write_response::<HP, RP, NH, NR>(response, Some(handles), Some(rsp), session_responses)
     }
 
+    /// Formats and writes a response [`Message`](tpm2::Message) and the active session responses
+    /// to the output buffer.
+    ///
+    /// Writes the response handle area (`rsp.handles()`), then the parameter area (`rsp`
+    /// marshals only its parameters), preceded by `parameterSize` when the response carries
+    /// sessions, and then the session responses. The output is byte-identical to
+    /// [`Self::write_response_all`] (or [`Self::write_response_handles`],
+    /// [`Self::write_response_rsp`], [`Self::write_response_none`]) called with the same handles
+    /// and parameters: a response without parameters still gets a zero `parameterSize` when it
+    /// carries sessions.
+    pub fn write_response_message<M: tpm2::Message<MaxBuffer = [u8; N]>, const N: usize>(
+        &self,
+        mut response: crate::req_resp::Response<'_, '_>,
+        rsp: &M,
+        session_responses: &[TpmsAuthResponse],
+    ) -> Result<(), TpmRc> {
+        for handle in rsp.handles().as_ref() {
+            let mut buf = [0u8; Handle::MAX_SIZE];
+            let len = handle.marshal(&mut buf);
+            response.write(&buf[..len]).map_err(|_| TpmRc::FAILURE)?;
+        }
+        self.write_response::<(), M, 0, N>(response, None, Some(rsp), session_responses)
+    }
+
     /// Computes the cryptographic hash of a sequence of byte slices using the given hash algorithm.
     pub fn compute_hash(
         &self,
         hash_alg: TpmiAlgHash,
         buffers: &[&[u8]],
     ) -> Result<([u8; 64], usize), TpmRc> {
-        let mut state = tpm2::crypto::HashCtx::new(self.crypto(), hash_alg)
-            .map_err(|_| TpmRc::VALUE.to_rc())?;
+        let mut state =
+            HashStream::new(self.crypto(), hash_alg).map_err(|_| TpmRc::VALUE.to_rc())?;
         for buf in buffers {
             state.update(buf).map_err(|_| TpmRc::FAILURE)?;
         }
-        let mut digest_buf = [0u8; 64];
+        let mut digest_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let digest = state
             .finalize(&mut digest_buf)
             .map_err(|_| TpmRc::FAILURE)?;
         let len = digest.digest().len();
         Ok((digest_buf, len))
+    }
+
+    /// [`sym_encrypt_decrypt`] with this TPM's crypto provider: encrypts or decrypts `data` in
+    /// place with the algorithm and mode of `alg`, `key` and `iv` (updated in place).
+    pub fn sym_encrypt_decrypt(
+        &self,
+        alg: TpmtSymDefObject,
+        key: &[u8],
+        iv: &mut [u8],
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        sym_encrypt_decrypt(self.crypto(), alg, key, iv, dir, data)
     }
 
     /// Filters a PCR selection against the current PCR allocation (C `FilterPcr`).
@@ -604,8 +677,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         pcr_select: &TpmlPcrSelection,
         hash_alg: TpmiAlgHash,
     ) -> Result<OwnedDigest, TpmRc> {
-        let mut state = tpm2::crypto::HashCtx::new(self.crypto(), hash_alg)
-            .map_err(|_| TpmRc::VALUE.to_rc())?;
+        let mut state =
+            HashStream::new(self.crypto(), hash_alg).map_err(|_| TpmRc::VALUE.to_rc())?;
 
         let filtered = self.filter_pcr_selection(pcr_select);
         for in_sel in filtered.pcr_selections() {
@@ -635,7 +708,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
-        let mut digest_buf = [0u8; 64];
+        let mut digest_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let digest = state
             .finalize(&mut digest_buf)
             .map_err(|_| TpmRc::FAILURE)?;
@@ -797,7 +870,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             data_len
         } else if let Some(seed) = args.gen_seed {
             let mut generated_key = [0u8; 64];
-            kdfa(
+            kdfa_bits(
                 self.crypto(),
                 name_alg,
                 seed,
@@ -836,7 +909,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<usize, TpmRc> {
         let key_len = if let Some(seed) = args.gen_seed {
             let mut generated_key = [0u8; 64];
-            kdfa(
+            kdfa_bits(
                 self.crypto(),
                 name_alg,
                 seed,
@@ -1022,7 +1095,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
         if needs_obfuscation {
             let mut obfuscation = [0u8; 16];
-            tpm2::crypto::kdf::kdfa(
+            kdfa_bits(
                 self.crypto(),
                 // CONTEXT_INTEGRITY_HASH_ALG of the reference build (largest implemented hash).
                 tpm2::TpmiAlgHash::Sha512,
@@ -1119,7 +1192,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         hmac_input[offset..offset + metadata.len()].copy_from_slice(metadata);
         offset += metadata.len();
 
-        let mut hmac_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+        let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = tpm2::crypto::hmac(
             self.crypto(),
             TpmiAlgHash::Sha256,
@@ -1163,7 +1236,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         hmac_input[offset..offset + digest.len()].copy_from_slice(digest);
         offset += digest.len();
 
-        let mut hmac_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+        let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = tpm2::crypto::hmac(
             self.crypto(),
             TpmiAlgHash::Sha256,
@@ -1229,5 +1302,320 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.with(pos));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::req_resp::{RequestResponseCursor, Response};
+    use crate::test_support::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
+    use alloc::vec::Vec;
+    use tpm2::commands::responses;
+    use tpm2::platform::TpmPlatform;
+    use tpm2::{AlgSym, Tpm2bName, TpmiAlgCipherMode};
+
+    type TestHandler<'a, 'b> = CommandHandler<'a, 'b, FakeCrypto, FakeStorage, FakeTimer, FakeRng>;
+
+    /// Where the response handle area starts (after the 10-byte response header).
+    const RESPONSE_OFFSET: usize = 10;
+
+    /// Runs `f` with a handler on fresh fake platform state.
+    fn with_handler<T>(in_shadow_execution: bool, f: impl FnOnce(&TestHandler<'_, '_>) -> T) -> T {
+        let mut crypto = FakeCrypto;
+        let mut storage = FakeStorage::default();
+        let mut timer = FakeTimer;
+        let mut rng = FakeRng::new();
+        let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
+        let mut engine = TpmEngine::new(platform).unwrap();
+        let mut state = GlobalState {
+            in_shadow_execution,
+            ..GlobalState::default()
+        };
+        let handler = CommandHandler::new(&mut engine, &mut state);
+        f(&handler)
+    }
+
+    /// Returns the bytes that `write` writes after the response header.
+    fn written(
+        in_shadow_execution: bool,
+        write: impl FnOnce(&TestHandler<'_, '_>, Response<'_, '_>) -> Result<(), TpmRc>,
+    ) -> Vec<u8> {
+        with_handler(in_shadow_execution, |handler| {
+            let mut resp = [0u8; 512];
+            let mut cursor = RequestResponseCursor::new(&[], &mut resp, RESPONSE_OFFSET);
+            write(handler, cursor.request().into_response()).unwrap();
+            let end = cursor.last_response_byte_written();
+            cursor.response_mut()[RESPONSE_OFFSET..end].to_vec()
+        })
+    }
+
+    fn session_response() -> TpmsAuthResponse<'static> {
+        TpmsAuthResponse {
+            nonce: Tpm2bNonce::from_bytes(&[1, 2, 3]).unwrap(),
+            session_attributes: TpmaSession(1),
+            hmac: Tpm2bAuth::from_bytes(&[4, 5]).unwrap(),
+        }
+    }
+
+    #[test]
+    fn write_response_message_matches_write_response_all() {
+        let rsp = responses::LoadExternal {
+            object_handle: Handle(0x8000_0001),
+            name: Tpm2bName::from_bytes(&[0x00, 0x0B, 0xAA, 0xBB]).unwrap(),
+        };
+        let session = session_response();
+        for shadow in [false, true] {
+            for sessions in [&[][..], &[session][..], &[session, session][..]] {
+                assert_eq!(
+                    written(shadow, |h, r| h.write_response_message(r, &rsp, sessions)),
+                    written(shadow, |h, r| h.write_response_all(
+                        r,
+                        &rsp.object_handle,
+                        &rsp,
+                        sessions
+                    )),
+                );
+            }
+        }
+
+        // Handle area, then the parameters.
+        let name_param = [0x00, 0x04, 0x00, 0x0B, 0xAA, 0xBB];
+        let plain = written(false, |h, r| h.write_response_message(r, &rsp, &[]));
+        assert_eq!(plain[..4], [0x80, 0x00, 0x00, 0x01]);
+        assert_eq!(plain[4..], name_param);
+
+        // With sessions: handle area, `parameterSize`, the parameters, then the sessions.
+        let with_session = written(false, |h, r| h.write_response_message(r, &rsp, &[session]));
+        assert_eq!(with_session[..4], [0x80, 0x00, 0x00, 0x01]);
+        assert_eq!(with_session[4..8], [0x00, 0x00, 0x00, 0x06]);
+        assert_eq!(with_session[8..14], name_param);
+        assert_eq!(
+            with_session[14..],
+            [0x00, 0x03, 1, 2, 3, 0x01, 0x00, 0x02, 4, 5]
+        );
+
+        // Shadow execution never writes `parameterSize` or sessions.
+        assert_eq!(
+            written(true, |h, r| h.write_response_message(r, &rsp, &[session])),
+            plain
+        );
+    }
+
+    #[test]
+    fn write_response_message_with_only_handles_matches_write_response_handles() {
+        let rsp = responses::HMACStart {
+            sequence_handle: Handle(0x8000_0002),
+        };
+        let session = session_response();
+        for sessions in [&[][..], &[session][..]] {
+            assert_eq!(
+                written(false, |h, r| h.write_response_message(r, &rsp, sessions)),
+                written(false, |h, r| h.write_response_handles(
+                    r,
+                    &rsp.sequence_handle,
+                    sessions
+                )),
+            );
+        }
+        // A zero `parameterSize` follows the handle when sessions are present.
+        assert_eq!(
+            written(false, |h, r| h.write_response_message(r, &rsp, &[session]))[..8],
+            [0x80, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn write_response_message_with_only_parameters_matches_write_response_rsp() {
+        let rsp = responses::GetRandom {
+            random_bytes: Tpm2bDigest::from_bytes(&[9, 8, 7]).unwrap(),
+        };
+        let session = session_response();
+        for sessions in [&[][..], &[session][..]] {
+            assert_eq!(
+                written(false, |h, r| h.write_response_message(r, &rsp, sessions)),
+                written(false, |h, r| h.write_response_rsp(r, &rsp, sessions)),
+            );
+        }
+        assert_eq!(
+            written(false, |h, r| h.write_response_message(r, &rsp, &[])),
+            [0x00, 0x03, 9, 8, 7]
+        );
+    }
+
+    #[test]
+    fn write_response_message_of_empty_response_matches_write_response_none() {
+        let session = session_response();
+        for sessions in [&[][..], &[session][..]] {
+            assert_eq!(
+                written(false, |h, r| h.write_response_message(r, &(), sessions)),
+                written(false, |h, r| h.write_response_none(r, sessions)),
+            );
+        }
+        assert!(written(false, |h, r| h.write_response_message(r, &(), &[])).is_empty());
+        assert_eq!(
+            written(false, |h, r| h.write_response_message(r, &(), &[session]))[..4],
+            [0x00, 0x00, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn write_response_message_reports_failure_when_the_buffer_is_full() {
+        let rsp = responses::GetRandom {
+            random_bytes: Tpm2bDigest::from_bytes(&[0; 32]).unwrap(),
+        };
+        let result = with_handler(false, |handler| {
+            let mut resp = [0u8; RESPONSE_OFFSET + 8];
+            let mut cursor = RequestResponseCursor::new(&[], &mut resp, RESPONSE_OFFSET);
+            handler.write_response_message(cursor.request().into_response(), &rsp, &[])
+        });
+        assert_eq!(result, Err(TpmRc::FAILURE));
+    }
+
+    fn aes128_cfb() -> TpmtSymDefObject {
+        TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }
+    }
+
+    #[test]
+    fn sym_encrypt_decrypt_runs_the_cipher_in_both_directions() {
+        let key = [0x11u8; 16];
+        let iv_in = [0x22u8; 16];
+        // CFB accepts any data length.
+        let plain = *b"0123456789abcdefXYZ";
+        let mut data = plain;
+        let mut iv = iv_in;
+        sym_encrypt_decrypt(
+            &FakeCrypto,
+            aes128_cfb(),
+            &key,
+            &mut iv,
+            Direction::Encrypt,
+            &mut data,
+        )
+        .unwrap();
+        // The fake cipher XORs the data with the key and the IV, and keeps the IV.
+        for (encrypted, plain) in data.iter().zip(plain) {
+            assert_eq!(*encrypted, plain ^ 0x11 ^ 0x22);
+        }
+        assert_eq!(iv, iv_in);
+
+        sym_encrypt_decrypt(
+            &FakeCrypto,
+            aes128_cfb(),
+            &key,
+            &mut iv,
+            Direction::Decrypt,
+            &mut data,
+        )
+        .unwrap();
+        assert_eq!(data, plain);
+    }
+
+    #[test]
+    fn sym_encrypt_decrypt_without_a_cipher_mode_is_unsupported() {
+        let mut data = [0xAA; 16];
+        for mode in [None, Some(TpmiAlgSymMode::Cmac)] {
+            let alg = TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode,
+            };
+            // The mode is checked first: the IV and key sizes are wrong as well.
+            assert_eq!(
+                sym_encrypt_decrypt(
+                    &FakeCrypto,
+                    alg,
+                    &[0; 3],
+                    &mut [0; 3],
+                    Direction::Encrypt,
+                    &mut data
+                ),
+                Err(CryptoError::Unsupported)
+            );
+        }
+        assert_eq!(data, [0xAA; 16]);
+    }
+
+    #[test]
+    fn sym_encrypt_decrypt_rejects_bad_iv_and_key_sizes() {
+        let ecb = |alg| TpmtSymDefObject {
+            alg,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Ecb)),
+        };
+        let mut data = [0xAA; 16];
+        // CFB needs a one-block IV.
+        for iv_len in [0, 15, 17] {
+            let mut iv = [0u8; 17];
+            assert_eq!(
+                sym_encrypt_decrypt(
+                    &FakeCrypto,
+                    aes128_cfb(),
+                    &[0; 16],
+                    &mut iv[..iv_len],
+                    Direction::Encrypt,
+                    &mut data
+                ),
+                Err(CryptoError::Internal)
+            );
+        }
+        // ECB takes no IV.
+        assert_eq!(
+            sym_encrypt_decrypt(
+                &FakeCrypto,
+                ecb(AlgSym::Aes128),
+                &[0; 16],
+                &mut [0; 16],
+                Direction::Encrypt,
+                &mut data
+            ),
+            Err(CryptoError::Internal)
+        );
+        // The key must have the algorithm's key size.
+        for key_len in [0, 15, 24, 32] {
+            let key = [0u8; 32];
+            assert_eq!(
+                sym_encrypt_decrypt(
+                    &FakeCrypto,
+                    aes128_cfb(),
+                    &key[..key_len],
+                    &mut [0; 16],
+                    Direction::Decrypt,
+                    &mut data
+                ),
+                Err(CryptoError::Internal)
+            );
+        }
+        assert_eq!(data, [0xAA; 16]);
+
+        // ECB with an empty IV, and AES-256 with a 32-byte key, are accepted.
+        sym_encrypt_decrypt(
+            &FakeCrypto,
+            ecb(AlgSym::Aes256),
+            &[0x0F; 32],
+            &mut [],
+            Direction::Encrypt,
+            &mut data,
+        )
+        .unwrap();
+        assert_eq!(data, [0xA5; 16]);
+    }
+
+    #[test]
+    fn handler_sym_encrypt_decrypt_uses_the_platform_crypto() {
+        let mut data = [0x5A; 20];
+        let mut iv = [0x01; 16];
+        with_handler(false, |handler| {
+            handler.sym_encrypt_decrypt(
+                aes128_cfb(),
+                &[0x10; 16],
+                &mut iv,
+                Direction::Encrypt,
+                &mut data,
+            )
+        })
+        .unwrap();
+        assert_eq!(data, [0x5A ^ 0x10 ^ 0x01; 20]);
     }
 }

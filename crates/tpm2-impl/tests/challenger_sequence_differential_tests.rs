@@ -1,16 +1,13 @@
 use common::marshal_to_slice;
 
-use tpm2::Unmarshal;
+use tpm2::{Message, Unmarshal, UnmarshalMessage};
 mod common;
 
 use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
-use tpm2::commands::{
-    Command, HashSequenceStart, SequenceComplete, SequenceCompleteHandles, SequenceUpdate,
-    SequenceUpdateHandles,
-};
+use tpm2::commands::{Command, HashSequenceStart, SequenceComplete, SequenceUpdate};
 use tpm2::{Marshal, TpmiAlgHash};
 use tpm2_impl::TpmEngine;
 use tpm2_impl::TpmPlatform;
@@ -19,7 +16,7 @@ fn setup_tpm_with_crypto<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -44,9 +41,8 @@ fn setup_tpm_with_crypto<'a>(
 fn execute_tpm_command<C, S, T, R, Cmd>(
     tpm: &mut TpmEngine<C, S, T, R>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &Cmd::Handles,
     cmd: &Cmd,
-) -> Result<(Cmd::RespHandles, Cmd::Response<'static>), u32>
+) -> Result<Cmd::Response<'static>, u32>
 where
     C: tpm2::crypto::CryptoProvider,
     S: tpm2_impl::storage::NvStorage,
@@ -54,8 +50,6 @@ where
     R: tpm2::crypto::Rng + Sync,
     Cmd: Command,
     for<'b> &'b mut <Cmd as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<Cmd as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    Cmd::Response<'static>: Unmarshal<'static>,
 {
     let mut req_buf = [0u8; 32768];
     let cc = Cmd::CMD_CODE.code();
@@ -63,7 +57,15 @@ where
     req_buf[6..10].copy_from_slice(&cc.to_be_bytes());
 
     let mut offset = 10;
-    let handles_len = marshal_to_slice(handles, &mut req_buf[offset..]);
+    let mut handles_len = 0;
+    for handle in cmd.handles().as_ref() {
+        let start = offset + handles_len;
+        let handle_slice: &mut <Handle as Marshal>::MaxBuffer = (&mut req_buf
+            [start..start + <Handle as Marshal>::MAX_SIZE])
+            .try_into()
+            .unwrap();
+        handles_len += handle.marshal(handle_slice);
+    }
     offset += handles_len;
     // Every handle passed to this helper is a sequence handle, which has the USER auth role:
     // C requires a session even for an empty authValue (TPM_RC_AUTH_MISSING otherwise,
@@ -91,13 +93,17 @@ where
 
     let mut cursor: &'static [u8] = std::vec::Vec::leak(resp_buf[10..resp_size].to_vec());
 
-    let resp_handles = Cmd::RespHandles::unmarshal(&mut cursor).map_err(|_| 0xFFFFFFFFu32)?;
+    let mut resp_handles = <Cmd::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut cursor).map_err(|_| 0xFFFFFFFFu32)?;
+    }
     if with_session {
         let _param_size = u32::unmarshal(&mut cursor).map_err(|_| 0xFFFFFFFFu32)?;
     }
-    let resp_t = <Cmd::Response<'static>>::unmarshal(&mut cursor).map_err(|_| 0xFFFFFFFFu32)?;
+    let resp_t = <Cmd::Response<'static>>::unmarshal_with_handles(resp_handles, &mut cursor)
+        .map_err(|_| 0xFFFFFFFFu32)?;
 
-    Ok((resp_handles, resp_t))
+    Ok(resp_t)
 }
 
 fn run_differential_case(
@@ -112,32 +118,27 @@ fn run_differential_case(
         auth: Default::default(),
         hash_alg: Some(alg),
     };
-    let (start_resp_handles, _) = execute_tpm_command(tpm, global_state, &(), &start_cmd).unwrap();
-    let handle = start_resp_handles.sequence_handle;
+    let start_resp = execute_tpm_command(tpm, global_state, &start_cmd).unwrap();
+    let handle = start_resp.sequence_handle;
 
     // 2. Perform updates. C streams sequence data into the hash state and has no length
     // limit (SequenceUpdate.c has no TPM_RC_MEMORY path), so every update must succeed.
     for chunk in chunks {
-        let update_handles = SequenceUpdateHandles {
-            sequence_handle: handle,
-        };
         let update_cmd = SequenceUpdate {
+            sequence_handle: handle,
             buffer: tpm2::Tpm2bMaxBuffer::from_bytes(chunk).unwrap(),
         };
 
-        execute_tpm_command(tpm, global_state, &update_handles, &update_cmd).unwrap();
+        execute_tpm_command(tpm, global_state, &update_cmd).unwrap();
     }
 
     // 3. Complete sequence
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: handle,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(final_chunk).unwrap(),
         hierarchy: Handle::RH_NULL,
     };
-    let (_, complete_resp) =
-        execute_tpm_command(tpm, global_state, &complete_handles, &complete_cmd).unwrap();
+    let complete_resp = execute_tpm_command(tpm, global_state, &complete_cmd).unwrap();
 
     // Verify against direct hashing
     let mut concatenated = Vec::new();
@@ -170,9 +171,9 @@ fn test_sequence_hash_differential_exhaustive() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let algs = [
         TpmiAlgHash::Sha1,
@@ -235,9 +236,9 @@ fn test_sequence_hash_differential_random_fuzz() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let algs = [
         TpmiAlgHash::Sha1,
@@ -292,9 +293,9 @@ fn test_sequence_complete_slice_passing_correctness() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     // Verify that passing data in updates vs passing data in complete behaves identically.
     // Case A: 4KB updated, 1KB completed.
@@ -308,41 +309,25 @@ fn test_sequence_complete_slice_passing_correctness() {
         auth: Default::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_resp_handles_a, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd_a).unwrap();
-    let handle_a = start_resp_handles_a.sequence_handle;
+    let start_resp_a = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd_a).unwrap();
+    let handle_a = start_resp_a.sequence_handle;
 
     for i in 0..4 {
-        let update_handles_a = SequenceUpdateHandles {
-            sequence_handle: handle_a,
-        };
         let update_cmd_a = SequenceUpdate {
+            sequence_handle: handle_a,
             buffer: tpm2::Tpm2bMaxBuffer::from_bytes(&total_data[i * 1000..(i + 1) * 1000])
                 .unwrap(),
         };
-        execute_tpm_command(
-            &mut tpm,
-            &mut global_state,
-            &update_handles_a,
-            &update_cmd_a,
-        )
-        .unwrap();
+        execute_tpm_command(&mut tpm, &mut global_state, &update_cmd_a).unwrap();
     }
 
-    let complete_handles_a = SequenceCompleteHandles {
-        sequence_handle: handle_a,
-    };
     let complete_cmd_a = SequenceComplete {
+        sequence_handle: handle_a,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(&total_data[4000..]).unwrap(),
         hierarchy: Handle::RH_NULL,
     };
-    let (_, complete_resp_a) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles_a,
-        &complete_cmd_a,
-    )
-    .unwrap();
+    let complete_resp_a =
+        execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd_a).unwrap();
 
     // Verify different chunk combinations of total 5000 bytes:
     // Partition A: [1000, 1000, 1000, 1000] updates, [1000] complete.
@@ -355,66 +340,44 @@ fn test_sequence_complete_slice_passing_correctness() {
         auth: Default::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (handles_1, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd_1).unwrap();
-    let h1 = handles_1.sequence_handle;
+    let start_resp_1 = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd_1).unwrap();
+    let h1 = start_resp_1.sequence_handle;
 
     for i in 0..4 {
-        let update_handles = SequenceUpdateHandles {
-            sequence_handle: h1,
-        };
         let update_cmd = SequenceUpdate {
+            sequence_handle: h1,
             buffer: tpm2::Tpm2bMaxBuffer::from_bytes(&data_5000[i * 1000..(i + 1) * 1000]).unwrap(),
         };
-        execute_tpm_command(&mut tpm, &mut global_state, &update_handles, &update_cmd).unwrap();
+        execute_tpm_command(&mut tpm, &mut global_state, &update_cmd).unwrap();
     }
-    let complete_handles_1 = SequenceCompleteHandles {
-        sequence_handle: h1,
-    };
     let complete_cmd_1 = SequenceComplete {
+        sequence_handle: h1,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(&data_5000[4000..5000]).unwrap(),
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_1) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles_1,
-        &complete_cmd_1,
-    )
-    .unwrap();
+    let resp_1 = execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd_1).unwrap();
 
     // Partition B:
     let start_cmd_2 = HashSequenceStart {
         auth: Default::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (handles_2, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd_2).unwrap();
-    let h2 = handles_2.sequence_handle;
+    let start_resp_2 = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd_2).unwrap();
+    let h2 = start_resp_2.sequence_handle;
 
     for i in 0..4 {
-        let update_handles = SequenceUpdateHandles {
-            sequence_handle: h2,
-        };
         let update_cmd = SequenceUpdate {
+            sequence_handle: h2,
             buffer: tpm2::Tpm2bMaxBuffer::from_bytes(&data_5000[i * 1024..(i + 1) * 1024]).unwrap(),
         };
-        execute_tpm_command(&mut tpm, &mut global_state, &update_handles, &update_cmd).unwrap();
+        execute_tpm_command(&mut tpm, &mut global_state, &update_cmd).unwrap();
     }
-    let complete_handles_2 = SequenceCompleteHandles {
-        sequence_handle: h2,
-    };
     let complete_cmd_2 = SequenceComplete {
+        sequence_handle: h2,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(&data_5000[4096..5000]).unwrap(),
         hierarchy: Handle::RH_NULL,
     };
-    let (_, resp_2) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles_2,
-        &complete_cmd_2,
-    )
-    .unwrap();
+    let resp_2 = execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd_2).unwrap();
 
     assert_eq!(resp_1.result.get_buffer(), resp_2.result.get_buffer());
     assert_eq!(

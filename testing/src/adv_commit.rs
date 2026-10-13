@@ -1,11 +1,13 @@
 use crate::test_utils::*;
-use tpm2::commands::{Commit, CommitHandles, CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::{Commit, CreateLoaded};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_auth_bypass() {
     let mut sim = create_simulator!();
     let password = b"correct_password";
@@ -42,33 +44,22 @@ fn test_commit_auth_bypass() {
     };
     let in_public = crate::test_utils::make_template(&pub_area);
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001),
-    };
-    let (_rsp_cp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
 
     let commit = Commit {
+        sign_handle: rsp_handles.object_handle,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    let commit_handles = CommitHandles {
-        sign_handle: rsp_handles.object_handle,
-    };
 
     // THIS SHOULD FAIL because the password is wrong!
     let wrong_password = b"wrong_password";
-    let res = execute_with_password_sessions(
-        &mut sim,
-        &commit,
-        commit_handles.clone(),
-        1,
-        wrong_password,
-    );
+    let res = execute_with_password_sessions(&mut sim, &commit, 1, wrong_password);
 
     // If it succeeds, it's a bug!
     assert!(
@@ -81,16 +72,14 @@ fn test_commit_auth_bypass() {
 fn test_commit_invalid_handle() {
     let mut sim = create_simulator!();
     let commit = Commit {
+        // Use an arbitrary uninitialized handle
+        sign_handle: Handle(0x80000099),
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    // Use an arbitrary uninitialized handle
-    let commit_handles = CommitHandles {
-        sign_handle: Handle(0x80000099),
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &commit, commit_handles, 1, b"");
+    let res = execute_with_password_sessions(&mut sim, &commit, 1, b"");
     assert!(
         res.is_err(),
         "BUG: Commit succeeded with an invalid uninitialized handle! The handler is missing handle existence checks."
@@ -98,6 +87,7 @@ fn test_commit_invalid_handle() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_decrypt_attr() {
     let mut sim = create_simulator!();
     let password = b"password";
@@ -131,25 +121,20 @@ fn test_commit_decrypt_attr() {
     };
     let in_public = crate::test_utils::make_template(&pub_area);
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001),
-    };
-    let (_rsp_cp, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create, 1, &[]).unwrap();
 
     let commit = Commit {
+        sign_handle: rsp_handles.object_handle,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    let commit_handles = CommitHandles {
-        sign_handle: rsp_handles.object_handle,
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &commit, commit_handles, 1, password);
+    let res = execute_with_password_sessions(&mut sim, &commit, 1, password);
 
     assert!(
         res.is_err(),
@@ -160,6 +145,7 @@ fn test_commit_decrypt_attr() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_commit_missing_sign_encrypt_attr() {
     let mut sim = create_simulator!();
     let password = b"password";
@@ -193,29 +179,25 @@ fn test_commit_missing_sign_encrypt_attr() {
     };
     let in_public = crate::test_utils::make_template(&pub_area);
     let create = CreateLoaded {
+        parent_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
     };
-    let create_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001),
-    };
-    let create_res = execute_with_password_sessions(&mut sim, &create, create_handles, 1, &[]);
+    let create_res = execute_with_password_sessions(&mut sim, &create, 1, &[]);
     if let Err(e) = create_res {
         assert_eq!(e, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
         return;
     }
-    let (_rsp_cp, rsp_handles) = create_res.unwrap();
+    let rsp_handles = create_res.unwrap();
 
     let commit = Commit {
+        sign_handle: rsp_handles.object_handle,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    let commit_handles = CommitHandles {
-        sign_handle: rsp_handles.object_handle,
-    };
 
-    let res = execute_with_password_sessions(&mut sim, &commit, commit_handles, 1, password);
+    let res = execute_with_password_sessions(&mut sim, &commit, 1, password);
 
     assert!(
         res.is_err(),

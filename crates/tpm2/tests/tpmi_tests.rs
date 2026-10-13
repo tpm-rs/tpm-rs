@@ -52,10 +52,7 @@ fn test_tpmi_rsa_key_bits_unmarshal_valid() {
 #[test]
 fn test_feature_dependent_max_sizes_and_selectors() {
     assert_eq!(TpmiAlgHash::MAX_DIGEST_BYTES, TpmtHa::MAX_DIGEST_SIZE);
-    assert_eq!(
-        TPM2_MAX_SYM_KEY_BYTES as usize,
-        TpmtSymDefObject::MAX_KEY_BYTES
-    );
+    assert_eq!(TPM2_MAX_SYM_KEY_BYTES as usize, AlgSym::MAX_KEY_BYTES);
     assert_eq!(
         TPM2_MAX_RSA_KEY_BYTES as usize,
         TpmiRsaKeyBits::MAX_PUB_KEY_BYTES
@@ -72,10 +69,7 @@ fn test_feature_dependent_max_sizes_and_selectors() {
         <tags::Digest as tags::Tpm2bTag>::CAP,
         TpmiAlgHash::MAX_DIGEST_BYTES
     );
-    assert_eq!(
-        <tags::SymKey as tags::Tpm2bTag>::CAP,
-        TpmtSymDefObject::MAX_KEY_BYTES
-    );
+    assert_eq!(<tags::SymKey as tags::Tpm2bTag>::CAP, AlgSym::MAX_KEY_BYTES);
     assert_eq!(
         <tags::PublicKeyRsa as tags::Tpm2bTag>::CAP,
         TpmiRsaKeyBits::MAX_PUB_KEY_BYTES
@@ -193,11 +187,11 @@ fn test_tpms_rsa_parms_unmarshal_invalid_key_bits() {
 #[test]
 fn test_tpmi_alg_cipher_mode_unmarshal_valid() {
     let valid_modes = [
-        (0x0040u16, TpmiAlgCipherMode::CTR),
-        (0x0041u16, TpmiAlgCipherMode::OFB),
-        (0x0042u16, TpmiAlgCipherMode::CBC),
-        (0x0043u16, TpmiAlgCipherMode::CFB),
-        (0x0044u16, TpmiAlgCipherMode::ECB),
+        (0x0040u16, TpmiAlgCipherMode::Ctr),
+        (0x0041u16, TpmiAlgCipherMode::Ofb),
+        (0x0042u16, TpmiAlgCipherMode::Cbc),
+        (0x0043u16, TpmiAlgCipherMode::Cfb),
+        (0x0044u16, TpmiAlgCipherMode::Ecb),
     ];
     for (alg_id, expected) in valid_modes {
         let mut buf = [0u8; 4];
@@ -248,6 +242,7 @@ fn test_tpmi_alg_cipher_mode_rejects_cmac() {
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_EncryptDecrypt is deprecated.
 fn test_encrypt_decrypt_unmarshal_rejects_cmac_mode() {
     use tpm2::commands::{EncryptDecrypt, EncryptDecrypt2};
 
@@ -264,7 +259,7 @@ fn test_encrypt_decrypt_unmarshal_rejects_cmac_mode() {
     buf[21..23].copy_from_slice(&0u16.to_be_bytes()); // in_data size = 0
 
     let mut slice: &[u8] = &buf;
-    let res = EncryptDecrypt::unmarshal(&mut slice);
+    let res = EncryptDecrypt::unmarshal_with_handles(Default::default(), &mut slice);
     assert_eq!(res, Err(UnmarshalError::MODE.in_parameter(2)));
 
     // EncryptDecrypt2 parameters:
@@ -279,7 +274,7 @@ fn test_encrypt_decrypt_unmarshal_rejects_cmac_mode() {
     buf2[5..7].copy_from_slice(&16u16.to_be_bytes()); // iv_in size = 16
 
     let mut slice2: &[u8] = &buf2;
-    let res2 = EncryptDecrypt2::unmarshal(&mut slice2);
+    let res2 = EncryptDecrypt2::unmarshal_with_handles(Default::default(), &mut slice2);
     assert_eq!(res2, Err(UnmarshalError::MODE.in_parameter(3)));
 }
 

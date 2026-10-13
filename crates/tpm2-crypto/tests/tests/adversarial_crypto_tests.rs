@@ -3,15 +3,13 @@ use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use tpm2::crypto::CryptoError;
 use tpm2::crypto::asymmetric::Asymmetric;
 use tpm2::crypto::ecc::Ecc;
-use tpm2::{Alg, TpmiAlgSymMode, TpmtSymDefObject};
+use tpm2::crypto::{ModeIv, SymmetricKey};
+use tpm2::errors::UnmarshalError;
+use tpm2::{Alg, AlgSym, TpmiAlgCipherMode, TpmtSymDefObject};
 use tpm2_crypto_tests::TestProvider;
 
 #[test]
 fn test_symmetric_invalid_key_sizes() {
-    let provider = TestProvider;
-    let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
-    let mut data = [0u8; 16];
-
     // Invalid key sizes: 0, 1, 15, 17, 31, 33, 64
     let invalid_keys = vec![
         vec![],
@@ -24,22 +22,15 @@ fn test_symmetric_invalid_key_sizes() {
     ];
 
     for key in invalid_keys {
-        let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
-        let res = tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data);
-        assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
-
-        let res_dec = tpm2::crypto::decrypt(&provider, alg, &key, &mut iv, &mut data);
-        assert_eq!(res_dec.unwrap_err(), CryptoError::InvalidData);
+        // The key length is validated when the `SymmetricKey` is built, before any backend
+        // call: no AES-128 key exists for a wrong length, so neither `encrypt` nor `decrypt`
+        // can run with it (exp: both returned `CryptoError::InvalidData`).
+        assert_eq!(SymmetricKey::new(AlgSym::Aes128, &key), None);
     }
 }
 
 #[test]
 fn test_symmetric_invalid_iv_sizes() {
-    let provider = TestProvider;
-    let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
-    let mut data = [0u8; 16];
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
-
     // Invalid IV sizes: 0, 1, 15, 17, 32
     let mut invalid_ivs = vec![
         vec![],
@@ -50,11 +41,10 @@ fn test_symmetric_invalid_iv_sizes() {
     ];
 
     for iv in &mut invalid_ivs {
-        let res = tpm2::crypto::encrypt(&provider, alg, &key, iv, &mut data);
-        assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
-
-        let res_dec = tpm2::crypto::decrypt(&provider, alg, &key, iv, &mut data);
-        assert_eq!(res_dec.unwrap_err(), CryptoError::InvalidData);
+        // The IV length is validated when the `ModeIv` is built, before any backend call: no
+        // CFB `ModeIv` exists for a wrong length, so neither `encrypt` nor `decrypt` can run
+        // with it (exp: both returned `CryptoError::InvalidData`).
+        assert_eq!(ModeIv::new(TpmiAlgCipherMode::Cfb, iv), None);
     }
 }
 
@@ -62,28 +52,28 @@ fn test_symmetric_invalid_iv_sizes() {
 fn test_symmetric_unsupported_algorithms() {
     let provider = TestProvider;
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
-    let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
     let mut data = [0u8; 16];
 
-    // Null mode
-    let res = tpm2::crypto::encrypt(
-        &provider,
-        TpmtSymDefObject::Aes128(None),
-        &key,
-        &mut iv,
-        &mut data,
+    // Null mode: `TPM_ALG_NULL` is not a block cipher mode, so it has no
+    // `TpmiAlgCipherMode` (and thus no `ModeIv`) to encrypt with (exp: `encrypt` returned
+    // `CryptoError::UnsupportedAlgorithm`).
+    let null_mode = TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: None,
+    };
+    assert_eq!(
+        TpmiAlgCipherMode::try_from(Alg::from(null_mode.mode)),
+        Err(UnmarshalError::MODE)
     );
-    assert_eq!(res.unwrap_err(), CryptoError::UnsupportedAlgorithm);
 
     // Unsupported mode (ECB)
     let res = tpm2::crypto::encrypt(
         &provider,
-        TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::ECB)),
-        &key,
-        &mut [],
+        SymmetricKey::Aes128(&key),
+        ModeIv::new(TpmiAlgCipherMode::Ecb, &mut []).unwrap(),
         &mut data,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::UnsupportedAlgorithm);
+    assert_eq!(res.unwrap_err(), CryptoError::Unsupported);
 }
 
 #[test]
@@ -92,14 +82,14 @@ fn test_symmetric_empty_data() {
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let mut iv = hex!("000102030405060708090a0b0c0d0e0f");
     let mut data = [];
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
+    let key = SymmetricKey::Aes128(&key);
 
     // CFB should support empty data as a no-op
-    let res = tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data);
+    let res = tpm2::crypto::encrypt(&provider, key, ModeIv::Cfb(&mut iv), &mut data);
     assert!(res.is_ok());
     assert_eq!(data.len(), 0);
 
-    let res_dec = tpm2::crypto::decrypt(&provider, alg, &key, &mut iv, &mut data);
+    let res_dec = tpm2::crypto::decrypt(&provider, key, ModeIv::Cfb(&mut iv), &mut data);
     assert!(res_dec.is_ok());
     assert_eq!(data.len(), 0);
 }
@@ -109,7 +99,7 @@ fn test_symmetric_non_block_aligned_data() {
     let provider = TestProvider;
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let original_iv = hex!("000102030405060708090a0b0c0d0e0f");
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
+    let key = SymmetricKey::Aes128(&key);
 
     // CFB is a stream cipher mode, should handle non-block aligned sizes like 1, 7, 15, 16, 17, 31, 32, 33, 100
     let sizes = vec![1, 7, 15, 16, 17, 31, 32, 33, 100];
@@ -123,12 +113,18 @@ fn test_symmetric_non_block_aligned_data() {
         let mut iv = original_iv;
 
         // Encrypt
-        tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+        tpm2::crypto::encrypt(&provider, key, ModeIv::Cfb(&mut iv), &mut data).unwrap();
 
         // Decrypt
         let mut decrypted_data = data.clone();
         let mut iv_dec = original_iv;
-        tpm2::crypto::decrypt(&provider, alg, &key, &mut iv_dec, &mut decrypted_data).unwrap();
+        tpm2::crypto::decrypt(
+            &provider,
+            key,
+            ModeIv::Cfb(&mut iv_dec),
+            &mut decrypted_data,
+        )
+        .unwrap();
 
         assert_eq!(
             decrypted_data, original_data,
@@ -145,9 +141,14 @@ fn test_symmetric_iv_mutability() {
     let original_iv = hex!("000102030405060708090a0b0c0d0e0f");
     let mut iv = original_iv;
     let mut data = [0xAAu8; 32];
-    let alg = TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB));
 
-    tpm2::crypto::encrypt(&provider, alg, &key, &mut iv, &mut data).unwrap();
+    tpm2::crypto::encrypt(
+        &provider,
+        SymmetricKey::Aes128(&key),
+        ModeIv::Cfb(&mut iv),
+        &mut data,
+    )
+    .unwrap();
 
     // Check if the IV buffer was modified in place.
     assert_ne!(original_iv, iv);
@@ -155,9 +156,6 @@ fn test_symmetric_iv_mutability() {
 
 #[test]
 fn test_cmac_invalid_key_sizes() {
-    let provider = TestProvider;
-    let data = b"some data to mac";
-
     // Invalid key sizes: 0, 1, 15, 17, 31, 33, 64
     let invalid_keys = vec![
         vec![],
@@ -169,16 +167,11 @@ fn test_cmac_invalid_key_sizes() {
         vec![0u8; 64],
     ];
 
-    let mut mac = [0u8; 16];
     for key in invalid_keys {
-        let res = tpm2::crypto::cmac(
-            &provider,
-            tpm2::TpmtSymDefObject::Aes128(None),
-            &key,
-            data,
-            &mut mac,
-        );
-        assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+        // The key length is validated when the `SymmetricKey` is built, before any backend
+        // call: no AES-128 CMAC key exists for a wrong length (exp: `cmac` returned
+        // `CryptoError::InvalidData`).
+        assert_eq!(SymmetricKey::new(AlgSym::Aes128, &key), None);
     }
 }
 
@@ -189,14 +182,8 @@ fn test_cmac_unsupported_algorithms() {
     let data = b"some data to mac";
 
     let mut mac = [0u8; 16];
-    let res = tpm2::crypto::cmac(
-        &provider,
-        tpm2::TpmtSymDefObject::Sm4_128(None),
-        &key,
-        data,
-        &mut mac,
-    );
-    assert_eq!(res.unwrap_err(), CryptoError::UnsupportedAlgorithm);
+    let res = tpm2::crypto::cmac(&provider, SymmetricKey::Sm4_128(&key), data, &mut mac);
+    assert_eq!(res.unwrap_err(), CryptoError::Unsupported);
 }
 
 #[test]
@@ -205,13 +192,7 @@ fn test_cmac_empty_data() {
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
 
     let mut mac = [0u8; 16];
-    let res = tpm2::crypto::cmac(
-        &provider,
-        tpm2::TpmtSymDefObject::Aes128(None),
-        &key,
-        &[],
-        &mut mac,
-    );
+    let res = tpm2::crypto::cmac(&provider, SymmetricKey::Aes128(&key), &[], &mut mac);
     assert!(res.is_ok());
 }
 
@@ -225,13 +206,7 @@ fn test_cmac_various_data_sizes() {
     let mut mac = [0u8; 16];
     for size in sizes {
         let data = vec![0x55u8; size];
-        let res = tpm2::crypto::cmac(
-            &provider,
-            tpm2::TpmtSymDefObject::Aes128(None),
-            &key,
-            &data,
-            &mut mac,
-        );
+        let res = tpm2::crypto::cmac(&provider, SymmetricKey::Aes128(&key), &data, &mut mac);
         assert!(res.is_ok());
     }
 }
@@ -256,7 +231,7 @@ fn test_rsa_keygen_buffer_too_small() {
         &mut private_key,
         None,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+    assert_eq!(res.unwrap_err(), CryptoError::Internal);
 }
 
 #[test]
@@ -275,7 +250,7 @@ fn test_rsa_keygen_unsupported_scheme() {
         &mut private_key,
         None,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::UnsupportedAlgorithm);
+    assert_eq!(res.unwrap_err(), CryptoError::Unsupported);
 }
 
 #[test]
@@ -285,12 +260,12 @@ fn test_ecc_keygen_buffer_too_small() {
     let mut private_key = [0u8; 32];
 
     let res = provider.generate_key(Alg::ECC, None, &mut public_key, &mut private_key, None);
-    assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+    assert_eq!(res.unwrap_err(), CryptoError::Internal);
 
     let mut public_key = [0u8; 64];
     let mut private_key = [0u8; 31]; // ECC privkey needs 32 bytes
     let res = provider.generate_key(Alg::ECC, None, &mut public_key, &mut private_key, None);
-    assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+    assert_eq!(res.unwrap_err(), CryptoError::Internal);
 }
 
 #[test]
@@ -303,13 +278,13 @@ fn test_rsa_import_private_key_validation() {
 
     // p = 0
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // p does not divide n
     let modulus = [0x0f; 128];
     let prime_p = [0x02; 64];
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // exponent invalid (e.g. 0)
     // First generate a valid key to get modulus/prime
@@ -334,12 +309,12 @@ fn test_rsa_import_private_key_validation() {
 
     // Import with e = 0
     let res = provider.rsa_import_private_key(&mod_bytes, &p_bytes, 0, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // Import with buffer too small
     let mut small_buf = [0u8; 10];
     let res = provider.rsa_import_private_key(&mod_bytes, &p_bytes, 65537, &mut small_buf);
-    assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+    assert_eq!(res.unwrap_err(), CryptoError::Internal);
 }
 
 #[test]
@@ -380,7 +355,7 @@ fn test_rsa_decrypt_null_raw_padding_and_bounds() {
         &mut plaintext,
         &[],
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // Ciphertext greater than modulus
     let mut c_bytes_greater = c_bytes_equal.clone();
@@ -393,7 +368,7 @@ fn test_rsa_decrypt_null_raw_padding_and_bounds() {
         &mut plaintext,
         &[],
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // Ciphertext is 0 (should return padded array of zeros)
     let c_zero = [0u8; 10];
@@ -407,7 +382,7 @@ fn test_rsa_decrypt_null_raw_padding_and_bounds() {
             &[],
         )
         .unwrap();
-    assert_eq!(res, mod_len);
+    assert_eq!(res, Some(mod_len));
     assert!(plaintext.iter().all(|&x| x == 0));
 
     // Ciphertext that decrypts to a small integer (should have leading zeros padding)
@@ -426,7 +401,7 @@ fn test_rsa_decrypt_null_raw_padding_and_bounds() {
             &[],
         )
         .unwrap();
-    assert_eq!(res, mod_len);
+    assert_eq!(res, Some(mod_len));
     assert_eq!(plaintext[mod_len - 1], 5);
     assert!(plaintext[..mod_len - 1].iter().all(|&x| x == 0));
 
@@ -440,7 +415,7 @@ fn test_rsa_decrypt_null_raw_padding_and_bounds() {
         &mut small_plain,
         &[],
     );
-    assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+    assert_eq!(res.unwrap_err(), CryptoError::Internal);
 }
 
 #[test]
@@ -459,7 +434,7 @@ fn test_ecc_point_multiply_unsupported_and_invalid() {
         &large_scalar,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // Scalar is 0
     let zero_scalar = [0u8; 32];
@@ -468,7 +443,7 @@ fn test_ecc_point_multiply_unsupported_and_invalid() {
         &zero_scalar,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // point_multiply with invalid public point length
     let invalid_pt = [1u8; 63];
@@ -478,7 +453,7 @@ fn test_ecc_point_multiply_unsupported_and_invalid() {
         &invalid_pt,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // point_multiply with invalid public point (not on curve)
     let not_on_curve = [0xffu8; 64];
@@ -488,5 +463,5 @@ fn test_ecc_point_multiply_unsupported_and_invalid() {
         &not_on_curve,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 }

@@ -1,8 +1,6 @@
 #![allow(unused_imports, dead_code)]
 use crate::test_utils::{execute_with_password_sessions, execute_with_password_sessions_status};
-use tpm2::commands::{
-    PCREvent, PCREventHandles, PCRExtend, PCRExtendHandles, PCRRead, PCRReset, PCRResetHandles,
-};
+use tpm2::commands::{PCREvent, PCRExtend, PCRRead, PCRReset};
 use tpm2::{
     Handle, TPM2_PCR_SELECT_MAX, Tpm2bEvent, TpmiAlgHash, TpmlDigestValues, TpmlPcrSelection,
     TpmsPcrSelection, TpmtHa,
@@ -50,11 +48,11 @@ fn test_pcr_extend_sha256() {
     let auth_handle = Handle(16);
     let mut digests = TpmlDigestValues::default();
     digests.add(&TpmtHa::Sha256(&[0xaa; 32])).unwrap();
-    let cmd = PCRExtend { digests };
-    let handles = PCRExtendHandles {
+    let cmd = PCRExtend {
         pcr_handle: auth_handle,
+        digests,
     };
-    let _ = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
 }
 
 #[test]
@@ -63,11 +61,9 @@ fn test_srtm_boot_sequence() {
     for &pcr in &[0, 1, 2, 4, 5] {
         let auth_handle = Handle(pcr);
         let cmd = PCREvent {
+            pcr_handle: auth_handle,
             event_data: Tpm2bEvent::from_bytes(b"measurement").unwrap(),
         };
-        let handles = PCREventHandles {
-            pcr_handle: auth_handle,
-        };
-        execute_with_password_sessions_status(&mut sim, &cmd, handles, 1, &[]).unwrap();
+        execute_with_password_sessions_status(&mut sim, &cmd, 1, &[]).unwrap();
     }
 }

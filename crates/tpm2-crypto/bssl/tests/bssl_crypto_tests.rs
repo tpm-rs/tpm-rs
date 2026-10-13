@@ -27,30 +27,30 @@ fn test_nist_p224_keygen_and_ecdsa_sign_verify() {
     let mut sig = [0u8; 56];
     let sig_len = provider
         .ecdsa_sign(&priv_key[..priv_len], digest_ha, &mut sig)
+        .unwrap()
         .unwrap();
     assert_eq!(sig_len, 56);
 
     // Verify valid signature
-    provider
-        .ecdsa_verify(&pub_key[..pub_len], digest_ha, &sig[..sig_len])
-        .unwrap();
+    assert_eq!(
+        provider.ecdsa_verify(&pub_key[..pub_len], digest_ha, &sig[..sig_len]),
+        Ok(true)
+    );
 
     // Verify that corrupted signature fails
     let mut bad_sig = sig;
     bad_sig[0] ^= 0x01;
-    assert!(
-        provider
-            .ecdsa_verify(&pub_key[..pub_len], digest_ha, &bad_sig[..sig_len])
-            .is_err()
+    assert_eq!(
+        provider.ecdsa_verify(&pub_key[..pub_len], digest_ha, &bad_sig[..sig_len]),
+        Ok(false)
     );
 
     // Verify that corrupted digest fails
     let bad_digest = [0x43u8; 32];
     let bad_ha = TpmtHa::new(TpmiAlgHash::Sha256, &bad_digest).unwrap();
-    assert!(
-        provider
-            .ecdsa_verify(&pub_key[..pub_len], bad_ha, &sig[..sig_len])
-            .is_err()
+    assert_eq!(
+        provider.ecdsa_verify(&pub_key[..pub_len], bad_ha, &sig[..sig_len]),
+        Ok(false)
     );
 }
 
@@ -72,11 +72,13 @@ fn test_ecdsa_cross_hash_algorithms() {
         let mut sig = [0u8; 56];
         let sig_len = provider
             .ecdsa_sign(&priv_p224[..priv_len], digest_ha, &mut sig)
+            .unwrap()
             .unwrap();
         assert_eq!(sig_len, 56);
-        provider
-            .ecdsa_verify(&pub_p224[..pub_len], digest_ha, &sig[..sig_len])
-            .unwrap();
+        assert_eq!(
+            provider.ecdsa_verify(&pub_p224[..pub_len], digest_ha, &sig[..sig_len]),
+            Ok(true)
+        );
     }
 
     // 2. NIST P-256 with SHA-1, SHA-256, SHA-384, SHA-512 (verifying fix for cross-hash ECDSA)
@@ -98,11 +100,13 @@ fn test_ecdsa_cross_hash_algorithms() {
         let mut sig = [0u8; 64];
         let sig_len = provider
             .ecdsa_sign(&priv_p256[..priv_len], digest_ha, &mut sig)
+            .unwrap()
             .unwrap();
         assert_eq!(sig_len, 64);
-        provider
-            .ecdsa_verify(&pub_p256[..pub_len], digest_ha, &sig[..sig_len])
-            .unwrap();
+        assert_eq!(
+            provider.ecdsa_verify(&pub_p256[..pub_len], digest_ha, &sig[..sig_len]),
+            Ok(true)
+        );
     }
 
     // 3. NIST P-384 with SHA-256, SHA-384, SHA-512
@@ -123,11 +127,13 @@ fn test_ecdsa_cross_hash_algorithms() {
         let mut sig = [0u8; 96];
         let sig_len = provider
             .ecdsa_sign(&priv_p384[..priv_len], digest_ha, &mut sig)
+            .unwrap()
             .unwrap();
         assert_eq!(sig_len, 96);
-        provider
-            .ecdsa_verify(&pub_p384[..pub_len], digest_ha, &sig[..sig_len])
-            .unwrap();
+        assert_eq!(
+            provider.ecdsa_verify(&pub_p384[..pub_len], digest_ha, &sig[..sig_len]),
+            Ok(true)
+        );
     }
 }
 
@@ -145,17 +151,21 @@ fn test_bssl_ecc_nist_p224_operations() {
     scalar_one[27] = 1;
     let mut gx = [0u8; 28];
     let mut gy = [0u8; 28];
-    ctx.point_multiply_generator(&scalar_one, &mut gx, &mut gy)
-        .unwrap();
+    assert_eq!(
+        ctx.point_multiply_generator(&scalar_one, &mut gx, &mut gy),
+        Ok(Some(()))
+    );
 
     // 2. Validate generator point G
-    ctx.validate_point(&gx, &gy).unwrap();
+    assert_eq!(ctx.validate_point(&gx, &gy), Ok(true));
 
     // 3. Point multiplication G * 1 == G
     let mut mx = [0u8; 28];
     let mut my = [0u8; 28];
-    ctx.point_multiply(&scalar_one, &gx, &gy, &mut mx, &mut my)
-        .unwrap();
+    assert_eq!(
+        ctx.point_multiply(&scalar_one, &gx, &gy, &mut mx, &mut my),
+        Ok(Some(()))
+    );
     assert_eq!(mx, gx);
     assert_eq!(my, gy);
 
@@ -164,23 +174,27 @@ fn test_bssl_ecc_nist_p224_operations() {
     scalar_two[27] = 2;
     let mut g2x = [0u8; 28];
     let mut g2y = [0u8; 28];
-    ctx.point_multiply_generator(&scalar_two, &mut g2x, &mut g2y)
-        .unwrap();
-    ctx.validate_point(&g2x, &g2y).unwrap();
+    assert_eq!(
+        ctx.point_multiply_generator(&scalar_two, &mut g2x, &mut g2y),
+        Ok(Some(()))
+    );
+    assert_eq!(ctx.validate_point(&g2x, &g2y), Ok(true));
     assert_ne!(g2x, gx);
 
     // 5. Point multiplication G * 2 == 2*G
     let mut g2_from_g_x = [0u8; 28];
     let mut g2_from_g_y = [0u8; 28];
-    ctx.point_multiply(&scalar_two, &gx, &gy, &mut g2_from_g_x, &mut g2_from_g_y)
-        .unwrap();
+    assert_eq!(
+        ctx.point_multiply(&scalar_two, &gx, &gy, &mut g2_from_g_x, &mut g2_from_g_y),
+        Ok(Some(()))
+    );
     assert_eq!(g2_from_g_x, g2x);
     assert_eq!(g2_from_g_y, g2y);
 
-    // 6. Invalid point validation returns error
+    // 6. Invalid point validation returns `Ok(false)`
     let invalid_x = [0xFFu8; 28];
     let invalid_y = [0xFFu8; 28];
-    assert!(ctx.validate_point(&invalid_x, &invalid_y).is_err());
+    assert_eq!(ctx.validate_point(&invalid_x, &invalid_y), Ok(false));
 }
 
 #[test]
@@ -195,16 +209,18 @@ fn test_bssl_ecc_nist_p256_ecdaa_sign() {
     let mut s = [0u8; 32];
 
     // 1. Basic ECDAA sign without commit_x and commit_p1
-    ctx.ecdaa_sign(
-        &commit_r,
-        &[],
-        &[],
-        &private_key_d,
-        &digest,
-        &mut nonce_k,
-        &mut s,
-    )
-    .unwrap();
+    assert_eq!(
+        ctx.ecdaa_sign(
+            &commit_r,
+            &[],
+            &[],
+            &private_key_d,
+            &digest,
+            &mut nonce_k,
+            &mut s,
+        ),
+        Ok(Some(()))
+    );
 
     assert!(!nonce_k.iter().all(|&b| b == 0));
     assert!(!s.iter().all(|&b| b == 0));
@@ -214,20 +230,24 @@ fn test_bssl_ecc_nist_p256_ecdaa_sign() {
     s42[31] = 42;
     let mut p42_x = [0u8; 32];
     let mut p42_y = [0u8; 32];
-    ctx.point_multiply_generator(&s42, &mut p42_x, &mut p42_y)
-        .unwrap();
+    assert_eq!(
+        ctx.point_multiply_generator(&s42, &mut p42_x, &mut p42_y),
+        Ok(Some(()))
+    );
 
     let mut s_p42 = [0u8; 32];
-    ctx.ecdaa_sign(
-        &commit_r,
-        &[],
-        &p42_x,
-        &private_key_d,
-        &digest,
-        &mut nonce_k,
-        &mut s_p42,
-    )
-    .unwrap();
+    assert_eq!(
+        ctx.ecdaa_sign(
+            &commit_r,
+            &[],
+            &p42_x,
+            &private_key_d,
+            &digest,
+            &mut nonce_k,
+            &mut s_p42,
+        ),
+        Ok(Some(()))
+    );
 
     assert_ne!(s, s_p42);
 
@@ -236,20 +256,24 @@ fn test_bssl_ecc_nist_p256_ecdaa_sign() {
     s55[31] = 55;
     let mut p55_x = [0u8; 32];
     let mut p55_y = [0u8; 32];
-    ctx.point_multiply_generator(&s55, &mut p55_x, &mut p55_y)
-        .unwrap();
+    assert_eq!(
+        ctx.point_multiply_generator(&s55, &mut p55_x, &mut p55_y),
+        Ok(Some(()))
+    );
 
     let mut s_p55 = [0u8; 32];
-    ctx.ecdaa_sign(
-        &commit_r,
-        &[],
-        &p55_x,
-        &private_key_d,
-        &digest,
-        &mut nonce_k,
-        &mut s_p55,
-    )
-    .unwrap();
+    assert_eq!(
+        ctx.ecdaa_sign(
+            &commit_r,
+            &[],
+            &p55_x,
+            &private_key_d,
+            &digest,
+            &mut nonce_k,
+            &mut s_p55,
+        ),
+        Ok(Some(()))
+    );
 
     assert_ne!(s, s_p55);
     assert_ne!(s_p42, s_p55);
@@ -257,20 +281,24 @@ fn test_bssl_ecc_nist_p256_ecdaa_sign() {
     // 4. ECDAA sign with commit_p1 matching d*G (public key)
     let mut pq_x = [0u8; 32];
     let mut pq_y = [0u8; 32];
-    ctx.point_multiply_generator(&private_key_d, &mut pq_x, &mut pq_y)
-        .unwrap();
+    assert_eq!(
+        ctx.point_multiply_generator(&private_key_d, &mut pq_x, &mut pq_y),
+        Ok(Some(()))
+    );
 
     let mut s_pq = [0u8; 32];
-    ctx.ecdaa_sign(
-        &commit_r,
-        &[],
-        &pq_x,
-        &private_key_d,
-        &digest,
-        &mut nonce_k,
-        &mut s_pq,
-    )
-    .unwrap();
+    assert_eq!(
+        ctx.ecdaa_sign(
+            &commit_r,
+            &[],
+            &pq_x,
+            &private_key_d,
+            &digest,
+            &mut nonce_k,
+            &mut s_pq,
+        ),
+        Ok(Some(()))
+    );
 
     assert_ne!(s, s_pq);
 
@@ -280,16 +308,18 @@ fn test_bssl_ecc_nist_p256_ecdaa_sign() {
     e_x_custom[31] = 0x39; // 12345
     let mut nonce_k_exact = [0u8; 32];
     let mut s_exact = [0u8; 32];
-    ctx.ecdaa_sign(
-        &commit_r,
-        &e_x_custom,
-        &[],
-        &private_key_d,
-        &digest,
-        &mut nonce_k_exact,
-        &mut s_exact,
-    )
-    .unwrap();
+    assert_eq!(
+        ctx.ecdaa_sign(
+            &commit_r,
+            &e_x_custom,
+            &[],
+            &private_key_d,
+            &digest,
+            &mut nonce_k_exact,
+            &mut s_exact,
+        ),
+        Ok(Some(()))
+    );
 
     assert_eq!(
         nonce_k_exact,
@@ -302,16 +332,18 @@ fn test_bssl_ecc_nist_p256_ecdaa_sign() {
 
     // 6. Verify exact mathematical test vector with commit_p1 matching 42*G
     let mut s_42_exact = [0u8; 32];
-    ctx.ecdaa_sign(
-        &commit_r,
-        &e_x_custom,
-        &p42_x,
-        &private_key_d,
-        &digest,
-        &mut nonce_k_exact,
-        &mut s_42_exact,
-    )
-    .unwrap();
+    assert_eq!(
+        ctx.ecdaa_sign(
+            &commit_r,
+            &e_x_custom,
+            &p42_x,
+            &private_key_d,
+            &digest,
+            &mut nonce_k_exact,
+            &mut s_42_exact,
+        ),
+        Ok(Some(()))
+    );
     assert_eq!(
         s_42_exact,
         hex!("8d6167748bbada5c72d106b679ea219334433ae4e28dc11ebe918d2014759313")
@@ -319,16 +351,18 @@ fn test_bssl_ecc_nist_p256_ecdaa_sign() {
 
     // 7. Verify exact mathematical test vector with commit_p1 matching 55*G
     let mut s_55_exact = [0u8; 32];
-    ctx.ecdaa_sign(
-        &commit_r,
-        &e_x_custom,
-        &p55_x,
-        &private_key_d,
-        &digest,
-        &mut nonce_k_exact,
-        &mut s_55_exact,
-    )
-    .unwrap();
+    assert_eq!(
+        ctx.ecdaa_sign(
+            &commit_r,
+            &e_x_custom,
+            &p55_x,
+            &private_key_d,
+            &digest,
+            &mut nonce_k_exact,
+            &mut s_55_exact,
+        ),
+        Ok(Some(()))
+    );
     assert_eq!(
         s_55_exact,
         hex!("2cf35cd00637bc6c534ead5cabd72bf7c49c992e289a6922804692e9e5e9c48b")
@@ -336,24 +370,26 @@ fn test_bssl_ecc_nist_p256_ecdaa_sign() {
 
     // 8. Verify exact mathematical test vector with commit_p1 matching d*G
     let mut s_d_exact = [0u8; 32];
-    ctx.ecdaa_sign(
-        &commit_r,
-        &e_x_custom,
-        &pq_x,
-        &private_key_d,
-        &digest,
-        &mut nonce_k_exact,
-        &mut s_d_exact,
-    )
-    .unwrap();
+    assert_eq!(
+        ctx.ecdaa_sign(
+            &commit_r,
+            &e_x_custom,
+            &pq_x,
+            &private_key_d,
+            &digest,
+            &mut nonce_k_exact,
+            &mut s_d_exact,
+        ),
+        Ok(Some(()))
+    );
     assert_eq!(
         s_d_exact,
         hex!("1f25073ae2645b970d15e5fcb76c130da3417881580fd73e355769e851c3fb6c")
     );
 
-    // 9. Invalid private key (zero scalar) returns error
+    // 9. Invalid private key (zero scalar) returns `Ok(None)`
     let zero_scalar = [0u8; 32];
-    assert!(
+    assert_eq!(
         ctx.ecdaa_sign(
             &commit_r,
             &[],
@@ -362,8 +398,8 @@ fn test_bssl_ecc_nist_p256_ecdaa_sign() {
             &digest,
             &mut nonce_k,
             &mut s,
-        )
-        .is_err()
+        ),
+        Ok(None)
     );
 }
 
@@ -766,4 +802,368 @@ fn test_p256_ecdaa_sign() {
     .unwrap();
 
     assert_ne!(s, s_with_p42);
+}
+
+// =========================================================================
+// Tests of the `tpm2::crypto` trait conventions (merged crypto API)
+// =========================================================================
+
+#[test]
+fn test_provider_symmetric_cfb_matches_nist_vectors_and_updates_iv() {
+    use tpm2::AlgSym;
+    use tpm2::crypto::{ModeIv, SymmetricKey, decrypt, encrypt};
+
+    // NIST SP 800-38A CFB128-AES128
+    let provider = BsslCryptoProvider;
+    let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
+    let iv0 = hex!("000102030405060708090a0b0c0d0e0f");
+    let pt = hex!(
+        "6bc1bee22e409f96e93d7e117393172a"
+        "ae2d8a571e03ac9c9eb76fac45af8e51"
+    );
+    let expected_ct = hex!(
+        "3b3fd92eb72dad20333449f8e83cfb4a"
+        "c8a64537a0b3a93fcde3cdad9f1ce58b"
+    );
+    let sym_key = SymmetricKey::new(AlgSym::Aes128, &key).unwrap();
+
+    let mut buf = pt;
+    let mut iv = iv0;
+    encrypt(&provider, sym_key, ModeIv::Cfb(&mut iv), &mut buf).unwrap();
+    assert_eq!(buf, expected_ct);
+    // The IV is updated in place with the final chaining value (`ivOut`).
+    assert_eq!(iv, expected_ct[16..32]);
+
+    let mut iv = iv0;
+    decrypt(&provider, sym_key, ModeIv::Cfb(&mut iv), &mut buf).unwrap();
+    assert_eq!(buf, pt);
+    assert_eq!(iv, expected_ct[16..32]);
+
+    // Chaining two calls through the updated IV equals one call.
+    let mut chained = pt;
+    let mut iv = iv0;
+    let (first, second) = chained.split_at_mut(16);
+    encrypt(&provider, sym_key, ModeIv::Cfb(&mut iv), first).unwrap();
+    encrypt(&provider, sym_key, ModeIv::Cfb(&mut iv), second).unwrap();
+    assert_eq!(chained, expected_ct);
+
+    // NIST SP 800-38A CFB128-AES192 and CFB128-AES256 (first block)
+    let key192 = hex!("8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b");
+    let mut block = hex!("6bc1bee22e409f96e93d7e117393172a");
+    let mut iv = iv0;
+    let sym_key = SymmetricKey::new(AlgSym::Aes192, &key192).unwrap();
+    encrypt(&provider, sym_key, ModeIv::Cfb(&mut iv), &mut block).unwrap();
+    assert_eq!(block, hex!("cdc80d6fddf18cab34c25909c99a4174"));
+
+    let key256 = hex!("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914df1a");
+    let mut block = hex!("6bc1bee22e409f96e93d7e117393172a");
+    let mut iv = iv0;
+    let sym_key = SymmetricKey::new(AlgSym::Aes256, &key256).unwrap();
+    encrypt(&provider, sym_key, ModeIv::Cfb(&mut iv), &mut block).unwrap();
+    assert_eq!(block, hex!("b5a8a1747ed889ebce581f4ea2a5646e"));
+}
+
+#[test]
+fn test_provider_symmetric_rejects_unsupported_modes_and_ciphers() {
+    use tpm2::AlgSym;
+    use tpm2::crypto::{CryptoError, Direction, ModeIv, SymmetricKey, encrypt_decrypt};
+
+    let provider = BsslCryptoProvider;
+    let key = [0x11u8; 16];
+    let aes = SymmetricKey::new(AlgSym::Aes128, &key).unwrap();
+    let mut data = [0u8; 16];
+    let mut iv = [0u8; 16];
+    assert_eq!(
+        encrypt_decrypt(&provider, aes, ModeIv::Ecb, Direction::Encrypt, &mut data),
+        Err(CryptoError::Unsupported)
+    );
+    assert_eq!(
+        encrypt_decrypt(
+            &provider,
+            aes,
+            ModeIv::Cbc(&mut iv),
+            Direction::Decrypt,
+            &mut data
+        ),
+        Err(CryptoError::Unsupported)
+    );
+    let sm4 = SymmetricKey::new(AlgSym::Sm4_128, &key).unwrap();
+    assert_eq!(
+        encrypt_decrypt(
+            &provider,
+            sm4,
+            ModeIv::Cfb(&mut iv),
+            Direction::Encrypt,
+            &mut data
+        ),
+        Err(CryptoError::Unsupported)
+    );
+}
+
+#[test]
+fn test_provider_hash_hmac_and_cmac_vectors() {
+    use tpm2::AlgSym;
+    use tpm2::crypto::{CryptoError, HashStream, SymmetricKey, cmac, hash, hmac};
+
+    let provider = BsslCryptoProvider;
+    let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+
+    // FIPS 180-2 SHA-256("abc")
+    let digest = hash(&provider, TpmiAlgHash::Sha256, b"abc", &mut out).unwrap();
+    assert_eq!(
+        digest.digest(),
+        hex!("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    );
+
+    // Streaming gives the same digest.
+    let mut stream = HashStream::new(&provider, TpmiAlgHash::Sha256).unwrap();
+    stream.update(b"a").unwrap();
+    stream.update(b"bc").unwrap();
+    let mut out2 = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+    assert_eq!(stream.finalize(&mut out2).unwrap(), digest);
+
+    // RFC 4231 test case 1 (HMAC-SHA-256) and RFC 2202 test case 1 (HMAC-SHA-1)
+    let key = [0x0bu8; 20];
+    let mac = hmac(&provider, TpmiAlgHash::Sha256, &key, b"Hi There", &mut out).unwrap();
+    assert_eq!(
+        mac.digest(),
+        hex!("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")
+    );
+    let mac = hmac(&provider, TpmiAlgHash::Sha1, &key, b"Hi There", &mut out).unwrap();
+    assert_eq!(
+        mac.digest(),
+        hex!("b617318655057264e28bc0b6fb378c8ef146be00")
+    );
+
+    // SM3 is not implemented by this provider.
+    assert_eq!(
+        hash(&provider, TpmiAlgHash::Sm3_256, b"abc", &mut out),
+        Err(CryptoError::Unsupported)
+    );
+
+    // NIST SP 800-38B AES-128-CMAC (empty message)
+    let key128 = hex!("2b7e151628aed2a6abf7158809cf4f3c");
+    let mut tag = [0u8; 16];
+    cmac(
+        &provider,
+        SymmetricKey::new(AlgSym::Aes128, &key128).unwrap(),
+        &[],
+        &mut tag,
+    )
+    .unwrap();
+    assert_eq!(tag, hex!("bb1d6929e95937287fa37d129b756746"));
+}
+
+#[test]
+fn test_provider_random_and_constant_time_eq() {
+    use tpm2::crypto::{ConstantTimeEq, CryptoError, CryptoProvider, Random};
+
+    let provider = BsslCryptoProvider;
+    let mut a = [0u8; 32];
+    let mut b = [0u8; 32];
+    provider.get_random(&mut a).unwrap();
+    provider.get_random(&mut b).unwrap();
+    assert_ne!(a, [0u8; 32]);
+    assert_ne!(a, b);
+    assert_eq!(provider.stir_random(b"additional entropy"), Ok(()));
+
+    // The provider has no `Rng` factory.
+    assert!(matches!(provider.rng(), Err(CryptoError::Unsupported)));
+    assert!(matches!(
+        provider.rng_seeded(b"seed"),
+        Err(CryptoError::Unsupported)
+    ));
+
+    assert!(provider.constant_time_eq(&a, &a));
+    let mut c = a;
+    c[31] ^= 0x80;
+    assert!(!provider.constant_time_eq(&a, &c));
+    assert!(provider.constant_time_eq::<0>(&[], &[]));
+}
+
+#[test]
+fn test_provider_rsa_semantic_failures_are_ok_none_or_false() {
+    use tpm2::{Alg, TpmiRsaKeyBits};
+
+    let provider = BsslCryptoProvider;
+    let mut pub_key = [0u8; 128];
+    let mut priv_key = [0u8; 1024];
+    let (pub_len, priv_len) = provider
+        .rsa_generate_key(
+            TpmiRsaKeyBits(1024),
+            &mut pub_key,
+            &mut priv_key,
+            Some(b"semantic failures"),
+        )
+        .unwrap();
+    let (pub_key, priv_key) = (&pub_key[..pub_len], &priv_key[..priv_len]);
+
+    // OAEP round trip, then a wrong label and a corrupted ciphertext.
+    let msg = b"secret";
+    let mut ct = [0u8; 128];
+    let ct_len = provider
+        .oaep_encrypt(TpmiAlgHash::Sha256, pub_key, msg, b"LABEL\0", &mut ct)
+        .unwrap()
+        .unwrap();
+    let mut pt = [0u8; 128];
+    let pt_len = provider
+        .oaep_decrypt(
+            TpmiAlgHash::Sha256,
+            priv_key,
+            &ct[..ct_len],
+            b"LABEL\0",
+            &mut pt,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(&pt[..pt_len], msg);
+    assert_eq!(
+        provider.oaep_decrypt(
+            TpmiAlgHash::Sha256,
+            priv_key,
+            &ct[..ct_len],
+            b"OTHER\0",
+            &mut pt
+        ),
+        Ok(None)
+    );
+    let mut bad_ct = ct;
+    bad_ct[5] ^= 0x01;
+    assert_eq!(
+        provider.oaep_decrypt(
+            TpmiAlgHash::Sha256,
+            priv_key,
+            &bad_ct[..ct_len],
+            b"LABEL\0",
+            &mut pt
+        ),
+        Ok(None)
+    );
+
+    // Messages too large for the padding scheme.
+    assert_eq!(
+        provider.rsaes_encrypt(pub_key, &[0x42u8; 118], &mut ct),
+        Ok(None)
+    );
+    assert_eq!(
+        provider.oaep_encrypt(TpmiAlgHash::Sha256, pub_key, &[0x42u8; 63], &[], &mut ct),
+        Ok(None)
+    );
+    // Raw RSA requires `m < n`.
+    assert_eq!(
+        provider.rsa_null_encrypt(pub_key, &[0xFFu8; 128], &mut ct),
+        Ok(None)
+    );
+
+    // Signatures: a 1024-bit key cannot hold a SHA-512 PSS signature with a digest-sized salt.
+    let digest = [0x11u8; 64];
+    let digest_ha = TpmtHa::new(TpmiAlgHash::Sha512, &digest).unwrap();
+    let mut sig = [0u8; 128];
+    assert_eq!(
+        provider.rsapss_sign(priv_key, digest_ha, &mut sig),
+        Ok(None)
+    );
+    let digest_ha = TpmtHa::new(TpmiAlgHash::Sha256, &digest[..32]).unwrap();
+    let sig_len = provider
+        .rsassa_sign(priv_key, digest_ha, &mut sig)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        provider.verify_inner(Alg::RSASSA, pub_key, digest_ha, &sig[..sig_len]),
+        Ok(true)
+    );
+    sig[0] ^= 0x01;
+    assert_eq!(
+        provider.verify_inner(Alg::RSASSA, pub_key, digest_ha, &sig[..sig_len]),
+        Ok(false)
+    );
+
+    // Invalid private keys and inconsistent key components.
+    assert_eq!(
+        provider.rsassa_sign(&[0u8; 8], digest_ha, &mut sig),
+        Ok(None)
+    );
+    let mut prime_p = [0u8; 64];
+    assert_eq!(
+        provider.rsa_private_key_to_prime_p(&[0u8; 8], &mut prime_p),
+        Ok(None)
+    );
+    let mut imported = [0u8; 1024];
+    assert_eq!(
+        provider.rsa_import_private_key(pub_key, &[0x03], 65537, &mut imported),
+        Ok(None)
+    );
+}
+
+#[test]
+fn test_provider_ecc_dispatch_conventions() {
+    use tpm2::crypto::{CryptoError, point_multiply, point_multiply_generator, validate_point};
+
+    let provider = BsslCryptoProvider;
+    let curve = TpmEccCurve::NistP256;
+
+    // [1]G through the dispatch helpers: `Some(2N)` bytes written.
+    let mut g = [0u8; 64];
+    assert_eq!(
+        point_multiply_generator(&provider, curve, &[1], &mut g),
+        Ok(Some(64))
+    );
+    assert_eq!(validate_point(&provider, curve, &g), Ok(true));
+    let mut out = [0u8; 64];
+    assert_eq!(
+        point_multiply(&provider, curve, &[2], &g, &mut out),
+        Ok(Some(64))
+    );
+    let mut g2 = [0u8; 64];
+    assert_eq!(
+        point_multiply_generator(&provider, curve, &[2], &mut g2),
+        Ok(Some(64))
+    );
+    assert_eq!(out, g2);
+
+    // Semantic failures: a zero scalar, an off-curve point, a wrong point length.
+    assert_eq!(
+        point_multiply_generator(&provider, curve, &[0], &mut out),
+        Ok(None)
+    );
+    let mut off_curve = g;
+    off_curve[63] ^= 0x01;
+    assert_eq!(validate_point(&provider, curve, &off_curve), Ok(false));
+    assert_eq!(
+        point_multiply(&provider, curve, &[2], &off_curve, &mut out),
+        Ok(None)
+    );
+    assert_eq!(validate_point(&provider, curve, &g[..63]), Ok(false));
+
+    // Output buffers that are too small are internal errors.
+    assert_eq!(
+        point_multiply(&provider, curve, &[2], &g, &mut out[..63]),
+        Err(CryptoError::Internal)
+    );
+
+    // Unsupported curves and key sizes.
+    assert!(matches!(
+        provider.nist_p192(),
+        Err(CryptoError::Unsupported)
+    ));
+    assert_eq!(
+        validate_point(&provider, TpmEccCurve::None, &g),
+        Err(CryptoError::Unsupported)
+    );
+    let mut pub_key = [0u8; 132];
+    let mut priv_key = [0u8; 66];
+    assert_eq!(
+        provider.ecc_generate_key(TpmEccCurve::None, &mut pub_key, &mut priv_key, None),
+        Err(CryptoError::Unsupported)
+    );
+    let digest_ha = TpmtHa::new(TpmiAlgHash::Sha256, &[0x22u8; 32]).unwrap();
+    let mut sig = [0u8; 132];
+    assert_eq!(
+        provider.ecdsa_sign(&[0x01u8; 31], digest_ha, &mut sig),
+        Ok(None)
+    );
+    assert_eq!(
+        provider.ecdsa_verify(&g[..63], digest_ha, &sig[..64]),
+        Ok(false)
+    );
 }

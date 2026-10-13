@@ -1,12 +1,14 @@
 //! Extra (non-Go-parity) tests for create_loaded, moved out of src/go.
 
 use crate::test_utils::*;
-use tpm2::commands::{CreateLoaded, CreateLoadedHandles};
+#[allow(deprecated)]
+use tpm2::commands::CreateLoaded;
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
 use tpm2_simulator::create_simulator;
 
 #[test]
+#[allow(deprecated)]
 fn test_create_loaded_derived_ecc_with_ibm_tss_appended_context() {
     let mut sim = create_simulator!();
 
@@ -28,17 +30,15 @@ fn test_create_loaded_derived_ecc_with_ibm_tss_appended_context() {
     };
     let deriver_in_public = crate::test_utils::make_template(&deriver_pub_area);
     let deriver_cmd = CreateLoaded {
+        parent_handle: Handle(0x40000001), // TPMRH_OWNER
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: deriver_in_public,
     };
-    let deriver_handles = CreateLoadedHandles {
-        parent_handle: Handle(0x40000001), // TPMRH_OWNER
-    };
-    let (_, deriver_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &deriver_cmd, deriver_handles, 1, &[]).unwrap();
+    let deriver_rsp_handles =
+        execute_with_password_sessions(&mut sim, &deriver_cmd, 1, &[]).unwrap();
 
     // Create derived ECC key using IBM TSS TSS_TPMT_PUBLIC_D_Marshal wire format:
     // TPMT_PUBLIC with unique.ecc.x = label, unique.ecc.y = empty, followed by appended TPM2B_LABEL context.
@@ -90,14 +90,11 @@ fn test_create_loaded_derived_ecc_with_ibm_tss_appended_context() {
 
     let bad_in_public = Tpm2bTemplate::from_bytes(&template_buffer[..total_template_len]).unwrap();
     let bad_cmd = CreateLoaded {
+        parent_handle: deriver_rsp_handles.object_handle,
         in_sensitive,
         in_public: bad_in_public,
     };
-    let handles = CreateLoadedHandles {
-        parent_handle: deriver_rsp_handles.object_handle,
-    };
-    let err =
-        execute_with_password_sessions(&mut sim, &bad_cmd, handles.clone(), 1, &[]).unwrap_err();
+    let err = execute_with_password_sessions(&mut sim, &bad_cmd, 1, &[]).unwrap_err();
     assert_eq!(
         err,
         tpm2::errors::TpmRc::SIZE
@@ -128,11 +125,11 @@ fn test_create_loaded_derived_ecc_with_ibm_tss_appended_context() {
     };
     let valid_in_public = crate::test_utils::make_template(&valid_ecc_pub_area);
     let valid_cmd = CreateLoaded {
+        parent_handle: deriver_rsp_handles.object_handle,
         in_sensitive,
         in_public: valid_in_public,
     };
-    let (_, derived_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &valid_cmd, handles, 1, &[]).unwrap();
+    let derived_rsp_handles = execute_with_password_sessions(&mut sim, &valid_cmd, 1, &[]).unwrap();
 
     // Flush derived key
     flush_context(&mut sim, derived_rsp_handles.object_handle).unwrap();
@@ -142,6 +139,7 @@ fn test_create_loaded_derived_ecc_with_ibm_tss_appended_context() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_create_loaded_derived_keyedhash_sym_and_set_label_context() {
     let mut sim = create_simulator!();
 
@@ -162,22 +160,14 @@ fn test_create_loaded_derived_keyedhash_sym_and_set_label_context() {
         ),
     };
     let deriver_cmd = CreateLoaded {
+        parent_handle: Handle(0x40000001),
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: crate::test_utils::make_template(&deriver_pub_area),
     };
-    let (_, deriver_handles) = execute_with_password_sessions(
-        &mut sim,
-        &deriver_cmd,
-        CreateLoadedHandles {
-            parent_handle: Handle(0x40000001),
-        },
-        1,
-        &[],
-    )
-    .unwrap();
+    let deriver_handles = execute_with_password_sessions(&mut sim, &deriver_cmd, 1, &[]).unwrap();
     let parent_handle = deriver_handles.object_handle;
 
     // 2. Derive a KeyedHash child where `inPublic` (`TPM2B_TEMPLATE`) contains `TPMS_DERIVE` (label + context)
@@ -197,20 +187,14 @@ fn test_create_loaded_derived_keyedhash_sym_and_set_label_context() {
         ),
     };
     let kh_cmd = CreateLoaded {
+        parent_handle,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: crate::test_utils::make_derive_template(&kh_pub_template, &pub_derive),
     };
-    let (kh_rsp, kh_handles) = execute_with_password_sessions(
-        &mut sim,
-        &kh_cmd,
-        CreateLoadedHandles { parent_handle },
-        1,
-        &[],
-    )
-    .unwrap();
+    let kh_rsp = execute_with_password_sessions(&mut sim, &kh_cmd, 1, &[]).unwrap();
 
     // 3. Test `SetLabelAndContext` precedence (`Object_spt.c:1552-1584`):
     // - `inPublic` has `label = "pub_label"`, `context = ""` (empty)
@@ -227,20 +211,14 @@ fn test_create_loaded_derived_keyedhash_sym_and_set_label_context() {
     let mut sens_derive_buf = [0u8; 128];
     let sens_derive_len = marshal_to_slice(&sens_derive, &mut sens_derive_buf);
     let kh_merged_cmd = CreateLoaded {
+        parent_handle,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::from_bytes(&sens_derive_buf[..sens_derive_len]).unwrap(),
         }),
         in_public: crate::test_utils::make_derive_template(&kh_pub_template, &partial_pub_derive),
     };
-    let (kh_merged_rsp, kh_merged_handles) = execute_with_password_sessions(
-        &mut sim,
-        &kh_merged_cmd,
-        CreateLoadedHandles { parent_handle },
-        1,
-        &[],
-    )
-    .unwrap();
+    let kh_merged_rsp = execute_with_password_sessions(&mut sim, &kh_merged_cmd, 1, &[]).unwrap();
     assert_eq!(
         kh_rsp.out_public.0.parms_and_id, kh_merged_rsp.out_public.0.parms_and_id,
         "SetLabelAndContext must merge non-empty label from inPublic with fallback context from inSensitive.data"
@@ -255,25 +233,22 @@ fn test_create_loaded_derived_keyedhash_sym_and_set_label_context() {
             | TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            },
             Tpm2bDigest::default(),
         ),
     };
     let sym_cmd = CreateLoaded {
+        parent_handle,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: crate::test_utils::make_derive_template(&sym_pub_template, &pub_derive),
     };
-    let (_, sym_handles) = execute_with_password_sessions(
-        &mut sim,
-        &sym_cmd,
-        CreateLoadedHandles { parent_handle },
-        1,
-        &[],
-    )
-    .unwrap();
+    let sym_handles = execute_with_password_sessions(&mut sim, &sym_cmd, 1, &[]).unwrap();
 
     // 5. Reject deriving an RSA key under a derivation parent with `TPM_RC_TYPE + P2` (`CreateLoaded.c:108-109`)
     let rsa_pub_template = TpmtPublic {
@@ -293,20 +268,14 @@ fn test_create_loaded_derived_keyedhash_sym_and_set_label_context() {
         ),
     };
     let rsa_cmd = CreateLoaded {
+        parent_handle,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: crate::test_utils::make_derive_template(&rsa_pub_template, &pub_derive),
     };
-    let rsa_err = execute_with_password_sessions(
-        &mut sim,
-        &rsa_cmd,
-        CreateLoadedHandles { parent_handle },
-        1,
-        &[],
-    )
-    .unwrap_err();
+    let rsa_err = execute_with_password_sessions(&mut sim, &rsa_cmd, 1, &[]).unwrap_err();
     assert_eq!(
         rsa_err,
         tpm2::errors::TpmRc::TYPE
@@ -337,20 +306,15 @@ fn test_create_loaded_derived_keyedhash_sym_and_set_label_context() {
         ),
     };
     let ecc_oversized_cmd = CreateLoaded {
+        parent_handle,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: crate::test_utils::make_template(&ecc_oversized_pub),
     };
-    let ecc_size_err = execute_with_password_sessions(
-        &mut sim,
-        &ecc_oversized_cmd,
-        CreateLoadedHandles { parent_handle },
-        1,
-        &[],
-    )
-    .unwrap_err();
+    let ecc_size_err =
+        execute_with_password_sessions(&mut sim, &ecc_oversized_cmd, 1, &[]).unwrap_err();
     assert_eq!(
         ecc_size_err,
         tpm2::errors::TpmRc::SIZE
@@ -361,8 +325,8 @@ fn test_create_loaded_derived_keyedhash_sym_and_set_label_context() {
 
     // Flush all created handles
     for handle in [
-        kh_handles.object_handle,
-        kh_merged_handles.object_handle,
+        kh_rsp.object_handle,
+        kh_merged_rsp.object_handle,
         sym_handles.object_handle,
         parent_handle,
     ] {

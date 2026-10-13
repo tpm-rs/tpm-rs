@@ -54,6 +54,7 @@
 extern crate alloc;
 
 mod error;
+mod handle_checks;
 pub mod handler;
 pub mod hash_state;
 pub mod owned;

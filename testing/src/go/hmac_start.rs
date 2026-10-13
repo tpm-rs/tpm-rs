@@ -5,10 +5,7 @@ use crate::test_utils::{
     start_auth_session,
 };
 use rand::{RngCore, thread_rng};
-use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, HmacStart, HmacStartHandles, SequenceComplete,
-    SequenceCompleteHandles, SequenceUpdate, SequenceUpdateHandles,
-};
+use tpm2::commands::{CreatePrimary, HMACStart, SequenceComplete, SequenceUpdate};
 use tpm2::{Handle, TpmSe};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, TpmaObject, TpmaSession, TpmiAlgHash,
@@ -76,22 +73,21 @@ fn update_and_complete_sequence(
 ) -> Vec<u8> {
     while data.len() > MAX_INPUT_BUFFER {
         let cmd_update = SequenceUpdate {
+            sequence_handle,
             buffer: tpm2::Tpm2bMaxBuffer::from_bytes(&data[..MAX_INPUT_BUFFER]).unwrap(),
         };
-        let cmd_handles = SequenceUpdateHandles { sequence_handle };
-        execute_with_password_sessions(sim, &cmd_update, cmd_handles, 1, password)
+        execute_with_password_sessions(sim, &cmd_update, 1, password)
             .expect("SequenceUpdate failed");
         data = &data[MAX_INPUT_BUFFER..];
     }
 
     let cmd_complete = SequenceComplete {
+        sequence_handle,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(data).unwrap(),
         hierarchy,
     };
-    let cmd_handles = SequenceCompleteHandles { sequence_handle };
-    let (resp_complete, _) =
-        execute_with_password_sessions(sim, &cmd_complete, cmd_handles, 1, password)
-            .expect("SequenceComplete failed");
+    let resp_complete = execute_with_password_sessions(sim, &cmd_complete, 1, password)
+        .expect("SequenceComplete failed");
     resp_complete.result.as_ref().to_vec()
 }
 
@@ -106,46 +102,37 @@ fn run_hmac_start(
 ) -> Vec<u8> {
     let mut sas = start_hmac_session(sim);
 
-    let create_cmd = hmac_key_create_primary();
-    let create_handles = CreatePrimaryHandles {
+    let create_cmd = CreatePrimary {
         primary_handle: hierarchy,
+        ..hmac_key_create_primary()
     };
-    let (create_rsp, create_rsp_handles) = execute_with_hmac_sessions(
+    let create_rsp = execute_with_hmac_sessions(
         sim,
         &create_cmd,
-        create_handles,
         &[],
         core::slice::from_mut(&mut sas),
         &[&[]],
     )
     .expect("CreatePrimary HMAC key failed");
-    let object_handle = create_rsp_handles.object_handle;
+    let object_handle = create_rsp.object_handle;
     let name = create_rsp.name;
 
-    let start_cmd = HmacStart {
+    let start_cmd = HMACStart {
+        handle: object_handle,
         auth: Tpm2bAuth::from_bytes(password).unwrap(),
         hash_alg: None,
     };
-    let start_handles = HmacStartHandles {
-        handle: object_handle,
-    };
-    let (_, start_resp_handles) = execute_with_hmac_sessions(
+    let start_rsp = execute_with_hmac_sessions(
         sim,
         &start_cmd,
-        start_handles,
         &[name.get_buffer()],
         core::slice::from_mut(&mut sas),
         &[&[]],
     )
     .expect("HmacStart failed");
 
-    let result = update_and_complete_sequence(
-        sim,
-        start_resp_handles.sequence_handle,
-        data,
-        password,
-        hierarchy,
-    );
+    let result =
+        update_and_complete_sequence(sim, start_rsp.sequence_handle, data, password, hierarchy);
 
     // Deferred cleanup in Go runs in LIFO order: flush the key, then the session.
     let _ = flush_context(sim, object_handle);
@@ -162,33 +149,24 @@ fn run_hmac_start_no_key_auth(
     password: &[u8],
     hierarchy: Handle,
 ) -> Vec<u8> {
-    let create_cmd = hmac_key_create_primary();
-    let create_handles = CreatePrimaryHandles {
+    let create_cmd = CreatePrimary {
         primary_handle: hierarchy,
+        ..hmac_key_create_primary()
     };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[])
-            .expect("CreatePrimary HMAC key failed");
-    let object_handle = create_rsp_handles.object_handle;
+    let create_rsp = execute_with_password_sessions(sim, &create_cmd, 1, &[])
+        .expect("CreatePrimary HMAC key failed");
+    let object_handle = create_rsp.object_handle;
 
-    let start_cmd = HmacStart {
+    let start_cmd = HMACStart {
+        handle: object_handle,
         auth: Tpm2bAuth::from_bytes(password).unwrap(),
         hash_alg: None,
     };
-    let start_handles = HmacStartHandles {
-        handle: object_handle,
-    };
-    let (_, start_resp_handles) =
-        execute_with_password_sessions(sim, &start_cmd, start_handles, 1, &[])
-            .expect("HmacStart failed");
+    let start_rsp =
+        execute_with_password_sessions(sim, &start_cmd, 1, &[]).expect("HmacStart failed");
 
-    let result = update_and_complete_sequence(
-        sim,
-        start_resp_handles.sequence_handle,
-        data,
-        password,
-        hierarchy,
-    );
+    let result =
+        update_and_complete_sequence(sim, start_rsp.sequence_handle, data, password, hierarchy);
 
     let _ = flush_context(sim, object_handle);
 
@@ -307,74 +285,65 @@ fn test_hmac_start_same_key_multiple_sequences() {
 
     let mut sas = start_hmac_session(&mut sim);
 
-    let create_cmd = hmac_key_create_primary();
-    let create_handles = CreatePrimaryHandles {
+    let create_cmd = CreatePrimary {
         primary_handle: Handle::RH_NULL,
+        ..hmac_key_create_primary()
     };
-    let (create_rsp, create_rsp_handles) = execute_with_hmac_sessions(
+    let create_rsp = execute_with_hmac_sessions(
         &mut sim,
         &create_cmd,
-        create_handles,
         &[],
         core::slice::from_mut(&mut sas),
         &[&[]],
     )
     .expect("CreatePrimary HMAC key failed");
-    let object_handle = create_rsp_handles.object_handle;
+    let object_handle = create_rsp.object_handle;
     let name = create_rsp.name;
 
-    let start_cmd = HmacStart {
+    let start_cmd = HMACStart {
+        handle: object_handle,
         auth: Tpm2bAuth::from_bytes(&password).unwrap(),
         hash_alg: None,
     };
-    let start_handles = HmacStartHandles {
-        handle: object_handle,
-    };
 
-    let (_, start_resp_handles1) = execute_with_hmac_sessions(
+    let start_rsp1 = execute_with_hmac_sessions(
         &mut sim,
         &start_cmd,
-        start_handles,
         &[name.get_buffer()],
         core::slice::from_mut(&mut sas),
         &[&[]],
     )
     .expect("HmacStart failed");
 
-    let (_, start_resp_handles2) = execute_with_hmac_sessions(
+    let start_rsp2 = execute_with_hmac_sessions(
         &mut sim,
         &start_cmd,
-        start_handles,
         &[name.get_buffer()],
         core::slice::from_mut(&mut sas),
         &[&[]],
     )
     .expect("HmacStart failed");
 
-    let h1 = start_resp_handles1.sequence_handle;
-    let h2 = start_resp_handles2.sequence_handle;
+    let h1 = start_rsp1.sequence_handle;
+    let h2 = start_rsp2.sequence_handle;
     assert_ne!(h1.0, h2.0, "sequence handles are not unique");
 
     // go-tpm marshals the zero-valued nullable `Hierarchy` as TPM_RH_NULL and
     // the zero-valued `Buffer` as an empty TPM2B.
     let cmd_complete1 = SequenceComplete {
+        sequence_handle: h1,
         buffer: tpm2::Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
-    let cmd_handles1 = SequenceCompleteHandles {
-        sequence_handle: h1,
-    };
-    execute_with_password_sessions(&mut sim, &cmd_complete1, cmd_handles1, 1, &password)
+    execute_with_password_sessions(&mut sim, &cmd_complete1, 1, &password)
         .expect("SequenceComplete failed");
 
     let cmd_complete2 = SequenceComplete {
+        sequence_handle: h2,
         buffer: tpm2::Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
-    let cmd_handles2 = SequenceCompleteHandles {
-        sequence_handle: h2,
-    };
-    execute_with_password_sessions(&mut sim, &cmd_complete2, cmd_handles2, 1, &password)
+    execute_with_password_sessions(&mut sim, &cmd_complete2, 1, &password)
         .expect("SequenceComplete failed");
 
     // Deferred cleanup in Go runs in LIFO order: flush the key, then the session.

@@ -2,10 +2,7 @@ use crate::test_utils::execute_with_password_sessions;
 use rand::{RngCore, thread_rng};
 use sha2::{Digest, Sha256};
 use tpm2::Handle;
-use tpm2::commands::{
-    Hash, HashSequenceStart, SequenceComplete, SequenceCompleteHandles, SequenceUpdate,
-    SequenceUpdateHandles,
-};
+use tpm2::commands::{Hash, HashSequenceStart, SequenceComplete, SequenceUpdate};
 use tpm2::{Tpm2bAuth, Tpm2bMaxBuffer, TpmiAlgHash};
 use tpm2_simulator::{Simulator, create_simulator};
 
@@ -81,10 +78,8 @@ fn run_hash_sequence(
         auth: Tpm2bAuth::from_bytes(auth).unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (_, resp_start_handles) = sim
-        .execute_with_handles(cmd_start, ())
-        .expect("HashSequenceStart failed");
-    let sequence_handle = resp_start_handles.sequence_handle;
+    let resp_start = sim.execute(cmd_start).expect("HashSequenceStart failed");
+    let sequence_handle = resp_start.sequence_handle;
 
     let mut data = vec![0u8; buffer_size];
     thread_rng().fill_bytes(&mut data);
@@ -93,22 +88,20 @@ fn run_hash_sequence(
     let mut remaining_data = data.as_slice();
     while remaining_data.len() > max_digest_buffer {
         let cmd_update = SequenceUpdate {
+            sequence_handle,
             buffer: Tpm2bMaxBuffer::from_bytes(&remaining_data[..max_digest_buffer]).unwrap(),
         };
-        let cmd_handles = SequenceUpdateHandles { sequence_handle };
-        execute_with_password_sessions(sim, &cmd_update, cmd_handles, 1, auth)
-            .expect("SequenceUpdate failed");
+        execute_with_password_sessions(sim, &cmd_update, 1, auth).expect("SequenceUpdate failed");
         remaining_data = &remaining_data[max_digest_buffer..];
     }
 
     let cmd_complete = SequenceComplete {
+        sequence_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(remaining_data).unwrap(),
         hierarchy,
     };
-    let cmd_handles = SequenceCompleteHandles { sequence_handle };
-    let (resp_complete, _) =
-        execute_with_password_sessions(sim, &cmd_complete, cmd_handles, 1, auth)
-            .expect("SequenceComplete failed");
+    let resp_complete = execute_with_password_sessions(sim, &cmd_complete, 1, auth)
+        .expect("SequenceComplete failed");
 
     assert_eq!(
         resp_complete.result.as_ref(),

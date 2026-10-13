@@ -5,10 +5,7 @@ extern crate alloc;
 mod common;
 
 use common::{FakeRng, FakeStorage, FakeTimer};
-use tpm2::commands::{
-    Command, FlushContext, GetCapability, GetSessionAuditDigest, GetSessionAuditDigestHandles,
-};
-use tpm2::crypto::Rng;
+use tpm2::commands::{Command, FlushContext, GetCapability, GetSessionAuditDigest};
 use tpm2::crypto::{Asymmetric, AsymmetricSign};
 use tpm2::crypto::{CryptoError, CryptoProvider};
 use tpm2::{Handle, Marshal, TpmCap, TpmPt};
@@ -22,42 +19,45 @@ struct StressTestCrypto;
 impl_fake_hash!(StressTestCrypto);
 
 impl AsymmetricSign for StressTestCrypto {
+    /// Fills the signature with `0xee` bytes (64 for ECDSA, 256 otherwise). A `signature_out`
+    /// that is too small fails with [`CryptoError::Internal`] (formerly `BufferTooSmall`).
     fn sign_inner(
         &self,
         sign_alg: tpm2::Alg,
         _private_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         let len = match sign_alg {
             tpm2::Alg::ECDSA => {
                 if signature_out.len() < 64 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..64].fill(0xee);
                 64
             }
             _ => {
                 if signature_out.len() < 256 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 signature_out[..256].fill(0xee);
                 256
             }
         };
-        Ok(len)
+        Ok(Some(len))
     }
 }
 
 impl Asymmetric for StressTestCrypto {
+    /// Accepts every signature (formerly `Ok(())`).
     fn verify_inner(
         &self,
         _sign_alg: tpm2::Alg,
         _public_key: &[u8],
         _digest: tpm2::TpmtHa<'_>,
         _signature: &[u8],
-    ) -> Result<(), CryptoError> {
-        Ok(())
+    ) -> Result<bool, CryptoError> {
+        Ok(true)
     }
     fn encrypt(
         &self,
@@ -67,9 +67,12 @@ impl Asymmetric for StressTestCrypto {
         _data: &[u8],
         _ciphertext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
-        Ok(0)
+    ) -> Result<Option<usize>, CryptoError> {
+        Ok(Some(0))
     }
+    /// Copies `ciphertext` to `plaintext`. An empty private key fails with
+    /// [`CryptoError::Internal`] (formerly `HardwareFailure`), and so does a `plaintext` buffer
+    /// that is too small (formerly `BufferTooSmall`).
     fn decrypt(
         &self,
         _scheme: tpm2::Alg,
@@ -78,16 +81,16 @@ impl Asymmetric for StressTestCrypto {
         ciphertext: &[u8],
         plaintext: &mut [u8],
         _label: &[u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         if private_key.is_empty() {
-            return Err(CryptoError::HardwareFailure);
+            return Err(CryptoError::Internal);
         }
         let len = ciphertext.len();
         if plaintext.len() < len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         plaintext[..len].copy_from_slice(ciphertext);
-        Ok(len)
+        Ok(Some(len))
     }
     fn generate_key(
         &self,
@@ -108,25 +111,24 @@ impl Asymmetric for StressTestCrypto {
                 private_key[..32].fill(0xdd);
                 Ok((64, 32))
             }
-            _ => Err(CryptoError::HardwareFailure),
+            _ => Err(CryptoError::Internal),
         }
     }
 }
 
-impl Rng for StressTestCrypto {
+impl CryptoProvider for StressTestCrypto {
+    /// The provider CSPRNG: fills `dest` with `0xaa` bytes.
     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
         dest.fill(0xaa);
         Ok(())
     }
 }
 
-impl CryptoProvider for StressTestCrypto {}
-
 fn setup_tpm<'a>(
     crypto: &'a mut StressTestCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -153,13 +155,11 @@ fn setup_tpm<'a>(
 fn execute_tpm_command_with_auths<C: Command>(
     tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<(), u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
@@ -172,7 +172,12 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    offset += marshal_to_slice(handles, &mut request_buf[offset..]);
+    for handle in cmd.handles().as_ref() {
+        let mut handle_buf = [0u8; Handle::MAX_SIZE];
+        let handle_len = handle.marshal(&mut handle_buf);
+        request_buf[offset..offset + handle_len].copy_from_slice(&handle_buf[..handle_len]);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -235,8 +240,8 @@ fn test_adv_audit_first_use_becomes_exclusive() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x02000001;
 
@@ -291,7 +296,7 @@ fn test_adv_audit_first_use_becomes_exclusive() {
         hmac,
     };
 
-    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &(), &cmd, &[auth])
+    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[auth])
         .expect("Command failed");
 
     // Under correct spec behavior, the session MUST become exclusive on first use
@@ -309,8 +314,8 @@ fn test_adv_exclusive_session_used_without_exclusive_retains_exclusivity() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x02000001;
 
@@ -367,7 +372,7 @@ fn test_adv_exclusive_session_used_without_exclusive_retains_exclusivity() {
         hmac,
     };
 
-    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &(), &cmd, &[auth])
+    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[auth])
         .expect("Command failed");
 
     // Under correct spec behavior, it MUST retain exclusivity since it was used in the command as an audit session
@@ -384,8 +389,8 @@ fn test_adv_policy_session_cannot_be_audit_session() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x02000001;
 
@@ -440,7 +445,7 @@ fn test_adv_policy_session_cannot_be_audit_session() {
         hmac,
     };
 
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &(), &cmd, &[auth]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[auth]);
     assert_eq!(
         res.err(),
         Some(0x982),
@@ -454,8 +459,8 @@ fn test_flush_exclusive_audit_session_clears_exclusivity() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x02000001;
 
@@ -502,7 +507,7 @@ fn test_flush_exclusive_audit_session_clears_exclusivity() {
         flush_handle: Handle(session_handle),
     };
 
-    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &(), &flush_cmd, &[])
+    execute_tpm_command_with_auths(&mut tpm, &mut global_state, &flush_cmd, &[])
         .expect("Flush failed");
 
     assert_eq!(
@@ -517,8 +522,8 @@ fn test_get_session_audit_digest_on_policy_session() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let session_handle = 0x03000001;
 
@@ -561,14 +566,11 @@ fn test_get_session_audit_digest_on_policy_session() {
     global_state.add_session(s).unwrap();
 
     let cmd = GetSessionAuditDigest {
-        qualifying_data: Tpm2bData::default(),
-        in_scheme: None,
-    };
-
-    let handles = GetSessionAuditDigestHandles {
         privacy_admin_handle: Handle::RH_ENDORSEMENT,
         sign_handle: Handle(0x40000007), // RHNull
         session_handle: Handle(session_handle),
+        qualifying_data: Tpm2bData::default(),
+        in_scheme: None,
     };
 
     let auth = TpmsAuthCommand {
@@ -578,7 +580,7 @@ fn test_get_session_audit_digest_on_policy_session() {
         hmac: Tpm2bAuth::default(),
     };
 
-    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &handles, &cmd, &[auth]);
+    let res = execute_tpm_command_with_auths(&mut tpm, &mut global_state, &cmd, &[auth]);
     assert_eq!(
         res.err(),
         Some(0x384), // TPMI_SH_HMAC rejects policy session handles (0x03xxxxxx) with TPM_RC_VALUE + TPM_RC_H + TPM_RC_3 (0x384)

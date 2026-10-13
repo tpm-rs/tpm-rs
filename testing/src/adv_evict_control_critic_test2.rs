@@ -1,5 +1,5 @@
 use crate::test_utils::*;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles, EvictControl, EvictControlHandles};
+use tpm2::commands::{CreatePrimary, EvictControl};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
@@ -17,7 +17,10 @@ fn get_ecc_srk_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -43,33 +46,29 @@ fn test_evict_control_owner_evict_platform_wrong_error() {
     let in_public = tpm2::Tpm2b(get_ecc_srk_template());
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_PLATFORM,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_PLATFORM,
-    };
-    let (_, rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
+    let rsp_handles = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
 
     let persistent_handle = Handle(0x81800000);
-    let evict_cmd = EvictControl { persistent_handle };
-    let evict_handles = EvictControlHandles {
+    let evict_cmd = EvictControl {
         auth: Handle::RH_PLATFORM,
         object_handle: rsp_handles.object_handle,
+        persistent_handle,
     };
-    execute_with_password_sessions(&mut sim, &evict_cmd, evict_handles, 1, &[]).unwrap();
+    execute_with_password_sessions(&mut sim, &evict_cmd, 1, &[]).unwrap();
 
     // 2. Owner tries to evict it
-    let evict_cmd_owner = EvictControl { persistent_handle };
-    let evict_handles_owner = EvictControlHandles {
+    let evict_cmd_owner = EvictControl {
         auth: Handle::RH_OWNER,
         object_handle: persistent_handle,
+        persistent_handle,
     };
-    let res =
-        execute_with_password_sessions(&mut sim, &evict_cmd_owner, evict_handles_owner, 1, &[]);
+    let res = execute_with_password_sessions(&mut sim, &evict_cmd_owner, 1, &[]);
 
     let expected_rc = TpmRc::HIERARCHY.with(Position::handle(2)).get();
 

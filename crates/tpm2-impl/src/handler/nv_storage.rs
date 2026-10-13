@@ -1,3 +1,4 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::owned::{OwnedAuthCommand, OwnedDigest};
 use crate::storage::manager::StorageManager;
 use crate::storage::{NvStorage, Tpm2Storage};
@@ -7,16 +8,13 @@ use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{
-    NVCertify, NVCertifyHandles, NVChangeAuth, NVChangeAuthHandles, NVDefineSpace,
-    NVDefineSpaceHandles, NVExtend, NVExtendHandles, NVGlobalWriteLock, NVGlobalWriteLockHandles,
-    NVIncrement, NVIncrementHandles, NVRead, NVReadHandles, NVReadLock, NVReadLockHandles,
-    NVReadPublic, NVReadPublicHandles, NVSetBits, NVSetBitsHandles, NVUndefineSpace,
-    NVUndefineSpaceHandles, NVUndefineSpaceSpecial, NVUndefineSpaceSpecialHandles, NVWrite,
-    NVWriteHandles, NVWriteLock, NVWriteLockHandles,
+    NVCertify, NVChangeAuth, NVDefineSpace, NVExtend, NVGlobalWriteLock, NVIncrement, NVRead,
+    NVReadLock, NVReadPublic, NVSetBits, NVUndefineSpace, NVUndefineSpaceSpecial, NVWrite,
+    NVWriteLock,
 };
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, TpmGenerated, TpmNt};
+use tpm2::{Handle, TpmGenerated, TpmNt, TpmiAlgHash};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{
     Tpm2bAuth, Tpm2bMaxNvBuffer, Tpm2bNvPublic, TpmaNv, TpmsAttest, TpmsNvCertifyInfo,
@@ -425,8 +423,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVDefineSpaceHandles>()?;
-        let auth_handle = handles.auth_handle;
+        let handles = request.try_unmarshal_handles::<NVDefineSpace>()?;
+        let [auth_handle] = handles;
+        check(auth_handle, Tpmi::RhProvision, Position::handle(1))?;
         let auth_handle_u32 = auth_handle.0;
 
         if auth_handle_u32 != Handle::RH_OWNER.0 && auth_handle_u32 != Handle::RH_PLATFORM.0 {
@@ -443,7 +442,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.validate_nv_define_space_auth(auth_handle_u32, provided_auth)?;
         }
 
-        let cmd = request.try_unmarshal::<NVDefineSpace>()?;
+        let cmd = request.try_unmarshal_command::<NVDefineSpace>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -503,9 +502,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVUndefineSpaceHandles>()?;
-        let auth_handle = handles.auth_handle;
-        let nv_index = handles.nv_index;
+        let handles = request.try_unmarshal_handles::<NVUndefineSpace>()?;
+        let [auth_handle, nv_index] = handles;
+        check(auth_handle, Tpmi::RhProvision, Position::handle(1))?;
+        check(nv_index, Tpmi::RhNvDefinedIndex, Position::handle(2))?;
 
         if auth_handle.0 != Handle::RH_OWNER.0 && auth_handle.0 != Handle::RH_PLATFORM.0 {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
@@ -517,7 +517,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<NVUndefineSpace>()?;
+        let _cmd = request.try_unmarshal_command::<NVUndefineSpace>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -560,9 +560,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVUndefineSpaceSpecialHandles>()?;
-        let nv_index = handles.nv_index;
-        let platform = handles.platform;
+        let handles = request.try_unmarshal_handles::<NVUndefineSpaceSpecial>()?;
+        let [nv_index, platform] = handles;
+        check(nv_index, Tpmi::RhNvDefinedIndex, Position::handle(1))?;
+        check(platform, Tpmi::RhPlatform, Position::handle(2))?;
 
         if Handle(nv_index.0).handle_type() != Some(tpm2::TpmHt::NVIndex) {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
@@ -575,7 +576,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<NVUndefineSpaceSpecial>()?;
+        let _cmd = request.try_unmarshal_command::<NVUndefineSpaceSpecial>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -639,12 +640,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVReadPublicHandles>()?;
-        let nv_index = handles.nv_index.0;
+        let handles = request.try_unmarshal_handles::<NVReadPublic>()?;
+        let [nv_index] = handles;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(1))?;
+        let nv_index = nv_index.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<NVReadPublic>()?;
+        let _cmd = request.try_unmarshal_command::<NVReadPublic>(handles)?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -674,7 +677,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -879,13 +882,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn nv_write(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVWriteHandles>()?;
-        let auth_handle = handles.auth_handle.0;
-        let nv_index = handles.nv_index.0;
+        let handles = request.try_unmarshal_handles::<NVWrite>()?;
+        let [auth_handle, nv_index] = handles;
+        check(auth_handle, Tpmi::RhNvAuth, Position::handle(1))?;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(2))?;
+        let auth_handle = auth_handle.0;
+        let nv_index = nv_index.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<NVWrite>()?;
+        let cmd = request.try_unmarshal_command::<NVWrite>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -945,14 +951,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVCertifyHandles>()?;
-        let sign_handle = handles.sign_handle.0;
-        let auth_handle = handles.auth_handle.0;
-        let nv_index = handles.nv_index.0;
+        let handles = request.try_unmarshal_handles::<NVCertify>()?;
+        let [sign_handle, auth_handle, nv_index] = handles;
+        check(sign_handle, Tpmi::DhObjectOrNull, Position::handle(1))?;
+        check(auth_handle, Tpmi::RhNvAuth, Position::handle(2))?;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(3))?;
+        let sign_handle = sign_handle.0;
+        let auth_handle = auth_handle.0;
+        let nv_index = nv_index.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<NVCertify>()?;
+        let cmd = request.try_unmarshal_command::<NVCertify>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -1101,7 +1111,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -1120,13 +1130,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub fn nv_read(&mut self, request_response: RequestThenResponse<'_, '_>) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVReadHandles>()?;
-        let auth_handle = handles.auth_handle.0;
-        let nv_index = handles.nv_index.0;
+        let handles = request.try_unmarshal_handles::<NVRead>()?;
+        let [auth_handle, nv_index] = handles;
+        check(auth_handle, Tpmi::RhNvAuth, Position::handle(1))?;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(2))?;
+        let auth_handle = auth_handle.0;
+        let nv_index = nv_index.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<NVRead>()?;
+        let cmd = request.try_unmarshal_command::<NVRead>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -1168,7 +1181,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let response = request.into_response();
-        self.write_response_rsp(response, &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }
@@ -1189,13 +1202,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVIncrementHandles>()?;
-        let auth_handle = handles.auth_handle.0;
-        let nv_index = handles.nv_index.0;
+        let handles = request.try_unmarshal_handles::<NVIncrement>()?;
+        let [auth_handle, nv_index] = handles;
+        check(auth_handle, Tpmi::RhNvAuth, Position::handle(1))?;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(2))?;
+        let auth_handle = auth_handle.0;
+        let nv_index = nv_index.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<NVIncrement>()?;
+        let _cmd = request.try_unmarshal_command::<NVIncrement>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -1254,13 +1270,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVExtendHandles>()?;
-        let auth_handle = handles.auth_handle.0;
-        let nv_index = handles.nv_index.0;
+        let handles = request.try_unmarshal_handles::<NVExtend>()?;
+        let [auth_handle, nv_index] = handles;
+        check(auth_handle, Tpmi::RhNvAuth, Position::handle(1))?;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(2))?;
+        let auth_handle = auth_handle.0;
+        let nv_index = nv_index.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<NVExtend>()?;
+        let cmd = request.try_unmarshal_command::<NVExtend>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -1283,7 +1302,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // newDigest = H_nameAlg(oldDigest || data), with an all-zero oldDigest before the first
         // extend.
-        let mut old_bytes = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+        let mut old_bytes = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let data_size = header.public.data_size as usize;
         if data_size > old_bytes.len() {
             return Err(TpmRc::FAILURE);
@@ -1325,13 +1344,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVWriteLockHandles>()?;
-        let auth_handle = handles.auth_handle.0;
-        let nv_index = handles.nv_index.0;
+        let handles = request.try_unmarshal_handles::<NVWriteLock>()?;
+        let [auth_handle, nv_index] = handles;
+        check(auth_handle, Tpmi::RhNvAuth, Position::handle(1))?;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(2))?;
+        let auth_handle = auth_handle.0;
+        let nv_index = nv_index.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<NVWriteLock>()?;
+        let _cmd = request.try_unmarshal_command::<NVWriteLock>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -1381,8 +1403,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVGlobalWriteLockHandles>()?;
-        let auth_handle = handles.auth_handle.0;
+        let handles = request.try_unmarshal_handles::<NVGlobalWriteLock>()?;
+        let [auth_handle] = handles;
+        check(auth_handle, Tpmi::RhProvision, Position::handle(1))?;
+        let auth_handle = auth_handle.0;
 
         if auth_handle != Handle::RH_OWNER.0 && auth_handle != Handle::RH_PLATFORM.0 {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
@@ -1390,7 +1414,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<NVGlobalWriteLock>()?;
+        let _cmd = request.try_unmarshal_command::<NVGlobalWriteLock>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -1446,13 +1470,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVReadLockHandles>()?;
-        let auth_handle = handles.auth_handle.0;
-        let nv_index = handles.nv_index.0;
+        let handles = request.try_unmarshal_handles::<NVReadLock>()?;
+        let [auth_handle, nv_index] = handles;
+        check(auth_handle, Tpmi::RhNvAuth, Position::handle(1))?;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(2))?;
+        let auth_handle = auth_handle.0;
+        let nv_index = nv_index.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let _cmd = request.try_unmarshal::<NVReadLock>()?;
+        let _cmd = request.try_unmarshal_command::<NVReadLock>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -1508,13 +1535,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVSetBitsHandles>()?;
-        let auth_handle = handles.auth_handle.0;
-        let nv_index = handles.nv_index.0;
+        let handles = request.try_unmarshal_handles::<NVSetBits>()?;
+        let [auth_handle, nv_index] = handles;
+        check(auth_handle, Tpmi::RhNvAuth, Position::handle(1))?;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(2))?;
+        let auth_handle = auth_handle.0;
+        let nv_index = nv_index.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<NVSetBits>()?;
+        let cmd = request.try_unmarshal_command::<NVSetBits>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -1565,12 +1595,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<NVChangeAuthHandles>()?;
-        let nv_index = handles.nv_index.0;
+        let handles = request.try_unmarshal_handles::<NVChangeAuth>()?;
+        let [nv_index] = handles;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(1))?;
+        let nv_index = nv_index.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<NVChangeAuth>()?;
+        let cmd = request.try_unmarshal_command::<NVChangeAuth>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }

@@ -1,7 +1,7 @@
 use core::fmt;
-use tpm2::TpmiStCommandTag;
-use tpm2::commands::*;
+use tpm2::commands::{Command, Message, UnmarshalMessage};
 use tpm2::errors::{TpmRc, UnmarshalError};
+use tpm2::{Handle, TpmiStCommandTag};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{TpmCc, TpmSt};
 
@@ -159,39 +159,29 @@ impl<'a> Unmarshal<'a> for RespHeader {
     }
 }
 
-/// Runs a command with default/unset handles.
+/// Runs a command on the simulator and returns its response.
+///
+/// The command's handles ([`Message::handles`]) are written to the handle
+/// area. One empty password session (`TPM_RS_PW`) is added for each handle
+/// that requires authorization, as reported by
+/// [`tpm2_impl::handle_requires_auth`]. The response handles are returned
+/// inside the response.
+///
+/// # Errors
+/// - [`ExecuteError::Tpm`] if the TPM returns a non-success response code.
+/// - [`ExecuteError::CommandTooLarge`] if the command does not fit in the
+///   command buffer.
+/// - [`ExecuteError::ResponseTooLarge`] if the response header's size exceeds
+///   the response buffer.
+/// - [`ExecuteError::Unmarshal`] if the response handles, parameters, or
+///   authorization area cannot be unmarshaled.
+/// - [`ExecuteError::TrailingBytes`] if bytes remain after the response.
 pub fn run_command<CmdT: Command>(
     cmd: &CmdT,
     tpm: &mut crate::Simulator<'_>,
 ) -> Result<CmdT::Response<'static>, ExecuteError>
 where
-    CmdT::Response<'static>: Unmarshal<'static>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-{
-    Ok(run_command_with_handles(cmd, CmdT::Handles::default(), tpm)?.0)
-}
-
-/// Unmarshals the response header and checks the contained response code.
-fn read_response_header(buffer: &[u8]) -> Result<(RespHeader, usize), ExecuteError> {
-    let mut slice = buffer;
-    let resp_header = RespHeader::unmarshal(&mut slice)?;
-    if let Some(error) = TpmRc::new(resp_header.rc) {
-        return Err(ExecuteError::Tpm(error));
-    }
-    Ok((resp_header, buffer.len() - slice.len()))
-}
-
-/// Runs a command with provided handles and sessions.
-pub fn run_command_with_handles<CmdT: Command>(
-    cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
-    tpm: &mut crate::Simulator<'_>,
-) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), ExecuteError>
-where
-    CmdT::Response<'static>: Unmarshal<'static>,
-    for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut num_sessions = 0;
     let num_handles = tpm2_impl::command_handles_count(CmdT::CMD_CODE);
@@ -218,16 +208,18 @@ where
             .unwrap(),
     );
 
-    if written + CmdT::Handles::MAX_SIZE > CMD_BUFFER_SIZE {
+    let cmd_handles = cmd.handles();
+    let cmd_handles = cmd_handles.as_ref();
+    if written + cmd_handles.len() * Handle::MAX_SIZE > CMD_BUFFER_SIZE {
         return Err(ExecuteError::CommandTooLarge);
     }
-    let handles_len = cmd_handles.marshal(
-        (&mut cmd_buffer[written..written + CmdT::Handles::MAX_SIZE])
-            .try_into()
-            .ok()
-            .unwrap(),
-    );
-    written += handles_len;
+    for handle in cmd_handles {
+        written += handle.marshal(
+            (&mut cmd_buffer[written..written + Handle::MAX_SIZE])
+                .try_into()
+                .unwrap(),
+        );
+    }
 
     if num_sessions > 0 {
         let auth_cmd = tpm2::TpmsAuthCommand {
@@ -282,11 +274,14 @@ where
         return Err(ExecuteError::ResponseTooLarge);
     }
     let mut slice: &'static [u8] = std::vec::Vec::leak(resp_buffer[read..resp_size].to_vec());
-    let resp_handles = CmdT::RespHandles::unmarshal(&mut slice)?;
+    let mut resp_handles = <CmdT::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut slice)?;
+    }
     if resp_header.tag == TpmSt::SESSIONS {
         let _param_size = u32::unmarshal(&mut slice)?;
     }
-    let resp = <CmdT::Response<'static>>::unmarshal(&mut slice)?;
+    let resp = <CmdT::Response<'static>>::unmarshal_with_handles(resp_handles, &mut slice)?;
 
     if resp_header.tag == TpmSt::SESSIONS {
         for _ in 0..num_sessions {
@@ -297,5 +292,15 @@ where
     if !slice.is_empty() {
         return Err(ExecuteError::TrailingBytes);
     }
-    Ok((resp, resp_handles))
+    Ok(resp)
+}
+
+/// Unmarshals the response header and checks the contained response code.
+fn read_response_header(buffer: &[u8]) -> Result<(RespHeader, usize), ExecuteError> {
+    let mut slice = buffer;
+    let resp_header = RespHeader::unmarshal(&mut slice)?;
+    if let Some(error) = TpmRc::new(resp_header.rc) {
+        return Err(ExecuteError::Tpm(error));
+    }
+    Ok((resp_header, buffer.len() - slice.len()))
 }

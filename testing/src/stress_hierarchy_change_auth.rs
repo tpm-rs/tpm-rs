@@ -1,7 +1,7 @@
 use crate::test_utils::*;
 use tpm2::Handle;
 use tpm2::Tpm2bAuth;
-use tpm2::commands::{HierarchyChangeAuth, HierarchyChangeAuthHandles};
+use tpm2::commands::HierarchyChangeAuth;
 use tpm2_simulator::{SimulatorPlatformSignal, create_simulator};
 
 #[test]
@@ -11,12 +11,10 @@ fn stress_test_auth_size() {
     // Change owner auth
     let new_auth = b"newownerauth";
     let hca_cmd = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(new_auth).unwrap(),
     };
-    let hca_handles = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    let resp = execute_with_password_sessions(&mut sim, &hca_cmd, hca_handles.clone(), 1, &[]);
+    let resp = execute_with_password_sessions(&mut sim, &hca_cmd, 1, &[]);
     assert!(resp.is_ok());
 
     // Power cycle
@@ -26,9 +24,10 @@ fn stress_test_auth_size() {
 
     // Check if new owner auth is still valid!
     let hca_cmd2 = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(b"another").unwrap(),
     };
-    let resp2 = execute_with_password_sessions(&mut sim, &hca_cmd2, hca_handles, 1, new_auth);
+    let resp2 = execute_with_password_sessions(&mut sim, &hca_cmd2, 1, new_auth);
     assert!(
         resp2.is_ok(),
         "Owner auth was not saved across power cycle! State is LOST!"

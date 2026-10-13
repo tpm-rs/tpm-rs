@@ -6,8 +6,8 @@ mod common;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use tpm2::commands::{GetCapability, TestParms};
 use tpm2::errors::{Position, TpmRc};
+use tpm2::{AlgSym, TpmiAlgCipherMode, TpmiAlgSymMode, TpmtPublicParms, TpmtSymDefObject};
 use tpm2::{TpmCap, TpmCc};
-use tpm2::{TpmiAlgSymMode, TpmtPublicParms, TpmtSymDefObject};
 use tpm2_impl::{TpmEngine, TpmPlatform};
 
 #[test]
@@ -15,8 +15,8 @@ fn test_get_capability_commands_parity() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -72,8 +72,8 @@ fn test_test_parms_error_codes() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -101,7 +101,10 @@ fn test_test_parms_error_codes() {
     );
 
     // Test invalid AES key size (192 bits)
-    let parms = TpmtPublicParms::Sym(TpmtSymDefObject::Aes192(Some(TpmiAlgSymMode::CFB)));
+    let parms = TpmtPublicParms::Sym(TpmtSymDefObject {
+        alg: AlgSym::Aes192,
+        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+    });
     let cmd = TestParms { parameters: parms };
     let mut request = [0u8; 1024];
     let mut offset = 0;
@@ -121,7 +124,10 @@ fn test_test_parms_error_codes() {
     // AES-CBC is a valid symmetric mode for TPM2_TestParms: C only checks it while unmarshaling
     // `TPMU_SYM_MODE` (`TPMI_ALG_SYM_MODE_Unmarshal` accepts CTR/OFB/CBC/CFB/ECB), so it
     // succeeds. The CFB restriction applies to restricted decryption keys at object creation.
-    let parms_mode = TpmtPublicParms::Sym(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CBC)));
+    let parms_mode = TpmtPublicParms::Sym(TpmtSymDefObject {
+        alg: AlgSym::Aes128,
+        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cbc)),
+    });
     let cmd_mode = TestParms {
         parameters: parms_mode,
     };
@@ -143,8 +149,8 @@ fn test_get_capability_pcr_extend_l2() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -205,8 +211,8 @@ fn test_get_capability_pcr_reset_l2() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -260,8 +266,8 @@ fn test_get_capability_loaded_and_saved_sessions() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -389,8 +395,8 @@ fn test_ecc_parameters_invalid_curves() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -470,8 +476,8 @@ fn test_get_capability_vendor_string() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -542,14 +548,14 @@ fn test_get_capability_vendor_string() {
 
 #[test]
 fn test_get_capability_auth_policies_nullable_and_set_primary_policy() {
-    use tpm2::commands::{SetPrimaryPolicy, SetPrimaryPolicyHandles};
+    use tpm2::commands::{Message, SetPrimaryPolicy};
     use tpm2::{Handle, Tpm2bDigest, TpmiAlgHash, TpmsAuthCommand, TpmtHa};
 
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -636,11 +642,9 @@ fn test_get_capability_auth_policies_nullable_and_set_primary_policy() {
     let dummy_policy = [0x42u8; 32];
     let policy_digest = Tpm2bDigest::from_bytes(&dummy_policy).unwrap();
     let set_cmd = SetPrimaryPolicy {
+        auth_handle: Handle::RH_OWNER,
         auth_policy: policy_digest,
         hash_alg: Some(TpmiAlgHash::Sha256),
-    };
-    let set_handles = SetPrimaryPolicyHandles {
-        auth_handle: Handle::RH_OWNER,
     };
     let mut set_req = [0u8; 1024];
     let mut s_off = 0;
@@ -648,7 +652,9 @@ fn test_get_capability_auth_policies_nullable_and_set_primary_policy() {
     let len_offset = s_off;
     s_off += marshal_to_slice(&(0u32), &mut set_req[s_off..]);
     s_off += marshal_to_slice(&(TpmCc::SetPrimaryPolicy.code()), &mut set_req[s_off..]);
-    s_off += marshal_to_slice(&set_handles, &mut set_req[s_off..]);
+    for handle in set_cmd.handles() {
+        s_off += marshal_to_slice(&handle, &mut set_req[s_off..]);
+    }
     let auth_len_offset = s_off;
     s_off += marshal_to_slice(&(0u32), &mut set_req[s_off..]);
     let auth_start = s_off;
@@ -708,8 +714,8 @@ fn test_get_capability_tpm_spec_properties() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);

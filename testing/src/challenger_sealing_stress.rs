@@ -3,21 +3,20 @@ use crate::test_utils::marshal_to_slice;
 use crate::test_utils::{CLIENT_CRYPTO, entity_name, max_loaded_sessions};
 
 use crate::test_utils::{
-    ActiveSession, CmdHeader, RespHeader, execute_with_password_sessions, map_sessions_to_handles,
-    start_auth_session, strip_trailing_zeros,
+    ActiveSession, CmdHeader, RespHandles, RespHeader, execute_with_password_sessions,
+    map_sessions_to_handles, marshal_auth_command, start_auth_session, strip_trailing_zeros,
+    sym_encrypt,
 };
-use tpm2::commands::{
-    Create, CreateHandles, CreatePrimary, CreatePrimaryHandles, FlushContext, Unseal, UnsealHandles,
-};
-use tpm2::crypto::Rng;
-use tpm2::{Handle, TpmSe, TpmSt};
-use tpm2::{Marshal, Unmarshal};
+use tpm2::commands::{Create, CreatePrimary, FlushContext, Unseal};
+use tpm2::crypto::CryptoProvider;
 use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce, Tpm2bPublicKeyRsa,
-    Tpm2bSensitiveData, TpmaObject, TpmaSession, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits,
-    TpmiStCommandTag, TpmlPcrSelection, TpmsAuthCommand, TpmsAuthResponse, TpmsRsaParms,
-    TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce,
+    Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmaObject, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash,
+    TpmiAlgSymMode, TpmiRsaKeyBits, TpmiStCommandTag, TpmlPcrSelection, TpmsAuthCommand,
+    TpmsAuthResponse, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
+use tpm2::{Handle, TpmSe, TpmSt};
+use tpm2::{Marshal, Unmarshal, UnmarshalMessage};
 use tpm2_simulator::{Simulator, create_simulator};
 
 // =========================================================================
@@ -36,7 +35,10 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Rsa(
             TpmsRsaParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                }),
                 scheme: None,
                 key_bits: TpmiRsaKeyBits(2048),
                 exponent: 0,
@@ -58,37 +60,31 @@ fn create_srk(
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
     let in_public = tpm2::Tpm2b(*srk_template);
     let create_primary = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (rsp, rsp_handles) =
-        execute_with_password_sessions(sim, &create_primary, create_handles, 1, &[])
-            .expect("could not call TPM2_CreatePrimary");
+    let rsp = execute_with_password_sessions(sim, &create_primary, 1, &[])
+        .expect("could not call TPM2_CreatePrimary");
 
-    (rsp_handles.object_handle, rsp.name)
+    (rsp.object_handle, rsp.name)
 }
 
 fn flush_context(tpm: &mut Simulator<'_>, handle: Handle) -> Result<(), u32> {
     let cmd = FlushContext {
         flush_handle: handle,
     };
-    execute_with_password_sessions(tpm, &cmd, (), 0, &[]).map(|_| ())
+    execute_with_password_sessions(tpm, &cmd, 0, &[]).map(|_| ())
 }
 
 fn compute_client_hash<H: tpm2::crypto::Hash>(
     crypto: &H,
     auth_hash: TpmiAlgHash,
     updates: &[&[u8]],
-) -> Vec<u8>
-where
-    H::Error: core::fmt::Debug,
-{
-    let mut state = tpm2::crypto::HashCtx::new(crypto, auth_hash).unwrap();
+) -> Vec<u8> {
+    let mut state = tpm2::crypto::HashStream::new(crypto, auth_hash).unwrap();
     for data in updates {
         state.update(data).unwrap();
     }
@@ -101,11 +97,8 @@ fn compute_client_hmac<H: tpm2::crypto::Hmac>(
     auth_hash: TpmiAlgHash,
     key: &[u8],
     updates: &[&[u8]],
-) -> Vec<u8>
-where
-    H::Error: core::fmt::Debug,
-{
-    let mut state = tpm2::crypto::HmacCtx::new(crypto, auth_hash, key).unwrap();
+) -> Vec<u8> {
+    let mut state = tpm2::crypto::HmacStream::new(crypto, auth_hash, key).unwrap();
     for data in updates {
         state.update(data).unwrap();
     }
@@ -121,16 +114,13 @@ fn reference_kdfa<H: tpm2::crypto::Hmac>(
     context_u: &[u8],
     context_v: &[u8],
     bits: u32,
-) -> Vec<u8>
-where
-    H::Error: core::fmt::Debug,
-{
+) -> Vec<u8> {
     let required_bytes = bits.div_ceil(8) as usize;
     let mut out = vec![0u8; required_bytes];
     let mut counter = 1u32;
     let mut generated = 0;
     while generated < required_bytes {
-        let mut state = tpm2::crypto::HmacCtx::new(crypto, auth_hash, key).unwrap();
+        let mut state = tpm2::crypto::HmacStream::new(crypto, auth_hash, key).unwrap();
         state.update(&counter.to_be_bytes()).unwrap();
         state.update(label).unwrap();
         state.update(&[0x00]).unwrap();
@@ -156,10 +146,7 @@ fn derive_key_and_iv_ref<H: tpm2::crypto::Hmac>(
     context_u: &[u8],
     context_v: &[u8],
     key_size_bytes: usize,
-) -> (Vec<u8>, [u8; 16])
-where
-    H::Error: core::fmt::Debug,
-{
+) -> (Vec<u8>, [u8; 16]) {
     let total_bytes = key_size_bytes + 16;
     let total_bits = (total_bytes * 8) as u32;
     let out_buffer = reference_kdfa(
@@ -176,15 +163,12 @@ where
 fn execute_with_hmac_sessions_corrupt_ciphertext<CmdT: tpm2::commands::Command>(
     tpm: &mut Simulator<'_>,
     cmd: &CmdT,
-    cmd_handles: CmdT::Handles,
     sessions: &mut [ActiveSession],
     entity_auths: &[&[u8]],
     corrupt_byte_offset: usize,
-) -> Result<(CmdT::Response<'static>, CmdT::RespHandles), u32>
+) -> Result<CmdT::Response<'static>, u32>
 where
-    CmdT::Response<'static>: tpm2::Unmarshal<'static>,
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut cmd_buffer = [0u8; 4096];
     let mut cmd_header = CmdHeader {
@@ -198,7 +182,9 @@ where
     };
 
     let mut written = cmd_header.marshal((&mut cmd_buffer[0..10]).try_into().unwrap());
-    written += marshal_to_slice(&(cmd_handles), &mut cmd_buffer[written..]);
+    for handle in cmd.handles().as_ref() {
+        written += handle.marshal((&mut cmd_buffer[written..written + 4]).try_into().unwrap());
+    }
 
     let session_size_pos = written;
     if !sessions.is_empty() {
@@ -260,8 +246,14 @@ where
         let size = u16::from_be_bytes([param_buf[0], param_buf[1]]) as usize;
 
         let bits = match &session.symmetric {
-            Some(TpmtSymDefObject::Aes128(_)) => 128 + 128,
-            Some(TpmtSymDefObject::Aes256(_)) => 256 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                ..
+            }) => 128 + 128,
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes256,
+                ..
+            }) => 256 + 128,
             _ => 0,
         };
 
@@ -287,7 +279,7 @@ where
 
             let mut iv = derived_iv;
             let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((derived_key.len() * 8) as u16).unwrap();
-            tpm2::crypto::encrypt(
+            sym_encrypt(
                 CLIENT_CRYPTO,
                 sym_alg,
                 &derived_key,
@@ -365,12 +357,16 @@ where
             hmac: hmac_val,
         };
 
-        auth_written += marshal_to_slice(&(auth_cmd), &mut auth_buffer[auth_written..]);
+        auth_written += marshal_auth_command(&auth_cmd, &mut auth_buffer[auth_written..]);
     }
 
     if !sessions.is_empty() {
         let size_u32 = auth_written as u32;
-        marshal_to_slice(&(size_u32), &mut cmd_buffer[session_size_pos..]);
+        size_u32.marshal(
+            (&mut cmd_buffer[session_size_pos..session_size_pos + 4])
+                .try_into()
+                .unwrap(),
+        );
         cmd_buffer[sessions_start_pos..sessions_start_pos + auth_written]
             .copy_from_slice(&auth_buffer[..auth_written]);
         written = sessions_start_pos + auth_written;
@@ -395,7 +391,10 @@ where
         return Err(resp_header.rc);
     }
 
-    let resp_handles = CmdT::RespHandles::unmarshal(&mut unmarsh).unwrap();
+    let mut resp_handles = RespHandles::<CmdT>::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut unmarsh).unwrap();
+    }
     let mut parameter_size = 0;
     if resp_header.tag == TpmSt::SESSIONS {
         parameter_size = u32::unmarshal(&mut unmarsh).unwrap() as usize;
@@ -415,9 +414,10 @@ where
     }
 
     let mut resp_unmarsh: &'static [u8] = crate::test_utils::leak_bytes(encrypted_param_buf);
-    let resp_struct = <CmdT::Response<'static>>::unmarshal(&mut resp_unmarsh).unwrap();
+    let resp_struct =
+        <CmdT::Response<'static>>::unmarshal_with_handles(resp_handles, &mut resp_unmarsh).unwrap();
 
-    Ok((resp_struct, resp_handles))
+    Ok(resp_struct)
 }
 
 // =========================================================================
@@ -510,36 +510,29 @@ fn test_sealing_auth_value_zeros_and_padding() {
             parms_and_id: PublicParmsAndId::KeyedHash(None, Tpm2bDigest::default()),
         });
         let create_cmd = Create {
+            parent_handle: srk_handle,
             in_sensitive,
             in_public,
             outside_info: Tpm2bData::default(),
             creation_pcr: TpmlPcrSelection::default(),
         };
-        let create_handles = CreateHandles {
-            parent_handle: srk_handle,
-        };
-        let (create_rsp, _) =
-            execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, srk_auth)
-                .unwrap();
+        let create_rsp =
+            execute_with_password_sessions(&mut sim, &create_cmd, 1, srk_auth).unwrap();
 
         // Load
         let load_cmd = tpm2::commands::Load {
+            parent_handle: srk_handle,
             in_private: create_rsp.out_private,
             in_public: create_rsp.out_public,
         };
-        let load_handles = tpm2::commands::LoadHandles {
-            parent_handle: srk_handle,
-        };
-        let (_, load_rsp_handles) =
-            execute_with_password_sessions(&mut sim, &load_cmd, load_handles, 1, srk_auth).unwrap();
+        let load_rsp_handles =
+            execute_with_password_sessions(&mut sim, &load_cmd, 1, srk_auth).unwrap();
 
         // Unseal with empty auth
-        let unseal_cmd = Unseal {};
-        let unseal_handles = UnsealHandles {
+        let unseal_cmd = Unseal {
             item_handle: load_rsp_handles.object_handle,
         };
-        let (unseal_rsp, _) =
-            execute_with_password_sessions(&mut sim, &unseal_cmd, unseal_handles, 1, auth).unwrap();
+        let unseal_rsp = execute_with_password_sessions(&mut sim, &unseal_cmd, 1, auth).unwrap();
         assert_eq!(unseal_rsp.out_data.get_buffer(), data);
 
         flush_context(&mut sim, load_rsp_handles.object_handle).unwrap();
@@ -565,28 +558,23 @@ fn test_sealing_auth_value_zeros_and_padding() {
             parms_and_id: PublicParmsAndId::KeyedHash(None, Tpm2bDigest::default()),
         });
         let create_cmd = Create {
+            parent_handle: srk_handle,
             in_sensitive,
             in_public,
             outside_info: Tpm2bData::default(),
             creation_pcr: TpmlPcrSelection::default(),
         };
-        let create_handles = CreateHandles {
-            parent_handle: srk_handle,
-        };
-        let (create_rsp, _) =
-            execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, srk_auth)
-                .unwrap();
+        let create_rsp =
+            execute_with_password_sessions(&mut sim, &create_cmd, 1, srk_auth).unwrap();
 
         // Load
         let load_cmd = tpm2::commands::Load {
+            parent_handle: srk_handle,
             in_private: create_rsp.out_private,
             in_public: create_rsp.out_public,
         };
-        let load_handles = tpm2::commands::LoadHandles {
-            parent_handle: srk_handle,
-        };
-        let (_, load_rsp_handles) =
-            execute_with_password_sessions(&mut sim, &load_cmd, load_handles, 1, srk_auth).unwrap();
+        let load_rsp_handles =
+            execute_with_password_sessions(&mut sim, &load_cmd, 1, srk_auth).unwrap();
 
         // Start HMAC session for unseal
         let mut sess = start_auth_session(
@@ -602,20 +590,18 @@ fn test_sealing_auth_value_zeros_and_padding() {
         sess.attributes = TpmaSession::CONTINUE_SESSION;
 
         // Verify unseal works when client uses stripped auth "p@ssw0rd"
-        let unseal_cmd = Unseal {};
-        let unseal_handles = UnsealHandles {
+        let unseal_cmd = Unseal {
             item_handle: load_rsp_handles.object_handle,
         };
         let unseal_res = crate::test_utils::execute_with_hmac_sessions(
             &mut sim,
             &unseal_cmd,
-            unseal_handles,
             &[],
             &mut [sess.clone()],
             &[b"p@ssw0rd"],
         );
         assert!(unseal_res.is_ok());
-        let (unseal_rsp, _) = unseal_res.unwrap();
+        let unseal_rsp = unseal_res.unwrap();
         assert_eq!(unseal_rsp.out_data.get_buffer(), data);
 
         flush_context(&mut sim, sess.session_handle).unwrap();
@@ -642,37 +628,29 @@ fn test_sealing_auth_value_zeros_and_padding() {
             parms_and_id: PublicParmsAndId::KeyedHash(None, Tpm2bDigest::default()),
         });
         let create_cmd = Create {
+            parent_handle: srk_handle,
             in_sensitive,
             in_public,
             outside_info: Tpm2bData::default(),
             creation_pcr: TpmlPcrSelection::default(),
         };
-        let create_handles = CreateHandles {
-            parent_handle: srk_handle,
-        };
-        let (create_rsp, _) =
-            execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, srk_auth)
-                .unwrap();
+        let create_rsp =
+            execute_with_password_sessions(&mut sim, &create_cmd, 1, srk_auth).unwrap();
 
         // Load
         let load_cmd = tpm2::commands::Load {
+            parent_handle: srk_handle,
             in_private: create_rsp.out_private,
             in_public: create_rsp.out_public,
         };
-        let load_handles = tpm2::commands::LoadHandles {
-            parent_handle: srk_handle,
-        };
-        let (_, load_rsp_handles) =
-            execute_with_password_sessions(&mut sim, &load_cmd, load_handles, 1, srk_auth).unwrap();
+        let load_rsp_handles =
+            execute_with_password_sessions(&mut sim, &load_cmd, 1, srk_auth).unwrap();
 
         // Unseal
-        let unseal_cmd = Unseal {};
-        let unseal_handles = UnsealHandles {
+        let unseal_cmd = Unseal {
             item_handle: load_rsp_handles.object_handle,
         };
-        let (unseal_rsp, _) =
-            execute_with_password_sessions(&mut sim, &unseal_cmd, unseal_handles, 1, &auth)
-                .unwrap();
+        let unseal_rsp = execute_with_password_sessions(&mut sim, &unseal_cmd, 1, &auth).unwrap();
         assert_eq!(unseal_rsp.out_data.get_buffer(), data);
 
         flush_context(&mut sim, load_rsp_handles.object_handle).unwrap();
@@ -707,19 +685,16 @@ fn test_sealing_payload_boundaries() {
             parms_and_id: PublicParmsAndId::KeyedHash(None, Tpm2bDigest::default()),
         });
         let create_cmd = Create {
+            parent_handle: srk_handle,
             in_sensitive,
             in_public,
             outside_info: Tpm2bData::default(),
             creation_pcr: TpmlPcrSelection::default(),
         };
-        let create_handles = CreateHandles {
-            parent_handle: srk_handle,
-        };
         // C CreateChecks (Object_spt.c:343-346): with sensitiveDataOrigin CLEAR
         // the caller must provide data, so an empty sealed payload is rejected
         // with TPM_RCS_ATTRIBUTES + RC_Create_inPublic (ATTRIBUTES+P2, 0x2C2).
-        let res =
-            execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, srk_auth);
+        let res = execute_with_password_sessions(&mut sim, &create_cmd, 1, srk_auth);
         assert_eq!(res.err(), Some(0x2c2));
     }
 
@@ -742,36 +717,29 @@ fn test_sealing_payload_boundaries() {
             parms_and_id: PublicParmsAndId::KeyedHash(None, Tpm2bDigest::default()),
         });
         let create_cmd = Create {
+            parent_handle: srk_handle,
             in_sensitive,
             in_public,
             outside_info: Tpm2bData::default(),
             creation_pcr: TpmlPcrSelection::default(),
         };
-        let create_handles = CreateHandles {
-            parent_handle: srk_handle,
-        };
-        let (create_rsp, _) =
-            execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, srk_auth)
-                .unwrap();
+        let create_rsp =
+            execute_with_password_sessions(&mut sim, &create_cmd, 1, srk_auth).unwrap();
 
         // Load
         let load_cmd = tpm2::commands::Load {
+            parent_handle: srk_handle,
             in_private: create_rsp.out_private,
             in_public: create_rsp.out_public,
         };
-        let load_handles = tpm2::commands::LoadHandles {
-            parent_handle: srk_handle,
-        };
-        let (_, load_rsp_handles) =
-            execute_with_password_sessions(&mut sim, &load_cmd, load_handles, 1, srk_auth).unwrap();
+        let load_rsp_handles =
+            execute_with_password_sessions(&mut sim, &load_cmd, 1, srk_auth).unwrap();
 
         // Unseal
-        let unseal_cmd = Unseal {};
-        let unseal_handles = UnsealHandles {
+        let unseal_cmd = Unseal {
             item_handle: load_rsp_handles.object_handle,
         };
-        let (unseal_rsp, _) =
-            execute_with_password_sessions(&mut sim, &unseal_cmd, unseal_handles, 1, auth).unwrap();
+        let unseal_rsp = execute_with_password_sessions(&mut sim, &unseal_cmd, 1, auth).unwrap();
         assert_eq!(unseal_rsp.out_data.get_buffer(), data);
 
         flush_context(&mut sim, load_rsp_handles.object_handle).unwrap();
@@ -803,7 +771,10 @@ fn test_sealing_parameter_encryption_corruption() {
         Handle::RH_NULL,
         &[],
         TpmSe::HMAC,
-        Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        }),
         TpmiAlgHash::Sha256,
     )
     .unwrap();
@@ -826,13 +797,11 @@ fn test_sealing_parameter_encryption_corruption() {
         parms_and_id: PublicParmsAndId::KeyedHash(None, Tpm2bDigest::default()),
     });
     let create_cmd = Create {
+        parent_handle: srk_handle,
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
-    };
-    let create_handles = CreateHandles {
-        parent_handle: srk_handle,
     };
 
     // Corrupt ciphertext parameter byte offset 10 (inside inside Tpm2bSensitiveCreate / userAuth / sensitiveData)
@@ -841,7 +810,6 @@ fn test_sealing_parameter_encryption_corruption() {
     let corrupt_res = execute_with_hmac_sessions_corrupt_ciphertext(
         &mut sim,
         &create_cmd,
-        create_handles,
         &mut [sess.clone()],
         &[srk_auth],
         3, // corrupt byte 3 (inside user_auth size prefix)

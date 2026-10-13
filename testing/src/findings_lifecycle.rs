@@ -101,7 +101,10 @@ fn ecc_primary_template() -> TpmtPublic<'static> {
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Ecc(
             TpmsEccParms {
-                symmetric: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+                symmetric: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
                 scheme: None,
                 curve_id: TpmEccCurve::NistP256,
                 kdf: None,
@@ -117,6 +120,7 @@ fn ecc_primary_template() -> TpmtPublic<'static> {
 /// Creates an ECC primary key under `hierarchy` and returns its handle and Name.
 fn create_primary(sim: &mut Simulator<'_>, hierarchy: Handle, auth: &[u8]) -> (Handle, Vec<u8>) {
     let cmd = CreatePrimary {
+        primary_handle: hierarchy,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -125,52 +129,36 @@ fn create_primary(sim: &mut Simulator<'_>, hierarchy: Handle, auth: &[u8]) -> (H
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let handles = CreatePrimaryHandles {
-        primary_handle: hierarchy,
-    };
-    let (rsp, rsp_handles) = execute_with_password_sessions(sim, &cmd, handles, 1, auth)
+    let rsp = execute_with_password_sessions(sim, &cmd, 1, auth)
         .unwrap_or_else(|rc| panic!("CreatePrimary({hierarchy:?}) failed: {rc:#x}"));
-    (rsp_handles.object_handle, rsp.name.get_buffer().to_vec())
+    (rsp.object_handle, rsp.name.get_buffer().to_vec())
 }
 
 /// Makes `object` persistent at `persistent` using `auth` (owner or platform).
 fn evict(sim: &mut Simulator<'_>, auth: Handle, object: Handle, persistent: u32) {
     let cmd = EvictControl {
-        persistent_handle: Handle(persistent),
-    };
-    let handles = EvictControlHandles {
         auth,
         object_handle: object,
+        persistent_handle: Handle(persistent),
     };
-    execute_with_password_sessions(sim, &cmd, handles, 1, &[])
+    execute_with_password_sessions(sim, &cmd, 1, &[])
         .unwrap_or_else(|rc| panic!("EvictControl({persistent:#x}) failed: {rc:#x}"));
 }
 
 /// Returns whether a persistent/transient object handle is present (`TPM2_ReadPublic`).
 fn object_exists(sim: &mut Simulator<'_>, handle: u32) -> bool {
-    sim.execute_with_handles(
-        ReadPublic {},
-        ReadPublicHandles {
-            object_handle: Handle(handle),
-        },
-    )
+    sim.execute(ReadPublic {
+        object_handle: Handle(handle),
+    })
     .is_ok()
 }
 
 fn clear(sim: &mut Simulator<'_>, auth: Handle) -> Result<(), u32> {
-    execute_with_password_sessions(sim, &Clear {}, ClearHandles { auth_handle: auth }, 1, &[])
-        .map(|_| ())
+    execute_with_password_sessions(sim, &Clear { auth_handle: auth }, 1, &[]).map(|_| ())
 }
 
 fn clear_control(sim: &mut Simulator<'_>, auth: Handle, disable: bool) -> Result<(), u32> {
-    execute_with_password_sessions(
-        sim,
-        &ClearControl { disable },
-        ClearControlHandles { auth },
-        1,
-        &[],
-    )
-    .map(|_| ())
+    execute_with_password_sessions(sim, &ClearControl { auth, disable }, 1, &[]).map(|_| ())
 }
 
 fn hierarchy_control(
@@ -181,8 +169,11 @@ fn hierarchy_control(
 ) -> Result<(), u32> {
     execute_with_password_sessions(
         sim,
-        &HierarchyControl { enable, state },
-        HierarchyControlHandles { auth_handle: auth },
+        &HierarchyControl {
+            auth_handle: auth,
+            enable,
+            state,
+        },
         1,
         &[],
     )
@@ -198,10 +189,8 @@ fn hierarchy_change_auth(
     execute_with_password_sessions(
         sim,
         &HierarchyChangeAuth {
-            new_auth: Tpm2bAuth::from_bytes(new_auth).unwrap(),
-        },
-        HierarchyChangeAuthHandles {
             auth_handle: hierarchy,
+            new_auth: Tpm2bAuth::from_bytes(new_auth).unwrap(),
         },
         1,
         current,
@@ -228,6 +217,7 @@ fn incremental_self_test(sim: &mut Simulator<'_>, algs: &[Alg]) -> Result<Vec<Al
 
 fn define_nv(sim: &mut Simulator<'_>, index: u32, attributes: TpmaNv, size: u16) {
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info: Tpm2b(TpmsNvPublic {
             nv_index: Handle(index),
@@ -237,28 +227,18 @@ fn define_nv(sim: &mut Simulator<'_>, index: u32, attributes: TpmaNv, size: u16)
             data_size: size,
         }),
     };
-    execute_with_password_sessions(
-        sim,
-        &cmd,
-        NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        },
-        1,
-        &[],
-    )
-    .unwrap_or_else(|rc| panic!("NV_DefineSpace({index:#x}) failed: {rc:#x}"));
+    execute_with_password_sessions(sim, &cmd, 1, &[])
+        .unwrap_or_else(|rc| panic!("NV_DefineSpace({index:#x}) failed: {rc:#x}"));
 }
 
 fn nv_write(sim: &mut Simulator<'_>, index: u32, data: &[u8]) -> Result<(), u32> {
     execute_with_password_sessions(
         sim,
         &NVWrite {
-            data: Tpm2bMaxNvBuffer::from_bytes(data).unwrap(),
-            offset: 0,
-        },
-        NVWriteHandles {
             auth_handle: Handle::RH_OWNER,
             nv_index: Handle(index),
+            data: Tpm2bMaxNvBuffer::from_bytes(data).unwrap(),
+            offset: 0,
         },
         1,
         &[],
@@ -269,10 +249,11 @@ fn nv_write(sim: &mut Simulator<'_>, index: u32, data: &[u8]) -> Result<(), u32>
 fn nv_read(sim: &mut Simulator<'_>, index: u32, size: u16) -> Result<(), u32> {
     execute_with_password_sessions(
         sim,
-        &NVRead { size, offset: 0 },
-        NVReadHandles {
+        &NVRead {
             auth_handle: Handle::RH_OWNER,
             nv_index: Handle(index),
+            size,
+            offset: 0,
         },
         1,
         &[],
@@ -293,9 +274,9 @@ fn tpm2_clockset_i64_overflow_and_hardcoded_clock_safe_flag() {
     let new_time = 0x8000_0000_0000_0000u64;
     execute_with_password_sessions(
         &mut sim,
-        &ClockSet { new_time },
-        ClockSetHandles {
+        &ClockSet {
             auth: Handle::RH_OWNER,
+            new_time,
         },
         1,
         &[],
@@ -308,9 +289,9 @@ fn tpm2_clockset_i64_overflow_and_hardcoded_clock_safe_flag() {
     let max_time = 0xFFFF_0000_0000_0000u64;
     execute_with_password_sessions(
         &mut sim,
-        &ClockSet { new_time: max_time },
-        ClockSetHandles {
+        &ClockSet {
             auth: Handle::RH_OWNER,
+            new_time: max_time,
         },
         1,
         &[],
@@ -352,10 +333,8 @@ fn clock_set_rate_adjust_and_clock_safe_nv_bugs() {
     let rc = execute_with_password_sessions(
         &mut sim,
         &ClockSet {
-            new_time: before + 1_000_000,
-        },
-        ClockSetHandles {
             auth: Handle::RH_OWNER,
+            new_time: before + 1_000_000,
         },
         1,
         &[],
@@ -375,10 +354,8 @@ fn clock_set_clock_rate_adjust_slows_time() {
         execute_with_password_sessions(
             &mut sim,
             &ClockRateAdjust {
-                rate_adjust: TpmClockAdjust::CoarseSlower,
-            },
-            ClockRateAdjustHandles {
                 auth: Handle::RH_PLATFORM,
+                rate_adjust: TpmClockAdjust::CoarseSlower,
             },
             1,
             &[],
@@ -416,14 +393,10 @@ fn tpm2_clear_deletes_platform_persistent_objects_and_corrupts_counters() {
     // A saved platform-object context must remain loadable: clearCount is reset to 0
     // (it was already 0 after the TPM Reset), not incremented.
     let saved = sim
-        .execute_with_handles(
-            ContextSave {},
-            ContextSaveHandles {
-                save_handle: platform_key,
-            },
-        )
+        .execute(ContextSave {
+            save_handle: platform_key,
+        })
         .unwrap()
-        .0
         .context;
 
     let counter_before = pcr_update_counter(&mut sim);
@@ -481,8 +454,7 @@ fn tpm2_hierarchy_commands_clear_changeeps_changepps_and_hierarchycontrol_bugs()
     evict(&mut sim, Handle::RH_PLATFORM, platform_key, 0x8180_0002);
     execute_with_password_sessions(
         &mut sim,
-        &ChangePPS {},
-        ChangePPSHandles {
+        &ChangePPS {
             auth_handle: Handle::RH_PLATFORM,
         },
         1,
@@ -504,11 +476,9 @@ fn tpm2_changeeps_and_changepps_omit_nv_evict_flushing_and_endorsement_alg() {
     execute_with_password_sessions(
         &mut sim,
         &SetPrimaryPolicy {
+            auth_handle: Handle::RH_ENDORSEMENT,
             auth_policy: Tpm2bDigest::from_bytes(&[0x11; 32]).unwrap(),
             hash_alg: Some(TpmiAlgHash::Sha256),
-        },
-        SetPrimaryPolicyHandles {
-            auth_handle: Handle::RH_ENDORSEMENT,
         },
         1,
         &[],
@@ -520,8 +490,7 @@ fn tpm2_changeeps_and_changepps_omit_nv_evict_flushing_and_endorsement_alg() {
     hierarchy_control(&mut sim, Handle::RH_PLATFORM, Handle::RH_OWNER, false).unwrap();
     execute_with_password_sessions(
         &mut sim,
-        &ChangeEPS {},
-        ChangeEPSHandles {
+        &ChangeEPS {
             auth_handle: Handle::RH_PLATFORM,
         },
         1,
@@ -539,15 +508,12 @@ fn tpm2_changeeps_and_changepps_omit_nv_evict_flushing_and_endorsement_alg() {
     );
 
     // TPM_CAP_AUTH_POLICIES reports TPM_ALG_NULL for the endorsement hierarchy again.
-    let (rsp, _) = sim
-        .execute_with_handles(
-            GetCapability {
-                capability: TpmCap::AuthPolicies,
-                property: Handle::RH_ENDORSEMENT.0,
-                property_count: 1,
-            },
-            (),
-        )
+    let rsp = sim
+        .execute(GetCapability {
+            capability: TpmCap::AuthPolicies,
+            property: Handle::RH_ENDORSEMENT.0,
+            property_count: 1,
+        })
         .unwrap();
     match rsp.capability_data {
         TpmsCapabilityData::AuthPolicies(policies) => {
@@ -586,8 +552,7 @@ fn change_eps_change_pps_and_clear_ph_enable_nv_available_and_clear_count_bugs()
     nv_off(&mut sim);
     let rc = execute_with_password_sessions(
         &mut sim,
-        &ChangeEPS {},
-        ChangeEPSHandles {
+        &ChangeEPS {
             auth_handle: Handle::RH_PLATFORM,
         },
         1,
@@ -597,8 +562,7 @@ fn change_eps_change_pps_and_clear_ph_enable_nv_available_and_clear_count_bugs()
     assert_eq!(rc, nv_unavailable());
     let rc = execute_with_password_sessions(
         &mut sim,
-        &ChangePPS {},
-        ChangePPSHandles {
+        &ChangePPS {
             auth_handle: Handle::RH_PLATFORM,
         },
         1,
@@ -623,11 +587,9 @@ fn nv_clear_orderly_bypasses_nv_available_when_orderly_state_cleared() {
     let rc = execute_with_password_sessions(
         &mut sim,
         &SetPrimaryPolicy {
+            auth_handle: Handle::RH_PLATFORM,
             auth_policy: Tpm2bDigest::from_bytes(&[0x22; 32]).unwrap(),
             hash_alg: Some(TpmiAlgHash::Sha256),
-        },
-        SetPrimaryPolicyHandles {
-            auth_handle: Handle::RH_PLATFORM,
         },
         1,
         &[],
@@ -757,11 +719,9 @@ fn set_primary_policy_nv_off_check(sim: &mut Simulator<'_>, hierarchy: Handle) {
     let rc = execute_with_password_sessions(
         sim,
         &SetPrimaryPolicy {
+            auth_handle: hierarchy,
             auth_policy: Tpm2bDigest::from_bytes(&[0x33; 32]).unwrap(),
             hash_alg: Some(TpmiAlgHash::Sha256),
-        },
-        SetPrimaryPolicyHandles {
-            auth_handle: hierarchy,
         },
         1,
         &[],
@@ -843,8 +803,7 @@ fn tpm2_incrementalselftest_and_selftest_alg_null_partial_mutation_and_unmarshal
 fn da_lock_reset(sim: &mut Simulator<'_>) -> Result<(), u32> {
     execute_with_password_sessions(
         sim,
-        &DictionaryAttackLockReset {},
-        DictionaryAttackLockResetHandles {
+        &DictionaryAttackLockReset {
             lock_handle: Handle::RH_LOCKOUT,
         },
         1,
@@ -862,12 +821,10 @@ fn da_parameters(
     execute_with_password_sessions(
         sim,
         &DictionaryAttackParameters {
+            lock_handle: Handle::RH_LOCKOUT,
             new_max_tries: max,
             new_recovery_time: recovery,
             lockout_recovery: lockout,
-        },
-        DictionaryAttackParametersHandles {
-            lock_handle: Handle::RH_LOCKOUT,
         },
         1,
         &[],
@@ -908,6 +865,7 @@ fn dictionary_attack_lock_reset_clearcontrol_and_daselfheal_nv_bugs() {
     let rc = execute_with_password_sessions(
         &mut sim,
         &Create {
+            parent_handle: key,
             in_sensitive: Tpm2b(TpmsSensitiveCreate {
                 user_auth: Tpm2bAuth::default(),
                 data: Tpm2bSensitiveData::default(),
@@ -916,7 +874,6 @@ fn dictionary_attack_lock_reset_clearcontrol_and_daselfheal_nv_bugs() {
             outside_info: Tpm2bData::default(),
             creation_pcr: TpmlPcrSelection::default(),
         },
-        CreateHandles { parent_handle: key },
         1,
         b"wrong",
     )
@@ -970,6 +927,7 @@ fn tpm2_startup_state_transition_and_null_seed_bugs() {
     assert!(hierarchy_control(&mut sim, Handle::RH_PLATFORM, Handle::RH_OWNER, true).is_err());
     // ...the saved one does, and the storage hierarchy is still disabled until re-enabled.
     let cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -979,26 +937,15 @@ fn tpm2_startup_state_transition_and_null_seed_bugs() {
         creation_pcr: TpmlPcrSelection::default(),
     };
     assert!(
-        execute_with_password_sessions(
-            &mut sim,
-            &cmd,
-            CreatePrimaryHandles {
-                primary_handle: Handle::RH_OWNER,
-            },
-            1,
-            &[],
-        )
-        .is_err(),
+        execute_with_password_sessions(&mut sim, &cmd, 1, &[]).is_err(),
         "shEnable was re-enabled by TPM Resume"
     );
     execute_with_password_sessions(
         &mut sim,
         &HierarchyControl {
+            auth_handle: Handle::RH_PLATFORM,
             enable: Handle::RH_OWNER,
             state: true,
-        },
-        HierarchyControlHandles {
-            auth_handle: Handle::RH_PLATFORM,
         },
         1,
         b"plat",
@@ -1079,14 +1026,10 @@ fn tpm2_shutdown_nv_uninitialized_error_order_and_missing_state_persistence() {
     )
     .unwrap();
     let saved = sim
-        .execute_with_handles(
-            ContextSave {},
-            ContextSaveHandles {
-                save_handle: session.session_handle,
-            },
-        )
+        .execute(ContextSave {
+            save_handle: session.session_handle,
+        })
         .unwrap()
-        .0
         .context;
     assert_eq!(power_cycle(&mut sim, Some(SU_STATE), SU_STATE), 0);
     sim.execute(ContextLoad { context: saved })
@@ -1151,8 +1094,7 @@ fn tpm2_startup_omits_nv_entity_startup_lock_reset_clear_stclear_and_orderly_cou
     }
     execute_with_password_sessions(
         &mut sim,
-        &NVReadLock {},
-        NVReadLockHandles {
+        &NVReadLock {
             auth_handle: Handle::RH_OWNER,
             nv_index: Handle(read_locked),
         },
@@ -1162,8 +1104,7 @@ fn tpm2_startup_omits_nv_entity_startup_lock_reset_clear_stclear_and_orderly_cou
     .unwrap();
     execute_with_password_sessions(
         &mut sim,
-        &NVWriteLock {},
-        NVWriteLockHandles {
+        &NVWriteLock {
             auth_handle: Handle::RH_OWNER,
             nv_index: Handle(write_locked),
         },
@@ -1204,9 +1145,9 @@ fn validate_provision_and_platform_auth_hierarchy_enable_bad_auth_and_order_bugs
     let now = read_clock(&mut sim).clock_info.clock;
     let rc = execute_with_password_sessions(
         &mut sim,
-        &ClockSet { new_time: now + 10 },
-        ClockSetHandles {
+        &ClockSet {
             auth: Handle::RH_OWNER,
+            new_time: now + 10,
         },
         1,
         b"ab",
@@ -1221,9 +1162,9 @@ fn clock_set_and_clock_rate_adjust_provision_auth_and_unmarshal_bugs() {
     let now = read_clock(&mut sim).clock_info.clock;
     let rc = execute_with_password_sessions(
         &mut sim,
-        &ClockSet { new_time: now + 10 },
-        ClockSetHandles {
+        &ClockSet {
             auth: Handle::RH_OWNER,
+            new_time: now + 10,
         },
         0,
         &[],
@@ -1233,10 +1174,8 @@ fn clock_set_and_clock_rate_adjust_provision_auth_and_unmarshal_bugs() {
     let rc = execute_with_password_sessions(
         &mut sim,
         &ClockRateAdjust {
-            rate_adjust: TpmClockAdjust::FineFaster,
-        },
-        ClockRateAdjustHandles {
             auth: Handle::RH_PLATFORM,
+            rate_adjust: TpmClockAdjust::FineFaster,
         },
         0,
         &[],
@@ -1252,8 +1191,7 @@ fn da_lockout_auth_validation_order_orderly_state_and_auth_missing_bugs() {
     let mut sim = create_simulator!();
     let rc = execute_with_password_sessions(
         &mut sim,
-        &DictionaryAttackLockReset {},
-        DictionaryAttackLockResetHandles {
+        &DictionaryAttackLockReset {
             lock_handle: Handle::RH_LOCKOUT,
         },
         0,
@@ -1280,11 +1218,9 @@ fn lockout_policy_and_bound_session_rejected_when_lockout_auth_disabled() {
     execute_with_password_sessions(
         &mut sim,
         &SetPrimaryPolicy {
+            auth_handle: Handle::RH_LOCKOUT,
             auth_policy: Tpm2bDigest::from_bytes(leak_bytes(&policy)).unwrap(),
             hash_alg: Some(TpmiAlgHash::Sha256),
-        },
-        SetPrimaryPolicyHandles {
-            auth_handle: Handle::RH_LOCKOUT,
         },
         1,
         &[],
@@ -1296,8 +1232,7 @@ fn lockout_policy_and_bound_session_rejected_when_lockout_auth_disabled() {
     let lock_reset = |sim: &mut Simulator<'_>, auth: &[u8]| {
         execute_with_password_sessions(
             sim,
-            &DictionaryAttackLockReset {},
-            DictionaryAttackLockResetHandles {
+            &DictionaryAttackLockReset {
                 lock_handle: Handle::RH_LOCKOUT,
             },
             1,
@@ -1320,20 +1255,15 @@ fn lockout_policy_and_bound_session_rejected_when_lockout_auth_disabled() {
     )
     .unwrap();
     session.attributes = TpmaSession::CONTINUE_SESSION;
-    sim.execute_with_handles(
-        PolicyCommandCode {
-            code: TpmCc::DictionaryAttackLockReset,
-        },
-        PolicyCommandCodeHandles {
-            policy_session: session.session_handle,
-        },
-    )
+    sim.execute(PolicyCommandCode {
+        policy_session: session.session_handle,
+        code: TpmCc::DictionaryAttackLockReset,
+    })
     .unwrap();
     let lockout_name = Handle::RH_LOCKOUT.0.to_be_bytes();
     execute_with_hmac_sessions_status(
         &mut sim,
-        &DictionaryAttackLockReset {},
-        DictionaryAttackLockResetHandles {
+        &DictionaryAttackLockReset {
             lock_handle: Handle::RH_LOCKOUT,
         },
         &[&lockout_name],

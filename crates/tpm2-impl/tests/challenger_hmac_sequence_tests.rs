@@ -5,9 +5,10 @@ mod common;
 use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
+#[allow(deprecated)] // TPM2_Sign is deprecated in the `tpm2` crate.
 use tpm2::commands::{
-    Command, EvictControl, EvictControlHandles, ReadPublic, ReadPublicHandles, SequenceComplete,
-    SequenceCompleteHandles, SequenceUpdate, SequenceUpdateHandles, Sign, SignHandles,
+    Command, EvictControl, Message, ReadPublic, SequenceComplete, SequenceUpdate, Sign,
+    UnmarshalMessage, responses,
 };
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmCc};
@@ -21,6 +22,7 @@ use tpm2_impl::TpmPlatform;
 // Local structures for commands not fully exported by tpm2 or tpm2-impl.
 #[derive(Clone, PartialEq, Default, Debug)]
 pub struct LocalHmacStartCmd<'a> {
+    pub handle: Handle,
     pub auth: Tpm2bAuth<'a>,
     pub hash_alg: Option<TpmiAlgHash>,
 }
@@ -39,59 +41,61 @@ impl tpm2::Marshal for LocalHmacStartCmd<'_> {
         offset
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalHmacStartCmd<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
+impl Message for LocalHmacStartCmd<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.handle]
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalHmacStartCmd<'a> {
+    fn unmarshal_with_handles(
+        [handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, tpm2::errors::UnmarshalError> {
         let auth = Tpm2bAuth::unmarshal(src)?;
         let hash_alg = <Option<TpmiAlgHash>>::unmarshal(src)?;
-        Ok(Self { auth, hash_alg })
+        Ok(Self {
+            handle,
+            auth,
+            hash_alg,
+        })
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub struct LocalHmacStartHandles {
-    pub handle: Handle,
-}
-impl tpm2::Marshal for LocalHmacStartHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.handle.marshal(dst)
-    }
-}
-impl<'a> tpm2::Unmarshal<'a> for LocalHmacStartHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
-        let handle = Handle::unmarshal(src)?;
-        Ok(Self { handle })
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub struct LocalHmacStartRespHandles {
+pub struct LocalHmacStartRsp {
     pub sequence_handle: Handle,
 }
-impl tpm2::Marshal for LocalHmacStartRespHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.sequence_handle.marshal(dst)
+impl tpm2::Marshal for LocalHmacStartRsp {
+    const MAX_SIZE: usize = 0;
+    type MaxBuffer = [u8; 0];
+    fn marshal(&self, _dst: &mut Self::MaxBuffer) -> usize {
+        0
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalHmacStartRespHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
-        let sequence_handle = Handle::unmarshal(src)?;
+impl Message for LocalHmacStartRsp {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.sequence_handle]
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalHmacStartRsp {
+    fn unmarshal_with_handles(
+        [sequence_handle]: Self::Handles,
+        _src: &mut &'a [u8],
+    ) -> Result<Self, tpm2::errors::UnmarshalError> {
         Ok(Self { sequence_handle })
     }
 }
 
 impl Command for LocalHmacStartCmd<'_> {
     const CMD_CODE: TpmCc = TpmCc::HmacStart;
-    type Handles = LocalHmacStartHandles;
-    type Response<'a> = ();
-    type RespHandles = LocalHmacStartRespHandles;
+    type Response<'a> = LocalHmacStartRsp;
 }
 
 #[derive(Clone, PartialEq, Default, Debug)]
 pub struct LocalMacCmd<'a> {
+    pub handle: Handle,
     pub in_buffer: tpm2::Tpm2bMaxBuffer<'a>,
     pub hash_alg: Option<TpmiAlgHash>,
 }
@@ -112,32 +116,24 @@ impl tpm2::Marshal for LocalMacCmd<'_> {
         offset
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalMacCmd<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
+impl Message for LocalMacCmd<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.handle]
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalMacCmd<'a> {
+    fn unmarshal_with_handles(
+        [handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, tpm2::errors::UnmarshalError> {
         let in_buffer = tpm2::Tpm2bMaxBuffer::unmarshal(src)?;
         let hash_alg = <Option<TpmiAlgHash>>::unmarshal(src)?;
         Ok(Self {
+            handle,
             in_buffer,
             hash_alg,
         })
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub struct LocalMacHandles {
-    pub handle: Handle,
-}
-impl tpm2::Marshal for LocalMacHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.handle.marshal(dst)
-    }
-}
-impl<'a> tpm2::Unmarshal<'a> for LocalMacHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
-        let handle = Handle::unmarshal(src)?;
-        Ok(Self { handle })
     }
 }
 
@@ -152,8 +148,17 @@ impl tpm2::Marshal for LocalMacRsp<'_> {
         self.out_hmac.marshal(dst)
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalMacRsp<'a> {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
+impl Message for LocalMacRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalMacRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, tpm2::errors::UnmarshalError> {
         let out_hmac = Tpm2bDigest::unmarshal(src)?;
         Ok(Self { out_hmac })
     }
@@ -161,16 +166,14 @@ impl<'a> tpm2::Unmarshal<'a> for LocalMacRsp<'a> {
 
 impl Command for LocalMacCmd<'_> {
     const CMD_CODE: TpmCc = TpmCc::MAC;
-    type Handles = LocalMacHandles;
     type Response<'a> = LocalMacRsp<'a>;
-    type RespHandles = ();
 }
 
 fn setup_tpm_with_crypto<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -195,14 +198,11 @@ fn setup_tpm_with_crypto<'a>(
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 32768];
     let mut offset = 10;
@@ -215,13 +215,10 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        request_buf[offset..offset + Handle::MAX_SIZE].copy_from_slice(&handle.0.to_be_bytes());
+        offset += Handle::MAX_SIZE;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -260,12 +257,11 @@ where
 
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
-    let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
-
-    let handles_len = orig_handles_len - handles_slice.len();
-    resp_offset += handles_len;
+    let mut resp_handles = <<C::Response<'static> as Message>::Handles>::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+        resp_offset += Handle::MAX_SIZE;
+    }
 
     let resp_tag = u16::from_be_bytes([response_buf[0], response_buf[1]]);
     if resp_tag == 0x8002 {
@@ -274,20 +270,20 @@ where
 
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
-    let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let resp = <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+        .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp)
 }
 
+#[allow(deprecated)] // TPM2_Sign is deprecated in the `tpm2` crate.
 fn execute_tpm_sign<'a>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &SignHandles,
     cmd: &Sign,
     auths: &[TpmsAuthCommand],
     response_buf: &'a mut [u8; 32768],
-) -> Result<<Sign<'static> as Command>::Response<'a>, u32> {
+) -> Result<responses::Sign<'a>, u32> {
     let mut request_buf = [0u8; 32768];
     let mut offset = 10;
 
@@ -299,10 +295,10 @@ fn execute_tpm_sign<'a>(
 
     request_buf[6..10].copy_from_slice(&(Sign::CMD_CODE.code()).to_be_bytes());
 
-    let mut handles_buf = [0u8; SignHandles::MAX_SIZE];
-    let handles_len = handles.marshal(&mut handles_buf);
-    request_buf[offset..offset + handles_len].copy_from_slice(&handles_buf.as_ref()[..handles_len]);
-    offset += handles_len;
+    for handle in cmd.handles() {
+        request_buf[offset..offset + Handle::MAX_SIZE].copy_from_slice(&handle.0.to_be_bytes());
+        offset += Handle::MAX_SIZE;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -342,7 +338,7 @@ fn execute_tpm_sign<'a>(
     }
 
     let mut params_slice = &response_buf[resp_offset..resp_size];
-    Unmarshal::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())
+    responses::Sign::unmarshal_with_handles([], &mut params_slice).map_err(|_| TpmRc::FAILURE.get())
 }
 
 fn insert_keyed_hash_key(
@@ -394,9 +390,9 @@ fn test_multiple_concurrent_hmac_sequences() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000005u32;
     insert_keyed_hash_key(
@@ -417,44 +413,26 @@ fn test_multiple_concurrent_hmac_sequences() {
     let mut seq_handles = Vec::new();
     for _ in 0..tpm2_impl::MAX_ACTIVE_SEQUENCES {
         let start_cmd = LocalHmacStartCmd {
+            handle: Handle(key_handle),
             auth: Tpm2bAuth::from_bytes(b"seqauth").unwrap(),
             hash_alg: Some(TpmiAlgHash::Sha256),
         };
-        let start_handles = LocalHmacStartHandles {
-            handle: Handle(key_handle),
-        };
-        let (resp_handles, _) = execute_tpm_command(
-            &mut tpm,
-            &mut global_state,
-            &start_handles,
-            &start_cmd,
-            &auths,
-        )
-        .unwrap();
+        let resp_handles =
+            execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &auths).unwrap();
         seq_handles.push(resp_handles.sequence_handle);
     }
 
     let start_cmd = LocalHmacStartCmd {
+        handle: Handle(key_handle),
         auth: Tpm2bAuth::from_bytes(b"seqauth").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let start_handles = LocalHmacStartHandles {
-        handle: Handle(key_handle),
-    };
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &start_handles,
-        &start_cmd,
-        &auths,
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &auths);
     assert!(res.is_err());
     assert_eq!(res.err().unwrap(), TpmRc::OBJECT_MEMORY.get());
 
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: seq_handles[0],
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: seq_handles[0],
         buffer: tpm2::Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
@@ -464,23 +442,10 @@ fn test_multiple_concurrent_hmac_sequences() {
         session_attributes: TpmaSession(1),
         hmac: Tpm2bAuth::from_bytes(b"seqauth").unwrap(),
     }];
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &complete_auths,
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &complete_auths).unwrap();
 
-    let (resp_handles, _) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &start_handles,
-        &start_cmd,
-        &auths,
-    )
-    .unwrap();
+    let resp_handles =
+        execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &auths).unwrap();
     let new_seq_handle = resp_handles.sequence_handle;
     assert_eq!(new_seq_handle.0, seq_handles[0].0);
 }
@@ -490,9 +455,9 @@ fn test_hmac_sequence_correctness_and_split_chunks() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000005u32;
     let key_bytes = b"another_secret_key_bytes_56789";
@@ -512,20 +477,12 @@ fn test_hmac_sequence_correctness_and_split_chunks() {
     }];
 
     let start_cmd = LocalHmacStartCmd {
+        handle: Handle(key_handle),
         auth: Tpm2bAuth::from_bytes(b"seqauth").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let start_handles = LocalHmacStartHandles {
-        handle: Handle(key_handle),
-    };
-    let (resp_handles, _) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &start_handles,
-        &start_cmd,
-        &auths,
-    )
-    .unwrap();
+    let resp_handles =
+        execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &auths).unwrap();
     let seq_handle = resp_handles.sequence_handle;
 
     let seq_auths = [TpmsAuthCommand {
@@ -539,62 +496,32 @@ fn test_hmac_sequence_correctness_and_split_chunks() {
     let chunk2 = b"this is a stress test for ";
     let chunk3 = b"HMAC sequence updates!";
 
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: seq_handle,
-    };
-
     let update_cmd1 = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(chunk1).unwrap(),
     };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd1,
-        &seq_auths,
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &update_cmd1, &seq_auths).unwrap();
 
     let update_cmd2 = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(chunk2).unwrap(),
     };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd2,
-        &seq_auths,
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &update_cmd2, &seq_auths).unwrap();
 
     let update_cmd3 = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(chunk3).unwrap(),
     };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd3,
-        &seq_auths,
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &update_cmd3, &seq_auths).unwrap();
 
     let final_chunk = b" End of sequence.";
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: seq_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: seq_handle,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(final_chunk).unwrap(),
         hierarchy: Handle::RH_NULL,
     };
-    let (_, complete_resp) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &seq_auths,
-    )
-    .unwrap();
+    let complete_resp =
+        execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &seq_auths).unwrap();
 
     let mut full_data = Vec::new();
     full_data.extend_from_slice(chunk1);
@@ -620,9 +547,9 @@ fn test_hmac_sequence_memory_limit() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000005u32;
     insert_keyed_hash_key(
@@ -641,20 +568,12 @@ fn test_hmac_sequence_memory_limit() {
     }];
 
     let start_cmd = LocalHmacStartCmd {
+        handle: Handle(key_handle),
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let start_handles = LocalHmacStartHandles {
-        handle: Handle(key_handle),
-    };
-    let (resp_handles, _) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &start_handles,
-        &start_cmd,
-        &auths,
-    )
-    .unwrap();
+    let resp_handles =
+        execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &auths).unwrap();
     let seq_handle = resp_handles.sequence_handle;
 
     // The sequence has an empty authValue; SequenceUpdate/SequenceComplete require USER
@@ -668,52 +587,28 @@ fn test_hmac_sequence_memory_limit() {
 
     // Send 4 chunks of 1024 bytes (total 4096 bytes)
     let chunk_1024 = vec![0u8; 1024];
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: seq_handle,
-    };
     let update_cmd = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(&chunk_1024).unwrap(),
     };
     for _ in 0..4 {
-        execute_tpm_command(
-            &mut tpm,
-            &mut global_state,
-            &update_handles,
-            &update_cmd,
-            &seq_auths,
-        )
-        .unwrap();
+        execute_tpm_command(&mut tpm, &mut global_state, &update_cmd, &seq_auths).unwrap();
     }
 
     // C has no limit on the total length of a sequence (the data is consumed by the running
     // hash), so going past 4096 bytes must still succeed (no TPM_RC_MEMORY).
     let update_cmd_more = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(&[0]).unwrap(),
     };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd_more,
-        &seq_auths,
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &update_cmd_more, &seq_auths).unwrap();
 
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: seq_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: seq_handle,
         buffer: tpm2::Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &seq_auths,
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &seq_auths).unwrap();
 }
 
 #[test]
@@ -721,9 +616,9 @@ fn test_hmac_sequence_auth_and_unauthorized_commands() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let key_handle = 0x80000005u32;
     insert_keyed_hash_key(
@@ -742,36 +637,20 @@ fn test_hmac_sequence_auth_and_unauthorized_commands() {
     }];
 
     let start_cmd = LocalHmacStartCmd {
+        handle: Handle(key_handle),
         auth: Tpm2bAuth::from_bytes(b"seqauth").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let start_handles = LocalHmacStartHandles {
-        handle: Handle(key_handle),
-    };
-    let (resp_handles, _) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &start_handles,
-        &start_cmd,
-        &auths,
-    )
-    .unwrap();
+    let resp_handles =
+        execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &auths).unwrap();
     let seq_handle = resp_handles.sequence_handle;
 
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: seq_handle,
-    };
     let update_cmd = SequenceUpdate {
+        sequence_handle: seq_handle,
         buffer: tpm2::Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
     };
 
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd,
-        &[],
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &update_cmd, &[]);
     assert!(res.is_err());
     assert_eq!(res.err().unwrap(), TpmRc::AUTH_MISSING.get());
 
@@ -781,57 +660,43 @@ fn test_hmac_sequence_auth_and_unauthorized_commands() {
         session_attributes: TpmaSession(1),
         hmac: Tpm2bAuth::from_bytes(b"wrongauth").unwrap(),
     }];
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd,
-        &wrong_auths,
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &update_cmd, &wrong_auths);
     assert!(res.is_err());
     assert_eq!(
         res.err().unwrap(),
         TpmRc::BAD_AUTH.with(Position::session(1)).get()
     );
 
-    let rp_handles = ReadPublicHandles {
+    let rp_cmd = ReadPublic {
         object_handle: seq_handle,
     };
-    let rp_cmd = ReadPublic {};
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &rp_handles, &rp_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &rp_cmd, &[]);
     assert!(res.is_err());
     // C: ReadPublic of a sequence object returns bare TPM_RC_SEQUENCE (0x103), ReadPublic.c:22.
     assert_eq!(res.err().unwrap(), TpmRc::SEQUENCE.get());
 
-    let mac_handles = LocalMacHandles { handle: seq_handle };
     let mac_cmd = LocalMacCmd {
+        handle: seq_handle,
         in_buffer: tpm2::Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &mac_handles, &mac_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &mac_cmd, &[]);
     assert!(res.is_err());
     assert_eq!(res.err().unwrap(), TpmRc::AUTH_MISSING.get());
 
-    let bad_update_handles = SequenceUpdateHandles {
+    let bad_update_cmd = SequenceUpdate {
         sequence_handle: Handle(key_handle),
+        ..update_cmd
     };
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &bad_update_handles,
-        &update_cmd,
-        &auths,
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &bad_update_cmd, &auths);
     assert!(res.is_err());
     assert_eq!(
         res.err().unwrap(),
         TpmRc::MODE.with(Position::handle(1)).get()
     );
 
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: seq_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: seq_handle,
         buffer: tpm2::Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
@@ -841,24 +706,18 @@ fn test_hmac_sequence_auth_and_unauthorized_commands() {
         session_attributes: TpmaSession(1),
         hmac: Tpm2bAuth::from_bytes(b"seqauth").unwrap(),
     }];
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &correct_auths,
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &correct_auths).unwrap();
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_Sign is deprecated in the `tpm2` crate.
 fn test_persistent_handle_resolution() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
+    let mut rng = FakeRng::new();
     let (mut tpm, mut global_state) =
-        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &rng);
+        setup_tpm_with_crypto(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let transient_handle = 0x80000007u32;
     let persistent_handle = 0x81000003u32;
@@ -872,11 +731,9 @@ fn test_persistent_handle_resolution() {
         TpmaObject::SIGN_ENCRYPT,
     );
 
-    let evict_handles = EvictControlHandles {
+    let evict_cmd = EvictControl {
         auth: Handle::RH_OWNER,
         object_handle: Handle(transient_handle),
-    };
-    let evict_cmd = EvictControl {
         persistent_handle: Handle(persistent_handle),
     };
 
@@ -887,38 +744,27 @@ fn test_persistent_handle_resolution() {
         hmac: Tpm2bAuth::default(),
     }];
 
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &evict_handles,
-        &evict_cmd,
-        &evict_auths,
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &evict_cmd, &evict_auths).unwrap();
 
     global_state
         .remove_transient_object(transient_handle)
         .unwrap();
 
-    let rp_handles = ReadPublicHandles {
+    let rp_cmd = ReadPublic {
         object_handle: Handle(transient_handle),
     };
-    let rp_cmd = ReadPublic {};
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &rp_handles, &rp_cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &rp_cmd, &[]);
     assert!(res.is_err());
     assert_eq!(res.err().unwrap(), TpmRc::REFERENCE_H0.get());
 
-    let rp_handles_p = ReadPublicHandles {
+    let rp_cmd_p = ReadPublic {
         object_handle: Handle(persistent_handle),
     };
-    let (_, rp_resp) =
-        execute_tpm_command(&mut tpm, &mut global_state, &rp_handles_p, &rp_cmd, &[]).unwrap();
+    let rp_resp = execute_tpm_command(&mut tpm, &mut global_state, &rp_cmd_p, &[]).unwrap();
     assert!(!rp_resp.name.get_buffer().is_empty());
 
-    let mac_handles = LocalMacHandles {
-        handle: Handle(persistent_handle),
-    };
     let mac_cmd = LocalMacCmd {
+        handle: Handle(persistent_handle),
         in_buffer: tpm2::Tpm2bMaxBuffer::from_bytes(b"hello world").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
@@ -928,14 +774,7 @@ fn test_persistent_handle_resolution() {
         session_attributes: TpmaSession(1),
         hmac: Tpm2bAuth::from_bytes(b"keyauth").unwrap(),
     }];
-    let (_, mac_resp) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &mac_handles,
-        &mac_cmd,
-        &key_auths,
-    )
-    .unwrap();
+    let mac_resp = execute_tpm_command(&mut tpm, &mut global_state, &mac_cmd, &key_auths).unwrap();
 
     let mut expected_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
     let expected_mac = tpm2::crypto::hmac(
@@ -949,20 +788,12 @@ fn test_persistent_handle_resolution() {
     assert_eq!(mac_resp.out_hmac.get_buffer(), expected_mac.digest());
 
     let hmac_start_cmd = LocalHmacStartCmd {
+        handle: Handle(persistent_handle),
         auth: Tpm2bAuth::from_bytes(b"seqauth").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_start_handles = LocalHmacStartHandles {
-        handle: Handle(persistent_handle),
-    };
-    let (hmac_start_resp_handles, _) = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &hmac_start_handles,
-        &hmac_start_cmd,
-        &key_auths,
-    )
-    .unwrap();
+    let hmac_start_resp_handles =
+        execute_tpm_command(&mut tpm, &mut global_state, &hmac_start_cmd, &key_auths).unwrap();
     let seq_handle = hmac_start_resp_handles.sequence_handle;
 
     let seq_auths = [TpmsAuthCommand {
@@ -971,26 +802,15 @@ fn test_persistent_handle_resolution() {
         session_attributes: TpmaSession(1),
         hmac: Tpm2bAuth::from_bytes(b"seqauth").unwrap(),
     }];
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: seq_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: seq_handle,
         buffer: tpm2::Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &seq_auths,
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &seq_auths).unwrap();
 
-    let sign_handles = SignHandles {
-        key_handle: Handle(persistent_handle),
-    };
     let sign_cmd = Sign {
+        key_handle: Handle(persistent_handle),
         digest: Tpm2bDigest::from_bytes(&[0; 32]).unwrap(),
         in_scheme: Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
         validation: TpmtTkHashcheck::default(),
@@ -999,7 +819,6 @@ fn test_persistent_handle_resolution() {
     let res = execute_tpm_sign(
         &mut tpm,
         &mut global_state,
-        &sign_handles,
         &sign_cmd,
         &key_auths,
         &mut response_buf,
@@ -1012,19 +831,10 @@ fn test_persistent_handle_resolution() {
         TpmRc::SCHEME.with(Position::parameter(2)).get()
     );
 
-    let evict_handles_p = EvictControlHandles {
+    let evict_cmd_p = EvictControl {
         auth: Handle::RH_OWNER,
         object_handle: Handle(persistent_handle),
-    };
-    let evict_cmd_p = EvictControl {
         persistent_handle: Handle(persistent_handle),
     };
-    execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &evict_handles_p,
-        &evict_cmd_p,
-        &evict_auths,
-    )
-    .unwrap();
+    execute_tpm_command(&mut tpm, &mut global_state, &evict_cmd_p, &evict_auths).unwrap();
 }

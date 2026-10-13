@@ -6,18 +6,18 @@ use crate::test_utils::{
     execute_sign, execute_with_password_sessions_status, flush_context, marshal_to_slice,
 };
 use sha2::{Digest as _, Sha256};
-use tpm2::commands::{
-    Command, LoadExternal, Sign, SignHandles, VerifySignature, VerifySignatureHandles,
-};
+use tpm2::commands::{Command, LoadExternal, Message, UnmarshalMessage};
+#[allow(deprecated)] // TPM2_Sign / TPM2_VerifySignature are deprecated upstream.
+use tpm2::commands::{Sign, VerifySignature};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, TpmCc, TpmEccCurve};
 use tpm2::{
-    PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bLabel, Tpm2bMaxBuffer,
-    Tpm2bName, Tpm2bPrivateKeyRsa, Tpm2bPublic, Tpm2bPublicKeyRsa, Tpm2bSensitiveData, Tpm2bSymKey,
-    TpmaObject, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsEccParms, TpmsEccPoint,
-    TpmsRsaParms, TpmtKeyedHashScheme, TpmtPublic, TpmtRsaScheme, TpmtSensitive, TpmtSymDefObject,
-    TpmtTkHashcheck, TpmuSensitiveComposite,
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bLabel,
+    Tpm2bMaxBuffer, Tpm2bName, Tpm2bPrivateKeyRsa, Tpm2bPublic, Tpm2bPublicKeyRsa,
+    Tpm2bSensitiveData, Tpm2bSymKey, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
+    TpmiRsaKeyBits, TpmsEccParms, TpmsEccPoint, TpmsRsaParms, TpmtKeyedHashScheme, TpmtPublic,
+    TpmtRsaScheme, TpmtSensitive, TpmtSymDefObject, TpmtTkHashcheck, TpmuSensitiveComposite,
 };
+use tpm2::{Handle, TpmCc, TpmEccCurve, Unmarshal};
 use tpm2_platform_linux::PlatformCryptoProvider;
 use tpm2_simulator::create_simulator;
 
@@ -78,6 +78,7 @@ pub const ECC_D: &[u8] = &[
 // 3. RSADecryptCmd
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct LocalRSADecryptCmd {
+    pub key_handle: Handle,
     pub cipher_text: Tpm2bPublicKeyRsa<'static>,
     pub in_scheme: Option<TpmtRsaScheme>,
     pub label: Tpm2bLabel<'static>,
@@ -107,8 +108,17 @@ impl tpm2::Marshal for LocalRSADecryptCmd {
         offset
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalRSADecryptCmd {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
+impl Message for LocalRSADecryptCmd {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalRSADecryptCmd {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, tpm2::errors::UnmarshalError> {
         let orig_len = src.len();
         let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
         let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
@@ -118,39 +128,11 @@ impl<'a> tpm2::Unmarshal<'a> for LocalRSADecryptCmd {
             let in_scheme = <Option<tpm2::TpmtRsaScheme>>::unmarshal(src)?;
             let label = Tpm2bLabel::unmarshal(src)?;
             Ok(Self {
+                key_handle,
                 cipher_text,
                 in_scheme,
                 label,
             })
-        })();
-        if res.is_ok() {
-            let consumed = orig_len - leaked.len();
-            *src = &src[consumed..];
-        }
-        res
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub struct LocalRSADecryptHandles {
-    pub key_handle: Handle,
-}
-impl tpm2::Marshal for LocalRSADecryptHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.key_handle.marshal(dst)
-    }
-}
-impl<'a> tpm2::Unmarshal<'a> for LocalRSADecryptHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
-        let orig_len = src.len();
-        let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
-        let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
-            let src = &mut leaked;
-
-            let key_handle = Handle::unmarshal(src)?;
-            Ok(Self { key_handle })
         })();
         if res.is_ok() {
             let consumed = orig_len - leaked.len();
@@ -188,17 +170,30 @@ impl<'a> tpm2::Unmarshal<'a> for LocalRSADecryptRsp {
         res
     }
 }
+impl Message for LocalRSADecryptRsp {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalRSADecryptRsp {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, tpm2::errors::UnmarshalError> {
+        <Self as tpm2::Unmarshal>::unmarshal(src)
+    }
+}
 
 impl Command for LocalRSADecryptCmd {
     const CMD_CODE: TpmCc = TpmCc::RSADecrypt;
-    type Handles = LocalRSADecryptHandles;
     type Response<'a> = LocalRSADecryptRsp;
-    type RespHandles = ();
 }
 
 // 4. Hmac
 #[derive(Clone, PartialEq, Default, Debug)]
 pub struct LocalHmacCmd {
+    pub handle: Handle,
     pub in_buffer: Tpm2bMaxBuffer<'static>,
     pub hash_alg: Option<TpmiAlgHash>,
 }
@@ -217,8 +212,17 @@ impl tpm2::Marshal for LocalHmacCmd {
         offset
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalHmacCmd {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
+impl Message for LocalHmacCmd {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.handle]
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalHmacCmd {
+    fn unmarshal_with_handles(
+        [handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, tpm2::errors::UnmarshalError> {
         let orig_len = src.len();
         let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
         let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
@@ -227,38 +231,10 @@ impl<'a> tpm2::Unmarshal<'a> for LocalHmacCmd {
             let in_buffer = Tpm2bMaxBuffer::unmarshal(src)?;
             let hash_alg = <Option<TpmiAlgHash>>::unmarshal(src)?;
             Ok(Self {
+                handle,
                 in_buffer,
                 hash_alg,
             })
-        })();
-        if res.is_ok() {
-            let consumed = orig_len - leaked.len();
-            *src = &src[consumed..];
-        }
-        res
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub struct LocalMacHandles {
-    pub handle: Handle,
-}
-impl tpm2::Marshal for LocalMacHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.handle.marshal(dst)
-    }
-}
-impl<'a> tpm2::Unmarshal<'a> for LocalMacHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
-        let orig_len = src.len();
-        let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
-        let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
-            let src = &mut leaked;
-
-            let handle = Handle::unmarshal(src)?;
-            Ok(Self { handle })
         })();
         if res.is_ok() {
             let consumed = orig_len - leaked.len();
@@ -296,17 +272,30 @@ impl<'a> tpm2::Unmarshal<'a> for LocalMacRsp {
         res
     }
 }
+impl Message for LocalMacRsp {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalMacRsp {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, tpm2::errors::UnmarshalError> {
+        <Self as tpm2::Unmarshal>::unmarshal(src)
+    }
+}
 
 impl Command for LocalHmacCmd {
     const CMD_CODE: TpmCc = TpmCc::MAC;
-    type Handles = LocalMacHandles;
     type Response<'a> = LocalMacRsp;
-    type RespHandles = ();
 }
 
 // 5. MACStart (MACStart)
 #[derive(Clone, PartialEq, Default, Debug)]
 pub struct LocalMacStartCmd {
+    pub handle: Handle,
     pub auth: Tpm2bAuth<'static>,
     pub hash_alg: Option<TpmiAlgHash>,
 }
@@ -325,8 +314,17 @@ impl tpm2::Marshal for LocalMacStartCmd {
         offset
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalMacStartCmd {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
+impl Message for LocalMacStartCmd {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.handle]
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalMacStartCmd {
+    fn unmarshal_with_handles(
+        [handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, tpm2::errors::UnmarshalError> {
         let orig_len = src.len();
         let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
         let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
@@ -334,7 +332,11 @@ impl<'a> tpm2::Unmarshal<'a> for LocalMacStartCmd {
 
             let auth = Tpm2bAuth::unmarshal(src)?;
             let hash_alg = <Option<TpmiAlgHash>>::unmarshal(src)?;
-            Ok(Self { auth, hash_alg })
+            Ok(Self {
+                handle,
+                auth,
+                hash_alg,
+            })
         })();
         if res.is_ok() {
             let consumed = orig_len - leaked.len();
@@ -344,69 +346,37 @@ impl<'a> tpm2::Unmarshal<'a> for LocalMacStartCmd {
     }
 }
 
+/// `TPM2_MAC_Start` response: the response handle `sequenceHandle` and no
+/// parameters.
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub struct LocalMacStartHandles {
-    pub handle: Handle,
-}
-impl tpm2::Marshal for LocalMacStartHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.handle.marshal(dst)
-    }
-}
-impl<'a> tpm2::Unmarshal<'a> for LocalMacStartHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
-        let orig_len = src.len();
-        let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
-        let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
-            let src = &mut leaked;
-
-            let handle = Handle::unmarshal(src)?;
-            Ok(Self { handle })
-        })();
-        if res.is_ok() {
-            let consumed = orig_len - leaked.len();
-            *src = &src[consumed..];
-        }
-        res
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub struct LocalMacStartRespHandles {
+pub struct LocalMacStartRsp {
     pub sequence_handle: Handle,
 }
-impl tpm2::Marshal for LocalMacStartRespHandles {
-    const MAX_SIZE: usize = Handle::MAX_SIZE;
+impl tpm2::Marshal for LocalMacStartRsp {
+    const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; Self::MAX_SIZE];
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.sequence_handle.marshal(dst)
+    fn marshal(&self, _dst: &mut Self::MaxBuffer) -> usize {
+        0
     }
 }
-impl<'a> tpm2::Unmarshal<'a> for LocalMacStartRespHandles {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, tpm2::errors::UnmarshalError> {
-        let orig_len = src.len();
-        let mut leaked: &'static [u8] = std::vec::Vec::leak(src.to_vec());
-        let res = (|| -> Result<Self, tpm2::errors::UnmarshalError> {
-            let src = &mut leaked;
-
-            let sequence_handle = Handle::unmarshal(src)?;
-            Ok(Self { sequence_handle })
-        })();
-        if res.is_ok() {
-            let consumed = orig_len - leaked.len();
-            *src = &src[consumed..];
-        }
-        res
+impl Message for LocalMacStartRsp {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.sequence_handle]
+    }
+}
+impl<'a> UnmarshalMessage<'a> for LocalMacStartRsp {
+    fn unmarshal_with_handles(
+        [sequence_handle]: Self::Handles,
+        _src: &mut &'a [u8],
+    ) -> Result<Self, tpm2::errors::UnmarshalError> {
+        Ok(Self { sequence_handle })
     }
 }
 
 impl Command for LocalMacStartCmd {
     const CMD_CODE: TpmCc = TpmCc::MACStart;
-    type Handles = LocalMacStartHandles;
-    type Response<'a> = ();
-    type RespHandles = LocalMacStartRespHandles;
+    type Response<'a> = LocalMacStartRsp;
 }
 
 // Helper functions for public areas
@@ -485,7 +455,7 @@ fn test_load_external_ecc_no_sensitive() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -498,7 +468,7 @@ fn test_load_external_ecc_owner() {
         in_public,
         hierarchy: Handle::RH_OWNER,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -511,7 +481,7 @@ fn test_load_external_ecc_platform() {
         in_public,
         hierarchy: Handle::RH_PLATFORM,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -524,7 +494,7 @@ fn test_load_external_ecc_endorsement() {
         in_public,
         hierarchy: Handle::RH_ENDORSEMENT,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -537,7 +507,7 @@ fn test_load_external_ecc_attributes() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -555,7 +525,7 @@ fn test_load_external_rsa_null() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -572,7 +542,7 @@ fn test_load_external_rsa_owner() {
         in_public,
         hierarchy: Handle::RH_OWNER,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -589,7 +559,7 @@ fn test_load_external_rsa_platform() {
         in_public,
         hierarchy: Handle::RH_PLATFORM,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -606,7 +576,7 @@ fn test_load_external_rsa_endorsement() {
         in_public,
         hierarchy: Handle::RH_ENDORSEMENT,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -623,7 +593,7 @@ fn test_load_external_rsa_sha384() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -655,7 +625,7 @@ fn test_load_external_keyed_hash_sensitive() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -675,7 +645,7 @@ fn test_load_external_ecc_sensitive() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -699,7 +669,7 @@ fn test_load_external_rsa_sensitive() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -725,7 +695,10 @@ fn test_load_external_sym_sensitive() {
         object_attributes: TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            },
             Tpm2bDigest::from_bytes(&sym_unique).unwrap(),
         ),
     };
@@ -736,7 +709,7 @@ fn test_load_external_sym_sensitive() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -756,7 +729,7 @@ fn test_load_external_sensitive_invalid_hierarchy() {
         in_public,
         hierarchy: Handle::RH_OWNER,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
 }
 
@@ -772,7 +745,7 @@ fn test_load_external_name_ecc() {
         hierarchy: Handle::RH_NULL,
     };
 
-    let (resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp = sim.execute(cmd).unwrap();
 
     // Compute expected name
     let mut buf = [0u8; 1024];
@@ -788,7 +761,7 @@ fn test_load_external_name_ecc() {
     let expected_name = Tpm2bName::from_bytes(crate::test_utils::leak_bytes(&name_bytes)).unwrap();
 
     assert_eq!(resp.name, expected_name);
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -803,7 +776,7 @@ fn test_load_external_name_keyed_hash() {
         hierarchy: Handle::RH_NULL,
     };
 
-    let (resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp = sim.execute(cmd).unwrap();
 
     // Compute expected name
     let mut buf = [0u8; 1024];
@@ -819,7 +792,7 @@ fn test_load_external_name_keyed_hash() {
     let expected_name = Tpm2bName::from_bytes(crate::test_utils::leak_bytes(&name_bytes)).unwrap();
 
     assert_eq!(resp.name, expected_name);
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -834,7 +807,7 @@ fn test_load_external_name_rsa() {
         hierarchy: Handle::RH_NULL,
     };
 
-    let (resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp = sim.execute(cmd).unwrap();
 
     // Compute expected name
     let mut buf = [0u8; 1024];
@@ -850,7 +823,7 @@ fn test_load_external_name_rsa() {
     let expected_name = Tpm2bName::from_bytes(crate::test_utils::leak_bytes(&name_bytes)).unwrap();
 
     assert_eq!(resp.name, expected_name);
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -864,9 +837,9 @@ fn test_load_external_name_alg_null() {
         hierarchy: Handle::RH_NULL,
     };
 
-    let (resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp = sim.execute(cmd).unwrap();
     assert_eq!(resp.name, Tpm2bName::default());
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -887,7 +860,7 @@ fn test_load_external_name_sensitive_match() {
         hierarchy: Handle::RH_NULL,
     };
 
-    let (resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp = sim.execute(cmd).unwrap();
 
     // Compute expected name
     let mut buf = [0u8; 1024];
@@ -903,7 +876,7 @@ fn test_load_external_name_sensitive_match() {
     let expected_name = Tpm2bName::from_bytes(crate::test_utils::leak_bytes(&name_bytes)).unwrap();
 
     assert_eq!(resp.name, expected_name);
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 // ==================== TIER 2 tests ====================
@@ -922,7 +895,7 @@ fn test_load_external_ecc_invalid_curve() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
 }
 
@@ -941,7 +914,7 @@ fn test_load_external_ecc_point_not_on_curve() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
 }
 
@@ -960,7 +933,7 @@ fn test_load_external_rsa_invalid_exponent() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
 }
 
@@ -974,7 +947,7 @@ fn test_load_external_invalid_hierarchy_handle() {
         in_public,
         hierarchy: Handle(0x80000000), // completely invalid handle
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
 }
 
@@ -1006,18 +979,22 @@ fn test_load_external_invalid_public_size() {
             off
         }
     }
+    impl tpm2::Message for BadLoadExternal<'_> {
+        type Handles = [Handle; 0];
+        fn handles(&self) -> Self::Handles {
+            []
+        }
+    }
     impl tpm2::Command for BadLoadExternal<'_> {
         const CMD_CODE: tpm2::TpmCc = tpm2::TpmCc::LoadExternal;
-        type Handles = ();
         type Response<'a> = ();
-        type RespHandles = ();
     }
 
     let cmd = BadLoadExternal {
         in_public_buf: &[0; 10],
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
 }
 
@@ -1039,7 +1016,7 @@ fn test_load_external_key_size_mismatch() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
 }
 
@@ -1060,7 +1037,7 @@ fn test_load_external_type_mismatch() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
 }
 
@@ -1080,7 +1057,10 @@ fn test_load_external_weak_sym_key() {
         object_attributes: TpmaObject::SIGN_ENCRYPT | TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            },
             Tpm2bDigest::default(),
         ),
     };
@@ -1091,7 +1071,7 @@ fn test_load_external_weak_sym_key() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
 }
 
@@ -1118,7 +1098,7 @@ fn test_load_external_rsa_primes_size_mismatch() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
 }
 
@@ -1139,7 +1119,7 @@ fn test_load_external_invalid_private_attributes() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
 }
 
@@ -1171,7 +1151,7 @@ fn test_load_external_ecc_sha384_platform() {
         in_public,
         hierarchy: Handle::RH_PLATFORM,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -1184,9 +1164,9 @@ fn test_load_external_rsa_alg_null_owner() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp = sim.execute(cmd).unwrap();
     assert_eq!(resp.name, Tpm2bName::default());
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -1201,9 +1181,9 @@ fn test_load_external_ecc_alg_null_sensitive() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp = sim.execute(cmd).unwrap();
     assert_eq!(resp.name, Tpm2bName::default());
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -1228,13 +1208,14 @@ fn test_load_external_keyed_hash_auth_policy() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
 // ==================== TIER 4 tests ====================
 
 #[test]
+#[allow(deprecated)] // TPM2_Sign / TPM2_VerifySignature
 fn test_load_external_verify_signature_ecc() {
     let mut sim = create_simulator!();
     let sensitive_create = TpmtSensitive {
@@ -1249,26 +1230,17 @@ fn test_load_external_verify_signature_ecc() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, sign_handles) = sim.execute_with_handles(sign_load_cmd, ()).unwrap();
+    let sign_handles = sim.execute(sign_load_cmd).unwrap();
 
     let digest = Tpm2bDigest::from_bytes(&[0x02; 32]).unwrap();
     let sign_cmd = Sign {
+        key_handle: sign_handles.object_handle,
         digest,
         in_scheme: Some(tpm2::TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
         validation: TpmtTkHashcheck::default(),
     };
     let mut resp_buffer = [0u8; 4096];
-    let (sign_rsp, _) = execute_sign(
-        &mut sim,
-        &sign_cmd,
-        SignHandles {
-            key_handle: sign_handles.object_handle,
-        },
-        1,
-        &[],
-        &mut resp_buffer,
-    )
-    .unwrap();
+    let sign_rsp = execute_sign(&mut sim, &sign_cmd, 1, &[], &mut resp_buffer).unwrap();
     flush_context(&mut sim, sign_handles.object_handle).unwrap();
 
     let load_cmd = LoadExternal {
@@ -1276,22 +1248,19 @@ fn test_load_external_verify_signature_ecc() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_load_resp, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let verify_cmd = VerifySignature {
+        key_handle: resp_handles.object_handle,
         digest,
         signature: sign_rsp.signature,
     };
-    let verify_handles = VerifySignatureHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let _verify_resp = sim
-        .execute_with_handles(verify_cmd, verify_handles)
-        .unwrap();
+    let _verify_resp = sim.execute(verify_cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_Sign / TPM2_VerifySignature
 fn test_load_external_verify_signature_rsa() {
     let mut sim = create_simulator!();
     let sensitive_create = TpmtSensitive {
@@ -1310,26 +1279,17 @@ fn test_load_external_verify_signature_rsa() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_, sign_handles) = sim.execute_with_handles(sign_load_cmd, ()).unwrap();
+    let sign_handles = sim.execute(sign_load_cmd).unwrap();
 
     let digest = Tpm2bDigest::from_bytes(&[0x02; 32]).unwrap();
     let sign_cmd = Sign {
+        key_handle: sign_handles.object_handle,
         digest,
         in_scheme: Some(tpm2::TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
         validation: TpmtTkHashcheck::default(),
     };
     let mut resp_buffer = [0u8; 4096];
-    let (sign_rsp, _) = execute_sign(
-        &mut sim,
-        &sign_cmd,
-        SignHandles {
-            key_handle: sign_handles.object_handle,
-        },
-        1,
-        &[],
-        &mut resp_buffer,
-    )
-    .unwrap();
+    let sign_rsp = execute_sign(&mut sim, &sign_cmd, 1, &[], &mut resp_buffer).unwrap();
     flush_context(&mut sim, sign_handles.object_handle).unwrap();
 
     let load_cmd = LoadExternal {
@@ -1337,22 +1297,19 @@ fn test_load_external_verify_signature_rsa() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_load_resp, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let verify_cmd = VerifySignature {
+        key_handle: resp_handles.object_handle,
         digest,
         signature: sign_rsp.signature,
     };
-    let verify_handles = VerifySignatureHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let _verify_resp = sim
-        .execute_with_handles(verify_cmd, verify_handles)
-        .unwrap();
+    let _verify_resp = sim.execute(verify_cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
 #[test]
+#[allow(deprecated)] // TPM2_Sign / TPM2_VerifySignature
 fn test_load_external_sign_ecc() {
     let mut sim = create_simulator!();
     let sensitive_create = TpmtSensitive {
@@ -1368,17 +1325,15 @@ fn test_load_external_sign_ecc() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_load_resp, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let sign_cmd = Sign {
+        key_handle: resp_handles.object_handle,
         digest: Tpm2bDigest::from_bytes(&[0x02; 32]).unwrap(),
         in_scheme: None,
         validation: TpmtTkHashcheck::default(),
     };
-    let sign_handles = SignHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, sign_handles, 0, &[]);
+    let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, 0, &[]);
     assert!(res.is_err());
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
@@ -1403,19 +1358,15 @@ fn test_load_external_decrypt_rsa() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_load_resp, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let decrypt_cmd = LocalRSADecryptCmd {
+        key_handle: resp_handles.object_handle,
         cipher_text: Tpm2bPublicKeyRsa::from_bytes(&[0x01; 256]).unwrap(),
         in_scheme: None,
         label: Tpm2bLabel::default(),
     };
-    let decrypt_handles = LocalRSADecryptHandles {
-        key_handle: resp_handles.object_handle,
-    };
-    let _decrypt_resp = sim
-        .execute_with_handles(decrypt_cmd, decrypt_handles)
-        .unwrap();
+    let _decrypt_resp = sim.execute(decrypt_cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -1442,16 +1393,14 @@ fn test_load_external_hmac_keyed_hash() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_load_resp, resp_handles) = sim.execute_with_handles(load_cmd, ()).unwrap();
+    let resp_handles = sim.execute(load_cmd).unwrap();
 
     let hmac_cmd = LocalHmacCmd {
+        handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let hmac_handles = LocalMacHandles {
-        handle: resp_handles.object_handle,
-    };
-    let _hmac_resp = sim.execute_with_handles(hmac_cmd, hmac_handles).unwrap();
+    let _hmac_resp = sim.execute(hmac_cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -1468,7 +1417,7 @@ fn adv_load_external_sh_disabled() {
         in_public,
         hierarchy: Handle::RH_OWNER,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     let expected = TpmRc::HIERARCHY.with(Position::parameter(3));
@@ -1486,7 +1435,7 @@ fn adv_load_external_eh_disabled() {
         in_public,
         hierarchy: Handle::RH_ENDORSEMENT,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     let expected = TpmRc::HIERARCHY.with(Position::parameter(3));
@@ -1509,7 +1458,7 @@ fn adv_load_external_forbidden_attributes_fixed_parent() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     let expected = TpmRc::ATTRIBUTES.with(Position::parameter(2));
@@ -1532,7 +1481,7 @@ fn adv_load_external_forbidden_attributes_restricted() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     let expected = TpmRc::ATTRIBUTES.with(Position::parameter(2));
@@ -1553,7 +1502,7 @@ fn adv_load_external_ecc_invalid_coords_size() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     let expected = TpmRc::KEY.with(Position::parameter(2));
@@ -1577,7 +1526,7 @@ fn adv_load_external_ecc_scalar_too_large() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     let expected = TpmRc::KEY_SIZE.with(Position::parameter(1));
@@ -1611,7 +1560,7 @@ fn adv_load_external_keyed_hash_sensitive_too_large() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     let expected = TpmRc::KEY_SIZE.with(Position::parameter(1));
@@ -1629,7 +1578,7 @@ fn adv_load_external_unsupported_name_alg() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     let expected = TpmRc::HASH.with(Position::parameter(2));
@@ -1647,7 +1596,7 @@ fn adv_load_external_name_alg_sha512() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp = sim.execute(cmd).unwrap();
 
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(&pub_struct, &mut buf);
@@ -1662,7 +1611,7 @@ fn adv_load_external_name_alg_sha512() {
     let expected_name = Tpm2bName::from_bytes(crate::test_utils::leak_bytes(&name_bytes)).unwrap();
 
     assert_eq!(resp.name, expected_name);
-    flush_context(&mut sim, resp_handles.object_handle).unwrap();
+    flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
 #[test]
@@ -1677,11 +1626,11 @@ fn adv_load_external_transient_objects_exhaustion() {
 
     let mut handles = Vec::new();
     for _ in 0..tpm2::TPM2_MAX_LOADED_OBJECTS as usize {
-        let (_, resp_handles) = sim.execute_with_handles(cmd.clone(), ()).unwrap();
+        let resp_handles = sim.execute(cmd).unwrap();
         handles.push(resp_handles.object_handle);
     }
 
-    let res = sim.execute_with_handles(cmd.clone(), ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     let expected = TpmRc::OBJECT_MEMORY;
@@ -1725,7 +1674,7 @@ fn adv_load_external_rsa_p_q_bits_mismatch() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     // C ObjectLoad returns CryptRsaLoadPrivateExponent's TPM_RC_BINDING without
@@ -1751,7 +1700,7 @@ fn adv_load_external_sensitive_auth_value_too_large() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     let expected = TpmRc::SIZE.with(Position::parameter(1));
@@ -1768,7 +1717,10 @@ fn adv_load_external_sym_public_only() {
         object_attributes: TpmaObject::SIGN_ENCRYPT | TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            },
             Tpm2bDigest::from_bytes(&sym_unique).unwrap(),
         ),
     };
@@ -1779,7 +1731,7 @@ fn adv_load_external_sym_public_only() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let (_resp, resp_handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let resp_handles = sim.execute(cmd).unwrap();
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }
 
@@ -1793,7 +1745,10 @@ fn adv_load_external_sym_public_only_size_mismatch() {
         object_attributes: TpmaObject::SIGN_ENCRYPT | TpmaObject::DECRYPT,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+            },
             Tpm2bDigest::from_bytes(&sym_unique).unwrap(),
         ),
     };
@@ -1804,7 +1759,7 @@ fn adv_load_external_sym_public_only_size_mismatch() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute_with_handles(cmd, ());
+    let res = sim.execute(cmd);
     assert!(res.is_err());
     let err = res.err().unwrap();
     let expected = TpmRc::KEY.with(Position::parameter(2));

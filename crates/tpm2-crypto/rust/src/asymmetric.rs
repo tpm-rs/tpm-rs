@@ -15,16 +15,21 @@ fn prepare_prehash(d: &[u8], target_len: usize, buf: &mut [u8]) -> usize {
     target_len
 }
 
+/// Signing follows the [`AsymmetricSign`] conventions: `Ok(None)` if `private_key` is invalid or
+/// cannot sign the digest (for example, an RSA key too small for the digest and its padding),
+/// `Err(CryptoError::Unsupported)` for an unsupported digest algorithm, and
+/// `Err(CryptoError::Internal)` if `signature_out` is too small.
 impl AsymmetricSign for RustCryptoProvider {
     fn rsassa_sign(
         &self,
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         use rsa::pkcs8::DecodePrivateKey as _;
-        let priv_key = rsa::RsaPrivateKey::from_pkcs8_der(private_key)
-            .map_err(|_| CryptoError::InvalidData)?;
+        let Ok(priv_key) = rsa::RsaPrivateKey::from_pkcs8_der(private_key) else {
+            return Ok(None);
+        };
 
         let sig = match digest {
             TpmtHa::Sha1(d) => priv_key.sign(rsa::pkcs1v15::Pkcs1v15Sign::new::<sha1::Sha1>(), d),
@@ -37,15 +42,17 @@ impl AsymmetricSign for RustCryptoProvider {
             TpmtHa::Sha512(d) => {
                 priv_key.sign(rsa::pkcs1v15::Pkcs1v15Sign::new::<sha2::Sha512>(), d)
             }
-            _ => return Err(CryptoError::UnsupportedAlgorithm),
-        }
-        .map_err(|_| CryptoError::HardwareFailure)?;
+            _ => return Err(CryptoError::Unsupported),
+        };
+        let Ok(sig) = sig else {
+            return Ok(None);
+        };
 
         if signature_out.len() < sig.len() {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         signature_out[..sig.len()].copy_from_slice(&sig);
-        Ok(sig.len())
+        Ok(Some(sig.len()))
     }
 
     fn rsapss_sign(
@@ -53,10 +60,11 @@ impl AsymmetricSign for RustCryptoProvider {
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         use rsa::pkcs8::DecodePrivateKey as _;
-        let priv_key = rsa::RsaPrivateKey::from_pkcs8_der(private_key)
-            .map_err(|_| CryptoError::InvalidData)?;
+        let Ok(priv_key) = rsa::RsaPrivateKey::from_pkcs8_der(private_key) else {
+            return Ok(None);
+        };
 
         let sig = match digest {
             TpmtHa::Sha1(d) => {
@@ -77,15 +85,17 @@ impl AsymmetricSign for RustCryptoProvider {
                 rsa::pss::Pss::new::<sha2::Sha512>(),
                 d,
             ),
-            _ => return Err(CryptoError::UnsupportedAlgorithm),
-        }
-        .map_err(|_| CryptoError::HardwareFailure)?;
+            _ => return Err(CryptoError::Unsupported),
+        };
+        let Ok(sig) = sig else {
+            return Ok(None);
+        };
 
         if signature_out.len() < sig.len() {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         signature_out[..sig.len()].copy_from_slice(&sig);
-        Ok(sig.len())
+        Ok(Some(sig.len()))
     }
 
     fn ecdsa_sign(
@@ -93,80 +103,92 @@ impl AsymmetricSign for RustCryptoProvider {
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         if private_key.len() <= 32 && !private_key.is_empty() {
             let mut padded = [0u8; 32];
             padded[32 - private_key.len()..].copy_from_slice(private_key);
-            let secret_key =
-                p256::SecretKey::from_slice(&padded).map_err(|_| CryptoError::InvalidData)?;
+            let Ok(secret_key) = p256::SecretKey::from_slice(&padded) else {
+                return Ok(None);
+            };
             let signing_key = p256::ecdsa::SigningKey::from(secret_key);
             use p256::ecdsa::signature::hazmat::PrehashSigner as _;
             let mut d_buf = [0u8; 66];
             let d_len = prepare_prehash(digest.digest(), 32, &mut d_buf);
-            let sig: p256::ecdsa::Signature = signing_key
-                .sign_prehash(&d_buf[..d_len])
-                .map_err(|_| CryptoError::HardwareFailure)?;
+            let sig: Result<p256::ecdsa::Signature, _> = signing_key.sign_prehash(&d_buf[..d_len]);
+            let Ok(sig) = sig else {
+                return Ok(None);
+            };
             let sig_bytes = sig.to_bytes();
             if signature_out.len() < sig_bytes.len() {
-                return Err(CryptoError::BufferTooSmall);
+                return Err(CryptoError::Internal);
             }
             signature_out[..sig_bytes.len()].copy_from_slice(&sig_bytes);
-            Ok(sig_bytes.len())
+            Ok(Some(sig_bytes.len()))
         } else if private_key.len() <= 48 && private_key.len() > 32 {
             let mut padded = [0u8; 48];
             padded[48 - private_key.len()..].copy_from_slice(private_key);
-            let secret_key =
-                p384::SecretKey::from_slice(&padded).map_err(|_| CryptoError::InvalidData)?;
+            let Ok(secret_key) = p384::SecretKey::from_slice(&padded) else {
+                return Ok(None);
+            };
             let signing_key = p384::ecdsa::SigningKey::from(secret_key);
             use p384::ecdsa::signature::hazmat::PrehashSigner as _;
             let mut d_buf = [0u8; 66];
             let d_len = prepare_prehash(digest.digest(), 48, &mut d_buf);
-            let sig: p384::ecdsa::Signature = signing_key
-                .sign_prehash(&d_buf[..d_len])
-                .map_err(|_| CryptoError::HardwareFailure)?;
+            let sig: Result<p384::ecdsa::Signature, _> = signing_key.sign_prehash(&d_buf[..d_len]);
+            let Ok(sig) = sig else {
+                return Ok(None);
+            };
             let sig_bytes = sig.to_bytes();
             if signature_out.len() < sig_bytes.len() {
-                return Err(CryptoError::BufferTooSmall);
+                return Err(CryptoError::Internal);
             }
             signature_out[..sig_bytes.len()].copy_from_slice(&sig_bytes);
-            Ok(sig_bytes.len())
+            Ok(Some(sig_bytes.len()))
         } else if private_key.len() <= 66 && private_key.len() > 48 {
             let mut padded = [0u8; 66];
             padded[66 - private_key.len()..].copy_from_slice(private_key);
-            let signing_key = p521::ecdsa::SigningKey::from_slice(&padded)
-                .map_err(|_| CryptoError::InvalidData)?;
+            let Ok(signing_key) = p521::ecdsa::SigningKey::from_slice(&padded) else {
+                return Ok(None);
+            };
             use p521::ecdsa::signature::hazmat::PrehashSigner as _;
             let mut d_buf = [0u8; 66];
             let d_len = prepare_prehash(digest.digest(), 66, &mut d_buf);
-            let sig: p521::ecdsa::Signature = signing_key
-                .sign_prehash(&d_buf[..d_len])
-                .map_err(|_| CryptoError::HardwareFailure)?;
+            let sig: Result<p521::ecdsa::Signature, _> = signing_key.sign_prehash(&d_buf[..d_len]);
+            let Ok(sig) = sig else {
+                return Ok(None);
+            };
             let sig_bytes = sig.to_bytes();
             if signature_out.len() < sig_bytes.len() {
-                return Err(CryptoError::BufferTooSmall);
+                return Err(CryptoError::Internal);
             }
             signature_out[..sig_bytes.len()].copy_from_slice(&sig_bytes);
-            Ok(sig_bytes.len())
+            Ok(Some(sig_bytes.len()))
         } else {
-            Err(CryptoError::InvalidData)
+            Ok(None)
         }
     }
 }
 
+/// Verification returns `Ok(false)` for an invalid signature or an unusable public key.
+/// Encryption, decryption and key import return `Ok(None)` for invalid inputs (an unusable key or
+/// label, a message too large for the key, a bad ciphertext or padding, inconsistent key
+/// components). Unsupported algorithms return `Err(CryptoError::Unsupported)`, and output buffers
+/// that are too small return `Err(CryptoError::Internal)`.
 impl Asymmetric for RustCryptoProvider {
     fn rsassa_verify(
         &self,
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), CryptoError> {
-        let pub_key = rsa::RsaPublicKey::new(
+    ) -> Result<bool, CryptoError> {
+        let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
             rsa::BigUint::from(65537u32),
-        )
-        .map_err(|_| CryptoError::InvalidData)?;
+        ) else {
+            return Ok(false);
+        };
 
-        match digest {
+        let verified = match digest {
             TpmtHa::Sha1(d) => pub_key.verify(
                 rsa::pkcs1v15::Pkcs1v15Sign::new::<sha1::Sha1>(),
                 d,
@@ -187,9 +209,9 @@ impl Asymmetric for RustCryptoProvider {
                 d,
                 signature,
             ),
-            _ => return Err(CryptoError::UnsupportedAlgorithm),
-        }
-        .map_err(|_| CryptoError::InvalidData)
+            _ => return Err(CryptoError::Unsupported),
+        };
+        Ok(verified.is_ok())
     }
 
     fn rsapss_verify(
@@ -197,14 +219,15 @@ impl Asymmetric for RustCryptoProvider {
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), CryptoError> {
-        let pub_key = rsa::RsaPublicKey::new(
+    ) -> Result<bool, CryptoError> {
+        let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
             rsa::BigUint::from(65537u32),
-        )
-        .map_err(|_| CryptoError::InvalidData)?;
+        ) else {
+            return Ok(false);
+        };
 
-        match digest {
+        let verified = match digest {
             TpmtHa::Sha1(d) => pub_key
                 .verify(rsa::pss::Pss::new::<sha1::Sha1>(), d, signature)
                 .or_else(|_| {
@@ -245,9 +268,9 @@ impl Asymmetric for RustCryptoProvider {
                         signature,
                     )
                 }),
-            _ => return Err(CryptoError::UnsupportedAlgorithm),
-        }
-        .map_err(|_| CryptoError::InvalidData)
+            _ => return Err(CryptoError::Unsupported),
+        };
+        Ok(verified.is_ok())
     }
 
     fn ecdsa_verify(
@@ -255,65 +278,62 @@ impl Asymmetric for RustCryptoProvider {
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), CryptoError> {
+    ) -> Result<bool, CryptoError> {
         if public_key.len() <= 64 && !public_key.is_empty() {
             if signature.len() != 64 {
-                return Err(CryptoError::InvalidData);
+                return Ok(false);
             }
             let mut sec1 = [0u8; 65];
             sec1[0] = 0x04;
             sec1[65 - public_key.len()..].copy_from_slice(public_key);
-            let public =
-                p256::PublicKey::from_sec1_bytes(&sec1).map_err(|_| CryptoError::InvalidData)?;
+            let Ok(public) = p256::PublicKey::from_sec1_bytes(&sec1) else {
+                return Ok(false);
+            };
             let verifying_key = p256::ecdsa::VerifyingKey::from(public);
-            let sig = p256::ecdsa::Signature::from_slice(signature)
-                .map_err(|_| CryptoError::InvalidData)?;
+            let Ok(sig) = p256::ecdsa::Signature::from_slice(signature) else {
+                return Ok(false);
+            };
             use p256::ecdsa::signature::hazmat::PrehashVerifier as _;
             let mut d_buf = [0u8; 66];
             let d_len = prepare_prehash(digest.digest(), 32, &mut d_buf);
-            verifying_key
-                .verify_prehash(&d_buf[..d_len], &sig)
-                .map_err(|_| CryptoError::InvalidData)?;
-            Ok(())
+            Ok(verifying_key.verify_prehash(&d_buf[..d_len], &sig).is_ok())
         } else if public_key.len() <= 96 && public_key.len() > 64 {
             if signature.len() != 96 {
-                return Err(CryptoError::InvalidData);
+                return Ok(false);
             }
             let mut sec1 = [0u8; 97];
             sec1[0] = 0x04;
             sec1[97 - public_key.len()..].copy_from_slice(public_key);
-            let public =
-                p384::PublicKey::from_sec1_bytes(&sec1).map_err(|_| CryptoError::InvalidData)?;
+            let Ok(public) = p384::PublicKey::from_sec1_bytes(&sec1) else {
+                return Ok(false);
+            };
             let verifying_key = p384::ecdsa::VerifyingKey::from(public);
-            let sig = p384::ecdsa::Signature::from_slice(signature)
-                .map_err(|_| CryptoError::InvalidData)?;
+            let Ok(sig) = p384::ecdsa::Signature::from_slice(signature) else {
+                return Ok(false);
+            };
             use p384::ecdsa::signature::hazmat::PrehashVerifier as _;
             let mut d_buf = [0u8; 66];
             let d_len = prepare_prehash(digest.digest(), 48, &mut d_buf);
-            verifying_key
-                .verify_prehash(&d_buf[..d_len], &sig)
-                .map_err(|_| CryptoError::InvalidData)?;
-            Ok(())
+            Ok(verifying_key.verify_prehash(&d_buf[..d_len], &sig).is_ok())
         } else if public_key.len() <= 132 && public_key.len() > 96 {
             if signature.len() != 132 {
-                return Err(CryptoError::InvalidData);
+                return Ok(false);
             }
             let mut sec1 = [0u8; 133];
             sec1[0] = 0x04;
             sec1[133 - public_key.len()..].copy_from_slice(public_key);
-            let verifying_key = p521::ecdsa::VerifyingKey::from_sec1_bytes(&sec1)
-                .map_err(|_| CryptoError::InvalidData)?;
-            let sig = p521::ecdsa::Signature::from_slice(signature)
-                .map_err(|_| CryptoError::InvalidData)?;
+            let Ok(verifying_key) = p521::ecdsa::VerifyingKey::from_sec1_bytes(&sec1) else {
+                return Ok(false);
+            };
+            let Ok(sig) = p521::ecdsa::Signature::from_slice(signature) else {
+                return Ok(false);
+            };
             use p521::ecdsa::signature::hazmat::PrehashVerifier as _;
             let mut d_buf = [0u8; 66];
             let d_len = prepare_prehash(digest.digest(), 66, &mut d_buf);
-            verifying_key
-                .verify_prehash(&d_buf[..d_len], &sig)
-                .map_err(|_| CryptoError::InvalidData)?;
-            Ok(())
+            Ok(verifying_key.verify_prehash(&d_buf[..d_len], &sig).is_ok())
         } else {
-            Err(CryptoError::InvalidData)
+            Ok(false)
         }
     }
 
@@ -322,21 +342,24 @@ impl Asymmetric for RustCryptoProvider {
         public_key: &[u8],
         data: &[u8],
         ciphertext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        let pub_key = rsa::RsaPublicKey::new(
+    ) -> Result<Option<usize>, CryptoError> {
+        let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
             rsa::BigUint::from(65537u32),
-        )
-        .map_err(|_| CryptoError::InvalidData)?;
+        ) else {
+            return Ok(None);
+        };
 
-        let encrypted = pub_key
-            .encrypt(&mut rand_core::OsRng, rsa::Pkcs1v15Encrypt, data)
-            .map_err(|_| CryptoError::HardwareFailure)?;
+        // Fails if `data` is too large for the key.
+        let Ok(encrypted) = pub_key.encrypt(&mut rand_core::OsRng, rsa::Pkcs1v15Encrypt, data)
+        else {
+            return Ok(None);
+        };
         if ciphertext.len() < encrypted.len() {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         ciphertext[..encrypted.len()].copy_from_slice(&encrypted);
-        Ok(encrypted.len())
+        Ok(Some(encrypted.len()))
     }
 
     fn oaep_encrypt(
@@ -346,14 +369,17 @@ impl Asymmetric for RustCryptoProvider {
         data: &[u8],
         label: &[u8],
         ciphertext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        let pub_key = rsa::RsaPublicKey::new(
+    ) -> Result<Option<usize>, CryptoError> {
+        let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
             rsa::BigUint::from(65537u32),
-        )
-        .map_err(|_| CryptoError::InvalidData)?;
+        ) else {
+            return Ok(None);
+        };
 
-        let label_str = core::str::from_utf8(label).map_err(|_| CryptoError::InvalidData)?;
+        let Ok(label_str) = core::str::from_utf8(label) else {
+            return Ok(None);
+        };
         let encrypted = match hash_alg {
             TpmiAlgHash::Sha1 => pub_key.encrypt(
                 &mut rand_core::OsRng,
@@ -391,15 +417,18 @@ impl Asymmetric for RustCryptoProvider {
                 },
                 data,
             ),
-            _ => return Err(CryptoError::UnsupportedAlgorithm),
-        }
-        .map_err(|_| CryptoError::HardwareFailure)?;
+            _ => return Err(CryptoError::Unsupported),
+        };
+        // Fails if `data` (or `label`) is too large for the key.
+        let Ok(encrypted) = encrypted else {
+            return Ok(None);
+        };
 
         if ciphertext.len() < encrypted.len() {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         ciphertext[..encrypted.len()].copy_from_slice(&encrypted);
-        Ok(encrypted.len())
+        Ok(Some(encrypted.len()))
     }
 
     fn rsa_null_encrypt(
@@ -407,29 +436,30 @@ impl Asymmetric for RustCryptoProvider {
         public_key: &[u8],
         data: &[u8],
         ciphertext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        let pub_key = rsa::RsaPublicKey::new(
+    ) -> Result<Option<usize>, CryptoError> {
+        let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
             rsa::BigUint::from(65537u32),
-        )
-        .map_err(|_| CryptoError::InvalidData)?;
+        ) else {
+            return Ok(None);
+        };
 
         let n = pub_key.n();
         let e = pub_key.e();
         let m = rsa::BigUint::from_bytes_be(data);
         if &m >= n {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         let c = m.modpow(e, n);
         let c_bytes = c.to_bytes_be();
         let mod_len = n.bits().div_ceil(8);
         if ciphertext.len() < mod_len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         ciphertext[..mod_len].fill(0);
         let start = mod_len - c_bytes.len();
         ciphertext[start..mod_len].copy_from_slice(&c_bytes);
-        Ok(mod_len)
+        Ok(Some(mod_len))
     }
 
     fn rsaes_decrypt(
@@ -437,19 +467,20 @@ impl Asymmetric for RustCryptoProvider {
         private_key: &[u8],
         ciphertext: &[u8],
         plaintext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         use rsa::pkcs8::DecodePrivateKey as _;
-        let priv_key = rsa::RsaPrivateKey::from_pkcs8_der(private_key)
-            .map_err(|_| CryptoError::InvalidData)?;
+        let Ok(priv_key) = rsa::RsaPrivateKey::from_pkcs8_der(private_key) else {
+            return Ok(None);
+        };
 
-        let decrypted = priv_key
-            .decrypt(rsa::Pkcs1v15Encrypt, ciphertext)
-            .map_err(|_| CryptoError::InvalidData)?;
+        let Ok(decrypted) = priv_key.decrypt(rsa::Pkcs1v15Encrypt, ciphertext) else {
+            return Ok(None);
+        };
         if plaintext.len() < decrypted.len() {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         plaintext[..decrypted.len()].copy_from_slice(&decrypted);
-        Ok(decrypted.len())
+        Ok(Some(decrypted.len()))
     }
 
     fn oaep_decrypt(
@@ -459,12 +490,15 @@ impl Asymmetric for RustCryptoProvider {
         ciphertext: &[u8],
         label: &[u8],
         plaintext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         use rsa::pkcs8::DecodePrivateKey as _;
-        let priv_key = rsa::RsaPrivateKey::from_pkcs8_der(private_key)
-            .map_err(|_| CryptoError::InvalidData)?;
+        let Ok(priv_key) = rsa::RsaPrivateKey::from_pkcs8_der(private_key) else {
+            return Ok(None);
+        };
 
-        let label_str = core::str::from_utf8(label).map_err(|_| CryptoError::InvalidData)?;
+        let Ok(label_str) = core::str::from_utf8(label) else {
+            return Ok(None);
+        };
         let decrypted = match hash_alg {
             TpmiAlgHash::Sha1 => priv_key.decrypt(
                 if label.is_empty() {
@@ -498,15 +532,18 @@ impl Asymmetric for RustCryptoProvider {
                 },
                 ciphertext,
             ),
-            _ => return Err(CryptoError::UnsupportedAlgorithm),
-        }
-        .map_err(|_| CryptoError::HardwareFailure)?;
+            _ => return Err(CryptoError::Unsupported),
+        };
+        // Fails if the ciphertext, its padding, or the label is invalid.
+        let Ok(decrypted) = decrypted else {
+            return Ok(None);
+        };
 
         if plaintext.len() < decrypted.len() {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         plaintext[..decrypted.len()].copy_from_slice(&decrypted);
-        Ok(decrypted.len())
+        Ok(Some(decrypted.len()))
     }
 
     fn rsa_null_decrypt(
@@ -514,27 +551,28 @@ impl Asymmetric for RustCryptoProvider {
         private_key: &[u8],
         ciphertext: &[u8],
         plaintext: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         use rsa::pkcs8::DecodePrivateKey as _;
-        let priv_key = rsa::RsaPrivateKey::from_pkcs8_der(private_key)
-            .map_err(|_| CryptoError::InvalidData)?;
+        let Ok(priv_key) = rsa::RsaPrivateKey::from_pkcs8_der(private_key) else {
+            return Ok(None);
+        };
 
         let n = priv_key.n();
         let d = priv_key.d();
         let c = rsa::BigUint::from_bytes_be(ciphertext);
         if &c >= n {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         let m = c.modpow(d, n);
         let m_bytes = m.to_bytes_be();
         let mod_len = n.bits().div_ceil(8);
         if plaintext.len() < mod_len {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         plaintext[..mod_len].fill(0);
         let start = mod_len - m_bytes.len();
         plaintext[start..mod_len].copy_from_slice(&m_bytes);
-        Ok(mod_len)
+        Ok(Some(mod_len))
     }
 
     fn rsa_generate_key(
@@ -557,20 +595,18 @@ impl Asymmetric for RustCryptoProvider {
         };
 
         let bit_size = u16::from(key_bits) as usize;
-        let priv_key = rsa::RsaPrivateKey::new(&mut rng, bit_size)
-            .map_err(|_| CryptoError::HardwareFailure)?;
+        let priv_key =
+            rsa::RsaPrivateKey::new(&mut rng, bit_size).map_err(|_| CryptoError::Internal)?;
         let pub_key = rsa::RsaPublicKey::from(&priv_key);
 
         use rsa::pkcs8::EncodePrivateKey as _;
-        let priv_der = priv_key
-            .to_pkcs8_der()
-            .map_err(|_| CryptoError::HardwareFailure)?;
+        let priv_der = priv_key.to_pkcs8_der().map_err(|_| CryptoError::Internal)?;
         let pub_bytes = pub_key.n().to_bytes_be();
 
         let priv_bytes = priv_der.as_bytes();
 
         if private_key.len() < priv_bytes.len() || public_key.len() < pub_bytes.len() {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
 
         private_key[..priv_bytes.len()].copy_from_slice(priv_bytes);
@@ -616,9 +652,7 @@ impl Asymmetric for RustCryptoProvider {
                 let gy = rsa::BigUint::from_bytes_be(&hex_literal::hex!(
                     "bd376388b5f723fb4c22dfe6cd4375a05a07476444d5819985007e34"
                 ));
-                let q = p224
-                    .multiply(&k, (gx, gy))
-                    .ok_or(CryptoError::HardwareFailure)?;
+                let q = p224.multiply(&k, (gx, gy)).ok_or(CryptoError::Internal)?;
                 let q_x = q.0.to_bytes_be();
                 let q_y = q.1.to_bytes_be();
 
@@ -637,7 +671,7 @@ impl Asymmetric for RustCryptoProvider {
                 }
 
                 if public_key.len() < 56 || private_key.len() < 28 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 public_key[..56].copy_from_slice(&public_xy);
                 private_key[..28].copy_from_slice(&private_scalar);
@@ -650,11 +684,11 @@ impl Asymmetric for RustCryptoProvider {
                 let encoded_point = public_key_point.to_encoded_point(false);
                 let public_sec1 = encoded_point.as_bytes();
                 if public_sec1.len() != 65 || public_sec1[0] != 0x04 {
-                    return Err(CryptoError::HardwareFailure);
+                    return Err(CryptoError::Internal);
                 }
                 let public_xy = &public_sec1[1..];
                 if public_key.len() < public_xy.len() || private_key.len() < private_scalar.len() {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 public_key[..public_xy.len()].copy_from_slice(public_xy);
                 private_key[..private_scalar.len()].copy_from_slice(&private_scalar);
@@ -667,11 +701,11 @@ impl Asymmetric for RustCryptoProvider {
                 let encoded_point = public_key_point.to_encoded_point(false);
                 let public_sec1 = encoded_point.as_bytes();
                 if public_sec1.len() != 97 || public_sec1[0] != 0x04 {
-                    return Err(CryptoError::HardwareFailure);
+                    return Err(CryptoError::Internal);
                 }
                 let public_xy = &public_sec1[1..];
                 if public_key.len() < public_xy.len() || private_key.len() < private_scalar.len() {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 public_key[..public_xy.len()].copy_from_slice(public_xy);
                 private_key[..private_scalar.len()].copy_from_slice(&private_scalar);
@@ -684,11 +718,11 @@ impl Asymmetric for RustCryptoProvider {
                 let encoded_point = public_key_point.to_encoded_point(false);
                 let public_sec1 = encoded_point.as_bytes();
                 if public_sec1.len() != 133 || public_sec1[0] != 0x04 {
-                    return Err(CryptoError::HardwareFailure);
+                    return Err(CryptoError::Internal);
                 }
                 let public_xy = &public_sec1[1..];
                 if public_key.len() < public_xy.len() || private_key.len() < private_scalar.len() {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 public_key[..public_xy.len()].copy_from_slice(public_xy);
                 private_key[..private_scalar.len()].copy_from_slice(&private_scalar);
@@ -706,7 +740,7 @@ impl Asymmetric for RustCryptoProvider {
                     }
                 };
                 let g = (rsa::BigUint::from(1u32), rsa::BigUint::from(2u32));
-                let q = bn.multiply(&k, g).ok_or(CryptoError::HardwareFailure)?;
+                let q = bn.multiply(&k, g).ok_or(CryptoError::Internal)?;
                 let q_x = q.0.to_bytes_be();
                 let q_y = q.1.to_bytes_be();
 
@@ -725,13 +759,13 @@ impl Asymmetric for RustCryptoProvider {
                 }
 
                 if public_key.len() < 64 || private_key.len() < 32 {
-                    return Err(CryptoError::BufferTooSmall);
+                    return Err(CryptoError::Internal);
                 }
                 public_key[..64].copy_from_slice(&public_xy);
                 private_key[..32].copy_from_slice(&private_scalar);
                 Ok((64, 32))
             }
-            _ => Err(CryptoError::UnsupportedAlgorithm),
+            _ => Err(CryptoError::Unsupported),
         }
     }
 
@@ -741,9 +775,9 @@ impl Asymmetric for RustCryptoProvider {
         prime_p: &[u8],
         exponent: u32,
         private_key_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         if exponent == 0 {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         let n = rsa::BigUint::from_bytes_be(modulus);
         let p = rsa::BigUint::from_bytes_be(prime_p);
@@ -751,55 +785,55 @@ impl Asymmetric for RustCryptoProvider {
 
         let one = rsa::BigUint::from(1u32);
         if p <= one {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         let q = &n / &p;
         if q <= one {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         if p.bits().abs_diff(q.bits()) > 1 {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         let rem = &n % &p;
         if rem != rsa::BigUint::default() {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         if &p * &q != n {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
 
-        let priv_key =
-            rsa::RsaPrivateKey::from_p_q(p, q, e).map_err(|_| CryptoError::InvalidData)?;
+        let Ok(priv_key) = rsa::RsaPrivateKey::from_p_q(p, q, e) else {
+            return Ok(None);
+        };
 
         use rsa::pkcs8::EncodePrivateKey as _;
-        let priv_der = priv_key
-            .to_pkcs8_der()
-            .map_err(|_| CryptoError::HardwareFailure)?;
+        let priv_der = priv_key.to_pkcs8_der().map_err(|_| CryptoError::Internal)?;
         let priv_bytes = priv_der.as_bytes();
         if private_key_out.len() < priv_bytes.len() {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         private_key_out[..priv_bytes.len()].copy_from_slice(priv_bytes);
-        Ok(priv_bytes.len())
+        Ok(Some(priv_bytes.len()))
     }
 
     fn rsa_private_key_to_prime_p(
         &self,
         private_key: &[u8],
         prime_p_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<Option<usize>, CryptoError> {
         use rsa::pkcs8::DecodePrivateKey as _;
-        let priv_key = rsa::RsaPrivateKey::from_pkcs8_der(private_key)
-            .map_err(|_| CryptoError::InvalidData)?;
+        let Ok(priv_key) = rsa::RsaPrivateKey::from_pkcs8_der(private_key) else {
+            return Ok(None);
+        };
         let primes = priv_key.primes();
         if primes.is_empty() {
-            return Err(CryptoError::InvalidData);
+            return Ok(None);
         }
         let prime_p_bytes = primes[0].to_bytes_be();
         if prime_p_out.len() < prime_p_bytes.len() {
-            return Err(CryptoError::BufferTooSmall);
+            return Err(CryptoError::Internal);
         }
         prime_p_out[..prime_p_bytes.len()].copy_from_slice(&prime_p_bytes);
-        Ok(prime_p_bytes.len())
+        Ok(Some(prime_p_bytes.len()))
     }
 }

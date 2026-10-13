@@ -3,9 +3,8 @@ use crate::test_utils::{
     flush_context, read_public_name, start_auth_session,
 };
 use rsa::{Oaep, RsaPublicKey};
-use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, LoadExternal, StartAuthSession, StartAuthSessionHandles,
-};
+use tpm2::commands::{CreatePrimary, LoadExternal, StartAuthSession};
+use tpm2::{AlgSym, TpmiAlgCipherMode};
 use tpm2::{Handle, TpmSe};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bNonce, Tpm2bPublicKeyRsa,
@@ -40,16 +39,13 @@ fn create_rsa_decrypt_key(sim: &mut Simulator) -> Handle {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    create_rsp_handles.object_handle
+    let create_rsp = execute_with_password_sessions(sim, &create_cmd, 1, &[]).unwrap();
+    create_rsp.object_handle
 }
 
 // 1. Nonce caller size validations (too small, too large, exact boundary).
@@ -59,43 +55,45 @@ fn test_nonce_caller_sizes() {
 
     // Valid size: 16 (exact lower boundary)
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert!(res.is_ok(), "Nonce size 16 should succeed: {:?}", res);
-    let (_, resp_handles) = res.unwrap();
-    flush_context(&mut sim, resp_handles.session_handle).unwrap();
+    let rsp = res.unwrap();
+    flush_context(&mut sim, rsp.session_handle).unwrap();
 
     // Valid size: 32 (exact upper boundary for SHA256)
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 32]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert!(res.is_ok(), "Nonce size 32 should succeed: {:?}", res);
-    let (_, resp_handles) = res.unwrap();
-    flush_context(&mut sim, resp_handles.session_handle).unwrap();
+    let rsp = res.unwrap();
+    flush_context(&mut sim, rsp.session_handle).unwrap();
 
     // Invalid size: 15 (too small)
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 15]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x1D5),
@@ -104,13 +102,15 @@ fn test_nonce_caller_sizes() {
 
     // Invalid size: 33 (too large for SHA256)
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 33]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x1D5),
@@ -119,13 +119,15 @@ fn test_nonce_caller_sizes() {
 
     // Invalid size: 21 (too large for SHA1, digest size 20)
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 21]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha1,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x1D5),
@@ -141,17 +143,15 @@ fn test_encrypted_salt_presence() {
     // When tpmKey is RHNull, encrypted_salt must be empty.
     // If not empty (e.g. 10 bytes), should fail with TPM_RC_VALUE (0x2C4)
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::from_bytes(&[1u8; 10]).unwrap(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x2C4),
@@ -162,12 +162,10 @@ fn test_encrypted_salt_presence() {
     let key_handle = create_rsa_decrypt_key(&mut sim);
 
     // Retrieve the public key modulus to encrypt a valid salt
-    let read_cmd = tpm2::commands::ReadPublic {};
-    let read_handles = tpm2::commands::ReadPublicHandles {
+    let read_cmd = tpm2::commands::ReadPublic {
         object_handle: key_handle,
     };
-    let (read_rsp, _) =
-        execute_with_password_sessions(&mut sim, &read_cmd, read_handles, 0, &[]).unwrap();
+    let read_rsp = execute_with_password_sessions(&mut sim, &read_cmd, 0, &[]).unwrap();
     let out_pub = read_rsp.out_public.0;
     let PublicParmsAndId::Rsa(_, rsa_pubkey) = out_pub.parms_and_id else {
         panic!("Expected RSA key");
@@ -185,6 +183,8 @@ fn test_encrypted_salt_presence() {
     let enc_salt = rsa.encrypt(&mut rng, oaep, &salt).unwrap();
 
     let cmd = StartAuthSession {
+        tpm_key: key_handle,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::from_bytes(crate::test_utils::leak_bytes(&enc_salt))
             .unwrap(),
@@ -192,18 +192,14 @@ fn test_encrypted_salt_presence() {
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let handles = StartAuthSessionHandles {
-        tpm_key: key_handle,
-        bind: Handle::RH_NULL,
-    };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert!(
         res.is_ok(),
         "Valid encrypted salt should succeed: {:?}",
         res
     );
-    let (_, resp_handles) = res.unwrap();
-    flush_context(&mut sim, resp_handles.session_handle).unwrap();
+    let rsp = res.unwrap();
+    flush_context(&mut sim, rsp.session_handle).unwrap();
 
     flush_context(&mut sim, key_handle).unwrap();
 }
@@ -214,12 +210,10 @@ fn test_salt_size_boundaries() {
     let mut sim = create_simulator!();
     let key_handle = create_rsa_decrypt_key(&mut sim);
 
-    let read_cmd = tpm2::commands::ReadPublic {};
-    let read_handles = tpm2::commands::ReadPublicHandles {
+    let read_cmd = tpm2::commands::ReadPublic {
         object_handle: key_handle,
     };
-    let (read_rsp, _) =
-        execute_with_password_sessions(&mut sim, &read_cmd, read_handles, 0, &[]).unwrap();
+    let read_rsp = execute_with_password_sessions(&mut sim, &read_cmd, 0, &[]).unwrap();
     let out_pub = read_rsp.out_public.0;
     let PublicParmsAndId::Rsa(_, rsa_pubkey) = out_pub.parms_and_id else {
         panic!("Expected RSA key");
@@ -233,16 +227,13 @@ fn test_salt_size_boundaries() {
 
     let mut rng = rsa::rand_core::OsRng;
 
-    let handles = StartAuthSessionHandles {
-        tpm_key: key_handle,
-        bind: Handle::RH_NULL,
-    };
-
     // Valid salt size: 32 (exact boundary for SHA256 nameAlg)
     let salt = vec![5u8; 32];
     let oaep = Oaep::new_with_label::<sha2::Sha256, _>("SECRET\0");
     let enc_salt = rsa.encrypt(&mut rng, oaep, &salt).unwrap();
     let cmd = StartAuthSession {
+        tpm_key: key_handle,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::from_bytes(crate::test_utils::leak_bytes(&enc_salt))
             .unwrap(),
@@ -250,16 +241,18 @@ fn test_salt_size_boundaries() {
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert!(res.is_ok(), "Salt size 32 should succeed");
-    let (_, resp_handles) = res.unwrap();
-    flush_context(&mut sim, resp_handles.session_handle).unwrap();
+    let rsp = res.unwrap();
+    flush_context(&mut sim, rsp.session_handle).unwrap();
 
     // Invalid salt size: 33 (too large for SHA256 nameAlg)
     let salt = vec![5u8; 33];
     let oaep_err = Oaep::new_with_label::<sha2::Sha256, _>("SECRET\0");
     let enc_salt = rsa.encrypt(&mut rng, oaep_err, &salt).unwrap();
     let cmd = StartAuthSession {
+        tpm_key: key_handle,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::from_bytes(crate::test_utils::leak_bytes(&enc_salt))
             .unwrap(),
@@ -267,7 +260,7 @@ fn test_salt_size_boundaries() {
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x2C4),
@@ -281,37 +274,39 @@ fn test_salt_size_boundaries() {
 #[test]
 fn test_symmetric_modes() {
     let mut sim = create_simulator!();
-    let handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
 
     // Valid: Aes128 CFB
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
-        symmetric: Some(tpm2::TpmtSymDef::Cipher(tpm2::TpmtSymDefObject::Aes128(
-            Some(TpmiAlgSymMode::CFB),
-        ))),
+        symmetric: Some(tpm2::TpmtSymDef::Cipher(tpm2::TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+        })),
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert!(res.is_ok(), "Aes128 CFB should succeed");
-    let (_, resp_handles) = res.unwrap();
-    flush_context(&mut sim, resp_handles.session_handle).unwrap();
+    let rsp = res.unwrap();
+    flush_context(&mut sim, rsp.session_handle).unwrap();
 
     // Invalid: Aes128 CBC (should fail with TPM_RC_MODE 0x4C9)
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
-        symmetric: Some(tpm2::TpmtSymDef::Cipher(tpm2::TpmtSymDefObject::Aes128(
-            Some(TpmiAlgSymMode::CBC),
-        ))),
+        symmetric: Some(tpm2::TpmtSymDef::Cipher(tpm2::TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cbc)),
+        })),
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x4C9),
@@ -320,15 +315,18 @@ fn test_symmetric_modes() {
 
     // Invalid: Aes128 CTR (should fail with TPM_RC_MODE 0x4C9)
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
-        symmetric: Some(tpm2::TpmtSymDef::Cipher(tpm2::TpmtSymDefObject::Aes128(
-            Some(TpmiAlgSymMode::CTR),
-        ))),
+        symmetric: Some(tpm2::TpmtSymDef::Cipher(tpm2::TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Ctr)),
+        })),
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x4C9),
@@ -337,26 +335,30 @@ fn test_symmetric_modes() {
 
     // Valid: XOR with Sha256
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: Some(tpm2::TpmtSymDef::Xor(TpmiAlgHash::Sha256)),
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert!(res.is_ok(), "XOR with Sha256 should succeed");
-    let (_, resp_handles) = res.unwrap();
-    flush_context(&mut sim, resp_handles.session_handle).unwrap();
+    let rsp = res.unwrap();
+    flush_context(&mut sim, rsp.session_handle).unwrap();
 
     // Invalid: XOR with NULL hash (should fail with TPM_RC_HASH 0x4C3)
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: Some(tpm2::TpmtSymDef::Xor(TpmiAlgHash::Sha256)),
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let res = execute_with_corrupted_bytes(&mut sim, &cmd, handles, 0, &[], |buf| {
+    let res = execute_with_corrupted_bytes(&mut sim, &cmd, 0, &[], |buf| {
         // symmetric starts at offset 21 (2 bytes Alg::XOR = 0x000A), followed by hash_alg at 23..25
         buf[23..25].copy_from_slice(&0x0010u16.to_be_bytes());
     });
@@ -371,71 +373,72 @@ fn test_symmetric_modes() {
 #[test]
 fn test_session_type_prefix_routing() {
     let mut sim = create_simulator!();
-    let handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-    };
 
     // HMAC Session: prefix should be 0x02xxxxxx
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (_, resp_handles) =
-        execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]).unwrap();
+    let rsp = execute_with_password_sessions(&mut sim, &cmd, 0, &[]).unwrap();
     assert_eq!(
-        resp_handles.session_handle.0 >> 24,
+        rsp.session_handle.0 >> 24,
         0x02,
         "HMAC session handle should start with 0x02"
     );
-    flush_context(&mut sim, resp_handles.session_handle).unwrap();
+    flush_context(&mut sim, rsp.session_handle).unwrap();
 
     // Policy Session: prefix should be 0x03xxxxxx
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (_, resp_handles) =
-        execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]).unwrap();
+    let rsp = execute_with_password_sessions(&mut sim, &cmd, 0, &[]).unwrap();
     assert_eq!(
-        resp_handles.session_handle.0 >> 24,
+        rsp.session_handle.0 >> 24,
         0x03,
         "Policy session handle should start with 0x03"
     );
-    flush_context(&mut sim, resp_handles.session_handle).unwrap();
+    flush_context(&mut sim, rsp.session_handle).unwrap();
 
     // Trial Session: prefix should be 0x03xxxxxx
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Trial,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let (_, resp_handles) =
-        execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]).unwrap();
+    let rsp = execute_with_password_sessions(&mut sim, &cmd, 0, &[]).unwrap();
     assert_eq!(
-        resp_handles.session_handle.0 >> 24,
+        rsp.session_handle.0 >> 24,
         0x03,
         "Trial session handle should start with 0x03"
     );
-    flush_context(&mut sim, resp_handles.session_handle).unwrap();
+    flush_context(&mut sim, rsp.session_handle).unwrap();
 
     // Invalid Session Type: TpmSe::try_from(0x02).unwrap() (should fail with TPM_RC_VALUE 0x3C4)
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let res = execute_with_corrupted_bytes(&mut sim, &cmd, handles, 0, &[], |buf| {
+    let res = execute_with_corrupted_bytes(&mut sim, &cmd, 0, &[], |buf| {
         buf[20] = 0x02; // corrupt session_type to invalid value 2
     });
     assert_eq!(
@@ -474,30 +477,25 @@ fn test_invalid_tpm_key_type_keyedhash() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    let keyedhash_key_handle = create_rsp_handles.object_handle;
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
+    let keyedhash_key_handle = create_rsp.object_handle;
 
     // Call StartAuthSession with KeyedHash key as tpm_key
     let cmd = StartAuthSession {
+        tpm_key: keyedhash_key_handle,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let handles = StartAuthSessionHandles {
-        tpm_key: keyedhash_key_handle,
-        bind: Handle::RH_NULL,
-    };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x19C),
@@ -537,32 +535,27 @@ fn test_invalid_tpm_key_attributes() {
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
     let create_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
         ..Default::default()
     };
-    let create_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
-    let (_, create_rsp_handles) =
-        execute_with_password_sessions(&mut sim, &create_cmd, create_handles, 1, &[]).unwrap();
-    let rsa_key_handle = create_rsp_handles.object_handle;
+    let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
+    let rsa_key_handle = create_rsp.object_handle;
 
     // Call StartAuthSession
     // A non-empty salt: C checks `encryptedSalt.size == 0` (TPM_RCS_VALUE + RC_P2) before the
     // publicOnly / DECRYPT checks.
     let cmd = StartAuthSession {
+        tpm_key: rsa_key_handle,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::from_bytes(&[0x11; 256]).unwrap(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let handles = StartAuthSessionHandles {
-        tpm_key: rsa_key_handle,
-        bind: Handle::RH_NULL,
-    };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x182),
@@ -577,17 +570,15 @@ fn test_invalid_tpm_key_attributes() {
 fn test_invalid_tpm_key_handle() {
     let mut sim = create_simulator!();
     let cmd = StartAuthSession {
+        tpm_key: Handle(0x800000FF), // Fake handle
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let handles = StartAuthSessionHandles {
-        tpm_key: Handle(0x800000FF), // Fake handle
-        bind: Handle::RH_NULL,
-    };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x910),
@@ -600,17 +591,15 @@ fn test_invalid_tpm_key_handle() {
 fn test_invalid_bind_handle() {
     let mut sim = create_simulator!();
     let cmd = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle(0x800000FF), // Fake handle
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let handles = StartAuthSessionHandles {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle(0x800000FF), // Fake handle
-    };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x911),
@@ -621,7 +610,7 @@ fn test_invalid_bind_handle() {
 // 10. Attempting to authorize a command using an HMAC session handle should be rejected
 #[test]
 fn test_unsupported_non_password_session_auth() {
-    use tpm2::commands::{ReadPublic, ReadPublicHandles};
+    use tpm2::commands::ReadPublic;
 
     let mut sim = create_simulator!();
 
@@ -645,8 +634,7 @@ fn test_unsupported_non_password_session_auth() {
     session.attributes = tpm2::TpmaSession::CONTINUE_SESSION | tpm2::TpmaSession::AUDIT;
 
     // Now try to execute ReadPublic using the HMAC session.
-    let read_cmd = ReadPublic {};
-    let read_handles = ReadPublicHandles {
+    let read_cmd = ReadPublic {
         object_handle: key_handle,
     };
 
@@ -655,7 +643,6 @@ fn test_unsupported_non_password_session_auth() {
     let res = execute_with_hmac_sessions(
         &mut sim,
         &read_cmd,
-        read_handles,
         &[name.get_buffer()],
         &mut sessions,
         &[&[]],
@@ -682,17 +669,15 @@ fn test_salt_decryption_failure() {
     let malformed_salt = vec![0xAAu8; 256];
 
     let cmd = StartAuthSession {
+        tpm_key: key_handle,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::from_bytes(&malformed_salt).unwrap(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let handles = StartAuthSessionHandles {
-        tpm_key: key_handle,
-        bind: Handle::RH_NULL,
-    };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
 
     assert_eq!(
         res.err(),
@@ -751,8 +736,8 @@ fn load_rsa_public_only_key(sim: &mut Simulator) -> Handle {
         hierarchy: Handle::RH_NULL,
     };
 
-    let (_, resp_handles) = execute_with_password_sessions(sim, &cmd, (), 0, &[]).unwrap();
-    resp_handles.object_handle
+    let rsp = execute_with_password_sessions(sim, &cmd, 0, &[]).unwrap();
+    rsp.object_handle
 }
 
 struct TpmiCode;
@@ -772,17 +757,15 @@ fn test_invalid_tpm_key_type_public_only() {
     // A non-empty salt: C checks `encryptedSalt.size == 0` (TPM_RCS_VALUE + RC_P2) before the
     // publicOnly / DECRYPT checks.
     let cmd = StartAuthSession {
+        tpm_key: public_key_handle,
+        bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::from_bytes(&[0x11; 256]).unwrap(),
         session_type: TpmSe::HMAC,
         symmetric: None,
         auth_hash: TpmiAlgHash::Sha256,
     };
-    let handles = StartAuthSessionHandles {
-        tpm_key: public_key_handle,
-        bind: Handle::RH_NULL,
-    };
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
     assert_eq!(
         res.err(),
         Some(0x18B),
@@ -795,18 +778,16 @@ fn test_invalid_tpm_key_type_public_only() {
 // 13. Password trailing zero input succeeds authorization
 #[test]
 fn test_password_trailing_zero_auth() {
-    use tpm2::commands::{HierarchyChangeAuth, HierarchyChangeAuthHandles};
+    use tpm2::commands::HierarchyChangeAuth;
 
     let mut sim = create_simulator!();
 
     // 1. Change Owner Auth from empty to "hello" (with trailing zeros, e.g. "hello\0\0")
     let cmd1 = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(b"hello\0\0").unwrap(),
     };
-    let handles1 = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    let res1 = execute_with_password_sessions(&mut sim, &cmd1, handles1, 1, &[]);
+    let res1 = execute_with_password_sessions(&mut sim, &cmd1, 1, &[]);
     assert!(
         res1.is_ok(),
         "Setting owner auth to hello\\0\\0 should succeed: {:?}",
@@ -816,12 +797,10 @@ fn test_password_trailing_zero_auth() {
     // 2. Perform another auth check using "hello" (without trailing zeros)
     // We change the owner auth back to empty
     let cmd2 = HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::default(),
     };
-    let handles2 = HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    let res2 = execute_with_password_sessions(&mut sim, &cmd2, handles2, 1, b"hello");
+    let res2 = execute_with_password_sessions(&mut sim, &cmd2, 1, b"hello");
     assert!(
         res2.is_ok(),
         "Authorizing hello\\0\\0 auth using hello should succeed: {:?}",

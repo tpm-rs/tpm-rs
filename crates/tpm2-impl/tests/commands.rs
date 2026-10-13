@@ -13,8 +13,8 @@ fn test_clear_overflow() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
@@ -66,7 +66,7 @@ fn create_test_primary(
     global_state: &mut tpm2_impl::GlobalState,
 ) -> u32 {
     use tpm2::Handle;
-    use tpm2::commands::{CreatePrimary, CreatePrimaryHandles};
+    use tpm2::commands::CreatePrimary;
     use tpm2::{
         PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bSensitiveData, TpmaObject, TpmiAlgHash,
         TpmlPcrSelection, TpmsSensitiveCreate, TpmtPublic,
@@ -89,19 +89,20 @@ fn create_test_primary(
         // A restricted decrypt KEYEDHASH object would need an XOR scheme (C `SchemeChecks()`);
         // use a symmetric storage parent instead.
         parms_and_id: PublicParmsAndId::Sym(
-            tpm2::TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB)),
+            tpm2::TpmtSymDefObject {
+                alg: tpm2::AlgSym::Aes128,
+                mode: Some(tpm2::TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)),
+            },
             tpm2::Tpm2bDigest::default(),
         ),
     };
     let in_public = tpm2::Tpm2b(pub_tmpl);
     let cmd = CreatePrimary {
+        primary_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
-    };
-    let handles = CreatePrimaryHandles {
-        primary_handle: Handle(0x40000001),
     };
     let mut req_buf = [0u8; 1024];
     let mut offset = 0;
@@ -109,7 +110,7 @@ fn create_test_primary(
     let len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
     offset += marshal_to_slice(&(0x00000131u32), &mut req_buf[offset..]);
-    offset += marshal_to_slice(&handles, &mut req_buf[offset..]);
+    offset += marshal_to_slice(&cmd.primary_handle, &mut req_buf[offset..]);
     use tpm2::{Tpm2bNonce, TpmaSession, TpmsAuthCommand};
     let auth_len_offset = offset;
     offset += marshal_to_slice(&(0u32), &mut req_buf[offset..]);
@@ -136,8 +137,8 @@ fn test_import_table31_attribute_precedence() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -158,7 +159,7 @@ fn test_import_table31_attribute_precedence() {
     // Construct TPM2_Import command with fixedTPM attribute set on object_public (Pos2)
     // Table 31 mandates that fixedTPM MUST be clear for imported objects, returning TPM_RC_ATTRIBUTES at Pos2 (0x240)
     use tpm2::Handle;
-    use tpm2::commands::{Import, ImportHandles};
+    use tpm2::commands::Import;
     use tpm2::errors::{Position, TpmRc};
     use tpm2::{
         PublicParmsAndId, Tpm2bData, Tpm2bEncryptedSecret, Tpm2bPrivate, TpmaObject, TpmiAlgHash,
@@ -182,15 +183,16 @@ fn test_import_table31_attribute_precedence() {
         ),
     };
 
-    let import_handles = ImportHandles {
-        parent_handle: Handle(parent_handle),
-    };
     let import_cmd = Import {
+        parent_handle: Handle(parent_handle),
         encryption_key: Tpm2bData::from_bytes(&[0u8; 16]).unwrap(),
         object_public: tpm2::Tpm2b(bad_pub),
         duplicate: Tpm2bPrivate::default(),
         in_sym_seed: Tpm2bEncryptedSecret::default(),
-        symmetric_alg: Some(TpmtSymDefObject::Aes128(Some(tpm2::TpmiAlgSymMode::CFB))),
+        symmetric_alg: Some(TpmtSymDefObject {
+            alg: tpm2::AlgSym::Aes128,
+            mode: Some(tpm2::TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)),
+        }),
     };
 
     let mut cmd_buf = [0u8; 2048];
@@ -199,7 +201,7 @@ fn test_import_table31_attribute_precedence() {
     offset += 6; // skip size for now
     cmd_buf[6..10].copy_from_slice(&0x00000156u32.to_be_bytes()); // CC_Import
     offset += 4;
-    offset += marshal_to_slice(&(import_handles), &mut cmd_buf[offset..]);
+    offset += marshal_to_slice(&(import_cmd.parent_handle), &mut cmd_buf[offset..]);
     use tpm2::{Tpm2bAuth, Tpm2bNonce, TpmaSession, TpmsAuthCommand};
     let auth = TpmsAuthCommand {
         session_handle: Handle::RS_PW,
@@ -231,8 +233,8 @@ fn test_evict_control_table31_precedence() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -249,13 +251,11 @@ fn test_evict_control_table31_precedence() {
     );
 
     use tpm2::Handle;
-    use tpm2::commands::{EvictControl, EvictControlHandles};
+    use tpm2::commands::EvictControl;
     // Call EvictControl on transient handle 0x80000001 (which does not exist) -> must check range / existence cleanly
-    let ec_handles = EvictControlHandles {
+    let ec_cmd = EvictControl {
         auth: Handle(0x40000001),
         object_handle: Handle(0x80000001),
-    };
-    let ec_cmd = EvictControl {
         persistent_handle: Handle(0x81000000),
     };
 
@@ -265,7 +265,8 @@ fn test_evict_control_table31_precedence() {
     offset += 6;
     cmd_buf[6..10].copy_from_slice(&0x00000120u32.to_be_bytes()); // CC_EvictControl
     offset += 4;
-    offset += marshal_to_slice(&(ec_handles), &mut cmd_buf[offset..]);
+    offset += marshal_to_slice(&(ec_cmd.auth), &mut cmd_buf[offset..]);
+    offset += marshal_to_slice(&(ec_cmd.object_handle), &mut cmd_buf[offset..]);
     use tpm2::{Tpm2bAuth, Tpm2bNonce, TpmaSession, TpmsAuthCommand};
     let auth = TpmsAuthCommand {
         session_handle: Handle::RS_PW,
@@ -294,16 +295,17 @@ fn test_evict_control_table31_precedence() {
 
 #[test]
 fn test_testing_commands_engine_execution() {
-    use tpm2::commands::{
-        GetTestResult, GetTestResultRsp, IncrementalSelfTest, IncrementalSelfTestRsp, SelfTest,
+    use tpm2::commands::responses::{
+        GetTestResult as GetTestResultRsp, IncrementalSelfTest as IncrementalSelfTestRsp,
     };
+    use tpm2::commands::{GetTestResult, IncrementalSelfTest, SelfTest, UnmarshalMessage};
     use tpm2::{Alg, Command, CommandHeader, ResponseHeader, TpmiStCommandTag, TpmlAlg, Unmarshal};
 
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     let mut global_state = tpm2_impl::GlobalState::default();
     tpm.init_storage(&mut global_state);
@@ -337,7 +339,7 @@ fn test_testing_commands_engine_execution() {
     let mut slice = &rsp_buf[..rsp_len];
     let rsp_hdr = ResponseHeader::unmarshal(&mut slice).unwrap();
     assert_eq!(rsp_hdr.rc, Ok(()));
-    let inc_rsp = IncrementalSelfTestRsp::unmarshal(&mut slice).unwrap();
+    let inc_rsp = IncrementalSelfTestRsp::unmarshal_with_handles([], &mut slice).unwrap();
     assert!(slice.is_empty());
     assert!(inc_rsp.to_do_list.count() <= 32);
 
@@ -377,7 +379,7 @@ fn test_testing_commands_engine_execution() {
     let mut slice = &rsp_buf[..rsp_len];
     let rsp_hdr = ResponseHeader::unmarshal(&mut slice).unwrap();
     assert_eq!(rsp_hdr.rc, Ok(()));
-    let gtr_rsp = GetTestResultRsp::unmarshal(&mut slice).unwrap();
+    let gtr_rsp = GetTestResultRsp::unmarshal_with_handles([], &mut slice).unwrap();
     assert!(slice.is_empty());
     assert_eq!(gtr_rsp.test_result, Ok(()));
 

@@ -9,14 +9,12 @@
 
 use crate::test_utils::*;
 use tpm2::commands::{
-    Command, Commit, CommitHandles, CreatePrimary, CreatePrimaryHandles, ECDHKeyGen,
-    ECDHKeyGenHandles, ECDHZGen, ECDHZGenHandles, EncryptDecrypt, EncryptDecryptHandles,
-    EventSequenceComplete, EventSequenceCompleteHandles, EvictControl, EvictControlHandles,
-    HashSequenceStart, HashSequenceStartHandles, Hmac, HmacHandles, HmacStart, HmacStartHandles,
-    LoadExternal, PCRRead, PolicyAuthorize, PolicyAuthorizeHandles, RSADecrypt, RSADecryptHandles,
-    RSAEncrypt, RSAEncryptHandles, SequenceComplete, SequenceCompleteHandles, SequenceUpdate,
-    SequenceUpdateHandles, Sign, SignHandles, VerifySignature, VerifySignatureHandles,
+    Command, Commit, CreatePrimary, ECDHKeyGen, ECDHZGen, EventSequenceComplete, EvictControl,
+    HMAC, HMACStart, HashSequenceStart, LoadExternal, PCRRead, PolicyAuthorize, RSADecrypt,
+    RSAEncrypt, SequenceComplete, SequenceUpdate,
 };
+#[allow(deprecated)]
+use tpm2::commands::{EncryptDecrypt, Sign, VerifySignature};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2_simulator::{Simulator, create_simulator};
@@ -44,6 +42,7 @@ fn create_primary(
     user_auth: &'static [u8],
 ) -> Handle {
     let cmd = CreatePrimary {
+        primary_handle: hierarchy,
         in_sensitive: Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::from_bytes(user_auth).unwrap(),
             data: Tpm2bSensitiveData::default(),
@@ -51,17 +50,8 @@ fn create_primary(
         in_public: Tpm2b(public),
         ..Default::default()
     };
-    let (_, handles) = execute_with_password_sessions(
-        sim,
-        &cmd,
-        CreatePrimaryHandles {
-            primary_handle: hierarchy,
-        },
-        1,
-        &[],
-    )
-    .expect("CreatePrimary failed");
-    handles.object_handle
+    let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary failed");
+    rsp.object_handle
 }
 
 /// Default attributes of a TPM-generated key with password (userWithAuth) authorization.
@@ -100,7 +90,10 @@ fn ecc_storage_template() -> TpmtPublic<'static> {
         None,
     );
     if let PublicParmsAndId::Ecc(parms, _) = &mut t.parms_and_id {
-        parms.symmetric = Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)));
+        parms.symmetric = Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        });
     }
     t
 }
@@ -155,37 +148,45 @@ fn sym_template(attrs: TpmaObject) -> TpmtPublic<'static> {
         object_attributes: attrs,
         auth_policy: Tpm2bDigest::default(),
         parms_and_id: PublicParmsAndId::Sym(
-            TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+            TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgCipherMode::Cfb.into()),
+            },
             Tpm2bDigest::default(),
         ),
     }
 }
 
-/// Sends `cmd` with optional password sessions, appending `trailing` bytes after the
-/// parameters (the command size covers them), and returns the response code.
+/// Marshals `num_sessions` password sessions carrying `auth` (the authorization area without
+/// its size field).
+fn password_sessions(num_sessions: usize, auth: &[u8]) -> Vec<u8> {
+    let auth_cmd = TpmsAuthCommand {
+        session_handle: Handle::RS_PW,
+        nonce: Tpm2bNonce::default(),
+        session_attributes: TpmaSession(1),
+        hmac: Tpm2bAuth::from_bytes(leak_bytes(auth)).unwrap(),
+    };
+    marshal_to_vec(&auth_cmd).repeat(num_sessions)
+}
+
+/// Sends `cmd` (with its handles) with optional password sessions, appending `trailing` bytes
+/// after the parameters (the command size covers them), and returns the response code.
 fn send_with_trailing<CmdT: Command>(
     sim: &mut Simulator<'_>,
     cmd: &CmdT,
-    handles: CmdT::Handles,
     num_sessions: usize,
     auth: &[u8],
     trailing: &[u8],
 ) -> u32
 where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <CmdT::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut buf = vec![0u8; 10];
-    buf.extend_from_slice(&marshal_to_vec(&handles));
+    for handle in cmd.handles().as_ref() {
+        buf.extend_from_slice(&handle.0.to_be_bytes());
+    }
     if num_sessions > 0 {
-        let auth_cmd = TpmsAuthCommand {
-            session_handle: Handle::RS_PW,
-            nonce: Tpm2bNonce::default(),
-            session_attributes: TpmaSession(1),
-            hmac: Tpm2bAuth::from_bytes(leak_bytes(auth)).unwrap(),
-        };
-        let one = marshal_to_vec(&auth_cmd);
-        let area: Vec<u8> = one.repeat(num_sessions);
+        let area = password_sessions(num_sessions, auth);
         buf.extend_from_slice(&(area.len() as u32).to_be_bytes());
         buf.extend_from_slice(&area);
     }
@@ -212,13 +213,14 @@ where
 /// Computes a SHA-256 digest client-side.
 fn sha256(data: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
-    let mut state = tpm2::crypto::HashCtx::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
+    let mut state = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
     state.update(data).unwrap();
     out.copy_from_slice(state.finalize(&mut [0u8; 64]).unwrap().digest());
     out
 }
 
 /// Runs TPM2_Sign with one password session.
+#[allow(deprecated)]
 fn sign(
     sim: &mut Simulator<'_>,
     key: Handle,
@@ -227,15 +229,16 @@ fn sign(
     in_scheme: Option<TpmtSigScheme>,
 ) -> Result<TpmtSignature<'static>, u32> {
     let cmd = Sign {
+        key_handle: key,
         digest: Tpm2bDigest::from_bytes(digest).unwrap(),
         in_scheme,
         validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
-    execute_with_password_sessions(sim, &cmd, SignHandles { key_handle: key }, 1, auth)
-        .map(|(rsp, _)| rsp.signature)
+    execute_with_password_sessions(sim, &cmd, 1, auth).map(|rsp| rsp.signature)
 }
 
 /// Runs TPM2_VerifySignature (no sessions).
+#[allow(deprecated)]
 fn verify_signature(
     sim: &mut Simulator<'_>,
     key: Handle,
@@ -243,28 +246,22 @@ fn verify_signature(
     signature: TpmtSignature<'static>,
 ) -> Result<TpmtTkVerified<'static>, u32> {
     let cmd = VerifySignature {
+        key_handle: key,
         digest: Tpm2bDigest::from_bytes(digest).unwrap(),
         signature,
     };
-    execute_with_password_sessions(
-        sim,
-        &cmd,
-        VerifySignatureHandles { key_handle: key },
-        0,
-        &[],
-    )
-    .map(|(rsp, _)| rsp.validation)
+    execute_with_password_sessions(sim, &cmd, 0, &[]).map(|rsp| rsp.validation)
 }
 
 /// Runs TPM2_Commit without P1/P2 and returns the commit counter.
 fn commit(sim: &mut Simulator<'_>, key: Handle, auth: &[u8]) -> Result<u16, u32> {
     let cmd = Commit {
+        sign_handle: key,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    execute_with_password_sessions(sim, &cmd, CommitHandles { sign_handle: key }, 1, auth)
-        .map(|(rsp, _)| rsp.counter)
+    execute_with_password_sessions(sim, &cmd, 1, auth).map(|rsp| rsp.counter)
 }
 
 /// The ECDAA signing scheme for commit `count`.
@@ -281,25 +278,17 @@ fn start_hash_sequence(sim: &mut Simulator<'_>, alg: Option<TpmiAlgHash>) -> Han
         auth: Tpm2bAuth::default(),
         hash_alg: alg,
     };
-    let (_, handles) = execute_with_password_sessions(sim, &cmd, (), 0, &[]).unwrap();
-    handles.sequence_handle
+    let rsp = execute_with_password_sessions(sim, &cmd, 0, &[]).unwrap();
+    rsp.sequence_handle
 }
 
 /// Feeds `data` into a sequence.
 fn sequence_update(sim: &mut Simulator<'_>, seq: Handle, data: &'static [u8]) -> Result<(), u32> {
     let cmd = SequenceUpdate {
+        sequence_handle: seq,
         buffer: Tpm2bMaxBuffer::from_bytes(data).unwrap(),
     };
-    execute_with_password_sessions(
-        sim,
-        &cmd,
-        SequenceUpdateHandles {
-            sequence_handle: seq,
-        },
-        1,
-        &[],
-    )
-    .map(|_| ())
+    execute_with_password_sessions(sim, &cmd, 1, &[]).map(|_| ())
 }
 
 /// Completes a hash sequence for `hierarchy`.
@@ -310,19 +299,11 @@ fn sequence_complete(
     hierarchy: Handle,
 ) -> Result<TpmtTkHashcheck<'static>, u32> {
     let cmd = SequenceComplete {
+        sequence_handle: seq,
         buffer: Tpm2bMaxBuffer::from_bytes(data).unwrap(),
         hierarchy,
     };
-    execute_with_password_sessions(
-        sim,
-        &cmd,
-        SequenceCompleteHandles {
-            sequence_handle: seq,
-        },
-        1,
-        &[],
-    )
-    .map(|(rsp, _)| rsp.validation)
+    execute_with_password_sessions(sim, &cmd, 1, &[]).map(|rsp| rsp.validation)
 }
 
 /// Completes an event sequence, extending `pcr` (or `TPM_RH_NULL`).
@@ -333,19 +314,11 @@ fn event_sequence_complete(
     data: &'static [u8],
 ) -> Result<usize, u32> {
     let cmd = EventSequenceComplete {
+        pcr_handle: pcr,
+        sequence_handle: seq,
         buffer: Tpm2bMaxBuffer::from_bytes(data).unwrap(),
     };
-    execute_with_password_sessions(
-        sim,
-        &cmd,
-        EventSequenceCompleteHandles {
-            pcr_handle: pcr,
-            sequence_handle: seq,
-        },
-        2,
-        &[],
-    )
-    .map(|(rsp, _)| rsp.results.digests().count())
+    execute_with_password_sessions(sim, &cmd, 2, &[]).map(|rsp| rsp.results.digests().count())
 }
 
 /// Reads the PCR update counter.
@@ -365,7 +338,7 @@ fn allocated_banks_for_pcr(sim: &mut Simulator<'_>, pcr: usize) -> u32 {
         property_count: 16,
     };
     let mut buf = [0u8; 4096];
-    let (rsp, _) = execute_get_capability(sim, &cmd, (), 0, &[], &mut buf).unwrap();
+    let rsp = execute_get_capability(sim, &cmd, 0, &[], &mut buf).unwrap();
     match rsp.capability_data {
         TpmsCapabilityData::AssignedPcr(sel) => sel
             .pcr_selections()
@@ -440,21 +413,14 @@ fn tpm2_verifysignature_accepts_tpm_alg_null_produces_hmac_ticket_validates() {
 
     let key_name = read_public_name(&mut sim, key);
     let cmd = PolicyAuthorize {
+        policy_session: session.session_handle,
         approved_policy: Tpm2bDigest::from_bytes(approved).unwrap(),
         policy_ref: Tpm2bNonce::default(),
         key_sign: key_name,
         check_ticket: ticket,
     };
-    execute_with_password_sessions(
-        &mut sim,
-        &cmd,
-        PolicyAuthorizeHandles {
-            policy_session: session.session_handle,
-        },
-        0,
-        &[],
-    )
-    .expect("PolicyAuthorize must accept the HMAC-key ticket");
+    execute_with_password_sessions(&mut sim, &cmd, 0, &[])
+        .expect("PolicyAuthorize must accept the HMAC-key ticket");
 }
 
 /// An HMAC key in the NULL hierarchy yields the NULL ticket (empty digest).
@@ -570,6 +536,7 @@ fn verify_signature_and_sign_ecschnorr_sm2_omission_and_ecdaa_verification_bug()
 
 /// Trailing parameter bytes are a `TPM_RC_SIZE` error that wins over execution errors.
 #[test]
+#[allow(deprecated)]
 fn crypt_ops_and_startup_unmarshal_trailing_bytes_and_validation_order() {
     let mut sim = create_simulator!();
     let key = create_primary(
@@ -585,6 +552,7 @@ fn crypt_ops_and_startup_unmarshal_trailing_bytes_and_validation_order() {
 
     // VerifySignature with an invalid signature + 1 trailing byte.
     let verify = VerifySignature {
+        key_handle: key,
         digest: Tpm2bDigest::from_bytes(&[0x44; 32]).unwrap(),
         signature: TpmtSignature::Ecdsa(TpmsSignatureEcc {
             hash: TpmiAlgHash::Sha256,
@@ -592,63 +560,32 @@ fn crypt_ops_and_startup_unmarshal_trailing_bytes_and_validation_order() {
             signature_s: Tpm2bEccParameter::from_bytes(&[1]).unwrap(),
         }),
     };
-    let handles = VerifySignatureHandles { key_handle: key };
-    assert_eq!(
-        send_with_trailing(&mut sim, &verify, handles, 0, &[], &[0]),
-        size
-    );
+    assert_eq!(send_with_trailing(&mut sim, &verify, 0, &[], &[0]), size);
 
     // Sign with a wrong digest size + trailing byte.
     let sign_cmd = Sign {
+        key_handle: key,
         digest: Tpm2bDigest::from_bytes(&[0x44; 7]).unwrap(),
         in_scheme: None,
         validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
-    assert_eq!(
-        send_with_trailing(
-            &mut sim,
-            &sign_cmd,
-            SignHandles { key_handle: key },
-            1,
-            &[],
-            &[0]
-        ),
-        size
-    );
+    assert_eq!(send_with_trailing(&mut sim, &sign_cmd, 1, &[], &[0]), size);
 
     // RSA_Encrypt / RSA_Decrypt on an ECC key (TPM_RC_KEY) + trailing byte.
     let enc = RSAEncrypt {
+        key_handle: key,
         message: Tpm2bPublicKeyRsa::from_bytes(b"msg").unwrap(),
         in_scheme: None,
         label: Tpm2bData::default(),
     };
-    assert_eq!(
-        send_with_trailing(
-            &mut sim,
-            &enc,
-            RSAEncryptHandles { key_handle: key },
-            0,
-            &[],
-            &[0]
-        ),
-        size
-    );
+    assert_eq!(send_with_trailing(&mut sim, &enc, 0, &[], &[0]), size);
     let dec = RSADecrypt {
+        key_handle: key,
         cipher_text: Tpm2bPublicKeyRsa::from_bytes(b"msg").unwrap(),
         in_scheme: None,
         label: Tpm2bData::default(),
     };
-    assert_eq!(
-        send_with_trailing(
-            &mut sim,
-            &dec,
-            RSADecryptHandles { key_handle: key },
-            1,
-            &[],
-            &[0]
-        ),
-        size
-    );
+    assert_eq!(send_with_trailing(&mut sim, &dec, 1, &[], &[0]), size);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -797,11 +734,9 @@ fn tpm2_commit_rejects_persistent_ecc_keys_rejects() {
     execute_with_password_sessions(
         &mut sim,
         &EvictControl {
-            persistent_handle: persistent,
-        },
-        EvictControlHandles {
             auth: Handle::RH_OWNER,
             object_handle: key,
+            persistent_handle: persistent,
         },
         1,
         &[],
@@ -845,21 +780,13 @@ fn tpm2_commit_rejects_persistent_ecc_keys_rejects() {
     )
     .unwrap();
     let cmd = Commit {
+        sign_handle: policy_key,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
     };
-    execute_with_hmac_sessions(
-        &mut sim,
-        &cmd,
-        CommitHandles {
-            sign_handle: policy_key,
-        },
-        &[],
-        &mut [session],
-        &[b""],
-    )
-    .expect("Commit must accept a policy-authorized key with userWithAuth clear");
+    execute_with_hmac_sessions(&mut sim, &cmd, &[], &mut [session], &[b""])
+        .expect("Commit must accept a policy-authorized key with userWithAuth clear");
 }
 
 /// An unloaded transient `signHandle` is reported as `TPM_RC_REFERENCE_H0`.
@@ -890,21 +817,15 @@ fn tpm2_ecdh_keygen_erroneously_enforces_restricted_and() {
         ),
         b"",
     );
-    sim.execute_with_handles(
-        ECDHKeyGen {},
-        ECDHKeyGenHandles {
-            key_handle: sign_key,
-        },
-    )
+    sim.execute(ECDHKeyGen {
+        key_handle: sign_key,
+    })
     .expect("ECDH_KeyGen must accept an ECC signing key");
 
     let storage = create_primary(&mut sim, Handle::RH_OWNER, ecc_storage_template(), b"");
-    sim.execute_with_handles(
-        ECDHKeyGen {},
-        ECDHKeyGenHandles {
-            key_handle: storage,
-        },
-    )
+    sim.execute(ECDHKeyGen {
+        key_handle: storage,
+    })
     .expect("ECDH_KeyGen must accept a restricted ECC key");
 }
 
@@ -922,12 +843,9 @@ fn tpm2_ecdh_keygen_attribute_order_and_curve_support_bugs() {
         b"",
     );
     let err = sim
-        .execute_with_handles(
-            ECDHKeyGen {},
-            ECDHKeyGenHandles {
-                key_handle: hmac_key,
-            },
-        )
+        .execute(ECDHKeyGen {
+            key_handle: hmac_key,
+        })
         .unwrap_err();
     assert_eq!(err.get(), rc_at(TpmRc::KEY, Position::handle(1)));
 }
@@ -948,33 +866,25 @@ fn tpm2_hmac_mac_and_ecdh_zgen_validation_order_bugs() {
         b"",
     );
     let zgen = ECDHZGen {
+        key_handle: hmac_key,
         in_point: Tpm2b(TpmsEccPoint {
             x: Tpm2bEccParameter::from_bytes(&[1]).unwrap(),
             y: Tpm2bEccParameter::from_bytes(&[2]).unwrap(),
         }),
     };
     assert_eq!(
-        execute_with_password_sessions(
-            &mut sim,
-            &zgen,
-            ECDHZGenHandles {
-                key_handle: hmac_key,
-            },
-            1,
-            &[]
-        )
-        .unwrap_err(),
+        execute_with_password_sessions(&mut sim, &zgen, 1, &[]).unwrap_err(),
         rc_at(TpmRc::KEY, Position::handle(1))
     );
 
     // TPM2_HMAC: restricted is checked before the hash algorithm selection.
-    let hmac = Hmac {
+    let hmac = HMAC {
+        handle: hmac_key,
         buffer: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha1),
     };
     assert_eq!(
-        execute_with_password_sessions(&mut sim, &hmac, HmacHandles { handle: hmac_key }, 1, &[])
-            .unwrap_err(),
+        execute_with_password_sessions(&mut sim, &hmac, 1, &[]).unwrap_err(),
         rc_at(TpmRc::ATTRIBUTES, Position::handle(1))
     );
 }
@@ -986,22 +896,14 @@ fn tpm2_evictcontrol_and_ecdh_zgen_mac_validation_and_error_bugs() {
     let mut sim = create_simulator!();
     let storage = create_primary(&mut sim, Handle::RH_OWNER, ecc_storage_template(), b"");
     let zgen = ECDHZGen {
+        key_handle: storage,
         in_point: Tpm2b(TpmsEccPoint {
             x: Tpm2bEccParameter::from_bytes(&[1]).unwrap(),
             y: Tpm2bEccParameter::from_bytes(&[2]).unwrap(),
         }),
     };
     assert_eq!(
-        send_with_trailing(
-            &mut sim,
-            &zgen,
-            ECDHZGenHandles {
-                key_handle: storage
-            },
-            1,
-            &[],
-            &[0]
-        ),
+        send_with_trailing(&mut sim, &zgen, 1, &[], &[0]),
         rc_bare(TpmRc::SIZE)
     );
 }
@@ -1023,39 +925,31 @@ fn tpm2_rsa_encrypt_and_tpm2_rsa_decrypt_attribute_and_error_position_bugs() {
         rsa_template(
             base_attrs() | TpmaObject::RESTRICTED | TpmaObject::DECRYPT,
             None,
-            Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+            Some(TpmtSymDefObject {
+                alg: AlgSym::Aes128,
+                mode: Some(TpmiAlgCipherMode::Cfb.into()),
+            }),
         ),
         b"",
     );
     let enc = RSAEncrypt {
+        key_handle: srk,
         message: Tpm2bPublicKeyRsa::from_bytes(b"secret").unwrap(),
         in_scheme: Some(TpmtRsaDecrypt::Oaep(TpmiAlgHash::Sha256)),
         label: Tpm2bData::default(),
     };
-    execute_with_password_sessions(
-        &mut sim,
-        &enc,
-        RSAEncryptHandles { key_handle: srk },
-        0,
-        &[],
-    )
-    .expect("RSA_Encrypt must accept a restricted decryption key");
+    execute_with_password_sessions(&mut sim, &enc, 0, &[])
+        .expect("RSA_Encrypt must accept a restricted decryption key");
 
     // Unterminated label -> TPM_RC_VALUE + RC_P3.
     let enc_bad_label = RSAEncrypt {
+        key_handle: srk,
         message: Tpm2bPublicKeyRsa::from_bytes(b"secret").unwrap(),
         in_scheme: Some(TpmtRsaDecrypt::Oaep(TpmiAlgHash::Sha256)),
         label: Tpm2bData::from_bytes(b"abc").unwrap(),
     };
     assert_eq!(
-        execute_with_password_sessions(
-            &mut sim,
-            &enc_bad_label,
-            RSAEncryptHandles { key_handle: srk },
-            0,
-            &[]
-        )
-        .unwrap_err(),
+        execute_with_password_sessions(&mut sim, &enc_bad_label, 0, &[]).unwrap_err(),
         rc_at(TpmRc::VALUE, Position::parameter(3))
     );
 
@@ -1072,69 +966,47 @@ fn tpm2_rsa_encrypt_and_tpm2_rsa_decrypt_attribute_and_error_position_bugs() {
     );
     // Scheme mismatch -> TPM_RC_SCHEME + RC_P2.
     let dec_bad_scheme = RSADecrypt {
+        key_handle: dec_key,
         cipher_text: Tpm2bPublicKeyRsa::from_bytes(&[1u8; 256]).unwrap(),
         in_scheme: Some(TpmtRsaDecrypt::Rsaes),
         label: Tpm2bData::default(),
     };
     assert_eq!(
-        execute_with_password_sessions(
-            &mut sim,
-            &dec_bad_scheme,
-            RSADecryptHandles {
-                key_handle: dec_key
-            },
-            1,
-            &[]
-        )
-        .unwrap_err(),
+        execute_with_password_sessions(&mut sim, &dec_bad_scheme, 1, &[]).unwrap_err(),
         rc_at(TpmRc::SCHEME, Position::parameter(2))
     );
     // Ciphertext not the size of the modulus -> bare TPM_RC_SIZE.
     let dec_short = RSADecrypt {
+        key_handle: dec_key,
         cipher_text: Tpm2bPublicKeyRsa::from_bytes(&[1u8; 16]).unwrap(),
         in_scheme: None,
         label: Tpm2bData::default(),
     };
     assert_eq!(
-        execute_with_password_sessions(
-            &mut sim,
-            &dec_short,
-            RSADecryptHandles {
-                key_handle: dec_key
-            },
-            1,
-            &[]
-        )
-        .unwrap_err(),
+        execute_with_password_sessions(&mut sim, &dec_short, 1, &[]).unwrap_err(),
         rc_bare(TpmRc::SIZE)
     );
 
     // Restricted ECC key: not an RSA key -> TPM_RC_KEY + RC_H1 (type before attributes).
     let ecc_srk = create_primary(&mut sim, Handle::RH_OWNER, ecc_storage_template(), b"");
     let dec = RSADecrypt {
+        key_handle: ecc_srk,
         cipher_text: Tpm2bPublicKeyRsa::from_bytes(&[1u8; 256]).unwrap(),
         in_scheme: None,
         label: Tpm2bData::default(),
     };
     assert_eq!(
-        execute_with_password_sessions(
-            &mut sim,
-            &dec,
-            RSADecryptHandles {
-                key_handle: ecc_srk
-            },
-            1,
-            &[]
-        )
-        .unwrap_err(),
+        execute_with_password_sessions(&mut sim, &dec, 1, &[]).unwrap_err(),
         rc_at(TpmRc::KEY, Position::handle(1))
     );
     // Restricted RSA key -> TPM_RC_ATTRIBUTES + RC_H1.
     assert_eq!(
         execute_with_password_sessions(
             &mut sim,
-            &dec,
-            RSADecryptHandles { key_handle: srk },
+            &RSADecrypt {
+                key_handle: srk,
+                ..dec
+            },
             1,
             &[]
         )
@@ -1222,13 +1094,13 @@ fn tpm2_sequence_commands_buffer_limit_sha512_and_macstart_bugs() {
         ),
         b"",
     );
-    let start = HmacStart {
+    let start = HMACStart {
+        handle: key,
         auth: Tpm2bAuth::default(),
         hash_alg: None,
     };
     assert_eq!(
-        execute_with_password_sessions(&mut sim, &start, HmacStartHandles { handle: key }, 1, &[])
-            .unwrap_err(),
+        execute_with_password_sessions(&mut sim, &start, 1, &[]).unwrap_err(),
         rc_at(TpmRc::ATTRIBUTES, Position::handle(1))
     );
 }
@@ -1258,14 +1130,14 @@ fn tpm2_mac_start_symcipher_cmac_rejection_and_validation_order_bugs() {
         ),
         b"",
     );
-    let start = HmacStart {
-        auth: Tpm2bAuth::default(),
-        hash_alg: Some(TpmiAlgHash::Sha1),
-    };
     for handle in [key, restricted] {
+        let start = HMACStart {
+            handle,
+            auth: Tpm2bAuth::default(),
+            hash_alg: Some(TpmiAlgHash::Sha1),
+        };
         assert_eq!(
-            execute_with_password_sessions(&mut sim, &start, HmacStartHandles { handle }, 1, &[])
-                .unwrap_err(),
+            execute_with_password_sessions(&mut sim, &start, 1, &[]).unwrap_err(),
             rc_at(TpmRc::VALUE, Position::parameter(2))
         );
     }
@@ -1288,13 +1160,13 @@ fn mac_start_and_hash_sequence_start_validation_order_and_error_code_bugs() {
         ),
         b"",
     );
-    let start = HmacStart {
+    let start = HMACStart {
+        handle: key,
         auth: Tpm2bAuth::default(),
         hash_alg: None,
     };
     assert_eq!(
-        execute_with_password_sessions(&mut sim, &start, HmacStartHandles { handle: key }, 1, &[])
-            .unwrap_err(),
+        execute_with_password_sessions(&mut sim, &start, 1, &[]).unwrap_err(),
         rc_at(TpmRc::ATTRIBUTES, Position::handle(1))
     );
 }
@@ -1367,31 +1239,26 @@ fn load_public_only_sym_key(sim: &mut Simulator<'_>) -> Handle {
         ))),
         hierarchy: Handle::RH_NULL,
     };
-    let (_, handles) = sim.execute_with_handles(cmd, ()).unwrap();
-    handles.object_handle
+    let rsp = sim.execute(cmd).unwrap();
+    rsp.object_handle
 }
 
 /// EncryptDecrypt with a public-only key never runs the cipher with an empty key: C rejects the
 /// authorization with `TPM_RC_AUTH_UNAVAILABLE` (the handler additionally refuses an empty key
 /// with `TPM_RC_KEY + RC_H1`) instead of returning `TPM_RC_FAILURE`.
 #[test]
+#[allow(deprecated)]
 fn tpm2_encryptdecrypt_cmac_mode_and_public_only_key_bugs() {
     let mut sim = create_simulator!();
     let key = load_public_only_sym_key(&mut sim);
     let cmd = EncryptDecrypt {
+        key_handle: key,
         decrypt: false,
         mode: None,
         iv_in: Tpm2bIv::from_bytes(&[0u8; 16]).unwrap(),
         in_data: Tpm2bMaxBuffer::from_bytes(&[0u8; 16]).unwrap(),
     };
-    let rc = execute_with_password_sessions(
-        &mut sim,
-        &cmd,
-        EncryptDecryptHandles { key_handle: key },
-        1,
-        &[],
-    )
-    .unwrap_err();
+    let rc = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
     // C IsAuthValueAvailable: a public-only object can't be authorized (bare, fmt-0 RC).
     assert_eq!(rc, TpmRc::AUTH_UNAVAILABLE.get());
 }
@@ -1408,10 +1275,10 @@ fn sign_public_only_keyedhash_zero_byte_key_and_asymmetric_error_code_bugs() {
         ))),
         hierarchy: Handle::RH_NULL,
     };
-    let (_, handles) = sim.execute_with_handles(cmd, ()).unwrap();
+    let rsp = sim.execute(cmd).unwrap();
     let digest: &'static [u8] = leak_bytes(&[0x88; 32]);
     assert_eq!(
-        sign(&mut sim, handles.object_handle, b"", digest, None).unwrap_err(),
+        sign(&mut sim, rsp.object_handle, b"", digest, None).unwrap_err(),
         TpmRc::AUTH_UNAVAILABLE.get()
     );
 }

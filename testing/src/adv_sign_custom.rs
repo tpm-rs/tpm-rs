@@ -2,9 +2,8 @@
 use rsa::{BigUint, Pkcs1v15Sign, RsaPublicKey};
 use sha2::{Digest, Sha256};
 use tpm2::Handle;
-use tpm2::commands::{
-    CreatePrimary, CreatePrimaryHandles, Sign, SignHandles, VerifySignature, VerifySignatureHandles,
-};
+#[allow(deprecated)]
+use tpm2::commands::{CreatePrimary, Sign, VerifySignature};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2_simulator::{Simulator, create_simulator};
@@ -12,6 +11,7 @@ use tpm2_simulator::{Simulator, create_simulator};
 use crate::test_utils::*;
 
 #[test]
+#[allow(deprecated)]
 fn test_sign_edge_cases() {
     let mut sim = create_simulator!();
 
@@ -35,6 +35,7 @@ fn test_sign_edge_cases() {
     };
 
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -43,14 +44,10 @@ fn test_sign_edge_cases() {
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let create_primary_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (_, create_primary_resp_handles) = execute_with_password_sessions(
+    let create_primary_resp_handles = execute_with_password_sessions(
         &mut sim,
         &create_primary_cmd,
-        create_primary_handles,
         1, // CreatePrimary needs authorization of the hierarchy (C: AUTH_MISSING otherwise)
         &[],
     )
@@ -63,16 +60,14 @@ fn test_sign_edge_cases() {
 
     // 1. Test signing with mismatched/invalid scheme hash algorithm
     let sign_cmd_mismatched = Sign {
+        key_handle: object_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha1)), // Mismatched hash algorithm
         validation: TpmtTkHashcheck::default(),
     };
-    let sign_handles = SignHandles {
-        key_handle: object_handle,
-    };
 
     let res_mismatched =
-        execute_with_password_sessions_status(&mut sim, &sign_cmd_mismatched, sign_handles, 1, &[]);
+        execute_with_password_sessions_status(&mut sim, &sign_cmd_mismatched, 1, &[]);
     assert!(
         res_mismatched.is_err(),
         "Expected sign with mismatched scheme to fail"
@@ -80,25 +75,23 @@ fn test_sign_edge_cases() {
 
     // 2. Test successful sign
     let sign_cmd = Sign {
+        key_handle: object_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
         validation: TpmtTkHashcheck::default(),
     };
     let mut resp_buffer = [0u8; 4096];
-    let (sign_resp, _) = execute_sign(&mut sim, &sign_cmd, sign_handles, 1, &[], &mut resp_buffer)
-        .expect("Sign failed");
+    let sign_resp =
+        execute_sign(&mut sim, &sign_cmd, 1, &[], &mut resp_buffer).expect("Sign failed");
 
     // 3. Test VerifySignature command (Success)
     let verify_cmd = VerifySignature {
+        key_handle: object_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         signature: sign_resp.signature,
     };
-    let verify_handles = VerifySignatureHandles {
-        key_handle: object_handle,
-    };
-    let (verify_resp, _) =
-        execute_with_password_sessions(&mut sim, &verify_cmd, verify_handles, 0, &[])
-            .expect("VerifySignature failed");
+    let verify_resp = execute_with_password_sessions(&mut sim, &verify_cmd, 0, &[])
+        .expect("VerifySignature failed");
     // Verify that the ticket is returned indicating success
     assert_eq!(verify_resp.validation.tag(), (tpm2::TpmSt::VERIFIED.id()));
 
@@ -106,11 +99,11 @@ fn test_sign_edge_cases() {
     let mut modified_digest = digest;
     modified_digest[0] ^= 1;
     let verify_cmd_mod_digest = VerifySignature {
+        key_handle: object_handle,
         digest: Tpm2bDigest::from_bytes(&modified_digest).unwrap(),
         signature: sign_resp.signature,
     };
-    let res_mod_digest =
-        execute_with_password_sessions(&mut sim, &verify_cmd_mod_digest, verify_handles, 0, &[]);
+    let res_mod_digest = execute_with_password_sessions(&mut sim, &verify_cmd_mod_digest, 0, &[]);
     assert!(
         res_mod_digest.is_err(),
         "VerifySignature should fail when digest is modified"
@@ -128,11 +121,11 @@ fn test_sign_edge_cases() {
         _ => panic!("Expected RSASSA signature"),
     }
     let verify_cmd_mod_sig = VerifySignature {
+        key_handle: object_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         signature: modified_sig,
     };
-    let res_mod_sig =
-        execute_with_password_sessions(&mut sim, &verify_cmd_mod_sig, verify_handles, 0, &[]);
+    let res_mod_sig = execute_with_password_sessions(&mut sim, &verify_cmd_mod_sig, 0, &[]);
     assert!(
         res_mod_sig.is_err(),
         "VerifySignature should fail when signature is modified"
@@ -143,6 +136,7 @@ fn test_sign_edge_cases() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_sign_with_non_sign_key() {
     let mut sim = create_simulator!();
 
@@ -167,6 +161,7 @@ fn test_sign_with_non_sign_key() {
     };
 
     let create_primary_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -175,14 +170,10 @@ fn test_sign_with_non_sign_key() {
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let create_primary_handles = CreatePrimaryHandles {
-        primary_handle: Handle::RH_OWNER,
-    };
 
-    let (_, create_primary_resp_handles) = execute_with_password_sessions(
+    let create_primary_resp_handles = execute_with_password_sessions(
         &mut sim,
         &create_primary_cmd,
-        create_primary_handles,
         1, // CreatePrimary needs authorization of the hierarchy (C: AUTH_MISSING otherwise)
         &[],
     )
@@ -194,15 +185,13 @@ fn test_sign_with_non_sign_key() {
     let digest = Sha256::digest(data_to_sign);
 
     let sign_cmd = Sign {
+        key_handle: object_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
         validation: TpmtTkHashcheck::default(),
     };
-    let sign_handles = SignHandles {
-        key_handle: object_handle,
-    };
 
-    let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, sign_handles, 1, &[]);
+    let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, 1, &[]);
     assert!(
         res.is_err(),
         "Sign should fail when using a key without SIGN attribute"
@@ -216,6 +205,7 @@ fn test_sign_with_non_sign_key() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_verify_with_non_verify_key() {
     let mut sim = create_simulator!();
 
@@ -240,6 +230,7 @@ fn test_verify_with_non_verify_key() {
     };
 
     let create_sign_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -248,12 +239,9 @@ fn test_verify_with_non_verify_key() {
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let (_, sign_resp_handles) = execute_with_password_sessions(
+    let sign_resp_handles = execute_with_password_sessions(
         &mut sim,
         &create_sign_cmd,
-        CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
-        },
         1, // CreatePrimary needs authorization of the hierarchy (C: AUTH_MISSING otherwise)
         &[],
     )
@@ -281,6 +269,7 @@ fn test_verify_with_non_verify_key() {
     };
 
     let create_decrypt_cmd = CreatePrimary {
+        primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
             user_auth: Tpm2bAuth::default(),
             data: Tpm2bSensitiveData::default(),
@@ -289,12 +278,9 @@ fn test_verify_with_non_verify_key() {
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let (_, decrypt_resp_handles) = execute_with_password_sessions(
+    let decrypt_resp_handles = execute_with_password_sessions(
         &mut sim,
         &create_decrypt_cmd,
-        CreatePrimaryHandles {
-            primary_handle: Handle::RH_OWNER,
-        },
         1, // CreatePrimary needs authorization of the hierarchy (C: AUTH_MISSING otherwise)
         &[],
     )
@@ -305,32 +291,22 @@ fn test_verify_with_non_verify_key() {
     let data_to_sign = b"migrationpains";
     let digest = Sha256::digest(data_to_sign);
     let sign_cmd = Sign {
+        key_handle: sign_key_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
         validation: TpmtTkHashcheck::default(),
     };
     let mut resp_buffer = [0u8; 4096];
-    let (sign_resp, _) = execute_sign(
-        &mut sim,
-        &sign_cmd,
-        SignHandles {
-            key_handle: sign_key_handle,
-        },
-        1,
-        &[],
-        &mut resp_buffer,
-    )
-    .expect("Sign failed");
+    let sign_resp =
+        execute_sign(&mut sim, &sign_cmd, 1, &[], &mut resp_buffer).expect("Sign failed");
 
     // 4. Attempt to verify signature with the decryption-only key
     let verify_cmd = VerifySignature {
+        key_handle: decrypt_key_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         signature: sign_resp.signature,
     };
-    let verify_handles = VerifySignatureHandles {
-        key_handle: decrypt_key_handle,
-    };
-    let res = execute_with_password_sessions(&mut sim, &verify_cmd, verify_handles, 0, &[]);
+    let res = execute_with_password_sessions(&mut sim, &verify_cmd, 0, &[]);
     assert!(
         res.is_err(),
         "VerifySignature should fail when key lacks SIGN attribute"
@@ -341,6 +317,7 @@ fn test_verify_with_non_verify_key() {
 
     // 5. Attempt to verify with a mismatched signature scheme type (e.g. ECDSA signature)
     let verify_cmd_mismatched = VerifySignature {
+        key_handle: sign_key_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         signature: TpmtSignature::Ecdsa(TpmsSignatureEcc {
             hash: TpmiAlgHash::Sha256,
@@ -348,16 +325,7 @@ fn test_verify_with_non_verify_key() {
             signature_s: Tpm2bEccParameter::default(),
         }),
     };
-    let verify_handles_sign = VerifySignatureHandles {
-        key_handle: sign_key_handle,
-    };
-    let res_mismatched = execute_with_password_sessions(
-        &mut sim,
-        &verify_cmd_mismatched,
-        verify_handles_sign,
-        0,
-        &[],
-    );
+    let res_mismatched = execute_with_password_sessions(&mut sim, &verify_cmd_mismatched, 0, &[]);
     assert!(
         res_mismatched.is_err(),
         "VerifySignature should fail with mismatched scheme (ECDSA on RSA key)"
@@ -378,16 +346,12 @@ fn test_verify_with_non_verify_key() {
         _ => panic!("Expected RSASSA signature"),
     }
     let verify_cmd_mismatched_hash = VerifySignature {
+        key_handle: sign_key_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         signature: signature_mismatched_hash,
     };
-    let res_mismatched_hash = execute_with_password_sessions(
-        &mut sim,
-        &verify_cmd_mismatched_hash,
-        verify_handles_sign,
-        0,
-        &[],
-    );
+    let res_mismatched_hash =
+        execute_with_password_sessions(&mut sim, &verify_cmd_mismatched_hash, 0, &[]);
     assert!(
         res_mismatched_hash.is_err(),
         "VerifySignature should fail with mismatched hash algorithm"

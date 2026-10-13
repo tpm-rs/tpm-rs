@@ -2,7 +2,7 @@ use crate::test_utils::marshal_to_slice;
 use crate::test_utils::*;
 use tpm2::TpmiStCommandTag;
 use tpm2::Unmarshal;
-use tpm2::commands::{CreatePrimary, CreatePrimaryHandles};
+use tpm2::commands::CreatePrimary;
 use tpm2::*;
 use tpm2::{Handle, TpmCc};
 use tpm2_simulator::create_simulator;
@@ -47,13 +47,11 @@ fn test_dump() {
     let creation_pcr = TpmlPcrSelection::unmarshal(&mut unmarsh).unwrap();
 
     let cp_cmd = CreatePrimary {
+        primary_handle: Handle(0x40000001),
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),
         creation_pcr,
-    };
-    let cp_handles = CreatePrimaryHandles {
-        primary_handle: Handle(0x40000001),
     };
 
     let _num_sessions = 1;
@@ -64,7 +62,9 @@ fn test_dump() {
         code: TpmCc::CreatePrimary,
     };
     let mut written = marshal_to_slice(&cmd_header, &mut cmd_buffer);
-    written += marshal_to_slice(&(cp_handles), &mut cmd_buffer[written..]);
+    for handle in cp_cmd.handles() {
+        written += marshal_to_slice(&handle, &mut cmd_buffer[written..]);
+    }
 
     let auth_cmd = TpmsAuthCommand {
         session_handle: Handle::RS_PW,

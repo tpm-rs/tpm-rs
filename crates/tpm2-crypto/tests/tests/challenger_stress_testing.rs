@@ -12,27 +12,27 @@ fn test_rsa_import_private_key_bounds() {
 
     // 1. Zero modulus, zero p
     let res = provider.rsa_import_private_key(&[0], &[0], 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 2. Zero p, non-zero modulus
     let res = provider.rsa_import_private_key(&[15], &[0], 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 3. p = 1
     let res = provider.rsa_import_private_key(&[15], &[1], 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 4. p > n (so q = 0)
     let res = provider.rsa_import_private_key(&[15], &[16], 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 5. p = n (so q = 1)
     let res = provider.rsa_import_private_key(&[15], &[15], 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 6. n not divisible by p
     let res = provider.rsa_import_private_key(&[15], &[4], 65537, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 7. Invalid exponents (0, 1, 2)
     // First get a valid key parameters to test exponent validation
@@ -58,15 +58,15 @@ fn test_rsa_import_private_key_bounds() {
 
     // Exponent 0
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 0, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // Exponent 1
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 1, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // Exponent 2 (even exponent should fail for RSA)
     let res = provider.rsa_import_private_key(&modulus, &prime_p, 2, &mut private_key_out);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 8. Extreme/garbage values
     let res = provider.rsa_import_private_key(
@@ -75,7 +75,7 @@ fn test_rsa_import_private_key_bounds() {
         65537,
         &mut private_key_out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 }
 
 #[test]
@@ -104,30 +104,32 @@ fn test_ecc_point_multiply_buffer_sizes() {
             &pub_a,
             &mut buf,
         );
-        assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+        assert_eq!(res.unwrap_err(), CryptoError::Internal);
     }
 
     // Output buffer size 64 (succeeds)
     let mut buf_64 = [0u8; 64];
-    provider
-        .point_multiply(
+    assert_eq!(
+        provider.point_multiply(
             tpm2::crypto::ecc::TpmEccCurve::NistP256,
             &priv_a,
             &pub_a,
             &mut buf_64,
-        )
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
 
     // Output buffer size 100 (succeeds)
     let mut buf_100 = [0u8; 100];
-    provider
-        .point_multiply(
+    assert_eq!(
+        provider.point_multiply(
             tpm2::crypto::ecc::TpmEccCurve::NistP256,
             &priv_a,
             &pub_a,
             &mut buf_100,
-        )
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
     // Verification that only 64 bytes were written or handled correctly
     assert_ne!(buf_100[..64], [0u8; 64]);
     assert_eq!(buf_100[64..], [0u8; 36]);
@@ -140,26 +142,28 @@ fn test_ecc_point_multiply_buffer_sizes() {
             &priv_a,
             &mut buf,
         );
-        assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+        assert_eq!(res.unwrap_err(), CryptoError::Internal);
     }
 
     let mut buf_64 = [0u8; 64];
-    provider
-        .point_multiply_generator(
+    assert_eq!(
+        provider.point_multiply_generator(
             tpm2::crypto::ecc::TpmEccCurve::NistP256,
             &priv_a,
             &mut buf_64,
-        )
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
 
     let mut buf_100 = [0u8; 100];
-    provider
-        .point_multiply_generator(
+    assert_eq!(
+        provider.point_multiply_generator(
             tpm2::crypto::ecc::TpmEccCurve::NistP256,
             &priv_a,
             &mut buf_100,
-        )
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
     assert_ne!(buf_100[..64], [0u8; 64]);
     assert_eq!(buf_100[64..], [0u8; 36]);
 }
@@ -175,46 +179,50 @@ fn test_bn_p256_fallback() {
     bn_point[63] = 2; // Y = 2
 
     // 1. Validate point (1, 2) on BN_P256
-    provider
-        .validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &bn_point)
-        .unwrap();
+    assert_eq!(
+        provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &bn_point),
+        Ok(true)
+    );
 
     // 2. Validate point (1, 3) is NOT on BN_P256
     let mut invalid_bn_point = [0u8; 64];
     invalid_bn_point[31] = 1; // X = 1
     invalid_bn_point[63] = 3; // Y = 3
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &invalid_bn_point);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
 
     // 3. Point multiplication with scalar = 1 (should return same point)
     let mut scalar_1 = [0u8; 32];
     scalar_1[31] = 1;
     let mut out_point = [0u8; 64];
-    provider
-        .point_multiply(
+    assert_eq!(
+        provider.point_multiply(
             tpm2::crypto::ecc::TpmEccCurve::BNP256,
             &scalar_1,
             &bn_point,
             &mut out_point,
-        )
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
     assert_eq!(out_point, bn_point);
 
     // 4. Point multiplication with scalar = 2 (should return a valid point on the curve)
     let mut scalar_2 = [0u8; 32];
     scalar_2[31] = 2;
-    provider
-        .point_multiply(
+    assert_eq!(
+        provider.point_multiply(
             tpm2::crypto::ecc::TpmEccCurve::BNP256,
             &scalar_2,
             &bn_point,
             &mut out_point,
-        )
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
     // Output point must be on the curve
-    provider
-        .validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &out_point)
-        .unwrap();
+    assert_eq!(
+        provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &out_point),
+        Ok(true)
+    );
 
     // 5. Point multiplication with scalar = 0 (should fail)
     let scalar_0 = [0u8; 32];
@@ -224,22 +232,24 @@ fn test_bn_p256_fallback() {
         &bn_point,
         &mut out_point,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 6. Point multiplication with large scalar
     let mut scalar_large = [0u8; 32];
     scalar_large[0] = 0x01; // some arbitrary non-zero scalar
-    provider
-        .point_multiply(
+    assert_eq!(
+        provider.point_multiply(
             tpm2::crypto::ecc::TpmEccCurve::BNP256,
             &scalar_large,
             &bn_point,
             &mut out_point,
-        )
-        .unwrap();
-    provider
-        .validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &out_point)
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
+    assert_eq!(
+        provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &out_point),
+        Ok(true)
+    );
 }
 
 #[test]
@@ -253,9 +263,9 @@ fn test_bn_p256_coordinate_range_validation() {
         "0000000000000000000000000000000000000000000000000000000000000002" // Y = 2
     );
 
-    // If coordinates >= p are strictly rejected, this should fail with InvalidData
+    // If coordinates >= p are strictly rejected, this should fail with Ok(false)
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &bn_point);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
 }
 
 #[test]
@@ -271,7 +281,7 @@ fn test_ecc_curve_isolation_and_boundaries() {
     nist_p_equal_x[..32].copy_from_slice(&nist_p_bytes);
     nist_p_equal_x[63] = 1;
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &nist_p_equal_x);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
 
     let mut out = [0u8; 64];
     let scalar = [1u8; 32];
@@ -281,7 +291,7 @@ fn test_ecc_curve_isolation_and_boundaries() {
         &nist_p_equal_x,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 2. NIST P-256: Coordinate X = p + 1, Y = 1
     let mut nist_p_greater_x = [0u8; 64];
@@ -291,7 +301,7 @@ fn test_ecc_curve_isolation_and_boundaries() {
     nist_p_greater_x[..32].copy_from_slice(&nist_p_plus_1_bytes);
     nist_p_greater_x[63] = 1;
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &nist_p_greater_x);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
 
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::NistP256,
@@ -299,14 +309,14 @@ fn test_ecc_curve_isolation_and_boundaries() {
         &nist_p_greater_x,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 3. NIST P-256: Coordinate X = 1, Y = p
     let mut nist_p_equal_y = [0u8; 64];
     nist_p_equal_y[31] = 1;
     nist_p_equal_y[32..].copy_from_slice(&nist_p_bytes);
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &nist_p_equal_y);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
 
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::NistP256,
@@ -314,7 +324,7 @@ fn test_ecc_curve_isolation_and_boundaries() {
         &nist_p_equal_y,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 4. BN_P256: Coordinate X = p, Y = 1
     let bn_p_bytes =
@@ -323,7 +333,7 @@ fn test_ecc_curve_isolation_and_boundaries() {
     bn_p_equal_x[..32].copy_from_slice(&bn_p_bytes);
     bn_p_equal_x[63] = 1;
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &bn_p_equal_x);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
 
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::BNP256,
@@ -331,14 +341,14 @@ fn test_ecc_curve_isolation_and_boundaries() {
         &bn_p_equal_x,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 5. BN_P256: Coordinate X = 1, Y = p
     let mut bn_p_equal_y = [0u8; 64];
     bn_p_equal_y[31] = 1;
     bn_p_equal_y[32..].copy_from_slice(&bn_p_bytes);
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &bn_p_equal_y);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
 
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::BNP256,
@@ -346,19 +356,20 @@ fn test_ecc_curve_isolation_and_boundaries() {
         &bn_p_equal_y,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 6. Curve Isolation: Valid BN_P256 point (1, 2) validated/multiplied on NIST P-256
     let mut bn_valid_point = [0u8; 64];
     bn_valid_point[31] = 1;
     bn_valid_point[63] = 2;
     // Verify it is indeed valid on BN_P256
-    provider
-        .validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &bn_valid_point)
-        .unwrap();
+    assert_eq!(
+        provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &bn_valid_point),
+        Ok(true)
+    );
     // Validate on NIST P-256 should fail
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &bn_valid_point);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
     // Multiply on NIST P-256 should fail
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::NistP256,
@@ -366,7 +377,7 @@ fn test_ecc_curve_isolation_and_boundaries() {
         &bn_valid_point,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 7. Curve Isolation: Valid NIST P-256 point validated/multiplied on BN_P256
     let mut nist_pub = [0u8; 64];
@@ -383,12 +394,13 @@ fn test_ecc_curve_isolation_and_boundaries() {
         )
         .unwrap();
     // Verify it is indeed valid on NIST P-256
-    provider
-        .validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &nist_pub)
-        .unwrap();
+    assert_eq!(
+        provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &nist_pub),
+        Ok(true)
+    );
     // Validate on BN_P256 should fail
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &nist_pub);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
     // Multiply on BN_P256 should fail
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::BNP256,
@@ -396,21 +408,21 @@ fn test_ecc_curve_isolation_and_boundaries() {
         &nist_pub,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 8. NIST P-256: Coordinate X = 1, Y = p + 1
     let mut nist_p_plus_1_y = [0u8; 64];
     nist_p_plus_1_y[31] = 1;
     nist_p_plus_1_y[32..].copy_from_slice(&nist_p_plus_1_bytes);
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &nist_p_plus_1_y);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::NistP256,
         &scalar,
         &nist_p_plus_1_y,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 9. BN_P256: Coordinate X = p + 1, Y = 2
     let mut bn_p_plus_1_x = [0u8; 64];
@@ -424,63 +436,63 @@ fn test_ecc_curve_isolation_and_boundaries() {
         &bn_p_plus_1_x,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 10. BN_P256: Coordinate X = 1, Y = p + 1
     let mut bn_p_plus_1_y = [0u8; 64];
     bn_p_plus_1_y[31] = 1;
     bn_p_plus_1_y[32..].copy_from_slice(&bn_p_plus_1_bytes);
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &bn_p_plus_1_y);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::BNP256,
         &scalar,
         &bn_p_plus_1_y,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 11. Point with all 0xFF coordinates
     let all_ff = [0xffu8; 64];
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &all_ff);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::NistP256,
         &scalar,
         &all_ff,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &all_ff);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::BNP256,
         &scalar,
         &all_ff,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 
     // 12. Point with all 0x00 coordinates (0, 0)
     let all_zero = [0u8; 64];
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::NistP256, &all_zero);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::NistP256,
         &scalar,
         &all_zero,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
     let res = provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &all_zero);
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(false));
     let res = provider.point_multiply(
         tpm2::crypto::ecc::TpmEccCurve::BNP256,
         &scalar,
         &all_zero,
         &mut out,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res, Ok(None));
 }
 
 #[test]
@@ -636,6 +648,7 @@ fn adv_test_rsa_signatures_all_hashes() {
                 tpm2::TpmtHa::from_alg(hash_alg, &digest).unwrap(),
                 &mut signature,
             )
+            .unwrap()
             .unwrap();
 
         // Verify using rsa crate directly
@@ -758,6 +771,7 @@ fn adv_test_rsa_oaep_decrypt_all_hashes() {
                 &mut decrypted,
                 &[],
             )
+            .unwrap()
             .unwrap();
 
         assert_eq!(&decrypted[..dec_len], plaintext);
@@ -830,22 +844,24 @@ fn adv_test_ecc_bn_p256_keygen_and_multiply_generator() {
     assert_eq!(priv_len, 32);
 
     // Validate the generated point on BN_P256
-    provider
-        .validate_point(
+    assert_eq!(
+        provider.validate_point(
             tpm2::crypto::ecc::TpmEccCurve::BNP256,
             &public_key[..pub_len],
-        )
-        .unwrap();
+        ),
+        Ok(true)
+    );
 
     // Multiply the generator with the private scalar using point_multiply_generator
     let mut public_key_regen = [0u8; 64];
-    provider
-        .point_multiply_generator(
+    assert_eq!(
+        provider.point_multiply_generator(
             tpm2::crypto::ecc::TpmEccCurve::BNP256,
             &private_key[..priv_len],
             &mut public_key_regen,
-        )
-        .unwrap();
+        ),
+        Ok(Some(64))
+    );
 
     // Verify it yields the same public key
     assert_eq!(public_key, public_key_regen);
@@ -862,7 +878,7 @@ fn adv_test_ecc_validate_point_invalid_lengths() {
         for len in [0, 1, 32, 63, 65, 100] {
             let invalid_point = vec![0u8; len];
             let res = provider.validate_point(curve, &invalid_point);
-            assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+            assert_eq!(res, Ok(false));
         }
     }
 }
@@ -891,9 +907,10 @@ fn adv_test_ecc_bn_p256_keygen_with_seed() {
     assert_eq!(priv1_len, 32);
 
     // Verify it is on the curve
-    provider
-        .validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &pub1)
-        .unwrap();
+    assert_eq!(
+        provider.validate_point(tpm2::crypto::ecc::TpmEccCurve::BNP256, &pub1),
+        Ok(true)
+    );
 
     // Re-generate with the same seed, must be identical
     let mut pub1_bis = [0u8; 64];
@@ -1046,10 +1063,11 @@ fn adv_test_rsa_oaep_decrypt_with_label() {
             &mut decrypted,
             label,
         )
+        .unwrap()
         .unwrap();
     assert_eq!(&decrypted[..dec_len], plaintext);
 
-    // Decrypt with incorrect label -> should fail (HardwareFailure)
+    // Decrypt with incorrect label -> should fail (Ok(None); exp: HardwareFailure)
     let bad_label = b"wrong_label";
     let mut decrypted_bad = [0u8; 128];
     let res = provider.decrypt(
@@ -1060,7 +1078,7 @@ fn adv_test_rsa_oaep_decrypt_with_label() {
         &mut decrypted_bad,
         bad_label,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::HardwareFailure);
+    assert_eq!(res, Ok(None));
 
     // Decrypt with empty label -> should fail
     let res_empty = provider.decrypt(
@@ -1071,7 +1089,7 @@ fn adv_test_rsa_oaep_decrypt_with_label() {
         &mut decrypted_bad,
         &[],
     );
-    assert_eq!(res_empty.unwrap_err(), CryptoError::HardwareFailure);
+    assert_eq!(res_empty, Ok(None));
 }
 
 #[test]
@@ -1086,7 +1104,7 @@ fn adv_test_ecc_invalid_scalar_len() {
         &scalar_too_large,
         &mut out,
     );
-    assert_eq!(res1.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res1, Ok(None));
 
     let pt = [0u8; 64];
     let res2 = provider.point_multiply(
@@ -1095,7 +1113,7 @@ fn adv_test_ecc_invalid_scalar_len() {
         &pt,
         &mut out,
     );
-    assert_eq!(res2.unwrap_err(), CryptoError::InvalidData);
+    assert_eq!(res2, Ok(None));
 }
 
 #[test]
@@ -1127,7 +1145,7 @@ fn adv_test_rsa_sign_buffer_too_small() {
         tpm2::TpmtHa::Sha256(&digest),
         &mut signature,
     );
-    assert_eq!(res.unwrap_err(), CryptoError::BufferTooSmall);
+    assert_eq!(res.unwrap_err(), CryptoError::Internal);
 }
 
 #[test]
@@ -1174,17 +1192,19 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha256(&digest),
             &mut signature,
         )
+        .unwrap()
         .unwrap();
 
     // Verify successfully
-    provider
-        .verify_inner(
+    assert_eq!(
+        provider.verify_inner(
             Alg::RSASSA,
             &rsa_pub1[..rsa_pub1_len],
             tpm2::TpmtHa::Sha256(&digest),
             &signature[..sig_len],
-        )
-        .unwrap();
+        ),
+        Ok(true)
+    );
 
     // Challenge 1: Corrupted RSA signature
     {
@@ -1196,7 +1216,7 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha256(&digest),
             &corrupted_sig[..sig_len],
         );
-        assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+        assert_eq!(res, Ok(false));
     }
 
     // Challenge 2: Wrong hash algorithm for RSA signature verification
@@ -1208,7 +1228,7 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha384(&digest_sha384),
             &signature[..sig_len],
         );
-        assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+        assert_eq!(res, Ok(false));
     }
 
     // Challenge 3: Mismatched keys (verify using public key 2)
@@ -1219,7 +1239,7 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha256(&digest),
             &signature[..sig_len],
         );
-        assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+        assert_eq!(res, Ok(false));
     }
 
     // Challenge 4: Unsupported scheme (e.g. verify using Alg::ECDSA with RSA public key/signature sizes)
@@ -1230,7 +1250,7 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha256(&digest),
             &signature[..sig_len],
         );
-        assert_eq!(res.unwrap_err(), CryptoError::InvalidData); // because public_key.len() != 64 or signature.len() != 64
+        assert_eq!(res, Ok(false)); // because public_key.len() != 64 or signature.len() != 64
     }
 
     // 2. ECC setup
@@ -1273,18 +1293,20 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &mut ecc_signature,
         )
+        .unwrap()
         .unwrap();
     assert_eq!(ecc_sig_len, 64);
 
     // Verify successfully
-    provider
-        .verify_inner(
+    assert_eq!(
+        provider.verify_inner(
             Alg::ECDSA,
             &ecc_pub1[..ecc_pub1_len],
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &ecc_signature[..ecc_sig_len],
-        )
-        .unwrap();
+        ),
+        Ok(true)
+    );
 
     // Challenge 5: Corrupted ECC signature
     {
@@ -1296,7 +1318,7 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &corrupted_sig[..ecc_sig_len],
         );
-        assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+        assert_eq!(res, Ok(false));
     }
 
     // Challenge 6: Wrong digest / hash algorithm for ECC signature verification
@@ -1308,7 +1330,7 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha384(&ecc_digest_sha384),
             &ecc_signature[..ecc_sig_len],
         );
-        assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+        assert_eq!(res, Ok(false));
     }
 
     // Challenge 7: Mismatched ECC keys
@@ -1319,7 +1341,7 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &ecc_signature[..ecc_sig_len],
         );
-        assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+        assert_eq!(res, Ok(false));
     }
 
     // Challenge 8: Invalid ECC buffer sizes (length != 64)
@@ -1330,7 +1352,7 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &ecc_signature[..ecc_sig_len],
         );
-        assert_eq!(res.unwrap_err(), CryptoError::InvalidData);
+        assert_eq!(res, Ok(false));
 
         let res2 = provider.verify_inner(
             Alg::ECDSA,
@@ -1338,7 +1360,7 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &ecc_signature[..ecc_sig_len - 1],
         );
-        assert_eq!(res2.unwrap_err(), CryptoError::InvalidData);
+        assert_eq!(res2, Ok(false));
     }
 
     // Challenge 9: Completely unsupported algorithms
@@ -1349,25 +1371,25 @@ fn adv_test_signature_verification_edge_cases() {
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &ecc_signature[..ecc_sig_len],
         );
-        assert_eq!(res.unwrap_err(), CryptoError::UnsupportedAlgorithm);
+        assert_eq!(res.unwrap_err(), CryptoError::Unsupported);
 
         let mut out = [0u8; 256];
-        // With an ECC key, sign_inner(Alg::AES) fails matching scheme -> UnsupportedAlgorithm
+        // With an ECC key, sign_inner(Alg::AES) fails matching scheme -> Unsupported
         let res2 = provider.sign_inner(
             Alg::AES,
             &ecc_priv1[..ecc_priv1_len],
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &mut out[..64],
         );
-        assert_eq!(res2.unwrap_err(), CryptoError::UnsupportedAlgorithm);
+        assert_eq!(res2.unwrap_err(), CryptoError::Unsupported);
 
-        // With an RSA key, sign_inner(Alg::AES) parses key successfully but fails matching scheme -> UnsupportedAlgorithm
+        // With an RSA key, sign_inner(Alg::AES) parses key successfully but fails matching scheme -> Unsupported
         let res3 = provider.sign_inner(
             Alg::AES,
             &rsa_priv1[..rsa_priv1_len],
             tpm2::TpmtHa::Sha256(&digest),
             &mut out,
         );
-        assert_eq!(res3.unwrap_err(), CryptoError::UnsupportedAlgorithm);
+        assert_eq!(res3.unwrap_err(), CryptoError::Unsupported);
     }
 }

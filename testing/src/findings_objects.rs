@@ -46,17 +46,17 @@ fn read_public_and_object_handlers_sequence_handle_error_discrepancies() {
     );
 
     // Unseal: a sequence object is not a KEYEDHASH object.
-    let rc = rc_of(&mut sim, &Unseal {}, UnsealHandles { item_handle: seq }, 1);
+    let rc = rc_of(&mut sim, &Unseal { item_handle: seq }, 1);
     assert_eq!(rc, rc_h(TpmRc::TYPE, 1));
 
     // MakeCredential: a sequence object is not an asymmetric key.
     let rc = rc_of(
         &mut sim,
         &MakeCredential {
+            handle: seq,
             credential: Tpm2bDigest::from_bytes(&[1; 16]).unwrap(),
             object_name: Tpm2bName::from_bytes(&[0, 0x0b, 1, 2, 3]).unwrap(),
         },
-        MakeCredentialHandles { handle: seq },
         0,
     );
     assert_eq!(rc, rc_h(TpmRc::TYPE, 1));
@@ -65,12 +65,10 @@ fn read_public_and_object_handlers_sequence_handle_error_discrepancies() {
     let rc = rc_of(
         &mut sim,
         &ActivateCredential {
-            credential_blob: Tpm2bIdObject::default(),
-            secret: Tpm2bEncryptedSecret::default(),
-        },
-        ActivateCredentialHandles {
             activate_handle: srk,
             key_handle: seq,
+            credential_blob: Tpm2bIdObject::default(),
+            secret: Tpm2bEncryptedSecret::default(),
         },
         2,
     );
@@ -90,6 +88,7 @@ fn read_public_and_object_handlers_sequence_handle_error_discrepancies() {
 
 // sequence-object-handle-validation-and-error-code-discrepancies
 #[test]
+#[allow(deprecated)]
 fn sequence_object_handle_validation_and_error_code_discrepancies() {
     let mut sim = create_simulator!();
     let srk = owner_srk(&mut sim);
@@ -105,11 +104,9 @@ fn sequence_object_handle_validation_and_error_code_discrepancies() {
     let rc = rc_of(
         &mut sim,
         &ObjectChangeAuth {
-            new_auth: Tpm2bAuth::default(),
-        },
-        ObjectChangeAuthHandles {
             object_handle: seq,
             parent_handle: srk,
+            new_auth: Tpm2bAuth::default(),
         },
         1,
     );
@@ -119,10 +116,10 @@ fn sequence_object_handle_validation_and_error_code_discrepancies() {
     let rc = rc_of(
         &mut sim,
         &CreateLoaded {
+            parent_handle: seq,
             in_sensitive: sensitive_create(&[], &[]),
             in_public: make_template(&ecc_sign_template(TpmiAlgHash::Sha256, TpmaObject::empty())),
         },
-        CreateLoadedHandles { parent_handle: seq },
         1,
     );
     assert_eq!(rc, rc_h(TpmRc::TYPE, 1));
@@ -300,11 +297,9 @@ fn tpm2_create_load_and_objectchangeauth_parent_handle_and_sensitive_error_bugs(
     let rc = rc_of(
         &mut sim,
         &ObjectChangeAuth {
-            new_auth: Tpm2bAuth::from_bytes(b"new").unwrap(),
-        },
-        ObjectChangeAuthHandles {
             object_handle: srk,
             parent_handle: Handle::RH_OWNER,
+            new_auth: Tpm2bAuth::from_bytes(b"new").unwrap(),
         },
         1,
     );
@@ -377,14 +372,12 @@ fn tpm2_objectchangeauth_explicitly_rejects_persistent_objects() {
     let (obj, obj_rsp) = create_and_load(&mut sim, srk, t, b"old", b"sealed");
     evict_control(&mut sim, Handle::RH_OWNER, obj, Handle(0x8100_0300)).unwrap();
     let sess = policy_command_code_session(&mut sim, TpmiAlgHash::Sha256, TpmCc::ObjectChangeAuth);
-    let (rsp, _) = execute_with_hmac_sessions(
+    let rsp = execute_with_hmac_sessions(
         &mut sim,
         &ObjectChangeAuth {
-            new_auth: Tpm2bAuth::from_bytes(b"new").unwrap(),
-        },
-        ObjectChangeAuthHandles {
             object_handle: Handle(0x8100_0300),
             parent_handle: srk,
+            new_auth: Tpm2bAuth::from_bytes(b"new").unwrap(),
         },
         &[],
         &mut [sess],
@@ -392,10 +385,9 @@ fn tpm2_objectchangeauth_explicitly_rejects_persistent_objects() {
     )
     .expect("ObjectChangeAuth on a persistent object");
     let new_obj = load(&mut sim, srk, rsp.out_private, obj_rsp.out_public).unwrap();
-    let (unsealed, _) = execute_with_password_sessions(
+    let unsealed = execute_with_password_sessions(
         &mut sim,
-        &Unseal {},
-        UnsealHandles {
+        &Unseal {
             item_handle: new_obj,
         },
         1,
@@ -428,11 +420,9 @@ fn object_change_auth_validation_order_and_non_storage_parent_error_code() {
         rc_of(
             sim,
             &ObjectChangeAuth {
-                new_auth: Tpm2bAuth::from_bytes(leak_bytes(auth)).unwrap(),
-            },
-            ObjectChangeAuthHandles {
                 object_handle: obj,
                 parent_handle: parent,
+                new_auth: Tpm2bAuth::from_bytes(leak_bytes(auth)).unwrap(),
             },
             1,
         )
@@ -470,22 +460,19 @@ fn tpm2_objectchangeauth_handle2_error_positions_and_seedvalue_corruption() {
         run(
             sim,
             &ObjectChangeAuth {
-                new_auth: Tpm2bAuth::from_bytes(b"pw").unwrap(),
-            },
-            ObjectChangeAuthHandles {
                 object_handle: obj,
                 parent_handle: parent,
+                new_auth: Tpm2bAuth::from_bytes(b"pw").unwrap(),
             },
             1,
         )
     };
     assert_eq!(run_oca(&mut sim, signer).unwrap_err(), rc_h(TpmRc::TYPE, 2));
-    let (rsp, _) = run_oca(&mut sim, srk).unwrap();
+    let rsp = run_oca(&mut sim, srk).unwrap();
     let reloaded = load(&mut sim, srk, rsp.out_private, obj_rsp.out_public).expect("Load");
-    let (unsealed, _) = execute_with_password_sessions(
+    let unsealed = execute_with_password_sessions(
         &mut sim,
-        &Unseal {},
-        UnsealHandles {
+        &Unseal {
             item_handle: reloaded,
         },
         1,
@@ -570,6 +557,7 @@ fn public_only_objects_bypass_isauthvalueavailable_isauthpolicyavailable_checks(
 
 // loadexternal-external-objects-accepted-as-parents-with-public-name-seed
 #[test]
+#[allow(deprecated)]
 fn loadexternal_external_objects_accepted_as_parents_with_public_name_seed() {
     let mut sim = create_simulator!();
     let ext = load_external(&mut sim, external_storage_public(), None, Handle::RH_OWNER).unwrap();
@@ -585,13 +573,13 @@ fn loadexternal_external_objects_accepted_as_parents_with_public_name_seed() {
         rc_of(
             &mut sim,
             &CreateLoaded {
+                parent_handle: ext,
                 in_sensitive: sensitive_create(&[], b"x"),
                 in_public: make_template(&sealed_template(
                     TpmiAlgHash::Sha256,
                     TpmaObject::empty(),
                 )),
             },
-            CreateLoadedHandles { parent_handle: ext },
             1,
         ),
     ] {
@@ -613,7 +601,7 @@ fn unseal_public_only_keyedhash_and_oversized_private_failure_mode() {
     public.parms_and_id =
         PublicParmsAndId::KeyedHash(None, Tpm2bDigest::from_bytes(&[3u8; 32]).unwrap());
     let ext = load_external(&mut sim, public, None, Handle::RH_OWNER).unwrap();
-    let rc = rc_of(&mut sim, &Unseal {}, UnsealHandles { item_handle: ext }, 1);
+    let rc = rc_of(&mut sim, &Unseal { item_handle: ext }, 1);
     assert_eq!(rc, rc0(TpmRc::AUTH_UNAVAILABLE));
 }
 
@@ -623,6 +611,7 @@ fn unseal_public_only_keyedhash_and_oversized_private_failure_mode() {
 
 // tpm2-createprimary-and-createloaded-primary-seed-derivation-vulnerability
 #[test]
+#[allow(deprecated)]
 fn tpm2_createprimary_and_createloaded_primary_seed_derivation_vulnerability() {
     let mut sim = create_simulator!();
     let plain = ecc_sign_template(
@@ -656,14 +645,12 @@ fn tpm2_createprimary_and_createloaded_primary_seed_derivation_vulnerability() {
     );
 
     // CreateLoaded with a hierarchy parent derives the same primary object as CreatePrimary.
-    let (rsp, _) = run(
+    let rsp = run(
         &mut sim,
         &CreateLoaded {
+            parent_handle: Handle::RH_OWNER,
             in_sensitive: sensitive_create(&[], &[]),
             in_public: make_template(&with_policy),
-        },
-        CreateLoadedHandles {
-            parent_handle: Handle::RH_OWNER,
         },
         1,
     )
@@ -738,6 +725,7 @@ fn create_primary_spurious_nv_clear_orderly_and_transient_slot_allocation_order_
 
 // create-loaded-template-unmarshal-order-error-codes-and-namealg-bugs
 #[test]
+#[allow(deprecated)]
 fn create_loaded_template_unmarshal_order_error_codes_and_namealg_bugs() {
     let mut sim = create_simulator!();
     let srk = owner_srk(&mut sim);
@@ -746,10 +734,10 @@ fn create_loaded_template_unmarshal_order_error_codes_and_namealg_bugs() {
     let rc = rc_of(
         &mut sim,
         &CreateLoaded {
+            parent_handle: srk,
             in_sensitive: sensitive_create(&[], b"x"),
             in_public: make_template(&t),
         },
-        CreateLoadedHandles { parent_handle: srk },
         1,
     );
     assert_eq!(rc, rc_p(TpmRc::HASH, 2));
@@ -859,7 +847,13 @@ fn object_attributes_and_schemechecks_validation_bugs() {
 
     // A SYMCIPHER decryption key may use the NULL mode.
     let mut t = sym_template(TpmiAlgHash::Sha256, TpmaObject::empty());
-    t.parms_and_id = PublicParmsAndId::Sym(TpmtSymDefObject::Aes128(None), Tpm2bDigest::default());
+    t.parms_and_id = PublicParmsAndId::Sym(
+        TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: None,
+        },
+        Tpm2bDigest::default(),
+    );
     create(&mut sim, srk, t, &[], &[]).expect("SYMCIPHER decrypt key with NULL mode");
 
     // A primary object with sensitiveDataOrigin may get inSensitive.data (extra KDF input).
@@ -886,13 +880,13 @@ fn compute_pcr_digest_omits_sha512_and_pcr_allocation_filter() {
     ])
     .unwrap();
     let cmd = Create {
+        parent_handle: srk,
         in_sensitive: sensitive_create(&[], b"x"),
         in_public: Tpm2b(sealed_template(TpmiAlgHash::Sha256, TpmaObject::empty())),
         outside_info: Tpm2bData::default(),
         creation_pcr: selection,
     };
-    let (rsp, _) = run(&mut sim, &cmd, CreateHandles { parent_handle: srk }, 1)
-        .expect("SHA-512 creationPCR must be accepted");
+    let rsp = run(&mut sim, &cmd, 1).expect("SHA-512 creationPCR must be accepted");
     let creation = rsp.creation_data.0;
     // Both banks are unallocated by default: their bits are filtered out and nothing is hashed.
     for sel in creation.pcr_select.pcr_selections() {
@@ -930,7 +924,10 @@ fn tpm2_loadexternal_rejects_null_namealg_and_omits_scheme_and_key_validation() 
     t.object_attributes
         .remove(TpmaObject::SENSITIVE_DATA_ORIGIN);
     t.parms_and_id = PublicParmsAndId::Sym(
-        TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+        TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        },
         Tpm2bDigest::from_bytes(leak_bytes(&unique)).unwrap(),
     );
     let sensitive = TpmtSensitive {
@@ -1027,7 +1024,10 @@ fn validate_and_import_sensitive_rsa_msb_and_ecc_validation_bugs() {
     t.object_attributes
         .remove(TpmaObject::SENSITIVE_DATA_ORIGIN);
     t.parms_and_id = PublicParmsAndId::Sym(
-        TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB)),
+        TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        },
         Tpm2bDigest::from_bytes(&[0xee; 32]).unwrap(),
     );
     let s = TpmtSensitive {
@@ -1058,14 +1058,14 @@ fn tpm2_activatecredential_and_tpm2_makecredential_reject_valid() {
         run(
             sim,
             &MakeCredential {
+                handle,
                 credential: Tpm2bDigest::from_bytes(leak_bytes(cred)).unwrap(),
                 object_name: name,
             },
-            MakeCredentialHandles { handle },
             0,
         )
     };
-    let (made, _) = mc(&mut sim, ecc_ek, &[1; 16], ek_name)
+    let made = mc(&mut sim, ecc_ek, &[1; 16], ek_name)
         .expect("stripped ECC coordinate must be accepted by MakeCredential");
     // The credential size is validated against the key's nameAlg.
     assert_eq!(
@@ -1073,15 +1073,13 @@ fn tpm2_activatecredential_and_tpm2_makecredential_reject_valid() {
         rc_p(TpmRc::SIZE, 1)
     );
     // ActivateCredential with the same key (activateHandle = the key itself).
-    let (activated, _) = run(
+    let activated = run(
         &mut sim,
         &ActivateCredential {
-            credential_blob: made.credential_blob,
-            secret: made.secret,
-        },
-        ActivateCredentialHandles {
             activate_handle: ecc_ek,
             key_handle: ecc_ek,
+            credential_blob: made.credential_blob,
+            secret: made.secret,
         },
         2,
     )
@@ -1100,12 +1098,10 @@ fn tpm2_activatecredential_and_tpm2_makecredential_reject_valid() {
         rc_of(
             sim,
             &ActivateCredential {
-                credential_blob: Tpm2bIdObject::from_bytes(leak_bytes(blob)).unwrap(),
-                secret: Tpm2bEncryptedSecret::from_bytes(leak_bytes(secret)).unwrap(),
-            },
-            ActivateCredentialHandles {
                 activate_handle: signer,
                 key_handle: key,
+                credential_blob: Tpm2bIdObject::from_bytes(leak_bytes(blob)).unwrap(),
+                secret: Tpm2bEncryptedSecret::from_bytes(leak_bytes(secret)).unwrap(),
             },
             2,
         )
@@ -1117,13 +1113,13 @@ fn tpm2_activatecredential_and_tpm2_makecredential_reject_valid() {
 
     // A valid secret with a tampered credential blob -> INTEGRITY + RC_P1.
     let signer_name = read_public(&mut sim, signer).unwrap().name;
-    let (made, _) = run(
+    let made = run(
         &mut sim,
         &MakeCredential {
+            handle: srk,
             credential: Tpm2bDigest::from_bytes(&[5; 20]).unwrap(),
             object_name: signer_name,
         },
-        MakeCredentialHandles { handle: srk },
         0,
     )
     .unwrap();
@@ -1206,23 +1202,17 @@ fn tpm2_duplicate_and_import_outer_wrapper_hash_and_seed_bugs() {
 
     // An inner wrapper key is required whenever symmetricAlg is not NULL.
     let cmd = Import {
+        parent_handle: parent,
         encryption_key: Tpm2bData::default(),
         object_public: obj_rsp.out_public,
         duplicate: Tpm2bPrivate::from_bytes(&[0, 2, 0, 0]).unwrap(),
         in_sym_seed: Tpm2bEncryptedSecret::default(),
-        symmetric_alg: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
+        symmetric_alg: Some(TpmtSymDefObject {
+            alg: AlgSym::Aes128,
+            mode: Some(TpmiAlgCipherMode::Cfb.into()),
+        }),
     };
-    assert_eq!(
-        rc_of(
-            &mut sim,
-            &cmd,
-            ImportHandles {
-                parent_handle: parent
-            },
-            1
-        ),
-        rc_p(TpmRc::SIZE, 1)
-    );
+    assert_eq!(rc_of(&mut sim, &cmd, 1), rc_p(TpmRc::SIZE, 1));
 }
 
 // tpm2-duplicate-and-import-outer-wrap-hash-and-inner-key-bugs
@@ -1281,14 +1271,15 @@ fn tpm2_duplicate_and_import_outer_wrap_hash_and_inner_key_bugs() {
         rc_of(
             sim,
             &Import {
+                parent_handle: parent,
                 encryption_key: Tpm2bData::from_bytes(leak_bytes(&key)).unwrap(),
                 object_public: obj_rsp.out_public,
                 duplicate: Tpm2bPrivate::from_bytes(leak_bytes(&blob)).unwrap(),
                 in_sym_seed: Tpm2bEncryptedSecret::default(),
-                symmetric_alg: Some(TpmtSymDefObject::Aes128(Some(TpmiAlgSymMode::CFB))),
-            },
-            ImportHandles {
-                parent_handle: parent,
+                symmetric_alg: Some(TpmtSymDefObject {
+                    alg: AlgSym::Aes128,
+                    mode: Some(TpmiAlgCipherMode::Cfb.into()),
+                }),
             },
             1,
         )
@@ -1537,6 +1528,7 @@ fn tpm2b_private_encrypted_sensitive_size_and_auth_padding_bug() {
 
 // tpm2-createloaded-derivation-parent-kdf-seed-rsa-and-symcipher-bugs
 #[test]
+#[allow(deprecated)]
 fn tpm2_createloaded_derivation_parent_kdf_seed_rsa_and_symcipher_bugs() {
     let mut sim = create_simulator!();
     let srk = owner_srk(&mut sim);
@@ -1557,19 +1549,17 @@ fn tpm2_createloaded_derivation_parent_kdf_seed_rsa_and_symcipher_bugs() {
                 context: Tpm2bLabel::from_bytes(b"context").unwrap(),
             },
         );
-        let (rsp, h) = run(
+        let rsp = run(
             sim,
             &CreateLoaded {
+                parent_handle: parent,
                 in_sensitive: sensitive_create(&[], &[]),
                 in_public: template,
-            },
-            CreateLoadedHandles {
-                parent_handle: parent,
             },
             1,
         )
         .expect("derived CreateLoaded");
-        flush_context(sim, h.object_handle).unwrap();
+        flush_context(sim, rsp.object_handle).unwrap();
         ecc_point(&rsp.out_public.0)
     };
     // The derivation secret is the parent's sensitive bits, not its seedValue.

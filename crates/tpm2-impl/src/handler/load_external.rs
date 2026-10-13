@@ -7,8 +7,8 @@ use tpm2::Handle;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
+use tpm2::commands::LoadExternal;
 use tpm2::commands::responses;
-use tpm2::commands::{LoadExternal, LoadExternalRespHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
@@ -40,7 +40,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<LoadExternal>()?;
+        // `TPM2_LoadExternal` has no handle area.
+        let cmd = request.try_unmarshal_command::<LoadExternal>([])?;
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -133,21 +134,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             (crate::owned::OwnedAuth::default(), ([0u8; 64], 0))
         };
 
-        let resp_handles = LoadExternalRespHandles {
-            object_handle: Handle(handle),
-        };
         let rsp = responses::LoadExternal {
+            object_handle: Handle(handle),
             name: name.as_tpm2b(),
         };
 
         // 5. Write the response
         let response = request.into_response();
-        self.write_response_all(
-            response,
-            &resp_handles,
-            &rsp,
-            &session_responses[..num_sessions],
-        )?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         // 6. Apply object to transient objects storage
 
@@ -261,9 +255,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Ok(bytes.len())
         };
         match (&public_struct.parms_and_id, &sensitive_struct.sensitive) {
-            (PublicParmsAndId::Rsa(rsa_parms, rsa_unique), TpmuSensitiveComposite::Rsa(p)) => self
-                .crypto()
-                .rsa_import_private_key(
+            (PublicParmsAndId::Rsa(rsa_parms, rsa_unique), TpmuSensitiveComposite::Rsa(p)) => {
+                // Exp mapped every failure (`InvalidData` included) to `TPM_RC_BINDING`.
+                match self.crypto().rsa_import_private_key(
                     rsa_unique.get_buffer(),
                     p.get_buffer(),
                     if rsa_parms.exponent == 0 {
@@ -272,8 +266,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         rsa_parms.exponent
                     },
                     actual_private_key,
-                )
-                .map_err(|_| TpmRc::BINDING.to_rc()),
+                ) {
+                    Ok(Some(len)) => Ok(len),
+                    Ok(None) | Err(_) => Err(TpmRc::BINDING.to_rc()),
+                }
+            }
             (PublicParmsAndId::Ecc(ecc_parms, _), TpmuSensitiveComposite::Ecc(d)) => {
                 let param_size = match ecc_parms.curve_id {
                     tpm2::TpmEccCurve::NistP192 => 24,
@@ -358,18 +355,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         actual_private_key[..buf.len()].copy_from_slice(buf);
                         Ok(buf.len())
                     } else {
-                        self.crypto()
-                            .rsa_import_private_key(
-                                rsa_unique.get_buffer(),
-                                rsa_private.get_buffer(),
-                                if rsa_parms.exponent == 0 {
-                                    65537
-                                } else {
-                                    rsa_parms.exponent
-                                },
-                                actual_private_key,
-                            )
-                            .map_err(|_| TpmRc::BINDING.to_rc())
+                        // Exp mapped every failure (`InvalidData` included) to `TPM_RC_BINDING`.
+                        match self.crypto().rsa_import_private_key(
+                            rsa_unique.get_buffer(),
+                            rsa_private.get_buffer(),
+                            if rsa_parms.exponent == 0 {
+                                65537
+                            } else {
+                                rsa_parms.exponent
+                            },
+                            actual_private_key,
+                        ) {
+                            Ok(Some(len)) => Ok(len),
+                            Ok(None) | Err(_) => Err(TpmRc::BINDING.to_rc()),
+                        }
                     }
                 } else {
                     Err(TpmRc::TYPE.with(pos_sensitive))
@@ -401,9 +400,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     ecc_pub_key[param_size - px.len()..param_size].copy_from_slice(px);
                     ecc_pub_key[param_size * 2 - py.len()..param_size * 2].copy_from_slice(py);
 
-                    self.crypto()
-                        .validate_point(curve, &ecc_pub_key[..param_size * 2])
-                        .map_err(|_| TpmRc::ECC_POINT.with(pos_public))?;
+                    // Exp mapped every failure (invalid point included) to `TPM_RC_ECC_POINT`.
+                    if !matches!(
+                        self.crypto()
+                            .validate_point(curve, &ecc_pub_key[..param_size * 2]),
+                        Ok(true)
+                    ) {
+                        return Err(TpmRc::ECC_POINT.with(pos_public));
+                    }
                 }
 
                 if let TpmuSensitiveComposite::Ecc(sensitive_ecc) = &sensitive_struct.sensitive {
@@ -424,13 +428,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
                     if public_struct.name_alg.is_some() {
                         let mut computed_pub_key = [0u8; 256];
-                        self.crypto()
-                            .point_multiply_generator(
+                        // Exp mapped every failure (invalid scalar included) to
+                        // `TPM_RC_BINDING`.
+                        if !matches!(
+                            self.crypto().point_multiply_generator(
                                 curve,
                                 &scalar[..param_size],
                                 &mut computed_pub_key,
-                            )
-                            .map_err(|_| TpmRc::BINDING.to_rc())?;
+                            ),
+                            Ok(Some(_))
+                        ) {
+                            return Err(TpmRc::BINDING.to_rc());
+                        }
 
                         if computed_pub_key[..param_size * 2] != ecc_pub_key[..param_size * 2] {
                             return Err(TpmRc::BINDING.to_rc());
@@ -686,9 +695,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             ecc_pub_key[param_size - px.len()..param_size].copy_from_slice(px);
             ecc_pub_key[param_size * 2 - py.len()..param_size * 2].copy_from_slice(py);
 
-            self.crypto()
-                .validate_point(curve, &ecc_pub_key[..param_size * 2])
-                .map_err(|_| TpmRc::ECC_POINT.with(Position::parameter(2)))?;
+            // Exp mapped every failure (invalid point included) to `TPM_RC_ECC_POINT`.
+            if !matches!(
+                self.crypto()
+                    .validate_point(curve, &ecc_pub_key[..param_size * 2]),
+                Ok(true)
+            ) {
+                return Err(TpmRc::ECC_POINT.with(Position::parameter(2)));
+            }
         }
         Ok(())
     }

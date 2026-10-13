@@ -4,7 +4,7 @@ use tpm2::Alg;
 use crate::test_utils::{execute_with_corrupted_bytes, execute_with_password_sessions};
 use tpm2::Handle;
 use tpm2::TpmiAlgHash;
-use tpm2::commands::{NVDefineSpace, NVDefineSpaceHandles, NVReadPublic, NVReadPublicHandles};
+use tpm2::commands::{NVDefineSpace, NVReadPublic};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bAuth, TpmaNv, TpmsNvPublic};
 use tpm2_platform_linux::PlatformCryptoProvider;
@@ -27,26 +27,21 @@ fn test_nv_define_space_and_read_public() {
     let public_info = tpm2::Tpm2b(nv_public_struct);
 
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
 
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-
     // Execute NVDefineSpace with a password session
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[])
-        .expect("Failed to define NV space");
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[]).expect("Failed to define NV space");
 
     // Read public area back
-    let read_cmd = NVReadPublic {};
-    let read_handles = NVReadPublicHandles {
+    let read_cmd = NVReadPublic {
         nv_index: Handle(nv_index_val),
     };
 
-    let (read_rsp, _) = sim
-        .execute_with_handles(read_cmd, read_handles)
+    let read_rsp = sim
+        .execute(read_cmd)
         .expect("Failed to read NV public area");
 
     assert_eq!(read_rsp.nv_public, public_info);
@@ -72,7 +67,7 @@ fn test_nv_define_space_and_read_public() {
     assert_eq!(read_rsp.nv_name, expected_name);
 
     // Edge case 1: Redefining an already defined NV space should fail with NvDefined (0x14C)
-    let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+    let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
     assert_eq!(err, TpmRc::NV_DEFINED.get());
 }
 
@@ -81,14 +76,11 @@ fn test_nv_read_public_undefined() {
     let mut sim = create_simulator!();
 
     // Read public area of an undefined index should fail with Handle (0x08B or 0x10B depending on format)
-    let read_cmd = NVReadPublic {};
-    let read_handles = NVReadPublicHandles {
+    let read_cmd = NVReadPublic {
         nv_index: Handle(0x01500002),
     };
 
-    let err = sim
-        .execute_with_handles(read_cmd, read_handles)
-        .unwrap_err();
+    let err = sim.execute(read_cmd).unwrap_err();
     // C `NvIndexIsAccessible` during handle unmarshaling: TPM_RC_HANDLE + RC_H1.
     assert_eq!(err.get(), TpmRc::HANDLE.with(Position::handle(1)).get());
 }
@@ -109,15 +101,12 @@ fn test_nv_define_space_overflow() {
     let public_info = tpm2::Tpm2b(nv_public_struct);
 
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
 
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-
-    let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+    let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
     assert_eq!(err, TpmRc::SIZE.with(Position::parameter(2)).get());
 }
 
@@ -137,25 +126,21 @@ fn test_nv_read_public_large_index() {
     let public_info = tpm2::Tpm2b(nv_public_struct);
 
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info,
     };
 
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-
-    execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[])
+    execute_with_password_sessions(&mut sim, &cmd, 1, &[])
         .expect("Failed to define large NV space");
 
     // Read public area back
-    let read_cmd = NVReadPublic {};
-    let read_handles = NVReadPublicHandles {
+    let read_cmd = NVReadPublic {
         nv_index: Handle(nv_index_val),
     };
 
-    let (read_rsp, _) = sim
-        .execute_with_handles(read_cmd, read_handles)
+    let read_rsp = sim
+        .execute(read_cmd)
         .expect("Failed to read large NV public area");
 
     assert_eq!(read_rsp.nv_public, public_info);
@@ -175,13 +160,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle(0x80000000), // transient handle instead of owner/platform
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle(0x80000000), // transient handle instead of owner/platform
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         // Returns TpmRc::VALUE.with(Position::handle(1)) -> which is 0x1C5 (Value + Pos1)
         assert_eq!(err, TpmRc::VALUE.with(Position::handle(1)).get());
     }
@@ -196,13 +179,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         // Returns value_for(Position::handle(2)) -> which is 0x2C5
         assert_eq!(err, TpmRc::VALUE.with(Position::parameter(2)).get());
     }
@@ -217,13 +198,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
@@ -247,13 +226,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 7, // invalid size (not 8)
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::SIZE.with(Position::parameter(2)).get());
     }
 
@@ -269,13 +246,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 31, // invalid size
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::SIZE.with(Position::parameter(2)).get());
     }
 
@@ -290,13 +265,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
     // No write attributes (only OWNERREAD)
@@ -309,13 +282,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
@@ -331,13 +302,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 8,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
@@ -352,13 +321,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_PLATFORM,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_PLATFORM,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::handle(1)).get());
     }
     // auth_handle is RHOwner but PLATFORMCREATE is set
@@ -371,13 +338,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::handle(1)).get());
     }
 
@@ -391,13 +356,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
@@ -413,13 +376,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 8,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
@@ -437,13 +398,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 8,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
     // Case B: contains AUTHWRITE
@@ -458,13 +417,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 8,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
 
@@ -478,14 +435,12 @@ fn test_nv_define_space_adversarial() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             // 33 significant bytes > 32 (trailing zeros would be removed before the check).
             auth: Tpm2bAuth::from_bytes(&[0x5au8; 33]).unwrap(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::SIZE.with(Position::parameter(1)).get());
     }
 
@@ -499,13 +454,11 @@ fn test_nv_define_space_adversarial() {
             data_size: 2049, // data_size > 2048
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         assert_eq!(err, TpmRc::SIZE.with(Position::parameter(2)).get());
     }
 }
@@ -527,13 +480,11 @@ fn test_nv_define_space_invalid_attribute_combos() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         // C `NvDefineSpace` rejects this combination with TPM_RC_ATTRIBUTES + RC_P2.
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
@@ -550,13 +501,11 @@ fn test_nv_define_space_invalid_attribute_combos() {
             data_size: 8,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         // C `NvDefineSpace` rejects this combination with TPM_RC_ATTRIBUTES + RC_P2.
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
@@ -573,13 +522,11 @@ fn test_nv_define_space_invalid_attribute_combos() {
             data_size: 8,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let err = execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]).unwrap_err();
+        let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap_err();
         // C `NvDefineSpace` rejects this combination with TPM_RC_ATTRIBUTES + RC_P2.
         assert_eq!(err, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
     }
@@ -595,13 +542,11 @@ fn test_nv_define_space_invalid_attribute_combos() {
             data_size: 64,
         };
         let cmd = NVDefineSpace {
+            auth_handle: Handle::RH_OWNER,
             auth: Tpm2bAuth::default(),
             public_info: tpm2::Tpm2b(nv_public_struct),
         };
-        let handles = NVDefineSpaceHandles {
-            auth_handle: Handle::RH_OWNER,
-        };
-        let res = execute_with_corrupted_bytes(&mut sim, &cmd, handles, 1, &[], |buf| {
+        let res = execute_with_corrupted_bytes(&mut sim, &cmd, 1, &[], |buf| {
             buf[8..10].copy_from_slice(&0x1234u16.to_be_bytes());
         });
         assert!(
@@ -623,25 +568,21 @@ fn test_nv_define_space_hierarchy_auth() {
         data_size: 64,
     };
     let cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info: tpm2::Tpm2b(nv_public_struct),
-    };
-    let handles = NVDefineSpaceHandles {
-        auth_handle: Handle::RH_OWNER,
     };
 
     // 1. Change Owner Auth to "ownerpass"
     let hca_cmd = tpm2::commands::HierarchyChangeAuth {
+        auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(b"ownerpass").unwrap(),
     };
-    let hca_handles = tpm2::commands::HierarchyChangeAuthHandles {
-        auth_handle: Handle::RH_OWNER,
-    };
-    execute_with_password_sessions(&mut sim, &hca_cmd, hca_handles, 1, &[])
+    execute_with_password_sessions(&mut sim, &hca_cmd, 1, &[])
         .expect("Failed to change hierarchy auth");
 
     // 2. Try DefineSpace with empty auth
-    let err_no_auth = match execute_with_password_sessions(&mut sim, &cmd, handles, 1, &[]) {
+    let err_no_auth = match execute_with_password_sessions(&mut sim, &cmd, 1, &[]) {
         Ok(_) => panic!("Expected auth failure with empty password, but it succeeded!"),
         Err(e) => e,
     };
@@ -652,11 +593,10 @@ fn test_nv_define_space_hierarchy_auth() {
     );
 
     // 3. Try DefineSpace with wrong auth
-    let err_wrong_auth =
-        match execute_with_password_sessions(&mut sim, &cmd, handles, 1, b"wrongpass") {
-            Ok(_) => panic!("Expected auth failure with wrong password, but it succeeded!"),
-            Err(e) => e,
-        };
+    let err_wrong_auth = match execute_with_password_sessions(&mut sim, &cmd, 1, b"wrongpass") {
+        Ok(_) => panic!("Expected auth failure with wrong password, but it succeeded!"),
+        Err(e) => e,
+    };
     // Expected: 0x9A2 (BadAuth for session 1)
     assert_eq!(
         err_wrong_auth, 0x9A2,
@@ -664,7 +604,7 @@ fn test_nv_define_space_hierarchy_auth() {
     );
 
     // 4. Try DefineSpace with correct auth
-    let res = execute_with_password_sessions(&mut sim, &cmd, handles, 1, b"ownerpass");
+    let res = execute_with_password_sessions(&mut sim, &cmd, 1, b"ownerpass");
     assert!(
         res.is_ok(),
         "Expected success with correct password, got: {:?}",

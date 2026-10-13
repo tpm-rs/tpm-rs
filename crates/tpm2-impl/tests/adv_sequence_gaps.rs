@@ -1,14 +1,11 @@
-use tpm2::{Marshal, Unmarshal};
+use tpm2::{Marshal, Message, Unmarshal, UnmarshalMessage};
 mod common;
 
 use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
-use tpm2::commands::{
-    Command, Hash, HashSequenceStart, SequenceComplete, SequenceCompleteHandles, SequenceUpdate,
-    SequenceUpdateHandles,
-};
+use tpm2::commands::{Command, Hash, HashSequenceStart, SequenceComplete, SequenceUpdate};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bAuth, Tpm2bMaxBuffer, TpmiAlgHash, TpmsAuthCommand, TpmtHa};
 use tpm2_impl::TpmEngine;
@@ -18,7 +15,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -55,14 +52,11 @@ fn pw() -> tpm2::TpmsAuthCommand<'static> {
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 32768];
     let mut offset = 10;
@@ -75,13 +69,14 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut <Handle as Marshal>::MaxBuffer = (&mut request_buf
+            [offset..offset + <Handle as Marshal>::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        offset += handle.marshal(handle_slice);
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -121,8 +116,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -135,22 +132,20 @@ where
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
     let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+        <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+            .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp_params)
 }
 
 fn execute_tpm_command_with_extra_bytes<C: Command>(
     tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &C::Handles,
     cmd: &C,
     auths: &[TpmsAuthCommand],
-) -> Result<(C::RespHandles, C::Response<'static>), u32>
+) -> Result<C::Response<'static>, u32>
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    for<'b> &'b mut <<C as Command>::Handles as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
-    C::Response<'static>: Unmarshal<'static>,
 {
     let mut request_buf = [0u8; 32768];
     let mut offset = 10;
@@ -163,13 +158,14 @@ where
 
     request_buf[6..10].copy_from_slice(&(C::CMD_CODE.code()).to_be_bytes());
 
-    let handles_slice: &mut <C::Handles as Marshal>::MaxBuffer = (&mut request_buf
-        [offset..offset + <C::Handles as Marshal>::MAX_SIZE])
-        .try_into()
-        .map_err(|_| ())
-        .unwrap();
-    let handles_len = handles.marshal(handles_slice);
-    offset += handles_len;
+    for handle in cmd.handles().as_ref() {
+        let handle_slice: &mut <Handle as Marshal>::MaxBuffer = (&mut request_buf
+            [offset..offset + <Handle as Marshal>::MAX_SIZE])
+            .try_into()
+            .map_err(|_| ())
+            .unwrap();
+        offset += handle.marshal(handle_slice);
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -212,8 +208,10 @@ where
     let mut resp_offset = 10;
     let mut handles_slice = &response_buf[resp_offset..resp_size];
     let orig_handles_len = handles_slice.len();
-    let resp_handles =
-        C::RespHandles::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    let mut resp_handles = <C::Response<'static> as Message>::Handles::default();
+    for handle in resp_handles.as_mut() {
+        *handle = Handle::unmarshal(&mut handles_slice).map_err(|_| TpmRc::FAILURE.get())?;
+    }
 
     let handles_len = orig_handles_len - handles_slice.len();
     resp_offset += handles_len;
@@ -226,9 +224,10 @@ where
     let mut params_slice: &'static [u8] =
         std::vec::Vec::leak(response_buf[resp_offset..resp_size].to_vec());
     let resp_params =
-        <C::Response<'static>>::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())?;
+        <C::Response<'static>>::unmarshal_with_handles(resp_handles, &mut params_slice)
+            .map_err(|_| TpmRc::FAILURE.get())?;
 
-    Ok((resp_handles, resp_params))
+    Ok(resp_params)
 }
 
 #[test]
@@ -236,8 +235,8 @@ fn adv_hash_happy_path_sha256() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let test_data = b"Hello Adversary Hash!";
     let cmd = Hash {
@@ -246,7 +245,7 @@ fn adv_hash_happy_path_sha256() {
         hierarchy: Handle::RH_NULL,
     };
 
-    let (_, resp) = execute_tpm_command(&mut tpm, &mut global_state, &(), &cmd, &[]).unwrap();
+    let resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
     let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
     let expected_digest = tpm2::crypto::hash(
         &TestCryptoProvider,
@@ -269,8 +268,8 @@ fn adv_hash_happy_path_all_algorithms_and_hierarchies() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let test_data = b"Multialg data check";
 
@@ -288,7 +287,7 @@ fn adv_hash_happy_path_all_algorithms_and_hierarchies() {
             hierarchy,
         };
 
-        let (_, resp) = execute_tpm_command(&mut tpm, &mut global_state, &(), &cmd, &[]).unwrap();
+        let resp = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]).unwrap();
         let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
         let expected_digest = tpm2::crypto::hash(&TestCryptoProvider, alg, test_data, &mut out)
             .unwrap()
@@ -309,8 +308,8 @@ fn adv_hash_invalid_alg() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let cmd = Hash {
         data: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
@@ -318,7 +317,7 @@ fn adv_hash_invalid_alg() {
         hierarchy: Handle::RH_NULL,
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &(), &cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::HASH.with(Position::parameter(2)).get())
@@ -330,8 +329,8 @@ fn adv_hash_invalid_hierarchy() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let cmd = Hash {
         data: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
@@ -339,7 +338,7 @@ fn adv_hash_invalid_hierarchy() {
         hierarchy: Handle(0x80000000), // invalid hierarchy handle
     };
 
-    let res = execute_tpm_command(&mut tpm, &mut global_state, &(), &cmd, &[]);
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &cmd, &[]);
     assert_eq!(
         res.err(),
         Some(TpmRc::VALUE.with(Position::parameter(3)).get())
@@ -351,8 +350,8 @@ fn adv_hash_trailing_bytes() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let cmd = Hash {
         data: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
@@ -360,7 +359,7 @@ fn adv_hash_trailing_bytes() {
         hierarchy: Handle::RH_NULL,
     };
 
-    let res = execute_tpm_command_with_extra_bytes(&mut tpm, &mut global_state, &(), &cmd, &[]);
+    let res = execute_tpm_command_with_extra_bytes(&mut tpm, &mut global_state, &cmd, &[]);
     assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
 }
 
@@ -369,15 +368,15 @@ fn adv_sequence_start_trailing_bytes() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
 
-    let res = execute_tpm_command_with_extra_bytes(&mut tpm, &mut global_state, &(), &cmd, &[]);
+    let res = execute_tpm_command_with_extra_bytes(&mut tpm, &mut global_state, &cmd, &[]);
     assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
 }
 
@@ -386,30 +385,22 @@ fn adv_sequence_update_trailing_bytes() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
+    let start_rsp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
 
-    let update_handles = SequenceUpdateHandles {
-        sequence_handle: start_handles.sequence_handle,
-    };
     let update_cmd = SequenceUpdate {
+        sequence_handle: start_rsp.sequence_handle,
         buffer: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
     };
 
-    let res = execute_tpm_command_with_extra_bytes(
-        &mut tpm,
-        &mut global_state,
-        &update_handles,
-        &update_cmd,
-        &[pw()],
-    );
+    let res =
+        execute_tpm_command_with_extra_bytes(&mut tpm, &mut global_state, &update_cmd, &[pw()]);
     assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
 }
 
@@ -418,31 +409,23 @@ fn adv_sequence_complete_trailing_bytes() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
+    let start_rsp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
 
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: start_handles.sequence_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: start_rsp.sequence_handle,
         buffer: Tpm2bMaxBuffer::default(),
         hierarchy: Handle::RH_NULL,
     };
 
-    let res = execute_tpm_command_with_extra_bytes(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &[pw()],
-    );
+    let res =
+        execute_tpm_command_with_extra_bytes(&mut tpm, &mut global_state, &complete_cmd, &[pw()]);
     assert_eq!(res.err(), Some(TpmRc::SIZE.get()));
 }
 
@@ -451,31 +434,22 @@ fn adv_sequence_complete_invalid_hierarchy_detailed() {
     let mut crypto = TestCryptoProvider;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let start_cmd = HashSequenceStart {
         auth: Tpm2bAuth::default(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let (start_handles, _) =
-        execute_tpm_command(&mut tpm, &mut global_state, &(), &start_cmd, &[]).unwrap();
+    let start_rsp = execute_tpm_command(&mut tpm, &mut global_state, &start_cmd, &[]).unwrap();
 
-    let complete_handles = SequenceCompleteHandles {
-        sequence_handle: start_handles.sequence_handle,
-    };
     let complete_cmd = SequenceComplete {
+        sequence_handle: start_rsp.sequence_handle,
         buffer: Tpm2bMaxBuffer::default(),
         hierarchy: Handle(0x80000000), // invalid hierarchy handle
     };
 
-    let res = execute_tpm_command(
-        &mut tpm,
-        &mut global_state,
-        &complete_handles,
-        &complete_cmd,
-        &[pw()],
-    );
+    let res = execute_tpm_command(&mut tpm, &mut global_state, &complete_cmd, &[pw()]);
     assert_eq!(
         res.err(),
         Some(TpmRc::VALUE.with(Position::parameter(2)).get())

@@ -1,12 +1,12 @@
 use tpm2::errors::TpmRc;
-use tpm2::{Marshal, Unmarshal};
+use tpm2::{Marshal, Message, UnmarshalMessage};
 mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Alg;
 use tpm2::Handle;
-use tpm2::commands::{Command, Quote, QuoteHandles};
+use tpm2::commands::{Command, Quote};
 use tpm2::crypto::Asymmetric;
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce, Tpm2bPublicKeyRsa,
@@ -21,7 +21,7 @@ fn setup_tpm<'a>(
     crypto: &'a mut FakeCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a FakeRng,
+    rng: &'a mut FakeRng,
 ) -> (
     TpmEngine<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
     tpm2_impl::GlobalState,
@@ -44,7 +44,6 @@ fn setup_tpm<'a>(
 fn execute_tpm_quote<'a>(
     tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
     global_state: &mut tpm2_impl::GlobalState,
-    handles: &QuoteHandles,
     cmd: &Quote,
     auths: &[TpmsAuthCommand],
     response_buf: &'a mut [u8; 32768],
@@ -60,10 +59,12 @@ fn execute_tpm_quote<'a>(
 
     request_buf[6..10].copy_from_slice(&(Quote::CMD_CODE.code()).to_be_bytes());
 
-    let mut handles_buf = [0u8; QuoteHandles::MAX_SIZE];
-    let handles_len = handles.marshal(&mut handles_buf);
-    request_buf[offset..offset + handles_len].copy_from_slice(&handles_buf.as_ref()[..handles_len]);
-    offset += handles_len;
+    for handle in cmd.handles() {
+        let mut handle_buf = [0u8; Handle::MAX_SIZE];
+        let handle_len = handle.marshal(&mut handle_buf);
+        request_buf[offset..offset + handle_len].copy_from_slice(&handle_buf[..handle_len]);
+        offset += handle_len;
+    }
 
     if !auths.is_empty() {
         let auth_len_offset = offset;
@@ -103,7 +104,8 @@ fn execute_tpm_quote<'a>(
     }
 
     let mut params_slice = &response_buf[resp_offset..resp_size];
-    Unmarshal::unmarshal(&mut params_slice).map_err(|_| TpmRc::FAILURE.get())
+    UnmarshalMessage::unmarshal_with_handles([], &mut params_slice)
+        .map_err(|_| TpmRc::FAILURE.get())
 }
 
 #[test]
@@ -111,8 +113,8 @@ fn test_quote_rsa_success() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let signer_handle = Handle(0x80000002);
     let signer_obj = TransientObject {
@@ -151,10 +153,8 @@ fn test_quote_rsa_success() {
     // Extend PCR 0 with a test hash
     global_state.pcrs.sha256[0] = [0x42; 32];
 
-    let handles = QuoteHandles {
-        sign_handle: signer_handle,
-    };
     let cmd = Quote {
+        sign_handle: signer_handle,
         qualifying_data: Tpm2bData::from_bytes(&[10, 20, 30]).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
         pcr_select: TpmlPcrSelection::from_slice(&[TpmsPcrSelection::new(
@@ -176,7 +176,6 @@ fn test_quote_rsa_success() {
     let resp = execute_tpm_quote(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd,
         &[pw_auth],
         &mut response_buf,
@@ -207,9 +206,11 @@ fn test_quote_rsa_success() {
     .unwrap();
     match resp.signature {
         Some(TpmtSignature::Rsassa(sig)) => {
-            crypto
-                .verify_inner(Alg::RSASSA, &[1, 2, 3], digest, sig.sig.get_buffer())
-                .expect("Cryptographic signature verification failed");
+            assert_eq!(
+                crypto.verify_inner(Alg::RSASSA, &[1, 2, 3], digest, sig.sig.get_buffer()),
+                Ok(true),
+                "Cryptographic signature verification failed"
+            );
         }
         _ => panic!("Expected RSASSA signature"),
     }
@@ -220,8 +221,8 @@ fn test_quote_unsupported_scheme_fails() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let decrypt_handle = Handle(0x80000003);
     let decrypt_obj = TransientObject {
@@ -255,10 +256,8 @@ fn test_quote_unsupported_scheme_fails() {
     };
     global_state.transient_objects[2] = Some(decrypt_obj);
 
-    let handles = QuoteHandles {
-        sign_handle: decrypt_handle,
-    };
     let cmd = Quote {
+        sign_handle: decrypt_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
         pcr_select: TpmlPcrSelection::from_slice(&[TpmsPcrSelection::new(
@@ -280,7 +279,6 @@ fn test_quote_unsupported_scheme_fails() {
     let res = execute_tpm_quote(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd,
         &[pw_auth],
         &mut response_buf,
@@ -302,8 +300,8 @@ fn test_quote_qualified_signer_exact_accumulation() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let rng = FakeRng::new();
-    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &rng);
+    let mut rng = FakeRng::new();
+    let (mut tpm, mut global_state) = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
 
     let signer_handle = Handle(0x80000002);
     let signer_qn = Tpm2bName::from_bytes(&[30, 31, 32, 33]).unwrap();
@@ -341,10 +339,8 @@ fn test_quote_qualified_signer_exact_accumulation() {
     global_state.transient_objects[1] = Some(signer_obj.clone());
     global_state.transient_parents[1] = Some(0x40000001);
 
-    let handles = QuoteHandles {
-        sign_handle: signer_handle,
-    };
     let cmd = Quote {
+        sign_handle: signer_handle,
         qualifying_data: Tpm2bData::from_bytes(&[10, 20]).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
         pcr_select: TpmlPcrSelection::from_slice(&[TpmsPcrSelection::new(
@@ -366,7 +362,6 @@ fn test_quote_qualified_signer_exact_accumulation() {
     let resp = execute_tpm_quote(
         &mut tpm,
         &mut global_state,
-        &handles,
         &cmd,
         &[pw_auth],
         &mut response_buf,

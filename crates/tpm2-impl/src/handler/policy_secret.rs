@@ -1,11 +1,12 @@
+use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
+use tpm2::commands::PolicySecret;
 use tpm2::commands::responses;
-use tpm2::commands::{PolicySecret, PolicySecretHandles};
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bDigest, Tpm2bTimeout, TpmHt, TpmNt, TpmSe, TpmaNv, TpmtTkAuth};
@@ -32,13 +33,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut request = request_response;
 
-        let handles = request.try_unmarshal::<PolicySecretHandles>()?;
-        let auth_handle = handles.auth_handle.0;
-        let policy_session = handles.policy_session.0;
+        let handles = request.try_unmarshal_handles::<PolicySecret>()?;
+        let [auth_handle, policy_session] = handles;
+        check(auth_handle, Tpmi::DhEntity, Position::handle(1))?;
+        check(policy_session, Tpmi::ShPolicy, Position::handle(2))?;
+        let auth_handle = auth_handle.0;
+        let policy_session = policy_session.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal::<PolicySecret>()?;
+        let cmd = request.try_unmarshal_command::<PolicySecret>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -225,7 +229,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 5. Write response
         let response = request.into_response();
-        self.write_response_all(response, &(), &rsp, &session_responses[..num_sessions])?;
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
     }

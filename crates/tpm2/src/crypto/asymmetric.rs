@@ -7,7 +7,24 @@
 //!
 //! Supported algorithms implement the specific trait methods (such as [`AsymmetricSign::rsassa_sign`],
 //! [`Asymmetric::ecdsa_verify`], [`Asymmetric::oaep_encrypt`], [`Asymmetric::rsa_generate_key`], etc.),
-//! while unimplemented algorithms keep the default body returning [`Err(self.unimplemented(...))`](Base::unimplemented).
+//! while unimplemented algorithms keep the default body returning
+//! `Err(`[`CryptoError::Unsupported`]`)`.
+//!
+//! ### Error Handling
+//!
+//! Following the conventions of [`crypto`](super), [`CryptoError`] is only returned for
+//! unsupported algorithms, schemes, or key sizes ([`CryptoError::Unsupported`]) and for internal
+//! failures ([`CryptoError::Internal`], which puts the TPM into failure mode). Semantic failures
+//! caused by the inputs are reported in the `Ok` value:
+//!   - Verification returns `Ok(false)` if the signature is invalid, or if the public key cannot
+//!     be used to verify it.
+//!   - Signing, encryption, decryption, and key import return `Ok(Some(len))` with the number of
+//!     bytes written on success, and `Ok(None)` for invalid inputs: an unusable key, a message too
+//!     large for the key, a bad ciphertext or padding, inconsistent key components, etc.
+//!   - Key generation has no semantic failures; it returns `Ok((public_len, private_len))`.
+//!
+//! An output buffer too small for the result is a programming error of the caller, reported as
+//! [`CryptoError::Internal`].
 //!
 //! ### Role of `sign_alg` (`scheme`) and `hash_alg`
 //!
@@ -36,28 +53,28 @@
 //! # Example
 //!
 //! ```
-//! # use tpm2::{crypto::{Base, AsymmetricSign, KeyParams}, Alg, TpmiRsaKeyBits, TpmtHa};
+//! # use tpm2::{crypto::{AsymmetricSign, CryptoError}, TpmtHa};
 //! # struct MyBackend;
-//! # #[derive(Debug, PartialEq)]
-//! # struct MyError;
-//! # impl Base for MyBackend {
-//! #   type Error = MyError;
-//! #   fn unimplemented(&self, _: Alg) -> MyError { MyError }
-//! # }
 //! impl AsymmetricSign for MyBackend {
 //!     fn rsassa_sign(
 //!         &self,
 //!         _private_key: &[u8],
 //!         _digest: TpmtHa<'_>,
 //!         signature_out: &mut [u8],
-//!     ) -> Result<usize, MyError> {
-//!         signature_out[..32].fill(0xAA);
-//!         Ok(32)
+//!     ) -> Result<Option<usize>, CryptoError> {
+//!         let Some(signature) = signature_out.get_mut(..32) else {
+//!             // The output buffer is too small: a programming error.
+//!             return Err(CryptoError::Internal);
+//!         };
+//!         signature.fill(0xAA);
+//!         Ok(Some(32))
 //!     }
+//!     // All other schemes keep the default `Err(CryptoError::Unsupported)`.
 //! }
 //! ```
 
-use crate::{Alg, TpmiAlgHash, TpmtHa, constants::TpmEccCurve, crypto::Base};
+use super::CryptoError;
+use crate::{Alg, TpmiAlgHash, TpmtHa, constants::TpmEccCurve};
 
 pub use crate::TpmiRsaKeyBits;
 
@@ -74,17 +91,26 @@ pub enum KeyParams {
 ///
 /// Supported algorithms implement the algorithm-specific methods (such as [`AsymmetricSign::rsassa_sign`],
 /// [`AsymmetricSign::rsapss_sign`], [`AsymmetricSign::ecdsa_sign`], etc.).
-/// Unimplemented algorithms keep the default body of [`Err(self.unimplemented(...))`](Base::unimplemented).
-pub trait AsymmetricSign: Base {
+/// Unimplemented algorithms keep the default body of `Err(`[`CryptoError::Unsupported`]`)`.
+///
+/// Every signing method writes the signature to the start of `signature_out` and returns:
+///   - `Ok(Some(len))` with the signature length on success (for ECC schemes, the signature is
+///     `r || s`, each half being the curve's scalar size),
+///   - `Ok(None)` if `private_key` is invalid or cannot sign `digest` (e.g. the key is too small
+///     for the digest),
+///   - `Err(`[`CryptoError::Unsupported`]`)` for an unsupported scheme, hash, or key size, and
+///   - `Err(`[`CryptoError::Internal`]`)` for internal failures, including a `signature_out`
+///     buffer too small for the signature.
+#[allow(unused_variables)]
+pub trait AsymmetricSign {
     /// Signs `digest` using RSASSA-PKCS1-v1_5 (`TPM_ALG_RSASSA`) with `private_key`.
     fn rsassa_sign(
         &self,
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (private_key, digest, signature_out);
-        Err(self.unimplemented(Alg::RSASSA))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Signs `digest` using RSASSA-PSS (`TPM_ALG_RSAPSS`) with `private_key`.
@@ -93,9 +119,8 @@ pub trait AsymmetricSign: Base {
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (private_key, digest, signature_out);
-        Err(self.unimplemented(Alg::RSAPSS))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Signs `digest` using ECDSA (`TPM_ALG_ECDSA`) with `private_key`.
@@ -104,9 +129,8 @@ pub trait AsymmetricSign: Base {
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (private_key, digest, signature_out);
-        Err(self.unimplemented(Alg::ECDSA))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Signs `digest` using SM2 (`TPM_ALG_SM2`) with `private_key`.
@@ -115,9 +139,8 @@ pub trait AsymmetricSign: Base {
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (private_key, digest, signature_out);
-        Err(self.unimplemented(Alg::SM2))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Signs `digest` using ECSchnorr (`TPM_ALG_ECSCHNORR`) with `private_key`.
@@ -126,19 +149,22 @@ pub trait AsymmetricSign: Base {
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (private_key, digest, signature_out);
-        Err(self.unimplemented(Alg::ECSCHNORR))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Signs `digest` using the requested `sign_alg`.
+    ///
+    /// Dispatches to the algorithm-specific method for each signature scheme
+    /// whose crate feature is enabled; any other `sign_alg` returns
+    /// `Err(`[`CryptoError::Unsupported`]`)`.
     fn sign_inner(
         &self,
         sign_alg: Alg,
         private_key: &[u8],
         digest: TpmtHa<'_>,
         signature_out: &mut [u8],
-    ) -> Result<usize, Self::Error> {
+    ) -> Result<Option<usize>, CryptoError> {
         match sign_alg {
             #[cfg(feature = "rsassa")]
             Alg::RSASSA => self.rsassa_sign(private_key, digest, signature_out),
@@ -150,10 +176,7 @@ pub trait AsymmetricSign: Base {
             Alg::SM2 => self.sm2_sign(private_key, digest, signature_out),
             #[cfg(feature = "ecschnorr")]
             Alg::ECSCHNORR => self.ecschnorr_sign(private_key, digest, signature_out),
-            _ => {
-                let _ = (private_key, digest, signature_out);
-                Err(self.unimplemented(sign_alg))
-            }
+            _ => Err(CryptoError::Unsupported),
         }
     }
 }
@@ -162,17 +185,24 @@ pub trait AsymmetricSign: Base {
 ///
 /// Supported algorithms implement the algorithm-specific methods (such as [`Asymmetric::ecdsa_verify`],
 /// [`Asymmetric::oaep_encrypt`], [`Asymmetric::rsa_generate_key`], etc.).
-/// Unimplemented algorithms keep the default body of [`Err(self.unimplemented(...))`](Base::unimplemented).
-pub trait Asymmetric: Base {
+/// Unimplemented algorithms keep the default body of `Err(`[`CryptoError::Unsupported`]`)`.
+///
+/// Semantic failures are reported in the `Ok` value (see the [module documentation](self)):
+///   - verification methods return `Ok(true)` for a valid signature and `Ok(false)` for an invalid
+///     signature or an unusable public key,
+///   - encryption, decryption, and import methods return `Ok(Some(len))` with the number of bytes
+///     written and `Ok(None)` for invalid inputs,
+///   - key generation methods return `Ok((public_len, private_len))`.
+#[allow(unused_variables)]
+pub trait Asymmetric {
     /// Verifies `signature` over `digest` using RSASSA-PKCS1-v1_5 (`TPM_ALG_RSASSA`) with `public_key`.
     fn rsassa_verify(
         &self,
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), Self::Error> {
-        let _ = (public_key, digest, signature);
-        Err(self.unimplemented(Alg::RSASSA))
+    ) -> Result<bool, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Verifies `signature` over `digest` using RSASSA-PSS (`TPM_ALG_RSAPSS`) with `public_key`.
@@ -181,9 +211,8 @@ pub trait Asymmetric: Base {
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), Self::Error> {
-        let _ = (public_key, digest, signature);
-        Err(self.unimplemented(Alg::RSAPSS))
+    ) -> Result<bool, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Verifies `signature` over `digest` using ECDSA (`TPM_ALG_ECDSA`) with `public_key`.
@@ -192,9 +221,8 @@ pub trait Asymmetric: Base {
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), Self::Error> {
-        let _ = (public_key, digest, signature);
-        Err(self.unimplemented(Alg::ECDSA))
+    ) -> Result<bool, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Verifies `signature` over `digest` using SM2 (`TPM_ALG_SM2`) with `public_key`.
@@ -203,9 +231,8 @@ pub trait Asymmetric: Base {
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), Self::Error> {
-        let _ = (public_key, digest, signature);
-        Err(self.unimplemented(Alg::SM2))
+    ) -> Result<bool, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Verifies `signature` over `digest` using ECSchnorr (`TPM_ALG_ECSCHNORR`) with `public_key`.
@@ -214,23 +241,25 @@ pub trait Asymmetric: Base {
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), Self::Error> {
-        let _ = (public_key, digest, signature);
-        Err(self.unimplemented(Alg::ECSCHNORR))
+    ) -> Result<bool, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Encrypts `data` using RSAES-PKCS1-v1_5 (`TPM_ALG_RSAES`) with `public_key`.
+    ///
+    /// Returns `Ok(None)` if `public_key` is invalid or `data` is too large for it.
     fn rsaes_encrypt(
         &self,
         public_key: &[u8],
         data: &[u8],
         ciphertext: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (public_key, data, ciphertext);
-        Err(self.unimplemented(Alg::RSAES))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Encrypts `data` using RSAES-OAEP (`TPM_ALG_OAEP`) with `hash_alg`, `public_key`, and `label`.
+    ///
+    /// Returns `Ok(None)` if `public_key` or `label` is invalid, or `data` is too large for the key.
     fn oaep_encrypt(
         &self,
         hash_alg: TpmiAlgHash,
@@ -238,34 +267,39 @@ pub trait Asymmetric: Base {
         data: &[u8],
         label: &[u8],
         ciphertext: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (hash_alg, public_key, data, label, ciphertext);
-        Err(self.unimplemented(Alg::OAEP))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Encrypts `data` using raw RSA modular exponentiation ($m^e \bmod n$).
+    ///
+    /// Returns `Ok(None)` if `public_key` is invalid or `data` (as an integer) is not smaller
+    /// than the modulus.
     fn rsa_null_encrypt(
         &self,
         public_key: &[u8],
         data: &[u8],
         ciphertext: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (public_key, data, ciphertext);
-        Err(self.unimplemented(Alg::RSA))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Decrypts `ciphertext` using RSAES-PKCS1-v1_5 (`TPM_ALG_RSAES`) with `private_key`.
+    ///
+    /// Returns `Ok(None)` if `private_key` is invalid, or `ciphertext` or its padding is invalid.
     fn rsaes_decrypt(
         &self,
         private_key: &[u8],
         ciphertext: &[u8],
         plaintext: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (private_key, ciphertext, plaintext);
-        Err(self.unimplemented(Alg::RSAES))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Decrypts `ciphertext` using RSAES-OAEP (`TPM_ALG_OAEP`) with `hash_alg`, `private_key`, and `label`.
+    ///
+    /// Returns `Ok(None)` if `private_key` or `label` is invalid, or `ciphertext` or its padding
+    /// is invalid.
     fn oaep_decrypt(
         &self,
         hash_alg: TpmiAlgHash,
@@ -273,76 +307,90 @@ pub trait Asymmetric: Base {
         ciphertext: &[u8],
         label: &[u8],
         plaintext: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (hash_alg, private_key, ciphertext, label, plaintext);
-        Err(self.unimplemented(Alg::OAEP))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Decrypts `ciphertext` using raw RSA modular exponentiation ($c^d \bmod n$).
+    ///
+    /// Returns `Ok(None)` if `private_key` is invalid or `ciphertext` (as an integer) is not
+    /// smaller than the modulus.
     fn rsa_null_decrypt(
         &self,
         private_key: &[u8],
         ciphertext: &[u8],
         plaintext: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (private_key, ciphertext, plaintext);
-        Err(self.unimplemented(Alg::RSA))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Generates an RSA key pair for `key_bits` using optional deterministic `seed`.
+    ///
+    /// Writes the public modulus to `public_key` and the private key (in the backend's
+    /// internal format) to `private_key`, and returns `(public_len, private_len)`.
     fn rsa_generate_key(
         &self,
         key_bits: TpmiRsaKeyBits,
         public_key: &mut [u8],
         private_key: &mut [u8],
         seed: Option<&[u8]>,
-    ) -> Result<(usize, usize), Self::Error> {
-        let _ = (key_bits, public_key, private_key, seed);
-        Err(self.unimplemented(Alg::RSA))
+    ) -> Result<(usize, usize), CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Generates an ECC key pair for `curve` using optional deterministic `seed`.
+    ///
+    /// Writes the public point (`x || y`) to `public_key` and the private scalar to
+    /// `private_key`, and returns `(public_len, private_len)`.
     fn ecc_generate_key(
         &self,
         curve: TpmEccCurve,
         public_key: &mut [u8],
         private_key: &mut [u8],
         seed: Option<&[u8]>,
-    ) -> Result<(usize, usize), Self::Error> {
-        let _ = (curve, public_key, private_key, seed);
-        Err(self.unimplemented(Alg::ECC))
+    ) -> Result<(usize, usize), CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Imports an RSA private key by verifying its components and serializing it into the internal format.
+    ///
+    /// Returns `Ok(Some(len))` with the length of the private key written to
+    /// `private_key_out`, or `Ok(None)` if the components do not form a valid key (e.g.
+    /// `prime_p` does not divide `modulus`, or `exponent` is invalid).
     fn rsa_import_private_key(
         &self,
         modulus: &[u8],
         prime_p: &[u8],
         exponent: u32,
         private_key_out: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (modulus, prime_p, exponent, private_key_out);
-        Err(self.unimplemented(Alg::RSA))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Extracts prime factor P from a PKCS#8 DER-encoded RSA private key.
+    ///
+    /// Returns `Ok(Some(len))` with the length of the prime written to `prime_p_out`, or
+    /// `Ok(None)` if `private_key` is not a valid private key.
     fn rsa_private_key_to_prime_p(
         &self,
         private_key: &[u8],
         prime_p_out: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        let _ = (private_key, prime_p_out);
-        Err(self.unimplemented(Alg::RSA))
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 
     /// Verifies `signature` over `digest` using the requested `sign_alg`.
+    ///
+    /// Dispatches to the algorithm-specific method for each signature scheme
+    /// whose crate feature is enabled; any other `sign_alg` returns
+    /// `Err(`[`CryptoError::Unsupported`]`)`.
     fn verify_inner(
         &self,
         sign_alg: Alg,
         public_key: &[u8],
         digest: TpmtHa<'_>,
         signature: &[u8],
-    ) -> Result<(), Self::Error> {
+    ) -> Result<bool, CryptoError> {
         match sign_alg {
             #[cfg(feature = "rsassa")]
             Alg::RSASSA => self.rsassa_verify(public_key, digest, signature),
@@ -354,14 +402,16 @@ pub trait Asymmetric: Base {
             Alg::SM2 => self.sm2_verify(public_key, digest, signature),
             #[cfg(feature = "ecschnorr")]
             Alg::ECSCHNORR => self.ecschnorr_verify(public_key, digest, signature),
-            _ => {
-                let _ = (public_key, digest, signature);
-                Err(self.unimplemented(sign_alg))
-            }
+            _ => Err(CryptoError::Unsupported),
         }
     }
 
     /// Encrypts `data` using the requested asymmetric `scheme` and `hash_alg`.
+    ///
+    /// `scheme` is [`Alg::RSAES`], [`Alg::OAEP`] (with `hash_alg` and `label`), or
+    /// [`Alg::NULL`] (raw RSA), each available only if the corresponding crate feature is
+    /// enabled. Any other `scheme`, or an OAEP `hash_alg` that is not a hash algorithm,
+    /// returns `Err(`[`CryptoError::Unsupported`]`)`.
     fn encrypt(
         &self,
         scheme: Alg,
@@ -370,7 +420,7 @@ pub trait Asymmetric: Base {
         data: &[u8],
         ciphertext: &mut [u8],
         label: &[u8],
-    ) -> Result<usize, Self::Error> {
+    ) -> Result<Option<usize>, CryptoError> {
         match scheme {
             #[cfg(feature = "rsaes")]
             Alg::RSAES => self.rsaes_encrypt(public_key, data, ciphertext),
@@ -379,19 +429,21 @@ pub trait Asymmetric: Base {
                 let hash = Option::<TpmiAlgHash>::try_from(hash_alg)
                     .ok()
                     .flatten()
-                    .ok_or_else(|| self.unimplemented(hash_alg))?;
+                    .ok_or(CryptoError::Unsupported)?;
                 self.oaep_encrypt(hash, public_key, data, label, ciphertext)
             }
             #[cfg(feature = "rsa")]
             Alg::NULL => self.rsa_null_encrypt(public_key, data, ciphertext),
-            _ => {
-                let _ = (hash_alg, public_key, data, ciphertext, label);
-                Err(self.unimplemented(scheme))
-            }
+            _ => Err(CryptoError::Unsupported),
         }
     }
 
     /// Decrypts `ciphertext` using the requested asymmetric `scheme` and `hash_alg`.
+    ///
+    /// `scheme` is [`Alg::RSAES`], [`Alg::OAEP`] (with `hash_alg` and `label`), or
+    /// [`Alg::NULL`] (raw RSA), each available only if the corresponding crate feature is
+    /// enabled. Any other `scheme`, or an OAEP `hash_alg` that is not a hash algorithm,
+    /// returns `Err(`[`CryptoError::Unsupported`]`)`.
     fn decrypt(
         &self,
         scheme: Alg,
@@ -400,7 +452,7 @@ pub trait Asymmetric: Base {
         ciphertext: &[u8],
         plaintext: &mut [u8],
         label: &[u8],
-    ) -> Result<usize, Self::Error> {
+    ) -> Result<Option<usize>, CryptoError> {
         match scheme {
             #[cfg(feature = "rsaes")]
             Alg::RSAES => self.rsaes_decrypt(private_key, ciphertext, plaintext),
@@ -409,19 +461,21 @@ pub trait Asymmetric: Base {
                 let hash = Option::<TpmiAlgHash>::try_from(hash_alg)
                     .ok()
                     .flatten()
-                    .ok_or_else(|| self.unimplemented(hash_alg))?;
+                    .ok_or(CryptoError::Unsupported)?;
                 self.oaep_decrypt(hash, private_key, ciphertext, label, plaintext)
             }
             #[cfg(feature = "rsa")]
             Alg::NULL => self.rsa_null_decrypt(private_key, ciphertext, plaintext),
-            _ => {
-                let _ = (hash_alg, private_key, ciphertext, plaintext, label);
-                Err(self.unimplemented(scheme))
-            }
+            _ => Err(CryptoError::Unsupported),
         }
     }
 
     /// Generates an asymmetric key pair for `scheme` and `params`.
+    ///
+    /// `scheme` is [`Alg::RSA`] (with [`KeyParams::Rsa`], defaulting to 2048 bits) or
+    /// [`Alg::ECC`]/[`Alg::ECDH`] (with [`KeyParams::Ecc`], defaulting to NIST P-256), each
+    /// available only if the corresponding crate feature is enabled. Any other `scheme`
+    /// returns `Err(`[`CryptoError::Unsupported`]`)`.
     fn generate_key(
         &self,
         scheme: Alg,
@@ -429,7 +483,7 @@ pub trait Asymmetric: Base {
         public_key: &mut [u8],
         private_key: &mut [u8],
         seed: Option<&[u8]>,
-    ) -> Result<(usize, usize), Self::Error> {
+    ) -> Result<(usize, usize), CryptoError> {
         match scheme {
             #[cfg(feature = "rsa")]
             Alg::RSA => {
@@ -446,41 +500,44 @@ pub trait Asymmetric: Base {
                     #[cfg(feature = "ecc_curve_nist_p256")]
                     _ => TpmEccCurve::NistP256,
                     #[cfg(not(feature = "ecc_curve_nist_p256"))]
-                    _ => return Err(self.unimplemented(scheme)),
+                    _ => return Err(CryptoError::Unsupported),
                 };
                 self.ecc_generate_key(curve, public_key, private_key, seed)
             }
-            _ => {
-                let _ = (params, public_key, private_key, seed);
-                Err(self.unimplemented(scheme))
-            }
+            _ => Err(CryptoError::Unsupported),
         }
     }
 }
 
 /// Signs `digest` using the requested `sign_alg` via backend `a`.
+///
+/// See [`AsymmetricSign::sign_inner`].
 pub fn sign_inner<A: AsymmetricSign>(
     a: &A,
     sign_alg: Alg,
     private_key: &[u8],
     digest: TpmtHa<'_>,
     signature_out: &mut [u8],
-) -> Result<usize, A::Error> {
+) -> Result<Option<usize>, CryptoError> {
     a.sign_inner(sign_alg, private_key, digest, signature_out)
 }
 
 /// Verifies `signature` over `digest` using the requested `sign_alg` via backend `a`.
+///
+/// See [`Asymmetric::verify_inner`].
 pub fn verify_inner<A: Asymmetric>(
     a: &A,
     sign_alg: Alg,
     public_key: &[u8],
     digest: TpmtHa<'_>,
     signature: &[u8],
-) -> Result<(), A::Error> {
+) -> Result<bool, CryptoError> {
     a.verify_inner(sign_alg, public_key, digest, signature)
 }
 
 /// Encrypts `data` using the requested asymmetric `scheme` and `hash_alg` via backend `a`.
+///
+/// See [`Asymmetric::encrypt`].
 pub fn rsa_encrypt<A: Asymmetric>(
     a: &A,
     scheme: Alg,
@@ -489,11 +546,13 @@ pub fn rsa_encrypt<A: Asymmetric>(
     data: &[u8],
     ciphertext: &mut [u8],
     label: &[u8],
-) -> Result<usize, A::Error> {
+) -> Result<Option<usize>, CryptoError> {
     a.encrypt(scheme, hash_alg, public_key, data, ciphertext, label)
 }
 
 /// Decrypts `ciphertext` using the requested asymmetric `scheme` and `hash_alg` via backend `a`.
+///
+/// See [`Asymmetric::decrypt`].
 pub fn rsa_decrypt<A: Asymmetric>(
     a: &A,
     scheme: Alg,
@@ -502,11 +561,13 @@ pub fn rsa_decrypt<A: Asymmetric>(
     ciphertext: &[u8],
     plaintext: &mut [u8],
     label: &[u8],
-) -> Result<usize, A::Error> {
+) -> Result<Option<usize>, CryptoError> {
     a.decrypt(scheme, hash_alg, private_key, ciphertext, plaintext, label)
 }
 
 /// Generates an asymmetric key pair for `scheme` and `params` via backend `a`.
+///
+/// See [`Asymmetric::generate_key`].
 pub fn generate_key<A: Asymmetric>(
     a: &A,
     scheme: Alg,
@@ -514,26 +575,30 @@ pub fn generate_key<A: Asymmetric>(
     public_key: &mut [u8],
     private_key: &mut [u8],
     seed: Option<&[u8]>,
-) -> Result<(usize, usize), A::Error> {
+) -> Result<(usize, usize), CryptoError> {
     a.generate_key(scheme, params, public_key, private_key, seed)
 }
 
 /// Imports an RSA private key from modulus, prime P, and exponent via backend `a`.
+///
+/// See [`Asymmetric::rsa_import_private_key`].
 pub fn rsa_import_private_key<A: Asymmetric>(
     a: &A,
     modulus: &[u8],
     prime_p: &[u8],
     exponent: u32,
     private_key_out: &mut [u8],
-) -> Result<usize, A::Error> {
+) -> Result<Option<usize>, CryptoError> {
     a.rsa_import_private_key(modulus, prime_p, exponent, private_key_out)
 }
 
 /// Extracts prime factor P from a PKCS#8 DER-encoded RSA private key via backend `a`.
+///
+/// See [`Asymmetric::rsa_private_key_to_prime_p`].
 pub fn rsa_private_key_to_prime_p<A: Asymmetric>(
     a: &A,
     private_key: &[u8],
     prime_p_out: &mut [u8],
-) -> Result<usize, A::Error> {
+) -> Result<Option<usize>, CryptoError> {
     a.rsa_private_key_to_prime_p(private_key, prime_p_out)
 }
