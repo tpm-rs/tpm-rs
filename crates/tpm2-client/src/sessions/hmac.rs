@@ -199,14 +199,19 @@ impl<C> HmacSession<C> {
         self.auth_hash
     }
 
+    /// Returns the most recent TPM nonce.
+    pub fn nonce_tpm(&self) -> Tpm2bNonce<'_> {
+        Tpm2bNonce::new(self.nonce_tpm.as_slice()).unwrap()
+    }
+
     /// Returns the most recent caller nonce.
     pub fn nonce_caller(&self) -> Tpm2bNonce<'_> {
         Tpm2bNonce::new(self.nonce_caller.as_slice()).unwrap()
     }
 
-    /// Returns the most recent TPM nonce.
-    pub fn nonce_tpm(&self) -> Tpm2bNonce<'_> {
-        Tpm2bNonce::new(self.nonce_tpm.as_slice()).unwrap()
+    /// Updates the length of nonceCaller.
+    pub fn set_new_nonce_caller_length(&mut self, len: usize) {
+        self.nonce_caller.len = len;
     }
 }
 
@@ -227,7 +232,7 @@ impl<C> fmt::Debug for HmacSession<C> {
 impl<C: Hash + Hmac + Random + ConstantTimeEq> Session for HmacSession<C> {
     fn auth_command(&mut self, cmd: &CommandData) -> Result<TpmsAuthCommand<'_>, AuthError> {
         let mut nonce = [0u8; MAX_DIGEST];
-        let nonce = &mut nonce[..self.auth_hash.digest_size()];
+        let nonce = &mut nonce[..self.nonce_caller.len];
         self.crypto.rng()?.fill_bytes(nonce)?;
 
         // Part 1: Architecture - Section 16.6.16 declares that in this case, this can be empty.
