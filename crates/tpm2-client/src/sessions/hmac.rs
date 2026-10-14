@@ -226,19 +226,25 @@ impl<C> fmt::Debug for HmacSession<C> {
 
 impl<C: Hash + Hmac + Random + ConstantTimeEq> Session for HmacSession<C> {
     fn auth_command(&mut self, cmd: &CommandData) -> Result<TpmsAuthCommand<'_>, AuthError> {
-        let mut cp_buf = [0u8; MAX_DIGEST];
-        let cp_hash = cmd.cp_hash(&self.crypto, self.auth_hash, &mut cp_buf)?;
-
         let mut nonce = [0u8; MAX_DIGEST];
         let nonce = &mut nonce[..self.auth_hash.digest_size()];
         self.crypto.rng()?.fill_bytes(nonce)?;
 
-        let hmac = self.compute_hmac(&[
-            cp_hash.digest(),
-            nonce,
-            self.nonce_tpm.as_slice(),
-            &[self.session_attributes.0],
-        ])?;
+        // Part 1: Architecture - Section 16.6.16 declares that in this case, this can be empty.
+        let hmac = if self.session_key.len == 0 && self.auth_value.len == 0 {
+            Buf::EMPTY
+        } else {
+            let mut cp_buf = [0u8; MAX_DIGEST];
+            let cp_hash = cmd.cp_hash(&self.crypto, self.auth_hash, &mut cp_buf)?;
+
+            self.compute_hmac(&[
+                cp_hash.digest(),
+                nonce,
+                self.nonce_tpm.as_slice(),
+                &[self.session_attributes.0],
+            ])?
+        };
+
         self.nonce_caller = Buf::new(nonce);
         self.hmac = hmac;
 
@@ -256,20 +262,32 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> Session for HmacSession<C> {
         auth: &TpmsAuthResponse,
     ) -> Result<(), AuthError> {
         let digest_size = self.auth_hash.digest_size();
-        if auth.nonce.as_slice().len() != digest_size || auth.hmac.as_slice().len() != digest_size {
+        let expected_hmac_len = if self.session_key.len == 0 && self.auth_value.len == 0 {
+            0
+        } else {
+            digest_size
+        };
+
+        if auth.nonce.as_slice().len() != digest_size || auth.hmac.as_slice().len() != expected_hmac_len {
             return Err(AuthError::InvalidResponse);
         }
 
-        let mut rp_buf = [0u8; MAX_DIGEST];
-        let rp_hash = rsp.rp_hash(&self.crypto, self.auth_hash, &mut rp_buf)?;
-
         let nonce_tpm = auth.nonce.as_slice();
-        let expected = self.compute_hmac(&[
-            rp_hash.digest(),
-            nonce_tpm,
-            self.nonce_caller.as_slice(),
-            &[auth.session_attributes.0],
-        ])?;
+
+        // Part 1: Architecture - Section 16.6.16 declares that in this case, this can be empty.
+        let expected = if self.session_key.len == 0 && self.auth_value.len == 0 {
+            Buf::EMPTY
+        } else {
+            let mut rp_buf = [0u8; MAX_DIGEST];
+            let rp_hash = rsp.rp_hash(&self.crypto, self.auth_hash, &mut rp_buf)?;
+
+            self.compute_hmac(&[
+                rp_hash.digest(),
+                nonce_tpm,
+                self.nonce_caller.as_slice(),
+                &[auth.session_attributes.0],
+            ])?
+        };
 
         // Both are digest-sized (checked above), so comparing the
         // zero-padded buffers is equivalent.
