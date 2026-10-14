@@ -53,17 +53,18 @@ fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
         .unwrap()
 }
 
-/// Returns the response the TPM would send for `nonce_caller`, with an empty
-/// HMAC key.
+/// Returns the response the TPM would send for `nonce_caller`, with the HMAC
+/// key `key`.
 fn tpm_response<'a>(
     rsp: &ResponseData,
+    key: &[u8],
     nonce_tpm: &'a [u8; 32],
     nonce_caller: &[u8],
     hmac_out: &'a mut [u8; 32],
 ) -> TpmsAuthResponse<'a> {
     let rp_hash = sha256(&[&0u32.to_be_bytes(), &CODE.code().to_be_bytes(), rsp.params]);
     *hmac_out = hmac_sha256(
-        &[],
+        key,
         &[
             &rp_hash,
             nonce_tpm,
@@ -121,6 +122,7 @@ fn test_hmac_session_command_hmac() {
 #[test]
 fn test_hmac_session_rolls_nonces() {
     let mut session = new_hmac_session();
+    session.set_auth_value(Tpm2bAuth::new(b"auth").unwrap());
     let cmd = CommandData {
         code: CODE,
         handles: &[Handle::RH_OWNER],
@@ -138,7 +140,7 @@ fn test_hmac_session_rolls_nonces() {
 
     let new_nonce_tpm = [0x33; 32];
     let mut hmac_buf = [0u8; 32];
-    let mut response = tpm_response(&rsp, &new_nonce_tpm, &nonce_caller, &mut hmac_buf);
+    let mut response = tpm_response(&rsp, b"auth", &new_nonce_tpm, &nonce_caller, &mut hmac_buf);
 
     // A tampered HMAC is rejected, and nonceTPM is not updated.
     let good_hmac = response.hmac;
@@ -166,7 +168,7 @@ fn test_hmac_session_rolls_nonces() {
         b"params",
     ]);
     let expected = hmac_sha256(
-        &[],
+        b"auth",
         &[
             &cp_hash,
             auth.nonce.as_slice(),
@@ -180,6 +182,8 @@ fn test_hmac_session_rolls_nonces() {
 #[test]
 fn test_hmac_session_missing_name() {
     let mut session = new_hmac_session();
+    // With an empty HMAC key, no cpHash (and so no Name) is needed.
+    session.set_auth_value(Tpm2bAuth::new(b"auth").unwrap());
     let cmd = CommandData {
         code: CODE,
         handles: &[Handle::RH_OWNER, NV_INDEX],
@@ -190,6 +194,47 @@ fn test_hmac_session_missing_name() {
         session.auth_command(&cmd).err(),
         Some(AuthError::MissingName)
     );
+}
+
+#[test]
+fn test_hmac_session_empty_key() {
+    // Unbound, unsalted, and an empty authValue: the HMAC key is empty, so
+    // the HMACs are empty (and no Names are needed).
+    let mut session = new_hmac_session();
+    let cmd = CommandData {
+        code: CODE,
+        handles: &[Handle::RH_OWNER, NV_INDEX],
+        names: &[],
+        params: b"params",
+    };
+    let rsp = ResponseData {
+        code: CODE,
+        params: b"response",
+    };
+
+    let auth = session.auth_command(&cmd).unwrap();
+    assert!(auth.hmac.as_slice().is_empty());
+    // The nonce still rolls.
+    assert_eq!(auth.nonce.as_slice().len(), ALG.digest_size());
+    assert_ne!(auth.nonce.as_slice(), NONCE_CALLER);
+    let mut nonce_caller = [0u8; 32];
+    nonce_caller.copy_from_slice(auth.nonce.as_slice());
+
+    let new_nonce_tpm = [0x33; 32];
+    let mut hmac_buf = [0u8; 32];
+    let mut response = tpm_response(&rsp, &[], &new_nonce_tpm, &nonce_caller, &mut hmac_buf);
+
+    // A non-empty response HMAC is rejected, and nonceTPM is not updated.
+    assert_eq!(
+        session.validate_auth_response(&rsp, &response),
+        Err(AuthError::InvalidResponse)
+    );
+    assert_eq!(session.nonce_tpm().as_slice(), NONCE_TPM);
+
+    // An empty response HMAC is accepted, and nonceTPM rolls forward.
+    response.hmac = Tpm2bData::default();
+    assert_eq!(session.validate_auth_response(&rsp, &response), Ok(()));
+    assert_eq!(session.nonce_tpm().as_slice(), new_nonce_tpm);
 }
 
 #[test]
