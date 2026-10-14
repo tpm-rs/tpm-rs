@@ -130,7 +130,7 @@ crate.
 
 Before adding a new third-party crate to the top-level `Cargo.toml`, ensure
 that you review the crate's license for compatibility with our
-[license](https://github.com/tpm-rs/tpm-rs/blob/main/LICENSE.md). After that,
+[license](https://github.com/tpm-rs/tpm-rs/blob/main/LICENSE). After that,
 please create an [issue](https://github.com/tpm-rs/tpm-rs/issues) outlining the
 need for the crate. In your description, clarify the specific problems the
 crate addresses and how it aligns with the project's goals. Additionally,
