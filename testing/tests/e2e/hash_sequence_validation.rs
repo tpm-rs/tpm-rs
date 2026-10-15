@@ -192,7 +192,7 @@ fn long_data_event_banks_and_start_error_order() {
 fn rejects_unloaded_sequence_handle() {
     let mut sim = Tpm::new();
 
-    let invalid_handle = Handle(0x8000000F);
+    let invalid_handle = Handle::TRANSIENT_LAST;
 
     // Update with invalid handle
     let update_cmd = SequenceUpdate {

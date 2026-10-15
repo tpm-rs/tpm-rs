@@ -14,7 +14,7 @@ use tpm2::{Handle, Unmarshal};
 #[test]
 fn crypto_commands_reject_missing_handle() {
     let mut sim = Tpm::new();
-    let missing_handle = Handle(0x8000000F); // Unloaded transient key handle (TRANSIENT_LAST).
+    let missing_handle = Handle::TRANSIENT_LAST; // Unloaded transient key handle.
 
     // 1. MAC Command
     let error_code = send_key_command(&mut sim, CC_MAC, missing_handle, false, &mac_params(0x000b));

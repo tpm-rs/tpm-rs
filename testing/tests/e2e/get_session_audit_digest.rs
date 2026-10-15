@@ -300,8 +300,8 @@ fn get_session_audit_digest_rejects_unloaded_sign_key() {
 
     let get_audit_cmd = GetSessionAuditDigest {
         privacy_admin_handle: Handle::RH_ENDORSEMENT,
-        // Use non-existent sign key handle 0x80ffffff
-        sign_handle: Handle(0x8000000E),
+        // Use non-existent sign key handle TRANSIENT_LAST
+        sign_handle: Handle::TRANSIENT_LAST,
         session_handle: sess.session_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,

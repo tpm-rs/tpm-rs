@@ -246,6 +246,7 @@ fn scheme_and_signing_key_validation() {
         .unwrap_err(),
         scheme_p2
     );
+    flush_context(&mut sim, ecdaa_key).unwrap();
 
     // Scheme-less ECC key with an RSA scheme -> SCHEME + P2.
     let ecc_key = create_primary_with_auth_in(
@@ -265,6 +266,7 @@ fn scheme_and_signing_key_validation() {
         .unwrap_err(),
         scheme_p2
     );
+    flush_context(&mut sim, ecc_key).unwrap();
 
     // Symmetric cipher key with `sign` set is not a signing object.
     let sym_key = create_primary_with_auth_in(
@@ -284,6 +286,7 @@ fn scheme_and_signing_key_validation() {
         .unwrap_err(),
         rc_at(TpmRc::KEY, Position::handle(1))
     );
+    flush_context(&mut sim, sym_key).unwrap();
 
     // A decrypt-only key is not a signing object either.
     let storage = create_primary_with_auth_in(
@@ -673,7 +676,7 @@ fn sign_rejects_key_without_sign() {
 fn sign_rejects_unloaded_key_handle() {
     let mut sim = Tpm::new();
     let sign_cmd = Sign {
-        key_handle: Handle(0x8000000E),
+        key_handle: Handle::TRANSIENT_LAST,
         digest: Tpm2bDigest::default(),
         in_scheme: None,
         validation: TpmtTkHashcheck::default(),

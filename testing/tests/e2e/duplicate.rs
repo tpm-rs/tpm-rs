@@ -4,7 +4,7 @@
 use crate::_common::{
     AES128_CFB, command_rc, create_and_load, create_dup_target, create_srk, create_storage_primary,
     create_unwrap, dup_policy, duplicable_sign_template, duplicate, duplicate_alg,
-    duplicate_command, duplicate_command_with_name_alg, evict_control, import, load,
+    duplicate_command, duplicate_command_with_name_alg, evict_control, flush_context, import, load,
     load_with_name, owner_srk, rc_p, read_public, rewrap, rsa_dup_target,
     rsa_storage_template_with, storage_attrs, try_create_owner_primary, try_create_primary_in,
 };
@@ -187,6 +187,9 @@ fn outer_wrapper_uses_new_parent_name_alg() {
     );
     let name = read_public(&mut sim, obj).unwrap().name;
     let dup = duplicate_alg(&mut sim, obj, parent, None, TpmiAlgHash::Sha384).unwrap();
+    // Free the slots of the source object and its parent for the Load below.
+    flush_context(&mut sim, obj).unwrap();
+    flush_context(&mut sim, srk).unwrap();
     let plain = rewrap(
         &mut sim,
         parent,
@@ -229,7 +232,9 @@ fn outer_wrapper_uses_new_parent_name_alg() {
     assert_eq!(command_rc(&mut sim, &cmd, 1), rc_p(TpmRc::SIZE, 1));
 }
 
-/// Duplicate works for a persistent object (NULL new parent) and to a persistent new parent; the result imports.
+/// Duplicate works for a persistent object (NULL new parent) and to a persistent new parent; the
+/// result imports and loads. A persistent parent occupies an object slot for the duration of the
+/// command, so the Load needs a free slot for it besides the one for the new object.
 #[test]
 fn persistent_object_and_persistent_new_parent() {
     let mut sim = Tpm::new();
@@ -256,6 +261,12 @@ fn persistent_object_and_persistent_new_parent() {
         dup.out_sym_seed,
     )
     .expect("Import");
+    // SRK + object + the persistent parent fill all three slots: no room for the new object.
+    assert_eq!(
+        load(&mut sim, Handle(0x8100_0201), private, obj_rsp.out_public),
+        Err(TpmRc::OBJECT_MEMORY.get())
+    );
+    flush_context(&mut sim, obj).unwrap();
     load(&mut sim, Handle(0x8100_0201), private, obj_rsp.out_public).expect("Load");
 }
 

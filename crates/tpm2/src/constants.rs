@@ -556,8 +556,12 @@ pub const TPM2_MAX_CONTEXT_SIZE: u32 = 5120;
 pub const TPM2_MAX_PRIVATE_SIZE: usize =
     crate::Tpm2bDigest::MAX_SIZE + crate::Tpm2bDigest::MAX_SIZE + crate::Tpm2bSensitive::MAX_SIZE;
 pub const TPM2_MAX_ACTIVE_SESSIONS: u32 = 64;
+/// Maximum number of loaded transient objects (`MAX_LOADED_OBJECTS`), the slots shared by
+/// transient objects and hash/HMAC sequence objects. Matches the TCG reference profile (`3`, the
+/// minimum `TPM_PT_HR_TRANSIENT_MIN` of the PC Client profile); it also determines
+/// [`Handle::TRANSIENT_LAST`](crate::Handle::TRANSIENT_LAST).
 #[doc(alias = "MAX_LOADED_OBJECTS")]
-pub const TPM2_MAX_LOADED_OBJECTS: u32 = 16;
+pub const TPM2_MAX_LOADED_OBJECTS: u32 = 3;
 
 /// `TPM_ECC_CURVE` and `TPMI_ECC_CURVE` defined in TPM 2.0 Part 2: Structures, Section 6.4 (Table 10) and Section 9.7 (Table 38).
 ///

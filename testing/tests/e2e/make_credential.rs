@@ -100,7 +100,7 @@ fn missing_protector_handle_rejected() {
 
     let secret = Tpm2bDigest::from_bytes(b"Secrets!!!").unwrap();
     let mc = MakeCredential {
-        handle: Handle(0x8000000E),
+        handle: Handle::TRANSIENT_LAST,
         credential: secret,
         object_name: srk_resp.name,
     };

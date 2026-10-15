@@ -64,7 +64,7 @@ fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
     assert_eq!(slot0, 0);
     assert_eq!(handle0, 0x80000000);
 
-    // 2. Fill all 16 slots to test capacity behavior when transient RAM is exhausted
+    // 2. Fill all MAX_LOADED_OBJECTS slots to test capacity behavior when transient RAM is exhausted
     let mut tpmt_public_buf = [0u8; 1024];
     tpmt_public_buf[0] = 0x00;
     tpmt_public_buf[1] = 0x08; // KeyedHash
@@ -73,7 +73,7 @@ fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
     tpmt_public_buf[10] = 0x00;
     tpmt_public_buf[11] = 0x10; // Null scheme
 
-    for (i, slot) in state.transient_objects.iter_mut().enumerate().take(16) {
+    for (i, slot) in state.transient_objects.iter_mut().enumerate() {
         *slot = Some(TransientObject {
             handle: 0x80000000 | (i as u32),
             seed: [0u8; 64],

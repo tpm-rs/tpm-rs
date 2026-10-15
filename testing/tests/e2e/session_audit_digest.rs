@@ -211,7 +211,7 @@ fn handle_and_session_type_errors() {
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H2.get()));
 
     // 2. Sign handle invalid -> should fail with TpmRc::REFERENCE_H1
-    let missing_key = Handle(0x80000009);
+    let missing_key = Handle::TRANSIENT_LAST;
     assert_ne!(missing_key, signer_handle);
     let cmd = GetSessionAuditDigest {
         privacy_admin_handle: Handle(0x4000000B), // TPM_RH_ENDORSEMENT

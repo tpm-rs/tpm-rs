@@ -165,13 +165,13 @@ fn certify_rejects_unloaded_object() {
     let (ak_handle, _) = create_signing_key_ecc(&mut sim, &[]);
 
     let certify_cmd = Certify {
-        object_handle: Handle(0x8000000E),
+        object_handle: Handle::TRANSIENT_LAST,
         sign_handle: ak_handle,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
 
-    // Use non-existent object handle 0x80ffffff (handle 1)
+    // Use non-existent object handle TRANSIENT_LAST (handle 1)
 
     let resp = execute_with_password_sessions_status(&mut sim, &certify_cmd, 2, &[]);
     // SPEC EXPECTS: TPM_RC_REFERENCE_Hx for invalid transient object_handle (ReferenceH0 = 2320)
@@ -188,12 +188,12 @@ fn certify_rejects_unloaded_sign_key() {
 
     let certify_cmd = Certify {
         object_handle: obj_handle,
-        sign_handle: Handle(0x8000000E),
+        sign_handle: Handle::TRANSIENT_LAST,
         qualifying_data: Tpm2bData::default(),
         in_scheme: None,
     };
 
-    // Use non-existent sign handle 0x8000000E (handle 2)
+    // Use non-existent sign handle TRANSIENT_LAST (handle 2)
 
     let resp = execute_with_password_sessions_status(&mut sim, &certify_cmd, 2, &[]);
     // SPEC EXPECTS: TPM_RC_REFERENCE_Hx for invalid transient sign_handle (ReferenceH1 = 2321)
@@ -533,14 +533,14 @@ fn handle_and_signer_key_errors() {
     };
 
     // 1. Certified object invalid handle -> should fail with TpmRc::REFERENCE_H0
-    let missing = Handle(0x80000009);
+    let missing = Handle::TRANSIENT_LAST;
     assert_ne!(missing, certified_handle);
     let cmd = Certify {
         object_handle: missing,          // Non-existent
         sign_handle: Handle(0x40000007), // RH_NULL
         ..cmd
     };
-    // Since 0x80000009 is non-existent, its auth is empty. Provide empty hmac.
+    // Since TRANSIENT_LAST is non-existent, its auth is empty. Provide empty hmac.
     let res = exec_pws(&mut sim, &cmd, &[empty_auth]);
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
 

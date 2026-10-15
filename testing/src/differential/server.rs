@@ -165,9 +165,6 @@ pub struct DiffState {
     /// Byte offsets successfully written (`TPM2_NV_Write`) per NV index since
     /// it was defined (for exception 5).
     pub nv_written: HashMap<u32, HashSet<usize>>,
-    /// Handles of the hash/HMAC sequence objects currently loaded in
-    /// tpm-rs (for exception 10).
-    pub rs_sequences: Vec<u32>,
     /// Transient object handles that differ between the implementations,
     /// as `(tpm-rs handle, C handle)` pairs (exception 11). Handles in
     /// commands are translated with this map before they are sent to C.
@@ -448,18 +445,6 @@ impl<B: Backend> Server<B> {
                 st.handle_map.retain(|&(r, h)| r != rs && h != c);
                 st.handle_map.push((rs, c));
             }
-            Some(Resync::FlushRefObject(handle)) => {
-                let mut flush = vec![0x80, 0x01, 0, 0, 0, 14, 0, 0, 0x01, 0x65];
-                flush.extend_from_slice(&handle.to_be_bytes());
-                let rsp = self.backend.run_command(locality, &flush);
-                if response_code(&rsp) != Some(0) {
-                    return Err(format!(
-                        "test `{test}`, command {index}: resync TPM2_FlushContext \
-                         ({handle:#010x}) on {implementation} failed: {}",
-                        hex(&rsp)
-                    ));
-                }
-            }
         }
         Ok(())
     }
@@ -470,18 +455,14 @@ mod cc {
     pub const PCR_RESET: u32 = 0x0000_013D;
     pub const INCREMENTAL_SELF_TEST: u32 = 0x0000_0142;
     pub const REWRAP: u32 = 0x0000_0152;
-    pub const HMAC_START: u32 = 0x0000_015B;
     pub const NV_DEFINE_SPACE: u32 = 0x0000_012A;
     pub const NV_UNDEFINE_SPACE: u32 = 0x0000_0122;
     pub const NV_UNDEFINE_SPACE_SPECIAL: u32 = 0x0000_011F;
     pub const NV_WRITE: u32 = 0x0000_0137;
     pub const NV_READ: u32 = 0x0000_014E;
     pub const ECC_PARAMETERS: u32 = 0x0000_0178;
-    pub const SEQUENCE_COMPLETE: u32 = 0x0000_013E;
     pub const STARTUP: u32 = 0x0000_0144;
     pub const FLUSH_CONTEXT: u32 = 0x0000_0165;
-    pub const EVENT_SEQUENCE_COMPLETE: u32 = 0x0000_0185;
-    pub const HASH_SEQUENCE_START: u32 = 0x0000_0186;
     pub const CONTEXT_LOAD: u32 = 0x0000_0161;
     pub const CONTEXT_SAVE: u32 = 0x0000_0162;
     pub const LOAD_EXTERNAL: u32 = 0x0000_0167;
@@ -880,7 +861,6 @@ fn capability_difference_is_documented(command: &[u8], expected: &[u8], actual: 
         // started in PT_FIXED. All other properties must match exactly.
         6 => {
             const IMPLEMENTATION_SPECIFIC: &[u32] = &[
-                0x10E, // TPM_PT_HR_TRANSIENT_MIN (tpm-rs 3, C 16)
                 0x10F, // TPM_PT_HR_PERSISTENT_MIN
                 0x116, // TPM_PT_NV_COUNTERS_MAX
                 0x118, // TPM_PT_MEMORY
@@ -1011,24 +991,11 @@ fn track_exception_state(st: &mut DiffState, command: &[u8], expected: &[u8], ac
                 st.nv_written.remove(&handles[index_pos]);
             }
         }
-        cc::HASH_SEQUENCE_START | cc::HMAC_START if exp_rc == 0 => {
-            if let Some(handle) = be32(expected, 10) {
-                st.rs_sequences.push(handle);
-            }
-        }
-        cc::SEQUENCE_COMPLETE | cc::EVENT_SEQUENCE_COMPLETE | cc::FLUSH_CONTEXT if exp_rc == 0 => {
-            let handle = match code {
-                cc::SEQUENCE_COMPLETE => be32(command, 10),
-                cc::EVENT_SEQUENCE_COMPLETE => be32(command, 14),
-                _ => command_parts(command, 0).and_then(|(_, p)| be32(p, 0)),
-            };
-            st.rs_sequences.retain(|&h| Some(h) != handle);
-            if code == cc::FLUSH_CONTEXT {
-                st.handle_map.retain(|&(r, _)| Some(r) != handle);
-            }
+        cc::FLUSH_CONTEXT if exp_rc == 0 => {
+            let handle = command_parts(command, 0).and_then(|(_, p)| be32(p, 0));
+            st.handle_map.retain(|&(r, _)| Some(r) != handle);
         }
         cc::STARTUP if exp_rc == 0 => {
-            st.rs_sequences.clear();
             st.handle_map.clear();
         }
         _ => {}
@@ -1060,8 +1027,6 @@ fn log_exception(
 /// divergence that left C with state tpm-rs does not have.
 #[derive(Debug)]
 enum Resync {
-    /// `TPM2_FlushContext` the given C object, which only C created.
-    FlushRefObject(u32),
     /// Record that tpm-rs transient handle `rs` is C handle `c`.
     MapHandle { rs: u32, c: u32 },
 }
@@ -1244,23 +1209,6 @@ fn compare_differential_response(
                         })
                     })
                 })
-        }
-        // 10. TPM2_HashSequenceStart / TPM2_HMAC_Start while tpm-rs already
-        //     holds its maximum of 3 sequence objects: tpm-rs reports
-        //     TPM_RC_OBJECT_MEMORY, while C allocates sequences from its 16
-        //     shared object slots and succeeds. The sequence then exists in
-        //     C only; the harness flushes it from C (see `Resync`) so both
-        //     TPMs hold the same objects afterwards.
-        (cc::HASH_SEQUENCE_START | cc::HMAC_START, Some(0x902), Some(0))
-            if st.rs_sequences.len() >= 3 =>
-        {
-            log_exception(test, index, code, command, expected, actual);
-            return match be32(actual, 10) {
-                Some(handle) => Ok(Some(Resync::FlushRefObject(handle))),
-                None => Err(format!(
-                    "test `{test}`, command {index}: no C sequence handle"
-                )),
-            };
         }
         _ => false,
     };

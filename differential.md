@@ -214,12 +214,11 @@ These are the only specification-deviation fixes (`bug-fix-*.patch`). `tpm-rs` f
 ### 9. Profile Configuration of `mstpm20`
 
 - **Classification**: **Profile difference** (`#define` only).
-- **Test & Implementation Code**: [`testing/patches/mstpm20/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/mstpm20) (`profile-algorithms`, `profile-command-list`, `profile-no-act`, `profile-no-sec-channel`, `profile-no-vendor-commands`, `profile-max-loaded-objects`, `profile-max-context-size`, `profile-rsa-private-prime-only`, `profile-production-context-slot`, `profile-no-self-tests`, `platform-no-debug-print`, `platform-pcr-banks`, `profile-enable-vendor-permanent-auth`, `platform-vendor-info`, `platform-vendor-unique-value`, `platform-ram-backed-nv`, `platform-manufacture-zero-state`, `build-fix-openssl-version-check`).
+- **Test & Implementation Code**: [`testing/patches/mstpm20/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/mstpm20) (`profile-algorithms`, `profile-command-list`, `profile-no-act`, `profile-no-sec-channel`, `profile-no-vendor-commands`, `profile-max-context-size`, `profile-rsa-private-prime-only`, `profile-production-context-slot`, `profile-no-self-tests`, `platform-no-debug-print`, `platform-pcr-banks`, `profile-enable-vendor-permanent-auth`, `platform-vendor-info`, `platform-vendor-unique-value`, `platform-ram-backed-nv`, `platform-manufacture-zero-state`, `build-fix-openssl-version-check`).
 - **Settings**:
 
   | Setting | Value | Reason |
   |---|---|---|
-  | `MAX_LOADED_OBJECTS` | 16 | `tpm-rs` `TPM2_MAX_LOADED_OBJECTS` (also determines `TRANSIENT_LAST`). |
   | Algorithms | +SHA-512; no Camellia, CMAC, SM2, SM4, EC-Schnorr, ECMQV, RSA-3072/4096, P-192, BN-P638, SM2-P256 | The set `tpm-rs` implements (so the context-integrity hash is SHA-512, and `0x15B` is `TPM2_HMAC_Start`). |
   | Commands | `CC_NO` for the 14 commands `tpm-rs` lacks (`ECC_Decrypt`, `ECC_Encrypt`, `EC_Ephemeral`, `ZGen_2Phase`, `PolicyCapability`, `PolicyParameters`, `PolicyPhysicalPresence`, `Policy_AC_SendSelect`, `PolicyTransportSPDM` with `SEC_CHANNEL_SUPPORT NO`, `SetAlgorithmSet`, `NV_DefineSpace2`, `NV_ReadPublic2`, `ReadOnlyControl`, `PP_Commands`), the vendor test command, and ACT | `tpm-rs`'s command set. |
   | PCR banks | SHA-1 + SHA-256 | `tpm-rs` default allocation. |
@@ -238,7 +237,7 @@ Each rule in [`server.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-
 | Rule | Difference | Specification basis |
 |---|---|---|
 | 1 | `TPM2_ContextSave` `contextBlob` content. `sequence`, `savedHandle`, `hierarchy`, sessions and tag are compared exactly. A saved blob is translated to the other TPM's blob only on an exact match. | The saved-context structure "may be defined by the vendor" (Part 1 §26.1). |
-| 2 | `TPM2_GetCapability` (tag, capability, `moreData` and order exact): `TPM_CAP_PCRS` lists `tpm-rs`-only empty SM3/SHA3 banks; `TPM_CAP_AUTH_POLICIES` has C `moreData = YES` when the list is full; `TPM_CAP_TPM_PROPERTIES` has implementation-specific values `{0x10E, 0x10F, 0x116, 0x118, 0x119, 0x11C, 0x11E, 0x11F, 0x121, 0x122, 0x12D}`, C-only `0x12F`/`0x130`, and `tpm-rs` `PT_VAR` entries when a query starts in `PT_FIXED`; `TPM_CAP_HANDLES` has C-only FW/SVN permanent handles. | Capability contents are TPM-specific (Part 3 §30.2). |
+| 2 | `TPM2_GetCapability` (tag, capability, `moreData` and order exact): `TPM_CAP_PCRS` lists `tpm-rs`-only empty SM3/SHA3 banks; `TPM_CAP_AUTH_POLICIES` has C `moreData = YES` when the list is full; `TPM_CAP_TPM_PROPERTIES` has implementation-specific values `{0x10F, 0x116, 0x118, 0x119, 0x11C, 0x11E, 0x11F, 0x121, 0x122, 0x12D}`, C-only `0x12F`/`0x130`, and `tpm-rs` `PT_VAR` entries when a query starts in `PT_FIXED`; `TPM_CAP_HANDLES` has C-only FW/SVN permanent handles. | Capability contents are TPM-specific (Part 3 §30.2). |
 | 3 | `TPM2_ECC_Parameters` fields are equal up to leading zero bytes. | "may not be the same size" (Part 1 §33.6.3, Part 3 §14.6). |
 | 4 | `TPM2_IncrementalSelfTest` `toDoList` (both sides must return a well-formed `TPML_ALG`, tag `0x8001`). | Which algorithms are listed is TPM-dependent (Part 3 §10.3). |
 | 5 | `TPM2_NV_Read`: `0x00` (`tpm-rs`) vs. `0xFF` (C) only at offsets never written since the index was defined; header, size and sessions exact. | The content of unwritten NV bytes is not specified. |
@@ -246,7 +245,7 @@ Each rule in [`server.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-
 | 7 | `TPM2_Rewrap` with an `inDuplicate` size in (1350, 1618]: `tpm-rs` `TPM_RC_VALUE + P1` vs. C `TPM_RC_SIZE + P1`. | The maximum `TPM2B_PRIVATE` size is a profile constant. |
 | 8 | `TPM2_PCR_Reset` of PCR 16 at locality 5-31: `tpm-rs` `TPM_RC_LOCALITY` vs. C success. | The C simulator platform maps localities 5-31 to 0. |
 | 9 | `TPM2_ContextLoad` of a blob that was never saved (tampered or truncated): both reject, with `SIZE` vs. `INTEGRITY + P1` depending on the blob layout. | Vendor-defined blob layout (Rule 1). |
-| 10 | `TPM2_HashSequenceStart`/`TPM2_HMAC_Start` while `tpm-rs` already holds 3 sequence objects: `tpm-rs` `TPM_RC_OBJECT_MEMORY` vs. C success. The harness flushes the C-only sequence, and the flush must succeed. | Object-slot capacity is implementation-specific. |
+| 10 | Retired: `tpm-rs` and both references now share the TCG reference profile value `MAX_LOADED_OBJECTS = 3` (object slots shared by transient and sequence objects), so a fourth sequence object fails with `TPM_RC_OBJECT_MEMORY` in all of them. | — |
 | 11 | Transient handle numbering when a persistent object is referenced (C uses a temporary object slot). Only the returned handle may differ, and later commands are translated from `tpm-rs` handles to C handles. | Handle assignment is implementation-specific. |
 | RETRY | C (both references, `USE_DA_USED = YES`) returns `TPM_RC_RETRY` from `CheckLockedOut` on the first DA-protected access of a boot: the identical command is re-issued to C once and compared, and a second `RETRY` fails. | `TPM_RC_RETRY` is a warning; both behaviors meet Part 1 "Non-orderly Shutdown". |
 
@@ -329,7 +328,7 @@ Each rule in [`server.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-
 
   | Setting | Value | Reason |
   |---|---|---|
-  | Algorithms, `MAX_LOADED_OBJECTS`, PCR banks, `RSA_PRIVATE_PRIME_ONLY`, `VENDOR_PERMANENT_AUTH`, `ENABLE_SELF_TESTS`, production context slot, RAM-backed NV | as item 9 | IBM already has SHA-512 on and SM4 off. |
+  | Algorithms, PCR banks, `RSA_PRIVATE_PRIME_ONLY`, `VENDOR_PERMANENT_AUTH`, `ENABLE_SELF_TESTS`, production context slot, RAM-backed NV | as item 9 | IBM already has SHA-512 on and SM4 off. |
   | Commands | `CC_NO` for the `mstpm20` list that exists in this older code (no `ReadOnlyControl`/`PolicyTransportSPDM`) plus `CertifyX509` (on in IBM, off in the `mstpm20` profile), `ACT_SetTimeout` (with `ACT_SUPPORT NO`), `Vendor_TCG_Test` and the Nuvoton `NTC2_PreConfig`/`NTC2_LockPreConfig`/`NTC2_GetConfig` vendor commands | `tpm-rs`'s command set. With these off, `X509_ECC.c`/`X509_RSA.c` are compiled out (their ASN.1 helpers exist only with `CertifyX509`), and the unconditional `ActStartup`/`ActShutdown`/`ActGetCapabilityData` calls are guarded; `TPM_CAP_ACT` is `TPM_RC_VALUE + P2` as in `mstpm20` without ACT support. |
   | `MAX_CONTEXT_SIZE` | 2264 (IBM: 2680 for RSA-3072) | As `mstpm20`. The informational "can be reduced" and "Size of OBJECT" output of `TpmSizeChecks` is silenced. |
   | `MIN_EVICT_OBJECTS`, `NV_MEMORY_SIZE` | 2, 16384 (IBM: 7, 32768) | `mstpm20` values. |
@@ -359,7 +358,6 @@ No rule of [`server.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs
 | 2 (`GetCapability`) | yes | `TPM_CAP_PCRS` (the `tpm-rs`-only empty SM3/SHA3 banks). |
 | 4 (`IncrementalSelfTest`) | yes | |
 | 8 (`PCR_Reset` at locality 5-31) | yes | Same simulator platform locality mapping. |
-| 10 (fourth sequence object) | yes | |
 | 11 (transient handle numbering) | yes | |
 | RETRY | yes | With `USE_DA_USED = YES` (item 18). |
 | 3, 5, 6, 7, 9 | not hit | IBM's ECC parameter constants, NV erase value, `TPM2B_PRIVATE` size and context-blob checks happen to match `tpm-rs` for the tested inputs; the rules stay available because the same implementation-defined freedom applies. |

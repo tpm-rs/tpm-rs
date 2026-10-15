@@ -229,7 +229,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     (TpmPt::FIRMWARE_VERSION_1, 1),
                     (TpmPt::FIRMWARE_VERSION_2, 0),
                     (TpmPt::INPUT_BUFFER, 1024),
-                    (TpmPt::HR_TRANSIENT_MIN, 3),
+                    (
+                        TpmPt::HR_TRANSIENT_MIN,
+                        crate::engine::MAX_LOADED_OBJECTS as u32,
+                    ),
                     (TpmPt::HR_PERSISTENT_MIN, 7),
                     (TpmPt::HR_LOADED_MIN, 3),
                     (TpmPt::ACTIVE_SESSIONS_MAX, 64),

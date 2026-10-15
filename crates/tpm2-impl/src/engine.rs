@@ -375,6 +375,11 @@ pub struct GlobalState {
     pub active_sequences: [Option<ActiveSequence>; MAX_ACTIVE_SEQUENCES],
     /// A counter used to generate the next transient handle index.
     pub next_transient_index: u32,
+    /// Number of persistent objects referenced by the handle area of the command being executed.
+    /// Each occupies one of the `MAX_LOADED_OBJECTS` object slots (shared with transient and
+    /// sequence objects) for the duration of the command, like the temporary copy C
+    /// `ObjectLoadEvict` makes. Reset at the start of every command.
+    pub command_persistent_objects: usize,
     /// The authorization value for the Owner (Storage) Hierarchy.
     pub owner_auth: OwnedAuth,
     /// The authorization value for the Endorsement Hierarchy.
@@ -748,6 +753,7 @@ impl Default for GlobalState {
             saved_session_sequences: [0; MAX_ACTIVE_SESSIONS],
             active_sequences: [const { None }; MAX_ACTIVE_SEQUENCES],
             next_transient_index: 0,
+            command_persistent_objects: 0,
             owner_auth: OwnedAuth::default(),
             endorsement_auth: OwnedAuth::default(),
             platform_auth: OwnedAuth::default(),
@@ -906,6 +912,7 @@ impl GlobalState {
             *seq = None;
         }
         self.next_transient_index = 0;
+        self.command_persistent_objects = 0;
         self.owner_auth = Default::default();
         self.endorsement_auth = Default::default();
         self.platform_auth = Default::default();
@@ -1169,12 +1176,14 @@ impl GlobalState {
         Err(TpmRc::HANDLE.to_rc())
     }
 
-    /// Finds the lowest free transient handle (0x80000000..0x80000003) that is not in use by either
+    /// Finds the lowest free transient handle (`TRANSIENT_FIRST..=TRANSIENT_LAST`) that is not in use by either
     /// loaded transient objects or active sequences, enforcing the shared `MAX_LOADED_OBJECTS` (`3`)
-    /// capacity across transient objects and sequences (`s_objects` parity with `ibmswtpm2`).
+    /// capacity across transient objects, sequences and the persistent objects referenced by the
+    /// current command (`s_objects` parity with the C references).
     pub fn find_next_transient_handle(&self) -> Result<u32, TpmRc> {
         let total_loaded = self.transient_objects.iter().flatten().count()
-            + self.active_sequences.iter().flatten().count();
+            + self.active_sequences.iter().flatten().count()
+            + self.command_persistent_objects;
         if total_loaded >= MAX_LOADED_OBJECTS {
             return Err(TpmRc::OBJECT_MEMORY);
         }
@@ -2472,6 +2481,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     }
 
     pub fn execute_command(&mut self, cmd_buf: &[u8], resp_buf: &mut [u8]) -> Result<usize, TpmRc> {
+        // The temporary object slots of the persistent objects referenced by the previous command
+        // are released when it ends (`ObjectCleanupEvict()` in `ExecCommand.c`).
+        self.state.command_persistent_objects = 0;
         // Any command through this function unceremoniously ends an active DRTM event sequence
         // (`ObjectTerminateEvent()` in `ExecCommand.c`).
         if self.state.drtm_handle != Handle::RH_UNASSIGNED.0 {
@@ -5121,9 +5133,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 }
             }
         }
-        // Number of persistent objects already copied into a (temporary) object slot by this
-        // command (`ObjectLoadEvict`).
-        let mut persistent_loaded = 0usize;
+        // Persistent objects already copied into a (temporary) object slot by this command
+        // (`ObjectLoadEvict`) are counted in `state.command_persistent_objects`.
+        self.state.command_persistent_objects = 0;
         for (h_idx, &handle) in handles.iter().enumerate().take(handles_len) {
             let pos = Position::handle((h_idx + 1) as u8);
             // C `EntityGetLoadStatus`: every NV Index handle must be accessible
@@ -5179,7 +5191,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         });
                     }
                 } else if handle >> 24 == 0x81 {
-                    self.load_evict_status(cc, handle, pos, &mut persistent_loaded)?;
+                    self.load_evict_status(cc, handle, pos)?;
                 } else {
                     // `TPMI_DH_OBJECT` accepts only transient and persistent handles
                     // (`TPMI_DH_OBJECT_Unmarshal`); permanent handles are invalid values,
@@ -5200,7 +5212,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         return Err(TpmRc::REFERENCE_H0);
                     }
                 } else if mso == 0x81 {
-                    self.load_evict_status(cc, handle, pos, &mut persistent_loaded)?;
+                    self.load_evict_status(cc, handle, pos)?;
                 } else if mso != 0x40 {
                     return Err(TpmRc::VALUE.with(pos));
                 }
@@ -5257,7 +5269,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                             return Err(TpmRc::REFERENCE_H0);
                         }
                     } else if handle >> 24 == 0x81 {
-                        self.load_evict_status(cc, handle, pos, &mut persistent_loaded)?;
+                        self.load_evict_status(cc, handle, pos)?;
                     } else {
                         return Err(TpmRc::VALUE.with(pos));
                     }
@@ -5289,7 +5301,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                             return Err(TpmRc::REFERENCE_H1);
                         }
                     } else if mso == 0x81 {
-                        self.load_evict_status(cc, handle, pos, &mut persistent_loaded)?;
+                        self.load_evict_status(cc, handle, pos)?;
                     } else if mso == 0x00 && handle > 23 {
                         return Err(TpmRc::VALUE.with(pos));
                     }
@@ -5343,7 +5355,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 }
             } else if handle >> 24 == 0x81 {
                 // Any other persistent handle is loaded like an object handle (`ObjectLoadEvict`).
-                self.load_evict_status(cc, handle, pos, &mut persistent_loaded)?;
+                self.load_evict_status(cc, handle, pos)?;
             }
             if (0x40000000..=0x40FFFFFF).contains(&handle)
                 && !(cc == TpmCc::HierarchyControl && h_idx == 1)
@@ -5375,17 +5387,12 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     ///    `0x8180_0000..`, `shEnable` otherwise) looks undefined: `TPM_RC_HANDLE` at `pos`.
     /// 2. A free object slot is needed for the duration of the command (shared with loaded
     ///    transient and sequence objects and the persistent objects already referenced by this
-    ///    command, counted in `persistent_loaded`): otherwise `TPM_RC_OBJECT_MEMORY`.
+    ///    command, counted in `state.command_persistent_objects`): otherwise
+    ///    `TPM_RC_OBJECT_MEMORY`.
     /// 3. An undefined persistent handle is `TPM_RC_HANDLE` at `pos`.
     /// 4. An endorsement-hierarchy object while `ehEnable` is clear is `TPM_RC_HANDLE` at `pos`,
     ///    except for `TPM2_EvictControl`.
-    fn load_evict_status(
-        &mut self,
-        cc: TpmCc,
-        handle: u32,
-        pos: Position,
-        persistent_loaded: &mut usize,
-    ) -> Result<(), TpmRc> {
+    fn load_evict_status(&mut self, cc: TpmCc, handle: u32, pos: Position) -> Result<(), TpmRc> {
         let hierarchy_enabled = if handle >= 0x8180_0000 {
             self.state.ph_enable
         } else {
@@ -5396,7 +5403,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         }
         let used = self.state.transient_objects.iter().flatten().count()
             + self.state.active_sequences.iter().flatten().count()
-            + *persistent_loaded;
+            + self.state.command_persistent_objects;
         if used >= MAX_LOADED_OBJECTS {
             return Err(TpmRc::OBJECT_MEMORY);
         }
@@ -5411,7 +5418,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         {
             return Err(TpmRc::HANDLE.with(pos));
         }
-        *persistent_loaded += 1;
+        self.state.command_persistent_objects += 1;
         Ok(())
     }
 

@@ -16,9 +16,11 @@ use tpm2::{
     TpmtKeyedHashScheme, TpmtPublic, TpmtSigScheme, TpmtTkHashcheck, *,
 };
 
-/// Starting more than the maximum concurrent HMAC sequences fails with TPM_RC_OBJECT_MEMORY until one completes.
+/// Starting more HMAC sequences than there are free object slots fails with TPM_RC_OBJECT_MEMORY until one completes.
 ///
-/// 1. Starting multiple concurrent HMAC sequences.
+/// 1. Starting multiple concurrent HMAC sequences. Sequence objects share the
+///    `TPM2_MAX_LOADED_OBJECTS` object slots with the loaded HMAC key, so at most
+///    `min(MAX_ACTIVE_SEQUENCES, TPM2_MAX_LOADED_OBJECTS - 1)` sequences can be active.
 #[test]
 fn concurrent_sequences_object_memory() {
     let mut sim = Tpm::new();
@@ -32,8 +34,9 @@ fn concurrent_sequences_object_memory() {
     };
 
     let mut handles = Vec::new();
-    // Start up to MAX_ACTIVE_SEQUENCES concurrent HMAC sequences
-    for _ in 0..MAX_ACTIVE_SEQUENCES {
+    // Start as many concurrent HMAC sequences as fit next to the loaded key.
+    let max_sequences = MAX_ACTIVE_SEQUENCES.min(tpm2::TPM2_MAX_LOADED_OBJECTS as usize - 1);
+    for _ in 0..max_sequences {
         let resp_h =
             execute_tpm_command_mapping_parse_errors(&mut sim, &start_cmd, &[pw()]).unwrap();
         handles.push(resp_h.sequence_handle);

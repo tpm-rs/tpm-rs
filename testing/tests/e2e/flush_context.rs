@@ -455,9 +455,10 @@ fn unloaded_transient_handle_error() {
 #[test]
 fn out_of_range_handle_rejected_as_value() {
     let mut sim = Tpm::new();
-    // TRANSIENT_LAST is TRANSIENT_FIRST + MAX_LOADED_OBJECTS - 1 = 0x8000000F.
-    assert_eq!(flush_rc(&mut sim, 0x8000_000F), rc_p(TpmRc::HANDLE, 1));
-    assert_eq!(flush_rc(&mut sim, 0x8000_0010), rc_p(TpmRc::VALUE, 1));
+    // TRANSIENT_LAST is TRANSIENT_FIRST + MAX_LOADED_OBJECTS - 1 = 0x80000002.
+    assert_eq!(flush_rc(&mut sim, 0x8000_0002), rc_p(TpmRc::HANDLE, 1));
+    assert_eq!(flush_rc(&mut sim, 0x8000_0003), rc_p(TpmRc::VALUE, 1));
+    assert_eq!(flush_rc(&mut sim, 0x8000_000F), rc_p(TpmRc::VALUE, 1));
     assert_eq!(flush_rc(&mut sim, 0x8000_00FF), rc_p(TpmRc::VALUE, 1));
     // *_SESSION_LAST is *_SESSION_FIRST + MAX_ACTIVE_SESSIONS - 1 = 0x0X00003F.
     assert_eq!(flush_rc(&mut sim, 0x0200_003F), rc_p(TpmRc::HANDLE, 1));

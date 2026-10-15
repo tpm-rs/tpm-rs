@@ -157,8 +157,6 @@ fn derived_key_uses_parent_sensitive_bits() {
     let srk = owner_srk(&mut sim);
     // Two derivation parents with the same sensitive bits (but different random seeds).
     let parent_t = derivation_parent_template(TpmiAlgHash::Sha256, TpmaObject::empty());
-    let (p1, _) = create_and_load(&mut sim, srk, parent_t, &[], &[0x77; 32]);
-    let (p2, _) = create_and_load(&mut sim, srk, parent_t, &[], &[0x77; 32]);
     let derived = |sim: &mut Tpm, parent: Handle| {
         let child = ecc_sign_template(TpmiAlgHash::Sha256, TpmaObject::FIXED_PARENT);
         let mut child = child;
@@ -185,8 +183,16 @@ fn derived_key_uses_parent_sensitive_bits() {
         flush_context(sim, rsp.object_handle).unwrap();
         ecc_point(&rsp.out_public.0)
     };
+    // Each parent is flushed before the next one is loaded, so that the SRK, one parent and its
+    // derived child fit into the TPM's object slots.
+    let (p1, _) = create_and_load(&mut sim, srk, parent_t, &[], &[0x77; 32]);
+    let from_p1 = derived(&mut sim, p1);
+    flush_context(&mut sim, p1).unwrap();
+    let (p2, _) = create_and_load(&mut sim, srk, parent_t, &[], &[0x77; 32]);
+    let from_p2 = derived(&mut sim, p2);
+    flush_context(&mut sim, p2).unwrap();
     // The derivation secret is the parent's sensitive bits, not its seedValue.
-    assert_eq!(derived(&mut sim, p1), derived(&mut sim, p2));
+    assert_eq!(from_p1, from_p2);
 }
 
 /// Derived keyed-hash/symmetric children merge label/context per SetLabelAndContext; invalid derivations are rejected.
@@ -275,6 +281,9 @@ fn derived_keyedhash_label_context_precedence() {
         kh_rsp.out_public.0.parms_and_id, kh_merged_rsp.out_public.0.parms_and_id,
         "SetLabelAndContext must merge non-empty label from inPublic with fallback context from inSensitive.data"
     );
+    // Free the object slots of both keyed-hash children for the next derivations.
+    flush_context(&mut sim, kh_rsp.object_handle).unwrap();
+    flush_context(&mut sim, kh_merged_rsp.object_handle).unwrap();
 
     // 4. Derive a Symmetric (AES-128 CFB) child under the derivation parent
     let sym_pub_template = TpmtPublic {
@@ -375,13 +384,8 @@ fn derived_keyedhash_label_context_precedence() {
         "ECC derivation template with >32 byte label must fail with TPM_RC_SIZE + P2"
     );
 
-    // Flush all created handles
-    for handle in [
-        kh_rsp.object_handle,
-        kh_merged_rsp.object_handle,
-        sym_handles.object_handle,
-        parent_handle,
-    ] {
+    // Flush the remaining created handles
+    for handle in [sym_handles.object_handle, parent_handle] {
         flush_context(&mut sim, handle).unwrap();
     }
 }

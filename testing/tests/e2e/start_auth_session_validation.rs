@@ -642,7 +642,7 @@ fn unloaded_bind_handle_rejected() {
     let mut sim = Tpm::new();
     let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,
-        bind: Handle(0x8000000F), // Unloaded transient handle
+        bind: Handle::TRANSIENT_LAST, // Unloaded transient handle
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,

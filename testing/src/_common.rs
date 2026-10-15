@@ -10523,6 +10523,10 @@ pub fn derive_key_and_iv_ref<H: tpm2::crypto::Hmac>(
 
 /// Duplicates `target` to `parent`, imports the result under `parent`, loads it and checks that
 /// the loaded object has the Name `target_name`.
+///
+/// `target` is flushed right after `TPM2_Duplicate`, so that the imported copy can be loaded
+/// even when the TPM's few object slots are otherwise occupied (e.g. by the target's parent and
+/// `parent`); the imported copy is flushed again after the check.
 #[allow(clippy::too_many_arguments)]
 pub fn dup_import_load(
     sim: &mut Tpm,
@@ -10558,6 +10562,7 @@ pub fn dup_import_load(
         target_hash,
     )
     .unwrap_or_else(|e| panic!("Duplicate failed for {ctx}, error={e:08X}"));
+    flush_context(sim, target).unwrap();
 
     let imp_resp = import_command(
         sim,

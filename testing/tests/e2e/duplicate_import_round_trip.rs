@@ -51,11 +51,14 @@ fn hash_and_symmetric_algorithm_matrix() {
             .unwrap();
 
             for (target_hash, target) in &targets {
-                // 2. Load the target signing key with target_hash
-                let (target_handle, target_name) =
-                    load_with_name(&mut sim, srk, target.out_private, target.out_public).unwrap();
-
                 for &sym_alg in &sym_algos {
+                    // 2. Load the target signing key with target_hash (`dup_import_load` flushes
+                    // it after the duplication, so that the imported copy fits into the TPM's
+                    // object slots next to the SRK and the parent)
+                    let (target_handle, target_name) =
+                        load_with_name(&mut sim, srk, target.out_private, target.out_public)
+                            .unwrap();
+
                     // 3-5. Duplicate, Import and Load
                     dup_import_load(
                         &mut sim,
@@ -71,7 +74,6 @@ fn hash_and_symmetric_algorithm_matrix() {
                         ),
                     );
                 }
-                flush_context(&mut sim, target_handle).unwrap();
             }
             flush_context(&mut sim, parent).unwrap();
         }
@@ -152,7 +154,9 @@ fn parent_and_target_key_type_matrix() {
                 });
 
             for (target_type, target) in &targets {
-                // 2. Load target signing key
+                // 2. Load target signing key (`dup_import_load` flushes it after the duplication,
+                // so that the imported copy fits into the TPM's object slots next to the SRK and
+                // the parent)
                 let (target_handle, target_name) =
                     load_with_name(&mut sim, srk, target.out_private, target.out_public).unwrap();
 
@@ -170,7 +174,6 @@ fn parent_and_target_key_type_matrix() {
                          parent_hash={parent_hash:?}"
                     ),
                 );
-                flush_context(&mut sim, target_handle).unwrap();
             }
             flush_context(&mut sim, parent).unwrap();
         }

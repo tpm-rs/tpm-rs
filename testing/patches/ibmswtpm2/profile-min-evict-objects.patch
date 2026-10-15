@@ -6,17 +6,14 @@ The TCG reference default (as mstpm20) instead of IBM's PC-Client value 7;
 it determines TPM_PT_HR_PERSISTENT_MIN and when TPM2_EvictControl/NV space
 allocation fail.
 
-Ordering: generated against the tree with profile-max-loaded-objects.patch applied
-(it changes lines within this patch's context), so it must be applied after
-it; the patches are applied in sorted file-name order.
-
 diff --git a/src/TpmProfile_Misc.h b/src/TpmProfile_Misc.h
 --- a/src/TpmProfile_Misc.h
 +++ b/src/TpmProfile_Misc.h
-@@ -83,7 +83,8 @@
- // tpm-rs differential testing: tpm-rs implements 16 transient object slots
- // (so TRANSIENT_LAST = TRANSIENT_FIRST + 15, Part 2 handle constants).
- #define MAX_LOADED_OBJECTS         16
+@@ -80,7 +80,8 @@
+ #define MAX_ACTIVE_SESSIONS        64
+ #define MAX_LOADED_SESSIONS        3
+ #define MAX_SESSION_NUM            3
+ #define MAX_LOADED_OBJECTS         3
 -#define MIN_EVICT_OBJECTS          7	/* kgold for PC client */
 +// tpm-rs differential testing: the TCG reference default (as mstpm20).
 +#define MIN_EVICT_OBJECTS          2

@@ -103,7 +103,7 @@ fn create_with_unloaded_parent_fails() {
     });
     let in_public = tpm2::Tpm2b(get_ecc_template());
     let cmd = Create {
-        parent_handle: Handle(0x80000005), // non-existent transient handle
+        parent_handle: Handle::TRANSIENT_LAST, // non-existent transient handle
         in_sensitive: t_sens,
         in_public,
         outside_info: Tpm2bData::default(),
@@ -310,7 +310,7 @@ fn missing_transient_parent_rejected() {
     let in_public = tpm2::Tpm2b(pub_area);
 
     let cmd = Create {
-        parent_handle: Handle(0x8000000F), // Unloaded transient handle
+        parent_handle: Handle::TRANSIENT_LAST, // Unloaded transient handle
         in_sensitive,
         in_public,
         outside_info: Tpm2bData::default(),

@@ -109,7 +109,10 @@ fn exclusive_audit_and_saved_session_tracking() {
     assert!(session_handles(&mut sim, true).is_empty());
 
     // 3. Unloaded transient object / unknown session: TPM_RC_HANDLE + RC_P1.
-    assert_eq!(flush_rc(&mut sim, 0x8000_0005), rc_p(TpmRc::HANDLE, 1));
+    assert_eq!(
+        flush_rc(&mut sim, Handle::TRANSIENT_LAST.0),
+        rc_p(TpmRc::HANDLE, 1)
+    );
     assert_eq!(flush_rc(&mut sim, 0x0200_0010), rc_p(TpmRc::HANDLE, 1));
 }
 

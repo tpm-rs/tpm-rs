@@ -5,7 +5,7 @@
 
 use crate::_common::{
     create_primary_st_clear, evict_control, evict_control_rc, execute_with_password_sessions,
-    execute_with_password_sessions_status, fixed_rsa_storage, get_ecc_srk_template,
+    execute_with_password_sessions_status, fixed_rsa_storage, flush_context, get_ecc_srk_template,
     get_ecc_srk_template_unique, hash_sequence_start, hierarchy_control_rc, is_accessible,
     owner_srk, rc_h, rc0, read_public, try_create_primary_in,
 };
@@ -329,20 +329,6 @@ fn evict_control_error_precedence_across_handles() {
         Handle::RH_ENDORSEMENT,
     ];
 
-    let mut transient_handles = vec![];
-    for (i, &h) in hierarchies.iter().enumerate() {
-        let in_public = tpm2::Tpm2b(get_ecc_srk_template_unique(i as u8));
-        let create_cmd = CreatePrimary {
-            primary_handle: h,
-            in_sensitive,
-            in_public,
-            outside_info: Tpm2bData::default(),
-            creation_pcr: TpmlPcrSelection::default(),
-        };
-        let rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
-        transient_handles.push(rsp.object_handle);
-    }
-
     let auth_handles = [Handle::RH_OWNER, Handle::RH_PLATFORM];
     let persistent_handles = [
         Handle(0x80000000), // Out of range
@@ -350,9 +336,21 @@ fn evict_control_error_precedence_across_handles() {
         Handle(0x81800005), // Platform range
     ];
 
-    for &auth in &auth_handles {
-        for (i, &obj_hier) in hierarchies.iter().enumerate() {
-            let obj = transient_handles[i];
+    // One primary per hierarchy at a time: evicting a persistent object loads it into an object
+    // slot, so the primaries of all hierarchies cannot stay loaded at once.
+    for (i, &obj_hier) in hierarchies.iter().enumerate() {
+        let in_public = tpm2::Tpm2b(get_ecc_srk_template_unique(i as u8));
+        let create_cmd = CreatePrimary {
+            primary_handle: obj_hier,
+            in_sensitive,
+            in_public,
+            outside_info: Tpm2bData::default(),
+            creation_pcr: TpmlPcrSelection::default(),
+        };
+        let obj = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[])
+            .unwrap()
+            .object_handle;
+        for &auth in &auth_handles {
             for &pers in &persistent_handles {
                 let cmd = EvictControl {
                     auth,
@@ -440,6 +438,7 @@ fn evict_control_error_precedence_across_handles() {
                 }
             }
         }
+        flush_context(&mut sim, obj).unwrap();
     }
 }
 
@@ -522,6 +521,8 @@ fn handle_error_codes_and_validation_order() {
     let (primary, _) =
         try_create_primary_in(&mut sim, Handle::RH_PLATFORM, fixed_rsa_storage(), &[]).unwrap();
     evict_control(&mut sim, Handle::RH_PLATFORM, primary, Handle(0x8180_0000)).unwrap();
+    // The transient copy is no longer needed; free its object slot.
+    flush_context(&mut sim, primary).unwrap();
 
     // Owner evicting a platform object with a mismatching persistentHandle: C checks
     // persistentHandle != objectHandle (HANDLE + RC_H2) before the hierarchy (HIERARCHY + RC_H2).
@@ -553,6 +554,7 @@ fn handle_error_codes_and_validation_order() {
         evict_control(&mut sim, Handle::RH_OWNER, seq, Handle(0x8100_0103)).unwrap_err(),
         rc_h(TpmRc::ATTRIBUTES, 2)
     );
+    flush_context(&mut sim, seq).unwrap();
 
     // NV unavailable: no mutation.
     let srk = owner_srk(&mut sim);

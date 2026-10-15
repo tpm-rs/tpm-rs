@@ -507,7 +507,7 @@ fn test_tpmi_sh_and_context_handles() {
 
     assert!(TpmiDhContext::try_from(Handle(0x02000000)).is_ok());
     assert!(TpmiDhContext::try_from(Handle(0x03000000)).is_ok());
-    assert!(TpmiDhContext::try_from(Handle(0x80000005)).is_ok());
+    assert!(TpmiDhContext::try_from(Handle(0x80000002)).is_ok());
     assert_eq!(
         TpmiDhContext::try_from(Handle(0x81000000)),
         Err(UnmarshalError::VALUE)

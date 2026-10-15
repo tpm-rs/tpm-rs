@@ -273,10 +273,10 @@ fn load_external_until_object_memory_then_flush() {
     }
 }
 
-/// Verifies that transient object capacity matches the expected boundary (4 slots) to satisfy
-/// Section 2.14 compliance test sequences without overflowing client cache assumptions in Section 2.22.
+/// Exactly `MAX_LOADED_OBJECTS` (3) primary objects can be loaded at once; the next
+/// TPM2_CreatePrimary fails with TPM_RC_OBJECT_MEMORY.
 #[test]
-fn seventeenth_object_out_of_memory() {
+fn create_primary_beyond_capacity_out_of_memory() {
     let mut sim = Tpm::new();
 
     let t_sens = TpmsSensitiveCreate {
@@ -291,8 +291,8 @@ fn seventeenth_object_out_of_memory() {
         creation_pcr: TpmlPcrSelection::default(),
     };
 
-    // Exactly 16 items (MAX_LOADED_OBJECTS = 16) should be created and stored in RAM without error.
-    for i in 0..16 {
+    // Exactly MAX_LOADED_OBJECTS items should be created and stored in RAM without error.
+    for i in 0..tpm2::TPM2_MAX_LOADED_OBJECTS {
         let res = execute_tpm_command_uncorrupted(&mut sim, &cmd, &[empty_password_auth()]);
         assert!(
             res.is_ok(),
@@ -302,11 +302,11 @@ fn seventeenth_object_out_of_memory() {
         );
     }
 
-    // The 17th load attempt should fail with TPM_RC_OBJECT_MEMORY (0x902), preserving cache limits.
+    // The next load attempt should fail with TPM_RC_OBJECT_MEMORY (0x902), preserving cache limits.
     let overflow_res = execute_tpm_command_uncorrupted(&mut sim, &cmd, &[empty_password_auth()]);
     assert_eq!(
         overflow_res.err(),
         Some(TpmRc::OBJECT_MEMORY.get()),
-        "Expected TPM_RC_OBJECT_MEMORY when exceeding transient capacity of 16 slots"
+        "Expected TPM_RC_OBJECT_MEMORY when exceeding the transient capacity"
     );
 }

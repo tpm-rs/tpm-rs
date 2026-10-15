@@ -184,7 +184,7 @@ fn save_handle_type_and_session_type() {
         Err(TpmRc::REFERENCE_H0.get())
     );
     assert_eq!(
-        context_save_raw(&mut sim, 0x8000_0007),
+        context_save_raw(&mut sim, Handle::TRANSIENT_LAST.0),
         Err(TpmRc::REFERENCE_H0.get())
     );
     // A loaded policy session referenced with the HMAC type byte: TPM_RC_HANDLE + RC_H1.
@@ -195,7 +195,10 @@ fn save_handle_type_and_session_type() {
     );
     assert!(context_save_raw(&mut sim, p).is_ok());
 
-    assert_eq!(flush_rc(&mut sim, 0x8000_0009), rc_p(TpmRc::HANDLE, 1));
+    assert_eq!(
+        flush_rc(&mut sim, Handle::TRANSIENT_LAST.0),
+        rc_p(TpmRc::HANDLE, 1)
+    );
     assert_eq!(flush_rc(&mut sim, 0x4000_0001), rc_p(TpmRc::VALUE, 1));
 }
 

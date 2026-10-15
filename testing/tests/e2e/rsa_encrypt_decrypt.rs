@@ -275,7 +275,7 @@ fn rsa_decrypt_rejects_signing_only_key_raw() {
 fn rsa_decrypt_rejects_unloaded_key_handle() {
     let mut sim = Tpm::new();
     let decrypt_cmd = LocalRSADecryptCmd {
-        key_handle: Handle(0x8000000E),
+        key_handle: Handle::TRANSIENT_LAST,
         cipher_text: Tpm2bPublicKeyRsa::from_bytes(&[0x01; 256]).unwrap(),
         in_scheme: None,
         label: Tpm2bLabel::default(),

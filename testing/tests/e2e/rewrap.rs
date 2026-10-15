@@ -32,6 +32,9 @@ fn fresh_seed_for_new_parent() {
 
     // Unwrapped duplicate -> Rewrap to an ECC parent (fresh ECDH seed) -> Import -> Load.
     let dup = duplicate(&mut sim, obj, Handle::RH_NULL, None).unwrap();
+    // Free the slots of the source object and its parent for the Load below.
+    flush_context(&mut sim, obj).unwrap();
+    flush_context(&mut sim, srk).unwrap();
     let wrapped = rewrap(
         &mut sim,
         Handle::RH_NULL,

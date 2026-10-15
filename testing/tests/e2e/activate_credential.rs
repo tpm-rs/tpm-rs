@@ -149,7 +149,7 @@ fn missing_key_handle_rejected() {
     // 2. Call ActivateCredential with invalid key handle
     let ac_cmd = ActivateCredential {
         activate_handle: srk_resp.object_handle,
-        key_handle: Handle(0x8000000E), // Invalid handle
+        key_handle: Handle::TRANSIENT_LAST, // Invalid handle
         credential_blob: tpm2::Tpm2bIdObject::default(),
         secret: tpm2::Tpm2bEncryptedSecret::default(),
     };

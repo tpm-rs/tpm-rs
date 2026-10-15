@@ -1216,7 +1216,7 @@ fn trailing_zero_key_auth_ignored() {
 fn unloaded_sign_handle_rejected() {
     let mut sim = Tpm::new();
     let commit = Commit {
-        sign_handle: Handle(0x8000000F),
+        sign_handle: Handle::TRANSIENT_LAST,
         p1: Tpm2bEccPoint::default(),
         s2: Tpm2bSensitiveData::default(),
         y2: Tpm2bEccParameter::default(),
@@ -1237,7 +1237,7 @@ fn unloaded_sign_handle_rejected() {
 fn unloaded_sign_handle_returns_reference_h0() {
     let mut sim = Tpm::new();
     assert_eq!(
-        commit(&mut sim, Handle(0x8000_000F), b"").unwrap_err(),
+        commit(&mut sim, Handle::TRANSIENT_LAST, b"").unwrap_err(),
         TpmRc::REFERENCE_H0.get()
     );
 }

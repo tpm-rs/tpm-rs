@@ -581,7 +581,7 @@ fn test_tpm_ps_tpm_pub_key_and_tpm_ae_constants_and_marshalling() {
     );
 
     assert_eq!(core::mem::size_of::<TpmHc>(), 4);
-    assert_eq!(TPM2_MAX_LOADED_OBJECTS, 16);
+    assert_eq!(TPM2_MAX_LOADED_OBJECTS, 3);
     assert_eq!(Handle::HR_HANDLE_MASK, 0x00FF_FFFF);
     assert_eq!(Handle::HR_RANGE_MASK, 0xFF00_0000);
     assert_eq!(Handle::HR_SHIFT, 24);

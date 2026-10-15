@@ -338,7 +338,7 @@ fn tpm_key_without_decrypt_rejected() {
 fn unloaded_tpm_key_handle_rejected() {
     let mut sim = Tpm::new();
     let cmd = StartAuthSession {
-        tpm_key: Handle(0x8000000F), // Unloaded transient handle
+        tpm_key: Handle::TRANSIENT_LAST, // Unloaded transient handle
         bind: Handle::RH_NULL,
         nonce_caller: Tpm2bNonce::from_bytes(&[0u8; 16]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),

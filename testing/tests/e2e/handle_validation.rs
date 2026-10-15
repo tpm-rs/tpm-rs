@@ -114,13 +114,18 @@ fn handle_positions_for_less_common_commands() {
     assert_eq!(mssim_rc_of(&mut sim, &cmd), rc_h(TpmRc::VALUE, 1));
 
     // Unloaded objects: TPM_RC_REFERENCE_Hx.
-    let cmd = build_pw_cmd(CC_COMMIT, &[0x8000_000F], 1, &[]);
+    let cmd = build_pw_cmd(CC_COMMIT, &[Handle::TRANSIENT_LAST.0], 1, &[]);
     assert_eq!(mssim_rc_of(&mut sim, &cmd), TpmRc::REFERENCE_H0.get());
-    let cmd = build_pw_cmd(CC_REWRAP, &[0x8000_0007, Handle::RH_NULL.0], 1, &[]);
+    let cmd = build_pw_cmd(
+        CC_REWRAP,
+        &[Handle::TRANSIENT_LAST.0, Handle::RH_NULL.0],
+        1,
+        &[],
+    );
     assert_eq!(mssim_rc_of(&mut sim, &cmd), TpmRc::REFERENCE_H0.get());
     let cmd = build_pw_cmd(
         CC_GET_TIME,
-        &[Handle::RH_ENDORSEMENT.0, 0x8000_0007],
+        &[Handle::RH_ENDORSEMENT.0, Handle::TRANSIENT_LAST.0],
         2,
         &[],
     );
@@ -181,8 +186,9 @@ fn policy_signed_auth_object_must_be_object() {
         u32::from_be_bytes(resp[10..14].try_into().unwrap())
     };
     for (auth_object, expected) in [
-        (0x8000_000Fu32, TpmRc::REFERENCE_H0.get()),
+        (Handle::TRANSIENT_LAST.0, TpmRc::REFERENCE_H0.get()),
         // Above TRANSIENT_LAST: not a TPMI_DH_OBJECT value.
+        (Handle::TRANSIENT_LAST.0 + 1, rc_h(TpmRc::VALUE, 1)),
         (0x8000_0099, rc_h(TpmRc::VALUE, 1)),
         (0x8100_0099, rc_h(TpmRc::HANDLE, 1)),
         (Handle::RH_OWNER.0, rc_h(TpmRc::VALUE, 1)),

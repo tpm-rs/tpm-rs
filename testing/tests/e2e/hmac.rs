@@ -530,7 +530,7 @@ fn hmac_rejects_symcipher_key() {
 fn hmac_rejects_unloaded_key_handle() {
     let mut sim = Tpm::new();
     let cmd = LocalHmacCmdExplicitNullAlg {
-        handle: Handle(0x8000000E), // Arbitrary unused handle
+        handle: Handle::TRANSIENT_LAST, // Unloaded transient handle
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha256),
     };

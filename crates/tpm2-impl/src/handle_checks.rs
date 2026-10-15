@@ -64,7 +64,7 @@ const SAVED_OBJECT_CONTEXT_LAST: Handle = Handle(0x8000_0002);
 /// Variants ending in `OrNull` are the `+` forms (e.g. `TPMI_DH_OBJECT+`), which additionally
 /// accept `TPM_RH_NULL`; [`Tpmi::ShAuthSessionOrPw`] (`TPMI_SH_AUTH_SESSION+`) additionally accepts
 /// `TPM_RS_PW`. Ranges use the implementation values of this TPM (the `Handle` constants of the
-/// `tpm2` crate): `TRANSIENT_LAST = TRANSIENT_FIRST + MAX_LOADED_OBJECTS - 1` (`0x8000_000F`),
+/// `tpm2` crate): `TRANSIENT_LAST = TRANSIENT_FIRST + MAX_LOADED_OBJECTS - 1` (`0x8000_0002`),
 /// `HMAC_SESSION_LAST` / `POLICY_SESSION_LAST = *_FIRST + MAX_ACTIVE_SESSIONS - 1`
 /// (`0x0200_003F` / `0x0300_003F`), and `PCR_LAST = PCR_FIRST + IMPLEMENTATION_PCR - 1` (`23`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -349,7 +349,7 @@ mod tests {
     const LOCKOUT: Handle = Handle::RH_LOCKOUT;
     const PLATFORM_NV: Handle = Handle::RH_PLATFORM_NV;
     const TRANSIENT_FIRST: Handle = Handle(0x8000_0000);
-    const TRANSIENT_LAST: Handle = Handle(0x8000_000F);
+    const TRANSIENT_LAST: Handle = Handle(0x8000_0002);
     const PERSISTENT_FIRST: Handle = Handle(0x8100_0000);
     const PERSISTENT_LAST: Handle = Handle(0x81FF_FFFF);
     const NV_FIRST: Handle = Handle(0x0100_0000);

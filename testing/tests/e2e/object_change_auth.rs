@@ -364,6 +364,8 @@ fn non_storage_parent_and_sha512_seed_preserved() {
         )
     };
     assert_eq!(run_oca(&mut sim, signer).unwrap_err(), rc_h(TpmRc::TYPE, 2));
+    // Free the signer's object slot for the reload below.
+    flush_context(&mut sim, signer).unwrap();
     let rsp = run_oca(&mut sim, srk).unwrap();
     let reloaded = load(&mut sim, srk, rsp.out_private, obj_rsp.out_public).expect("Load");
     let unsealed = execute_with_password_sessions(

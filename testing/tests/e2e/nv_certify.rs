@@ -78,7 +78,7 @@ fn handle_validation_order() {
     assert_eq!(
         nv_certify(
             &mut sim,
-            Handle(0x8000_000E),
+            Handle::TRANSIENT_LAST,
             Handle::RH_OWNER,
             Handle(0x0150_0800),
             None,
@@ -112,7 +112,7 @@ fn handle_validation_order() {
     assert_eq!(
         nv_certify(
             &mut sim,
-            Handle(0x8000_000E),
+            Handle::TRANSIENT_LAST,
             Handle::RH_OWNER,
             Handle(index),
             None,
