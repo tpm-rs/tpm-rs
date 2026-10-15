@@ -43,7 +43,7 @@ impl TpmaLocality {
     /// TPM 2.0 Part 2: Structures, Section 8.4, Table 11 (TPMA_LOCALITY) - Bits 5..7 (0xE0) indicate Extended Locality (32..255).
     const EXTENDED_LOCALITY_MASK: u8 = 0xE0;
     /// Returns whether this attribute indicates an extended locality.
-    pub fn is_extended(&self) -> bool {
+    pub fn is_extended(self) -> bool {
         (self.0 & Self::EXTENDED_LOCALITY_MASK) != 0
     }
 }
@@ -139,7 +139,7 @@ impl TpmaNv {
     }
 
     /// Returns the type of the index.
-    pub fn get_index_type(&self) -> Option<TpmNt> {
+    pub fn get_index_type(self) -> Option<TpmNt> {
         TpmNt::try_from(get_attribute_field(self.0, Self::NT_MASK, Self::NT_SHIFT) as u8).ok()
     }
     /// Sets the type of the index.
@@ -298,21 +298,21 @@ impl TpmaCc {
         ))
     }
     /// Creates a TpmaCc with the command handles field set to the provided value.
-    pub const fn c_handles(count: u32) -> TpmaCc {
+    pub const fn c_handles(count: u8) -> TpmaCc {
         TpmaCc(new_attribute_field(
-            count,
+            count as u32,
             Self::C_HANDLES_MASK,
             Self::C_HANDLES_SHIFT,
         ))
     }
 
     /// Returns the command being selected.
-    pub fn get_command_index(&self) -> u16 {
+    pub fn get_command_index(self) -> u16 {
         get_attribute_field(self.0, Self::COMMAND_INDEX_MASK, Self::COMMAND_INDEX_SHIFT) as u16
     }
     /// Returns the number of handles in the handle area for this command.
-    pub fn get_c_handles(&self) -> u32 {
-        get_attribute_field(self.0, Self::C_HANDLES_MASK, Self::C_HANDLES_SHIFT)
+    pub fn get_c_handles(self) -> u8 {
+        get_attribute_field(self.0, Self::C_HANDLES_MASK, Self::C_HANDLES_SHIFT) as u8
     }
 
     /// Sets the command being selected.
@@ -325,8 +325,13 @@ impl TpmaCc {
         );
     }
     /// Sets the number of handles in the handle area for this command.
-    pub fn set_c_handles(&mut self, count: u32) {
-        self.0 = set_attribute_field(self.0, count, Self::C_HANDLES_MASK, Self::C_HANDLES_SHIFT);
+    pub fn set_c_handles(&mut self, count: u8) {
+        self.0 = set_attribute_field(
+            self.0,
+            u32::from(count),
+            Self::C_HANDLES_MASK,
+            Self::C_HANDLES_SHIFT,
+        );
     }
 }
 
@@ -345,6 +350,12 @@ impl<'a> Unmarshal<'a> for TpmaCc {
     }
 }
 
+/// `TPMA_OBJECT` attribute structure defined in TPM 2.0 Part 2: Structures
+///
+/// This bitfield indicates an object's use, its authorization types, and its relationship to other objects.
+/// It controls duplication (`fixedTPM`, `fixedParent`, `encryptedDuplication`), authorization
+/// (`userWithAuth`, `adminWithPolicy`, `noDA`), and key usage (`restricted`, `decrypt`, `sign`, `x509sign`).
+/// It is set in the `objectAttributes` field of [`TpmtPublic`] when the object is created and is never changed by the TPM.
 #[doc(alias = "TPMA_OBJECT")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[repr(transparent)]
