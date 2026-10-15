@@ -6,8 +6,10 @@ Part 3 (version 185), TPM2_NV_Certify: "If size and offset are both zero and
 signHandle is TPM_RH_NULL, the digest is computed using the hash algorithm
 provided in inScheme, unless the scheme or hash algorithm is TPM_ALG_NULL, in
 which case the TPM shall return TPM_RC_SCHEME." (Versions 1.83 and earlier
-allowed an Empty Buffer.) The reference clears inScheme while selecting the
-scheme for a NULL signHandle, so the caller's scheme is kept for the digest.
+allowed an Empty Buffer.) Version 185 sets inScheme to TPM_ALG_NULL while
+selecting the scheme for a NULL signHandle (CryptoCommon_SelectSignScheme())
+and then takes the digest's hash algorithm from it, so it always returns
+TPM_RC_SCHEME. The caller's scheme is kept for the digest.
 diff --git a/TPMCmd/tpm/src/command/NVStorage/NV_Certify.c b/TPMCmd/tpm/src/command/NVStorage/NV_Certify.c
 --- a/TPMCmd/tpm/src/command/NVStorage/NV_Certify.c
 +++ b/TPMCmd/tpm/src/command/NVStorage/NV_Certify.c
