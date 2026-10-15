@@ -1,0 +1,38 @@
+nv-certify-null-sign-handle-digest: unsigned NV digest attestations use the hash of inScheme
+
+Classification: spec-deviation bug fix.
+
+Part 3 (version 185), TPM2_NV_Certify: "If size and offset are both zero and
+signHandle is TPM_RH_NULL, the digest is computed using the hash algorithm
+provided in inScheme, unless the scheme or hash algorithm is TPM_ALG_NULL, in
+which case the TPM shall return TPM_RC_SCHEME." (Versions 1.83 and earlier
+allowed an Empty Buffer.) The reference clears inScheme while selecting the
+scheme for a NULL signHandle, so the caller's scheme is kept for the digest.
+diff --git a/TPMCmd/tpm/src/command/NVStorage/NV_Certify.c b/TPMCmd/tpm/src/command/NVStorage/NV_Certify.c
+--- a/TPMCmd/tpm/src/command/NVStorage/NV_Certify.c
++++ b/TPMCmd/tpm/src/command/NVStorage/NV_Certify.c
+@@ -36,6 +36,14 @@ TPM2_NV_Certify(NV_Certify_In*  in,  // IN: input parameter list
+     // Input Validation
+     if(!IsSigningObject(signObject))
+         return TPM_RCS_KEY + RC_NV_Certify_signHandle;
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // Part 3 (version 185), TPM2_NV_Certify: if size and offset are both zero and
++    // signHandle is TPM_RH_NULL, the digest is computed with the hash algorithm of
++    // inScheme, unless the scheme or hash algorithm is TPM_ALG_NULL, in which case
++    // the TPM returns TPM_RC_SCHEME (versions 1.83 and earlier returned an Empty
++    // Buffer). The scheme selection clears inScheme for a NULL signHandle, so the
++    // caller's scheme is kept.
++    TPMT_SIG_SCHEME callerScheme = in->inScheme;
+     if(!CryptoCommon_SelectSignScheme(signObject, &in->inScheme))
+         return TPM_RCS_SCHEME + RC_NV_Certify_inScheme;
+ 
+@@ -92,7 +100,8 @@ TPM2_NV_Certify(NV_Certify_In*  in,  // IN: input parameter list
+         TPMI_ALG_HASH hashAlg;
+         HASH_STATE    hashState;
+ 
+-        hashAlg = CryptoCommon_GetSignSchemeHashAlg(&in->inScheme);
++        hashAlg = CryptoCommon_GetSignSchemeHashAlg(
++            signObject == NULL ? &callerScheme : &in->inScheme);
+         if(hashAlg == TPM_ALG_NULL)
+         {
+             return TPM_RCS_SCHEME + RC_NV_Certify_inScheme;

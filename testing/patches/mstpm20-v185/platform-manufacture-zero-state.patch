@@ -1,0 +1,28 @@
+manufacture-zero-state: zero all TPM state at manufacture
+
+Classification: platform setting.
+
+TPM_Manufacture() initializes only some fields of the persistent, orderly,
+state-reset and state-clear data. All of them (and the persistent NV area)
+are zeroed first so that the fields not written explicitly (e.g. resetCount,
+timeEpoch, algorithmSet) start at 0, as in a freshly manufactured tpm-rs,
+rather than at 0xff or values left from an earlier instance.
+diff --git a/TPMCmd/tpm/src/support/Manufacture.c b/TPMCmd/tpm/src/support/Manufacture.c
+--- a/TPMCmd/tpm/src/support/Manufacture.c
++++ b/TPMCmd/tpm/src/support/Manufacture.c
+@@ -60,6 +60,15 @@ LIB_EXPORT int TPM_Manufacture(
+     // initialize NV
+     NvManufacture();
+ 
++    // Zero all RAM state structures and the persistent NV area so that fields not
++    // explicitly written below (e.g. resetCount, timeEpoch, algorithmSet) start at 0
++    // rather than 0xff or stale values from a previous trace.
++    MemorySet(&gp, 0, sizeof(gp));
++    NvWrite(NV_PERSISTENT_DATA, sizeof(gp), &gp);
++    MemorySet(&go, 0, sizeof(go));
++    MemorySet(&gr, 0, sizeof(gr));
++    MemorySet(&gc, 0, sizeof(gc));
++
+     // Clear the magic value in the DRBG state
+     go.drbgState.magic = 0;
+ 

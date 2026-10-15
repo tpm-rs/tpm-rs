@@ -855,7 +855,8 @@ fn capability_difference_is_documented(command: &[u8], expected: &[u8], actual: 
         // TPM_CAP_TPM_PROPERTIES: values of implementation-specific
         // properties may differ; C additionally reports
         // TPM_PT_FIRMWARE_SVN/TPM_PT_FIRMWARE_MAX_SVN (0x12F/0x130, spec
-        // 1.83+); C never crosses from the PT_FIXED into the PT_VAR group in
+        // 1.83+) and, from version 185 on, TPM_PT_ML_PARAMETER_SETS (0x131)
+        // with no ML-KEM/ML-DSA parameter set implemented (value 0); C never crosses from the PT_FIXED into the PT_VAR group in
         // one response (PropertyCap.c `TPMCapGetProperties`), so tpm-rs may
         // additionally report PT_VAR (>= 0x200) properties when the query
         // started in PT_FIXED. All other properties must match exactly.
@@ -874,7 +875,9 @@ fn capability_difference_is_documented(command: &[u8], expected: &[u8], actual: 
             ];
             let prop = |x: &[u8]| be32(x, 0).unwrap_or(0);
             let rs_only = |x: &[u8]| requested_property < 0x200 && prop(x) >= 0x200;
-            let ref_only = |x: &[u8]| matches!(prop(x), 0x12F | 0x130);
+            let ref_only = |x: &[u8]| {
+                matches!(prop(x), 0x12F | 0x130) || (prop(x) == 0x131 && be32(x, 4) == Some(0))
+            };
             let mask = |list: Vec<Vec<u8>>| -> Vec<Vec<u8>> {
                 list.into_iter()
                     .map(|mut x| {

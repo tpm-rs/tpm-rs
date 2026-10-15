@@ -2,9 +2,14 @@
 //! code base) as a child process of the differential tests (`differential`
 //! feature of `testing`).
 //!
-//! `testing/build.rs` clones `https://github.com/TrustedComputingGroup/TPM` at
-//! commit `3b1f0e623f244abe2015df9e3ba86de5c9118524`, applies
-//! `testing/patches/mstpm20/*.patch`, compiles it into a symbol-isolated static library
+//! `testing/build.rs` clones the TCG reference code, either version 185
+//! (`https://github.com/TrustedComputingGroup/TPM-Internal` at tag `v185.0.0`,
+//! patched by `testing/patches/mstpm20-v185/*.patch`) when the user's `git`
+//! may clone it, or else the public repository
+//! (`https://github.com/TrustedComputingGroup/TPM` at commit
+//! `3b1f0e623f244abe2015df9e3ba86de5c9118524`, patched by
+//! `testing/patches/mstpm20/*.patch`; `MSTPM20_VERSION` selects one), compiles
+//! it into a symbol-isolated static library
 //! (`libmstpm20.a`, exporting only `difftest_*`) and links it into this
 //! binary. The C reference keeps its state in globals, so every
 //! `testing::tpm::Tpm` launches its own `mstpm20` process (see

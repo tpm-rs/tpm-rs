@@ -1,0 +1,36 @@
+cmac-disabled: build the OpenSSL hash library without ALG_CMAC
+
+Classification: build fix.
+
+Version 185 moved the CMAC/SMAC functions into the OpenSSL hash library
+(OsslHash.c) without the ALG_CMAC / SMAC_IMPLEMENTED guards their state
+types have, so the library does not compile with ALG_CMAC = NO (see
+profile-algorithms). The functions are guarded like their types.
+diff --git a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslHash.c b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslHash.c
+--- a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslHash.c
++++ b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslHash.c
+@@ -403,6 +403,9 @@ LIB_EXPORT UINT16 CryptoHash_HmacStart(
+     return hashDef->digestSize;
+ }
+ 
++// tpm-rs differential testing (build fix): the CMAC and SMAC functions
++// reference state that only exists with ALG_CMAC / SMAC_IMPLEMENTED.
++#if ALG_CMAC
+ //*** CryptCmacData()
+ // This function is used to add data to the CMAC sequence computation. The function
+ // will XOR new data into the IV. If the buffer is full, and there is additional
+@@ -527,6 +530,9 @@ CryptCmacStart(
+     return cState->iv.t.size;
+ }
+ 
++#endif  // ALG_CMAC
++
++#if SMAC_IMPLEMENTED
+ //*** CryptSmacStart()
+ // Function to start an SMAC.
+ UINT16
+@@ -595,3 +601,4 @@ CryptoHash_MacEnd(HMAC_STATE* state, UINT32 size, BYTE* buffer)
+     state->hashState.type = HASH_STATE_EMPTY;
+     return retVal;
+ }
++#endif  // SMAC_IMPLEMENTED

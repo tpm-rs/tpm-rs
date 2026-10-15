@@ -1,0 +1,20 @@
+max-nv-index-size: MAX_NV_INDEX_SIZE = 2048
+
+Classification: profile setting.
+
+The maximum NV index data size is a profile choice; version 185 raises it to
+8500 octets, tpm-rs (like the public mstpm20 and ibmswtpm2 profiles) uses
+2048, which determines which TPM2_NV_DefineSpace sizes are rejected and the
+reported TPM_PT_NV_INDEX_MAX.
+diff --git a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
+--- a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
++++ b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
+@@ -26,7 +26,7 @@
+ #define NUM_AUTHVALUE_PCR_GROUP    1
+ #define MAX_CONTEXT_SIZE           2264
+ #define MAX_DIGEST_BUFFER          1024
+-#define MAX_NV_INDEX_SIZE          8500
++#define MAX_NV_INDEX_SIZE          2048
+ #define MAX_NV_BUFFER_SIZE         1024
+ #define MAX_CAP_BUFFER             1024
+ #define NV_MEMORY_SIZE             131072

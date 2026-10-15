@@ -1,0 +1,109 @@
+command-list: configure the commands tpm-rs does not implement as CC_NO
+
+Classification: profile setting.
+
+The implemented command set is a profile choice. Commands that tpm-rs does
+not implement (tpm2-impl engine.rs SUPPORTED_COMMANDS) are configured CC_NO
+so that both TPMs expose the same command set (TPM_CAP_COMMANDS,
+TPM_PT_TOTAL_COMMANDS, TPM_PT_LIBRARY_COMMANDS) and reject the same command
+codes with TPM_RC_COMMAND_CODE.
+diff --git a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_CommandList.h b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_CommandList.h
+--- a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_CommandList.h
++++ b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_CommandList.h
+@@ -5,6 +5,11 @@
+ #ifndef _TPM_PROFILE_COMMAND_LIST_H_
+ #define _TPM_PROFILE_COMMAND_LIST_H_
+ 
++// tpm-rs differential testing: the implemented command set is a profile
++// choice; commands that tpm-rs does not implement (engine.rs
++// SUPPORTED_COMMANDS) are configured CC_NO so that both TPMs expose the same
++// command set (TPM_CAP_COMMANDS, TPM_PT_TOTAL_COMMANDS/LIBRARY_COMMANDS).
++
+ #if (YES != 1 || NO != 0)
+ #  error YES and NO must be correctly set before including TpmProfile_CommandList.h
+ #endif
+@@ -95,11 +100,11 @@
+ #define CC_PCR_Reset                  CC_YES
+ #define CC_PCR_SetAuthPolicy          CC_YES
+ #define CC_PCR_SetAuthValue           CC_YES
+-#define CC_PP_Commands                CC_YES
++#define CC_PP_Commands                CC_NO
+ #define CC_PolicyAuthValue            CC_YES
+ #define CC_PolicyAuthorize            CC_YES
+ #define CC_PolicyAuthorizeNV          CC_YES
+-#define CC_PolicyCapability           CC_YES
++#define CC_PolicyCapability           CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
+ #define CC_PolicyCommandCode          CC_YES
+ #define CC_PolicyCounterTimer         CC_YES
+ #define CC_PolicyCpHash               CC_YES
+@@ -112,8 +117,8 @@
+ #define CC_PolicyOR                   CC_YES
+ #define CC_PolicyPCR                  CC_YES
+ #define CC_PolicyPassword             CC_YES
+-#define CC_PolicyParameters           CC_YES
+-#define CC_PolicyPhysicalPresence     CC_YES
++#define CC_PolicyParameters           CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_PolicyPhysicalPresence     CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
+ #define CC_PolicyRestart              CC_YES
+ #define CC_PolicySecret               CC_YES
+ #define CC_PolicySigned               CC_YES
+@@ -126,7 +131,7 @@
+ #define CC_SelfTest                   CC_YES
+ #define CC_SequenceComplete           CC_YES
+ #define CC_SequenceUpdate             CC_YES
+-#define CC_SetAlgorithmSet            CC_YES
++#define CC_SetAlgorithmSet            CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
+ #define CC_SetCommandCodeAuditStatus  CC_YES
+ #define CC_SetPrimaryPolicy           CC_YES
+ #define CC_Shutdown                   CC_YES
+@@ -137,20 +142,20 @@
+ #define CC_TestParms                  CC_YES
+ #define CC_Unseal                     CC_YES
+ #define CC_VerifySignature            CC_YES
+-#define CC_NV_DefineSpace2            CC_YES
+-#define CC_NV_ReadPublic2             CC_YES
++#define CC_NV_DefineSpace2            CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_NV_ReadPublic2             CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
+ // Disabled because there are no settable capabilities for this simulator.
+ #define CC_SetCapability              CC_NO
+-#define CC_ReadOnlyControl            CC_YES
+-#define CC_PolicyTransportSPDM        CC_YES
+-#define CC_VerifySequenceStart        CC_YES
+-#define CC_SignSequenceStart          CC_YES
+-#define CC_VerifySequenceComplete     CC_YES
+-#define CC_SignSequenceComplete       CC_YES
+-#define CC_VerifyDigestSignature      CC_YES
+-#define CC_SignDigest                 CC_YES
+-#define CC_Encapsulate                CC_YES
+-#define CC_Decapsulate                CC_YES
++#define CC_ReadOnlyControl            CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_PolicyTransportSPDM        CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_VerifySequenceStart        CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_SignSequenceStart          CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_VerifySequenceComplete     CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_SignSequenceComplete       CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_VerifyDigestSignature      CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_SignDigest                 CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_Encapsulate                CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_Decapsulate                CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
+ 
+ 
+ // Commands that depend on ACT support:
+@@ -165,13 +170,13 @@
+ 
+ #if ALG_ECC
+ #define CC_Commit                     CC_YES
+-#define CC_ECC_Decrypt                CC_YES
+-#define CC_ECC_Encrypt                CC_YES
++#define CC_ECC_Decrypt                CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_ECC_Encrypt                CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
+ #define CC_ECC_Parameters             CC_YES
+ #define CC_ECDH_KeyGen                CC_YES
+ #define CC_ECDH_ZGen                  CC_YES
+-#define CC_EC_Ephemeral               CC_YES
+-#define CC_ZGen_2Phase                CC_YES
++#define CC_EC_Ephemeral               CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
++#define CC_ZGen_2Phase                CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
+ #else
+ #define CC_Commit                     CC_NO
+ #define CC_ECC_Decrypt                CC_NO

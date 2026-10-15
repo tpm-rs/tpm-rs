@@ -1,0 +1,24 @@
+pcr-reset-handle-type: TPM2_PCR_Reset rejects TPM_RH_NULL with TPM_RC_VALUE
+
+Classification: spec-deviation bug fix.
+
+The pcrHandle of TPM2_PCR_Reset is a TPMI_DH_PCR without '+' (Part 3,
+TPM2_PCR_Reset), so TPM_RH_NULL must be rejected while unmarshaling the
+handle (TPM_RC_VALUE + TPM_RC_H + TPM_RC_1). Version 185 unmarshals it as
+TPMI_DH_PCR+ and thus accepts TPM_RH_NULL (and fails later, e.g. with
+TPM_RC_AUTH_MISSING).
+diff --git a/TPMCmd/tpm/include/private/CommandDispatch.inl b/TPMCmd/tpm/include/private/CommandDispatch.inl
+--- a/TPMCmd/tpm/include/private/CommandDispatch.inl
++++ b/TPMCmd/tpm/include/private/CommandDispatch.inl
+@@ -640,7 +640,10 @@ MAKE_DISPATCH_TABLE(
+ #define CURRENT_TPM_COMMAND PCR_Reset
+ MAKE_DISPATCH_TABLE(
+     // Command input handles
+-    MAKE_INPUT_DISPATCH_ENTRY(MARSHAL_ID_TPMI_DH_PCR_Plus, pcrHandle),
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // pcrHandle is a TPMI_DH_PCR without '+' (Part 3, TPM2_PCR_Reset), so
++    // TPM_RH_NULL is TPM_RC_VALUE.
++    MAKE_INPUT_DISPATCH_ENTRY(MARSHAL_ID_TPMI_DH_PCR, pcrHandle),
+ 
+     MAKE_DISPATCH_SEPARATOR(START_INPUT_PARAMETERS),
+     // Command input parameters

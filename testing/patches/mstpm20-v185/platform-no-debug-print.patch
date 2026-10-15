@@ -1,0 +1,20 @@
+no-debug-print: ENABLE_TPM_DEBUG_PRINT = NO
+
+Classification: platform setting.
+
+Simulation builds route TPM_DEBUG_PRINT strings to the platform's debug
+output. The reference process must stay quiet (its stdout is redirected to
+stderr to protect the harness's pipe protocol), so debug printing is
+disabled.
+diff --git a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmBuildSwitches.h b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmBuildSwitches.h
+--- a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmBuildSwitches.h
++++ b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmBuildSwitches.h
+@@ -54,7 +54,7 @@
+ // ENABLE_TPM_DEBUG_PRINT enables arbitrary string printing.
+ // enables the TPM_DEBUG_PRINT macro to route debugging strings
+ // to the _plat_debug_out function
+-#define ENABLE_TPM_DEBUG_PRINT      (YES * SIMULATION)
++#define ENABLE_TPM_DEBUG_PRINT      NO
+ 
+ //  ENABLE_TPM_DEBUG_TRACE enables code tracing macros - depends on TPM_DEBUG_PRINT
+ #define ENABLE_TPM_DEBUG_TRACE      (NO  * ENABLE_TPM_DEBUG_PRINT)

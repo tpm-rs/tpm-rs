@@ -1,0 +1,23 @@
+max-command-size: MAX_COMMAND_SIZE = MAX_RESPONSE_SIZE = 4096 - 0x80
+
+Classification: profile setting.
+
+The maximum command and response sizes are a profile choice; version 185
+raises them to 8192 octets for post-quantum algorithms (which the profile
+disables), tpm-rs (like the public mstpm20 profile) uses 4096 - 0x80, which
+determines which commands are rejected with TPM_RC_COMMAND_SIZE and the
+reported TPM_PT_MAX_COMMAND_SIZE/TPM_PT_MAX_RESPONSE_SIZE.
+diff --git a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h
+--- a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h
++++ b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h
+@@ -216,8 +216,8 @@
+ // offset 0x80, so the net size available is:
+ // PQC will overrun these sizes, so systems targeting PC CRB
+ // need to use the new chunked CRB interface in PC Client PTP 1.07+
+-#define  MAX_COMMAND_SIZE               (8192)
+-#define  MAX_RESPONSE_SIZE              (8192)
++#define  MAX_COMMAND_SIZE               (4096-0x80)
++#define  MAX_RESPONSE_SIZE              (4096-0x80)
+ //***********************************************
+ // Vendor Info
+ //***********************************************

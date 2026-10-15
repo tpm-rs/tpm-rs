@@ -22,11 +22,13 @@ Response codes are given as `NAME + position` with their numeric value. Format-1
 | | `mstpm20` | `ibmswtpm2` |
 |---|---|---|
 | Implementation | TCG / Microsoft TPM 2.0 reference implementation | IBM software TPM (derived from the same Microsoft code, older layout) |
-| Upstream | `https://github.com/TrustedComputingGroup/TPM` | `https://github.com/kgoldman/ibmswtpm2` |
-| Pinned commit | `3b1f0e623f244abe2015df9e3ba86de5c9118524` | `e1df46e46fc2671e55372d65f27ecbb3c789d992` (tag `rev183-2026-08-26`) |
-| Patches | [`testing/patches/mstpm20/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/mstpm20) (one file per fix) | [`testing/patches/ibmswtpm2/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/ibmswtpm2) (one file per fix) |
+| Upstream | `v185`: `https://github.com/TrustedComputingGroup/TPM-Internal` (TCG members only); `public`: `https://github.com/TrustedComputingGroup/TPM` | `https://github.com/kgoldman/ibmswtpm2` |
+| Pinned commit | `v185`: `80a8b19436d742f42e00fba8527272071284b42c` (tag `v185.0.0`); `public`: `3b1f0e623f244abe2015df9e3ba86de5c9118524` | `e1df46e46fc2671e55372d65f27ecbb3c789d992` (tag `rev183-2026-08-26`) |
+| Patches | `v185`: [`testing/patches/mstpm20-v185/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/mstpm20-v185); `public`: [`testing/patches/mstpm20/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/mstpm20) (one file per fix) | [`testing/patches/ibmswtpm2/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/ibmswtpm2) (one file per fix) |
 | Binary | [`testing/src/bin/mstpm20.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/src/bin/mstpm20.rs) | [`testing/src/bin/ibmswtpm2.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/src/bin/ibmswtpm2.rs) |
-| Crypto library | OpenSSL (`HASH_LIB`/`SYM_LIB`/`BN_MATH_LIB = Ossl`, `MATH_LIB = TpmBigNum`) | OpenSSL (same settings) |
+| Crypto library | OpenSSL (`HASH_LIB`/`SYM_LIB`/`BN_MATH_LIB = Ossl`, `MATH_LIB = TpmBigNum`; `v185` additionally `RAND_LIB = RandRef`, `KDF_LIB = KdfRef`, `RSA_LIB = RsaRef`, `ECC_LIB = EccRef`, `MLKEM_LIB`/`MLDSA_LIB = Ossl`, its CMake defaults) | OpenSSL (same settings) |
+
+- **`mstpm20` versions.** `mstpm20` is built from one of two versions of the TCG reference code ([`testing/build.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/build.rs) `Version`): **`v185`**, the TCG-internal repository at tag `v185.0.0` (specification version 185, the version `tpm-rs` reports), whenever the user's `git` may clone it, and otherwise **`public`**, the public repository. The first available version is used: its checkout in `OUT_DIR` already holds the pinned commit, or `git ls-remote` lists its repository without prompting for credentials. `MSTPM20_VERSION=v185` or `MSTPM20_VERSION=public` selects a version explicitly (the build fails if it cannot be cloned); the selected version is the compile-time environment variable `DIFFERENTIAL_MSTPM20_VERSION` of `testing`. Each version has its own patch directory and its own checkout (`OUT_DIR/mstpm20-v185`, `OUT_DIR/mstpm20`), and the same binary name `mstpm20`. The `reference-rng` feature of `tpm2-impl` always links the `public` version's random-number code, which draws the same values as `v185` (all tests pass against both). Item 22 lists what the `v185` patches change.
 
 - **Build.** With the opt-in `differential` feature of `testing`, [`testing/build.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/build.rs) clones each repository at its pinned commit, applies every `*.patch` of `testing/patches/<name>/` in file-name order (one `git apply` per file; each file name starts with its classification: `bug-fix-`, `build-fix-`, `harness-`, `platform-` or `profile-`), compiles it (`mstpm20`: the TPM library and simulator platform; `ibmswtpm2`: the `OBJFILES` of its Linux makefile without `TPMCmds.c`, the TCP server and `main()`), combines the objects with `ld -r` and localizes every symbol except the `difftest_*` entry points with `objcopy --keep-global-symbol`. The resulting `lib<name>.a` is linked into exactly one binary of the same name (`rustc-link-arg-bin`), so the two references, which share most C symbol names, never meet in one process. Both binaries share [`testing/src/bin/shared/ffi.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/src/bin/shared/ffi.rs), the only `unsafe` FFI of the crate, and run [`testing::differential::server::serve`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/src/differential/server.rs).
 - **Patches.** Each patch file fixes one thing and starts with a header explaining it and its classification, which is also the prefix of its file name: a fix of a specification deviation of that reference (`bug-fix-*.patch`, Parts II and VI), a profile or platform setting (`profile-*.patch`, `platform-*.patch`; items 9 and 18), a build fix (`build-fix-*.patch`), or harness plumbing (`harness-*.patch`: `harness-difftest-entry-points.patch`, the `difftest_*` entry points; `harness-virtual-clock.patch`, `_plat__RealTime()` returns the harness's virtual clock). **No patch changes how a reference draws or uses random numbers**: `tpm-rs` reproduces the references' random-number generation instead, by linking the original code (M.4).
@@ -113,6 +115,8 @@ Byte-identical comparison requires `tpm-rs` to draw exactly the random values th
 | 18 | [`ibmswtpm2`: profile configuration](#18-profile-configuration-of-ibmswtpm2) | **Profile difference** | profile/platform patches in `testing/patches/ibmswtpm2/` |
 | 19 | [`ibmswtpm2`: harness plumbing and aligned implementation choices](#19-harness-plumbing-and-aligned-implementation-choices) | **Aligned with `mstpm20`** | `profile-align-empty-encrypted-parameter.patch` |
 | 20 | [`ibmswtpm2`: harness exceptions](#20-harness-exceptions-for-ibmswtpm2) | **Implementation-defined** | No `ibmswtpm2`-specific rule; shared rules of Part IV |
+| 21 | [Unsigned `TPM2_NV_Certify` digest attestations](#21-unsigned-tpm2_nv_certify-digest-attestations) | **Bug in `mstpm20`/`ibmswtpm2`** (pre-185 behavior) | `bug-fix-nv-certify-null-sign-handle-digest.patch` (all three patch directories), `nv_storage.rs` |
+| 22 | [`mstpm20` version 185](#22-mstpm20-version-185) | **Bugs, build fixes and profile of `v185`** | `testing/patches/mstpm20-v185/` |
 
 ---
 
@@ -237,7 +241,7 @@ Each rule in [`server.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-
 | Rule | Difference | Specification basis |
 |---|---|---|
 | 1 | `TPM2_ContextSave` `contextBlob` content. `sequence`, `savedHandle`, `hierarchy`, sessions and tag are compared exactly. A saved blob is translated to the other TPM's blob only on an exact match. | The saved-context structure "may be defined by the vendor" (Part 1 §26.1). |
-| 2 | `TPM2_GetCapability` (tag, capability, `moreData` and order exact): `TPM_CAP_PCRS` lists `tpm-rs`-only empty SM3/SHA3 banks; `TPM_CAP_AUTH_POLICIES` has C `moreData = YES` when the list is full; `TPM_CAP_TPM_PROPERTIES` has implementation-specific values `{0x10F, 0x116, 0x118, 0x119, 0x11C, 0x11E, 0x11F, 0x121, 0x122, 0x12D}`, C-only `0x12F`/`0x130`, and `tpm-rs` `PT_VAR` entries when a query starts in `PT_FIXED`; `TPM_CAP_HANDLES` has C-only FW/SVN permanent handles. | Capability contents are TPM-specific (Part 3 §30.2). |
+| 2 | `TPM2_GetCapability` (tag, capability, `moreData` and order exact): `TPM_CAP_PCRS` lists `tpm-rs`-only empty SM3/SHA3 banks; `TPM_CAP_AUTH_POLICIES` has C `moreData = YES` when the list is full; `TPM_CAP_TPM_PROPERTIES` has implementation-specific values `{0x10F, 0x116, 0x118, 0x119, 0x11C, 0x11E, 0x11F, 0x121, 0x122, 0x12D}`, C-only `0x12F`/`0x130` and (`mstpm20` `v185`) `0x131` `TPM_PT_ML_PARAMETER_SETS` with value 0, and `tpm-rs` `PT_VAR` entries when a query starts in `PT_FIXED`; `TPM_CAP_HANDLES` has C-only FW/SVN permanent handles. | Capability contents are TPM-specific (Part 3 §30.2). |
 | 3 | `TPM2_ECC_Parameters` fields are equal up to leading zero bytes. | "may not be the same size" (Part 1 §33.6.3, Part 3 §14.6). |
 | 4 | `TPM2_IncrementalSelfTest` `toDoList` (both sides must return a well-formed `TPML_ALG`, tag `0x8001`). | Which algorithms are listed is TPM-dependent (Part 3 §10.3). |
 | 5 | `TPM2_NV_Read`: `0x00` (`tpm-rs`) vs. `0xFF` (C) only at offsets never written since the index was defined; header, size and sessions exact. | The content of unwritten NV bytes is not specified. |
@@ -361,3 +365,31 @@ No rule of [`server.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs
 | 11 (transient handle numbering) | yes | |
 | RETRY | yes | With `USE_DA_USED = YES` (item 18). |
 | 3, 5, 6, 7, 9 | not hit | IBM's ECC parameter constants, NV erase value, `TPM2B_PRIVATE` size and context-blob checks happen to match `tpm-rs` for the tested inputs; the rules stay available because the same implementation-defined freedom applies. |
+
+---
+
+## Part VII: Specification Version 185
+
+### 21. Unsigned `TPM2_NV_Certify` Digest Attestations
+
+- **Classification**: **Bug in `mstpm20` (`public`) and `ibmswtpm2`** (behavior of specification versions 1.83 and earlier); `mstpm20` `v185` already follows the specification when `inScheme` is `TPM_ALG_NULL`.
+- **Test & Implementation Code**: `bug-fix-nv-certify-null-sign-handle-digest.patch` in [`mstpm20/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/mstpm20/bug-fix-nv-certify-null-sign-handle-digest.patch), [`mstpm20-v185/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/mstpm20-v185/bug-fix-nv-certify-null-sign-handle-digest.patch) and [`ibmswtpm2/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/ibmswtpm2/bug-fix-nv-certify-null-sign-handle-digest.patch); [`nv_storage.rs`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/crates/tpm2-impl/src/handler/nv_storage.rs) (`TPM2_NV_Certify`); tests `e2e::nv_certify::whole_index_produces_nv_digest_attestation`, `e2e::nv_certify::unwritten_index_rejected_until_first_write`.
+- **TPM 2.0 Specification Quote & Explanation**: [Part 3, TPM2_NV_Certify](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L15947-L15964): "If *size* and *offset* are both zero and *signHandle* is TPM_RH_NULL, the digest is computed using the hash algorithm provided in *inScheme*, unless the scheme or hash algorithm is TPM_ALG_NULL, in which case the TPM shall return TPM_RC_SCHEME", and "Versions 1.83 and earlier allowed TPM2_NV_Certify to set the digest … to an Empty Buffer".
+- **Root Cause**: the scheme selection (`CryptSelectSignScheme`/`CryptoCommon_SelectSignScheme`) sets `inScheme` to `TPM_ALG_NULL` for a NULL `signHandle`, so the public references hash with `TPM_ALG_NULL` (an Empty Buffer) and `v185` always returns `TPM_RC_SCHEME`, also for a non-NULL `inScheme`.
+- **Fix**: the patches keep the caller's `inScheme` for the digest of an unsigned attestation and return `TPM_RC_SCHEME + P2` (`0x2D2`) for a `TPM_ALG_NULL` scheme. `tpm-rs` does the same (it previously returned an Empty Buffer like the public references).
+
+---
+
+### 22. `mstpm20` Version 185
+
+[`testing/patches/mstpm20-v185/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/mstpm20-v185) holds the patches of `public` ported to version 185 (`build-fix-openssl-version-check` is not needed: version 185 accepts OpenSSL up to 3.6), plus:
+
+- **Bug fixes** (spec deviations new in version 185):
+  - `bug-fix-cipher-mode-error-code`: `TPMI_ALG_CIPHER_MODE` values are rejected with `TPM_RC_SYMMETRIC` instead of `TPM_RC_MODE` (Part 2, `TPMI_ALG_CIPHER_MODE`); test `e2e::encrypt_decrypt::cmac_mode_rejected`.
+  - `bug-fix-pcr-reset-handle-type`: `TPM2_PCR_Reset` unmarshals `pcrHandle` as `TPMI_DH_PCR+`, accepting `TPM_RH_NULL` instead of returning `TPM_RC_VALUE + H1` (Part 3, `TPM2_PCR_Reset`); test `e2e::pcr_reset::reset_rh_null_rejected`.
+  - `bug-fix-read-public-null-name-alg`: the response marshaling of version 185 validates values, so `TPM2_ReadPublic` of an object loaded by `TPM2_LoadExternal` with `nameAlg = TPM_ALG_NULL` put the TPM into failure mode; `outPublic` is marshaled as `TPM2B_PUBLIC+`; test `e2e::unmarshal_error_positions::object_public_null_name_alg_rejected`.
+  - `bug-fix-nv-certify-null-sign-handle-digest` (item 21).
+- **Build fixes** for the profile: version 185 does not compile without CMAC (`build-fix-cmac-disabled`), ML-KEM/ML-DSA (`build-fix-pqc-disabled`), secure-channel support (`build-fix-no-sec-channel`) or vendor commands (`build-fix-no-vendor-commands`).
+- **Profile settings** that version 185 changed back to the values of `public` and `tpm-rs`: no ML-KEM/ML-DSA (`profile-algorithms`) and their 8 commands (`profile-command-list`), `MAX_CAP_BUFFER = 1024` (`profile-max-cap-buffer`), `MAX_COMMAND_SIZE = MAX_RESPONSE_SIZE = 4096 - 0x80` (`profile-max-command-size`), `MAX_NV_INDEX_SIZE = 2048` (`profile-max-nv-index-size`), `MIN_EVICT_OBJECTS = 2` (`profile-min-evict-objects`), `NV_MEMORY_SIZE = 16384` (`profile-nv-memory-size`), and the recommended `kdf` of the NIST curves in `TPM2_ECC_Parameters` (`profile-ecc-curve-kdf`; version 185 deprecates the field and reports `TPM_ALG_NULL`, which Part 2 also allows).
+- **Harness rule**: `TPM_PT_ML_PARAMETER_SETS` (`0x131`, new in version 185, value 0 with ML-KEM/ML-DSA disabled) is a C-only property (Rule 2).
+

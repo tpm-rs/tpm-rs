@@ -639,6 +639,9 @@ fn unwritten_index_rejected() {
 }
 
 /// NV_Certify of an unwritten index is TPM_RC_NV_UNINITIALIZED; succeeds after the first write
+///
+/// The certification is unsigned (`signHandle` = TPM_RH_NULL) and covers the whole index
+/// (`size` = `offset` = 0), so `inScheme` supplies the digest's hash algorithm.
 #[test]
 fn unwritten_index_rejected_until_first_write() {
     let mut sim = Tpm::new();
@@ -664,18 +667,19 @@ fn unwritten_index_rejected_until_first_write() {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
         qualifying_data: Tpm2bData::default(),
-        in_scheme: None,
+        in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
         size: 0,
         offset: 0,
     };
     let err_cert = nv_certify_pw(&mut sim, &certify_cmd, &[], &[]).unwrap_err();
     assert_eq!(err_cert, TpmRc::NV_UNINITIALIZED.get());
 
-    // 2. Write data -> should set WRITTEN
+    // 2. Write data -> should set WRITTEN. The whole index is written, because the
+    // content of never-written bytes (which the digest would cover) is not specified.
     let write_cmd = NVWrite {
         auth_handle: Handle::RH_OWNER,
         nv_index: Handle(nv_index_val),
-        data: Tpm2bMaxNvBuffer::from_bytes(&[0x55; 8]).unwrap(),
+        data: Tpm2bMaxNvBuffer::from_bytes(&[0x55; 16]).unwrap(),
         offset: 0,
     };
     execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
@@ -684,10 +688,12 @@ fn unwritten_index_rejected_until_first_write() {
     nv_certify_pw(&mut sim, &certify_cmd, &[], &[]).unwrap();
 }
 
-/// NV_Certify with size=0, offset=0 returns a TPM_ST_ATTEST_NV_DIGEST attestation (digest of whole index; empty when unsigned)
+/// NV_Certify with size=0, offset=0 returns a TPM_ST_ATTEST_NV_DIGEST attestation (digest of whole index)
 ///
 /// `size == 0 && offset == 0` produces a `TPM_ST_ATTEST_NV_DIGEST` attestation whose digest is
-/// H_schemeHash(whole index data); an unsigned one has an empty digest.
+/// H_schemeHash(whole index data). An unsigned one (`signHandle` = TPM_RH_NULL) uses the hash
+/// algorithm of `inScheme`, and a TPM_ALG_NULL `inScheme` is TPM_RC_SCHEME (Part 3, version 185;
+/// versions 1.83 and earlier returned an empty digest).
 #[test]
 fn whole_index_produces_nv_digest_attestation() {
     let mut sim = Tpm::new();
@@ -718,8 +724,8 @@ fn whole_index_produces_nv_digest_attestation() {
         other => panic!("expected TPM_ST_ATTEST_NV_DIGEST, got {other:?}"),
     }
 
-    // Unsigned (TPM_RH_NULL): the scheme hash is TPM_ALG_NULL, so the digest is empty.
-    let attest = nv_certify(
+    // Unsigned (TPM_RH_NULL) with a TPM_ALG_NULL inScheme: no hash algorithm is selected.
+    let err = nv_certify(
         &mut sim,
         Handle::RH_NULL,
         Handle::RH_OWNER,
@@ -729,9 +735,29 @@ fn whole_index_produces_nv_digest_attestation() {
         0,
         2,
     )
+    .unwrap_err();
+    assert_eq!(err, TpmRc::SCHEME.with(Position::parameter(2)).get());
+
+    // Unsigned (TPM_RH_NULL): the digest uses the hash algorithm of inScheme.
+    let attest = nv_certify(
+        &mut sim,
+        Handle::RH_NULL,
+        Handle::RH_OWNER,
+        Handle(index),
+        Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha384)),
+        0,
+        0,
+        2,
+    )
     .expect("NV_Certify failed");
     match attest.attested {
-        TpmuAttest::NvDigest(info) => assert!(info.nv_digest.get_buffer().is_empty()),
+        TpmuAttest::NvDigest(info) => {
+            assert_eq!(info.index_name.get_buffer(), name.as_slice());
+            assert_eq!(
+                info.nv_digest.get_buffer(),
+                sha(TpmiAlgHash::Sha384, &[&data]).as_slice()
+            );
+        }
         other => panic!("expected TPM_ST_ATTEST_NV_DIGEST, got {other:?}"),
     }
 }

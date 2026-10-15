@@ -1065,23 +1065,28 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             })
         } else {
             // TPM_ST_ATTEST_NV_DIGEST: a digest of the whole index data, computed with the
-            // hash algorithm of the selected signing scheme (empty for an unsigned
-            // attestation, whose scheme is TPM_ALG_NULL).
-            digest = match actual_in_scheme.and_then(|s| s.hash_alg()) {
-                Some(hash_alg) => {
-                    StorageManager::new(&mut *self.context.platform.storage)
-                        .read_item(
-                            nv_index,
-                            header.metadata_size,
-                            &mut nv_data[..data_size as usize],
-                        )
-                        .map_err(|_| TpmRc::FAILURE)?;
-                    let (hash, hash_len) =
-                        self.compute_hash(hash_alg, &[&nv_data[..data_size as usize]])?;
-                    OwnedDigest::from_bytes(&hash[..hash_len]).map_err(|_| TpmRc::FAILURE)?
-                }
-                None => OwnedDigest::default(),
+            // hash algorithm of the selected signing scheme. For an unsigned attestation
+            // (`signHandle` is TPM_RH_NULL) it is the hash algorithm of `inScheme`, and a
+            // TPM_ALG_NULL scheme is TPM_RC_SCHEME (Part 3, TPM2_NV_Certify, version 185;
+            // versions 1.83 and earlier returned an Empty Buffer instead).
+            let digest_scheme = if signer_obj_opt.is_some() {
+                actual_in_scheme
+            } else {
+                cmd.in_scheme
             };
+            let Some(hash_alg) = digest_scheme.and_then(|s| s.hash_alg()) else {
+                return Err(TpmRc::SCHEME.with(Position::parameter(2)));
+            };
+            StorageManager::new(&mut *self.context.platform.storage)
+                .read_item(
+                    nv_index,
+                    header.metadata_size,
+                    &mut nv_data[..data_size as usize],
+                )
+                .map_err(|_| TpmRc::FAILURE)?;
+            let (hash, hash_len) =
+                self.compute_hash(hash_alg, &[&nv_data[..data_size as usize]])?;
+            digest = OwnedDigest::from_bytes(&hash[..hash_len]).map_err(|_| TpmRc::FAILURE)?;
             TpmuAttest::NvDigest(TpmsNvDigestCertifyInfo {
                 index_name: nv_name.as_tpm2b(),
                 nv_digest: digest.as_tpm2b(),

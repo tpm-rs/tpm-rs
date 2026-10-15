@@ -1,0 +1,56 @@
+pqc-disabled: build the crypto libraries without ML-KEM and ML-DSA
+
+Classification: build fix.
+
+The OpenSSL ML-KEM/ML-DSA implementations (OsslMlkem.c, OsslMldsa.c) and the
+KEM dispatch (CryptKem.c) are compiled unconditionally, but the key types
+they use exist only with ALG_MLKEM / ALG_MLDSA, so they do not compile with
+both algorithms disabled (see profile-algorithms). Their contents are
+guarded by the algorithm switches.
+diff --git a/TPMCmd/tpm/cryptolibs/common/CryptKem.c b/TPMCmd/tpm/cryptolibs/common/CryptKem.c
+--- a/TPMCmd/tpm/cryptolibs/common/CryptKem.c
++++ b/TPMCmd/tpm/cryptolibs/common/CryptKem.c
+@@ -6,6 +6,8 @@
+ 
+ //** Includes
+ #include "Tpm.h"
++// tpm-rs differential testing (build fix): this file needs the ALG_MLKEM types.
++#if ALG_MLKEM
+ #include "CryptoMlkem_Interface.h"
+ 
+ TPM_RC
+@@ -46,3 +48,4 @@ CryptoKem_Decapsulate(OBJECT *key,                      // IN: KEM key object
+     // Not a supported KEM type
+     return TPM_RC_TYPE;
+ }
++#endif  // ALG_MLKEM
+diff --git a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMldsa.c b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMldsa.c
+--- a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMldsa.c
++++ b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMldsa.c
+@@ -1,4 +1,6 @@
+ #include "Tpm.h"
++// tpm-rs differential testing (build fix): this file needs the ALG_MLDSA types.
++#if ALG_MLDSA
+ #include "CryptoMldsa_Interface.h"
+ #include "tpm_public/TpmAlgorithmDefines.h"
+ #include <openssl/core_names.h>
+@@ -1268,3 +1270,4 @@ Exit:
+ 
+     return retVal;
+ }
++#endif  // ALG_MLDSA
+diff --git a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMlkem.c b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMlkem.c
+--- a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMlkem.c
++++ b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMlkem.c
+@@ -1,4 +1,6 @@
+ #include "Tpm.h"
++// tpm-rs differential testing (build fix): this file needs the ALG_MLKEM types.
++#if ALG_MLKEM
+ #include "CryptoMlkem_Interface.h"
+ #include "tpm_public/TpmAlgorithmDefines.h"
+ #include <openssl/core_names.h>
+@@ -504,3 +506,4 @@ Exit:
+ 
+     return retVal;
+ }
++#endif  // ALG_MLKEM

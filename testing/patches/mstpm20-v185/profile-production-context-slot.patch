@@ -1,0 +1,20 @@
+production-context-slot: use the production CONTEXT_SLOT size in simulation builds
+
+Classification: profile setting.
+
+SIMULATION && DEBUG builds use an 8-bit CONTEXT_SLOT so that tests can make
+the context epoch roll over quickly; tpm-rs uses the production 16-bit slot
+(TPM_PT_CONTEXT_GAP_MAX, contextArray gaps), so the simulation shortcut is
+disabled.
+diff --git a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
+--- a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
++++ b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
+@@ -56,7 +56,7 @@
+ #define STATE_RESET_DATA_PADDING        0
+ 
+ // configuration values that may vary by SIMULATION/DEBUG
+-#if SIMULATION && DEBUG
++#if 0 && SIMULATION && DEBUG
+ // This forces the use of a smaller context slot size. This reduction reduces the
+ // range of the epoch allowing the tester to force the epoch to occur faster than
+ // the normal production size

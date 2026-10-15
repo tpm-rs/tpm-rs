@@ -1,0 +1,20 @@
+no-self-tests: ENABLE_SELF_TESTS = NO
+
+Classification: profile setting.
+
+tpm-rs performs no algorithm self tests, so the reference does not either;
+otherwise TPM2_SelfTest, TPM2_IncrementalSelfTest, TPM2_GetTestResult and
+the first use of each algorithm would behave differently (e.g.
+TPM_RC_TESTING).
+diff --git a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmBuildSwitches.h b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmBuildSwitches.h
+--- a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmBuildSwitches.h
++++ b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmBuildSwitches.h
+@@ -169,7 +169,7 @@
+ #define USE_DA_USED                 YES
+ 
+ // This switch is used to enable the self-test capability in AlgorithmTests.c
+-#define ENABLE_SELF_TESTS           YES
++#define ENABLE_SELF_TESTS           NO
+ 
+ // This switch indicates where clock epoch value should be stored. If this value
+ // defined, then it is assumed that the timer will change at any time so the

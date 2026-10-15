@@ -1,0 +1,20 @@
+min-evict-objects: MIN_EVICT_OBJECTS = 2
+
+Classification: profile setting.
+
+The number of persistent objects for which NV space is reserved is a profile
+choice; version 185 raises it to 9, tpm-rs (like the public mstpm20 profile)
+uses 2, which determines the reported TPM_PT_HR_PERSISTENT_MIN and how much
+NV space remains for indices.
+diff --git a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
+--- a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
++++ b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
+@@ -21,7 +21,7 @@
+ #define MAX_LOADED_SESSIONS        3
+ #define MAX_SESSION_NUM            3
+ #define MAX_LOADED_OBJECTS         3
+-#define MIN_EVICT_OBJECTS          9
++#define MIN_EVICT_OBJECTS          2
+ #define NUM_POLICY_PCR_GROUP       1
+ #define NUM_AUTHVALUE_PCR_GROUP    1
+ #define MAX_CONTEXT_SIZE           2264
