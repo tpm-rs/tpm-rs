@@ -414,9 +414,16 @@ pub enum TpmtSignature<'a> {
     Ecdaa(TpmsSignatureEcc<'a>),
     Sm2(TpmsSignatureEcc<'a>),
     Ecschnorr(TpmsSignatureEcc<'a>),
+    Mldsa(Tpm2bSignatureMldsa<'a>),
+    HashMldsa(TpmsSignatureHashMldsa<'a>),
 }
 
 impl<'a> TpmtSignature<'a> {
+    #[doc(alias = "TPMU_SIGNATURE_CTX")]
+    pub const MAX_CTX_BYTES: usize = 255;
+    #[doc(alias = "MAX_SIGNATURE_HINT_SIZE")]
+    pub const MAX_HINT_BYTES: usize = 57;
+
     #[doc(alias = "TPMI_ALG_SIG_SCHEME")]
     pub const fn sig_alg(self) -> Alg {
         match self {
@@ -427,6 +434,8 @@ impl<'a> TpmtSignature<'a> {
             Self::Ecdaa(_) => Alg::ECDAA,
             Self::Sm2(_) => Alg::SM2,
             Self::Ecschnorr(_) => Alg::ECSCHNORR,
+            Self::Mldsa(_) => Alg::MLDSA,
+            Self::HashMldsa(_) => Alg::HASH_MLDSA,
         }
     }
 }
@@ -437,6 +446,8 @@ impl Marshal for TpmtSignature<'_> {
             TpmtHa::MAX_SIZE,
             TpmsSignatureRsa::MAX_SIZE,
             TpmsSignatureEcc::MAX_SIZE,
+            Tpm2bSignatureMldsa::MAX_SIZE,
+            TpmsSignatureHashMldsa::MAX_SIZE,
         );
     type MaxBuffer = [u8; TpmtSignature::MAX_SIZE];
 
@@ -448,6 +459,8 @@ impl Marshal for TpmtSignature<'_> {
             Self::Ecdsa(x) | Self::Ecdaa(x) | Self::Sm2(x) | Self::Ecschnorr(x) => {
                 marshal_helper(x, dst, count)
             }
+            Self::Mldsa(x) => marshal_helper(x, dst, count),
+            Self::HashMldsa(x) => marshal_helper(x, dst, count),
         }
     }
 }
@@ -462,6 +475,8 @@ impl<'a> Unmarshal<'a> for TpmtSignature<'a> {
             Alg::ECDAA => Self::Ecdaa(Unmarshal::unmarshal(src)?),
             Alg::SM2 => Self::Sm2(Unmarshal::unmarshal(src)?),
             Alg::ECSCHNORR => Self::Ecschnorr(Unmarshal::unmarshal(src)?),
+            Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?),
+            Alg::HASH_MLDSA => Self::HashMldsa(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
         })
     }
@@ -492,7 +507,9 @@ impl<'a> Unmarshal<'a> for Option<TpmtSignature<'a>> {
     }
 }
 
-/// Tagged signature scheme structure specifying a signature algorithm (HMAC, RSASSA, RSAPSS, ECDSA, ECDAA, SM2, ECSchnorr) and its hash algorithm.
+/// `TPMT_SIG_SCHEME` structure defined in TPM 2.0 Part 2: Structures
+///
+/// Tagged signature scheme structure specifying a signature algorithm and its parameters (if any).
 #[doc(alias = "TPMT_SIG_SCHEME")]
 #[doc(alias = "TPMU_SIG_SCHEME")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -504,6 +521,8 @@ pub enum TpmtSigScheme {
     Ecdaa(TpmsSchemeEcdaa),
     Sm2(TpmiAlgHash),
     Ecschnorr(TpmiAlgHash),
+    Mldsa,
+    HashMldsa,
 }
 
 impl TpmtSigScheme {
@@ -517,6 +536,8 @@ impl TpmtSigScheme {
             Self::Ecdaa(_) => Alg::ECDAA,
             Self::Sm2(_) => Alg::SM2,
             Self::Ecschnorr(_) => Alg::ECSCHNORR,
+            Self::Mldsa => Alg::MLDSA,
+            Self::HashMldsa => Alg::HASH_MLDSA,
         }
     }
 }
@@ -538,6 +559,7 @@ impl Marshal for Option<TpmtSigScheme> {
             | TpmtSigScheme::Sm2(x)
             | TpmtSigScheme::Ecschnorr(x) => marshal_helper(x, dst, count),
             TpmtSigScheme::Ecdaa(x) => marshal_helper(x, dst, count),
+            TpmtSigScheme::Mldsa | TpmtSigScheme::HashMldsa => count,
         }
     }
 }
@@ -556,6 +578,8 @@ impl<'a> Unmarshal<'a> for Option<TpmtSigScheme> {
             Alg::ECDAA => TpmtSigScheme::Ecdaa(Unmarshal::unmarshal(src)?),
             Alg::SM2 => TpmtSigScheme::Sm2(Unmarshal::unmarshal(src)?),
             Alg::ECSCHNORR => TpmtSigScheme::Ecschnorr(Unmarshal::unmarshal(src)?),
+            Alg::MLDSA => TpmtSigScheme::Mldsa,
+            Alg::HASH_MLDSA => TpmtSigScheme::HashMldsa,
             _ => return Err(UnmarshalError),
         }))
     }
@@ -867,12 +891,26 @@ pub enum TpmtPublicParms {
     Sym(TpmtSymDefObject),
     Rsa(TpmsRsaParms),
     Ecc(TpmsEccParms),
+    Mldsa(TpmsMldsaParms),
+    HashMldsa(TpmsHashMldsaParms),
+    Mlkem(TpmsMlkemParms),
 }
 
 impl TpmtPublicParms {
-    pub const MAX_SHARED_SECRET_BYTES: usize = TpmEccCurve::MAX_ECC_KEY_BYTES;
-    pub const MAX_KEM_CIPHERTEXT_BYTES: usize = TpmsEccPoint::MAX_SIZE;
-    pub const MAX_ENCRYPTED_SECRET_BYTES: usize = TpmiRsaKeyBits::MAX_PUB_KEY_BYTES;
+    #[doc(alias = "MAX_SHARED_SECRET_SIZE")]
+    pub const MAX_SHARED_SECRET_BYTES: usize = max!(
+        TpmEccCurve::MAX_ECC_KEY_BYTES,
+        TpmiMlkemParms::SHARED_SECRET_BYTES,
+    );
+    #[doc(alias = "TPMU_KEM_CIPHERTEXT")]
+    pub const MAX_KEM_CIPHERTEXT_BYTES: usize =
+        max!(TpmsEccPoint::MAX_SIZE, TpmiMlkemParms::MAX_CT_BYTES);
+    pub const MAX_ENCRYPTED_SECRET_BYTES: usize = max!(
+        TpmiRsaKeyBits::MAX_PUB_KEY_BYTES,
+        TpmsEccPoint::MAX_SIZE,
+        TpmiMlkemParms::MAX_CT_BYTES,
+        Tpm2bDigest::MAX_SIZE,
+    );
 
     #[doc(alias = "TPMI_ALG_PUBLIC")]
     pub const fn algorithm(self) -> Alg {
@@ -881,6 +919,9 @@ impl TpmtPublicParms {
             Self::Sym(_) => Alg::SYMCIPHER,
             Self::Rsa(_) => Alg::RSA,
             Self::Ecc(_) => Alg::ECC,
+            Self::Mldsa(_) => Alg::MLDSA,
+            Self::HashMldsa(_) => Alg::HASH_MLDSA,
+            Self::Mlkem(_) => Alg::MLKEM,
         }
     }
 }
@@ -892,6 +933,9 @@ impl Marshal for TpmtPublicParms {
             TpmtSymDefObject::MAX_SIZE,
             TpmsRsaParms::MAX_SIZE,
             TpmsEccParms::MAX_SIZE,
+            TpmsMldsaParms::MAX_SIZE,
+            TpmsHashMldsaParms::MAX_SIZE,
+            TpmsMlkemParms::MAX_SIZE,
         );
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
@@ -902,6 +946,9 @@ impl Marshal for TpmtPublicParms {
             Self::Sym(x) => marshal_helper(x, dst, count),
             Self::Rsa(x) => marshal_helper(x, dst, count),
             Self::Ecc(x) => marshal_helper(x, dst, count),
+            Self::Mldsa(x) => marshal_helper(x, dst, count),
+            Self::HashMldsa(x) => marshal_helper(x, dst, count),
+            Self::Mlkem(x) => marshal_helper(x, dst, count),
         }
     }
 }
@@ -913,6 +960,9 @@ impl<'a> Unmarshal<'a> for TpmtPublicParms {
             Alg::SYMCIPHER => Self::Sym(Unmarshal::unmarshal(src)?),
             Alg::RSA => Self::Rsa(Unmarshal::unmarshal(src)?),
             Alg::ECC => Self::Ecc(Unmarshal::unmarshal(src)?),
+            Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?),
+            Alg::HASH_MLDSA => Self::HashMldsa(Unmarshal::unmarshal(src)?),
+            Alg::MLKEM => Self::Mlkem(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
         })
     }
@@ -992,40 +1042,56 @@ impl Default for TpmtTkCreation<'_> {
 
 /// `TPMT_TK_VERIFIED` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.6 (Table 105).
 ///
-/// Verification ticket produced by `TPM2_VerifySignature` proving that a signature was verified by the TPM.
+/// Verification ticket produced by `TPM2_VerifySignature`, `TPM2_VerifySequenceComplete`, or `TPM2_VerifyDigestSignature`
+/// proving that a signature was verified by the TPM.
 #[doc(alias = "TPMT_TK_VERIFIED")]
+#[doc(alias = "TPMU_TK_VERIFIED_META")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TpmtTkVerified<'a> {
     Verified(Handle, Tpm2bDigest<'a>),
+    MessageVerified(Handle, Tpm2bDigest<'a>),
+    DigestVerified(Handle, TpmiAlgHash, Tpm2bDigest<'a>),
 }
 
 impl Ticket for TpmtTkVerified<'_> {
     fn tag(&self) -> TpmSt {
         match self {
             Self::Verified(..) => TpmSt::VERIFIED,
+            Self::MessageVerified(..) => TpmSt::MESSAGE_VERIFIED,
+            Self::DigestVerified(..) => TpmSt::DIGEST_VERIFIED,
         }
     }
     fn hierarchy(&self) -> Handle {
         match self {
-            Self::Verified(hierarchy, _) => *hierarchy,
+            Self::Verified(hierarchy, _)
+            | Self::MessageVerified(hierarchy, _)
+            | Self::DigestVerified(hierarchy, _, _) => *hierarchy,
         }
     }
     fn digest(&self) -> Tpm2bDigest<'_> {
         match self {
-            Self::Verified(_, digest) => *digest,
+            Self::Verified(_, digest)
+            | Self::MessageVerified(_, digest)
+            | Self::DigestVerified(_, _, digest) => *digest,
         }
     }
 }
 
 impl Marshal for TpmtTkVerified<'_> {
-    const MAX_SIZE: usize = TpmSt::MAX_SIZE + Handle::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
+    const MAX_SIZE: usize =
+        TpmSt::MAX_SIZE + Handle::MAX_SIZE + TpmiAlgHash::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
     type MaxBuffer = [u8; TpmtTkVerified::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmtTkVerified::MAX_SIZE]) -> usize {
         let count = marshal_helper(&self.tag(), dst, 0);
         match self {
-            Self::Verified(hierarchy, digest) => {
+            Self::Verified(hierarchy, digest) | Self::MessageVerified(hierarchy, digest) => {
                 let count = marshal_helper(hierarchy, dst, count);
+                marshal_helper(digest, dst, count)
+            }
+            Self::DigestVerified(hierarchy, hash_alg, digest) => {
+                let count = marshal_helper(hierarchy, dst, count);
+                let count = marshal_helper(hash_alg, dst, count);
                 marshal_helper(digest, dst, count)
             }
         }
@@ -1038,6 +1104,14 @@ impl<'a> Unmarshal<'a> for TpmtTkVerified<'a> {
             TpmSt::VERIFIED => {
                 Self::Verified(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
             }
+            TpmSt::MESSAGE_VERIFIED => {
+                Self::MessageVerified(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
+            }
+            TpmSt::DIGEST_VERIFIED => Self::DigestVerified(
+                Unmarshal::unmarshal(src)?,
+                Unmarshal::unmarshal(src)?,
+                Unmarshal::unmarshal(src)?,
+            ),
             _ => return Err(UnmarshalError),
         })
     }

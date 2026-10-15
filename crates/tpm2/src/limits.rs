@@ -157,10 +157,45 @@ pub struct EccParameter;
 impl Tag for EccParameter {
     const CAP: usize = TpmEccCurve::MAX_ECC_KEY_BYTES;
 }
+/// Sized to the maximum supported ML-KEM public key length ([`TpmiMlkemParms::MAX_PUB_KEY_BYTES`]).
+pub struct PublicKeyMlkem;
+impl Tag for PublicKeyMlkem {
+    const CAP: usize = TpmiMlkemParms::MAX_PUB_KEY_BYTES;
+}
+/// Sized to the maximum supported ML-DSA public key length ([`TpmiMldsaParms::MAX_PUB_KEY_BYTES`]).
+pub struct PublicKeyMldsa;
+impl Tag for PublicKeyMldsa {
+    const CAP: usize = TpmiMldsaParms::MAX_PUB_KEY_BYTES;
+}
+/// Sized to the maximum supported ML-DSA signature length ([`TpmiMldsaParms::MAX_SIG_BYTES`]).
+pub struct SignatureMldsa;
+impl Tag for SignatureMldsa {
+    const CAP: usize = TpmiMldsaParms::MAX_SIG_BYTES;
+}
 /// Sized to the largest supported asymmetric encrypted secret ([`TpmtPublicParms::MAX_ENCRYPTED_SECRET_BYTES`]).
 pub struct EncryptedSecret;
 impl Tag for EncryptedSecret {
     const CAP: usize = TpmtPublicParms::MAX_ENCRYPTED_SECRET_BYTES;
+}
+/// Sized to the largest supported KEM shared secret ([`TpmtPublicParms::MAX_SHARED_SECRET_BYTES`]).
+pub struct SharedSecret;
+impl Tag for SharedSecret {
+    const CAP: usize = TpmtPublicParms::MAX_SHARED_SECRET_BYTES;
+}
+/// Sized to the largest supported KEM ciphertext ([`TpmtPublicParms::MAX_KEM_CIPHERTEXT_BYTES`]).
+pub struct KemCiphertext;
+impl Tag for KemCiphertext {
+    const CAP: usize = TpmtPublicParms::MAX_KEM_CIPHERTEXT_BYTES;
+}
+/// Spec-mandated maximum size for signature context strings ([`TpmtSignature::MAX_CTX_BYTES`]).
+pub struct SignatureCtx;
+impl Tag for SignatureCtx {
+    const CAP: usize = TpmtSignature::MAX_CTX_BYTES;
+}
+/// Spec-mandated maximum size for signature verification hints ([`TpmtSignature::MAX_HINT_BYTES`]).
+pub struct SignatureHint;
+impl Tag for SignatureHint {
+    const CAP: usize = TpmtSignature::MAX_HINT_BYTES;
 }
 /// Sized to hold an encrypted sensitive area.
 ///

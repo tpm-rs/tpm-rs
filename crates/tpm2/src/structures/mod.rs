@@ -65,6 +65,9 @@ pub enum PublicParmsAndId<'a> {
     Sym(TpmtSymDefObject, Tpm2bDigest<'a>),
     Rsa(TpmsRsaParms, Tpm2bPublicKeyRsa<'a>),
     Ecc(TpmsEccParms, TpmsEccPoint<'a>),
+    Mldsa(TpmsMldsaParms, Tpm2bPublicKeyMldsa<'a>),
+    HashMldsa(TpmsHashMldsaParms, Tpm2bPublicKeyMldsa<'a>),
+    Mlkem(TpmsMlkemParms, Tpm2bPublicKeyMlkem<'a>),
 }
 
 impl PublicParmsAndId<'_> {
@@ -74,6 +77,9 @@ impl PublicParmsAndId<'_> {
             Self::Sym(p, _) => TpmtPublicParms::Sym(p),
             Self::Rsa(p, _) => TpmtPublicParms::Rsa(p),
             Self::Ecc(p, _) => TpmtPublicParms::Ecc(p),
+            Self::Mldsa(p, _) => TpmtPublicParms::Mldsa(p),
+            Self::HashMldsa(p, _) => TpmtPublicParms::HashMldsa(p),
+            Self::Mlkem(p, _) => TpmtPublicParms::Mlkem(p),
         }
     }
 }
@@ -93,6 +99,11 @@ impl<'a> PublicParmsAndId<'a> {
             Alg::SYMCIPHER => Self::Sym(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?),
             Alg::RSA => Self::Rsa(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?),
             Alg::ECC => Self::Ecc(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?),
+            Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?),
+            Alg::HASH_MLDSA => {
+                Self::HashMldsa(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
+            }
+            Alg::MLKEM => Self::Mlkem(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
         })
     }
@@ -104,6 +115,9 @@ impl Marshal for PublicParmsAndId<'_> {
         TpmtSymDefObject::MAX_SIZE + Tpm2bDigest::MAX_SIZE,
         TpmsRsaParms::MAX_SIZE + Tpm2bPublicKeyRsa::MAX_SIZE,
         TpmsEccParms::MAX_SIZE + TpmsEccPoint::MAX_SIZE,
+        TpmsMldsaParms::MAX_SIZE + Tpm2bPublicKeyMldsa::MAX_SIZE,
+        TpmsHashMldsaParms::MAX_SIZE + Tpm2bPublicKeyMldsa::MAX_SIZE,
+        TpmsMlkemParms::MAX_SIZE + Tpm2bPublicKeyMlkem::MAX_SIZE,
     );
     type MaxBuffer = [u8; PublicParmsAndId::MAX_SIZE];
 
@@ -124,6 +138,18 @@ impl Marshal for PublicParmsAndId<'_> {
             Self::Ecc(parms, point) => {
                 let count = marshal_helper(parms, dst, 0);
                 marshal_helper(point, dst, count)
+            }
+            Self::Mldsa(parms, id) => {
+                let count = marshal_helper(parms, dst, 0);
+                marshal_helper(id, dst, count)
+            }
+            Self::HashMldsa(parms, id) => {
+                let count = marshal_helper(parms, dst, 0);
+                marshal_helper(id, dst, count)
+            }
+            Self::Mlkem(parms, id) => {
+                let count = marshal_helper(parms, dst, 0);
+                marshal_helper(id, dst, count)
             }
         }
     }

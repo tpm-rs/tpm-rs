@@ -274,6 +274,136 @@ impl<'a> Unmarshal<'a> for TpmiRsaKeyBits {
     }
 }
 
+/// `TPMI_MLKEM_PARMS` interface type defined in TPM 2.0 Part 2: Structures
+///
+/// Selects an ML-KEM parameter set (`TPM_MLKEM_512`, `TPM_MLKEM_768`, or `TPM_MLKEM_1024`).
+#[doc(alias = "TPMI_MLKEM_PARMS")]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum TpmiMlkemParms {
+    Mlkem512 = 0x0001,
+    Mlkem768 = 0x0002,
+    Mlkem1024 = 0x0003,
+}
+
+impl TpmiMlkemParms {
+    const ALL: &[Self] = &[Self::Mlkem512, Self::Mlkem768, Self::Mlkem1024];
+
+    #[doc(alias = "MAX_MLKEM_PUB_SIZE")]
+    pub const MAX_PUB_KEY_BYTES: usize = max_by!(Self::ALL, Self::pub_key_bytes);
+    #[doc(alias = "MAX_MLKEM_CT_SIZE")]
+    pub const MAX_CT_BYTES: usize = max_by!(Self::ALL, Self::ct_bytes);
+    pub const SHARED_SECRET_BYTES: usize = 32;
+
+    const fn info(self) -> (usize, usize) {
+        match self {
+            Self::Mlkem512 => (800, 768),
+            Self::Mlkem768 => (1184, 1088),
+            Self::Mlkem1024 => (1568, 1568),
+        }
+    }
+
+    pub const fn pub_key_bytes(self) -> usize {
+        self.info().0
+    }
+
+    pub const fn ct_bytes(self) -> usize {
+        self.info().1
+    }
+}
+
+impl TryFrom<u16> for TpmiMlkemParms {
+    type Error = UnmarshalError;
+    fn try_from(val: u16) -> Result<Self, Self::Error> {
+        find_by!(Self::ALL, |p| u16::from(p) == val).ok_or(UnmarshalError)
+    }
+}
+
+impl From<TpmiMlkemParms> for u16 {
+    fn from(val: TpmiMlkemParms) -> Self {
+        val as u16
+    }
+}
+
+impl Marshal for TpmiMlkemParms {
+    const MAX_SIZE: usize = u16::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        u16::from(*self).marshal(dst)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmiMlkemParms {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        u16::unmarshal(src)?.try_into()
+    }
+}
+
+/// `TPMI_MLDSA_PARMS` interface type defined in TPM 2.0 Part 2: Structures
+///
+/// Selects an ML-DSA parameter set (`TPM_MLDSA_44`, `TPM_MLDSA_65`, or `TPM_MLDSA_87`).
+#[doc(alias = "TPMI_MLDSA_PARMS")]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum TpmiMldsaParms {
+    Mldsa44 = 0x0001,
+    Mldsa65 = 0x0002,
+    Mldsa87 = 0x0003,
+}
+
+impl TpmiMldsaParms {
+    const ALL: &[Self] = &[Self::Mldsa44, Self::Mldsa65, Self::Mldsa87];
+
+    #[doc(alias = "MAX_MLDSA_PUB_SIZE")]
+    pub const MAX_PUB_KEY_BYTES: usize = max_by!(Self::ALL, Self::pub_key_bytes);
+    #[doc(alias = "MAX_MLDSA_SIG_SIZE")]
+    pub const MAX_SIG_BYTES: usize = max_by!(Self::ALL, Self::sig_bytes);
+    pub const MU_BYTES: usize = 64;
+
+    const fn info(self) -> (usize, usize) {
+        match self {
+            Self::Mldsa44 => (1312, 2420),
+            Self::Mldsa65 => (1952, 3309),
+            Self::Mldsa87 => (2592, 4627),
+        }
+    }
+
+    pub const fn pub_key_bytes(self) -> usize {
+        self.info().0
+    }
+
+    pub const fn sig_bytes(self) -> usize {
+        self.info().1
+    }
+}
+
+impl TryFrom<u16> for TpmiMldsaParms {
+    type Error = UnmarshalError;
+    fn try_from(val: u16) -> Result<Self, Self::Error> {
+        find_by!(Self::ALL, |p| u16::from(p) == val).ok_or(UnmarshalError)
+    }
+}
+
+impl From<TpmiMldsaParms> for u16 {
+    fn from(val: TpmiMldsaParms) -> Self {
+        val as u16
+    }
+}
+
+impl Marshal for TpmiMldsaParms {
+    const MAX_SIZE: usize = u16::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        u16::from(*self).marshal(dst)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmiMldsaParms {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        u16::unmarshal(src)?.try_into()
+    }
+}
+
 /// `TPMI_ST_COMMAND_TAG` interface type defined in TPM 2.0 Part 2: Structures, Section 9.30 (Table 61).
 ///
 /// Specifies the structure tag in a command header (`TPM_ST_NO_SESSIONS` or `TPM_ST_SESSIONS`).
