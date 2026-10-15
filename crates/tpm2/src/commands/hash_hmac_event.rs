@@ -141,6 +141,148 @@ impl<'a> UnmarshalMessage<'a> for HashSequenceStartRsp {
     }
 }
 
+/// TPM2_SignSequenceStart (Command)
+#[doc(alias = "TPM2_SignSequenceStart")]
+#[doc(alias = "SignSequenceStart_In")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct SignSequenceStart<'a> {
+    pub key_handle: Handle,
+    pub auth: Tpm2bAuth<'a>,
+    pub context: Tpm2bSignatureCtx<'a>,
+}
+/// TPM2_SignSequenceStart (Response)
+#[doc(alias = "SignSequenceStart_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct SignSequenceStartRsp {
+    pub sequence_handle: Handle,
+}
+
+impl Command for SignSequenceStart<'_> {
+    const CMD_CODE: TpmCc = TpmCc::SignSequenceStart;
+    type Response<'a> = SignSequenceStartRsp;
+}
+impl Message for SignSequenceStart<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
+impl Marshal for SignSequenceStart<'_> {
+    const MAX_SIZE: usize = Tpm2bAuth::MAX_SIZE + Tpm2bSignatureCtx::MAX_SIZE;
+    type MaxBuffer = [u8; SignSequenceStart::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.auth, dst, 0);
+        marshal_helper(&self.context, dst, count)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for SignSequenceStart<'a> {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            key_handle,
+            auth: Unmarshal::unmarshal(src)?,
+            context: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+impl Message for SignSequenceStartRsp {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.sequence_handle]
+    }
+}
+impl Marshal for SignSequenceStartRsp {
+    const MAX_SIZE: usize = 0;
+    type MaxBuffer = [u8; 0];
+    fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
+        0
+    }
+}
+impl<'a> UnmarshalMessage<'a> for SignSequenceStartRsp {
+    fn unmarshal_with_handles(
+        [sequence_handle]: Self::Handles,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self { sequence_handle })
+    }
+}
+
+/// TPM2_VerifySequenceStart (Command)
+#[doc(alias = "TPM2_VerifySequenceStart")]
+#[doc(alias = "VerifySequenceStart_In")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct VerifySequenceStart<'a> {
+    pub key_handle: Handle,
+    pub auth: Tpm2bAuth<'a>,
+    pub hint: Tpm2bSignatureHint<'a>,
+    pub context: Tpm2bSignatureCtx<'a>,
+}
+/// TPM2_VerifySequenceStart (Response)
+#[doc(alias = "VerifySequenceStart_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct VerifySequenceStartRsp {
+    pub sequence_handle: Handle,
+}
+
+impl Command for VerifySequenceStart<'_> {
+    const CMD_CODE: TpmCc = TpmCc::VerifySequenceStart;
+    type Response<'a> = VerifySequenceStartRsp;
+}
+impl Message for VerifySequenceStart<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
+impl Marshal for VerifySequenceStart<'_> {
+    const MAX_SIZE: usize =
+        Tpm2bAuth::MAX_SIZE + Tpm2bSignatureHint::MAX_SIZE + Tpm2bSignatureCtx::MAX_SIZE;
+    type MaxBuffer = [u8; VerifySequenceStart::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.auth, dst, 0);
+        let count = marshal_helper(&self.hint, dst, count);
+        marshal_helper(&self.context, dst, count)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for VerifySequenceStart<'a> {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            key_handle,
+            auth: Unmarshal::unmarshal(src)?,
+            hint: Unmarshal::unmarshal(src)?,
+            context: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+impl Message for VerifySequenceStartRsp {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.sequence_handle]
+    }
+}
+impl Marshal for VerifySequenceStartRsp {
+    const MAX_SIZE: usize = 0;
+    type MaxBuffer = [u8; 0];
+    fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
+        0
+    }
+}
+impl<'a> UnmarshalMessage<'a> for VerifySequenceStartRsp {
+    fn unmarshal_with_handles(
+        [sequence_handle]: Self::Handles,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self { sequence_handle })
+    }
+}
+
 /// TPM2_SequenceUpdate (Command)
 #[doc(alias = "TPM2_SequenceUpdate")]
 #[doc(alias = "SequenceUpdate_In")]

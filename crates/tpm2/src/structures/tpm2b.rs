@@ -160,6 +160,10 @@ macro_rules! impl_marshal {
 ///
 /// A sized buffer that holds digest values, HMAC keys, auth values, nonces, or seed values.
 /// The size cannot exceed the largest digest produced by any hash algorithm implemented on the TPM.
+///
+/// [`commands::SignDigest`] and [`commands::VerifyDigestSignature`] also use this type to carry the
+/// 64-byte ML-DSA external µ ([`TpmiMldsaParms::MU_BYTES`]), which only fits if the `sha512` or
+/// `sha3_512` feature is enabled.
 #[doc(alias = "TPM2B_DIGEST")]
 pub type Tpm2bDigest<'a> = Tpm2bSized<'a, limits::Digest>;
 impl_marshal!(Tpm2bDigest<'_>);

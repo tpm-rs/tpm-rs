@@ -596,3 +596,138 @@ impl<'a> UnmarshalMessage<'a> for ECCDecryptRsp<'a> {
         })
     }
 }
+
+/// TPM2_Encapsulate (Command)
+#[doc(alias = "TPM2_Encapsulate")]
+#[doc(alias = "Encapsulate_In")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct Encapsulate {
+    pub key_handle: Handle,
+}
+/// TPM2_Encapsulate (Response)
+#[doc(alias = "Encapsulate_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct EncapsulateRsp<'a> {
+    pub shared_secret: Tpm2bSharedSecret<'a>,
+    pub ciphertext: Tpm2bKemCiphertext<'a>,
+}
+
+impl Command for Encapsulate {
+    const CMD_CODE: TpmCc = TpmCc::Encapsulate;
+    type Response<'a> = EncapsulateRsp<'a>;
+}
+impl Message for Encapsulate {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
+impl Marshal for Encapsulate {
+    const MAX_SIZE: usize = 0;
+    type MaxBuffer = [u8; 0];
+    fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
+        0
+    }
+}
+impl<'a> UnmarshalMessage<'a> for Encapsulate {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self { key_handle })
+    }
+}
+
+impl Message for EncapsulateRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl Marshal for EncapsulateRsp<'_> {
+    const MAX_SIZE: usize = Tpm2bSharedSecret::MAX_SIZE + Tpm2bKemCiphertext::MAX_SIZE;
+    type MaxBuffer = [u8; EncapsulateRsp::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.shared_secret, dst, 0);
+        marshal_helper(&self.ciphertext, dst, count)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for EncapsulateRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            shared_secret: Unmarshal::unmarshal(src)?,
+            ciphertext: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+/// TPM2_Decapsulate (Command)
+#[doc(alias = "TPM2_Decapsulate")]
+#[doc(alias = "Decapsulate_In")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct Decapsulate<'a> {
+    pub key_handle: Handle,
+    pub ciphertext: Tpm2bKemCiphertext<'a>,
+}
+/// TPM2_Decapsulate (Response)
+#[doc(alias = "Decapsulate_Out")]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+pub struct DecapsulateRsp<'a> {
+    pub shared_secret: Tpm2bSharedSecret<'a>,
+}
+
+impl Command for Decapsulate<'_> {
+    const CMD_CODE: TpmCc = TpmCc::Decapsulate;
+    type Response<'a> = DecapsulateRsp<'a>;
+}
+impl Message for Decapsulate<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.key_handle]
+    }
+}
+impl Marshal for Decapsulate<'_> {
+    const MAX_SIZE: usize = Tpm2bKemCiphertext::MAX_SIZE;
+    type MaxBuffer = [u8; Decapsulate::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.ciphertext.marshal(dst)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for Decapsulate<'a> {
+    fn unmarshal_with_handles(
+        [key_handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            key_handle,
+            ciphertext: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+impl Message for DecapsulateRsp<'_> {
+    type Handles = [Handle; 0];
+    fn handles(&self) -> Self::Handles {
+        []
+    }
+}
+impl Marshal for DecapsulateRsp<'_> {
+    const MAX_SIZE: usize = Tpm2bSharedSecret::MAX_SIZE;
+    type MaxBuffer = [u8; DecapsulateRsp::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.shared_secret.marshal(dst)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for DecapsulateRsp<'a> {
+    fn unmarshal_with_handles(
+        []: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            shared_secret: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
