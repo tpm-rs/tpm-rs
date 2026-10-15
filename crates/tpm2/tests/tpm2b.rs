@@ -178,6 +178,7 @@ fn test_all_tpm2b_simple_marshalling_bounds() {
     impl_stress_test_tpm2b_simple! {Tpm2bData};
     impl_stress_test_tpm2b_simple! {Tpm2bDigest};
     impl_stress_test_tpm2b_simple! {Tpm2bEccParameter};
+    impl_stress_test_tpm2b_simple! {Tpm2bSignatureEddsa};
     impl_stress_test_tpm2b_simple! {Tpm2bPublicKeyMlkem};
     impl_stress_test_tpm2b_simple! {Tpm2bPublicKeyMldsa};
     impl_stress_test_tpm2b_simple! {Tpm2bSignatureMldsa};

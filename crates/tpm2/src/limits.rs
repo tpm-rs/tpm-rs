@@ -157,6 +157,11 @@ pub struct EccParameter;
 impl Tag for EccParameter {
     const CAP: usize = TpmEccCurve::MAX_ECC_KEY_BYTES;
 }
+/// Sized to the maximum supported EdDSA signature length (`2 * TpmEccCurve::MAX_ECC_KEY_BYTES`).
+pub struct SignatureEddsa;
+impl Tag for SignatureEddsa {
+    const CAP: usize = 2 * TpmEccCurve::MAX_ECC_KEY_BYTES;
+}
 /// Sized to the maximum supported ML-KEM public key length ([`TpmiMlkemParms::MAX_PUB_KEY_BYTES`]).
 pub struct PublicKeyMlkem;
 impl Tag for PublicKeyMlkem {
