@@ -1,5 +1,6 @@
 use crate::{errors::UnmarshalError, *};
 use bitflags::bitflags;
+use core::ops::{BitAnd, BitOr, Not};
 
 /// Returns an attribute field built by applying the mask/shift to the value.
 pub(crate) const fn new_attribute_field(value: u32, mask: u32, shift: u32) -> u32 {
@@ -63,6 +64,86 @@ impl<'a> Unmarshal<'a> for TpmaLocality {
     }
 }
 
+// Private helpers for accessing the index type (`TPM_NT`) field of `TPMA_NV` and `TPMA_NV_EXP`.
+impl TpmNt {
+    /// TPM 2.0 Part 2: Structures, Section 13.2, Table 204 (TPMA_NV) - Bits 4..7 (0xF0) specify TPM_NT (Index Type).
+    const FIELD_MASK: u8 = 0xF0;
+    /// Shift of the index type field.
+    const FIELD_SHIFT: u8 = 4;
+
+    /// Returns the index type stored in `attributes`.
+    fn get_field(attributes: impl Into<u64>) -> Option<Self> {
+        let [low_byte, ..] = attributes.into().to_le_bytes();
+        Self::try_from((low_byte & Self::FIELD_MASK) >> Self::FIELD_SHIFT).ok()
+    }
+
+    /// Returns `attributes` with the index type field set to `self`.
+    fn set_field<T>(self, attributes: T) -> T
+    where
+        T: From<u8> + BitAnd<Output = T> + BitOr<Output = T> + Not<Output = T>,
+    {
+        (attributes & !T::from(Self::FIELD_MASK)) | T::from(u8::from(self) << Self::FIELD_SHIFT)
+    }
+}
+
+/// Defines the flags shared by [`TpmaNv`] and [`TpmaNvExp`], followed by any type-specific flags.
+macro_rules! tpma_nv_flags {
+    ($name:ident : $repr:ty { $($extra:tt)* }) => {
+        bitflags! {
+            impl $name : $repr {
+                /// Whether the index data can be written if platform authorization is provided.
+                const PPWRITE = 1 << 0;
+                /// Whether the index data can be written if owner authorization is provided.
+                const OWNERWRITE = 1 <<  1;
+                /// Whether authorizations to change the index contents that require USER role may be provided with an HMAC session or password.
+                const AUTHWRITE = 1 << 2;
+                /// Whether authorizations to change the index contents that require USER role may be provided with a policy session.
+                const POLICYWRITE = 1 << 3;
+                /// If set, the index may not be deteled unless the auth_policy is satisfied using nv_undefined_space_special.
+                /// If clear, the index may be deleted with proper platform/owner authorization using nv_undefine_space.
+                const POLICY_DELETE = 1 << 10;
+                /// Whether the index can NOT be written.
+                const WRITELOCKED = 1 << 11;
+                /// Whether a partial write of the index data is NOT allowed.
+                const WRITEALL = 1 << 12;
+                /// Whether nv_write_lock may be used to prevent futher writes to this location.
+                const WRITEDEFINE = 1 << 13;
+                /// Whether nv_write_lock may be used to prevent further writes to this location until the next TPM reset/restart.
+                const WRITE_STCLEAR = 1 << 14;
+                /// Whether WRITELOCKED is set if nv_global_write_lock is successful.
+                const GLOBALLOCK = 1 << 15;
+                /// Whether the index data can be read if platform authorization is provided.
+                const PPREAD = 1 << 16;
+                /// Whether the index data can be read if owner authorization is provided.
+                const OWNERREAD = 1 << 17;
+                /// Whether the index data can be read if auth_value is provided.
+                const AUTHREAD = 1 << 18;
+                /// Whether the index data can be read if the auth_policy is satisfied.
+                const POLICYREAD = 1 << 19;
+                /// If set, authorizationn failures of the index do not affect the DA logic and authorization of the index is not blocked when the TPM is in Lockout mode.
+                /// If clear, authorization failures of the index will increment the authorization failure counter and authorizations of this index are not allowed when the TPM is in Lockout mode.
+                const NO_DA = 1 << 25;
+                /// Whether NV index state is required to be saved only when the TPM performs an orderly shutdown.
+                const ORDERLY = 1 << 26;
+                /// Whether WRITTEN is cleared by TPM reset/restart.
+                const CLEAR_STCLEAR = 1 << 27;
+                /// Whether reads of the index are blocked  until the next TPM reset/restart.
+                const READLOCKED = 1 << 28;
+                /// Whether the index has been written.
+                const WRITTEN = 1 << 29;
+                /// If set, the index may be undefined with platform authorization but not owner authorization.
+                /// If clear, the index may be undefined with owner authorization but not platform authorization.
+                const PLATFORMCREATE = 1 << 30;
+                /// Whether nv_read_lock may be used to set READLOCKED for this index.
+                const READ_STCLEAR = 1 << 31;
+                $($extra)*
+                // See multi-bit type field below.
+                const _ = !0;
+            }
+        }
+    };
+}
+
 /// `TPMA_NV` attribute structure defined in TPM 2.0 Part 2: Structures, Section 13.2 (Table 204).
 ///
 /// This bitfield defines the access controls, write/read locking rules, authorization requirements,
@@ -71,86 +152,22 @@ impl<'a> Unmarshal<'a> for TpmaLocality {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[repr(transparent)]
 pub struct TpmaNv(pub u32);
-bitflags! {
-    impl TpmaNv : u32 {
-        /// Whether the index data can be written if platform authorization is provided.
-        const PPWRITE = 1 << 0;
-        /// Whether the index data can be written if owner authorization is provided.
-        const OWNERWRITE = 1 <<  1;
-        /// Whether authorizations to change the index contents that require USER role may be provided with an HMAC session or password.
-        const AUTHWRITE = 1 << 2;
-        /// Whether authorizations to change the index contents that require USER role may be provided with a policy session.
-        const POLICYWRITE = 1 << 3;
-        /// If set, the index may not be deteled unless the auth_policy is satisfied using nv_undefined_space_special.
-        /// If clear, the index may be deleted with proper platform/owner authorization using nv_undefine_space.
-        const POLICY_DELETE = 1 << 10;
-        /// Whether the index can NOT be written.
-        const WRITELOCKED = 1 << 11;
-        /// Whether a partial write of the index data is NOT allowed.
-        const WRITEALL = 1 << 12;
-        /// Whether nv_write_lock may be used to prevent futher writes to this location.
-        const WRITEDEFINE = 1 << 13;
-        /// Whether nv_write_lock may be used to prevent further writes to this location until the next TPM reset/restart.
-        const WRITE_STCLEAR = 1 << 14;
-        /// Whether WRITELOCKED is set if nv_global_write_lock is successful.
-        const GLOBALLOCK = 1 << 15;
-        /// Whether the index data can be read if platform authorization is provided.
-        const PPREAD = 1 << 16;
-        /// Whether the index data can be read if owner authorization is provided.
-        const OWNERREAD = 1 << 17;
-        /// Whether the index data can be read if auth_value is provided.
-        const AUTHREAD = 1 << 18;
-        /// Whether the index data can be read if the auth_policy is satisfied.
-        const POLICYREAD = 1 << 19;
-        /// If set, authorizationn failures of the index do not affect the DA logic and authorization of the index is not blocked when the TPM is in Lockout mode.
-        /// If clear, authorization failures of the index will increment the authorization failure counter and authorizations of this index are not allowed when the TPM is in Lockout mode.
-        const NO_DA = 1 << 25;
-        /// Whether NV index state is required to be saved only when the TPM performs an orderly shutdown.
-        const ORDERLY = 1 << 26;
-        /// Whether WRITTEN is cleared by TPM reset/restart.
-        const CLEAR_STCLEAR = 1 << 27;
-        /// Whether reads of the index are blocked  until the next TPM reset/restart.
-        const READLOCKED = 1 << 28;
-        /// Whether the index has been written.
-        const WRITTEN = 1 << 29;
-        /// If set, the index may be undefined with platform authorization but not owner authorization.
-        /// If clear, the index may be undefined with owner authorization but not platform authorization.
-        const PLATFORMCREATE = 1 << 30;
-        /// Whether nv_read_lock may be used to set READLOCKED for this index.
-        const READ_STCLEAR = 1 << 31;
-        // See multi-bit type field below.
-        const _ = !0;
-    }
-}
+tpma_nv_flags! { TpmaNv : u32 {} }
 
 impl TpmaNv {
-    /// TPM 2.0 Part 2: Structures, Section 13.2, Table 204 (TPMA_NV) - Bits 4..7 (0xF0) specify TPM_NT (Index Type).
-    const NT_MASK: u32 = 0xF0;
-    /// Shift of the index type field.
-    const NT_SHIFT: u32 = 4;
-
-    /// Returns the attribute for an index type (with all other field clear).
-    pub(crate) const fn from_index_type(index_type: TpmNt) -> TpmaNv {
-        TpmaNv(new_attribute_field(
-            index_type as u32,
-            Self::NT_MASK,
-            Self::NT_SHIFT,
-        ))
-    }
-
     /// Returns the type of the index.
     pub fn get_index_type(self) -> Option<TpmNt> {
-        TpmNt::try_from(get_attribute_field(self.0, Self::NT_MASK, Self::NT_SHIFT) as u8).ok()
+        TpmNt::get_field(self.0)
     }
     /// Sets the type of the index.
     pub fn set_type(&mut self, index_type: TpmNt) {
-        self.0 = set_attribute_field(self.0, index_type as u32, Self::NT_MASK, Self::NT_SHIFT);
+        self.0 = index_type.set_field(self.0);
     }
 }
 
 impl From<TpmNt> for TpmaNv {
     fn from(value: TpmNt) -> Self {
-        Self::from_index_type(value)
+        Self(value.set_field(0))
     }
 }
 
@@ -164,6 +181,63 @@ impl Marshal for TpmaNv {
 }
 
 impl<'a> Unmarshal<'a> for TpmaNv {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Unmarshal::unmarshal(src).map(Self)
+    }
+}
+
+/// `TPMA_NV_EXP` attribute structure defined in TPM 2.0 Part 2: Structures
+///
+/// Expanded 64-bit NV attribute bitfield containing all [`TpmaNv`] bits in the lower 32 bits and
+/// external NV protection attributes in the upper 32 bits.
+#[doc(alias = "TPMA_NV_EXP")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[repr(transparent)]
+pub struct TpmaNvExp(pub u64);
+tpma_nv_flags! {
+    TpmaNvExp : u64 {
+        /// Indicates that the NV Index data is to be encrypted when stored in external NV memory.
+        const EXTERNAL_NV_ENCRYPTION = 1 << 32;
+        /// Indicates that the NV Index data is to be integrity-protected when stored in external NV memory.
+        const EXTERNAL_NV_INTEGRITY = 1 << 33;
+        /// Indicates that the NV Index data is to be protected against rollback when stored in external NV memory.
+        const EXTERNAL_NV_ANTIROLLBACK = 1 << 34;
+    }
+}
+
+impl TpmaNvExp {
+    /// Returns the type of the index.
+    pub fn get_index_type(self) -> Option<TpmNt> {
+        TpmNt::get_field(self.0)
+    }
+    /// Sets the type of the index.
+    pub fn set_type(&mut self, index_type: TpmNt) {
+        self.0 = index_type.set_field(self.0);
+    }
+}
+
+impl From<TpmNt> for TpmaNvExp {
+    fn from(value: TpmNt) -> Self {
+        Self(value.set_field(0))
+    }
+}
+
+impl From<TpmaNv> for TpmaNvExp {
+    fn from(value: TpmaNv) -> Self {
+        Self(u64::from(value.0))
+    }
+}
+
+impl Marshal for TpmaNvExp {
+    const MAX_SIZE: usize = u64::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.0.marshal(dst)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmaNvExp {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Unmarshal::unmarshal(src).map(Self)
     }

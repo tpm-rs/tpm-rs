@@ -13,4 +13,11 @@ fn test_attributes_field() {
     assert_eq!(cc.get_command_index(), 0xA0);
     assert!(cc.contains(TpmaCc::NV));
     assert!((cc & TpmaCc::FLUSHED).0 != 0);
+
+    let nv = TpmaNv::from(TpmNt::Counter) | TpmaNv::OWNERWRITE;
+    let mut nv_exp = TpmaNvExp::from(nv) | TpmaNvExp::EXTERNAL_NV_ENCRYPTION;
+    assert_eq!(nv_exp.get_index_type(), Some(TpmNt::Counter));
+    nv_exp.set_type(TpmNt::Extend);
+    assert_eq!(nv_exp.get_index_type(), Some(TpmNt::Extend));
+    assert!(nv_exp.contains(TpmaNvExp::OWNERWRITE | TpmaNvExp::EXTERNAL_NV_ENCRYPTION));
 }

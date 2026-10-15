@@ -402,6 +402,34 @@ impl<'a> Unmarshal<'a> for TpmsNvCertifyInfo<'a> {
     }
 }
 
+/// `TPMS_NV_DIGEST_CERTIFY_INFO` structure defined in TPM 2.0 Part 2: Structures
+///
+/// Contains NV Index digest certification attestation data (returned when `TPM2_NV_Certify` is called with `size = 0`).
+#[doc(alias = "TPMS_NV_DIGEST_CERTIFY_INFO")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TpmsNvDigestCertifyInfo<'a> {
+    pub index_name: Tpm2bName<'a>,
+    pub nv_digest: Tpm2bDigest<'a>,
+}
+impl Marshal for TpmsNvDigestCertifyInfo<'_> {
+    const MAX_SIZE: usize = Tpm2bName::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
+    type MaxBuffer = [u8; TpmsNvDigestCertifyInfo::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut [u8; TpmsNvDigestCertifyInfo::MAX_SIZE]) -> usize {
+        let count = marshal_helper(&self.index_name, dst, 0);
+        marshal_helper(&self.nv_digest, dst, count)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmsNvDigestCertifyInfo<'a> {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            index_name: Unmarshal::unmarshal(src)?,
+            nv_digest: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
 /// `TPMS_ATTEST` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.24 (Table 143).
 ///
 /// Standard attestation structure signed during TPM attestation commands (`TPM2_Certify`, `TPM2_Quote`, `TPM2_GetTime`, etc.).
@@ -824,6 +852,10 @@ impl<'a> Unmarshal<'a> for TpmsAlgorithmDetailEcc<'a> {
 /// `TPMS_CAPABILITY_DATA` union structure defined in TPM 2.0 Part 2: Structures, Section 10.6.2 (Table 128).
 ///
 /// Data area returned in response to `TPM2_GetCapability`.
+///
+/// The `pubKeys` ([`TpmCap::PubKeys`]), `spdmSessionInfo` ([`TpmCap::SpdmSessionInfo`]), and
+/// `vendorProperty` (`TPM_CAP_VENDOR_PROPERTY`) capabilities are not supported; unmarshalling
+/// them returns an error.
 #[doc(alias = "TPMS_CAPABILITY_DATA")]
 #[doc(alias = "TPMU_CAPABILITIES")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1116,6 +1148,47 @@ impl Marshal for TpmsNvPublic<'_> {
 }
 
 impl<'a> Unmarshal<'a> for TpmsNvPublic<'a> {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            nv_index: Unmarshal::unmarshal(src)?,
+            name_alg: Unmarshal::unmarshal(src)?,
+            attributes: Unmarshal::unmarshal(src)?,
+            auth_policy: Unmarshal::unmarshal(src)?,
+            data_size: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+/// `TPMS_NV_PUBLIC_EXP_ATTR` structure defined in TPM 2.0 Part 2: Structures
+///
+/// Defines the public area parameters for an NV Index using 64-bit expanded attributes ([`TpmaNvExp`]).
+#[doc(alias = "TPMS_NV_PUBLIC_EXP_ATTR")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TpmsNvPublicExpAttr<'a> {
+    pub nv_index: Handle,
+    pub name_alg: TpmiAlgHash,
+    pub attributes: TpmaNvExp,
+    pub auth_policy: Tpm2bDigest<'a>,
+    pub data_size: u16,
+}
+impl Marshal for TpmsNvPublicExpAttr<'_> {
+    const MAX_SIZE: usize = Handle::MAX_SIZE
+        + TpmiAlgHash::MAX_SIZE
+        + TpmaNvExp::MAX_SIZE
+        + Tpm2bDigest::MAX_SIZE
+        + u16::MAX_SIZE;
+    type MaxBuffer = [u8; TpmsNvPublicExpAttr::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut [u8; TpmsNvPublicExpAttr::MAX_SIZE]) -> usize {
+        let count = marshal_helper(&self.nv_index, dst, 0);
+        let count = marshal_helper(&self.name_alg, dst, count);
+        let count = marshal_helper(&self.attributes, dst, count);
+        let count = marshal_helper(&self.auth_policy, dst, count);
+        marshal_helper(&self.data_size, dst, count)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmsNvPublicExpAttr<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             nv_index: Unmarshal::unmarshal(src)?,
