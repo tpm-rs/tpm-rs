@@ -1,0 +1,60 @@
+vendor-info: report tpm-rs's vendor strings, firmware version and spec levels
+
+Classification: platform setting.
+
+TPM_PT_MANUFACTURER, TPM_PT_VENDOR_STRING_x, TPM_PT_FIRMWARE_VERSION_x, the
+TPM specification version/year/day and the platform-specification
+family/level/revision/year/day are implementation-defined; the reference
+reports tpm-rs's values.
+
+diff --git a/src/VendorInfo.c b/src/VendorInfo.c
+--- a/src/VendorInfo.c
++++ b/src/VendorInfo.c
+@@ -68,13 +68,14 @@
+ #include "Platform.h"
+ 
+ // In this sample platform, these are compile time constants, but are not required to be.
+-#define MANUFACTURER    "IBM "
+-#define VENDOR_STRING_1 "SW  "
+-#define VENDOR_STRING_2 " TPM"
++// tpm-rs differential testing: tpm-rs's vendor strings and firmware version.
++#define MANUFACTURER    "GOOG"
++#define VENDOR_STRING_1 "TPM-"
++#define VENDOR_STRING_2 "RUST"
+ #define VENDOR_STRING_3 "\0\0\0\0"
+ #define VENDOR_STRING_4 "\0\0\0\0"
+-#define FIRMWARE_V1     (0x20240125)
+-#define FIRMWARE_V2     (0x00120000)
++#define FIRMWARE_V1     (0x00000001)
++#define FIRMWARE_V2     (0x00000000)
+ #define MAX_SVN         255
+ 
+ static uint32_t currentHash = FIRMWARE_V2;
+diff --git a/src/VendorInfo.h b/src/VendorInfo.h
+--- a/src/VendorInfo.h
++++ b/src/VendorInfo.h
+@@ -62,17 +62,19 @@
+ #define _VENDORINFO_H
+ 
+ // Define the TPM specification-specific capability values.
++// tpm-rs differential testing: the specification and platform-specification
++// capability values tpm-rs reports (as in mstpm20).
+ #define TPM_SPEC_FAMILY      (0x322E3000)
+ #define TPM_SPEC_LEVEL       (00)
+-#define TPM_SPEC_VERSION     (183)
+-#define TPM_SPEC_YEAR        (2024)
+-#define TPM_SPEC_DAY_OF_YEAR (25)
++#define TPM_SPEC_VERSION     (185)
++#define TPM_SPEC_YEAR        (0)
++#define TPM_SPEC_DAY_OF_YEAR (0)
+ #define MAX_VENDOR_PROPERTY  (1)
+ 
+ // Define the platform specification-specific capability values.
+-#define PLATFORM_FAMILY      (1)		/* kgold changed for PC Client */
++#define PLATFORM_FAMILY      (0)
+ #define PLATFORM_LEVEL       (0)
+-#define PLATFORM_VERSION     (0x00000106)
++#define PLATFORM_VERSION     (0)
+ #define PLATFORM_YEAR        (0)
+ #define PLATFORM_DAY_OF_YEAR (0)
+ 

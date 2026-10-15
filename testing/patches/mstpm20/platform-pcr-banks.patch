@@ -1,0 +1,29 @@
+pcr-banks: allocate the SHA-1 and SHA-256 PCR banks by default
+
+Classification: platform setting.
+
+The default PCR allocation is a platform choice; tpm-rs allocates the SHA-1
+and SHA-256 banks (instead of SHA-256 and SHA-384).
+
+diff --git a/TPMCmd/Platform/src/PlatformPcr.c b/TPMCmd/Platform/src/PlatformPcr.c
+--- a/TPMCmd/Platform/src/PlatformPcr.c
++++ b/TPMCmd/Platform/src/PlatformPcr.c
+@@ -65,15 +65,12 @@ MUST_BE(ARRAYSIZE(s_initAttributes) == I
+ #endif
+ 
+ static const TPM_ALG_ID DefaultActivePcrBanks[] = {
++#if ALG_SHA1
++    TPM_ALG_SHA1,
++#endif
+ #if ALG_SHA256
+     TPM_ALG_SHA256
+ #endif
+-#if ALG_SHA384
+-#  if ALG_SHA256
+-    ,
+-#  endif
+-    TPM_ALG_SHA384
+-#endif
+ };
+ 
+ UINT32 _platPcr__NumberOfPcrs()

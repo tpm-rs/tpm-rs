@@ -1,0 +1,101 @@
+fix-response-code-positions: number handle and parameter response codes per Part 3
+
+Classification: spec-deviation bug fix.
+
+Response-code positions follow the Part 3 command layout: handles are
+TPM_RC_H + n and parameters TPM_RC_P + n counted after the handles. Six
+command headers (ChangePPS, ContextSave, HierarchyChangeAuth, NV_ReadPublic,
+PolicyGetDigest, SequenceUpdate) number them wrongly.
+
+diff --git a/src/ChangePPS_fp.h b/src/ChangePPS_fp.h
+--- a/src/ChangePPS_fp.h
++++ b/src/ChangePPS_fp.h
+@@ -68,7 +68,10 @@ typedef struct {
+     TPMI_RH_PLATFORM	authHandle;
+ } ChangePPS_In;
+ 
+-#define RC_ChangePPS_authHandle	(TPM_RC_P + TPM_RC_1)
++// tpm-rs differential testing -- spec deviation fix (NOT determinism):
++// response-code positions per the Part 3 command layout (handles are
++// TPM_RC_H + n, parameters TPM_RC_P + n counted after the handles).
++#define RC_ChangePPS_authHandle	(TPM_RC_H + TPM_RC_1)
+ 
+ TPM_RC
+ TPM2_ChangePPS(
+diff --git a/src/ContextSave_fp.h b/src/ContextSave_fp.h
+--- a/src/ContextSave_fp.h
++++ b/src/ContextSave_fp.h
+@@ -68,7 +68,10 @@ typedef struct {
+     TPMI_DH_CONTEXT	saveHandle;
+ } ContextSave_In;
+ 
+-#define RC_ContextSave_saveHandle	(TPM_RC_P + TPM_RC_1)
++// tpm-rs differential testing -- spec deviation fix (NOT determinism):
++// response-code positions per the Part 3 command layout (handles are
++// TPM_RC_H + n, parameters TPM_RC_P + n counted after the handles).
++#define RC_ContextSave_saveHandle	(TPM_RC_H + TPM_RC_1)
+ 
+ typedef struct {
+     TPMS_CONTEXT	context;
+diff --git a/src/HierarchyChangeAuth_fp.h b/src/HierarchyChangeAuth_fp.h
+--- a/src/HierarchyChangeAuth_fp.h
++++ b/src/HierarchyChangeAuth_fp.h
+@@ -70,7 +70,10 @@ typedef struct {
+ } HierarchyChangeAuth_In;
+ 
+ #define RC_HierarchyChangeAuth_authHandle	(TPM_RC_H + TPM_RC_1)
+-#define RC_HierarchyChangeAuth_newAuth 		(TPM_RC_P + TPM_RC_2)
++// tpm-rs differential testing -- spec deviation fix (NOT determinism):
++// response-code positions per the Part 3 command layout (handles are
++// TPM_RC_H + n, parameters TPM_RC_P + n counted after the handles).
++#define RC_HierarchyChangeAuth_newAuth 		(TPM_RC_P + TPM_RC_1)
+ 
+ TPM_RC
+ TPM2_HierarchyChangeAuth(
+diff --git a/src/NV_ReadPublic_fp.h b/src/NV_ReadPublic_fp.h
+--- a/src/NV_ReadPublic_fp.h
++++ b/src/NV_ReadPublic_fp.h
+@@ -68,7 +68,10 @@ typedef struct {
+     TPMI_RH_NV_INDEX	nvIndex;
+ } NV_ReadPublic_In;
+ 
+-#define RC_NV_ReadPublic_nvIndex	(TPM_RC_P + TPM_RC_1)
++// tpm-rs differential testing -- spec deviation fix (NOT determinism):
++// response-code positions per the Part 3 command layout (handles are
++// TPM_RC_H + n, parameters TPM_RC_P + n counted after the handles).
++#define RC_NV_ReadPublic_nvIndex	(TPM_RC_H + TPM_RC_1)
+ 
+ typedef struct {
+     TPM2B_NV_PUBLIC	nvPublic;
+diff --git a/src/PolicyGetDigest_fp.h b/src/PolicyGetDigest_fp.h
+--- a/src/PolicyGetDigest_fp.h
++++ b/src/PolicyGetDigest_fp.h
+@@ -68,7 +68,10 @@ typedef struct {
+     TPMI_SH_POLICY	policySession;
+ } PolicyGetDigest_In;
+ 
+-#define RC_PolicyGetDigest_policySession	(TPM_RC_P + TPM_RC_1)
++// tpm-rs differential testing -- spec deviation fix (NOT determinism):
++// response-code positions per the Part 3 command layout (handles are
++// TPM_RC_H + n, parameters TPM_RC_P + n counted after the handles).
++#define RC_PolicyGetDigest_policySession	(TPM_RC_H + TPM_RC_1)
+ 
+ typedef struct {
+     TPM2B_DIGEST	policyDigest;
+diff --git a/src/SequenceUpdate_fp.h b/src/SequenceUpdate_fp.h
+--- a/src/SequenceUpdate_fp.h
++++ b/src/SequenceUpdate_fp.h
+@@ -70,8 +70,11 @@ typedef struct {
+     TPM2B_MAX_BUFFER	buffer;
+ } SequenceUpdate_In;
+ 
+-#define RC_SequenceUpdate_sequenceHandle 	(TPM_RC_P + TPM_RC_1)
+-#define RC_SequenceUpdate_buffer		(TPM_RC_P + TPM_RC_2)
++// tpm-rs differential testing -- spec deviation fix (NOT determinism):
++// response-code positions per the Part 3 command layout (handles are
++// TPM_RC_H + n, parameters TPM_RC_P + n counted after the handles).
++#define RC_SequenceUpdate_sequenceHandle 	(TPM_RC_H + TPM_RC_1)
++#define RC_SequenceUpdate_buffer		(TPM_RC_P + TPM_RC_1)
+ 
+ TPM_RC
+ TPM2_SequenceUpdate(

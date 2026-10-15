@@ -17,8 +17,3 @@ bssl-sys = { git = "https://boringssl.googlesource.com/boringssl" }
 rand_chacha = "0.3.1"
 rand_core = "0.6.4"
 hex-literal = { workspace = true }
-
-[features]
-# Opt-in deterministic randomness for reproducible test runs. Purely additive:
-# nothing changes outside a `replay::ReplayRng::scope`.
-reproducible = []

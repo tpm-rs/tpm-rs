@@ -1,4 +1,6 @@
-use super::{KeyDerivationArgs, TransientObject, provisioned_secret};
+#[cfg(not(feature = "reference-rng"))]
+use super::KeyDerivationArgs;
+use super::{TransientObject, provisioned_secret};
 use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
@@ -86,43 +88,64 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let parent_seed_len =
             self.resolve_primary_parent_seed(primary_handle, &mut parent_seed_val)?;
 
-        let name_alg = _in_public_struct
+        let _name_alg = _in_public_struct
             .name_alg
             .ok_or(TpmRc::HASH.with(Position::parameter(2)))?;
 
-        // 2. Derive object seed, private key, and update public key template unique area
-        let fallback_sensitive_data = if (_in_public_struct.object_attributes.0
-            & tpm2::TpmaObject::SENSITIVE_DATA_ORIGIN.0)
-            == 0
-        {
-            Some(in_sensitive_struct.data.get_buffer())
-        } else {
-            None
-        };
         let mut obj_seed = [0u8; 64];
-        let obj_seed_len = if parent_seed_len > 0 {
-            self.derive_primary_object_seed(
-                &parent_seed_val[..parent_seed_len],
-                &_in_public_struct.as_tpmt(),
+        let mut actual_private_key = [0u8; 1536];
+        // 2. With `reference-rng`, as the reference's `CryptCreateObject()` with the DRBG seeded
+        // from the hierarchy's Primary Seed (`DRBG_InstantiateSeeded()`).
+        #[cfg(feature = "reference-rng")]
+        let (obj_seed_len, actual_private_key_len) = {
+            let template = _in_public_struct;
+            self.reference_create_object(
+                Some(super::reference_ops::PrimaryCreation {
+                    seed: &parent_seed_val[..parent_seed_len],
+                    endorsement: primary_handle == tpm2::Handle::RH_ENDORSEMENT,
+                }),
+                &template.as_tpmt(),
                 in_sensitive_struct.data.get_buffer(),
+                &mut _in_public_struct.parms_and_id,
+                &mut actual_private_key,
                 &mut obj_seed,
             )?
-        } else {
-            0
         };
-        let gen_seed_arg = (obj_seed_len > 0).then_some(&obj_seed[..obj_seed_len]);
-        let mut actual_private_key = [0u8; 1536];
-        let actual_private_key_len = self.generate_key_and_unique(
-            name_alg,
-            &mut _in_public_struct.parms_and_id,
-            KeyDerivationArgs {
-                gen_seed: gen_seed_arg,
-                obj_seed: gen_seed_arg.unwrap_or(&[]),
-                get_random_fallback: fallback_sensitive_data.is_none(),
-                fallback_sensitive_data,
-            },
-            &mut actual_private_key,
-        )?;
+        #[cfg(not(feature = "reference-rng"))]
+        let (obj_seed_len, actual_private_key_len) = {
+            // 2. Derive object seed, private key, and update public key template unique area
+            let fallback_sensitive_data = if (_in_public_struct.object_attributes.0
+                & tpm2::TpmaObject::SENSITIVE_DATA_ORIGIN.0)
+                == 0
+            {
+                Some(in_sensitive_struct.data.get_buffer())
+            } else {
+                None
+            };
+            let obj_seed_len = if parent_seed_len > 0 {
+                self.derive_primary_object_seed(
+                    &parent_seed_val[..parent_seed_len],
+                    &_in_public_struct.as_tpmt(),
+                    in_sensitive_struct.data.get_buffer(),
+                    &mut obj_seed,
+                )?
+            } else {
+                0
+            };
+            let gen_seed_arg = (obj_seed_len > 0).then_some(&obj_seed[..obj_seed_len]);
+            let actual_private_key_len = self.generate_key_and_unique(
+                _name_alg,
+                &mut _in_public_struct.parms_and_id,
+                KeyDerivationArgs {
+                    gen_seed: gen_seed_arg,
+                    obj_seed: gen_seed_arg.unwrap_or(&[]),
+                    get_random_fallback: fallback_sensitive_data.is_none(),
+                    fallback_sensitive_data,
+                },
+                &mut actual_private_key,
+            )?;
+            (obj_seed_len, actual_private_key_len)
+        };
         let (stored_seed, stored_seed_len) = TransientObject::seed_from_bytes(
             Self::object_seed_value(&_in_public_struct.as_tpmt(), &obj_seed[..obj_seed_len]),
         );

@@ -1,6 +1,6 @@
-use super::{
-    KeyDerivationArgs, ParentSchemeInfo, ResolvedParentInfo, TransientObject, provisioned_secret,
-};
+#[cfg(not(feature = "reference-rng"))]
+use super::KeyDerivationArgs;
+use super::{ParentSchemeInfo, ResolvedParentInfo, TransientObject, provisioned_secret};
 use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
@@ -102,7 +102,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let (obj_seed_len, actual_private_key_len) = if is_derived {
             // 4-5. Derived Object: sensitive value and seedValue come from the KDFa stream of
             // the derivation parent (Part 1, "Entropy for Derived Objects").
-            self.derive_object_material(
+            let lens = self.derive_object_material(
                 &parent_seed_val[..parent_info.seed_len],
                 parent_info.name_alg,
                 &in_sensitive_struct,
@@ -111,51 +111,83 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 &mut in_public_struct.parms_and_id,
                 &mut actual_private_key,
                 &mut obj_seed,
-            )?
-        } else {
-            // 4. Derive/Generate the new object seed
-            let obj_seed_len = self.derive_create_loaded_seed(
-                is_primary,
-                is_derived,
-                &parent_seed_val[..parent_info.seed_len],
-                parent_info.seed_len,
-                &in_public_struct.as_tpmt(),
-                &in_sensitive_struct,
-                template_derive,
-                parent_info.name_alg,
-                &mut obj_seed,
             )?;
-
-            let gen_seed_arg = if is_primary {
-                Some(&obj_seed[..obj_seed_len])
-            } else {
-                None
-            };
-
-            // 5. Generate/Derive the key pairs and the unique identifier
-            let get_random_fallback = !is_primary
-                && (in_public_struct.object_attributes.0 & TpmaObject::SENSITIVE_DATA_ORIGIN.0)
-                    != 0;
-            let fallback_sensitive_data = if (in_public_struct.object_attributes.0
-                & TpmaObject::SENSITIVE_DATA_ORIGIN.0)
-                == 0
+            // The FIPS pairwise test of a signing ECC key draws from the TPM's DRBG.
+            #[cfg(feature = "reference-rng")]
+            if let crate::owned::OwnedPublicParmsAndId::Ecc(parms, _) =
+                in_public_struct.parms_and_id
+                && in_public_struct
+                    .object_attributes
+                    .contains(TpmaObject::SIGN_ENCRYPT)
             {
-                Some(in_sensitive_struct.data.get_buffer())
-            } else {
-                None
-            };
-            let actual_private_key_len = self.generate_key_and_unique(
-                name_alg,
-                &mut in_public_struct.parms_and_id,
-                KeyDerivationArgs {
-                    gen_seed: gen_seed_arg,
-                    obj_seed: &obj_seed[..obj_seed_len],
-                    get_random_fallback,
-                    fallback_sensitive_data,
-                },
-                &mut actual_private_key,
-            )?;
-            (obj_seed_len, actual_private_key_len)
+                self.reference_ecc_pairwise_test(parms.curve_id, &actual_private_key[..lens.1])?;
+            }
+            lens
+        } else {
+            // 4-5. With `reference-rng`, as the reference's `CryptCreateObject()`: from the TPM's
+            // DRBG, or for a Primary Object from the DRBG seeded with the hierarchy's seed.
+            #[cfg(feature = "reference-rng")]
+            {
+                let template = in_public_struct;
+                let primary = is_primary.then(|| super::reference_ops::PrimaryCreation {
+                    seed: &parent_seed_val[..parent_info.seed_len],
+                    endorsement: parent_handle == Handle::RH_ENDORSEMENT.0,
+                });
+                self.reference_create_object(
+                    primary,
+                    &template.as_tpmt(),
+                    in_sensitive_struct.data.get_buffer(),
+                    &mut in_public_struct.parms_and_id,
+                    &mut actual_private_key,
+                    &mut obj_seed,
+                )?
+            }
+            #[cfg(not(feature = "reference-rng"))]
+            {
+                // 4. Derive/Generate the new object seed
+                let obj_seed_len = self.derive_create_loaded_seed(
+                    is_primary,
+                    is_derived,
+                    &parent_seed_val[..parent_info.seed_len],
+                    parent_info.seed_len,
+                    &in_public_struct.as_tpmt(),
+                    &in_sensitive_struct,
+                    template_derive,
+                    parent_info.name_alg,
+                    &mut obj_seed,
+                )?;
+
+                let gen_seed_arg = if is_primary {
+                    Some(&obj_seed[..obj_seed_len])
+                } else {
+                    None
+                };
+
+                // 5. Generate/Derive the key pairs and the unique identifier
+                let get_random_fallback = !is_primary
+                    && (in_public_struct.object_attributes.0 & TpmaObject::SENSITIVE_DATA_ORIGIN.0)
+                        != 0;
+                let fallback_sensitive_data = if (in_public_struct.object_attributes.0
+                    & TpmaObject::SENSITIVE_DATA_ORIGIN.0)
+                    == 0
+                {
+                    Some(in_sensitive_struct.data.get_buffer())
+                } else {
+                    None
+                };
+                let actual_private_key_len = self.generate_key_and_unique(
+                    name_alg,
+                    &mut in_public_struct.parms_and_id,
+                    KeyDerivationArgs {
+                        gen_seed: gen_seed_arg,
+                        obj_seed: &obj_seed[..obj_seed_len],
+                        get_random_fallback,
+                        fallback_sensitive_data,
+                    },
+                    &mut actual_private_key,
+                )?;
+                (obj_seed_len, actual_private_key_len)
+            }
         };
 
         let mut pub_buf = [0u8; tpm2::TpmtPublic::MAX_SIZE];
@@ -1250,11 +1282,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         .map_err(|_| TpmRc::FAILURE)?;
 
         let mut iv = [0u8; 16];
-        self.context
-            .platform
-            .rng
-            .fill_bytes(&mut iv)
-            .map_err(|_| TpmRc::FAILURE)?;
+        self.context.random_platform(&mut iv)?;
         let orig_iv = iv;
 
         let sym_alg =
@@ -1392,6 +1420,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             sensitive: sensitive_comp,
         };
 
+        // Primary and Derived Objects have no `outPrivate` (and no outer wrap, so no IV is
+        // drawn for them).
+        if is_primary || is_derived {
+            return Ok(Tpm2bPrivate::default());
+        }
         let final_private_len = self.encrypt_sensitive_area(
             &tpmt_sensitive,
             parent_seed_val,
@@ -1400,13 +1433,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             sym_key_bits,
             private_buf,
         )?;
-
-        if !is_primary && !is_derived {
-            Ok(Tpm2bPrivate::from_bytes(&private_buf[..final_private_len])
-                .expect("marshalled private area has valid size"))
-        } else {
-            Ok(Tpm2bPrivate::default())
-        }
+        Ok(Tpm2bPrivate::from_bytes(&private_buf[..final_private_len])
+            .expect("marshalled private area has valid size"))
     }
 }
 

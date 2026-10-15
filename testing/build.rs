@@ -1,15 +1,21 @@
 //! Builds the C reference TPMs for differential testing.
 //!
 //! With the `differential` feature, the build clones every reference
-//! implementation at a pinned commit, applies its patch, compiles it into a
+//! implementation at a pinned commit, applies its patches, compiles it into a
 //! symbol-isolated static library (exporting only the `difftest_*` entry
 //! points) and links that library into the reference binary of the same name
 //! (see `src/differential/mod.rs`):
 //!
 //! * `mstpm20`: `https://github.com/TrustedComputingGroup/TPM` (the TCG / Microsoft
-//!   reference implementation), patched by `testing/mstpm20.patch`;
+//!   reference implementation), patched by `testing/patches/mstpm20/*.patch`;
 //! * `ibmswtpm2`: `https://github.com/kgoldman/ibmswtpm2` (the IBM software
-//!   TPM), patched by `testing/ibmswtpm2.patch`.
+//!   TPM), patched by `testing/patches/ibmswtpm2/*.patch`.
+//!
+//! Every patch file holds one individual fix (a spec-deviation bug fix, a
+//! profile or platform setting, harness plumbing or a build fix), described by
+//! the plain-text header before its first `diff --git` line, and is named
+//! `<classification>-<fix>.patch` (see [`PATCH_CLASSES`]). The patches of a
+//! reference are applied with `git apply` in sorted file-name order.
 //!
 //! Without the feature, nothing is built.
 
@@ -18,8 +24,9 @@ use std::process::Command;
 
 /// A C reference TPM implementation built for differential testing.
 struct Reference {
-    /// Name of the implementation, its patch (`testing/<name>.patch`), its
-    /// static library (`lib<name>.a`) and the binary it is linked into.
+    /// Name of the implementation, its patch directory
+    /// (`testing/patches/<name>/`), its static library (`lib<name>.a`) and the
+    /// binary it is linked into.
     name: &'static str,
     /// Git repository of the implementation.
     repo: &'static str,
@@ -135,20 +142,70 @@ fn run(cmd: &mut Command, desc: &str) {
     );
 }
 
-/// Clones `reference` at its pinned commit, applies its patch, compiles it,
+/// The classifications a patch file name must start with (followed by `-`):
+/// a fix of a specification deviation of the reference, a build fix, harness
+/// plumbing, a platform setting, or a profile setting.
+const PATCH_CLASSES: [&str; 5] = ["bug-fix", "build-fix", "harness", "platform", "profile"];
+
+/// Returns the patches of reference `name`: every `*.patch` file in
+/// `testing/patches/<name>/`, in sorted file-name order (the order in which
+/// they are applied), and asks Cargo to rerun the build script when the
+/// directory or any patch changes.
+///
+/// # Panics
+/// If there is no patch, or a patch file name does not start with one of
+/// [`PATCH_CLASSES`].
+fn patch_files(manifest: &Path, name: &str) -> Vec<PathBuf> {
+    let dir = manifest.join("patches").join(name);
+    println!("cargo:rerun-if-changed={}", dir.display());
+    let mut patches: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("read_dir testing/patches/{name}: {e}"))
+        .map(|e| e.expect("patch dir entry").path())
+        .filter(|p| p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("patch"))
+        .collect();
+    patches.sort();
+    assert!(!patches.is_empty(), "no patches in testing/patches/{name}");
+    for patch in &patches {
+        let file = patch
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or_default();
+        assert!(
+            PATCH_CLASSES.iter().any(|class| file
+                .strip_prefix(class)
+                .is_some_and(|rest| rest.starts_with('-'))),
+            "testing/patches/{name}/{file}: the file name must start with its classification \
+             ({}-)",
+            PATCH_CLASSES.join("-, ")
+        );
+        println!("cargo:rerun-if-changed={}", patch.display());
+    }
+    patches
+}
+
+/// Clones `reference` at its pinned commit, applies its patches, compiles it,
 /// partially links it with `libcrypto.a` while localizing every symbol but
 /// the `difftest_*` entry points (so that neither the reference's nor
 /// OpenSSL's symbols collide with `bssl-sys`), and archives the result as
 /// `lib<name>.a` in `out`.
 fn build_reference(reference: &Reference, manifest: &Path, out: &Path) {
     let name = reference.name;
-    let patch_file = manifest.join(format!("{name}.patch"));
-    println!("cargo:rerun-if-changed={}", patch_file.display());
+    let patches = patch_files(manifest, name);
 
-    let patch_bytes =
-        std::fs::read(&patch_file).unwrap_or_else(|e| panic!("read testing/{name}.patch: {e}"));
     let mut expected_stamp = format!("{}@{}\n", reference.repo, reference.commit).into_bytes();
-    expected_stamp.extend_from_slice(&patch_bytes);
+    // Every patch (its file name, which determines the order, and its
+    // contents) is part of the stamp, so adding, removing, renaming or
+    // editing a patch never reuses a stale library.
+    for patch in &patches {
+        let file_name = patch
+            .file_name()
+            .expect("patch file name")
+            .to_string_lossy();
+        let bytes = std::fs::read(patch)
+            .unwrap_or_else(|e| panic!("read testing/patches/{name}/{file_name}: {e}"));
+        expected_stamp.extend_from_slice(format!("{file_name}\n{}\n", bytes.len()).as_bytes());
+        expected_stamp.extend_from_slice(&bytes);
+    }
     // The build recipe (compiler flags, sources, exported symbols) is part of
     // the stamp too, so changing it never reuses a stale library.
     expected_stamp.extend_from_slice(include_bytes!("build.rs"));
@@ -209,14 +266,22 @@ fn build_reference(reference: &Reference, manifest: &Path, out: &Path) {
         "{name} checkout is not at the pinned commit"
     );
     git(&["clean", "-fdx"], &format!("git clean {name}"));
-    run(
-        Command::new("git")
-            .arg("-C")
-            .arg(&repo_dir)
-            .arg("apply")
-            .arg(&patch_file),
-        &format!("git apply testing/{name}.patch"),
-    );
+    // One `git apply` per patch, in sorted order, so that a failure names the
+    // patch.
+    for patch in &patches {
+        let file_name = patch
+            .file_name()
+            .expect("patch file name")
+            .to_string_lossy();
+        run(
+            Command::new("git")
+                .arg("-C")
+                .arg(&repo_dir)
+                .arg("apply")
+                .arg(patch),
+            &format!("git apply testing/patches/{name}/{file_name}"),
+        );
+    }
 
     let c_files = (reference.sources)(&repo_dir);
     let include_dirs = (reference.include_dirs)(&repo_dir);
@@ -286,6 +351,20 @@ fn build_reference(reference: &Reference, manifest: &Path, out: &Path) {
     }
     ld_cmd.arg(&libcrypto_a);
     run(&mut ld_cmd, &format!("ld -r {name}_all.o"));
+
+    // `getpid()` (which seeds the reference's `rand()` together with the
+    // clock) is redirected to the harness's `difftest_getpid()`, so that a
+    // fixed seed (`TPM_REFERENCE_SEED`) can reproduce a run. This is a
+    // link-level redirection; the C code is not changed.
+    let redirected_o = obj_dir.join(format!("{name}_redirected.o"));
+    run(
+        Command::new("objcopy")
+            .arg("--redefine-sym=getpid=difftest_getpid")
+            .arg(&all_o)
+            .arg(&redirected_o),
+        &format!("objcopy redirect {name} getpid"),
+    );
+    let all_o = redirected_o;
 
     let mut objcopy_cmd = Command::new("objcopy");
     for sym in EXPORTED_SYMBOLS {

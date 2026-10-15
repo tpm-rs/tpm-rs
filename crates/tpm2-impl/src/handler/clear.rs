@@ -61,21 +61,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut new_eh_proof = [0u8; 64];
         let mut new_sp_seed = [0u8; 64];
 
-        self.context
-            .platform
-            .rng
-            .fill_bytes(&mut new_sh_proof)
-            .map_err(|_| TpmRc::FAILURE)?;
-        self.context
-            .platform
-            .rng
-            .fill_bytes(&mut new_eh_proof)
-            .map_err(|_| TpmRc::FAILURE)?;
-        self.context
-            .platform
-            .rng
-            .fill_bytes(&mut new_sp_seed)
-            .map_err(|_| TpmRc::FAILURE)?;
+        // The reference order (`Clear.c`): the new SPS, then shProof, then ehProof.
+        self.context.random_platform(&mut new_sp_seed)?;
+        self.context.random_platform(&mut new_sh_proof)?;
+        self.context.random_platform(&mut new_eh_proof)?;
 
         // All random generated successfully, now mutate state
         self.context.state.sh_enable = true;
@@ -146,6 +135,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.context.state.pcrs.update_counter.wrapping_add(1);
 
         self.context.save_hierarchy_auths();
+        // `NvWrite(NV_ORDERLY_DATA, ...)` of `Clear.c` also persists the DRBG state.
+        #[cfg(feature = "reference-rng")]
+        self.context.save_drbg_state();
 
         // Only report success once every state and NV update has been performed.
         let response = request.into_response();

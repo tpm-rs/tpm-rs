@@ -29,6 +29,7 @@ pub use _common as test_utils;
 
 #[cfg(feature = "differential")]
 pub mod differential;
+pub mod seed;
 pub mod tpm;
 
 pub use tpm::{SimulatorPlatformSignal, Tpm};

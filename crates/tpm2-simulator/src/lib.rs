@@ -85,10 +85,6 @@ pub struct Simulator<'a> {
     context: Box<TpmEngine<'a, PlatformCryptoProvider, RamStorageMock<4096>, LinuxTimer, LinuxRng>>,
     is_power_on: bool,
     is_nv_on: bool,
-    /// Seeded stream used as the crypto provider's randomness while this
-    /// simulator executes commands and signals (see [`Simulator::pin_crypto_rng`]).
-    #[cfg(all(feature = "reproducible", feature = "bssl"))]
-    crypto_rng: Option<tpm2_platform_linux::CryptoReplayRng>,
 }
 
 impl<'a> Simulator<'a> {
@@ -105,22 +101,7 @@ impl<'a> Simulator<'a> {
             context,
             is_power_on: false,
             is_nv_on: false,
-            #[cfg(all(feature = "reproducible", feature = "bssl"))]
-            crypto_rng: None,
         })
-    }
-
-    /// Runs `f` as TPM-side work: with the `reproducible` feature and a pinned crypto
-    /// stream, the crypto provider draws its randomness from that stream while
-    /// `f` runs, and only then.
-    fn in_tpm_scope<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        #[cfg(all(feature = "reproducible", feature = "bssl"))]
-        if let Some(mut rng) = self.crypto_rng.take() {
-            let r = rng.scope(|| f(self));
-            self.crypto_rng = Some(rng);
-            return r;
-        }
-        f(self)
     }
 
     /// Handles one command-port transaction (see [`PlatformConnection::transact_platform`]).
@@ -129,9 +110,10 @@ impl<'a> Simulator<'a> {
         command: u32,
         stream: &mut S,
     ) -> anyhow::Result<bool> {
-        self.in_tpm_scope(|sim| sim.regular_command(command, stream))
+        self.regular_command(command, stream)
     }
 
+    /// Implementation of [`Simulator::handle_regular_command_raw`].
     fn regular_command<S: Read + Write>(
         &mut self,
         command: u32,
@@ -258,11 +240,10 @@ impl<'a> Simulator<'a> {
         code: SimulatorPlatformSignal,
         stream: &mut S,
     ) -> anyhow::Result<bool> {
-        self.in_tpm_scope(|sim| sim.platform_signal(code, stream))
+        self.platform_signal(code, stream)
     }
 
-    /// Implementation of [`Simulator::handle_platform_signal`], run inside
-    /// [`Simulator::in_tpm_scope`].
+    /// Implementation of [`Simulator::handle_platform_signal`].
     fn platform_signal<S: Read + Write>(
         &mut self,
         code: SimulatorPlatformSignal,
@@ -485,80 +466,47 @@ macro_rules! create_simulator {
     };
 }
 
-/// Seed used by [`create_replay_simulator!`] when none is given.
-#[cfg(feature = "reproducible")]
-pub const DEFAULT_REPLAY_SEED: u64 = 0x7470_6d2d_7273_0001;
-
-/// XORed into the replay seed to derive the crypto provider's seed, so that the
-/// platform RNG and the crypto RNG produce different streams.
-#[cfg(feature = "reproducible")]
-pub const REPLAY_CRYPTO_SEED_TWEAK: u64 = 0x6372_7970_746f_0000;
-
-#[cfg(feature = "reproducible")]
+#[cfg(feature = "reference-rng")]
 impl Simulator<'_> {
     /// Advances the simulator's virtual clock by `ms` milliseconds.
     ///
     /// Returns `false` (and does nothing) if the simulator runs on the wall
-    /// clock, i.e. was not created by [`create_replay_simulator!`].
+    /// clock, i.e. was not created by [`create_reference_simulator!`].
     pub fn advance_clock(&mut self, ms: u64) -> bool {
         self.context.platform.timer.advance(ms)
     }
-
-    /// Makes the crypto provider's randomness (key generation, ECDSA nonces,
-    /// RSA padding, `get_random`) a stream seeded by `seed` whenever this
-    /// simulator executes a command or signal.
-    ///
-    /// The stream belongs to this simulator: randomness drawn by other code
-    /// (e.g. a test's client-side crypto using the same provider type) or by
-    /// other simulators neither consumes nor perturbs it. Only the BoringSSL
-    /// backend supports this; with other backends it is a no-op returning
-    /// `false`.
-    pub fn pin_crypto_rng(&mut self, seed: u64) -> bool {
-        #[cfg(feature = "bssl")]
-        {
-            self.crypto_rng = Some(tpm2_platform_linux::CryptoReplayRng::new(seed));
-            true
-        }
-        #[cfg(not(feature = "bssl"))]
-        {
-            let _ = seed;
-            false
-        }
-    }
 }
 
-/// Implementation of [`create_replay_simulator!`]. Not part of the public API.
-#[cfg(feature = "reproducible")]
+/// Implementation of [`create_reference_simulator!`]. Not part of the public API.
+#[cfg(feature = "reference-rng")]
 #[doc(hidden)]
-pub fn __new_replay_simulator(seed: u64) -> Simulator<'static> {
-    let crypto: &'static mut PlatformCryptoProvider = Box::leak(Box::new(PlatformCryptoProvider));
-    let storage: &'static mut RamStorageMock<4096> = Box::leak(Box::new(RamStorageMock::new()));
-    let timer: &'static mut LinuxTimer = Box::leak(Box::new(LinuxTimer::new_virtual()));
-    let platform_rng: &'static mut LinuxRng = Box::leak(Box::new(LinuxRng::seeded(seed)));
-    let mut sim = Simulator::new(crypto, storage, timer, platform_rng)
-        .expect("failed to create TPM simulator");
-    // A distinct stream from the platform RNG, derived from the same seed.
-    sim.pin_crypto_rng(seed ^ REPLAY_CRYPTO_SEED_TWEAK);
-    power_on_start_up(&mut sim);
-    sim
+pub fn __new_reference_simulator(pid: u32, realtime_ms: u64) -> Simulator<'static> {
+    use tpm2_platform_linux::{ReferenceEntropy, VirtualClock};
+    let clock = VirtualClock::new(realtime_ms);
+    new_started_simulator(
+        LinuxTimer::new_virtual(clock.clone()),
+        LinuxRng::reference(ReferenceEntropy::new(pid, clock)),
+    )
 }
 
-/// Like [`create_simulator!`], but every source of nondeterminism is pinned:
-/// the platform RNG is a ChaCha20 stream seeded with `$seed` (default
-/// [`DEFAULT_REPLAY_SEED`]), the crypto provider's randomness is pinned with
-/// [`Simulator::pin_crypto_rng`] (BoringSSL backend only), and the timer is a
-/// virtual clock starting at 0 ms that only moves via
-/// [`Simulator::advance_clock`].
+/// Like [`create_simulator!`], but the simulator reproduces the randomness and
+/// clock of a C reference TPM process (`mstpm20`/`ibmswtpm2` built for
+/// differential testing) with process ID `$pid` whose `_plat__RealTime()`
+/// started at `$realtime_ms` milliseconds:
 ///
-/// Two simulators created with the same seed and fed the same inputs produce
-/// byte-identical responses.
-#[cfg(feature = "reproducible")]
+/// * the timer is a virtual clock starting at 0 ms (real time `$realtime_ms`)
+///   that only moves via [`Simulator::advance_clock`];
+/// * the platform entropy reproduces the reference's `_plat__GetEntropy()`
+///   (glibc `rand()` seeded from the real time and `$pid`), which feeds
+///   `tpm2-impl`'s port of the reference DRBG (`reference-rng` feature).
+///
+/// Two simulators created with the same `$pid` and `$realtime_ms` and fed the
+/// same inputs (including clock advances) produce byte-identical responses,
+/// and so does the C reference process they model.
+#[cfg(feature = "reference-rng")]
 #[macro_export]
-macro_rules! create_replay_simulator {
-    () => {
-        $crate::__new_replay_simulator($crate::DEFAULT_REPLAY_SEED)
-    };
-    ($seed:expr) => {
-        $crate::__new_replay_simulator($seed)
+macro_rules! create_reference_simulator {
+    ($pid:expr, $realtime_ms:expr) => {
+        $crate::__new_reference_simulator($pid, $realtime_ms)
     };
 }

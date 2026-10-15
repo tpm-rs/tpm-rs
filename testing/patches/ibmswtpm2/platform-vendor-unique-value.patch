@@ -1,0 +1,40 @@
+vendor-unique-value: return tpm-rs's platform unique value from _plat__GetUnique(1, ...)
+
+Classification: platform setting.
+
+_plat__GetUnique(1, ...) provides the authorization value of
+VENDOR_PERMANENT_AUTH_HANDLE. It returns tpm-rs's value: the platform's
+unique string without its terminator, byte reversed, at most 48 octets, and
+its size (upstream copies the string with its terminator but returns size 0,
+i.e. an empty authorization value).
+
+diff --git a/src/Unique.c b/src/Unique.c
+--- a/src/Unique.c
++++ b/src/Unique.c
+@@ -91,14 +91,22 @@ LIB_EXPORT uint32_t _plat__GetUnique(uin
+ 				     unsigned char* b  // output buffer
+ 				     )
+ {
+-    const char* from   = notReallyUnique;
+-    uint32_t    retVal = 0;
++    uint32_t retVal = 0;
+ 
++    // tpm-rs differential testing: tpm-rs's VENDOR_PERMANENT_AUTH_HANDLE
++    // authorization value (the unique string without its terminator, byte
++    // reversed, at most 48 bytes), with its size returned.
+     if(which == 1)
+ 	{
++	    if(bSize > 48)
++		bSize = 48;
+ 	    const size_t uSize =
+-		sizeof(notReallyUnique) <= bSize ? sizeof(notReallyUnique) : bSize;
+-	    MemoryCopy(b, notReallyUnique, uSize);
++		(sizeof(notReallyUnique) - 1) <= bSize ? (sizeof(notReallyUnique) - 1) : bSize;
++	    for(size_t i = 0; i < uSize; i++)
++		{
++		    b[uSize - 1 - i] = (unsigned char)notReallyUnique[i];
++		}
++	    retVal = (uint32_t)uSize;
+ 	}
+     // else fall through to default 0
+ 

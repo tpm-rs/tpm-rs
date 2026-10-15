@@ -90,22 +90,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
 
-        let mut nonce_tpm_bytes = [0u8; 64];
-        self.context
-            .platform
-            .rng
-            .fill_bytes(&mut nonce_tpm_bytes[..nonce_caller_len])
-            .map_err(|_| TpmRc::FAILURE)?;
-        let nonce_tpm = Tpm2bNonce::from_bytes(&nonce_tpm_bytes[..nonce_caller_len])
-            .map_err(|_| TpmRc::FAILURE)?;
-
         // Decrypt salt
         let mut decrypted_salt = [0u8; 64];
         let decrypted_salt_len = self.decrypt_session_salt(
             tpm_key,
             cmd.encrypted_salt.get_buffer(),
-            &nonce_tpm,
-            &cmd.nonce_caller,
             &mut decrypted_salt,
         )?;
 
@@ -116,6 +105,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // Generate unique session handle
         let session_handle = self.generate_session_handle(cmd.session_type)?;
+
+        // Generate nonceTPM (`SessionCreate()`): after the salt is decrypted and a session slot
+        // is allocated, so that a failing command draws no random value (as in the reference).
+        if self
+            .context
+            .state
+            .active_sessions
+            .iter()
+            .all(Option::is_some)
+        {
+            return Err(TpmRc::SESSION_MEMORY);
+        }
+        let mut nonce_tpm_bytes = [0u8; 64];
+        self.context
+            .random_platform(&mut nonce_tpm_bytes[..nonce_caller_len])?;
+        let nonce_tpm = Tpm2bNonce::from_bytes(&nonce_tpm_bytes[..nonce_caller_len])
+            .map_err(|_| TpmRc::FAILURE)?;
 
         // Derive session key (if not Trial session)
         let (session_key, session_key_len) = self.derive_session_key(
@@ -244,8 +250,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         &mut self,
         tpm_key: Handle,
         encrypted_salt: &[u8],
-        _nonce_tpm: &Tpm2bNonce,
-        _nonce_caller: &Tpm2bNonce,
         decrypted_salt: &mut [u8; 64],
     ) -> Result<usize, TpmRc> {
         if tpm_key != Handle::RH_NULL {

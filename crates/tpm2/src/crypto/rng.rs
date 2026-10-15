@@ -41,6 +41,14 @@ pub trait Rng {
     /// `additional_data`, and hierarchy proof values into a seeded RNG in
     /// `TPM2_CreatePrimary`.
     fn reseed(&mut self, data: &[u8]) -> Result<(), CryptoError>;
+
+    /// (Re)initializes the generator's entropy source when the TPM is initialized
+    /// (`_TPM_Init`, and at manufacture), like `_plat__GetEntropy(NULL, 0)` of the
+    /// reference implementation's simulator platform, which seeds its software entropy
+    /// source. Does nothing by default.
+    fn init(&mut self) -> Result<(), CryptoError> {
+        Ok(())
+    }
 }
 
 impl Rng for ! {

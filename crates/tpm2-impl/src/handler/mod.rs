@@ -32,7 +32,7 @@ mod change_pps;
 mod clear;
 mod clear_control;
 mod clock_ops;
-mod commit;
+pub(crate) mod commit;
 mod context_load;
 mod context_save;
 mod create;
@@ -78,6 +78,8 @@ mod quote;
 mod random;
 mod read_clock;
 mod read_public;
+#[cfg(feature = "reference-rng")]
+pub(crate) mod reference_ops;
 mod rewrap;
 mod sequence;
 pub(crate) mod session;

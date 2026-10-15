@@ -1,0 +1,27 @@
+fix-command-tag-unmarshal: return TPM_RC_BAD_TAG for every invalid command tag
+
+Classification: spec-deviation bug fix.
+
+Every command tag other than TPM_ST_NO_SESSIONS/TPM_ST_SESSIONS is
+TPM_RC_BAD_TAG (Part 2 TPMI_ST_COMMAND_TAG, Part 3 "Command Header
+Validation"); upstream unmarshals a TPM_ST first, which returns TPM_RC_VALUE
+for values that are not TPM_ST constants.
+
+diff --git a/src/Unmarshal.c b/src/Unmarshal.c
+--- a/src/Unmarshal.c
++++ b/src/Unmarshal.c
+@@ -1463,8 +1463,13 @@ TPMI_ST_COMMAND_TAG_Unmarshal(TPMI_ST_CO
+ {
+     TPM_RC rc = TPM_RC_SUCCESS;
+ 
++    // tpm-rs differential testing -- spec deviation fix (NOT determinism):
++    // every value other than TPM_ST_NO_SESSIONS/TPM_ST_SESSIONS is
++    // TPM_RC_BAD_TAG (Part 2 TPMI_ST_COMMAND_TAG, Part 3 "Command Header
++    // Validation"); upstream's TPM_ST_Unmarshal() returned TPM_RC_VALUE first
++    // for values that are not TPM_ST constants.
+     if (rc == TPM_RC_SUCCESS) {
+-	rc = TPM_ST_Unmarshal(target, buffer, size);
++	rc = UINT16_Unmarshal(target, buffer, size);
+     }
+     if (rc == TPM_RC_SUCCESS) {
+ 	switch (*target) {

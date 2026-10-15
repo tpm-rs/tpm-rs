@@ -9,8 +9,9 @@
 //! Tests treat the TPM as a black box: every helper talks to it only through
 //! the command interface of [`Tpm`] (which, with the `differential` feature,
 //! mirrors every interaction to the C reference TPM). Client-side randomness
-//! must come from [`client_rng`] / [`CLIENT_CRYPTO`] and sleeps must go through
-//! [`sleep`] so that test runs stay reproducible.
+//! comes from [`client_rng`] / [`CLIENT_CRYPTO`] (OS entropy), and sleeps must
+//! go through [`sleep`], which advances the TPMs' virtual clocks (keeping the
+//! C reference TPM, whose randomness depends on its clock, in lockstep).
 
 pub use crate::tpm::{SimulatorPlatformSignal, Tpm, sleep};
 pub use tpm2::Connection;
@@ -211,13 +212,56 @@ pub fn make_derive_template(
 /// own crypto provider; instead they use this independent instance.
 pub const CLIENT_CRYPTO: &PlatformCryptoProvider = &PlatformCryptoProvider;
 
-/// Random number generator for the client side of the tests (nonces, keys,
-/// test data), drawing from [`CLIENT_CRYPTO`].
+/// Fills `dest` with client-side random bytes (nonces, salts, keys, test
+/// data).
 ///
-/// Once a thread has created a [`Tpm`], the provider's client-side randomness
-/// on that thread is a stream seeded with [`crate::tpm::CLIENT_SEED`], so a
-/// test sends the same commands on every run (and a differential failure
-/// reproduces).
+/// By default the bytes come from the OS through [`CLIENT_CRYPTO`]
+/// (BoringSSL's `RAND_bytes`), so they differ between runs. When a test run is
+/// reproduced with [`crate::seed::SEED_ENV`] set, they instead come from a
+/// per-thread [`rand::rngs::StdRng`] seeded from that seed and the name of the
+/// test thread, so the commands a test sends (and hence, with the TPM's own
+/// randomness fixed by the same seed, the responses) repeat exactly. Client
+/// randomness drawn inside BoringSSL itself (e.g. client-side signatures)
+/// stays OS-random; tests whose TPM-visible inputs depend on it are not fully
+/// reproducible.
+///
+/// Returns the [`CryptoError`] of [`CLIENT_CRYPTO`] on failure (only possible
+/// on the OS path).
+pub fn client_random(dest: &mut [u8]) -> Result<(), CryptoError> {
+    use rand::{RngCore, SeedableRng};
+    thread_local! {
+        static SEEDED: core::cell::RefCell<Option<rand::rngs::StdRng>> =
+            core::cell::RefCell::new(crate::seed::ReferenceSeed::from_env().map(|seed| {
+                // FNV-1a over the seed and the test name: stable across builds.
+                let thread = std::thread::current();
+                let text = format!("{seed}/{}", thread.name().unwrap_or(""));
+                let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+                    (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+                });
+                rand::rngs::StdRng::seed_from_u64(hash)
+            }));
+    }
+    let seeded = SEEDED.with(|rng| {
+        rng.borrow_mut()
+            .as_mut()
+            .map(|rng| rng.fill_bytes(dest))
+            .is_some()
+    });
+    if seeded {
+        Ok(())
+    } else {
+        CLIENT_CRYPTO.get_random(dest)
+    }
+}
+
+/// Random number generator for the client side of the tests (nonces, keys,
+/// test data), drawing from [`client_random`].
+///
+/// The randomness comes from the OS (BoringSSL's `RAND_bytes`), so the
+/// client-side values differ between runs, unless the run is reproduced with
+/// [`crate::seed::SEED_ENV`] (see [`client_random`]). Differential comparisons
+/// do not depend on them: the C reference receives exactly the commands
+/// `tpm-rs` received.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ClientRng;
 
@@ -240,7 +284,7 @@ impl rand::RngCore for ClientRng {
     }
 
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        CLIENT_CRYPTO.get_random(dest).expect("client RNG failure");
+        client_random(dest).expect("client RNG failure");
     }
 
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
@@ -861,7 +905,7 @@ pub fn start_auth_session(
     auth_hash: TpmiAlgHash,
 ) -> Result<ActiveSession, u32> {
     let mut nonce_bytes = [0u8; 16];
-    CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
+    crate::_common::client_random(&mut nonce_bytes).unwrap();
     let nonce_caller = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
 
     let cmd = StartAuthSession {
@@ -1090,7 +1134,7 @@ where
 
     for (i, session) in sessions.iter_mut().enumerate() {
         let mut nonce_bytes = [0u8; 16];
-        CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
+        crate::_common::client_random(&mut nonce_bytes).unwrap();
         let nonce_caller_new = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
         nonce_callers_new.push(nonce_caller_new);
 
@@ -1527,7 +1571,7 @@ where
 
     for (i, session) in sessions.iter_mut().enumerate() {
         let mut nonce_bytes = [0u8; 16];
-        CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
+        crate::_common::client_random(&mut nonce_bytes).unwrap();
         let nonce_caller_new = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
         nonce_callers_new.push(nonce_caller_new);
 
@@ -1685,7 +1729,7 @@ where
 
         // Mismatch: generate another random 16-byte nonce for wire but keep nonce_caller_new for HMAC
         let mut nonce_bytes_wire = [0u8; 16];
-        CLIENT_CRYPTO.get_random(&mut nonce_bytes_wire).unwrap();
+        crate::_common::client_random(&mut nonce_bytes_wire).unwrap();
         let nonce_caller_wire = Tpm2bNonce::from_bytes(&nonce_bytes_wire).unwrap();
 
         let auth_cmd = TpmsAuthCommand {
@@ -1965,7 +2009,7 @@ where
 
     for (i, session) in sessions.iter_mut().enumerate() {
         let mut nonce_bytes = [0u8; 16];
-        CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
+        crate::_common::client_random(&mut nonce_bytes).unwrap();
         let nonce_caller_new = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
         nonce_callers_new.push(nonce_caller_new);
 
@@ -3691,7 +3735,7 @@ pub fn exec(
             }
             Some(s) => {
                 let mut nonce = [0u8; 16];
-                CLIENT_CRYPTO.get_random(&mut nonce).unwrap();
+                crate::_common::client_random(&mut nonce).unwrap();
                 let hmac = if let Some(pw) = &u.password {
                     pw.clone()
                 } else {
@@ -4320,7 +4364,7 @@ pub fn raw_at_checked(sim: &mut Tpm, locality: u8, cmd: &[u8]) -> Vec<u8> {
 /// An authorization entry for `session` with an explicit `hmac` value.
 pub fn raw_entry(session: &ActiveSession, attrs: u8, hmac: &[u8]) -> AuthEntry {
     let mut nonce = [0u8; 16];
-    CLIENT_CRYPTO.get_random(&mut nonce).unwrap();
+    crate::_common::client_random(&mut nonce).unwrap();
     AuthEntry {
         handle: session.session_handle.0,
         nonce: nonce.to_vec(),
@@ -6033,7 +6077,7 @@ pub fn start_session_active(sim: &mut Tpm, session_type: TpmSe) -> ActiveSession
 /// Starts an unbound, unsalted SHA-256 session of `session_type` and returns its handle.
 pub fn start_session_handle(sim: &mut Tpm, session_type: TpmSe) -> Handle {
     let mut nonce = [0u8; 16];
-    CLIENT_CRYPTO.get_random(&mut nonce).unwrap();
+    crate::_common::client_random(&mut nonce).unwrap();
     let rsp = sim
         .execute(StartAuthSession {
             tpm_key: Handle::RH_NULL,
@@ -12302,7 +12346,7 @@ where
 
     for (i, session) in sessions.iter_mut().enumerate() {
         let mut nonce_bytes = [0u8; 16];
-        CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
+        crate::_common::client_random(&mut nonce_bytes).unwrap();
         let nonce_caller_new =
             Tpm2bNonce::from_bytes(crate::test_utils::leak_bytes(&nonce_bytes)).unwrap();
         nonce_callers_new.push(nonce_caller_new);
@@ -12582,7 +12626,7 @@ where
 
     for (i, session) in sessions.iter_mut().enumerate() {
         let mut nonce_bytes = [0u8; 16];
-        CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
+        crate::_common::client_random(&mut nonce_bytes).unwrap();
         let nonce_caller_new =
             Tpm2bNonce::from_bytes(crate::test_utils::leak_bytes(&nonce_bytes)).unwrap();
         nonce_callers_new.push(nonce_caller_new);
@@ -13091,7 +13135,7 @@ pub fn hmac_auth(
     auth_value: &[u8],
 ) -> TpmsAuthCommand<'static> {
     let mut nonce = [0u8; 16];
-    CLIENT_CRYPTO.get_random(&mut nonce).unwrap();
+    crate::_common::client_random(&mut nonce).unwrap();
     let key = [session.session_key.as_slice(), auth_value].concat();
     let hmac = hmac_sha256(
         &key,
@@ -13127,7 +13171,7 @@ pub fn hmac_entry(
     let cp_hash = sha256(&cp_parts);
 
     let mut nonce = [0u8; 16];
-    CLIENT_CRYPTO.get_random(&mut nonce).unwrap();
+    crate::_common::client_random(&mut nonce).unwrap();
     let key = [
         session.session_key.as_slice(),
         strip_trailing_zeros(entity_auth),
@@ -14803,7 +14847,7 @@ pub fn power_cycle_with(sim: &mut Tpm, shutdown: Option<u16>, startup: u16) -> u
 /// Client-side random bytes.
 pub fn random_bytes(len: usize) -> &'static [u8] {
     let mut buf = vec![0u8; len];
-    CLIENT_CRYPTO.get_random(&mut buf).unwrap();
+    crate::_common::client_random(&mut buf).unwrap();
     leak_bytes(&buf)
 }
 

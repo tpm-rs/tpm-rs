@@ -1,0 +1,25 @@
+fix-sequence-object-hierarchy: put objects without a parent (sequence objects) in the NULL hierarchy
+
+Classification: spec-deviation bug fix.
+
+FindEmptyObjectSlot() zeroes the whole slot, leaving hierarchy = 0, an
+invalid value, for sequence objects (which are in the NULL hierarchy, see
+ObjectCreateHashSequence()); TPM2_ContextSave must report TPM_RH_NULL, as
+the TCG reference does.
+
+diff --git a/src/Object.c b/src/Object.c
+--- a/src/Object.c
++++ b/src/Object.c
+@@ -251,6 +251,12 @@ OBJECT* FindEmptyObjectSlot(TPMI_DH_OBJE
+ 		    // MemorySet(&object->attributes, 0, sizeof(OBJECT_ATTRIBUTES));
+ 		    MemorySet(object, 0, sizeof(*object)); // libtpms added: Initialize the whole
+ 							   // object
++		    // tpm-rs differential testing -- spec deviation fix (NOT
++		    // determinism): objects without a parent (sequence objects) are in
++		    // the NULL hierarchy (see ObjectCreateHashSequence()), so
++		    // TPM2_ContextSave must report TPM_RH_NULL, not the invalid value 0
++		    // left by the MemorySet() above (as the TCG reference does).
++		    object->hierarchy = TPM_RH_NULL;
+ 		    return object;
+ 		}
+ 	}

@@ -184,10 +184,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
             // 6. If auth_timeout != 0
             if auth_timeout != 0 {
-                // epoch (8 bytes, big endian self.context.state.time_epoch)
-                let epoch_val = self.context.state.time_epoch;
-                hmac_input[offset..offset + 8].copy_from_slice(&epoch_val.to_be_bytes());
-                offset += 8;
+                // epoch: `CLOCK_NONCE` (a 32-bit counter, `CLOCK_STOPS = NO`), big endian, as the
+                // reference `TicketComputeAuth()` hashes it (`sizeof(CLOCK_NONCE)` bytes).
+                let epoch_val = self.context.state.time_epoch as u32;
+                hmac_input[offset..offset + 4].copy_from_slice(&epoch_val.to_be_bytes());
+                offset += 4;
 
                 // If expiresOnReset (i.e. cmd.nonce_tpm.get_buffer().is_empty())
                 if cmd.nonce_tpm.get_buffer().is_empty() {

@@ -1,0 +1,34 @@
+fix-rsa-key-bits-unmarshal: accept only the implemented RSA key sizes in TPMI_RSA_KEY_BITS
+
+Classification: spec-deviation bug fix.
+
+TPMI_RSA_KEY_BITS admits only the implemented key sizes (Part 2,
+$RSA_KEY_SIZES_BITS); upstream hard-codes 1024/2048/3072 regardless of the
+RSA_* profile switches.
+
+diff --git a/src/Unmarshal.c b/src/Unmarshal.c
+--- a/src/Unmarshal.c
++++ b/src/Unmarshal.c
+@@ -3580,9 +3580,22 @@ TPMI_RSA_KEY_BITS_Unmarshal(TPMI_RSA_KEY
+     }
+     if (rc == TPM_RC_SUCCESS) {
+ 	switch (*target) {
++	  // tpm-rs differential testing -- spec deviation fix (NOT determinism):
++	  // TPMI_RSA_KEY_BITS admits only the implemented key sizes (Part 2,
++	  // "$RSA_KEY_SIZES_BITS"); upstream hard-codes 1024/2048/3072 regardless
++	  // of the RSA_* profile switches.
++#if RSA_1024
+ 	  case 1024:
++#endif
++#if RSA_2048
+ 	  case 2048:
++#endif
++#if RSA_3072
+ 	  case 3072:
++#endif
++#if RSA_4096
++	  case 4096:
++#endif
+ 	    break;
+ 	  default:
+ 	    rc = TPM_RC_VALUE;

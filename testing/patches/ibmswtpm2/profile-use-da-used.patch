@@ -1,0 +1,27 @@
+use-da-used: USE_DA_USED = YES
+
+Classification: profile setting.
+
+Records DA-protected use in NV (daUsed) and counts an authorization failure
+after a non-orderly shutdown only if one occurred, as tpm-rs and mstpm20 do
+(Part 1, "Non-orderly Shutdown").
+
+Ordering: generated against the tree with profile-no-self-tests.patch applied (it
+changes lines within this patch's context), so it must be applied after it;
+the patches are applied in sorted file-name order.
+
+diff --git a/src/TpmBuildSwitches.h b/src/TpmBuildSwitches.h
+--- a/src/TpmBuildSwitches.h
++++ b/src/TpmBuildSwitches.h
+@@ -241,7 +241,10 @@
+ 
+ // Definition to allow alternate behavior for non-orderly startup. If there is a
+ // chance that the TPM could not update 'failedTries'
+-#define USE_DA_USED                 NO
++// tpm-rs differential testing: record DA-protected use in NV (daUsed) and
++// count a failure after a non-orderly shutdown only if one occurred, as
++// tpm-rs and mstpm20 do (Part 1, "Non-orderly Shutdown").
++#define USE_DA_USED                 YES
+ 
+ // This switch is used to enable the self-test capability in AlgorithmTests.c
+ // tpm-rs differential testing: no self tests (as mstpm20).

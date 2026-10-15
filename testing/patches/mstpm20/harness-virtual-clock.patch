@@ -1,0 +1,36 @@
+virtual-clock: read the time from the harness's virtual clock
+
+Classification: harness plumbing.
+
+_plat__RealTime() returns difftest_virtual_ms(), the harness's virtual clock
+in milliseconds (testing/src/bin/shared/ffi.rs,
+testing/src/differential/server.rs). It starts at the reference process's
+CLOCK_MONOTONIC milliseconds and advances only when the harness advances it,
+so the TPM's Clock and Time follow tpm-rs's virtual clock exactly. The
+original implementation is kept, renamed and unused, to keep the patch
+small. difftest_virtual_ms is the only symbol the patched reference imports
+from the harness.
+
+diff --git a/TPMCmd/Platform/src/Clock.c b/TPMCmd/Platform/src/Clock.c
+--- a/TPMCmd/Platform/src/Clock.c
++++ b/TPMCmd/Platform/src/Clock.c
+@@ -68,8 +68,19 @@ clock_t debugTime;
+ //*** _plat__RealTime()
+ // This is another, probably futile, attempt to define a portable function
+ // that will return a 64-bit clock value that has mSec resolution.
++// tpm-rs differential testing: the real time is the harness's virtual clock
++// (see testing/src/differential/server.rs), which starts at the reference
++// process's CLOCK_MONOTONIC milliseconds and advances only when the harness
++// advances it. The original implementation is kept below, unused.
++extern uint64_t difftest_virtual_ms(void);
++
+ LIB_EXPORT uint64_t _plat__RealTime(void)
+ {
++    return difftest_virtual_ms();
++}
++
++static uint64_t _plat__RealTime_unused(void)
++{
+     clock64_t time;
+ #ifdef _MSC_VER
+     struct _timeb sysTime;

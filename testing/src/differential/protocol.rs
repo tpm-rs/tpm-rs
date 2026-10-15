@@ -11,11 +11,42 @@
 //! * Reply: `0` (success) or `1` (failure) followed by a message (bytes,
 //!   UTF-8; empty on success).
 //!
-//! Right after start-up, before reading any request, the process sends one
-//! reply telling whether its C reference TPM initialized successfully. Closing
-//! its stdin ends the process.
+//! The parent chooses the seed of the reference's random number generation
+//! (`TPM_REFERENCE_SEED=<pid>:<realtime_ms>` in the process's environment,
+//! see [`crate::seed`]). Right after start-up, the process sends a
+//! [`Handshake`] confirming the values its C reference TPM uses: the process
+//! ID its `getpid()` returns (`u32`) and its initial real time
+//! (`_plat__RealTime()`, `u64` milliseconds). It sends the handshake before
+//! initializing the C reference TPM. Then, still
+//! before reading any request, it sends one reply telling whether its C
+//! reference TPM initialized successfully. Closing its stdin ends the
+//! process.
 
 use std::io::{self, Read, Write};
+
+/// The first message of a reference TPM process (see the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Handshake {
+    /// The process ID `getpid()` returns to the C reference TPM.
+    pub pid: u32,
+    /// The initial `_plat__RealTime()` of the C reference TPM, in
+    /// milliseconds.
+    pub realtime_ms: u64,
+}
+
+/// Writes `handshake` (without flushing).
+pub fn write_handshake(w: &mut impl Write, handshake: &Handshake) -> io::Result<()> {
+    w.write_all(&handshake.pid.to_be_bytes())?;
+    w.write_all(&handshake.realtime_ms.to_be_bytes())
+}
+
+/// Reads a handshake.
+pub fn read_handshake(r: &mut impl Read) -> io::Result<Handshake> {
+    Ok(Handshake {
+        pid: u32::from_be_bytes(read_array(r)?),
+        realtime_ms: u64::from_be_bytes(read_array(r)?),
+    })
+}
 
 /// A request to a reference TPM process.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,6 +206,21 @@ mod tests {
             assert_eq!(read_request(&mut input).unwrap().as_ref(), Some(r));
         }
         assert_eq!(read_request(&mut input).unwrap(), None);
+    }
+
+    #[test]
+    fn handshake_round_trips() {
+        let handshake = Handshake {
+            pid: 0x1234_5678,
+            realtime_ms: 0x0102_0304_0506_0708,
+        };
+        let mut buf = Vec::new();
+        write_handshake(&mut buf, &handshake).unwrap();
+        assert_eq!(buf.len(), 12);
+        let mut input = buf.as_slice();
+        assert_eq!(read_handshake(&mut input).unwrap(), handshake);
+        assert!(input.is_empty());
+        assert!(read_handshake(&mut [0u8; 11].as_slice()).is_err());
     }
 
     #[test]

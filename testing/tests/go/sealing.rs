@@ -28,7 +28,6 @@ use testing::tpm::Tpm;
 use tpm2::commands::{
     Command, Create, CreatePrimary, Load, StartAuthSession, UnmarshalMessage, Unseal,
 };
-use tpm2::crypto::CryptoProvider;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{AlgSym, Handle, Marshal, TpmSe, TpmSt, Unmarshal};
 use tpm2::{
@@ -268,7 +267,7 @@ impl GoHmacSession {
             return;
         }
         self.nonce_caller = vec![0u8; self.nonce_size];
-        CLIENT_CRYPTO.get_random(&mut self.nonce_caller).unwrap();
+        crate::_common::client_random(&mut self.nonce_caller).unwrap();
 
         let (tpm_key, encrypted_salt, salt) = match &self.salt {
             Some((handle, public)) => {
@@ -319,7 +318,7 @@ impl GoHmacSession {
 
     /// go-tpm `hmacSession.NewNonceCaller`.
     fn new_nonce_caller(&mut self, _sim: &mut Tpm) {
-        CLIENT_CRYPTO.get_random(&mut self.nonce_caller).unwrap();
+        crate::_common::client_random(&mut self.nonce_caller).unwrap();
     }
 
     /// HMAC key (Part 1, 19.6): sessionKey || auth, unless this session is
@@ -390,7 +389,7 @@ fn encrypted_salt(
         PublicParmsAndId::Rsa(_, pub_key_rsa) => {
             use tpm2::crypto::Asymmetric;
             let mut salt = vec![0u8; digest_size(name_alg)];
-            CLIENT_CRYPTO.get_random(&mut salt).unwrap();
+            crate::_common::client_random(&mut salt).unwrap();
             let mut ciphertext = [0u8; 512];
             let len = CLIENT_CRYPTO
                 .encrypt(

@@ -98,6 +98,10 @@ impl tpm2_impl::storage::NvStorage for CountingStorage {
 }
 
 #[test]
+#[cfg_attr(
+    feature = "reference-rng",
+    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
+)]
 fn test_no_nv_writes_stress() {
     let mut crypto = FakeCrypto;
     let mut storage = CountingStorage {

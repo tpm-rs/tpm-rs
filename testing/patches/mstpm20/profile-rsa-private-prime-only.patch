@@ -1,0 +1,41 @@
+rsa-private-prime-only: store only the RSA prime in the sensitive area (RSA_PRIVATE_PRIME_ONLY)
+
+Classification: profile setting.
+
+RSA_PRIVATE_SIZE = MAX_RSA_KEY_BYTES / 2 is a vendor option (Part 2,
+TPM2B_PRIVATE_KEY_RSA note). tpm-rs stores only the prime in the sensitive
+area of every RSA key, so the reference does so also for keys with fixedTPM
+parents (where it would otherwise keep the full CRT values). Adds the
+RSA_PRIVATE_PRIME_ONLY switch to TpmProfile_Misc.h and uses it in
+MarshalSensitive().
+
+diff --git a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
+--- a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
++++ b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Misc.h
+@@ -34,6 +34,10 @@
+ #define NUM_STATIC_PCR             16
+ #define MAX_ALG_LIST_SIZE          64
+ #define PRIMARY_SEED_SIZE          32
++// tpm-rs differential testing: vendor choice RSA_PRIVATE_SIZE =
++// MAX_RSA_KEY_BYTES / 2 (Part 2, TPM2B_PRIVATE_KEY_RSA note): the sensitive
++// area of an RSA key holds only the prime, also under fixedTPM parents.
++#define RSA_PRIVATE_PRIME_ONLY     YES
+ #define CONTEXT_ENCRYPT_ALGORITHM  AES
+ #define NV_CLOCK_UPDATE_INTERVAL   22
+ #define NUM_POLICY_PCR             1
+diff --git a/TPMCmd/tpm/src/command/Object/Object_spt.c b/TPMCmd/tpm/src/command/Object/Object_spt.c
+--- a/TPMCmd/tpm/src/command/Object/Object_spt.c
++++ b/TPMCmd/tpm/src/command/Object/Object_spt.c
+@@ -1038,7 +1038,11 @@ static UINT16 MarshalSensitive(
+         // If the parent isn't fixedTPM, then truncate the sensitive data to be
+         // the size of the prime. Otherwise, leave it at the current size which
+         // is the full CRT size.
+-        if(parent == NULL
++        // tpm-rs differential testing: RSA_PRIVATE_PRIME_ONLY selects the
++        // vendor-specific RSA_PRIVATE_SIZE = MAX_RSA_KEY_BYTES / 2 option
++        // (Part 2, TPM2B_PRIVATE_KEY_RSA note), i.e. only the prime is stored
++        // even for keys with fixedTPM parents (as tpm-rs does).
++        if(RSA_PRIVATE_PRIME_ONLY || parent == NULL
+            || !IS_ATTRIBUTE(
+                parent->publicArea.objectAttributes, TPMA_OBJECT, fixedTPM))
+             sensitive->sensitive.rsa.t.size /= 5;

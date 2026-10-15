@@ -345,14 +345,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut sig_bytes = [0u8; 512];
             // Exp mapped every signing failure to `TPM_RC_FAILURE`; a key that cannot sign the
             // digest is now reported as `Ok(None)`.
-            let sig_len =
-                match self
-                    .crypto()
-                    .sign_inner(sig_alg, priv_key, digest_ha, &mut sig_bytes)
-                {
-                    Ok(Some(sig_len)) => sig_len,
-                    Ok(None) | Err(_) => return Err(TpmRc::FAILURE),
-                };
+            let sig_len = match self.sign_asymmetric(
+                sig_alg,
+                &signer.public.parms_and_id,
+                priv_key,
+                digest_ha,
+                &mut sig_bytes,
+            ) {
+                Ok(Some(sig_len)) => sig_len,
+                Ok(None) | Err(_) => return Err(TpmRc::FAILURE),
+            };
 
             match scheme {
                 TpmtSigScheme::Rsassa(_) => {

@@ -301,6 +301,10 @@ fn dup_policy_auth(global_state: &mut tpm2_impl::GlobalState) -> TpmsAuthCommand
 }
 
 #[test]
+#[cfg_attr(
+    feature = "reference-rng",
+    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
+)]
 fn test_duplicate_import_load_roundtrip() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();

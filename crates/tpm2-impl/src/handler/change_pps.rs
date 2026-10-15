@@ -50,16 +50,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut new_pp_seed = [0u8; 64];
         let mut new_ph_proof = [0u8; 64];
 
-        self.context
-            .platform
-            .rng
-            .fill_bytes(&mut new_pp_seed)
-            .map_err(|_| TpmRc::FAILURE)?;
-        self.context
-            .platform
-            .rng
-            .fill_bytes(&mut new_ph_proof)
-            .map_err(|_| TpmRc::FAILURE)?;
+        self.context.random_platform(&mut new_pp_seed)?;
+        self.context.random_platform(&mut new_ph_proof)?;
 
         self.nv_clear_orderly()?;
 

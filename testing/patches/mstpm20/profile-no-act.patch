@@ -1,0 +1,19 @@
+no-act: build without Authenticated Countdown Timers (ACT_SUPPORT = NO)
+
+Classification: profile setting.
+
+tpm-rs implements no ACTs, so no TPM_RH_ACT_x handle exists and
+TPM2_ACT_SetTimeout is not implemented.
+
+diff --git a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h
+--- a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h
++++ b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h
+@@ -154,7 +154,7 @@
+ //***********************************************
+ // Defines controlling ACT
+ //***********************************************
+-#define ACT_SUPPORT                         YES
++#define ACT_SUPPORT                         NO
+ #define RH_ACT_0                                (YES * ACT_SUPPORT)
+ #define RH_ACT_1                                ( NO * ACT_SUPPORT)
+ #define RH_ACT_2                                ( NO * ACT_SUPPORT)

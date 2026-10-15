@@ -9,6 +9,10 @@ use tpm2_impl::TpmPlatform;
 use tpm2_impl::handler::TransientObject;
 
 #[test]
+#[cfg_attr(
+    feature = "reference-rng",
+    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
+)]
 fn get_random_in_place() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
@@ -97,6 +101,10 @@ fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
 }
 
 #[test]
+#[cfg_attr(
+    feature = "reference-rng",
+    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
+)]
 fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
     use tpm2::platform::storage::NvStorage;
 
@@ -181,6 +189,10 @@ fn test_platform_construction_with_generic_rng() {
 /// independent 64-byte values from the platform RNG, in the reference order (EPS, SPS, PPS,
 /// phProof, shProof, ehProof), and they survive `_TPM_Init` (`reset`) through NV.
 #[test]
+#[cfg_attr(
+    feature = "reference-rng",
+    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
+)]
 fn manufacture_draws_independent_seeds_and_proofs() {
     let mut crypto = common::TestCryptoProvider;
     let mut storage = FakeStorage::default();

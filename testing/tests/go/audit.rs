@@ -1,7 +1,6 @@
 // Ported from go-tpm/tpm2/test/audit_test.go
 
 use crate::_common::Connection;
-use crate::test_utils::CLIENT_CRYPTO;
 use crate::test_utils::{
     ActiveSession, CmdHeader, RespHandles, RespHeader, flush_context, leak_bytes,
     marshal_auth_command, marshal_to_vec, start_auth_session, strip_trailing_zeros,
@@ -14,7 +13,6 @@ use tpm2::commands::{
     Certify, Command, CreatePrimary, GetCapability, GetSessionAuditDigest, UnmarshalMessage,
     responses,
 };
-use tpm2::crypto::CryptoProvider;
 use tpm2::{Handle, TpmCap, TpmEccCurve, TpmPt, TpmSe, TpmSt};
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bEccParameter, Tpm2bName, Tpm2bNonce,
@@ -113,7 +111,7 @@ where
                     "parameter encryption is not supported by this helper"
                 );
                 let mut nonce_bytes = [0u8; 16];
-                CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
+                crate::_common::client_random(&mut nonce_bytes).unwrap();
                 let nonce_caller = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
                 let key = [session.session_key.as_slice(), strip_trailing_zeros(auth)].concat();
                 let mut cp_parts: Vec<&[u8]> = vec![&cc_bytes];

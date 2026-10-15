@@ -440,7 +440,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// and returns their lengths.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn ecdaa_sign(
-        &self,
+        &mut self,
         curve: TpmEccCurve,
         hash_alg: tpm2::TpmiAlgHash,
         r: &[u8],
@@ -461,9 +461,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         for _ in 0..1000 {
             let mut c = [0u8; MAX_ECC_ORDER_SIZE + 8];
-            self.crypto()
-                .get_random(&mut c[..n_len + 8])
-                .map_err(|_| TpmRc::FAILURE)?;
+            // `TpmEcc_GenPrivateScalar()` with the TPM's random source.
+            self.context.random_crypto(&mut c[..n_len + 8])?;
             let mut k = [0u8; MAX_ECC_ORDER_SIZE];
             crate::modular::ecc_scalar_from_extra_bits(&c[..n_len + 8], n, &mut k[..n_len]);
             let skip = k[..n_len].iter().take_while(|&&b| b == 0).count();

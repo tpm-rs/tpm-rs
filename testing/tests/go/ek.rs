@@ -343,10 +343,8 @@ fn start_session(
     bind: Handle,
     salt: Option<(Handle, &TpmtPublic)>,
 ) -> ActiveSession {
-    use tpm2::crypto::CryptoProvider;
-
     let mut nonce_bytes = [0u8; 16];
-    CLIENT_CRYPTO.get_random(&mut nonce_bytes).unwrap();
+    crate::_common::client_random(&mut nonce_bytes).unwrap();
     let nonce_caller = Tpm2bNonce::from_bytes(leak_bytes(&nonce_bytes)).unwrap();
 
     let mut encrypted_salt = tpm2::Tpm2bEncryptedSecret::default();
@@ -359,7 +357,7 @@ fn start_session(
                 PublicParmsAndId::Rsa(rsa_parms, rsa_unique) => {
                     // RSA-OAEP(nameAlg, label "SECRET\0") of a nameAlg-sized salt.
                     let mut salt = [0u8; 32];
-                    CLIENT_CRYPTO.get_random(&mut salt).unwrap();
+                    crate::_common::client_random(&mut salt).unwrap();
                     let exponent = if rsa_parms.exponent == 0 {
                         65537
                     } else {

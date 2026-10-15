@@ -13,16 +13,16 @@ build = "build.rs"
 autobins = false
 
 [dependencies]
-# Tests run against a pinned (seeded RNGs, virtual clock) simulator on the
-# BoringSSL backend, the only backend whose crypto randomness can be pinned, so
-# runs are reproducible and the C reference TPMs can be kept in lockstep.
+# Tests run against a simulator that reproduces the randomness and virtual
+# clock of a C reference TPM process (`reference-rng`), so that the C reference
+# TPMs can be kept in lockstep, on the BoringSSL backend.
 tpm2-simulator = { path = "../crates/tpm2-simulator", default-features = false, features = [
     "bssl",
-    "reproducible",
+    "reference-rng",
 ] }
 tpm2-platform-linux = { path = "../crates/tpm2-platforms/linux", default-features = false, features = [
     "bssl",
-    "reproducible",
+    "reference-rng",
 ] }
 tpm2 = { workspace = true }
 rsa = { version = "0.9.10", features = ["sha2", "sha1", "getrandom"] }

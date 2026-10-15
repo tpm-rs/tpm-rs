@@ -1,0 +1,52 @@
+vendor-info: report tpm-rs's vendor strings, firmware version and spec levels
+
+Classification: platform setting.
+
+TPM_PT_MANUFACTURER, TPM_PT_VENDOR_STRING_x, TPM_PT_FIRMWARE_VERSION_x, the
+TPM specification version/year/day and the platform-specification
+family/level/revision/year/day are implementation-defined; the reference
+reports tpm-rs's values.
+
+diff --git a/TPMCmd/Platform/src/VendorInfo.c b/TPMCmd/Platform/src/VendorInfo.c
+--- a/TPMCmd/Platform/src/VendorInfo.c
++++ b/TPMCmd/Platform/src/VendorInfo.c
+@@ -8,12 +8,12 @@
+ #include "Platform.h"
+ 
+ // In this sample platform, these are compile time constants, but are not required to be.
+-#define MANUFACTURER    "XYZ "
+-#define VENDOR_STRING_1 "xCG "
+-#define VENDOR_STRING_2 "fTPM"
++#define MANUFACTURER    "GOOG"
++#define VENDOR_STRING_1 "TPM-"
++#define VENDOR_STRING_2 "RUST"
+ #define VENDOR_STRING_3 "\0\0\0\0"
+ #define VENDOR_STRING_4 "\0\0\0\0"
+-#define FIRMWARE_V1     (0x20250320)
++#define FIRMWARE_V1     (0x00000001)
+ #define FIRMWARE_V2     (0x00000000)
+ #define MAX_SVN         255
+ 
+@@ -154,17 +154,13 @@ LIB_EXPORT void _plat_GetSpecCapabilityV
+     // this is on the title page of part1 of the TPM spec
+     returnData->tpmSpecLevel      = 0;
+     // these come from part2 of the TPM spec
+-    returnData->tpmSpecVersion    = 184;
+-    returnData->tpmSpecYear       = 2025;
+-    returnData->tpmSpecDayOfYear  = 79; // March 20
++    returnData->tpmSpecVersion    = 185;
++    returnData->tpmSpecYear       = 0;
++    returnData->tpmSpecDayOfYear  = 0;
+     // these come from the PC Client Platform TPM Profile Specification
+-    returnData->platformFamily    = 1;
++    returnData->platformFamily    = 0;
+     returnData->platfromLevel     = 0;
+-    // The platform spec version is recorded such that 0x00000101 means version 1.01
+-    // Note this differs from some TPM/TCG specifications, but matches the behavior of Windows.
+-    // more recent TCG specs have discontinued using this field, but Windows displays it, so we
+-    // retain it using the historical encoding.
+-    returnData->platformRevision  = 0x105;
++    returnData->platformRevision  = 0;
+     returnData->platformYear      = 0;
+     returnData->platformDayOfYear = 0;
+     // clang-format on

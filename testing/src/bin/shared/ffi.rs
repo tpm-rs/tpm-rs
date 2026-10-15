@@ -1,8 +1,9 @@
 //! The FFI shell shared by the reference binaries (`mstpm20`, `ibmswtpm2`):
 //! the entry points of the linked, patched C reference TPM (`difftest_*`,
 //! exported by the symbol-isolated static library `testing/build.rs` links
-//! into exactly one binary), the callbacks the patches call back into, and
-//! the stdout takeover. This is the only `unsafe` code of the crate; all
+//! into exactly one binary), the virtual-clock callback the patches call
+//! back into (`difftest_virtual_ms`), the start-up clock reading and the
+//! stdout takeover. This is the only `unsafe` code of the crate; all
 //! logic lives in the safe [`testing::differential::server`].
 
 #![allow(unsafe_code)]
@@ -10,10 +11,8 @@
 use std::io::BufReader;
 
 use testing::differential::Implementation;
-use testing::differential::server::{
-    self, ActiveRefState, Backend, DeriveKeyRequest, Signal, derive_object_cached,
-    with_active_state,
-};
+use testing::differential::server::{self, Backend, Signal};
+use testing::seed::ReferenceSeed;
 
 unsafe extern "C" {
     fn difftest_init();
@@ -42,6 +41,23 @@ unsafe extern "C" {
 unsafe extern "C" {
     fn dup(fd: i32) -> i32;
     fn dup2(old_fd: i32, new_fd: i32) -> i32;
+    fn clock_gettime(clock_id: i32, tp: *mut Timespec) -> i32;
+    fn getpid() -> i32;
+}
+
+/// The process ID the C reference sees, if fixed by `TPM_REFERENCE_SEED`.
+static FIXED_PID: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+
+/// `getpid()` as seen by the C reference: `testing/build.rs` redirects the
+/// reference's `getpid` calls here. Returns the process ID fixed by
+/// `TPM_REFERENCE_SEED`, or the real one.
+#[unsafe(no_mangle)]
+pub extern "C" fn difftest_getpid() -> i32 {
+    match FIXED_PID.get().copied().flatten() {
+        Some(pid) => pid as i32,
+        // SAFETY: `getpid` has no preconditions.
+        None => unsafe { getpid() },
+    }
 }
 
 /// Takes over stdout as the protocol channel: returns a file for the
@@ -55,242 +71,37 @@ pub fn take_stdout() -> std::fs::File {
     unsafe { std::fs::File::from_raw_fd(fd) }
 }
 
+/// The virtual clock the patched C reference reads as `_plat__RealTime()`
+/// (milliseconds; see [`server::virtual_ms`]).
 #[unsafe(no_mangle)]
 pub extern "C" fn difftest_virtual_ms() -> u64 {
-    with_active_state(|st| st.virtual_ms).unwrap_or(0)
+    server::virtual_ms()
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_plat_rng_fill(buf: *mut u8, len: u16) {
-    if buf.is_null() || len == 0 {
-        return;
-    }
-    let slice = unsafe { std::slice::from_raw_parts_mut(buf, len as usize) };
-    with_active_state(|st| {
-        st.fill_plat_rng(slice);
-    });
+/// `struct timespec` on 64-bit Linux.
+#[repr(C)]
+struct Timespec {
+    tv_sec: i64,
+    tv_nsec: i64,
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_take_nonce(size: u16, buffer: *mut u8) -> i32 {
-    if buffer.is_null() || size == 0 {
-        return 0;
-    }
-    let slice = unsafe { std::slice::from_raw_parts_mut(buffer, size as usize) };
-    with_active_state(|st| i32::from(st.take_nonce(slice))).unwrap_or(0)
-}
+/// `CLOCK_MONOTONIC` on Linux.
+const CLOCK_MONOTONIC: i32 = 1;
 
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_peek_nonce(index: u32, size: u16, buffer: *mut u8) -> i32 {
-    if buffer.is_null() || size == 0 {
-        return 0;
-    }
-    let slice = unsafe { std::slice::from_raw_parts_mut(buffer, size as usize) };
-    with_active_state(|st| i32::from(st.peek_nonce(index as usize, slice))).unwrap_or(0)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_will_override_object() -> i32 {
-    with_active_state(|st| i32::from(st.will_override_object)).unwrap_or(0)
-}
-
-/// Lower bound on the capacity of `ContextLoad_In.context.contextBlob.t.buffer`
-/// in the patched C reference: `sizeof(TPMS_CONTEXT_DATA)` contains a
-/// `TPM2B_CONTEXT_SENSITIVE` of `MAX_CONTEXT_SIZE` (2264 in the patched
-/// profile) plus the integrity digest, so 2264 bytes are always writable.
-const C_CONTEXT_BLOB_CAPACITY: usize = 2264;
-
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_translate_context_blob(size: *mut u16, buffer: *mut u8) {
-    if size.is_null() || buffer.is_null() {
-        return;
-    }
-    let cur_size = unsafe { *size } as usize;
-    if cur_size > C_CONTEXT_BLOB_CAPACITY {
-        // Not a blob C could have produced; leave it for C to reject.
-        return;
-    }
-    let slice = unsafe { std::slice::from_raw_parts_mut(buffer, C_CONTEXT_BLOB_CAPACITY) };
-    let incoming = slice[..cur_size].to_vec();
-    with_active_state(|st| {
-        if let Some(new_len) = st.translate_context_blob(&incoming, slice) {
-            unsafe {
-                *size = new_len as u16;
-            }
-        }
-    });
-}
-
-fn copy_opt_bytes(
-    size: *mut u16,
-    buf: *mut u8,
-    take_fn: impl FnOnce(&mut ActiveRefState) -> Option<Vec<u8>>,
-) -> i32 {
-    if size.is_null() || buf.is_null() {
-        return 0;
-    }
-    with_active_state(|st| {
-        let Some(bytes) = take_fn(st) else {
-            return 0;
-        };
-        unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
-            *size = bytes.len() as u16;
-        }
-        1
-    })
-    .unwrap_or(0)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_get_recorded_ordinary_object(
-    pub_size: *mut u16,
-    pub_buf: *mut u8,
-    priv_size: *mut u16,
-    priv_buf: *mut u8,
-) -> i32 {
-    if pub_size.is_null() || pub_buf.is_null() || priv_size.is_null() || priv_buf.is_null() {
-        return 0;
-    }
-    with_active_state(|st| {
-        let Some((pub_bytes, priv_bytes)) = st.recorded_ordinary_object.take() else {
-            return 0;
-        };
-        unsafe {
-            std::ptr::copy_nonoverlapping(pub_bytes.as_ptr(), pub_buf, pub_bytes.len());
-            *pub_size = pub_bytes.len() as u16;
-            std::ptr::copy_nonoverlapping(priv_bytes.as_ptr(), priv_buf, priv_bytes.len());
-            *priv_size = priv_bytes.len() as u16;
-        }
-        1
-    })
-    .unwrap_or(0)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_get_recorded_signature(size: *mut u16, buf: *mut u8) -> i32 {
-    copy_opt_bytes(size, buf, |st| st.recorded_signature.take())
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_get_recorded_secret(size: *mut u16, buf: *mut u8) -> i32 {
-    copy_opt_bytes(size, buf, |st| st.recorded_secret.take())
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_get_recorded_inner_sym_key(size: *mut u16, buf: *mut u8) -> i32 {
-    copy_opt_bytes(size, buf, |st| st.recorded_inner_sym_key.take())
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_get_recorded_rsa_encrypt(size: *mut u16, buf: *mut u8) -> i32 {
-    copy_opt_bytes(size, buf, |st| st.recorded_rsa_encrypt.take())
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_get_recorded_ecdh(
-    z_size: *mut u16,
-    z_buf: *mut u8,
-    pub_size: *mut u16,
-    pub_buf: *mut u8,
-) -> i32 {
-    if z_size.is_null() || z_buf.is_null() || pub_size.is_null() || pub_buf.is_null() {
-        return 0;
-    }
-    with_active_state(|st| {
-        let Some((z_bytes, pub_bytes)) = st.recorded_ecdh.take() else {
-            return 0;
-        };
-        unsafe {
-            std::ptr::copy_nonoverlapping(z_bytes.as_ptr(), z_buf, z_bytes.len());
-            *z_size = z_bytes.len() as u16;
-            std::ptr::copy_nonoverlapping(pub_bytes.as_ptr(), pub_buf, pub_bytes.len());
-            *pub_size = pub_bytes.len() as u16;
-        }
-        1
-    })
-    .unwrap_or(0)
-}
-
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub extern "C" fn difftest_derive_object(
-    kdf_hash_alg: u16,
-    parent_seed: *const u8,
-    parent_seed_size: u16,
-    label: *const u8,
-    label_size: u16,
-    context_u: *const u8,
-    context_u_size: u16,
-    context_v: *const u8,
-    context_v_size: u16,
-    obj_type: u16,
-    name_alg: u16,
-    object_attributes: u32,
-    key_bits_or_curve: u16,
-    fallback_data: *const u8,
-    fallback_data_size: u16,
-    out_seed_value: *mut u8,
-    out_seed_value_size: *mut u16,
-    out_private_key: *mut u8,
-    out_private_key_size: *mut u16,
-    out_unique_x: *mut u8,
-    out_unique_x_size: *mut u16,
-    out_unique_y: *mut u8,
-    out_unique_y_size: *mut u16,
-) -> i32 {
-    let slice_or_empty = |ptr: *const u8, len: u16| -> &[u8] {
-        if ptr.is_null() || len == 0 {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(ptr, len as usize) }
-        }
+/// The current `CLOCK_MONOTONIC` time in milliseconds, computed exactly like
+/// the C references' `_plat__RealTime()` (`tv_sec * 1000 + tv_nsec /
+/// 1000000`), whose value the virtual clock starts at.
+fn monotonic_ms() -> u64 {
+    let mut ts = Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
     };
-    let req = DeriveKeyRequest {
-        kdf_hash_alg,
-        parent_seed: slice_or_empty(parent_seed, parent_seed_size).to_vec(),
-        label: slice_or_empty(label, label_size).to_vec(),
-        context_u: slice_or_empty(context_u, context_u_size).to_vec(),
-        context_v: slice_or_empty(context_v, context_v_size).to_vec(),
-        obj_type,
-        name_alg,
-        object_attributes,
-        key_bits_or_curve,
-        fallback_data: slice_or_empty(fallback_data, fallback_data_size).to_vec(),
-    };
-    let Some(derived) = derive_object_cached(&req) else {
-        return 0;
-    };
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            derived.seed_value.as_ptr(),
-            out_seed_value,
-            derived.seed_value.len(),
-        );
-        *out_seed_value_size = derived.seed_value.len() as u16;
-
-        std::ptr::copy_nonoverlapping(
-            derived.private_key.as_ptr(),
-            out_private_key,
-            derived.private_key.len(),
-        );
-        *out_private_key_size = derived.private_key.len() as u16;
-
-        std::ptr::copy_nonoverlapping(
-            derived.unique_x.as_ptr(),
-            out_unique_x,
-            derived.unique_x.len(),
-        );
-        *out_unique_x_size = derived.unique_x.len() as u16;
-
-        std::ptr::copy_nonoverlapping(
-            derived.unique_y.as_ptr(),
-            out_unique_y,
-            derived.unique_y.len(),
-        );
-        *out_unique_y_size = derived.unique_y.len() as u16;
-    }
-    1
+    // SAFETY: `ts` is a valid, writable `struct timespec`.
+    let rc = unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts) };
+    assert_eq!(rc, 0, "clock_gettime(CLOCK_MONOTONIC) failed");
+    (ts.tv_sec as u64)
+        .wrapping_mul(1000)
+        .wrapping_add((ts.tv_nsec / 1_000_000) as u64)
 }
 
 /// The linked C reference TPM.
@@ -352,10 +163,22 @@ impl Backend for CReference {
 /// Runs the reference process of `implementation` (see
 /// [`testing::differential::server`]); the first argument names the test.
 pub fn main(implementation: Implementation) {
+    // The seed chosen by the parent (`TPM_REFERENCE_SEED`, always set by
+    // `differential::Reference`): the process ID `getpid()` returns to the C
+    // reference and the start of its virtual clock, which only moves when the
+    // harness advances it. Run by hand without it, the process uses its own
+    // process ID and its `CLOCK_MONOTONIC` time at start-up.
+    let realtime_ms = monotonic_ms();
+    let fixed = ReferenceSeed::from_env();
+    FIXED_PID.get_or_init(|| fixed.map(|s| s.pid));
+    let seed = ReferenceSeed {
+        pid: difftest_getpid() as u32,
+        realtime_ms: fixed.map_or(realtime_ms, |s| s.realtime_ms),
+    };
     let test = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "<unknown>".into());
     let output = std::io::BufWriter::new(take_stdout());
     let input = BufReader::new(std::io::stdin().lock());
-    server::serve(implementation, CReference, test, input, output);
+    server::serve(implementation, CReference, test, seed, input, output);
 }

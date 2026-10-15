@@ -1,0 +1,25 @@
+fix-symmetric-unique: compute 'unique' of every symmetric/keyed-hash object as a digest
+
+Classification: spec-deviation bug fix.
+
+TPM 2.0 Part 1, "Public Area Creation" (TPM_ALG_KEYEDHASH and
+TPM_ALG_SYMCIPHER) requires unique := H_nameAlg(seedValue || sensitive) for
+every keyed-hash and symmetric object. The reference uses an HMAC for
+restricted decryption (parent) objects instead; that variant is disabled.
+
+diff --git a/TPMCmd/tpm/src/crypt/CryptUtil.c b/TPMCmd/tpm/src/crypt/CryptUtil.c
+--- a/TPMCmd/tpm/src/crypt/CryptUtil.c
++++ b/TPMCmd/tpm/src/crypt/CryptUtil.c
+@@ -1012,7 +1012,11 @@ void CryptComputeSymmetricUnique(
+ {
+     // For parents (symmetric and derivation), use an HMAC to compute
+     // the 'unique' field
+-    if(IS_ATTRIBUTE(publicArea->objectAttributes, TPMA_OBJECT, restricted)
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // TPM 2.0 Part 1, "Public Area Creation", TPM_ALG_KEYEDHASH/TPM_ALG_SYMCIPHER,
++    // requires unique := H_nameAlg(obfuscate || key) for every keyed-hash and
++    // symmetric object, parents included, so the HMAC variant is disabled.
++    if(0 && IS_ATTRIBUTE(publicArea->objectAttributes, TPMA_OBJECT, restricted)
+        && IS_ATTRIBUTE(publicArea->objectAttributes, TPMA_OBJECT, decrypt))
+     {
+         // Unique field is HMAC(sensitive->seedValue, sensitive->sensitive)

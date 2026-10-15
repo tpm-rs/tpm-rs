@@ -1,0 +1,42 @@
+quiet-size-checks: silence the informational output of TpmSizeChecks()
+
+Classification: harness plumbing.
+
+TpmSizeChecks() prints structure sizes and a hint that MAX_CONTEXT_SIZE
+could be reduced (it is fixed to tpm-rs's value on purpose, see max-context-
+size.patch). The reference process must stay quiet (its stdout is redirected
+to stderr to protect the harness's pipe protocol); the real size errors are
+still reported.
+
+diff --git a/src/TpmSizeChecks.c b/src/TpmSizeChecks.c
+--- a/src/TpmSizeChecks.c
++++ b/src/TpmSizeChecks.c
+@@ -134,6 +134,9 @@ TpmSizeChecks(
+         printf("sizeof(MarshalData) = %zu\n", sizeof(MarshalData_st));
+ #endif
+ 
++        // tpm-rs differential testing: no informational output (stdout is
++        // the reference process's stderr).
++#if 0
+         printf("Size of OBJECT = %zu\n", sizeof(OBJECT));
+         printf("Size of components in TPMT_SENSITIVE = %zu\n", sizeof(TPMT_SENSITIVE));
+         printf("    TPMI_ALG_PUBLIC                 %zu\n", sizeof(TPMI_ALG_PUBLIC));
+@@ -141,6 +144,7 @@ TpmSizeChecks(
+         printf("    TPM2B_DIGEST                    %zu\n", sizeof(TPM2B_DIGEST));
+         printf("    TPMU_SENSITIVE_COMPOSITE        %zu\n",
+                sizeof(TPMU_SENSITIVE_COMPOSITE));
++#endif
+     }
+     // Make sure that the size of the context blob is large enough for the largest
+     // context
+@@ -174,7 +178,9 @@ TpmSizeChecks(
+ 		       biggestContext, MAX_CONTEXT_SIZE);
+ 		PASS = FALSE;
+ 	    }
+-	else if (MAX_CONTEXT_SIZE > biggestContext)
++	// tpm-rs differential testing: MAX_CONTEXT_SIZE is fixed to mstpm20's
++	// value on purpose; no informational output.
++	else if (0 && MAX_CONTEXT_SIZE > biggestContext)
+ 	    {
+ 		printf("MAX_CONTEXT_SIZE can be reduced to %d (%d)\n",
+ 		       biggestContext, MAX_CONTEXT_SIZE);

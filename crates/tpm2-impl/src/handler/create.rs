@@ -1,3 +1,4 @@
+#[cfg(not(feature = "reference-rng"))]
 use super::KeyDerivationArgs;
 use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
@@ -7,13 +8,15 @@ use tpm2::Handle;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
+#[cfg(not(feature = "reference-rng"))]
+use tpm2::TpmaObject;
 use tpm2::commands::Create;
 use tpm2::commands::responses;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    Alg, Tpm2bDigest, Tpm2bName, TpmaLocality, TpmaObject, TpmiAlgHash, TpmiAlgKdf,
-    TpmsCreationData, TpmtTkCreation,
+    Alg, Tpm2bDigest, Tpm2bName, TpmaLocality, TpmiAlgHash, TpmiAlgKdf, TpmsCreationData,
+    TpmtTkCreation,
 };
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -169,38 +172,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             parent_info.scheme,
         )?;
 
-        // 3. Derive/Generate the new object seed
-        let mut obj_seed = [0u8; 64];
-        let obj_seed_len = self.derive_create_loaded_seed(
-            is_primary,
-            is_derived,
-            &parent_seed_val[..parent_info.seed_len],
-            parent_info.seed_len,
-            &in_public_struct.as_tpmt(),
-            &in_sensitive_struct,
-            None,
-            parent_info.name_alg,
-            &mut obj_seed,
-        )?;
-
-        let gen_seed_arg = if is_primary || is_derived {
-            Some(&obj_seed[..obj_seed_len])
-        } else {
-            None
-        };
-
-        // 4. Generate/Derive the key pairs and the unique identifier
-        let mut actual_private_key = [0u8; 1536];
-        let is_sym_primary_or_derived = is_primary || is_derived;
-        let get_random_fallback = !is_sym_primary_or_derived
-            && (in_public_struct.object_attributes.0 & TpmaObject::SENSITIVE_DATA_ORIGIN.0) != 0;
-        let fallback_sensitive_data = if !is_sym_primary_or_derived
-            && (in_public_struct.object_attributes.0 & TpmaObject::SENSITIVE_DATA_ORIGIN.0) == 0
-        {
-            Some(in_sensitive_struct.data.get_buffer())
-        } else {
-            None
-        };
         let name_alg = in_public_struct
             .name_alg
             .ok_or(TpmRc::HASH.with(Position::parameter(2)))?;
@@ -212,17 +183,68 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
 
-        let actual_private_key_len = self.generate_key_and_unique(
-            name_alg,
-            &mut in_public_struct.parms_and_id,
-            KeyDerivationArgs {
-                gen_seed: gen_seed_arg,
-                obj_seed: &obj_seed[..obj_seed_len],
-                get_random_fallback,
-                fallback_sensitive_data,
-            },
-            &mut actual_private_key,
-        )?;
+        let mut obj_seed = [0u8; 64];
+        let mut actual_private_key = [0u8; 1536];
+        // 3-4. Generate the seed, the key pair and the unique identifier. With `reference-rng`,
+        // as the reference's `CryptCreateObject()` with the TPM's DRBG.
+        #[cfg(feature = "reference-rng")]
+        let (obj_seed_len, actual_private_key_len) = {
+            let template = in_public_struct;
+            self.reference_create_object(
+                None,
+                &template.as_tpmt(),
+                in_sensitive_struct.data.get_buffer(),
+                &mut in_public_struct.parms_and_id,
+                &mut actual_private_key,
+                &mut obj_seed,
+            )?
+        };
+        #[cfg(not(feature = "reference-rng"))]
+        let (obj_seed_len, actual_private_key_len) = {
+            // 3. Derive/Generate the new object seed
+            let obj_seed_len = self.derive_create_loaded_seed(
+                is_primary,
+                is_derived,
+                &parent_seed_val[..parent_info.seed_len],
+                parent_info.seed_len,
+                &in_public_struct.as_tpmt(),
+                &in_sensitive_struct,
+                None,
+                parent_info.name_alg,
+                &mut obj_seed,
+            )?;
+
+            let gen_seed_arg = if is_primary || is_derived {
+                Some(&obj_seed[..obj_seed_len])
+            } else {
+                None
+            };
+
+            // 4. Generate/Derive the key pairs and the unique identifier
+            let is_sym_primary_or_derived = is_primary || is_derived;
+            let get_random_fallback = !is_sym_primary_or_derived
+                && (in_public_struct.object_attributes.0 & TpmaObject::SENSITIVE_DATA_ORIGIN.0)
+                    != 0;
+            let fallback_sensitive_data = if !is_sym_primary_or_derived
+                && (in_public_struct.object_attributes.0 & TpmaObject::SENSITIVE_DATA_ORIGIN.0) == 0
+            {
+                Some(in_sensitive_struct.data.get_buffer())
+            } else {
+                None
+            };
+            let actual_private_key_len = self.generate_key_and_unique(
+                name_alg,
+                &mut in_public_struct.parms_and_id,
+                KeyDerivationArgs {
+                    gen_seed: gen_seed_arg,
+                    obj_seed: &obj_seed[..obj_seed_len],
+                    get_random_fallback,
+                    fallback_sensitive_data,
+                },
+                &mut actual_private_key,
+            )?;
+            (obj_seed_len, actual_private_key_len)
+        };
 
         let mut pub_buf = [0u8; tpm2::TpmtPublic::MAX_SIZE];
         let pub_len = in_public_struct.marshal(&mut pub_buf);

@@ -13,9 +13,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 {
     fn try_get_random(&mut self, buffer: &mut [u8]) -> Result<(), InternalError> {
         self.context
-            .platform
-            .rng
-            .fill_bytes(buffer)
+            .random_platform(buffer)
             .map_err(|_| InternalError::HardwareError)
     }
 
@@ -84,10 +82,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
 
-        self.crypto()
-            .stir_random(cmd.in_data.get_buffer())
-            .map_err(|_| TpmRc::FAILURE)?;
-        let _ = self.context.platform.rng.reseed(cmd.in_data.get_buffer());
+        // With `reference-rng`, `CryptRandomStir()`: the DRBG is reseeded with fresh platform
+        // entropy and the derivation of `inData`.
+        #[cfg(feature = "reference-rng")]
+        {
+            crate::reference_rng::drbg::stir(
+                &mut self.context.ref_rng(),
+                cmd.in_data.get_buffer(),
+            )?;
+        }
+        #[cfg(not(feature = "reference-rng"))]
+        {
+            self.crypto()
+                .stir_random(cmd.in_data.get_buffer())
+                .map_err(|_| TpmRc::FAILURE)?;
+            let _ = self.context.platform.rng.reseed(cmd.in_data.get_buffer());
+        }
 
         let _response = request.into_response();
         Ok(())

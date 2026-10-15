@@ -1,0 +1,20 @@
+no-vendor-commands: disable the vendor command TPM2_Vendor_TCG_Test
+
+Classification: profile setting.
+
+tpm-rs implements no vendor commands, so TPM_CAP_COMMANDS and
+TPM_PT_VENDOR_COMMANDS must not list one.
+
+diff --git a/TPMCmd/TpmConfiguration/TpmConfiguration/VendorCommands/VendorCommandList.h b/TPMCmd/TpmConfiguration/TpmConfiguration/VendorCommands/VendorCommandList.h
+--- a/TPMCmd/TpmConfiguration/TpmConfiguration/VendorCommands/VendorCommandList.h
++++ b/TPMCmd/TpmConfiguration/TpmConfiguration/VendorCommands/VendorCommandList.h
+@@ -7,7 +7,8 @@
+ #  error This file should be included only within TpmProfile_CommandList.h
+ #endif
+ 
+-#define CC_Vendor_TCG_Test CC_YES
++// tpm-rs differential testing: tpm-rs implements no vendor commands.
++#define CC_Vendor_TCG_Test CC_NO
+ 
+ #define VENDOR_COMMAND_ARRAY_COUNT (CC_Vendor_TCG_Test)
+ 

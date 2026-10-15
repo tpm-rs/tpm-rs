@@ -37,27 +37,22 @@ pub use tpm2_crypto_crux::CruxCryptoProvider as PlatformCryptoProvider;
 #[cfg(feature = "bssl")]
 pub use tpm2_crypto_bssl::BsslCryptoProvider as PlatformCryptoProvider;
 
-/// Seeded stream that can stand in for the crypto provider's randomness within
-/// a scope (see `tpm2_crypto_bssl::replay`).
-#[cfg(all(feature = "reproducible", feature = "bssl"))]
-pub use tpm2_crypto_bssl::replay::ReplayRng as CryptoReplayRng;
-
-/// Pins (or unpins) the crypto provider's randomness on the current thread
-/// outside replay scopes (see `tpm2_crypto_bssl::replay::set_thread_default_seed`).
-#[cfg(all(feature = "reproducible", feature = "bssl"))]
-pub use tpm2_crypto_bssl::replay::set_thread_default_seed as set_crypto_thread_default_seed;
+#[cfg(feature = "reference-rng")]
+mod reference;
+#[cfg(feature = "reference-rng")]
+pub use reference::{GlibcRand, ReferenceEntropy, VirtualClock};
 
 /// Linux-specific monotonic timer based on `std::time::Instant`.
 ///
-/// With the `reproducible` feature, [`LinuxTimer::new_virtual`] additionally
-/// provides a virtual clock that only moves when [`LinuxTimer::advance`] is
-/// called, so time-dependent TPM output (`ReadClock`, `TPMS_CLOCK_INFO`, …)
-/// is identical on every run.
+/// With the `reference-rng` feature, [`LinuxTimer::new_virtual`] additionally
+/// provides a timer driven by a [`VirtualClock`], which only moves when
+/// [`LinuxTimer::advance`] is called, so that time passes exactly as for a C
+/// reference TPM driven by the same virtual clock.
 pub struct LinuxTimer {
     start: LazyLock<Instant>,
-    /// Current virtual time in milliseconds, or `None` for the wall clock.
-    #[cfg(feature = "reproducible")]
-    virtual_ms: Option<std::sync::atomic::AtomicU64>,
+    /// The virtual clock, or `None` for the wall clock.
+    #[cfg(feature = "reference-rng")]
+    virtual_clock: Option<VirtualClock>,
 }
 
 impl LinuxTimer {
@@ -65,18 +60,19 @@ impl LinuxTimer {
     pub const fn new() -> Self {
         Self {
             start: LazyLock::new(Instant::now),
-            #[cfg(feature = "reproducible")]
-            virtual_ms: None,
+            #[cfg(feature = "reference-rng")]
+            virtual_clock: None,
         }
     }
 
-    /// Creates a virtual timer that starts at 0 ms and only advances through
-    /// [`LinuxTimer::advance`].
-    #[cfg(feature = "reproducible")]
-    pub const fn new_virtual() -> Self {
+    /// Creates a timer that reads the elapsed time of `clock` (starting at
+    /// 0 ms) and only advances through [`LinuxTimer::advance`] (or another
+    /// handle of `clock`).
+    #[cfg(feature = "reference-rng")]
+    pub fn new_virtual(clock: VirtualClock) -> Self {
         Self {
             start: LazyLock::new(Instant::now),
-            virtual_ms: Some(std::sync::atomic::AtomicU64::new(0)),
+            virtual_clock: Some(clock),
         }
     }
 
@@ -84,11 +80,11 @@ impl LinuxTimer {
     ///
     /// Returns `false` (and does nothing) for a wall-clock timer, whose time
     /// cannot be moved.
-    #[cfg(feature = "reproducible")]
+    #[cfg(feature = "reference-rng")]
     pub fn advance(&self, ms: u64) -> bool {
-        match &self.virtual_ms {
-            Some(now) => {
-                now.fetch_add(ms, std::sync::atomic::Ordering::Relaxed);
+        match &self.virtual_clock {
+            Some(clock) => {
+                clock.advance(ms);
                 true
             }
             None => false,
@@ -98,9 +94,9 @@ impl LinuxTimer {
 
 impl TpmTimer for LinuxTimer {
     fn timer_read(&self) -> u64 {
-        #[cfg(feature = "reproducible")]
-        if let Some(now) = &self.virtual_ms {
-            return now.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(feature = "reference-rng")]
+        if let Some(clock) = &self.virtual_clock {
+            return clock.elapsed_ms();
         }
         self.start.elapsed().as_millis() as u64
     }
@@ -115,32 +111,33 @@ static URANDOM_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 /// syscall), falling back to `/dev/urandom`. [`Rng::reseed`] is a no-op,
 /// because the OS entropy source cannot be stirred.
 ///
-/// With the `reproducible` feature, [`LinuxRng::seeded`] additionally provides
-/// a deterministic ChaCha20 stream, so every TPM value derived from platform
-/// entropy (DRBG state, `nonceTPM`, null seed/proof, `GetRandom` output, …)
-/// is identical on every run.
+/// With the `reference-rng` feature, [`LinuxRng::reference`] additionally
+/// provides the entropy source of the C reference TPMs' simulator platform
+/// (`_plat__GetEntropy()`, see [`ReferenceEntropy`]), so that a TPM using it
+/// draws exactly the platform entropy a C reference TPM process with the same
+/// process ID and clock draws.
 pub struct LinuxRng {
-    /// Deterministic generator, or `None` for OS entropy.
-    #[cfg(feature = "reproducible")]
-    seeded: Option<Mutex<rand_chacha::ChaCha20Rng>>,
+    /// The reference entropy source, or `None` for OS entropy.
+    #[cfg(feature = "reference-rng")]
+    reference: Option<ReferenceEntropy>,
 }
 
 impl LinuxRng {
     /// Creates a new `LinuxRng`.
     pub const fn new() -> Self {
         Self {
-            #[cfg(feature = "reproducible")]
-            seeded: None,
+            #[cfg(feature = "reference-rng")]
+            reference: None,
         }
     }
 
-    /// Creates a deterministic `LinuxRng` whose output stream is fully
-    /// determined by `seed`. **Not for production use.**
-    #[cfg(feature = "reproducible")]
-    pub fn seeded(seed: u64) -> Self {
-        use rand_chacha::rand_core::SeedableRng as _;
+    /// Creates a `LinuxRng` that reproduces the platform entropy of a C
+    /// reference TPM process (see [`ReferenceEntropy::new`]). **Not for
+    /// production use.**
+    #[cfg(feature = "reference-rng")]
+    pub fn reference(entropy: ReferenceEntropy) -> Self {
         Self {
-            seeded: Some(Mutex::new(rand_chacha::ChaCha20Rng::seed_from_u64(seed))),
+            reference: Some(entropy),
         }
     }
 
@@ -157,21 +154,16 @@ impl LinuxRng {
 
 impl Rng for LinuxRng {
     /// Fills `dest` with random bytes from the OS entropy source (or from the
-    /// seeded stream of a [`LinuxRng::seeded`] generator).
+    /// reference entropy source of a [`LinuxRng::reference`] generator).
     ///
     /// # Errors
     /// * [`CryptoError::Internal`] - Neither the `getrandom` syscall nor
-    ///   `/dev/urandom` produced `dest.len()` bytes.
+    ///   `/dev/urandom` produced `dest.len()` bytes, or the reference entropy
+    ///   source failed its continuous test.
     fn fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), CryptoError> {
-        #[cfg(feature = "reproducible")]
-        if let Some(rng) = &self.seeded {
-            use rand_chacha::rand_core::RngCore as _;
-            let mut rng = match rng.lock() {
-                Ok(r) => r,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            rng.fill_bytes(dest);
-            return Ok(());
+        #[cfg(feature = "reference-rng")]
+        if let Some(entropy) = &mut self.reference {
+            return entropy.fill(dest);
         }
 
         // 1. Try PlatformCryptoProvider (getrandom syscall) in a loop to handle EINTR.
@@ -248,6 +240,16 @@ impl Rng for LinuxRng {
     fn reseed(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
         Ok(())
     }
+
+    /// (Re)seeds the reference entropy source (`_plat__GetEntropy(NULL, 0)`);
+    /// nothing for OS entropy.
+    fn init(&mut self) -> Result<(), CryptoError> {
+        #[cfg(feature = "reference-rng")]
+        if let Some(entropy) = &mut self.reference {
+            entropy.init();
+        }
+        Ok(())
+    }
 }
 
 /// Helper function to instantiate a `TpmPlatform` with Linux hardware components.
@@ -293,30 +295,17 @@ mod tests {
         assert!(timer.timer_read() > t0);
     }
 
-    #[cfg(feature = "reproducible")]
-    #[test]
-    fn seeded_rng_is_deterministic() {
-        let draw = |seed| {
-            let mut rng = LinuxRng::seeded(seed);
-            let (mut a, mut b) = ([0u8; 16], [0u8; 16]);
-            rng.fill_bytes(&mut a).unwrap();
-            rng.fill_bytes(&mut b).unwrap();
-            assert_ne!(a, b, "the stream advances");
-            (a, b)
-        };
-        assert_eq!(draw(1), draw(1));
-        assert_ne!(draw(1), draw(2));
-    }
-
-    #[cfg(feature = "reproducible")]
+    #[cfg(feature = "reference-rng")]
     #[test]
     fn virtual_timer_only_moves_when_advanced() {
-        let timer = LinuxTimer::new_virtual();
+        let clock = VirtualClock::new(1_000_000);
+        let timer = LinuxTimer::new_virtual(clock.clone());
         assert_eq!(timer.timer_read(), 0);
         std::thread::sleep(std::time::Duration::from_millis(5));
         assert_eq!(timer.timer_read(), 0);
         assert!(timer.advance(1500));
         assert_eq!(timer.timer_read(), 1500);
+        assert_eq!(clock.realtime_ms(), 1_001_500);
         assert!(
             !LinuxTimer::new().advance(10),
             "a wall clock cannot be advanced"

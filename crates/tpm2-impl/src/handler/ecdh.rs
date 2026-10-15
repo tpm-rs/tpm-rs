@@ -77,6 +77,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let mut de_buf = [0u8; 128];
         let mut qe_buf = [0u8; 256];
+        // `CryptEccNewKeyPair()`: with `reference-rng`, from the TPM's DRBG as in the reference.
+        #[cfg(feature = "reference-rng")]
+        let (pub_len, priv_len) = {
+            let len = self.reference_ecc_new_key_pair(curve, &mut de_buf, &mut qe_buf)?;
+            (2 * len, len)
+        };
+        #[cfg(not(feature = "reference-rng"))]
         let (pub_len, priv_len) = self
             .crypto()
             .generate_key(

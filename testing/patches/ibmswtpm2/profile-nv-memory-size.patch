@@ -1,0 +1,21 @@
+nv-memory-size: NV_MEMORY_SIZE = 16384
+
+Classification: profile setting.
+
+The TCG reference default (as mstpm20) instead of IBM's 32768, which
+determines how many NV indices and persistent objects fit (TPM_RC_NV_SPACE)
+and the reported NV capacity.
+
+diff --git a/src/TpmProfile_Misc.h b/src/TpmProfile_Misc.h
+--- a/src/TpmProfile_Misc.h
++++ b/src/TpmProfile_Misc.h
+@@ -90,7 +90,8 @@
+ #define MAX_NV_INDEX_SIZE          2048
+ #define MAX_NV_BUFFER_SIZE         1024
+ #define MAX_CAP_BUFFER             1024
+-#define NV_MEMORY_SIZE             32768 /* kgold */
++// tpm-rs differential testing: the TCG reference default (as mstpm20).
++#define NV_MEMORY_SIZE             16384
+ #define MIN_COUNTER_INDICES        8
+ #define NUM_STATIC_PCR             16
+ #define MAX_ALG_LIST_SIZE          64

@@ -1,0 +1,25 @@
+fix-startup-get-unique-auth: load the vendor authorization value with _plat__GetUnique(1, ...)
+
+Classification: build fix.
+
+With VENDOR_PERMANENT_AUTH_ENABLED, TPM2_Startup() loads
+g_platformUniqueAuth through _plat__GetUniqueAuth(), which no platform file
+defines (an undefined symbol at link time). The platform's unique value
+_plat__GetUnique(1, ...) is used instead.
+
+diff --git a/src/StartupCommands.c b/src/StartupCommands.c
+--- a/src/StartupCommands.c
++++ b/src/StartupCommands.c
+@@ -221,8 +221,10 @@ TPM2_Startup(
+ #  if VENDOR_PERMANENT_AUTH_ENABLED == YES
+     // Read the platform unique value that is used as VENDOR_PERMANENT_AUTH_HANDLE
+     // authorization value
+-    g_platformUniqueAuth.t.size = (UINT16)_plat__GetUniqueAuth
+-				  ((g_platformUniqueAuth.t.buffer), g_platformUniqueAuth.t.buffer);
++    // tpm-rs differential testing: upstream calls the undeclared
++    // _plat__GetUniqueAuth() with wrong arguments; use _plat__GetUnique(1, ...).
++    g_platformUniqueAuth.t.size = (UINT16)_plat__GetUnique(
++        1, sizeof(g_platformUniqueAuth.t.buffer), g_platformUniqueAuth.t.buffer);
+ #  endif
+ 
+     // Start up subsystems

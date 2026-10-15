@@ -367,8 +367,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let digest_ha = tpm2::TpmtHa::new(resolved_hash_alg_tpmi, cmd.digest.get_buffer())
                 .ok_or_else(|| TpmRc::SIZE.with(Position::parameter(1)))?;
 
-            let sig_len = match self.crypto().sign_inner(
+            let sig_len = match self.sign_asymmetric(
                 sign_alg,
+                &_obj.public.parms_and_id,
                 &_obj.private[.._obj.private_len],
                 digest_ha,
                 &mut sig_buf,
@@ -408,6 +409,59 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let response = request.into_response();
         self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
+    }
+
+    /// Signs `digest` with the asymmetric scheme `sign_alg` (RSASSA, RSAPSS or ECDSA) and the
+    /// private key of an object with public parameters `key` (`CryptSign()`), writing the
+    /// signature (`r || s` for ECDSA) to `out`.
+    ///
+    /// With `reference-rng`, the random parts (the ECDSA nonce, the PSS salt) are drawn from the
+    /// TPM's DRBG exactly as in the reference code; otherwise the crypto provider signs.
+    pub(crate) fn sign_asymmetric(
+        &mut self,
+        sign_alg: Alg,
+        key: &OwnedPublicParmsAndId,
+        private_key: &[u8],
+        digest: tpm2::TpmtHa<'_>,
+        out: &mut [u8],
+    ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
+        #[cfg(feature = "reference-rng")]
+        match (sign_alg, key) {
+            (Alg::ECDSA, OwnedPublicParmsAndId::Ecc(parms, _)) => {
+                let (mut r, mut s) = ([0u8; 66], [0u8; 66]);
+                let len = self
+                    .reference_ecdsa_sign(
+                        parms.curve_id,
+                        private_key,
+                        digest.digest(),
+                        &mut r,
+                        &mut s,
+                    )
+                    .map_err(|_| tpm2::crypto::CryptoError::Internal)?;
+                let out = out
+                    .get_mut(..2 * len)
+                    .ok_or(tpm2::crypto::CryptoError::Internal)?;
+                out[..len].copy_from_slice(&r[..len]);
+                out[len..].copy_from_slice(&s[..len]);
+                return Ok(Some(2 * len));
+            }
+            (Alg::RSAPSS, OwnedPublicParmsAndId::Rsa(_, unique)) => {
+                let hash = digest.hash_alg();
+                return self
+                    .reference_rsa_pss_sign(
+                        hash,
+                        private_key,
+                        unique.get_size() as usize,
+                        digest.digest(),
+                        out,
+                    )
+                    .map_err(|_| tpm2::crypto::CryptoError::Internal);
+            }
+            _ => {}
+        }
+        #[cfg(not(feature = "reference-rng"))]
+        let _ = key;
+        self.crypto().sign_inner(sign_alg, private_key, digest, out)
     }
 
     /// Handles the [TpmCc::RSAEncrypt] (`0x150`) command.
@@ -473,14 +527,50 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.to_rc());
         }
         let mut encrypted_data = [0u8; 512];
-        let encrypted_len = match self.crypto().encrypt(
+        // With `reference-rng`, OAEP and RSAES padding are drawn from the TPM's DRBG exactly as
+        // in the reference code (`OaepEncode()`, `RSAES_PKCS1v1_5Encode()`).
+        #[cfg(feature = "reference-rng")]
+        let encrypted = match resolved_scheme {
+            Alg::OAEP | Alg::RSAES => {
+                let hash = if resolved_scheme == Alg::OAEP {
+                    Some(
+                        tpm2::TpmiAlgHash::try_from(resolved_hash_alg)
+                            .map_err(|_| TpmRc::HASH.to_rc())?,
+                    )
+                } else {
+                    None
+                };
+                match self.reference_rsa_encrypt(
+                    hash,
+                    pub_key,
+                    label_bytes,
+                    cmd.message.get_buffer(),
+                    &mut encrypted_data[..key_size],
+                ) {
+                    Ok(r) => Ok(r),
+                    Err(e) if e == TpmRc::VALUE.to_rc() || e == TpmRc::HASH.to_rc() => Ok(None),
+                    Err(e) => return Err(e),
+                }
+            }
+            _ => self.crypto().encrypt(
+                resolved_scheme,
+                resolved_hash_alg,
+                pub_key,
+                cmd.message.get_buffer(),
+                &mut encrypted_data[..key_size],
+                label_bytes,
+            ),
+        };
+        #[cfg(not(feature = "reference-rng"))]
+        let encrypted = self.crypto().encrypt(
             resolved_scheme,
             resolved_hash_alg,
             pub_key,
             cmd.message.get_buffer(),
             &mut encrypted_data[..key_size],
             label_bytes,
-        ) {
+        );
+        let encrypted_len = match encrypted {
             Ok(Some(len)) => len,
             Ok(None) | Err(_) => return Err(TpmRc::VALUE.to_rc()),
         };

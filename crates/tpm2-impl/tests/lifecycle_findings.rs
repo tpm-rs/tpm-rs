@@ -161,6 +161,10 @@ impl Rng for FlakyRng<'_> {
 /// platform RNG fails (findings tpm2-getrandom-stirrandom-unmarshal-panic-and-size-bugs and
 /// get-random-and-stir-random-parameter-validation-and-failure-mode-bugs).
 #[test]
+#[cfg_attr(
+    feature = "reference-rng",
+    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
+)]
 fn tpm2_getrandom_stirrandom_unmarshal_panic_and_size_bugs() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();

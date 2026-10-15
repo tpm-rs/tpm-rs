@@ -1,0 +1,31 @@
+align-empty-encrypted-parameter: reject an empty encrypted parameter that ends the command
+
+Classification: profile setting (implementation-defined behavior, not a spec deviation).
+
+An encrypted first parameter that is an empty TPM2B ending the command is
+rejected with TPM_RC_SIZE, as tpm-rs and the TCG reference's
+CryptParameterDecryption() (`bufferSize <= 0`) do. The specification defines
+no error for this case; the upstream IBM code executes the command, which
+would leave the session (nonceTPM) and the TPM state of the TPMs different,
+so it cannot be a harness exception.
+
+diff --git a/src/CryptUtil.c b/src/CryptUtil.c
+--- a/src/CryptUtil.c
++++ b/src/CryptUtil.c
+@@ -1018,7 +1018,15 @@ CryptParameterDecryption(
+ 	    return TPM_RC_INSUFFICIENT;
+ 	}
+ 
+-    if(cipherSize > bufferSize)
++    // tpm-rs differential testing (implementation-defined behavior aligned
++    // with tpm-rs and mstpm20, NOT a spec deviation): an encrypted parameter
++    // that is an empty TPM2B ending the command is rejected with TPM_RC_SIZE,
++    // as the TCG reference's CryptParameterDecryption() (`bufferSize <= 0`)
++    // does. The specification defines no error for this case; the upstream
++    // IBM code executes the command, which would leave the session (nonceTPM)
++    // and TPM state of the two TPMs different, so it cannot be a harness
++    // exception.
++    if(cipherSize > bufferSize || bufferSize <= 0)
+ 	{
+ 	    return TPM_RC_SIZE;
+ 	}

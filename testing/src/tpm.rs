@@ -1,26 +1,45 @@
 //! The TPM the E2E tests talk to.
 //!
-//! Every test drives a [`Tpm`]: a pinned `tpm-rs` simulator (seeded platform
-//! and crypto RNGs, virtual clock; see `tpm2_simulator::create_replay_simulator!`),
-//! reachable only through its command interface (typed commands, raw command
-//! buffers at any locality, platform signals and `_TPM_Hash_*` indications),
-//! exactly like a real TPM.
+//! Every test drives a [`Tpm`]: a `tpm-rs` simulator on a virtual clock
+//! (see `tpm2_simulator::create_reference_simulator!`), reachable only
+//! through its command interface (typed commands, raw command buffers at any
+//! locality, platform signals and `_TPM_Hash_*` indications), exactly like a
+//! real TPM.
 //!
 //! With the `differential` feature, every interaction is additionally mirrored
-//! to patched C reference TPMs (the TCG reference `mstpm20` and the IBM
-//! `ibmswtpm2`), each running in a child process of its own (see
-//! [`crate::differential`]): each command is first executed by `tpm-rs`, then
-//! by every reference, and each reference's response must be identical to
-//! the `tpm-rs` response except for the documented, implementation-defined
-//! differences. A mismatch panics at the command that diverged, so the same
-//! test suite serves as both the `tpm-rs` E2E tests and the differential
-//! tests. The test always continues with the `tpm-rs` response.
+//! to the patched C reference TPMs selected by `DIFFERENTIAL_REFERENCES`
+//! (default: both the TCG reference `mstpm20` and the IBM `ibmswtpm2`), each
+//! running in a child process of its own (see [`crate::differential`]): each
+//! command is first executed by `tpm-rs`, then by every reference (in
+//! parallel), and each reference's response must be identical to the
+//! `tpm-rs` response except for the documented, implementation-defined
+//! differences, so the references are also compared with each other. A
+//! mismatch panics at the command that diverged, so the same test suite
+//! serves as both the `tpm-rs` E2E tests and the differential tests. The test
+//! always continues with the `tpm-rs` response.
 //!
-//! Time and client-side randomness are deterministic too: [`sleep`] only
-//! advances the virtual clocks of the TPMs (no wall-clock time passes), and
-//! creating the first [`Tpm`] on a thread pins that thread's client-side
-//! crypto randomness (see [`CLIENT_SEED`]), so every run of a test sends the
-//! same commands.
+//! The C references seed their random number generation from their process
+//! ID and their real-time clock. The `Tpm` chooses both values
+//! ([`crate::seed::ReferenceSeed::choose`]: the test process's ID and its
+//! current monotonic time), builds its simulator, which reproduces the
+//! references' random number generation, from them, and hands them to every
+//! reference process, which adopts them (its `getpid()` and its initial
+//! clock). Afterwards all clocks only move together, through [`sleep`] (no
+//! wall-clock time passes), so `tpm-rs` and every reference draw the same
+//! random values.
+//!
+//! Every `Tpm` prints its seed (`TPM_REFERENCE_SEED=<pid>:<realtime_ms>`, see
+//! [`crate::seed`]) on stderr, which the test harness shows for failing
+//! tests. Setting that environment variable makes every `Tpm` use that seed
+//! instead, so the TPM's random values repeat exactly. The variable holds one
+//! seed, so a test that creates several `Tpm`s gives all of them the same
+//! seed when reproduced.
+//!
+//! Client-side randomness (nonces, salts and client keys, see
+//! [`crate::_common::client_random`]) comes from the OS, so the commands a
+//! test sends may differ between runs, unless `TPM_REFERENCE_SEED` is set, in
+//! which case it is derived from the seed and the test name; the references
+//! always receive exactly the commands `tpm-rs` received.
 
 use std::cell::Cell;
 use std::io::Cursor;
@@ -28,7 +47,7 @@ use std::time::Duration;
 
 use tpm2::Connection;
 use tpm2::commands::Command;
-use tpm2_simulator::{NO_STREAM, PlatformConnection, Simulator, create_replay_simulator};
+use tpm2_simulator::{NO_STREAM, PlatformConnection, Simulator, create_reference_simulator};
 
 pub use tpm2_simulator::{ExecuteError, SimulatorPlatformSignal};
 
@@ -41,16 +60,9 @@ const TPM_SIGNAL_HASH_END: u32 = 7;
 /// MSSIM `TPM_SEND_COMMAND`.
 const TPM_SEND_COMMAND: u32 = 8;
 
-/// Seed of the client-side crypto randomness of every thread that created a
-/// [`Tpm`] (nonces, salts and client keys drawn from
-/// [`crate::_common::CLIENT_CRYPTO`]).
-pub const CLIENT_SEED: u64 = 0x636c_6965_6e74_0001;
-
 thread_local! {
     /// Milliseconds this thread let pass via [`sleep`].
     static THREAD_CLOCK_MS: Cell<u64> = const { Cell::new(0) };
-    /// Whether this thread's client-side randomness has been pinned.
-    static CLIENT_RNG_PINNED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Lets `duration` pass for every [`Tpm`] of the calling thread.
@@ -65,15 +77,14 @@ pub fn sleep(duration: Duration) {
 
 /// The TPM under test (see the module docs).
 ///
-/// A `Tpm` must be driven from the thread that created it (its crypto pinning
-/// and [`sleep`] clock are per thread).
+/// A `Tpm` must be driven from the thread that created it (its [`sleep`]
+/// clock is per thread).
 pub struct Tpm {
     /// The `tpm-rs` simulator, whose responses the tests see.
     sim: Simulator<'static>,
     /// The value of this thread's [`sleep`] clock last applied to the TPMs.
     clock_ms: u64,
-    /// The C reference TPMs mirroring `sim` (one per enabled
-    /// implementation).
+    /// The C reference TPMs mirroring `sim`.
     #[cfg(feature = "differential")]
     references: crate::differential::References,
 }
@@ -88,19 +99,34 @@ impl Tpm {
     /// Creates a fresh TPM that has been powered on, had NV enabled and
     /// received `TPM2_Startup(TPM_SU_CLEAR)`.
     ///
-    /// With the `differential` feature, the TPM is mirrored to C reference
-    /// TPMs in child processes of their own (one per enabled
-    /// implementation), so `Tpm`s are fully independent (across threads and
+    /// With the `differential` feature, the TPM is mirrored to every selected
+    /// C reference TPM, each in a child process of its own seeded with this
+    /// TPM's seed, so `Tpm`s are fully independent (across threads and
     /// within one test).
     pub fn new() -> Self {
-        if !CLIENT_RNG_PINNED.with(|p| p.replace(true)) {
-            tpm2_platform_linux::set_crypto_thread_default_seed(Some(CLIENT_SEED));
-        }
+        use crate::seed::{ReferenceSeed, SEED_ENV};
+        let seed = ReferenceSeed::choose();
+        #[cfg(feature = "differential")]
+        let references =
+            crate::differential::References::launch(crate::differential::selected(), seed);
+        // Shown with the output of a failing test: setting the variable
+        // reproduces this TPM's random values.
+        #[cfg(feature = "differential")]
+        eprintln!(
+            "tpm-rs: {SEED_ENV}={seed} (compared with {})",
+            references
+                .implementations()
+                .map(|i| i.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        #[cfg(not(feature = "differential"))]
+        eprintln!("tpm-rs: {SEED_ENV}={seed}");
         Self {
-            sim: create_replay_simulator!(),
+            sim: create_reference_simulator!(seed.pid, seed.realtime_ms),
             clock_ms: THREAD_CLOCK_MS.with(Cell::get),
             #[cfg(feature = "differential")]
-            references: crate::differential::References::launch(),
+            references,
         }
     }
 
@@ -122,7 +148,7 @@ impl Tpm {
     }
 
     /// Sends `command` at `locality` to `tpm-rs` (MSSIM `TPM_SEND_COMMAND`)
-    /// and, with `differential`, to the C references, comparing the
+    /// and, with `differential`, to the C reference, comparing the
     /// responses.
     /// Returns the `tpm-rs` response (empty while the TPM is powered off), or
     /// an error if the simulator rejected the command at the transport level
@@ -222,7 +248,7 @@ impl Tpm {
     }
 
     /// Whether every interaction with this TPM is mirrored to (and compared
-    /// with) C reference TPMs.
+    /// with) a C reference TPM.
     pub fn is_differential(&self) -> bool {
         cfg!(feature = "differential")
     }
@@ -275,15 +301,23 @@ mod tests {
         assert!(wall.elapsed() < Duration::from_secs(60));
     }
 
+    /// `TPM2_GetRandom(16)`.
+    const GET_RANDOM_16: [u8; 12] = [0x80, 0x01, 0, 0, 0, 12, 0, 0, 0x01, 0x7B, 0, 16];
+
     #[test]
-    fn identical_tests_produce_identical_responses() {
-        let run = || {
-            let mut tpm = Tpm::new();
-            sleep(Duration::from_millis(1500));
-            // TPM2_GetRandom(16).
-            tpm.send_command(0, &[0x80, 0x01, 0, 0, 0, 12, 0, 0, 0x01, 0x7B, 0, 16])
-        };
-        assert_eq!(run(), run());
+    fn get_random_draws_fresh_values() {
+        let mut tpm = Tpm::new();
+        let first = tpm.send_command(0, &GET_RANDOM_16);
+        assert_eq!(
+            &first[6..10],
+            &[0, 0, 0, 0],
+            "GetRandom failed: {first:02x?}"
+        );
+        assert_eq!(first.len(), 12 + 16);
+        sleep(Duration::from_millis(1500));
+        let second = tpm.send_command(0, &GET_RANDOM_16);
+        assert_eq!(second.len(), first.len());
+        assert_ne!(first, second, "the DRBG advances");
     }
 
     #[test]

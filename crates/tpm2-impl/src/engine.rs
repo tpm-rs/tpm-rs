@@ -162,6 +162,9 @@ pub const DRBG_MAGIC: u32 = 0x47425244;
 /// (`TPM2_Shutdown`) and restored and reseeded on subsequent orderly startup (`TPM2_Startup`).
 /// It preserves accumulated entropy across power cycles and satisfies `ibmswtpm2` rollback assertions
 /// (`pAssert(drbgState->magic == DRBG_MAGIC)`).
+///
+/// With the `reference-rng` feature, it is converted field by field to and from the reference
+/// code's `DRBG_STATE` around every call into that code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DrbgState {
     /// Reseed counter tracking requests since last reseed.
@@ -1518,29 +1521,36 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// (EPS, SPS, PPS, then phProof, shProof, ehProof; 64 bytes each).
     pub fn init_storage(&mut self) {
         const SEED_AND_PROOF_SIZE: u16 = 64;
-        let size = SEED_AND_PROOF_SIZE as usize;
-        let rng = &mut *self.platform.rng;
+        // `CryptInit()` and `CryptStartup(SU_RESET)` of `TPM_Manufacture()` come first: the
+        // DRBG the hierarchy secrets are drawn from is instantiated here.
+        #[cfg(feature = "reference-rng")]
+        let rng_ok = self.manufacture_rng().is_ok();
+        #[cfg(not(feature = "reference-rng"))]
+        let rng_ok = true;
         // A value the platform RNG cannot produce stays unprovisioned (zeroed, size 0): every
         // command that needs it as key material then fails with `TPM_RC_FAILURE`
         // (`handler::provisioned_secret`) instead of using a predictable value.
-        let mut draw = |buf: &mut [u8; 64]| -> u16 {
-            if rng.fill_bytes(&mut buf[..size]).is_ok() {
-                SEED_AND_PROOF_SIZE
+        let draw = |engine: &mut Self| -> ([u8; 64], u16) {
+            let mut buf = [0u8; 64];
+            if rng_ok && engine.random_platform(&mut buf).is_ok() {
+                (buf, SEED_AND_PROOF_SIZE)
             } else {
-                buf.fill(0);
-                0
+                ([0u8; 64], 0)
             }
         };
-        self.state.ep_seed_size = draw(&mut self.state.ep_seed);
-        self.state.sp_seed_size = draw(&mut self.state.sp_seed);
-        self.state.pp_seed_size = draw(&mut self.state.pp_seed);
-        self.state.ph_proof_size = draw(&mut self.state.ph_proof);
-        self.state.sh_proof_size = draw(&mut self.state.sh_proof);
-        self.state.eh_proof_size = draw(&mut self.state.eh_proof);
+        (self.state.ep_seed, self.state.ep_seed_size) = draw(self);
+        (self.state.sp_seed, self.state.sp_seed_size) = draw(self);
+        (self.state.pp_seed, self.state.pp_seed_size) = draw(self);
+        (self.state.ph_proof, self.state.ph_proof_size) = draw(self);
+        (self.state.sh_proof, self.state.sh_proof_size) = draw(self);
+        (self.state.eh_proof, self.state.eh_proof_size) = draw(self);
         let mut storage = StorageManager::new(&mut *self.platform.storage);
         let _ = storage.undefine_space(0x00FFFFFF);
         let _ = storage.undefine_space(PCR_ALLOCATION_HANDLE);
         self.save_hierarchy_auths();
+        // `NvWrite(NV_ORDERLY_DATA, ...)`: the DRBG state after manufacture is persisted.
+        #[cfg(feature = "reference-rng")]
+        self.save_drbg_state();
     }
 
     /// Creates a new [`TpmEngine`] over `platform` with a default (unmanufactured)
@@ -1597,10 +1607,16 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// including the Primary Seeds and hierarchy proofs written at manufacture
     /// ([`Self::init_storage`]) or by `TPM2_Clear`/`TPM2_ChangeEPS`/`TPM2_ChangePPS`.
     pub fn reset(&mut self) {
+        // `CryptInit()` re-seeds the platform entropy source.
+        #[cfg(feature = "reference-rng")]
+        self.crypt_rand_init();
         self.state.reset_in_place();
         self.restore_hierarchy_auths();
         self.restore_persistent_state();
         self.restore_pcr_allocation();
+        // `NvRead(&go, NV_ORDERLY_DATA, ...)`: the DRBG reverts to its last persisted state.
+        #[cfg(feature = "reference-rng")]
+        self.load_drbg_state();
     }
 
     /// Replaces the active PCR allocation with the NV copy written by `TPM2_PCR_Allocate`
@@ -2399,6 +2415,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             self.state.clock_safe = true;
             // The clock is persisted with the rest of the persistent hierarchy data.
             self.save_hierarchy_auths();
+            // The reference writes all of `go`, including the DRBG state.
+            #[cfg(feature = "reference-rng")]
+            self.save_drbg_state();
         }
     }
 
@@ -2823,9 +2842,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         .map(|s| s.nonce_tpm.get_size() as usize)
                         .unwrap_or(32);
                     let mut nonce_bytes = [0u8; 64];
-                    self.platform
-                        .crypto
-                        .get_random(&mut nonce_bytes[..nonce_size])
+                    self.random_crypto(&mut nonce_bytes[..nonce_size])
                         .map_err(|_| TpmRc::MEMORY)?;
                     nonces_tpm_new[i] = Some(
                         OwnedNonce::from_bytes(&nonce_bytes[..nonce_size])

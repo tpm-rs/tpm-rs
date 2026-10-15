@@ -11,8 +11,10 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::{Rewrap, responses};
+#[cfg(not(feature = "reference-rng"))]
+use tpm2::crypto::KeyParams;
 use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{CryptoProvider, Direction, HmacStream, KeyParams, Rng};
+use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bPrivate, TpmEccCurve, TpmaObject,
@@ -429,7 +431,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// secret (`TPM_RC_KEY` if the parent's public point is unusable). Returns
     /// `(seed_len, secret_len)`.
     pub(crate) fn crypt_secret_encrypt(
-        &self,
+        &mut self,
         parent: &TransientObject,
         label: &[u8],
         seed: &mut [u8; 64],
@@ -439,22 +441,33 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let digest_size = name_alg.digest_size();
         match &parent.public.parms_and_id {
             OwnedPublicParmsAndId::Rsa(_, unique) => {
-                self.crypto()
-                    .get_random(&mut seed[..digest_size])
-                    .map_err(|_| TpmRc::FAILURE)?;
+                self.context.random_crypto(&mut seed[..digest_size])?;
                 let mut label_buf = [0u8; 32];
                 let label_len = oaep_label(label, &mut label_buf);
-                let secret_len = crypto_len(
-                    self.crypto().encrypt(
-                        Alg::OAEP,
-                        Alg::from(name_alg),
+                // With `reference-rng`, the OAEP seed is drawn from the TPM's DRBG as in the
+                // reference (`OaepEncode()`).
+                #[cfg(feature = "reference-rng")]
+                let encrypted = {
+                    let n_len = unique.get_size() as usize;
+                    self.reference_rsa_encrypt(
+                        Some(name_alg),
                         unique.get_buffer(),
-                        &seed[..digest_size],
-                        secret_out,
                         &label_buf[..label_len],
-                    ),
-                    TpmRc::VALUE.to_rc(),
-                )?;
+                        &seed[..digest_size],
+                        &mut secret_out[..n_len],
+                    )
+                    .map_err(|_| tpm2::crypto::CryptoError::Internal)
+                };
+                #[cfg(not(feature = "reference-rng"))]
+                let encrypted = self.crypto().encrypt(
+                    Alg::OAEP,
+                    Alg::from(name_alg),
+                    unique.get_buffer(),
+                    &seed[..digest_size],
+                    secret_out,
+                    &label_buf[..label_len],
+                );
+                let secret_len = crypto_len(encrypted, TpmRc::VALUE.to_rc())?;
                 Ok((digest_size, secret_len))
             }
             OwnedPublicParmsAndId::Ecc(parms, unique) => {
@@ -475,6 +488,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .map_err(|_| TpmRc::KEY.to_rc())?;
                 let mut eph_pub = [0u8; 256];
                 let mut eph_priv = [0u8; 128];
+                // `CryptEccNewKeyPair()`: with `reference-rng`, from the TPM's DRBG.
+                #[cfg(feature = "reference-rng")]
+                let priv_len =
+                    self.reference_ecc_new_key_pair(curve, &mut eph_priv, &mut eph_pub)?;
+                #[cfg(not(feature = "reference-rng"))]
                 let (_, priv_len) = self
                     .crypto()
                     .generate_key(

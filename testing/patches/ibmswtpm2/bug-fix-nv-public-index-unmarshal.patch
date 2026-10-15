@@ -1,0 +1,27 @@
+fix-nv-public-index-unmarshal: restrict TPMS_NV_PUBLIC.nvIndex to ordinary NV indices
+
+Classification: spec-deviation bug fix.
+
+TPMS_NV_PUBLIC.nvIndex is a TPMI_RH_NV_LEGACY_INDEX (Part 2), i.e. only
+{NV_INDEX_FIRST:NV_INDEX_LAST}, else TPM_RC_VALUE; upstream also admits
+external and permanent NV handles there.
+
+diff --git a/src/Unmarshal.c b/src/Unmarshal.c
+--- a/src/Unmarshal.c
++++ b/src/Unmarshal.c
+@@ -4307,6 +4307,15 @@ TPMS_NV_PUBLIC_Unmarshal(TPMS_NV_PUBLIC
+     if (rc == TPM_RC_SUCCESS) {
+ 	rc = TPMI_RH_NV_INDEX_Unmarshal(&target->nvIndex, buffer, size);
+     }
++    // tpm-rs differential testing -- spec deviation fix (NOT determinism):
++    // TPMS_NV_PUBLIC.nvIndex is a TPMI_RH_NV_LEGACY_INDEX (Part 2), i.e. only
++    // {NV_INDEX_FIRST:NV_INDEX_LAST}, else TPM_RC_VALUE; upstream also admits
++    // external and permanent NV handles here.
++    if (rc == TPM_RC_SUCCESS) {
++	if ((target->nvIndex < NV_INDEX_FIRST) || (target->nvIndex > NV_INDEX_LAST)) {
++	    rc = TPM_RC_VALUE;
++	}
++    }
+     if (rc == TPM_RC_SUCCESS) {
+ 	rc = TPMI_ALG_HASH_Unmarshal(&target->nameAlg, buffer, size, NO);
+     }

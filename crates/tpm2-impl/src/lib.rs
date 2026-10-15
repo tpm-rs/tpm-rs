@@ -47,7 +47,10 @@
 //! - **Key Migration & Importing**: [duplicate.rs](handler/duplicate.rs) (encrypts objects for duplicate migration), [import.rs](handler/import.rs) (decrypts imported objects).
 
 #![no_std]
-#![forbid(unsafe_code)]
+// The opt-in `reference-rng` feature links the C reference TPM's random-number generation; its
+// FFI boundary (`reference_rng::ffi`) is the only module allowed to use `unsafe`.
+#![cfg_attr(not(feature = "reference-rng"), forbid(unsafe_code))]
+#![cfg_attr(feature = "reference-rng", deny(unsafe_code))]
 #![allow(dead_code)] // rustc >= 1.90.0 (1159e78c4 2025-09-14)
 
 #[cfg(test)]
@@ -64,6 +67,8 @@ pub mod hash_state;
 mod modular;
 pub mod owned;
 pub mod platform_connection;
+#[cfg(feature = "reference-rng")]
+pub mod reference_rng;
 pub mod storage;
 #[cfg(test)]
 pub mod test_support;
@@ -72,6 +77,7 @@ mod util;
 
 mod engine;
 mod req_resp;
+mod rng;
 pub use engine::{
     ActiveSequence, DRBG_MAGIC, DrbgState, GlobalState, MAX_ACTIVE_SEQUENCES, MAX_LOADED_OBJECTS,
     MAX_LOADED_SESSIONS, MAX_SEQUENCE_BUFFER, ResponseBufferTooSmall, SequenceType, TpmEngine,

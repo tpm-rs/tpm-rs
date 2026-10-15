@@ -1,0 +1,38 @@
+pcr-attributes: use tpm-rs's attributes for PCRs 16-23
+
+Classification: platform setting.
+
+The PCR attributes (reset/extend localities, TPM_PT_PCR properties such as
+TPM_PT_PCR_NO_INCREMENT, TPM_PT_PCR_AUTH, TPM_PT_PCR_POLICY) of PCRs 16-23
+are a platform choice; the reference uses those of tpm-rs and of the TCG
+reference platform (mstpm20), not IBM's PC-Client-like ones.
+
+diff --git a/src/PlatformPCR.c b/src/PlatformPCR.c
+--- a/src/PlatformPCR.c
++++ b/src/PlatformPCR.c
+@@ -100,17 +100,20 @@ static const PCR_Attributes s_initAttrib
+     {1, 0, 0, 0, 0, 0x1F},
+ 
+     // these PCRs are never saved
+-    {0, 1, 0, 0, 0x0F, 0x1F},  // PCR 16, Debug, reset allowed, extend all
++    // tpm-rs differential testing: the PCR attributes of PCRs 16-23 (a
++    // platform choice) are those of tpm-rs and of the TCG reference platform
++    // (mstpm20), not IBM's PC-Client-like ones.
++    {0, 0, 0, 0, 0x0F, 0x1F},  // PCR 16, Debug, reset allowed, extend all
+     {0, 0, 0, 0, 0x10, 0x1C},  // PCR 17, Locality 4, extend loc 2+
+     {0, 0, 0, 0, 0x10, 0x1C},  // PCR 18, Locality 3, extend loc 2+
+     {0, 0, 0, 0, 0x10, 0x0C},  // PCR 19, Locality 2, extend loc 2, 3
+     // these three support doNotIncrement, PolicyAuth, and AuthValue.
+     // this is consistent with the existing behavior of the TPM Reference code
+     // but differs from the behavior of the PC client spec.
+-    {0, 0, 0, 0, 0x1C, 0x0E},  // PCR 20, Locality 1, extend loc 1, 2, 3
+-    {0, 1, 0, 0, 0x1C, 0x04},  // PCR 21, Dynamic OS, extend loc 2
+-    {0, 1, 0, 0, 0x1C, 0x04},  // PCR 22, Dynamic OS, extend loc 2
+-    {0, 1, 0, 0, 0x0F, 0x1F},  // PCR 23, reset allowed, App specific, extend all
++    {0, 1, 1, 1, 0x14, 0x0E},  // PCR 20, Locality 1, extend loc 1, 2, 3
++    {0, 1, 1, 1, 0x14, 0x04},  // PCR 21, Dynamic OS, extend loc 2
++    {0, 1, 1, 1, 0x14, 0x04},  // PCR 22, Dynamic OS, extend loc 2
++    {0, 0, 0, 0, 0x0F, 0x1F},  // PCR 23, reset allowed, App specific, extend all
+ };
+ 
+ #ifndef ARRAYSIZE

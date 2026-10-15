@@ -1,0 +1,55 @@
+no-certify-x509: disable TPM2_CertifyX509
+
+Classification: profile setting, build fix.
+
+tpm-rs does not implement TPM2_CertifyX509, so it is configured CC_NO. Its
+ASN.1/X.509 helpers in X509_ECC.c and X509_RSA.c call functions that are
+compiled only with the command (undefined symbols otherwise), so they are
+compiled only with it as well.
+
+diff --git a/src/TpmProfile_CommandList.h b/src/TpmProfile_CommandList.h
+--- a/src/TpmProfile_CommandList.h
++++ b/src/TpmProfile_CommandList.h
+@@ -95,7 +95,7 @@
+ // While all of the TPM reference implementation is provided "AS IS" without any
+ // warranty, the current design and implementation of CertifyX509 are considered
+ // to be especially unsuitable for product use.
+-#define CC_CertifyX509 CC_YES
++#define CC_CertifyX509                CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
+ 
+ // Normal commands:
+ 
+diff --git a/src/X509_ECC.c b/src/X509_ECC.c
+--- a/src/X509_ECC.c
++++ b/src/X509_ECC.c
+@@ -67,6 +67,10 @@
+ #include "X509_spt_fp.h"
+ #include "CryptHash_fp.h"
+ 
++// tpm-rs differential testing: only needed by TPM2_CertifyX509, which is
++// configured CC_NO (its ASN.1 helpers are compiled only with it).
++#if CC_CertifyX509
++
+ //** Functions
+ 
+ //*** X509PushPoint()
+@@ -163,3 +167,5 @@ X509AddPublicECC(OBJECT* object, ASN1Mar
+     }
+     return ASN1EndEncapsulation(ctx, ASN1_CONSTRUCTED_SEQUENCE);  // Ends SEQUENCE 1st
+ }
++
++#endif  // CC_CertifyX509
+diff --git a/src/X509_RSA.c b/src/X509_RSA.c
+--- a/src/X509_RSA.c
++++ b/src/X509_RSA.c
+@@ -69,7 +69,9 @@
+ 
+ //** Functions
+ 
+-#if ALG_RSA
++// tpm-rs differential testing: only needed by TPM2_CertifyX509, which is
++// configured CC_NO (its ASN.1 helpers are compiled only with it).
++#if ALG_RSA && CC_CertifyX509
+ 
+ //*** X509AddSigningAlgorithmRSA()
+ // This creates the singing algorithm data.

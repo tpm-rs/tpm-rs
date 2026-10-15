@@ -1,21 +1,32 @@
 //! Differential testing against C reference TPMs (`differential` feature).
 //!
-//! Every [`crate::tpm::Tpm`] owns one [`Reference`] per enabled
-//! [`Implementation`]: a child process (the `mstpm20` or `ibmswtpm2` binary
-//! of this crate, `src/bin/`) that hosts its own instance of a patched C
-//! reference TPM:
+//! Every [`crate::tpm::Tpm`] owns one [`Reference`]: a child process (the
+//! `mstpm20` or `ibmswtpm2` binary of this crate, `src/bin/`) that hosts its
+//! own instance of a patched C reference TPM:
 //!
 //! * [`Implementation::Mstpm20`]: the TCG reference implementation
 //!   (`https://github.com/TrustedComputingGroup/TPM`, the Microsoft
-//!   `ms-tpm-20-ref` code base), patched by `testing/mstpm20.patch`;
+//!   `ms-tpm-20-ref` code base), patched by `testing/patches/mstpm20/`;
 //! * [`Implementation::Ibmswtpm2`]: the IBM software TPM
 //!   (`https://github.com/kgoldman/ibmswtpm2`), patched by
-//!   `testing/ibmswtpm2.patch`.
+//!   `testing/patches/ibmswtpm2/`.
 //!
 //! Both keep their state in globals, so one process per TPM is what lets
 //! tests run in parallel and a single test use several TPMs.
 //!
-//! The `Tpm` mirrors every interaction to its references over the children's
+//! The C references run their own, unmodified random number generation:
+//! glibc `rand()` seeded from their real-time clock and their process ID,
+//! feeding their DRBG. Right after start-up, the reference process reports
+//! its process ID and initial real time ([`protocol::Handshake`]), and the
+//! `Tpm` builds its `tpm-rs` simulator to reproduce exactly that randomness
+//! (`tpm2_simulator::create_reference_simulator!`). Since the randomness
+//! depends on the process ID, a `Tpm` can be compared with only one
+//! reference. Setting `TPM_REFERENCE_SEED=<pid>:<realtime_ms>` (see
+//! [`crate::seed`]) fixes both values for the reference process (its
+//! `getpid()` is redirected to `difftest_getpid` at link time by
+//! `build.rs`) and for `tpm-rs`, which reproduces a run.
+//!
+//! The `Tpm` mirrors every interaction to its reference over the child's
 //! stdin/stdout pipes ([`protocol`]): commands together with the response
 //! `tpm-rs` gave (the child executes the command on its C reference and
 //! compares the responses, see [`server`] and `differential.md`), platform
@@ -24,9 +35,11 @@
 //! interaction the C reference does not support) panics in the test at the
 //! diverging interaction.
 //!
-//! The references to run are selected with the `DIFFERENTIAL_REFERENCES`
-//! environment variable (a comma-separated list of `mstpm20`/`ibmswtpm2`;
-//! default: both). A reference binary is located through its environment
+//! The references are selected with the `DIFFERENTIAL_REFERENCES`
+//! environment variable: `mstpm20` or `ibmswtpm2` to compare with only that
+//! reference; unset (or both) to run every test against both, in parallel
+//! (the test compares with `mstpm20` and runs itself against `ibmswtpm2` in
+//! a [`CompanionRun`]). A reference binary is located through its environment
 //! variable (`MSTPM20_BIN`, `IBMSWTPM2_BIN`) or, by default, next to the
 //! running test executable (in it or in one of its ancestor directories,
 //! e.g. `target/release/mstpm20`); `cargo test -p testing --features
@@ -41,6 +54,7 @@ use std::sync::OnceLock;
 use tpm2_simulator::SimulatorPlatformSignal;
 
 use self::protocol::Request;
+use crate::seed::{ReferenceSeed, SEED_ENV};
 
 pub mod protocol;
 pub mod server;
@@ -55,7 +69,7 @@ pub enum Implementation {
 }
 
 impl Implementation {
-    /// Every implementation, in the order `tpm-rs` responses are compared.
+    /// Every implementation.
     pub const ALL: [Self; 2] = [Self::Mstpm20, Self::Ibmswtpm2];
 
     /// The name of the implementation, which is also the name of its
@@ -80,34 +94,41 @@ impl Implementation {
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|i| i.name() == name)
     }
+}
 
-    /// The implementations selected by `DIFFERENTIAL_REFERENCES` (see the
-    /// module docs).
-    ///
-    /// # Panics
-    /// If the variable names an unknown implementation or none at all.
-    pub fn enabled() -> &'static [Self] {
-        static ENABLED: OnceLock<Vec<Implementation>> = OnceLock::new();
-        ENABLED.get_or_init(|| match std::env::var(REFERENCES_ENV) {
-            Err(_) => Self::ALL.to_vec(),
-            Ok(list) => {
-                let mut enabled = Vec::new();
-                for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                    let implementation = Self::from_name(name).unwrap_or_else(|| {
-                        panic!(
-                            "{REFERENCES_ENV}: unknown reference `{name}` (expected a \
-                             comma-separated list of mstpm20, ibmswtpm2)"
-                        )
-                    });
-                    if !enabled.contains(&implementation) {
-                        enabled.push(implementation);
-                    }
-                }
-                assert!(!enabled.is_empty(), "{REFERENCES_ENV} selects no reference");
-                enabled
-            }
-        })
+/// The references every `Tpm` is mirrored to, selected by
+/// `DIFFERENTIAL_REFERENCES` (see the module docs): every implementation by
+/// default.
+///
+/// # Panics
+/// If the variable names an unknown implementation.
+pub fn selected() -> &'static [Implementation] {
+    static SELECTED: OnceLock<Vec<Implementation>> = OnceLock::new();
+    SELECTED.get_or_init(|| {
+        let value = std::env::var(REFERENCES_ENV).unwrap_or_default();
+        parse_selection(&value).unwrap_or_else(|e| panic!("{e}"))
+    })
+}
+
+/// Parses a `DIFFERENTIAL_REFERENCES` value: a comma-separated list of
+/// implementation names (surrounding whitespace and duplicates are ignored;
+/// an empty value means every implementation).
+pub fn parse_selection(value: &str) -> Result<Vec<Implementation>, String> {
+    let mut selected = Vec::new();
+    for name in value.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        let implementation = Implementation::from_name(name).ok_or_else(|| {
+            format!(
+                "{REFERENCES_ENV}: unknown reference `{name}` (expected mstpm20 and/or ibmswtpm2)"
+            )
+        })?;
+        if !selected.contains(&implementation) {
+            selected.push(implementation);
+        }
     }
+    if selected.is_empty() {
+        selected = Implementation::ALL.to_vec();
+    }
+    Ok(selected)
 }
 
 impl fmt::Display for Implementation {
@@ -166,21 +187,23 @@ impl Reference {
         self.implementation
     }
 
-    /// Launches a reference process of `implementation`, whose C reference
-    /// TPM is initialized like a new `Tpm` (powered on, NV on,
-    /// `TPM2_Startup(TPM_SU_CLEAR)` done).
+    /// Launches a reference process of `implementation` seeded with `seed`,
+    /// whose C reference TPM is initialized like a new `Tpm` (powered on, NV
+    /// on, `TPM2_Startup(TPM_SU_CLEAR)` done).
     ///
     /// # Panics
-    /// If the process cannot be started or the C reference fails to
-    /// initialize.
-    pub fn launch(implementation: Implementation) -> Self {
-        let mut reference = Self::spawn(implementation);
+    /// If the process cannot be started, its handshake is invalid or the C
+    /// reference fails to initialize.
+    pub fn launch(implementation: Implementation, seed: ReferenceSeed) -> Self {
+        let mut reference = Self::spawn(implementation, seed);
         reference.finish("start-up");
         reference
     }
 
-    /// Starts a reference process without waiting for its start-up reply.
-    fn spawn(implementation: Implementation) -> Self {
+    /// Starts a reference process seeded with `seed` (passed as
+    /// [`SEED_ENV`] in its environment) and checks its handshake, without
+    /// waiting for its start-up reply.
+    fn spawn(implementation: Implementation, seed: ReferenceSeed) -> Self {
         let test = std::thread::current()
             .name()
             .unwrap_or("<unnamed>")
@@ -188,13 +211,30 @@ impl Reference {
         let binary = reference_binary(implementation);
         let mut child = Command::new(binary)
             .arg(&test)
+            .env(SEED_ENV, seed.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
             .unwrap_or_else(|e| panic!("cannot start {}: {e}", binary.display()));
         let requests = child.stdin.take().map(BufWriter::new);
-        let replies = BufReader::new(child.stdout.take().expect("piped stdout"));
+        let mut replies = BufReader::new(child.stdout.take().expect("piped stdout"));
+        let handshake = protocol::read_handshake(&mut replies).unwrap_or_else(|e| {
+            panic!(
+                "test `{test}`: cannot read the handshake of the {implementation} reference TPM \
+                 process: {e} ({})",
+                match child.try_wait() {
+                    Ok(Some(status)) => format!("exited with {status}"),
+                    _ => "still running".into(),
+                }
+            )
+        });
+        assert_eq!(
+            (handshake.pid, handshake.realtime_ms),
+            (seed.pid, seed.realtime_ms),
+            "test `{test}`: the {implementation} reference TPM process did not adopt the seed \
+             {SEED_ENV}={seed} (process ID, initial real time)"
+        );
         Self {
             implementation,
             child,
@@ -267,58 +307,63 @@ fn describe(request: &Request) -> &'static str {
     }
 }
 
-/// The reference processes mirroring one [`crate::tpm::Tpm`], one per
-/// enabled [`Implementation`].
+/// The C reference TPMs mirroring one [`crate::tpm::Tpm`]: one
+/// [`Reference`] process per selected implementation, all seeded with the
+/// `Tpm`'s seed.
 ///
 /// Every interaction is sent to all references before any reply is awaited,
-/// so the references work concurrently.
+/// so the references work in parallel; each compares its response with the
+/// `tpm-rs` response, so they are also compared with each other.
 pub struct References(Vec<Reference>);
 
 impl References {
-    /// Launches one reference process per enabled implementation (see
-    /// [`Implementation::enabled`] and [`Reference::launch`]).
+    /// Launches one reference process per `implementation`, each seeded with
+    /// `seed`, in parallel (see [`Reference::launch`]).
     ///
     /// # Panics
-    /// If a process cannot be started or its C reference fails to
-    /// initialize.
-    pub fn launch() -> Self {
-        let mut references: Vec<Reference> = Implementation::enabled()
-            .iter()
-            .map(|&i| Reference::spawn(i))
-            .collect();
-        let errors: Vec<String> = references
-            .iter_mut()
-            .filter_map(|reference| reference.try_finish("start-up").err())
-            .collect();
-        if !errors.is_empty() {
-            panic!("{}", errors.join("\n\n"));
-        }
-        Self(references)
+    /// If a process cannot be started, its handshake is invalid or its C
+    /// reference fails to initialize.
+    pub fn launch(implementations: &[Implementation], seed: ReferenceSeed) -> Self {
+        let mut references = Self(
+            implementations
+                .iter()
+                .map(|&implementation| Reference::spawn(implementation, seed))
+                .collect(),
+        );
+        references.finish_all("start-up");
+        references
     }
 
-    /// The reference processes.
-    pub fn iter(&self) -> impl Iterator<Item = &Reference> {
-        self.0.iter()
+    /// The implementations of the references.
+    pub fn implementations(&self) -> impl Iterator<Item = Implementation> + '_ {
+        self.0.iter().map(Reference::implementation)
     }
 
-    /// Sends `request` to every reference and waits for all replies.
+    /// Reads every reference's reply to the last request.
     ///
     /// # Panics
-    /// On any error reply (reporting every reference's error), or if a
-    /// process died.
-    fn call(&mut self, request: Request) {
-        for reference in &mut self.0 {
-            reference.send(&request);
-        }
-        let what = describe(&request);
-        let errors: Vec<String> = self
+    /// If any reply is an error or a process died (with the messages of all
+    /// failing references).
+    fn finish_all(&mut self, what: &str) {
+        let failures: Vec<String> = self
             .0
             .iter_mut()
             .filter_map(|reference| reference.try_finish(what).err())
             .collect();
-        if !errors.is_empty() {
-            panic!("{}", errors.join("\n\n"));
+        if !failures.is_empty() {
+            panic!("{}", failures.join("\n\n"));
         }
+    }
+
+    /// Sends `request` to every reference, then waits for all replies.
+    ///
+    /// # Panics
+    /// See [`Self::finish_all`].
+    fn call(&mut self, request: Request) {
+        for reference in &mut self.0 {
+            reference.send(&request);
+        }
+        self.finish_all(describe(&request));
     }
 
     /// Advances the references' virtual clocks by `ms` milliseconds.
@@ -362,5 +407,23 @@ impl References {
             command: command.to_vec(),
             expected: expected.to_vec(),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn references_are_selected_by_name() {
+        use Implementation::{Ibmswtpm2, Mstpm20};
+        assert_eq!(parse_selection(""), Ok(vec![Mstpm20, Ibmswtpm2]));
+        assert_eq!(
+            parse_selection("ibmswtpm2, mstpm20"),
+            Ok(vec![Ibmswtpm2, Mstpm20])
+        );
+        assert_eq!(parse_selection(" ibmswtpm2 "), Ok(vec![Ibmswtpm2]));
+        assert_eq!(parse_selection("mstpm20,mstpm20"), Ok(vec![Mstpm20]));
+        assert!(parse_selection("mstpm2").is_err());
     }
 }

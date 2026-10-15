@@ -1,0 +1,21 @@
+openssl-version-check: accept OpenSSL 3.6 and later 3.x versions
+
+Classification: build fix.
+
+BnToOsslMath.h refuses to build with OpenSSL >= 3.6.0 ("Untested OpenSSL
+version") because it mirrors OpenSSL's private bignum_st layout. The layout
+is unchanged in the 3.x series the build links (libcrypto.a), so the check
+is raised to 4.0.
+
+diff --git a/TPMCmd/tpm/cryptolibs/Ossl/include/Ossl/BnToOsslMath.h b/TPMCmd/tpm/cryptolibs/Ossl/include/Ossl/BnToOsslMath.h
+--- a/TPMCmd/tpm/cryptolibs/Ossl/include/Ossl/BnToOsslMath.h
++++ b/TPMCmd/tpm/cryptolibs/Ossl/include/Ossl/BnToOsslMath.h
+@@ -17,7 +17,7 @@
+ #include <openssl/ec.h>
+ #include <openssl/bn.h>
+ 
+-#if OPENSSL_VERSION_NUMBER >= 0x30600000L
++#if OPENSSL_VERSION_NUMBER >= 0x40000000L
+ // Check the bignum_st definition against the one below and either update the
+ // version check or provide the new definition for this version.
+ #  error Untested OpenSSL version

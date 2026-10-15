@@ -240,23 +240,45 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.perform_startup_state_transition(kind, prev_orderly_state)?;
 
         // 3. Restore and reseed or instantiate DRBG state (`CryptRandStartup`)
-        if is_orderly(prev_orderly_state) {
-            self.nv_load_persistent_drbg_state()?;
-        }
-        if is_orderly(prev_orderly_state)
-            && self.context.state.drbg_state.magic == crate::engine::DRBG_MAGIC
+        #[cfg(not(feature = "reference-rng"))]
         {
-            self.context
-                .state
-                .drbg_state
-                .reseed(self.context.platform.rng)?;
-        } else {
-            self.context
-                .state
-                .drbg_state
-                .instantiate(self.context.platform.rng)?;
+            if is_orderly(prev_orderly_state) {
+                self.nv_load_persistent_drbg_state()?;
+            }
+            if is_orderly(prev_orderly_state)
+                && self.context.state.drbg_state.magic == crate::engine::DRBG_MAGIC
+            {
+                self.context
+                    .state
+                    .drbg_state
+                    .reseed(self.context.platform.rng)?;
+            } else {
+                self.context
+                    .state
+                    .drbg_state
+                    .instantiate(self.context.platform.rng)?;
+            }
+            self.nv_sync_persistent_drbg_state()?;
         }
-        self.nv_sync_persistent_drbg_state()?;
+        // With `reference-rng`, as in the reference code: `CryptStartup()` reseeds the DRBG
+        // restored from NV at `_TPM_Init` (whatever the shutdown was) and, on TPM Reset, draws a
+        // new commit nonce; `HierarchyStartup()` then draws nullProof and nullSeed. The DRBG
+        // state is not written to NV here.
+        #[cfg(feature = "reference-rng")]
+        {
+            self.context.crypt_rand_startup()?;
+            if kind == StartupKind::Reset {
+                let mut value = [0u8; 64];
+                self.context.crypt_random_generate(&mut value)?;
+                self.context.state.commit_nonce = value;
+                self.context.crypt_random_generate(&mut value)?;
+                self.context.state.null_proof = value;
+                self.context.state.null_proof_size = 64;
+                self.context.crypt_random_generate(&mut value)?;
+                self.context.state.null_seed = value;
+                self.context.state.null_seed_size = 64;
+            }
+        }
 
         // `TimeStartup`: after an unorderly shutdown the clock may have rolled back.
         if !is_orderly(prev_orderly_state) {
@@ -454,28 +476,25 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             StartupKind::Reset => {
                 // `HierarchyStartup`: nullProof and nullSeed are regenerated on every TPM Reset.
-                self.context
-                    .platform
-                    .rng
-                    .fill_bytes(&mut self.context.state.null_seed[..64])
-                    .map_err(|_| TpmRc::FAILURE)?;
-                self.context.state.null_seed_size = 64;
-
-                self.context
-                    .platform
-                    .rng
-                    .fill_bytes(&mut self.context.state.null_proof[..64])
-                    .map_err(|_| TpmRc::FAILURE)?;
-                self.context.state.null_proof_size = 64;
-
                 // `CryptStartup(SU_RESET)`: a new secret commit nonce is generated and all
                 // outstanding commitments are dropped, so commit values (`r`) are
-                // unpredictable and never repeat across TPM Resets.
-                self.context
-                    .platform
-                    .rng
-                    .fill_bytes(&mut self.context.state.commit_nonce)
-                    .map_err(|_| TpmRc::FAILURE)?;
+                // unpredictable and never repeat across TPM Resets. With `reference-rng`,
+                // these values are drawn after `CryptRandStartup()` instead, in the order of
+                // the reference code (see `Self::startup`).
+                #[cfg(not(feature = "reference-rng"))]
+                {
+                    let mut value = [0u8; 64];
+                    self.context.random_platform(&mut value)?;
+                    self.context.state.null_seed = value;
+                    self.context.state.null_seed_size = 64;
+
+                    self.context.random_platform(&mut value)?;
+                    self.context.state.null_proof = value;
+                    self.context.state.null_proof_size = 64;
+
+                    self.context.random_platform(&mut value)?;
+                    self.context.state.commit_nonce = value;
+                }
                 self.context.state.commit_counter = 0;
                 self.context.state.commit_array = [0u8; 16];
 

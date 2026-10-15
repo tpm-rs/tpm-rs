@@ -273,6 +273,30 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
 
+        // With `reference-rng`, the seed of the outer wrapper is generated and encrypted to the
+        // new parent first (`CryptSecretEncrypt()`), and only then the inner wrapper key, as in
+        // the reference `Duplicate.c`.
+        #[cfg(feature = "reference-rng")]
+        let mut precomputed_seed =
+            if new_parent_handle != Handle::RH_NULL.0 && !parent_symmetric_is_null {
+                let parent = parent_obj.as_ref().ok_or(TpmRc::FAILURE)?;
+                let mut seed = [0u8; 64];
+                let mut secret = [0u8; 512];
+                // An unusable parent point is `TPM_RC_FAILURE` here, as in the default path.
+                let (seed_len, secret_len) = self
+                    .crypt_secret_encrypt(parent, b"DUPLICATE", &mut seed, &mut secret)
+                    .map_err(|e| {
+                        if e == TpmRc::KEY.to_rc() {
+                            TpmRc::FAILURE
+                        } else {
+                            e
+                        }
+                    })?;
+                Some((seed, seed_len, secret, secret_len))
+            } else {
+                None
+            };
+
         // 4. Inner wrapper encryption
         let mut inner_blob = [0u8; 2048];
         let mut sym_key = [0u8; 32];
@@ -285,9 +309,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 sym_key[..sym_key_len].copy_from_slice(cmd.encryption_key_in.get_buffer());
             } else {
                 // Generate a random key
-                self.crypto()
-                    .get_random(&mut sym_key[..sym_key_len])
-                    .map_err(|_| TpmRc::FAILURE)?;
+                self.context.random_crypto(&mut sym_key[..sym_key_len])?;
                 encryption_key_out = Tpm2bData::from_bytes(&sym_key[..sym_key_len]).unwrap();
             }
 
@@ -352,7 +374,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut seed = [0u8; 64];
             let seed_len;
 
-            if let Some(curve) = parent_ecc_curve {
+            #[cfg(feature = "reference-rng")]
+            let precomputed = precomputed_seed.take();
+            #[cfg(not(feature = "reference-rng"))]
+            let precomputed: Option<([u8; 64], usize, [u8; 512], usize)> = None;
+            if let Some((pre_seed, pre_seed_len, secret, secret_len)) = precomputed {
+                seed = pre_seed;
+                seed_len = pre_seed_len;
+                encrypted_seed[..secret_len].copy_from_slice(&secret[..secret_len]);
+                out_sym_seed = Tpm2bEncryptedSecret::from_bytes(&encrypted_seed[..secret_len])
+                    .map_err(|_| TpmRc::FAILURE)?;
+            } else if let Some(curve) = parent_ecc_curve {
                 let param_size = match curve {
                     TpmEccCurve::NistP224 => 28,
                     TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => 32,
@@ -424,9 +456,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 // Generate a random seed of the parent's nameAlg digest size
                 // (`CryptSecretEncrypt`).
                 let digest_size = parent_name_alg.digest_size();
-                self.crypto()
-                    .get_random(&mut seed[..digest_size])
-                    .map_err(|_| TpmRc::FAILURE)?;
+                self.context.random_crypto(&mut seed[..digest_size])?;
 
                 // RSA seed encryption
                 let encrypted_seed_len = crypto_len(

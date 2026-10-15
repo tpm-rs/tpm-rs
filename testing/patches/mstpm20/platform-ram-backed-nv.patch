@@ -1,0 +1,27 @@
+ram-backed-nv: keep NV in RAM instead of a file
+
+Classification: platform setting.
+
+The simulator platform backs NV with a file (NVChip) in the working
+directory. Every reference process (and every TPM of a test) must start from
+a freshly manufactured state independent of other runs, so NV is always kept
+in RAM.
+
+diff --git a/TPMCmd/Platform/include/PlatformData.h b/TPMCmd/Platform/include/PlatformData.h
+--- a/TPMCmd/Platform/include/PlatformData.h
++++ b/TPMCmd/Platform/include/PlatformData.h
+@@ -67,10 +67,10 @@ EXTERN unsigned char s_locality;
+ #  define FILE_BACKED_NV (VTPM && YES)  // Default: Either YES or NO
+ #endif
+ 
+-#if SIMULATION
+-#  undef FILE_BACKED_NV
+-#  define FILE_BACKED_NV YES
+-#endif  // SIMULATION
++// tpm-rs differential testing: NV is always backed by RAM, so that every
++// in-process instance starts from a freshly manufactured state.
++#undef FILE_BACKED_NV
++#define FILE_BACKED_NV NO
+ 
+ EXTERN unsigned char s_NV[NV_MEMORY_SIZE];
+ EXTERN int           s_NvIsAvailable;

@@ -16,16 +16,14 @@ tpm2-impl = { workspace = true }
 tpm2-crypto-rust = { workspace = true, optional = true }
 tpm2-crypto-crux = { workspace = true, optional = true }
 tpm2-crypto-bssl = { workspace = true, optional = true }
-rand_chacha = { version = "0.3.1", optional = true }
 
 [features]
 default = ["bssl"]
 rust = ["dep:tpm2-crypto-rust"]
 crux = ["dep:tpm2-crypto-crux"]
 bssl = ["dep:tpm2-crypto-bssl"]
-# Adds `LinuxRng::seeded`, `LinuxTimer::new_virtual` and (with `bssl`)
-# `CryptoReplayRng` for deterministic, reproducible test runs. Purely additive:
-# `LinuxRng::new`, `LinuxTimer::new` and the crypto provider keep using OS
-# entropy and the wall clock unless the new APIs are used.
-reproducible = ["dep:rand_chacha", "tpm2-crypto-bssl?/reproducible"]
+# Reproduce the simulator-platform entropy source and clock of the C reference
+# TPMs (`LinuxRng::reference`, `LinuxTimer::new_virtual`, `VirtualClock`) and
+# enable `tpm2-impl`'s linked C code of their DRBG, for differential testing.
+reference-rng = ["tpm2-impl/reference-rng"]
 

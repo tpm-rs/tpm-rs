@@ -1,0 +1,22 @@
+fix-vendor-auth-entity-break: add the missing 'break' for VENDOR_PERMANENT_AUTH_HANDLE
+
+Classification: spec-deviation bug fix.
+
+EntityGetAuthValue() falls through from the VENDOR_PERMANENT_AUTH_HANDLE
+case into 'default' (which fails), so the vendor authorization value can
+never be used.
+
+diff --git a/TPMCmd/tpm/src/support/Entity.c b/TPMCmd/tpm/src/support/Entity.c
+--- a/TPMCmd/tpm/src/support/Entity.c
++++ b/TPMCmd/tpm/src/support/Entity.c
+@@ -210,6 +210,10 @@ EntityGetAuthValue(TPMI_DH_ENTITY handle
+                 case VENDOR_PERMANENT_AUTH_HANDLE:
+                     // vendor authorization value
+                     pAuth = &g_platformUniqueAuth;
++                    // tpm-rs differential testing -- spec deviation fix (NOT
++                    // determinism): upstream falls through into 'default' (which
++                    // asserts), so the vendor authorization value is never used.
++                    break;
+ #endif
+                 default:
+                     // If any other permanent handle is present it is

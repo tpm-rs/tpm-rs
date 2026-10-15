@@ -1,0 +1,149 @@
+difftest-entry-points: add the difftest_* entry points the harness calls
+
+Classification: harness plumbing.
+
+Adds the difftest_* functions that testing/build.rs keeps global (every
+other symbol of the reference is localized) and that
+testing/src/bin/shared/ffi.rs calls: difftest_init() manufactures a fresh
+TPM in RAM and powers it on with NV available; the difftest_signal_*()
+functions forward the MSSIM platform signals and the _TPM_Hash_* indications
+to the simulator's _rpc__* layer; difftest_run_command() executes one
+command at a locality through _rpc__Send_Command(). difftest_advance_clock()
+is a no-op because the platform reads the harness's virtual clock directly
+(see harness-virtual-clock.patch).
+
+diff --git a/src/TPMCmdp.c b/src/TPMCmdp.c
+--- a/src/TPMCmdp.c
++++ b/src/TPMCmdp.c
+@@ -301,6 +301,131 @@ void _rpc__SetTpmFirmwareSvn(uint16_t sv
+     _plat__SetTpmFirmwareSvn(svn);
+ #endif
+ }
++
++//*** tpm-rs differential testing entry points
++// (see testing/src/bin/shared/ffi.rs)
++
++// The command tracing switch of the IBM simulator, defined next to main() in
++// TPMCmds.c (not linked): tracing stays off.
++int verbose = 0;
++
++void difftest_init(void);
++void difftest_init(void)
++{
++    s_isPowerOn = false;
++    _plat__SetNvAvail();
++    _plat__ClearCancel();
++    _plat__Signal_PhysicalPresenceOff();
++    _plat__LocalitySet(0);
++    _plat__NVEnable(NULL, 0);
++    TPM_TearDown();
++    TPM_Manufacture(1);
++    _plat__NvCommit();
++    _rpc__Signal_PowerOn(false);
++    _rpc__Signal_NvOn();
++}
++
++void difftest_advance_clock(uint64_t ms);
++void difftest_advance_clock(uint64_t ms)
++{
++    (void)ms;
++}
++
++void difftest_signal_power_on(void);
++void difftest_signal_power_on(void)
++{
++    _rpc__Signal_PowerOn(false);
++}
++
++void difftest_signal_power_off(void);
++void difftest_signal_power_off(void)
++{
++    _rpc__Signal_PowerOff();
++}
++
++void difftest_signal_reset(void);
++void difftest_signal_reset(void)
++{
++    _rpc__Signal_PowerOn(true);
++}
++
++void difftest_signal_nv_on(void);
++void difftest_signal_nv_on(void)
++{
++    _rpc__Signal_NvOn();
++}
++
++void difftest_signal_nv_off(void);
++void difftest_signal_nv_off(void)
++{
++    _rpc__Signal_NvOff();
++}
++
++void difftest_signal_physical_presence_on(void);
++void difftest_signal_physical_presence_on(void)
++{
++    _rpc__Signal_PhysicalPresenceOn();
++}
++
++void difftest_signal_physical_presence_off(void);
++void difftest_signal_physical_presence_off(void)
++{
++    _rpc__Signal_PhysicalPresenceOff();
++}
++
++void difftest_signal_cancel_on(void);
++void difftest_signal_cancel_on(void)
++{
++    _rpc__Signal_CancelOn();
++}
++
++void difftest_signal_cancel_off(void);
++void difftest_signal_cancel_off(void)
++{
++    _rpc__Signal_CancelOff();
++}
++
++void difftest_signal_hash_start(void);
++void difftest_signal_hash_start(void)
++{
++    _rpc__Signal_Hash_Start();
++}
++
++void difftest_signal_hash_data(const uint8_t* data, uint32_t size);
++void difftest_signal_hash_data(const uint8_t* data, uint32_t size)
++{
++    _IN_BUFFER buf;
++    buf.BufferSize = size;
++    buf.Buffer     = (uint8_t*)data;
++    _rpc__Signal_Hash_Data(buf);
++}
++
++void difftest_signal_hash_end(void);
++void difftest_signal_hash_end(void)
++{
++    _rpc__Signal_HashEnd();
++}
++
++uint32_t difftest_run_command(uint8_t        locality,
++                              const uint8_t* in_buf,
++                              uint32_t       in_size,
++                              uint8_t*       out_buf,
++                              uint32_t       out_cap);
++uint32_t difftest_run_command(uint8_t        locality,
++                              const uint8_t* in_buf,
++                              uint32_t       in_size,
++                              uint8_t*       out_buf,
++                              uint32_t       out_cap)
++{
++    _IN_BUFFER  req;
++    _OUT_BUFFER resp;
++    req.BufferSize  = in_size;
++    req.Buffer      = (uint8_t*)in_buf;
++    resp.BufferSize = out_cap;
++    resp.Buffer     = out_buf;
++    _rpc__Send_Command(locality, req, &resp);
++    return resp.BufferSize;
++}
+ #if 0
+ /* D.4 TPMCmdp.c */
+ /* D.4.1. Description */
