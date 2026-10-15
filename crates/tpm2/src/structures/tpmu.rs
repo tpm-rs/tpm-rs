@@ -1,8 +1,4 @@
-use crate::{
-    errors::UnmarshalError,
-    marshal::{marshal_helper, max},
-    *,
-};
+use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// `TPMU_ATTEST` union structure defined in TPM 2.0 Part 2: Structures, Section 10.4.23 (Table 142).
 ///
@@ -50,7 +46,7 @@ impl<'a> TpmuAttest<'a> {
 }
 
 impl Marshal for TpmuAttest<'_> {
-    const MAX_SIZE: usize = max(&[
+    const MAX_SIZE: usize = max!(
         TpmsCertifyInfo::MAX_SIZE,
         TpmsCreationInfo::MAX_SIZE,
         TpmsQuoteInfo::MAX_SIZE,
@@ -58,7 +54,7 @@ impl Marshal for TpmuAttest<'_> {
         TpmsSessionAuditInfo::MAX_SIZE,
         TpmsTimeAttestInfo::MAX_SIZE,
         TpmsNvCertifyInfo::MAX_SIZE,
-    ]);
+    );
     type MaxBuffer = [u8; TpmuAttest::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmuAttest::MAX_SIZE]) -> usize {
@@ -111,12 +107,12 @@ impl<'a> TpmuSensitiveComposite<'a> {
 }
 
 impl Marshal for TpmuSensitiveComposite<'_> {
-    const MAX_SIZE: usize = max(&[
+    const MAX_SIZE: usize = max!(
         Tpm2bSensitiveData::MAX_SIZE,
         Tpm2bSymKey::MAX_SIZE,
         Tpm2bPrivateKeyRsa::MAX_SIZE,
         Tpm2bEccParameter::MAX_SIZE,
-    ]);
+    );
     type MaxBuffer = [u8; TpmuSensitiveComposite::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmuSensitiveComposite::MAX_SIZE]) -> usize {

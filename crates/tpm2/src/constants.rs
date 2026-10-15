@@ -8,6 +8,7 @@
 //! hash algorithm ID, returning an `Err` if not.
 use core::fmt;
 
+use crate::bits_to_bytes;
 use crate::errors::UnmarshalError;
 use crate::marshal::{Marshal, Unmarshal};
 
@@ -234,29 +235,48 @@ pub enum TpmEccCurve {
 }
 
 impl TpmEccCurve {
-    pub const MAX_ECC_KEY_BITS: usize = 638;
-    pub const MAX_ECC_KEY_BYTES: usize = Self::MAX_ECC_KEY_BITS.div_ceil(8);
+    const ALL: &[Self] = &[
+        Self::NistP192,
+        Self::NistP224,
+        Self::NistP256,
+        Self::NistP384,
+        Self::NistP521,
+        Self::BNP256,
+        Self::BNP638,
+        Self::SM2P256,
+        Self::BpP256R1,
+        Self::BpP384R1,
+        Self::BpP512R1,
+        Self::Curve25519,
+        Self::Curve448,
+    ];
+
+    pub const MAX_ECC_KEY_BITS: u16 = max_by!(Self::ALL, Self::key_bits);
+    pub const MAX_ECC_KEY_BYTES: usize = bits_to_bytes(Self::MAX_ECC_KEY_BITS);
+
+    pub const fn key_bits(self) -> u16 {
+        match self {
+            Self::NistP192 => 192,
+            Self::NistP224 => 224,
+            Self::NistP256 | Self::BNP256 | Self::SM2P256 | Self::BpP256R1 | Self::Curve25519 => {
+                256
+            }
+            Self::NistP384 | Self::BpP384R1 => 384,
+            Self::Curve448 => 448,
+            Self::BpP512R1 => 512,
+            Self::NistP521 => 521,
+            Self::BNP638 => 638,
+        }
+    }
+    pub const fn key_bytes(self) -> usize {
+        bits_to_bytes(self.key_bits())
+    }
 }
 
 impl TryFrom<u16> for TpmEccCurve {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
-        Ok(match val {
-            0x0001 => Self::NistP192,
-            0x0002 => Self::NistP224,
-            0x0003 => Self::NistP256,
-            0x0004 => Self::NistP384,
-            0x0005 => Self::NistP521,
-            0x0010 => Self::BNP256,
-            0x0011 => Self::BNP638,
-            0x0020 => Self::SM2P256,
-            0x0030 => Self::BpP256R1,
-            0x0031 => Self::BpP384R1,
-            0x0032 => Self::BpP512R1,
-            0x0040 => Self::Curve25519,
-            0x0041 => Self::Curve448,
-            _ => return Err(UnmarshalError),
-        })
+        find_by!(Self::ALL, |c| u16::from(c) == val).ok_or(UnmarshalError)
     }
 }
 
