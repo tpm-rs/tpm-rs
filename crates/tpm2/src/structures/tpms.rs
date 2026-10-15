@@ -870,6 +870,7 @@ pub enum TpmsCapabilityData<'a> {
     PcrProperties(TpmlTaggedPcrProperty),
     EccCurves(TpmlEccCurve),
     AuthPolicies(TpmlTaggedPolicy<'a>),
+    ActData(TpmlActData),
 }
 
 impl<'a> TpmsCapabilityData<'a> {
@@ -885,6 +886,7 @@ impl<'a> TpmsCapabilityData<'a> {
             Self::PcrProperties(_) => TpmCap::PCRProperties,
             Self::EccCurves(_) => TpmCap::ECCCurves,
             Self::AuthPolicies(_) => TpmCap::AuthPolicies,
+            Self::ActData(_) => TpmCap::ACT,
         }
     }
 }
@@ -901,6 +903,7 @@ impl Marshal for TpmsCapabilityData<'_> {
             TpmlTaggedPcrProperty::MAX_SIZE,
             TpmlEccCurve::MAX_SIZE,
             TpmlTaggedPolicy::MAX_SIZE,
+            TpmlActData::MAX_SIZE,
         );
     type MaxBuffer = [u8; TpmsCapabilityData::MAX_SIZE];
 
@@ -917,6 +920,7 @@ impl Marshal for TpmsCapabilityData<'_> {
             Self::PcrProperties(x) => marshal_helper(x, dst, count),
             Self::EccCurves(x) => marshal_helper(x, dst, count),
             Self::AuthPolicies(x) => marshal_helper(x, dst, count),
+            Self::ActData(x) => marshal_helper(x, dst, count),
         }
     }
 }
@@ -934,6 +938,7 @@ impl<'a> Unmarshal<'a> for TpmsCapabilityData<'a> {
             TpmCap::PCRProperties => Self::PcrProperties(Unmarshal::unmarshal(src)?),
             TpmCap::ECCCurves => Self::EccCurves(Unmarshal::unmarshal(src)?),
             TpmCap::AuthPolicies => Self::AuthPolicies(Unmarshal::unmarshal(src)?),
+            TpmCap::ACT => Self::ActData(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
         })
     }
@@ -1048,6 +1053,38 @@ impl<'a> Unmarshal<'a> for TpmsTaggedPolicy<'a> {
         Ok(Self {
             handle: Unmarshal::unmarshal(src)?,
             policy_hash: Unmarshal::unmarshal(src)?,
+        })
+    }
+}
+
+/// `TPMS_ACT_DATA` structure defined in TPM 2.0 Part 2: Structures
+///
+/// Structure reporting Authenticated Countdown Timer (ACT) state (`handle`, `timeout`, `attributes`).
+#[doc(alias = "TPMS_ACT_DATA")]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub struct TpmsActData {
+    pub handle: Handle,
+    pub timeout: u32,
+    pub attributes: TpmaAct,
+}
+
+impl Marshal for TpmsActData {
+    const MAX_SIZE: usize = Handle::MAX_SIZE + u32::MAX_SIZE + TpmaAct::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.handle, dst, 0);
+        let count = marshal_helper(&self.timeout, dst, count);
+        marshal_helper(&self.attributes, dst, count)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmsActData {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            handle: Unmarshal::unmarshal(src)?,
+            timeout: Unmarshal::unmarshal(src)?,
+            attributes: Unmarshal::unmarshal(src)?,
         })
     }
 }

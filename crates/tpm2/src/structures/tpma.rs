@@ -476,3 +476,34 @@ impl<'a> Unmarshal<'a> for TpmaObject {
         Unmarshal::unmarshal(src).map(Self)
     }
 }
+
+/// `TPMA_ACT` attribute structure defined in TPM 2.0 Part 2: Structures
+///
+/// Reports the state of an Authenticated Countdown Timer (ACT) in `TPM2_GetCapability(TPM_CAP_ACT)`.
+#[doc(alias = "TPMA_ACT")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[repr(transparent)]
+pub struct TpmaAct(pub u32);
+bitflags! {
+    impl TpmaAct : u32 {
+        /// Indicates whether the ACT has signaled.
+        const SIGNALED = 1 << 0;
+        /// Preserves the state of `SIGNALED` across power cycles (TPM Resume).
+        const PRESERVE_SIGNALED = 1 << 1;
+    }
+}
+
+impl Marshal for TpmaAct {
+    const MAX_SIZE: usize = u32::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        self.0.marshal(dst)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmaAct {
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        Unmarshal::unmarshal(src).map(Self)
+    }
+}

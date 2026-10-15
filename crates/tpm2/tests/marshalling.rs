@@ -235,6 +235,20 @@ fn test_tpms_capability_data_marshalling() {
     let unmarshaled = TpmsCapabilityData::unmarshal(&mut reader).unwrap();
     assert_eq!(unmarshaled, cap_data);
     assert_eq!(unmarshaled.capability(), TpmCap::Algs);
+
+    let act_data = TpmsActData {
+        handle: Handle::RH_ACT_0,
+        timeout: 30,
+        attributes: TpmaAct::SIGNALED,
+    };
+    let cap_data = TpmsCapabilityData::ActData(TpmlActData::new(&[act_data]).unwrap());
+    assert_eq!(cap_data.capability(), TpmCap::ACT);
+
+    let len = cap_data.marshal(&mut buf);
+    let mut reader = &buf[..len];
+    let unmarshaled = TpmsCapabilityData::unmarshal(&mut reader).unwrap();
+    assert_eq!(unmarshaled, cap_data);
+    assert_eq!(unmarshaled.capability(), TpmCap::ACT);
 }
 
 #[test]
