@@ -1,9 +1,10 @@
 //! TPM2_CertifyCreation: creation ticket verification, check order and response-code positions.
 
 use crate::_common::{
-    RC_KEY_H1, RC_SCHEME_P3, RC_TICKET_P4, certify_creation, create_primary_full,
-    create_primary_in, execute_with_password_sessions, execute_with_password_sessions_status,
-    flush_context, leak_bytes, rsa_decrypt_template, rsa_sign_template,
+    RC_KEY_H1, RC_SCHEME_P3, RC_TICKET_P4, ST_SESSIONS, build_raw_cmd, certify_creation,
+    create_primary_full, create_primary_in, ecc_sign_template, execute_with_password_sessions,
+    execute_with_password_sessions_status, flush_context, leak_bytes, rsa_decrypt_template,
+    rsa_sign_template, send_with_rc,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::{CertifyCreation, CreatePrimary, LoadExternal};
@@ -12,6 +13,38 @@ use tpm2::{
     Tpm2bSensitiveData, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmlPcrSelection, TpmsRsaParms,
     TpmsSensitiveCreate, TpmtPublic, TpmtRsaScheme, TpmtSigScheme, TpmtTkCreation,
 };
+
+/// `TPM_RC_TAG + RC_P4`.
+const RC_TAG_P4: u32 = 0x4D7;
+
+/// CertifyCreation whose creationTicket tag is not a `TPM_ST` constant (0x0303) fails with
+/// `TPM_RC_TAG + P4`, not `TPM_RC_VALUE`: a `TPM_ST` unmarshals any value and the ticket checks
+/// its tag (found by differential fuzzing): Part 2 "TPM_ST Constants" has no `#TPM_RC_VALUE`,
+/// `TPMT_TK_CREATION.tag` has `#TPM_RC_TAG`.
+#[test]
+fn ticket_with_unknown_tag_rejected_with_tag() {
+    let mut sim = Tpm::new();
+    let object = create_primary_in(
+        &mut sim,
+        Handle::RH_OWNER,
+        ecc_sign_template(TpmiAlgHash::Sha256, TpmaObject::empty()),
+    );
+    let password = [0x40, 0, 0, 9, 0, 0, 1, 0, 0];
+    let params = [
+        0, 0, // qualifyingData
+        0, 0, // creationHash
+        0, 0x10, // inScheme: TPM_ALG_NULL
+        3, 3, 0x40, 0, 0, 7, 0, 0, // creationTicket: tag 0x0303, TPM_RH_NULL, empty digest
+    ];
+    let cmd = build_raw_cmd(
+        ST_SESSIONS,
+        0x14A,
+        &[Handle::RH_NULL.0, object.0],
+        Some(&password),
+        &params,
+    );
+    assert_eq!(send_with_rc(&mut sim, &cmd).0, RC_TAG_P4);
+}
 
 /// CertifyCreation: non-signing key KEY+H1, scheme (SCHEME+P3) checked before ticket (TICKET+P4).
 ///

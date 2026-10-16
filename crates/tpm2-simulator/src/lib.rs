@@ -18,7 +18,7 @@ pub struct Args {
 
 use tpm2::Connection;
 use tpm2::commands::Command;
-use tpm2_impl::{InternalError, TpmEngine};
+use tpm2_impl::{GlobalState, InternalError, TpmEngine};
 pub use tpm2_impl::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
 use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform};
 
@@ -75,6 +75,25 @@ impl SimResponse {
     }
 }
 
+/// Environment variable that makes the simulator log every command that
+/// fails (`SIMULATOR: CMD .. -> RC ..` on stderr); unset or empty: no logs.
+pub const LOG_ERRORS_ENV: &str = "TPM_SIMULATOR_LOG_ERRORS";
+
+/// Whether [`LOG_ERRORS_ENV`] asks for error logs (read once).
+fn log_errors() -> bool {
+    static LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *LOG.get_or_init(|| std::env::var_os(LOG_ERRORS_ENV).is_some_and(|v| !v.is_empty()))
+}
+
+/// Byte size of the simulator's NV backing store ([`RamStorageMock`]).
+///
+/// Large enough that the backing store never runs out before the reference's NV space
+/// accounting (`tpm2_impl::storage::nv_capacity`) does: that ledger admits up to seven persistent
+/// objects whatever their type, and an RSA object takes more bytes in this store than an ECC
+/// one, so the store needs room for the largest records the ledger admits (a 4 KiB store held
+/// only three RSA persistent objects).
+pub const NV_STORAGE_SIZE: usize = 32768;
+
 /// An in-process TPM simulator.
 ///
 /// The engine and its state are private: clients interact with the TPM only
@@ -82,7 +101,15 @@ impl SimResponse {
 /// [`Connection::transact`]) and platform signals
 /// ([`PlatformConnection::signal_platform`]), exactly like a real TPM.
 pub struct Simulator<'a> {
-    context: Box<TpmEngine<'a, PlatformCryptoProvider, RamStorageMock<4096>, LinuxTimer, LinuxRng>>,
+    context: Box<
+        TpmEngine<
+            'a,
+            PlatformCryptoProvider,
+            RamStorageMock<NV_STORAGE_SIZE>,
+            LinuxTimer,
+            LinuxRng,
+        >,
+    >,
     is_power_on: bool,
     is_nv_on: bool,
 }
@@ -90,7 +117,7 @@ pub struct Simulator<'a> {
 impl<'a> Simulator<'a> {
     pub fn new(
         crypto: &'a mut PlatformCryptoProvider,
-        storage: &'a mut RamStorageMock<4096>,
+        storage: &'a mut RamStorageMock<NV_STORAGE_SIZE>,
         timer: &'a mut LinuxTimer,
         platform_rng: &'a mut LinuxRng,
     ) -> Result<Self, InternalError> {
@@ -102,6 +129,27 @@ impl<'a> Simulator<'a> {
             is_power_on: false,
             is_nv_on: false,
         })
+    }
+
+    /// Returns the simulator to the state of a new one built from its own
+    /// crypto provider, fresh empty NV storage, `timer` and `platform_rng`,
+    /// powered on, NV enabled and `TPM2_Startup(TPM_SU_CLEAR)` done, reusing
+    /// the simulator's allocations (the components it borrows are
+    /// overwritten in place, so nothing is leaked).
+    ///
+    /// # Panics
+    /// If the power-on, NV enable or `TPM2_Startup` fails.
+    fn restart_with(&mut self, timer: LinuxTimer, platform_rng: LinuxRng) {
+        let platform = &mut self.context.platform;
+        *platform.storage = RamStorageMock::new();
+        *platform.timer = timer;
+        *platform.rng = platform_rng;
+        // What `TpmEngine::new` + `Simulator::new` do.
+        self.context.state = GlobalState::default();
+        self.context.init_storage();
+        self.is_power_on = false;
+        self.is_nv_on = false;
+        power_on_start_up(self);
     }
 
     /// Handles one command-port transaction (see [`PlatformConnection::transact_platform`]).
@@ -178,7 +226,7 @@ impl<'a> Simulator<'a> {
                 } else {
                     0
                 };
-                if resp_rc != 0 {
+                if resp_rc != 0 && log_errors() {
                     eprintln!(
                         "SIMULATOR: CMD 0x{:X} -> RC 0x{:X} (cmd_len={}, resp_len={})",
                         cmd_code,
@@ -434,7 +482,8 @@ fn power_on_start_up(sim: &mut Simulator<'_>) {
 /// Builds a powered-on, NV-enabled, started simulator from leaked components.
 fn new_started_simulator(timer: LinuxTimer, platform_rng: LinuxRng) -> Simulator<'static> {
     let crypto: &'static mut PlatformCryptoProvider = Box::leak(Box::new(PlatformCryptoProvider));
-    let storage: &'static mut RamStorageMock<4096> = Box::leak(Box::new(RamStorageMock::new()));
+    let storage: &'static mut RamStorageMock<NV_STORAGE_SIZE> =
+        Box::leak(Box::new(RamStorageMock::new()));
     let timer: &'static mut LinuxTimer = Box::leak(Box::new(timer));
     let platform_rng: &'static mut LinuxRng = Box::leak(Box::new(platform_rng));
     let mut sim = Simulator::new(crypto, storage, timer, platform_rng)
@@ -474,6 +523,24 @@ impl Simulator<'_> {
     /// clock, i.e. was not created by [`create_reference_simulator!`].
     pub fn advance_clock(&mut self, ms: u64) -> bool {
         self.context.platform.timer.advance(ms)
+    }
+
+    /// Returns the simulator to exactly the state
+    /// [`create_reference_simulator!`]`(pid, realtime_ms)` gives (fresh NV,
+    /// virtual clock at `realtime_ms`, reference entropy seeded from `pid`,
+    /// powered on, NV enabled and `TPM2_Startup(TPM_SU_CLEAR)` done), but
+    /// reuses the simulator's components instead of leaking new ones. Use it
+    /// to reset a simulator many times (e.g. once per fuzz input).
+    ///
+    /// # Panics
+    /// If the power-on, NV enable or `TPM2_Startup` fails.
+    pub fn reset_reference(&mut self, pid: u32, realtime_ms: u64) {
+        use tpm2_platform_linux::{ReferenceEntropy, VirtualClock};
+        let clock = VirtualClock::new(realtime_ms);
+        self.restart_with(
+            LinuxTimer::new_virtual(clock.clone()),
+            LinuxRng::reference(ReferenceEntropy::new(pid, clock)),
+        );
     }
 }
 

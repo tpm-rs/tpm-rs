@@ -3,6 +3,7 @@ use crate::handler::{CommandHandler, TransientObject};
 use crate::owned::OwnedAuthCommand;
 use crate::req_resp::RequestThenResponse;
 use crate::storage::manager::StorageManager;
+use crate::storage::nv_capacity;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
 use tpm2::Marshal;
@@ -83,11 +84,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .find_transient_object(object_handle)
                 .cloned()
                 .ok_or(TpmRc::REFERENCE_H1)?;
-            // Temporary (NULL hierarchy or external), stClear or public-only objects can not
-            // be made persistent.
-            if obj.public_only || obj.external {
-                return Err(TpmRc::ATTRIBUTES.with(Position::handle(2)));
-            }
+            // Public-only objects (including the public-only objects of `TPM2_LoadExternal`
+            // in a hierarchy other than `TPM_RH_NULL`) may be made persistent. Part 3
+            // TPM2_EvictControl: "Older versions of the specification did not allow an object
+            // to be persisted when only the public portion of the object was loaded (for NV
+            // space efficiency). Support for persisting public-only objects was added in
+            // version 185." Only objects "in the hierarchy of `TPM_RH_NULL`" or with
+            // "*stClear* ... SET in the object or in an ancestor key" are rejected with
+            // `TPM_RC_ATTRIBUTES` (checked below). An external object with a sensitive area
+            // is always in the NULL hierarchy (TPM2_LoadExternal: "If the public and sensitive
+            // portions of the object are loaded, *hierarchy* is required to be
+            // `TPM_RH_NULL`."), like the C reference's `temporary` objects.
             let is_st_clear = obj.public.object_attributes.contains(TpmaObject::ST_CLEAR);
 
             // 2. Validate transient object hierarchy rules and attributes consistency
@@ -107,6 +114,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .is_ok()
             {
                 return Err(TpmRc::NV_DEFINED);
+            }
+            // `NvAddEvictObject()` tests the NV space (`NvTestSpace()`, TPM_RC_NV_SPACE) before
+            // `NvAdd()` checks NV availability. NV capacity is implementation-specific (Part 3
+            // TPM2_EvictControl: "TPM_RC_NV_SPACE | no space in NV memory"; Part 2
+            // TPM_PT_HR_PERSISTENT_AVAIL: "This value is an estimate"), so tpm-rs accounts NV
+            // like the reference (`storage::nv_capacity`): every persistent object takes
+            // `NV_EVICT_OBJECT_SIZE` bytes whatever its type.
+            let usage =
+                nv_capacity::scan(&StorageManager::new(&mut *self.context.platform.storage))
+                    .map_err(|_| TpmRc::FAILURE)?;
+            if !usage.can_add_evict_object() {
+                return Err(TpmRc::NV_SPACE);
             }
             self.return_if_nv_is_not_available()?;
             self.nv_clear_orderly()?;
@@ -250,6 +269,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .try_into()
                 .unwrap(),
         );
+        // Flags byte (C keeps `attributes.external`/`publicOnly` in the persisted `OBJECT`):
+        // bit 0 = external, bit 1 = public-only. A record without it (written before
+        // public-only objects could be persisted) has both clear.
+        buf[offset] = u8::from(obj.external) | (u8::from(obj.public_only) << 1);
+        offset += 1;
 
         storage
             .define_space(persistent_handle, offset as u16, 0)

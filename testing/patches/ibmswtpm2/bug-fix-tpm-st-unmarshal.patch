@@ -1,0 +1,43 @@
+fix-tpm-st-unmarshal: accept every TPM_ST value when unmarshaling a TPM_ST
+
+Classification: spec-deviation bug fix.
+
+Spec (TPM 2.0 Part 2, TPM_ST, "Table: Definition of (UINT16) TPM_ST
+Constants"): the table lists the TPM_ST values and has no "#TPM_RC_VALUE"
+row, i.e. unmarshaling a TPM_ST performs no value check. The structures that
+need a particular tag check it themselves, e.g. Part 2, TPMT_TK_VERIFIED,
+"Table: Definition of TPMT_TK_VERIFIED Structure":
+  "tag | TPM_ST | ticket structure tag"
+  "#TPM_RC_TAG | | error returned when *tag* is not one of the values in
+   @tbl:tpm-st-for-signatures"
+and Part 2, TPMT_TK_CREATION, "Table: Definition of TPMT_TK_CREATION
+Structure":
+  "tag {TPM_ST_CREATION} | TPM_ST | ticket structure tag"
+  "#TPM_RC_TAG | | error returned when *tag* is not TPM_ST_CREATION"
+
+TPM_ST (Part 2, "TPM_ST Constants") has no #TPM_RC_VALUE, so unmarshaling a
+TPM_ST accepts any value, as the TCG reference does; structures that require
+a specific tag check it themselves (the tickets, TPMT_TK_*, return
+TPM_RC_TAG). Upstream returned TPM_RC_VALUE for values that are not TPM_ST
+constants, so e.g. TPM2_PolicyAuthorize or TPM2_CertifyCreation with a ticket
+tag such as 0x0303 failed with TPM_RC_VALUE instead of TPM_RC_TAG (found by
+differential fuzzing). Command tags are unaffected
+(bug-fix-command-tag-unmarshal.patch); TPMI_ST_ATTEST is output-only.
+
+diff --git a/src/Unmarshal.c b/src/Unmarshal.c
+--- a/src/Unmarshal.c
++++ b/src/Unmarshal.c
+@@ -332,7 +332,12 @@
+     if (rc == TPM_RC_SUCCESS) {
+ 	rc = UINT16_Unmarshal(target, buffer, size);
+     }
+-    if (rc == TPM_RC_SUCCESS) {
++    // tpm-rs differential testing -- spec deviation fix (NOT determinism):
++    // TPM_ST has no #TPM_RC_VALUE in Part 2, so any value unmarshals (as in
++    // the TCG reference); the structures that require a specific tag (the
++    // tickets) report TPM_RC_TAG themselves.  Upstream returned TPM_RC_VALUE
++    // here for values that are not TPM_ST constants.
++    if (0) {
+ 	switch (*target) {
+ 	  case TPM_ST_RSP_COMMAND:
+ 	  case TPM_ST_NULL:

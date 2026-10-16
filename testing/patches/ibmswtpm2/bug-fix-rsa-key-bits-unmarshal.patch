@@ -2,6 +2,12 @@ fix-rsa-key-bits-unmarshal: accept only the implemented RSA key sizes in TPMI_RS
 
 Classification: spec-deviation bug fix.
 
+Specification (TPM 2.0 Library, Part 2, "TPMI_RSA_KEY_BITS" (Table: Definition
+of (RSA) (TPM_KEY_BITS) TPMI_RSA_KEY_BITS Type)):
+
+  "$RSA_KEY_SIZES_BITS the number of bits in the supported key;
+  #TPM_RC_VALUE error when key size is not supported"
+
 TPMI_RSA_KEY_BITS admits only the implemented key sizes (Part 2,
 $RSA_KEY_SIZES_BITS); upstream hard-codes 1024/2048/3072 regardless of the
 RSA_* profile switches.

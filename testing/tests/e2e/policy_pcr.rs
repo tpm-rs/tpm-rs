@@ -165,6 +165,37 @@ fn invalid_selection_hash_rejected() {
     );
 }
 
+/// PolicyPCR with a PCR selection count above `HASH_COUNT` fails with TPM_RC_SIZE on pcrs, even
+/// if the first selection's hash is also invalid (the count is checked first; found by
+/// differential fuzzing). Part 2 `TPML_PCR_SELECTION`: `count` has `#TPM_RC_SIZE` and is unmarshaled
+/// before `pcrSelections`.
+#[test]
+fn oversized_selection_count_rejected_before_hash() {
+    let mut sim = Tpm::new();
+    let session_handle = start_trial_session(&mut sim);
+    let mut req = hex_checked(concat!(
+        "8001",     // NO_SESSIONS
+        "0000001a", // size: 26 bytes
+        "0000017f", // TPM_CC_PolicyPCR
+        "03000000", // sessionHandle
+        "0000",     // pcrDigest size: 0
+        "5f545241", // count: far above HASH_COUNT
+        "ffff",     // hash: 0xFFFF (invalid)
+        "03",       // sizeofSelect: 3
+        "010000",   // pcrSelect
+    ));
+    req[10..14].copy_from_slice(&session_handle.0.to_be_bytes());
+    // A count far above HASH_COUNT, and one just above this TPM's HASH_COUNT (4 banks).
+    for count in [0x5f54_5241u32, 5] {
+        req[16..20].copy_from_slice(&count.to_be_bytes());
+        assert_eq!(
+            raw_rc(&mut sim, &req),
+            TpmRc::SIZE.with(Position::parameter(2)).get(),
+            "count {count:#x}"
+        );
+    }
+}
+
 /// PolicyPCR with a pcrDigest not matching current PCR values fails with TPM_RC_VALUE + RC_P1
 #[test]
 fn pcr_digest_mismatch_rejected() {

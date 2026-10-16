@@ -144,7 +144,11 @@ pub const MAX_SEQUENCE_BUFFER: usize = 4096;
 
 /// Largest command accepted by `TpmEngine::execute_command` (`MAX_COMMAND_SIZE`; the value
 /// reported for `TPM_PT_MAX_COMMAND_SIZE`). Larger commands fail with `TPM_RC_COMMAND_SIZE`.
-pub(crate) const MAX_COMMAND_SIZE: usize = 4096;
+///
+/// The size is implementation-defined (TPM 2.0 Part 2, `TPM_PT_MAX_COMMAND_SIZE`: "the maximum
+/// value for *commandSize* in a command"); this TPM uses the TCG reference profile's `MAX_COMMAND_SIZE`
+/// (`4096 - 0x80`), so that the same commands are accepted.
+pub(crate) const MAX_COMMAND_SIZE: usize = 4096 - 0x80;
 
 /// Buffer size for decrypted command parameters.
 /// The parameter area can never be larger than the whole command, so sizing the buffer to
@@ -1180,6 +1184,15 @@ impl GlobalState {
     /// loaded transient objects or active sequences, enforcing the shared `MAX_LOADED_OBJECTS` (`3`)
     /// capacity across transient objects, sequences and the persistent objects referenced by the
     /// current command (`s_objects` parity with the C references).
+    ///
+    /// The handle of a new object is implementation-specific (Part 1, "Transient Object Handles":
+    /// "The TPM assigns Object handles when an Object is loaded [...] Transient Objects in TPM
+    /// RAM have handles with an MSO of $80_{16}$."; the three LSOs are not specified), so tpm-rs
+    /// numbers objects like the TCG reference: each persistent object referenced by the command
+    /// has been copied into the lowest free object slot (`ObjectLoadEvict` →
+    /// `ObjectAllocateSlot`, in handle order) for the duration of the command, so a new object
+    /// gets the first free slot after those `command_persistent_objects` copies (e.g.
+    /// `TPM2_HMAC_Start` with a persistent key and nothing else loaded returns `0x80000001`).
     pub fn find_next_transient_handle(&self) -> Result<u32, TpmRc> {
         let total_loaded = self.transient_objects.iter().flatten().count()
             + self.active_sequences.iter().flatten().count()
@@ -1187,15 +1200,14 @@ impl GlobalState {
         if total_loaded >= MAX_LOADED_OBJECTS {
             return Err(TpmRc::OBJECT_MEMORY);
         }
-        for i in 0..(MAX_LOADED_OBJECTS as u32) {
-            let handle = 0x8000_0000 | i;
-            if self.find_transient_object(handle).is_none()
-                && self.find_active_sequence(handle).is_none()
-            {
-                return Ok(handle);
-            }
-        }
-        Err(TpmRc::OBJECT_MEMORY)
+        (0..(MAX_LOADED_OBJECTS as u32))
+            .map(|i| 0x8000_0000 | i)
+            .filter(|&handle| {
+                self.find_transient_object(handle).is_none()
+                    && self.find_active_sequence(handle).is_none()
+            })
+            .nth(self.command_persistent_objects)
+            .ok_or(TpmRc::OBJECT_MEMORY)
     }
 
     /// Finds an empty slot for a new active sequence and returns its index and the transient handle to be assigned.
@@ -1503,13 +1515,16 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
         let qualified_name = OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let hierarchy = u32::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
+        // Optional flags byte (see `persist_transient_object`): bit 0 = external, bit 1 =
+        // public-only (persistable since revision 185 of Part 3 TPM2_EvictControl).
+        let flags = slice.first().copied().unwrap_or(0);
 
         Ok(TransientObject {
             handle,
             seed,
             seed_len,
-            external: false,
-            public_only: false,
+            external: flags & 1 != 0,
+            public_only: flags & 2 != 0,
             name,
             auth,
             public,
@@ -1565,6 +1580,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// Creates a new [`TpmEngine`] over `platform` with a default (unmanufactured)
     /// [`GlobalState`].
     pub fn new(platform: TpmPlatform<'a, C, S, T, R>) -> Result<Self, InternalError> {
+        // Commands are unmarshaled per this TPM's profile (algorithms, curves, RSA key sizes and
+        // RSA-dependent buffer sizes), not per the `tpm2` features of the build.
+        tpm2::profile::install(&crate::handler::capability::TPM_PROFILE)
+            .map_err(|_| InternalError::ProfileConflict)?;
         Ok(Self {
             platform,
             state: GlobalState::default(),
@@ -2553,7 +2572,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             } else {
                 let mut handles = [0u32; 3];
                 let handles_len = command_handles_count(cc);
-                if let Some(rc) = truncated_handle_area_error(size, handles_len) {
+                if let Some(rc) = handle_area_unmarshal_error(cmd_buf, size, cc, handles_len) {
                     return Err(rc);
                 }
                 for (i, handle) in handles[..handles_len].iter_mut().enumerate() {
@@ -2653,13 +2672,11 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         if !is_session_allowed(cc) {
             self.reject_sessions_for_no_sessions_command(cmd_buf, cc, request_size)?;
         }
-        // 1. Parse Handles and Session Area
+        // 1. Parse and validate the handles, then parse the session area (see
+        // `parse_command_and_sessions` for the order).
+        // Every session is validated as it is unmarshaled (`validate_session`).
         let mut cmd = self.parse_command_and_sessions(cmd_buf, cc, command_code, request_size)?;
-        // Handles are validated before the session area is examined, matching the C reference
-        // (`ParseHandleBuffer`/`EntityGetLoadStatus` run before `ParseSessionBuffer`).
-        self.validate_command_handles(cc, &cmd.handles, cmd.handles_len, cmd.parameters)?;
-        self.validate_session_attributes(&cmd, command_code, true)?;
-        self.validate_session_attributes(&cmd, command_code, false)?;
+        self.validate_encrypt_session_mode(&cmd)?;
 
         // 2. Session authorization (HMAC/password/policy) for all sessions. As in the C reference
         // `ParseSessionBuffer`, missing authorizations are reported first, and authorization
@@ -2901,7 +2918,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         // 1. Parse Handles
         let num_handles = command_handles_count(cc);
         let handles_size = num_handles * 4;
-        if let Some(rc) = truncated_handle_area_error(request_size, num_handles) {
+        if let Some(rc) = handle_area_unmarshal_error(cmd_buf, request_size, cc, num_handles) {
             return Err(rc);
         }
         if num_handles > 3 {
@@ -2920,6 +2937,17 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             ]);
         }
         let handle_bytes_read = handles_size;
+        // The handles are validated before anything of the authorization area is read, matching
+        // the C reference `ExecuteCommand()`: `ParseHandleBuffer`/`EntityGetLoadStatus` run
+        // before the `authorizationSize` is unmarshaled (`TPM_RC_INSUFFICIENT` if truncated) and
+        // sanity-checked (`TPM_RC_SIZE`), and before `ParseSessionBuffer`. A command whose
+        // `authorizationSize` is missing therefore still reports an invalid handle first.
+        // TPM 2.0 Part 3, "Handle Area Validation": "A TPM is required to perform the handle area
+        // validation before the authorization checks because an authorization cannot be
+        // performed unless the authorization values and attributes for the referenced entity are
+        // known by the TPM." The handle and session checks "may be performed in any order"; the
+        // order of the TCG reference is followed.
+        self.validate_command_handles(cc, &handles, handles_len, &[])?;
 
         // 2. Parse Auth Sessions Area
         let auth_size_offset = 10 + handle_bytes_read;
@@ -2940,6 +2968,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
         let mut auth_sessions = [OwnedAuthCommand::default(); 3];
         let mut auth_sessions_len = 0;
+        let mut session_roles = SessionRoles::default();
         let mut unmarsh = &cmd_buf[auth_size_offset + 4..auth_size_offset + 4 + auth_size];
         while !unmarsh.is_empty() {
             if auth_sessions_len >= 3 {
@@ -2951,6 +2980,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             })?;
             auth_sessions[auth_sessions_len] = auth;
             auth_sessions_len += 1;
+            // As in the C reference `RetrieveSessionData()`, each session is checked right
+            // after it is unmarshaled, before the next one is read.
+            self.validate_session(
+                &auth_sessions[..auth_sessions_len],
+                command_code,
+                &mut session_roles,
+            )?;
         }
 
         // Map sessions to authorizing handles (C `ParseSessionBuffer()`): the handles that need
@@ -2997,126 +3033,103 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         })
     }
 
-    /// Helper to validate attributes of encryption/decryption sessions.
-    fn validate_session_attributes(
+    /// Validates the last session of `sessions` (the one just unmarshaled), in the order of the
+    /// C reference `RetrieveSessionData()`, recording its decrypt/encrypt/audit role in `roles`:
+    ///
+    /// * a password session must not have the `decrypt`, `encrypt`, `audit`, `auditExclusive`
+    ///   or `auditReset` attribute (`TPM_RC_ATTRIBUTES`) and must have an empty nonce
+    ///   (`TPM_RC_NONCE`);
+    /// * any other session must be loaded (`TPM_RC_REFERENCE_S0 + i`), be referenced with the
+    ///   handle type of its kind (`TPM_RC_HANDLE`) and appear only once (`TPM_RC_HANDLE`); a
+    ///   session that is also named in the handle area is allowed (e.g. `TPM2_PolicyGetDigest`
+    ///   with the same session encrypting);
+    /// * `auditExclusive`/`auditReset` need `audit` (`TPM_RC_ATTRIBUTES`);
+    /// * `decrypt`, then `encrypt`: the command must allow it and only one session may have it
+    ///   (`TPM_RC_ATTRIBUTES`), and the session needs a symmetric algorithm
+    ///   (`TPM_RC_SYMMETRIC`);
+    /// * `audit`: only one session, not a policy session (`TPM_RC_ATTRIBUTES`), and an
+    ///   `auditExclusive` use of an audit session that is not exclusive is `TPM_RC_EXCLUSIVE`.
+    ///
+    /// TPM 2.0 Part 3, "Session Area Validation": "4. The TPM will unmarshal the authorization
+    /// sessions and perform the following validations: [...] 2. If the session is not loaded,
+    /// the TPM will return the warning `TPM_RC_REFERENCE_S0` + N where N is the number of the
+    /// session. The first session is session zero, N = 0." The specification does not order the
+    /// checks of one session against the unmarshaling of the next; like the TCG reference
+    /// (`RetrieveSessionData()`), each session is checked before the next one is unmarshaled.
+    fn validate_session(
         &self,
-        cmd: &ParsedCommand,
+        sessions: &[OwnedAuthCommand],
         command_code: u32,
-        syntax_only: bool,
+        roles: &mut SessionRoles,
     ) -> Result<(), TpmRc> {
-        let mut decrypt_session_idx = None;
-        let mut encrypt_session_idx = None;
-        let mut audit_session_idx = None;
+        let Some((auth, earlier)) = sessions.split_last() else {
+            return Ok(());
+        };
+        let i = earlier.len();
+        let pos = Position::session((i + 1) as u8);
+        let session_handle = auth.session_handle.0;
+        let attrs = auth.session_attributes;
 
-        for (i, auth) in cmd
-            .auth_sessions
-            .iter()
-            .enumerate()
-            .take(cmd.auth_sessions_len)
-        {
-            let pos = Position::session((i + 1) as u8);
-            let session_handle = auth.session_handle.0;
-            let attrs = auth.session_attributes;
-
-            if syntax_only {
-                // 2.1 Password Session (PWAP) Validation
-                if session_handle == Handle::RS_PW.0 {
-                    if attrs.intersects(
-                        TpmaSession::DECRYPT
-                            | TpmaSession::ENCRYPT
-                            | TpmaSession::AUDIT
-                            | TpmaSession::AUDIT_EXCLUSIVE
-                            | TpmaSession::AUDIT_RESET,
-                    ) {
-                        return Err(TpmRc::ATTRIBUTES.with(pos));
-                    }
-                    // The nonce of a password session must be empty (C `RetrieveSessionData`).
-                    if auth.nonce.get_size() != 0 {
-                        return Err(TpmRc::NONCE.with(pos));
-                    }
-                    continue;
-                }
-
-                // A session handle may appear only once in the session area (C
-                // `RetrieveSessionData`). A session that is also named in the handle area is
-                // allowed (e.g. `TPM2_PolicyGetDigest` with the same session encrypting).
-                if cmd.auth_sessions[..i]
-                    .iter()
-                    .any(|prev| prev.session_handle.0 == session_handle)
-                {
-                    return Err(TpmRc::HANDLE.with(pos));
-                }
-
-                // 2.2 Attribute Dependency Check
-                if (attrs.contains(TpmaSession::AUDIT_EXCLUSIVE)
-                    || attrs.contains(TpmaSession::AUDIT_RESET))
-                    && !attrs.contains(TpmaSession::AUDIT)
-                {
-                    return Err(TpmRc::ATTRIBUTES.with(pos));
-                }
-
-                // 2.3 Multiple Audit Sessions Check
-                if attrs.contains(TpmaSession::AUDIT) {
-                    if audit_session_idx.is_some() {
-                        return Err(TpmRc::ATTRIBUTES.with(pos));
-                    }
-                    audit_session_idx = Some(i);
-                }
-
-                if attrs.contains(TpmaSession::DECRYPT) {
-                    if decrypt_session_idx.is_some() {
-                        return Err(TpmRc::ATTRIBUTES.with(pos));
-                    }
-                    if !command_supports_decryption(TpmCc::new(command_code)) {
-                        return Err(TpmRc::ATTRIBUTES.with(pos));
-                    }
-                    decrypt_session_idx = Some(i);
-                }
-                if attrs.contains(TpmaSession::ENCRYPT) {
-                    if !command_supports_encryption(TpmCc::new(command_code)) {
-                        return Err(TpmRc::ATTRIBUTES.with(pos));
-                    }
-                    if encrypt_session_idx.is_some() {
-                        return Err(TpmRc::ATTRIBUTES.with(pos));
-                    }
-                    encrypt_session_idx = Some(i);
-                }
-                continue;
-            }
-
-            if session_handle == Handle::RS_PW.0 {
-                continue;
-            }
-
-            if attrs.contains(TpmaSession::ENCRYPT) {
-                encrypt_session_idx = Some(i);
-            }
-
-            // An unloaded session slot is `TPM_RC_REFERENCE_S0 + i`; a loaded slot referenced
-            // with the wrong session handle type is `TPM_RC_HANDLE` (C `RetrieveSessionData`).
-            let Some(slot) = self.state.session_by_slot(session_handle) else {
-                return Err(reference_s(i));
-            };
-            if slot.session_handle != session_handle {
-                return Err(TpmRc::HANDLE.with(pos));
-            }
-            let session_state = slot;
-
-            // A decrypt or encrypt session needs a symmetric algorithm (C `RetrieveSessionData`,
-            // which runs for every session before any authorization check).
-            if attrs.intersects(TpmaSession::DECRYPT | TpmaSession::ENCRYPT)
-                && session_state.symmetric.is_none()
-            {
-                return Err(TpmRc::SYMMETRIC.with(pos));
-            }
-
-            // 2.4 Policy Session Auditing Restriction
-            if attrs.contains(TpmaSession::AUDIT) && session_state.session_type != tpm2::TpmSe::HMAC
-            {
+        if session_handle == Handle::RS_PW.0 {
+            if attrs.intersects(
+                TpmaSession::DECRYPT
+                    | TpmaSession::ENCRYPT
+                    | TpmaSession::AUDIT
+                    | TpmaSession::AUDIT_EXCLUSIVE
+                    | TpmaSession::AUDIT_RESET,
+            ) {
                 return Err(TpmRc::ATTRIBUTES.with(pos));
             }
+            if auth.nonce.get_size() != 0 {
+                return Err(TpmRc::NONCE.with(pos));
+            }
+            return Ok(());
+        }
 
-            // 2.5 Exclusivity Validation Check
+        // An unloaded session slot is `TPM_RC_REFERENCE_S0 + i`; a loaded slot referenced
+        // with the wrong session handle type is `TPM_RC_HANDLE`.
+        let Some(session_state) = self.state.session_by_slot(session_handle) else {
+            return Err(reference_s(i));
+        };
+        if session_state.session_handle != session_handle {
+            return Err(TpmRc::HANDLE.with(pos));
+        }
+        if earlier
+            .iter()
+            .any(|prev| prev.session_handle.0 == session_handle)
+        {
+            return Err(TpmRc::HANDLE.with(pos));
+        }
+
+        if (attrs.contains(TpmaSession::AUDIT_EXCLUSIVE)
+            || attrs.contains(TpmaSession::AUDIT_RESET))
+            && !attrs.contains(TpmaSession::AUDIT)
+        {
+            return Err(TpmRc::ATTRIBUTES.with(pos));
+        }
+
+        if attrs.contains(TpmaSession::DECRYPT) {
+            if !command_supports_decryption(TpmCc::new(command_code)) || roles.decrypt.is_some() {
+                return Err(TpmRc::ATTRIBUTES.with(pos));
+            }
+            if session_state.symmetric.is_none() {
+                return Err(TpmRc::SYMMETRIC.with(pos));
+            }
+            roles.decrypt = Some(i);
+        }
+        if attrs.contains(TpmaSession::ENCRYPT) {
+            if !command_supports_encryption(TpmCc::new(command_code)) || roles.encrypt.is_some() {
+                return Err(TpmRc::ATTRIBUTES.with(pos));
+            }
+            if session_state.symmetric.is_none() {
+                return Err(TpmRc::SYMMETRIC.with(pos));
+            }
+            roles.encrypt = Some(i);
+        }
+        if attrs.contains(TpmaSession::AUDIT) {
+            if roles.audit.is_some() || session_state.session_type != tpm2::TpmSe::HMAC {
+                return Err(TpmRc::ATTRIBUTES.with(pos));
+            }
             if attrs.contains(TpmaSession::AUDIT_EXCLUSIVE)
                 && !attrs.contains(TpmaSession::AUDIT_RESET)
                 && session_state.audit_digest.is_some()
@@ -3124,33 +3137,43 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             {
                 return Err(TpmRc::EXCLUSIVE);
             }
+            roles.audit = Some(i);
         }
+        Ok(())
+    }
 
-        if syntax_only {
+    /// Checks the symmetric mode of the session with the `encrypt` attribute, once all sessions
+    /// have been validated (`validate_session`): response parameter encryption uses CFB
+    /// (`TPM_RC_MODE` otherwise) or XOR.
+    fn validate_encrypt_session_mode(&self, cmd: &ParsedCommand) -> Result<(), TpmRc> {
+        let Some((i, auth)) = cmd.auth_sessions[..cmd.auth_sessions_len]
+            .iter()
+            .enumerate()
+            .find(|(_, auth)| {
+                auth.session_handle.0 != Handle::RS_PW.0
+                    && auth.session_attributes.contains(TpmaSession::ENCRYPT)
+            })
+        else {
             return Ok(());
+        };
+        let session_handle = auth.session_handle.0;
+        let pos = Position::session((i + 1) as u8);
+        if !(0x02000000..=0x03FFFFFF).contains(&session_handle) {
+            return Err(TpmRc::VALUE.with(pos));
         }
-
-        if let Some(i) = encrypt_session_idx {
-            let auth = &cmd.auth_sessions[i];
-            let session_handle = auth.session_handle.0;
-            let pos = Position::session((i + 1) as u8);
-            if !(0x02000000..=0x03FFFFFF).contains(&session_handle) {
-                return Err(TpmRc::VALUE.with(pos));
+        let session_state = self
+            .state
+            .session(session_handle)
+            .ok_or(TpmRc::HANDLE.with(pos))?;
+        match session_state.symmetric {
+            Some(tpm2::TpmtSymDef::Cipher(sym_obj)) => {
+                if sym_obj.mode() != Some(CFB_MODE) {
+                    return Err(TpmRc::MODE.with(pos));
+                }
             }
-            let session_state = self
-                .state
-                .session(session_handle)
-                .ok_or(TpmRc::HANDLE.with(pos))?;
-            match session_state.symmetric {
-                Some(tpm2::TpmtSymDef::Cipher(sym_obj)) => {
-                    if sym_obj.mode() != Some(CFB_MODE) {
-                        return Err(TpmRc::MODE.with(pos));
-                    }
-                }
-                Some(tpm2::TpmtSymDef::Xor(_)) => {}
-                None => {
-                    return Err(TpmRc::SYMMETRIC.with(pos));
-                }
+            Some(tpm2::TpmtSymDef::Xor(_)) => {}
+            None => {
+                return Err(TpmRc::SYMMETRIC.with(pos));
             }
         }
         Ok(())
@@ -5044,12 +5067,57 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         Ok(offset)
     }
 
+    /// Validates the handle area of command `cc` as the C reference does before any session is
+    /// processed, in two passes over all handles:
+    ///
+    /// 1. `ParseHandleBuffer`: every handle is unmarshaled as its interface type (`TPMI_DH_*`,
+    ///    `TPMI_RH_*`, `TPMI_SH_*`), so a value the type does not admit is `TPM_RC_VALUE` at its
+    ///    position — for every handle before any is checked for presence;
+    /// 2. `EntityGetLoadStatus`: every handle must reference an available entity (loaded
+    ///    object or session, defined and accessible NV Index or persistent object, enabled
+    ///    hierarchy): `TPM_RC_REFERENCE_H*`, `TPM_RC_HANDLE`, `TPM_RC_HIERARCHY`,
+    ///    `TPM_RC_OBJECT_MEMORY`.
+    ///
+    /// So an invalid second handle is reported before a missing first one.
+    ///
+    /// TPM 2.0 Part 3, "Handle Area Validation": "1. The TPM shall successfully unmarshal the
+    /// number of handles required by the command and validate that the value of the handle is
+    /// consistent with the command syntax. If not, the TPM shall return `TPM_RC_VALUE`. The TPM
+    /// is permitted to unmarshal a handle and validate that it references an entity on the TPM
+    /// before unmarshaling a subsequent handle." and "2. For all handles in the handle area of
+    /// the command, the TPM will validate that the referenced entity is present in the TPM." The
+    /// specification permits both orders ("These checks may be performed in any order."); this
+    /// follows the TCG reference, which unmarshals all handles first (`ParseHandleBuffer`).
     fn validate_command_handles(
         &mut self,
         cc: TpmCc,
         handles: &[u32],
         handles_len: usize,
         _parameters: &[u8],
+    ) -> Result<(), TpmRc> {
+        // Pass 1: the interface types, in handle order.
+        for (h_idx, &handle) in handles.iter().enumerate().take(handles_len) {
+            let types = crate::handle_checks::command_handle_types(cc);
+            if let Some(&ty) = types.get(h_idx) {
+                crate::handle_checks::check(
+                    Handle(handle),
+                    ty,
+                    Position::handle((h_idx + 1) as u8),
+                )?;
+            }
+        }
+        // Pass 2: the load status (with the engine's remaining, implementation-specific value
+        // checks, e.g. unimplemented hierarchies).
+        self.check_command_handles(cc, handles, handles_len)
+    }
+
+    /// Pass 2 of [`Self::validate_command_handles`]: the load status of the entities the
+    /// handles reference (and the engine's remaining handle value checks).
+    fn check_command_handles(
+        &mut self,
+        cc: TpmCc,
+        handles: &[u32],
+        handles_len: usize,
     ) -> Result<(), TpmRc> {
         if handles_len >= 1 {
             let auth_handle = handles[0];
@@ -5074,64 +5142,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 return Err(TpmRc::VALUE.with(Position::handle(1)));
             }
 
-            // Handle types of the NV commands (`TPMI_RH_NV_INDEX`, `TPMI_RH_PLATFORM`,
-            // `TPMI_RH_PROVISION`, `TPMI_RH_NV_AUTH`). The accessibility of NV Index handles
-            // (C `NvIndexIsAccessible`) is checked in handle order by the loop below.
-            if cc == TpmCc::NVUndefineSpaceSpecial && handles_len >= 2 {
-                let nv_index = handles[0];
-                let platform = handles[1];
-                if Handle(nv_index).handle_type() != Some(TpmHt::NVIndex) {
-                    return Err(TpmRc::VALUE.with(Position::handle(1)));
-                }
-                if platform != Handle::RH_PLATFORM.0 {
-                    return Err(TpmRc::VALUE.with(Position::handle(2)));
-                }
-            } else if matches!(
-                cc,
-                TpmCc::NVUndefineSpace
-                    | TpmCc::NVRead
-                    | TpmCc::NVWrite
-                    | TpmCc::NVIncrement
-                    | TpmCc::NVExtend
-                    | TpmCc::NVSetBits
-                    | TpmCc::NVWriteLock
-                    | TpmCc::NVReadLock
-            ) && handles_len >= 2
-            {
-                if cc == TpmCc::NVUndefineSpace {
-                    let auth_handle = handles[0];
-                    if auth_handle != Handle::RH_OWNER.0 && auth_handle != Handle::RH_PLATFORM.0 {
-                        return Err(TpmRc::VALUE.with(Position::handle(1)));
-                    }
-                }
-                let nv_index = handles[1];
-                if Handle(nv_index).handle_type() != Some(TpmHt::NVIndex) {
-                    return Err(TpmRc::VALUE.with(Position::handle(2)));
-                }
-            } else if cc == TpmCc::NVChangeAuth && handles_len >= 1 {
-                let nv_index = handles[0];
-                if Handle(nv_index).handle_type() != Some(TpmHt::NVIndex) {
-                    return Err(TpmRc::VALUE.with(Position::handle(1)));
-                }
-            } else if cc == TpmCc::NVCertify && handles_len >= 3 {
-                // `signHandle`: TPMI_DH_OBJECT+, `authHandle`: TPMI_RH_NV_AUTH,
-                // `nvIndex`: TPMI_RH_NV_INDEX.
-                let sign_handle = handles[0];
-                if sign_handle != Handle::RH_NULL.0 && !matches!(sign_handle >> 24, 0x80 | 0x81) {
-                    return Err(TpmRc::VALUE.with(Position::handle(1)));
-                }
-                let nv_auth = handles[1];
-                if nv_auth != Handle::RH_OWNER.0
-                    && nv_auth != Handle::RH_PLATFORM.0
-                    && Handle(nv_auth).handle_type() != Some(TpmHt::NVIndex)
-                {
-                    return Err(TpmRc::VALUE.with(Position::handle(2)));
-                }
-                let nv_index = handles[2];
-                if Handle(nv_index).handle_type() != Some(TpmHt::NVIndex) {
-                    return Err(TpmRc::VALUE.with(Position::handle(3)));
-                }
-            }
+            // The NV handle types (`TPMI_RH_NV_INDEX`, `TPMI_RH_NV_AUTH`, ...) are checked in pass
+            // 1 (`handle_checks`); the accessibility of NV Index handles (C
+            // `NvIndexIsAccessible`) in handle order by the loop below.
         }
         // Persistent objects already copied into a (temporary) object slot by this command
         // (`ObjectLoadEvict`) are counted in `state.command_persistent_objects`.
@@ -5142,6 +5155,19 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             // (`NvIndexIsAccessible`), whatever command it is passed to. Positions whose
             // interface type cannot hold an NV Index (objects, contexts, sessions, permanent
             // handles) reject it at handle unmarshaling instead (`TPM_RC_VALUE`, below).
+            // Firmware-limited and SVN-limited hierarchies (valid `TPMI_RH_HIERARCHY` and
+            // `TPMI_DH_PARENT` values) are not available: see [`limited_hierarchy_error`].
+            if let Some(rc) = limited_hierarchy_error(handle) {
+                return Err(rc.with(pos));
+            }
+            // External and permanent NV Indexes (valid `TPMI_RH_NV_INDEX` values) are not
+            // implemented. The specification is silent on their load status; this follows the TCG
+            // reference's `EntityGetLoadStatus` ("case TPM_HT_EXTERNAL_NV: case
+            // TPM_HT_PERMANENT_NV: // Not yet supported. result = TPM_RC_VALUE;"), in handle
+            // order.
+            if matches!(handle >> 24, 0x11 | 0x12) {
+                return Err(TpmRc::VALUE.with(pos));
+            }
             if Handle(handle).handle_type() == Some(TpmHt::NVIndex)
                 && !expects_object_handle(cc, h_idx)
                 && !is_expected_session_handle(cc, h_idx)
@@ -5265,7 +5291,15 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         if handle > Handle::TRANSIENT_LAST.0 {
                             return Err(TpmRc::VALUE.with(pos));
                         }
-                        if self.state.find_transient_object(handle).is_none() {
+                        // A loaded sequence object is present too (it then fails in the handler
+                        // with TPM_RC_KEY). TPM 2.0 Part 3, "Handle Area Validation": "If the
+                        // handle references a transient object, the handle shall reference a
+                        // loaded object (`TPM_RC_REFERENCE_H0` + N ...)"; Part 1, "transient
+                        // object": "object or sequence object that can be explicitly loaded and
+                        // unloaded from TPM memory by the TRM".
+                        if self.state.find_transient_object(handle).is_none()
+                            && self.state.find_active_sequence(handle).is_none()
+                        {
                             return Err(TpmRc::REFERENCE_H0);
                         }
                     } else if handle >> 24 == 0x81 {
@@ -5297,7 +5331,11 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         if handle > Handle::TRANSIENT_LAST.0 {
                             return Err(TpmRc::VALUE.with(pos));
                         }
-                        if self.state.find_transient_object(handle).is_none() {
+                        // A loaded sequence object is a loaded transient object too (see
+                        // `tpmKey` above).
+                        if self.state.find_transient_object(handle).is_none()
+                            && self.state.find_active_sequence(handle).is_none()
+                        {
                             return Err(TpmRc::REFERENCE_H1);
                         }
                     } else if mso == 0x81 {
@@ -6105,6 +6143,31 @@ fn handle_name<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>(
     OwnedName::from_bytes(&handle_bytes).unwrap_or_default()
 }
 
+/// The error for using a firmware-limited or SVN-limited hierarchy, `None` for any other handle
+/// (the counterpart of the TCG reference's `ValidateHierarchy()`/`GetAdditionalSecret()` built
+/// without `FW_LIMITED_SUPPORT`/`SVN_LIMITED_SUPPORT`).
+///
+/// TPM 2.0 Part 2, Table "Definition of (TPM_HANDLE) TPMI_RH_HIERARCHY Type" lists them
+/// unconditionally ("TPM_RH_FW_OWNER | Firmware-limited Storage hierarchy", ...,
+/// "{SVN_OWNER_FIRST:SVN_OWNER_LAST} | SVN-limited Storage hierarchies", ...), so they are valid
+/// handle values. Their seeds and proofs need a firmware secret (Part 1, "Firmware-limited
+/// Hierarchy": "a hierarchy whose seed and proof values are derived from a Primary Seed and a
+/// Firmware Secret"; "SVN-limited Hierarchy": "... a Primary Seed and a Firmware SVN Secret"),
+/// which this TPM does not have, so every use fails with Part 2, "TPM_RC_FW_LIMITED | the
+/// hierarchy is firmware-limited but the Firmware Secret is unavailable" or "TPM_RC_SVN_LIMITED
+/// | the hierarchy is SVN-limited but the Firmware SVN Secret associated with the given SVN is
+/// unavailable". Where the error is reported (the handle's load status, or the proof of a
+/// ticket or context) follows the TCG reference version 185.
+pub(crate) fn limited_hierarchy_error(handle: u32) -> Option<tpm2::errors::Fmt1> {
+    if (Handle::RH_FW_OWNER.0..=Handle::RH_FW_NULL.0).contains(&handle) {
+        Some(TpmRc::FW_LIMITED)
+    } else if (Handle::SVN_OWNER_FIRST.0..=Handle::SVN_NULL_LAST.0).contains(&handle) {
+        Some(TpmRc::SVN_LIMITED)
+    } else {
+        None
+    }
+}
+
 fn expects_permanent_handle(cc: TpmCc, handle_index: usize) -> bool {
     if handle_index == 0 {
         matches!(
@@ -6234,20 +6297,39 @@ fn expects_object_handle(cc: TpmCc, handle_index: usize) -> bool {
     }
 }
 
-/// Returns the error for a command whose handle area holds fewer complete handles than the
-/// command requires, or `None` if all handles are present.
+/// The unmarshaling error of the handle area of command `cc` in `cmd_buf` (`request_size`
+/// bytes), if any: the handles are unmarshaled one after the other, so the first handle that is
+/// truncated is `TPM_RC_INSUFFICIENT` at its position, unless an earlier, complete handle is not
+/// a value of its interface type (`TPM_RC_VALUE` at that earlier position), as in the C
+/// reference `ParseHandleBuffer()`.
 ///
-/// Each handle is a typed parameter (`TPMI_DH_*`), and running out of octets while
-/// unmarshaling it is `TPM_RC_INSUFFICIENT` (TPM 2.0 Part 2, "Unmarshaling Errors": "the
-/// input buffer did not contain enough octets to allow unmarshaling of the expected data
-/// type"), reported at the position of the first incomplete handle (`TPM_RC_H + n`, as C
-/// `ParseHandleBuffer` does). `TPM_RC_SIZE` ("the value of a size parameter is larger or
-/// smaller than allowed") and `TPM_RC_COMMAND_SIZE` (commandSize inconsistent with the
-/// received octets, checked earlier) do not apply.
-fn truncated_handle_area_error(request_size: usize, num_handles: usize) -> Option<TpmRc> {
-    let complete = request_size.saturating_sub(10) / 4;
-    (complete < num_handles)
-        .then(|| TpmRc::INSUFFICIENT.with(Position::handle((complete + 1) as u8)))
+/// TPM 2.0 Part 3, "Handle Area Validation": "1. The TPM shall successfully unmarshal the number
+/// of handles required by the command and validate that the value of the handle is consistent
+/// with the command syntax. If not, the TPM shall return `TPM_RC_VALUE`." Running out of octets
+/// while unmarshaling a handle is `TPM_RC_INSUFFICIENT` (TPM 2.0 Part 2, "Unmarshaling Errors":
+/// "the input buffer did not contain enough octets to allow unmarshaling of the expected data
+/// type").
+fn handle_area_unmarshal_error(
+    cmd_buf: &[u8],
+    request_size: usize,
+    cc: TpmCc,
+    num_handles: usize,
+) -> Option<TpmRc> {
+    let types = crate::handle_checks::command_handle_types(cc);
+    for h_idx in 0..num_handles {
+        let pos = Position::handle((h_idx + 1) as u8);
+        let at = 10 + 4 * h_idx;
+        let Some(bytes) = cmd_buf.get(at..at + 4).filter(|_| request_size >= at + 4) else {
+            return Some(TpmRc::INSUFFICIENT.with(pos));
+        };
+        let handle = Handle(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
+        if let Some(&ty) = types.get(h_idx)
+            && let Err(rc) = crate::handle_checks::check(handle, ty, pos)
+        {
+            return Some(rc);
+        }
+    }
+    None
 }
 
 /// Returns `TPM_RC_REFERENCE_H0 + h_idx`, the error for a handle that does not reference a
@@ -6258,6 +6340,18 @@ fn reference_h(h_idx: usize) -> TpmRc {
         1 => TpmRc::REFERENCE_H1,
         _ => TpmRc::REFERENCE_H2,
     }
+}
+
+/// The sessions of a command's session area with the `decrypt`, `encrypt` and `audit` roles
+/// (indexes into the session area), collected by `TpmEngine::validate_session`.
+#[derive(Clone, Copy, Debug, Default)]
+struct SessionRoles {
+    /// The session with the `decrypt` attribute.
+    decrypt: Option<usize>,
+    /// The session with the `encrypt` attribute.
+    encrypt: Option<usize>,
+    /// The session with the `audit` attribute.
+    audit: Option<usize>,
 }
 
 /// Validates a session handle of the handle area (`TPMI_SH_HMAC` / `TPMI_SH_POLICY` /
@@ -6581,7 +6675,15 @@ fn xor_obfuscation(
         return Ok(());
     }
     let total_bits = (data_len * 8) as u32;
-    let mut mask = [0u8; 2048];
+    // The reference's `CryptParameterDecryption()` bounds the ciphertext only by the command
+    // ("if(cipherSize > MAX_COMMAND_SIZE || bufferSize <= 0 || (UINT32)cipherSize >
+    // (UINT32)bufferSize) return TPM_RC_SIZE;", checked by the caller with the session's
+    // position), and TPM 2.0 Part 1, "XOR Parameter Obfuscation", obfuscates "a variable sized
+    // buffer containing the parameter to be obfuscated" with "The obfuscated size of parameter
+    // is the same as the size of the underlying parameter." So the mask covers a whole
+    // command; a parameter that long is then rejected (or not) by its own unmarshaling, e.g.
+    // `TPM2B_PRIVATE` → TPM_RC_SIZE + P1.
+    let mut mask = [0u8; MAX_COMMAND_SIZE];
     if data_len > mask.len() {
         return Err(TpmRc::SIZE.to_rc());
     }

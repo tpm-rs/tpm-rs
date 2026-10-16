@@ -4,8 +4,9 @@
 #![allow(deprecated)] // TPM2_EncryptDecrypt is deprecated upstream but still implemented.
 
 use crate::_common::{
-    AES128_CFB, create_aes_key, execute_with_corrupted_bytes, execute_with_corrupted_bytes_status,
-    execute_with_password_sessions, load_public_only_sym_key, try_create_aes_key,
+    AES128_CFB, ST_SESSIONS, build_raw_cmd, create_aes_key, execute_with_corrupted_bytes,
+    execute_with_corrupted_bytes_status, execute_with_password_sessions, load_public_only_sym_key,
+    send_with_rc, start_trial_session, try_create_aes_key,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, EncryptDecrypt, EncryptDecrypt2};
@@ -14,6 +15,36 @@ use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bIv, Tpm2bMaxBuffer, Tpm2bSensitiveData,
     TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmsSensitiveCreate, TpmtPublic,
 };
+
+/// A loaded policy session referenced with an HMAC session handle (same slot) and the `decrypt`
+/// attribute is `TPM_RC_HANDLE + S1`, not `TPM_RC_ATTRIBUTES + S1` for the decrypt attribute that
+/// TPM2_EncryptDecrypt does not allow: each session's handle checks come before its attribute
+/// checks (found by differential fuzzing). TPM 2.0 Part 3, "Session Area Validation", 4.2: "If the
+/// session is not loaded, the TPM will return the warning `TPM_RC_REFERENCE_S0` + N" with note "If
+/// the HMAC and policy session contexts use the same memory, the type of the context is required
+/// to match the type of the handle", before 4.4: "The consistency of the authorization session
+/// attributes is checked."
+#[test]
+fn mistyped_session_handle_reported_before_decrypt_attribute() {
+    let mut sim = Tpm::new();
+    let key = create_aes_key(&mut sim, TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb));
+    let policy = start_trial_session(&mut sim);
+    // The HMAC-session handle of the policy session's slot.
+    let hmac_alias = (policy.0 & 0x00FF_FFFF) | 0x0200_0000;
+    let mut session = hmac_alias.to_be_bytes().to_vec();
+    session.extend_from_slice(&[0, 0, 0x21, 0, 0]); // empty nonce, continue|decrypt, empty HMAC
+    let params = [
+        0, // decrypt: NO
+        0, 0x43, // mode: CFB
+        0, 0, // ivIn: empty
+        0, 0, // inData: empty
+    ];
+    let cmd = build_raw_cmd(ST_SESSIONS, 0x164, &[key.0], Some(&session), &params);
+    assert_eq!(
+        send_with_rc(&mut sim, &cmd).0,
+        TpmRc::HANDLE.with(Position::session(1)).get()
+    );
+}
 
 /// CMAC is not implemented: an AES key with CMAC mode is rejected by CreatePrimary
 /// (TPM_RC_MODE + RC_P2) and CMAC as EncryptDecrypt(2) mode parameter fails to unmarshal

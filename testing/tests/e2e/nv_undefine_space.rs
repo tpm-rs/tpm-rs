@@ -393,3 +393,22 @@ fn special_with_policy_delete_session() {
     );
     assert!(read_res.is_err());
 }
+
+/// TPM2_NV_UndefineSpaceSpecial's `nvIndex` is a `TPMI_RH_NV_DEFINED_INDEX`, which excludes the
+/// permanent NV range, so a permanent NV handle is `TPM_RC_VALUE + H1` while the handle area is
+/// unmarshaled, before the invalid `platform` handle (found by differential fuzzing; fixed in
+/// ibmswtpm2 by `bug-fix-nv-undefine-defined-index.patch`). TPM 2.0 Part 3,
+/// TPM2_NV_UndefineSpaceSpecial: "TPMI_RH_NV_DEFINED_INDEX | @nvIndex | Index to be deleted".
+#[test]
+fn special_permanent_nv_index_rejected_before_platform() {
+    let mut tpm = Tpm::new();
+    let password = [0x40, 0, 0, 9, 0, 0, 1, 0, 0].repeat(2);
+    let cmd = build_raw_cmd(
+        ST_SESSIONS,
+        0x11F,
+        &[0x12E0_8E2C, 0x0100_0000],
+        Some(&password),
+        &[],
+    );
+    assert_eq!(send_with_rc(&mut tpm, &cmd).0, 0x184, "TPM_RC_VALUE + H1");
+}

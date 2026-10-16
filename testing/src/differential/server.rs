@@ -5,7 +5,7 @@
 //! A reference binary links its patched C reference TPM (built by
 //! `testing/build.rs`), implements [`Backend`] over the C entry points
 //! (`difftest_*`, the only `unsafe` FFI of this crate, in
-//! `src/bin/shared/ffi.rs`) and calls [`serve`]. The only callback the
+//! `src/differential/inproc.rs`) and calls [`serve`]. The only callback the
 //! patches add is the virtual clock (`_plat__RealTime()` returns
 //! `difftest_virtual_ms()`, i.e. [`virtual_ms`]); the C references otherwise
 //! run their unmodified algorithms, including their random number generation
@@ -21,23 +21,26 @@
 //!
 //! Each `Exchange` request carries a command and the response `tpm-rs` gave
 //! to it. The command is executed by the C reference (after translating the
-//! implementation-defined values a test may pass back: transient handles
-//! that differ (exception 11) and `contextBlob`s (exception 1), see
-//! [`DiffState::to_ref_command`]), and its response must be byte-identical
+//! implementation-defined `contextBlob`s a test may pass back (exception 1),
+//! see [`DiffState::to_ref_command`]), and its response must be byte-identical
 //! to the `tpm-rs` response, except for the narrowly-scoped, documented
 //! rules in `compare_differential_response` (each keyed to a command code, a
 //! response code pair and a checked condition, and listed in
 //! `differential.md`) and the `TPM_RC_RETRY` re-issue rule. Any other
-//! difference is replied as an error, which fails the test.
+//! difference is replied as an error carrying the C reference's response
+//! (see [`protocol::Failure`]), which fails the test.
+//!
+//! A `Reinit` request re-initializes the C reference exactly like a new
+//! process with the same seed ([`Server::reinit`]), so one process can serve
+//! many independent conversations (e.g. one per fuzz input).
 
-use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tpm2_simulator::SimulatorPlatformSignal;
 
 use super::Implementation;
-use super::protocol::{self, Handshake, Request};
+use super::protocol::{self, Failure, Handshake, Request};
 
 /// Environment variable that makes reference processes log every applied
 /// documented exception and `TPM_RC_RETRY` re-issue on stderr.
@@ -54,6 +57,22 @@ static VIRTUAL_MS: AtomicU64 = AtomicU64::new(0);
 pub fn virtual_ms() -> u64 {
     VIRTUAL_MS.load(Ordering::Relaxed)
 }
+
+/// Sets the virtual clock (see [`virtual_ms`]) to `ms` milliseconds.
+///
+/// The clock is global to the process: [`serve`] starts it at the seed's
+/// real time and the [`Server`] moves it on `AdvanceClock` and `Reinit`
+/// requests. Hosts that drive several [`Server`]s in one process (which then
+/// share the clock) use this to set it before each one handles a request.
+pub fn set_virtual_ms(ms: u64) {
+    VIRTUAL_MS.store(ms, Ordering::Relaxed);
+}
+
+/// Serializes the unit tests of this crate that use the process-global virtual clock
+/// ([`virtual_ms`], [`set_virtual_ms`]): every such test holds this lock while it runs, since
+/// the test harness runs tests in parallel threads of one process.
+#[cfg(test)]
+pub(crate) static VIRTUAL_CLOCK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// A platform signal delivered to a C reference TPM.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +147,7 @@ pub fn serve<B: Backend>(
     protocol::write_handshake(&mut output, &handshake)
         .and_then(|()| output.flush())
         .unwrap_or_else(|e| panic!("{implementation}: cannot write handshake: {e}"));
-    let mut reply = |result: &Result<(), String>| {
+    let mut reply = |result: &Result<(), Failure>| {
         protocol::write_reply(&mut output, result)
             .and_then(|()| output.flush())
             .unwrap_or_else(|e| panic!("{implementation}: cannot write reply: {e}"));
@@ -139,7 +158,7 @@ pub fn serve<B: Backend>(
             server
         }
         Err(e) => {
-            reply(&Err(e));
+            reply(&Err(Failure::new(e)));
             std::process::exit(1);
         }
     };
@@ -162,51 +181,24 @@ pub struct DiffState {
     /// `(tpm-rs contextBlob, C contextBlob)` of every successful
     /// `TPM2_ContextSave` (exception 1).
     pub context_blobs: Vec<(Vec<u8>, Vec<u8>)>,
-    /// Byte offsets successfully written (`TPM2_NV_Write`) per NV index since
-    /// it was defined (for exception 5).
-    pub nv_written: HashMap<u32, HashSet<usize>>,
-    /// Transient object handles that differ between the implementations,
-    /// as `(tpm-rs handle, C handle)` pairs (exception 11). Handles in
-    /// commands are translated with this map before they are sent to C.
-    pub handle_map: Vec<(u32, u32)>,
 }
 
 impl DiffState {
-    /// The command to send to C:
-    ///
-    /// * every tpm-rs transient handle of `handle_map` in the handle area
-    ///   (and the `flushHandle` parameter of `TPM2_FlushContext`) replaced
-    ///   by the C handle (exception 11);
-    /// * the `contextBlob` of a `TPM2_ContextLoad` replaced by the C blob
-    ///   (see [`DiffState::translate_context_load`]).
+    /// The command to send to C: the command itself, except that the
+    /// `contextBlob` of a `TPM2_ContextLoad` is replaced by the C blob (see
+    /// [`DiffState::translate_context_load`]), or, for a blob that cannot be
+    /// translated, its integrity value is made invalid (see
+    /// [`DiffState::untranslated_context_load`]).
     pub fn to_ref_command(&self, command: &[u8]) -> Vec<u8> {
-        let mut out = command.to_vec();
         let Some((_, code)) = header(command) else {
-            return out;
+            return command.to_vec();
         };
         if code == cc::CONTEXT_LOAD {
-            return self.translate_context_load(command).unwrap_or(out);
+            return self
+                .translate_context_load(command)
+                .unwrap_or_else(|| Self::untranslated_context_load(command));
         }
-        if self.handle_map.is_empty() {
-            return out;
-        }
-        let mut positions: Vec<usize> = match handle_counts(code) {
-            Some((n, _)) => (0..n).map(|i| 10 + 4 * i).collect(),
-            None => Vec::new(),
-        };
-        if code == cc::FLUSH_CONTEXT
-            && let Some((_, params)) = command_parts(command, 0)
-        {
-            positions.push(command.len() - params.len());
-        }
-        for at in positions {
-            if let Some(h) = be32(command, at)
-                && let Some(&(_, c)) = self.handle_map.iter().find(|(r, _)| *r == h)
-            {
-                out[at..at + 4].copy_from_slice(&c.to_be_bytes());
-            }
-        }
-        out
+        command.to_vec()
     }
 
     /// Translates the `contextBlob` of a `TPM2_ContextLoad` command to the
@@ -220,8 +212,13 @@ impl DiffState {
     /// `TPM2_ContextSave`; the `TPM2B` size and the `commandSize` are
     /// adjusted). Every other blob (tampered, truncated, foreign) is passed
     /// to C unchanged, so neither implementation's rejection of a modified
-    /// blob is fabricated by the harness.
+    /// blob is fabricated by the harness. A command whose `commandSize` is not
+    /// its length is also passed unchanged: recomputing the size would hide
+    /// the `TPM_RC_COMMAND_SIZE` error from C (and the blob is never read).
     pub fn translate_context_load(&self, command: &[u8]) -> Option<Vec<u8>> {
+        if be32(command, 2)? as usize != command.len() {
+            return None;
+        }
         let (_, params) = command_parts(command, 0)?;
         // TPMS_CONTEXT: sequence (8), savedHandle (4), hierarchy (4),
         // contextBlob (TPM2B).
@@ -229,6 +226,13 @@ impl DiffState {
         let blob_len = be16(command, size_at)? as usize;
         let blob_at = size_at + 2;
         let blob = command.get(blob_at..blob_at + blob_len)?;
+        // Bytes after the context fail the command with `TPM_RC_SIZE` whatever the blob is
+        // (parameter unmarshaling precedes the blob's integrity check), and a larger C blob
+        // could push the command beyond `MAX_COMMAND_SIZE` (`TPM_RC_COMMAND_SIZE` in C only):
+        // such a command is sent unchanged.
+        if blob_at + blob_len != command.len() {
+            return None;
+        }
         let (_, ref_blob) = self
             .context_blobs
             .iter()
@@ -243,6 +247,41 @@ impl DiffState {
         let total = u32::try_from(out.len()).ok()?;
         out[2..6].copy_from_slice(&total.to_be_bytes());
         Some(out)
+    }
+
+    /// A `TPM2_ContextLoad` whose blob cannot be translated (not one `tpm-rs`
+    /// saved on this TPM: tampered, truncated, or from another run), with its
+    /// integrity value zeroed (never a valid HMAC; unlike a reversible change,
+    /// it cannot turn a tampered integrity value back into the authentic one).
+    ///
+    /// All implementations share the hierarchy proofs (one seed) and the
+    /// integrity HMAC of TPM 2.0 Part 1, "Context Integrity Protection"
+    /// (`HMAC(hProof, resetValue || sequence || handle || encContext)`), so an
+    /// authentic `tpm-rs` blob from another run (e.g. a fuzzing seed) would
+    /// also pass the integrity check of a C reference, which would then
+    /// interpret `tpm-rs`'s implementation-defined contents as its own
+    /// (`ibmswtpm2` loads garbage, `mstpm20` enters failure mode on the
+    /// fingerprint). On a real TPM no other implementation can authenticate a
+    /// blob, so C must reject it as unauthentic (`TPM_RC_INTEGRITY`, or a size
+    /// error the integrity check never reaches; exception 9). Commands without
+    /// a complete blob or a non-empty integrity value are sent unchanged.
+    pub fn untranslated_context_load(command: &[u8]) -> Vec<u8> {
+        let mut out = command.to_vec();
+        let Some((_, params)) = command_parts(command, 0) else {
+            return out;
+        };
+        let size_at = command.len() - params.len() + 16;
+        let (Some(blob_len), Some(integrity_len)) =
+            (be16(command, size_at), be16(command, size_at + 2))
+        else {
+            return out;
+        };
+        let integrity_at = size_at + 4;
+        let integrity_end = integrity_at + integrity_len as usize;
+        if 2 + integrity_len as usize <= blob_len as usize && integrity_end <= command.len() {
+            out[integrity_at..integrity_end].fill(0);
+        }
+        out
     }
 
     /// Records the `contextBlob` pair of a successful `TPM2_ContextSave`
@@ -294,16 +333,38 @@ pub struct Server<B: Backend> {
     retries: usize,
     /// The comparison state.
     state: DiffState,
+    /// The virtual clock ([`virtual_ms`]) when the server was created, i.e.
+    /// the seed's real time; `Reinit` resets the clock to it.
+    initial_ms: u64,
 }
 
 impl<B: Backend> Server<B> {
     /// Initializes the C reference TPM like a new `Tpm`: manufactured,
     /// powered on, NV on and `TPM2_Startup(TPM_SU_CLEAR)` done.
+    ///
+    /// The current virtual clock ([`virtual_ms`]) must be the seed's real
+    /// time (as [`serve`] sets it): the C reference seeds its random number
+    /// generation from it, and [`Self::reinit`] returns the clock to it.
     pub fn new(
         implementation: Implementation,
         mut backend: B,
         test: String,
     ) -> Result<Self, String> {
+        Self::start_up(implementation, &mut backend, &test)?;
+        Ok(Self {
+            implementation,
+            backend,
+            test,
+            commands: 0,
+            retries: 0,
+            state: DiffState::default(),
+            initial_ms: virtual_ms(),
+        })
+    }
+
+    /// Manufactures, powers on and enables NV of `backend` ([`Backend::init`])
+    /// and sends it `TPM2_Startup(TPM_SU_CLEAR)`.
+    fn start_up(implementation: Implementation, backend: &mut B, test: &str) -> Result<(), String> {
         backend.init();
         let startup_clear = [
             0x80, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x01, 0x44, 0x00, 0x00,
@@ -315,18 +376,29 @@ impl<B: Backend> Server<B> {
                 hex(&startup_rsp)
             ));
         }
-        Ok(Self {
-            implementation,
-            backend,
-            test,
-            commands: 0,
-            retries: 0,
-            state: DiffState::default(),
-        })
+        Ok(())
+    }
+
+    /// Re-initializes the C reference TPM like a new reference process with
+    /// the same seed (the `Reinit` request): resets the virtual clock to its
+    /// value when the server was created (the seed's real time), then
+    /// manufactures, powers on, enables NV and sends
+    /// `TPM2_Startup(TPM_SU_CLEAR)` as [`Self::new`] does, and forgets the
+    /// comparison state ([`DiffState`]) and the command counters.
+    ///
+    /// The C reference reseeds its random number generation from the clock
+    /// and the process ID when it is manufactured, so the TPM then produces
+    /// the same responses as a new process.
+    pub fn reinit(&mut self) -> Result<(), Failure> {
+        set_virtual_ms(self.initial_ms);
+        self.state = DiffState::default();
+        self.commands = 0;
+        self.retries = 0;
+        Self::start_up(self.implementation, &mut self.backend, &self.test).map_err(Failure::new)
     }
 
     /// Handles one protocol request.
-    pub fn handle(&mut self, request: Request) -> Result<(), String> {
+    pub fn handle(&mut self, request: Request) -> Result<(), Failure> {
         match request {
             Request::Exchange {
                 locality,
@@ -343,8 +415,11 @@ impl<B: Backend> Server<B> {
                 Ok(())
             }
             Request::Signal(code) => match SimulatorPlatformSignal::try_from(code) {
-                Ok(signal) => self.signal(signal),
-                Err(()) => Err(format!("test `{}`: unknown signal {code}", self.test)),
+                Ok(signal) => self.signal(signal).map_err(Failure::new),
+                Err(()) => Err(Failure::new(format!(
+                    "test `{}`: unknown signal {code}",
+                    self.test
+                ))),
             },
             Request::HashStart => {
                 self.backend.hash_start();
@@ -358,6 +433,7 @@ impl<B: Backend> Server<B> {
                 self.backend.hash_end();
                 Ok(())
             }
+            Request::Reinit => self.reinit(),
         }
     }
 
@@ -395,14 +471,15 @@ impl<B: Backend> Server<B> {
     }
 
     /// Executes `command` (which `tpm-rs` answered with `expected`) on
-    /// the C reference at `locality` and compares the responses.
+    /// the C reference at `locality` and compares the responses; a failure
+    /// carries the C reference's response.
     fn exchange(
         &mut self,
         index: usize,
         locality: u8,
         command: &[u8],
         expected: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), Failure> {
         let test = self.test.as_str();
         let implementation = self.implementation;
         let ref_command = self.state.to_ref_command(command);
@@ -438,15 +515,10 @@ impl<B: Backend> Server<B> {
             expected,
             &actual,
         );
-        track_exception_state(st, command, expected, &actual);
-        match result? {
-            None => {}
-            Some(Resync::MapHandle { rs, c }) => {
-                st.handle_map.retain(|&(r, h)| r != rs && h != c);
-                st.handle_map.push((rs, c));
-            }
-        }
-        Ok(())
+        result.map_err(|message| Failure {
+            message,
+            reference_response: Some(actual),
+        })
     }
 }
 
@@ -454,18 +526,10 @@ impl<B: Backend> Server<B> {
 mod cc {
     pub const PCR_RESET: u32 = 0x0000_013D;
     pub const INCREMENTAL_SELF_TEST: u32 = 0x0000_0142;
-    pub const REWRAP: u32 = 0x0000_0152;
-    pub const NV_DEFINE_SPACE: u32 = 0x0000_012A;
-    pub const NV_UNDEFINE_SPACE: u32 = 0x0000_0122;
-    pub const NV_UNDEFINE_SPACE_SPECIAL: u32 = 0x0000_011F;
-    pub const NV_WRITE: u32 = 0x0000_0137;
-    pub const NV_READ: u32 = 0x0000_014E;
     pub const ECC_PARAMETERS: u32 = 0x0000_0178;
     pub const STARTUP: u32 = 0x0000_0144;
-    pub const FLUSH_CONTEXT: u32 = 0x0000_0165;
     pub const CONTEXT_LOAD: u32 = 0x0000_0161;
     pub const CONTEXT_SAVE: u32 = 0x0000_0162;
-    pub const LOAD_EXTERNAL: u32 = 0x0000_0167;
     pub const GET_CAPABILITY: u32 = 0x0000_017A;
 }
 
@@ -806,14 +870,7 @@ fn capability_list(rsp: &[u8]) -> Option<(u8, u32, Vec<&[u8]>)> {
 /// Exception 2 (`TPM2_GetCapability`): the capability lists may differ
 /// only by the documented implementation-specific entries; every other
 /// entry, the entry order, `moreData` and the selector must be identical.
-fn capability_difference_is_documented(command: &[u8], expected: &[u8], actual: &[u8]) -> bool {
-    let Some((_, params)) = command_parts(command, 0) else {
-        return false;
-    };
-    let (Some(requested_property), Some(requested_count)) = (be32(params, 4), be32(params, 8))
-    else {
-        return false;
-    };
+fn capability_difference_is_documented(expected: &[u8], actual: &[u8]) -> bool {
     let (Some((e_more, e_cap, e)), Some((a_more, a_cap, a))) =
         (capability_list(expected), capability_list(actual))
     else {
@@ -830,36 +887,12 @@ fn capability_difference_is_documented(command: &[u8], expected: &[u8], actual: 
     };
     let none = |_: &[u8]| false;
     match e_cap {
-        // TPM_CAP_HANDLES: the C reference implements the firmware-limited
-        // and SVN-limited hierarchies (TPM_RH_FW_OWNER..TPM_RH_FW_NULL =
-        // 0x40000140..=0x40000143, TPM_RH_SVN_*_BASE = 0x4001xxxx..0x4004xxxx,
-        // TPM 2.0 Library spec 1.83+), which tpm-rs does not.
-        1 => {
-            let fw_or_svn = |x: &[u8]| {
-                be32(x, 0).is_some_and(|h| {
-                    (0x4000_0140..=0x4000_0143).contains(&h)
-                        || (0x4001_0000..=0x4004_FFFF).contains(&h)
-                })
-            };
-            e_more == a_more && keep(&e, &none) == keep(&a, &fw_or_svn)
-        }
-        // TPM_CAP_PCRS: tpm-rs additionally lists the SM3_256 (0x12) and
-        // SHA3_256/384/512 (0x27..0x29) banks with no PCR allocated.
-        5 => {
-            let empty_extra_bank = |x: &[u8]| {
-                matches!(be16(x, 0), Some(0x0012 | 0x0027..=0x0029))
-                    && x[3..].iter().all(|&b| b == 0)
-            };
-            e_more == a_more && keep(&e, &empty_extra_bank) == keep(&a, &none)
-        }
         // TPM_CAP_TPM_PROPERTIES: values of implementation-specific
         // properties may differ; C additionally reports
         // TPM_PT_FIRMWARE_SVN/TPM_PT_FIRMWARE_MAX_SVN (0x12F/0x130, spec
         // 1.83+) and, from version 185 on, TPM_PT_ML_PARAMETER_SETS (0x131)
-        // with no ML-KEM/ML-DSA parameter set implemented (value 0); C never crosses from the PT_FIXED into the PT_VAR group in
-        // one response (PropertyCap.c `TPMCapGetProperties`), so tpm-rs may
-        // additionally report PT_VAR (>= 0x200) properties when the query
-        // started in PT_FIXED. All other properties must match exactly.
+        // with no ML-KEM/ML-DSA parameter set implemented (value 0). All
+        // other properties must match exactly.
         6 => {
             const IMPLEMENTATION_SPECIFIC: &[u32] = &[
                 0x10F, // TPM_PT_HR_PERSISTENT_MIN
@@ -867,14 +900,16 @@ fn capability_difference_is_documented(command: &[u8], expected: &[u8], actual: 
                 0x118, // TPM_PT_MEMORY
                 0x119, // TPM_PT_CLOCK_UPDATE
                 0x11C, // TPM_PT_CONTEXT_SYM_SIZE
-                0x11E, // TPM_PT_MAX_COMMAND_SIZE
                 0x11F, // TPM_PT_MAX_RESPONSE_SIZE
+                // TPM_PT_MAX_OBJECT_CONTEXT/TPM_PT_MAX_SESSION_CONTEXT: the bounds of each
+                // implementation's own context format (exception 1); C reports
+                // SIZE_OF_CONTEXT_OVERHEAD + sizeof(OBJECT)/sizeof(SESSION), tpm-rs the bounds
+                // of its serialization (context_save.rs).
                 0x121, // TPM_PT_MAX_OBJECT_CONTEXT
                 0x122, // TPM_PT_MAX_SESSION_CONTEXT
                 0x12D, // TPM_PT_MODES (vendor certification modes)
             ];
             let prop = |x: &[u8]| be32(x, 0).unwrap_or(0);
-            let rs_only = |x: &[u8]| requested_property < 0x200 && prop(x) >= 0x200;
             let ref_only = |x: &[u8]| {
                 matches!(prop(x), 0x12F | 0x130) || (prop(x) == 0x131 && be32(x, 4) == Some(0))
             };
@@ -888,120 +923,14 @@ fn capability_difference_is_documented(command: &[u8], expected: &[u8], actual: 
                     })
                     .collect()
             };
-            e_more == a_more && mask(keep(&e, &rs_only)) == mask(keep(&a, &ref_only))
-        }
-        // TPM_CAP_AUTH_POLICIES: identical entries; C reports
-        // moreData = YES when the list is full because its firmware/SVN
-        // hierarchy handles (TPM_RH_FW_*/TPM_RH_SVN_*, spec 1.83+, not
-        // implemented by tpm-rs) follow.
-        9 => {
-            keep(&e, &none) == keep(&a, &none)
-                && e_more == 0
-                && a_more == 1
-                && a.len() as u32 == requested_count
+            // C's `moreData` may be YES where tpm-rs's is NO: tpm-rs returned every property
+            // it has from the requested one on, and C's list (equal up to the C-only entries)
+            // was cut by `propertyCount` before or within its C-only tail
+            // (0x12F/0x130/0x131), the only properties C has beyond tpm-rs's last.
+            let more_matches = e_more == a_more || (e_more == 0 && a_more == 1);
+            more_matches && mask(keep(&e, &none)) == mask(keep(&a, &ref_only))
         }
         _ => false,
-    }
-}
-
-/// Exception 5 (`TPM2_NV_Read`): bytes of an NV index that were never
-/// written since the index was defined read as `0x00` in tpm-rs and as
-/// `0xFF` in C (flash-erased backing store). Only those bytes may differ;
-/// every written byte and the rest of the response must match.
-fn nv_read_difference_is_documented(
-    st: &DiffState,
-    command: &[u8],
-    expected: &[u8],
-    actual: &[u8],
-) -> bool {
-    let Some((handles, params)) = command_parts(command, 2) else {
-        return false;
-    };
-    let (Some(size), Some(offset)) = (be16(params, 0), be16(params, 2)) else {
-        return false;
-    };
-    let (Some((start, e)), Some((a_start, a))) = (
-        response_params_at(expected, 0),
-        response_params_at(actual, 0),
-    ) else {
-        return false;
-    };
-    // Everything outside `data.buffer` (header, data size, authorization
-    // area) must be identical.
-    let data_end = start + 2 + size as usize;
-    if expected.len() != actual.len()
-        || start != a_start
-        || be16(e, 0) != Some(size)
-        || be16(a, 0) != Some(size)
-        || expected[..start + 2] != actual[..start + 2]
-        || expected.get(data_end..) != actual.get(data_end..)
-    {
-        return false;
-    }
-    let written = st.nv_written.get(&handles[1]);
-    e[2..2 + size as usize]
-        .iter()
-        .zip(&a[2..2 + size as usize])
-        .enumerate()
-        .all(|(i, (&eb, &ab))| {
-            let unwritten = !written.is_some_and(|w| w.contains(&(offset as usize + i)));
-            eb == ab || (unwritten && eb == 0x00 && ab == 0xFF)
-        })
-}
-
-/// Records state used by the narrowly-scoped exceptions after a command
-/// has run on both implementations.
-fn track_exception_state(st: &mut DiffState, command: &[u8], expected: &[u8], actual: &[u8]) {
-    let (Some((_, code)), Some((_, exp_rc)), Some((_, act_rc))) =
-        (header(command), header(expected), header(actual))
-    else {
-        return;
-    };
-    // A new object that got the same handle in both implementations ends
-    // any stale translation involving that handle.
-    if exp_rc == 0
-        && act_rc == 0
-        && handle_counts(code).is_some_and(|(_, n)| n >= 1)
-        && let (Some(rs), Some(c)) = (be32(expected, 10), be32(actual, 10))
-        && rs == c
-    {
-        st.handle_map.retain(|&(r, h)| r != rs && h != c);
-    }
-    match code {
-        cc::NV_WRITE if exp_rc == 0 && act_rc == 0 => {
-            if let Some((handles, params)) = command_parts(command, 2)
-                && let Some(len) = be16(params, 0)
-                && let Some(offset) = be16(params, 2 + len as usize)
-            {
-                st.nv_written
-                    .entry(handles[1])
-                    .or_default()
-                    .extend(offset as usize..offset as usize + len as usize);
-            }
-        }
-        cc::NV_DEFINE_SPACE if exp_rc == 0 => {
-            // TPM2B_NV_PUBLIC after auth (TPM2B_AUTH): nvIndex is first.
-            if let Some((_, params)) = command_parts(command, 1)
-                && let Some(auth_len) = be16(params, 0)
-                && let Some(index) = be32(params, 2 + auth_len as usize + 2)
-            {
-                st.nv_written.remove(&index);
-            }
-        }
-        cc::NV_UNDEFINE_SPACE | cc::NV_UNDEFINE_SPACE_SPECIAL if exp_rc == 0 => {
-            let index_pos = if code == cc::NV_UNDEFINE_SPACE { 1 } else { 0 };
-            if let Some((handles, _)) = command_parts(command, 2) {
-                st.nv_written.remove(&handles[index_pos]);
-            }
-        }
-        cc::FLUSH_CONTEXT if exp_rc == 0 => {
-            let handle = command_parts(command, 0).and_then(|(_, p)| be32(p, 0));
-            st.handle_map.retain(|&(r, _)| Some(r) != handle);
-        }
-        cc::STARTUP if exp_rc == 0 => {
-            st.handle_map.clear();
-        }
-        _ => {}
     }
 }
 
@@ -1026,14 +955,6 @@ fn log_exception(
     }
 }
 
-/// A C-side state correction the harness must apply after a documented
-/// divergence that left C with state tpm-rs does not have.
-#[derive(Debug)]
-enum Resync {
-    /// Record that tpm-rs transient handle `rs` is C handle `c`.
-    MapHandle { rs: u32, c: u32 },
-}
-
 /// Compares the C reference response (`actual`) with the recorded tpm-rs
 /// response (`expected`): they must be byte-identical, except for the
 /// narrowly-scoped, documented divergences below (each also listed in
@@ -1049,43 +970,14 @@ fn compare_differential_response(
     command: &[u8],
     expected: &[u8],
     actual: &[u8],
-) -> Result<Option<Resync>, String> {
+) -> Result<(), String> {
     if expected == actual {
-        return Ok(None);
+        return Ok(());
     }
     let code = header(command).map(|(_, c)| c).unwrap_or(0);
     let exp_rc = header(expected).map(|(_, rc)| rc);
     let act_rc = header(actual).map(|(_, rc)| rc);
     let same_tag = header(expected).map(|(t, _)| t) == header(actual).map(|(t, _)| t);
-
-    // 11. Transient handle allocation: C loads a persistent object into a
-    //     temporary transient slot for the duration of a command, so an
-    //     object created by a command that references a persistent handle
-    //     gets a different (implementation-defined) handle; afterwards the
-    //     two implementations' slot assignments may stay shifted. Accepted
-    //     only if the returned handle is the sole difference, both handles
-    //     are transient, and the command references a persistent handle or
-    //     a shift is already being tracked. The pair is then recorded and
-    //     later commands are translated (`DiffState::to_ref_command`).
-    if exp_rc == Some(0)
-        && act_rc == Some(0)
-        && expected.len() == actual.len()
-        && handle_counts(code).is_some_and(|(_, n)| n >= 1)
-        && let (Some(rs), Some(c)) = (be32(expected, 10), be32(actual, 10))
-        && rs != c
-        && rs >> 24 == 0x80
-        && c >> 24 == 0x80
-        && expected[..10] == actual[..10]
-        && expected[14..] == actual[14..]
-    {
-        let references_persistent = handle_counts(code)
-            .and_then(|(n, _)| command_parts(command, n))
-            .is_some_and(|(handles, _)| handles.iter().any(|h| h >> 24 == 0x81));
-        if references_persistent || !st.handle_map.is_empty() {
-            log_exception(test, index, code, command, expected, actual);
-            return Ok(Some(Resync::MapHandle { rs, c }));
-        }
-    }
 
     let documented = match (code, exp_rc, act_rc) {
         // 1. TPM2_ContextSave: the `contextBlob` (encrypted OBJECT/SESSION
@@ -1108,7 +1000,7 @@ fn compare_differential_response(
         (cc::GET_CAPABILITY, Some(0), Some(0)) => {
             header(expected).is_some_and(|(tag, _)| tag == 0x8001)
                 && same_tag
-                && capability_difference_is_documented(command, expected, actual)
+                && capability_difference_is_documented(expected, actual)
         }
         // 3. TPM2_ECC_Parameters: tpm-rs pads every curve parameter to the
         //    curve's byte width; C's `CryptEccData.c` constants omit leading
@@ -1153,39 +1045,6 @@ fn compare_differential_response(
             };
             well_formed(expected) && well_formed(actual)
         }
-        // 5. TPM2_NV_Read: see `nv_read_difference_is_documented`.
-        (cc::NV_READ, Some(0), Some(0)) => {
-            same_tag && nv_read_difference_is_documented(st, command, expected, actual)
-        }
-        // 6. TPM2_LoadExternal of a public-only RSA-3072 key: the C profile
-        //    has RSA_3072 = NO (TPM_RC_VALUE + P2), tpm-rs supports it.
-        (cc::LOAD_EXTERNAL, Some(0), Some(0x2C4)) => {
-            command_parts(command, 0).is_some_and(|(_, p)| {
-                // Empty inPrivate, then TPM2B_PUBLIC: size, type (RSA),
-                // nameAlg, objectAttributes, authPolicy, then
-                // TPMS_RSA_PARMS symmetric, scheme and keyBits (3072).
-                be16(p, 0) == Some(0)
-                    && be16(p, 4) == Some(0x0001)
-                    && be16(p, 12).and_then(|policy| {
-                        let mut at = 14 + policy as usize;
-                        at += if be16(p, at)? == 0x0010 { 2 } else { 6 };
-                        at += if matches!(be16(p, at)?, 0x0010 | 0x0015) {
-                            2
-                        } else {
-                            4
-                        };
-                        be16(p, at)
-                    }) == Some(3072)
-            })
-        }
-        // 7. TPM2_Rewrap with an `inDuplicate` larger than C's
-        //    TPM2B_PRIVATE buffer (sized for 2048-bit RSA keys): C rejects
-        //    its size during unmarshaling (TPM_RC_SIZE + P1), tpm-rs
-        //    (TPM2_MAX_PRIVATE_SIZE = 1618) unmarshals it and rejects the
-        //    malformed content (TPM_RC_VALUE + P1).
-        (cc::REWRAP, Some(0x1C4), Some(0x1D5)) => command_parts(command, 2)
-            .and_then(|(_, p)| be16(p, 0))
-            .is_some_and(|size| size > 1350 && size <= 1618),
         // 8. TPM2_PCR_Reset of PCR 16 at a reserved locality (5..=31):
         //    tpm-rs rejects the locality (TPM_RC_LOCALITY); the C
         //    simulator's platform layer (`_plat__LocalitySet`) silently
@@ -1201,7 +1060,15 @@ fn compare_differential_response(
         //    as a malformed blob, but whether the size or the integrity
         //    check fires first depends on the layout (TPM_RC_SIZE + P1 vs
         //    TPM_RC_INTEGRITY + P1).
-        (cc::CONTEXT_LOAD, Some(e @ (0x1D5 | 0x1DF)), Some(a @ (0x1D5 | 0x1DF))) => {
+        //    tpm-rs may also answer `TPM_RC_FAILURE`: a blob from another run
+        //    can be authentic (all implementations share the proofs under one
+        //    seed) and then fail tpm-rs's decrypted fingerprint check, for which
+        //    the specification requires failure mode (TPM 2.0 Part 3,
+        //    TPM2_ContextLoad: "The TPM shall perform a check on the decrypted
+        //    context [...] and enter failure mode if the check fails."); C gets
+        //    the blob with a zeroed integrity value
+        //    (`DiffState::untranslated_context_load`) and rejects it.
+        (cc::CONTEXT_LOAD, Some(e @ (0x1D5 | 0x1DF | 0x101)), Some(a @ (0x1D5 | 0x1DF))) => {
             e != a
                 && command_parts(command, 0).is_some_and(|(_, p)| {
                     // TPMS_CONTEXT: sequence (8), savedHandle (4),
@@ -1217,7 +1084,7 @@ fn compare_differential_response(
     };
     if documented {
         log_exception(test, index, code, command, expected, actual);
-        return Ok(None);
+        return Ok(());
     }
 
     Err(format!(
@@ -1253,7 +1120,6 @@ mod tests {
     fn context_load_of_a_recorded_blob_is_translated() {
         let state = DiffState {
             context_blobs: vec![(vec![1; 40], vec![2; 64]), (vec![3; 10], vec![4; 5])],
-            ..DiffState::default()
         };
         assert_eq!(
             state.to_ref_command(&context_load(&[1; 40])),
@@ -1269,7 +1135,6 @@ mod tests {
     fn context_load_of_another_blob_is_unchanged() {
         let state = DiffState {
             context_blobs: vec![(vec![1; 40], vec![2; 64])],
-            ..DiffState::default()
         };
         for blob in [&[1u8; 39][..], &[1; 41], &[9; 40], &[]] {
             let cmd = context_load(blob);
@@ -1285,7 +1150,6 @@ mod tests {
     fn the_latest_context_save_wins() {
         let state = DiffState {
             context_blobs: vec![(vec![1; 8], vec![2; 8]), (vec![1; 8], vec![5; 9])],
-            ..DiffState::default()
         };
         assert_eq!(
             state.to_ref_command(&context_load(&[1; 8])),
@@ -1293,16 +1157,164 @@ mod tests {
         );
     }
 
+    /// A backend that records what it is asked to do and answers every
+    /// command with a fixed response.
+    #[derive(Default)]
+    struct MockBackend {
+        /// The virtual clock at every `init`.
+        inits: Vec<u64>,
+        /// Every command executed.
+        commands: Vec<Vec<u8>>,
+        /// The response to every command but `TPM2_Startup`.
+        response: Vec<u8>,
+    }
+
+    impl Backend for MockBackend {
+        fn init(&mut self) {
+            self.inits.push(virtual_ms());
+        }
+        fn advance_clock(&mut self, _ms: u64) {}
+        fn signal(&mut self, _signal: Signal) {}
+        fn hash_start(&mut self) {}
+        fn hash_data(&mut self, _data: &[u8]) {}
+        fn hash_end(&mut self) {}
+        fn run_command(&mut self, _locality: u8, command: &[u8]) -> Vec<u8> {
+            self.commands.push(command.to_vec());
+            if header(command).map(|(_, code)| code) == Some(cc::STARTUP) {
+                vec![0x80, 0x01, 0, 0, 0, 10, 0, 0, 0, 0]
+            } else {
+                self.response.clone()
+            }
+        }
+    }
+
+    /// `TPM2_GetRandom(8)`.
+    const GET_RANDOM_8: [u8; 12] = [0x80, 0x01, 0, 0, 0, 12, 0, 0, 0x01, 0x7B, 0, 8];
+
+    /// Holds [`VIRTUAL_CLOCK_TEST_LOCK`]: the test sets the process-global virtual clock.
     #[test]
-    fn mapped_transient_handles_are_translated() {
-        let state = DiffState {
-            handle_map: vec![(0x8000_0001, 0x8000_0005)],
-            ..DiffState::default()
+    fn reinit_restarts_the_reference_like_a_new_process() {
+        let _clock = VIRTUAL_CLOCK_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        set_virtual_ms(5_000);
+        let backend = MockBackend {
+            response: vec![0x80, 0x01, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0],
+            ..MockBackend::default()
         };
-        // TPM2_ReadPublic(0x80000001).
-        let cmd = [0x80, 0x01, 0, 0, 0, 14, 0, 0, 0x01, 0x73, 0x80, 0, 0, 1];
+        let mut server = Server::new(Implementation::Mstpm20, backend, "reinit".into()).unwrap();
+        assert_eq!(server.backend.inits, [5_000]);
+        server.handle(Request::AdvanceClock(250)).unwrap();
+        assert_eq!(virtual_ms(), 5_250);
+        server.state.context_blobs.push((vec![1], vec![2]));
+        // A diverging command fails with the reference's response.
+        let failure = server
+            .handle(Request::Exchange {
+                locality: 0,
+                command: GET_RANDOM_8.to_vec(),
+                expected: vec![0x80, 0x01, 0, 0, 0, 10, 0, 0, 0x01, 0x01],
+            })
+            .unwrap_err();
+        assert_eq!(
+            failure.reference_response,
+            Some(server.backend.response.clone())
+        );
+        assert_eq!(server.commands, 1);
+
+        server.handle(Request::Reinit).unwrap();
+        assert_eq!(virtual_ms(), 5_000, "the clock returns to the seed time");
+        assert_eq!(server.backend.inits, [5_000, 5_000]);
+        assert_eq!(server.commands, 0);
+        assert!(server.state.context_blobs.is_empty());
+        let codes: Vec<u32> = server
+            .backend
+            .commands
+            .iter()
+            .filter_map(|c| header(c).map(|(_, code)| code))
+            .collect();
+        assert_eq!(codes, [cc::STARTUP, 0x17B, cc::STARTUP]);
+        // A matching command succeeds after the re-initialization.
+        let expected = server.backend.response.clone();
+        server
+            .handle(Request::Exchange {
+                locality: 0,
+                command: GET_RANDOM_8.to_vec(),
+                expected,
+            })
+            .unwrap();
+        reinit_reports_a_failed_startup();
+    }
+
+    /// A failed `TPM2_Startup` fails the re-initialization (part of
+    /// [`reinit_restarts_the_reference_like_a_new_process`], which holds the
+    /// virtual clock lock).
+    fn reinit_reports_a_failed_startup() {
+        struct FailingStartup(bool);
+        impl Backend for FailingStartup {
+            fn init(&mut self) {}
+            fn advance_clock(&mut self, _ms: u64) {}
+            fn signal(&mut self, _signal: Signal) {}
+            fn hash_start(&mut self) {}
+            fn hash_data(&mut self, _data: &[u8]) {}
+            fn hash_end(&mut self) {}
+            fn run_command(&mut self, _locality: u8, _command: &[u8]) -> Vec<u8> {
+                let rc = if self.0 { 0x100u32 } else { 0 };
+                let mut rsp = vec![0x80, 0x01, 0, 0, 0, 10];
+                rsp.extend_from_slice(&rc.to_be_bytes());
+                rsp
+            }
+        }
+        let mut server =
+            Server::new(Implementation::Ibmswtpm2, FailingStartup(false), "t".into()).unwrap();
+        server.backend.0 = true;
+        let failure = server.reinit().unwrap_err();
+        assert!(failure.message.contains("TPM2_Startup"), "{failure:?}");
+        assert_eq!(failure.reference_response, None);
+    }
+
+    /// A `TPM2_ContextLoad` whose `commandSize` is not its length is sent
+    /// unchanged, even if its blob is a known tpm-rs blob, so C sees the
+    /// same malformed size.
+    #[test]
+    fn context_load_with_wrong_command_size_is_not_translated() {
+        let state = DiffState {
+            context_blobs: vec![(vec![0xAA], vec![0xBB, 0xCC])],
+        };
+        // TPM2_ContextLoad: sequence, savedHandle, hierarchy, blob {0xAA}.
+        let mut cmd = vec![0x80, 0x01, 0, 0, 0, 0, 0, 0, 0x01, 0x61];
+        cmd.extend_from_slice(&[0; 16]);
+        cmd.extend_from_slice(&[0, 1, 0xAA]);
+        let len = cmd.len() as u32;
+        cmd[2..6].copy_from_slice(&len.to_be_bytes());
+        let translated = state.to_ref_command(&cmd);
+        assert_eq!(translated[translated.len() - 4..], [0, 2, 0xBB, 0xCC]);
+        assert_eq!(be32(&translated, 2), Some(len + 1));
+        cmd[2..6].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(state.to_ref_command(&cmd), cmd);
+        // Bytes after the context: sent unchanged too.
+        cmd.push(0);
+        let len = cmd.len() as u32;
+        cmd[2..6].copy_from_slice(&len.to_be_bytes());
+        assert_eq!(state.to_ref_command(&cmd), cmd);
+    }
+
+    /// A `TPM2_ContextLoad` blob that is not one tpm-rs saved reaches C with
+    /// a zeroed integrity value, so C cannot authenticate tpm-rs's contents.
+    #[test]
+    fn untranslated_context_blob_is_unauthentic_for_the_reference() {
+        let state = DiffState::default();
+        // TPM2_ContextLoad: sequence, savedHandle, hierarchy, blob {integrity {0x11, 0x22}, 0x33}.
+        let mut cmd = vec![0x80, 0x01, 0, 0, 0, 0, 0, 0, 0x01, 0x61];
+        cmd.extend_from_slice(&[0; 16]);
+        cmd.extend_from_slice(&[0, 5, 0, 2, 0x11, 0x22, 0x33]);
+        let len = cmd.len() as u32;
+        cmd[2..6].copy_from_slice(&len.to_be_bytes());
         let out = state.to_ref_command(&cmd);
-        assert_eq!(out[..10], cmd[..10]);
-        assert_eq!(out[10..], [0x80, 0, 0, 5]);
+        assert_eq!(out[..cmd.len() - 3], cmd[..cmd.len() - 3]);
+        assert_eq!(out[cmd.len() - 3..], [0, 0, 0x33]);
+        // A tampered integrity value is not turned back into the authentic one.
+        let n = cmd.len();
+        cmd[n - 3] ^= 0xFF;
+        assert_eq!(state.to_ref_command(&cmd)[n - 3..], [0, 0, 0x33]);
     }
 }

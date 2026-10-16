@@ -1,0 +1,39 @@
+persistent-copy-handle-alias: a transient handle must not resolve to a persistent object's RAM copy
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, "Handle Area Validation"): "2. For all handles in
+the handle area of the command, the TPM will validate that the referenced
+entity is present in the TPM. 1. If the handle references a transient object,
+the handle shall reference a loaded object (`TPM_RC_REFERENCE_H0` + N where N
+is the number of the handle in the command)."
+
+EntityGetLoadStatus() checks the handles in order and, for a persistent handle,
+ObjectLoadEvict() copies the object into the lowest free object slot for the
+duration of the command and replaces the handle with that slot's transient
+handle. A later transient handle of the same command that names that slot
+(e.g. TPM2_Duplicate(0x81000200, 0x80000000) with no object loaded at
+0x80000000) then passes IsObjectPresent() and silently refers to the persistent
+object, instead of failing with TPM_RC_REFERENCE_H1: no object was loaded at
+that handle. tpm-rs returns TPM_RC_REFERENCE_H0 + N. The check now also rejects
+a slot that only holds such a per-command copy (attributes.evict SET; a
+transient object loaded with TPM2_Load/CreatePrimary/ContextLoad never has it).
+Found by differential fuzzing.
+diff --git a/TPMCmd/tpm/src/support/Entity.c b/TPMCmd/tpm/src/support/Entity.c
+--- a/TPMCmd/tpm/src/support/Entity.c
++++ b/TPMCmd/tpm/src/support/Entity.c
+@@ -71,7 +71,13 @@
+             case TPM_HT_TRANSIENT:
+                 // For a transient object, check if the handle is associated
+                 // with a loaded object.
+-                if(!IsObjectPresent(handle))
++                // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++                // a transient handle must reference a loaded object, not the slot that only
++                // holds the per-command RAM copy of a persistent object (ObjectLoadEvict)
++                // loaded for an earlier handle of this command (Part 3, "Handle Area
++                // Validation").
++                if(!IsObjectPresent(handle)
++                   || HandleToObject(handle)->attributes.evict == SET)
+                     result = TPM_RC_REFERENCE_H0;
+                 break;
+             case TPM_HT_PERSISTENT:

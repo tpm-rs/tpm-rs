@@ -208,3 +208,146 @@ fn policy_signed_auth_object_must_be_object() {
         );
     }
 }
+
+/// Every handle is type-checked before any is checked for presence, as the C reference
+/// unmarshals the whole handle area (`ParseHandleBuffer`) before `EntityGetLoadStatus`: an
+/// invalid second handle is reported before an unloaded first one (found by differential
+/// fuzzing).
+#[test]
+fn invalid_handle_type_is_reported_before_unloaded_handle() {
+    const CC_CERTIFY_CREATION: u32 = 0x0000_014A;
+    const ST_SESSIONS: u16 = 0x8002;
+    let mut sim = Tpm::new();
+    // `TPM2_CertifyCreation(signHandle = unloaded 0x80000000, objectHandle = 0)`, without an
+    // authorization area.
+    let cmd = build_raw_cmd(
+        ST_SESSIONS,
+        CC_CERTIFY_CREATION,
+        &[0x8000_0000, 0],
+        None,
+        &[],
+    );
+    // `TPM_RC_VALUE + TPM_RC_H + TPM_RC_2`.
+    assert_eq!(mssim_rc_of(&mut sim, &cmd), 0x284);
+    // With a valid second handle type, the unloaded first handle is reported.
+    let cmd = build_raw_cmd(
+        ST_NO_SESSIONS,
+        CC_CERTIFY_CREATION,
+        &[0x8000_0000, 0x8000_0001],
+        None,
+        &[],
+    );
+    assert_eq!(mssim_rc_of(&mut sim, &cmd), TpmRc::REFERENCE_H0.get());
+}
+
+/// Every handle is unmarshaled as the interface type of its position (Part 3) before any entity
+/// is looked up, so a value outside the type is `TPM_RC_VALUE` at the first such position,
+/// whatever the later handles are (found by differential fuzzing; the TCG reference needed
+/// `bug-fix` patches for `TPM2_CreateLoaded` and `TPM2_RSA_Decrypt`).
+#[test]
+fn handles_outside_their_interface_type_are_value_errors() {
+    const TPM_RC_VALUE_H1: u32 = 0x184;
+    let cases: [(&str, &[u8]); 9] = [
+        // TPM2_NV_Read(authHandle = TPM_RS_PW, nvIndex = 0): TPMI_RH_NV_AUTH.
+        (
+            "NV_Read",
+            &[
+                0x80, 0x02, 0, 0, 0, 0x12, 0, 0, 0x01, 0x4E, 0x40, 0, 0, 0x09, 0, 0, 0, 0,
+            ],
+        ),
+        // TPM2_PolicySecret(authHandle = 0x0B000000, policySession = 0): TPMI_DH_ENTITY.
+        (
+            "PolicySecret",
+            &[
+                0x80, 0x02, 0, 0, 0, 0x12, 0, 0, 0x01, 0x51, 0x0B, 0, 0, 0, 0, 0, 0, 0,
+            ],
+        ),
+        // TPM2_NV_ReadPublic(0x81800000): TPMI_RH_NV_INDEX.
+        (
+            "NV_ReadPublic",
+            &[
+                0x80, 0x01, 0, 0, 0, 0x0E, 0, 0, 0x01, 0x69, 0x81, 0x80, 0, 0,
+            ],
+        ),
+        // TPM2_CreateLoaded(parentHandle = TPM_RS_PW, 0, an NV Index, TPM_RH_AUTH_00,
+        // TPM_RH_LOCKOUT): TPMI_DH_PARENT.
+        (
+            "CreateLoaded(TPM_RS_PW)",
+            &[
+                0x80, 0x01, 0, 0, 0, 0x0E, 0, 0, 0x01, 0x91, 0x40, 0, 0, 0x09,
+            ],
+        ),
+        (
+            "CreateLoaded(0)",
+            &[0x80, 0x01, 0, 0, 0, 0x0E, 0, 0, 0x01, 0x91, 0, 0, 0, 0],
+        ),
+        (
+            "CreateLoaded(NV)",
+            &[0x80, 0x01, 0, 0, 0, 0x0E, 0, 0, 0x01, 0x91, 0x01, 0, 0, 0],
+        ),
+        (
+            "CreateLoaded(TPM_RH_AUTH_00)",
+            &[
+                0x80, 0x01, 0, 0, 0, 0x0E, 0, 0, 0x01, 0x91, 0x40, 0, 0, 0x10,
+            ],
+        ),
+        (
+            "CreateLoaded(TPM_RH_LOCKOUT)",
+            &[
+                0x80, 0x01, 0, 0, 0, 0x0E, 0, 0, 0x01, 0x91, 0x40, 0, 0, 0x0A,
+            ],
+        ),
+        // TPM2_RSA_Decrypt(keyHandle = TPM_RH_NULL): TPMI_DH_OBJECT without '+'.
+        (
+            "RSA_Decrypt",
+            &[
+                0x80, 0x01, 0, 0, 0, 0x0E, 0, 0, 0x01, 0x59, 0x40, 0, 0, 0x07,
+            ],
+        ),
+    ];
+    let mut sim = Tpm::new();
+    for (name, cmd) in cases {
+        assert_eq!(mssim_rc_of(&mut sim, cmd), TPM_RC_VALUE_H1, "{name}");
+    }
+}
+
+/// External (`0x11xxxxxx`) and permanent (`0x12xxxxxx`) NV Indexes are valid `TPMI_RH_NV_INDEX`
+/// values (TPM 2.0 Part 2, Table "Definition of (TPM_HANDLE) TPMI_RH_NV_INDEX Type":
+/// "{EXTERNAL_NV_FIRST:EXTERNAL_NV_LAST} | range of external NV Indexes" and
+/// "{PERMANENT_NV_FIRST:PERMANENT_NV_LAST} | range of permanent NV Indexes"), so they pass handle
+/// unmarshaling; this TPM does not implement them, so their load status check fails with
+/// `TPM_RC_VALUE` at their position, in handle order after the earlier handles.
+#[test]
+fn external_and_permanent_nv_indexes_are_unmarshaled_but_not_implemented() {
+    const CC_NV_WRITE_LOCK: u32 = 0x0000_0138;
+    const CC_NV_READ_PUBLIC: u32 = 0x0000_0169;
+    let mut sim = crate::_common::Tpm::new();
+    // An undefined NV Index as authHandle is reported first.
+    let cmd = crate::_common::build(
+        0x8002,
+        CC_NV_WRITE_LOCK,
+        &[0x0100_0000, 0x1100_7100],
+        Some(&crate::_common::PW_SESSION),
+        &[],
+    );
+    assert_eq!(
+        crate::_common::rc_of(&sim.send_command(0, &cmd)),
+        rc_h(TpmRc::HANDLE, 1)
+    );
+    let cmd = crate::_common::build(
+        0x8002,
+        CC_NV_WRITE_LOCK,
+        &[Handle::RH_OWNER.0, 0x1100_7100],
+        Some(&crate::_common::PW_SESSION),
+        &[],
+    );
+    assert_eq!(
+        crate::_common::rc_of(&sim.send_command(0, &cmd)),
+        rc_h(TpmRc::VALUE, 2)
+    );
+    let cmd = crate::_common::build(0x8001, CC_NV_READ_PUBLIC, &[0x1200_0001], None, &[]);
+    assert_eq!(
+        crate::_common::rc_of(&sim.send_command(0, &cmd)),
+        rc_h(TpmRc::VALUE, 1)
+    );
+}

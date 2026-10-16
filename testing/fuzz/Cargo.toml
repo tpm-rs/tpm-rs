@@ -1,0 +1,58 @@
+# Differential fuzzing of tpm-rs against the C reference TPMs (`cargo fuzz`).
+#
+# One fuzz input is a multi-round conversation with a fresh, started TPM;
+# every command goes to tpm-rs and to every C reference (`testing` with its
+# `differential` feature), and any undocumented response difference is a
+# finding. Build and run from the repository root:
+#
+#   cargo fuzz build --fuzz-dir testing/fuzz
+#   cargo fuzz run --fuzz-dir testing/fuzz diff_conversation
+#
+# The crate is its own workspace (and excluded from the root workspace), so
+# the root `cargo test`/`cargo clippy` are unaffected by its nightly-only,
+# sanitizer-instrumented build.
+
+[package]
+name = "tpm2-fuzz"
+description = "Differential fuzzing of tpm-rs against the C reference TPMs"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+arbitrary = { version = "1.4.2", features = ["derive"] }
+testing = { path = "..", features = ["differential"] }
+# The features are unified with those `testing` enables.
+tpm2 = { path = "../../crates/tpm2" }
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# Mirror to the C references linked into the fuzzer process (`testing`'s
+# `fuzz-inproc`) instead of reference processes: no pipe round trips and no
+# MSTPM20_BIN/IBMSWTPM2_BIN needed (`cargo fuzz build --features inproc`).
+inproc = ["testing/fuzz-inproc"]
+
+[[bin]]
+name = "diff_conversation"
+path = "fuzz_targets/diff_conversation.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
+
+[profile.release]
+# Symbols for readable crash stack traces.
+debug = 1
+
+# Like the root workspace: the BoringSSL backend builds the in-tree bssl-sys.
+[patch."https://boringssl.googlesource.com/boringssl"]
+bssl-sys = { path = "../../crates/tpm2-crypto/bssl/bssl-sys" }

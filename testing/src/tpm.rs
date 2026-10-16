@@ -40,6 +40,13 @@
 //! test sends may differ between runs, unless `TPM_REFERENCE_SEED` is set, in
 //! which case it is derived from the seed and the test name; the references
 //! always receive exactly the commands `tpm-rs` received.
+//!
+//! For fuzzing, [`Tpm::with_seed`] fixes the seed explicitly,
+//! [`Tpm::try_exchange`] reports a diverging command as an error instead of
+//! panicking, and [`Tpm::reset`] returns the `Tpm` (and its reference
+//! processes, without launching new ones) to the state of a new `Tpm` with
+//! the same seed. With `TPM_FUZZ_RECORD_DIR` set, every `Tpm` records its
+//! commands and responses (see [`trace`]).
 
 use std::cell::Cell;
 use std::io::Cursor;
@@ -50,6 +57,44 @@ use tpm2::commands::Command;
 use tpm2_simulator::{NO_STREAM, PlatformConnection, Simulator, create_reference_simulator};
 
 pub use tpm2_simulator::{ExecuteError, SimulatorPlatformSignal};
+
+use self::trace::{Event, Recorder};
+use crate::seed::{ReferenceSeed, SEED_ENV};
+
+pub mod trace;
+
+/// Why [`Tpm::try_exchange`] failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SendError {
+    /// The simulator rejected the command at the transport level (e.g. an
+    /// oversized buffer); it was neither executed nor mirrored.
+    Transport(String),
+    /// `tpm-rs` executed the command, but the responses of these references
+    /// differ from its response other than as documented (or a reference
+    /// failed). Every reference executed the command; continue with
+    /// [`Tpm::reset`] (or drop the `Tpm`).
+    #[cfg(feature = "differential")]
+    Divergence {
+        /// The `tpm-rs` response.
+        response: Vec<u8>,
+        /// The diverging references.
+        divergences: Vec<crate::differential::Divergence>,
+    },
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transport(e) => write!(f, "TPM transport error: {e}"),
+            #[cfg(feature = "differential")]
+            Self::Divergence { divergences, .. } => {
+                f.write_str(&crate::differential::join_messages(divergences))
+            }
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
 
 /// MSSIM `TPM_SIGNAL_HASH_START`.
 const TPM_SIGNAL_HASH_START: u32 = 5;
@@ -82,11 +127,82 @@ pub fn sleep(duration: Duration) {
 pub struct Tpm {
     /// The `tpm-rs` simulator, whose responses the tests see.
     sim: Simulator<'static>,
+    /// The seed `sim` and the references were built from.
+    seed: ReferenceSeed,
     /// The value of this thread's [`sleep`] clock last applied to the TPMs.
     clock_ms: u64,
     /// The C reference TPMs mirroring `sim`.
     #[cfg(feature = "differential")]
-    references: crate::differential::References,
+    references: Mirror,
+    /// The trace file, with `TPM_FUZZ_RECORD_DIR` (see [`trace`]).
+    recorder: Option<Recorder>,
+}
+
+/// The C reference TPMs mirroring a [`Tpm`]: reference processes, or (with
+/// `fuzz-inproc`) the C references linked into this process.
+#[cfg(feature = "differential")]
+enum Mirror {
+    /// One child process per reference ([`crate::differential::References`]).
+    Processes(crate::differential::References),
+    /// The in-process references
+    /// ([`crate::differential::inproc::InProcReferences`]).
+    #[cfg(feature = "fuzz-inproc")]
+    InProcess(crate::differential::inproc::InProcReferences),
+}
+
+/// Forwards a method call to the references of a [`Mirror`].
+#[cfg(feature = "differential")]
+macro_rules! dispatch {
+    ($mirror:expr, $r:ident => $call:expr) => {
+        match $mirror {
+            Mirror::Processes($r) => $call,
+            #[cfg(feature = "fuzz-inproc")]
+            Mirror::InProcess($r) => $call,
+        }
+    };
+}
+
+#[cfg(feature = "differential")]
+impl Mirror {
+    /// The names of the references, comma-separated.
+    fn names(&self) -> String {
+        let names: Vec<&str> =
+            dispatch!(self, r => r.implementations().map(|i| i.name()).collect());
+        names.join(", ")
+    }
+
+    fn reinit(&mut self) {
+        dispatch!(self, r => r.reinit())
+    }
+
+    fn advance_clock(&mut self, ms: u64) {
+        dispatch!(self, r => r.advance_clock(ms))
+    }
+
+    fn signal(&mut self, signal: SimulatorPlatformSignal) {
+        dispatch!(self, r => r.signal(signal))
+    }
+
+    fn hash_start(&mut self) {
+        dispatch!(self, r => r.hash_start())
+    }
+
+    fn hash_data(&mut self, data: &[u8]) {
+        dispatch!(self, r => r.hash_data(data))
+    }
+
+    fn hash_end(&mut self) {
+        dispatch!(self, r => r.hash_end())
+    }
+
+    fn try_exchange(
+        &mut self,
+        locality: u8,
+        command: &[u8],
+        expected: &[u8],
+    ) -> Result<(), Vec<crate::differential::Divergence>> {
+        dispatch!(self, r => r.try_exchange(locality, command, expected))
+    }
 }
 
 impl Default for Tpm {
@@ -104,29 +220,105 @@ impl Tpm {
     /// TPM's seed, so `Tpm`s are fully independent (across threads and
     /// within one test).
     pub fn new() -> Self {
-        use crate::seed::{ReferenceSeed, SEED_ENV};
-        let seed = ReferenceSeed::choose();
+        Self::with_seed(ReferenceSeed::choose())
+    }
+
+    /// Like [`Self::new`], but with the given seed of the TPM's random number
+    /// generation (instead of [`ReferenceSeed::choose`], so `TPM_REFERENCE_SEED`
+    /// is not consulted).
+    ///
+    /// Two `Tpm`s with the same seed that receive the same interactions give
+    /// byte-identical responses (`tpm-rs` and every C reference alike), which
+    /// is what makes a fuzz input reproducible: a fuzzer uses one fixed seed
+    /// for every input.
+    pub fn with_seed(seed: ReferenceSeed) -> Self {
         #[cfg(feature = "differential")]
-        let references =
-            crate::differential::References::launch(crate::differential::selected(), seed);
+        let references = Mirror::Processes(crate::differential::References::launch(
+            crate::differential::selected(),
+            seed,
+        ));
+        Self::from_parts(
+            seed,
+            #[cfg(feature = "differential")]
+            references,
+        )
+    }
+
+    /// Like [`Self::with_seed`], but mirrored to the C references linked
+    /// into this process ([`crate::differential::inproc::InProcReferences`])
+    /// instead of reference processes, which saves the pipe round trips of
+    /// every interaction (for single-threaded fuzzing).
+    ///
+    /// # Panics
+    /// If another in-process-mirrored `Tpm` is alive in this process (the C
+    /// references keep their state in globals).
+    #[cfg(feature = "fuzz-inproc")]
+    pub fn with_seed_in_process(seed: ReferenceSeed) -> Self {
+        let references = Mirror::InProcess(crate::differential::inproc::InProcReferences::launch(
+            crate::differential::selected(),
+            seed,
+        ));
+        Self::from_parts(seed, references)
+    }
+
+    /// A new `Tpm` with `seed` mirrored to `references`, which are already
+    /// seeded with it.
+    fn from_parts(
+        seed: ReferenceSeed,
+        #[cfg(feature = "differential")] references: Mirror,
+    ) -> Self {
         // Shown with the output of a failing test: setting the variable
         // reproduces this TPM's random values.
         #[cfg(feature = "differential")]
         eprintln!(
             "tpm-rs: {SEED_ENV}={seed} (compared with {})",
-            references
-                .implementations()
-                .map(|i| i.name())
-                .collect::<Vec<_>>()
-                .join(", ")
+            references.names()
         );
         #[cfg(not(feature = "differential"))]
         eprintln!("tpm-rs: {SEED_ENV}={seed}");
         Self {
             sim: create_reference_simulator!(seed.pid, seed.realtime_ms),
+            seed,
             clock_ms: THREAD_CLOCK_MS.with(Cell::get),
             #[cfg(feature = "differential")]
             references,
+            recorder: Recorder::from_env(seed),
+        }
+    }
+
+    /// The seed of this TPM's random number generation.
+    pub fn seed(&self) -> ReferenceSeed {
+        self.seed
+    }
+
+    /// Returns the TPM to the state of a new `Tpm` with the same seed
+    /// ([`Self::with_seed`]`(self.seed())`): powered on, NV available,
+    /// `TPM2_Startup(TPM_SU_CLEAR)` done, virtual clock at the seed's real
+    /// time, and the same random values ahead.
+    ///
+    /// The `tpm-rs` simulator is reset in place
+    /// (`Simulator::reset_reference`, which reuses its allocations, so
+    /// resetting leaks nothing); with `differential`, the existing references
+    /// are re-initialized in place (no process is launched) and their
+    /// comparison state is cleared. Time this thread let pass via [`sleep`]
+    /// before the reset does not apply to the reset TPM.
+    ///
+    /// # Panics
+    /// With `differential`, if a reference fails to re-initialize or its
+    /// process died.
+    pub fn reset(&mut self) {
+        self.record(&Event::Reset);
+        self.sim
+            .reset_reference(self.seed.pid, self.seed.realtime_ms);
+        self.clock_ms = THREAD_CLOCK_MS.with(Cell::get);
+        #[cfg(feature = "differential")]
+        self.references.reinit();
+    }
+
+    /// Appends `event` to the trace, if one is recorded.
+    fn record(&mut self, event: &Event) {
+        if let Some(recorder) = &mut self.recorder {
+            recorder.record(event);
         }
     }
 
@@ -139,6 +331,7 @@ impl Tpm {
             return;
         }
         self.clock_ms = now;
+        self.record(&Event::AdvanceClock(ms));
         assert!(
             self.sim.advance_clock(ms),
             "the simulator has no virtual clock"
@@ -148,13 +341,45 @@ impl Tpm {
     }
 
     /// Sends `command` at `locality` to `tpm-rs` (MSSIM `TPM_SEND_COMMAND`)
-    /// and, with `differential`, to the C reference, comparing the
+    /// and, with `differential`, to every C reference, comparing the
     /// responses.
+    ///
     /// Returns the `tpm-rs` response (empty while the TPM is powered off), or
-    /// an error if the simulator rejected the command at the transport level
-    /// (e.g. an oversized buffer), in which case it is not mirrored.
-    fn try_send_command(&mut self, locality: u8, command: &[u8]) -> Result<Vec<u8>, String> {
+    /// [`SendError::Transport`] if the simulator rejected the command at the
+    /// transport level (e.g. an oversized buffer), in which case it is not
+    /// mirrored, or [`SendError::Divergence`] if a reference's response
+    /// differs other than as documented. Unlike [`Self::send_command`] it
+    /// never panics on a divergence, so a fuzzer can classify it.
+    pub fn try_exchange(&mut self, locality: u8, command: &[u8]) -> Result<Vec<u8>, SendError> {
         self.sync_clock();
+        let response = match self.run_on_simulator(locality, command) {
+            Ok(response) => response,
+            Err(e) => {
+                self.record(&Event::Rejected {
+                    locality,
+                    command: command.to_vec(),
+                });
+                return Err(SendError::Transport(e));
+            }
+        };
+        self.record(&Event::Command {
+            locality,
+            command: command.to_vec(),
+            response: response.clone(),
+        });
+        #[cfg(feature = "differential")]
+        if let Err(divergences) = self.references.try_exchange(locality, command, &response) {
+            return Err(SendError::Divergence {
+                response,
+                divergences,
+            });
+        }
+        Ok(response)
+    }
+
+    /// Executes `command` at `locality` on the `tpm-rs` simulator only; its
+    /// response, or the simulator's transport-level rejection.
+    fn run_on_simulator(&mut self, locality: u8, command: &[u8]) -> Result<Vec<u8>, String> {
         let mut input = vec![locality];
         input.extend_from_slice(&(command.len() as u32).to_be_bytes());
         input.extend_from_slice(command);
@@ -169,13 +394,26 @@ impl Tpm {
             .get(..4)
             .map(|l| u32::from_be_bytes([l[0], l[1], l[2], l[3]]) as usize)
             .ok_or("simulator wrote no response length")?;
-        let response = out
+        Ok(out
             .get(4..4 + len)
             .ok_or("truncated simulator response")?
-            .to_vec();
-        #[cfg(feature = "differential")]
-        self.references.exchange(locality, command, &response);
-        Ok(response)
+            .to_vec())
+    }
+
+    /// Like [`Self::try_exchange`], but only transport-level rejections are
+    /// returned (as an error message, the command was neither executed nor
+    /// mirrored); the `tpm-rs` response otherwise.
+    ///
+    /// # Panics
+    /// With `differential`, if a reference's response differs other than as
+    /// documented.
+    pub fn try_send_command(&mut self, locality: u8, command: &[u8]) -> Result<Vec<u8>, String> {
+        match self.try_exchange(locality, command) {
+            Ok(response) => Ok(response),
+            Err(SendError::Transport(e)) => Err(e),
+            #[cfg(feature = "differential")]
+            Err(e @ SendError::Divergence { .. }) => panic!("{e}"),
+        }
     }
 
     /// Sends the raw command buffer `command` at `locality` and returns the
@@ -207,6 +445,7 @@ impl Tpm {
     /// With `differential`, if a C reference TPM does not support `signal`.
     pub fn signal_platform(&mut self, signal: SimulatorPlatformSignal) -> Result<(), String> {
         self.sync_clock();
+        self.record(&Event::Signal(format!("{signal:?}")));
         self.sim
             .signal_platform(signal, NO_STREAM)
             .map_err(|e| e.to_string())?;
@@ -215,10 +454,11 @@ impl Tpm {
         Ok(())
     }
 
-    /// Sends a `_TPM_Hash_*` indication (MSSIM command `code` with `payload`)
-    /// to `tpm-rs`.
-    fn hash_indication(&mut self, code: u32, payload: Vec<u8>) {
+    /// Sends a `_TPM_Hash_*` indication (MSSIM command `code` with `payload`,
+    /// recorded as `event`) to `tpm-rs`.
+    fn hash_indication(&mut self, code: u32, payload: Vec<u8>, event: Event) {
         self.sync_clock();
+        self.record(&event);
         self.sim
             .transact_platform(code, &mut Cursor::new(payload))
             .unwrap_or_else(|e| panic!("TPM transport error: {e}"));
@@ -226,7 +466,7 @@ impl Tpm {
 
     /// Sends the `_TPM_Hash_Start` indication.
     pub fn hash_start(&mut self) {
-        self.hash_indication(TPM_SIGNAL_HASH_START, Vec::new());
+        self.hash_indication(TPM_SIGNAL_HASH_START, Vec::new(), Event::HashStart);
         #[cfg(feature = "differential")]
         self.references.hash_start();
     }
@@ -235,14 +475,18 @@ impl Tpm {
     pub fn hash_data(&mut self, data: &[u8]) {
         let mut payload = (data.len() as u32).to_be_bytes().to_vec();
         payload.extend_from_slice(data);
-        self.hash_indication(TPM_SIGNAL_HASH_DATA, payload);
+        self.hash_indication(
+            TPM_SIGNAL_HASH_DATA,
+            payload,
+            Event::HashData(data.to_vec()),
+        );
         #[cfg(feature = "differential")]
         self.references.hash_data(data);
     }
 
     /// Sends the `_TPM_Hash_End` indication.
     pub fn hash_end(&mut self) {
-        self.hash_indication(TPM_SIGNAL_HASH_END, Vec::new());
+        self.hash_indication(TPM_SIGNAL_HASH_END, Vec::new(), Event::HashEnd);
         #[cfg(feature = "differential")]
         self.references.hash_end();
     }

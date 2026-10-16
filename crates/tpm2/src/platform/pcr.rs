@@ -53,7 +53,9 @@ pub struct PcrState {
 
 impl Default for PcrState {
     fn default() -> Self {
-        let pcr_allocation = crate::TpmlPcrSelection::from_slice(&[
+        // Every bank of an implemented hash, without the hashes an installed unmarshal profile
+        // (`crate::profile`) excludes: the TPM does not implement those.
+        let banks = [
             #[cfg(feature = "sha1")]
             crate::TpmsPcrSelection::new(crate::TpmiAlgHash::Sha1, &[0xFF, 0xFF, 0xFF]).unwrap(),
             #[cfg(feature = "sha256")]
@@ -73,8 +75,16 @@ impl Default for PcrState {
             #[cfg(feature = "sha3_512")]
             crate::TpmsPcrSelection::new(crate::TpmiAlgHash::Sha3_512, &[0x00, 0x00, 0x00])
                 .unwrap(),
-        ])
-        .unwrap();
+        ];
+        let mut implemented = banks;
+        let mut count = 0;
+        for bank in banks {
+            if crate::profile::allows_algorithm(crate::Alg::from(bank.hash())) {
+                implemented[count] = bank;
+                count += 1;
+            }
+        }
+        let pcr_allocation = crate::TpmlPcrSelection::from_slice(&implemented[..count]).unwrap();
 
         Self {
             #[cfg(feature = "sha1")]

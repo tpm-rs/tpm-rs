@@ -131,12 +131,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 }
 
 /// Returns whether `alg` is implemented by this TPM (`TEST_BIT(alg, g_implementedAlgorithms)`):
-/// it is advertised in `TPM_CAP_ALGS` or is one of the self-testable algorithms tracked in the
-/// to-do list. `TPM_ALG_NULL` is never implemented.
+/// it is advertised in `TPM_CAP_ALGS`. `TPM_ALG_NULL` is never implemented.
+///
+/// TPM 2.0 Part 3, TPM2_IncrementalSelfTest, only says "This command causes the TPM to perform a
+/// test of the selected algorithms." and "If *toTest* contains an algorithm that has already been
+/// tested, it will not be tested again."; it is silent on algorithms the TPM does not implement.
+/// Like the TCG reference (`CryptIncrementalSelfTest()`, which checks `toTest` against
+/// `g_implementedAlgorithms`, the table behind `TPM_CAP_ALGS`), such an entry is
+/// `TPM_RC_VALUE + RC_P1`. (The to-do list's own entries, e.g. `TPM_ALG_ECSCHNORR`, are not
+/// implementation evidence: ECSCHNORR is not in `TPM_CAP_ALGS`.)
 fn is_implemented_algorithm(alg: Alg) -> bool {
     alg != Alg::NULL
-        && (crate::handler::capability::IMPLEMENTED_ALGORITHMS
+        && crate::handler::capability::IMPLEMENTED_ALGORITHMS
             .iter()
             .any(|&(implemented, _)| implemented == alg)
-            || crate::engine::INITIAL_UNTESTED_ALGORITHMS.contains(&alg))
 }

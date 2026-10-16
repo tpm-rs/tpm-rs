@@ -717,3 +717,56 @@ fn xor_with_null_hash_rejected() {
         "Expected TPM_RC_HASH (0x04c3) for StartAuthSession with XOR symmetric having NULL hash"
     );
 }
+
+/// `encryptedSalt` larger than the TPM's `TPM2B_ENCRYPTED_SECRET` is `TPM_RC_SIZE + P2`, and a
+/// `symmetric.algorithm` that is not a symmetric algorithm is `TPM_RC_SYMMETRIC + P4`. TPM 2.0
+/// Part 2, Table "Definition of TPM2B_ENCRYPTED_SECRET Structure": "secret[size]
+/// {:sizeof(TPMU_ENCRYPTED_SECRET)}"; Table "Definition of (TPM_ALG_ID) TPMI_ALG_SYM Type":
+/// "#TPM_RC_SYMMETRIC". Found by differential fuzzing.
+#[test]
+fn oversized_salt_and_unknown_symmetric_algorithm_rejected_at_unmarshal() {
+    let mut tpm = testing::tpm::Tpm::new();
+    let steps: [(&str, u32); 2] = [
+        (
+            "80010000002b0000017640000007400000070010a30850fa000000005c0000000000118102000000118102",
+            0x2d5,
+        ),
+        (
+            "80010000002b0000017640000007400000070010009e00000000000000000000000003000000001000000b",
+            0x4d6,
+        ),
+    ];
+    for (i, (cmd, rc)) in steps.into_iter().enumerate() {
+        let rsp = tpm.send_command(0, &crate::_common::hex_checked(cmd));
+        assert_eq!(
+            u32::from_be_bytes(rsp[6..10].try_into().unwrap()),
+            rc,
+            "step {i}: {rsp:02x?}"
+        );
+    }
+}
+
+/// StartAuthSession checks `encryptedSalt` before the `symmetric` mode: a non-empty salt without
+/// a `tpmKey` is `TPM_RC_VALUE + P2` even when the mode (AES-128-OFB) is not CFB. `tpm-rs`
+/// checked the mode first and returned `TPM_RC_MODE + P4` (found by differential fuzzing).
+/// TPM 2.0 Part 3, TPM2_StartAuthSession: "If *symmetric* specifies a block cipher, then
+/// `TPM_ALG_CFB` is the only allowed value for the *mode* field in the *symmetric* parameter
+/// (`TPM_RC_MODE`)."; the spec gives no order, and the TCG reference checks the mode last.
+#[test]
+fn salt_checked_before_symmetric_mode() {
+    let mut sim = Tpm::new();
+    let request = hex(concat!(
+        "8001",
+        "00000031",
+        "00000176",
+        "40000007",                             // tpmKey: TPM_RH_NULL
+        "40000007",                             // bind: TPM_RH_NULL
+        "00100102030405060708090a0b0c0d0e0f10", // nonceCaller
+        "0002abcd",                             // encryptedSalt (must be empty)
+        "01",                                   // TPM_SE_POLICY
+        "000600800041",                         // symmetric: AES-128-OFB
+        "000b",                                 // authHash: SHA-256
+    ));
+    let response = send(&mut sim, &request);
+    assert_eq!(rc_of(&response), 0x2C4, "TPM_RC_VALUE + P2");
+}

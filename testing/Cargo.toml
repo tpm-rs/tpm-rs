@@ -10,6 +10,9 @@ license.workspace = true
 keywords.workspace = true
 categories.workspace = true
 build = "build.rs"
+# Dependent build scripts find the C reference archives (`differential`) as
+# `DEP_TPM_REFERENCES_<NAME>_ARCHIVE`.
+links = "tpm-references"
 autobins = false
 
 [dependencies]
@@ -44,8 +47,15 @@ hmac = "0.12.1"
 # `src/differential/`).
 differential = []
 
+# With `differential`: `differential::inproc::InProcReferences`, both C
+# reference TPMs in the calling process (no reference processes or pipes),
+# for fast single-threaded users such as the fuzz targets. The C references
+# keep their state in globals, so a process hosts at most one at a time.
+fuzz-inproc = ["differential"]
+
 # The C reference TPM servers launched by every `Tpm` with `differential`.
-# Each links its own static library (build.rs), so they have no unit tests.
+# Each hosts its C reference through `differential::inproc` (the library links
+# both C archives, see build.rs); they have no unit tests of their own.
 [[bin]]
 name = "mstpm20"
 path = "src/bin/mstpm20.rs"

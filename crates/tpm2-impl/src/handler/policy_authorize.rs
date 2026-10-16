@@ -42,6 +42,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
+        // TPM 2.0 Part 2, TPMT_TK_VERIFIED: "tag | TPM_ST | ticket structure tag" with
+        // "#TPM_RC_TAG | | error returned when *tag* is not one of the values in
+        // @tbl:tpm-st-for-signatures", and that table pairs each tag with the command producing
+        // it: "`TPM_ST_VERIFIED` | `TPM2_VerifySignature()`", "`TPM_ST_MESSAGE_VERIFIED` |
+        // `TPM2_VerifySequenceComplete()`", "`TPM_ST_DIGEST_VERIFIED` |
+        // `TPM2_VerifyDigestSignature()`". The spec is silent on the tags of commands a TPM does
+        // not implement; like the TCG reference, whose ticket unmarshaling accepts only the tags
+        // of its implemented commands, this TPM (which implements only TPM2_VerifySignature)
+        // rejects the others with TPM_RC_TAG on `checkTicket` while it is unmarshaled, i.e.
+        // before the ticket's later fields.
+        {
+            let mut peek = request.remaining_slice();
+            if tpm2::Tpm2bDigest::unmarshal(&mut peek).is_ok()
+                && tpm2::Tpm2bNonce::unmarshal(&mut peek).is_ok()
+                && tpm2::Tpm2bName::unmarshal(&mut peek).is_ok()
+                && let Some(tag) = peek.get(..2).map(|b| u16::from_be_bytes([b[0], b[1]]))
+                && tag != tpm2::TpmSt::VERIFIED.id()
+            {
+                return Err(TpmRc::TAG.with(Position::parameter(4)));
+            }
+        }
         let cmd = request.try_unmarshal_command::<PolicyAuthorize>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());

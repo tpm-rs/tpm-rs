@@ -6,7 +6,7 @@ use tpm2_simulator::{PlatformConnection, Simulator, SimulatorPlatformSignal};
 #[test]
 fn test_invalid_platform_signal() {
     let mut crypto = PlatformCryptoProvider;
-    let mut storage = RamStorageMock::<4096>::new();
+    let mut storage = RamStorageMock::<{ tpm2_simulator::NV_STORAGE_SIZE }>::new();
     let mut timer = LinuxTimer::new();
     let mut rng = LinuxRng::new();
     let _sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng).unwrap();
@@ -18,7 +18,7 @@ fn test_invalid_platform_signal() {
 #[test]
 fn test_oversized_tpm_command() {
     let mut crypto = PlatformCryptoProvider;
-    let mut storage = RamStorageMock::<4096>::new();
+    let mut storage = RamStorageMock::<{ tpm2_simulator::NV_STORAGE_SIZE }>::new();
     let mut timer = LinuxTimer::new();
     let mut rng = LinuxRng::new();
     let mut sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng).unwrap();
@@ -132,5 +132,44 @@ mod reference_simulator {
         assert_eq!(time(&mut sim, &mut rsp), t0);
         assert!(sim.advance_clock(2500));
         assert_eq!(time(&mut sim, &mut rsp), t0 + 2500);
+    }
+
+    /// `TPM_CC_HierarchyChangeAuth(TPM_RH_OWNER, "auth")` with an empty
+    /// password session.
+    const CHANGE_OWNER_AUTH: [u8; 33] = [
+        0x80, 0x02, 0, 0, 0, 33, 0, 0, 0x01, 0x29, 0x40, 0, 0, 0x01, 0, 0, 0, 9, 0x40, 0, 0, 0x09,
+        0, 0, 0x01, 0, 0, 0, 4, b'a', b'u', b't', b'h',
+    ];
+
+    /// A reset reference simulator repeats the responses of a new one with
+    /// the same seed, whatever happened before the reset (clock, DRBG, NV
+    /// state such as the owner authorization), also for another seed.
+    #[test]
+    fn reset_reference_repeats_a_new_simulator() {
+        let mut rsp = [0u8; 64];
+        let mut run = |sim: &mut tpm2_simulator::Simulator<'_>| -> Vec<Vec<u8>> {
+            [
+                &GET_RANDOM_16[..],
+                &READ_CLOCK,
+                &CHANGE_OWNER_AUTH,
+                &GET_RANDOM_16,
+            ]
+            .iter()
+            .map(|cmd| sim.transact(cmd, &mut rsp).unwrap().to_vec())
+            .collect()
+        };
+        let fresh = run(&mut create_reference_simulator!(7, 5_000_000));
+        let other = run(&mut create_reference_simulator!(8, 6_000_000));
+        let mut sim = create_reference_simulator!(7, 5_000_000);
+        for _ in 0..3 {
+            assert_eq!(run(&mut sim), fresh);
+            assert!(sim.advance_clock(1500));
+            sim.reset_reference(7, 5_000_000);
+        }
+        // The owner authorization is empty again: the change succeeds.
+        assert_eq!(&fresh[2][6..10], &[0, 0, 0, 0]);
+        assert_eq!(run(&mut sim), fresh);
+        sim.reset_reference(8, 6_000_000);
+        assert_eq!(run(&mut sim), other);
     }
 }

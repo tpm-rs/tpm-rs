@@ -6,6 +6,10 @@ use tpm2::commands::Rewrap;
 use tpm2::errors::TpmRc;
 use tpm2::{Handle, Tpm2bEncryptedSecret, Tpm2bName, Tpm2bPrivate, *};
 
+/// The capacity of this TPM's `TPM2B_PRIVATE` (`sizeof(_PRIVATE)` of its profile: RSA keys of up
+/// to 2048 bits, see `tpm2::profile`).
+const PRIVATE_CAP: usize = 910;
+
 /// Rewrap to an ECC/NULL parent produces a fresh seed that imports and loads; max-size unwrapped duplicate is VALUE+P1.
 ///
 /// tpm2-rewrap-reuses-old-protection-seed-instead
@@ -67,8 +71,21 @@ fn fresh_seed_for_new_parent() {
     .expect("Rewrap from an ECC parent");
     assert_eq!(back.out_duplicate.get_buffer(), dup.duplicate.get_buffer());
 
+    // A larger inDuplicate does not unmarshal (Part 2, TPM2B_PRIVATE: #TPM_RC_SIZE).
+    let too_big = vec![0x42u8; PRIVATE_CAP + 1];
+    let mut cmd = vec![0x80, 0x02, 0, 0, 0, 0, 0, 0, 0x01, 0x52, 0x40, 0, 0, 7];
+    cmd.extend_from_slice(&ecc_parent.0.to_be_bytes());
+    cmd.extend_from_slice(&[0, 0, 0, 9, 0x40, 0, 0, 9, 0, 0, 1, 0, 0]);
+    cmd.extend_from_slice(&((PRIVATE_CAP + 1) as u16).to_be_bytes());
+    cmd.extend_from_slice(&too_big);
+    cmd.extend_from_slice(&[0, 0, 0, 0]);
+    let len = cmd.len() as u32;
+    cmd[2..6].copy_from_slice(&len.to_be_bytes());
+    let rsp = sim.send_command(0, &cmd);
+    assert_eq!(&rsp[6..10], &rc_p(TpmRc::SIZE, 1).to_be_bytes());
+
     // A maximum-size unwrapped duplicate can not get an outer wrapper: VALUE + RC_P1 (no panic).
-    let big = vec![0x42u8; Tpm2bPrivate::CAP];
+    let big = vec![0x42u8; PRIVATE_CAP];
     assert_eq!(
         rewrap(
             &mut sim,
@@ -137,7 +154,7 @@ fn malformed_duplicate_error_positions() {
         rc_p(TpmRc::INTEGRITY, 1)
     );
     // Output overflow -> VALUE + RC_P1.
-    let big = vec![0x42u8; Tpm2bPrivate::CAP];
+    let big = vec![0x42u8; PRIVATE_CAP];
     assert_eq!(
         rewrap(
             &mut sim,

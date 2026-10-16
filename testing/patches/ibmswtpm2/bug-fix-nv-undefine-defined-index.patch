@@ -1,0 +1,57 @@
+fix-nv-undefine-defined-index: unmarshal nvIndex of TPM2_NV_UndefineSpace(Special) as TPMI_RH_NV_DEFINED_INDEX
+
+Classification: spec-deviation bug fix.
+
+Spec: TPM 2.0 Part 3, TPM2_NV_UndefineSpace, command table:
+  "TPMI_RH_NV_DEFINED_INDEX | nvIndex | the NV Index to remove from NV space"
+and TPM2_NV_UndefineSpaceSpecial, command table:
+  "TPMI_RH_NV_DEFINED_INDEX | @nvIndex | Index to be deleted"
+Part 2, "Table: Definition of (TPM_HANDLE) TPMI_RH_NV_DEFINED_INDEX Type":
+  "{NV_INDEX_FIRST:NV_INDEX_LAST} | range of NV Indexes with 32-bit attributes"
+  "{EXTERNAL_NV_FIRST:EXTERNAL_NV_LAST} | range of external NV Indexes"
+  "#TPM_RC_VALUE | error returned if the handle is out of range"
+(unlike TPMI_RH_NV_INDEX, which also lists
+"{PERMANENT_NV_FIRST:PERMANENT_NV_LAST} | range of permanent NV Indexes").
+
+Upstream defines TPMI_RH_NV_DEFINED_INDEX_Unmarshal() but dispatches both
+commands' nvIndex as TPMI_RH_NV_INDEX, so a permanent NV handle (0x12xxxxxx)
+passed unmarshaling and the next handle's type error was reported instead
+(e.g. NV_UndefineSpaceSpecial(0x12e08e2c, 0x01000000): TPM_RC_VALUE + H2
+instead of TPM_RC_VALUE + H1, found by differential fuzzing). The patch adds
+the dispatch entry and uses it for both commands, as the TCG reference does.
+
+diff --git a/src/CommandDispatchData.h b/src/CommandDispatchData.h
+--- a/src/CommandDispatchData.h
++++ b/src/CommandDispatchData.h
+@@ -106,7 +106,12 @@
+ 					UNMARSHAL_DISPATCH(TPMI_RH_NV_AUTH),
+ #define TPMI_RH_NV_INDEX_H_UNMARSHAL            (TPMI_RH_NV_AUTH_H_UNMARSHAL + 1)
+ 					UNMARSHAL_DISPATCH(TPMI_RH_NV_INDEX),
+-#define TPMI_RH_PLATFORM_H_UNMARSHAL            (TPMI_RH_NV_INDEX_H_UNMARSHAL + 1)
++					// tpm-rs differential testing -- spec deviation fix (NOT
++					// determinism): TPMI_RH_NV_DEFINED_INDEX handles (Part 3
++					// TPM2_NV_UndefineSpace / TPM2_NV_UndefineSpaceSpecial nvIndex).
++#define TPMI_RH_NV_DEFINED_INDEX_H_UNMARSHAL    (TPMI_RH_NV_INDEX_H_UNMARSHAL + 1)
++					UNMARSHAL_DISPATCH(TPMI_RH_NV_DEFINED_INDEX),
++#define TPMI_RH_PLATFORM_H_UNMARSHAL            (TPMI_RH_NV_DEFINED_INDEX_H_UNMARSHAL + 1)
+ 					UNMARSHAL_DISPATCH(TPMI_RH_PLATFORM),
+ #define TPMI_RH_PROVISION_H_UNMARSHAL           (TPMI_RH_PLATFORM_H_UNMARSHAL + 1)
+ 					UNMARSHAL_DISPATCH(TPMI_RH_PROVISION),
+@@ -3799,7 +3804,7 @@
+     /* offsetOfTypes */   offsetof(NV_UndefineSpace_COMMAND_DESCRIPTOR_t, types),
+     /* offsets */         {(UINT16)(offsetof(NV_UndefineSpace_In, nvIndex))},
+     /* types */           {TPMI_RH_PROVISION_H_UNMARSHAL,
+-			   TPMI_RH_NV_INDEX_H_UNMARSHAL,
++			   TPMI_RH_NV_DEFINED_INDEX_H_UNMARSHAL,
+ 			   END_OF_LIST,
+ 			   END_OF_LIST}
+ };
+@@ -3826,7 +3831,7 @@
+     /* outSize */         0,
+     /* offsetOfTypes */   offsetof(NV_UndefineSpaceSpecial_COMMAND_DESCRIPTOR_t, types),
+     /* offsets */         {(UINT16)(offsetof(NV_UndefineSpaceSpecial_In, platform))},
+-    /* types */           {TPMI_RH_NV_INDEX_H_UNMARSHAL,
++    /* types */           {TPMI_RH_NV_DEFINED_INDEX_H_UNMARSHAL,
+ 			   TPMI_RH_PLATFORM_H_UNMARSHAL,
+ 			   END_OF_LIST,
+ 			   END_OF_LIST}

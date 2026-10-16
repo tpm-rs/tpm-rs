@@ -4,15 +4,18 @@
 use crate::_common::Connection;
 use crate::_common::{
     CAP_ACT, CAP_ALGS, CAP_PCRS, CmdHeader, TPMA_CC_EXTENSIVE, TPMA_CC_FLUSHED, TPMA_CC_NV,
-    cap_handles, cap_pcr_properties, command_attributes, create_storage_primary_in,
-    da_parameters_unwrap, execute_get_capability, execute_raw_transact,
-    execute_with_corrupted_bytes_status, get_cap, get_tpm_property, marshal_to_slice,
-    no_session_command, power_cycle_orderly, rc_of, rc_p, run_raw, start_session_raw,
+    cap_handles, cap_pcr_properties, command_attributes, context_save_raw, create_primary,
+    create_storage_primary_in, da_parameters_unwrap, execute_get_capability, execute_raw_transact,
+    execute_with_corrupted_bytes_status, get_cap, get_tpm_property, hash_sequence_start,
+    marshal_to_slice, no_session_command, power_cycle_orderly, rc_of, rc_p, rsa_ek_template,
+    run_raw, start_auth_session, start_session_raw,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::GetCapability;
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, Marshal, TpmCap, TpmCc, TpmPt, TpmiStCommandTag, Unmarshal};
+use tpm2::{
+    Handle, Marshal, TpmCap, TpmCc, TpmPt, TpmSe, TpmiAlgHash, TpmiStCommandTag, Unmarshal,
+};
 
 /// `TPM_CAP_ACT` reports `TPM_RC_VALUE + RC_P2`, not `RC_P1`.
 #[test]
@@ -25,6 +28,94 @@ fn act_capability_rejected_on_property() {
             "property {property:#x}"
         );
     }
+}
+
+/// `TPM_CAP_ALGS` and `TPM_CAP_ECC_CURVES` take only the low 16 bits of `property` as the first
+/// `TPM_ALG_ID`/`TPM_ECC_CURVE` (the reference casts it), so set upper bits do not empty the
+/// list (found by differential fuzzing). Part 3 `TPM2_GetCapability` only says the ID "is cast to a
+/// UINT32" and is silent on set upper bits, so `tpm-rs` follows `mstpm20`.
+#[test]
+fn algorithm_and_curve_properties_ignore_upper_bits() {
+    /// `TPM_CAP_ECC_CURVES`.
+    const CAP_ECC_CURVES: u32 = 8;
+    let mut sim = Tpm::new();
+    for capability in [CAP_ALGS, CAP_ECC_CURVES] {
+        let plain = get_cap(&mut sim, capability, 0x0003, 64).unwrap();
+        let masked = get_cap(&mut sim, capability, 0x00A2_0003, 64).unwrap();
+        assert_eq!(masked, plain, "capability {capability}");
+        let count = u32::from_be_bytes(plain.1[0..4].try_into().unwrap());
+        assert!(count > 0, "capability {capability}");
+    }
+}
+
+/// `TPM_CAP_TPM_PROPERTIES` returns only properties of the group of `property`: a start beyond
+/// the last fixed property returns an empty list (not the variable group), and a start at
+/// `PT_FIXED` stops at `PT_VAR` (found by differential fuzzing). TPM 2.0 Part 3,
+/// TPM2_GetCapability: "The TPM will only return values in the same group as the *property*
+/// parameter in the command."
+#[test]
+fn tpm_properties_stay_within_the_requested_group() {
+    /// `TPM_CAP_TPM_PROPERTIES`.
+    const CAP_TPM_PROPERTIES: u32 = 6;
+    let mut sim = Tpm::new();
+    let (more, data) = get_cap(&mut sim, CAP_TPM_PROPERTIES, 0x154, 4).unwrap();
+    assert!(!more);
+    assert_eq!(data, [0, 0, 0, 0], "empty TPML_TAGGED_TPM_PROPERTY");
+    let (more, data) = get_cap(&mut sim, CAP_TPM_PROPERTIES, 0x100, 127).unwrap();
+    assert!(!more);
+    let n = u32::from_be_bytes(data[0..4].try_into().unwrap()) as usize;
+    assert!(n > 0);
+    for i in 0..n {
+        let tag = u32::from_be_bytes(data[4 + 8 * i..8 + 8 * i].try_into().unwrap());
+        assert!((0x100..0x200).contains(&tag), "property {tag:#x}");
+    }
+}
+
+/// A capability this TPM does not implement (`TPM_CAP_PUB_KEYS`, `TPM_CAP_SPDM_SESSION_INFO`) is
+/// `TPM_RC_VALUE + RC_P1` while it is unmarshaled, so it wins over
+/// trailing bytes (`TPM_RC_SIZE`) and over missing later parameters (found by differential
+/// fuzzing). TPM 2.0 Part 2, "Definition of (UINT32) TPM_CAP Constants": "#TPM_RC_VALUE".
+#[test]
+fn unimplemented_capability_rejected_while_unmarshaling() {
+    let mut sim = Tpm::new();
+    for capability in [0x0Bu32, 0x0C] {
+        let mut params = capability.to_be_bytes().to_vec();
+        params.extend_from_slice(&[0, 0, 0, 0x0A, 0, 0, 0, 0, 0, 0, 1, 0]); // + 4 trailing bytes
+        for len in [params.len(), 4] {
+            let mut cmd = vec![0x80, 0x01, 0, 0, 0, 0, 0, 0, 0x01, 0x7A];
+            cmd.extend_from_slice(&params[..len]);
+            let size = cmd.len() as u32;
+            cmd[2..6].copy_from_slice(&size.to_be_bytes());
+            assert_eq!(
+                rc_of(&run_raw(&mut sim, &cmd)),
+                rc_p(TpmRc::VALUE, 1),
+                "capability {capability:#x}, {len} parameter bytes"
+            );
+        }
+    }
+}
+
+/// `TPM_PT_LOADED_CURVES` is the number of implemented (always loaded) ECC curves, i.e. the length
+/// of the `TPM_CAP_ECC_CURVES` list (found by differential fuzzing). TPM 2.0 Part 2, TPM_PT:
+/// "TPM_PT_LOADED_CURVES | PT_VAR + 13 | the number of loaded ECC curves".
+#[test]
+fn loaded_curves_counts_every_implemented_curve() {
+    /// `TPM_CAP_ECC_CURVES`.
+    const CAP_ECC_CURVES: u32 = 8;
+    /// `TPM_PT_LOADED_CURVES`.
+    const PT_LOADED_CURVES: u32 = 0x20D;
+    let mut sim = Tpm::new();
+    let (_, curves) = get_cap(&mut sim, CAP_ECC_CURVES, 0, 64).unwrap();
+    let n_curves = u32::from_be_bytes(curves[0..4].try_into().unwrap());
+    let (_, props) = get_cap(&mut sim, 6, PT_LOADED_CURVES, 1).unwrap();
+    assert_eq!(
+        &props[0..8],
+        [&1u32.to_be_bytes()[..], &PT_LOADED_CURVES.to_be_bytes()].concat()
+    );
+    assert_eq!(
+        u32::from_be_bytes(props[8..12].try_into().unwrap()),
+        n_curves
+    );
 }
 
 /// `TPM_CAP_ALGS` reports MGF1 and the KDFs, and the full `KEYEDHASH` attributes.
@@ -699,4 +790,84 @@ fn vendor_string_properties() {
     } else {
         panic!("Expected TpmProperties capability data");
     }
+}
+
+/// `TPM_PT_MAX_OBJECT_CONTEXT` and `TPM_PT_MAX_SESSION_CONTEXT` bound the contexts that
+/// TPM2_ContextSave actually returns (an RSA-2048 key, a hash sequence object and a SHA-512 policy
+/// session). Before, `tpm-rs` reported a fixed 3072/512 regardless of its context format. TPM 2.0
+/// Part 2, TPM_PT: "TPM_PT_MAX_OBJECT_CONTEXT | PT_FIXED + 33 | the maximum size of an object
+/// context that will be returned by TPM2_ContextSave()" and "TPM_PT_MAX_SESSION_CONTEXT |
+/// PT_FIXED + 34 | the maximum size of a session context that will be returned by
+/// TPM2_ContextSave()".
+#[test]
+fn max_context_sizes_bound_saved_contexts() {
+    let mut sim = Tpm::new();
+    let max_object = get_tpm_property(&mut sim, TpmPt::MAX_OBJECT_CONTEXT) as usize;
+    let max_session = get_tpm_property(&mut sim, TpmPt::MAX_SESSION_CONTEXT) as usize;
+
+    let (key, _) = create_primary(&mut sim, rsa_ek_template());
+    let key_context = context_save_raw(&mut sim, key.0).unwrap();
+    assert!(
+        key_context.len() <= max_object,
+        "{} > {max_object}",
+        key_context.len()
+    );
+
+    let sequence = hash_sequence_start(&mut sim);
+    let sequence_context = context_save_raw(&mut sim, sequence.0).unwrap();
+    assert!(
+        sequence_context.len() <= max_object,
+        "{} > {max_object}",
+        sequence_context.len()
+    );
+
+    let session = start_auth_session(
+        &mut sim,
+        Handle::RH_NULL,
+        Handle::RH_NULL,
+        &[],
+        TpmSe::Policy,
+        None,
+        TpmiAlgHash::Sha512,
+    )
+    .unwrap();
+    let session_context = context_save_raw(&mut sim, session.session_handle.0).unwrap();
+    assert!(
+        session_context.len() <= max_session,
+        "{} > {max_session}",
+        session_context.len()
+    );
+}
+
+/// TPM_CAP_TPM_PROPERTIES from `TPM_PT_NV_INDEX_MAX` (0x10C) with a `propertyCount` that reaches
+/// past the last fixed property this TPM reports: the response lists every implemented property
+/// of the group from 0x10C on, in order, and `moreData` is NO, as no value remains (TPM 2.0
+/// Part 3, TPM2_GetCapability: "The *moreData* parameter will have a value of YES if there are
+/// more values of the requested type that were not returned."). The C references also report the
+/// firmware-SVN properties, so their list is cut there (`differential.md` rule 2).
+#[test]
+fn fixed_properties_to_the_end_of_the_group() {
+    let mut tpm = Tpm::new();
+    let cmd = [
+        0x80, 0x01, 0, 0, 0, 0x16, 0, 0, 0x01, 0x7A, 0, 0, 0, 6, 0, 0, 0x01, 0x0C, 0, 0, 0, 0x24,
+    ];
+    let rsp = tpm.send_command(0, &cmd);
+    assert_eq!(rc_of(&rsp), 0);
+    assert_eq!(rsp[10], 0, "moreData");
+}
+
+/// TPM_CAP_TPM_PROPERTIES of the last fixed property this TPM reports
+/// (`TPM_PT_MAX_CAP_BUFFER`, 0x12E) with `propertyCount` 1: that property, and `moreData` NO, as
+/// no further value of this TPM remains (TPM 2.0 Part 3, TPM2_GetCapability: "The *moreData* parameter will have a value of
+/// YES if there are more values of the requested type that were not returned."). The C
+/// references have their firmware-SVN properties after it (`differential.md` rule 2).
+#[test]
+fn last_fixed_property_has_no_more_data() {
+    let mut tpm = Tpm::new();
+    let cmd = [
+        0x80, 0x01, 0, 0, 0, 0x16, 0, 0, 0x01, 0x7A, 0, 0, 0, 6, 0, 0, 0x01, 0x2E, 0, 0, 0, 0x01,
+    ];
+    let rsp = tpm.send_command(0, &cmd);
+    assert_eq!(rc_of(&rsp), 0);
+    assert_eq!(rsp[10], 0, "moreData");
 }

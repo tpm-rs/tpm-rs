@@ -21,7 +21,10 @@
 //!   host one C reference TPM per `Tpm` and implementation, and the server
 //!   logic they run to compare its responses with those of `tpm-rs`.
 
-#![forbid(unsafe_code)]
+// The only `unsafe` code is the FFI of the linked C reference TPMs
+// (`differential::inproc`, with `differential`), which allows it locally.
+#![cfg_attr(feature = "differential", deny(unsafe_code))]
+#![cfg_attr(not(feature = "differential"), forbid(unsafe_code))]
 #![allow(dead_code)]
 
 pub mod _common;

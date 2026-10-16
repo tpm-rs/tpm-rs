@@ -108,8 +108,9 @@ fn main() {
     let mut plat_rng: LinuxRng = LinuxRng::new();
     let mut crypto: ::tpm2_platform_linux::PlatformCryptoProvider =
         ::tpm2_platform_linux::PlatformCryptoProvider;
-    let mut storage: ::tpm2_impl::storage::ram_storage_mock::RamStorageMock<4096> =
-        ::tpm2_impl::storage::ram_storage_mock::RamStorageMock::new();
+    let mut storage: ::tpm2_impl::storage::ram_storage_mock::RamStorageMock<
+        { ::tpm2_simulator::NV_STORAGE_SIZE },
+    > = ::tpm2_impl::storage::ram_storage_mock::RamStorageMock::new();
     let mut timer: ::tpm2_platform_linux::LinuxTimer = ::tpm2_platform_linux::LinuxTimer::new();
     let sim =
         Mutex::new(Simulator::new(&mut crypto, &mut storage, &mut timer, &mut plat_rng).unwrap());

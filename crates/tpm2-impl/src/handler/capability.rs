@@ -13,6 +13,141 @@ use tpm2::{
     TpmlTaggedTpmProperty, TpmsAlgProperty, TpmsCapabilityData, TpmsTaggedProperty,
 };
 
+/// ECC curves implemented by this TPM (`TPM_CAP_ECC_CURVES`, the TPM's unmarshal profile).
+pub(crate) const IMPLEMENTED_CURVES: [TpmEccCurve; 5] = [
+    TpmEccCurve::NistP224,
+    TpmEccCurve::NistP256,
+    TpmEccCurve::NistP384,
+    TpmEccCurve::NistP521,
+    TpmEccCurve::BNP256,
+];
+
+/// The algorithm IDs of [`IMPLEMENTED_ALGORITHMS`].
+pub(crate) const IMPLEMENTED_ALGORITHM_IDS: [Alg; IMPLEMENTED_ALGORITHMS.len()] = {
+    let mut ids = [Alg::NULL; IMPLEMENTED_ALGORITHMS.len()];
+    let mut i = 0;
+    while i < ids.len() {
+        ids[i] = IMPLEMENTED_ALGORITHMS[i].0;
+        i += 1;
+    }
+    ids
+};
+
+/// The largest RSA key of this TPM's profile, in bits (`RSA_1024` and `RSA_2048`).
+const MAX_RSA_KEY_BITS: usize = 2048;
+/// `MAX_RSA_KEY_BYTES`: the bytes of the largest RSA modulus.
+const MAX_RSA_KEY_BYTES: usize = MAX_RSA_KEY_BITS / 8;
+/// `RSA_PRIVATE_SIZE`. TPM 2.0 Part 2, TPM2B_PRIVATE_KEY_RSA: "`RSA_PRIVATE_SIZE` is a vendor
+/// specific value that can be (`MAX_RSA_KEY_BYTES` / 2) or ((`MAX_RSA_KEY_BYTES` \* 5) / 2)."
+/// This TPM (like the TCG reference profile) uses the larger value.
+const RSA_PRIVATE_SIZE: usize = (MAX_RSA_KEY_BYTES * 5) / 2;
+/// The largest digest of the implemented hashes (SHA-512), in bytes.
+const MAX_DIGEST_SIZE: usize = 64;
+/// `sizeof(TPM2B_DIGEST)` (and `sizeof(TPM2B_AUTH)`): a `UINT16` size and the largest digest.
+const SIZEOF_TPM2B_DIGEST: usize = 2 + MAX_DIGEST_SIZE;
+/// `MAX_ECC_KEY_BYTES`: the bytes of the largest implemented curve (NIST P-521).
+const MAX_ECC_KEY_BYTES: usize = 66;
+/// `MAX_SYM_DATA`: the largest `TPM2B_SENSITIVE_DATA` (Part 2: "For interoperability,
+/// `MAX_SYM_DATA` should be 128.").
+const MAX_SYM_DATA: usize = 128;
+/// `MAX_SYM_KEY_BYTES`: the bytes of the largest symmetric key (AES-256).
+const MAX_SYM_KEY_BYTES: usize = 32;
+/// `PRIVATE_VENDOR_SPECIFIC_BYTES`. Part 2: "The value for `PRIVATE_VENDOR_SPECIFIC_BYTES` is
+/// determined by the vendor." This TPM (like the TCG reference) uses `RSA_PRIVATE_SIZE`.
+const PRIVATE_VENDOR_SPECIFIC_BYTES: usize = RSA_PRIVATE_SIZE;
+
+/// The larger of `a` and `b`.
+const fn max(a: usize, b: usize) -> usize {
+    if a > b { a } else { b }
+}
+
+/// `sizeof(TPMU_SENSITIVE_COMPOSITE)`. Part 2, Table "Definition of TPMU_SENSITIVE_COMPOSITE
+/// Union": "rsa | TPM2B_PRIVATE_KEY_RSA", "ecc | TPM2B_ECC_PARAMETER", "bits |
+/// TPM2B_SENSITIVE_DATA", "sym | TPM2B_SYM_KEY", "any | TPM2B_PRIVATE_VENDOR_SPECIFIC" (the
+/// ML-DSA and ML-KEM members are not implemented).
+const SIZEOF_TPMU_SENSITIVE_COMPOSITE: usize = max(
+    max(2 + RSA_PRIVATE_SIZE, 2 + MAX_ECC_KEY_BYTES),
+    max(
+        max(2 + MAX_SYM_DATA, 2 + MAX_SYM_KEY_BYTES),
+        2 + PRIVATE_VENDOR_SPECIFIC_BYTES,
+    ),
+);
+/// `sizeof(TPMT_SENSITIVE)`. Part 2, Table "Definition of TPMT_SENSITIVE Structure":
+/// "sensitiveType | TPMI_ALG_PUBLIC", "authValue | TPM2B_AUTH", "seedValue | TPM2B_DIGEST",
+/// "\[sensitiveType\]sensitive | TPMU_SENSITIVE_COMPOSITE".
+const SIZEOF_TPMT_SENSITIVE: usize =
+    2 + SIZEOF_TPM2B_DIGEST + SIZEOF_TPM2B_DIGEST + SIZEOF_TPMU_SENSITIVE_COMPOSITE;
+/// `sizeof(_PRIVATE)`. Part 2, Table "Definition of _PRIVATE Structure": "integrityOuter |
+/// TPM2B_DIGEST", "integrityInner | TPM2B_DIGEST", "sensitive | TPM2B_SENSITIVE" (Table
+/// "Definition of TPM2B_SENSITIVE Structure": "size | UINT16", "sensitiveArea |
+/// TPMT_SENSITIVE").
+const SIZEOF_PRIVATE: usize = SIZEOF_TPM2B_DIGEST + SIZEOF_TPM2B_DIGEST + 2 + SIZEOF_TPMT_SENSITIVE;
+/// `sizeof(TPMU_ENCRYPTED_SECRET)`. Part 2, Table "Definition of TPMU_ENCRYPTED_SECRET Union":
+/// "ecc\[sizeof(TPMS_ECC_POINT)\]", "rsa\[MAX_RSA_KEY_BYTES\]",
+/// "symmetric\[sizeof(TPM2B_DIGEST)\]", "keyedHash\[sizeof(TPM2B_DIGEST)\]" (ML-KEM is not
+/// implemented); a `TPMS_ECC_POINT` is two `TPM2B_ECC_PARAMETER`s.
+const SIZEOF_TPMU_ENCRYPTED_SECRET: usize = max(
+    max(2 * (2 + MAX_ECC_KEY_BYTES), MAX_RSA_KEY_BYTES),
+    SIZEOF_TPM2B_DIGEST,
+);
+/// `sizeof(TPMU_PUBLIC_PARMS)`: the largest member of Part 2, Table "Definition of
+/// TPMU_PUBLIC_PARMS Union" in this profile, `eccDetail` (`TPMS_ECC_PARMS`: "symmetric |
+/// TPMT_SYM_DEF_OBJECT+" (algorithm, keyBits and mode: 6), "scheme | TPMT_ECC_SCHEME+" (scheme
+/// and its largest details, `TPMS_SCHEME_ECDAA` "hashAlg | TPMI_ALG_HASH" and "count |
+/// UINT16": 6), "curveID | TPMI_ECC_CURVE" (2) and "kdf | TPMT_KDF_SCHEME+" (4)); `rsaDetail`
+/// (`TPMS_RSA_PARMS`: symmetric 6, scheme 6, keyBits 2 and exponent 4) is as large,
+/// `keyedHashDetail` and `symDetail` are 6, `asymDetail` is 12.
+const SIZEOF_TPMU_PUBLIC_PARMS: usize = 6 + 6 + 2 + 4;
+/// `sizeof(TPMU_PUBLIC_ID)`: the largest member of Part 2, Table "Definition of TPMU_PUBLIC_ID
+/// Union", `rsa` ("TPM2B_PUBLIC_KEY_RSA"); `ecc` (`TPMS_ECC_POINT`, two
+/// `TPM2B_ECC_PARAMETER`s: 136), `keyedHash`/`sym` (`TPM2B_DIGEST`: 66) and `derive`
+/// (`TPMS_DERIVE`, two `TPM2B_LABEL`s: 68) are smaller.
+const SIZEOF_TPMU_PUBLIC_ID: usize = 2 + MAX_RSA_KEY_BYTES;
+/// `sizeof(TPMT_PUBLIC)`. Part 2, Table "Definition of TPMT_PUBLIC Structure": "type |
+/// TPMI_ALG_PUBLIC", "nameAlg | +TPMI_ALG_HASH", "objectAttributes | TPMA_OBJECT", "authPolicy
+/// | TPM2B_DIGEST", "\[type\]parameters | TPMU_PUBLIC_PARMS", "\[type\]unique |
+/// TPMU_PUBLIC_ID". Part 2, "Data Alignment": "When used in a table to indicate a maximum size,
+/// the sizeof() function returns the octet-aligned size of the structure, with no padding."
+/// (The C references use the padded C `sizeof`, 356; their `bug-fix-template-size.patch`
+/// fixes that.)
+pub(crate) const SIZEOF_TPMT_PUBLIC: usize =
+    2 + 2 + 4 + SIZEOF_TPM2B_DIGEST + SIZEOF_TPMU_PUBLIC_PARMS + SIZEOF_TPMU_PUBLIC_ID;
+
+/// The unmarshal profile of this TPM ([`tpm2::profile`], installed by `TpmEngine::new`): its
+/// implemented algorithms and curves, RSA keys of 1024 and 2048 bits, and the buffer capacities
+/// that follow from them (TPM 2.0 Part 2):
+///
+/// * `TPM2B_PUBLIC_KEY_RSA`: "buffer\[size\] {: MAX_RSA_KEY_BYTES}";
+/// * `TPM2B_PRIVATE_KEY_RSA`: "buffer\[size\]{:RSA_PRIVATE_SIZE }";
+/// * `TPM2B_ENCRYPTED_SECRET`: "secret\[size\]{:sizeof(TPMU_ENCRYPTED_SECRET)}";
+/// * `TPM2B_PRIVATE`: "buffer\[size\] {:sizeof(_PRIVATE)}";
+/// * `TPM2B_TEMPLATE`: "buffer\[size\]{:sizeof(TPMT_PUBLIC)}";
+/// * `TPM2B_ECC_PARAMETER`: "buffer\[size\] {:MAX_ECC_KEY_BYTES}".
+///
+/// The values (256, 640, 256, 910, 350 and 66 bytes) equal those of the C references with the
+/// same profile (with `bug-fix-template-size.patch`), which reject larger buffers with
+/// `TPM_RC_SIZE` (checked by the differential tests). The lists bounded by `HASH_COUNT` follow
+/// from the implemented hash algorithms.
+pub(crate) static TPM_PROFILE: tpm2::profile::Profile = tpm2::profile::Profile {
+    algorithms: &IMPLEMENTED_ALGORITHM_IDS,
+    curves: &IMPLEMENTED_CURVES,
+    rsa_key_bits: &[1024, 2048],
+    // `AES_128` and `AES_256` (no AES-192; SM4 and Camellia are not implemented).
+    sym_key_bits: &[128, 256],
+    buffer_limits: tpm2::profile::BufferLimits {
+        public_key_rsa: MAX_RSA_KEY_BYTES,
+        private_key_rsa: RSA_PRIVATE_SIZE,
+        encrypted_secret: SIZEOF_TPMU_ENCRYPTED_SECRET,
+        private: SIZEOF_PRIVATE,
+        template: SIZEOF_TPMT_PUBLIC,
+        ecc_parameter: MAX_ECC_KEY_BYTES,
+    },
+};
+
+const _: () = assert!(
+    SIZEOF_PRIVATE == 910 && SIZEOF_TPMU_ENCRYPTED_SECRET == 256 && SIZEOF_TPMT_PUBLIC == 350
+);
+
 /// Algorithms implemented by this TPM together with their attributes (`s_algorithms` in the C
 /// reference `AlgorithmCap.c`). This single table backs both `TPM2_GetCapability(TPM_CAP_ALGS)`
 /// and the implemented-algorithm check of `TPM2_IncrementalSelfTest` (`g_implementedAlgorithms`).
@@ -127,6 +262,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
+        // TPM 2.0 Part 2, TPM_CAP, Table "Definition of (UINT32) TPM_CAP Constants" ends with
+        // "#TPM_RC_VALUE": the capability is validated while it is unmarshaled, before the
+        // later parameters and the trailing-bytes check. The table also lists
+        // `TPM_CAP_PUB_KEYS` and `TPM_CAP_SPDM_SESSION_INFO` (added in version 184); the spec is
+        // silent on capabilities a TPM does not implement, so like the TCG reference (whose
+        // `TPM_CAP` unmarshaler accepts `TPM_CAP_FIRST`..`TPM_CAP_ACT` and
+        // `TPM_CAP_VENDOR_PROPERTY`) they fail here.
+        if let Some(b) = request.remaining_slice().get(..4) {
+            /// `TPM_CAP_VENDOR_PROPERTY`.
+            const CAP_VENDOR_PROPERTY: u32 = 0x100;
+            let capability = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+            if capability > TpmCap::ACT as u32 && capability != CAP_VENDOR_PROPERTY {
+                return Err(TpmRc::VALUE.with(Position::parameter(1)));
+            }
+        }
         let cmd = request.try_unmarshal_command::<GetCapability>([])?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
@@ -174,6 +324,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         (0, 0)
                     }
                 };
+                // The reference's NV space ledger (`NvCapGetPersistentAvail()`,
+                // `NvCapGetCounterNumber()`, `NvCapGetCounterAvail()`), see
+                // `storage::nv_capacity`.
+                let nv_usage = crate::storage::nv_capacity::scan(
+                    &crate::storage::manager::StorageManager::new(
+                        &mut *self.context.platform.storage,
+                    ),
+                )
+                .unwrap_or_default();
 
                 let mut permanent_attr = tpm2::TpmaPermanent::empty();
                 if self.context.state.owner_auth.get_size() > 0 {
@@ -251,11 +410,24 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     (TpmPt::CONTEXT_SYM, tpm2::Alg::AES.id() as u32),
                     (TpmPt::CONTEXT_SYM_SIZE, 128),
                     (TpmPt::ORDERLY_COUNT, 255),
-                    (TpmPt::MAX_COMMAND_SIZE, 4096),
+                    (
+                        TpmPt::MAX_COMMAND_SIZE,
+                        crate::engine::MAX_COMMAND_SIZE as u32,
+                    ),
                     (TpmPt::MAX_RESPONSE_SIZE, 4096),
                     (TpmPt::MAX_DIGEST, 64),
-                    (TpmPt::MAX_OBJECT_CONTEXT, 3072),
-                    (TpmPt::MAX_SESSION_CONTEXT, 512),
+                    // Part 2, TPM_PT: "the maximum size of an object context that will be
+                    // returned by TPM2_ContextSave()" / "the maximum size of a session context
+                    // that will be returned by TPM2_ContextSave()": the bounds of this TPM's
+                    // (implementation-defined) context serialization.
+                    (
+                        TpmPt::MAX_OBJECT_CONTEXT,
+                        crate::handler::context_save::MAX_OBJECT_CONTEXT_SIZE as u32,
+                    ),
+                    (
+                        TpmPt::MAX_SESSION_CONTEXT,
+                        crate::handler::context_save::MAX_SESSION_CONTEXT_SIZE as u32,
+                    ),
                     (TpmPt::PS_FAMILY_INDICATOR, 0),
                     (TpmPt::PS_LEVEL, 0),
                     (TpmPt::PS_REVISION, 0),
@@ -290,12 +462,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     ),
                     (TpmPt::HR_TRANSIENT_AVAIL, transient_avail),
                     (TpmPt::HR_PERSISTENT, persistent_count),
-                    (
-                        TpmPt::HR_PERSISTENT_AVAIL,
-                        7u32.saturating_sub(persistent_count),
-                    ),
-                    (TpmPt::NV_COUNTERS, 0),
-                    (TpmPt::NV_COUNTERS_AVAIL, 8),
+                    (TpmPt::HR_PERSISTENT_AVAIL, nv_usage.persistent_avail()),
+                    (TpmPt::NV_COUNTERS, nv_usage.counters),
+                    (TpmPt::NV_COUNTERS_AVAIL, nv_usage.counter_avail()),
                     (TpmPt::LOCKOUT_COUNTER, self.context.state.failed_tries),
                     (TpmPt::MAX_AUTH_FAIL, self.context.state.max_tries),
                     (TpmPt::LOCKOUT_INTERVAL, self.context.state.recovery_time),
@@ -310,26 +479,35 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         self.context.state.audit_counter as u32,
                     ),
                     (TpmPt::ALGORITHM_SET, 0),
-                    (TpmPt::LOADED_CURVES, 4),
+                    // TPM 2.0 Part 2, TPM_PT: "TPM_PT_LOADED_CURVES | PT_VAR + 13 | the number
+                    // of loaded ECC curves". Every implemented curve is always loaded (as in
+                    // the TCG reference, which reports `ECC_CURVE_COUNT`).
+                    (TpmPt::LOADED_CURVES, IMPLEMENTED_CURVES.len() as u32),
                 ];
 
                 let mut all_sorted = all_properties;
                 all_sorted.sort_unstable_by_key(|&(pt, _)| pt.tag());
 
-                let starting_prop = if cmd.property < 0x00000100 {
-                    0x00000100
-                } else if cmd.property > 0x0000014B && cmd.property < 0x00000200 {
-                    0x00000200
-                } else {
-                    cmd.property
-                };
+                // TPM 2.0 Part 3, TPM2_GetCapability: "`TPM_CAP_TPM_PROPERTIES` - Returns a list
+                // of tagged properties. The tag is a `TPM_PT` and the property is a 32-bit
+                // value. The properties are returned in groups. Each property group is on a
+                // 256-value boundary (that is, the boundary occurs when the `TPM_PT` is evenly
+                // divisible by 256). The TPM will only return values in the same group as the
+                // *property* parameter in the command."
+                // A `property` below `PT_FIXED` starts at `PT_FIXED` (as in the TCG reference's
+                // `TPMCapGetProperties()`).
+                const PT_GROUP: u32 = 0x100;
+                let starting_prop = cmd.property.max(PT_GROUP);
+                let group_end = (starting_prop / PT_GROUP)
+                    .saturating_mul(PT_GROUP)
+                    .saturating_add(PT_GROUP);
 
                 let mut tpm_property =
                     [TpmsTaggedProperty::default(); tpm2::TPM2_MAX_TPM_PROPERTIES];
                 let mut count = 0;
 
                 for &(pt, val) in all_sorted.iter() {
-                    if pt.tag() >= starting_prop {
+                    if (starting_prop..group_end).contains(&pt.tag()) {
                         if count < cmd.property_count as usize
                             && count < tpm2::TPM2_MAX_TPM_PROPERTIES
                         {
@@ -550,8 +728,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 algs.sort_unstable_by_key(|&(alg, _)| alg.id() as u32);
                 let mut alg_properties = [TpmsAlgProperty::default(); tpm2::TPM2_MAX_CAP_ALGS];
                 let mut count = 0;
+                // TPM 2.0 Part 3, TPM2_GetCapability, capability table: "TPM_CAP_ALGS |
+                // TPM_ALG_ID(1) | TPML_ALG_PROPERTY" with note "[1] The TPM_ALG_ID or
+                // TPM_ECC_CURVE is cast to a UINT32". The spec is silent on a `property` with
+                // upper bits set; like the TCG reference (`(TPM_ALG_ID)in->property`), only
+                // its low 16 bits count.
+                let first = cmd.property as u16;
                 for &(alg, props) in algs.iter() {
-                    if (alg.id() as u32) >= cmd.property {
+                    if alg.id() >= first {
                         if count < cmd.property_count as usize && count < tpm2::TPM2_MAX_CAP_ALGS {
                             alg_properties[count] = TpmsAlgProperty {
                                 alg,
@@ -568,17 +752,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 )
             }
             TpmCap::ECCCurves => {
-                let curves = [
-                    TpmEccCurve::NistP224,
-                    TpmEccCurve::NistP256,
-                    TpmEccCurve::NistP384,
-                    TpmEccCurve::NistP521,
-                    TpmEccCurve::BNP256,
-                ];
+                let curves = IMPLEMENTED_CURVES;
                 let mut ecc_curves = [TpmEccCurve::NistP256; tpm2::TPM2_MAX_ECC_CURVES];
                 let mut count = 0;
+                // TPM 2.0 Part 3, TPM2_GetCapability, capability table: "TPM_CAP_ECC_CURVES
+                // | TPM_ECC_CURVE(1) | TPML_ECC_CURVE" with note "[1] The TPM_ALG_ID or
+                // TPM_ECC_CURVE is cast to a UINT32". The spec is silent on a `property` with
+                // upper bits set; like the TCG reference (`(TPM_ECC_CURVE)in->property`), only
+                // its low 16 bits count.
+                let first = cmd.property as u16;
                 for &curve in curves.iter() {
-                    if (curve as u32) >= cmd.property {
+                    if (curve as u16) >= first {
                         if count < cmd.property_count as usize && count < tpm2::TPM2_MAX_ECC_CURVES
                         {
                             ecc_curves[count] = curve;
@@ -762,109 +946,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = match request.try_unmarshal_command::<TestParms>([]) {
-            Ok(c) => c,
-            Err(unmarshal_err) => {
-                let buf = request.remaining_slice();
-                let is_valid_hash =
-                    |h: u16| h == 0x0004 || h == 0x000B || h == 0x000C || h == 0x000D;
-                let is_valid_kdf =
-                    |k: u16| k == 0x0007 || k == 0x0020 || k == 0x0021 || k == 0x0022;
-                // CTR, OFB, CBC, CFB, ECB and TPM_ALG_NULL.
-                let is_valid_mode = |m: u16| matches!(m, 0x0040..=0x0044 | 0x0010);
-                if buf.len() >= 4 {
-                    let selector = u16::from_be_bytes([buf[0], buf[1]]);
-                    if selector == 0x0025 && buf.len() >= 8 {
-                        let sym_alg = u16::from_be_bytes([buf[2], buf[3]]);
-                        if sym_alg == 0x0006 {
-                            let mode = u16::from_be_bytes([buf[6], buf[7]]);
-                            if !is_valid_mode(mode) {
-                                return Err(TpmRc::MODE.with(Position::parameter(1)));
-                            }
-                        }
-                    } else if selector == 0x0008 && buf.len() >= 6 {
-                        let scheme_id = u16::from_be_bytes([buf[2], buf[3]]);
-                        if scheme_id == 0x0005 && buf.len() >= 6 {
-                            let hash_id = u16::from_be_bytes([buf[4], buf[5]]);
-                            if !is_valid_hash(hash_id) {
-                                return Err(TpmRc::HASH.with(Position::parameter(1)));
-                            }
-                        } else if scheme_id == 0x000A && buf.len() >= 8 {
-                            let hash_id = u16::from_be_bytes([buf[4], buf[5]]);
-                            if !is_valid_hash(hash_id) {
-                                return Err(TpmRc::HASH.with(Position::parameter(1)));
-                            }
-                            let kdf_id = u16::from_be_bytes([buf[6], buf[7]]);
-                            if !is_valid_kdf(kdf_id) {
-                                return Err(TpmRc::KDF.with(Position::parameter(1)));
-                            }
-                        }
-                    } else if selector == 0x0001 || selector == 0x0023 {
-                        // Wire order: symmetric (TPMT_SYM_DEF_OBJECT) first, then the scheme,
-                        // (ECC) the curve and the KDF; report the first field that fails.
-                        let sym_alg = u16::from_be_bytes([buf[2], buf[3]]);
-                        match sym_alg {
-                            0x0010 => {}
-                            0x0006 if buf.len() >= 8 => {
-                                // `TPMI_AES_KEY_BITS`: only the implemented key sizes.
-                                let key_bits = u16::from_be_bytes([buf[4], buf[5]]);
-                                if key_bits != 128 && key_bits != 256 {
-                                    return Err(TpmRc::VALUE.with(Position::parameter(1)));
-                                }
-                                let mode = u16::from_be_bytes([buf[6], buf[7]]);
-                                if !is_valid_mode(mode) {
-                                    return Err(TpmRc::MODE.with(Position::parameter(1)));
-                                }
-                            }
-                            0x0006 => return Err(unmarshal_err),
-                            // Not a `TPMI_ALG_SYM_OBJECT` of this TPM.
-                            _ => return Err(TpmRc::SYMMETRIC.with(Position::parameter(1))),
-                        }
-                        let scheme_offset = if sym_alg == 0x0010 { 4 } else { 8 };
-                        if buf.len() >= scheme_offset + 4 {
-                            let scheme_id =
-                                u16::from_be_bytes([buf[scheme_offset], buf[scheme_offset + 1]]);
-                            if scheme_id != 0x0010 && scheme_id != 0x0015 {
-                                let hash_id = u16::from_be_bytes([
-                                    buf[scheme_offset + 2],
-                                    buf[scheme_offset + 3],
-                                ]);
-                                if !is_valid_hash(hash_id) {
-                                    return Err(TpmRc::HASH.with(Position::parameter(1)));
-                                }
-                            }
-                            if selector == 0x0023 {
-                                let curve_offset = if scheme_id == 0x0010 {
-                                    scheme_offset + 2
-                                } else {
-                                    scheme_offset + 4
-                                };
-                                let kdf_offset = curve_offset + 2;
-                                if buf.len() >= kdf_offset + 4 {
-                                    let kdf_id =
-                                        u16::from_be_bytes([buf[kdf_offset], buf[kdf_offset + 1]]);
-                                    if kdf_id != 0x0010 {
-                                        if !is_valid_kdf(kdf_id) {
-                                            return Err(TpmRc::KDF.with(Position::parameter(1)));
-                                        }
-                                        let kdf_hash = u16::from_be_bytes([
-                                            buf[kdf_offset + 2],
-                                            buf[kdf_offset + 3],
-                                        ]);
-                                        if !is_valid_hash(kdf_hash) {
-                                            return Err(TpmRc::HASH.with(Position::parameter(1)));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // Otherwise report the precise unmarshal error (e.g. `TPM_RC_INSUFFICIENT + RC_P1`
-                // for a truncated buffer), as `TPMT_PUBLIC_PARMS_Unmarshal` does.
-                return Err(unmarshal_err);
-            }
-        };
+        // The parameters are unmarshaled field by field, in wire order, by the profile-aware
+        // `TPMT_PUBLIC_PARMS` unmarshaler, whose first failing field gives the response code.
+        // TPM 2.0 Part 3, TPM2_TestParms, General Description: "This command is used to check
+        // to see if specific combinations of algorithm parameters are supported." and "The TPM
+        // will unmarshal the provided `TPMT_PUBLIC_PARMS`. If the parameters unmarshal
+        // correctly, then the TPM will return `TPM_RC_SUCCESS`, indicating that the parameters
+        // are valid for the TPM. The TPM will return the appropriate unmarshaling error if a
+        // parameter is not valid."
+        let cmd = request.try_unmarshal_command::<TestParms>([])?;
         // Leftover parameter bytes: `TPM_RC_SIZE` (`CommandDispatcher`).
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());

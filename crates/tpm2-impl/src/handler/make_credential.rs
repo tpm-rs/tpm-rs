@@ -12,7 +12,8 @@ use tpm2::crypto::kdf::kdfa_bits;
 use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bIdObject, TpmaObject, TpmiAlgHash, TpmsIdObject,
+    Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bIdObject, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash,
+    TpmiAlgSymMode, TpmsIdObject, TpmtSymDefObject,
 };
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -89,8 +90,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let secret = Tpm2bEncryptedSecret::from_bytes(&secret_buf[..secret_len])
             .map_err(|_| TpmRc::FAILURE)?;
 
-        // 4. Derive symmetric key and HMAC key using KDFa
-        let sym_alg = match &protector_obj.public.parms_and_id {
+        // 4. Derive symmetric key and HMAC key using KDFa. The credential is always encrypted in
+        // CFB mode with the protector's symmetric algorithm, whatever mode its public area names
+        // (TPM 2.0 Part 1, "Credential Protection": "encIdentity := CFB_ekSymAlg (symKey, 0, CV)",
+        // where "CFB_ekSymAlg | is symmetric encryption in CFB mode using the symmetric algorithm
+        // of the key serving as "EK""), so e.g. a parent with mode `TPM_ALG_CTR` works too.
+        let protector_sym = match &protector_obj.public.parms_and_id {
             crate::owned::OwnedPublicParmsAndId::Rsa(parms, _) => parms
                 .symmetric
                 .ok_or(TpmRc::TYPE.with(Position::handle(1)))?,
@@ -98,6 +103,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .symmetric
                 .ok_or(TpmRc::TYPE.with(Position::handle(1)))?,
             _ => return Err(TpmRc::TYPE.with(Position::handle(1))),
+        };
+        let sym_alg = TpmtSymDefObject {
+            alg: protector_sym.alg,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
         };
         let sym_key_bits = sym_alg.key_bits() as u32;
         let outer_key_len = (sym_key_bits / 8) as usize;

@@ -410,8 +410,10 @@ fn test_duplicate_import_load_roundtrip() {
         encryption_key_in: Tpm2bData::default(),
         symmetric_alg: None,
     };
+    // An in-range transient handle that references no loaded object (with
+    // `MAX_LOADED_OBJECTS = 3`, a handle beyond `TRANSIENT_LAST` would be `TPM_RC_VALUE`).
     let dup_cmd_bad = tpm2::commands::Duplicate {
-        object_handle: Handle(0x80000009),
+        object_handle: Handle(0x80000000),
         ..dup_cmd
     };
     let res = execute_tpm_command_with_auths(&mut tpm, &dup_cmd_bad, &[]);
@@ -440,7 +442,7 @@ fn test_duplicate_import_load_roundtrip() {
 
     // C. New parent handle not found -> returns TpmRc::HANDLE.with(Position::handle(2))
     let dup_cmd_bad_parent = tpm2::commands::Duplicate {
-        new_parent_handle: Handle(0x80000009),
+        new_parent_handle: Handle(0x80000000),
         ..dup_cmd
     };
     let res = execute_tpm_command_with_auths(&mut tpm, &dup_cmd_bad_parent, &[]);
@@ -448,7 +450,7 @@ fn test_duplicate_import_load_roundtrip() {
 
     // D. New parent is not asymmetric -> returns TpmRc::TYPE.with(Position::handle(2))
     let bad_parent_obj = TransientObject {
-        handle: 0x80000003,
+        handle: 0x80000000,
         seed: [0u8; 64],
         seed_len: 32,
         external: false,
@@ -476,7 +478,7 @@ fn test_duplicate_import_load_roundtrip() {
     };
     tpm.state.transient_objects[2] = Some(bad_parent_obj);
     let dup_cmd_bad_type = tpm2::commands::Duplicate {
-        new_parent_handle: Handle(0x80000003),
+        new_parent_handle: Handle(0x80000000),
         ..dup_cmd
     };
     let dup_auth = dup_policy_auth(&mut tpm.state);
@@ -591,7 +593,7 @@ fn test_duplicate_import_load_roundtrip() {
         in_public: object_public_2b,
     };
     let load_cmd_bad = tpm2::commands::Load {
-        parent_handle: Handle(0x80000009),
+        parent_handle: Handle(0x80000000),
         ..load_cmd
     };
     let res =

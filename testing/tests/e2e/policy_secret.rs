@@ -472,3 +472,51 @@ fn trial_session_succeeds() {
     let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
     assert!(res.is_ok(), "PolicySecret on Trial session failed");
 }
+
+/// An expiration of `INT32_MIN` (a ticket requested for 2^31 seconds) uses its absolute value,
+/// 2^31 s, for the timeout (TPM 2.0 Part 3, "Policy Parameter Checks": "the absolute value of
+/// *expiration* is converted to milliseconds"), both relative to the session start (with
+/// nonceTPM) and as an absolute time (empty nonceTPM, which also sets the expires-on-reset flag in
+/// the reference's timeout format).
+#[test]
+fn most_negative_expiration_uses_its_absolute_value() {
+    const TWO_POW_31_MS: u64 = (1u64 << 31) * 1000;
+    const EXPIRES_ON_RESET: u64 = 1 << 63;
+    for with_nonce in [true, false] {
+        let mut sim = Tpm::new();
+        let session = start_auth_session(
+            &mut sim,
+            Handle::RH_NULL,
+            Handle::RH_NULL,
+            &[],
+            TpmSe::Policy,
+            None,
+            TpmiAlgHash::Sha256,
+        )
+        .unwrap();
+        let nonce_tpm = if with_nonce {
+            session.nonce_tpm
+        } else {
+            Tpm2bNonce::default()
+        };
+        let resp = run_pw(
+            &mut sim,
+            PolicySecret {
+                auth_handle: Handle::RH_OWNER,
+                policy_session: session.session_handle,
+                nonce_tpm,
+                cp_hash_a: Tpm2bDigest::default(),
+                policy_ref: Default::default(),
+                expiration: i32::MIN,
+            },
+        )
+        .expect("PolicySecret with expiration INT32_MIN");
+        let timeout = u64::from_be_bytes(resp.timeout.get_buffer().try_into().unwrap());
+        assert_eq!(timeout & EXPIRES_ON_RESET != 0, !with_nonce);
+        let ms = timeout & !EXPIRES_ON_RESET;
+        assert!(
+            (TWO_POW_31_MS..TWO_POW_31_MS + 1_000_000_000).contains(&ms),
+            "timeout {timeout:#x}"
+        );
+    }
+}

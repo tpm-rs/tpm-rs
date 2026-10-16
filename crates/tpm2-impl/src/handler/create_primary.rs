@@ -81,6 +81,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             None,
             false,
             None,
+            false, // auth_size_first: after CreateChecks (C `CreatePrimary.c`)
         )?;
 
         // 1. Resolve parent seed value and length

@@ -1,0 +1,31 @@
+tpma-object-fixed-firmware-reserved: TPMA_OBJECT bit 3 is reserved
+
+Classification: profile setting.
+
+Specification (TPM 2.0 Part 2, Table "Definition of (UINT32) TPMA_OBJECT
+Bits"): "3 | Reserved | shall be zero"; Part 2: "When any reserved bit in an
+attribute is SET, the TPM shall return TPM_RC_RESERVED_BITS."
+
+This version of the reference defines bit 3 of TPMA_OBJECT as fixedFirmware
+(a draft attribute that none of its code evaluates) and therefore does not
+reject it when it unmarshals TPMA_OBJECT (reserved mask 0xfff0f001). In the
+specification version tpm-rs implements bit 3 is reserved, so a public area
+with it SET is TPM_RC_RESERVED_BITS when it is unmarshaled (as in ibmswtpm2
+and, with the same profile patch, mstpm20 version 185), instead of failing
+later with another response code (e.g. TPM_RC_SIZE). The bit is added to the
+reserved mask. Found by differential testing.
+diff --git a/TPMCmd/tpm/src/support/Marshal.c b/TPMCmd/tpm/src/support/Marshal.c
+--- a/TPMCmd/tpm/src/support/Marshal.c
++++ b/TPMCmd/tpm/src/support/Marshal.c
+@@ -333,7 +333,10 @@
+     if(result == TPM_RC_SUCCESS)
+     {
+         // check that no reserved bits are set
+-        if(*((UINT32*)target) & (UINT32)0xfff0f001)
++        // tpm-rs differential testing -- profile setting: fixedFirmware
++        // (bit 3) is reserved, as in the specification version tpm-rs
++        // implements.
++        if(*((UINT32*)target) & (UINT32)0xfff0f009)
+             result = TPM_RC_RESERVED_BITS;
+     }
+     return result;

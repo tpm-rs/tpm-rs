@@ -43,10 +43,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // 1. Resolve certified object
-        let certified_obj = self.resolve_object(object_handle.0, Position::handle(1))?;
-
-        // 2. Resolve signer key
+        // 1. Resolve the signer key first: the reference validates `signHandle`
+        // (`IsSigningObject()`, `TPM_RC_KEY + RC_Certify_signHandle`) and the scheme before it
+        // looks at the certified object. TPM 2.0 Part 3, TPM2_Certify, does not order these
+        // checks (it only says "The object may be any object that is loaded with
+        // `TPM2_Load()` or `TPM2_CreatePrimary()`. An object that only has its public area
+        // loaded cannot be certified."), so the TCG reference's order is used. A sequence
+        // object as `signHandle` is not a signing key.
         let signer_obj_opt = if sign_handle.0 == 0x40000007 {
             None
         } else {
@@ -55,13 +58,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let _auths = &self.context.state.parsed_auths[..self.context.state.parsed_auths_len];
 
-        // 3. Verify authorizations
+        // 2. Verify authorizations
         let expected_sessions = if sign_handle.0 == 0x40000007 { 1 } else { 2 };
         if num_sessions < expected_sessions {
             return Err(TpmRc::AUTH_MISSING);
         }
 
-        // 4. IsSigningObject() (TPM_RC_KEY + RC_Certify_signHandle) and CryptSelectSignScheme()
+        // 3. IsSigningObject() (TPM_RC_KEY + RC_Certify_signHandle) and CryptSelectSignScheme()
         //    (TPM_RC_SCHEME + RC_Certify_inScheme).
         let public_opt = signer_obj_opt.as_ref().map(|s| &s.public);
         let actual_in_scheme = self.resolve_attest_scheme(
@@ -70,6 +73,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Position::handle(2),
             Position::parameter(2),
         )?;
+
+        // 4. Resolve the certified object (used only for its Name and Qualified Name).
+        let certified_obj = self.resolve_object(object_handle.0, Position::handle(1))?;
 
         // 5. Construct attestation structure
         let header = self.compute_attest_fields(
@@ -192,10 +198,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // 1. Resolve certified object
-        let certified_obj = self.resolve_object(object_handle.0, Position::handle(2))?;
-
-        // 2. Resolve signer key
+        // 1. Resolve the signer key; the certified object is needed only for its Name, when the
+        // ticket is checked (C `TPM2_CertifyCreation()`: `IsSigningObject()` and the scheme
+        // first). TPM 2.0 Part 3 does not order these checks, so the reference's order is used.
         let signer_obj_opt = if sign_handle.0 == 0x40000007 {
             None
         } else {
@@ -223,7 +228,25 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 5. Verify the creation ticket (`TicketComputeCreation`). The ticket is recomputed for the
         //    hierarchy named in the ticket itself; its tag and hierarchy value were already
-        //    validated when unmarshaling `TPMT_TK_CREATION`.
+        //    validated when unmarshaling `TPMT_TK_CREATION`. A sequence object was never created
+        //    with a creation ticket, so no ticket can match it (TPM 2.0 Part 3,
+        //    TPM2_CertifyCreation: "This command is used to prove the association between an
+        //    object and its creation data."): `TPM_RC_TICKET`, as in the reference. The ticket's
+        //    proof is obtained first, so a firmware-limited/SVN-limited ticket hierarchy fails
+        //    with its error before that (`limited_hierarchy_error`).
+        if let Some(rc) = crate::engine::limited_hierarchy_error(cmd.creation_ticket.hierarchy().0)
+        {
+            return Err(rc.to_rc());
+        }
+        if self
+            .context
+            .state
+            .find_active_sequence(object_handle.0)
+            .is_some()
+        {
+            return Err(TpmRc::TICKET.with(Position::parameter(4)));
+        }
+        let certified_obj = self.resolve_object(object_handle.0, Position::handle(2))?;
         let expected_digest = self.compute_creation_ticket(
             cmd.creation_ticket.hierarchy().0,
             &certified_obj.name,

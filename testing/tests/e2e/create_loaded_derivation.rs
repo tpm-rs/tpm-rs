@@ -441,3 +441,24 @@ fn primary_derivation_bound_to_template_and_sensitive() {
         key(&mut sim, with_policy, &[])
     );
 }
+
+/// A template with `sensitiveDataOrigin` SET under a Derivation Parent is `TPM_RC_ATTRIBUTES`
+/// without a parameter number, as in the TCG reference (found by differential fuzzing). TPM 2.0
+/// Part 3, TPM2_CreateLoaded: "when *parentHandle* references a Derivation Parent, then
+/// *sensitiveDataOrigin* in *inPublic* is required to be CLEAR."
+#[test]
+fn derived_template_with_sensitive_data_origin_rejected() {
+    let mut tpm = Tpm::new();
+    // CreateLoaded(owner): KEYEDHASH derivation parent (restricted|decrypt, XOR/SHA-256/KDF1_SP800_108).
+    let parent = crate::_common::hex(
+        "80020000003500000191400000010000000940000009000001000000040000000000120008000b000300600000000a000b00220000",
+    );
+    let rsp = tpm.send_command(0, &parent);
+    assert_eq!(&rsp[6..10], [0, 0, 0, 0], "derivation parent: {rsp:02x?}");
+    let mut child = crate::_common::hex(
+        "800200000041000001918000000000000009400000090000010000000c00087040737377307264000000160023000b000400600000001000100003001000000000",
+    );
+    child[10..14].copy_from_slice(&rsp[10..14]);
+    let rsp = tpm.send_command(0, &child);
+    assert_eq!(&rsp[6..10], 0x082u32.to_be_bytes(), "{rsp:02x?}");
+}

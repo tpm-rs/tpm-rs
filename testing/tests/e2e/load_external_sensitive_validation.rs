@@ -606,3 +606,37 @@ fn symcipher_unique_binding_mismatch() {
     // mismatch (no parameter position).
     assert_eq!(rc, TpmRc::BINDING.get());
 }
+
+/// LoadExternal of a KEYEDHASH object with a sensitive area checks the `seedValue` size
+/// (32 octets for a SHA-512 nameAlg: `TPM_RC_KEY_SIZE + P1`) before anything about the
+/// `unique` digest, whose size does not match the nameAlg either; `unique` is only compared with the digest computed from the
+/// sensitive area (`TPM_RC_BINDING`). `tpm-rs` returned `TPM_RC_KEY + P2` for the `unique` size
+/// (found by differential fuzzing). TPM 2.0 Part 3, TPM2_LoadExternal: "If *nameAlg* is not
+/// `TPM_ALG_NULL`, then the same consistency checks between *inPublic* and *inPrivate* are made
+/// as for `TPM2_Load()`."
+#[test]
+fn keyed_hash_seed_size_checked_before_unique_size() {
+    let mut tpm = Tpm::new();
+    let cmd = crate::_common::hex(concat!(
+        "80010000007300000167",
+        // inPrivate: KEYEDHASH, empty authValue, 32-byte seedValue, 7-byte data.
+        "002f",
+        "0008",
+        "0000",
+        "0020",
+        "0202020202740000000000000002020202020202020202020202020202020202",
+        "0007",
+        "73656372657473",
+        // inPublic: KEYEDHASH, SHA-512, sign|userWithAuth, empty authPolicy,
+        // XOR(SHA-256, KDF1_SP800_108), 32-byte unique.
+        "0032",
+        "0008000d000200400000",
+        "000a000b0022",
+        "0020",
+        "8897eebe4000000700000039810101010146caf16abe01000000000000b2eebe",
+        // hierarchy: TPM_RH_NULL.
+        "40000007",
+    ));
+    let (rc, _) = crate::_common::send_with_rc(&mut tpm, &cmd);
+    assert_eq!(rc, rc_p(TpmRc::KEY_SIZE, 1), "TPM_RC_KEY_SIZE + P1");
+}

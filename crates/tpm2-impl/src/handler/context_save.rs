@@ -114,6 +114,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 return Err(TpmRc::REFERENCE_H0);
             };
         let offset = CONTEXT_FINGERPRINT_SIZE + entity_len;
+        // The reported `TPM_PT_MAX_OBJECT_CONTEXT`/`TPM_PT_MAX_SESSION_CONTEXT` bound every saved
+        // context.
+        debug_assert!(
+            CONTEXT_OVERHEAD - CONTEXT_FINGERPRINT_SIZE + offset
+                <= if is_session {
+                    MAX_SESSION_CONTEXT_SIZE
+                } else {
+                    MAX_OBJECT_CONTEXT_SIZE
+                }
+        );
 
         let handle_bytes = out_saved_handle.to_be_bytes();
         let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(obj_hierarchy)?;
@@ -518,6 +528,105 @@ pub(crate) const CONTEXT_FINGERPRINT_SIZE: usize = 8;
 pub(crate) const CONTEXT_ENCRYPTION_ALG: TpmtSymDefObject = TpmtSymDefObject {
     alg: AlgSym::Aes128,
     mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+};
+
+/// The length `N` of an array field, taken from a (never called) projection, so that the context
+/// size bounds below follow the field declarations instead of repeating them.
+const fn array_len<S, T, const N: usize>(_field: fn(&S) -> &[T; N]) -> usize {
+    N
+}
+
+/// The bytes of a `TPMS_CONTEXT` returned by `TPM2_ContextSave` around the serialized entity:
+/// `sequence` (`UINT64`), `savedHandle` (`TPMI_DH_SAVED`), `hierarchy` (`TPMI_RH_HIERARCHY+`), the
+/// `size` of `contextBlob` (`TPM2B_CONTEXT_DATA`), its `integrity` (`TPM2B_DIGEST` of
+/// `CONTEXT_INTEGRITY_HASH_ALG`) and the encrypted `sequence` fingerprint. The C references use the
+/// same layout (`PropertyCap.c`: `SIZE_OF_CONTEXT_OVERHEAD`).
+const CONTEXT_OVERHEAD: usize =
+    8 + 4 + 4 + 2 + (2 + crate::handler::TICKET_DIGEST_SIZE) + CONTEXT_FINGERPRINT_SIZE;
+
+/// Upper bound of `serialize_transient_object`: every field at its capacity. The
+/// public area is bounded by the profile's `sizeof(TPMT_PUBLIC)` (every loaded public area passed
+/// the profile-checked unmarshaling), the private blob by the capacity of
+/// `TransientObject::private`.
+const MAX_TRANSIENT_OBJECT_ENTITY_SIZE: usize = 4 // handle
+    + 1
+    + array_len(|o: &TransientObject| &o.seed)
+    + tpm2::Tpm2bName::MAX_SIZE
+    + tpm2::Tpm2bAuth::MAX_SIZE
+    + crate::handler::capability::SIZEOF_TPMT_PUBLIC
+    + 2
+    + array_len(|o: &TransientObject| &o.private)
+    + tpm2::Tpm2bName::MAX_SIZE // qualified name
+    + 1; // flags
+
+/// Upper bound of `serialize_sequence` (HMAC sequences carry the largest
+/// variant; every bank's hash state is always serialized).
+const MAX_SEQUENCE_ENTITY_SIZE: usize = 4 // handle
+    + tpm2::Tpm2bAuth::MAX_SIZE
+    + 1
+    + tpm2::TpmiAlgHash::MAX_SIZE
+    + tpm2::Tpm2bSensitiveData::MAX_SIZE
+    + 4 // sequence length
+    + 4 + 1 // first bytes
+    + array_len(|s: &crate::ActiveSequence| &s.hash_states)
+        * crate::hash_state::StreamingHashState::SERIALIZED_SIZE;
+
+/// Upper bound of `serialize_session`: every field at its capacity.
+const MAX_SESSION_ENTITY_SIZE: usize = 4 // handle
+    + tpm2::TpmSe::MAX_SIZE
+    + tpm2::TpmiAlgHash::MAX_SIZE
+    + 2 * tpm2::Tpm2bNonce::MAX_SIZE // nonceTPM, nonceCaller
+    + 2
+    + array_len(|s: &SessionState| &s.session_key)
+    + <Option<tpm2::TpmtSymDef>>::MAX_SIZE
+    + tpm2::Handle::MAX_SIZE
+    + tpm2::Tpm2bName::MAX_SIZE
+    + 1 + 2
+    + array_len(|s: &SessionState| s.audit_digest.as_ref().unwrap())
+    + 2
+    + array_len(|s: &SessionState| &s.audit_cp_hash)
+    + 2
+    + array_len(|s: &SessionState| &s.policy_hash)
+    + 1 + 1 // isCpHashDefined, isNameHashDefined
+    + 2
+    + array_len(|s: &SessionState| &s.policy_digest)
+    + 4 // command code
+    + 8 + 8 + 8 // start time, timeout, epoch
+    + 1 + 1 // isAuthValueNeeded, isPasswordNeeded
+    + 1 + 4 // pcrCounter
+    + 1 + 1 + 1 // checkNvWritten, nvWrittenState, locality
+    + 1; // flags
+
+/// `TPM_PT_MAX_OBJECT_CONTEXT`, the largest object (or sequence object) context this TPM returns.
+/// TPM 2.0 Part 2, TPM_PT: "TPM_PT_MAX_OBJECT_CONTEXT | PT_FIXED + 33 | the maximum size of an
+/// object context that will be returned by TPM2_ContextSave()". The context format is
+/// implementation-defined, so the value is that of `tpm-rs`'s serialization, not the C references'
+/// `SIZE_OF_CONTEXT_OVERHEAD + sizeof(OBJECT)`.
+pub(crate) const MAX_OBJECT_CONTEXT_SIZE: usize = CONTEXT_OVERHEAD
+    + if MAX_TRANSIENT_OBJECT_ENTITY_SIZE > MAX_SEQUENCE_ENTITY_SIZE {
+        MAX_TRANSIENT_OBJECT_ENTITY_SIZE
+    } else {
+        MAX_SEQUENCE_ENTITY_SIZE
+    };
+
+/// `TPM_PT_MAX_SESSION_CONTEXT`, the largest session context this TPM returns. TPM 2.0 Part 2,
+/// TPM_PT: "TPM_PT_MAX_SESSION_CONTEXT | PT_FIXED + 34 | the maximum size of a session context
+/// that will be returned by TPM2_ContextSave()". As for objects, the value is that of `tpm-rs`'s
+/// serialization, not the C references' `SIZE_OF_CONTEXT_OVERHEAD + sizeof(SESSION)`.
+pub(crate) const MAX_SESSION_CONTEXT_SIZE: usize = CONTEXT_OVERHEAD + MAX_SESSION_ENTITY_SIZE;
+
+// Every context this TPM saves can be loaded again: its `contextBlob` (everything after the
+// 16-byte `sequence`/`savedHandle`/`hierarchy` header and the 2-byte size) fits the
+// `TPM2B_CONTEXT_DATA` capacity `TPM2_ContextLoad` enforces, and the plaintext fits the
+// serialization buffer.
+const _: () = {
+    let max = if MAX_OBJECT_CONTEXT_SIZE > MAX_SESSION_CONTEXT_SIZE {
+        MAX_OBJECT_CONTEXT_SIZE
+    } else {
+        MAX_SESSION_CONTEXT_SIZE
+    };
+    assert!(max - 18 <= super::context_load::CONTEXT_DATA_CAPACITY);
+    assert!(max - CONTEXT_OVERHEAD + CONTEXT_FINGERPRINT_SIZE <= TPM2_MAX_CONTEXT_SIZE as usize);
 };
 
 /// Maximum marshaled size of [`RawContextSaveRsp`].

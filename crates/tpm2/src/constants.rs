@@ -681,6 +681,18 @@ impl TpmEccCurve {
 impl TryFrom<u16> for TpmEccCurve {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
+        let curve = Self::try_from_enabled(val)?;
+        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
+        if curve != Self::None && !crate::profile::allows_curve(curve) {
+            return Err(UnmarshalError::CURVE);
+        }
+        Ok(curve)
+    }
+}
+
+impl TpmEccCurve {
+    /// The curve `val` among the curves enabled by the Cargo features.
+    fn try_from_enabled(val: u16) -> Result<Self, UnmarshalError> {
         match val {
             0x0000 => Ok(Self::None),
             #[cfg(feature = "ecc_curve_nist_p192")]

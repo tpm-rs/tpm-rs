@@ -113,6 +113,22 @@ fn manufacture_default_audits_only_set_command_code_audit_status() {
     );
 }
 
+/// An unimplemented audit hash algorithm (SM3_256) is `TPM_RC_HASH + RC_P1` even when a later
+/// parameter is also malformed (an oversized, truncated `clearList`): the algorithm is checked
+/// while `auditAlg` is unmarshaled (found by differential fuzzing): Part 2 `TPMI_ALG_HASH` has
+/// `#TPM_RC_HASH`, and parameters are unmarshaled in order (Part 3, "Command Parameters").
+#[test]
+fn unimplemented_audit_alg_rejected_before_later_parameters() {
+    let mut sim = Tpm::new();
+    let params = [
+        0, 0x12, // auditAlg: TPM_ALG_SM3_256 (not implemented)
+        0, 0, 0, 0, // setList: empty
+        0, 0, 3, 0, // clearList: 768 entries, none present
+    ];
+    let cmd = build_pw_cmd(CC_SET_COMMAND_CODE_AUDIT_STATUS, &[0x4000_0001], 1, &params);
+    assert_eq!(send_rc(&mut sim, &cmd), 0x1C3, "TPM_RC_HASH + RC_P1");
+}
+
 /// setList adds commands, clearList removes them, 0x140 can never be removed
 ///
 /// Commands in `setList` are added to the audit list and commands in `clearList` are removed;

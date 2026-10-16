@@ -2,9 +2,11 @@
 //!
 //! With the `differential` feature, the build clones every reference
 //! implementation at a pinned commit, applies its patches, compiles it into a
-//! symbol-isolated static library (exporting only the `difftest_*` entry
-//! points) and links that library into the reference binary of the same name
-//! (see `src/differential/mod.rs`):
+//! symbol-isolated static library (exporting only its entry points, prefixed
+//! with its name: `difftest_<name>_*`) and links both libraries into the
+//! crate's library (`src/differential/inproc.rs` holds their FFI), so that
+//! the reference binaries (`src/bin/`) and in-process users (the
+//! `fuzz-inproc` feature) can host them:
 //!
 //! * `mstpm20`: the TCG / Microsoft reference implementation, in one of two
 //!   versions (see [`Version`]):
@@ -34,6 +36,9 @@
 //! `<classification>-<fix>.patch` (see [`PATCH_CLASSES`]). The patches of a
 //! version are applied with `git apply` in sorted file-name order.
 //!
+//! `FUZZ_C_COVERAGE=1` adds coverage instrumentation for libFuzzer to the C
+//! code (see [`C_COVERAGE_ENV`]).
+//!
 //! Without the feature, nothing is built.
 
 use std::path::{Path, PathBuf};
@@ -41,8 +46,9 @@ use std::process::Command;
 
 /// A C reference TPM implementation built for differential testing.
 struct Reference {
-    /// Name of the implementation, its static library (`lib<name>.a`) and the
-    /// binary it is linked into.
+    /// Name of the implementation, of its static library (`lib<name>.a`), of
+    /// the prefix of its entry points (`difftest_<name>_*`) and of its
+    /// reference binary.
     name: &'static str,
     /// The versions the implementation can be built from, in order of
     /// preference: the first available one is used unless `<NAME>_VERSION`
@@ -153,8 +159,11 @@ const REFERENCES: [Reference; 2] = [
     },
 ];
 
-/// The entry points every patched reference exports (see
-/// `src/bin/shared/ffi.rs`); every other symbol is localized.
+/// The entry points every patched reference defines (see
+/// `src/differential/inproc.rs`). The archive of reference `<name>` exports
+/// each of them as `difftest_<name>_<entry point>` (see [`prefixed`]), so
+/// that both archives can be linked into one binary; every other symbol is
+/// localized.
 const EXPORTED_SYMBOLS: [&str; 15] = [
     "difftest_init",
     "difftest_advance_clock",
@@ -173,10 +182,51 @@ const EXPORTED_SYMBOLS: [&str; 15] = [
     "difftest_run_command",
 ];
 
+/// The C library functions whose state is global to a process and that the
+/// references use for their random number generation (`_plat__GetEntropy()`
+/// seeds `rand()` with `srand()`). The archive of reference `<name>` calls
+/// `difftest_<name>_<function>` instead (see [`prefixed`]), which
+/// `src/differential/inproc.rs` implements with one generator per reference,
+/// so that two references in one process do not share (and perturb) one
+/// generator.
+const PER_REFERENCE_LIBC: [&str; 2] = ["rand", "srand"];
+
+/// The callbacks into the harness the references share (implemented once in
+/// `src/differential/inproc.rs`): the process ID (`getpid()` is redirected
+/// to `difftest_getpid()`) and the virtual clock (`difftest_virtual_ms()`,
+/// see `harness-virtual-clock.patch`).
+const SHARED_CALLBACKS: [&str; 2] = ["difftest_getpid", "difftest_virtual_ms"];
+
+/// The name under which the archive of reference `name` exports the entry
+/// point `symbol` (`difftest_init` → `difftest_<name>_init`) or calls the C
+/// library function `symbol` of [`PER_REFERENCE_LIBC`] (`rand` →
+/// `difftest_<name>_rand`).
+fn prefixed(name: &str, symbol: &str) -> String {
+    let base = symbol.strip_prefix("difftest_").unwrap_or(symbol);
+    format!("difftest_{name}_{base}")
+}
+
+/// Environment variable that, set to `1`, compiles the C references with
+/// `-fsanitize=fuzzer-no-link` (with `clang`, unless `CC` names another
+/// compiler), so that a fuzz target linking them in-process (`fuzz-inproc`)
+/// also counts new paths in the C code as coverage. The archives then need
+/// the libFuzzer runtime, so only fuzz targets can link them.
+const C_COVERAGE_ENV: &str = "FUZZ_C_COVERAGE";
+
+/// The extra C compiler flags [`C_COVERAGE_ENV`] selects.
+fn coverage_cflags() -> &'static [&'static str] {
+    if std::env::var(C_COVERAGE_ENV).is_ok_and(|v| v == "1") {
+        &["-fsanitize=fuzzer-no-link"]
+    } else {
+        &[]
+    }
+}
+
 fn main() {
     let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed={C_COVERAGE_ENV}");
 
     if std::env::var_os("CARGO_FEATURE_DIFFERENTIAL").is_some() {
         let versions: Vec<&Version> = REFERENCES
@@ -190,6 +240,11 @@ fn main() {
                 s.spawn(move || build_reference(reference.name, version, manifest, out));
             }
         });
+        // Both archives are linked into the library (and through it into
+        // every binary using it, including dependent crates such as the fuzz
+        // targets): their entry points have distinct names (see
+        // `prefixed`), so they coexist in one binary.
+        println!("cargo:rustc-link-search=native={}", out.display());
         for (reference, version) in REFERENCES.iter().zip(&versions) {
             let name = reference.name;
             println!(
@@ -197,13 +252,18 @@ fn main() {
                 name.to_uppercase(),
                 version.label
             );
-            let archive = out.join(format!("lib{name}.a"));
-            // Each library goes into its own binary only (both export the
-            // same `difftest_*` entry points).
-            println!("cargo:rustc-link-arg-bin={name}={}", archive.display());
-            println!("cargo:rustc-link-arg-bin={name}=-lz");
-            println!("cargo:rustc-link-arg-bin={name}=-lzstd");
+            println!("cargo:rustc-link-lib=static={name}");
+            // The archive's path for dependent build scripts
+            // (`DEP_TPM_REFERENCES_<NAME>_ARCHIVE`, see `links` in
+            // Cargo.toml).
+            println!(
+                "cargo:{name}_archive={}",
+                out.join(format!("lib{name}.a")).display()
+            );
         }
+        // `libcrypto.a` (inside the archives) needs zlib and zstd.
+        println!("cargo:rustc-link-lib=dylib=z");
+        println!("cargo:rustc-link-lib=dylib=zstd");
     }
 }
 
@@ -353,6 +413,8 @@ fn build_reference(name: &str, version: &Version, manifest: &Path, out: &Path) {
     // The build recipe (compiler flags, sources, exported symbols) is part of
     // the stamp too, so changing it never reuses a stale library.
     expected_stamp.extend_from_slice(include_bytes!("build.rs"));
+    let coverage = coverage_cflags();
+    expected_stamp.extend_from_slice(format!("coverage cflags: {coverage:?}\n").as_bytes());
 
     let archive = out.join(format!("lib{name}.a"));
     let stamp_file = out.join(format!("{name}.stamp"));
@@ -427,7 +489,10 @@ fn build_reference(name: &str, version: &Version, manifest: &Path, out: &Path) {
     let _ = std::fs::remove_dir_all(&obj_dir);
     std::fs::create_dir_all(&obj_dir).expect("create obj_dir");
 
-    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_owned());
+    let cc = std::env::var("CC").unwrap_or_else(|_| {
+        // `-fsanitize=fuzzer-no-link` is a clang flag.
+        if coverage.is_empty() { "cc" } else { "clang" }.to_owned()
+    });
     let obj_paths: Vec<PathBuf> = c_files
         .iter()
         .enumerate()
@@ -448,6 +513,7 @@ fn build_reference(name: &str, version: &Version, manifest: &Path, out: &Path) {
                 for (src, obj) in src_chunk.iter().zip(obj_chunk.iter()) {
                     let mut cmd = Command::new(cc);
                     cmd.args(version.cflags);
+                    cmd.args(coverage);
                     for inc in include_dirs {
                         cmd.arg("-I").arg(inc);
                     }
@@ -491,27 +557,33 @@ fn build_reference(name: &str, version: &Version, manifest: &Path, out: &Path) {
 
     // `getpid()` (which seeds the reference's `rand()` together with the
     // clock) is redirected to the harness's `difftest_getpid()`, so that a
-    // fixed seed (`TPM_REFERENCE_SEED`) can reproduce a run. This is a
-    // link-level redirection; the C code is not changed.
+    // fixed seed (`TPM_REFERENCE_SEED`) can reproduce a run. `rand()` and
+    // `srand()` are redirected to a generator of this reference only (see
+    // [`PER_REFERENCE_LIBC`]), and the entry points get the reference's
+    // prefix (see [`prefixed`]). These are link-level redirections; the C
+    // code is not changed.
     let redirected_o = obj_dir.join(format!("{name}_redirected.o"));
+    let mut redirect_cmd = Command::new("objcopy");
+    redirect_cmd.arg("--redefine-sym=getpid=difftest_getpid");
+    for sym in PER_REFERENCE_LIBC.iter().chain(&EXPORTED_SYMBOLS) {
+        redirect_cmd.arg(format!("--redefine-sym={sym}={}", prefixed(name, sym)));
+    }
     run(
-        Command::new("objcopy")
-            .arg("--redefine-sym=getpid=difftest_getpid")
-            .arg(&all_o)
-            .arg(&redirected_o),
-        &format!("objcopy redirect {name} getpid"),
+        redirect_cmd.arg(&all_o).arg(&redirected_o),
+        &format!("objcopy redirect {name} symbols"),
     );
     let all_o = redirected_o;
 
     let mut objcopy_cmd = Command::new("objcopy");
     for sym in EXPORTED_SYMBOLS {
-        objcopy_cmd.arg(format!("--keep-global-symbol={sym}"));
+        objcopy_cmd.arg(format!("--keep-global-symbol={}", prefixed(name, sym)));
     }
     objcopy_cmd.arg(&all_o).arg(&isolated_o);
     run(
         &mut objcopy_cmd,
         &format!("objcopy localize {name} symbols"),
     );
+    check_interface(name, &isolated_o);
 
     let _ = std::fs::remove_file(&archive);
     run(
@@ -521,6 +593,57 @@ fn build_reference(name: &str, version: &Version, manifest: &Path, out: &Path) {
 
     std::fs::write(&stamp_file, &expected_stamp)
         .unwrap_or_else(|e| panic!("write {name}.stamp: {e}"));
+}
+
+/// Checks the symbol interface of the isolated object `obj` of reference
+/// `name` with `nm`: it defines exactly the prefixed entry points as global
+/// symbols, and the only harness symbols (`difftest_*`) and redirected C
+/// library functions it needs are [`SHARED_CALLBACKS`] and its own
+/// [`PER_REFERENCE_LIBC`] replacements. This is what lets both references
+/// (and the localized `libtpmrs_refrng.a` of `tpm2-impl`'s
+/// `reference-rng`, which exports only `tpmrs_refrng_*`) share one binary.
+///
+/// # Panics
+/// If the interface differs.
+fn check_interface(name: &str, obj: &Path) {
+    let out = Command::new("nm")
+        .arg("-g")
+        .arg(obj)
+        .output()
+        .expect("spawn nm");
+    assert!(out.status.success(), "nm {} failed", obj.display());
+    let listing = String::from_utf8_lossy(&out.stdout);
+    let mut defined = Vec::new();
+    let mut undefined = Vec::new();
+    for line in listing.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        match fields.as_slice() {
+            [kind, symbol] if kind.eq_ignore_ascii_case("u") || *kind == "w" => {
+                undefined.push(*symbol)
+            }
+            [_, _, symbol] => defined.push(*symbol),
+            _ => {}
+        }
+    }
+    defined.sort_unstable();
+    let mut expected: Vec<String> = EXPORTED_SYMBOLS.iter().map(|s| prefixed(name, s)).collect();
+    expected.sort_unstable();
+    assert_eq!(
+        defined, expected,
+        "lib{name}.a must export exactly its prefixed entry points"
+    );
+    let allowed: Vec<String> = SHARED_CALLBACKS
+        .iter()
+        .map(|s| s.to_string())
+        .chain(PER_REFERENCE_LIBC.iter().map(|s| prefixed(name, s)))
+        .collect();
+    for symbol in undefined {
+        assert!(
+            !["getpid", "rand", "srand"].contains(&symbol)
+                && (!symbol.starts_with("difftest_") || allowed.iter().any(|a| a == symbol)),
+            "lib{name}.a needs the unexpected symbol `{symbol}`"
+        );
+    }
 }
 
 /// Collects the `.c` files under `dir` (recursively, sorted) into `out`.

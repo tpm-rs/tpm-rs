@@ -30,6 +30,20 @@ use tpm2::{TpmSe, TpmiAlgHash};
 
 use super::context_save::{CONTEXT_ENCRYPTION_ALG, CONTEXT_FINGERPRINT_SIZE};
 
+/// `MAX_CONTEXT_SIZE` of this TPM's profile: the capacity of `TPM2B_CONTEXT_SENSITIVE` (TPM 2.0
+/// Part 2, Table "Definition of TPM2B_CONTEXT_SENSITIVE Structure": "buffer\[size\]{:MAX_CONTEXT_SIZE}").
+/// The value is implementation-specific; the C references are configured with the same value
+/// (`testing/patches/*/profile-max-context-size.patch`).
+const MAX_CONTEXT_SIZE: usize = 2264;
+
+/// The capacity of `TPM2B_CONTEXT_DATA`: TPM 2.0 Part 2, Table "Definition of TPM2B_CONTEXT_DATA
+/// Structure": "buffer\[size\] {:sizeof(TPMS_CONTEXT_DATA)}", where Table "Definition of
+/// TPMS_CONTEXT_DATA Structure" is "integrity | TPM2B_DIGEST" followed by "encrypted |
+/// TPM2B_CONTEXT_SENSITIVE": `(2 + sizeof(TPMU_HA)) + (2 + MAX_CONTEXT_SIZE)`, with the largest
+/// implemented digest (SHA-512, 64 octets). A larger `contextBlob` size is `TPM_RC_SIZE` while it
+/// is unmarshaled, before any missing bytes (`TPM_RC_INSUFFICIENT`).
+pub(crate) const CONTEXT_DATA_CAPACITY: usize = (2 + 64) + (2 + MAX_CONTEXT_SIZE);
+
 /// Size of the context integrity HMAC (`CONTEXT_INTEGRITY_HASH_ALG`).
 const CONTEXT_INTEGRITY_DIGEST_SIZE: usize = crate::handler::TICKET_DIGEST_SIZE;
 
@@ -62,24 +76,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let saved_handle = request
             .try_unmarshal::<Handle>()
             .map_err(|e| e.with_position(Position::parameter(1)))?;
-        let is_valid_saved_handle = matches!(saved_handle.0, 0x8000_0000..=0x8000_0002)
-            || matches!(saved_handle.0 >> 24, 0x02 | 0x03);
-        if !is_valid_saved_handle {
+        // TPM 2.0 Part 2, Table "Definition of (TPM_HANDLE) TPMI_DH_SAVED Type": "{HMAC_SESSION_FIRST
+        // : HMAC_SESSION_LAST} | an HMAC session context", "{POLICY_SESSION_FIRST:POLICY_SESSION_LAST}
+        // | a policy session context", "0x80000000", "0x80000001", "0x80000002", "#TPM_RC_VALUE";
+        // and TPM_HC: "HMAC_SESSION_LAST | (HMAC_SESSION_FIRST + MAX_ACTIVE_SESSIONS - 1)". A
+        // session handle beyond MAX_ACTIVE_SESSIONS fails here, before `hierarchy` is read.
+        if tpm2::TpmiDhSaved::try_from(saved_handle).is_err() {
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
         }
         let hierarchy = request
             .try_unmarshal::<Handle>()
             .map_err(|e| e.with_position(Position::parameter(1)))?;
-        if !matches!(
-            hierarchy,
-            Handle::RH_OWNER | Handle::RH_ENDORSEMENT | Handle::RH_PLATFORM | Handle::RH_NULL
-        ) {
+        // `TPMI_RH_HIERARCHY+`, including the firmware-limited and SVN-limited hierarchies (Part 2,
+        // Table "Definition of (TPM_HANDLE) TPMI_RH_HIERARCHY Type"), whose unavailable proof
+        // then fails the integrity check (`resolve_hierarchy_proof`, `limited_hierarchy_error`).
+        if tpm2::TpmiRhHierarchy::try_from(hierarchy).is_err() {
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
         }
         let blob_size = request
             .try_unmarshal::<u16>()
             .map_err(|e| e.with_position(Position::parameter(1)))? as usize;
-        if blob_size > tpm2::Tpm2bContextData::MAX_BUFFER_SIZE {
+        if blob_size > CONTEXT_DATA_CAPACITY {
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
         if request.remaining_bytes() < blob_size {
@@ -131,9 +148,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // From here on the blob is known to have been produced by this TPM, so
         // any inconsistency indicates a TPM failure rather than bad input.
         let mut protected_slice = protected;
-        let enc_size = u16::unmarshal(&mut protected_slice).map_err(|_| TpmRc::FAILURE)? as usize;
+        let enc_size = u16::unmarshal(&mut protected_slice)
+            .map_err(|_| TpmRc::INTEGRITY.with(Position::parameter(1)))?
+            as usize;
         if protected_slice.len() != enc_size {
-            return Err(TpmRc::FAILURE);
+            // An authentic blob of another context layout (see `malformed_context`).
+            return Err(TpmRc::INTEGRITY.with(Position::parameter(1)));
         }
         let enc_slice = protected_slice;
 
@@ -215,20 +235,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 return Err(TpmRc::CONTEXT_GAP);
             }
             // 3. Deserialize session context
-            let sess = Self::deserialize_session(plaintext)?;
+            let sess = Self::deserialize_session(plaintext).map_err(malformed_context)?;
             let handle = sess.session_handle;
             self.context.state.remove_saved_session(handle);
             self.context.state.add_session(sess)?;
             handle
         } else if is_sequence {
-            let mut seq = Self::deserialize_sequence(plaintext)?;
+            let mut seq = Self::deserialize_sequence(plaintext).map_err(malformed_context)?;
             let (slot, handle) = self.context.state.find_empty_sequence_slot()?;
             seq.handle = handle;
             self.context.state.active_sequences[slot] = Some(seq);
             handle
         } else {
             // 3. Unmarshal decrypted buffer into fields
-            let (fields, ancestor_has_st_clear) = Self::unmarshal_decrypted_context(plaintext)?;
+            let (fields, ancestor_has_st_clear) =
+                Self::unmarshal_decrypted_context(plaintext).map_err(malformed_context)?;
 
             // 4. Resolve empty slot and load transient object
             let (slot, handle) = self.context.state.find_empty_transient_slot(true)?;
@@ -366,7 +387,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let name = OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let auth = OwnedAuth::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
-        let public = OwnedPublic::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
+        // The saved public area may have `nameAlg = TPM_ALG_NULL`: TPM 2.0 Part 3,
+        // TPM2_LoadExternal: "If *nameAlg* is `TPM_ALG_NULL`, then the Name is the Empty
+        // Buffer." Such an object can be saved and loaded again like any other, so
+        // the area is read as a `TPMT_PUBLIC+` (strict unmarshaling turned a valid context of
+        // such an object into TPM_RC_FAILURE).
+        let public = OwnedPublic::unmarshal_nullable(&mut slice).map_err(|_| TpmRc::FAILURE)?;
 
         let priv_len = u16::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? as usize;
         if slice.len() < priv_len {
@@ -577,5 +603,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             first_bytes_len,
             hash_states,
         })
+    }
+}
+
+/// The error for an authentic context (its integrity HMAC is valid and its decrypted fingerprint
+/// matches) whose contents do not have this TPM's context layout, e.g. a context saved by an
+/// earlier version of this TPM with the same proof: `TPM_RC_INTEGRITY + P1`. Other errors pass
+/// unchanged.
+///
+/// The specification only requires the fingerprint check (TPM 2.0 Part 3, TPM2_ContextLoad:
+/// "The TPM shall perform a check on the decrypted context as described in the \"Context
+/// Confidentiality Protection\" clause of TPM 2.0 Part 1 and enter failure mode if the check
+/// fails."; the context data itself is not specified: Part 2, `TPM2B_CONTEXT_SENSITIVE`: "This is
+/// an informative table that is included in the specification only to allow calculation of the
+/// maximum size for `TPM2B_CONTEXT_DATA`."). A blob that is not a valid context of this TPM is
+/// not a TPM failure
+/// but input the TPM cannot load, the same as a blob whose integrity fails ("If the integrity HMAC
+/// of the saved context is not valid, the TPM shall return `TPM_RC_INTEGRITY`.").
+fn malformed_context(rc: TpmRc) -> TpmRc {
+    if rc == TpmRc::FAILURE {
+        TpmRc::INTEGRITY.with(Position::parameter(1))
+    } else {
+        rc
     }
 }

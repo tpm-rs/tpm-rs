@@ -707,3 +707,69 @@ fn unsupported_name_alg_rejected() {
         "BUG: Create succeeded (or failed with wrong error) with unsupported name alg SM3256!"
     );
 }
+
+/// A malformed `inSensitive` (parameter 1, inner `data` size beyond the buffer) is reported as
+/// `TPM_RC_SIZE + P1` even when `inPublic` (parameter 2) is invalid as well: the parameters are
+/// unmarshaled in order. TPM 2.0 Part 3, "Unmarshaling Errors": "When an error is encountered
+/// while unmarshaling a command parameter, an error response code is returned, and no command
+/// processing occurs." Found by differential fuzzing.
+#[test]
+fn malformed_in_sensitive_reported_before_in_public() {
+    let mut tpm = testing::tpm::Tpm::new();
+    let steps: [(&str, u32); 2] = [
+        (
+            concat!(
+                "800200000043000001314000000100000009400000090000010000000400000000001a0023000b000300720000000600",
+                "80004300100003001000000000000000000000",
+            ),
+            0x000,
+        ),
+        (
+            concat!(
+                "800200000048000001538000000000000009400000090000010000000b0007000081000401002d000b00076f6c646175",
+                "7468000000180001000b00040072000000106f6c64617574",
+            ),
+            0x1d5,
+        ),
+    ];
+    for (i, (cmd, rc)) in steps.into_iter().enumerate() {
+        let rsp = tpm.send_command(0, &crate::_common::hex_checked(cmd));
+        assert_eq!(
+            u32::from_be_bytes(rsp[6..10].try_into().unwrap()),
+            rc,
+            "step {i}: {rsp:02x?}"
+        );
+    }
+}
+
+/// TPM2_Create of an RSA key with an unsupported public exponent fails at key generation with
+/// `TPM_RC_RANGE` (see `create_primary_validation::unsupported_rsa_exponent_fails_key_generation_with_range`).
+/// Found by differential fuzzing.
+#[test]
+fn unsupported_rsa_exponent_fails_child_key_generation_with_range() {
+    let mut tpm = testing::tpm::Tpm::new();
+    let steps: [(&str, u32); 2] = [
+        (
+            concat!(
+                "800200000043000001314000000100000009400000090000010000000400000000001a0023000b000300720000000600",
+                "80004300100003001000000000000000000000",
+            ),
+            0x000,
+        ),
+        (
+            concat!(
+                "80020000005f00000153800000000000000940000009000000000000040000000000360001000b000400600020bef56b",
+                "8c1cc84e11edd717528d2cd99356bd2bbf8f015209c3f84aeeaba8e8a200100010080000003a300000000000000000",
+            ),
+            0x08d,
+        ),
+    ];
+    for (i, (cmd, rc)) in steps.into_iter().enumerate() {
+        let rsp = tpm.send_command(0, &crate::_common::hex_checked(cmd));
+        assert_eq!(
+            u32::from_be_bytes(rsp[6..10].try_into().unwrap()),
+            rc,
+            "step {i}: {rsp:02x?}"
+        );
+    }
+}

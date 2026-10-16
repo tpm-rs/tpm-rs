@@ -1,0 +1,32 @@
+rsa-decrypt-key-handle-type: TPM2_RSA_Decrypt rejects TPM_RH_NULL with TPM_RC_VALUE
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, TPM2_RSA_Decrypt, Table "TPM2_RSA_Decrypt
+Command", Handles): "TPMI_DH_OBJECT | @keyHandle | RSA key to use for
+decryption" (no '+', so TPM_RH_NULL is not a member). Part 3, "Handle Area
+Validation": "The TPM shall successfully unmarshal the number of handles
+required by the command and validate that the value of the handle is
+consistent with the command syntax. If not, the TPM shall return
+`TPM_RC_VALUE`."
+
+The keyHandle of TPM2_RSA_Decrypt is a TPMI_DH_OBJECT without '+' (Part 3,
+TPM2_RSA_Decrypt), so TPM_RH_NULL must be rejected while unmarshaling the
+handle (TPM_RC_VALUE + TPM_RC_H + TPM_RC_1, as tpm-rs and ibmswtpm2 return).
+Version 185 unmarshals it as TPMI_DH_OBJECT+ and thus accepts TPM_RH_NULL
+(and fails later with TPM_RC_AUTH_MISSING). Found by differential fuzzing.
+diff --git a/TPMCmd/tpm/include/private/CommandDispatch.inl b/TPMCmd/tpm/include/private/CommandDispatch.inl
+--- a/TPMCmd/tpm/include/private/CommandDispatch.inl
++++ b/TPMCmd/tpm/include/private/CommandDispatch.inl
+@@ -1269,7 +1269,10 @@
+ #define CURRENT_TPM_COMMAND RSA_Decrypt
+ MAKE_DISPATCH_TABLE(
+     // Command input handles
+-    MAKE_INPUT_DISPATCH_ENTRY(MARSHAL_ID_TPMI_DH_OBJECT_Plus, keyHandle),
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // keyHandle is a TPMI_DH_OBJECT without '+' (Part 3, TPM2_RSA_Decrypt), so
++    // TPM_RH_NULL is TPM_RC_VALUE.
++    MAKE_INPUT_DISPATCH_ENTRY(MARSHAL_ID_TPMI_DH_OBJECT, keyHandle),
+ 
+     MAKE_DISPATCH_SEPARATOR(START_INPUT_PARAMETERS),
+     // Command input parameters

@@ -36,7 +36,11 @@
 //! signals, `_TPM_Hash_*` indications and virtual-clock advances. Every
 //! request is answered; an error reply (an undocumented difference, or an
 //! interaction the C reference does not support) panics in the test at the
-//! diverging interaction.
+//! diverging interaction. [`References::try_exchange`] reports a diverging
+//! command as [`Divergence`]s instead (with each reference's response), and
+//! [`References::reinit`] re-initializes the existing processes like new
+//! ones with the same seed (`Reinit`), which is much cheaper than launching
+//! new processes (e.g. once per fuzz input).
 //!
 //! The references are selected with the `DIFFERENTIAL_REFERENCES`
 //! environment variable: `mstpm20` or `ibmswtpm2` to compare with only that
@@ -56,11 +60,31 @@ use std::sync::OnceLock;
 
 use tpm2_simulator::SimulatorPlatformSignal;
 
-use self::protocol::Request;
+use self::protocol::{Failure, Request};
 use crate::seed::{ReferenceSeed, SEED_ENV};
 
+pub mod inproc;
 pub mod protocol;
 pub mod server;
+
+/// A reference TPM whose response to a command differs from the `tpm-rs`
+/// response other than as documented, or that failed to execute it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Divergence {
+    /// The diverging reference.
+    pub implementation: Implementation,
+    /// The reference's response; `None` if it has none (the process died or
+    /// the failure was not a response difference).
+    pub reference_response: Option<Vec<u8>>,
+    /// The diagnostic message (with both responses for a difference).
+    pub message: String,
+}
+
+impl fmt::Display for Divergence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
 
 /// A C reference TPM implementation that `tpm-rs` is compared with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -252,17 +276,17 @@ impl Reference {
     /// # Panics
     /// On an error reply, or if the process died.
     fn finish(&mut self, what: &str) {
-        if let Err(message) = self.try_finish(what) {
-            panic!("{message}");
+        if let Err(failure) = self.try_finish(what) {
+            panic!("{}", failure.message);
         }
     }
 
-    /// Reads the reply to the last request; the error message of an error
-    /// reply or of a dead process.
-    fn try_finish(&mut self, what: &str) -> Result<(), String> {
+    /// Reads the reply to the last request; the failure of an error reply
+    /// or of a dead process.
+    fn try_finish(&mut self, what: &str) -> Result<(), Failure> {
         match protocol::read_reply(&mut self.replies) {
             Ok(result) => result,
-            Err(e) => Err(format!(
+            Err(e) => Err(Failure::new(format!(
                 "test `{}`: the {} reference TPM process failed during {what} ({e}; {})",
                 self.test,
                 self.implementation,
@@ -270,7 +294,7 @@ impl Reference {
                     Ok(Some(status)) => format!("exited with {status}"),
                     _ => "still running".into(),
                 }
-            )),
+            ))),
         }
     }
 
@@ -307,6 +331,7 @@ fn describe(request: &Request) -> &'static str {
         Request::AdvanceClock(_) => "a clock advance",
         Request::Signal(_) => "a platform signal",
         Request::HashStart | Request::HashData(_) | Request::HashEnd => "a _TPM_Hash indication",
+        Request::Reinit => "a re-initialization",
     }
 }
 
@@ -342,20 +367,46 @@ impl References {
         self.0.iter().map(Reference::implementation)
     }
 
+    /// Reads every reference's reply to the last request (always all of
+    /// them, so every channel stays in sync); the failing references.
+    fn try_finish_all(&mut self, what: &str) -> Result<(), Vec<Divergence>> {
+        let divergences: Vec<Divergence> = self
+            .0
+            .iter_mut()
+            .filter_map(|reference| {
+                let failure = reference.try_finish(what).err()?;
+                Some(Divergence {
+                    implementation: reference.implementation,
+                    reference_response: failure.reference_response,
+                    message: failure.message,
+                })
+            })
+            .collect();
+        if divergences.is_empty() {
+            Ok(())
+        } else {
+            Err(divergences)
+        }
+    }
+
     /// Reads every reference's reply to the last request.
     ///
     /// # Panics
     /// If any reply is an error or a process died (with the messages of all
     /// failing references).
     fn finish_all(&mut self, what: &str) {
-        let failures: Vec<String> = self
-            .0
-            .iter_mut()
-            .filter_map(|reference| reference.try_finish(what).err())
-            .collect();
-        if !failures.is_empty() {
-            panic!("{}", failures.join("\n\n"));
+        if let Err(divergences) = self.try_finish_all(what) {
+            panic!("{}", join_messages(&divergences));
         }
+    }
+
+    /// Sends `request` to every reference, then waits for all replies; the
+    /// failing references.
+    fn try_call(&mut self, request: Request) -> Result<(), Vec<Divergence>> {
+        for reference in &mut self.0 {
+            reference.send(&request);
+        }
+        self.try_finish_all(describe(&request))
     }
 
     /// Sends `request` to every reference, then waits for all replies.
@@ -363,10 +414,21 @@ impl References {
     /// # Panics
     /// See [`Self::finish_all`].
     fn call(&mut self, request: Request) {
-        for reference in &mut self.0 {
-            reference.send(&request);
+        if let Err(divergences) = self.try_call(request) {
+            panic!("{}", join_messages(&divergences));
         }
-        self.finish_all(describe(&request));
+    }
+
+    /// Re-initializes every reference process like a new one with the same
+    /// seed (`Request::Reinit`, see [`server::Server::reinit`]): virtual clock
+    /// back at the seed's real time, manufactured, powered on, NV on,
+    /// `TPM2_Startup(TPM_SU_CLEAR)` done, and comparison state cleared. No
+    /// process is launched.
+    ///
+    /// # Panics
+    /// If a reference fails to re-initialize or a process died.
+    pub fn reinit(&mut self) {
+        self.call(Request::Reinit);
     }
 
     /// Advances the references' virtual clocks by `ms` milliseconds.
@@ -405,12 +467,36 @@ impl References {
     /// # Panics
     /// If a reference's response differs other than as documented.
     pub fn exchange(&mut self, locality: u8, command: &[u8], expected: &[u8]) {
-        self.call(Request::Exchange {
+        if let Err(divergences) = self.try_exchange(locality, command, expected) {
+            panic!("{}", join_messages(&divergences));
+        }
+    }
+
+    /// Like [`Self::exchange`], but returns the references whose responses
+    /// differ (or that failed) instead of panicking. Every reference has
+    /// executed the command either way, so the `References` stay usable
+    /// (unless a process died).
+    pub fn try_exchange(
+        &mut self,
+        locality: u8,
+        command: &[u8],
+        expected: &[u8],
+    ) -> Result<(), Vec<Divergence>> {
+        self.try_call(Request::Exchange {
             locality,
             command: command.to_vec(),
             expected: expected.to_vec(),
-        });
+        })
     }
+}
+
+/// The messages of `divergences`, separated by blank lines.
+pub fn join_messages(divergences: &[Divergence]) -> String {
+    divergences
+        .iter()
+        .map(|d| d.message.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[cfg(test)]

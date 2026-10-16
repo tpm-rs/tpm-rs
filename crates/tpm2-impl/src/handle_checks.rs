@@ -51,8 +51,8 @@
 //! `unmarshal_with_handles` in the `tpm2` crate, and the engine's own command-level handle
 //! validation is unchanged.
 
-use tpm2::Handle;
 use tpm2::errors::{Position, TpmRc};
+use tpm2::{Handle, TpmCc};
 
 /// The last of the three saved object context handles of `TPMI_DH_SAVED` (Part 2, Table 53):
 /// `0x8000_0000` (an ordinary transient object), `0x8000_0001` (a sequence object) and
@@ -251,6 +251,129 @@ pub(crate) fn check(handle: Handle, ty: Tpmi, pos: Position) -> Result<Handle, T
         Ok(handle)
     } else {
         Err(TpmRc::VALUE.with(pos))
+    }
+}
+
+/// The interface types of the handle area of command `cc` (TPM 2.0 Part 3, the `Handles`
+/// of each command's request table), in handle order; empty for a command without handles or
+/// an unknown command code.
+///
+/// The engine checks every handle against its type before it checks whether any handle
+/// references an available entity, as the C reference's `ParseHandleBuffer` unmarshals the
+/// whole handle area before `EntityGetLoadStatus` runs.
+///
+/// The types are the `Handles` rows of each command table, e.g. TPM 2.0 Part 3,
+/// TPM2_CreateLoaded: "TPMI_DH_PARENT | \@parentHandle | Handle of a transient storage key, a
+/// persistent storage key, TPM_RH_ENDORSEMENT, TPM_RH_OWNER, TPM_RH_PLATFORM+{PP}, or
+/// TPM_RH_NULL", and TPM2_RSA_Decrypt: "TPMI_DH_OBJECT | \@keyHandle | RSA key to use for
+/// decryption" (no `+`, so `TPM_RH_NULL` is `TPM_RC_VALUE`).
+pub(crate) fn command_handle_types(cc: TpmCc) -> &'static [Tpmi] {
+    match cc {
+        TpmCc::NVUndefineSpaceSpecial => &[Tpmi::RhNvDefinedIndex, Tpmi::RhPlatform],
+        TpmCc::EvictControl => &[Tpmi::RhProvision, Tpmi::DhObject],
+        TpmCc::HierarchyControl => &[Tpmi::RhBaseHierarchy],
+        TpmCc::NVUndefineSpace => &[Tpmi::RhProvision, Tpmi::RhNvDefinedIndex],
+        TpmCc::ChangeEPS => &[Tpmi::RhPlatform],
+        TpmCc::ChangePPS => &[Tpmi::RhPlatform],
+        TpmCc::Clear => &[Tpmi::RhClear],
+        TpmCc::ClearControl => &[Tpmi::RhClear],
+        TpmCc::ClockSet => &[Tpmi::RhProvision],
+        TpmCc::HierarchyChangeAuth => &[Tpmi::RhHierarchyAuth],
+        TpmCc::NVDefineSpace => &[Tpmi::RhProvision],
+        TpmCc::PCRAllocate => &[Tpmi::RhPlatform],
+        TpmCc::PCRSetAuthPolicy => &[Tpmi::RhPlatform],
+        TpmCc::PPCommands => &[Tpmi::RhPlatform],
+        TpmCc::SetPrimaryPolicy => &[Tpmi::RhHierarchyPolicy],
+        TpmCc::FieldUpgradeStart => &[Tpmi::RhPlatform, Tpmi::DhObject],
+        TpmCc::ClockRateAdjust => &[Tpmi::RhProvision],
+        TpmCc::CreatePrimary => &[Tpmi::RhHierarchy],
+        TpmCc::NVGlobalWriteLock => &[Tpmi::RhProvision],
+        TpmCc::GetCommandAuditDigest => &[Tpmi::RhEndorsement, Tpmi::DhObjectOrNull],
+        TpmCc::NVIncrement => &[Tpmi::RhNvAuth, Tpmi::RhNvIndex],
+        TpmCc::NVSetBits => &[Tpmi::RhNvAuth, Tpmi::RhNvIndex],
+        TpmCc::NVExtend => &[Tpmi::RhNvAuth, Tpmi::RhNvIndex],
+        TpmCc::NVWrite => &[Tpmi::RhNvAuth, Tpmi::RhNvIndex],
+        TpmCc::NVWriteLock => &[Tpmi::RhNvAuth, Tpmi::RhNvIndex],
+        TpmCc::DictionaryAttackLockReset => &[Tpmi::RhLockout],
+        TpmCc::DictionaryAttackParameters => &[Tpmi::RhLockout],
+        TpmCc::NVChangeAuth => &[Tpmi::RhNvIndex],
+        TpmCc::PCREvent => &[Tpmi::DhPcrOrNull],
+        TpmCc::PCRReset => &[Tpmi::DhPcr],
+        TpmCc::SequenceComplete => &[Tpmi::DhObject],
+        TpmCc::SetAlgorithmSet => &[Tpmi::RhPlatform],
+        TpmCc::SetCommandCodeAuditStatus => &[Tpmi::RhProvision],
+        TpmCc::ActivateCredential => &[Tpmi::DhObject, Tpmi::DhObject],
+        TpmCc::Certify => &[Tpmi::DhObject, Tpmi::DhObjectOrNull],
+        TpmCc::PolicyNV => &[Tpmi::RhNvAuth, Tpmi::RhNvIndex, Tpmi::ShPolicy],
+        TpmCc::CertifyCreation => &[Tpmi::DhObjectOrNull, Tpmi::DhObject],
+        TpmCc::Duplicate => &[Tpmi::DhObject, Tpmi::DhObjectOrNull],
+        TpmCc::GetTime => &[Tpmi::RhEndorsement, Tpmi::DhObjectOrNull],
+        TpmCc::GetSessionAuditDigest => &[Tpmi::RhEndorsement, Tpmi::DhObjectOrNull, Tpmi::ShHmac],
+        TpmCc::NVRead => &[Tpmi::RhNvAuth, Tpmi::RhNvIndex],
+        TpmCc::NVReadLock => &[Tpmi::RhNvAuth, Tpmi::RhNvIndex],
+        TpmCc::ObjectChangeAuth => &[Tpmi::DhObject, Tpmi::DhObject],
+        TpmCc::PolicySecret => &[Tpmi::DhEntity, Tpmi::ShPolicy],
+        TpmCc::Rewrap => &[Tpmi::DhObjectOrNull, Tpmi::DhObjectOrNull],
+        TpmCc::Create => &[Tpmi::DhObject],
+        TpmCc::ECDHZGen => &[Tpmi::DhObject],
+        TpmCc::MAC => &[Tpmi::DhObject],
+        TpmCc::Import => &[Tpmi::DhObject],
+        TpmCc::Load => &[Tpmi::DhObject],
+        TpmCc::Quote => &[Tpmi::DhObjectOrNull],
+        // `TPMI_DH_OBJECT` (Part 3, TPM2_RSA_Decrypt).
+        TpmCc::RSADecrypt => &[Tpmi::DhObject],
+        TpmCc::MACStart => &[Tpmi::DhObject],
+        TpmCc::SequenceUpdate => &[Tpmi::DhObject],
+        TpmCc::Sign => &[Tpmi::DhObject],
+        TpmCc::Unseal => &[Tpmi::DhObject],
+        TpmCc::PolicySigned => &[Tpmi::DhObject, Tpmi::ShPolicy],
+        TpmCc::ContextSave => &[Tpmi::DhContext],
+        TpmCc::ECDHKeyGen => &[Tpmi::DhObject],
+        TpmCc::EncryptDecrypt => &[Tpmi::DhObject],
+        TpmCc::MakeCredential => &[Tpmi::DhObject],
+        TpmCc::NVReadPublic => &[Tpmi::RhNvIndex],
+        TpmCc::PolicyAuthorize => &[Tpmi::ShPolicy],
+        TpmCc::PolicyAuthValue => &[Tpmi::ShPolicy],
+        TpmCc::PolicyCommandCode => &[Tpmi::ShPolicy],
+        TpmCc::PolicyCounterTimer => &[Tpmi::ShPolicy],
+        TpmCc::PolicyCpHash => &[Tpmi::ShPolicy],
+        TpmCc::PolicyLocality => &[Tpmi::ShPolicy],
+        TpmCc::PolicyNameHash => &[Tpmi::ShPolicy],
+        TpmCc::PolicyOR => &[Tpmi::ShPolicy],
+        TpmCc::PolicyTicket => &[Tpmi::ShPolicy],
+        TpmCc::ReadPublic => &[Tpmi::DhObject],
+        TpmCc::RSAEncrypt => &[Tpmi::DhObject],
+        TpmCc::StartAuthSession => &[Tpmi::DhObjectOrNull, Tpmi::DhEntityOrNull],
+        TpmCc::VerifySignature => &[Tpmi::DhObject],
+        TpmCc::PolicyPCR => &[Tpmi::ShPolicy],
+        TpmCc::PolicyRestart => &[Tpmi::ShPolicy],
+        TpmCc::PCRExtend => &[Tpmi::DhPcrOrNull],
+        TpmCc::PCRSetAuthValue => &[Tpmi::DhPcr],
+        TpmCc::NVCertify => &[Tpmi::DhObjectOrNull, Tpmi::RhNvAuth, Tpmi::RhNvIndex],
+        TpmCc::EventSequenceComplete => &[Tpmi::DhPcrOrNull, Tpmi::DhObject],
+        TpmCc::PolicyPhysicalPresence => &[Tpmi::ShPolicy],
+        TpmCc::PolicyDuplicationSelect => &[Tpmi::ShPolicy],
+        TpmCc::PolicyGetDigest => &[Tpmi::ShPolicy],
+        TpmCc::Commit => &[Tpmi::DhObject],
+        TpmCc::PolicyPassword => &[Tpmi::ShPolicy],
+        TpmCc::ZGen2Phase => &[Tpmi::DhObject],
+        TpmCc::PolicyNvWritten => &[Tpmi::ShPolicy],
+        TpmCc::PolicyTemplate => &[Tpmi::ShPolicy],
+        // `TPMI_DH_PARENT+` (Part 3, TPM2_CreateLoaded).
+        TpmCc::CreateLoaded => &[Tpmi::DhParent],
+        TpmCc::PolicyAuthorizeNV => &[Tpmi::RhNvAuth, Tpmi::RhNvIndex, Tpmi::ShPolicy],
+        TpmCc::EncryptDecrypt2 => &[Tpmi::DhObject],
+        TpmCc::ACTSetTimeout => &[Tpmi::RhAct],
+        TpmCc::ECCEncrypt => &[Tpmi::DhObject],
+        TpmCc::ECCDecrypt => &[Tpmi::DhObject],
+        TpmCc::PolicyCapability => &[Tpmi::ShPolicy],
+        TpmCc::PolicyParameters => &[Tpmi::ShPolicy],
+        TpmCc::NVDefineSpace2 => &[Tpmi::RhProvision],
+        TpmCc::NVReadPublic2 => &[Tpmi::RhNvIndex],
+        TpmCc::SetCapability => &[Tpmi::RhHierarchyAuth],
+        TpmCc::ReadOnlyControl => &[Tpmi::RhPlatform],
+        TpmCc::PolicyTransportSPDM => &[Tpmi::ShPolicy],
+        _ => &[],
     }
 }
 
@@ -733,6 +856,29 @@ mod tests {
             &[EXTERNAL_NV],
             &[NV_FIRST, PERMANENT_NV],
         );
+    }
+
+    /// Every command handle type entry matches the number of handles the dispatcher reads (for
+    /// the implemented commands; `command_handles_count` is 0 for the others).
+    #[test]
+    fn command_handle_types_match_the_handle_counts() {
+        for code in 0x11Fu32..=0x1AA {
+            let cc = TpmCc::new(code);
+            let types = command_handle_types(cc);
+            if !types.is_empty() && crate::command_handles_count(cc) != 0 {
+                assert_eq!(
+                    types.len(),
+                    crate::command_handles_count(cc),
+                    "handle count of command {code:#x}"
+                );
+            }
+        }
+        assert_eq!(
+            command_handle_types(TpmCc::NVRead),
+            [Tpmi::RhNvAuth, Tpmi::RhNvIndex]
+        );
+        assert_eq!(command_handle_types(TpmCc::CreateLoaded), [Tpmi::DhParent]);
+        assert!(command_handle_types(TpmCc::GetRandom).is_empty());
     }
 
     #[test]

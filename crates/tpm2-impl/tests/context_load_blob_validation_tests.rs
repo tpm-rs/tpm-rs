@@ -179,10 +179,15 @@ fn context_cfb(
 }
 
 /// The integrity value is genuine (white-box forged with the hierarchy proof)
-/// but `encrypted.size` is inconsistent with the data: since only the TPM can
-/// produce such a blob, this is a TPM failure.
+/// but `encrypted.size` is inconsistent with the data: an authentic blob that is
+/// not in this TPM's context layout is rejected like an unauthentic one
+/// (`TPM_RC_INTEGRITY + P1`, `context_load.rs` `malformed_context`); only the
+/// fingerprint check is a TPM failure (TPM 2.0 Part 3, TPM2_ContextLoad: "The
+/// TPM shall perform a check on the decrypted context as described in the
+/// \"Context Confidentiality Protection\" clause of TPM 2.0 Part 1 and enter
+/// failure mode if the check fails.").
 #[test]
-fn context_load_size_mismatch_behind_valid_integrity_is_failure() {
+fn context_load_size_mismatch_behind_valid_integrity_is_integrity_error() {
     setup!(tpm);
     let context = save_object_context(&mut tpm);
     let blob = context.context_blob.get_buffer();
@@ -192,7 +197,9 @@ fn context_load_size_mismatch_behind_valid_integrity_is_failure() {
     let forged = forge_blob(&tpm.state, &context, &enc_context);
     assert_eq!(
         load(&mut tpm, with_blob(context, forged)),
-        Err(TpmRc::FAILURE.get())
+        Err(TpmRc::INTEGRITY
+            .with(tpm2::errors::Position::parameter(1))
+            .get())
     );
 }
 

@@ -4,10 +4,11 @@
 //! `testing/build.rs` clones `https://github.com/kgoldman/ibmswtpm2` at a
 //! pinned commit, applies `testing/patches/ibmswtpm2/*.patch`, compiles it into a
 //! symbol-isolated static library (`libibmswtpm2.a`, exporting only
-//! `difftest_*`) and links it into this binary. The IBM TPM keeps its state in
-//! globals, so every `testing::tpm::Tpm` launches its own `ibmswtpm2` process
-//! (see `testing::differential::Reference`), which lets tests run in parallel
-//! and a single test use several TPMs.
+//! `difftest_ibmswtpm2_*`) and links it into the `testing` library, whose
+//! `testing::differential::inproc` hosts it in this process. The IBM TPM keeps
+//! its state in globals, so every `testing::tpm::Tpm` launches its own
+//! `ibmswtpm2` process (see `testing::differential::Reference`), which lets
+//! tests run in parallel and a single test use several TPMs.
 //!
 //! Its C reference runs its own random number generator, seeded from the
 //! process ID and its (virtual) clock, which the matching `tpm-rs` simulator
@@ -18,11 +19,8 @@
 //! `testing::differential::server`); anything the C code prints goes to
 //! stderr instead of the protocol channel.
 
-#![deny(unsafe_code)]
-
-#[path = "shared/ffi.rs"]
-mod ffi;
+#![forbid(unsafe_code)]
 
 fn main() {
-    ffi::main(testing::differential::Implementation::Ibmswtpm2);
+    testing::differential::inproc::serve_process(testing::differential::Implementation::Ibmswtpm2);
 }

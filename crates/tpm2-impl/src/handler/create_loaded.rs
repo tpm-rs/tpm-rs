@@ -83,6 +83,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Some(parent_info.attributes),
             parent_info.is_derivation_parent,
             parent_info.scheme,
+            true, // auth_size_first: before the template checks (C `CreateLoaded.c`)
         )?;
 
         // A NULL or unimplemented nameAlg is rejected as `TPM_RC_HASH + RC_CreateLoaded_inPublic`.
@@ -779,7 +780,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         &self,
         public_struct: &TpmtPublic,
         parent_handle: u32,
-        parent_hierarchy_val: u32,
+        // The parent's hierarchy does not affect the attribute rules (see the fixedTPM check).
+        _parent_hierarchy_val: u32,
         parent_attributes: Option<TpmaObject>,
         is_import: bool,
         allow_null_name_alg: bool,
@@ -877,10 +879,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::ATTRIBUTES.with(error_pos));
         }
 
-        // For derived/ordinary objects in the Null hierarchy, fixedTPM and fixedParent MUST be CLEAR
-        if !is_primary && parent_hierarchy_val == 0x40000007 && (fixed_tpm || fixed_parent) {
-            return Err(TpmRc::ATTRIBUTES.with(error_pos));
-        }
+        // The hierarchy of the parent does not restrict fixedTPM/fixedParent: only the parent's
+        // fixedTPM does (checked above). TPM 2.0 Part 2, TPMA_OBJECT Bit[1] fixedTPM,
+        // "Creation": "If *fixedTPM* is SET in the object's parent, then *fixedTPM* shall equal
+        // *fixedParent* in *template.* If *fixedTPM* is CLEAR in the parent, this attribute shall
+        // also be CLEAR in *template*." So a fixedTPM storage key in the NULL hierarchy may have
+        // fixedTPM children (as in the reference's `PublicAttributesValidation()`).
 
         // If the object can't be duplicated (directly or indirectly) then there is no justification for encryptedDuplication SET
         if fixed_tpm && encrypted_duplication {
@@ -940,14 +944,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
-        // RSA key size and exponent sanity (unmarshal-time / `CryptValidateKeys` checks).
-        if let PublicParmsAndId::Rsa(parms, _) = &public_struct.parms_and_id {
-            if !matches!(parms.key_bits.0, 1024 | 2048 | 3072 | 4096) {
-                return Err(TpmRc::VALUE.with(error_pos));
-            }
-            if parms.exponent != 0 && parms.exponent != 65537 {
-                return Err(TpmRc::VALUE.with(error_pos));
-            }
+        // RSA key size sanity (unmarshal-time check). The public exponent is not checked here:
+        // as in the C reference, an unsupported exponent fails key generation
+        // (`CryptRsaGenerateKey()`, `TPM_RC_RANGE`) and a loaded key is checked by
+        // `CryptValidateKeys()` (exponent below 7: `TPM_RC_VALUE`). TPM 2.0 Part 1, RSA: "A TPM
+        // is required only to support a public exponent (*e*) of $2^{16}+1$. Support for other
+        // exponents is allowed but discouraged." The specification does not say where or with
+        // which response code an unsupported exponent fails; the TCG reference is followed.
+        if let PublicParmsAndId::Rsa(parms, _) = &public_struct.parms_and_id
+            && !matches!(parms.key_bits.0, 1024 | 2048 | 3072 | 4096)
+        {
+            return Err(TpmRc::VALUE.with(error_pos));
         }
 
         // 6. Scheme checks per key type (C `SchemeChecks`).
@@ -1118,6 +1125,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         parent_attributes: Option<TpmaObject>,
         is_derived: bool,
         parent_scheme: Option<ParentSchemeInfo>,
+        auth_size_first: bool,
     ) -> Result<(bool, bool), TpmRc> {
         let is_primary = parent_handle == 0x40000001
             || parent_handle == 0x40000007
@@ -1129,11 +1137,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let digest_size = in_public_struct
             .name_alg
             .map_or(64, |alg| alg.digest_size());
+        let check_auth_size = || {
+            if crate::util::strip_trailing_zeros(in_sensitive_struct.user_auth.get_buffer()).len()
+                > digest_size
+            {
+                return Err(TpmRc::SIZE.with(Position::parameter(1)));
+            }
+            Ok(())
+        };
 
-        if crate::util::strip_trailing_zeros(in_sensitive_struct.user_auth.get_buffer()).len()
-            > digest_size
-        {
-            return Err(TpmRc::SIZE.with(Position::parameter(1)));
+        // TPM 2.0 Part 3, "Command Validation": "Unless stated otherwise, the order of the checks
+        // is not normative and different TPM may give different responses when a command has
+        // multiple errors." The order is the TCG reference's: TPM2_CreateLoaded checks the
+        // `userAuth` size (`AdjustAuthSize()`) before the template, while TPM2_Create and
+        // TPM2_CreatePrimary check it after `CreateChecks()` (including
+        // `PublicAttributesValidation()`).
+        if auth_size_first {
+            check_auth_size()?;
         }
 
         let attr = in_public_struct.object_attributes.0;
@@ -1143,8 +1163,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             if matches!(in_public_struct.parms_and_id, PublicParmsAndId::Rsa(_, _)) {
                 return Err(TpmRc::TYPE.with(Position::parameter(2)));
             }
+            // TPM 2.0 Part 3, TPM2_CreateLoaded: "when *parentHandle* references a Derivation
+            // Parent, then *sensitiveDataOrigin* in *inPublic* is required to be CLEAR." The
+            // spec does not give the response code a parameter number; like the TCG reference
+            // (`return TPM_RCS_ATTRIBUTES;` in `TPM2_CreateLoaded()`), it has none.
             if sensitive_data_origin {
-                return Err(TpmRc::ATTRIBUTES.with(Position::parameter(2)));
+                return Err(TpmRc::ATTRIBUTES.to_rc());
             }
         }
 
@@ -1163,6 +1187,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Position::parameter(2),
             parent_scheme,
         )?;
+
+        if !auth_size_first {
+            check_auth_size()?;
+        }
 
         if !is_derived {
             if let PublicParmsAndId::Sym(sym, _) = &in_public_struct.parms_and_id {

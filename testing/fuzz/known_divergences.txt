@@ -1,0 +1,15 @@
+# Finding signatures the `diff_conversation` fuzz target suppresses (see
+# `tpm2_fuzz::driver::KnownDivergences`): a finding whose signatures all match
+# a pattern ends the conversation quietly instead of crashing, so long
+# campaigns (`-fork=N -ignore_crashes=1`) keep finding new issues.
+#
+# One pattern per line; `#` starts a comment; `*` matches any run of
+# characters. Signatures:
+#   DIVERGENCE[<impl>:round<i>:<cc>:<rs_rc>:<ref_rc>]
+#   MALFORMED_RESPONSE[round<i>:<cc>]
+#   UNPARSEABLE_RESPONSE[round<i>:<cc>]
+# Usually leave the round as `*`, e.g. DIVERGENCE[ibmswtpm2:*:0x17a:*:*].
+# Every entry should say why it is here; remove it once it is fixed.
+#
+# (No open suppressions: the handle-area validation order findings of the
+# first smoke runs are fixed.)

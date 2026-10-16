@@ -1,0 +1,33 @@
+tpma-object-fixed-firmware-reserved: TPMA_OBJECT bit 3 is reserved
+
+Classification: profile setting.
+
+Specification (TPM 2.0 Part 2, Table "Definition of (UINT32) TPMA_OBJECT
+Bits"): "3 | Reserved | shall be zero"; Part 2, bit fields: "When the bit
+fields do not occupy consecutive locations, a spacer field is defined with a
+name of "Reserved." Bits in these spaces are reserved and shall be zero."
+
+Version 185 defines bit 3 of TPMA_OBJECT as fixedFirmware (a draft
+attribute of the newer specification; nothing in the version 185 code
+evaluates it) and therefore no longer rejects it as a reserved bit. In the
+specification version tpm-rs implements (Part 2, TPMA_OBJECT) bit 3 is
+reserved, so a public area with it SET is TPM_RC_RESERVED_BITS when it is
+unmarshaled (as in ibmswtpm2; the public mstpm20 needs the same patch),
+instead of failing
+later with another response code (e.g. TPM_RC_SIZE or TPM_RC_ATTRIBUTES).
+The bit is put back into TPMA_OBJECT_RESERVED_BITS. Found by differential
+fuzzing.
+diff --git a/TPMCmd/tpm/include/tpm_public/TpmTypes.h b/TPMCmd/tpm/include/tpm_public/TpmTypes.h
+--- a/TPMCmd/tpm/include/tpm_public/TpmTypes.h
++++ b/TPMCmd/tpm/include/tpm_public/TpmTypes.h
+@@ -1009,7 +1009,9 @@
+ #define TPMA_OBJECT_sign                 ((TPMA_OBJECT)1 << 18)
+ #define TPMA_OBJECT_x509sign             ((TPMA_OBJECT)1 << 19)
+ #define TPMA_OBJECT_RESERVED_BITS                                                \
+-    (~(TPMA_OBJECT_fixedTPM | TPMA_OBJECT_stClear | TPMA_OBJECT_fixedFirmware    \
++    /* tpm-rs differential testing -- profile setting: fixedFirmware (bit 3) */ \
++    /* is reserved, as in the specification version tpm-rs implements.      */ \
++    (~(TPMA_OBJECT_fixedTPM | TPMA_OBJECT_stClear                                \
+        | TPMA_OBJECT_fixedParent | TPMA_OBJECT_sensitiveDataOrigin               \
+        | TPMA_OBJECT_userWithAuth | TPMA_OBJECT_adminWithPolicy                  \
+        | TPMA_OBJECT_firmwareLimited | TPMA_OBJECT_svnLimited | TPMA_OBJECT_noDA \

@@ -51,6 +51,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
+        // A sequence object is a loaded object without the *sign* attribute (C
+        // `AllocateSequenceSlot()` sets only *noDA*), so it is rejected like any other
+        // non-signing object (`TPM_RC_ATTRIBUTES` + `RC_VerifySignature_keyHandle` in the
+        // reference; TPM 2.0 Part 3, TPM2_VerifySignature, gives no code for it).
+        if self
+            .context
+            .state
+            .find_active_sequence(key_handle.0)
+            .is_some()
+        {
+            return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
+        }
         let _obj = self.resolve_object(key_handle.0, Position::handle(1))?;
 
         // The object to validate the signature must be a signing key.
@@ -641,9 +653,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let (resolved_scheme, resolved_hash_alg) =
             self.resolve_rsa_scheme(key_scheme, cmd.in_scheme)?;
 
-        // CryptRsaDecrypt(): the ciphertext must be exactly the size of the modulus. Its
-        // errors are returned without a position.
-        if cmd.cipher_text.get_buffer().len() != modulus_len {
+        // CryptRsaDecrypt(): the ciphertext must be exactly the size of the modulus, and RSADP
+        // rejects a value that is not below the modulus (`TPM_RC_SIZE` as well). Its errors are
+        // returned without a position. TPM 2.0 Part 3, TPM2_RSA_Decrypt, only assigns
+        // `TPM_RC_VALUE` to padding failures ("It will then validate the padding according to
+        // the selected scheme. If the padding checks fail, `TPM_RC_VALUE` is returned."); RFC
+        // 8017 RSADP's "ciphertext representative out of range" has no code there, so the
+        // reference's is used.
+        let modulus = match &obj.public.parms_and_id {
+            OwnedPublicParmsAndId::Rsa(_, unique) => unique.get_buffer(),
+            _ => &[],
+        };
+        if cmd.cipher_text.get_buffer().len() != modulus_len
+            || cmd.cipher_text.get_buffer() >= modulus
+        {
             return Err(TpmRc::SIZE.to_rc());
         }
 
@@ -725,6 +748,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
+        // A sequence object is a loaded object of type `TPM_ALG_NULL` (C
+        // `AllocateSequenceSlot()`), not a MAC key. TPM 2.0 Part 3: "If the key type is neither
+        // `TPM_ALG_KEYEDHASH` nor `TPM_ALG_SYMCIPHER` then the TPM shall return `TPM_RC_TYPE`."
+        // (the text does not order this against the *sign* check; the reference checks the type
+        // first).
+        if self.context.state.find_active_sequence(handle.0).is_some() {
+            return Err(TpmRc::TYPE.with(Position::handle(1)));
+        }
         let obj = self.resolve_object(handle.0, Position::handle(1))?;
 
         let scheme = match &obj.public.parms_and_id {

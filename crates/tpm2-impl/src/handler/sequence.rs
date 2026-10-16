@@ -52,6 +52,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             && hierarchy.0 != Handle::RH_ENDORSEMENT.0
             && hierarchy.0 != Handle::RH_PLATFORM.0
             && hierarchy.0 != Handle::RH_NULL.0
+            // The firmware-limited and SVN-limited hierarchies are `TPMI_RH_HIERARCHY+` values;
+            // their (unavailable) proof fails the ticket (`limited_hierarchy_error`).
+            && crate::engine::limited_hierarchy_error(hierarchy.0).is_none()
         {
             return Err(TpmRc::VALUE.with(Position::parameter(3)));
         }
@@ -246,6 +249,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             && hierarchy.0 != Handle::RH_ENDORSEMENT.0
             && hierarchy.0 != Handle::RH_PLATFORM.0
             && hierarchy.0 != Handle::RH_NULL.0
+            // The firmware-limited and SVN-limited hierarchies are `TPMI_RH_HIERARCHY+` values;
+            // their (unavailable) proof fails the ticket (`limited_hierarchy_error`).
+            && crate::engine::limited_hierarchy_error(hierarchy.0).is_none()
         {
             return Err(TpmRc::VALUE.with(Position::parameter(2)));
         }
@@ -453,6 +459,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let key_handle = key_handle.0;
+        // A sequence object is a loaded object of type `TPM_ALG_NULL` (C
+        // `AllocateSequenceSlot()`), not a MAC key. TPM 2.0 Part 3: "If the key type is not
+        // `TPM_ALG_KEYEDHASH` or `TPM_ALG_SYMCIPHER` then the TPM shall return `TPM_RC_TYPE`."
+        // (the text does not order this against the *sign* check; the reference checks the type
+        // first).
+        if self
+            .context
+            .state
+            .find_active_sequence(key_handle)
+            .is_some()
+        {
+            return Err(TpmRc::TYPE.with(Position::handle(1)));
+        }
         let key_obj = self.resolve_object(key_handle, Position::handle(1))?;
 
         let scheme = match &key_obj.public.parms_and_id {

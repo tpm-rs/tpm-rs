@@ -11,6 +11,62 @@ use tpm2::{
     TpmtTkHashcheck, TpmtTkVerified, *,
 };
 
+/// PolicyAuthorize whose checkTicket tag is not a `TPM_ST` constant (0x0303) fails with
+/// `TPM_RC_TAG` on the ticket (parameter 4), not `TPM_RC_VALUE`: a `TPM_ST` unmarshals any
+/// value and the ticket checks its tag (found by differential fuzzing): Part 2 "TPM_ST Constants" has
+/// no `#TPM_RC_VALUE`, `TPMT_TK_VERIFIED.tag` has `#TPM_RC_TAG`.
+#[test]
+fn ticket_with_unknown_tag_rejected_with_tag() {
+    let mut sim = Tpm::new();
+    let session = start_trial_session(&mut sim);
+    let mut cmd = hex_checked(concat!(
+        "8001",     // NO_SESSIONS
+        "0000001c", // size: 28 bytes
+        "0000016a", // TPM_CC_PolicyAuthorize
+        "03000000", // policySession (patched below)
+        "0000",     // approvedPolicy: empty
+        "0000",     // policyRef: empty
+        "0000",     // keySign: empty
+        "0303",     // checkTicket.tag: not a TPM_ST constant
+        "40000007", // checkTicket.hierarchy: TPM_RH_NULL
+        "0000",     // checkTicket.digest: empty
+    ));
+    let len = cmd.len() as u32;
+    cmd[2..6].copy_from_slice(&len.to_be_bytes());
+    cmd[10..14].copy_from_slice(&session.0.to_be_bytes());
+    assert_eq!(
+        raw_rc(&mut sim, &cmd),
+        TpmRc::TAG.with(Position::parameter(4)).get()
+    );
+}
+
+/// PolicyAuthorize with a `TPM_ST_DIGEST_VERIFIED` ticket (produced only by
+/// TPM2_VerifyDigestSignature, which this TPM does not implement) fails with `TPM_RC_TAG` on the
+/// ticket while it is unmarshaled, before its oversized digest (found by differential fuzzing;
+/// Part 2 TPMT_TK_VERIFIED "#TPM_RC_TAG", spec silent on unimplemented producers → mstpm20).
+#[test]
+fn digest_verified_ticket_rejected_with_tag() {
+    let mut sim = Tpm::new();
+    let session = start_trial_session(&mut sim);
+    let mut cmd = hex_checked(concat!(
+        "8001",     // NO_SESSIONS
+        "0000001d", // size: 29 bytes
+        "0000016a", // TPM_CC_PolicyAuthorize
+        "03000000", // policySession (patched below)
+        "0000",     // approvedPolicy: empty
+        "0000",     // policyRef: empty
+        "000100",   // keySign: 1 byte
+        "8026",     // checkTicket.tag: TPM_ST_DIGEST_VERIFIED
+        "40000007", // checkTicket.hierarchy: TPM_RH_NULL
+        "0080",     // checkTicket.digest: 128 bytes announced, none present
+    ));
+    cmd[10..14].copy_from_slice(&session.0.to_be_bytes());
+    assert_eq!(
+        raw_rc(&mut sim, &cmd),
+        TpmRc::TAG.with(Position::parameter(4)).get()
+    );
+}
+
 /// PolicyAuthorize with forged verification tickets (NULL and owner hierarchy) fails.
 #[test]
 fn forged_ticket_rejected() {

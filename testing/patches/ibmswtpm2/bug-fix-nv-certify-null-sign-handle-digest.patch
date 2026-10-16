@@ -2,6 +2,18 @@ nv-certify-null-sign-handle-digest: unsigned NV digest attestations use the hash
 
 Classification: spec-deviation bug fix.
 
+Specification (TPM 2.0 Library, Part 3 (version 185), "TPM2_NV_Certify",
+"General Description"):
+
+  "If size and offset are both zero (0), then certifyInfo in the response
+  will contain a TPMS_NV_DIGEST_CERTIFY_INFO, otherwise, it will contain a
+  TPMS_NV_CERTIFY_INFO. The digest in the TPMS_NV_DIGEST_CERTIFY_INFO is
+  created using the hash algorithm of the selected signing scheme. If size
+  and offset are both zero and signHandle is TPM_RH_NULL, the digest is
+  computed using the hash algorithm provided in inScheme, unless the scheme
+  or hash algorithm is TPM_ALG_NULL, in which case the TPM shall return
+  TPM_RC_SCHEME."
+
 Part 3 (version 185), TPM2_NV_Certify: "If size and offset are both zero and
 signHandle is TPM_RH_NULL, the digest is computed using the hash algorithm
 provided in inScheme, unless the scheme or hash algorithm is TPM_ALG_NULL, in

@@ -669,3 +669,38 @@ fn saved_object_reloads_with_same_name() {
     let _ = flush_context(&mut sim, cl_handle);
     let _ = flush_context(&mut sim, cl_handle2);
 }
+
+/// An external object loaded with `nameAlg = TPM_ALG_NULL` (and a private key) can be saved and
+/// loaded again: the context holds a `TPMT_PUBLIC+` (found by differential fuzzing; `tpm-rs`
+/// returned TPM_RC_FAILURE). TPM 2.0 Part 3, TPM2_LoadExternal: "If *nameAlg* is
+/// `TPM_ALG_NULL`, then the Name is the Empty Buffer."
+#[test]
+fn null_name_alg_external_object_round_trips() {
+    let mut tpm = Tpm::new();
+    // LoadExternal: ECC P-256 private key 0x0101..01, ECDSA-SHA256 signing public area with
+    // nameAlg TPM_ALG_NULL and an empty unique field, NULL hierarchy.
+    let load = [
+        "8001000000520000016700280023000000000020",
+        "0101010101010101010101010101010101010101010101010101010101010101",
+        "00180023001000040040000000100018000b000300100000000040000007",
+    ]
+    .concat();
+    let rsp = tpm.send_command(0, &crate::_common::hex(&load));
+    assert_eq!(&rsp[6..10], [0, 0, 0, 0], "LoadExternal: {rsp:02x?}");
+    let handle = rsp[10..14].to_vec();
+    let mut save = vec![0x80, 0x01, 0, 0, 0, 0x0E, 0, 0, 0x01, 0x62];
+    save.extend_from_slice(&handle);
+    let rsp = tpm.send_command(0, &save);
+    assert_eq!(&rsp[6..10], [0, 0, 0, 0], "ContextSave: {rsp:02x?}");
+    // Flush the object, then load its context (the TPMS_CONTEXT response parameter).
+    let mut flush = vec![0x80, 0x01, 0, 0, 0, 0x0E, 0, 0, 0x01, 0x65];
+    flush.extend_from_slice(&handle);
+    assert_eq!(&tpm.send_command(0, &flush)[6..10], [0, 0, 0, 0]);
+    let context = &rsp[10..];
+    let mut load_ctx = vec![0x80, 0x01, 0, 0, 0, 0, 0, 0, 0x01, 0x61];
+    load_ctx.extend_from_slice(context);
+    let size = load_ctx.len() as u32;
+    load_ctx[2..6].copy_from_slice(&size.to_be_bytes());
+    let rsp = tpm.send_command(0, &load_ctx);
+    assert_eq!(&rsp[6..10], [0, 0, 0, 0], "ContextLoad: {rsp:02x?}");
+}

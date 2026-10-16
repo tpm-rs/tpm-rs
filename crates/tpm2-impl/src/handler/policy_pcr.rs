@@ -3,11 +3,10 @@ use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use tpm2::TpmiAlgHash;
+use tpm2::Marshal;
 use tpm2::commands::PolicyPCR;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Marshal, Unmarshal};
 use tpm2::{TpmCc, TpmSe};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -39,25 +38,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let policy_session = policy_session.0;
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
-        let cmd = match request.try_unmarshal_command::<PolicyPCR>(handles) {
-            Ok(cmd) => cmd,
-            Err(e) => {
-                let mut slice = request.remaining_slice();
-                if let Ok(_pcr_digest) = tpm2::Tpm2bDigest::unmarshal(&mut slice)
-                    && slice.len() >= 4
-                {
-                    let count = u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]);
-                    if count > 0 && slice.len() >= 6 {
-                        let hash_raw = u16::from_be_bytes([slice[4], slice[5]]);
-                        if TpmiAlgHash::try_from(hash_raw).is_err() {
-                            // `pcrs` is parameter 2 (parameter 1 is `pcrDigest`).
-                            return Err(TpmRc::HASH.with(Position::parameter(2)));
-                        }
-                    }
-                }
-                return Err(e);
-            }
-        };
+        // TPM 2.0 Part 2, TPML_PCR_SELECTION, Table "Definition of TPML_PCR_SELECTION
+        // Structure": "count | UINT32 | number of selection structures",
+        // "pcrSelections[count]{:HASH_COUNT}", "#TPM_RC_SIZE | response code when *count* is
+        // greater than the possible number of banks", and TPMS_PCR_SELECTION's "hash |
+        // TPMI_ALG_HASH". The profile-aware unmarshaler checks the count (against this TPM's
+        // HASH_COUNT) before any selection, then each selection's hash, in wire order.
+        let cmd = request.try_unmarshal_command::<PolicyPCR>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }

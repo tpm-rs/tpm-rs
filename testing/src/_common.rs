@@ -15840,6 +15840,111 @@ fn u16_be(b: &[u8]) -> u16 {
     u16::from_be_bytes(b[..2].try_into().unwrap())
 }
 
+/// Labeled key encapsulation of a fresh secret to the key whose `TPMT_PUBLIC` wire bytes are
+/// `public` (TPM 2.0 Part 1, 11.4.10.2 / Annex B.10.3 RSA-OAEP and Annex C.6.4 ECC), as used for
+/// the salt of `TPM2_StartAuthSession` (`label` "SECRET"), the seed of `TPM2_Import`
+/// ("DUPLICATE") or `TPM2_MakeCredential` ("IDENTITY"). Mirrors the reference's
+/// `CryptSecretDecrypt()`:
+/// - RSA: a secret of the OAEP hash's digest size, RSA-OAEP encrypted with the key's OAEP scheme
+///   hash (its nameAlg if the scheme is `TPM_ALG_NULL`) and the label with its NUL terminator.
+/// - ECC (NIST P-256 only): an ephemeral key `Qe`, `Z = x(de * Qs)`, and the secret
+///   `KDFe(nameAlg, Z, label, x(Qe), x(Qs), digestBits(nameAlg))`; the encrypted secret is the
+///   marshalled `TPMS_ECC_POINT` `Qe`.
+///
+/// Returns `(secret, encrypted secret)` (the contents of the `TPM2B_ENCRYPTED_SECRET`), or `None`
+/// if `public` does not parse or uses a key type, curve or hash this helper does not support.
+/// Never panics, so fuzzers may feed it arbitrary public areas. Randomness (the RSA secret and
+/// OAEP seed, the ECC ephemeral key) is drawn from a `StdRng` seeded with `seed`, so equal inputs
+/// give equal outputs.
+pub fn encapsulate_secret(public: &[u8], label: &str, seed: u64) -> Option<(Vec<u8>, Vec<u8>)> {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let mut src = public;
+    let public = TpmtPublic::unmarshal(&mut src).ok()?;
+    let name_alg = public.name_alg?;
+    match &public.parms_and_id {
+        PublicParmsAndId::Ecc(parms, point) => {
+            if parms.curve_id != TpmEccCurve::NistP256 {
+                return None;
+            }
+            let (qs_x, qs_y) = (point.x.get_buffer(), point.y.get_buffer());
+            if qs_x.len() != 32 || qs_y.len() != 32 {
+                return None;
+            }
+            let qs = p256::PublicKey::from_encoded_point(
+                &p256::EncodedPoint::from_affine_coordinates(qs_x.into(), qs_y.into(), false),
+            );
+            let qs = Option::<p256::PublicKey>::from(qs)?;
+            let de = p256::SecretKey::random(&mut rng);
+            let qe = de.public_key().to_encoded_point(false);
+            let (qe_x, qe_y) = (qe.x()?.to_vec(), qe.y()?.to_vec());
+            let z = p256::ecdh::diffie_hellman(de.to_nonzero_scalar(), qs.as_affine());
+            let bits = (name_alg.digest_size() * 8) as u32;
+            let mut secret = vec![0u8; name_alg.digest_size()];
+            tpm2::crypto::kdf::kdfe_bits(
+                CLIENT_CRYPTO,
+                name_alg,
+                z.raw_secret_bytes().as_slice(),
+                label.as_bytes(),
+                &qe_x,
+                qs_x,
+                bits,
+                &mut secret,
+            )
+            .ok()?;
+            let mut encrypted = Vec::new();
+            for coordinate in [&qe_x, &qe_y] {
+                encrypted.extend_from_slice(&(coordinate.len() as u16).to_be_bytes());
+                encrypted.extend_from_slice(coordinate);
+            }
+            Some((secret, encrypted))
+        }
+        PublicParmsAndId::Rsa(parms, modulus) => {
+            let hash = match &parms.scheme {
+                None => name_alg,
+                Some(TpmtRsaScheme::Oaep(hash)) => *hash,
+                Some(_) => return None,
+            };
+            let n = rsa::BigUint::from_bytes_be(modulus.get_buffer());
+            let exponent = if parms.exponent == 0 {
+                65537
+            } else {
+                parms.exponent
+            };
+            let key = rsa::RsaPublicKey::new(n, rsa::BigUint::from(exponent)).ok()?;
+            let mut secret = vec![0u8; hash.digest_size()];
+            rng.fill_bytes(&mut secret);
+            let label = format!("{label}\0");
+            let encrypted = match hash {
+                TpmiAlgHash::Sha1 => key.encrypt(
+                    &mut rng,
+                    rsa::Oaep::new_with_label::<Sha1, _>(label),
+                    &secret,
+                ),
+                TpmiAlgHash::Sha256 => key.encrypt(
+                    &mut rng,
+                    rsa::Oaep::new_with_label::<Sha256, _>(label),
+                    &secret,
+                ),
+                TpmiAlgHash::Sha384 => key.encrypt(
+                    &mut rng,
+                    rsa::Oaep::new_with_label::<Sha384, _>(label),
+                    &secret,
+                ),
+                TpmiAlgHash::Sha512 => key.encrypt(
+                    &mut rng,
+                    rsa::Oaep::new_with_label::<Sha512, _>(label),
+                    &secret,
+                ),
+                _ => return None,
+            }
+            .ok()?;
+            Some((secret, encrypted))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

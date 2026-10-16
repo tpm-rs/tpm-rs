@@ -9,6 +9,13 @@ TPM_PT_TOTAL_COMMANDS, TPM_PT_LIBRARY_COMMANDS) and reject the same command
 codes with TPM_RC_COMMAND_CODE. TPM2_CertifyX509 and the vendor commands are
 disabled by profile-no-certify-x509.patch and profile-no-vendor-commands.patch.
 
+Commands configured CC_NO here: ACT_SetTimeout, ECC_Decrypt, ECC_Encrypt,
+EC_Ephemeral, PP_Commands, PolicyCapability, PolicyParameters,
+PolicyPhysicalPresence, SetAlgorithmSet, ZGen_2Phase, NV_DefineSpace2,
+NV_ReadPublic2. Commands that tpm-rs implements but the reference does not:
+none (so no harness exception is needed); the TPM2_HMAC/TPM2_HMAC_Start and
+TPM2_MAC/TPM2_MAC_Start variants share their command codes.
+
 diff --git a/src/TpmProfile_CommandList.h b/src/TpmProfile_CommandList.h
 --- a/src/TpmProfile_CommandList.h
 +++ b/src/TpmProfile_CommandList.h

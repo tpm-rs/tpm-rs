@@ -1,0 +1,49 @@
+expiration-absolute-value: no signed overflow for expiration = INT32_MIN
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, "Enhanced Authorization (EA) Commands",
+"Signed Authorization Actions", "Policy Parameter Checks"): "*expiration* -
+If this parameter is not zero, then: [...] if *nonceTPM* is not an Empty
+Buffer, then the absolute value of *expiration* is converted to milliseconds
+and added to *policySession→startTime* to create the *timeout* value [...] If
+*nonceTPM* is an Empty Buffer, then the absolute value of *expiration* is
+converted to milliseconds and used as the *timeout* value". Part 3,
+TPM2_PolicySecret/TPM2_PolicySigned Command tables: "INT32 | expiration |
+time when authorization will expire, measured in seconds [...]".
+
+ComputeAuthTimeout() computes the absolute value as `expiration =
+-expiration` on the INT32, which overflows (undefined behavior; in practice
+it stays INT32_MIN) for expiration = -2147483648, and the sign-extended value
+then gives a timeout of (2^64 - 2^31) * 1000 instead of 2147483648 * 1000
+milliseconds; the output timeout and the policy ticket's HMAC (which covers
+the timeout) differ from tpm-rs, which uses the absolute value 2^31. The fix
+takes the absolute value in UINT64 arithmetic. Found by differential fuzzing
+(TPM2_PolicySecret with expiration 0x80000000).
+diff --git a/TPMCmd/tpm/src/command/EA/Policy_spt.c b/TPMCmd/tpm/src/command/EA/Policy_spt.c
+--- a/TPMCmd/tpm/src/command/EA/Policy_spt.c
++++ b/TPMCmd/tpm/src/command/EA/Policy_spt.c
+@@ -146,18 +146,19 @@
+         policyTime = 0;
+     else
+     {
+-        if(expiration < 0)
+-            expiration = -expiration;
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // the absolute value of expiration without the signed overflow of
++        // -expiration for INT32_MIN (Part 3, "Policy Parameter Checks").
+         if(nonce->t.size == 0)
+             // The input time is absolute Time (not Clock), but it is expressed
+             // in seconds. To make sure that we don't time out too early, take the
+             // current value of milliseconds in g_time and add that to the input
+             // seconds value.
+-            policyTime = (((UINT64)expiration) * 1000) + g_time % 1000;
++            policyTime = ((expiration < 0 ? (UINT64)0 - (UINT64)expiration : (UINT64)expiration) * 1000) + g_time % 1000;
+         else
+             // The policy timeout is the absolute value of the expiration in seconds
+             // added to the start time of the policy.
+-            policyTime = session->startTime + (((UINT64)expiration) * 1000);
++            policyTime = session->startTime + ((expiration < 0 ? (UINT64)0 - (UINT64)expiration : (UINT64)expiration) * 1000);
+     }
+     return policyTime;
+ }

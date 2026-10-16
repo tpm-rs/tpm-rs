@@ -1,0 +1,36 @@
+no-fw-svn-limited: no firmware-limited or SVN-limited hierarchies
+
+Classification: profile setting.
+
+tpm-rs does not implement firmware-limited or SVN-limited hierarchies (TPM 2.0
+Part 1, "Firmware-limited Hierarchy": "a hierarchy whose seed and proof values
+are derived from a Primary Seed and a Firmware Secret"; "SVN-limited
+Hierarchy": "a hierarchy whose seed and proof values are derived from a
+Primary Seed and a Firmware SVN Secret"). These are the TPM_RH_FW_* and
+SVN-limited handle rows of TPM 2.0 Part 2, Table "Definition of (TPM_HANDLE)
+TPMI_RH_HIERARCHY Type": "TPM_RH_FW_OWNER | Firmware-limited Storage
+hierarchy", "TPM_RH_FW_PLATFORM", "TPM_RH_FW_ENDORSEMENT", "TPM_RH_FW_NULL",
+"{SVN_OWNER_FIRST:SVN_OWNER_LAST} | SVN-limited Storage hierarchies",
+"{SVN_PLATFORM_FIRST:SVN_PLATFORM_LAST}",
+"{SVN_ENDORSEMENT_FIRST:SVN_ENDORSEMENT_LAST}" and
+"{SVN_NULL_FIRST:SVN_NULL_LAST}". The reference profile enables both
+(FW_LIMITED_SUPPORT and SVN_LIMITED_SUPPORT = YES); they are disabled so that
+the reference implements the same hierarchies as tpm-rs: the handles are not
+listed by TPM2_GetCapability (TPM_CAP_HANDLES, TPM_CAP_AUTH_POLICIES). They
+remain TPMI_RH_HIERARCHY values (the unmarshaling code is unconditional);
+commands that use them fail with TPM_RC_FW_LIMITED/TPM_RC_SVN_LIMITED where
+the reference needs the (unavailable) firmware secret.
+diff --git a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h
+--- a/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h
++++ b/TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h
+@@ -209,8 +209,8 @@
+ //***********************************************
+ // Defines controlling Firmware- and SVN-limited objects
+ //***********************************************
+-#define FW_LIMITED_SUPPORT                    YES
+-#define SVN_LIMITED_SUPPORT                   YES
++#define FW_LIMITED_SUPPORT                    NO
++#define SVN_LIMITED_SUPPORT                   NO
+ 
+ //***********************************************
+ // Defines controlling External NV

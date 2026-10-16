@@ -1,8 +1,6 @@
-use super::encrypt_decrypt::{crypto_check, crypto_len};
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
-use tpm2::Alg;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
@@ -16,8 +14,7 @@ use crate::timer::TpmTimer;
 use tpm2::crypto::kdf::kdfa_bits;
 use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
 use tpm2::{
-    PublicParmsAndId, TpmaObject, TpmiAlgSymMode, TpmsSensitiveCreate, TpmtSensitive,
-    TpmuSensitiveComposite,
+    TpmaObject, TpmiAlgSymMode, TpmsSensitiveCreate, TpmtSensitive, TpmuSensitiveComposite,
 };
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -56,9 +53,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     && let Ok(_seed) = tpm2::Tpm2bEncryptedSecret::unmarshal(&mut slice)
                     && slice.len() >= 2
                 {
+                    // `symmetricAlg` is a `TPMT_SYM_DEF_OBJECT+`, whose `algorithm` is a
+                    // `TPMI_ALG_SYM_OBJECT+`: any value that is not a symmetric object algorithm
+                    // (including values beyond the algorithm IDs) is `TPM_RC_SYMMETRIC`. TPM 2.0
+                    // Part 2, Table "Definition of (TPM_ALG_ID) TPMI_ALG_SYM_OBJECT Type":
+                    // "#TPM_RC_SYMMETRIC".
                     let alg = u16::from_be_bytes([slice[0], slice[1]]);
                     if alg > 0x0080 {
-                        return Err(TpmRc::VALUE.with(Position::parameter(5)));
+                        return Err(TpmRc::SYMMETRIC.with(Position::parameter(5)));
                     }
                 }
                 return Err(e);
@@ -72,6 +74,29 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .object_public
             .to_struct()
             .map_err(|e| e.in_parameter(2).to_rc())?;
+
+        // `symmetricAlg` checks of `TPMT_SYM_DEF_OBJECT+` unmarshaling (Pos5): key size and
+        // block cipher mode (CFB, CTR, OFB, CBC or ECB; not NULL or CMAC).
+        if let Some(sym_def) = cmd.symmetric_alg {
+            let bits = sym_def.key_bits();
+            if bits != 128 && bits != 256 && bits != 192 {
+                return Err(TpmRc::SYMMETRIC.with(Position::parameter(5)));
+            }
+            if !matches!(sym_def.mode(), Some(TpmiAlgSymMode::Cipher(_))) {
+                return Err(TpmRc::MODE.with(Position::parameter(5)));
+            }
+        }
+
+        // C `TPM2_Import()` starts with `fixedTPM` and `fixedParent`, which must be CLEAR
+        // (Pos2), before it looks at the parent. TPM 2.0 Part 3, TPM2_Import: "If *fixedTPM* or
+        // *fixedParent* is SET in *objectPublic*, the TPM shall return `TPM_RC_ATTRIBUTES`."
+        // (The order against the other checks is not specified; the TCG reference's is used.)
+        if object_public_struct
+            .object_attributes
+            .intersects(TpmaObject::FIXED_TPM | TpmaObject::FIXED_PARENT)
+        {
+            return Err(TpmRc::ATTRIBUTES.with(Position::parameter(2)));
+        }
 
         // 1. Resolve parent object or hierarchy seed and parameters
         let mut parent_seed_val = [0u8; 64];
@@ -97,130 +122,79 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::HANDLE.with(Position::handle(1)));
         };
 
-        let parent_symmetric_is_null = match &parent_obj.public.parms_and_id {
-            OwnedPublicParmsAndId::Rsa(parms, _) => parms.symmetric.is_none(),
-            OwnedPublicParmsAndId::Ecc(parms, _) => parms.symmetric.is_none(),
-            _ => true,
-        };
-
-        // 2. Validate parameter sizes and attributes (encryptionKey Pos1, symmetricAlg Pos5, objectPublic Pos2, then inSymSeed Pos4)
+        // 2. Validate parameter sizes and attributes (encryptionKey Pos1, objectPublic Pos2,
+        // then inSymSeed Pos4).
         match cmd.symmetric_alg {
             None => {
                 if cmd.encryption_key.get_size() > 0 {
                     return Err(TpmRc::SIZE.with(Position::parameter(1)));
                 }
+                // Without an inner wrapper, `encryptedDuplication` cannot be honored.
+                if object_public_struct
+                    .object_attributes
+                    .contains(TpmaObject::ENCRYPTED_DUPLICATION)
+                {
+                    return Err(TpmRc::ATTRIBUTES.with(Position::parameter(1)));
+                }
             }
             Some(sym_def) => {
-                let bits = sym_def.key_bits();
-                if bits != 128 && bits != 256 && bits != 192 {
-                    return Err(TpmRc::SYMMETRIC.with(Position::parameter(5)));
-                }
-                // CFB, CTR, OFB, CBC or ECB (any block cipher mode, i.e. not NULL or CMAC).
-                if !matches!(sym_def.mode(), Some(TpmiAlgSymMode::Cipher(_))) {
-                    return Err(TpmRc::MODE.with(Position::parameter(5)));
-                }
                 // The inner wrapper key must always be supplied and match the algorithm
                 // key size (C `Import.c`); it is never derived from `inSymSeed`.
-                let inner_key_len = (bits / 8) as usize;
+                let inner_key_len = (sym_def.key_bits() / 8) as usize;
                 if cmd.encryption_key.get_size() as usize != inner_key_len {
                     return Err(TpmRc::SIZE.with(Position::parameter(1)));
                 }
             }
         }
 
-        if object_public_struct.auth_policy.get_size() != 0
-            && let Some(name_alg) = object_public_struct.name_alg
-        {
-            let digest_size = name_alg.digest_size();
-            if object_public_struct.auth_policy.get_size() as usize != digest_size {
-                return Err(TpmRc::SIZE.with(Position::parameter(2)));
+        // 3. Recover the seed of the outer wrapper first. TPM 2.0 Part 3, TPM2_Import:
+        // "Recovery of the sensitive data of the object occurs in the TPM in a multi-step
+        // process in the following order: 1. If *inSymSeed* has a non-zero size: 2. The
+        // asymmetric parameters and private key of *parentHandle* are used to recover the seed
+        // used in the creation of the HMAC key and encryption keys used to protect the
+        // duplication blob." `objectPublic` is validated only after the duplicate is unwrapped,
+        // and only for a *fixedTPM* parent ("For an object that is imported under a parent with
+        // *fixedTPM* SET, binding need only be checked at import"; C `ObjectLoad()`). The
+        // decryption's error codes are those of `crypt_secret_decrypt`, with the position of
+        // `inSymSeed` (C `RcSafeAddToResult(result, RC_Import_inSymSeed)`).
+        let mut seed = [0u8; 64];
+        let seed_len = if cmd.in_sym_seed.get_size() > 0 {
+            // The seed is recovered with "The asymmetric parameters and private key of
+            // *parentHandle*" (TPM 2.0 Part 3, TPM2_Import, quoted above), which a symmetric
+            // storage key does not have. The specification gives no response code for an outer
+            // wrapper under a `TPM_ALG_SYMCIPHER` parent; as in the TCG reference
+            // (`Import.c`: "in order to decrypt an outer wrapper, it must be able to do key
+            // exchange and a symmetric key can't do that"), it is `TPM_RC_TYPE` on
+            // `parentHandle`, checked before the seed is decrypted.
+            if matches!(
+                parent_obj.public.parms_and_id,
+                OwnedPublicParmsAndId::Sym(..)
+            ) {
+                return Err(TpmRc::TYPE.with(Position::handle(1)));
             }
-        }
-
-        // Check unique/parameter sizes of objectPublic before checking attributes
-        match &object_public_struct.parms_and_id {
-            PublicParmsAndId::Rsa(rsa_parms, rsa_unique) => {
-                let key_size_bytes = (rsa_parms.key_bits.0 / 8) as usize;
-                if rsa_unique.get_size() > 0 && rsa_unique.get_size() as usize != key_size_bytes {
-                    return Err(TpmRc::SIZE.with(Position::parameter(2)));
-                }
-            }
-            PublicParmsAndId::Ecc(ecc_parms, point) => {
-                let param_size = match ecc_parms.curve_id {
-                    tpm2::TpmEccCurve::NistP192 => 24,
-                    tpm2::TpmEccCurve::NistP224 => 28,
-                    tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                    tpm2::TpmEccCurve::NistP384 => 48,
-                    tpm2::TpmEccCurve::NistP521 => 66,
-                    _ => 32,
-                };
-                // Coordinates may have leading zero bytes stripped; only oversized
-                // coordinates are invalid (C `CryptValidateKeys`).
-                if point.x.get_size() as usize > param_size
-                    || point.y.get_size() as usize > param_size
-                {
-                    return Err(TpmRc::SIZE.with(Position::parameter(2)));
-                }
-            }
-            _ => {}
-        }
-
-        if cmd.in_sym_seed.get_size() > 0 {
-            if parent_symmetric_is_null {
-                return Err(TpmRc::SIZE.with(Position::parameter(4)));
-            }
-            match &parent_obj.public.parms_and_id {
-                OwnedPublicParmsAndId::Rsa(parms, _) => {
-                    let expected_size = (parms.key_bits.0 / 8) as usize;
-                    if cmd.in_sym_seed.get_size() as usize != expected_size {
-                        return Err(TpmRc::SIZE.with(Position::parameter(4)));
-                    }
-                }
-                OwnedPublicParmsAndId::Ecc(parms, _) => {
-                    let mut slice = cmd.in_sym_seed.get_buffer();
-                    let eph_point = tpm2::TpmsEccPoint::unmarshal(&mut slice)
-                        .map_err(|e| e.in_parameter(4).to_rc())?;
-                    if !slice.is_empty() {
-                        return Err(TpmRc::SIZE.with(Position::parameter(4)));
-                    }
-                    let param_size = match parms.curve_id {
-                        tpm2::TpmEccCurve::NistP192 => 24,
-                        tpm2::TpmEccCurve::NistP224 => 28,
-                        tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                        tpm2::TpmEccCurve::NistP384 => 48,
-                        tpm2::TpmEccCurve::NistP521 => 66,
-                        _ => return Err(TpmRc::ECC_POINT.with(Position::parameter(4))),
-                    };
-                    // Leading zero bytes may be stripped; the point is left-padded below.
-                    if eph_point.x.get_size() as usize > param_size
-                        || eph_point.y.get_size() as usize > param_size
-                    {
-                        return Err(TpmRc::ECC_POINT.with(Position::parameter(4)));
-                    }
-                }
-                _ => {
-                    return Err(TpmRc::SIZE.with(Position::parameter(4)));
-                }
-            }
-        }
-
-        // 3. Validate semantic attributes on objectPublic (Pos2) and symmetricAlg (Pos1) after size checks
-        if cmd.symmetric_alg.is_none()
-            && object_public_struct
+            self.crypt_secret_decrypt(
+                &parent_obj,
+                b"DUPLICATE",
+                cmd.in_sym_seed.get_buffer(),
+                &mut seed,
+            )
+            .map_err(|e| e.with_position(Position::parameter(4)))?
+        } else {
+            // No outer wrapper: `encryptedDuplication` needs one.
+            if object_public_struct
                 .object_attributes
                 .contains(TpmaObject::ENCRYPTED_DUPLICATION)
-        {
-            return Err(TpmRc::ATTRIBUTES.with(Position::parameter(1)));
-        }
+            {
+                return Err(TpmRc::ATTRIBUTES.with(Position::parameter(4)));
+            }
+            0
+        };
 
-        if object_public_struct
-            .object_attributes
-            .intersects(TpmaObject::FIXED_TPM | TpmaObject::FIXED_PARENT)
-        {
-            return Err(TpmRc::ATTRIBUTES.with(Position::parameter(2)));
+        // An object without a Name (nameAlg `TPM_ALG_NULL`) cannot be imported (C: "Compute
+        // name of object ... if(name.t.size == 0) return TPM_RCS_HASH + RC_Import_objectPublic").
+        if object_public_struct.name_alg.is_none() {
+            return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
-
-        self.validate_public_parameters(&object_public_struct, true)?;
 
         // 5. Compute object name
         let mut pub_buf = [0u8; tpm2::TpmtPublic::MAX_SIZE];
@@ -232,97 +206,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let inner_blob_len;
 
         let duplicate_bytes = cmd.duplicate.get_buffer();
-        let mut seed = [0u8; 64];
 
-        if cmd.in_sym_seed.get_size() > 0 {
-            if parent_symmetric_is_null {
-                return Err(TpmRc::SIZE.with(Position::parameter(1)));
-            }
-            // Decrypt seed using parent private key
-            let seed_len = match &parent_obj.public.parms_and_id {
-                OwnedPublicParmsAndId::Rsa(_, _) => crypto_len(
-                    self.crypto().decrypt(
-                        Alg::OAEP,
-                        Alg::from(parent_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?),
-                        &parent_obj.private[..parent_obj.private_len],
-                        cmd.in_sym_seed.get_buffer(),
-                        &mut seed,
-                        b"DUPLICATE\0",
-                    ),
-                    TpmRc::VALUE.with(Position::parameter(4)),
-                )?,
-                OwnedPublicParmsAndId::Ecc(parms, unique) => {
-                    // 1. Unmarshal the ephemeral public key from in_sym_seed
-                    let mut slice = cmd.in_sym_seed.get_buffer();
-                    let eph_point = tpm2::TpmsEccPoint::unmarshal(&mut slice)
-                        .map_err(|e| e.in_parameter(4).to_rc())?;
-
-                    let curve = parms.curve_id;
-                    let param_size = match curve {
-                        tpm2::TpmEccCurve::NistP192 => 24,
-                        tpm2::TpmEccCurve::NistP224 => 28,
-                        tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                        tpm2::TpmEccCurve::NistP384 => 48,
-                        tpm2::TpmEccCurve::NistP521 => 66,
-                        _ => return Err(TpmRc::ECC_POINT.with(Position::parameter(4))),
-                    };
-
-                    let mut eph_pub_point = [0u8; 256];
-                    let ex_buf = eph_point.x.get_buffer();
-                    let ey_buf = eph_point.y.get_buffer();
-                    if ex_buf.len() > param_size || ey_buf.len() > param_size {
-                        return Err(TpmRc::ECC_POINT.with(Position::parameter(4)));
-                    }
-                    eph_pub_point[param_size - ex_buf.len()..param_size].copy_from_slice(ex_buf);
-                    eph_pub_point[param_size * 2 - ey_buf.len()..param_size * 2]
-                        .copy_from_slice(ey_buf);
-
-                    crypto_check(
-                        self.crypto()
-                            .validate_point(curve, &eph_pub_point[..param_size * 2]),
-                        TpmRc::ECC_POINT.with(Position::parameter(4)),
-                    )?;
-
-                    // 2. ECDH point multiply (Parent private scalar key * Ephemeral public point)
-                    let mut ecdh_point = [0u8; 256];
-                    crypto_len(
-                        self.crypto().point_multiply(
-                            curve,
-                            &parent_obj.private[..parent_obj.private_len],
-                            &eph_pub_point[..param_size * 2],
-                            &mut ecdh_point,
-                        ),
-                        TpmRc::ECC_POINT.with(Position::parameter(4)),
-                    )?;
-
-                    // 3. Validate parent's public point coordinates
-                    let px_buf = unique.x.get_buffer();
-                    let py_buf = unique.y.get_buffer();
-                    if px_buf.len() > param_size || py_buf.len() > param_size {
-                        return Err(TpmRc::VALUE.to_rc());
-                    }
-
-                    // 4. KDFe to recover seed
-                    let parent_name_alg = parent_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
-                    let digest_size = parent_name_alg.digest_size();
-                    let total_bits = (digest_size * 8) as u32;
-
-                    tpm2::crypto::kdf::kdfe_bits(
-                        self.crypto(),
-                        parent_name_alg,
-                        &ecdh_point[..param_size],
-                        b"DUPLICATE",
-                        ex_buf,
-                        px_buf,
-                        total_bits,
-                        &mut seed,
-                    )
-                    .map_err(|_| TpmRc::FAILURE)?;
-                    digest_size
-                }
-                _ => return Err(TpmRc::TYPE.with(Position::handle(1))),
-            };
-
+        if seed_len > 0 {
             // UnwrapOuter errors are returned with `RC_Import_duplicate` (parameter 3).
             if duplicate_bytes.len() < 2 {
                 return Err(TpmRc::INSUFFICIENT.with(Position::parameter(3)));
@@ -427,12 +312,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .map_err(|_| TpmRc::FAILURE)?;
         } else {
             // No outer wrapper
-            if object_public_struct
-                .object_attributes
-                .contains(TpmaObject::ENCRYPTED_DUPLICATION)
-            {
-                return Err(TpmRc::ATTRIBUTES.with(Position::parameter(4)));
-            }
             if duplicate_bytes.len() > inner_blob.len() {
                 return Err(TpmRc::SIZE.to_rc());
             }
@@ -538,6 +417,25 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             || parent_handle == 0x4000000C
             || parent_handle == 0x4000000B
         {
+            if object_public_struct.auth_policy.get_size() != 0
+                && let Some(name_alg) = object_public_struct.name_alg
+            {
+                let digest_size = name_alg.digest_size();
+                if object_public_struct.auth_policy.get_size() as usize != digest_size {
+                    return Err(TpmRc::SIZE.with(Position::parameter(2)));
+                }
+            }
+
+            // The sizes of the public key (`unique`) are not checked on their own here: the
+            // object is validated "as if it were being loaded" with its sensitive area, and TPM
+            // 2.0 Part 3, TPM2_Load, says: "For all objects, the size of the key in the
+            // sensitive area shall be consistent with the key size indicated in the public area
+            // or the TPM shall return `TPM_RC_KEY_SIZE`. Before use, a loaded object shall be
+            // checked to validate that the public and sensitive portions are properly linked,
+            // cryptographically. ... If the parts of the object are not properly linked, the TPM
+            // shall return `TPM_RC_BINDING`." `validate_and_import_sensitive` makes those checks
+            // after the attribute checks (C `ObjectLoad()`: `PublicAttributesValidation()`, then
+            // `CryptValidateKeys()`, where an oversized ECC coordinate is a binding error).
             self.validate_object_attributes(
                 &object_public_struct,
                 parent_handle,

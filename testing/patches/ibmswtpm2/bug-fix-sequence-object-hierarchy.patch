@@ -2,6 +2,15 @@ fix-sequence-object-hierarchy: put objects without a parent (sequence objects) i
 
 Classification: spec-deviation bug fix.
 
+Specification (TPM 2.0 Library, Part 1, "Context Management", "Context Data",
+"Hierarchy"):
+
+  "The hierarchy parameter of the context indicates which of the hierarchy
+  proof values are used in the creation of the protection values for the
+  context. For objects, this value is determined by the hierarchy of the
+  object and may be TPM_RH_NULL for a Temporary Object. Sequence objects and
+  sessions are in the NULL hierarchy."
+
 FindEmptyObjectSlot() zeroes the whole slot, leaving hierarchy = 0, an
 invalid value, for sequence objects (which are in the NULL hierarchy, see
 ObjectCreateHashSequence()); TPM2_ContextSave must report TPM_RH_NULL, as

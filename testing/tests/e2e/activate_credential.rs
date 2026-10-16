@@ -353,3 +353,63 @@ fn symmetric_protector_rejected() {
     );
     assert_eq!(res.err(), Some(TpmRc::TYPE.with(Position::handle(2)).get()));
 }
+
+/// MakeCredential and ActivateCredential protect the credential in CFB mode even when the
+/// protector's public area names another mode (here AES-128 CTR): the credential round-trips.
+/// `tpm-rs` used the protector's mode and failed with `TPM_RC_FAILURE` (found by differential
+/// fuzzing). TPM 2.0 Part 1, "Credential Protection": "encIdentity := CFB_ekSymAlg (symKey, 0,
+/// CV)", where "CFB_ekSymAlg | is symmetric encryption in CFB mode using the symmetric algorithm
+/// of the key serving as "EK"".
+#[test]
+fn credential_round_trips_under_ctr_mode_protector() {
+    let mut sim = Tpm::new();
+    let mut template = get_ecc_srk_template();
+    if let PublicParmsAndId::Ecc(parms, _) = &mut template.parms_and_id {
+        parms.symmetric = Some(tpm2::TpmtSymDefObject {
+            alg: tpm2::AlgSym::Aes128,
+            mode: Some(tpm2::TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Ctr)),
+        });
+    }
+    let key = execute_with_password_sessions(
+        &mut sim,
+        &CreatePrimary {
+            primary_handle: Handle::RH_OWNER,
+            in_sensitive: tpm2::Tpm2b(TpmsSensitiveCreate {
+                user_auth: Tpm2bAuth::default(),
+                data: Tpm2bSensitiveData::default(),
+            }),
+            in_public: tpm2::Tpm2b(template),
+            ..Default::default()
+        },
+        1,
+        &[],
+    )
+    .expect("CreatePrimary failed");
+
+    let credential = Tpm2bDigest::from_bytes(b"Secrets!!!").unwrap();
+    let made = execute_with_password_sessions(
+        &mut sim,
+        &MakeCredential {
+            handle: key.object_handle,
+            credential,
+            object_name: key.name,
+        },
+        0,
+        &[],
+    )
+    .expect("MakeCredential failed");
+
+    let activated = execute_with_password_sessions(
+        &mut sim,
+        &ActivateCredential {
+            activate_handle: key.object_handle,
+            key_handle: key.object_handle,
+            credential_blob: made.credential_blob,
+            secret: made.secret,
+        },
+        2,
+        &[],
+    )
+    .expect("ActivateCredential failed");
+    assert_eq!(activated.cert_info.get_buffer(), b"Secrets!!!");
+}

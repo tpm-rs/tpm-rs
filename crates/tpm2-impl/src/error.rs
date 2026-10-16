@@ -23,12 +23,18 @@ use core::fmt::Display;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InternalError {
     HardwareError,
+    /// A different `tpm2` unmarshal profile ([`tpm2::profile`]) is already installed in this
+    /// process.
+    ProfileConflict,
 }
 
 impl Display for InternalError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             InternalError::HardwareError => write!(f, "Hardware operation failed"),
+            InternalError::ProfileConflict => {
+                write!(f, "a different TPM unmarshal profile is already installed")
+            }
         }
     }
 }

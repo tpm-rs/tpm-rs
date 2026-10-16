@@ -1,0 +1,41 @@
+sequence-complete-ticket-error-state: a failed TPM2_SequenceComplete leaves the sequence intact
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, "Response Codes"): "The normal response for
+any command is TPM_RC_SUCCESS. Any other value indicates that the command did
+not complete and the state of the TPM is unchanged."
+
+TPM2_SequenceComplete of a hash sequence adds the last data, ends the hash
+(the hash state is consumed) and only then computes the hash-check ticket,
+which can fail (TPM_RC_FW_LIMITED/TPM_RC_SVN_LIMITED when the hierarchy's
+proof is unavailable). The failed command leaves the sequence object loaded
+with an ended hash state (and possibly ticketSafe updated), so a later
+TPM2_SequenceComplete or TPM2_SequenceUpdate on it uses the consumed state
+(version 185 enters failure mode). The ticket's proof is now obtained before
+the sequence is changed, so the error leaves the sequence unchanged, as in
+tpm-rs. Found by differential fuzzing.
+diff --git a/TPMCmd/tpm/src/command/HashHMAC/SequenceComplete.c b/TPMCmd/tpm/src/command/HashHMAC/SequenceComplete.c
+--- a/TPMCmd/tpm/src/command/HashHMAC/SequenceComplete.c
++++ b/TPMCmd/tpm/src/command/HashHMAC/SequenceComplete.c
+@@ -29,6 +29,20 @@
+     {
+         // Get the hash algorithm before the algorithm is lost in TpmHash_HashEnd
+         TPM_ALG_ID hashAlg = hashObject->state.hashState[0].hashAlg;
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // the ticket's proof is checked before the sequence is changed ("the
++        // state of the TPM is unchanged" after an error, Part 3 "Response Codes").
++        if(in->hierarchy != TPM_RH_NULL
++           && (hashObject->attributes.ticketSafe == SET
++               || (hashObject->attributes.firstBlock == CLEAR
++                   && CryptoCommon_TicketIsSafe(&in->buffer.b))))
++        {
++            TPM2B_PROOF proof;
++            TPM_RC      proofResult = HierarchyGetProof(in->hierarchy, &proof);
++            MemorySet(proof.t.buffer, 0, sizeof(proof.t.buffer));
++            if(proofResult != TPM_RC_SUCCESS)
++                return proofResult;
++        }
+ 
+         // Update last piece of the data
+         CryptoCommon_DigestUpdate2B(&hashObject->state.hashState[0], &in->buffer.b);

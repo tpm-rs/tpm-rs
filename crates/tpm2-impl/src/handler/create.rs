@@ -15,8 +15,7 @@ use tpm2::commands::responses;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    Alg, Tpm2bDigest, Tpm2bName, TpmaLocality, TpmiAlgHash, TpmiAlgKdf, TpmsCreationData,
-    TpmtTkCreation,
+    Alg, Tpm2bDigest, Tpm2bName, TpmaLocality, TpmiAlgHash, TpmsCreationData, TpmtTkCreation,
 };
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -52,91 +51,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = match request.try_unmarshal_command::<Create>(handles) {
-            Ok(cmd) => cmd,
-            Err(e) => {
-                let remaining = request.remaining_slice();
-                if remaining.len() >= 6 {
-                    let sens_size = u16::from_be_bytes([remaining[0], remaining[1]]) as usize;
-                    let pub_offset = 2 + sens_size;
-                    if remaining.len() >= pub_offset + 2 {
-                        let pub_size =
-                            u16::from_be_bytes([remaining[pub_offset], remaining[pub_offset + 1]])
-                                as usize;
-                        let pub_bytes = &remaining
-                            [pub_offset + 2..remaining.len().min(pub_offset + 2 + pub_size)];
-                        if pub_bytes.len() >= 2 {
-                            let type_alg = u16::from_be_bytes([pub_bytes[0], pub_bytes[1]]);
-                            if type_alg != 0x0001
-                                && type_alg != 0x0008
-                                && type_alg != 0x0023
-                                && type_alg != 0x0025
-                            {
-                                return Err(TpmRc::TYPE.with(Position::parameter(2)));
-                            }
-                        }
-                        if pub_bytes.len() >= 8 {
-                            let type_alg = u16::from_be_bytes([pub_bytes[0], pub_bytes[1]]);
-                            let name_alg = u16::from_be_bytes([pub_bytes[2], pub_bytes[3]]);
-                            if TpmiAlgHash::try_from(name_alg).is_err() {
-                                return Err(TpmRc::HASH.with(Position::parameter(2)));
-                            }
-                            if type_alg == 0x0008 {
-                                let mut offset = 8;
-                                if pub_bytes.len() >= offset + 2 {
-                                    let policy_size = u16::from_be_bytes([
-                                        pub_bytes[offset],
-                                        pub_bytes[offset + 1],
-                                    ])
-                                        as usize;
-                                    offset += 2 + policy_size;
-                                    if pub_bytes.len() >= offset + 4 {
-                                        let scheme_id = u16::from_be_bytes([
-                                            pub_bytes[offset],
-                                            pub_bytes[offset + 1],
-                                        ]);
-                                        if scheme_id == 0x0005 {
-                                            let hash_id = u16::from_be_bytes([
-                                                pub_bytes[offset + 2],
-                                                pub_bytes[offset + 3],
-                                            ]);
-                                            if TpmiAlgHash::try_from(hash_id).is_err() {
-                                                return Err(
-                                                    TpmRc::HASH.with(Position::parameter(2))
-                                                );
-                                            }
-                                        } else if scheme_id == 0x000A
-                                            && pub_bytes.len() >= offset + 6
-                                        {
-                                            let hash_id = u16::from_be_bytes([
-                                                pub_bytes[offset + 2],
-                                                pub_bytes[offset + 3],
-                                            ]);
-                                            if TpmiAlgHash::try_from(hash_id).is_err() {
-                                                return Err(
-                                                    TpmRc::HASH.with(Position::parameter(2))
-                                                );
-                                            }
-                                            let kdf_id = u16::from_be_bytes([
-                                                pub_bytes[offset + 4],
-                                                pub_bytes[offset + 5],
-                                            ]);
-                                            if kdf_id != 0x0010
-                                                && (kdf_id == Alg::HKDF.id()
-                                                    || TpmiAlgKdf::try_from(kdf_id).is_err())
-                                            {
-                                                return Err(TpmRc::KDF.with(Position::parameter(2)));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                return Err(e);
-            }
-        };
+        // The parameters are unmarshaled in order, with the TPM's profile, and the first error
+        // is the response (TPM 2.0 Part 3, "Unmarshaling Errors": "When an error is encountered
+        // while unmarshaling a command parameter, an error response code is returned, and no
+        // command processing occurs."): e.g. reserved bits in `objectAttributes` are reported
+        // before an invalid scheme in `parameters`, since `TPMT_PUBLIC` unmarshals `type`,
+        // `nameAlg`, `objectAttributes`, `authPolicy` and `parameters` in that order (Part 2,
+        // "Definition of TPMT_PUBLIC Structure").
+        let cmd = request.try_unmarshal_command::<Create>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -161,6 +83,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             false, // allow_derivation_parent
         )?;
 
+        // A free object slot as scratch memory for the new object. TPM 2.0 Part 3, "Response
+        // Code Details", TPM_RC_OBJECT_MEMORY: "This response code can be returned by any command
+        // that causes the TPM to need an object 'slot'. [...] However, the TPM implementation is
+        // allowed to use object slots for other reasons. In the Reference Code, the TPM copies a
+        // referenced persistent object into RAM for the duration of the command. If all the slots
+        // are previously occupied, the TPM may return this value. A TPM is allowed to use object
+        // slots for other purposes and return this value." The specification leaves the slot use
+        // of TPM2_Create to the implementation, so tpm-rs follows mstpm20, whose TPM2_Create takes
+        // a free slot right after the parent check ("Get a slot for the creation":
+        // `FindEmptyObjectSlot(NULL)`, else TPM_RC_OBJECT_MEMORY). The slot is only scratch
+        // memory, so nothing is allocated; a persistent parent's RAM copy already counts in
+        // `command_persistent_objects`.
+        self.context.state.find_next_transient_handle()?;
+
         // 2. Validate template properties and attributes
         let (is_primary, is_derived) = self.validate_create_loaded_parameters(
             &in_public_struct.as_tpmt(),
@@ -170,6 +106,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Some(parent_info.attributes),
             false,
             parent_info.scheme,
+            false, // auth_size_first: after CreateChecks (C `Create.c`)
         )?;
 
         let name_alg = in_public_struct

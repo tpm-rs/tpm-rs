@@ -1,0 +1,52 @@
+template-size: TPM2B_TEMPLATE is bounded by the unpadded sizeof(TPMT_PUBLIC)
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 2, Table "Definition of TPM2B_TEMPLATE
+Structure"): "buffer[size]{:sizeof(TPMT_PUBLIC)}", and Part 2, "Data
+Alignment": "When used in a table to indicate a maximum size, the sizeof()
+function returns the octet-aligned size of the structure, with no padding."
+
+The reference bounds TPM2B_TEMPLATE with the C sizeof(TPMT_PUBLIC), which
+includes the alignment padding of TPMA_OBJECT and of the UINT32 exponent of
+TPMS_RSA_PARMS: 356 bytes instead of 350 with this profile, so templates of
+351 to 356 bytes are accepted instead of TPM_RC_SIZE. The bound is the
+unpadded size (the same kind of padding issue as bug-fix-tpmu-name-size).
+Found by differential fuzzing.
+diff --git a/src/Unmarshal.c b/src/Unmarshal.c
+--- a/src/Unmarshal.c
++++ b/src/Unmarshal.c
+@@ -4182,13 +4182,32 @@
+ 
+ /* Table 2:193 - Definition of TPM2B_TEMPLATE Structure (StructuresTable()) */
+ 
++// tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++// TPM2B_TEMPLATE is bounded by "sizeof(TPMT_PUBLIC)", which Part 2 ("Data
++// Alignment") defines as "the octet-aligned size of the structure, with no
++// padding", not the padded C sizeof. The largest TPMU_PUBLIC_PARMS members
++// are TPMS_RSA_PARMS (unpadded: symmetric, scheme, keyBits, exponent) and
++// TPMS_ECC_PARMS (no padding of its own); TPM2B_DIGEST and TPMU_PUBLIC_ID
++// have no padding of their own.
++#define TPMS_RSA_PARMS_PACKED_SIZE                                        \
++    (sizeof(TPMT_SYM_DEF_OBJECT) + sizeof(TPMT_RSA_SCHEME) + sizeof(UINT16) \
++     + sizeof(UINT32))
++#define TPMU_PUBLIC_PARMS_PACKED_SIZE                                \
++    (TPMS_RSA_PARMS_PACKED_SIZE > sizeof(TPMS_ECC_PARMS)               \
++         ? TPMS_RSA_PARMS_PACKED_SIZE                                  \
++         : sizeof(TPMS_ECC_PARMS))
++#define TPMT_PUBLIC_PACKED_SIZE                                         \
++    (sizeof(TPMI_ALG_PUBLIC) + sizeof(TPMI_ALG_HASH) + sizeof(UINT32) \
++     + sizeof(TPM2B_DIGEST) + TPMU_PUBLIC_PARMS_PACKED_SIZE      \
++     + sizeof(TPMU_PUBLIC_ID))
++
+ TPM_RC
+ TPM2B_TEMPLATE_Unmarshal(TPM2B_TEMPLATE *target, BYTE **buffer, INT32 *size)
+ {
+     TPM_RC rc = TPM_RC_SUCCESS;
+ 
+     if (rc == TPM_RC_SUCCESS) {
+-	rc = TPM2B_Unmarshal(&target->b, sizeof(TPMT_PUBLIC), buffer, size);
++	rc = TPM2B_Unmarshal(&target->b, TPMT_PUBLIC_PACKED_SIZE, buffer, size);
+     }
+     return rc;
+ }

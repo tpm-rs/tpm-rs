@@ -11,7 +11,9 @@ use tpm2::commands::responses;
 use tpm2::crypto::kdf::kdfa_bits;
 use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Tpm2bDigest, TpmaObject, TpmiAlgHash};
+use tpm2::{
+    Tpm2bDigest, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmtSymDefObject,
+};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -50,9 +52,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
-
-        // 1. Retrieve target (activated) object
-        let activate_obj = self.resolve_object(activate_handle, Position::handle(1))?;
 
         // 2. Retrieve decryption (protector) object. A sequence object is not an
         // asymmetric key (`TPM_RC_TYPE + RC_ActivateCredential_keyHandle`).
@@ -97,8 +96,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 }
             })?;
 
-        // 5. Derive symmetric key and HMAC key using KDFa
-        let sym_alg = match &key_obj.public.parms_and_id {
+        // The activated object is used only for its Name, after the protector key's checks
+        // and the seed's decryption (C `TPM2_ActivateCredential()`: the key's type check and
+        // `CryptSecretDecrypt()` come first; "this assertion is deliberately late, after other
+        // validation has happened"). Any loaded object qualifies, a sequence object included.
+        // TPM 2.0 Part 3, TPM2_ActivateCredential: "The key associated with *keyHandle* is used
+        // to recover a seed from *secret*, which is the encrypted seed. The Name of the object
+        // associated with *activateHandle*, and the recovered seed are used in a KDF to recover
+        // the symmetric key."
+        let activate_name = self.context.handle_name(activate_handle);
+
+        // 5. Derive symmetric key and HMAC key using KDFa. The credential is always decrypted in
+        // CFB mode with the key's symmetric algorithm, whatever mode its public area names (TPM
+        // 2.0 Part 1, "Credential Protection": "encIdentity := CFB_ekSymAlg (symKey, 0, CV)",
+        // where "CFB_ekSymAlg | is symmetric encryption in CFB mode using the symmetric algorithm
+        // of the key serving as "EK"").
+        let key_sym = match &key_obj.public.parms_and_id {
             crate::owned::OwnedPublicParmsAndId::Rsa(parms, _) => parms
                 .symmetric
                 .ok_or(TpmRc::TYPE.with(Position::handle(2)))?,
@@ -106,6 +119,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .symmetric
                 .ok_or(TpmRc::TYPE.with(Position::handle(2)))?,
             _ => return Err(TpmRc::TYPE.with(Position::handle(2))),
+        };
+        let sym_alg = TpmtSymDefObject {
+            alg: key_sym.alg,
+            mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
         };
         let sym_key_bits = sym_alg.key_bits() as u32;
         let outer_key_len = (sym_key_bits / 8) as usize;
@@ -119,7 +136,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             name_alg,
             &seed[..seed_len],
             b"STORAGE",
-            activate_obj.name.get_buffer(),
+            activate_name.get_buffer(),
             &[],
             sym_key_bits,
             &mut sym_key_iv,
@@ -151,7 +168,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .update(encrypted_enc_identity)
             .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx
-            .update(activate_obj.name.get_buffer())
+            .update(activate_name.get_buffer())
             .map_err(|_| TpmRc::FAILURE)?;
         let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = hmac_ctx

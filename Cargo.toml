@@ -13,7 +13,12 @@ members = [
     "crates/tpm2-crypto/tests",
     "testing",
 ]
-exclude = ["crates/tpm2-crypto/bssl/bssl-sys"]
+exclude = [
+    "crates/tpm2-crypto/bssl/bssl-sys",
+    # The differential fuzzer: its own workspace, built with `cargo fuzz`
+    # (nightly, sanitizers), so the workspace builds stay unaffected.
+    "testing/fuzz",
+]
 
 # Package keys that should be used by all packages.
 # We don't set: authors (deprecated), license-file, exclude, include, or publish

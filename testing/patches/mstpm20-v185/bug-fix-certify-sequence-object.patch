@@ -1,0 +1,34 @@
+fix-certify-sequence-object: TPM2_Certify rejects a sequence object as objectHandle
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3, "TPM2_Certify", "General
+Description"):
+
+  "The object may be any object that is loaded with `TPM2_Load()` or
+  `TPM2_CreatePrimary()`. An object that only has its public area loaded
+  cannot be certified."
+
+A hash, HMAC or event sequence object is not loaded with TPM2_Load() or
+TPM2_CreatePrimary(), yet the reference certifies it: its Name and Qualified
+Name are whatever an earlier object left in the slot (FindEmptyObjectSlot()
+clears only the slot's attributes and AllocateSequenceSlot() sets neither),
+so the attestation contains stale data. The specification gives no response
+code for this case; the check returns TPM_RC_KEY + RC_Certify_objectHandle,
+the response code tpm-rs uses, after the signHandle and scheme checks (which
+keep their order).
+
+diff --git a/TPMCmd/tpm/src/command/Attestation/Certify.c b/TPMCmd/tpm/src/command/Attestation/Certify.c
+--- a/TPMCmd/tpm/src/command/Attestation/Certify.c
++++ b/TPMCmd/tpm/src/command/Attestation/Certify.c
+@@ -27,6 +27,10 @@
+         return TPM_RCS_KEY + RC_Certify_signHandle;
+     if(!CryptoCommon_SelectSignScheme(signObject, &in->inScheme))
+         return TPM_RCS_SCHEME + RC_Certify_inScheme;
++    // A sequence object is not an object loaded with TPM2_Load() or
++    // TPM2_CreatePrimary(); its Name and Qualified Name are not defined.
++    if(ObjectIsSequence(certifiedObject))
++        return TPM_RCS_KEY + RC_Certify_objectHandle;
+ 
+     // Command Output
+     // Filling in attest information

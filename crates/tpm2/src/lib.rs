@@ -122,6 +122,7 @@ pub mod errors;
 pub mod limits;
 mod marshal;
 pub mod platform;
+pub mod profile;
 #[cfg(feature = "std")]
 mod std;
 mod structures;

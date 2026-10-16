@@ -2,6 +2,17 @@ fix-nv-public-index-unmarshal: restrict TPMS_NV_PUBLIC.nvIndex to ordinary NV in
 
 Classification: spec-deviation bug fix.
 
+Specification (TPM 2.0 Library, Part 2, "TPMS_NV_PUBLIC" (Table: Definition of
+TPMS_NV_PUBLIC Structure)):
+
+  "nvIndex TPMI_RH_NV_LEGACY_INDEX the handle of the data area"
+
+Specification (TPM 2.0 Library, Part 2, "TPMI_RH_NV_LEGACY_INDEX" (Table:
+Definition of (TPM_HANDLE) TPMI_RH_NV_LEGACY_INDEX Type)):
+
+  "{NV_INDEX_FIRST:NV_INDEX_LAST} range of NV Indexes with 32-bit
+  attributes; #TPM_RC_VALUE error returned if the handle is out of range"
+
 TPMS_NV_PUBLIC.nvIndex is a TPMI_RH_NV_LEGACY_INDEX (Part 2), i.e. only
 {NV_INDEX_FIRST:NV_INDEX_LAST}, else TPM_RC_VALUE; upstream also admits
 external and permanent NV handles there.

@@ -244,3 +244,65 @@ fn works_without_nv_and_object_memory_checked_first() {
         rc0(TpmRc::OBJECT_MEMORY)
     );
 }
+
+/// An RSA template whose public exponent the TPM does not support (`0x00080000`, even) fails
+/// when the key is generated, with `TPM_RC_RANGE` (no position), not while the template is
+/// validated. TPM 2.0 Part 1, RSA: "A TPM is required only to support a public exponent (*e*)
+/// of $2^{16}+1$. Support for other exponents is allowed but discouraged." The specification
+/// leaves the response code to the TPM; this follows the TCG reference (`CryptRsaGenerateKey()`
+/// returns `TPM_RC_RANGE` for an exponent below 65537 or not prime). Found by differential
+/// fuzzing.
+#[test]
+fn unsupported_rsa_exponent_fails_key_generation_with_range() {
+    let mut tpm = testing::tpm::Tpm::new();
+    let steps: [(&str, u32); 1] = [(
+        concat!(
+            "800200000043000001314000000100000009400000090000010000000400000000001a0001000b000300720000000600",
+            "80004300100800080000000000000000000000",
+        ),
+        0x08d,
+    )];
+    for (i, (cmd, rc)) in steps.into_iter().enumerate() {
+        let rsp = tpm.send_command(0, &crate::_common::hex_checked(cmd));
+        assert_eq!(
+            u32::from_be_bytes(rsp[6..10].try_into().unwrap()),
+            rc,
+            "step {i}: {rsp:02x?}"
+        );
+    }
+}
+
+/// `TPMA_OBJECT` bit 3 is reserved, so a public area with it SET fails to unmarshal
+/// (`TPM_RC_RESERVED_BITS + P2`) before anything later in the template is examined. TPM 2.0
+/// Part 2, Table "Definition of (UINT32) TPMA_OBJECT Bits": "3 | Reserved | shall be zero". (The
+/// TCG reference version 185 defines the bit as `fixedFirmware`, see
+/// `testing/patches/mstpm20-v185/profile-tpma-object-fixed-firmware-reserved.patch`.) Found by
+/// differential fuzzing.
+#[test]
+fn reserved_object_attribute_bit_3_rejected() {
+    let mut tpm = testing::tpm::Tpm::new();
+    let steps: [(&str, u32); 2] = [
+        (
+            concat!(
+                "80020000005e000001314000000100000009400000090000010000002900076b657961757468001e616e6f746865725f",
+                "7365637265745f6b65795f62797465735f353637383900100008000b000400aefffffffaffeb0000000000000000",
+            ),
+            0x2e1,
+        ),
+        (
+            concat!(
+                "80020000003f000001314000000b0000000940000009000001000000040000000000160001000b0004006e0000001000",
+                "100800000000000000000000000000",
+            ),
+            0x2e1,
+        ),
+    ];
+    for (i, (cmd, rc)) in steps.into_iter().enumerate() {
+        let rsp = tpm.send_command(0, &crate::_common::hex_checked(cmd));
+        assert_eq!(
+            u32::from_be_bytes(rsp[6..10].try_into().unwrap()),
+            rc,
+            "step {i}: {rsp:02x?}"
+        );
+    }
+}

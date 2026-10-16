@@ -2,6 +2,18 @@ fix-symmetric-unique: compute 'unique' of every symmetric/keyed-hash object as a
 
 Classification: spec-deviation bug fix.
 
+Specification (TPM 2.0 Library, Part 1, "Public Area Creation", "unique",
+"TPM_ALG_KEYEDHASH" and "TPM_ALG_SYMCIPHER" (the equation in plain text)):
+
+  "This type is used for an HMAC key or data block. The computation for
+  unique for a KeyedHash object is: unique := H_nameAlg(obfuscate || key)
+  where ... obfuscate is the contents of seedValue.buffer in the object's
+  sensitive area; key is the contents of sensitive.bits.buffer in the
+  object's sensitive area; this will be either an HMAC key, a data blob, or
+  a symmetric key. ... TPM_ALG_SYMCIPHER: This type is used for a symmetric
+  block cipher key. The unique value is computed as shown in [the equation
+  above]."
+
 TPM 2.0 Part 1, "Public Area Creation" (TPM_ALG_KEYEDHASH and
 TPM_ALG_SYMCIPHER) requires unique := H_nameAlg(seedValue || sensitive) for
 every keyed-hash and symmetric object. The reference uses an HMAC for

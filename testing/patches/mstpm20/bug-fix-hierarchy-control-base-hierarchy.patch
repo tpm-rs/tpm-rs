@@ -1,0 +1,29 @@
+hierarchy-control-base-hierarchy: TPM2_HierarchyControl authHandle is a TPMI_RH_BASE_HIERARCHY
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, Table "TPM2_HierarchyControl Command"):
+"TPMI_RH_BASE_HIERARCHY | @authHandle | TPM_RH_ENDORSEMENT, TPM_RH_OWNER or
+TPM_RH_PLATFORM+{PP}"; Part 2, Table "Definition of (TPM_HANDLE)
+TPMI_RH_BASE_HIERARCHY Type": "TPM_RH_OWNER", "TPM_RH_PLATFORM",
+"TPM_RH_ENDORSEMENT", "#TPM_RC_VALUE | response code returned when the
+unmarshaling of this type fails".
+
+The reference unmarshals authHandle as a TPMI_RH_HIERARCHY, which also admits
+TPM_RH_NULL and the firmware-limited and SVN-limited hierarchies, so such a
+handle reaches the load status check (e.g. TPM_RC_FW_LIMITED + H1) instead of
+failing to unmarshal with TPM_RC_VALUE + H1 (as in version 185 and tpm-rs).
+The command's descriptor now uses the existing
+TPMI_RH_BASE_HIERARCHY_H_UNMARSHAL handle type. Found by differential fuzzing.
+diff --git a/TPMCmd/tpm/include/private/CommandDispatchData.h b/TPMCmd/tpm/include/private/CommandDispatchData.h
+--- a/TPMCmd/tpm/include/private/CommandDispatchData.h
++++ b/TPMCmd/tpm/include/private/CommandDispatchData.h
+@@ -3621,7 +3621,7 @@
+     /* offsetOfTypes */         offsetof(HierarchyControl_COMMAND_DESCRIPTOR_t, types),
+     /* offsets       */         {(UINT16)(offsetof(HierarchyControl_In, enable)),
+                                  (UINT16)(offsetof(HierarchyControl_In, state))},
+-    /* types         */         {TPMI_RH_HIERARCHY_H_UNMARSHAL,
++    /* types         */         {TPMI_RH_BASE_HIERARCHY_H_UNMARSHAL,
+                                  TPMI_RH_ENABLES_P_UNMARSHAL,
+                                  TPMI_YES_NO_P_UNMARSHAL,
+                                  END_OF_LIST,

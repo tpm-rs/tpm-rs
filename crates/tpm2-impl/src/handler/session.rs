@@ -3,12 +3,11 @@ use crate::handler::{CommandHandler, SessionState};
 use crate::req_resp::RequestThenResponse;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
-use tpm2::Alg;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{PolicyCommandCode, PolicyGetDigest, PolicyRestart, StartAuthSession};
-use tpm2::crypto::kdf::{kdfa_bits, kdfe_bits};
+use tpm2::crypto::kdf::kdfa_bits;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TPM2_MAX_ACTIVE_SESSIONS, TpmSe};
@@ -59,9 +58,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     && let Ok(_st) = tpm2::TpmSe::unmarshal(&mut slice)
                     && slice.len() >= 2
                 {
+                    // `symmetric` is a `TPMT_SYM_DEF+`, whose `algorithm` is a `TPMI_ALG_SYM+`:
+                    // any value that is not a symmetric algorithm (including values beyond
+                    // the algorithm IDs) is `TPM_RC_SYMMETRIC`. TPM 2.0 Part 2, Table
+                    // "Definition of (TPM_ALG_ID) TPMI_ALG_SYM Type": "#TPM_RC_SYMMETRIC".
                     let alg = u16::from_be_bytes([slice[0], slice[1]]);
                     if alg > 0x0080 {
-                        return Err(TpmRc::VALUE.with(Position::parameter(4)));
+                        return Err(TpmRc::SYMMETRIC.with(Position::parameter(4)));
                     }
                 }
                 return Err(e);
@@ -70,13 +73,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
-        }
-
-        // Validate symmetric block cipher mode (if not Null, mode must be CFB)
-        if let Some(tpm2::TpmtSymDef::Cipher(sym_obj)) = cmd.symmetric
-            && sym_obj.mode() != Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb))
-        {
-            return Err(TpmRc::MODE.with(Position::parameter(4)));
         }
 
         // Generate nonceTPM
@@ -102,6 +98,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut bind_auth = [0u8; 64];
         let bind_auth_len = self.retrieve_bind_auth(bind, &mut bind_auth)?;
         let bind_auth_stripped = crate::util::strip_trailing_zeros(&bind_auth[..bind_auth_len]);
+
+        // TPM 2.0 Part 3, TPM2_StartAuthSession: "If *symmetric* specifies a block cipher, then
+        // `TPM_ALG_CFB` is the only allowed value for the *mode* field in the *symmetric*
+        // parameter (`TPM_RC_MODE`)." The spec gives no order relative to the `encryptedSalt`
+        // and `bind` checks; like the TCG reference (`TPM2_StartAuthSession()`), the mode is
+        // checked after them, so an undecryptable salt is `TPM_RC_VALUE + RC_encryptedSalt`
+        // even with a non-CFB mode.
+        if let Some(tpm2::TpmtSymDef::Cipher(sym_obj)) = cmd.symmetric
+            && sym_obj.mode() != Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb))
+        {
+            return Err(TpmRc::MODE.with(Position::parameter(4)));
+        }
 
         // Generate unique session handle
         let session_handle = self.generate_session_handle(cmd.session_type)?;
@@ -254,6 +262,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<usize, TpmRc> {
         if tpm_key != Handle::RH_NULL {
             let handle_val = tpm_key.0;
+            // A sequence object is a loaded object but not an asymmetric key. TPM 2.0 Part 3,
+            // TPM2_StartAuthSession: "The TPM shall return `TPM_RC_KEY` if *tpmKey* does not
+            // reference an asymmetric key."
+            if self
+                .context
+                .state
+                .find_active_sequence(handle_val)
+                .is_some()
+            {
+                return Err(TpmRc::KEY.with(Position::handle(1)));
+            }
             let key_obj = self.resolve_object(handle_val, Position::handle(1))?;
 
             // Same order as C `TPM2_StartAuthSession`: the key must be asymmetric
@@ -283,120 +302,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
             }
 
-            match &key_obj.public.parms_and_id {
-                crate::owned::OwnedPublicParmsAndId::Rsa(parms, _) => {
-                    let expected_size = (parms.key_bits.0 / 8) as usize;
-                    if encrypted_salt.is_empty() || encrypted_salt.len() != expected_size {
-                        return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                    }
-                    let mut plaintext_buf = [0u8; 512];
-                    let name_alg = key_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
-                    let hash_alg = Alg::from(name_alg);
-
-                    let decrypted_len = match self.crypto().decrypt(
-                        Alg::OAEP,
-                        hash_alg,
-                        &key_obj.private[..key_obj.private_len],
-                        encrypted_salt,
-                        &mut plaintext_buf,
-                        b"SECRET\0",
-                    ) {
-                        Ok(Some(len)) => len,
-                        Ok(None) | Err(_) => {
-                            return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                        }
-                    };
-
-                    let name_alg_digest_size = name_alg.digest_size();
-                    if name_alg_digest_size == 0 || decrypted_len > name_alg_digest_size {
-                        return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                    }
-
-                    decrypted_salt[..decrypted_len]
-                        .copy_from_slice(&plaintext_buf[..decrypted_len]);
-                    Ok(decrypted_len)
-                }
-                crate::owned::OwnedPublicParmsAndId::Ecc(ecc_parms, ecc_unique) => {
-                    if encrypted_salt.is_empty() {
-                        return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                    }
-                    use tpm2::TpmsEccPoint;
-                    use tpm2::Unmarshal;
-
-                    let curve = ecc_parms.curve_id;
-                    let param_size = match curve {
-                        tpm2::TpmEccCurve::NistP192 => 24,
-                        tpm2::TpmEccCurve::NistP224 => 28,
-                        tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                        tpm2::TpmEccCurve::NistP384 => 48,
-                        tpm2::TpmEccCurve::NistP521 => 66,
-                        _ => return Err(TpmRc::CURVE.with(Position::handle(1))),
-                    };
-
-                    let mut slice = encrypted_salt;
-                    let in_point_struct = TpmsEccPoint::unmarshal(&mut slice)
-                        .map_err(|_| TpmRc::VALUE.with(Position::parameter(2)))?;
-                    if !slice.is_empty() {
-                        return Err(TpmRc::SIZE.with(Position::parameter(2)));
-                    }
-
-                    let in_x = in_point_struct.x.get_buffer();
-                    let in_y = in_point_struct.y.get_buffer();
-                    if in_x.len() > param_size || in_y.len() > param_size {
-                        return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                    }
-
-                    let mut raw_point = [0u8; 256];
-                    raw_point[param_size - in_x.len()..param_size].copy_from_slice(in_x);
-                    raw_point[param_size * 2 - in_y.len()..param_size * 2].copy_from_slice(in_y);
-
-                    if !matches!(
-                        self.crypto()
-                            .validate_point(curve, &raw_point[..param_size * 2]),
-                        Ok(true)
-                    ) {
-                        return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                    }
-
-                    let mut z_buf = [0u8; 256];
-                    if !matches!(
-                        self.crypto().point_multiply(
-                            curve,
-                            &key_obj.private[..key_obj.private_len],
-                            &raw_point[..param_size * 2],
-                            &mut z_buf,
-                        ),
-                        Ok(Some(_))
-                    ) {
-                        return Err(TpmRc::VALUE.with(Position::parameter(2)));
-                    }
-
-                    let name_alg = key_obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
-                    let hash_size = name_alg.digest_size();
-                    let z_x = &z_buf[..param_size];
-
-                    let ek_x = ecc_unique.x.get_buffer();
-
-                    let mut derived_salt = [0u8; 64];
-                    let derived_salt_len = kdfe_bits(
-                        self.crypto(),
-                        name_alg,
-                        z_x,
-                        b"SECRET",
-                        in_x,
-                        ek_x,
-                        (hash_size * 8) as u32,
-                        &mut derived_salt[..hash_size],
-                    )
-                    .map_err(|_| TpmRc::FAILURE)?;
-
-                    decrypted_salt[..derived_salt_len]
-                        .copy_from_slice(&derived_salt[..derived_salt_len]);
-                    Ok(derived_salt_len)
-                }
-                // Non-asymmetric keys (e.g. TPM_ALG_SYMCIPHER) were rejected above.
-                _ => Err(TpmRc::KEY.with(Position::handle(1))),
-            }
+            // TPM 2.0 Part 3, TPM2_StartAuthSession: "The TPM shall return `TPM_RC_VALUE` if:
+            // 1. *tpmKey* references an RSA key and 1. the size of *encryptedSalt* is not the
+            // same as the size of the public modulus of *tpmKey*, 2. *encryptedSalt* has a value
+            // that is greater than the public modulus of *tpmKey*, 3. *encryptedSalt* is not a
+            // properly encoded OAEP value, or 4. the decrypted *salt* value is larger than the
+            // size of the digest produced by the *nameAlg* of *tpmKey*; or 2. *tpmKey*
+            // references an ECC key and *encryptedSalt* 1. does not contain a `TPMS_ECC_POINT`
+            // or 2. is not a point on the curve of *tpmKey*". Every failure of the shared
+            // `CryptSecretDecrypt` is therefore `TPM_RC_VALUE` on `encryptedSalt` (as in the
+            // reference: `return TPM_RCS_VALUE + RC_StartAuthSession_encryptedSalt`).
+            self.crypt_secret_decrypt(&key_obj, b"SECRET", encrypted_salt, decrypted_salt)
+                .map_err(|_| TpmRc::VALUE.with(Position::parameter(2)))
         } else {
             if !encrypted_salt.is_empty() {
                 return Err(TpmRc::VALUE.with(Position::parameter(2)));
@@ -422,7 +339,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let bind_handle = bind.0;
             let handle_err = TpmRc::HANDLE.with(Position::handle(2));
             if (bind_handle >> 24) == 0x80 {
+                // A sequence object is a loaded object with an authValue (the `auth` of its
+                // `TPM2_HashSequenceStart`/`TPM2_HMAC_Start`), so it can be a bind entity
+                // (the reference keeps sequence objects in its object slots). TPM 2.0 Part 2,
+                // TPMI_DH_ENTITY: "The TPMI_DH_ENTITY interface type is TPM-defined values that
+                // are used to indicate that the handle refers to an *authValue*." with the row
+                // "{TRANSIENT_FIRST : TRANSIENT_LAST} range of object handles".
+                let is_sequence = self
+                    .context
+                    .state
+                    .find_active_sequence(bind_handle)
+                    .is_some();
                 match self.context.state.find_transient_object(bind_handle) {
+                    None if is_sequence => {}
                     None => return Err(TpmRc::REFERENCE_H1),
                     Some(obj) if obj.public_only => return Err(handle_err),
                     Some(_) => {}

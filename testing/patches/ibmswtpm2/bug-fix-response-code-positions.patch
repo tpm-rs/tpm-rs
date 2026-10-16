@@ -2,6 +2,21 @@ fix-response-code-positions: number handle and parameter response codes per Part
 
 Classification: spec-deviation bug fix.
 
+Specification (TPM 2.0 Library, Part 2, "Response Code Formats" (Table:
+Format-One Response Codes (TPM_RC))):
+
+  "When an error is associated with a parameter, TPM_RC_P (0x040) is added
+  and N is set to the parameter number. ... For an error associated with a
+  handle, a parameter number (1 to 7) is added to the N field. For an error
+  associated with a session, a value of 8 plus the session number (1 to 7)
+  is added to the N field."
+
+Specification (TPM 2.0 Library, Part 2, "Response Code Formats" (Note)):
+
+  "In the Reference Code, for a RC_FMT1 response code, a constant of the
+  form RC_Command_parameterName is the one based parameter number (TPM_RC_n)
+  plus TPM_RC_P."
+
 Response-code positions follow the Part 3 command layout: handles are
 TPM_RC_H + n and parameters TPM_RC_P + n counted after the handles. Six
 command headers (ChangePPS, ContextSave, HierarchyChangeAuth, NV_ReadPublic,

@@ -278,3 +278,27 @@ fn wrong_integrity_size_returns_size() {
     tampered.extend_from_slice(&blob[ENC_SIZE_OFFSET..]);
     assert_load_rejected(&mut sim, context, tampered, size_rc(), "20-byte integrity");
 }
+
+/// `TPMS_CONTEXT` fields fail in unmarshaling order (found by differential fuzzing): a
+/// `savedHandle` session handle beyond `MAX_ACTIVE_SESSIONS` is `TPM_RC_VALUE + RC_P1` before the
+/// (missing) `hierarchy` is read (Part 2 TPMI_DH_SAVED "{HMAC_SESSION_FIRST : HMAC_SESSION_LAST}",
+/// TPM_HC "HMAC_SESSION_LAST | (HMAC_SESSION_FIRST + MAX_ACTIVE_SESSIONS - 1)"), and a
+/// `contextBlob` size above `sizeof(TPMS_CONTEXT_DATA)` is `TPM_RC_SIZE + RC_P1` before its
+/// (missing) bytes (Part 2 TPM2B_CONTEXT_DATA "buffer[size] {:sizeof(TPMS_CONTEXT_DATA)}").
+#[test]
+fn context_fields_fail_in_unmarshaling_order() {
+    let mut tpm = Tpm::new();
+    let cases: [(&str, u32); 2] = [
+        // sequence 0, savedHandle 0x02010000, one byte of hierarchy.
+        ("8001000000170000016100000000000000000201000000", 0x1C4),
+        // sequence 1, savedHandle 0x80000000, owner, blob size 0x1000 and no blob bytes.
+        (
+            "80010000001c00000161000000000000000180000000400000011000",
+            0x1D5,
+        ),
+    ];
+    for (cmd, rc) in cases {
+        let rsp = tpm.send_command(0, &crate::_common::hex(cmd));
+        assert_eq!(&rsp[6..10], rc.to_be_bytes(), "{cmd}: {rsp:02x?}");
+    }
+}

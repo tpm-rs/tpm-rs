@@ -2,6 +2,16 @@ fix-command-tag-unmarshal: return TPM_RC_BAD_TAG for every invalid command tag
 
 Classification: spec-deviation bug fix.
 
+Specification (TPM 2.0 Library, Part 3, "Command Header Validation"):
+
+  "1. The TPM shall successfully unmarshal a TPMI_ST_COMMAND_TAG and verify
+  that it is either TPM_ST_SESSIONS or TPM_ST_NO_SESSIONS (TPM_RC_BAD_TAG)."
+
+Specification (TPM 2.0 Library, Part 2, "TPMI_ST_COMMAND_TAG" (Table:
+Definition of (TPM_ST) TPMI_ST_COMMAND_TAG Type)):
+
+  "TPM_ST_NO_SESSIONS; TPM_ST_SESSIONS; #TPM_RC_BAD_TAG"
+
 Every command tag other than TPM_ST_NO_SESSIONS/TPM_ST_SESSIONS is
 TPM_RC_BAD_TAG (Part 2 TPMI_ST_COMMAND_TAG, Part 3 "Command Header
 Validation"); upstream unmarshals a TPM_ST first, which returns TPM_RC_VALUE

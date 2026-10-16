@@ -1,4 +1,5 @@
 pub mod manager;
+pub mod nv_capacity;
 pub mod ram_storage_mock;
 pub mod transcoder;
 pub mod translator;

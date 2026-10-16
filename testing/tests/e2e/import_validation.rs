@@ -1168,3 +1168,70 @@ fn tampered_duplicate_blobs_rejected() {
         flush_context(&mut sim, srk_handle).unwrap();
     }
 }
+
+/// TPM2_Import: an unimplemented `symmetricAlg` is `TPM_RC_SYMMETRIC + P5` and an oversized
+/// `inSymSeed` `TPM_RC_SIZE + P4` (both unmarshaling errors), and a `fixedTPM` object is
+/// `TPM_RC_ATTRIBUTES + P2` before the `encryptionKey` size (P1) is checked. TPM 2.0 Part 2,
+/// Table "Definition of (TPM_ALG_ID) TPMI_ALG_SYM_OBJECT Type": "#TPM_RC_SYMMETRIC"; Table
+/// "Definition of TPM2B_ENCRYPTED_SECRET Structure": "secret[size]
+/// {:sizeof(TPMU_ENCRYPTED_SECRET)}". The order of the command's own checks is not specified;
+/// this follows the TCG reference (`TPM2_Import()` starts with `fixedTPM`/`fixedParent`). Found
+/// by differential fuzzing.
+#[test]
+fn import_checks_follow_unmarshaling_then_object_attributes() {
+    let mut tpm = testing::tpm::Tpm::new();
+    let steps: [(&str, u32); 4] = [
+        (
+            concat!(
+                "800200000043000001314000000100000009400000090000010000000400000000001a0023000b000300720000000600",
+                "80004300100003001000000000000000000000",
+            ),
+            0x000,
+        ),
+        (
+            concat!(
+                "8002000001430000015680000000000000094000000900000100000000001a0001000b00030022000000060080004300",
+                "100800000100010000000001000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000044808001005d000000550023000b000400400000001000100003001000",
+            ),
+            0x5d6,
+        ),
+        (
+            concat!(
+                "8002000001470000015680000000000000094000000900000100000000011a0001000b00030072000000060080004300",
+                "10080000000000010094903e85a70120b39ce49b6d95c7555158e388f6810ca30a6c147c580f417155f220c6bcada4b1",
+                "a0305ae176446752a5090065cc9413af9817156f63483f3bd2908e9324baac3ade183cb6822c2126a909403babceec6d",
+                "2a11b9b635ee3f51501ee648eb10a9172590bf4d117953a2b03f323b8d6f212efb554aed03359a40bfdaa27ece0678a5",
+                "1b57835aad64c13d7441ca501b292ab27b8e9e4c3f3fdb1924e5d24da237434a23325f85f810d9d8ae158740deef1e7e",
+                "e3758395ad65b7d31aaa258d554f17384cfbbaf2f5684c455dab4bc85ae01adcda803d8601169da3c1e440b25bb0b282",
+                "3f4bbb19cd2de07e72aa78fd037e9f4d6d480f68f7a4e5f96d0004000200000000000600800043",
+            ),
+            0x2c2,
+        ),
+        (
+            concat!(
+                "800200000179000001568000000000000009400000090000000000001011111111111111111111111111111111013600",
+                "01000b000400600020bef56b8c1cc84e11edd717528d2cd99356bd2bbf8f015209c3f84aeeaba8e8a200100010080000",
+                "0000000100d7e31d38c54cf663a54d08dcca5d6398f16f8574193b70d9ae17b3d50ce78636dbb165b04576395a0be354",
+                "fb3d93bedf5eb7d50dd92e08f59c28c53aeffd1b51d2b8135902b241f77ca6fefe7cf567196fc1ad3414757484fd9be7",
+                "5ec6ae9be4f4fb30ccebb218dbe69d0904e510a38a7dca83e75944a97f9091ca0beef483a5f662acf2055205d253c6c3",
+                "ed0d12a82c2d2522ddfdb4dad0cf2083a6b4c87f71ca9742333f302aa7ce2a8fd0eb39d6f544ae9f8843554aedfd56aa",
+                "6d8bcda3fd8d1bf863ab60c021e7dae1cb3f8bf425bfe1d835fecd86054731984f62d03b8b829fc5176d195af8796028",
+                "9f9b83c37174de5b0678c4ac1e5910e7dc7c299b73000aeeee11111111111111110200000600800003",
+            ),
+            0x4d5,
+        ),
+    ];
+    for (i, (cmd, rc)) in steps.into_iter().enumerate() {
+        let rsp = tpm.send_command(0, &crate::_common::hex_checked(cmd));
+        assert_eq!(
+            u32::from_be_bytes(rsp[6..10].try_into().unwrap()),
+            rc,
+            "step {i}: {rsp:02x?}"
+        );
+    }
+}

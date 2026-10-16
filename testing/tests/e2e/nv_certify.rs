@@ -819,3 +819,43 @@ fn written_index_certifies_data() {
         panic!("Expected Nv attest type");
     }
 }
+
+/// An unsigned NV_Certify of a partially written index certifies the whole requested range,
+/// including bytes never written (whose content the specification leaves open: TPM 2.0 Part 3,
+/// TPM2_NV_Certify only requires `TPMA_NV_WRITTEN`); the differential harness compares the
+/// written bytes and everything else exactly (`differential.md` rule 5).
+#[test]
+fn partially_written_index_certifies_requested_range() {
+    let mut sim = Tpm::new();
+    let nv_index_val = 0x01500034;
+    let public_info = tpm2::Tpm2b(TpmsNvPublic {
+        nv_index: tpm2::Handle(nv_index_val),
+        name_alg: TpmiAlgHash::Sha256,
+        attributes: TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD,
+        auth_policy: tpm2::Tpm2bDigest::default(),
+        data_size: 32,
+    });
+    let define_cmd = NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
+        auth: Tpm2bAuth::default(),
+        public_info,
+    };
+    execute_with_password_sessions(&mut sim, &define_cmd, 1, &[]).unwrap();
+    let write_cmd = NVWrite {
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
+        data: Tpm2bMaxNvBuffer::from_bytes(&[0xAA; 8]).unwrap(),
+        offset: 4,
+    };
+    execute_with_password_sessions(&mut sim, &write_cmd, 1, &[]).unwrap();
+    let certify_cmd = NVCertify {
+        sign_handle: Handle(0x40000007), // TPM_RH_NULL
+        auth_handle: Handle::RH_OWNER,
+        nv_index: Handle(nv_index_val),
+        qualifying_data: Tpm2bData::default(),
+        in_scheme: None,
+        size: 32,
+        offset: 0,
+    };
+    nv_certify_pw(&mut sim, &certify_cmd, &[], &[]).unwrap();
+}

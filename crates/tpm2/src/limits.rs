@@ -68,6 +68,17 @@ const _: () = assert!(2 + PRIVATE_VENDOR_SPECIFIC_BYTES >= TpmuSensitiveComposit
 /// Specifies the maximum capacity (`CAP`) in bytes for a [`Tpm2bSized`] buffer.
 pub trait Tag {
     const CAP: usize;
+    /// The buffer whose capacity an installed unmarshal profile may lower ([`crate::profile`]).
+    const PROFILE_LIMITED: Option<crate::profile::LimitedBuffer> = None;
+
+    /// The capacity enforced when unmarshaling: [`Self::CAP`], lowered to the installed
+    /// profile's limit for [`Self::PROFILE_LIMITED`] buffers.
+    fn unmarshal_cap() -> usize {
+        match Self::PROFILE_LIMITED {
+            Some(buffer) => crate::profile::buffer_cap(buffer, Self::CAP),
+            None => Self::CAP,
+        }
+    }
 }
 
 /// Spec-mandated 8-byte maximum size for ticket timeout buffers.
@@ -142,16 +153,22 @@ impl Tag for SymKey {
 /// Sized to the maximum supported RSA key modulus ([`TpmiRsaKeyBits::MAX_PUB_KEY_BYTES`]).
 pub struct PublicKeyRsa;
 impl Tag for PublicKeyRsa {
+    const PROFILE_LIMITED: Option<crate::profile::LimitedBuffer> =
+        Some(crate::profile::LimitedBuffer::PublicKeyRsa);
     const CAP: usize = TpmiRsaKeyBits::MAX_PUB_KEY_BYTES;
 }
 /// Sized to the maximum supported RSA prime factor ([`TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES`]).
 pub struct PrivateKeyRsa;
 impl Tag for PrivateKeyRsa {
+    const PROFILE_LIMITED: Option<crate::profile::LimitedBuffer> =
+        Some(crate::profile::LimitedBuffer::PrivateKeyRsa);
     const CAP: usize = TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES;
 }
 /// Sized to the maximum supported ECC coordinate length ([`TpmEccCurve::MAX_ECC_KEY_BYTES`]).
 pub struct EccParameter;
 impl Tag for EccParameter {
+    const PROFILE_LIMITED: Option<crate::profile::LimitedBuffer> =
+        Some(crate::profile::LimitedBuffer::EccParameter);
     const CAP: usize = TpmEccCurve::MAX_ECC_KEY_BYTES;
 }
 /// Sized to twice the maximum ECC parameter size (`2 * MAX_ECC_KEY_BYTES`) for EdDSA signatures.
@@ -187,11 +204,15 @@ impl Tag for SignatureMldsa {
 /// Sized to the largest supported asymmetric encrypted secret ([`TpmtPublicParms::MAX_ENCRYPTED_SECRET_BYTES`]).
 pub struct EncryptedSecret;
 impl Tag for EncryptedSecret {
+    const PROFILE_LIMITED: Option<crate::profile::LimitedBuffer> =
+        Some(crate::profile::LimitedBuffer::EncryptedSecret);
     const CAP: usize = TpmtPublicParms::MAX_ENCRYPTED_SECRET_BYTES;
 }
 /// Sized to hold a public template ([`TpmtPublic::MAX_SIZE`]).
 pub struct Template;
 impl Tag for Template {
+    const PROFILE_LIMITED: Option<crate::profile::LimitedBuffer> =
+        Some(crate::profile::LimitedBuffer::Template);
     const CAP: usize = TpmtPublic::MAX_SIZE;
 }
 /// Sized to hold an encrypted sensitive area.
@@ -204,6 +225,8 @@ impl Tag for Template {
 #[doc(alias = "_PRIVATE")]
 pub struct Private;
 impl Tag for Private {
+    const PROFILE_LIMITED: Option<crate::profile::LimitedBuffer> =
+        Some(crate::profile::LimitedBuffer::Private);
     const CAP: usize = Tpm2bDigest::MAX_SIZE * 2 + Tpm2bSensitive::MAX_SIZE
         - TpmuSensitiveComposite::MAX_SIZE
         + (2 + PRIVATE_VENDOR_SPECIFIC_BYTES);

@@ -277,3 +277,19 @@ fn reserved_algorithm_error_codes() {
         );
     }
 }
+
+/// IncrementalSelfTest with an algorithm this TPM does not implement (TPM_ALG_ECSCHNORR, absent
+/// from `TPM_CAP_ALGS`) in `toTest` fails with `TPM_RC_VALUE + RC_P1`, even though the rest of the
+/// list is implemented (found by differential fuzzing). TPM 2.0 Part 3 TPM2_IncrementalSelfTest is
+/// silent on unimplemented algorithms; the TCG reference checks `g_implementedAlgorithms`.
+#[test]
+fn unimplemented_algorithm_in_to_test_rejected() {
+    let mut sim = Tpm::new();
+    let cmd = IncrementalSelfTest {
+        to_test: TpmlAlg::from_slice(&[Alg::SHA256, Alg::ECSCHNORR, Alg::AES]).unwrap(),
+    };
+    assert_eq!(
+        sim.execute(cmd).err().map(rc_of_error),
+        Some(TpmRc::VALUE.with(Position::parameter(1)).get())
+    );
+}

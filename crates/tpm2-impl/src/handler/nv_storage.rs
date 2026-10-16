@@ -1,6 +1,7 @@
 use crate::handle_checks::{Tpmi, check};
 use crate::owned::{OwnedAuthCommand, OwnedDigest};
 use crate::storage::manager::StorageManager;
+use crate::storage::nv_capacity;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -334,6 +335,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ///
     /// On the first write of an ordinary index with a partial write (`data` smaller than the
     /// index), the whole data area is cleared first so that stale bytes never become readable.
+    /// The bytes never written are not specified (Part 3 TPM2_NV_Write: "the TPM will merge the
+    /// *data.size* octets of *data.buffer* value into the *nvIndex→data* starting at
+    /// *nvIndex→data\[offset\]*"), so tpm-rs clears like the TCG reference: a non-orderly index to
+    /// the erase value of its NV memory, `0xFF` (`_plat__NvMemoryClear`: "In this implementation,
+    /// assume that the erase value for NV is all 1s"), an orderly index's RAM copy to `0x00`
+    /// (`MemorySet(..., 0, ...)`).
     fn nv_write_index_data(
         &mut self,
         nv_index: u32,
@@ -350,12 +357,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             if attributes.get_index_type() == Ok(TpmNt::Ordinary)
                 && (header.public.data_size as usize) > data.len()
             {
-                let zeros = [0u8; MAX_NV_INDEX_SIZE as usize];
+                let erased = if attributes.contains(TpmaNv::ORDERLY) {
+                    0x00
+                } else {
+                    0xFF
+                };
+                let cleared = [erased; MAX_NV_INDEX_SIZE as usize];
                 StorageManager::new(&mut *self.context.platform.storage)
                     .write_item(
                         nv_index,
                         header.metadata_size,
-                        &zeros[..header.public.data_size as usize],
+                        &cleared[..header.public.data_size as usize],
                     )
                     .map_err(|_| TpmRc::FAILURE)?;
             }
@@ -462,6 +474,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             cmd.auth.get_buffer(),
             self.context.state.ph_enable_nv,
         )?;
+
+        // C `NvDefineSpace()` checks TPM_RC_NV_DEFINED, then `NvDefineIndex()` tests the NV
+        // space (`NvTestSpace()` and, for an orderly Index, `NvRamTestSpaceIndex()`,
+        // TPM_RC_NV_SPACE), and only then `NvAdd()` checks NV availability. NV capacity is
+        // implementation-specific (Part 3 TPM2_NV_DefineSpace: "TPM_RC_NV_SPACE | insufficient
+        // space for the Index"; Part 2 TPM_PT_NV_COUNTERS_AVAIL: "This value is an estimate"),
+        // so tpm-rs accounts NV like the reference (`storage::nv_capacity`).
+        {
+            let storage = StorageManager::new(&mut *self.context.platform.storage);
+            if storage.get_metadata(nv_public_struct.nv_index.0).is_ok() {
+                return Err(TpmRc::NV_DEFINED);
+            }
+            let usage = nv_capacity::scan(&storage).map_err(|_| TpmRc::FAILURE)?;
+            if !usage.can_define_index(nv_public_struct.attributes.0, nv_public_struct.data_size) {
+                return Err(TpmRc::NV_SPACE);
+            }
+        }
 
         // C `NvAdd` (`RETURN_IF_NV_IS_NOT_AVAILABLE`).
         self.return_if_nv_is_not_available()?;
@@ -866,6 +895,25 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if storage.write_item(nv_index, 0, &buf[..offset]).is_err() {
             let _ = storage.undefine_space(nv_index);
             return Err(TpmRc::FAILURE);
+        }
+        // The data area starts out with unspecified contents (Part 3 TPM2_NV_Write: "the TPM
+        // will merge the *data.size* octets of *data.buffer* value into the *nvIndex→data*"),
+        // so tpm-rs follows the TCG reference: `NvAdd()` writes only the index header into NV
+        // memory whose free space is kept at the erase value `0xFF` (`_plat__NvMemoryClear`: "In
+        // this implementation, assume that the erase value for NV is all 1s"), while the RAM copy
+        // of an orderly index starts as `0x00` (`NvAddRAM`: `MemorySet(..., 0, ...)`). This is
+        // what a first write that covers none or part of the data (for example a zero-length
+        // `TPM2_NV_Write` of a PIN index) leaves readable.
+        if !TpmaNv(attributes).contains(TpmaNv::ORDERLY) && data_size > 0 {
+            let erased = [0xFFu8; MAX_NV_INDEX_SIZE as usize];
+            let len = (data_size as usize).min(erased.len());
+            if storage
+                .write_item(nv_index, metadata_size, &erased[..len])
+                .is_err()
+            {
+                let _ = storage.undefine_space(nv_index);
+                return Err(TpmRc::FAILURE);
+            }
         }
         Ok(())
     }

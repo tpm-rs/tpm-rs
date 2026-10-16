@@ -111,7 +111,9 @@ fn counter_bits_extend_index_rejected() {
 
 /// The first partial write of an ordinary index clears the rest of the index (even when reusing deleted storage)
 ///
-/// The first partial write of an ordinary index clears the rest of the index.
+/// The first partial write of an ordinary index clears the rest of the index. The bytes never
+/// written are not specified; like the TCG reference, a non-orderly index reads them as the NV
+/// erase value `0xFF`.
 #[test]
 fn first_partial_write_clears_rest() {
     let mut sim = Tpm::new();
@@ -132,9 +134,66 @@ fn first_partial_write_clears_rest() {
     define_nv_with_policy_unwrap(&mut sim, index, OWNER_RW, 64, &[]);
     owner_write(&mut sim, index, 0, &[0x01]).unwrap();
     let data = read_as(&mut sim, Handle::RH_OWNER, index, 0, 64).unwrap();
-    let mut expected = vec![0u8; 64];
+    let mut expected = vec![0xFFu8; 64];
     expected[0] = 0x01;
     assert_eq!(data, expected);
+}
+
+/// The first partial write of an orderly ordinary index clears its RAM copy to `0x00`, like
+/// the TCG reference; a later partial write keeps the earlier data.
+#[test]
+fn first_partial_write_of_orderly_index_clears_rest_to_zero() {
+    let mut sim = Tpm::new();
+    let index = 0x0150_0503;
+    define_nv_with_policy_unwrap(&mut sim, index, OWNER_RW | TpmaNv::ORDERLY, 16, &[]);
+    owner_write(&mut sim, index, 4, &[0x5A; 2]).unwrap();
+    let mut expected = vec![0u8; 16];
+    expected[4..6].fill(0x5A);
+    assert_eq!(
+        read_as(&mut sim, Handle::RH_OWNER, index, 0, 16).unwrap(),
+        expected
+    );
+    owner_write(&mut sim, index, 10, &[0xA5]).unwrap();
+    expected[10] = 0xA5;
+    assert_eq!(
+        read_as(&mut sim, Handle::RH_OWNER, index, 0, 16).unwrap(),
+        expected
+    );
+}
+
+/// The data area of a new non-orderly index is at the NV erase value `0xFF`, like in the TCG
+/// reference, so a zero-length first `TPM2_NV_Write` of a PIN index leaves it readable as
+/// `0xFF`.
+#[test]
+fn zero_length_first_write_of_pin_index_leaves_data_erased() {
+    let mut sim = Tpm::new();
+    let index = 0x0150_0505;
+    let mut attributes = OWNER_RW | TpmaNv::NO_DA;
+    attributes.set_type(TpmNt::PinFail);
+    define_nv_with_policy_unwrap(&mut sim, index, attributes, 8, &[]);
+    // A PIN index takes `TPM2_NV_Write`; an empty write only sets TPMA_NV_WRITTEN.
+    owner_write(&mut sim, index, 0, &[]).unwrap();
+    assert_eq!(
+        read_as(&mut sim, Handle::RH_OWNER, index, 0, 8).unwrap(),
+        [0xFF; 8]
+    );
+}
+
+/// Bytes of a non-orderly index never written read as `0xFF` also after later partial writes.
+#[test]
+fn unwritten_bytes_of_non_orderly_index_read_as_erased() {
+    let mut sim = Tpm::new();
+    let index = 0x0150_0504;
+    define_nv_with_policy_unwrap(&mut sim, index, OWNER_RW, 16, &[]);
+    owner_write(&mut sim, index, 8, &[0x11; 4]).unwrap();
+    owner_write(&mut sim, index, 0, &[0x22]).unwrap();
+    let mut expected = vec![0xFFu8; 16];
+    expected[0] = 0x22;
+    expected[8..12].fill(0x11);
+    assert_eq!(
+        read_as(&mut sim, Handle::RH_OWNER, index, 0, 16).unwrap(),
+        expected
+    );
 }
 
 /// NV_Write on counter, bits and extend indexes fails with TPM_RC_ATTRIBUTES

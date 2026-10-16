@@ -248,3 +248,32 @@ fn xor_null_kdf_and_trailing_bytes() {
     trailing.push(0);
     assert_eq!(test_parms(&mut sim, &trailing), TpmRc::SIZE.get());
 }
+
+/// TPM2_TestParms reports the first parameter field that fails to unmarshal, in wire order, with
+/// the unmarshaler's response code (found by differential fuzzing; both references agree):
+/// e.g. an invalid AES `keyBits` before an invalid mode (VALUE, not MODE), an RSA scheme selector
+/// outside `TPMI_ALG_RSA_SCHEME` (VALUE, not HASH), an ECC scheme selector outside the profile
+/// (SCHEME, not CURVE/HASH). TPM 2.0 Part 3, TPM2_TestParms: "The TPM will unmarshal the
+/// provided `TPMT_PUBLIC_PARMS`. ... The TPM will return the appropriate unmarshaling error if a
+/// parameter is not valid."
+#[test]
+fn first_invalid_field_in_wire_order_is_reported() {
+    let mut sim = Tpm::new();
+    let cases: [(&str, u32); 6] = [
+        // SYMCIPHER: AES, keyBits 769, mode 0x0001.
+        ("8001000000120000018a0025000603010001", 0x1C4),
+        // RSA: symmetric NULL, scheme 0x0008 (not an RSA scheme).
+        ("8001000000160000018a000100100008000000000010", 0x1C4),
+        // ECC: symmetric NULL, scheme 0x0010 0x0b03 ... (curve/kdf garbage).
+        ("8001000000160000018a0023001000100b030000000b", 0x1E6),
+        ("8001000000160000018a002300100016000000000a0b", 0x1D2),
+        (
+            "80010000001e0000018a0023000600800043001a000d0000000400220000",
+            0x1C3,
+        ),
+        ("8001000000160000018a0023001000100b030007370b", 0x1E6),
+    ];
+    for (cmd, expected) in cases {
+        assert_eq!(transact_rc_of(&mut sim, &hex(cmd)), expected, "{cmd}");
+    }
+}

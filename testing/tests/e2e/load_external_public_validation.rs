@@ -186,7 +186,8 @@ fn rsa_modulus_size_mismatch_rejected() {
     }
 }
 
-/// LoadExternal runs SchemeChecks, digest-sized seed/unique checks and accepts RSA-3072 public keys.
+/// LoadExternal runs SchemeChecks and digest-sized seed/unique checks, and rejects RSA-3072 public
+/// keys (a key size outside this TPM's profile).
 #[test]
 fn scheme_seed_unique_and_key_size_checks() {
     let mut sim = Tpm::new();
@@ -229,7 +230,12 @@ fn scheme_seed_unique_and_key_size_checks() {
         rc_p(TpmRc::KEY, 2)
     );
 
-    // 4. RSA-3072 public keys are accepted like in create_loaded.
+    // 4. RSA-3072 is not a key size of this TPM's profile (1024 and 2048 bits), so `keyBits`
+    //    fails to unmarshal: VALUE + P2. TPM 2.0 Part 2, Table "Definition of (RSA)
+    //    (TPM_KEY_BITS) TPMI_RSA_KEY_BITS Type": "$RSA_KEY_SIZES_BITS | the number of bits in
+    //    the supported key", "#TPM_RC_VALUE | error when key size is not supported". (Its note
+    //    allows "limited support for smaller RSA key sizes" in `TPM2_LoadExternal()`, not larger
+    //    ones.)
     let mut modulus = [0x33u8; 384];
     modulus[0] = 0xd5;
     let t = TpmtPublic {
@@ -246,7 +252,10 @@ fn scheme_seed_unique_and_key_size_checks() {
             Tpm2bPublicKeyRsa::from_bytes(leak_bytes(&modulus)).unwrap(),
         ),
     };
-    load_external(&mut sim, t, None, Handle::RH_OWNER).expect("RSA-3072 public key");
+    assert_eq!(
+        load_external(&mut sim, t, None, Handle::RH_OWNER).unwrap_err(),
+        rc_p(TpmRc::VALUE, 2)
+    );
 }
 
 /// A public-only symmetric key whose unique size mismatches nameAlg fails with TPM_RC_KEY.
@@ -316,4 +325,50 @@ fn unsupported_name_alg_returns_hash() {
     let err = res.err().unwrap();
     let expected = TpmRc::HASH.with(Position::parameter(2));
     assert_eq!(err.get(), expected.get());
+}
+
+/// A `nameAlg` the TPM does not implement (SM3-256) is `TPM_RC_HASH + P2` and a curve it does not
+/// implement (BN P-638) is `TPM_RC_CURVE + P2`, before the invalid `hierarchy` (parameter 3) is
+/// examined. TPM 2.0 Part 2, `TPMI_ALG_HASH`: "`TPMI_ALG_HASH` is an interface type of all the hash
+/// algorithms implemented on a specific TPM" with "#TPM_RC_HASH"; `TPMI_ECC_CURVE`: "enumerates
+/// the ECC curves implemented by the TPM", Table "Definition of (ECC) (TPM_ECC_CURVE)
+/// TPMI_ECC_CURVE Type": "#TPM_RC_CURVE | error when curve is not supported". Found by
+/// differential fuzzing.
+#[test]
+fn name_alg_and_curve_outside_the_profile_rejected_at_unmarshal() {
+    let mut tpm = testing::tpm::Tpm::new();
+    let steps: [(&str, u32); 3] = [
+        (
+            concat!(
+                "80010000006800000167000000560023000b000400400000001000100011001000203561244d853489754cf0710d875a",
+                "7ba4b2aca9cc38a5d02985d4ceb83bcbd0a20020f8f0017d0000000000000013823d0402018200040004010004000000",
+                "1000000052820201",
+            ),
+            0x2e6,
+        ),
+        (
+            concat!(
+                "800100000068000001670000005600230012000400400000001000100003001000203561244d853489754cf0710d875a",
+                "7ba4b2aca9cc38a5d02985d4ceb83bcbd0a20020f8f0b6850f0925254ff63a19a01125a88994fc866060354d9305a711",
+                "686dfc8640000007",
+            ),
+            0x2c3,
+        ),
+        (
+            concat!(
+                "800100000068000001670000005600230012000400400000001000100003001000203561244d853489754cf0710d875a",
+                "7ba4b2aca9cc38a5d02985d4ceb83bcbd0a20020f8f0b6850f0925254ff63a19a01125a88994fc866060354d9305a740",
+                "11686d7177400000",
+            ),
+            0x2c3,
+        ),
+    ];
+    for (i, (cmd, rc)) in steps.into_iter().enumerate() {
+        let rsp = tpm.send_command(0, &crate::_common::hex_checked(cmd));
+        assert_eq!(
+            u32::from_be_bytes(rsp[6..10].try_into().unwrap()),
+            rc,
+            "step {i}: {rsp:02x?}"
+        );
+    }
 }

@@ -1,0 +1,41 @@
+persist-public-only-objects: TPM2_EvictControl may make a public-only object persistent
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, revision 185, TPM2_EvictControl): "If
+*objectHandle* references a Transient Object: 1. The TPM shall return
+`TPM_RC_ATTRIBUTES` if 1. it is in the hierarchy of `TPM_RH_NULL` or a
+firmware-limited or SVN-limited hierarchy, or [...] 2. the *stClear* is SET in
+the object or in an ancestor key." with the note "Older versions of the
+specification did not allow an object to be persisted when only the public
+portion of the object was loaded (for NV space efficiency). Support for
+persisting public-only objects was added in version 185."
+
+This reference still implements the older rule and rejects an object with
+attributes.publicOnly SET (e.g. the public-only object of
+TPM2_LoadExternal(hierarchy = TPM_RH_OWNER)) with TPM_RC_ATTRIBUTES +
+RC_EvictControl_objectHandle. tpm-rs (TPM_SPEC_VERSION 185) and the TCG
+reference v185.0.0 (`mstpm20-v185`, which already dropped the check) persist it.
+The check now rejects only temporary and stClear objects, as in v185; the
+persistent copy keeps attributes.publicOnly (NvAddEvictObject stores the whole
+OBJECT), so it still has neither authValue nor authPolicy available.
+Found by differential fuzzing.
+diff --git a/TPMCmd/tpm/src/command/Context/EvictControl.c b/TPMCmd/tpm/src/command/Context/EvictControl.c
+--- a/TPMCmd/tpm/src/command/Context/EvictControl.c
++++ b/TPMCmd/tpm/src/command/Context/EvictControl.c
+@@ -38,10 +38,12 @@
+        || HierarchyIsSvnLimited(evictObject->hierarchy))
+         return TPM_RCS_HIERARCHY + RC_EvictControl_objectHandle;
+ 
+-    // Temporary, stClear or public only objects can not be made persistent
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // public-only objects may be made persistent since revision 185 of Part 3
++    // (TPM2_EvictControl); only temporary and stClear objects are rejected.
++    // Temporary or stClear objects can not be made persistent
+     if(evictObject->attributes.temporary == SET
+-       || evictObject->attributes.stClear == SET
+-       || evictObject->attributes.publicOnly == SET)
++       || evictObject->attributes.stClear == SET)
+         return TPM_RCS_ATTRIBUTES + RC_EvictControl_objectHandle;
+ 
+     // If objectHandle refers to a persistent object, it should be the same as

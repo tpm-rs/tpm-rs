@@ -124,3 +124,49 @@ fn unrestricted_parent_rejected() {
     );
     assert_eq!(res.err(), Some(TpmRc::TYPE.with(Position::handle(1)).get()));
 }
+
+/// A `decrypt` session with XOR obfuscation de-obfuscates a parameter of any size that fits the
+/// command, so an oversized `inPrivate` (2169 octets) is rejected by its own unmarshaling with
+/// `TPM_RC_SIZE + RC_P1`, not a bare `TPM_RC_SIZE` from a fixed-size mask (found by differential
+/// fuzzing). TPM 2.0 Part 1, "XOR Parameter Obfuscation": "The obfuscated size of parameter is the
+/// same as the size of the underlying parameter."
+#[test]
+fn oversized_private_under_xor_decrypt_session_is_a_parameter_size_error() {
+    let mut tpm = Tpm::new();
+    // ECC P-256 storage primary under the owner hierarchy.
+    let mut cp = crate::_common::hex(concat!(
+        "8002000000000000013140000001000000094000000900000100000004000000000",
+        "01a0023000b00030072000000060080004300100003001000000000000000000000",
+    ));
+    let n = cp.len() as u32;
+    cp[2..6].copy_from_slice(&n.to_be_bytes());
+    let rsp = tpm.send_command(0, &cp);
+    assert_eq!(&rsp[6..10], [0, 0, 0, 0], "CreatePrimary: {rsp:02x?}");
+    let parent = rsp[10..14].to_vec();
+    // Unbound, unsalted HMAC session with XOR/SHA-256 parameter obfuscation: its HMAC key is
+    // empty, so a decrypt-only use carries an empty (null) HMAC.
+    let sas = crate::_common::hex(concat!(
+        "80010000002d00000176400000074000000700105a5b58595e5f5c5d5253505156575455",
+        "000000000a000b000b",
+    ));
+    let rsp = tpm.send_command(0, &sas);
+    assert_eq!(&rsp[6..10], [0, 0, 0, 0], "StartAuthSession: {rsp:02x?}");
+    let session = rsp[10..14].to_vec();
+    // Load(parent): password session for the parent, then the decrypt-only session.
+    let mut cmd = vec![0x80, 0x02, 0, 0, 0, 0, 0, 0, 0x01, 0x57];
+    cmd.extend_from_slice(&parent);
+    let mut auth = vec![0x40, 0, 0, 9, 0, 0, 1, 0, 0];
+    auth.extend_from_slice(&session);
+    auth.extend_from_slice(&[0, 16]);
+    auth.extend_from_slice(&[0x11; 16]);
+    auth.extend_from_slice(&[0x21, 0, 0]);
+    cmd.extend_from_slice(&(auth.len() as u32).to_be_bytes());
+    cmd.extend_from_slice(&auth);
+    cmd.extend_from_slice(&2169u16.to_be_bytes());
+    cmd.extend(std::iter::repeat_n(0x42u8, 2169));
+    cmd.extend_from_slice(&[0, 0]); // inPublic
+    let n = cmd.len() as u32;
+    cmd[2..6].copy_from_slice(&n.to_be_bytes());
+    let rsp = tpm.send_command(0, &cmd);
+    assert_eq!(&rsp[6..10], 0x1D5u32.to_be_bytes(), "{rsp:02x?}");
+}

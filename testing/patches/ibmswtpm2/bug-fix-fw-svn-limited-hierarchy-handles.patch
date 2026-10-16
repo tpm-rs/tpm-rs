@@ -1,0 +1,146 @@
+fw-svn-limited-hierarchy-handles: firmware-limited and SVN-limited hierarchy handles
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 2, Table "Definition of (TPM_HANDLE)
+TPMI_RH_HIERARCHY Type"): "TPM_RH_FW_OWNER | Firmware-limited Storage
+hierarchy", "TPM_RH_FW_PLATFORM", "TPM_RH_FW_ENDORSEMENT", "TPM_RH_FW_NULL",
+"{SVN_OWNER_FIRST:SVN_OWNER_LAST} | SVN-limited Storage hierarchies",
+"{SVN_PLATFORM_FIRST:SVN_PLATFORM_LAST}",
+"{SVN_ENDORSEMENT_FIRST:SVN_ENDORSEMENT_LAST}",
+"{SVN_NULL_FIRST:SVN_NULL_LAST}"; Table "Definition of (TPM_HANDLE)
+TPMI_DH_PARENT Type" lists the same handles. Part 2, response codes:
+"TPM_RC_FW_LIMITED | the hierarchy is firmware-limited but the Firmware
+Secret is unavailable" and "TPM_RC_SVN_LIMITED | the hierarchy is SVN-limited
+but the Firmware SVN Secret associated with the given SVN is unavailable".
+
+The reference implements firmware-limited and SVN-limited hierarchies
+(Hierarchy.c DecomposeHandle/ValidateHierarchy/HierarchyGetProof), but its
+TPMI_RH_HIERARCHY and TPMI_DH_PARENT unmarshaling still rejects their handles
+with TPM_RC_VALUE, and TPM2_Hash, TPM2_SequenceComplete and TPM2_CertifyCreation
+ignore the result of TicketComputeHashCheck()/TicketComputeCreation(), so a
+ticket for a hierarchy whose proof is unavailable is returned with an
+uncomputed digest (or compared against one) instead of the error. The handles are accepted as the specification lists them, in the
+TPMI_RH_HIERARCHY+ and TPMI_DH_PARENT+ uses (TPM2_HierarchyControl's
+authHandle, the reference's only other use, is a TPMI_RH_BASE_HIERARCHY in
+Part 3), and the ticket error is returned,
+as in the TCG reference (version 185). Found by differential fuzzing.
+diff --git a/src/AttestationCommands.c b/src/AttestationCommands.c
+--- a/src/AttestationCommands.c
++++ b/src/AttestationCommands.c
+@@ -144,8 +144,15 @@
+ 	return TPM_RCS_SCHEME + RC_CertifyCreation_inScheme;
+     // CertifyCreation specific input validation
+     // Re-compute ticket
+-    TicketComputeCreation(in->creationTicket.hierarchy, &certified->name,
+-			  &in->creationHash, &ticket);
++    // tpm-rs differential testing -- C-ref spec deviation fix: the
++    // hierarchy's proof may be unavailable (TPM_RC_FW_LIMITED,
++    // TPM_RC_SVN_LIMITED).
++    {
++	TPM_RC result = TicketComputeCreation(in->creationTicket.hierarchy, &certified->name,
++					      &in->creationHash, &ticket);
++	if (result != TPM_RC_SUCCESS)
++	    return result;
++    }
+     // Compare ticket
+     if(!MemoryEqual2B(&ticket.digest.b, &in->creationTicket.digest.b))
+ 	return TPM_RCS_TICKET + RC_CertifyCreation_creationTicket;
+diff --git a/src/Unmarshal.c b/src/Unmarshal.c
+--- a/src/Unmarshal.c
++++ b/src/Unmarshal.c
+@@ -611,6 +611,35 @@
+ 
+ /* Table 2:41 - Definition of TPMI_DH_PARENT Type (InterfaceTable()) */
+ 
++// tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++// the firmware-limited and SVN-limited hierarchies of Part 2
++// TPMI_RH_HIERARCHY/TPMI_DH_PARENT (the NULL-based ones like TPM_RH_NULL).
++// Only the "+" (NULL-allowing) uses take them: this reference's only other use,
++// TPM2_HierarchyControl's authHandle, is a TPMI_RH_BASE_HIERARCHY in Part 3
++// ("TPMI_RH_BASE_HIERARCHY | @authHandle").
++static BOOL IsLimitedHierarchyHandle(TPM_HANDLE handle, BOOL allowNull)
++{
++    if (!allowNull) {
++	return FALSE;
++    }
++    switch (handle) {
++      case TPM_RH_FW_OWNER:
++      case TPM_RH_FW_ENDORSEMENT:
++      case TPM_RH_FW_PLATFORM:
++	return TRUE;
++      case TPM_RH_FW_NULL:
++	return allowNull;
++      default:
++	break;
++    }
++    if ((handle >= SVN_OWNER_FIRST && handle <= SVN_OWNER_LAST)
++	|| (handle >= SVN_ENDORSEMENT_FIRST && handle <= SVN_ENDORSEMENT_LAST)
++	|| (handle >= SVN_PLATFORM_FIRST && handle <= SVN_PLATFORM_LAST)) {
++	return TRUE;
++    }
++    return allowNull && handle >= SVN_NULL_FIRST && handle <= SVN_NULL_LAST;
++}
++
+ TPM_RC
+ TPMI_DH_PARENT_Unmarshal(TPMI_DH_PARENT *target, BYTE **buffer, INT32 *size, BOOL allowNull)
+ {
+@@ -631,7 +660,8 @@
+ 	    isNotOwner &&
+ 	    isNotPlatform &&
+ 	    isNotEndorsement &&
+-	    isNotLegalNull) {
++	    isNotLegalNull &&
++	    !IsLimitedHierarchyHandle(*target, allowNull)) {
+ 	    rc = TPM_RC_VALUE;
+ 	}
+     }
+@@ -848,7 +878,9 @@
+ 		break;
+ 	    }
+ 	  default:
+-	    rc = TPM_RC_VALUE;
++	    if (!IsLimitedHierarchyHandle(*target, allowNull)) {
++		rc = TPM_RC_VALUE;
++	    }
+ 	}
+     }
+     return rc;
+diff --git a/src/HashCommands.c b/src/HashCommands.c
+--- a/src/HashCommands.c
++++ b/src/HashCommands.c
+@@ -325,8 +325,13 @@
+ 	    else
+ 		{
+ 		    // Compute ticket
+-		    TicketComputeHashCheck(out->validation.hierarchy, hashAlg,
+-					   &out->result, &out->validation);
++		    // tpm-rs differential testing -- C-ref spec deviation fix:
++		    // the hierarchy's proof may be unavailable (TPM_RC_FW_LIMITED,
++		    // TPM_RC_SVN_LIMITED).
++		    TPM_RC result = TicketComputeHashCheck(out->validation.hierarchy, hashAlg,
++							   &out->result, &out->validation);
++		    if (result != TPM_RC_SUCCESS)
++			return result;
+ 		}
+ 	}
+     else
+diff --git a/src/SymmetricCommands.c b/src/SymmetricCommands.c
+--- a/src/SymmetricCommands.c
++++ b/src/SymmetricCommands.c
+@@ -254,8 +254,13 @@
+     else
+ 	{
+ 	    // Compute ticket
+-	    TicketComputeHashCheck(in->hierarchy, in->hashAlg,
+-				   &out->outHash, &out->validation);
++	    // tpm-rs differential testing -- C-ref spec deviation fix: the
++	    // hierarchy's proof may be unavailable (TPM_RC_FW_LIMITED,
++	    // TPM_RC_SVN_LIMITED).
++	    TPM_RC result = TicketComputeHashCheck(in->hierarchy, in->hashAlg,
++						   &out->outHash, &out->validation);
++	    if (result != TPM_RC_SUCCESS)
++		return result;
+ 	}
+     return TPM_RC_SUCCESS;
+ }

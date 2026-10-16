@@ -48,8 +48,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         // `authObject` (handle 1, `TPMI_DH_OBJECT`) must reference a loaded object for every
-        // session type (C validates it with `EntityGetLoadStatus` before the command runs).
-        let obj = self.resolve_object(auth_object, Position::handle(1))?;
+        // session type (C validates it with `EntityGetLoadStatus` before the command runs). A
+        // sequence object is loaded but holds no key: the reference first checks the policy
+        // parameters and then fails to validate `auth` with it (`TPM_RC_SCHEME` +
+        // `RC_PolicySigned_auth`, C `CryptValidateSignature()` for a key of type
+        // `TPM_ALG_NULL`). TPM 2.0 Part 3, TPM2_PolicySigned, leaves the order to the
+        // implementation, so the TCG reference's is used.
+        let auth_is_sequence = self
+            .context
+            .state
+            .find_active_sequence(auth_object)
+            .is_some();
+        let obj = if auth_is_sequence {
+            None
+        } else {
+            Some(self.resolve_object(auth_object, Position::handle(1))?)
+        };
 
         // Validate session expiration
         self.validate_policy_session(policy_session, Position::handle(2))?;
@@ -116,6 +130,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
             // Validate the signature with the public key or HMAC key of authObject
             // (C `CryptValidateSignature`; errors get `RC_PolicySigned_auth`).
+            let Some(obj) = obj.as_ref() else {
+                return Err(TpmRc::SCHEME.with(Position::parameter(5)));
+            };
             if let crate::owned::OwnedPublicParmsAndId::KeyedHash(scheme, _) =
                 &obj.public.parms_and_id
             {
@@ -276,6 +293,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         // 2. Authorization object name (of the loaded object, for trial sessions too)
+        // A trial session with a sequence object as `authObject` keeps tpm-rs's previous
+        // `TPM_RC_KEY` (the reference would use the Name left in the sequence's object slot,
+        // which is not defined for a sequence object).
+        let Some(obj) = obj else {
+            return Err(TpmRc::KEY.with(Position::handle(1)));
+        };
         let auth_name = obj.name;
 
         // 3. Compute new policy digest

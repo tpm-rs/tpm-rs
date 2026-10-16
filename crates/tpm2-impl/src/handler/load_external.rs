@@ -384,39 +384,31 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     tpm2::TpmEccCurve::NistP521 => 66,
                     _ => return Err(TpmRc::CURVE.with(pos_public)),
                 };
-                let mut ecc_pub_key = [0u8; 256];
-                if public_struct.name_alg.is_some() {
-                    // With a sensitive area C only compares the (zero-adjusted) public point
-                    // with [d]G, so stripped leading zero bytes are fine.
-                    if (!allow_empty_unique || point.x.get_size() > 0)
-                        && (point.x.get_size() as usize > param_size
-                            || point.y.get_size() as usize > param_size)
-                    {
-                        return Err(TpmRc::KEY.with(pos_public));
-                    }
-
-                    let px = point.x.get_buffer();
-                    let py = point.y.get_buffer();
-                    ecc_pub_key[param_size - px.len()..param_size].copy_from_slice(px);
-                    ecc_pub_key[param_size * 2 - py.len()..param_size * 2].copy_from_slice(py);
-
-                    // Exp mapped every failure (invalid point included) to `TPM_RC_ECC_POINT`.
-                    if !matches!(
-                        self.crypto()
-                            .validate_point(curve, &ecc_pub_key[..param_size * 2]),
-                        Ok(true)
-                    ) {
-                        return Err(TpmRc::ECC_POINT.with(pos_public));
-                    }
-                }
-
+                // With a sensitive area, the public point is not validated on its own (C
+                // `CryptoCommon_ValidateKeys()` checks the point on the curve only for a
+                // public-only key): the private key is checked, and then the public point is
+                // compared with [d]G. TPM 2.0 Part 3, TPM2_Load: "For all objects, the size of
+                // the key in the sensitive area shall be consistent with the key size indicated
+                // in the public area or the TPM shall return `TPM_RC_KEY_SIZE`. Before use, a
+                // loaded object shall be checked to validate that the public and sensitive
+                // portions are properly linked, cryptographically. ... If the parts of the object
+                // are not properly linked, the TPM shall return `TPM_RC_BINDING`." A public point
+                // that is not on the curve is not linked to any private key, so it is a binding
+                // error here (as in the reference), not `TPM_RC_ECC_POINT`.
                 if let TpmuSensitiveComposite::Ecc(sensitive_ecc) = &sensitive_struct.sensitive {
-                    if sensitive_ecc.get_size() as usize > param_size {
+                    // The private key is a number: leading zero octets do not count against the
+                    // key size (C `CryptEccIsValidPrivateKey()` converts the `TPM2B` to a big
+                    // number and checks only 0 < d < n). TPM 2.0 Part 3, TPM2_Load: "For all
+                    // objects, the size of the key in the sensitive area shall be consistent with
+                    // the key size indicated in the public area or the TPM shall return
+                    // `TPM_RC_KEY_SIZE`."
+                    let raw = sensitive_ecc.get_buffer();
+                    let scalar_bytes = &raw[raw.iter().take_while(|&&b| b == 0).count()..];
+                    if scalar_bytes.len() > param_size {
                         return Err(TpmRc::KEY_SIZE.to_rc());
                     }
 
                     let mut scalar = [0u8; 128];
-                    let scalar_bytes = sensitive_ecc.get_buffer();
                     scalar[param_size - scalar_bytes.len()..param_size]
                         .copy_from_slice(scalar_bytes);
 
@@ -428,8 +420,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
                     if public_struct.name_alg.is_some() {
                         let mut computed_pub_key = [0u8; 256];
-                        // Exp mapped every failure (invalid scalar included) to
-                        // `TPM_RC_BINDING`.
                         if !matches!(
                             self.crypto().point_multiply_generator(
                                 curve,
@@ -440,8 +430,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         ) {
                             return Err(TpmRc::BINDING.to_rc());
                         }
-
-                        if computed_pub_key[..param_size * 2] != ecc_pub_key[..param_size * 2] {
+                        // C adjusts the computed coordinates to the sizes of the given ones
+                        // (adding or removing leading zeros) before comparing them, so the
+                        // coordinates are compared as numbers.
+                        let strip = |bytes: &[u8]| -> usize {
+                            bytes.iter().take_while(|&&b| b == 0).count()
+                        };
+                        let same = |given: &[u8], computed: &[u8]| {
+                            given[strip(given)..] == computed[strip(computed)..]
+                        };
+                        if !same(point.x.get_buffer(), &computed_pub_key[..param_size])
+                            || !same(
+                                point.y.get_buffer(),
+                                &computed_pub_key[param_size..param_size * 2],
+                            )
+                        {
                             return Err(TpmRc::BINDING.to_rc());
                         }
                     }
@@ -575,48 +578,43 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     return Err(TpmRc::VALUE.with(Position::parameter(2)));
                 }
             }
-            PublicParmsAndId::Ecc(ecc_parms, point) => {
+            PublicParmsAndId::Ecc(ecc_parms, _) => {
                 let curve = ecc_parms.curve_id;
-                let param_size = match curve {
-                    tpm2::TpmEccCurve::NistP192 => 24,
-                    tpm2::TpmEccCurve::NistP224 => 28,
-                    tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                    tpm2::TpmEccCurve::NistP384 => 48,
-                    tpm2::TpmEccCurve::NistP521 => 66,
-                    _ => return Err(TpmRc::CURVE.with(Position::parameter(2))),
-                };
-                // Coordinates may have leading zero bytes stripped when a sensitive area is
-                // present (C adjusts them before the binding check); only oversized
-                // coordinates are invalid here. Public-only keys need exact sizes, which
-                // `validate_public_only` checks.
-                if point.x.get_size() as usize > param_size
-                    || point.y.get_size() as usize > param_size
-                {
-                    return Err(TpmRc::KEY.with(Position::parameter(2)));
+                if !matches!(
+                    curve,
+                    tpm2::TpmEccCurve::NistP192
+                        | tpm2::TpmEccCurve::NistP224
+                        | tpm2::TpmEccCurve::NistP256
+                        | tpm2::TpmEccCurve::BNP256
+                        | tpm2::TpmEccCurve::NistP384
+                        | tpm2::TpmEccCurve::NistP521
+                ) {
+                    return Err(TpmRc::CURVE.with(Position::parameter(2)));
                 }
+                // The coordinate sizes are not checked on their own when a sensitive area is
+                // present: the public point is compared with [d]G as numbers (leading zero bytes
+                // added or removed), so an oversized coordinate is a binding error
+                // (`validate_and_import_sensitive`), as in the reference's
+                // `CryptValidateKeys()`. Public-only keys need exact sizes, which
+                // `validate_public_only` checks. TPM 2.0 Part 3, TPM2_Load: "If the parts of the
+                // object are not properly linked, the TPM shall return `TPM_RC_BINDING`."
             }
-            PublicParmsAndId::Sym(sym_def, sym_unique) => {
+            PublicParmsAndId::Sym(sym_def, _) => {
                 let kb = sym_def.key_bits();
                 if kb != 128 && kb != 256 && kb != 192 {
                     return Err(TpmRc::SYMMETRIC.with(Position::parameter(2)));
                 }
-                let digest_size = public_struct
-                    .name_alg
-                    .map(|alg| alg.digest_size())
-                    .unwrap_or(0) as u16;
-                if sym_unique.get_size() != 0 && sym_unique.get_size() != digest_size {
-                    return Err(TpmRc::KEY.with(Position::parameter(2)));
-                }
             }
-            PublicParmsAndId::KeyedHash(_, kh_unique) => {
-                let digest_size = public_struct
-                    .name_alg
-                    .map(|alg| alg.digest_size())
-                    .unwrap_or(0) as u16;
-                if kh_unique.get_size() != 0 && kh_unique.get_size() != digest_size {
-                    return Err(TpmRc::KEY.with(Position::parameter(2)));
-                }
-            }
+            // The `unique` digest of a SYMCIPHER/KEYEDHASH object is not checked on its own when
+            // a sensitive area is present: it is bound to the sensitive area, so the seedValue
+            // size (`TPM_RC_KEY_SIZE`) and then the binding (`TPM_RC_BINDING`) are checked
+            // (`validate_and_import_sensitive`), as in the reference's `CryptValidateKeys()`.
+            // Public-only objects get the exact size check in `validate_public_only`. TPM 2.0
+            // Part 3, TPM2_LoadExternal: "If *nameAlg* is not `TPM_ALG_NULL`, then the same
+            // consistency checks between *inPublic* and *inPrivate* are made as for
+            // `TPM2_Load()`." and TPM2_Load: "If the parts of the object are not properly
+            // linked, the TPM shall return `TPM_RC_BINDING`."
+            PublicParmsAndId::KeyedHash(_, _) => {}
             PublicParmsAndId::Mldsa(parms, unique) => {
                 let expected_size = parms.parameter_set.public_key_bytes();
                 if (!allow_empty_unique || unique.get_size() > 0)

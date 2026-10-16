@@ -1,0 +1,34 @@
+session-audit-attribute-dependency: auditExclusive/auditReset require audit
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 2, Table "Definition of (UINT8) TPMA_SESSION
+Bits"): "1 | auditExclusive | ... This setting is only allowed if the
+*audit* attribute is SET (TPM_RC_ATTRIBUTES)." and "2 | auditReset | ...
+This setting is only allowed if the *audit* attribute is SET
+(TPM_RC_ATTRIBUTES)."
+
+The reference ignores auditExclusive and auditReset on a non-password session
+whose audit attribute is CLEAR (for a password session it already returns
+TPM_RC_ATTRIBUTES), so it continues and fails later with another response
+code (e.g. a later session's unmarshaling error, TPM_RC_SYMMETRIC or
+TPM_RC_BAD_AUTH). The check is added to RetrieveSessionData() right after the
+duplicate-handle check, i.e. before the decrypt/encrypt/audit checks, as in
+tpm-rs. Found by differential fuzzing.
+diff --git a/src/SessionProcess.c b/src/SessionProcess.c
+--- a/src/SessionProcess.c
++++ b/src/SessionProcess.c
+@@ -1214,6 +1214,13 @@
+ 		    if(s_sessionHandles[i] == s_sessionHandles[sessionIndex])
+ 			return TPM_RCS_HANDLE + errorIndex;
+ 		}
++	    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++	    // auditExclusive and auditReset are "only allowed if the *audit* attribute
++	    // is SET (TPM_RC_ATTRIBUTES)" (Part 2, TPMA_SESSION).
++	    if((IS_ATTRIBUTE(sessionAttributes, TPMA_SESSION, auditExclusive)
++	        || IS_ATTRIBUTE(sessionAttributes, TPMA_SESSION, auditReset))
++	       && !IS_ATTRIBUTE(sessionAttributes, TPMA_SESSION, audit))
++	    	return TPM_RCS_ATTRIBUTES + errorIndex;
+ 	    // If the session is used for parameter encryption or audit as well, set
+ 	    // the corresponding Indexes.
+ 

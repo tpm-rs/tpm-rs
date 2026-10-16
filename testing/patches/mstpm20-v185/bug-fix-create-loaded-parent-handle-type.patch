@@ -1,0 +1,48 @@
+create-loaded-parent-handle-type: TPM2_CreateLoaded unmarshals parentHandle as TPMI_DH_PARENT
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, TPM2_CreateLoaded, Table "TPM2_CreateLoaded
+Command", Handles): "TPMI_DH_PARENT | @parentHandle | Handle of a transient
+storage key, a persistent storage key, TPM_RH_ENDORSEMENT, TPM_RH_OWNER,
+TPM_RH_PLATFORM+{PP}, or TPM_RH_NULL". Part 3, "Handle Area Validation":
+"The TPM shall successfully unmarshal the number of handles required by the
+command and validate that the value of the handle is consistent with the
+command syntax. If not, the TPM shall return `TPM_RC_VALUE`."
+
+The parentHandle of TPM2_CreateLoaded is a TPMI_DH_PARENT (Part 3,
+TPM2_CreateLoaded): the hierarchies, TPM_RH_NULL and transient or
+persistent objects. Version 185 unmarshals it as TPMI_DH_ENTITY+ and thus
+accepts NV indices, PCRs, TPM_RH_LOCKOUT and TPM_RH_AUTH_xx, which then fail
+later with other response codes (TPM_RC_HANDLE, TPM_RC_AUTH_MISSING) instead
+of TPM_RC_VALUE + TPM_RC_H + TPM_RC_1 (as tpm-rs and ibmswtpm2 return). The
+marshal ID TPMI_DH_PARENT, whose unmarshaling function already exists, is
+added for it. Found by differential fuzzing.
+diff --git a/TPMCmd/tpm/include/private/CommandDispatch.inl b/TPMCmd/tpm/include/private/CommandDispatch.inl
+--- a/TPMCmd/tpm/include/private/CommandDispatch.inl
++++ b/TPMCmd/tpm/include/private/CommandDispatch.inl
+@@ -2357,7 +2357,12 @@
+ #define CURRENT_TPM_COMMAND CreateLoaded
+ MAKE_DISPATCH_TABLE(
+     // Command input handles
+-    MAKE_INPUT_DISPATCH_ENTRY(MARSHAL_ID_TPMI_DH_ENTITY_Plus, parentHandle),
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // parentHandle is a TPMI_DH_PARENT (Part 3, TPM2_CreateLoaded): only the
++    // hierarchies, TPM_RH_NULL and transient/persistent objects are valid
++    // values; every other handle (NV indices, PCRs, TPM_RH_LOCKOUT,
++    // TPM_RH_AUTH_xx, ...) is TPM_RC_VALUE.
++    MAKE_INPUT_DISPATCH_ENTRY(MARSHAL_ID_TPMI_DH_PARENT, parentHandle),
+ 
+     MAKE_DISPATCH_SEPARATOR(START_INPUT_PARAMETERS),
+     // Command input parameters
+diff --git a/TPMCmd/tpm/include/private/MarshalID.h b/TPMCmd/tpm/include/private/MarshalID.h
+--- a/TPMCmd/tpm/include/private/MarshalID.h
++++ b/TPMCmd/tpm/include/private/MarshalID.h
+@@ -67,6 +67,7 @@
+     DO_MARSHAL_ID(TPMI_DH_ENTITY_Plus)       \
+     DO_MARSHAL_ID(TPMI_DH_OBJECT)            \
+     DO_MARSHAL_ID(TPMI_DH_OBJECT_Plus)       \
++    DO_MARSHAL_ID(TPMI_DH_PARENT)            \
+     DO_MARSHAL_ID(TPMI_DH_PCR)               \
+     DO_MARSHAL_ID(TPMI_DH_PCR_Plus)          \
+     DO_MARSHAL_ID(TPMI_DH_PERSISTENT)        \

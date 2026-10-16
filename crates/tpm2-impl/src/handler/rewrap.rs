@@ -213,9 +213,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             out_sym_seed = Tpm2bEncryptedSecret::from_bytes(&encrypted_secret[..secret_len])
                 .map_err(|_| TpmRc::FAILURE)?;
 
-            // Make sure that the outer integrity digest still fits.
+            // Make sure that the outer integrity digest still fits into the `outDuplicate` buffer
+            // of this TPM's profile (`sizeof(out->outDuplicate.t.buffer)` in the C reference).
+            // TPM 2.0 Part 2, Table "Definition of TPM2B_PRIVATE Structure":
+            // "buffer[size] {:sizeof(_PRIVATE)} | BYTE | an encrypted private area".
             let hash_size = 2 + new_name_alg.digest_size();
-            if private_blob_len + hash_size > Tpm2bPrivate::CAP {
+            if private_blob_len + hash_size > Tpm2bPrivate::capacity() {
                 return Err(TpmRc::VALUE.with(Position::parameter(1)));
             }
 
@@ -343,11 +346,28 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .map_err(|_| TpmRc::FAILURE)
     }
 
-    /// Recovers a seed from `secret` with the private key of `parent` (C `CryptSecretDecrypt`
-    /// with `label`, e.g. `DUPLICATE` or `IDENTITY`): RSA-OAEP decryption (`TPM_RC_VALUE` on
-    /// failure), or for ECC `KDFe(nameAlg, ([d]Qe).x, label, Qe.x, Qs.x, digestBits)`
-    /// (unmarshal errors, or `TPM_RC_ECC_POINT` for an invalid point). Returns the seed length.
-    /// Errors carry no position; callers add the parameter position of `secret`.
+    /// Recovers a seed from `secret` with the private key of `parent` (C
+    /// `CryptoCommon_SecretDecrypt()` with `label`, e.g. `DUPLICATE`, `IDENTITY` or `SECRET`):
+    ///
+    /// * RSA: RSAES-OAEP with the key's scheme hash, or `nameAlg` if its scheme is
+    ///   `TPM_ALG_NULL` (`TPM_RC_SCHEME` for any other scheme); a ciphertext that is not as
+    ///   long as the modulus, or whose value is not below the modulus, is `TPM_RC_SIZE`; a
+    ///   decoding failure, or a seed longer than the scheme hash's digest, is `TPM_RC_VALUE`.
+    /// * ECC: `KDFe(nameAlg, ([d]Qe).x, label, Qe.x, Qs.x, digestBits)` with `Qe` unmarshaled
+    ///   from the front of `secret` (unmarshal errors; bytes after it are ignored), or
+    ///   `TPM_RC_ECC_POINT` for a point that is not on the curve.
+    ///
+    /// TPM 2.0 Part 1, "RSAES_OAEP": "This encryption scheme is defined in RFC 8017
+    /// [@{rfc8017}]. It is the only scheme used with an RSA-restricted decryption key." The
+    /// specification assigns no response codes to the RFC 8017 decryption failures (RFC 8017,
+    /// 7.1.2: "If the length of the ciphertext C is not k octets ... output 'decryption
+    /// error'"; 5.1.2 RSADP: "If the ciphertext representative c is not between 0 and n - 1,
+    /// output 'ciphertext representative out of range'"), nor to bytes after the ECC point, so
+    /// they follow the TCG reference (`CryptoRsa_Decrypt()`: "Size is checked to make sure that
+    /// the encrypted value is the right size", `TPM_RC_SIZE`).
+    ///
+    /// Returns the seed length. Errors carry no position; callers add the parameter position of
+    /// `secret`.
     pub(crate) fn crypt_secret_decrypt(
         &self,
         parent: &TransientObject,
@@ -357,34 +377,52 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<usize, TpmRc> {
         let name_alg = parent.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
         match &parent.public.parms_and_id {
-            OwnedPublicParmsAndId::Rsa(_, _) => {
+            OwnedPublicParmsAndId::Rsa(parms, unique) => {
+                // "If the key scheme is TPM_ALG_NULL, set the scheme to OAEP and set the
+                // algorithm to the name algorithm" (C).
+                let hash = match parms.scheme {
+                    None => name_alg,
+                    Some(scheme) if scheme.scheme() == Alg::OAEP => {
+                        scheme.hash_alg().ok_or(TpmRc::SCHEME.to_rc())?
+                    }
+                    Some(_) => return Err(TpmRc::SCHEME.to_rc()),
+                };
+                let digest_size = hash.digest_size();
+                if digest_size == 0 {
+                    return Err(TpmRc::SCHEME.to_rc());
+                }
+                let modulus = unique.get_buffer();
+                if secret.len() != modulus.len() || secret >= modulus {
+                    return Err(TpmRc::SIZE.to_rc());
+                }
                 let mut label_buf = [0u8; 32];
                 let label_len = oaep_label(label, &mut label_buf);
+                let mut plaintext = [0u8; 512];
                 let len = crypto_len(
                     self.crypto().decrypt(
                         Alg::OAEP,
-                        Alg::from(name_alg),
+                        Alg::from(hash),
                         &parent.private[..parent.private_len],
                         secret,
-                        seed,
+                        &mut plaintext,
                         &label_buf[..label_len],
                     ),
                     TpmRc::VALUE.to_rc(),
                 )?;
-                // The recovered seed may not be larger than the nameAlg digest.
-                if len > name_alg.digest_size() {
+                // The recovered seed may not be larger than the scheme hash's digest.
+                if len > digest_size || len > seed.len() {
                     return Err(TpmRc::VALUE.to_rc());
                 }
+                seed[..len].copy_from_slice(&plaintext[..len]);
                 Ok(len)
             }
             OwnedPublicParmsAndId::Ecc(parms, unique) => {
                 let curve = parms.curve_id;
                 let param_size = ecc_param_size(curve).ok_or(TpmRc::CURVE.to_rc())?;
+                // Bytes after the point are not examined (C unmarshals the point from the
+                // front of the buffer and ignores the rest).
                 let mut slice = secret;
                 let eph_point = TpmsEccPoint::unmarshal(&mut slice).map_err(|e| e.to_rc())?;
-                if !slice.is_empty() {
-                    return Err(TpmRc::SIZE.to_rc());
-                }
                 let mut eph = [0u8; 132];
                 pad_coordinate(eph_point.x.get_buffer(), param_size, &mut eph[..param_size])?;
                 pad_coordinate(

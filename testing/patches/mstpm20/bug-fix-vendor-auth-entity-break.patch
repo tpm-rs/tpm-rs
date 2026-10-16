@@ -2,6 +2,21 @@ fix-vendor-auth-entity-break: add the missing 'break' for VENDOR_PERMANENT_AUTH_
 
 Classification: spec-deviation bug fix.
 
+Specification (TPM 2.0 Library, Part 1, "TPM Handles", "Permanent Resource
+Handles (MSO=40)"):
+
+  "Another type of permanent resource handle is the vendor-specific
+  authorization value. ... If present, a vendor-specific authorization value
+  can be used as a bind value within an authorization session or to
+  authorize a policy using the TPM2_PolicySecret() command."
+
+Specification (TPM 2.0 Library, Part 2, "TPMI_DH_ENTITY" (Table: Definition of
+(TPM_HANDLE) TPMI_DH_ENTITY Type)):
+
+  "The TPMI_DH_ENTITY interface type is TPM-defined values that are used to
+  indicate that the handle refers to an authValue. ... {TPM_RH_AUTH_00 :
+  TPM_RH_AUTH_FF} range of vendor-specific authorization values"
+
 EntityGetAuthValue() falls through from the VENDOR_PERMANENT_AUTH_HANDLE
 case into 'default' (which fails), so the vendor authorization value can
 never be used.

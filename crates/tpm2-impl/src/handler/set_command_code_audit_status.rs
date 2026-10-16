@@ -2,12 +2,12 @@ use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, owned::OwnedDigest, req_resp::RequestThenResponse};
-use tpm2::Alg;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::SetCommandCodeAuditStatus;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
+use tpm2::{Alg, TpmiAlgHash};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -55,16 +55,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
-        let cmd = request.try_unmarshal_command::<SetCommandCodeAuditStatus>(handles)?;
-        // `TPMI_ALG_HASH+` admits only the hash algorithms this TPM implements (`#TPM_RC_HASH`);
-        // the wire type also decodes SM3/SHA-3 identifiers, which are not implemented.
-        if let Some(alg) = cmd.audit_alg
+        // TPM 2.0 Part 2, TPMI_ALG_HASH: "`TPMI_ALG_HASH` is an interface type of all the
+        // hash algorithms implemented on a specific TPM", and Table "Definition of (TPM_ALG_ID)
+        // TPMI_ALG_HASH Type" ends with "+TPM_ALG_NULL" and "#TPM_RC_HASH". Part 3,
+        // TPM2_SetCommandCodeAuditStatus: "TPMI_ALG_HASH+ | auditAlg" is the first parameter.
+        // The `tpm2` wire type also decodes SM3/SHA-3 identifiers, which this TPM does not
+        // implement, so the check belongs to unmarshaling `auditAlg` and precedes any error in
+        // the later parameters (`setList`, `clearList`).
+        let audit_alg_id = request
+            .remaining_slice()
+            .get(..2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]));
+        if let Some(id) = audit_alg_id
+            && id != Alg::NULL.id()
+            && TpmiAlgHash::try_from(id).is_ok()
             && !crate::handler::capability::IMPLEMENTED_ALGORITHMS
                 .iter()
-                .any(|&(implemented, _)| implemented == Alg::from(alg))
+                .any(|&(implemented, _)| implemented.id() == id)
         {
             return Err(TpmRc::HASH.with(Position::parameter(1)));
         }
+        let cmd = request.try_unmarshal_command::<SetCommandCodeAuditStatus>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }

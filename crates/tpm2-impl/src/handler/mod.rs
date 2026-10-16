@@ -25,7 +25,7 @@
 //! - **Key Management Security**: [duplicate::duplicate](duplicate.rs) (encrypts object payloads for migration), [import::import](import.rs) (decrypts imported objects).
 
 mod activate_credential;
-mod capability;
+pub(crate) mod capability;
 mod certify;
 mod change_eps;
 mod change_pps;
@@ -858,6 +858,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         gen_seed_arg: Option<&[u8]>,
         actual_private_key: &mut [u8],
     ) -> Result<usize, TpmRc> {
+        // `CryptRsaGenerateKey()`: an exponent below 65537 or not prime is `TPM_RC_RANGE`.
+        // The crypto provider generates keys with the default exponent only, so any other
+        // (valid) exponent is unsupported, which is `TPM_RC_RANGE` as well. TPM 2.0 Part 1,
+        // RSA: "A TPM is required only to support a public exponent (*e*) of $2^{16}+1$.
+        // Support for other exponents is allowed but discouraged." (The response code is not
+        // specified; the TCG reference's is used.)
+        // `RSA_DEFAULT_PUBLIC_EXPONENT`.
+        const DEFAULT_EXPONENT: u32 = 65537;
+        if parms.exponent != 0 && parms.exponent != DEFAULT_EXPONENT {
+            return Err(TpmRc::RANGE.to_rc());
+        }
         let mut priv_buf = [0u8; 1536];
         let mut pub_buf = [0u8; 512];
         let bits = parms.key_bits;
@@ -1154,8 +1165,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// the null hierarchy) as `(buffer, length, hierarchy handle)`.
     ///
     /// Fails with `TPM_RC_FAILURE` if the proof is not provisioned (see
-    /// [`provisioned_secret`]).
+    /// [`provisioned_secret`]), and with `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED` for a
+    /// firmware-limited/SVN-limited hierarchy.
     pub fn resolve_hierarchy_proof(&self, hierarchy: u32) -> Result<(&[u8], usize, u32), TpmRc> {
+        // The proof of a firmware-limited or SVN-limited hierarchy is not available (the TCG
+        // reference's `HierarchyGetProof()`), see `limited_hierarchy_error`.
+        if let Some(rc) = crate::engine::limited_hierarchy_error(hierarchy) {
+            return Err(rc.to_rc());
+        }
         let gs = &self.context.state;
         let (proof, size, handle) = if hierarchy == 0x40000001 {
             (&gs.sh_proof, gs.sh_proof_size, 0x40000001)
@@ -1225,6 +1242,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         hash_alg: TpmiAlgHash,
         digest: &[u8],
     ) -> Result<[u8; TICKET_DIGEST_SIZE], TpmRc> {
+        // The proof of a firmware-limited or SVN-limited hierarchy is unavailable
+        // (`resolve_hierarchy_proof`), whatever the hierarchy check below would say.
+        if let Some(rc) = crate::engine::limited_hierarchy_error(hierarchy.0) {
+            return Err(rc.to_rc());
+        }
         if hierarchy != Handle::RH_NULL
             && hierarchy != Handle::RH_OWNER
             && hierarchy != Handle::RH_PLATFORM

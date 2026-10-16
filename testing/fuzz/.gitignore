@@ -1,0 +1,11 @@
+# Build output and the per-run state of `cargo fuzz` and libFuzzer, and the
+# seed corpus, which is generated locally (see README.md, "The seed corpus").
+target
+corpus
+artifacts
+coverage
+/crash-*
+/leak-*
+/oom-*
+/timeout-*
+/slow-unit-*
