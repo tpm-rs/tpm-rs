@@ -87,12 +87,10 @@ impl TpmsPcrSelect {
 
     /// Returns the slice of selected PCR bits.
     pub const fn pcrs(&self) -> &[u8] {
-        debug_assert!(self.sizeof_select as usize >= Self::MIN);
-        debug_assert!(self.sizeof_select as usize <= Self::MAX);
-        if let Some((head, _)) = self
-            .pcr_select
-            .split_at_checked(self.sizeof_select as usize)
-        {
+        let len = self.sizeof_select as usize;
+        debug_assert!(len >= Self::MIN);
+        debug_assert!(len <= Self::MAX);
+        if let Some((head, _)) = self.pcr_select.split_at_checked(len) {
             head
         } else {
             &self.pcr_select
@@ -126,7 +124,7 @@ impl Marshal for TpmsPcrSelect {
 impl<'a> Unmarshal<'a> for TpmsPcrSelect {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let sizeof_select = u8::unmarshal(src)?;
-        let len = sizeof_select as usize;
+        let len = usize::from(sizeof_select);
         if !(Self::MIN..=Self::MAX).contains(&len) || src.len() < len {
             return Err(UnmarshalError);
         }

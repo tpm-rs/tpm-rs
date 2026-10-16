@@ -43,8 +43,7 @@ pub fn kdfa(
     let bits = (out.len() as u32) * 8;
     let mut mac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
 
-    for (i, chunk) in out.chunks_mut(alg.digest_size()).enumerate() {
-        let counter = (i as u32) + 1;
+    for (chunk, counter) in out.chunks_mut(alg.digest_size()).zip(1u32..) {
         let mut state = HmacStream::new(h, alg, key)?;
 
         state.update(&counter.to_be_bytes())?;
@@ -83,8 +82,7 @@ pub fn kdfe(
 ) -> Result<(), CryptoError> {
     let mut digest_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
 
-    for (i, chunk) in out.chunks_mut(alg.digest_size()).enumerate() {
-        let counter = (i as u32) + 1;
+    for (chunk, counter) in out.chunks_mut(alg.digest_size()).zip(1u32..) {
         let mut state = HashStream::new(h, alg)?;
 
         state.update(&counter.to_be_bytes())?;
