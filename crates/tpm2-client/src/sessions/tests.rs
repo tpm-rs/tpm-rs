@@ -1,7 +1,7 @@
 use tpm2::crypto::{HashStream, HmacStream};
 use tpm2::{
-    Handle, Tpm2bAuth, Tpm2bData, Tpm2bName, Tpm2bNonce, TpmCc, TpmaSession, TpmiAlgHash,
-    TpmsAuthResponse,
+    Handle, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce, TpmCc, TpmaSession,
+    TpmiAlgHash, TpmsAuthResponse,
 };
 use tpm2_rustcrypto::RustCrypto;
 
@@ -284,4 +284,309 @@ fn test_nv_name() {
     let mut written_buf = [0u8; Tpm2bName::CAP];
     let written_name = nv_name(&RustCrypto, &public, &mut written_buf).unwrap();
     assert_ne!(written_name, name);
+}
+
+fn hex32(s: &str) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap();
+    }
+    out
+}
+
+/// policyDigest after `TPM2_PolicyAuthValue` (or `TPM2_PolicyPassword`) on a
+/// new SHA-256 session.
+const POLICY_AUTH_VALUE: &str = "8fcd2169ab92694e0c633f1ab772842b8241bbc20288981fc7ac1eddc1fddb0e";
+
+#[test]
+fn test_policy_digest_known_values() {
+    let mut policy = PolicyDigest::new(RustCrypto, ALG);
+    assert_eq!(policy.digest().as_slice(), [0u8; 32]);
+
+    policy.policy_auth_value().unwrap();
+    assert_eq!(policy.digest().as_slice(), hex32(POLICY_AUTH_VALUE));
+
+    policy.reset();
+    assert_eq!(policy.digest().as_slice(), [0u8; 32]);
+    policy.policy_password().unwrap();
+    assert_eq!(policy.digest().as_slice(), hex32(POLICY_AUTH_VALUE));
+
+    // The policy of the default EK templates (TPM 2.0 EK Credential Profile):
+    // PolicySecret(TPM_RH_ENDORSEMENT) with an empty policyRef.
+    let mut policy = PolicyDigest::new(RustCrypto, ALG);
+    let name = Handle::RH_ENDORSEMENT.0.to_be_bytes();
+    policy
+        .policy_secret(Tpm2bName::new(&name).unwrap(), Tpm2bNonce::default())
+        .unwrap();
+    assert_eq!(
+        policy.digest().as_slice(),
+        hex32("837197674484b3f81a90cc8d46a5d724fd52d76e06520b64f2a1da1b331469aa")
+    );
+}
+
+#[test]
+fn test_policy_digest_updates() {
+    let cc = |code: TpmCc| code.code().to_be_bytes();
+
+    // PolicyCommandCode extends the current digest.
+    let mut policy = PolicyDigest::new(RustCrypto, ALG);
+    policy.policy_command_code(TpmCc::NVRead).unwrap();
+    let expected = sha256(&[&[0u8; 32], &cc(TpmCc::PolicyCommandCode), &cc(TpmCc::NVRead)]);
+    assert_eq!(policy.digest().as_slice(), expected);
+
+    // PolicyNV hashes its arguments first.
+    let nv_name = [0xAB; 34];
+    policy
+        .policy_nv(
+            tpm2::Tpm2bOperand::new(b"operand").unwrap(),
+            3,
+            tpm2::TpmEo::UnsignedLT,
+            Tpm2bName::new(&nv_name).unwrap(),
+        )
+        .unwrap();
+    let args = sha256(&[b"operand", &3u16.to_be_bytes(), &5u16.to_be_bytes()]);
+    let expected = sha256(&[&expected, &cc(TpmCc::PolicyNV), &args, &nv_name]);
+    assert_eq!(policy.digest().as_slice(), expected);
+
+    // PolicyOR replaces the digest, regardless of its current value.
+    let a = [0x01; 32];
+    let b = [0x02; 32];
+    policy
+        .policy_or(&[Tpm2bDigest::new(&a).unwrap(), Tpm2bDigest::new(&b).unwrap()])
+        .unwrap();
+    let expected = sha256(&[&[0u8; 32], &cc(TpmCc::PolicyOR), &a, &b]);
+    assert_eq!(policy.digest().as_slice(), expected);
+
+    // PolicyAuthorize also replaces the digest, and always does the second
+    // (policyRef) update.
+    let key_name = [0xCD; 34];
+    policy
+        .policy_authorize(Tpm2bName::new(&key_name).unwrap(), Tpm2bNonce::default())
+        .unwrap();
+    let expected = sha256(&[&[0u8; 32], &cc(TpmCc::PolicyAuthorize), &key_name]);
+    let expected = sha256(&[&expected]);
+    assert_eq!(policy.digest().as_slice(), expected);
+
+    // PolicyDuplicationSelect only includes objectName if includeObject.
+    let mut policy = PolicyDigest::new(RustCrypto, ALG);
+    let object_name = [0x11; 34];
+    let parent_name = [0x22; 34];
+    policy
+        .policy_duplication_select(
+            Tpm2bName::new(&object_name).unwrap(),
+            Tpm2bName::new(&parent_name).unwrap(),
+            false,
+        )
+        .unwrap();
+    let expected = sha256(&[
+        &[0u8; 32],
+        &cc(TpmCc::PolicyDuplicationSelect),
+        &parent_name,
+        &[0],
+    ]);
+    assert_eq!(policy.digest().as_slice(), expected);
+
+    // PolicyPCR includes the marshaled TPML_PCR_SELECTION.
+    let mut policy = PolicyDigest::new(RustCrypto, ALG);
+    let pcr_digest = [0x33; 32];
+    policy
+        .policy_pcr(
+            Tpm2bDigest::new(&pcr_digest).unwrap(),
+            &tpm2::TpmlPcrSelection::default(),
+        )
+        .unwrap();
+    let expected = sha256(&[
+        &[0u8; 32],
+        &cc(TpmCc::PolicyPCR),
+        &0u32.to_be_bytes(), // empty list
+        &pcr_digest,
+    ]);
+    assert_eq!(policy.digest().as_slice(), expected);
+}
+
+const POLICY_SESSION_HANDLE: Handle = Handle(0x03000000);
+
+fn new_policy_session() -> PolicySession<RustCrypto> {
+    PolicySession::new(
+        RustCrypto,
+        POLICY_SESSION_HANDLE,
+        ALG,
+        Tpm2bNonce::new(&NONCE_CALLER).unwrap(),
+        Tpm2bNonce::new(&NONCE_TPM).unwrap(),
+    )
+}
+
+#[test]
+fn test_policy_session_policy_only() {
+    // Without PolicyAuthValue/PolicyPassword, an unbound, unsalted policy
+    // session has an empty HMAC key, so the HMACs are empty, even if an
+    // authValue is set.
+    let mut session = new_policy_session();
+    session.set_auth_value(Tpm2bAuth::new(b"auth").unwrap());
+    session
+        .policy_mut()
+        .policy_command_code(TpmCc::NVRead)
+        .unwrap();
+    assert_ne!(session.policy().digest().as_slice(), [0u8; 32]);
+
+    let cmd = CommandData {
+        code: CODE,
+        handles: &[NV_INDEX, NV_INDEX],
+        names: &[],
+        params: b"params",
+    };
+    let rsp = ResponseData {
+        code: CODE,
+        params: b"response",
+    };
+    let auth = session.auth_command(&cmd).unwrap();
+    assert_eq!(auth.session_handle, POLICY_SESSION_HANDLE);
+    assert!(auth.hmac.as_slice().is_empty());
+    let mut nonce_caller = [0u8; 32];
+    nonce_caller.copy_from_slice(auth.nonce.as_slice());
+
+    let new_nonce_tpm = [0x33; 32];
+    let response = TpmsAuthResponse {
+        nonce: Tpm2bNonce::new(&new_nonce_tpm).unwrap(),
+        session_attributes: TpmaSession::CONTINUE_SESSION,
+        hmac: Tpm2bData::default(),
+    };
+    assert_eq!(session.validate_auth_response(&rsp, &response), Ok(()));
+    assert_eq!(session.nonce_tpm().as_slice(), new_nonce_tpm);
+
+    // A successful use resets the policy.
+    assert_eq!(session.policy().digest().as_slice(), [0u8; 32]);
+}
+
+#[test]
+fn test_policy_session_auth_value() {
+    let mut session = new_policy_session();
+    session
+        .policy_auth_value(Tpm2bAuth::new(b"auth\0\0").unwrap())
+        .unwrap();
+    assert_eq!(
+        session.policy().digest().as_slice(),
+        hex32(POLICY_AUTH_VALUE)
+    );
+
+    let name = [0xAB; 34];
+    let names = [Some(Tpm2bName::new(&name).unwrap())];
+    let cmd = CommandData {
+        code: CODE,
+        handles: &[NV_INDEX],
+        names: &names,
+        params: b"params",
+    };
+    let rsp = ResponseData {
+        code: CODE,
+        params: b"response",
+    };
+
+    // The HMAC key is the authValue, with trailing zeros removed.
+    let auth = session.auth_command(&cmd).unwrap();
+    let cp_hash = sha256(&[&CODE.code().to_be_bytes(), &name, b"params"]);
+    let expected = hmac_sha256(
+        b"auth",
+        &[
+            &cp_hash,
+            auth.nonce.as_slice(),
+            &NONCE_TPM,
+            &[TpmaSession::CONTINUE_SESSION.0],
+        ],
+    );
+    assert_eq!(auth.hmac.as_slice(), expected);
+    let mut nonce_caller = [0u8; 32];
+    nonce_caller.copy_from_slice(auth.nonce.as_slice());
+
+    // So is the response HMAC key.
+    let new_nonce_tpm = [0x33; 32];
+    let mut hmac_buf = [0u8; 32];
+    let response = tpm_response(&rsp, &[], &new_nonce_tpm, &nonce_caller, &mut hmac_buf);
+    assert_eq!(
+        session.validate_auth_response(&rsp, &response),
+        Err(AuthError::InvalidResponse)
+    );
+    // A failed validation doesn't reset the policy.
+    assert_eq!(
+        session.policy().digest().as_slice(),
+        hex32(POLICY_AUTH_VALUE)
+    );
+    let response = tpm_response(&rsp, b"auth", &new_nonce_tpm, &nonce_caller, &mut hmac_buf);
+    assert_eq!(session.validate_auth_response(&rsp, &response), Ok(()));
+
+    // A successful use resets the policy, so the authValue is no longer used.
+    assert_eq!(session.policy().digest().as_slice(), [0u8; 32]);
+    let auth = session.auth_command(&cmd).unwrap();
+    assert!(auth.hmac.as_slice().is_empty());
+}
+
+#[test]
+fn test_policy_session_password() {
+    let mut session = new_policy_session();
+    session
+        .policy_password(Tpm2bAuth::new(b"password").unwrap())
+        .unwrap();
+    assert_eq!(
+        session.policy().digest().as_slice(),
+        hex32(POLICY_AUTH_VALUE)
+    );
+
+    // No Names are needed, as there is no cpHash.
+    let cmd = CommandData {
+        code: CODE,
+        handles: &[NV_INDEX],
+        names: &[],
+        params: b"params",
+    };
+    let rsp = ResponseData {
+        code: CODE,
+        params: b"response",
+    };
+
+    // The authValue is sent in place of the HMAC, but the nonce still rolls.
+    let auth = session.auth_command(&cmd).unwrap();
+    assert_eq!(auth.session_handle, POLICY_SESSION_HANDLE);
+    assert_eq!(auth.hmac.as_slice(), b"password");
+    assert_eq!(auth.nonce.as_slice().len(), ALG.digest_size());
+    assert_ne!(auth.nonce.as_slice(), NONCE_CALLER);
+    let mut nonce_caller = [0u8; 32];
+    nonce_caller.copy_from_slice(auth.nonce.as_slice());
+
+    // The response HMAC must be empty.
+    let new_nonce_tpm = [0x33; 32];
+    let mut hmac_buf = [0u8; 32];
+    let mut response = tpm_response(&rsp, &[], &new_nonce_tpm, &nonce_caller, &mut hmac_buf);
+    assert_eq!(
+        session.validate_auth_response(&rsp, &response),
+        Err(AuthError::InvalidResponse)
+    );
+    assert_eq!(session.nonce_tpm().as_slice(), NONCE_TPM);
+
+    response.hmac = Tpm2bData::default();
+    assert_eq!(session.validate_auth_response(&rsp, &response), Ok(()));
+    assert_eq!(session.nonce_tpm().as_slice(), new_nonce_tpm);
+
+    // A successful use resets the policy.
+    assert_eq!(session.policy().digest().as_slice(), [0u8; 32]);
+    let auth = session.auth_command(&cmd).unwrap();
+    assert!(auth.hmac.as_slice().is_empty());
+}
+
+#[test]
+fn test_policy_session_restart() {
+    let mut session = new_policy_session();
+    session
+        .policy_password(Tpm2bAuth::new(b"password").unwrap())
+        .unwrap();
+    session.policy_restart();
+    assert_eq!(session.policy().digest().as_slice(), [0u8; 32]);
+
+    let cmd = CommandData {
+        code: CODE,
+        handles: &[NV_INDEX],
+        names: &[],
+        params: b"params",
+    };
+    let auth = session.auth_command(&cmd).unwrap();
+    assert!(auth.hmac.as_slice().is_empty());
 }

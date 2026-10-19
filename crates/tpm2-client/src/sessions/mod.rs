@@ -4,6 +4,7 @@
 mod authorization_area;
 mod hmac;
 mod password;
+mod policy;
 mod session;
 mod session_auth_core;
 #[cfg(test)]
@@ -12,4 +13,5 @@ mod tests;
 pub use authorization_area::*;
 pub use hmac::*;
 pub use password::*;
+pub use policy::*;
 pub use session::*;
