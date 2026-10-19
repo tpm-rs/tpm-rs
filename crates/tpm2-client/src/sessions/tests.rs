@@ -1,9 +1,9 @@
-use tpm2::crypto::{HashStream, HmacStream};
+use tpm2::crypto::{hash, hmac};
 use tpm2::{
     Handle, Tpm2bAuth, Tpm2bData, Tpm2bName, Tpm2bNonce, TpmCc, TpmaSession, TpmiAlgHash,
     TpmsAuthResponse,
 };
-use tpm2_rustcrypto::RustCrypto;
+use crate::CryptoBackend;
 
 use super::*;
 use crate::nv_name;
@@ -15,9 +15,8 @@ const CODE: TpmCc = TpmCc::NVWrite;
 const NONCE_CALLER: [u8; 32] = [0x11; 32];
 const NONCE_TPM: [u8; 32] = [0x22; 32];
 
-fn new_hmac_session() -> HmacSession<RustCrypto> {
+fn new_hmac_session() -> HmacSession {
     HmacSession::new(
-        RustCrypto,
         SESSION_HANDLE,
         ALG,
         Tpm2bNonce::new(&NONCE_CALLER).unwrap(),
@@ -26,13 +25,8 @@ fn new_hmac_session() -> HmacSession<RustCrypto> {
 }
 
 fn sha256(parts: &[&[u8]]) -> [u8; 32] {
-    let mut stream = HashStream::new(&RustCrypto, ALG).unwrap();
-    for part in parts {
-        stream.update(part).unwrap();
-    }
     let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    stream
-        .finalize(&mut out)
+    hash::<CryptoBackend>(ALG, parts, &mut out)
         .unwrap()
         .digest()
         .try_into()
@@ -40,13 +34,8 @@ fn sha256(parts: &[&[u8]]) -> [u8; 32] {
 }
 
 fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    let mut stream = HmacStream::new(&RustCrypto, ALG, key).unwrap();
-    for part in parts {
-        stream.update(part).unwrap();
-    }
     let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    stream
-        .finalize(&mut out)
+    hmac::<CryptoBackend>(ALG, key, parts, &mut out)
         .unwrap()
         .digest()
         .try_into()
@@ -265,7 +254,7 @@ fn test_nv_name() {
         data_size: 16,
     };
     let mut name_buf = [0u8; Tpm2bName::CAP];
-    let name = nv_name(&RustCrypto, &public, &mut name_buf).unwrap();
+    let name = nv_name::<CryptoBackend>(&public, &mut name_buf).unwrap();
 
     // Name := nameAlg || H(nvIndex || nameAlg || attributes || authPolicy || dataSize)
     let digest = sha256(&[
@@ -282,6 +271,6 @@ fn test_nv_name() {
     // Setting TPMA_NV_WRITTEN changes the Name.
     public.attributes |= tpm2::TpmaNv::WRITTEN;
     let mut written_buf = [0u8; Tpm2bName::CAP];
-    let written_name = nv_name(&RustCrypto, &public, &mut written_buf).unwrap();
+    let written_name = nv_name::<CryptoBackend>(&public, &mut written_buf).unwrap();
     assert_ne!(written_name, name);
 }

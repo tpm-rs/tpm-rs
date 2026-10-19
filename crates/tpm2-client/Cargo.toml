@@ -12,8 +12,16 @@ license.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = ["rustcrypto"]
+
+# Use RustCrypto as the default cryptography backend (`Backend`). Sessions are
+# generic over the backend, so another can be used without this feature.
+rustcrypto = ["dep:tpm2-rustcrypto"]
+
 [dependencies]
 tpm2 = { workspace = true }
+tpm2-rustcrypto = { path = "../tpm2-rustcrypto", optional = true }
 
 [dev-dependencies]
 tpm2-tcp = { workspace = true }

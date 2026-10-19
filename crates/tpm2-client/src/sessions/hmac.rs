@@ -1,37 +1,50 @@
+use crate::CryptoBackend;
 use crate::sessions::{AuthError, CommandData, ResponseData, Session};
-use core::fmt;
-use tpm2::crypto::{ConstantTimeEq, CryptoError, Hash, Hmac, HmacStream, Random, Rng, kdfa};
+use core::marker::PhantomData;
+use tpm2::crypto::{Crypto, CryptoError, hmac, kdfa};
 use tpm2::{
     Handle, Tpm2bAuth, Tpm2bDigest, Tpm2bNonce, TpmaSession, TpmiAlgHash, TpmsAuthCommand,
     TpmsAuthResponse,
 };
 
-const MAX_DIGEST: usize = TpmiAlgHash::MAX_DIGEST_BYTES;
+pub(super) const MAX_DIGEST: usize = TpmiAlgHash::MAX_DIGEST_BYTES;
 
 /// Fixed-capacity storage for nonces, keys, and HMACs, which are all at most
 /// [`TpmiAlgHash::MAX_DIGEST_BYTES`] long.
-#[derive(Clone, Copy)]
-struct Buf {
-    bytes: [u8; MAX_DIGEST],
-    len: usize,
+///
+/// This is intentionally not `Copy`, so that copies are explicit (via
+/// `clone()`).
+//
+// ATTN/NOTE: This may hold secrets (session keys, authValues, and passwords), which
+// aren't overwritten when no longer needed. Neither are the other copies of
+// them, e.g. in the temporary HMAC and KDFa key buffers below, or in the
+// marshaled command in `run_command_with_sessions()`. Whether this matters
+// depends on the environment (e.g. a discrete TPM has no other software that
+// could read them, unlike a userspace process), so this needs a consistent
+// approach (e.g. `zeroize` on drop) across the call stack, rather than
+// piecemeal overwriting.
+#[derive(Clone)]
+pub(super) struct Buf {
+    pub(super) bytes: [u8; MAX_DIGEST],
+    pub(super) len: usize,
 }
 
 impl Buf {
-    const EMPTY: Self = Buf {
+    pub(super) const EMPTY: Self = Buf {
         bytes: [0; MAX_DIGEST],
         len: 0,
     };
 
     /// Callers must ensure `src.len() <= MAX_DIGEST` (e.g. by taking a
     /// [`Tpm2bDigest`] or a digest-sized slice).
-    fn new(src: &[u8]) -> Self {
+    pub(super) fn new(src: &[u8]) -> Self {
         let mut buf = Self::EMPTY;
         buf.bytes[..src.len()].copy_from_slice(src);
         buf.len = src.len();
         buf
     }
 
-    fn as_slice(&self) -> &[u8] {
+    pub(super) fn as_slice(&self) -> &[u8] {
         &self.bytes[..self.len]
     }
 }
@@ -66,24 +79,31 @@ fn trim_trailing_zeros(s: &[u8]) -> &[u8] {
 /// `nonceDecrypt`/`nonceEncrypt` are not yet included in the HMAC, so this
 /// session must not be combined with separate encrypt/decrypt sessions.
 ///
-/// This is intentionally not `Copy`, as using a stale copy of the session
-/// would send a stale `nonceTPM`.
-#[derive(Clone)]
-pub struct HmacSession<C> {
-    crypto: C,
-    session_handle: Handle,
-    auth_hash: TpmiAlgHash,
-    /// Session attributes sent with this session;
-    /// defaults to [`TpmaSession::CONTINUE_SESSION`].
-    pub session_attributes: TpmaSession,
-    session_key: Buf,
-    auth_value: Buf,
-    nonce_caller: Buf,
-    nonce_tpm: Buf,
+/// The session uses the cryptography backend `C`, which defaults to
+/// [`CryptoBackend`].
+///
+/// This is intentionally neither `Clone` nor `Copy`: only the copy used for a
+/// command would see the new `nonceTPM`, so the others would desynchronize
+/// from the TPM.
+//
+// The `pub(super)` fields and methods are visible throughout `sessions` (but
+// not outside it), for [`PolicySession`](super::PolicySession), which wraps
+// this and chooses how the authValue is used.
+pub struct HmacSession<C = CryptoBackend> {
+    crypto: PhantomData<C>,
+    pub(super) session_handle: Handle,
+    pub(super) auth_hash: TpmiAlgHash,
+    pub(super) session_key: Buf,
+    pub(super) nonce_caller: Buf,
+    pub(super) nonce_tpm: Buf,
+    /// Backing storage for the HMAC in the last [`TpmsAuthCommand`], which
+    /// borrows it.
     hmac: Buf,
+    pub(super) session_attributes: TpmaSession,
+    pub(super) auth_value: Buf,
 }
 
-impl<C: Hash + Hmac + Random + ConstantTimeEq> HmacSession<C> {
+impl<C: Crypto> HmacSession<C> {
     /// Creates a new unbound, unsalted HMAC session (i.e. `bind` and `tpmKey`
     /// were both `TPM_RH_NULL` in `TPM2_StartAuthSession`), which has an
     /// empty session key.
@@ -91,26 +111,30 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> HmacSession<C> {
     /// `nonce_caller` is the nonce sent in `TPM2_StartAuthSession`, and
     /// `nonce_tpm` is the nonce returned in its response.
     ///
-    /// The `continueSession` attribute is enabled by default; clear it
-    /// (e.g. `session.session_attributes.set(TpmaSession::CONTINUE_SESSION, false)`)
-    /// to request that the command terminate the session.
+    /// The `continueSession` attribute is enabled by default; see
+    /// [`HmacSession::clear_session_attributes`].
+    //
+    // TODO: Unless an authValue is set, the HMAC key of such a session is
+    // empty, so the HMACs are empty and the session provides no integrity
+    // (Part 1, Section 16.6.16). This is allowed and should stay supported
+    // (this code is meant to become the TPM itself), but document it in a
+    // `# Security` section, and consider requiring callers to opt into it.
     pub fn new(
-        crypto: C,
         session_handle: Handle,
         auth_hash: TpmiAlgHash,
         nonce_caller: Tpm2bNonce<'_>,
         nonce_tpm: Tpm2bNonce<'_>,
     ) -> Self {
         HmacSession {
-            crypto,
+            crypto: PhantomData,
             session_handle,
             auth_hash,
-            session_attributes: TpmaSession::CONTINUE_SESSION,
             session_key: Buf::EMPTY,
-            auth_value: Buf::EMPTY,
             nonce_caller: Buf::new(nonce_caller.as_slice()),
             nonce_tpm: Buf::new(nonce_tpm.as_slice()),
             hmac: Buf::EMPTY,
+            session_attributes: TpmaSession::CONTINUE_SESSION,
+            auth_value: Buf::EMPTY,
         }
     }
 
@@ -125,7 +149,6 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> HmacSession<C> {
     /// decrypted `encryptedSalt`. Either may be empty; if both are, this is
     /// equivalent to [`HmacSession::new`].
     pub fn new_bound_or_salted(
-        crypto: C,
         session_handle: Handle,
         auth_hash: TpmiAlgHash,
         nonce_caller: Tpm2bNonce<'_>,
@@ -133,7 +156,7 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> HmacSession<C> {
         bind_auth: Tpm2bAuth<'_>,
         salt: Tpm2bDigest<'_>,
     ) -> Result<Self, CryptoError> {
-        let mut session = Self::new(crypto, session_handle, auth_hash, nonce_caller, nonce_tpm);
+        let mut session = Self::new(session_handle, auth_hash, nonce_caller, nonce_tpm);
 
         let bind_auth = trim_trailing_zeros(bind_auth.as_slice());
         let salt = salt.as_slice();
@@ -148,17 +171,139 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> HmacSession<C> {
 
         let mut session_key = [0u8; MAX_DIGEST];
         let session_key = &mut session_key[..auth_hash.digest_size()];
-        kdfa(
-            &session.crypto,
+        kdfa::<C>(
             auth_hash,
             secret,
             c"ATH",
-            session.nonce_tpm.as_slice(),
-            session.nonce_caller.as_slice(),
+            (
+                session.nonce_tpm.as_slice(),
+                session.nonce_caller.as_slice(),
+            ),
             session_key,
         )?;
         session.session_key = Buf::new(session_key);
         Ok(session)
+    }
+
+    /// Computes `HMAC(sessionKey || auth_value, parts[0] || parts[1] || ...)`.
+    fn compute_hmac(&self, auth_value: &[u8], parts: &[&[u8]]) -> Result<Buf, CryptoError> {
+        let session_key = self.session_key.as_slice();
+        let mut key = [0u8; 2 * MAX_DIGEST];
+        key[..session_key.len()].copy_from_slice(session_key);
+        key[session_key.len()..][..auth_value.len()].copy_from_slice(auth_value);
+        let key = &key[..session_key.len() + auth_value.len()];
+
+        let mut out = [0u8; MAX_DIGEST];
+        Ok(Buf::new(
+            hmac::<C>(self.auth_hash, key, parts, &mut out)?.digest(),
+        ))
+    }
+
+    /// Whether the HMAC key (`sessionKey || auth_value`) is empty, in which
+    /// case the HMACs are empty too (Part 1, Section 16.6.16).
+    fn hmac_key_is_empty(&self, auth_value: &[u8]) -> bool {
+        self.session_key.len == 0 && auth_value.is_empty()
+    }
+
+    /// Generates a fresh `nonceCaller`, the same length as the current one.
+    pub(super) fn fresh_nonce_caller(&self) -> Result<Buf, AuthError> {
+        let mut nonce = Buf::EMPTY;
+        nonce.len = self.nonce_caller.len;
+        C::rand_bytes(&mut nonce.bytes[..nonce.len])?;
+        Ok(nonce)
+    }
+
+    /// Computes the command HMAC for the new `nonce_caller`, with
+    /// `auth_value` (trailing zeros already removed) as part of the HMAC key.
+    ///
+    /// This doesn't change the session; see [`Self::finish_auth_command`].
+    pub(super) fn command_hmac(
+        &self,
+        cmd: &CommandData,
+        nonce_caller: &[u8],
+        auth_value: &[u8],
+    ) -> Result<Buf, AuthError> {
+        if self.hmac_key_is_empty(auth_value) {
+            return Ok(Buf::EMPTY);
+        }
+
+        let mut cp_buf = [0u8; MAX_DIGEST];
+        let cp_hash = cmd.cp_hash::<C>(self.auth_hash, &mut cp_buf)?;
+        Ok(self.compute_hmac(
+            auth_value,
+            &[
+                cp_hash.digest(),
+                nonce_caller,
+                self.nonce_tpm.as_slice(),
+                &[self.session_attributes.0],
+            ],
+        )?)
+    }
+
+    /// Verifies the response HMAC, with `auth_value` (trailing zeros already
+    /// removed) as part of the HMAC key.
+    ///
+    /// This doesn't change the session: on success, the caller stores the
+    /// new `nonceTPM`.
+    pub(super) fn check_response_hmac(
+        &self,
+        rsp: &ResponseData,
+        auth: &TpmsAuthResponse,
+        auth_value: &[u8],
+    ) -> Result<(), AuthError> {
+        let key_is_empty = self.hmac_key_is_empty(auth_value);
+        let expected_hmac_len = if key_is_empty {
+            0
+        } else {
+            self.auth_hash.digest_size()
+        };
+        if auth.nonce.as_slice().len() != self.nonce_tpm.len
+            || auth.hmac.as_slice().len() != expected_hmac_len
+        {
+            return Err(AuthError::InvalidResponse);
+        }
+        if key_is_empty {
+            return Ok(());
+        }
+
+        let mut rp_buf = [0u8; MAX_DIGEST];
+        let rp_hash = rsp.rp_hash::<C>(self.auth_hash, &mut rp_buf)?;
+        let expected = self.compute_hmac(
+            auth_value,
+            &[
+                rp_hash.digest(),
+                auth.nonce.as_slice(),
+                self.nonce_caller.as_slice(),
+                &[auth.session_attributes.0],
+            ],
+        )?;
+
+        // Both are digest-sized (checked above), so comparing the
+        // zero-padded buffers is equivalent.
+        let received = Buf::new(auth.hmac.as_slice());
+        if !C::ct_eq(&expected.bytes, &received.bytes) {
+            return Err(AuthError::InvalidResponse);
+        }
+        Ok(())
+    }
+}
+
+impl<C> HmacSession<C> {
+    /// Stores the `nonce_caller` and `hmac` sent with a command, and returns
+    /// the command's authorization.
+    pub(super) fn finish_auth_command(
+        &mut self,
+        nonce_caller: Buf,
+        hmac: Buf,
+    ) -> TpmsAuthCommand<'_> {
+        self.nonce_caller = nonce_caller;
+        self.hmac = hmac;
+        TpmsAuthCommand {
+            session_handle: self.session_handle,
+            nonce: self.nonce_caller(),
+            session_attributes: self.session_attributes,
+            hmac: Tpm2bAuth::new(self.hmac.as_slice()).unwrap(),
+        }
     }
 
     /// Sets the authValue of the entity this session authorizes, which is
@@ -170,25 +315,36 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> HmacSession<C> {
         self.auth_value = Buf::new(trim_trailing_zeros(auth_value.as_slice()));
     }
 
-    /// Computes `HMAC(sessionKey || authValue, parts[0] || parts[1] || ...)`.
-    fn compute_hmac(&self, parts: &[&[u8]]) -> Result<Buf, CryptoError> {
-        let session_key = self.session_key.as_slice();
-        let auth_value = self.auth_value.as_slice();
-        let mut key = [0u8; 2 * MAX_DIGEST];
-        key[..session_key.len()].copy_from_slice(session_key);
-        key[session_key.len()..][..auth_value.len()].copy_from_slice(auth_value);
-        let key = &key[..session_key.len() + auth_value.len()];
-
-        let mut stream = HmacStream::new(&self.crypto, self.auth_hash, key)?;
-        for part in parts {
-            stream.update(part)?;
-        }
-        let mut out = [0u8; MAX_DIGEST];
-        Ok(Buf::new(stream.finalize(&mut out)?.digest()))
+    /// Returns the session attributes sent with this session; by default,
+    /// only `continueSession`.
+    pub const fn session_attributes(&self) -> TpmaSession {
+        self.session_attributes
     }
-}
 
-impl<C> HmacSession<C> {
+    /// Sets the given session attributes, leaving the others unchanged.
+    ///
+    /// E.g. set [`TpmaSession::CONTINUE_SESSION`] (the default) for the
+    /// session to remain active after the next command.
+    //
+    // TODO: Validate these. `decrypt`, `encrypt`, and the audit attributes
+    // aren't supported yet (parameters aren't encrypted, and
+    // `nonceDecrypt`/`nonceEncrypt` aren't included in the HMAC), but nothing
+    // prevents setting them. Once they are, this should check that the
+    // change is allowed, and return a `Result`.
+    pub fn set_session_attributes(&mut self, attributes: TpmaSession) {
+        self.session_attributes.insert(attributes);
+    }
+
+    /// Clears the given session attributes, leaving the others unchanged.
+    ///
+    /// E.g. clear [`TpmaSession::CONTINUE_SESSION`] to have the next command
+    /// terminate the session.
+    //
+    // TODO: Validate these, as for `set_session_attributes()`.
+    pub fn clear_session_attributes(&mut self, attributes: TpmaSession) {
+        self.session_attributes.remove(attributes);
+    }
+
     /// Returns the session handle this session refers to.
     pub const fn handle(&self) -> Handle {
         self.session_handle
@@ -210,96 +366,28 @@ impl<C> HmacSession<C> {
     }
 }
 
-// Manual impl, to avoid printing the session key and authValue.
-impl<C> fmt::Debug for HmacSession<C> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("HmacSession")
-            .field("session_handle", &self.session_handle)
-            .field("auth_hash", &self.auth_hash)
-            .field("session_attributes", &self.session_attributes)
-            .field("nonce_caller", &self.nonce_caller.as_slice())
-            .field("nonce_tpm", &self.nonce_tpm.as_slice())
-            .field("hmac", &self.hmac.as_slice())
-            .finish_non_exhaustive()
-    }
-}
-
-impl<C: Hash + Hmac + Random + ConstantTimeEq> Session for HmacSession<C> {
+impl<C: Crypto> Session for HmacSession<C> {
     fn auth_command(&mut self, cmd: &CommandData) -> Result<TpmsAuthCommand<'_>, AuthError> {
-        let mut nonce = [0u8; MAX_DIGEST];
-        let nonce = &mut nonce[..self.nonce_caller.len];
-        self.crypto.rng()?.fill_bytes(nonce)?;
-
-        // Part 1: Architecture - Section 16.6.16 declares that in this case, this can be empty.
-        let hmac = if self.session_key.len == 0 && self.auth_value.len == 0 {
-            Buf::EMPTY
-        } else {
-            let mut cp_buf = [0u8; MAX_DIGEST];
-            let cp_hash = cmd.cp_hash(&self.crypto, self.auth_hash, &mut cp_buf)?;
-
-            self.compute_hmac(&[
-                cp_hash.digest(),
-                nonce,
-                self.nonce_tpm.as_slice(),
-                &[self.session_attributes.0],
-            ])?
-        };
-
-        self.nonce_caller = Buf::new(nonce);
-        self.hmac = hmac;
-
-        Ok(TpmsAuthCommand {
-            session_handle: self.session_handle,
-            nonce: self.nonce_caller(),
-            session_attributes: self.session_attributes,
-            hmac: Tpm2bAuth::new(self.hmac.as_slice()).unwrap(),
-        })
+        let nonce = self.fresh_nonce_caller()?;
+        let hmac = self.command_hmac(cmd, nonce.as_slice(), self.auth_value.as_slice())?;
+        Ok(self.finish_auth_command(nonce, hmac))
     }
 
+    // TODO: If the response check fails, the session's state can no longer
+    // be trusted (the TPM may have rolled `nonceTPM`, or the response may
+    // have been tampered with), but the session can still be used, with the
+    // old `nonceTPM`. Consider marking it invalid (so that further commands
+    // are refused, and the caller must flush it), even though the TPM may
+    // still consider it valid. This isn't trivial, as this code is also
+    // meant to become TPM firmware, so the same state must work on both
+    // sides.
     fn validate_auth_response(
         &mut self,
         rsp: &ResponseData,
         auth: &TpmsAuthResponse,
     ) -> Result<(), AuthError> {
-        let digest_size = self.auth_hash.digest_size();
-        let expected_hmac_len = if self.session_key.len == 0 && self.auth_value.len == 0 {
-            0
-        } else {
-            digest_size
-        };
-
-        if auth.nonce.as_slice().len() != digest_size || auth.hmac.as_slice().len() != expected_hmac_len {
-            return Err(AuthError::InvalidResponse);
-        }
-
-        let nonce_tpm = auth.nonce.as_slice();
-
-        // Part 1: Architecture - Section 16.6.16 declares that in this case, this can be empty.
-        let expected = if self.session_key.len == 0 && self.auth_value.len == 0 {
-            Buf::EMPTY
-        } else {
-            let mut rp_buf = [0u8; MAX_DIGEST];
-            let rp_hash = rsp.rp_hash(&self.crypto, self.auth_hash, &mut rp_buf)?;
-
-            self.compute_hmac(&[
-                rp_hash.digest(),
-                nonce_tpm,
-                self.nonce_caller.as_slice(),
-                &[auth.session_attributes.0],
-            ])?
-        };
-
-        // Both are digest-sized (checked above), so comparing the
-        // zero-padded buffers is equivalent.
-        let received = Buf::new(auth.hmac.as_slice());
-        if !self
-            .crypto
-            .constant_time_eq(&expected.bytes, &received.bytes)
-        {
-            return Err(AuthError::InvalidResponse);
-        }
-
-        self.nonce_tpm = Buf::new(nonce_tpm);
+        self.check_response_hmac(rsp, auth, self.auth_value.as_slice())?;
+        self.nonce_tpm = Buf::new(auth.nonce.as_slice());
         Ok(())
     }
 }

@@ -5,7 +5,7 @@ mod authorization_area;
 mod hmac;
 mod password;
 mod session;
-#[cfg(test)]
+#[cfg(all(test, feature = "rustcrypto"))]
 mod tests;
 
 pub use authorization_area::*;
