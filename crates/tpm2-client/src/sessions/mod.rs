@@ -5,6 +5,7 @@ mod authorization_area;
 mod hmac;
 mod password;
 mod session;
+mod session_auth_core;
 #[cfg(test)]
 mod tests;
 
