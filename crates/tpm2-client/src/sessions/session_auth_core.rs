@@ -155,6 +155,14 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
         Ok(Buf::new(stream.finalize(&mut out)?.digest()))
     }
 
+    /// Generates a fresh `nonceCaller`, the same length as the current one.
+    fn fresh_nonce_caller(&self) -> Result<Buf, AuthError> {
+        let mut nonce = Buf::EMPTY;
+        nonce.len = self.nonce_caller.len;
+        self.crypto.rng()?.fill_bytes(&mut nonce.bytes[..nonce.len])?;
+        Ok(nonce)
+    }
+
     /// Generates a fresh `nonceCaller` and computes the command HMAC, with
     /// `auth_value` (trailing zeros already removed) as part of the HMAC key.
     pub(super) fn auth_command(
@@ -163,9 +171,8 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
         session_attributes: TpmaSession,
         auth_value: &[u8],
     ) -> Result<TpmsAuthCommand<'_>, AuthError> {
-        let mut nonce = [0u8; MAX_DIGEST];
-        let nonce = &mut nonce[..self.nonce_caller.len];
-        self.crypto.rng()?.fill_bytes(nonce)?;
+        let nonce = self.fresh_nonce_caller()?;
+        let nonce = nonce.as_slice();
 
         // Part 1: Architecture - Section 16.6.16 declares that in this case, this can be empty.
         let hmac = if self.session_key.len == 0 && auth_value.is_empty() {
@@ -246,6 +253,41 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
         }
 
         self.nonce_tpm = Buf::new(nonce_tpm);
+        Ok(())
+    }
+
+    /// Generates a fresh `nonceCaller` and sends `password` (trailing zeros
+    /// already removed) in place of the command HMAC, as a policy session
+    /// does after `TPM2_PolicyPassword`.
+    pub(super) fn password_auth_command(
+        &mut self,
+        session_attributes: TpmaSession,
+        password: &[u8],
+    ) -> Result<TpmsAuthCommand<'_>, AuthError> {
+        self.nonce_caller = self.fresh_nonce_caller()?;
+        self.hmac = Buf::new(password);
+
+        Ok(TpmsAuthCommand {
+            session_handle: self.session_handle,
+            nonce: self.nonce_caller(),
+            session_attributes,
+            hmac: Tpm2bAuth::new(self.hmac.as_slice()).unwrap(),
+        })
+    }
+
+    /// Validates the response to [`Self::password_auth_command`], which has
+    /// an empty HMAC, and stores the new `nonceTPM`.
+    pub(super) fn validate_password_response(
+        &mut self,
+        auth: &TpmsAuthResponse,
+    ) -> Result<(), AuthError> {
+        if auth.nonce.as_slice().len() != self.auth_hash.digest_size()
+            || !auth.hmac.as_slice().is_empty()
+        {
+            return Err(AuthError::InvalidResponse);
+        }
+
+        self.nonce_tpm = Buf::new(auth.nonce.as_slice());
         Ok(())
     }
 }
