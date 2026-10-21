@@ -11,5 +11,4 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-hex-literal = { workspace = true }
 tpm2 = { workspace = true }

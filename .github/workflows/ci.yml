@@ -64,11 +64,8 @@ jobs:
   miri:
     name: Miri UB Test Suite
     runs-on: ubuntu-latest
-    env:
-      RUSTDOCFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v4
       - run: rustup component add miri --toolchain nightly
       - run: rustc +nightly --version
-      # trybuild uses stat systemcall which is not supported by miri
-      - run: cargo +nightly miri test -- --skip unionify
+      - run: cargo +nightly miri test

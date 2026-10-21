@@ -86,9 +86,8 @@
 //! ## Dependencies
 //!
 //! To allow this crate to be used in constrained environments (like kernels or
-//! TPM2 implementations), we disallow any _runtime_ dependencies. Also, we
-//! restrict our [build-dependencies] to a subset necessary to create Procedural
-//! Macros (`proc_macro`, `syn`, `quote`, etc...). We will have more
+//! TPM2 implementations), we minimize external dependencies and disallow any
+//! [build-dependencies] or procedural macros. We will have more
 //! [dev-dependencies] for running additional tests, but such additional
 //! dev-dependencies should be gated by opt-in Cargo features.
 //!

@@ -2,6 +2,7 @@
 *.lock
 .vscode
 NVChip
-/client/command.port
-/client/platform.port
+command.port
+platform.port
 *.patch
+boringssl-build/
