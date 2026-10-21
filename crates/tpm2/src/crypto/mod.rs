@@ -1,11 +1,14 @@
-//! Cryptography Interfaces for TPM implementations and clients
+//! Cryptography interfaces for TPM implementations and clients.
+
+mod active;
+mod backend_traits;
 mod cmac;
 mod hash;
 mod hmac;
 mod kdf;
 mod rng;
 mod symmetric;
-pub use {cmac::*, hash::*, hmac::*, kdf::*, rng::*, symmetric::*};
+pub use {active::*, backend_traits::*, cmac::*, hash::*, hmac::*, kdf::*, rng::*, symmetric::*};
 
 /// Common error type for all cryptographic traits.
 ///
@@ -20,37 +23,7 @@ pub enum CryptoError {
     Internal,
 }
 
-/// Selects between encryption and decryption operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-    Encrypt,
-    Decrypt,
-}
-
-/// Constant-time equality comparison for fixed-length byte arrays.
+/// Constant-time equality comparison for byte slices.
 pub trait ConstantTimeEq {
-    fn constant_time_eq<const N: usize>(&self, a: &[u8; N], b: &[u8; N]) -> bool;
-}
-
-/// Feeds incremental input bytes into an active cryptographic stream context.
-pub trait Update {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError>;
-}
-/// Consumes a cryptographic stream context and writes the fixed-length output.
-///
-/// Other traits and functions wrap this to return TPM structs. For example,
-/// [`HashStream::finalize`] wraps this to return a [TpmtHa](crate::TpmtHa).
-pub trait Finalize<const N: usize> {
-    fn finalize(self, out: &mut [u8; N]) -> Result<(), CryptoError>;
-}
-
-impl Update for ! {
-    fn update(&mut self, _: &[u8]) -> Result<(), CryptoError> {
-        match *self {}
-    }
-}
-impl<const N: usize> Finalize<N> for ! {
-    fn finalize(self, _: &mut [u8; N]) -> Result<(), CryptoError> {
-        match self {}
-    }
+    fn eq(a: &[u8], b: &[u8]) -> bool;
 }

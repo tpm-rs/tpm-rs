@@ -1,174 +1,189 @@
-use super::{CryptoError, Finalize, Update};
+//! Cryptographic HMAC traits and streaming wrappers.
+
+use core::mem::MaybeUninit;
+
+use super::{Active, CryptoError, Finalize, InitFrom, Update};
 use crate::{TpmiAlgHash, TpmtHa};
 
 /// Cryptographic HMAC interfaces for TPM implementations and clients.
 ///
-/// This is extremely similar to [`Hash`] except that the context constructors
-/// (like [`Hmac::sha256`]) take in a key.
-#[allow(unused_variables)]
+/// This is extremely similar to [`Hash`](super::Hash) except that the context
+/// types implement [`InitFrom<[u8]>`](InitFrom) to initialize with a key.
 pub trait Hmac {
-    type Sha1Context: Update + Finalize<20>;
-    fn sha1(&self, key: &[u8]) -> Result<Self::Sha1Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha256Context: Update + Finalize<32>;
-    fn sha256(&self, key: &[u8]) -> Result<Self::Sha256Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha384Context: Update + Finalize<48>;
-    fn sha384(&self, key: &[u8]) -> Result<Self::Sha384Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha512Context: Update + Finalize<64>;
-    fn sha512(&self, key: &[u8]) -> Result<Self::Sha512Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sm3_256Context: Update + Finalize<32>;
-    fn sm3_256(&self, key: &[u8]) -> Result<Self::Sm3_256Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha3_256Context: Update + Finalize<32>;
-    fn sha3_256(&self, key: &[u8]) -> Result<Self::Sha3_256Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha3_384Context: Update + Finalize<48>;
-    fn sha3_384(&self, key: &[u8]) -> Result<Self::Sha3_384Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha3_512Context: Update + Finalize<64>;
-    fn sha3_512(&self, key: &[u8]) -> Result<Self::Sha3_512Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
+    type Sha1Context: InitFrom<[u8]> + Update + Finalize<20>;
+    type Sha256Context: InitFrom<[u8]> + Update + Finalize<32>;
+    type Sha384Context: InitFrom<[u8]> + Update + Finalize<48>;
+    type Sha512Context: InitFrom<[u8]> + Update + Finalize<64>;
+    type Sm3_256Context: InitFrom<[u8]> + Update + Finalize<32>;
+    type Sha3_256Context: InitFrom<[u8]> + Update + Finalize<32>;
+    type Sha3_384Context: InitFrom<[u8]> + Update + Finalize<48>;
+    type Sha3_512Context: InitFrom<[u8]> + Update + Finalize<64>;
 }
 
-/// Dynamic HMAC context wrapping algorithm-specific contexts.
-///
-/// This is for streaming HMAC calculation. One-shot users should use [`hmac`].
+/// Uninitialized stack storage for a dynamic HMAC context.
 ///
 /// While a [`Hmac`] implementation can implement whichever algorithms it
 /// wants, the variants of this enum will only exist if the corresponding
 /// hash algorithm [crate feature](crate#algorithm-feature-flags) is enabled.
-pub enum HmacStream<H: Hmac> {
+pub enum HmacSlot<H: Hmac> {
     #[cfg(feature = "sha1")]
-    Sha1(H::Sha1Context),
+    Sha1(MaybeUninit<H::Sha1Context>),
     #[cfg(feature = "sha256")]
-    Sha256(H::Sha256Context),
+    Sha256(MaybeUninit<H::Sha256Context>),
     #[cfg(feature = "sha384")]
-    Sha384(H::Sha384Context),
+    Sha384(MaybeUninit<H::Sha384Context>),
     #[cfg(feature = "sha512")]
-    Sha512(H::Sha512Context),
+    Sha512(MaybeUninit<H::Sha512Context>),
     #[cfg(feature = "sm3_256")]
-    Sm3_256(H::Sm3_256Context),
+    Sm3_256(MaybeUninit<H::Sm3_256Context>),
     #[cfg(feature = "sha3_256")]
-    Sha3_256(H::Sha3_256Context),
+    Sha3_256(MaybeUninit<H::Sha3_256Context>),
     #[cfg(feature = "sha3_384")]
-    Sha3_384(H::Sha3_384Context),
+    Sha3_384(MaybeUninit<H::Sha3_384Context>),
     #[cfg(feature = "sha3_512")]
-    Sha3_512(H::Sha3_512Context),
+    Sha3_512(MaybeUninit<H::Sha3_512Context>),
 }
 
-impl<H: Hmac> HmacStream<H> {
-    /// Initializes an HMAC context for `alg` using backend `h` and `key`.
-    pub fn new(h: &H, alg: TpmiAlgHash, key: &[u8]) -> Result<Self, CryptoError> {
+impl<H: Hmac> HmacSlot<H> {
+    /// Reserves an uninitialized stack slot for `alg`.
+    #[inline]
+    pub const fn new(alg: TpmiAlgHash) -> Self {
         match alg {
             #[cfg(feature = "sha1")]
-            TpmiAlgHash::Sha1 => h.sha1(key).map(HmacStream::Sha1),
+            TpmiAlgHash::Sha1 => Self::Sha1(MaybeUninit::uninit()),
             #[cfg(feature = "sha256")]
-            TpmiAlgHash::Sha256 => h.sha256(key).map(HmacStream::Sha256),
+            TpmiAlgHash::Sha256 => Self::Sha256(MaybeUninit::uninit()),
             #[cfg(feature = "sha384")]
-            TpmiAlgHash::Sha384 => h.sha384(key).map(HmacStream::Sha384),
+            TpmiAlgHash::Sha384 => Self::Sha384(MaybeUninit::uninit()),
             #[cfg(feature = "sha512")]
-            TpmiAlgHash::Sha512 => h.sha512(key).map(HmacStream::Sha512),
+            TpmiAlgHash::Sha512 => Self::Sha512(MaybeUninit::uninit()),
             #[cfg(feature = "sm3_256")]
-            TpmiAlgHash::Sm3_256 => h.sm3_256(key).map(HmacStream::Sm3_256),
+            TpmiAlgHash::Sm3_256 => Self::Sm3_256(MaybeUninit::uninit()),
             #[cfg(feature = "sha3_256")]
-            TpmiAlgHash::Sha3_256 => h.sha3_256(key).map(HmacStream::Sha3_256),
+            TpmiAlgHash::Sha3_256 => Self::Sha3_256(MaybeUninit::uninit()),
             #[cfg(feature = "sha3_384")]
-            TpmiAlgHash::Sha3_384 => h.sha3_384(key).map(HmacStream::Sha3_384),
+            TpmiAlgHash::Sha3_384 => Self::Sha3_384(MaybeUninit::uninit()),
             #[cfg(feature = "sha3_512")]
-            TpmiAlgHash::Sha3_512 => h.sha3_512(key).map(HmacStream::Sha3_512),
+            TpmiAlgHash::Sha3_512 => Self::Sha3_512(MaybeUninit::uninit()),
         }
     }
 
+    /// Initializes this slot with `key` and returns an active [`HmacStream`].
+    #[inline]
+    pub fn init(&mut self, key: &[u8]) -> Result<HmacStream<'_, H>, CryptoError> {
+        Ok(match self {
+            #[cfg(feature = "sha1")]
+            Self::Sha1(slot) => HmacStream::Sha1(Active::new_from(slot, key)?),
+            #[cfg(feature = "sha256")]
+            Self::Sha256(slot) => HmacStream::Sha256(Active::new_from(slot, key)?),
+            #[cfg(feature = "sha384")]
+            Self::Sha384(slot) => HmacStream::Sha384(Active::new_from(slot, key)?),
+            #[cfg(feature = "sha512")]
+            Self::Sha512(slot) => HmacStream::Sha512(Active::new_from(slot, key)?),
+            #[cfg(feature = "sm3_256")]
+            Self::Sm3_256(slot) => HmacStream::Sm3_256(Active::new_from(slot, key)?),
+            #[cfg(feature = "sha3_256")]
+            Self::Sha3_256(slot) => HmacStream::Sha3_256(Active::new_from(slot, key)?),
+            #[cfg(feature = "sha3_384")]
+            Self::Sha3_384(slot) => HmacStream::Sha3_384(Active::new_from(slot, key)?),
+            #[cfg(feature = "sha3_512")]
+            Self::Sha3_512(slot) => HmacStream::Sha3_512(Active::new_from(slot, key)?),
+        })
+    }
+}
+
+/// Dynamic HMAC stream wrapping an initialized [`HmacSlot`].
+pub enum HmacStream<'a, H: Hmac> {
+    #[cfg(feature = "sha1")]
+    Sha1(Active<'a, H::Sha1Context>),
+    #[cfg(feature = "sha256")]
+    Sha256(Active<'a, H::Sha256Context>),
+    #[cfg(feature = "sha384")]
+    Sha384(Active<'a, H::Sha384Context>),
+    #[cfg(feature = "sha512")]
+    Sha512(Active<'a, H::Sha512Context>),
+    #[cfg(feature = "sm3_256")]
+    Sm3_256(Active<'a, H::Sm3_256Context>),
+    #[cfg(feature = "sha3_256")]
+    Sha3_256(Active<'a, H::Sha3_256Context>),
+    #[cfg(feature = "sha3_384")]
+    Sha3_384(Active<'a, H::Sha3_384Context>),
+    #[cfg(feature = "sha3_512")]
+    Sha3_512(Active<'a, H::Sha3_512Context>),
+}
+
+impl<H: Hmac> HmacStream<'_, H> {
     /// Feeds `data` into the active HMAC stream.
+    #[inline]
     pub fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
         match self {
             #[cfg(feature = "sha1")]
-            HmacStream::Sha1(ctx) => ctx.update(data),
+            Self::Sha1(ctx) => ctx.update(data),
             #[cfg(feature = "sha256")]
-            HmacStream::Sha256(ctx) => ctx.update(data),
+            Self::Sha256(ctx) => ctx.update(data),
             #[cfg(feature = "sha384")]
-            HmacStream::Sha384(ctx) => ctx.update(data),
+            Self::Sha384(ctx) => ctx.update(data),
             #[cfg(feature = "sha512")]
-            HmacStream::Sha512(ctx) => ctx.update(data),
+            Self::Sha512(ctx) => ctx.update(data),
             #[cfg(feature = "sm3_256")]
-            HmacStream::Sm3_256(ctx) => ctx.update(data),
+            Self::Sm3_256(ctx) => ctx.update(data),
             #[cfg(feature = "sha3_256")]
-            HmacStream::Sha3_256(ctx) => ctx.update(data),
+            Self::Sha3_256(ctx) => ctx.update(data),
             #[cfg(feature = "sha3_384")]
-            HmacStream::Sha3_384(ctx) => ctx.update(data),
+            Self::Sha3_384(ctx) => ctx.update(data),
             #[cfg(feature = "sha3_512")]
-            HmacStream::Sha3_512(ctx) => ctx.update(data),
+            Self::Sha3_512(ctx) => ctx.update(data),
         }
     }
 
-    /// Finalizes the MAC into `out` and returns the tagged [`TpmtHa`].
-    pub fn finalize<'a>(
-        self,
-        out: &'a mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
-    ) -> Result<TpmtHa<'a>, CryptoError> {
+    /// Finalizes the MAC into `out`, cleans up the stream, and returns the
+    /// tagged [`TpmtHa`].
+    #[inline]
+    pub fn finalize<'a>(self, out: &'a mut [u8]) -> Result<TpmtHa<'a>, CryptoError> {
         /// Bridge between a digest-specific sized output buffer needed for
-        /// [`Finalize`] and the generic [`TpmiAlgHash::MAX_DIGEST_BYTES`].
-        fn helper<'a, const N: usize>(
-            ctx: impl Finalize<N>,
-            out: &'a mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
+        /// [`Finalize`] and a runtime-checked slice.
+        fn helper<'a, S: Finalize<N>, const N: usize>(
+            ctx: Active<'_, S>,
+            out: &'a mut [u8],
         ) -> Result<&'a [u8; N], CryptoError> {
-            const { assert!(N <= TpmiAlgHash::MAX_DIGEST_BYTES) };
-            let digest: &'a mut [u8; N] = out.first_chunk_mut().unwrap();
+            let digest: &'a mut [u8; N] = out.try_into().map_err(|_| CryptoError::Internal)?;
             ctx.finalize(digest)?;
             Ok(digest)
         }
 
         match self {
             #[cfg(feature = "sha1")]
-            HmacStream::Sha1(ctx) => helper(ctx, out).map(TpmtHa::Sha1),
+            Self::Sha1(ctx) => helper(ctx, out).map(TpmtHa::Sha1),
             #[cfg(feature = "sha256")]
-            HmacStream::Sha256(ctx) => helper(ctx, out).map(TpmtHa::Sha256),
+            Self::Sha256(ctx) => helper(ctx, out).map(TpmtHa::Sha256),
             #[cfg(feature = "sha384")]
-            HmacStream::Sha384(ctx) => helper(ctx, out).map(TpmtHa::Sha384),
+            Self::Sha384(ctx) => helper(ctx, out).map(TpmtHa::Sha384),
             #[cfg(feature = "sha512")]
-            HmacStream::Sha512(ctx) => helper(ctx, out).map(TpmtHa::Sha512),
+            Self::Sha512(ctx) => helper(ctx, out).map(TpmtHa::Sha512),
             #[cfg(feature = "sm3_256")]
-            HmacStream::Sm3_256(ctx) => helper(ctx, out).map(TpmtHa::Sm3_256),
+            Self::Sm3_256(ctx) => helper(ctx, out).map(TpmtHa::Sm3_256),
             #[cfg(feature = "sha3_256")]
-            HmacStream::Sha3_256(ctx) => helper(ctx, out).map(TpmtHa::Sha3_256),
+            Self::Sha3_256(ctx) => helper(ctx, out).map(TpmtHa::Sha3_256),
             #[cfg(feature = "sha3_384")]
-            HmacStream::Sha3_384(ctx) => helper(ctx, out).map(TpmtHa::Sha3_384),
+            Self::Sha3_384(ctx) => helper(ctx, out).map(TpmtHa::Sha3_384),
             #[cfg(feature = "sha3_512")]
-            HmacStream::Sha3_512(ctx) => helper(ctx, out).map(TpmtHa::Sha3_512),
+            Self::Sha3_512(ctx) => helper(ctx, out).map(TpmtHa::Sha3_512),
         }
     }
 }
 
 /// Write a MAC into a caller-provided buffer.
 ///
-/// This is for one-shot HMAC calculation. [`HmacStream`] allows for streaming
-/// HMAC calculation.
-pub fn hmac<'a>(
-    h: &impl Hmac,
+/// This is for one-shot HMAC calculation. [`HmacSlot`] and [`HmacStream`] allow
+/// for streaming HMAC calculation.
+pub fn hmac<'a, H: Hmac>(
     alg: TpmiAlgHash,
     key: &[u8],
     data: &[u8],
     out: &'a mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
 ) -> Result<TpmtHa<'a>, CryptoError> {
-    let mut ctx = HmacStream::new(h, alg, key)?;
-    ctx.update(data)?;
-    ctx.finalize(out)
+    let mut slot = HmacSlot::<H>::new(alg);
+    let mut stream = slot.init(key)?;
+    stream.update(data)?;
+    stream.finalize(&mut out[..alg.digest_size()])
 }

@@ -1,145 +1,182 @@
-use super::{CryptoError, Finalize, SymmetricKey, Update};
+//! Cryptographic CMAC traits and streaming wrappers.
+
+use core::mem::MaybeUninit;
+
+use super::{Active, CryptoError, Finalize, InitFrom, Symmetric, SymmetricKey, Update};
+use crate::AlgSym;
 
 /// Cryptographic CMAC interfaces for TPM implementations and clients.
 ///
-/// This is extremely similar to [`Hash`](super::Hash) and [`Hmac`](super::Hmac)
-/// except that the context constructors (like [`Cmac::aes128`]) take a
-/// fixed-size block cipher key and always produce a 16-byte MAC.
-#[allow(unused_variables)]
-pub trait Cmac {
-    type Aes128Context: Update + Finalize<16>;
-    fn aes128(&self, key: &[u8; 16]) -> Result<Self::Aes128Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Aes192Context: Update + Finalize<16>;
-    fn aes192(&self, key: &[u8; 24]) -> Result<Self::Aes192Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Aes256Context: Update + Finalize<16>;
-    fn aes256(&self, key: &[u8; 32]) -> Result<Self::Aes256Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sm4_128Context: Update + Finalize<16>;
-    fn sm4_128(&self, key: &[u8; 16]) -> Result<Self::Sm4_128Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Camellia128Context: Update + Finalize<16>;
-    fn camellia128(&self, key: &[u8; 16]) -> Result<Self::Camellia128Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Camellia192Context: Update + Finalize<16>;
-    fn camellia192(&self, key: &[u8; 24]) -> Result<Self::Camellia192Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Camellia256Context: Update + Finalize<16>;
-    fn camellia256(&self, key: &[u8; 32]) -> Result<Self::Camellia256Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
+/// This is similar to [`Hash`](super::Hash) and [`Hmac`](super::Hmac) except
+/// that the context types are initialized from an already-initialized
+/// [`Symmetric`] key (such as [`Symmetric::Aes128Key`]) via [`InitFrom`] and
+/// always produce a 16-byte MAC.
+pub trait Cmac: Symmetric {
+    type Aes128Context: InitFrom<Self::Aes128Key> + Update + Finalize<16>;
+    type Aes192Context: InitFrom<Self::Aes192Key> + Update + Finalize<16>;
+    type Aes256Context: InitFrom<Self::Aes256Key> + Update + Finalize<16>;
+    type Sm4_128Context: InitFrom<Self::Sm4_128Key> + Update + Finalize<16>;
+    type Camellia128Context: InitFrom<Self::Camellia128Key> + Update + Finalize<16>;
+    type Camellia192Context: InitFrom<Self::Camellia192Key> + Update + Finalize<16>;
+    type Camellia256Context: InitFrom<Self::Camellia256Key> + Update + Finalize<16>;
 }
 
-/// Dynamic CMAC context wrapping algorithm-specific contexts.
-///
-/// This is for streaming CMAC calculation. One-shot users should use [`cmac`].
+/// Uninitialized stack storage for a dynamic CMAC context.
 ///
 /// While a [`Cmac`] implementation can implement whichever algorithms it
 /// wants, the variants of this enum will only exist if the corresponding
 /// symmetric cipher [crate feature](crate#algorithm-feature-flags) is enabled.
-pub enum CmacStream<C: Cmac> {
+pub enum CmacSlot<C: Cmac> {
     #[cfg(feature = "aes128")]
-    Aes128(C::Aes128Context),
+    Aes128(MaybeUninit<C::Aes128Context>),
     #[cfg(feature = "aes192")]
-    Aes192(C::Aes192Context),
+    Aes192(MaybeUninit<C::Aes192Context>),
     #[cfg(feature = "aes256")]
-    Aes256(C::Aes256Context),
+    Aes256(MaybeUninit<C::Aes256Context>),
     #[cfg(feature = "sm4_128")]
-    Sm4_128(C::Sm4_128Context),
+    Sm4_128(MaybeUninit<C::Sm4_128Context>),
     #[cfg(feature = "camellia128")]
-    Camellia128(C::Camellia128Context),
+    Camellia128(MaybeUninit<C::Camellia128Context>),
     #[cfg(feature = "camellia192")]
-    Camellia192(C::Camellia192Context),
+    Camellia192(MaybeUninit<C::Camellia192Context>),
     #[cfg(feature = "camellia256")]
-    Camellia256(C::Camellia256Context),
+    Camellia256(MaybeUninit<C::Camellia256Context>),
 }
 
-impl<C: Cmac> CmacStream<C> {
-    /// Initializes a CMAC context for `key` using backend `c`.
-    pub fn new(c: &C, key: SymmetricKey<'_>) -> Result<Self, CryptoError> {
-        match key {
+impl<C: Cmac> CmacSlot<C> {
+    /// Reserves an uninitialized stack slot for `alg`.
+    #[inline]
+    pub const fn new(alg: AlgSym) -> Self {
+        match alg {
             #[cfg(feature = "aes128")]
-            SymmetricKey::Aes128(key) => c.aes128(key).map(CmacStream::Aes128),
+            AlgSym::Aes128 => Self::Aes128(MaybeUninit::uninit()),
             #[cfg(feature = "aes192")]
-            SymmetricKey::Aes192(key) => c.aes192(key).map(CmacStream::Aes192),
+            AlgSym::Aes192 => Self::Aes192(MaybeUninit::uninit()),
             #[cfg(feature = "aes256")]
-            SymmetricKey::Aes256(key) => c.aes256(key).map(CmacStream::Aes256),
+            AlgSym::Aes256 => Self::Aes256(MaybeUninit::uninit()),
             #[cfg(feature = "sm4_128")]
-            SymmetricKey::Sm4_128(key) => c.sm4_128(key).map(CmacStream::Sm4_128),
+            AlgSym::Sm4_128 => Self::Sm4_128(MaybeUninit::uninit()),
             #[cfg(feature = "camellia128")]
-            SymmetricKey::Camellia128(key) => c.camellia128(key).map(CmacStream::Camellia128),
+            AlgSym::Camellia128 => Self::Camellia128(MaybeUninit::uninit()),
             #[cfg(feature = "camellia192")]
-            SymmetricKey::Camellia192(key) => c.camellia192(key).map(CmacStream::Camellia192),
+            AlgSym::Camellia192 => Self::Camellia192(MaybeUninit::uninit()),
             #[cfg(feature = "camellia256")]
-            SymmetricKey::Camellia256(key) => c.camellia256(key).map(CmacStream::Camellia256),
+            AlgSym::Camellia256 => Self::Camellia256(MaybeUninit::uninit()),
         }
     }
 
+    /// Initializes this slot with `key` and returns an active [`CmacStream`].
+    #[inline]
+    pub fn init(&mut self, key: &SymmetricKey<'_, C>) -> Result<CmacStream<'_, C>, CryptoError> {
+        Ok(match (self, key) {
+            #[cfg(feature = "aes128")]
+            (Self::Aes128(slot), SymmetricKey::Aes128(key)) => {
+                CmacStream::Aes128(Active::new_from(slot, key.0)?)
+            }
+            #[cfg(feature = "aes192")]
+            (Self::Aes192(slot), SymmetricKey::Aes192(key)) => {
+                CmacStream::Aes192(Active::new_from(slot, key.0)?)
+            }
+            #[cfg(feature = "aes256")]
+            (Self::Aes256(slot), SymmetricKey::Aes256(key)) => {
+                CmacStream::Aes256(Active::new_from(slot, key.0)?)
+            }
+            #[cfg(feature = "sm4_128")]
+            (Self::Sm4_128(slot), SymmetricKey::Sm4_128(key)) => {
+                CmacStream::Sm4_128(Active::new_from(slot, key.0)?)
+            }
+            #[cfg(feature = "camellia128")]
+            (Self::Camellia128(slot), SymmetricKey::Camellia128(key)) => {
+                CmacStream::Camellia128(Active::new_from(slot, key.0)?)
+            }
+            #[cfg(feature = "camellia192")]
+            (Self::Camellia192(slot), SymmetricKey::Camellia192(key)) => {
+                CmacStream::Camellia192(Active::new_from(slot, key.0)?)
+            }
+            #[cfg(feature = "camellia256")]
+            (Self::Camellia256(slot), SymmetricKey::Camellia256(key)) => {
+                CmacStream::Camellia256(Active::new_from(slot, key.0)?)
+            }
+            #[allow(unreachable_patterns)]
+            _ => return Err(CryptoError::Internal),
+        })
+    }
+}
+
+/// Dynamic CMAC stream wrapping an initialized [`CmacSlot`].
+pub enum CmacStream<'a, C: Cmac> {
+    #[cfg(feature = "aes128")]
+    Aes128(Active<'a, C::Aes128Context>),
+    #[cfg(feature = "aes192")]
+    Aes192(Active<'a, C::Aes192Context>),
+    #[cfg(feature = "aes256")]
+    Aes256(Active<'a, C::Aes256Context>),
+    #[cfg(feature = "sm4_128")]
+    Sm4_128(Active<'a, C::Sm4_128Context>),
+    #[cfg(feature = "camellia128")]
+    Camellia128(Active<'a, C::Camellia128Context>),
+    #[cfg(feature = "camellia192")]
+    Camellia192(Active<'a, C::Camellia192Context>),
+    #[cfg(feature = "camellia256")]
+    Camellia256(Active<'a, C::Camellia256Context>),
+}
+
+impl<C: Cmac> CmacStream<'_, C> {
     /// Feeds `data` into the active CMAC stream.
+    #[inline]
     pub fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
         match self {
             #[cfg(feature = "aes128")]
-            CmacStream::Aes128(ctx) => ctx.update(data),
+            Self::Aes128(ctx) => ctx.update(data),
             #[cfg(feature = "aes192")]
-            CmacStream::Aes192(ctx) => ctx.update(data),
+            Self::Aes192(ctx) => ctx.update(data),
             #[cfg(feature = "aes256")]
-            CmacStream::Aes256(ctx) => ctx.update(data),
+            Self::Aes256(ctx) => ctx.update(data),
             #[cfg(feature = "sm4_128")]
-            CmacStream::Sm4_128(ctx) => ctx.update(data),
+            Self::Sm4_128(ctx) => ctx.update(data),
             #[cfg(feature = "camellia128")]
-            CmacStream::Camellia128(ctx) => ctx.update(data),
+            Self::Camellia128(ctx) => ctx.update(data),
             #[cfg(feature = "camellia192")]
-            CmacStream::Camellia192(ctx) => ctx.update(data),
+            Self::Camellia192(ctx) => ctx.update(data),
             #[cfg(feature = "camellia256")]
-            CmacStream::Camellia256(ctx) => ctx.update(data),
+            Self::Camellia256(ctx) => ctx.update(data),
         }
     }
 
-    /// Finalizes the MAC into `out`.
-    pub fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
+    /// Finalizes the MAC into `out` and cleans up the stream.
+    #[inline]
+    pub fn finalize(self, out: &mut [u8]) -> Result<(), CryptoError> {
+        let out: &mut [u8; 16] = out.try_into().map_err(|_| CryptoError::Internal)?;
         match self {
             #[cfg(feature = "aes128")]
-            CmacStream::Aes128(ctx) => ctx.finalize(out),
+            Self::Aes128(ctx) => ctx.finalize(out),
             #[cfg(feature = "aes192")]
-            CmacStream::Aes192(ctx) => ctx.finalize(out),
+            Self::Aes192(ctx) => ctx.finalize(out),
             #[cfg(feature = "aes256")]
-            CmacStream::Aes256(ctx) => ctx.finalize(out),
+            Self::Aes256(ctx) => ctx.finalize(out),
             #[cfg(feature = "sm4_128")]
-            CmacStream::Sm4_128(ctx) => ctx.finalize(out),
+            Self::Sm4_128(ctx) => ctx.finalize(out),
             #[cfg(feature = "camellia128")]
-            CmacStream::Camellia128(ctx) => ctx.finalize(out),
+            Self::Camellia128(ctx) => ctx.finalize(out),
             #[cfg(feature = "camellia192")]
-            CmacStream::Camellia192(ctx) => ctx.finalize(out),
+            Self::Camellia192(ctx) => ctx.finalize(out),
             #[cfg(feature = "camellia256")]
-            CmacStream::Camellia256(ctx) => ctx.finalize(out),
+            Self::Camellia256(ctx) => ctx.finalize(out),
         }
     }
 }
 
 /// Write a CMAC into a caller-provided buffer.
 ///
-/// This is for one-shot CMAC calculation. [`CmacStream`] allows for streaming
-/// CMAC calculation.
-pub fn cmac(
-    c: &impl Cmac,
-    key: SymmetricKey<'_>,
+/// This is for one-shot CMAC calculation. [`CmacSlot`] and [`CmacStream`] allow
+/// for streaming CMAC calculation.
+pub fn cmac<C: Cmac>(
+    key: &SymmetricKey<'_, C>,
     data: &[u8],
-    out: &mut [u8; 16],
+    out: &mut [u8; AlgSym::BLOCK_SIZE],
 ) -> Result<(), CryptoError> {
-    let mut ctx = CmacStream::new(c, key)?;
-    ctx.update(data)?;
-    ctx.finalize(out)
+    let mut slot = CmacSlot::<C>::new(key.alg());
+    let mut stream = slot.init(key)?;
+    stream.update(data)?;
+    stream.finalize(out)
 }
