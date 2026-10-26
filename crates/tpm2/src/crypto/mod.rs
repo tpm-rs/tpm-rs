@@ -22,28 +22,42 @@
 //! ## Stateful `enum`s and RNG
 //!
 //! When cryptographic context must persist across commands, this module also
-//! provides stateful dispatch enums (and [`Rng`]) with methods that use/mutate
-//! the state:
+//! provides stateful dispatch enums with methods that use/mutate the state:
 //! - Hashing: [`HashContext`]
 //! - HMACs: [`HmacContext`]
 //! - Encryption and Decryption: [`SymmetricContext`]
 //! - CMACs: [`CmacContext`]
 //! - Random number generation: [`Rng`] (created via [`Random::from_entropy`] or
 //!   [`Random::from_seed`])
+//! - RSA: [`RsaPublicKey`] (`encrypt`, `verify`) and [`RsaPrivateKey`]
+//!   (`decrypt`, `sign`)
+//! - ECC: [`EccPublicKey`] (`verify`) and [`EccPrivateKey`] (`ecdh`, `sign`)
 //!
 //! For stack usage and code size guidance, see the
 //! [backend optimization notes](backend#optimization-notes).
 
 #[cfg(feature = "cmac")]
 mod cmac;
+#[cfg(feature = "ecc")]
+mod ecc;
 mod hash;
 mod hmac;
 mod rng;
+#[cfg(feature = "rsa")]
+mod rsa;
+#[cfg(any(feature = "rsa", feature = "ecc"))]
+mod signing;
 mod symmetric;
 
 pub mod backend;
 #[cfg(feature = "cmac")]
 pub use cmac::*;
+#[cfg(feature = "ecc")]
+pub use ecc::*;
+#[cfg(feature = "rsa")]
+pub use rsa::*;
+#[cfg(any(feature = "rsa", feature = "ecc"))]
+pub use signing::*;
 pub use {hash::*, hmac::*, rng::*, symmetric::*};
 
 /// Common error type for all cryptographic operations.
@@ -54,10 +68,12 @@ pub use {hash::*, hmac::*, rng::*, symmetric::*};
 ///
 /// `CryptoError` is not used to reject invalid caller input that a TPM should
 /// report with a normal response code. Such checks return an [`Option`] or
-/// [`bool`] instead (e.g. [`SymmetricKey::new`] or [`CipherInput::new`]).
+/// [`bool`] instead (e.g. [`SymmetricKey::new`], an off-curve ECC point, invalid
+/// RSA padding, or a failed signature verification).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CryptoError {
-    /// The requested algorithm, mode, or key size is unsupported.
+    /// The requested algorithm, mode, scheme, exponent, or key size is
+    /// unsupported.
     Unsupported,
     /// An internal error, which puts the TPM into failure mode.
     Internal,
@@ -82,10 +98,33 @@ impl core::error::Error for CryptoError {}
 /// trait. Generic code should use a `C: Crypto` bound rather than naming the
 /// backend traits directly.
 pub trait Crypto:
-    Random + backend::Hash + backend::Hmac + backend::Cmac + backend::Symmetric
+    Random
+    + backend::Hash
+    + backend::Hmac
+    + backend::Cmac
+    + backend::Symmetric
+    + backend::Rsa
+    + backend::Ecc
 {
     /// Returns `a == b`, in time independent of the slice contents.
     fn ct_eq(a: &[u8], b: &[u8]) -> bool;
+}
+
+// Internal helpers
+
+/// Left-pads a non-empty big-endian integer slice (`1 <= src.len() <= N`) with
+/// `0x00` bytes into an `N`-byte array, returning `None` if `src` is empty or
+/// longer than `N`.
+#[cfg(any(feature = "rsa", feature = "ecc"))]
+// Unused if `ecc` is enabled without `rsa` or any Weierstrass curve.
+#[cfg_attr(not(feature = "rsa"), allow(dead_code))]
+pub(crate) fn left_pad_be<const N: usize>(src: &[u8]) -> Option<[u8; N]> {
+    if src.is_empty() || src.len() > N {
+        return None;
+    }
+    let mut out = [0u8; N];
+    out[N - src.len()..].copy_from_slice(src);
+    Some(out)
 }
 
 // Internal helper macros
@@ -157,25 +196,46 @@ macro_rules! match_sym_alg {
     };
 }
 
-// Lets the submodules (declared above) import these macros by path.
+/// [`match_variants`] over the [`TpmiRsaKeyBits`](crate::TpmiRsaKeyBits)
+/// variants.
+#[cfg(feature = "rsa")]
+macro_rules! match_rsa_bits {
+    ($($t:tt)*) => {
+        $crate::crypto::match_variants!([
+            #[cfg(feature = "rsa1024")] Rsa1024,
+            #[cfg(feature = "rsa2048")] Rsa2048,
+            #[cfg(feature = "rsa3072")] Rsa3072,
+            #[cfg(feature = "rsa4096")] Rsa4096,
+        ] $($t)*)
+    };
+}
+#[cfg(feature = "rsa")]
+use match_rsa_bits;
+
+/// [`match_variants`] over the Weierstrass [`TpmEccCurve`](crate::TpmEccCurve)
+/// variants.
+#[cfg(feature = "ecc")]
+macro_rules! match_ecc_curve {
+    ($($t:tt)*) => {
+        $crate::crypto::match_variants!([
+            #[cfg(feature = "nist_p192")] NistP192,
+            #[cfg(feature = "nist_p224")] NistP224,
+            #[cfg(feature = "nist_p256")] NistP256,
+            #[cfg(feature = "nist_p384")] NistP384,
+            #[cfg(feature = "nist_p521")] NistP521,
+            #[cfg(feature = "bn_p256")] BNP256,
+            #[cfg(feature = "bn_p638")] BNP638,
+            #[cfg(feature = "sm2_p256")] SM2P256,
+            #[cfg(feature = "bp_p256_r1")] BpP256R1,
+            #[cfg(feature = "bp_p384_r1")] BpP384R1,
+            #[cfg(feature = "bp_p512_r1")] BpP512R1,
+        ] $($t)*)
+    };
+}
+#[cfg(feature = "ecc")]
+use match_ecc_curve;
+
 use {match_hash_alg, match_sym_alg, match_variants};
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_crypto_error_display_and_error() {
-        fn assert_error<T: core::error::Error>(_: &T) {}
-        assert_error(&CryptoError::Unsupported);
-        assert_error(&CryptoError::Internal);
-        assert_eq!(
-            format!("{}", CryptoError::Unsupported),
-            "unsupported cryptographic algorithm, mode, or key size"
-        );
-        assert_eq!(
-            format!("{}", CryptoError::Internal),
-            "internal cryptographic error"
-        );
-    }
-}
+mod tests;
