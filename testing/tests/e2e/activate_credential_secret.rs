@@ -138,3 +138,25 @@ fn sequence_object_protector_is_type_error() {
         rc_h(TpmRc::TYPE, 2)
     );
 }
+
+/// A sequence object as the activated object (`activateHandle`) is rejected
+/// with `TPM_RC_TYPE` on `activateHandle`, after the protector key's checks and
+/// before `secret` is decrypted. TPM 2.0 Part 3, TPM2_ActivateCredential: "This
+/// command enables the association of a credential with an object in a way
+/// that ensures that the TPM has validated the parameters of the credentialed
+/// object."; the specification gives no response code for a sequence object,
+/// so tpm-rs follows `mstpm20` version 185 ("Cannot activate credential of
+/// sequence object"; the other references are patched alike,
+/// `bug-fix-activate-credential-sequence-object.patch`).
+#[test]
+fn sequence_object_activated_is_type_error() {
+    let mut tpm = Tpm::new();
+    let srk = owner_srk(&mut tpm);
+    let rsp = tpm.send_command(0, &HASH_SEQUENCE_START);
+    assert_eq!(rc_of(&rsp), 0, "HashSequenceStart: {rsp:02x?}");
+    let sequence = Handle(u32::from_be_bytes(rsp[10..14].try_into().unwrap()));
+    assert_eq!(
+        activate_credential_rc(&mut tpm, sequence, srk, &[0x5a; 4]),
+        rc_h(TpmRc::TYPE, 1)
+    );
+}

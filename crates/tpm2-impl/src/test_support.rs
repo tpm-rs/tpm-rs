@@ -217,6 +217,7 @@ impl Asymmetric for FakeCrypto {
         &self,
         _sign_alg: Alg,
         _public_key: &[u8],
+        _rsa_exponent: u32,
         _digest: tpm2::TpmtHa<'_>,
         _signature: &[u8],
     ) -> Result<bool, CryptoError> {
@@ -227,6 +228,7 @@ impl Asymmetric for FakeCrypto {
         _scheme: Alg,
         _hash_alg: Alg,
         _public_key: &[u8],
+        _rsa_exponent: u32,
         _data: &[u8],
         _ciphertext: &mut [u8],
         _label: &[u8],

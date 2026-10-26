@@ -1,0 +1,46 @@
+pcr-extended-locality: PCR reset and extend reject extended localities
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 1, "Locality"): "Localities 0 through 4 are
+represented as bits in the byte with 0000 0001 representing locality 0 and
+0001 0000 representing locality 4. [...] A second representation is for
+localities above 4. These are called *extended localities*. For extended
+localities, the locality byte is an integer value representing the locality.
+[...] The range of extended localities is 32-255."
+
+PCRIsResetAllowed() and PCRIsExtendAllowed() compute the bit of the command
+locality as `1 << locality` and test it against the PCR's reset/extend
+locality bitmap (localities 0-4). For an extended locality the shift is
+undefined behavior (on x86 it shifts by locality % 32), so e.g. locality 67
+acts as locality 3 and locality 68 as locality 4, and PCRs restricted to those
+localities can be extended or reset from an extended locality. An extended
+locality is not a member of the bitmap; the patch rejects it (TPM_RC_LOCALITY),
+as tpm-rs does. Found by differential fuzzing.
+diff --git a/src/PCR.c b/src/PCR.c
+--- a/src/PCR.c
++++ b/src/PCR.c
+@@ -712,6 +712,11 @@
+ 
+     // Check for the locality
+     commandLocality = _plat__LocalityGet();
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // an extended locality (32-255) is an integer, not a bit of the PCR's
++    // locality bitmap (localities 0-4); shifting by it is undefined.
++    if(commandLocality > 4)
++        return FALSE;
+ 
+ #ifdef DRTM_PCR
+     // For a TPM that does DRTM, Reset is not allowed at locality 4
+@@ -762,6 +767,11 @@
+ 
+     // Check for the locality
+     commandLocality = _plat__LocalityGet();
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // an extended locality (32-255) is an integer, not a bit of the PCR's
++    // locality bitmap (localities 0-4); shifting by it is undefined.
++    if(commandLocality > 4)
++        return FALSE;
+     localityBits    = localityBits << commandLocality;
+     if((localityBits & currentPcrAttributes.extendLocality) == 0)
+ 	return FALSE;

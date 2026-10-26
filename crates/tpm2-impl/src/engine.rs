@@ -313,6 +313,25 @@ pub struct GlobalState {
     pub startup_locality_3: bool,
     /// Flag indicating if Dictionary Attack (DA) mitigation logic is currently active.
     pub da_used: bool,
+    /// Power was lost and no `TPM2_Startup` has completed since (`g_powerWasLost` of the TCG
+    /// reference): kept across `_TPM_Init` ([`TpmEngine::reset`]), set by the platform on
+    /// power on and cleared by a successful `TPM2_Startup`. While it is set, `_TPM_Init`
+    /// re-enables NV (`NvPowerOn()`).
+    pub power_lost_since_startup: bool,
+    /// The platform timer was reset by a power on since the last time epoch was started
+    /// (`s_timerStopped` of the TCG reference platform, set by `_plat__TimerReset()`): kept across
+    /// `_TPM_Init` ([`TpmEngine::reset`]) and consumed by the time update of the next
+    /// `TPM2_Startup`, which then starts a new time epoch (`TimeUpdate()`:
+    /// `if(_plat__TimerWasStopped()) { TimeNewEpoch(); }`).
+    pub timer_stopped: bool,
+    /// The platform timer was reset by a power on since the last `TPM2_Startup` (`s_timerReset`
+    /// of the TCG reference platform, consumed by `DAStartup()` through `_plat__TimerWasReset()`):
+    /// only then are the dictionary-attack timers rebased onto the new *Time*.
+    pub timer_was_reset: bool,
+    /// *Time* at the last `TPM2_Shutdown` (`go.time` of the TCG reference: `go.time = g_time;`),
+    /// by which `TPM2_Startup` after an orderly shutdown and a power cycle rebases the
+    /// dictionary-attack timers.
+    pub shutdown_time_ms: u64,
     /// Tracks the identifier for the object context.
     pub object_context_id: u32,
     /// Flag indicating if the TPM detected a power loss without an orderly shutdown.
@@ -481,8 +500,8 @@ pub struct GlobalState {
     /// platform `Clock.c`); [`CLOCK_NOMINAL`] means no adjustment. Changed by
     /// `TPM2_ClockRateAdjust` within `CLOCK_NOMINAL ± CLOCK_ADJUST_LIMIT`.
     pub clock_adjust_rate: u32,
-    /// Sub-millisecond remainder (in units of `1 / CLOCK_NOMINAL` ms) carried between rate-adjusted
-    /// time updates so that no time is lost to rounding.
+    /// Platform milliseconds not yet consumed by rate-adjusted time updates
+    /// (`timeNow - s_realTimePrevious` in the C platform `_plat__TimerRead()`).
     pub clock_adjust_remainder: u64,
     /// PCR state.
     pub pcrs: PcrState,
@@ -725,6 +744,10 @@ impl Default for GlobalState {
             drtm_handle: Handle::RH_UNASSIGNED.0,
             startup_locality_3: false,
             da_used: false,
+            power_lost_since_startup: true,
+            timer_stopped: true,
+            timer_was_reset: true,
+            shutdown_time_ms: 0,
             object_context_id: 0,
             power_was_lost: false,
             disable_clear: false,
@@ -946,9 +969,8 @@ impl GlobalState {
         self.exclusive_audit_session = None;
         self.in_shadow_execution = false;
         self.clock_rate_adjust = tpm2::TpmClockAdjust::NoChange;
-        // The platform clock-rate adjustment is volatile (`_plat__TimerReset`).
-        self.clock_adjust_rate = CLOCK_NOMINAL;
-        self.clock_adjust_remainder = 0;
+        // *Time* and the platform clock-rate adjustment are kept: only a power on resets them
+        // (`_plat__TimerReset()`, [`TpmEngine::platform_timer_reset`]).
         // The persistent command audit state is reloaded from NV by `restore_hierarchy_auths`;
         // these manufacture defaults only remain if NV holds no audit record.
         self.audit_hash_alg = tpm2::Alg::SHA512.id();
@@ -1591,8 +1613,16 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     }
 
     /// Sets the locality of the following commands (`_plat__LocalityGet`).
+    ///
+    /// TPM 2.0 Part 1, "Locality": "Locality 5 through 31 cannot be selected." The
+    /// specification leaves to the platform what a request for such a locality does; like the
+    /// TCG reference platform (`_plat__LocalitySet()`), it selects locality 0.
     pub fn set_locality(&mut self, locality: u8) {
-        self.state.locality = locality;
+        self.state.locality = if (5..32).contains(&locality) {
+            0
+        } else {
+            locality
+        };
     }
 
     /// Sets whether NV memory is available to the TPM (`_plat__SetNvAvail` /
@@ -1638,6 +1668,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         // `CryptInit()` re-seeds the platform entropy source.
         #[cfg(feature = "reference-rng")]
         self.crypt_rand_init();
+        self.time_power_on();
         self.state.reset_in_place();
         self.restore_hierarchy_auths();
         self.restore_persistent_state();
@@ -2410,7 +2441,55 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// (`_plat__TimerRead()` in the C platform `Clock.c`). When `Clock` crosses a multiple of
     /// `2^NV_CLOCK_UPDATE_INTERVAL` ms it is written to NV and `clockSafe` is SET
     /// (`TimeClockUpdate()`).
-    fn time_update(&mut self) {
+    pub(crate) fn time_update(&mut self) {
+        // `if(_plat__TimerWasStopped()) { TimeNewEpoch(); }`: `gp.timeEpoch++;
+        // NV_SYNC_PERSISTENT(timeEpoch);`.
+        if self.state.timer_stopped {
+            self.state.timer_stopped = false;
+            self.state.time_epoch = self.state.time_epoch.wrapping_add(1);
+            let _ = self
+                .platform
+                .storage
+                .write_nv(24, &self.state.time_epoch.to_be_bytes());
+        }
+        let elapsed_ms = self.advance_time();
+        let old_clock = self.get_clock();
+        self.state.tpm_time_ms = self.state.tpm_time_ms.saturating_add(elapsed_ms);
+        let new_clock = self.get_clock();
+        self.clock_update(old_clock, new_clock);
+
+        self.da_self_heal();
+    }
+
+    /// A power on (`_plat__TimerReset()` of the TCG reference platform): *Time* restarts at 0,
+    /// "the time in milliseconds that the circuit providing *Time* has been powered" (TPM 2.0
+    /// Part 1, "Time"), `Clock` keeps its value, the clock-rate adjustment returns to nominal,
+    /// and the timer records that it was stopped (a new time epoch, see
+    /// [`GlobalState::timer_stopped`]) and reset (see [`GlobalState::timer_was_reset`]).
+    pub fn platform_timer_reset(&mut self) {
+        self.state.clock_offset = self
+            .state
+            .clock_offset
+            .wrapping_add(self.state.tpm_time_ms as i64);
+        self.state.tpm_time_ms = 0;
+        self.state.last_timer_read_ms = Some(self.platform.timer.timer_read());
+        self.state.clock_adjust_rate = CLOCK_NOMINAL;
+        self.state.clock_adjust_remainder = 0;
+        self.state.timer_stopped = true;
+        self.state.timer_was_reset = true;
+    }
+
+    /// `TimePowerOn()` at `_TPM_Init` (`g_time = _plat__TimerRead();`): *Time* catches up with the
+    /// platform timer, while `Clock` (`go.clock`) does not advance by that interval.
+    fn time_power_on(&mut self) {
+        let elapsed_ms = self.advance_time();
+        self.state.tpm_time_ms = self.state.tpm_time_ms.saturating_add(elapsed_ms);
+        self.state.clock_offset = self.state.clock_offset.wrapping_sub(elapsed_ms as i64);
+    }
+
+    /// Reads the platform timer and returns the rate-adjusted ms elapsed since the last read
+    /// (`_plat__TimerRead()`), without adding them to *Time*.
+    fn advance_time(&mut self) -> u64 {
         let raw_timer_ms = self.platform.timer.timer_read();
         let elapsed_raw_ms = if let Some(prev_raw) = self.state.last_timer_read_ms {
             raw_timer_ms.saturating_sub(prev_raw)
@@ -2419,19 +2498,18 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         };
         self.state.last_timer_read_ms = Some(raw_timer_ms);
 
-        // adjusted = elapsed * CLOCK_NOMINAL / adjustRate, carrying the remainder.
+        // As the C platform (`_plat__TimerRead()`): `adjustedTimeDiff = timeDiff * CLOCK_NOMINAL /
+        // adjustRate` ms are added to Time, and only the platform time that maps back to them
+        // (`adjustedTimeDiff * adjustRate / CLOCK_NOMINAL`) is consumed; the rest of `timeDiff`
+        // (in platform ms) carries over and is scaled with the rate of the next update.
         let rate = u128::from(self.state.clock_adjust_rate.max(1));
-        let scaled = u128::from(elapsed_raw_ms) * u128::from(CLOCK_NOMINAL)
-            + u128::from(self.state.clock_adjust_remainder);
-        let elapsed_ms = u64::try_from(scaled / rate).unwrap_or(u64::MAX);
-        self.state.clock_adjust_remainder = (scaled % rate) as u64;
-
-        let old_clock = self.get_clock();
-        self.state.tpm_time_ms = self.state.tpm_time_ms.saturating_add(elapsed_ms);
-        let new_clock = self.get_clock();
-        self.clock_update(old_clock, new_clock);
-
-        self.da_self_heal();
+        let time_diff = u128::from(elapsed_raw_ms) + u128::from(self.state.clock_adjust_remainder);
+        let adjusted = time_diff * u128::from(CLOCK_NOMINAL) / rate;
+        let readjusted = adjusted * rate / u128::from(CLOCK_NOMINAL);
+        let elapsed_ms = u64::try_from(adjusted).unwrap_or(u64::MAX);
+        self.state.clock_adjust_remainder =
+            u64::try_from(time_diff.saturating_sub(readjusted)).unwrap_or(u64::MAX);
+        elapsed_ms
     }
 
     /// Records a change of `Clock` from `old_clock` to `new_clock` (`TimeClockUpdate()` in
@@ -2503,6 +2581,15 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         // The temporary object slots of the persistent objects referenced by the previous command
         // are released when it ends (`ObjectCleanupEvict()` in `ExecCommand.c`).
         self.state.command_persistent_objects = 0;
+        // `TimeUpdateToCurrent()` (`Time.c`): Time/Clock only advance, and `DASelfHeal()` only
+        // runs, once TPM2_Startup has completed and while NV is available. Otherwise the elapsed
+        // platform time is deferred (the last timer sample is kept) until the next update. As in
+        // the C reference `ExecuteCommand()`, this happens for every command before its header is
+        // parsed, so even a rejected command (e.g. an unimplemented command code) advances Clock
+        // and records it in NV when it crosses an `NV_CLOCK_UPDATE_INTERVAL` boundary.
+        if self.state.initialized && self.state.nv_available {
+            self.time_update();
+        }
         // Any command through this function unceremoniously ends an active DRTM event sequence
         // (`ObjectTerminateEvent()` in `ExecCommand.c`).
         if self.state.drtm_handle != Handle::RH_UNASSIGNED.0 {
@@ -2542,13 +2629,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
         if !is_command_supported(cc) {
             return Err(TpmRc::COMMAND_CODE);
-        }
-
-        // `TimeUpdateToCurrent()` (`Time.c`): Time/Clock only advance, and `DASelfHeal()` only
-        // runs, once TPM2_Startup has completed and while NV is available. Otherwise the elapsed
-        // platform time is deferred (the last timer sample is kept) until the next update.
-        if self.state.initialized && self.state.nv_available {
-            self.time_update();
         }
 
         // `ExecCommand.c`: only `TPM2_Startup` is accepted before the TPM is started, and it is
@@ -3504,6 +3584,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         if !attrs.contains(tpm2::TpmaNv::WRITTEN) {
             return;
         }
+        // The counter of a non-orderly index lives in NV: while NV is unavailable it cannot be
+        // updated, and the update is dropped (TCG reference: `NvWriteUINT64Data()` ->
+        // `NvConditionallyWrite()` writes only while `g_NvStatus` is `TPM_RC_SUCCESS`, and the
+        // authorization result stands).
+        if !attrs.contains(tpm2::TpmaNv::ORDERLY) && !self.state.nv_available {
+            return;
+        }
         let Some((count, limit)) = self.read_nv_pin(handle, data_offset) else {
             return;
         };
@@ -3534,19 +3621,25 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// Shutdown": an NV flag "indicating that access to a DA protected object occurred");
     /// `lockoutAuth` has its own protection (`lockoutRecovery`), so its use does not set it, as
     /// in the reference `CheckLockedOut()`.
+    ///
+    /// The flag must reach NV before the DA-protected authorization is checked (TPM 2.0 Part 1,
+    /// "Non-orderly Shutdown": "An alternative implementation sets an NV flag indicating that
+    /// access to a DA protected object occurred during this boot cycle. After a non-orderly
+    /// restart, if the flag is set, the TPM increments *failedTries* and clears the flag."), so
+    /// while NV is unavailable the first such use in a power cycle fails with
+    /// `TPM_RC_NV_UNAVAILABLE`, as in the reference (`CheckLockedOut()`, `USE_DA_USED`).
     fn check_da_lockout(&mut self, lockout_auth: bool) -> Result<(), TpmRc> {
         self.check_locked_out(lockout_auth)?;
         if !lockout_auth && !self.state.da_used {
-            self.state.da_used = true;
-            if self.state.nv_available {
-                self.state.orderly_state = 0xFFFE;
-                let _ = self
-                    .platform
-                    .storage
-                    .write_nv(4, &self.state.orderly_state.to_be_bytes());
-            } else {
-                self.state.clear_orderly = true;
+            if !self.state.nv_available {
+                return Err(TpmRc::NV_UNAVAILABLE);
             }
+            self.state.da_used = true;
+            self.state.orderly_state = 0xFFFE;
+            let _ = self
+                .platform
+                .storage
+                .write_nv(4, &self.state.orderly_state.to_be_bytes());
         }
         Ok(())
     }
@@ -4556,6 +4649,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             let continue_session = (resp_attrs & 1) != 0;
             let (now_ms, time_epoch) = (self.state.tpm_time_ms, self.state.time_epoch);
             if let Some(session_state) = self.state.session_mut(session_handle) {
+                // Only a session with the `audit` attribute in this command extends its audit
+                // digest (C `UpdateAuditSessionStatus()`/`Audit()`: `s_auditSessionIndex`); a
+                // cpHash left by an earlier command that failed after its authorization was
+                // checked must not be used (and does not make the session an audit session).
+                if auth.session_attributes.0 & 0x80 == 0 {
+                    session_state.audit_cp_hash_len = 0;
+                }
                 if session_state.audit_cp_hash_len > 0 {
                     let mut extend_buf = [0u8; 192];
                     let d_len = session_state.audit_digest_len;
@@ -4957,6 +5057,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             let continue_session = (resp_attrs & 1) != 0;
             let (now_ms, time_epoch) = (self.state.tpm_time_ms, self.state.time_epoch);
             if let Some(session_state) = self.state.session_mut(session_handle) {
+                // Only a session with the `audit` attribute in this command extends its audit
+                // digest (C `UpdateAuditSessionStatus()`/`Audit()`: `s_auditSessionIndex`); a
+                // cpHash left by an earlier command that failed after its authorization was
+                // checked must not be used (and does not make the session an audit session).
+                if auth.session_attributes.0 & 0x80 == 0 {
+                    session_state.audit_cp_hash_len = 0;
+                }
                 if session_state.audit_cp_hash_len > 0 {
                     let mut extend_buf = [0u8; 192];
                     let d_len = session_state.audit_digest_len;

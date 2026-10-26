@@ -768,6 +768,7 @@ fn test_rsa_oaep_encrypt_decrypt() {
             Alg::OAEP,
             Alg::SHA256,
             &public_key[..pub_len],
+            0,
             plaintext,
             &mut ciphertext,
             &[],
@@ -829,6 +830,7 @@ fn test_rsa_pss_sign_verify() {
     let res = provider.verify_inner(
         Alg::RSAPSS,
         &public_key[..pub_len],
+        0,
         TpmtHa::Sha256(&digest),
         &signature[..sig_len],
     );
@@ -886,6 +888,7 @@ fn test_rsa_pkcs1v15_sign_verify() {
     let res = provider.verify_inner(
         Alg::RSASSA,
         &public_key[..pub_len],
+        0,
         TpmtHa::Sha256(&digest),
         &signature[..sig_len],
     );
@@ -1060,6 +1063,7 @@ fn test_rsa_pss_verify_corrupted() {
     let res = provider.verify_inner(
         Alg::RSAPSS,
         &public_key,
+        0,
         TpmtHa::Sha256(&digest),
         &signature,
     );
@@ -1170,6 +1174,7 @@ fn test_ecdsa_sign_verify() {
         provider.verify_inner(
             Alg::ECDSA,
             &ecc_pub[..ecc_pub_len],
+            0,
             TpmtHa::Sha256(&digest),
             &signature[..sig_len],
         ),
@@ -1311,6 +1316,7 @@ fn test_ecdsa_verify_corrupted_signature() {
     let res = provider.verify_inner(
         Alg::ECDSA,
         &ecc_pub[..ecc_pub_len],
+        0,
         TpmtHa::Sha256(&digest),
         &signature[..sig_len],
     );
@@ -1365,6 +1371,7 @@ fn test_ecdsa_verify_mismatched_key() {
     let res = provider.verify_inner(
         Alg::ECDSA,
         &ecc_pub_b[..ecc_pub_len_a],
+        0,
         TpmtHa::Sha256(&digest),
         &signature[..sig_len],
     );
@@ -1604,6 +1611,7 @@ fn test_combo_ecc_keygen_sign_verify() {
         provider.verify_inner(
             Alg::ECDSA,
             &public_key[..pub_len],
+            0,
             TpmtHa::Sha256(&digest_bytes),
             &signature[..sig_len],
         ),

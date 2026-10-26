@@ -26,7 +26,7 @@ fn test_time_epoch_monotonic_persistence_and_resume_preservation() {
 
     assert_eq!(tpm.state.time_epoch, 0);
 
-    // 1. Cold boot TPM Reset -> Startup(CLEAR) increments time_epoch to 1 and persists to NV
+    // 1. Cold boot (power on) TPM Reset -> Startup(CLEAR) increments time_epoch to 1 and persists to NV
     let startup_clear = hex!("8001 0000000c 00000144 0000");
     let mut resp = [0u8; 256];
     tpm.execute_command_separate(&startup_clear[..], &mut resp[..]);
@@ -51,7 +51,15 @@ fn test_time_epoch_monotonic_persistence_and_resume_preservation() {
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
     assert_eq!(tpm.state.time_epoch, 1);
 
-    // 3. Unorderly power cycle / TPM Reset -> Startup(CLEAR) increments time_epoch to 2 and persists
+    // 3. A TPM Reset without a power loss keeps time_epoch (Time keeps running).
+    tpm.state.initialized = false;
+    tpm.execute_command_separate(&startup_clear[..], &mut resp[..]);
+    assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
+    assert_eq!(tpm.state.time_epoch, 1);
+
+    // 4. Unorderly power cycle (the platform timer is reset) -> Startup(CLEAR) increments
+    // time_epoch to 2 and persists it
+    tpm.platform_timer_reset();
     tpm.state.initialized = false;
     tpm.execute_command_separate(&startup_clear[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);

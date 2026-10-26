@@ -208,7 +208,8 @@ fn test_da_timers_preserved_across_orderly_shutdown_and_startup() {
     tpm.execute_command_separate(&shutdown_req[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
 
-    // Simulate power cycle and Startup(SU_STATE)
+    // Simulate power cycle (the platform timer is reset) and Startup(SU_STATE)
+    tpm.platform_timer_reset();
     tpm.state.initialized = false;
     let startup_req = hex!("8001 0000000c 00000144 0001");
     tpm.execute_command_separate(&startup_req[..], &mut resp[..]);

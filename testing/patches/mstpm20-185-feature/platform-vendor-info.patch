@@ -1,0 +1,45 @@
+vendor-info: report tpm-rs's vendor strings, firmware version and spec levels
+
+Classification: platform setting.
+
+TPM_PT_MANUFACTURER, TPM_PT_VENDOR_STRING_x, TPM_PT_FIRMWARE_VERSION_x, the
+TPM specification version/errata and the platform-specification
+family/level/revision/year/day are implementation-defined; the reference
+reports tpm-rs's values (version 185 already reports TPM_PT_YEAR = 0 and
+TPM_PT_ERRATA = 0).
+diff --git a/TPMCmd/Platform/src/VendorInfo.c b/TPMCmd/Platform/src/VendorInfo.c
+--- a/TPMCmd/Platform/src/VendorInfo.c
++++ b/TPMCmd/Platform/src/VendorInfo.c
+@@ -8,13 +8,13 @@
+ #include "Platform.h"
+ 
+ // In this sample platform, these are compile time constants, but are not required to be.
+-#define MANUFACTURER    "XYZ "
+-#define VENDOR_STRING_1 "xCG "
+-#define VENDOR_STRING_2 "fTPM"
++#define MANUFACTURER    "GOOG"
++#define VENDOR_STRING_1 "TPM-"
++#define VENDOR_STRING_2 "RUST"
+ #define VENDOR_STRING_3 "\0\0\0\0"
+ #define VENDOR_STRING_4 "\0\0\0\0"
+-#define FIRMWARE_V1     (0x20240125)
+-#define FIRMWARE_V2     (0x00120000)
++#define FIRMWARE_V1     (0x00000001)
++#define FIRMWARE_V2     (0x00000000)
+ #define MAX_SVN         255
+ 
+ static uint32_t currentHash = FIRMWARE_V2;
+@@ -157,11 +157,9 @@
+     returnData->tpmSpecVersion    = 185;
+     returnData->tpmSpecErrata     = 0;
+     // these come from the PC CLient Platform TPM Profile Specification
+-    returnData->platformFamily    = 1;
++    returnData->platformFamily    = 0;
+     returnData->platfromLevel     = 0;
+-    // https://trustedcomputinggroup.org/wp-content/uploads/PC-Client-Specific-Platform-TPM-Profile-for-TPM-2p0-v1p07_Pub.pdf
+-    // Which specifies TPM_PT_RS_REVISION to 0x107
+-    returnData->platformRevision  = 0x107;
++    returnData->platformRevision  = 0;
+     returnData->platformYear      = 0;
+     returnData->platformDayOfYear = 0;
+     // clang-format on

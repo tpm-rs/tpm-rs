@@ -247,7 +247,7 @@ Recurring `tpm-rs` bug classes (details and spec quotes are in `report.md`
 
 ### 6. Write a reference patch
 
-- File: `testing/patches/{mstpm20,mstpm20-v185,ibmswtpm2}/bug-fix-<topic>.patch`.
+- File: `testing/patches/{mstpm20,mstpm20-185-feature,ibmswtpm2}/bug-fix-<topic>.patch`.
   Use the same name in every directory that needs it, and check each version
   separately. For example, v185 already persisted public-only objects
   correctly. Patches apply in file-name order.

@@ -176,7 +176,7 @@ fn rsassa_quote_attests_pcr_digest() {
     match resp.signature {
         Some(TpmtSignature::Rsassa(sig)) => {
             assert_eq!(
-                CLIENT_CRYPTO.verify_inner(Alg::RSASSA, &modulus, digest, sig.sig.get_buffer()),
+                CLIENT_CRYPTO.verify_inner(Alg::RSASSA, &modulus, 0, digest, sig.sig.get_buffer()),
                 Ok(true),
                 "Cryptographic signature verification failed"
             );

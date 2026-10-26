@@ -26,7 +26,8 @@ fn enlarged_encrypted_size_returns_integrity() {
     assert_load_rejected(&mut sim, context, blob, integrity_rc(), "size+256");
 }
 
-/// Blobs too short for the integrity TPM2B give INSUFFICIENT; later size checks give SIZE + P1.
+/// Blobs too short for the integrity TPM2B give INSUFFICIENT, blobs with less than a fingerprint
+/// after it give SIZE + P1, and longer ones reach the integrity check.
 #[test]
 fn short_blobs_return_size() {
     let mut sim = Tpm::new();
@@ -44,8 +45,16 @@ fn short_blobs_return_size() {
         ("integrity + size only", ENC_SIZE_OFFSET + 2, size_rc()),
         (
             "no room for fingerprint",
-            ENC_SIZE_OFFSET + 2 + FINGERPRINT_SIZE - 1,
+            ENC_SIZE_OFFSET + FINGERPRINT_SIZE - 1,
             size_rc(),
+        ),
+        // As C ("Make sure that the context blob has enough space for the fingerprint.",
+        // `size < sizeof(in->context.sequence)`), a protected part of at least the fingerprint's
+        // size reaches the integrity check.
+        (
+            "fingerprint-sized protected part",
+            ENC_SIZE_OFFSET + 2 + FINGERPRINT_SIZE - 1,
+            integrity_rc(),
         ),
     ] {
         assert_load_rejected(&mut sim, context, blob[..len].to_vec(), rc, what);

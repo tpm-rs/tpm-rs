@@ -175,6 +175,37 @@ fn limited_hierarchy_parameters_fail_at_use() {
     }
 }
 
+/// A `TPM2_ContextLoad` blob whose protected part (after the integrity value) only holds the
+/// size of the sequence fingerprint (8 or 9 bytes) still reaches the integrity check, like the
+/// TCG reference ("Make sure that the context blob has enough space for the fingerprint."), so a
+/// firmware-limited or SVN-limited `hierarchy` fails with its unavailable proof
+/// (`TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`), and a short blob of an available hierarchy fails
+/// the integrity check (`TPM_RC_INTEGRITY + P1`). Found by the `diff_conversation` fuzzer.
+#[test]
+fn short_context_blob_of_limited_hierarchy_fails_with_limited_error() {
+    let mut tpm = Tpm::new();
+    let context_load = |hierarchy: u32, protected_len: usize| {
+        let mut params = 1u64.to_be_bytes().to_vec(); // sequence
+        params.extend_from_slice(&0x8000_0000u32.to_be_bytes()); // savedHandle
+        params.extend_from_slice(&hierarchy.to_be_bytes());
+        let mut blob = tpm2b(&[0x11; 64]); // integrity (SHA-512)
+        blob.extend_from_slice(&vec![0x22; protected_len]);
+        params.extend_from_slice(&tpm2b(&blob));
+        build(0x8001, TPM_CC_CONTEXT_LOAD, &[], None, &params)
+    };
+    for protected_len in [8, 9] {
+        for (handle, rc) in LIMITED {
+            let cmd = context_load(handle, protected_len);
+            assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc.get());
+        }
+        let cmd = context_load(tpm2::Handle::RH_OWNER.0, protected_len);
+        assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_p(TpmRc::INTEGRITY, 1));
+    }
+    // Fewer bytes than the fingerprint fail before the integrity check.
+    let cmd = context_load(tpm2::Handle::SVN_OWNER_FIRST.0, 7);
+    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 1));
+}
+
 /// `TPM2_HierarchyControl`'s `authHandle` is a `TPMI_RH_BASE_HIERARCHY` (TPM 2.0 Part 3,
 /// TPM2_HierarchyControl: "TPMI_RH_BASE_HIERARCHY | @authHandle"; Part 2, Table "Definition of
 /// (TPM_HANDLE) TPMI_RH_BASE_HIERARCHY Type": "TPM_RH_OWNER", "TPM_RH_PLATFORM",
@@ -198,21 +229,15 @@ fn hierarchy_control_rejects_limited_hierarchies() {
 /// `TPM2_CertifyCreation` recomputes the creation ticket for the ticket's hierarchy before it
 /// compares it (TPM 2.0 Part 3, TPM2_CertifyCreation: "The TPM will validate that the ticket was
 /// produced by the TPM"), so a firmware-limited or SVN-limited ticket hierarchy fails with
-/// `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`, also when the certified object is a sequence object
-/// (which no ticket can match).
+/// `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`.
 #[test]
 fn certify_creation_ticket_of_limited_hierarchy_fails() {
     let mut tpm = Tpm::new();
-    let start = build(
-        0x8001,
-        TPM_CC_HASH_SEQUENCE_START,
-        &[],
-        None,
-        &[0, 0, 0x00, 0x0B],
-    );
-    let rsp = tpm.send_command(0, &start);
-    assert_eq!(rc_of(&rsp), 0);
-    let sequence = u32::from_be_bytes(rsp[10..14].try_into().unwrap());
+    let (object, _) = crate::_common::try_create_owner_primary(
+        &mut tpm,
+        crate::_common::get_ecc_signing_key_template(),
+    )
+    .expect("signing key");
     for (handle, rc) in LIMITED {
         let mut params = vec![0, 0]; // qualifyingData
         params.extend_from_slice(&[0, 0]); // creationHash
@@ -223,10 +248,95 @@ fn certify_creation_ticket_of_limited_hierarchy_fails() {
         let cmd = build(
             0x8002,
             0x0000_014A,
-            &[tpm2::Handle::RH_NULL.0, sequence],
+            &[tpm2::Handle::RH_NULL.0, object.0],
             Some(&PW_SESSION),
             &params,
         );
         assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc.get(), "{handle:#x}");
     }
+}
+
+/// `TPM2_PolicyAuthorize` recomputes the verification ticket with the proof of the ticket's
+/// hierarchy before it compares it (TCG reference: `TicketComputeVerified()` ->
+/// `HierarchyGetProof()`), so an SVN-limited ticket hierarchy fails with `TPM_RC_SVN_LIMITED`
+/// instead of `TPM_RC_VALUE` on the ticket, as for the other tickets of this file (TPM 2.0 Part 1,
+/// "SVN-limited Hierarchy": its proof is derived from a firmware SVN secret this TPM does not
+/// have). Found by differential fuzzing.
+#[test]
+fn policy_authorize_ticket_of_limited_hierarchy_fails() {
+    let response_code = |rsp: &[u8]| u32::from_be_bytes(rsp[6..10].try_into().unwrap());
+    let mut tpm = testing::tpm::Tpm::with_seed(testing::seed::ReferenceSeed {
+        pid: 4242,
+        realtime_ms: 1000000,
+    });
+
+    // Round 0: TPM2_CreatePrimary.
+    let rsp = tpm.send_command(
+        0,
+        &[
+            0x80, 0x02, 0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x01, 0x31, 0x40, 0x00, 0x00, 0x07,
+            0x00, 0x00, 0x00, 0x09, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x23, 0x00, 0x0b, 0x00, 0x04, 0x00,
+            0x72, 0x00, 0x00, 0x00, 0x10, 0x00, 0x18, 0x00, 0x0b, 0x00, 0x03, 0x00, 0x10, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ],
+    );
+    assert_eq!(response_code(&rsp), 0x0);
+
+    // Round 1: TPM2_ChangeEPS.
+    let rsp = tpm.send_command(
+        0,
+        &[
+            0x80, 0x02, 0x00, 0x00, 0x00, 0x63, 0x00, 0x00, 0x01, 0x24, 0x80, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x09, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00, 0x80,
+            0x21, 0x40, 0x00, 0x00, 0x07, 0x00, 0x40, 0x5f, 0x23, 0x3c, 0x95, 0x0a, 0x53, 0x68,
+            0x7c, 0x43, 0xc2, 0x38, 0x05, 0xed, 0xdd, 0xff, 0xb2, 0xfa, 0x74, 0xb0, 0x0c, 0xea,
+            0x6a, 0x52, 0xa1, 0xfd, 0xcb, 0x77, 0x4b, 0x1a, 0x94, 0x4f, 0xac, 0x15, 0x61, 0xf7,
+            0x46, 0xbd, 0x44, 0xc4, 0xd9, 0x4f, 0xda, 0x0c, 0xdd, 0x09, 0xb2, 0x96, 0x0d, 0xe5,
+            0x8f, 0x32, 0x6b, 0x76, 0x6f, 0xcb, 0x25, 0xe6, 0x35, 0xe0, 0xf5, 0x07, 0x8e, 0xc5,
+            0xf9,
+        ],
+    );
+    assert_eq!(response_code(&rsp), 0x184);
+
+    // Round 2: TPM2_FlushContext.
+    let rsp = tpm.send_command(
+        0,
+        &[
+            0x80, 0x01, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x01, 0x65, 0x80, 0x00, 0x00, 0x00,
+        ],
+    );
+    assert_eq!(response_code(&rsp), 0x0);
+
+    // Round 3: TPM2_StartAuthSession.
+    let rsp = tpm.send_command(
+        0,
+        &[
+            0x80, 0x01, 0x00, 0x00, 0x00, 0x2b, 0x00, 0x00, 0x01, 0x76, 0x40, 0x00, 0x00, 0x07,
+            0x40, 0x00, 0x00, 0x07, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x10, 0x00,
+            0x0b,
+        ],
+    );
+    assert_eq!(response_code(&rsp), 0x0);
+
+    // Round 4: TPM2_PolicyAuthorize.
+    let rsp = tpm.send_command(
+        0,
+        &[
+            0x80, 0x01, 0x00, 0x00, 0x00, 0x9e, 0x00, 0x00, 0x01, 0x6a, 0x03, 0x00, 0x00, 0x00,
+            0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x22, 0x00, 0x0b, 0x37, 0x67,
+            0x57, 0x64, 0x3b, 0x60, 0x75, 0x98, 0x42, 0xfa, 0x13, 0x62, 0x70, 0xa9, 0x38, 0xb9,
+            0x45, 0xf2, 0xc8, 0x22, 0x5f, 0x6d, 0x5c, 0x70, 0x68, 0x9a, 0xa6, 0xb6, 0xf4, 0xb7,
+            0xe5, 0x1d, 0x80, 0x22, 0x40, 0x02, 0x00, 0x01, 0x00, 0x40, 0x00, 0x00, 0x11, 0x81,
+            0x02, 0x00, 0x81, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x23,
+            0x00, 0x0b, 0x00, 0x04, 0x00, 0x72, 0x00, 0x00, 0x00, 0x10, 0x00, 0x18, 0x00, 0x2a,
+            0x01, 0x03, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x3c, 0x81, 0x00, 0x01, 0x81, 0xb6, 0xc6, 0xa0, 0x8c, 0x5a, 0x84,
+            0x0e, 0x00, 0x00, 0x00,
+        ],
+    );
+    assert_eq!(response_code(&rsp), 0xa9);
 }

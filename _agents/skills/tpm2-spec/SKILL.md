@@ -36,14 +36,14 @@ silent; `ibmswtpm2` never decides.
 
 | Implementation | Repository |
 |---|---|
-| `mstpm20` v185 (TCG reference implementation) | https://github.com/TrustedComputingGroup/TPM-Internal, tag `v185.0.0` |
+| `mstpm20` v185 (TCG reference implementation) | https://github.com/TrustedComputingGroup/TPM-Internal, branch `185-feature` (pinned in `testing/build.rs`) |
 | `ibmswtpm2` (IBM software TPM), latest | https://github.com/kgoldman/ibmswtpm2 |
 
 Clone them into `/tmp/` or into your artifact folder, never into the
 repository:
 
 ```sh
-git clone --depth 1 --branch v185.0.0 https://github.com/TrustedComputingGroup/TPM-Internal /tmp/mstpm20-v185
+git clone --depth 1 --branch 185-feature https://github.com/TrustedComputingGroup/TPM-Internal /tmp/mstpm20-185-feature
 git clone --depth 1 https://github.com/kgoldman/ibmswtpm2 /tmp/ibmswtpm2
 ```
 

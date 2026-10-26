@@ -1,12 +1,15 @@
 //! The fuzz input model: a [`Conversation`] of TPM command [`Step`]s.
 //!
 //! One fuzz input is a conversation with a fresh, started TPM. Each step is
-//! either raw bytes sent as is ([`Step::Raw`]) or a structured command
+//! either raw bytes sent as is ([`Step::Raw`]), a structured command
 //! ([`Step::Cmd`]) whose handles, parameters and authorizations may refer to
 //! values that earlier rounds returned (see [`crate::pool`]): response
-//! handles, names, blobs, nonces, context blobs and so on. References index
-//! by kind and recency, modulo what is available, so almost every byte string
-//! decodes to a meaningful conversation.
+//! handles, names, blobs, nonces, context blobs and so on, or an out-of-band
+//! event: a platform signal or `_TPM_Hash_*` indication ([`Step::Platform`]),
+//! a virtual clock advance ([`Step::Sleep`]) or a change of the locality of
+//! the following commands ([`Step::Locality`]). References index by kind and
+//! recency, modulo what is available, so almost every byte string decodes to
+//! a meaningful conversation.
 //!
 //! # Byte encoding
 //!
@@ -31,7 +34,8 @@
 //! | length | one byte `< 0xFF`, or `0xFF` followed by a `u16` |
 //! | byte string | length, then that many bytes (truncated at the end of the input) |
 //! | [`Conversation`] | steps until the input ends (at most [`MAX_ROUNDS`]) |
-//! | [`Step`] | selector byte (`>= 0xF0`: [`Step::Raw`] + byte string, else [`Step::Cmd`]) |
+//! | [`Step`] | selector byte: `< 0xF0`: [`Step::Cmd`]; `0xFC`: [`Step::Platform`]; `0xFD`: [`Step::Sleep`] + `u32` ms; `0xFE`: [`Step::Locality`] + `u8`; else [`Step::Raw`] + byte string |
+//! | [`PlatformOp`] | `b % 8`: `0..=4`: [`PlatformOp::Signal`] of [`PLATFORM_SIGNALS`]`[b % 8]`; 5: `HashStart`; 6: `HashData` + byte string; 7: `HashEnd` |
 //! | [`Cmd`] | tag, code, handle list, session list, segment list, fix-ups |
 //! | [`TagSel`] | `< 0xF0`: `Auto`; else `(b - 0xF0) % 4`: `NoSessions`, `Sessions`, `Raw(u16)` (2 and 3) |
 //! | command code | `< 0xF8`: `IMPLEMENTED_COMMANDS[b % len]`; else a `u32` |
@@ -47,7 +51,7 @@
 use std::sync::LazyLock;
 
 use arbitrary::{Arbitrary, Unstructured};
-use testing::_common::handle_requires_auth;
+use testing::_common::{SimulatorPlatformSignal, handle_requires_auth};
 use testing::differential::server::handle_counts;
 use tpm2::TpmCc;
 
@@ -202,6 +206,83 @@ pub enum Step {
     Raw(Vec<u8>),
     /// A structured command whose operands may come from earlier responses.
     Cmd(Cmd),
+    /// A platform event (power, TPM reset, NV availability, `_TPM_Hash_*`),
+    /// which reaches TPM states the commands alone cannot
+    /// (e.g. `TPM2_Startup` after a power cycle).
+    Platform(PlatformOp),
+    /// Lets this many milliseconds pass on the TPMs' virtual clocks
+    /// (timeouts, clock and timer values, dictionary-attack recovery).
+    Sleep(u32),
+    /// Sends the following commands at this locality (initially 0).
+    Locality(u8),
+}
+
+/// The platform signals a [`PlatformOp::Signal`] can deliver: the signals
+/// that the `tpm-rs` simulator and the C references both support
+/// (`testing::differential::server`) and that change the TPM's state.
+/// Physical presence and command cancel are left out: `tpm-rs` implements
+/// neither `TPM2_PP_Commands` (so no command requires physical presence) nor
+/// cancellation (the platform may let commands run to completion), so those
+/// signals could only show implementation-defined differences.
+pub const PLATFORM_SIGNALS: [SimulatorPlatformSignal; 5] = [
+    SimulatorPlatformSignal::PowerOff,
+    SimulatorPlatformSignal::PowerOn,
+    SimulatorPlatformSignal::NvOn,
+    SimulatorPlatformSignal::NvOff,
+    SimulatorPlatformSignal::Reset,
+];
+
+/// An out-of-band platform event ([`Step::Platform`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlatformOp {
+    /// The platform signal [`PLATFORM_SIGNALS`]`[i]` (`i < 5`).
+    Signal(u8),
+    /// The `_TPM_Hash_Start` indication.
+    HashStart,
+    /// The `_TPM_Hash_Data` indication with these bytes.
+    HashData(Vec<u8>),
+    /// The `_TPM_Hash_End` indication.
+    HashEnd,
+}
+
+impl PlatformOp {
+    /// The [`PlatformOp::Signal`] of `signal`, if it is one of
+    /// [`PLATFORM_SIGNALS`].
+    pub fn signal(signal: SimulatorPlatformSignal) -> Option<Self> {
+        PLATFORM_SIGNALS
+            .iter()
+            .position(|&s| s == signal)
+            .map(|i| Self::Signal(i as u8))
+    }
+
+    /// The signal of a [`PlatformOp::Signal`].
+    pub fn platform_signal(&self) -> Option<SimulatorPlatformSignal> {
+        match self {
+            Self::Signal(i) => PLATFORM_SIGNALS.get(usize::from(*i)).copied(),
+            _ => None,
+        }
+    }
+
+    fn decode(d: &mut Decoder<'_>) -> Self {
+        match d.u8() % 8 {
+            b @ 0..=4 => Self::Signal(b),
+            5 => Self::HashStart,
+            6 => Self::HashData(d.bytes()),
+            _ => Self::HashEnd,
+        }
+    }
+
+    fn encode(&self, e: &mut Encoder) {
+        match self {
+            Self::Signal(i) => e.u8(*i % 5),
+            Self::HashStart => e.u8(5),
+            Self::HashData(bytes) => {
+                e.u8(6);
+                e.bytes(bytes);
+            }
+            Self::HashEnd => e.u8(7),
+        }
+    }
 }
 
 /// A structured command (see [`crate::builder`] for how it becomes bytes).
@@ -517,12 +598,21 @@ impl<'a> Arbitrary<'a> for Conversation {
     }
 }
 
+/// The [`Step`] selector of [`Step::Platform`].
+const STEP_PLATFORM: u8 = 0xFC;
+/// The [`Step`] selector of [`Step::Sleep`].
+const STEP_SLEEP: u8 = 0xFD;
+/// The [`Step`] selector of [`Step::Locality`].
+const STEP_LOCALITY: u8 = 0xFE;
+
 impl Step {
     fn decode(d: &mut Decoder<'_>) -> Self {
-        if d.u8() >= 0xF0 {
-            Step::Raw(d.bytes())
-        } else {
-            Step::Cmd(Cmd::decode(d))
+        match d.u8() {
+            0..0xF0 => Step::Cmd(Cmd::decode(d)),
+            STEP_PLATFORM => Step::Platform(PlatformOp::decode(d)),
+            STEP_SLEEP => Step::Sleep(d.u32()),
+            STEP_LOCALITY => Step::Locality(d.u8()),
+            _ => Step::Raw(d.bytes()),
         }
     }
 
@@ -535,6 +625,18 @@ impl Step {
             Step::Cmd(cmd) => {
                 e.u8(0);
                 cmd.encode(e);
+            }
+            Step::Platform(op) => {
+                e.u8(STEP_PLATFORM);
+                op.encode(e);
+            }
+            Step::Sleep(ms) => {
+                e.u8(STEP_SLEEP);
+                e.u32(*ms);
+            }
+            Step::Locality(locality) => {
+                e.u8(STEP_LOCALITY);
+                e.u8(*locality);
             }
         }
     }
@@ -999,8 +1101,43 @@ mod tests {
                 Step::Cmd(plain),
                 Step::Cmd(Cmd::new(0x17B)),
                 Step::Raw(vec![]),
+                Step::Platform(PlatformOp::Signal(0)),
+                Step::Platform(PlatformOp::Signal(4)),
+                Step::Platform(PlatformOp::HashStart),
+                Step::Platform(PlatformOp::HashData(vec![1, 2, 3])),
+                Step::Platform(PlatformOp::HashEnd),
+                Step::Sleep(0x0102_0304),
+                Step::Locality(3),
             ],
         }
+    }
+
+    /// The out-of-band steps own their selectors; every other selector
+    /// `>= 0xF0` is a raw step, and platform operations are chosen modulo 8.
+    #[test]
+    fn event_step_selectors() {
+        let conv = Conversation::from_bytes(&[
+            0xFC, 9, 0xFD, 0, 0, 1, 0, 0xFE, 4, 0xFF, 1, 0xAA, 0xFC, 14, 2, 7, 8,
+        ]);
+        assert_eq!(
+            conv.steps,
+            vec![
+                Step::Platform(PlatformOp::Signal(1)),
+                Step::Sleep(256),
+                Step::Locality(4),
+                Step::Raw(vec![0xAA]),
+                Step::Platform(PlatformOp::HashData(vec![7, 8])),
+            ]
+        );
+        assert_eq!(
+            PlatformOp::Signal(1).platform_signal(),
+            Some(SimulatorPlatformSignal::PowerOn)
+        );
+        assert_eq!(
+            PlatformOp::signal(SimulatorPlatformSignal::Reset),
+            Some(PlatformOp::Signal(4))
+        );
+        assert_eq!(PlatformOp::signal(SimulatorPlatformSignal::Restart), None);
     }
 
     #[test]

@@ -98,6 +98,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if qn_compare.get_buffer() != obj_dyn_qn.get_buffer() {
             return Err(TpmRc::TYPE.with(Position::handle(2)));
         }
+        // A Derived Object cannot be loaded, so no private area may be returned for it (TPM 2.0
+        // Part 3, TPM2_CreateLoaded: "If *parentHandle* references a Derivation Parent or a
+        // Primary Seed, then *outPrivate* will be an Empty Buffer.", noting "Returning
+        // *outPrivate* would imply that the returned primary or derived object can be loaded,
+        // and it cannot."), and its Derivation Parent has no symmetric definition to protect
+        // one. The specification gives no response code for TPM2_ObjectChangeAuth;
+        // `TPM_RC_TYPE` on `parentHandle` (a parent that cannot be used) is returned, as in the
+        // patched references (`bug-fix-object-change-auth-derived-object.patch`).
+        if parent_info.is_derivation_parent {
+            return Err(TpmRc::TYPE.with(Position::handle(2)));
+        }
         // Construct new TpmtSensitive
         let mut prime_p = [0u8; 256];
         let sensitive_comp = match &object.public.parms_and_id {

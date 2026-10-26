@@ -1045,15 +1045,8 @@ fn compare_differential_response(
             };
             well_formed(expected) && well_formed(actual)
         }
-        // 8. TPM2_PCR_Reset of PCR 16 at a reserved locality (5..=31):
-        //    tpm-rs rejects the locality (TPM_RC_LOCALITY); the C
-        //    simulator's platform layer (`_plat__LocalitySet`) silently
-        //    maps localities 5..=31 to locality 0, at which PCR 16 may be
-        //    reset (TPM_RC_SUCCESS).
-        (cc::PCR_RESET, Some(0x907), Some(0)) => {
-            (5..=31).contains(&locality)
-                && command_parts(command, 1).is_some_and(|(h, _)| h[0] == 16)
-        }
+        // 8. Retired: tpm-rs selects locality 0 for a reserved locality (5..=31)
+        //    like the C simulator's platform layer (`_plat__LocalitySet`).
         // 9. TPM2_ContextLoad of a `contextBlob` that is not byte-identical
         //    to one tpm-rs returned (truncated or modified by the test): the
         //    blob layout is implementation-defined, so both must reject it

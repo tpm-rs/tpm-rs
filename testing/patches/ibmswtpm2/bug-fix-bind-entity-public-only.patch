@@ -1,0 +1,37 @@
+bind-entity-public-only: the bind check of an HMAC session skips public-only objects
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, "Authorization Checks"): "Authorization
+checks must be performed in this order. 1. The public and sensitive portions
+of the object shall be present on the TPM (`TPM_RC_AUTH_UNAVAILABLE`)."
+
+For an HMAC session that is bound, CheckAuthSession() first decides whether
+the authorized entity is the bind entity (IsSessionBindEntity() ->
+SessionComputeBoundEntity()), which reads the entity's authValue with
+EntityGetAuthValue(). For a public-only object that function asserts that the
+sensitive area is loaded, so the TPM enters failure mode instead of reaching
+the TPM_RC_AUTH_UNAVAILABLE check (IsAuthValueAvailable()). A public-only
+object cannot be the bind entity (binding needs its authValue), so the patch
+returns FALSE for it; the command then fails with TPM_RC_AUTH_UNAVAILABLE, as
+in tpm-rs. Found by differential fuzzing.
+diff --git a/src/SessionProcess.c b/src/SessionProcess.c
+--- a/src/SessionProcess.c
++++ b/src/SessionProcess.c
+@@ -219,6 +219,16 @@
+     if(session->attributes.isBound)
+ 	{
+ 	    // Compute the bind value for the entity.
++	    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++	    // a public-only object has no authValue (EntityGetAuthValue() asserts), so it
++	    // cannot be the bind entity.
++	    if(HandleGetType(associatedHandle) == TPM_HT_TRANSIENT)
++	    {
++	        OBJECT* object = HandleToObject(associatedHandle);
++	        if(object != NULL && !ObjectIsSequence(object)
++	           && object->attributes.publicOnly == SET)
++	            return FALSE;
++	    }
+ 	    SessionComputeBoundEntity(associatedHandle, &entity);
+ 
+ 	    // Compare to the bind value in the session.

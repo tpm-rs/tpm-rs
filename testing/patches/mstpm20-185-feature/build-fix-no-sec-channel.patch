@@ -1,0 +1,75 @@
+no-sec-channel: build the marshaling code without SEC_CHANNEL_SUPPORT
+
+Classification: build fix.
+
+The (un)marshaling functions of TPMS_SPDM_SESSION_INFO, TPML_PUB_KEY and
+TPML_SPDM_SESSION_INFO are compiled unconditionally, but the types exist
+only with SEC_CHANNEL_SUPPORT, so Marshal.c does not compile with
+SEC_CHANNEL_SUPPORT = NO (see profile-no-sec-channel). The functions are
+guarded like their types and prototypes.
+diff --git a/TPMCmd/tpm/src/support/Marshal.c b/TPMCmd/tpm/src/support/Marshal.c
+--- a/TPMCmd/tpm/src/support/Marshal.c
++++ b/TPMCmd/tpm/src/support/Marshal.c
+@@ -2123,6 +2123,9 @@
+     return TPM_RC_SUCCESS;
+ }
+ 
++// tpm-rs differential testing (build fix): the type only exists with
++// SEC_CHANNEL_SUPPORT.
++#if SEC_CHANNEL_SUPPORT
+ // Table "Definition of TPMS_SPDM_SESSION_INFO Structure" (Part 2: Structures)
+ TPM_RC TPMS_SPDM_SESSION_INFO_MarshalUnmarshal(
+     TPMS_SPDM_SESSION_INFO* target, BYTE** buffer, INT32* size, BOOL marshal)
+@@ -2139,6 +2142,7 @@
+ 
+     return TPM_RC_SUCCESS;
+ }
++#endif  // SEC_CHANNEL_SUPPORT
+ 
+ // Table "Definition of TPML_CC Structure" (Part 2: Structures)
+ TPM_RC
+@@ -2399,6 +2403,9 @@
+     return TPM_RC_SUCCESS;
+ }
+ 
++// tpm-rs differential testing (build fix): the type only exists with
++// SEC_CHANNEL_SUPPORT.
++#if SEC_CHANNEL_SUPPORT
+ // Table "Definition of TPML_PUB_KEY Structure" (Part 2: Structures)
+ TPM_RC TPML_PUB_KEY_MarshalUnmarshal(
+     TPML_PUB_KEY* target, BYTE** buffer, INT32* size, BOOL marshal)
+@@ -2417,7 +2424,11 @@
+ 
+     return TPM_RC_SUCCESS;
+ }
++#endif  // SEC_CHANNEL_SUPPORT
+ 
++// tpm-rs differential testing (build fix): the type only exists with
++// SEC_CHANNEL_SUPPORT.
++#if SEC_CHANNEL_SUPPORT
+ // Table "Definition of TPML_SPDM_SESSION_INFO Structure" (Part 2: Structures)
+ TPM_RC TPML_SPDM_SESSION_INFO_MarshalUnmarshal(
+     TPML_SPDM_SESSION_INFO* target, BYTE** buffer, INT32* size, BOOL marshal)
+@@ -2435,6 +2446,7 @@
+ 
+     return TPM_RC_SUCCESS;
+ }
++#endif  // SEC_CHANNEL_SUPPORT
+ 
+ // Table "Definition of TPML_VENDOR_PROPERTY Structure" (Part 2: Structures)
+ TPM_RC
+@@ -5605,6 +5617,9 @@
+     return TPM_RC_SUCCESS;
+ }
+ 
++// tpm-rs differential testing (build fix): the type only exists with
++// SEC_CHANNEL_SUPPORT.
++#if SEC_CHANNEL_SUPPORT
+ // Array Marshal for TPMS_SPDM_SESSION_INFO
+ TPM_RC TPMS_SPDM_SESSION_INFO_Array_MarshalUnmarshal(TPMS_SPDM_SESSION_INFO* target,
+                                                      BYTE**                  buffer,
+@@ -5622,3 +5637,4 @@
+ 
+     return TPM_RC_SUCCESS;
+ }
++#endif  // SEC_CHANNEL_SUPPORT

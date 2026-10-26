@@ -36,6 +36,14 @@ references and the same `tpm-rs`/reference response-code pair, any command).
 | Campaign 3 | 10,680,854 | 5,894 | 11,161 / 44,695 | 1,049 → 7,876 | 27 → 8 → 6 |
 | Campaign 4 | 7,944,395 | 4,411 | 11,343 / 45,402 | 2,067 → 6,507 | 10 → 7 → 7 |
 | Campaign 5 | 7,897,970 | 4,385 | 11,343 / 45,468 | 2,067 → 6,556 | **0** (clean) |
+| Campaign 6 | 3,715,249 | 2,064 | 11,690 / 45,758 | 2,191 → 6,198 | 6 → 6 → 5 |
+| Campaign 7 | 4,903,720 | 2,724 | 11,716 / 46,272 | 2,191 → 6,426 | 2 → 2 → 2 |
+| Campaign 8 | 8,049,187 | 4,472 | 11,722 / 47,600 | 2,191 → 6,994 | 4 → 4 → 4 |
+| Campaign 9 | 8,296,040 | 4,609 | 11,784 / 47,623 | 2,191 → 7,073 | 4 → 4 → 3 |
+| Campaign 10 | 7,922,992 | 4,402 | 11,756 / 47,432 | 2,191 → 7,063 | 1 → 1 → 1 |
+| Campaign 11 | 8,238,404 | 4,577 | 11,770 / 47,568 | 2,191 → 7,032 | 2 → 1 → 1 |
+| Campaign 12 | 9,522,679 | 5,290 | 11,768 / 48,019 | 2,191 → 7,214 | 2 → 2 → 2 |
+| Campaign 13 | 7,577,841 | 4,210 | 11,737 / 47,247 | 2,191 → 6,971 | **0** (clean) |
 
 Between campaigns, all families were triaged and fixed. Replaying the
 campaign-1 artifacts on the campaign-2 binary, 23,496 of 23,538 no longer
@@ -45,6 +53,16 @@ campaign-4 binary, and all 10 campaign-4 artifacts on the campaign-5 binary.
 Campaign 5 found nothing: no crash, timeout or out-of-memory input, with an
 empty `known_divergences.txt`. Campaigns 4 and 5 started from the grown corpus (see 1.2), which is why they
 execute fewer, longer inputs than campaign 3.
+
+Campaigns 6 and later run against `mstpm20` built from the `185-feature`
+branch of the TCG-internal repository (instead of tag `v185.0.0`, see
+[differential.md](../../differential.md) item 22) with the extended input model:
+besides commands, a round can be a platform signal (`PowerOff`, `PowerOn`,
+`NvOn`, `NvOff`, `Reset`), a `_TPM_Hash_*` indication, a virtual clock advance
+or a locality change. Their seed corpus (2,191 inputs) merges the earlier
+corpus with the E2E and Go traces converted with these events (1,687 inputs
+before the merge). Each campaign's findings were fixed before the next one;
+every artifact of a campaign replays clean on the next campaign's binary.
 
 ### 1.2 Seed corpus and input-model measurements
 
@@ -470,6 +488,110 @@ E2E test.
     Spec: Part 2, `TPM_PT`: "TPM_PT_MAX_OBJECT_CONTEXT | PT_FIXED + 33 | the maximum size of an object context that will be returned by TPM2_ContextSave()".
     Test: [get_capability.rs](../tests/e2e/get_capability.rs) (`max_context_sizes_bound_saved_contexts`).
 
+### 2.9 Platform events, NV availability and the `185-feature` reference (C6–C12)
+
+47. **Platform signals in states where they have no effect, and localities 5–31** — *smoke runs and C6 (`TPM2_Startup` `0x0` vs `TPM_RC_INITIALIZE`, `TPM2_Commit` vs `TPM_RC_NV_UNAVAILABLE`, `TPM2_CreatePrimary` creation data at locality 5, C9 `TPM2_Startup` `TPM_RC_NV_UNAVAILABLE` vs `TPM_RC_VALUE`).*
+    Root cause: the simulator re-initialized the TPM on every `PowerOn` and `Reset` (also while powered on or off), cleared NV availability while powered off, kept NV off across a reset before the first `TPM2_Startup` after a power loss, and kept localities 5–31.
+    Fix: as the reference simulator platform (`_rpc__Signal_PowerOn(isReset)`, `_rpc__Signal_NvOff()`, `g_powerWasLost`, `_plat__LocalitySet()`) — [tpm2-simulator `platform_signal`](../../crates/tpm2-simulator/src/lib.rs), [engine.rs `set_locality`](../../crates/tpm2-impl/src/engine.rs); differential.md item 42 (rule 8 retired).
+    Spec: Part 1, "_TPM_Init": "The method of signaling _TPM_Init is platform specific."; Part 1, "Locality": "Locality 5 through 31 cannot be selected."
+    Tests: [platform_signals.rs](../tests/e2e/platform_signals.rs).
+
+48. **First DA-protected use while NV is unavailable** — *smoke run (`TPM2_Commit` `TPM_RC_INSUFFICIENT` vs `TPM_RC_NV_UNAVAILABLE`).*
+    Root cause: the "DA-protected object used" flag (`SU_DA_USED_VALUE`) was only noted for later when NV was off, so the authorization proceeded.
+    Fix: the first DA-protected use of a power cycle fails with `TPM_RC_NV_UNAVAILABLE` while NV is off — [engine.rs `check_da_lockout`](../../crates/tpm2-impl/src/engine.rs).
+    Spec: Part 1, "Non-orderly Shutdown": "An alternative implementation sets an NV flag indicating that access to a DA protected object occurred during this boot cycle."
+    Test: [nv_availability.rs](../tests/e2e/nv_availability.rs) (`first_da_protected_use_with_nv_unavailable_fails`).
+
+49. **NV writes that change nothing, and PIN counters, while NV is unavailable** — *C6 (`TPM2_NV_Write` `TPM_RC_NV_UNAVAILABLE` vs `0x0`), C8 (`TPM2_NV_Read` data: `pinCount` 2 vs 0).*
+    Root cause: every write to a non-orderly index required NV, even when the bytes did not change; a failed authorization with a PIN Fail index's authValue updated its NV counter while NV was off.
+    Fix: an unchanged rewrite needs no NV, and the PIN counter update is dropped while NV is off, as the reference's `NvConditionallyWrite()` — [nv_storage.rs `nv_write_index_data`](../../crates/tpm2-impl/src/handler/nv_storage.rs), [engine.rs `update_nv_pin_count`](../../crates/tpm2-impl/src/engine.rs).
+    Spec: Part 2, `TPM_RC_NV_UNAVAILABLE`: "the command may require writing of NV and NV is not current accessible".
+    Tests: [nv_availability.rs](../tests/e2e/nv_availability.rs) (`unchanged_nv_write_succeeds_while_nv_unavailable`, `pin_fail_count_is_not_updated_while_nv_unavailable`).
+
+50. **Sequence objects in `TPM2_Certify`, `TPM2_CertifyCreation` and `TPM2_ActivateCredential`** — *the `185-feature` reference (upstream "Vrt10 patch").*
+    Root cause: the specification gives no response code; `tpm-rs` returned `TPM_RC_KEY`/`TPM_RC_TICKET` or activated the credential, the new reference returns `TPM_RC_TYPE`.
+    Fix: `TPM_RC_TYPE` on the sequence object's handle, in the reference's order — [certify.rs](../../crates/tpm2-impl/src/handler/certify.rs), [activate_credential.rs](../../crates/tpm2-impl/src/handler/activate_credential.rs); differential.md items 31 and 38.
+    Spec: Part 3, TPM2_CertifyCreation: "This command is used to prove the association between an object and its creation data."
+    Tests: [sequence_object_as_key.rs](../tests/e2e/sequence_object_as_key.rs), [activate_credential_secret.rs](../tests/e2e/activate_credential_secret.rs).
+
+51. **`TPMT_TK_VERIFIED` tags of version 185** — *the `185-feature` reference (`TPM2_PolicyAuthorize` `TPM_RC_TAG` vs `TPM_RC_SIZE`).*
+    Root cause: `tpm-rs` rejected `TPM_ST_MESSAGE_VERIFIED` and `TPM_ST_DIGEST_VERIFIED` tickets while unmarshaling.
+    Fix: all three tags unmarshal — [policy_authorize.rs](../../crates/tpm2-impl/src/handler/policy_authorize.rs); differential.md item 39.
+    Spec: Part 2, TPMT_TK_VERIFIED: "#TPM_RC_TAG | | error returned when *tag* is not one of the values in @tbl:tpm-st-for-signatures".
+    Tests: [policy_authorize.rs](../tests/e2e/policy_authorize.rs) (`message_verified_ticket_is_unmarshaled`, `digest_verified_ticket_metadata_is_unmarshaled`).
+
+52. **Stale audit cpHash** — *C7 (`TPM2_EncryptDecrypt` `TPM_RC_EXCLUSIVE` vs `TPM_RC_HANDLE + S3`).*
+    Root cause: the audit cpHash stored on a session by a command that then failed was used by a later command that did not audit, which made the session an audit session.
+    Fix: only a session with `audit` in the current command extends its digest — [engine.rs](../../crates/tpm2-impl/src/engine.rs) (response session construction).
+    Spec: Part 1, "Session Audit": "A session is designated for auditing by setting the *audit* attribute in the session."
+    Test: [session_audit_exclusive.rs](../tests/e2e/session_audit_exclusive.rs) (`audit_cp_hash_of_failed_command_is_discarded`).
+
+53. **`TPM2_ObjectChangeAuth` of a Derived Object** — *C7 (the reference crashed).*
+    Root cause: the new private area was protected with the Derivation Parent (no symmetric definition).
+    Fix: `TPM_RC_TYPE` on `parentHandle` — [object_change_auth.rs](../../crates/tpm2-impl/src/handler/object_change_auth.rs); differential.md item 43.
+    Spec: Part 3, TPM2_CreateLoaded: "Returning *outPrivate* would imply that the returned primary or derived object can be loaded, and it cannot."
+    Test: [object_change_auth.rs](../tests/e2e/object_change_auth.rs) (`derived_object_auth_cannot_be_changed`).
+
+54. **Clock rate rounding** — *C8 (`TPM2_ReadClock` time 14 vs 15 ms after `TPM2_ClockRateAdjust`).*
+    Root cause: the rate-adjusted time kept an exact remainder, the platform keeps the unconsumed platform time.
+    Fix: the reference platform's arithmetic (`_plat__TimerRead()`) — [engine.rs `time_update`](../../crates/tpm2-impl/src/engine.rs).
+    Spec: Part 3, TPM2_ClockRateAdjust: "This command adjusts the rate of advance of *Clock* and *Time* to provide a better approximation to real time."
+    Test: [clock.rs](../tests/e2e/clock.rs) (`clock_rate_adjustment_rounds_like_the_platform`).
+
+55. **`TPM2_PolicySecret` with a sequence object** — *C8 (`TPM_RC_KEY + H1` vs `0x0`).*
+    Root cause: the entity's hierarchy was resolved as a key, which a sequence object is not.
+    Fix: a sequence object is in the NULL hierarchy — [policy_secret.rs `entity_get_hierarchy`](../../crates/tpm2-impl/src/handler/policy_secret.rs).
+    Spec: Part 3, TPM2_PolicySecret: "TPMI_DH_ENTITY | \@authHandle | handle for an entity providing the authorization".
+    Test: [sequence_object_as_key.rs](../tests/e2e/sequence_object_as_key.rs) (`policy_secret_with_sequence_object_is_in_null_hierarchy`).
+
+56. **`TPM2_Import` inner wrapper with mode `TPM_ALG_NULL`** — *C8 (`TPM_RC_MODE + P5` vs later errors).*
+    Root cause: a NULL mode was rejected although `TPMU_SYM_MODE` allows it.
+    Fix: [import.rs](../../crates/tpm2-impl/src/handler/import.rs).
+    Spec: Part 2, TPMU_SYM_MODE: "aes | TPMI_ALG_SYM_MODE+", whose values include "+TPM_ALG_NULL".
+    Test: [import_validation.rs](../tests/e2e/import_validation.rs) (`import_accepts_null_inner_wrapper_mode`).
+
+57. **`TPM2_ECDH_KeyGen` with an unusable public point** — *C9 (later random values and an unsigned attestation's obfuscation differed).*
+    Root cause: the point was checked before the ephemeral key pair was generated, so fewer random numbers were drawn than by the reference.
+    Fix: the key pair first, as the reference — [ecdh.rs](../../crates/tpm2-impl/src/handler/ecdh.rs).
+    Spec: Part 3, TPM2_ECDH_KeyGen: "This command uses the TPM to generate an ephemeral key pair".
+    Test: [ecdh.rs](../tests/e2e/ecdh.rs) (`key_without_public_point_fails_after_ephemeral_key`).
+
+58. **RSA public exponent ignored** — *C9 (`TPM2_RSA_Encrypt` ciphertexts of keys with exponents 0x40000007 and 0x21000053).*
+    Root cause: the crypto backends' RSA public operations (`rsassa_verify`, `rsapss_verify`, `rsaes_encrypt`, `oaep_encrypt`, `rsa_null_encrypt`) always used 2^16 + 1.
+    Fix: the `tpm2::crypto::Asymmetric` trait and all three backends take the key's exponent — [asymmetric.rs](../../crates/tpm2/src/crypto/asymmetric.rs), callers in `crypt_ops.rs`, `rewrap.rs`, `duplicate.rs`, `policy_signed.rs`, `reference_ops.rs`.
+    Spec: Part 2, TPMS_RSA_PARMS: "the public exponent; A prime number greater than 2."
+    Test: [rsa_encrypt_decrypt.rs](../tests/e2e/rsa_encrypt_decrypt.rs) (`encrypt_uses_the_public_exponent`).
+
+59. **Clock not brought up to date by a rejected command** — *C10 (`TPM2_ReadClock` Clock 0 vs 4,194,304 after a power cycle).*
+    Root cause: `tpm-rs` advanced Time/Clock (and wrote Clock to NV at an `NV_CLOCK_UPDATE_INTERVAL` boundary) only for commands that passed the header checks.
+    Fix: the time update runs first for every command, as the reference's `ExecuteCommand()` — [engine.rs `execute_command`](../../crates/tpm2-impl/src/engine.rs).
+    Spec: Part 1, "Clock": "A non-volatile value (*NV Clock*) is updated periodically from *Clock*."
+    Test: [clock.rs](../tests/e2e/clock.rs) (`rejected_command_updates_clock_in_nv`).
+
+60. **`TPM2_PolicyAuthorize` ticket of a limited hierarchy** — *C11 (`TPM_RC_VALUE + P4` vs `TPM_RC_SVN_LIMITED`).*
+    Root cause: a ticket hierarchy other than the three base hierarchies was rejected with `TPM_RC_VALUE` before its proof was obtained.
+    Fix: `limited_hierarchy_error` first, as for the other tickets — [policy_authorize.rs](../../crates/tpm2-impl/src/handler/policy_authorize.rs).
+    Spec: Part 3, TPM2_PolicyAuthorize: "The TPM then validates that the parameters to `TPM2_PolicyAuthorize()` match the values used to generate the ticket."
+    Test: [limited_hierarchies.rs](../tests/e2e/limited_hierarchies.rs) (`policy_authorize_ticket_of_limited_hierarchy_fails`).
+
+61. **`TPM2_ContextLoad` of a short blob in a limited hierarchy** — *C12 (`TPM_RC_SIZE + P1` vs `TPM_RC_SVN_LIMITED`).*
+    Root cause: `tpm-rs` required the encrypted size field and the fingerprint (10 bytes) after the integrity value before the integrity check; the reference requires only the fingerprint's size, so for a 9-byte protected part it reached the (unavailable) hierarchy proof first.
+    Fix: only the fingerprint's size before the integrity check, the size field after it — [context_load.rs](../../crates/tpm2-impl/src/handler/context_load.rs).
+    Spec: silent on the order; the reference: "Make sure that the context blob has enough space for the fingerprint."
+    Test: [limited_hierarchies.rs](../tests/e2e/limited_hierarchies.rs) (`short_context_blob_of_limited_hierarchy_fails_with_limited_error`), [context_load_blob_validation.rs](../tests/e2e/context_load_blob_validation.rs) (`short_blobs_return_size`).
+
+62. **Time epoch after a power cycle with `TPM2_Startup(TPM_SU_STATE)`** — *C12 (`TPM2_PolicySecret` ticket HMACs differed).*
+    Root cause: `tpm-rs` started a new time epoch on every TPM Reset and TPM Restart and never on a TPM Resume, instead of on every time discontinuity (a power on), whatever the startup type.
+    Fix: a power on marks the timer as stopped (`GlobalState::timer_stopped`); the time update of the next `TPM2_Startup` starts the new epoch — [engine.rs `time_update`, `platform_timer_reset`](../../crates/tpm2-impl/src/engine.rs), [startup.rs](../../crates/tpm2-impl/src/handler/startup.rs).
+    Spec: Part 1: "a TPM is required to invalidate any time-based assertion that was created before a discontinuity in the TPM's measurement of time. Such a discontinuity can occur when *Time* does not advance or when *Time* is reset."
+    Test: [tickets.rs](../tests/e2e/tickets.rs) (`policy_ticket_rejects_ticket_from_before_power_cycle_resume`, `policy_ticket_accepts_ticket_from_before_restart_without_power_loss`).
+
+63. **Time reset by `TPM2_Startup` without a power loss** — *found while triaging 62 (`TPM2_ReadClock` time 0 vs 5,000 after the platform `Reset` signal).*
+    Root cause: every `TPM2_Startup` restarted *Time* at 0 (and dropped the time between `_TPM_Init` and `TPM2_Startup`); only a power on resets the circuit providing *Time*. `_TPM_Init` also reset the clock-rate adjustment.
+    Fix: *Time* and the rate adjustment restart only on power on (`platform_timer_reset`); `_TPM_Init` brings *Time* (not Clock) up to the platform timer (`time_power_on`, the reference's `TimePowerOn()`); `TPM2_Startup` runs the time update like `DAStartup()`, and rebases the DA timers only after a power on (by the *Time* of the shutdown, `go.time`) — [engine.rs](../../crates/tpm2-impl/src/engine.rs), [startup.rs](../../crates/tpm2-impl/src/handler/startup.rs), [shutdown.rs](../../crates/tpm2-impl/src/handler/shutdown.rs).
+    Spec: Part 1, "Time": "*Time* is a 64-bit value that contains the time in milliseconds that the circuit providing *Time* has been powered."
+    Test: [clock.rs](../tests/e2e/clock.rs) (`time_continues_across_reset_without_power_loss`).
+
 ## 3. Remaining ignored discrepancies
 
 ### 3.1 Active `server.rs` exceptions
@@ -485,11 +607,10 @@ command and condition; any other difference fails the comparison.
 | 2 | `TPM2_GetCapability` | both | `TPM_CAP_TPM_PROPERTIES` values of the implementation-specific properties `0x10F, 0x116, 0x118, 0x119, 0x11C, 0x11F, 0x121, 0x122, 0x12D`; the reference-only properties `0x12F`, `0x130` and (version 185) `0x131` with value 0, and a reference `moreData = YES` against `tpm-rs`'s `NO` when the lists are otherwise equal (the reference's list was cut by `propertyCount` before or within that reference-only tail). Tag, capability, order and every other value are compared exactly. | Capability values are TPM-specific (e.g. Part 2, `TPM_PT_HR_PERSISTENT_AVAIL`: "This value is an estimate"); `0x121`/`0x122` are the bounds of each implementation's own context format (rule 1). | [server.rs `capability_difference_is_documented`](../../testing/src/differential/server.rs#L873), differential.md rule 2 |
 | 3 | `TPM2_ECC_Parameters` | both | Curve parameters equal up to leading zero bytes (`tpm-rs` pads to the curve size). | Part 1/Part 3: the parameters "may not be the same size". | [server.rs](../../testing/src/differential/server.rs#L1005), rule 3 |
 | 4 | `TPM2_IncrementalSelfTest` | both | The `toDoList` contents (both must be well-formed `TPML_ALG` responses with identical headers). | Which algorithms still need testing is TPM-dependent (Part 3, TPM2_IncrementalSelfTest). | [server.rs](../../testing/src/differential/server.rs#L1034), rule 4 |
-| 8 | `TPM2_PCR_Reset` | both | PCR 16 at locality 5–31: `tpm-rs` `TPM_RC_LOCALITY`, reference success. | The C simulator's platform layer maps localities 5–31 to locality 0; a platform property, not TPM behavior. | [server.rs](../../testing/src/differential/server.rs#L1048), rule 8 |
 | 9 | `TPM2_ContextLoad` | both | A blob `tpm-rs` never returned (tampered, truncated, or from another run) reaches the reference with its integrity value zeroed, and both must reject it: the reference with `TPM_RC_SIZE` or `TPM_RC_INTEGRITY + P1` depending on the layout, `tpm-rs` with one of those or, for an authentic blob of another run whose decrypted fingerprint does not match, with the spec-mandated `TPM_RC_FAILURE`. **This deliberately masks** how the reference would treat the blob: all implementations share the hierarchy proofs and Part 1's integrity HMAC under the fixed seed, so the reference would otherwise authenticate a `tpm-rs` blob and interpret its implementation-defined contents. | Vendor-defined blob layout (rule 1); Part 3, TPM2_ContextLoad: "The TPM shall perform a check on the decrypted context as described in the "Context Confidentiality Protection" clause of TPM 2.0 Part 1 and enter failure mode if the check fails." and "If the integrity HMAC of the saved context is not valid, the TPM shall return TPM_RC_INTEGRITY." | [server.rs `untranslated_context_load`](../../testing/src/differential/server.rs#L268), rule 9 |
 | RETRY | DA-protected commands | both | The first DA-protected access of a boot returns `TPM_RC_RETRY` in the references (`USE_DA_USED`); the identical command is re-issued to the reference once and compared exactly. | `TPM_RC_RETRY` is a warning; both behaviors meet Part 1, "Non-orderly Shutdown". | [server.rs](../../testing/src/differential/server.rs#L487), rule RETRY |
 
-Rules 5, 6, 7, 10 and 11 are retired: the TPM profile, `MAX_LOADED_OBJECTS = 3`, the transient handle numbering (bug 41) and the NV erase value (bug 42) made `tpm-rs` and the references agree.
+Rules 5, 6, 7, 8, 10 and 11 are retired: the TPM profile, `MAX_LOADED_OBJECTS = 3`, the transient handle numbering (bug 41), the NV erase value (bug 42) and the locality mapping (bug 47) made `tpm-rs` and the references agree.
 
 ### 3.2 `known_divergences.txt`
 

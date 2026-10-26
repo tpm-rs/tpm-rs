@@ -59,6 +59,7 @@ impl Asymmetric for StressTestCrypto {
         &self,
         _sign_alg: tpm2::Alg,
         _public_key: &[u8],
+        _rsa_exponent: u32,
         _digest: tpm2::TpmtHa<'_>,
         _signature: &[u8],
     ) -> Result<bool, CryptoError> {
@@ -69,6 +70,7 @@ impl Asymmetric for StressTestCrypto {
         scheme: tpm2::Alg,
         _hash_alg: tpm2::Alg,
         public_key: &[u8],
+        _rsa_exponent: u32,
         data: &[u8],
         ciphertext: &mut [u8],
         _label: &[u8],

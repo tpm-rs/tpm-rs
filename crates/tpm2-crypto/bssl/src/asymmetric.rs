@@ -64,11 +64,13 @@ impl Asymmetric for BsslCryptoProvider {
     fn rsassa_verify(
         &self,
         public_key: &[u8],
+        exponent: u32,
         digest: TpmtHa<'_>,
         signature: &[u8],
     ) -> Result<bool, CryptoError> {
         verified(rsa_verify_pkcs1v15(
             public_key,
+            exponent,
             digest.hash_alg(),
             digest.digest(),
             signature,
@@ -78,11 +80,13 @@ impl Asymmetric for BsslCryptoProvider {
     fn rsapss_verify(
         &self,
         public_key: &[u8],
+        exponent: u32,
         digest: TpmtHa<'_>,
         signature: &[u8],
     ) -> Result<bool, CryptoError> {
         verified(rsa_verify_pss(
             public_key,
+            exponent,
             digest.hash_alg(),
             digest.digest(),
             signature,
@@ -109,32 +113,35 @@ impl Asymmetric for BsslCryptoProvider {
     fn rsaes_encrypt(
         &self,
         public_key: &[u8],
+        exponent: u32,
         data: &[u8],
         ciphertext: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
-        output(rsa_encrypt_pkcs1v15(public_key, data, ciphertext))
+        output(rsa_encrypt_pkcs1v15(public_key, exponent, data, ciphertext))
     }
 
     fn oaep_encrypt(
         &self,
         hash_alg: TpmiAlgHash,
         public_key: &[u8],
+        exponent: u32,
         data: &[u8],
         label: &[u8],
         ciphertext: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
         output(rsa_encrypt_oaep(
-            hash_alg, public_key, data, label, ciphertext,
+            hash_alg, public_key, exponent, data, label, ciphertext,
         ))
     }
 
     fn rsa_null_encrypt(
         &self,
         public_key: &[u8],
+        exponent: u32,
         data: &[u8],
         ciphertext: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
-        output(rsa_encrypt_null(public_key, data, ciphertext))
+        output(rsa_encrypt_null(public_key, exponent, data, ciphertext))
     }
 
     fn rsaes_decrypt(

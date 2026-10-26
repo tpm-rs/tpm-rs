@@ -1,0 +1,47 @@
+tk-verified-tags: TPMT_TK_VERIFIED accepts the version 185 ticket tags
+
+Classification: spec-deviation bug fix (pre-185 behavior).
+
+Specification (TPM 2.0 Part 2, version 185, Table "Definition of
+TPMT_TK_VERIFIED Structure"): "#TPM_RC_TAG | | error returned when *tag* is
+not one of the values in @tbl:tpm-st-for-signatures", where that table lists
+`TPM_ST_VERIFIED`, `TPM_ST_MESSAGE_VERIFIED` and `TPM_ST_DIGEST_VERIFIED`;
+Table "Definition of TPMU_TK_VERIFIED_META Union": "digestVerified |
+TPMI_ALG_HASH | `TPM_ST_DIGEST_VERIFIED`".
+
+The reference (written before version 185) accepts only TPM_ST_VERIFIED and
+returns TPM_RC_TAG for the other two tags, which version 185 (and tpm-rs)
+unmarshal, with the TPMI_ALG_HASH metadata of TPM_ST_DIGEST_VERIFIED. The patch
+accepts both tags and unmarshals (and discards) that metadata. A ticket with
+these tags cannot be valid on this TPM (it implements neither
+TPM2_VerifySequenceComplete nor TPM2_VerifyDigestSignature), so
+TPM2_PolicyAuthorize still rejects it when it compares the ticket.
+diff --git a/src/Unmarshal.c b/src/Unmarshal.c
+--- a/src/Unmarshal.c
++++ b/src/Unmarshal.c
+@@ -1855,13 +1855,24 @@
+ 	rc = TPM_ST_Unmarshal(&target->tag, buffer, size);
+     }
+     if (rc == TPM_RC_SUCCESS) {
+-	if (target->tag != TPM_ST_VERIFIED) {
++	/* tpm-rs differential testing -- C-ref spec deviation fix (NOT
++	   determinism): version 185 adds TPM_ST_MESSAGE_VERIFIED (0x8026) and
++	   TPM_ST_DIGEST_VERIFIED (0x8027, with a TPMI_ALG_HASH metadata field)
++	   to the tags of TPMT_TK_VERIFIED (Part 2, TPMT_TK_VERIFIED and
++	   TPMU_TK_VERIFIED_META); the metadata is not kept (no such ticket can
++	   be valid here). */
++	if ((target->tag != TPM_ST_VERIFIED) &&
++	    (target->tag != 0x8026) && (target->tag != 0x8027)) {
+ 	    rc = TPM_RC_TAG;
+ 	}
+     }
+     if (rc == TPM_RC_SUCCESS) {
+ 	rc = TPMI_RH_HIERARCHY_Unmarshal(&target->hierarchy, buffer, size, YES);
+     }
++    if ((rc == TPM_RC_SUCCESS) && (target->tag == 0x8027)) {
++	TPMI_ALG_HASH digestVerified;
++	rc = TPMI_ALG_HASH_Unmarshal(&digestVerified, buffer, size, NO);
++    }
+     if (rc == TPM_RC_SUCCESS) {
+ 	rc = TPM2B_DIGEST_Unmarshal(&target->digest, buffer, size);
+     }

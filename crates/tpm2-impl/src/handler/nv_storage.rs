@@ -349,6 +349,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         data: &[u8],
     ) -> Result<(), TpmRc> {
         let attributes = header.public.attributes;
+        // C `NvConditionallyWrite`: NV memory is only written (and so only needed) if the data
+        // changes. Rewriting the same bytes into a written, non-orderly index succeeds even while
+        // NV is unavailable. TPM 2.0 Part 3, "Response Codes": a `TPM_RC_NV_UNAVAILABLE` warning
+        // reports that the TPM could not complete an NV write; none is needed here.
+        if attributes.contains(TpmaNv::WRITTEN) && !attributes.contains(TpmaNv::ORDERLY) {
+            let mut current = [0u8; MAX_NV_INDEX_SIZE as usize];
+            let current = &mut current[..data.len()];
+            if StorageManager::new(&mut *self.context.platform.storage)
+                .read_item(nv_index, header.metadata_size + offset, current)
+                .is_ok()
+                && current == data
+            {
+                return Ok(());
+            }
+        }
         self.nv_prepare_index_update(attributes)?;
         if !attributes.contains(TpmaNv::WRITTEN) {
             let mut written = attributes;

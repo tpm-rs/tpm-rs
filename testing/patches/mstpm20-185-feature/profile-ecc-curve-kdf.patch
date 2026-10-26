@@ -1,0 +1,42 @@
+ecc-curve-kdf: report the recommended KDF of the NIST curves in TPM2_ECC_Parameters
+
+Classification: profile setting.
+
+The kdf of TPMS_ALGORITHM_DETAIL_ECC is an informative recommendation that
+may be TPM_ALG_NULL (Part 2; deprecated in version 185, where the reference
+reports TPM_ALG_NULL for every curve). tpm-rs, like the references before
+version 185, reports KDF1_SP800_56A with SHA-256 (P-192/P-224/P-256),
+SHA-384 (P-384) or SHA-512 (P-521), and TPM_ALG_NULL for the other curves.
+diff --git a/TPMCmd/tpm/cryptolibs/implementations/EccRef/CryptEccMain.c b/TPMCmd/tpm/cryptolibs/implementations/EccRef/CryptEccMain.c
+--- a/TPMCmd/tpm/cryptolibs/implementations/EccRef/CryptEccMain.c
++++ b/TPMCmd/tpm/cryptolibs/implementations/EccRef/CryptEccMain.c
+@@ -313,6 +313,29 @@
+         parameters->keySize = curve->keySizeBits;
+         // This field is deprecated and it never actually correlated to behavior from the Reference Code.
+         parameters->kdf.scheme = TPM_ALG_NULL;
++        // tpm-rs differential testing: the recommended KDF is informative and
++        // may be TPM_ALG_NULL (Part 2, TPMS_ALGORITHM_DETAIL_ECC); tpm-rs (like
++        // the references before version 185) reports KDF1_SP800_56A with the
++        // hash of the curve's security strength for the NIST curves.
++        switch(curveId)
++        {
++            case TPM_ECC_NIST_P192:
++            case TPM_ECC_NIST_P224:
++            case TPM_ECC_NIST_P256:
++                parameters->kdf.scheme = TPM_ALG_KDF1_SP800_56A;
++                parameters->kdf.details.kdf1_sp800_56a.hashAlg = TPM_ALG_SHA256;
++                break;
++            case TPM_ECC_NIST_P384:
++                parameters->kdf.scheme = TPM_ALG_KDF1_SP800_56A;
++                parameters->kdf.details.kdf1_sp800_56a.hashAlg = TPM_ALG_SHA384;
++                break;
++            case TPM_ECC_NIST_P521:
++                parameters->kdf.scheme = TPM_ALG_KDF1_SP800_56A;
++                parameters->kdf.details.kdf1_sp800_56a.hashAlg = TPM_ALG_SHA512;
++                break;
++            default:
++                break;
++        }
+         parameters->sign       = curve->sign;
+         //        BnTo2B(data->prime, &parameters->p.b, 0);
+         found = found

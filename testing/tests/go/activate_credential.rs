@@ -170,6 +170,7 @@ fn create_credential_software(
                     Alg::OAEP,
                     Alg::from(name_alg),
                     pub_key.get_buffer(),
+                    0,
                     &seed[..digest_size],
                     &mut encrypted_seed,
                     b"IDENTITY\0",

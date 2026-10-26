@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::{
     CertifyCreation, CreatePrimary, Hash, PolicyAuthorize, PolicyGetDigest, PolicySecret,
-    PolicyTicket, StartAuthSession, Startup,
+    PolicyTicket, Shutdown, StartAuthSession, Startup,
 };
 #[allow(deprecated)]
 use tpm2::commands::{Sign, VerifySignature};
@@ -515,6 +515,81 @@ fn policy_ticket_rejects_ticket_from_before_reset() {
         pt_res.err(),
         Some(TpmRc::TICKET.with(Position::parameter(5)).get())
     );
+}
+
+/// Creates a PolicySigned auth ticket, applies `restart` to the TPM, and returns the response
+/// code of TPM2_PolicyTicket with that ticket in a new policy session.
+fn policy_ticket_after(restart: impl FnOnce(&mut Tpm)) -> Option<u32> {
+    let mut sim = Tpm::new();
+    let (key, auth_name) = create_signing_key_name_bytes(&mut sim);
+    let (session, nonce_tpm) = start_policy(&mut sim, TpmSe::Policy);
+    let expiration: i32 = -10;
+    let digest = policy_signed_digest(nonce_tpm.get_buffer(), expiration);
+    let auth = sign_pss(&mut sim, key, &digest);
+    let ps_rsp =
+        policy_signed_with_nonce(&mut sim, key, session, nonce_tpm, expiration, auth).unwrap();
+    restart(&mut sim);
+    let (session2, _) = start_policy(&mut sim, TpmSe::Policy);
+    run_command(
+        &mut sim,
+        PolicyTicket {
+            policy_session: session2,
+            timeout: ps_rsp.timeout,
+            cp_hash_a: Tpm2bDigest::default(),
+            policy_ref: Tpm2bNonce::default(),
+            auth_name: Tpm2bName::from_bytes(leak_bytes(&auth_name)).unwrap(),
+            ticket: ps_rsp.policy_ticket,
+        },
+    )
+    .err()
+}
+
+/// A power cycle resets *Time*, a time discontinuity that starts a new *timeEpoch* (TPM 2.0
+/// Part 1: "a TPM is required to invalidate any time-based assertion that was created before a
+/// discontinuity in the TPM's measurement of time. Such a discontinuity can occur when *Time*
+/// does not advance or when *Time* is reset."), also when the TPM resumes
+/// (`TPM2_Shutdown(TPM_SU_STATE)`, power cycle, `TPM2_Startup(TPM_SU_STATE)`), so an auth ticket
+/// from before it fails TPM2_PolicyTicket with TPM_RC_TICKET. Found by the `diff_conversation`
+/// fuzzer.
+#[test]
+fn policy_ticket_rejects_ticket_from_before_power_cycle_resume() {
+    let rc = policy_ticket_after(|sim| {
+        sim.execute(Shutdown {
+            shutdown_type: TpmSu::State,
+        })
+        .unwrap();
+        sim.signal_platform(SimulatorPlatformSignal::PowerOff)
+            .unwrap();
+        sim.signal_platform(SimulatorPlatformSignal::PowerOn)
+            .unwrap();
+        sim.signal_platform(SimulatorPlatformSignal::NvOn).unwrap();
+        sim.execute(Startup {
+            startup_type: TpmSu::State,
+        })
+        .unwrap();
+    });
+    assert_eq!(rc, Some(TpmRc::TICKET.with(Position::parameter(5)).get()));
+}
+
+/// A `_TPM_Init` without a power loss (the platform `Reset` signal) does not reset *Time* (TPM
+/// 2.0 Part 1, "Time": "the time in milliseconds that the circuit providing *Time* has been
+/// powered"), so it is no time discontinuity: after `TPM2_Shutdown(TPM_SU_STATE)` and
+/// `TPM2_Startup(TPM_SU_CLEAR)` (a TPM Restart) the *timeEpoch* is unchanged and an auth ticket
+/// from before is still accepted by TPM2_PolicyTicket.
+#[test]
+fn policy_ticket_accepts_ticket_from_before_restart_without_power_loss() {
+    let rc = policy_ticket_after(|sim| {
+        sim.execute(Shutdown {
+            shutdown_type: TpmSu::State,
+        })
+        .unwrap();
+        sim.signal_platform(SimulatorPlatformSignal::Reset).unwrap();
+        sim.execute(Startup {
+            startup_type: TpmSu::Clear,
+        })
+        .unwrap();
+    });
+    assert_eq!(rc, None);
 }
 
 /// PolicyTicket rejects trial sessions, non-8-byte timeouts, cpHash conflicts before validating the ticket (TICKET+P5).

@@ -945,6 +945,16 @@ impl SessionEngine {
         self.last_auth_failure.as_ref()
     }
 
+    /// Forgets every session and loaded object after a power or reset
+    /// signal: the TPM loses its loaded sessions and transient objects (only
+    /// saved contexts and persistent objects may survive).
+    pub fn on_tpm_reset(&mut self) {
+        self.sessions.clear();
+        self.abort_pending();
+        self.pending_salt = None;
+        self.publics.retain(|(handle, _)| handle >> 24 != 0x80);
+    }
+
     /// Forgets what [`Self::authorize`] built, for a command the transport
     /// rejected (no response, so no session state changes).
     pub fn abort_pending(&mut self) {

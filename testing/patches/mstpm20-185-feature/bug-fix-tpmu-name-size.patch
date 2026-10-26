@@ -1,0 +1,41 @@
+fix-tpmu-name-size: do not let TPMU_NAME pad TPM2B_NAME beyond 66 octets
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 2, "TPM2B_NAME" (Table: Definition of
+TPM2B_NAME Structure)):
+
+  "If size is four, then the Name is a handle. If size is zero, then no Name
+  is present. Otherwise, the size shall be the size of a TPM_ALG_ID plus the
+  size of the digest produced by the indicated hash algorithm. ...
+  name[size]{:sizeof(TPMU_NAME)} BYTE the Name structure"
+
+Specification (TPM 2.0 Library, Part 2, "TPMU_NAME" (Table: Definition of
+TPMU_NAME Union)):
+
+  "digest TPMT_HA when the Name is a digest; handle TPM_HANDLE when the Name
+  is a handle"
+
+A TPM_HANDLE member pads sizeof(TPMU_NAME) to 68 although the largest
+TPMU_NAME is a 66-octet TPMT_HA (Part 2, TPM2B_NAME), so
+TPM2B_NAME_Unmarshal() accepted 67- and 68-octet Names that must be rejected
+with TPM_RC_SIZE. The handle member becomes a byte array of the same size
+and alignment 1.
+diff --git a/TPMCmd/tpm/include/tpm_public/TpmTypes.h b/TPMCmd/tpm/include/tpm_public/TpmTypes.h
+--- a/TPMCmd/tpm/include/tpm_public/TpmTypes.h
++++ b/TPMCmd/tpm/include/tpm_public/TpmTypes.h
+@@ -1432,8 +1432,12 @@
+ 
+ typedef union
+ {  // (Part 2: Structures)
+-    TPMT_HA    digest;
+-    TPM_HANDLE handle;
++    TPMT_HA digest;
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // a TPM_HANDLE member pads sizeof(TPMU_NAME) to 68 although the largest
++    // TPMU_NAME is a 66-octet TPMT_HA (Part 2, TPM2B_NAME), which made
++    // TPM2B_NAME_Unmarshal() accept 67/68-octet Names.
++    BYTE handle[sizeof(TPM_HANDLE)];
+ } TPMU_NAME;
+ 
+ typedef union

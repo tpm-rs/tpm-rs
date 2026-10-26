@@ -62,18 +62,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             _ => unreachable!(),
         };
 
+        // The public point of `keyHandle` is checked only by the point multiplication, after the
+        // ephemeral key pair has been generated (C `TPM2_ECDH_KeyGen()`: `CryptoEcc_NewKeyPair()`
+        // first, then `TPM_RC_ECC_POINT` from `CryptoEcc_PointMultiply()` becomes `TPM_RC_KEY`),
+        // so a bad point still consumes the random numbers of the ephemeral key.
         let qs_x = qs_point.x.get_buffer();
         let qs_y = qs_point.y.get_buffer();
-        if qs_x.len() > param_size
+        let qs_unusable = qs_x.len() > param_size
             || qs_y.len() > param_size
-            || (qs_x.is_empty() && qs_y.is_empty())
-        {
-            return Err(TpmRc::KEY.with(Position::handle(1)));
-        }
+            || (qs_x.is_empty() && qs_y.is_empty());
 
         let mut qs_bytes = [0u8; 256];
-        qs_bytes[param_size - qs_x.len()..param_size].copy_from_slice(qs_x);
-        qs_bytes[2 * param_size - qs_y.len()..2 * param_size].copy_from_slice(qs_y);
+        if !qs_unusable {
+            qs_bytes[param_size - qs_x.len()..param_size].copy_from_slice(qs_x);
+            qs_bytes[2 * param_size - qs_y.len()..2 * param_size].copy_from_slice(qs_y);
+        }
 
         let mut de_buf = [0u8; 128];
         let mut qe_buf = [0u8; 256];
@@ -94,6 +97,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 None,
             )
             .map_err(|_| TpmRc::FAILURE)?;
+
+        if qs_unusable {
+            return Err(TpmRc::KEY.with(Position::handle(1)));
+        }
 
         let mut z_raw = [0u8; 256];
         // Any failure, a point at infinity / invalid point (`Ok(None)`) or a crypto error, is

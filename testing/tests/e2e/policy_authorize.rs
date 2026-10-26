@@ -40,12 +40,14 @@ fn ticket_with_unknown_tag_rejected_with_tag() {
     );
 }
 
-/// PolicyAuthorize with a `TPM_ST_DIGEST_VERIFIED` ticket (produced only by
-/// TPM2_VerifyDigestSignature, which this TPM does not implement) fails with `TPM_RC_TAG` on the
-/// ticket while it is unmarshaled, before its oversized digest (found by differential fuzzing;
-/// Part 2 TPMT_TK_VERIFIED "#TPM_RC_TAG", spec silent on unimplemented producers → mstpm20).
+/// PolicyAuthorize with a `TPM_ST_MESSAGE_VERIFIED` ticket (produced only by
+/// TPM2_VerifySequenceComplete, which this TPM does not implement) unmarshals the ticket and
+/// fails on its oversized `hmac` (`TPM_RC_SIZE` on the ticket): TPM 2.0 Part 2,
+/// TPMT_TK_VERIFIED: "#TPM_RC_TAG | | error returned when *tag* is not one of the values in
+/// @tbl:tpm-st-for-signatures", and that table lists `TPM_ST_VERIFIED`,
+/// `TPM_ST_MESSAGE_VERIFIED` and `TPM_ST_DIGEST_VERIFIED`.
 #[test]
-fn digest_verified_ticket_rejected_with_tag() {
+fn message_verified_ticket_is_unmarshaled() {
     let mut sim = Tpm::new();
     let session = start_trial_session(&mut sim);
     let mut cmd = hex_checked(concat!(
@@ -56,15 +58,47 @@ fn digest_verified_ticket_rejected_with_tag() {
         "0000",     // approvedPolicy: empty
         "0000",     // policyRef: empty
         "000100",   // keySign: 1 byte
-        "8026",     // checkTicket.tag: TPM_ST_DIGEST_VERIFIED
+        "8026",     // checkTicket.tag: TPM_ST_MESSAGE_VERIFIED
         "40000007", // checkTicket.hierarchy: TPM_RH_NULL
-        "0080",     // checkTicket.digest: 128 bytes announced, none present
+        "0080",     // checkTicket.hmac: 128 bytes announced, none present
     ));
     cmd[10..14].copy_from_slice(&session.0.to_be_bytes());
     assert_eq!(
         raw_rc(&mut sim, &cmd),
-        TpmRc::TAG.with(Position::parameter(4)).get()
+        TpmRc::SIZE.with(Position::parameter(4)).get()
     );
+}
+
+/// PolicyAuthorize with a `TPM_ST_DIGEST_VERIFIED` ticket (produced only by
+/// TPM2_VerifyDigestSignature, which this TPM does not implement) unmarshals its
+/// `TPMI_ALG_HASH` metadata (TPM 2.0 Part 2, TPMU_TK_VERIFIED_META: "digestVerified |
+/// TPMI_ALG_HASH | `TPM_ST_DIGEST_VERIFIED`"), so a metadata value that is not a hash
+/// algorithm is `TPM_RC_HASH` on the ticket, and with a valid one the command proceeds past
+/// unmarshaling (to the `keySign` check: a 1-byte Name is `TPM_RC_SIZE` on `keySign`).
+#[test]
+fn digest_verified_ticket_metadata_is_unmarshaled() {
+    let mut sim = Tpm::new();
+    let session = start_trial_session(&mut sim);
+    for (meta, rc) in [
+        (0x0001u16, TpmRc::HASH.with(Position::parameter(4)).get()), // TPM_ALG_RSA
+        (0x000b, TpmRc::SIZE.with(Position::parameter(3)).get()),    // TPM_ALG_SHA256
+    ] {
+        let mut cmd = hex_checked(concat!(
+            "8001",     // NO_SESSIONS
+            "00000021", // size: 33 bytes
+            "0000016a", // TPM_CC_PolicyAuthorize
+            "03000000", // policySession (patched below)
+            "0000",     // approvedPolicy: empty
+            "0000",     // policyRef: empty
+            "000100",   // keySign: 1 byte
+            "8027",     // checkTicket.tag: TPM_ST_DIGEST_VERIFIED
+            "40000007", // checkTicket.hierarchy: TPM_RH_NULL
+        ));
+        cmd.extend_from_slice(&meta.to_be_bytes()); // checkTicket.metadata
+        cmd.extend_from_slice(&[0, 2, 1, 2]); // checkTicket.hmac: 2 bytes
+        cmd[10..14].copy_from_slice(&session.0.to_be_bytes());
+        assert_eq!(raw_rc(&mut sim, &cmd), rc, "metadata {meta:#06x}");
+    }
 }
 
 /// PolicyAuthorize with forged verification tickets (NULL and owner hierarchy) fails.

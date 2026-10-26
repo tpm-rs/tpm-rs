@@ -20,6 +20,8 @@ fn test_no_direct_nv_write() {
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.initialized = true;
+    // As if `TPM2_Startup` had started the time epoch of this power on.
+    tpm.state.timer_stopped = false;
     tpm.state.locality = 0;
 
     tpm.state.platform_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
@@ -115,6 +117,8 @@ fn test_no_nv_writes_stress() {
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.initialized = true;
+    // As if `TPM2_Startup` had started the time epoch of this power on.
+    tpm.state.timer_stopped = false;
     tpm.state.locality = 0;
 
     tpm.state.owner_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();

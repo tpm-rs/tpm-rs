@@ -108,20 +108,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
-    /// Persists the monotonic `time_epoch` counter (8 bytes at offset 24) to non-volatile storage.
-    ///
-    /// This ensures that time-bound authorization sessions and policy tickets (`TPMT_TK_AUTH`)
-    /// from previous power cycles or resets are permanently invalidated and cannot be replayed
-    /// across cold reboots (`TPM Reset` / `TPM Restart`).
-    fn nv_sync_persistent_time_epoch(&mut self) -> Result<(), TpmRc> {
-        self.context
-            .platform
-            .storage
-            .write_nv(24, &self.context.state.time_epoch.to_be_bytes())
-            .map_err(|_| TpmRc::FAILURE)?;
-        Ok(())
-    }
-
     /// Persists the dictionary attack `failed_tries` counter (4 bytes at offset 32) to non-volatile storage.
     pub(crate) fn nv_sync_persistent_failed_tries(&mut self) -> Result<(), TpmRc> {
         self.context
@@ -358,6 +344,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
+        // C `TPM2_Startup()`: "This can be reset after the first completion of a TPM2_Startup()
+        // after a power loss."
+        self.context.state.power_lost_since_startup = false;
+
         let _response = request.into_response();
         Ok(())
     }
@@ -422,30 +412,28 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         kind: StartupKind,
         prev_orderly_state: u16,
     ) -> Result<(), TpmRc> {
-        let current_timer = self.context.platform.timer.timer_read();
-        self.context.state.clock_offset = self
-            .context
-            .state
-            .clock_offset
-            .wrapping_add(self.context.state.tpm_time_ms as i64);
-        if !is_orderly(prev_orderly_state) {
-            self.context.state.self_heal_timer = 0;
-            self.context.state.lockout_timer = 0;
-            self.context.state.tpm_time_ms = 0;
-            self.context.state.last_timer_read_ms = Some(current_timer);
-        } else {
-            self.context.state.self_heal_timer = self
-                .context
-                .state
-                .self_heal_timer
-                .saturating_sub(self.context.state.tpm_time_ms as i64);
-            self.context.state.lockout_timer = self
-                .context
-                .state
-                .lockout_timer
-                .saturating_sub(self.context.state.tpm_time_ms as i64);
-            self.context.state.tpm_time_ms = 0;
-            self.context.state.last_timer_read_ms = Some(current_timer);
+        // `DAStartup()` (`ACCUMULATE_SELF_HEAL_TIMER`): only when the timer was reset by a power
+        // on (`if(_plat__TimerWasReset())`) are the timers rebased onto the new *Time*: to 0 after
+        // an unorderly shutdown, else by the *Time* of the shutdown (`s_selfHealTimer -=
+        // go.time;`). Otherwise *Time* kept running and the timers stay valid.
+        if self.context.state.timer_was_reset {
+            self.context.state.timer_was_reset = false;
+            if !is_orderly(prev_orderly_state) {
+                self.context.state.self_heal_timer = 0;
+                self.context.state.lockout_timer = 0;
+            } else {
+                let shutdown_time = self.context.state.shutdown_time_ms as i64;
+                self.context.state.self_heal_timer = self
+                    .context
+                    .state
+                    .self_heal_timer
+                    .saturating_sub(shutdown_time);
+                self.context.state.lockout_timer = self
+                    .context
+                    .state
+                    .lockout_timer
+                    .saturating_sub(shutdown_time);
+            }
         }
 
         if self.context.state.lockout_recovery == 0 && !self.context.state.lockout_auth_enabled {
@@ -463,6 +451,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.context.state.da_used = false;
             self.nv_sync_persistent_failed_tries()?;
         }
+        // "Before Startup, the TPM will not do clock updates. At startup, need to do a time
+        // update which will do the DA update." (`DAStartup()` ends with `TimeUpdate()`, which
+        // also starts a new time epoch if the timer was stopped by a power on.)
+        self.context.time_update();
 
         match kind {
             StartupKind::Resume => {
@@ -471,8 +463,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             StartupKind::Restart => {
                 self.context.state.clear_count += 1;
                 self.context.state.restart_count += 1;
-                self.context.state.time_epoch = self.context.state.time_epoch.wrapping_add(1);
-                self.nv_sync_persistent_time_epoch()?;
             }
             StartupKind::Reset => {
                 // `HierarchyStartup`: nullProof and nullSeed are regenerated on every TPM Reset.
@@ -511,9 +501,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .ok_or(TpmRc::FAILURE)?;
                 self.nv_sync_persistent_total_reset_count()?;
                 self.context.state.restart_count = 0;
-
-                self.context.state.time_epoch = self.context.state.time_epoch.wrapping_add(1);
-                self.nv_sync_persistent_time_epoch()?;
             }
         }
         Ok(())

@@ -3,8 +3,8 @@
 //! feature of `testing`).
 //!
 //! `testing/build.rs` clones the TCG reference code, either version 185
-//! (`https://github.com/TrustedComputingGroup/TPM-Internal` at tag `v185.0.0`,
-//! patched by `testing/patches/mstpm20-v185/*.patch`) when the user's `git`
+//! (`https://github.com/TrustedComputingGroup/TPM-Internal` on its
+//! `185-feature` branch, patched by `testing/patches/mstpm20-185-feature/*.patch`) when the user's `git`
 //! may clone it, or else the public repository
 //! (`https://github.com/TrustedComputingGroup/TPM` at commit
 //! `3b1f0e623f244abe2015df9e3ba86de5c9118524`, patched by

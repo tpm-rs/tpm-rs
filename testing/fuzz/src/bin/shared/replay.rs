@@ -8,7 +8,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use testing::tpm::Tpm;
 use tpm2_fuzz::driver::{Driver, Finding, RoundOutcome};
-use tpm2_fuzz::model::Conversation;
+use tpm2_fuzz::model::{Conversation, Step};
 
 /// What one replayed round did.
 #[derive(Debug)]
@@ -16,8 +16,11 @@ pub enum Outcome {
     /// Executed, with the `tpm-rs` response code (see
     /// [`RoundOutcome::Executed`]).
     Executed(u32),
-    /// Rejected at the transport level (not executed, not mirrored).
+    /// Rejected at the transport level, or sent while the TPM was powered
+    /// off (not executed, not mirrored).
     Skipped,
+    /// An event step (platform signal, `_TPM_Hash_*`, sleep, locality).
+    Event,
     /// The round ended the conversation with a driver finding.
     Finding(Finding),
     /// The round panicked (e.g. a session engine finding such as
@@ -29,6 +32,11 @@ pub enum Outcome {
 /// One replayed round.
 #[derive(Debug)]
 pub struct Replayed {
+    /// The step of the round.
+    pub step: Step,
+    /// The locality the command was sent at (for an event step: the
+    /// locality after it).
+    pub locality: u8,
     /// The resolved command bytes that were sent.
     pub command: Vec<u8>,
     /// The `tpm-rs` response (empty if the round was skipped or panicked
@@ -66,10 +74,13 @@ pub fn replay(tpm: &mut Tpm, conv: &Conversation) -> Vec<Replayed> {
         let outcome = match result {
             Ok(Ok(RoundOutcome::Executed(rc))) => Outcome::Executed(rc),
             Ok(Ok(RoundOutcome::Skipped)) => Outcome::Skipped,
+            Ok(Ok(RoundOutcome::Event)) => Outcome::Event,
             Ok(Err(finding)) => Outcome::Finding(finding),
             Err(payload) => Outcome::Panic(panic_message(payload.as_ref())),
         };
         let replayed = Replayed {
+            step: step.clone(),
+            locality: driver.locality(),
             command: driver.last_command().to_vec(),
             response: driver.last_response().to_vec(),
             outcome,

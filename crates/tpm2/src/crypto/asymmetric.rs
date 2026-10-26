@@ -195,20 +195,30 @@ pub trait AsymmetricSign {
 ///   - key generation methods return `Ok((public_len, private_len))`.
 #[allow(unused_variables)]
 pub trait Asymmetric {
-    /// Verifies `signature` over `digest` using RSASSA-PKCS1-v1_5 (`TPM_ALG_RSASSA`) with `public_key`.
+    /// Verifies `signature` over `digest` using RSASSA-PKCS1-v1_5 (`TPM_ALG_RSASSA`) with the modulus
+    /// `public_key` and public `exponent`.
+    ///
+    /// `exponent` is the public exponent of the key (`TPMS_RSA_PARMS.exponent`); `0` selects
+    /// the default exponent $2^{16}+1$ (65537).
     fn rsassa_verify(
         &self,
         public_key: &[u8],
+        exponent: u32,
         digest: TpmtHa<'_>,
         signature: &[u8],
     ) -> Result<bool, CryptoError> {
         Err(CryptoError::Unsupported)
     }
 
-    /// Verifies `signature` over `digest` using RSASSA-PSS (`TPM_ALG_RSAPSS`) with `public_key`.
+    /// Verifies `signature` over `digest` using RSASSA-PSS (`TPM_ALG_RSAPSS`) with the modulus
+    /// `public_key` and public `exponent`.
+    ///
+    /// `exponent` is the public exponent of the key (`TPMS_RSA_PARMS.exponent`); `0` selects
+    /// the default exponent $2^{16}+1$ (65537).
     fn rsapss_verify(
         &self,
         public_key: &[u8],
+        exponent: u32,
         digest: TpmtHa<'_>,
         signature: &[u8],
     ) -> Result<bool, CryptoError> {
@@ -245,25 +255,35 @@ pub trait Asymmetric {
         Err(CryptoError::Unsupported)
     }
 
-    /// Encrypts `data` using RSAES-PKCS1-v1_5 (`TPM_ALG_RSAES`) with `public_key`.
+    /// Encrypts `data` using RSAES-PKCS1-v1_5 (`TPM_ALG_RSAES`) with the modulus `public_key`
+    /// and public `exponent`.
     ///
-    /// Returns `Ok(None)` if `public_key` is invalid or `data` is too large for it.
+    /// `exponent` is the public exponent of the key (`TPMS_RSA_PARMS.exponent`); `0` selects
+    /// the default exponent $2^{16}+1$ (65537).
+    ///
+    /// Returns `Ok(None)` if the key is invalid or `data` is too large for it.
     fn rsaes_encrypt(
         &self,
         public_key: &[u8],
+        exponent: u32,
         data: &[u8],
         ciphertext: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
         Err(CryptoError::Unsupported)
     }
 
-    /// Encrypts `data` using RSAES-OAEP (`TPM_ALG_OAEP`) with `hash_alg`, `public_key`, and `label`.
+    /// Encrypts `data` using RSAES-OAEP (`TPM_ALG_OAEP`) with `hash_alg`, the modulus
+    /// `public_key`, the public `exponent`, and `label`.
     ///
-    /// Returns `Ok(None)` if `public_key` or `label` is invalid, or `data` is too large for the key.
+    /// `exponent` is the public exponent of the key (`TPMS_RSA_PARMS.exponent`); `0` selects
+    /// the default exponent $2^{16}+1$ (65537).
+    ///
+    /// Returns `Ok(None)` if the key or `label` is invalid, or `data` is too large for the key.
     fn oaep_encrypt(
         &self,
         hash_alg: TpmiAlgHash,
         public_key: &[u8],
+        exponent: u32,
         data: &[u8],
         label: &[u8],
         ciphertext: &mut [u8],
@@ -271,13 +291,18 @@ pub trait Asymmetric {
         Err(CryptoError::Unsupported)
     }
 
-    /// Encrypts `data` using raw RSA modular exponentiation ($m^e \bmod n$).
+    /// Encrypts `data` using raw RSA modular exponentiation ($m^e \bmod n$) with the modulus
+    /// `public_key` ($n$) and public `exponent` ($e$).
     ///
-    /// Returns `Ok(None)` if `public_key` is invalid or `data` (as an integer) is not smaller
+    /// `exponent` is the public exponent of the key (`TPMS_RSA_PARMS.exponent`); `0` selects
+    /// the default exponent $2^{16}+1$ (65537).
+    ///
+    /// Returns `Ok(None)` if the key is invalid or `data` (as an integer) is not smaller
     /// than the modulus.
     fn rsa_null_encrypt(
         &self,
         public_key: &[u8],
+        exponent: u32,
         data: &[u8],
         ciphertext: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
@@ -384,18 +409,22 @@ pub trait Asymmetric {
     /// Dispatches to the algorithm-specific method for each signature scheme
     /// whose crate feature is enabled; any other `sign_alg` returns
     /// `Err(`[`CryptoError::Unsupported`]`)`.
+    ///
+    /// `rsa_exponent` is the public exponent of an RSA key (`0` for the default 65537) and is
+    /// ignored by the ECC schemes.
     fn verify_inner(
         &self,
         sign_alg: Alg,
         public_key: &[u8],
+        rsa_exponent: u32,
         digest: TpmtHa<'_>,
         signature: &[u8],
     ) -> Result<bool, CryptoError> {
         match sign_alg {
             #[cfg(feature = "rsassa")]
-            Alg::RSASSA => self.rsassa_verify(public_key, digest, signature),
+            Alg::RSASSA => self.rsassa_verify(public_key, rsa_exponent, digest, signature),
             #[cfg(feature = "rsapss")]
-            Alg::RSAPSS => self.rsapss_verify(public_key, digest, signature),
+            Alg::RSAPSS => self.rsapss_verify(public_key, rsa_exponent, digest, signature),
             #[cfg(feature = "ecdsa")]
             Alg::ECDSA => self.ecdsa_verify(public_key, digest, signature),
             #[cfg(feature = "sm2")]
@@ -412,28 +441,33 @@ pub trait Asymmetric {
     /// [`Alg::NULL`] (raw RSA), each available only if the corresponding crate feature is
     /// enabled. Any other `scheme`, or an OAEP `hash_alg` that is not a hash algorithm,
     /// returns `Err(`[`CryptoError::Unsupported`]`)`.
+    ///
+    /// `public_key` is the modulus and `rsa_exponent` the public exponent of the RSA key
+    /// (`0` for the default 65537).
+    #[allow(clippy::too_many_arguments)]
     fn encrypt(
         &self,
         scheme: Alg,
         hash_alg: Alg,
         public_key: &[u8],
+        rsa_exponent: u32,
         data: &[u8],
         ciphertext: &mut [u8],
         label: &[u8],
     ) -> Result<Option<usize>, CryptoError> {
         match scheme {
             #[cfg(feature = "rsaes")]
-            Alg::RSAES => self.rsaes_encrypt(public_key, data, ciphertext),
+            Alg::RSAES => self.rsaes_encrypt(public_key, rsa_exponent, data, ciphertext),
             #[cfg(feature = "oaep")]
             Alg::OAEP => {
                 let hash = Option::<TpmiAlgHash>::try_from(hash_alg)
                     .ok()
                     .flatten()
                     .ok_or(CryptoError::Unsupported)?;
-                self.oaep_encrypt(hash, public_key, data, label, ciphertext)
+                self.oaep_encrypt(hash, public_key, rsa_exponent, data, label, ciphertext)
             }
             #[cfg(feature = "rsa")]
-            Alg::NULL => self.rsa_null_encrypt(public_key, data, ciphertext),
+            Alg::NULL => self.rsa_null_encrypt(public_key, rsa_exponent, data, ciphertext),
             _ => Err(CryptoError::Unsupported),
         }
     }
@@ -529,25 +563,36 @@ pub fn verify_inner<A: Asymmetric>(
     a: &A,
     sign_alg: Alg,
     public_key: &[u8],
+    rsa_exponent: u32,
     digest: TpmtHa<'_>,
     signature: &[u8],
 ) -> Result<bool, CryptoError> {
-    a.verify_inner(sign_alg, public_key, digest, signature)
+    a.verify_inner(sign_alg, public_key, rsa_exponent, digest, signature)
 }
 
 /// Encrypts `data` using the requested asymmetric `scheme` and `hash_alg` via backend `a`.
 ///
 /// See [`Asymmetric::encrypt`].
+#[allow(clippy::too_many_arguments)]
 pub fn rsa_encrypt<A: Asymmetric>(
     a: &A,
     scheme: Alg,
     hash_alg: Alg,
     public_key: &[u8],
+    rsa_exponent: u32,
     data: &[u8],
     ciphertext: &mut [u8],
     label: &[u8],
 ) -> Result<Option<usize>, CryptoError> {
-    a.encrypt(scheme, hash_alg, public_key, data, ciphertext, label)
+    a.encrypt(
+        scheme,
+        hash_alg,
+        public_key,
+        rsa_exponent,
+        data,
+        ciphertext,
+        label,
+    )
 }
 
 /// Decrypts `ciphertext` using the requested asymmetric `scheme` and `hash_alg` via backend `a`.

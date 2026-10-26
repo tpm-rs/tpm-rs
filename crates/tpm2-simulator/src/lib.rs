@@ -328,9 +328,20 @@ impl<'a> Simulator<'a> {
                 stream.write_all(&data)?;
                 stream.write_all(&0u32.to_be_bytes())?;
             }
+            // The power and reset signals follow the MSSIM platform port of the TCG reference
+            // simulator (`_rpc__Signal_PowerOn(isReset)`, `_rpc__Signal_PowerOff()`): power on
+            // is ignored while the power is on, and a reset while it is off.
             SimulatorPlatformSignal::PowerOn => {
-                self.is_power_on = true;
-                self.context.reset();
+                if !self.is_power_on {
+                    self.is_power_on = true;
+                    // `_TPM_Init` after a power loss: `NvPowerOn()` re-enables NV
+                    // (`_plat__NVEnable()`), which `Context::reset` does.
+                    self.is_nv_on = true;
+                    self.context.state.power_lost_since_startup = true;
+                    // `_plat__Signal_PowerOn()` resets the timer (`_plat__TimerReset()`).
+                    self.context.platform_timer_reset();
+                    self.context.reset();
+                }
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             SimulatorPlatformSignal::PowerOff => {
@@ -338,8 +349,16 @@ impl<'a> Simulator<'a> {
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             SimulatorPlatformSignal::Reset => {
-                self.is_power_on = true;
-                self.context.reset();
+                if self.is_power_on {
+                    // `_TPM_Init` without a new power loss: NV availability is unchanged,
+                    // unless no `TPM2_Startup` has completed since the last power loss
+                    // (`g_powerWasLost` is sticky until then, and `NvPowerOn()` re-enables NV).
+                    self.context.reset();
+                    if self.context.state.power_lost_since_startup {
+                        self.is_nv_on = true;
+                    }
+                    self.context.set_nv_available(self.is_nv_on);
+                }
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             SimulatorPlatformSignal::NvOn => {
@@ -352,9 +371,12 @@ impl<'a> Simulator<'a> {
             }
             SimulatorPlatformSignal::NvOff => {
                 // Matches `_plat__ClearNvAvail()`: subsequent commands that need NV fail with
-                // `TPM_RC_NV_UNAVAILABLE` (`NvCheckState` / `RETURN_IF_NV_IS_NOT_AVAILABLE`).
-                self.is_nv_on = false;
-                self.context.set_nv_available(false);
+                // `TPM_RC_NV_UNAVAILABLE` (`NvCheckState` / `RETURN_IF_NV_IS_NOT_AVAILABLE`),
+                // ignored while the power is off (`_rpc__Signal_NvOff()`).
+                if self.is_power_on {
+                    self.is_nv_on = false;
+                    self.context.set_nv_available(false);
+                }
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             SimulatorPlatformSignal::SetFirmwareHash | SimulatorPlatformSignal::SetFirmwareSvn => {

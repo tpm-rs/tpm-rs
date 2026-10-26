@@ -285,3 +285,52 @@ fn rsa_decrypt_rejects_unloaded_key_handle() {
     let err = res.err().unwrap();
     assert_eq!(err.get(), TpmRc::REFERENCE_H0.get());
 }
+
+/// TPM2_RSA_Encrypt uses the key's public exponent: TPM 2.0 Part 2, TPMS_RSA_PARMS: "exponent |
+/// UINT32 | the public exponent; A prime number greater than 2.", so a NULL-scheme ciphertext
+/// made with a key whose exponent is 65539 decrypts back to the message with TPM2_RSA_Decrypt
+/// (tpm-rs used 2^16 + 1 for every key's public operations). Found by differential fuzzing
+/// (OAEP ciphertexts of keys with the exponents 0x40000007 and 0x21000053 differed from the
+/// references').
+#[test]
+fn encrypt_uses_the_public_exponent() {
+    let mut tpm = Tpm::new();
+    // TPM2_CreatePrimary(TPM_RH_OWNER): RSA 2048 decryption key, symmetric and scheme
+    // TPM_ALG_NULL, exponent 65539.
+    let mut cmd = vec![
+        0x80, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x31, 0x40, 0x00, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x09, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x16, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x02, 0x00, 0x72, 0x00, 0x00,
+        0x00, 0x10, 0x00, 0x10, 0x08, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00,
+    ];
+    let size = cmd.len() as u32;
+    cmd[2..6].copy_from_slice(&size.to_be_bytes());
+    let rsp = tpm.send_command(0, &cmd);
+    assert_eq!(crate::_common::rc_of(&rsp), 0, "CreatePrimary: {rsp:02x?}");
+    let key = u32::from_be_bytes(rsp[10..14].try_into().unwrap());
+    // TPM2_RSA_Encrypt(key, message = [2], inScheme = TPM_ALG_NULL, label = empty).
+    let mut cmd = vec![0x80, 0x01, 0x00, 0x00, 0x00, 0x15, 0x00, 0x00, 0x01, 0x74];
+    cmd.extend_from_slice(&key.to_be_bytes());
+    cmd.extend_from_slice(&[0x00, 0x01, 0x02, 0x00, 0x10, 0x00, 0x00]);
+    let rsp = tpm.send_command(0, &cmd);
+    assert_eq!(crate::_common::rc_of(&rsp), 0, "RSA_Encrypt: {rsp:02x?}");
+    assert_eq!(rsp[10..12], [0x01, 0x00]);
+    let ciphertext = rsp[12..12 + 256].to_vec();
+    // TPM2_RSA_Decrypt(key, password session, ciphertext, TPM_ALG_NULL, label = empty).
+    let mut cmd = vec![0x80, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x59];
+    cmd.extend_from_slice(&key.to_be_bytes());
+    cmd.extend_from_slice(&[0, 0, 0, 9, 0x40, 0, 0, 9, 0, 0, 1, 0, 0]);
+    cmd.extend_from_slice(&[0x01, 0x00]);
+    cmd.extend_from_slice(&ciphertext);
+    cmd.extend_from_slice(&[0x00, 0x10, 0x00, 0x00]);
+    let size = cmd.len() as u32;
+    cmd[2..6].copy_from_slice(&size.to_be_bytes());
+    let rsp = tpm.send_command(0, &cmd);
+    assert_eq!(crate::_common::rc_of(&rsp), 0, "RSA_Decrypt: {rsp:02x?}");
+    // message: the plaintext value 2 (with leading zero octets).
+    let len = usize::from(u16::from_be_bytes([rsp[14], rsp[15]]));
+    let message = &rsp[16..16 + len];
+    assert_eq!(message.last(), Some(&2));
+    assert!(message[..len - 1].iter().all(|&b| b == 0), "{message:02x?}");
+}

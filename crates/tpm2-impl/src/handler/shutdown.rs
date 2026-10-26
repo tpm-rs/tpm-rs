@@ -56,6 +56,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         self.context.state.orderly_state = shutdown_type;
+        // `go.time = g_time;`
+        self.context.state.shutdown_time_ms = self.context.state.tpm_time_ms;
         self.context.state.da_used = false;
         if shutdown_type == 0x0001 {
             // Save the STATE_RESET and STATE_CLEAR data for a subsequent TPM Restart / Resume.

@@ -396,6 +396,7 @@ fn encrypted_salt(
                     tpm2::Alg::OAEP,
                     name_alg.into(),
                     pub_key_rsa.get_buffer(),
+                    0,
                     &salt,
                     &mut ciphertext,
                     b"SECRET\0",

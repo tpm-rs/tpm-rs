@@ -4,6 +4,12 @@ use tpm2::{TpmiAlgHash, TpmtHa};
 
 use crate::{BNP256, CruxCryptoProvider, RngWrapper};
 
+/// Returns the RSA public exponent `exponent` (`TPMS_RSA_PARMS.exponent`) as a big integer,
+/// where `0` selects the default exponent $2^{16}+1$ (65537).
+fn rsa_public_exponent(exponent: u32) -> rsa::BigUint {
+    rsa::BigUint::from(if exponent == 0 { 65537 } else { exponent })
+}
+
 /// Normalizes an ECDSA `digest` to exactly `N` bytes, the byte length of the
 /// curve order, as described by FIPS 186-5 section 6.4 (`bits2int`).
 ///
@@ -204,18 +210,20 @@ impl AsymmetricSign for CruxCryptoProvider {
 /// Encryption, decryption and key import return `Ok(None)` for invalid inputs (an unusable key or
 /// label, a message too large for the key, a bad ciphertext or padding, inconsistent key
 /// components). Unsupported algorithms return `Err(CryptoError::Unsupported)`, and output buffers
-/// that are too small return `Err(CryptoError::Internal)`. RSA public keys use the exponent 65537
+/// that are too small return `Err(CryptoError::Internal)`. RSA public-key operations use the
+/// key's public exponent (`0` for the default 65537), generated RSA keys use the exponent 65537,
 /// and private keys are PKCS#8 DER.
 impl Asymmetric for CruxCryptoProvider {
     fn rsassa_verify(
         &self,
         public_key: &[u8],
+        exponent: u32,
         digest: TpmtHa<'_>,
         signature: &[u8],
     ) -> Result<bool, CryptoError> {
         let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
-            rsa::BigUint::from(65537u32),
+            rsa_public_exponent(exponent),
         ) else {
             return Ok(false);
         };
@@ -249,12 +257,13 @@ impl Asymmetric for CruxCryptoProvider {
     fn rsapss_verify(
         &self,
         public_key: &[u8],
+        exponent: u32,
         digest: TpmtHa<'_>,
         signature: &[u8],
     ) -> Result<bool, CryptoError> {
         let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
-            rsa::BigUint::from(65537u32),
+            rsa_public_exponent(exponent),
         ) else {
             return Ok(false);
         };
@@ -336,13 +345,14 @@ impl Asymmetric for CruxCryptoProvider {
         &self,
         hash_alg: TpmiAlgHash,
         public_key: &[u8],
+        exponent: u32,
         data: &[u8],
         label: &[u8],
         ciphertext: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
         let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
-            rsa::BigUint::from(65537u32),
+            rsa_public_exponent(exponent),
         ) else {
             return Ok(None);
         };
@@ -404,12 +414,13 @@ impl Asymmetric for CruxCryptoProvider {
     fn rsa_null_encrypt(
         &self,
         public_key: &[u8],
+        exponent: u32,
         data: &[u8],
         ciphertext: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
         let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
-            rsa::BigUint::from(65537u32),
+            rsa_public_exponent(exponent),
         ) else {
             return Ok(None);
         };
@@ -832,14 +843,14 @@ mod tests {
         let mut sig = [0u8; 256];
         let len = c.rsassa_sign(&d, sha256, &mut sig).unwrap().unwrap();
         assert_eq!(len, 128);
-        assert_eq!(c.rsassa_verify(&n, sha256, &sig[..len]), Ok(true));
+        assert_eq!(c.rsassa_verify(&n, 0, sha256, &sig[..len]), Ok(true));
         assert_eq!(
-            c.verify_inner(Alg::RSASSA, &n, sha256, &sig[..len]),
+            c.verify_inner(Alg::RSASSA, &n, 0, sha256, &sig[..len]),
             Ok(true)
         );
         sig[0] ^= 1;
-        assert_eq!(c.rsassa_verify(&n, sha256, &sig[..len]), Ok(false));
-        assert_eq!(c.rsassa_verify(&[], sha256, &sig[..len]), Ok(false));
+        assert_eq!(c.rsassa_verify(&n, 0, sha256, &sig[..len]), Ok(false));
+        assert_eq!(c.rsassa_verify(&[], 0, sha256, &sig[..len]), Ok(false));
         assert_eq!(c.rsassa_sign(b"not a key", sha256, &mut sig), Ok(None));
         assert_eq!(
             c.rsassa_sign(&d, sha256, &mut sig[..64]),
@@ -852,7 +863,7 @@ mod tests {
 
         // RSA-PSS: a 1024-bit key cannot sign SHA-512 with a 64-byte salt.
         let len = c.rsapss_sign(&d, sha256, &mut sig).unwrap().unwrap();
-        assert_eq!(c.rsapss_verify(&n, sha256, &sig[..len]), Ok(true));
+        assert_eq!(c.rsapss_verify(&n, 0, sha256, &sig[..len]), Ok(true));
         assert_eq!(
             c.rsapss_sign(&d, TpmtHa::Sha512(&[7; 64]), &mut sig),
             Ok(None)
@@ -861,7 +872,7 @@ mod tests {
         // OAEP: round trip, wrong label, corrupted ciphertext, oversized message.
         let mut ct = [0u8; 128];
         let len = c
-            .oaep_encrypt(TpmiAlgHash::Sha256, &n, b"secret", b"label\0", &mut ct)
+            .oaep_encrypt(TpmiAlgHash::Sha256, &n, 0, b"secret", b"label\0", &mut ct)
             .unwrap()
             .unwrap();
         let mut pt = [0u8; 128];
@@ -880,28 +891,28 @@ mod tests {
             Ok(None)
         );
         assert_eq!(
-            c.oaep_encrypt(TpmiAlgHash::Sha256, &n, &[0; 63], b"", &mut ct),
+            c.oaep_encrypt(TpmiAlgHash::Sha256, &n, 0, &[0; 63], b"", &mut ct),
             Ok(None)
         );
         assert_eq!(
-            c.oaep_encrypt(TpmiAlgHash::Sha256, &n, b"m", &[0xff], &mut ct),
+            c.oaep_encrypt(TpmiAlgHash::Sha256, &n, 0, b"m", &[0xff], &mut ct),
             Ok(None)
         );
         assert_eq!(
-            c.oaep_encrypt(TpmiAlgHash::Sm3_256, &n, b"m", b"", &mut ct),
+            c.oaep_encrypt(TpmiAlgHash::Sm3_256, &n, 0, b"m", b"", &mut ct),
             Err(CryptoError::Unsupported)
         );
 
         // Raw RSA: round trip, and a message not smaller than the modulus.
         let mut m = [0u8; 128];
         m[127] = 9;
-        assert_eq!(c.rsa_null_encrypt(&n, &m, &mut ct), Ok(Some(128)));
+        assert_eq!(c.rsa_null_encrypt(&n, 0, &m, &mut ct), Ok(Some(128)));
         assert_eq!(c.rsa_null_decrypt(&d, &ct, &mut pt), Ok(Some(128)));
         assert_eq!(pt, m);
-        assert_eq!(c.rsa_null_encrypt(&n, &n, &mut ct), Ok(None));
+        assert_eq!(c.rsa_null_encrypt(&n, 0, &n, &mut ct), Ok(None));
         assert_eq!(c.rsa_null_decrypt(&d, &n, &mut pt), Ok(None));
         assert_eq!(
-            c.rsa_null_encrypt(&n, &m, &mut ct[..127]),
+            c.rsa_null_encrypt(&n, 0, &m, &mut ct[..127]),
             Err(CryptoError::Internal)
         );
 
@@ -938,7 +949,7 @@ mod tests {
 
         // RSAES is not implemented by this backend.
         assert_eq!(
-            c.encrypt(Alg::RSAES, Alg::NULL, &n, b"m", &mut ct, b""),
+            c.encrypt(Alg::RSAES, Alg::NULL, &n, 0, b"m", &mut ct, b""),
             Err(CryptoError::Unsupported)
         );
     }

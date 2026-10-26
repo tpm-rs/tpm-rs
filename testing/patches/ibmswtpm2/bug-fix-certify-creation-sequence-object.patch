@@ -1,0 +1,30 @@
+certify-creation-sequence-object: TPM2_CertifyCreation rejects a sequence object as objectHandle
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, "TPM2_CertifyCreation", "General
+Description"): "This command is used to prove the association between an
+object and its creation data."
+
+A hash, HMAC or event sequence object has no creation data, yet the reference
+recomputes the creation ticket over whatever Name an earlier object left in the
+slot (TPM_RC_TICKET), and checks signHandle first. The specification gives no
+response code for this case; the check returns
+TPM_RC_TYPE + RC_CertifyCreation_objectHandle before the signHandle and scheme
+checks, as the TCG reference's version 185 ("Cannot certify creation of a
+sequence object") and tpm-rs do.
+diff --git a/src/AttestationCommands.c b/src/AttestationCommands.c
+--- a/src/AttestationCommands.c
++++ b/src/AttestationCommands.c
+@@ -134,6 +134,11 @@
+ 	fclose(f);
+     }
+     // Input Validation
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // a sequence object has no creation data (as in mstpm20 version 185:
++    // "Cannot certify creation of a sequence object").
++    if(ObjectIsSequence(certified))
++	return TPM_RCS_TYPE + RC_CertifyCreation_objectHandle;
+     if(!IsSigningObject(signObject))
+ 	return TPM_RCS_KEY + RC_CertifyCreation_signHandle;
+     if(!CryptSelectSignScheme(signObject, &in->inScheme))

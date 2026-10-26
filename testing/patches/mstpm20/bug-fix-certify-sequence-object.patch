@@ -14,8 +14,9 @@ TPM2_CreatePrimary(), yet the reference certifies it: its Name and Qualified
 Name are whatever an earlier object left in the slot (FindEmptyObjectSlot()
 clears only the slot's attributes and AllocateSequenceSlot() sets neither),
 so the attestation contains stale data. The specification gives no response
-code for this case; the check returns TPM_RC_KEY + RC_Certify_objectHandle,
-the response code tpm-rs uses, after the signHandle and scheme checks (which
+code for this case; the check returns TPM_RC_TYPE + RC_Certify_objectHandle,
+the response code of the TCG reference's version 185 ("Cannot certify a
+sequence object") and of tpm-rs, after the signHandle and scheme checks (which
 keep their order).
 
 diff --git a/TPMCmd/tpm/src/command/Attestation/Certify.c b/TPMCmd/tpm/src/command/Attestation/Certify.c
@@ -28,7 +29,7 @@ diff --git a/TPMCmd/tpm/src/command/Attestation/Certify.c b/TPMCmd/tpm/src/comma
 +    // A sequence object is not an object loaded with TPM2_Load() or
 +    // TPM2_CreatePrimary(); its Name and Qualified Name are not defined.
 +    if(ObjectIsSequence(certifiedObject))
-+        return TPM_RCS_KEY + RC_Certify_objectHandle;
++        return TPM_RCS_TYPE + RC_Certify_objectHandle;
  
      // Command Output
      // Filling in attest information

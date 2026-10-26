@@ -76,14 +76,16 @@ fn extend_event_reset_locality_masks() {
 }
 
 // 10. Stress/Adversarial tests for locality enforcement
-/// PCR 16 reset at locality 4/5 and PCR 21 extend at locality 3 fail with LOCALITY.
+/// PCR 21 extend at locality 3 fails with LOCALITY; a command at locality 5 runs at locality 0
+/// (TPM 2.0 Part 1, "Locality": "Locality 5 through 31 cannot be selected."; like the TCG
+/// reference platform, `_plat__LocalitySet()`), so PCR 16 may be reset there and PCR 21 not
+/// extended.
 #[test]
 fn reset_and_extend_from_unauthorized_locality() {
     let mut sim = Tpm::new();
 
-    // PCR 16 Reset: reset mask allows 0..3, so locality 4 is unauthorized.
-    // Locality 5 (unauthorized as locality > 4)
-    assert_eq!(pcr_reset_at(&mut sim, 5, 16), TpmRc::LOCALITY.get());
+    // PCR 16 Reset: reset mask allows 0..3; locality 5 selects locality 0.
+    assert_eq!(pcr_reset_at(&mut sim, 5, 16), 0);
 
     // PCR 21 Extend: extend mask allows 2 only. Locality 3 is unauthorized.
     let digests = [(ALG_SHA256, vec![0x22u8; 32])];

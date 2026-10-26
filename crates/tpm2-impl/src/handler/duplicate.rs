@@ -132,6 +132,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 3. Resolve the new parent key public key modulus/parameters
         let mut parent_pub_modulus = [0u8; 512];
         let mut parent_pub_modulus_len = 0;
+        let mut parent_pub_exponent = 0;
         let mut parent_ecc_curve = None;
         let mut parent_ecc_pub_point = [0u8; 256];
         let mut parent_ecc_px_len = 0;
@@ -158,7 +159,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
             // Parent must be an asymmetric key
             match &obj.public.parms_and_id {
-                OwnedPublicParmsAndId::Rsa(_, unique) => {
+                OwnedPublicParmsAndId::Rsa(parms, unique) => {
+                    parent_pub_exponent = parms.exponent;
                     parent_pub_modulus_len = unique.get_size() as usize;
                     parent_pub_modulus[..parent_pub_modulus_len]
                         .copy_from_slice(unique.get_buffer());
@@ -464,6 +466,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         Alg::OAEP,
                         Alg::from(parent_name_alg),
                         &parent_pub_modulus[..parent_pub_modulus_len],
+                        parent_pub_exponent,
                         &seed[..digest_size],
                         &mut encrypted_seed,
                         b"DUPLICATE\0",

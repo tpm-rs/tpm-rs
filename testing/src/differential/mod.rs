@@ -7,7 +7,7 @@
 //! * [`Implementation::Mstpm20`]: the TCG reference implementation
 //!   (the Microsoft `ms-tpm-20-ref` code base): version 185 of the
 //!   TCG-internal `https://github.com/TrustedComputingGroup/TPM-Internal`,
-//!   patched by `testing/patches/mstpm20-v185/`, when the user's `git` may
+//!   patched by `testing/patches/mstpm20-185-feature/`, when the user's `git` may
 //!   clone it, and otherwise `https://github.com/TrustedComputingGroup/TPM`,
 //!   patched by `testing/patches/mstpm20/` (see `testing/build.rs`);
 //! * [`Implementation::Ibmswtpm2`]: the IBM software TPM

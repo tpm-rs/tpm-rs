@@ -276,7 +276,7 @@ fn unsupported_rsa_exponent_fails_key_generation_with_range() {
 /// (`TPM_RC_RESERVED_BITS + P2`) before anything later in the template is examined. TPM 2.0
 /// Part 2, Table "Definition of (UINT32) TPMA_OBJECT Bits": "3 | Reserved | shall be zero". (The
 /// TCG reference version 185 defines the bit as `fixedFirmware`, see
-/// `testing/patches/mstpm20-v185/profile-tpma-object-fixed-firmware-reserved.patch`.) Found by
+/// `testing/patches/mstpm20-185-feature/profile-tpma-object-fixed-firmware-reserved.patch`.) Found by
 /// differential fuzzing.
 #[test]
 fn reserved_object_attribute_bit_3_rejected() {

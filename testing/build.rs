@@ -11,9 +11,9 @@
 //! * `mstpm20`: the TCG / Microsoft reference implementation, in one of two
 //!   versions (see [`Version`]):
 //!   * `v185`: the TCG-internal repository
-//!     `https://github.com/TrustedComputingGroup/TPM-Internal` at tag
-//!     `v185.0.0` (specification version 185), patched by
-//!     `testing/patches/mstpm20-v185/*.patch`, used whenever the user's `git`
+//!     `https://github.com/TrustedComputingGroup/TPM-Internal` on its
+//!     `185-feature` branch (specification version 185), patched by
+//!     `testing/patches/mstpm20-185-feature/*.patch`, used whenever the user's `git`
 //!     may clone it;
 //!   * `public`: the public repository
 //!     `https://github.com/TrustedComputingGroup/TPM`, patched by
@@ -85,9 +85,10 @@ const REFERENCES: [Reference; 2] = [
             Version {
                 label: "v185",
                 repo: "https://github.com/TrustedComputingGroup/TPM-Internal",
-                // Tag `v185.0.0`.
-                commit: "80a8b19436d742f42e00fba8527272071284b42c",
-                patch_dir: "mstpm20-v185",
+                // Latest commit of the `185-feature` branch (after tag
+                // `v185.0.0`).
+                commit: "5b5e8df4142885bbd7a947dd064c3dc1b812a979",
+                patch_dir: "mstpm20-185-feature",
                 sources: mstpm20_v185_sources,
                 include_dirs: mstpm20_v185_include_dirs,
                 cflags: &[

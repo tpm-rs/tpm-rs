@@ -340,19 +340,25 @@ fn certify_signature_verifies_only_with_signer_and_hash() {
         };
 
         // 1. Correct verification should pass
-        let verify_res =
-            provider.verify_inner(sig_alg, rsa_unique.get_buffer(), digest_sha256, sig_bytes);
+        let verify_res = provider.verify_inner(
+            sig_alg,
+            rsa_unique.get_buffer(),
+            0,
+            digest_sha256,
+            sig_bytes,
+        );
         assert_eq!(verify_res, Ok(true));
 
         // 2. Verification with incorrect hash algorithm (SHA1 instead of SHA256) should fail
         let verify_res_wrong_hash =
-            provider.verify_inner(sig_alg, rsa_unique.get_buffer(), digest_sha1, sig_bytes);
+            provider.verify_inner(sig_alg, rsa_unique.get_buffer(), 0, digest_sha1, sig_bytes);
         assert_eq!(verify_res_wrong_hash, Ok(false));
 
         // 3. Verification with wrong key (other signer key) should fail
         let verify_res_wrong_key = provider.verify_inner(
             sig_alg,
             other_rsa_unique.get_buffer(),
+            0,
             digest_sha256,
             sig_bytes,
         );
@@ -369,8 +375,13 @@ fn certify_signature_verifies_only_with_signer_and_hash() {
             &mut mod_buf,
         )
         .unwrap();
-        let verify_res_modified_attest =
-            provider.verify_inner(sig_alg, rsa_unique.get_buffer(), modified_digest, sig_bytes);
+        let verify_res_modified_attest = provider.verify_inner(
+            sig_alg,
+            rsa_unique.get_buffer(),
+            0,
+            modified_digest,
+            sig_bytes,
+        );
         assert_eq!(verify_res_modified_attest, Ok(false));
     } else {
         panic!("Expected RSA public parameters");

@@ -201,7 +201,8 @@ fn test_certify() {
             _ => panic!("Expected RSASSA signature"),
         };
 
-        let verify_res = provider.verify_inner(sig_alg, rsa_unique.get_buffer(), digest, sig_bytes);
+        let verify_res =
+            provider.verify_inner(sig_alg, rsa_unique.get_buffer(), 0, digest, sig_bytes);
         assert!(
             matches!(verify_res, Ok(true)),
             "Signature verification failed: {:?}",
@@ -319,7 +320,8 @@ fn test_create_and_certify_creation() {
             _ => panic!("Expected RSASSA signature"),
         };
 
-        let verify_res = provider.verify_inner(sig_alg, rsa_unique.get_buffer(), digest, sig_bytes);
+        let verify_res =
+            provider.verify_inner(sig_alg, rsa_unique.get_buffer(), 0, digest, sig_bytes);
         assert!(
             matches!(verify_res, Ok(true)),
             "Signature verification failed: {:?}",
@@ -465,7 +467,8 @@ fn test_nv_certify() {
             _ => panic!("Expected RSASSA signature"),
         };
 
-        let verify_res = provider.verify_inner(sig_alg, rsa_unique.get_buffer(), digest, sig_bytes);
+        let verify_res =
+            provider.verify_inner(sig_alg, rsa_unique.get_buffer(), 0, digest, sig_bytes);
         assert!(
             matches!(verify_res, Ok(true)),
             "Signature verification failed: {:?}",

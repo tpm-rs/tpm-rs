@@ -83,6 +83,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .ok_or(TpmRc::TYPE.with(Position::handle(2)))?;
         let digest_size = name_alg.digest_size();
 
+        // A sequence object as `activateHandle` is rejected after the protector key's checks.
+        // TPM 2.0 Part 3, TPM2_ActivateCredential: "This command enables the association of a
+        // credential with an object in a way that ensures that the TPM has validated the
+        // parameters of the credentialed object." A sequence object has no such parameters; the
+        // specification gives no response code for it, so the TCG reference's (version 185,
+        // "Cannot activate credential of sequence object")
+        // `TPM_RC_TYPE + RC_ActivateCredential_activateHandle` is used.
+        if self
+            .context
+            .state
+            .find_active_sequence(activate_handle)
+            .is_some()
+        {
+            return Err(TpmRc::TYPE.with(Position::handle(1)));
+        }
+
         // 4. Decrypt secret to recover seed (`CryptSecretDecrypt`). C maps `TPM_RC_KEY` to
         // `TPM_RC_FAILURE` and adds `RC_ActivateCredential_secret` to the other errors.
         let mut seed = [0u8; 64];
@@ -99,7 +115,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // The activated object is used only for its Name, after the protector key's checks
         // and the seed's decryption (C `TPM2_ActivateCredential()`: the key's type check and
         // `CryptSecretDecrypt()` come first; "this assertion is deliberately late, after other
-        // validation has happened"). Any loaded object qualifies, a sequence object included.
+        // validation has happened"). Any loaded object other than a sequence object
+        // qualifies.
         // TPM 2.0 Part 3, TPM2_ActivateCredential: "The key associated with *keyHandle* is used
         // to recover a seed from *secret*, which is the encrypted seed. The Name of the object
         // associated with *activateHandle*, and the recovered seed are used in a KDF to recover

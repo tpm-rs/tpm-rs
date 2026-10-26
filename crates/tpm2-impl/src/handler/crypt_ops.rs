@@ -129,6 +129,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut pub_key = [0u8; 512];
         let mut sig_buf = [0u8; 512];
+        // The RSA public exponent (`0`: the default 65537); unused for ECC keys.
+        let mut rsa_exponent = 0;
         let (sign_alg, hash_alg, pub_len, sig_len) = match &obj.public.parms_and_id {
             OwnedPublicParmsAndId::Rsa(parms, unique) => {
                 // CryptRsaValidateSignature()
@@ -149,6 +151,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let offset = key_size - modulus.len();
                 pub_key[offset..key_size].copy_from_slice(modulus);
                 sig_buf[offset..key_size].copy_from_slice(sig_bytes);
+                rsa_exponent = parms.exponent;
                 (sign_alg, Alg::from(sig_rsa.hash), key_size, key_size)
             }
             OwnedPublicParmsAndId::Ecc(parms, point) => {
@@ -226,6 +229,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         match self.crypto().verify_inner(
             sign_alg,
             &pub_key[..pub_len],
+            rsa_exponent,
             digest_ha,
             &sig_buf[..sig_len],
         ) {
@@ -506,10 +510,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let obj = self.resolve_object(key_handle.0, Position::handle(1))?;
 
         // Validate the key referenced by key_handle is an RSA key
-        let (key_bits, key_scheme, pub_key) = match &obj.public.parms_and_id {
-            OwnedPublicParmsAndId::Rsa(parms, pub_key) => {
-                (parms.key_bits, parms.scheme, pub_key.get_buffer())
-            }
+        let (key_bits, key_scheme, exponent, pub_key) = match &obj.public.parms_and_id {
+            OwnedPublicParmsAndId::Rsa(parms, pub_key) => (
+                parms.key_bits,
+                parms.scheme,
+                parms.exponent,
+                pub_key.get_buffer(),
+            ),
             _ => {
                 return Err(TpmRc::KEY.with(Position::handle(1)));
             }
@@ -555,6 +562,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 match self.reference_rsa_encrypt(
                     hash,
                     pub_key,
+                    exponent,
                     label_bytes,
                     cmd.message.get_buffer(),
                     &mut encrypted_data[..key_size],
@@ -568,6 +576,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 resolved_scheme,
                 resolved_hash_alg,
                 pub_key,
+                exponent,
                 cmd.message.get_buffer(),
                 &mut encrypted_data[..key_size],
                 label_bytes,
@@ -578,6 +587,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             resolved_scheme,
             resolved_hash_alg,
             pub_key,
+            exponent,
             cmd.message.get_buffer(),
             &mut encrypted_data[..key_size],
             label_bytes,

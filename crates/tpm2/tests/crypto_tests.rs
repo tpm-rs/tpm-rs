@@ -575,11 +575,20 @@ fn test_asymmetric_default_unimplemented() {
         Err(CryptoError::Unsupported)
     );
     assert_eq!(
-        verify_inner(&provider, Alg::ECDSA, &[], digest, &[]),
+        verify_inner(&provider, Alg::ECDSA, &[], 0, digest, &[]),
         Err(CryptoError::Unsupported)
     );
     assert_eq!(
-        rsa_encrypt(&provider, Alg::OAEP, Alg::SHA256, &[], &[], &mut sig, &[]),
+        rsa_encrypt(
+            &provider,
+            Alg::OAEP,
+            Alg::SHA256,
+            &[],
+            0,
+            &[],
+            &mut sig,
+            &[]
+        ),
         Err(CryptoError::Unsupported)
     );
     assert_eq!(

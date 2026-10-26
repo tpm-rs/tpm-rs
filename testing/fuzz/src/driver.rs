@@ -4,11 +4,20 @@
 //! Per round the driver **resolves** the step against the value pool and the
 //! session table, **builds** the command bytes (with the authorization area
 //! from the [`SessionEngine`]), **sends** them through
-//! [`Tpm::try_exchange`] at locality 0 (which compares the responses of
-//! `tpm-rs` and the C references), **checks** that the `tpm-rs` response is
-//! well formed, lets the session engine **update** its sessions, and
-//! **extracts** the response fields into the [`ValuePool`]. Rounds the
-//! simulator rejects at the transport level are skipped.
+//! [`Tpm::try_exchange`] at the current locality (initially 0; which compares
+//! the responses of `tpm-rs` and the C references), **checks** that the
+//! `tpm-rs` response is well formed, lets the session engine **update** its
+//! sessions, and **extracts** the response fields into the [`ValuePool`].
+//! Rounds the simulator rejects at the transport level, and commands sent
+//! while the TPM is powered off (no response), are skipped.
+//!
+//! Event steps send nothing: [`Step::Platform`] delivers a platform signal
+//! ([`Tpm::signal_platform`]; a power or reset signal also ends every session
+//! the session engine tracks, because the TPM loses its loaded sessions) or a
+//! `_TPM_Hash_*` indication (skipped while the TPM is powered off; the data is
+//! cut at [`MAX_HASH_DATA`] bytes, the simulator's limit), [`Step::Sleep`]
+//! lets time pass ([`testing::tpm::sleep`]) and [`Step::Locality`] sets the
+//! locality of the following commands.
 //!
 //! # Findings
 //!
@@ -28,13 +37,14 @@
 
 use std::fmt::Write as _;
 use std::path::Path;
+use std::time::Duration;
 
 use testing::differential::Divergence;
 use testing::seed::ReferenceSeed;
-use testing::tpm::{SendError, Tpm};
+use testing::tpm::{SendError, SimulatorPlatformSignal, Tpm};
 
 use crate::builder::{assemble, has_auth_area, resolve_handles, resolve_params};
-use crate::model::{AuthSel, Cmd, SessionSel, Step};
+use crate::model::{AuthSel, Cmd, PlatformOp, SessionSel, Step};
 use crate::pool::ValuePool;
 use crate::session::{CommandInfo, SessionChoice, SessionEngine, SessionRequest};
 use crate::wire::{be16, be32, check_response, parse_command};
@@ -45,6 +55,10 @@ pub const FIXED_SEED: ReferenceSeed = ReferenceSeed {
     pid: 4242,
     realtime_ms: 1_000_000,
 };
+
+/// The largest `_TPM_Hash_Data` payload the driver sends (the `tpm-rs`
+/// simulator's MSSIM limit); longer [`PlatformOp::HashData`] bytes are cut.
+pub const MAX_HASH_DATA: usize = 4096;
 
 /// A finding (see the module docs).
 #[derive(Debug)]
@@ -182,9 +196,12 @@ impl Finding {
 pub enum RoundOutcome {
     /// The command was executed (and compared); its `tpm-rs` response code.
     Executed(u32),
-    /// The simulator rejected the command at the transport level, so it was
-    /// neither executed nor mirrored.
+    /// The simulator rejected the command at the transport level (or the TPM
+    /// is powered off), so it was neither executed nor mirrored.
     Skipped,
+    /// An event step ([`Step::Platform`], [`Step::Sleep`],
+    /// [`Step::Locality`]) was applied.
+    Event,
 }
 
 /// Counters of one driver.
@@ -196,6 +213,8 @@ pub struct Stats {
     pub skipped: u64,
     /// Rounds whose `tpm-rs` response was `TPM_RC_SUCCESS`.
     pub succeeded: u64,
+    /// Event rounds applied.
+    pub events: u64,
 }
 
 impl Stats {
@@ -204,6 +223,7 @@ impl Stats {
         self.rounds += other.rounds;
         self.skipped += other.skipped;
         self.succeeded += other.succeeded;
+        self.events += other.events;
     }
 }
 
@@ -222,6 +242,10 @@ pub struct Driver {
     last_command: Vec<u8>,
     /// The last `tpm-rs` response (empty if the round was skipped).
     last_response: Vec<u8>,
+    /// The locality commands are sent at ([`Step::Locality`]).
+    locality: u8,
+    /// Whether the last power signal was `PowerOff`.
+    powered_off: bool,
 }
 
 /// A command ready to send, with what the session engine needs to know about
@@ -249,6 +273,53 @@ impl Driver {
     /// The `tpm-rs` response of the last round (empty if it was skipped).
     pub fn last_response(&self) -> &[u8] {
         &self.last_response
+    }
+
+    /// The locality the next command is sent at.
+    pub fn locality(&self) -> u8 {
+        self.locality
+    }
+
+    /// Applies the event step `step` (see the module docs); `None` if it is
+    /// a command step.
+    fn apply_event(&mut self, tpm: &mut Tpm, step: &Step) -> Option<RoundOutcome> {
+        match step {
+            Step::Raw(_) | Step::Cmd(_) => return None,
+            Step::Sleep(ms) => testing::tpm::sleep(Duration::from_millis(u64::from(*ms))),
+            Step::Locality(locality) => self.locality = *locality,
+            Step::Platform(op) => {
+                if let Some(signal) = op.platform_signal() {
+                    if tpm.signal_platform(signal).is_err() {
+                        return Some(RoundOutcome::Skipped);
+                    }
+                    match signal {
+                        SimulatorPlatformSignal::PowerOff => self.powered_off = true,
+                        SimulatorPlatformSignal::PowerOn => self.powered_off = false,
+                        _ => {}
+                    }
+                    if matches!(
+                        signal,
+                        SimulatorPlatformSignal::PowerOff
+                            | SimulatorPlatformSignal::PowerOn
+                            | SimulatorPlatformSignal::Reset
+                    ) {
+                        self.sessions.on_tpm_reset();
+                    }
+                } else if self.powered_off {
+                    return Some(RoundOutcome::Skipped);
+                } else {
+                    match op {
+                        PlatformOp::HashStart => tpm.hash_start(),
+                        PlatformOp::HashData(data) => {
+                            tpm.hash_data(&data[..data.len().min(MAX_HASH_DATA)]);
+                        }
+                        PlatformOp::HashEnd => tpm.hash_end(),
+                        PlatformOp::Signal(_) => return Some(RoundOutcome::Skipped),
+                    }
+                }
+            }
+        }
+        Some(RoundOutcome::Event)
     }
 
     /// Resolves the auth value `sel` for the slot that authorizes `handle`.
@@ -362,12 +433,17 @@ impl Driver {
                     bytes: bytes.clone(),
                 }
             }
+            Step::Platform(_) | Step::Sleep(_) | Step::Locality(_) => Prepared {
+                bytes: Vec::new(),
+                code: None,
+                handles: Vec::new(),
+            },
         }
     }
 
-    /// Runs one round: builds `step`, sends it to `tpm` at locality 0,
-    /// checks the response and updates the session table and the value pool
-    /// (see the module docs).
+    /// Runs one round: builds `step`, sends it to `tpm` at the current
+    /// locality, checks the response and updates the session table and the
+    /// value pool, or applies an event step (see the module docs).
     ///
     /// # Errors
     /// A [`Finding`]; the conversation should end there (the `Tpm` must be
@@ -379,6 +455,16 @@ impl Driver {
     pub fn round(&mut self, tpm: &mut Tpm, step: &Step) -> Result<RoundOutcome, Finding> {
         let round = self.round;
         self.stats.rounds += 1;
+        self.last_command.clear();
+        self.last_response.clear();
+        if let Some(outcome) = self.apply_event(tpm, step) {
+            self.round += 1;
+            match outcome {
+                RoundOutcome::Skipped => self.stats.skipped += 1,
+                _ => self.stats.events += 1,
+            }
+            return Ok(outcome);
+        }
         // `prepare` builds the session engine's CommandInfo with `self.round`, so it must see
         // this round's index (the same one `on_response` gets).
         let prepared = self.prepare(step);
@@ -386,7 +472,13 @@ impl Driver {
         self.last_command.clone_from(&prepared.bytes);
         self.last_response.clear();
         let command = prepared.bytes;
-        let response = match tpm.try_exchange(0, &command) {
+        let response = match tpm.try_exchange(self.locality, &command) {
+            // A powered-off TPM does not answer.
+            Ok(response) if response.is_empty() && self.powered_off => {
+                self.sessions.abort_pending();
+                self.stats.skipped += 1;
+                return Ok(RoundOutcome::Skipped);
+            }
             Ok(response) => response,
             Err(SendError::Transport(_)) => {
                 self.sessions.abort_pending();
@@ -698,6 +790,71 @@ mod tests {
             // The same conversation again on the reset TPM.
             tpm.reset();
         }
+    }
+
+    /// Event steps reach a power cycle with `TPM2_Shutdown(STATE)` and
+    /// `TPM2_Startup(STATE)`, D-RTM, time and locality: commands sent while the
+    /// TPM is off are skipped, and the TPM answers again after the startup.
+    ///
+    /// Needs the reference binaries (`MSTPM20_BIN`/`IBMSWTPM2_BIN`).
+    #[test]
+    fn event_steps_power_cycle_the_tpm() {
+        use crate::model::PlatformOp;
+        use testing::tpm::SimulatorPlatformSignal as S;
+        let signal = |s| Step::Platform(PlatformOp::signal(s).expect("supported signal"));
+        let get_random = step(0x17B, vec![], vec![], vec![bytes(&[0, 8])]);
+        let conv = Conversation {
+            steps: vec![
+                // TPM2_Shutdown(TPM_SU_STATE).
+                step(0x145, vec![], vec![], vec![bytes(&[0, 1])]),
+                signal(S::PowerOff),
+                get_random.clone(),
+                signal(S::PowerOn),
+                // TPM2_Startup(TPM_SU_STATE): a TPM Resume.
+                step(0x144, vec![], vec![], vec![bytes(&[0, 1])]),
+                get_random.clone(),
+                Step::Platform(PlatformOp::HashStart),
+                Step::Platform(PlatformOp::HashData(vec![0xAB; 5000])),
+                Step::Platform(PlatformOp::HashEnd),
+                Step::Sleep(1500),
+                Step::Locality(3),
+                // TPM2_ReadClock.
+                step(0x181, vec![], vec![], vec![]),
+            ],
+        };
+        let conv = Conversation::from_bytes(&conv.to_bytes());
+        let mut tpm = Tpm::with_seed(FIXED_SEED);
+        let mut driver = Driver::default();
+        let outcomes: Vec<RoundOutcome> = conv
+            .steps
+            .iter()
+            .map(|s| {
+                driver
+                    .round(&mut tpm, s)
+                    .unwrap_or_else(|f| panic!("{}", f.report()))
+            })
+            .collect();
+        use RoundOutcome::{Event, Executed, Skipped};
+        assert_eq!(
+            outcomes,
+            [
+                Executed(0),
+                Event,
+                Skipped,
+                Event,
+                Executed(0),
+                Executed(0),
+                Event,
+                Event,
+                Event,
+                Event,
+                Event,
+                Executed(0),
+            ]
+        );
+        assert_eq!(driver.locality(), 3);
+        assert_eq!(driver.stats.events, 7);
+        assert_eq!(driver.stats.skipped, 1);
     }
 
     #[test]

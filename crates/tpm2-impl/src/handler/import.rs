@@ -76,13 +76,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .map_err(|e| e.in_parameter(2).to_rc())?;
 
         // `symmetricAlg` checks of `TPMT_SYM_DEF_OBJECT+` unmarshaling (Pos5): key size and
-        // block cipher mode (CFB, CTR, OFB, CBC or ECB; not NULL or CMAC).
+        // block cipher mode. TPM 2.0 Part 2, TPMU_SYM_MODE: "aes | TPMI_ALG_SYM_MODE+", whose
+        // values include "+TPM_ALG_NULL", so a NULL mode is accepted (the inner wrapper is
+        // always decrypted in CFB mode, as in the TCG reference `DuplicateToSensitive()`);
+        // CMAC is not a mode of this TPM's profile (`TPM_RC_MODE`).
         if let Some(sym_def) = cmd.symmetric_alg {
             let bits = sym_def.key_bits();
             if bits != 128 && bits != 256 && bits != 192 {
                 return Err(TpmRc::SYMMETRIC.with(Position::parameter(5)));
             }
-            if !matches!(sym_def.mode(), Some(TpmiAlgSymMode::Cipher(_))) {
+            if matches!(sym_def.mode(), Some(TpmiAlgSymMode::Cmac)) {
                 return Err(TpmRc::MODE.with(Position::parameter(5)));
             }
         }

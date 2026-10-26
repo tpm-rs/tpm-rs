@@ -250,11 +250,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
     /// RSA encryption with the reference code's OAEP (`hash_alg` `Some`) or RSAES-PKCS1-v1_5
     /// (`None`) encoding drawn from the TPM's DRBG, followed by the raw public-key operation of
-    /// the crypto provider. Returns `Ok(None)` if the provider rejects the key.
+    /// the crypto provider with the key's `modulus` and public `exponent` (`0` for the default
+    /// 65537). Returns `Ok(None)` if the provider rejects the key.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn reference_rsa_encrypt(
         &mut self,
         hash_alg: Option<TpmiAlgHash>,
         modulus: &[u8],
+        exponent: u32,
         label: &[u8],
         message: &[u8],
         out: &mut [u8],
@@ -267,7 +270,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             None => rsa::rsaes_pkcs1v15_encode(&mut rng, message, padded)?,
         }
         self.crypto()
-            .rsa_null_encrypt(modulus, padded, out)
+            .rsa_null_encrypt(modulus, exponent, padded, out)
             .map_err(|_| TpmRc::FAILURE)
     }
 

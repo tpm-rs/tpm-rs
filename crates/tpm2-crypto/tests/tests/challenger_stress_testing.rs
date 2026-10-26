@@ -1200,6 +1200,7 @@ fn adv_test_signature_verification_edge_cases() {
         provider.verify_inner(
             Alg::RSASSA,
             &rsa_pub1[..rsa_pub1_len],
+            0,
             tpm2::TpmtHa::Sha256(&digest),
             &signature[..sig_len],
         ),
@@ -1213,6 +1214,7 @@ fn adv_test_signature_verification_edge_cases() {
         let res = provider.verify_inner(
             Alg::RSASSA,
             &rsa_pub1[..rsa_pub1_len],
+            0,
             tpm2::TpmtHa::Sha256(&digest),
             &corrupted_sig[..sig_len],
         );
@@ -1225,6 +1227,7 @@ fn adv_test_signature_verification_edge_cases() {
         let res = provider.verify_inner(
             Alg::RSASSA,
             &rsa_pub1[..rsa_pub1_len],
+            0,
             tpm2::TpmtHa::Sha384(&digest_sha384),
             &signature[..sig_len],
         );
@@ -1236,6 +1239,7 @@ fn adv_test_signature_verification_edge_cases() {
         let res = provider.verify_inner(
             Alg::RSASSA,
             &rsa_pub2[..rsa_pub2_len],
+            0,
             tpm2::TpmtHa::Sha256(&digest),
             &signature[..sig_len],
         );
@@ -1247,6 +1251,7 @@ fn adv_test_signature_verification_edge_cases() {
         let res = provider.verify_inner(
             Alg::ECDSA,
             &rsa_pub1[..rsa_pub1_len],
+            0,
             tpm2::TpmtHa::Sha256(&digest),
             &signature[..sig_len],
         );
@@ -1302,6 +1307,7 @@ fn adv_test_signature_verification_edge_cases() {
         provider.verify_inner(
             Alg::ECDSA,
             &ecc_pub1[..ecc_pub1_len],
+            0,
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &ecc_signature[..ecc_sig_len],
         ),
@@ -1315,6 +1321,7 @@ fn adv_test_signature_verification_edge_cases() {
         let res = provider.verify_inner(
             Alg::ECDSA,
             &ecc_pub1[..ecc_pub1_len],
+            0,
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &corrupted_sig[..ecc_sig_len],
         );
@@ -1327,6 +1334,7 @@ fn adv_test_signature_verification_edge_cases() {
         let res = provider.verify_inner(
             Alg::ECDSA,
             &ecc_pub1[..ecc_pub1_len],
+            0,
             tpm2::TpmtHa::Sha384(&ecc_digest_sha384),
             &ecc_signature[..ecc_sig_len],
         );
@@ -1338,6 +1346,7 @@ fn adv_test_signature_verification_edge_cases() {
         let res = provider.verify_inner(
             Alg::ECDSA,
             &ecc_pub2[..ecc_pub2_len],
+            0,
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &ecc_signature[..ecc_sig_len],
         );
@@ -1349,6 +1358,7 @@ fn adv_test_signature_verification_edge_cases() {
         let res = provider.verify_inner(
             Alg::ECDSA,
             &ecc_pub1[..ecc_pub1_len - 1],
+            0,
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &ecc_signature[..ecc_sig_len],
         );
@@ -1357,6 +1367,7 @@ fn adv_test_signature_verification_edge_cases() {
         let res2 = provider.verify_inner(
             Alg::ECDSA,
             &ecc_pub1[..ecc_pub1_len],
+            0,
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &ecc_signature[..ecc_sig_len - 1],
         );
@@ -1368,6 +1379,7 @@ fn adv_test_signature_verification_edge_cases() {
         let res = provider.verify_inner(
             Alg::AES,
             &ecc_pub1[..ecc_pub1_len],
+            0,
             tpm2::TpmtHa::Sha256(&ecc_digest),
             &ecc_signature[..ecc_sig_len],
         );

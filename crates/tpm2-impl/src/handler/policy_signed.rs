@@ -167,6 +167,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             } else {
                 let mut pub_buf = [0u8; 512];
                 let pub_len;
+                // The RSA public exponent (`0`: the default 65537); unused for ECC keys.
+                let mut rsa_exponent = 0;
 
                 match obj.public.parms_and_id {
                     crate::owned::OwnedPublicParmsAndId::Rsa(parms, ref unique) => {
@@ -178,6 +180,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         let offset = key_size - u_buf.len();
                         pub_buf[offset..key_size].copy_from_slice(u_buf);
                         pub_len = key_size;
+                        rsa_exponent = parms.exponent;
                     }
                     crate::owned::OwnedPublicParmsAndId::Ecc(parms, ref point) => {
                         let curve = parms.curve_id;
@@ -282,6 +285,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     self.crypto().verify_inner(
                         sign_alg,
                         &pub_buf[..pub_len],
+                        rsa_exponent,
                         digest_ha,
                         &sig_buf[..sig_len],
                     ),

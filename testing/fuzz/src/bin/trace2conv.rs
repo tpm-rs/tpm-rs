@@ -3,7 +3,10 @@
 //! target.
 //!
 //! Each trace is split into conversations (see `shared/trace.rs`), truncated
-//! to [`MAX_ROUNDS`]. Every command becomes a structured [`Step::Cmd`] whose
+//! to [`MAX_ROUNDS`]. Platform signals, `_TPM_Hash_*` indications, clock
+//! advances and locality changes become event steps ([`Step::Platform`],
+//! [`Step::Sleep`], [`Step::Locality`]). Every command becomes a structured
+//! [`Step::Cmd`] whose
 //! operands refer to earlier responses wherever the recorded bytes equal what
 //! the driver's value pool holds at that round:
 //!
@@ -279,6 +282,10 @@ fn convert_conversation(rounds: &[Round]) -> Conversation {
     let mut pool = ValuePool::default();
     let mut steps = Vec::new();
     for (i, round) in rounds.iter().take(MAX_ROUNDS).enumerate() {
+        if let Some(step) = &round.event {
+            steps.push(step.clone());
+            continue;
+        }
         steps.push(convert_command(&round.command, &pool));
         // An unparseable success response ends the driver's conversation
         // with a finding; the error itself is irrelevant here.
@@ -309,7 +316,7 @@ fn count_refs(conv: &Conversation) -> usize {
                     .count()
                     + segs(&c.params)
             }
-            Step::Raw(_) => 0,
+            Step::Raw(_) | Step::Platform(_) | Step::Sleep(_) | Step::Locality(_) => 0,
         })
         .sum()
 }
@@ -323,6 +330,8 @@ fn reproduced_prefix(tpm: &mut Tpm, conv: &Conversation, rounds: &[Round]) -> (u
         let why = match &r.outcome {
             replay::Outcome::Finding(f) => f.signatures().join(", "),
             replay::Outcome::Panic(message) => format!("panic: {message}"),
+            replay::Outcome::Event if orig.event.as_ref() == Some(&r.step) => continue,
+            replay::Outcome::Event => "different event".into(),
             replay::Outcome::Skipped => "rejected at the transport level".into(),
             replay::Outcome::Executed(_) if r.command != orig.command => "different command".into(),
             replay::Outcome::Executed(_) if r.response != orig.response => format!(
@@ -489,10 +498,7 @@ fn rewrite_rounds(rounds: &[Round], rewrite: Rewrite) -> Option<(Vec<Round>, usi
             |(i, round)| match rewrite_template_command(&round.command, rewrite) {
                 Some(command) => {
                     first.get_or_insert(i);
-                    Round {
-                        command,
-                        response: round.response.clone(),
-                    }
+                    Round::command(command, round.response.clone())
                 }
                 None => round.clone(),
             },
@@ -511,8 +517,10 @@ fn same_rc_prefix(tpm: &mut Tpm, conv: &Conversation, rounds: &[Round]) -> usize
         .iter()
         .zip(rounds)
         .take_while(|(r, orig)| {
-            matches!(r.outcome, replay::Outcome::Executed(_))
-                && rc(&r.response) == rc(&orig.response)
+            matches!(
+                r.outcome,
+                replay::Outcome::Executed(_) | replay::Outcome::Event
+            ) && rc(&r.response) == rc(&orig.response)
         })
         .count()
 }

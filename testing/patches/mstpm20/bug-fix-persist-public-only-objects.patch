@@ -15,7 +15,7 @@ This reference still implements the older rule and rejects an object with
 attributes.publicOnly SET (e.g. the public-only object of
 TPM2_LoadExternal(hierarchy = TPM_RH_OWNER)) with TPM_RC_ATTRIBUTES +
 RC_EvictControl_objectHandle. tpm-rs (TPM_SPEC_VERSION 185) and the TCG
-reference v185.0.0 (`mstpm20-v185`, which already dropped the check) persist it.
+reference v185.0.0 (`mstpm20-185-feature`, which already dropped the check) persist it.
 The check now rejects only temporary and stClear objects, as in v185; the
 persistent copy keeps attributes.publicOnly (NvAddEvictObject stores the whole
 OBJECT), so it still has neither authValue nor authPolicy available.

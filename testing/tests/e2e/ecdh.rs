@@ -250,3 +250,39 @@ fn zgen_trailing_bytes_return_size() {
         rc_bare(TpmRc::SIZE)
     );
 }
+
+/// TPM2_ECDH_KeyGen generates the ephemeral key pair before it uses the public point of
+/// `keyHandle`, so a key without a usable public point (here an ECC key loaded by
+/// TPM2_LoadExternal with an empty point) fails with `TPM_RC_KEY` only after the ephemeral key's
+/// random numbers were drawn, as in the TCG reference (`CryptoEcc_NewKeyPair()`, then
+/// `TPM_RC_ECC_POINT` from `CryptoEcc_PointMultiply()` reported as `TPM_RC_KEY`); TPM 2.0 Part
+/// 3, TPM2_ECDH_KeyGen: "This command uses the TPM to generate an ephemeral key pair (d_e, Q_e
+/// where Q_e ≔ \[d_e\]G). It uses the private ephemeral key and a loaded public key (Q_s) to
+/// compute the shared secret value (P ≔ h\[d_e\]Q_s)." The random numbers that follow (here
+/// TPM2_GetRandom) are therefore the same as the references' (checked in differential mode).
+/// Found by differential fuzzing.
+#[test]
+fn key_without_public_point_fails_after_ephemeral_key() {
+    let mut tpm = Tpm::new();
+    // TPM2_LoadExternal: an ECC P-256 private key (nameAlg TPM_ALG_NULL) with an empty public
+    // point, in the NULL hierarchy.
+    let rsp = tpm.send_command(
+        0,
+        &[
+            0x80, 0x01, 0x00, 0x00, 0x00, 0x52, 0x00, 0x00, 0x01, 0x67, 0x00, 0x28, 0x00, 0x23,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+            0x01, 0x01, 0x00, 0x01, 0x24, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+            0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x18, 0x00, 0x23,
+            0x00, 0x10, 0x00, 0x04, 0x00, 0x40, 0x00, 0x00, 0x00, 0x10, 0x00, 0x18, 0x00, 0x0b,
+            0x00, 0x03, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x07,
+        ],
+    );
+    assert_eq!(crate::_common::rc_of(&rsp), 0);
+    let key = u32::from_be_bytes(rsp[10..14].try_into().unwrap());
+    let mut ecdh = vec![0x80, 0x01, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x01, 0x63];
+    ecdh.extend_from_slice(&key.to_be_bytes());
+    assert_eq!(crate::_common::rc_of(&tpm.send_command(0, &ecdh)), 0x19c);
+    // TPM2_GetRandom(16).
+    let rsp = tpm.send_command(0, &[0x80, 0x01, 0, 0, 0, 12, 0, 0, 0x01, 0x7B, 0, 16]);
+    assert_eq!(crate::_common::rc_of(&rsp), 0);
+}

@@ -1,0 +1,171 @@
+pqc-disabled: build the crypto libraries without ML-KEM and ML-DSA
+
+Classification: build fix.
+
+The OpenSSL ML-KEM/ML-DSA implementations (OsslMlkem.c, OsslMldsa.c) and the
+KEM dispatch (CryptKem.c) are compiled unconditionally, but the key types
+they use exist only with ALG_MLKEM / ALG_MLDSA, so they do not compile with
+both algorithms disabled (see profile-algorithms). Their contents are
+guarded by the algorithm switches. The same holds for the ML-DSA/ML-KEM TPM2B
+marshaling functions (Marshal.c, Marshal_Inner.h) and the ML-DSA interface
+include of Global.h, which the 185-feature branch added unconditionally.
+diff --git a/TPMCmd/tpm/cryptolibs/common/CryptKem.c b/TPMCmd/tpm/cryptolibs/common/CryptKem.c
+--- a/TPMCmd/tpm/cryptolibs/common/CryptKem.c
++++ b/TPMCmd/tpm/cryptolibs/common/CryptKem.c
+@@ -6,6 +6,8 @@
+ 
+ //** Includes
+ #include "Tpm.h"
++// tpm-rs differential testing (build fix): this file needs the ALG_MLKEM types.
++#if ALG_MLKEM
+ #include "CryptoMlkem_Interface.h"
+ 
+ TPM_RC
+@@ -46,3 +48,4 @@
+     // Not a supported KEM type
+     return TPM_RC_TYPE;
+ }
++#endif  // ALG_MLKEM
+diff --git a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMldsa.c b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMldsa.c
+--- a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMldsa.c
++++ b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMldsa.c
+@@ -1,4 +1,6 @@
+ #include "Tpm.h"
++// tpm-rs differential testing (build fix): this file needs the ALG_MLDSA types.
++#if ALG_MLDSA
+ #include "CryptoMldsa_Interface.h"
+ #include "tpm_public/TpmAlgorithmDefines.h"
+ #include <openssl/core_names.h>
+@@ -1383,3 +1385,4 @@
+ 
+     return retVal;
+ }
++#endif  // ALG_MLDSA
+diff --git a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMlkem.c b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMlkem.c
+--- a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMlkem.c
++++ b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslMlkem.c
+@@ -1,4 +1,6 @@
+ #include "Tpm.h"
++// tpm-rs differential testing (build fix): this file needs the ALG_MLKEM types.
++#if ALG_MLKEM
+ #include "CryptoMlkem_Interface.h"
+ #include "tpm_public/TpmAlgorithmDefines.h"
+ #include <openssl/core_names.h>
+@@ -541,3 +543,4 @@
+ 
+     return retVal;
+ }
++#endif  // ALG_MLKEM
+diff --git a/TPMCmd/tpm/include/private/Global.h b/TPMCmd/tpm/include/private/Global.h
+--- a/TPMCmd/tpm/include/private/Global.h
++++ b/TPMCmd/tpm/include/private/Global.h
+@@ -39,7 +39,11 @@
+ #  include "CryptoRand_Interface.h"
+ // A signing sequence over an ML-DSA key keeps a running ML-DSA state, so the
+ // sequence object below needs the ML-DSA state type.
+-#  include "CryptoMldsa_Interface.h"
++// tpm-rs differential testing (build fix): the interface needs the ALG_MLDSA
++// types.
++#  if ALG_MLDSA
++#    include "CryptoMldsa_Interface.h"
++#  endif  // ALG_MLDSA
+ 
+ #  include "NV.h"
+ #  include "tpm_public/ACT.h"
+diff --git a/TPMCmd/tpm/include/private/prototypes/Marshal_Inner.h b/TPMCmd/tpm/include/private/prototypes/Marshal_Inner.h
+--- a/TPMCmd/tpm/include/private/prototypes/Marshal_Inner.h
++++ b/TPMCmd/tpm/include/private/prototypes/Marshal_Inner.h
+@@ -1235,6 +1235,7 @@
+ TPMI_MLKEM_PARMS_MarshalUnmarshal(
+     TPMI_MLKEM_PARMS* target, BYTE** buffer, INT32* size, BOOL marshal);
+ 
++#if ALG_MLKEM  // tpm-rs differential testing (build fix)
+ // Table "Definition of TPM2B_PUBLIC_KEY_MLKEM Structure" (Part 2: Structures)
+ TPM_RC TPM2B_PUBLIC_KEY_MLKEM_MarshalUnmarshal(
+     TPM2B_PUBLIC_KEY_MLKEM* target, BYTE** buffer, INT32* size, BOOL marshal);
+@@ -1242,12 +1243,14 @@
+ // Table "Definition of TPM2B_PRIVATE_KEY_MLKEM Structure" (Part 2: Structures)
+ TPM_RC TPM2B_PRIVATE_KEY_MLKEM_MarshalUnmarshal(
+     TPM2B_PRIVATE_KEY_MLKEM* target, BYTE** buffer, INT32* size, BOOL marshal);
++#endif  // ALG_MLKEM
+ 
+ // Table "Definition of TPMI_MLDSA_PARMS Type" (Part 2: Structures)
+ TPM_RC
+ TPMI_MLDSA_PARMS_MarshalUnmarshal(
+     TPMI_MLDSA_PARMS* target, BYTE** buffer, INT32* size, BOOL marshal);
+ 
++#if ALG_MLDSA  // tpm-rs differential testing (build fix)
+ // Table "Definition of TPM2B_PUBLIC_KEY_MLDSA Structure" (Part 2: Structures)
+ TPM_RC TPM2B_PUBLIC_KEY_MLDSA_MarshalUnmarshal(
+     TPM2B_PUBLIC_KEY_MLDSA* target, BYTE** buffer, INT32* size, BOOL marshal);
+@@ -1255,6 +1258,7 @@
+ // Table "Definition of TPM2B_PRIVATE_KEY_MLDSA Structure" (Part 2: Structures)
+ TPM_RC TPM2B_PRIVATE_KEY_MLDSA_MarshalUnmarshal(
+     TPM2B_PRIVATE_KEY_MLDSA* target, BYTE** buffer, INT32* size, BOOL marshal);
++#endif  // ALG_MLDSA
+ 
+ // Table "Definition of TPMS_SIGNATURE_RSA Structure" (Part 2: Structures)
+ TPM_RC TPMS_SIGNATURE_RSA_MarshalUnmarshal(
+@@ -1298,9 +1302,11 @@
+     return TPMS_SIGNATURE_ECC_MarshalUnmarshal(target, buffer, size, marshal);
+ }
+ 
++#if ALG_MLDSA  // tpm-rs differential testing (build fix)
+ // Table "Definition of TPM2B_SIGNATURE_MLDSA Structure" (Part 2: Structures)
+ TPM_RC TPM2B_SIGNATURE_MLDSA_MarshalUnmarshal(
+     TPM2B_SIGNATURE_MLDSA* target, BYTE** buffer, INT32* size, BOOL marshal);
++#endif  // ALG_MLDSA
+ 
+ #if ALG_HASH_MLDSA
+ // Table "Definition of TPMS_SIGNATURE_HASH_MLDSA Structure" (Part 2: Structures)
+diff --git a/TPMCmd/tpm/src/support/Marshal.c b/TPMCmd/tpm/src/support/Marshal.c
+--- a/TPMCmd/tpm/src/support/Marshal.c
++++ b/TPMCmd/tpm/src/support/Marshal.c
+@@ -4104,6 +4104,7 @@
+                                        TPM_RC_PARMS);
+ }
+ 
++#if ALG_MLKEM  // tpm-rs differential testing (build fix)
+ // Table "Definition of TPM2B_PUBLIC_KEY_MLKEM Structure" (Part 2: Structures)
+ TPM_RC TPM2B_PUBLIC_KEY_MLKEM_MarshalUnmarshal(
+     TPM2B_PUBLIC_KEY_MLKEM* target, BYTE** buffer, INT32* size, BOOL marshal)
+@@ -4122,6 +4123,7 @@
+     return TPM2B_MarshalUnmarshalExpectedSize(
+         &target->b, buffer, size, marshal, MLKEM_PRIVATE_KEY_SEED_SIZE);
+ }
++#endif  // ALG_MLKEM
+ 
+ const TPMI_MLDSA_PARMS TPMI_MLDSA_PARMS_VALUES[] = {
+ #if MLDSA_44
+@@ -4149,6 +4151,7 @@
+                                        TPM_RC_PARMS);
+ }
+ 
++#if ALG_MLDSA  // tpm-rs differential testing (build fix)
+ // Table "Definition of TPM2B_PUBLIC_KEY_MLDSA Structure" (Part 2: Structures)
+ TPM_RC TPM2B_PUBLIC_KEY_MLDSA_MarshalUnmarshal(
+     TPM2B_PUBLIC_KEY_MLDSA* target, BYTE** buffer, INT32* size, BOOL marshal)
+@@ -4167,6 +4170,7 @@
+     return TPM2B_MarshalUnmarshalExpectedSize(
+         &target->b, buffer, size, marshal, MLDSA_PRIVATE_KEY_SEED_SIZE);
+ }
++#endif  // ALG_MLDSA
+ 
+ // Table "Definition of TPMS_SIGNATURE_RSA Structure" (Part 2: Structures)
+ TPM_RC
+@@ -4217,6 +4221,7 @@
+     return TPM_RC_SUCCESS;
+ }
+ 
++#if ALG_MLDSA  // tpm-rs differential testing (build fix)
+ // Table "Definition of TPM2B_SIGNATURE_MLDSA Structure" (Part 2: Structures)
+ TPM_RC TPM2B_SIGNATURE_MLDSA_MarshalUnmarshal(
+     TPM2B_SIGNATURE_MLDSA* target, BYTE** buffer, INT32* size, BOOL marshal)
+@@ -4225,6 +4230,7 @@
+     return TPM2B_MarshalUnmarshal(
+         &target->b, buffer, size, marshal, MAX_MLDSA_SIG_SIZE);
+ }
++#endif  // ALG_MLDSA
+ 
+ // Table "Definition of TPMU_SIGNATURE Union" (Part 2: Structures)
+ TPM_RC

@@ -791,7 +791,7 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
     // rejected.
     let mut ciphertext = [0u8; 128];
     let len = provider
-        .rsaes_encrypt(public_key, b"secret", &mut ciphertext)
+        .rsaes_encrypt(public_key, 0, b"secret", &mut ciphertext)
         .unwrap();
     assert_eq!(len, Some(128));
     let mut plaintext = [0u8; 128];
@@ -801,7 +801,7 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
     assert_eq!(len, Some(6));
     assert_eq!(&plaintext[..6], b"secret");
     assert_eq!(
-        provider.rsaes_encrypt(public_key, &[0x01; 118], &mut ciphertext),
+        provider.rsaes_encrypt(public_key, 0, &[0x01; 118], &mut ciphertext),
         Ok(None)
     );
     let mut corrupted = ciphertext;
@@ -819,6 +819,7 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
         .oaep_encrypt(
             TpmiAlgHash::Sha256,
             public_key,
+            0,
             b"secret",
             label,
             &mut ciphertext,
@@ -874,6 +875,7 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
         provider.oaep_encrypt(
             TpmiAlgHash::Sha256,
             public_key,
+            0,
             &[0x01; 63],
             &[],
             &mut ciphertext
@@ -884,6 +886,7 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
         provider.oaep_encrypt(
             TpmiAlgHash::Sm3_256,
             public_key,
+            0,
             b"secret",
             &[],
             &mut ciphertext
@@ -894,7 +897,7 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
     // Raw RSA round trip; an input that is not smaller than the modulus is
     // rejected.
     let len = provider
-        .rsa_null_encrypt(public_key, b"raw", &mut ciphertext)
+        .rsa_null_encrypt(public_key, 0, b"raw", &mut ciphertext)
         .unwrap();
     assert_eq!(len, Some(128));
     let len = provider
@@ -903,11 +906,11 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
     assert_eq!(len, Some(128));
     assert_eq!(&plaintext[125..128], b"raw");
     assert_eq!(
-        provider.rsa_null_encrypt(public_key, public_key, &mut ciphertext),
+        provider.rsa_null_encrypt(public_key, 0, public_key, &mut ciphertext),
         Ok(None)
     );
     assert_eq!(
-        provider.rsa_null_encrypt(public_key, b"raw", &mut ciphertext[..127]),
+        provider.rsa_null_encrypt(public_key, 0, b"raw", &mut ciphertext[..127]),
         Err(CryptoError::Internal)
     );
 
@@ -925,9 +928,9 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
         assert_eq!(sig_len, Some(128));
         let verify = |signature: &[u8]| {
             if pss {
-                provider.rsapss_verify(public_key, TpmtHa::Sha256(&digest), signature)
+                provider.rsapss_verify(public_key, 0, TpmtHa::Sha256(&digest), signature)
             } else {
-                provider.rsassa_verify(public_key, TpmtHa::Sha256(&digest), signature)
+                provider.rsassa_verify(public_key, 0, TpmtHa::Sha256(&digest), signature)
             }
         };
         assert_eq!(verify(&signature), Ok(true));
@@ -953,7 +956,7 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
         Ok(None)
     );
     assert_eq!(
-        provider.rsassa_verify(&[], TpmtHa::Sha256(&digest), &signature),
+        provider.rsassa_verify(&[], 0, TpmtHa::Sha256(&digest), &signature),
         Ok(false)
     );
 
@@ -1002,5 +1005,106 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
     assert_eq!(
         provider.rsa_private_key_to_prime_p(b"not a key", &mut prime_p),
         Ok(None)
+    );
+}
+
+/// RSA public-key operations use the key's public exponent: `0` selects the default 65537, and a
+/// key with another exponent (here 3) encrypts and verifies with that exponent only.
+#[test]
+fn test_rust_crypto_provider_rsa_public_exponent() {
+    use rsa::traits::PublicKeyParts as _;
+
+    let provider = RustCryptoProvider;
+    let key =
+        rsa::RsaPrivateKey::new_with_exp(&mut rand_core::OsRng, 1024, &rsa::BigUint::from(3u32))
+            .unwrap();
+    let n = key.n().to_bytes_be();
+    assert_eq!(n.len(), 128);
+
+    // Raw RSA: `m^e mod n` with the given exponent; 0 is the same as 65537.
+    let m = b"raw message";
+    let raw = |exponent: u32| {
+        let mut ciphertext = [0u8; 128];
+        assert_eq!(
+            provider.rsa_null_encrypt(&n, exponent, m, &mut ciphertext),
+            Ok(Some(128))
+        );
+        ciphertext
+    };
+    let expected = |e: u32| {
+        let c = rsa::BigUint::from_bytes_be(m).modpow(&rsa::BigUint::from(e), key.n());
+        let mut out = [0u8; 128];
+        let c = c.to_bytes_be();
+        out[128 - c.len()..].copy_from_slice(&c);
+        out
+    };
+    assert_eq!(raw(3), expected(3));
+    assert_eq!(raw(0), expected(65537));
+    assert_eq!(raw(65537), expected(65537));
+    assert_ne!(raw(3), raw(0));
+
+    // RSAES-PKCS1-v1_5 and OAEP ciphertexts made with the key's exponent decrypt with its
+    // private key; with the default exponent they do not.
+    let mut ciphertext = [0u8; 128];
+    assert_eq!(
+        provider.rsaes_encrypt(&n, 3, b"secret", &mut ciphertext),
+        Ok(Some(128))
+    );
+    assert_eq!(
+        key.decrypt(rsa::Pkcs1v15Encrypt, &ciphertext).unwrap(),
+        b"secret"
+    );
+    assert_eq!(
+        provider.rsaes_encrypt(&n, 0, b"secret", &mut ciphertext),
+        Ok(Some(128))
+    );
+    assert!(key.decrypt(rsa::Pkcs1v15Encrypt, &ciphertext).is_err());
+    assert_eq!(
+        provider.oaep_encrypt(TpmiAlgHash::Sha256, &n, 3, b"secret", b"", &mut ciphertext),
+        Ok(Some(128))
+    );
+    assert_eq!(
+        key.decrypt(rsa::Oaep::new::<sha2::Sha256>(), &ciphertext)
+            .unwrap(),
+        b"secret"
+    );
+
+    // Signatures of the key verify with its exponent only.
+    let digest = [0x5Au8; 32];
+    let signature = key
+        .sign(rsa::Pkcs1v15Sign::new::<sha2::Sha256>(), &digest)
+        .unwrap();
+    assert_eq!(
+        provider.rsassa_verify(&n, 3, TpmtHa::Sha256(&digest), &signature),
+        Ok(true)
+    );
+    assert_eq!(
+        provider.rsassa_verify(&n, 0, TpmtHa::Sha256(&digest), &signature),
+        Ok(false)
+    );
+    let signature = key
+        .sign_with_rng(
+            &mut rand_core::OsRng,
+            rsa::Pss::new::<sha2::Sha256>(),
+            &digest,
+        )
+        .unwrap();
+    assert_eq!(
+        provider.rsapss_verify(&n, 3, TpmtHa::Sha256(&digest), &signature),
+        Ok(true)
+    );
+    assert_eq!(
+        provider.rsapss_verify(&n, 0, TpmtHa::Sha256(&digest), &signature),
+        Ok(false)
+    );
+
+    // An even exponent is not a valid RSA public exponent.
+    assert_eq!(
+        provider.rsa_null_encrypt(&n, 4, m, &mut ciphertext),
+        Ok(None)
+    );
+    assert_eq!(
+        provider.rsassa_verify(&n, 4, TpmtHa::Sha256(&digest), &signature),
+        Ok(false)
     );
 }

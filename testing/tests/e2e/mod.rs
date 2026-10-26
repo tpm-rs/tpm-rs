@@ -107,6 +107,7 @@ mod pcr_read;
 mod pcr_reset;
 mod persistent_handle_resolution;
 mod persistent_object_handles;
+mod platform_signals;
 mod policy_authorize;
 mod policy_authorize_nv;
 mod policy_command_code;

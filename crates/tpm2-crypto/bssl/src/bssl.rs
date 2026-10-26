@@ -624,10 +624,11 @@ impl RsaKey {
         Ok(Self { ptr })
     }
 
-    /// Creates an RSA public key from big-endian modulus `n_bytes` and fixed exponent 65537.
-    fn from_public_key_be(n_bytes: &[u8]) -> Result<Self, BsslError> {
+    /// Creates an RSA public key from big-endian modulus `n_bytes` and public `exponent`
+    /// (`0` selects the default exponent 65537).
+    fn from_public_key_be(n_bytes: &[u8], exponent: u32) -> Result<Self, BsslError> {
         let n = Bignum::from_bytes_be(n_bytes)?;
-        let e = Bignum::from_u32(65537)?;
+        let e = Bignum::from_u32(if exponent == 0 { 65537 } else { exponent })?;
         // SAFETY: `n.as_ptr()` and `e.as_ptr()` are valid `BIGNUM`s. `RSA_new_public_key` copies/adopts them.
         let rsa_ptr = unsafe { bssl_sys::RSA_new_public_key(n.as_ptr(), e.as_ptr()) };
         let ptr = NonNull::new(rsa_ptr).ok_or(BsslError::InvalidData)?;
@@ -838,14 +839,18 @@ pub fn rsa_sign_pkcs1v15(
 }
 
 /// Verifies a pre-hashed digest against an RSASSA-PKCS1-v1_5 signature (`RSA_verify`).
+///
+/// The public key is the big-endian modulus `public_key_be` with the public `exponent` (`0`
+/// selects the default exponent 65537).
 pub fn rsa_verify_pkcs1v15(
     public_key_be: &[u8],
+    exponent: u32,
     hash_alg: TpmiAlgHash,
     digest: &[u8],
     signature: &[u8],
 ) -> Result<(), BsslError> {
     let nid = hash_alg_to_nid(hash_alg)?;
-    let rsa = RsaKey::from_public_key_be(public_key_be)?;
+    let rsa = RsaKey::from_public_key_be(public_key_be, exponent)?;
     // SAFETY:
     // - `digest.as_ptr()` is valid for `digest.len()` bytes.
     // - `signature.as_ptr()` is valid for `signature.len()` bytes.
@@ -910,14 +915,18 @@ pub fn rsa_sign_pss(
 ///
 /// Tries `RSA_PSS_SALTLEN_DIGEST` first, falling back to `RSA_PSS_SALTLEN_AUTO` for TPM 2.0 compatibility
 /// with signatures that use maximal salt length.
+///
+/// The public key is the big-endian modulus `public_key_be` with the public `exponent` (`0`
+/// selects the default exponent 65537).
 pub fn rsa_verify_pss(
     public_key_be: &[u8],
+    exponent: u32,
     hash_alg: TpmiAlgHash,
     digest: &[u8],
     signature: &[u8],
 ) -> Result<(), BsslError> {
     let md = hash_alg_to_evp_md(hash_alg)?;
-    let rsa = RsaKey::from_public_key_be(public_key_be)?;
+    let rsa = RsaKey::from_public_key_be(public_key_be, exponent)?;
     // SAFETY: `signature.as_ptr()` and `digest.as_ptr()` are valid for their respective lengths.
     let res_digest = unsafe {
         bssl_sys::RSA_verify_pss_mgf1(
@@ -957,12 +966,16 @@ pub fn rsa_verify_pss(
 }
 
 /// Encrypts `data` using RSAES-PKCS1-v1_5 (`RSA_encrypt` with `RSA_PKCS1_PADDING`).
+///
+/// The public key is the big-endian modulus `public_key_be` with the public `exponent` (`0`
+/// selects the default exponent 65537).
 pub fn rsa_encrypt_pkcs1v15(
     public_key_be: &[u8],
+    exponent: u32,
     data: &[u8],
     ciphertext_out: &mut [u8],
 ) -> Result<usize, BsslError> {
-    let rsa = RsaKey::from_public_key_be(public_key_be)?;
+    let rsa = RsaKey::from_public_key_be(public_key_be, exponent)?;
     let key_size = rsa.size();
     if ciphertext_out.len() < key_size {
         return Err(BsslError::BufferTooSmall);
@@ -1026,16 +1039,20 @@ pub fn rsa_decrypt_pkcs1v15(
 }
 
 /// Encrypts `data` using RSA-OAEP with the specified hash algorithm and label.
+///
+/// The public key is the big-endian modulus `public_key_be` with the public `exponent` (`0`
+/// selects the default exponent 65537).
 pub fn rsa_encrypt_oaep(
     hash_alg: TpmiAlgHash,
     public_key_be: &[u8],
+    exponent: u32,
     data: &[u8],
     label: &[u8],
     ciphertext_out: &mut [u8],
 ) -> Result<usize, BsslError> {
     let _label_str = core::str::from_utf8(label).map_err(|_| BsslError::InvalidData)?;
     let md = hash_alg_to_evp_md(hash_alg)?;
-    let rsa = RsaKey::from_public_key_be(public_key_be)?;
+    let rsa = RsaKey::from_public_key_be(public_key_be, exponent)?;
     let key_size = rsa.size();
     if ciphertext_out.len() < key_size {
         return Err(BsslError::BufferTooSmall);
@@ -1163,12 +1180,16 @@ pub fn rsa_decrypt_oaep(
 }
 
 /// Raw modular exponentiation $c = m^e \bmod n$ (`RSA_encrypt` with `RSA_NO_PADDING`).
+///
+/// The public key is the big-endian modulus `public_key_be` with the public `exponent` (`0`
+/// selects the default exponent 65537).
 pub fn rsa_encrypt_null(
     public_key_be: &[u8],
+    exponent: u32,
     data: &[u8],
     ciphertext_out: &mut [u8],
 ) -> Result<usize, BsslError> {
-    let rsa = RsaKey::from_public_key_be(public_key_be)?;
+    let rsa = RsaKey::from_public_key_be(public_key_be, exponent)?;
     let mod_len = rsa.size();
     let m = Bignum::from_bytes_be(data)?;
 

@@ -429,6 +429,7 @@ fn test_rsa_sign_verify_and_encrypt_decrypt() {
     .unwrap();
     rsa_verify_pkcs1v15(
         &det_pub1[..dp1_len],
+        0,
         TpmiAlgHash::Sha256,
         &[0x33u8; 32],
         &det_sig,
@@ -443,17 +444,17 @@ fn test_rsa_sign_verify_and_encrypt_decrypt() {
     let sig_len =
         rsa_sign_pkcs1v15(priv_der_slice, TpmiAlgHash::Sha256, &digest, &mut sig).unwrap();
     assert_eq!(sig_len, 128);
-    rsa_verify_pkcs1v15(&pub_bytes, TpmiAlgHash::Sha256, &digest, &sig).unwrap();
+    rsa_verify_pkcs1v15(&pub_bytes, 0, TpmiAlgHash::Sha256, &digest, &sig).unwrap();
 
     // RSAPSS
     let sig_len = rsa_sign_pss(priv_der_slice, TpmiAlgHash::Sha256, &digest, &mut sig).unwrap();
     assert_eq!(sig_len, 128);
-    rsa_verify_pss(&pub_bytes, TpmiAlgHash::Sha256, &digest, &sig).unwrap();
+    rsa_verify_pss(&pub_bytes, 0, TpmiAlgHash::Sha256, &digest, &sig).unwrap();
 
     // RSAES PKCS#1 v1.5
     let msg = b"Hello RSAES!";
     let mut ct = [0u8; 128];
-    let ct_len = rsa_encrypt_pkcs1v15(&pub_bytes, msg, &mut ct).unwrap();
+    let ct_len = rsa_encrypt_pkcs1v15(&pub_bytes, 0, msg, &mut ct).unwrap();
     assert_eq!(ct_len, 128);
     let mut pt = [0u8; 64]; // Intentionally smaller than modulus (128)
     let pt_len = rsa_decrypt_pkcs1v15(priv_der_slice, &ct, &mut pt).unwrap();
@@ -461,7 +462,7 @@ fn test_rsa_sign_verify_and_encrypt_decrypt() {
 
     // RSA-OAEP with label
     let label = b"DUPLICATE\0";
-    let ct_len = rsa_encrypt_oaep(TpmiAlgHash::Sha256, &pub_bytes, msg, label, &mut ct).unwrap();
+    let ct_len = rsa_encrypt_oaep(TpmiAlgHash::Sha256, &pub_bytes, 0, msg, label, &mut ct).unwrap();
     assert_eq!(ct_len, 128);
     let pt_len =
         rsa_decrypt_oaep(TpmiAlgHash::Sha256, priv_der_slice, &ct, label, &mut pt).unwrap();
@@ -470,7 +471,7 @@ fn test_rsa_sign_verify_and_encrypt_decrypt() {
     // RSA-NULL
     let raw_msg = [0x01u8; 32];
     let mut raw_ct = [0u8; 128];
-    let raw_ct_len = rsa_encrypt_null(&pub_bytes, &raw_msg, &mut raw_ct).unwrap();
+    let raw_ct_len = rsa_encrypt_null(&pub_bytes, 0, &raw_msg, &mut raw_ct).unwrap();
     assert_eq!(raw_ct_len, 128);
     let mut raw_pt = [0u8; 128];
     let raw_pt_len = rsa_decrypt_null(priv_der_slice, &raw_ct, &mut raw_pt).unwrap();
@@ -773,7 +774,7 @@ fn test_provider_rsa_semantic_failures_are_ok_none_or_false() {
     let msg = b"secret";
     let mut ct = [0u8; 128];
     let ct_len = provider
-        .oaep_encrypt(TpmiAlgHash::Sha256, pub_key, msg, b"LABEL\0", &mut ct)
+        .oaep_encrypt(TpmiAlgHash::Sha256, pub_key, 0, msg, b"LABEL\0", &mut ct)
         .unwrap()
         .unwrap();
     let mut pt = [0u8; 128];
@@ -813,16 +814,16 @@ fn test_provider_rsa_semantic_failures_are_ok_none_or_false() {
 
     // Messages too large for the padding scheme.
     assert_eq!(
-        provider.rsaes_encrypt(pub_key, &[0x42u8; 118], &mut ct),
+        provider.rsaes_encrypt(pub_key, 0, &[0x42u8; 118], &mut ct),
         Ok(None)
     );
     assert_eq!(
-        provider.oaep_encrypt(TpmiAlgHash::Sha256, pub_key, &[0x42u8; 63], &[], &mut ct),
+        provider.oaep_encrypt(TpmiAlgHash::Sha256, pub_key, 0, &[0x42u8; 63], &[], &mut ct),
         Ok(None)
     );
     // Raw RSA requires `m < n`.
     assert_eq!(
-        provider.rsa_null_encrypt(pub_key, &[0xFFu8; 128], &mut ct),
+        provider.rsa_null_encrypt(pub_key, 0, &[0xFFu8; 128], &mut ct),
         Ok(None)
     );
 
@@ -840,12 +841,12 @@ fn test_provider_rsa_semantic_failures_are_ok_none_or_false() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        provider.verify_inner(Alg::RSASSA, pub_key, digest_ha, &sig[..sig_len]),
+        provider.verify_inner(Alg::RSASSA, pub_key, 0, digest_ha, &sig[..sig_len]),
         Ok(true)
     );
     sig[0] ^= 0x01;
     assert_eq!(
-        provider.verify_inner(Alg::RSASSA, pub_key, digest_ha, &sig[..sig_len]),
+        provider.verify_inner(Alg::RSASSA, pub_key, 0, digest_ha, &sig[..sig_len]),
         Ok(false)
     );
 
@@ -936,5 +937,38 @@ fn test_provider_ecc_dispatch_conventions() {
     assert_eq!(
         provider.ecdsa_verify(&g[..63], digest_ha, &sig[..64]),
         Ok(false)
+    );
+}
+
+/// RSA public-key operations use the given public exponent (`0` for the default 65537): raw RSA
+/// of a message `m` with `m^3 < n` under exponent 3 is exactly `m^3`.
+#[test]
+fn test_provider_rsa_public_exponent() {
+    let provider = BsslCryptoProvider;
+    let mut n = [0u8; 128];
+    let mut private_key = [0u8; 1024];
+    let (n_len, _) = rsa_generate_key(1024, &mut n, &mut private_key, None).unwrap();
+    let n = &n[..n_len];
+
+    let m = [0x01, 0x00]; // 2^8
+    let raw = |exponent: u32| {
+        let mut ciphertext = [0u8; 128];
+        assert_eq!(
+            provider.rsa_null_encrypt(n, exponent, &m, &mut ciphertext),
+            Ok(Some(128))
+        );
+        ciphertext
+    };
+    let mut cubed = [0u8; 128];
+    cubed[124] = 0x01; // 2^24
+    assert_eq!(raw(3), cubed);
+    assert_eq!(raw(0), raw(65537));
+    assert_ne!(raw(0), cubed);
+
+    // An even exponent is not a valid RSA public exponent.
+    let mut ciphertext = [0u8; 128];
+    assert_eq!(
+        provider.rsa_null_encrypt(n, 4, &m, &mut ciphertext),
+        Ok(None)
     );
 }

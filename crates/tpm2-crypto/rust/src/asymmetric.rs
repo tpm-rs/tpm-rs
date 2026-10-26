@@ -4,6 +4,12 @@ use rsa::traits::{PrivateKeyParts as _, PublicKeyParts as _};
 use tpm2::crypto::{Asymmetric, AsymmetricSign, CryptoError, TpmiRsaKeyBits};
 use tpm2::{TpmEccCurve, TpmiAlgHash, TpmtHa};
 
+/// Returns the RSA public exponent `exponent` (`TPMS_RSA_PARMS.exponent`) as a big integer,
+/// where `0` selects the default exponent $2^{16}+1$ (65537).
+fn rsa_public_exponent(exponent: u32) -> rsa::BigUint {
+    rsa::BigUint::from(if exponent == 0 { 65537 } else { exponent })
+}
+
 fn prepare_prehash(d: &[u8], target_len: usize, buf: &mut [u8]) -> usize {
     if d.len() >= target_len {
         buf[..target_len].copy_from_slice(&d[..target_len]);
@@ -178,12 +184,13 @@ impl Asymmetric for RustCryptoProvider {
     fn rsassa_verify(
         &self,
         public_key: &[u8],
+        exponent: u32,
         digest: TpmtHa<'_>,
         signature: &[u8],
     ) -> Result<bool, CryptoError> {
         let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
-            rsa::BigUint::from(65537u32),
+            rsa_public_exponent(exponent),
         ) else {
             return Ok(false);
         };
@@ -217,12 +224,13 @@ impl Asymmetric for RustCryptoProvider {
     fn rsapss_verify(
         &self,
         public_key: &[u8],
+        exponent: u32,
         digest: TpmtHa<'_>,
         signature: &[u8],
     ) -> Result<bool, CryptoError> {
         let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
-            rsa::BigUint::from(65537u32),
+            rsa_public_exponent(exponent),
         ) else {
             return Ok(false);
         };
@@ -340,12 +348,13 @@ impl Asymmetric for RustCryptoProvider {
     fn rsaes_encrypt(
         &self,
         public_key: &[u8],
+        exponent: u32,
         data: &[u8],
         ciphertext: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
         let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
-            rsa::BigUint::from(65537u32),
+            rsa_public_exponent(exponent),
         ) else {
             return Ok(None);
         };
@@ -366,13 +375,14 @@ impl Asymmetric for RustCryptoProvider {
         &self,
         hash_alg: TpmiAlgHash,
         public_key: &[u8],
+        exponent: u32,
         data: &[u8],
         label: &[u8],
         ciphertext: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
         let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
-            rsa::BigUint::from(65537u32),
+            rsa_public_exponent(exponent),
         ) else {
             return Ok(None);
         };
@@ -434,12 +444,13 @@ impl Asymmetric for RustCryptoProvider {
     fn rsa_null_encrypt(
         &self,
         public_key: &[u8],
+        exponent: u32,
         data: &[u8],
         ciphertext: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
         let Ok(pub_key) = rsa::RsaPublicKey::new(
             rsa::BigUint::from_bytes_be(public_key),
-            rsa::BigUint::from(65537u32),
+            rsa_public_exponent(exponent),
         ) else {
             return Ok(None);
         };

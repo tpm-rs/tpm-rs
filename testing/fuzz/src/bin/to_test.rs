@@ -36,8 +36,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use testing::tpm::Tpm;
+use tpm2_fuzz::driver::MAX_HASH_DATA;
 use tpm2_fuzz::driver::{FIXED_SEED, Finding};
-use tpm2_fuzz::model::Conversation;
+use tpm2_fuzz::model::{Conversation, PlatformOp, Step};
 
 use crate::constants::command_name;
 use crate::replay::{Outcome, Replayed};
@@ -124,8 +125,56 @@ fn finding_summary(outcome: &Outcome) -> Option<String> {
             "panic: {}",
             message.lines().next().unwrap_or_default()
         )),
-        Outcome::Executed(_) | Outcome::Skipped => None,
+        Outcome::Executed(_) | Outcome::Skipped | Outcome::Event => None,
     }
+}
+
+/// The lines that apply the event step of `r` (a platform signal, a
+/// `_TPM_Hash_*` indication or a sleep; a locality change is only a comment,
+/// since every command line passes its locality).
+fn event_lines(i: usize, r: &Replayed) -> String {
+    let mut out = String::new();
+    match &r.step {
+        Step::Platform(op) => match op {
+            PlatformOp::HashStart => {
+                let _ = writeln!(out, "    // Round {i}: _TPM_Hash_Start.");
+                let _ = writeln!(out, "    tpm.hash_start();");
+            }
+            PlatformOp::HashData(data) => {
+                let data = &data[..data.len().min(MAX_HASH_DATA)];
+                let _ = writeln!(out, "    // Round {i}: _TPM_Hash_Data.");
+                let _ = write!(out, "    tpm.hash_data(&[\n{}", byte_lines(data, 8));
+                let _ = writeln!(out, "    ]);");
+            }
+            PlatformOp::HashEnd => {
+                let _ = writeln!(out, "    // Round {i}: _TPM_Hash_End.");
+                let _ = writeln!(out, "    tpm.hash_end();");
+            }
+            PlatformOp::Signal(_) => {
+                let signal = op.platform_signal().expect("a signal step");
+                let _ = writeln!(out, "    // Round {i}: platform signal {signal:?}.");
+                let _ = writeln!(
+                    out,
+                    "    tpm.signal_platform(testing::tpm::SimulatorPlatformSignal::{signal:?})\n        .unwrap();"
+                );
+            }
+        },
+        Step::Sleep(ms) => {
+            let _ = writeln!(out, "    // Round {i}: {ms} ms pass.");
+            let _ = writeln!(
+                out,
+                "    testing::tpm::sleep(std::time::Duration::from_millis({ms}));"
+            );
+        }
+        Step::Locality(locality) => {
+            let _ = writeln!(
+                out,
+                "    // Round {i}: the following commands are sent at locality {locality}."
+            );
+        }
+        Step::Raw(_) | Step::Cmd(_) => {}
+    }
+    out
 }
 
 /// The comment and assertion lines for the finding round.
@@ -168,7 +217,7 @@ fn finding_lines(r: &Replayed) -> String {
             );
             let _ = writeln!(out, "    // TODO(triage): assert the specified response.");
         }
-        Outcome::Executed(_) | Outcome::Skipped => {}
+        Outcome::Executed(_) | Outcome::Skipped | Outcome::Event => {}
     }
     out
 }
@@ -212,24 +261,35 @@ fn render_test(name: &str, source: &str, rounds: &[Replayed]) -> String {
     for (i, r) in rounds.iter().enumerate() {
         let label = command_label(&r.command);
         let _ = writeln!(out);
+        let locality = r.locality;
         match &r.outcome {
+            Outcome::Event => {
+                let _ = write!(out, "{}", event_lines(i, r));
+            }
+            Outcome::Skipped if !matches!(r.step, Step::Raw(_) | Step::Cmd(_)) => {
+                let _ = writeln!(
+                    out,
+                    "    // Round {i}: an event the TPM could not take (skipped)."
+                );
+            }
             Outcome::Skipped => {
                 let _ = writeln!(
                     out,
-                    "    // Round {i}: {label}, rejected at the transport level."
+                    "    // Round {i}: {label}, rejected at the transport level or not answered\n    \
+                     // (the TPM is powered off)."
                 );
                 let _ = write!(
                     out,
-                    "    assert!(tpm\n        .try_send_command(\n            0,\n            &[\n"
+                    "    let _ = tpm.try_send_command(\n        {locality},\n        &[\n"
                 );
-                let _ = write!(out, "{}", byte_lines(&r.command, 16));
-                let _ = writeln!(out, "            ],\n        )\n        .is_err());");
+                let _ = write!(out, "{}", byte_lines(&r.command, 12));
+                let _ = writeln!(out, "        ],\n    );");
             }
             Outcome::Executed(rc) => {
                 let _ = writeln!(out, "    // Round {i}: {label}.");
                 let _ = write!(
                     out,
-                    "    let rsp = tpm.send_command(\n        0,\n        &[\n"
+                    "    let rsp = tpm.send_command(\n        {locality},\n        &[\n"
                 );
                 let _ = write!(out, "{}", byte_lines(&r.command, 12));
                 let _ = writeln!(out, "        ],\n    );");
@@ -239,7 +299,7 @@ fn render_test(name: &str, source: &str, rounds: &[Replayed]) -> String {
                 let _ = writeln!(out, "    // Round {i}: {label}: the finding.");
                 let _ = write!(
                     out,
-                    "    let rsp = tpm.send_command(\n        0,\n        &[\n"
+                    "    let rsp = tpm.send_command(\n        {locality},\n        &[\n"
                 );
                 let _ = write!(out, "{}", byte_lines(&r.command, 12));
                 let _ = writeln!(out, "        ],\n    );");

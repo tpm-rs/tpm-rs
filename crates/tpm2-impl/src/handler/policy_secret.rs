@@ -270,6 +270,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 })
             }
             Some(TpmHt::Transient) | Some(TpmHt::Persistent) => {
+                // A sequence object (whose authValue may authorize TPM2_PolicySecret) is in the
+                // NULL hierarchy (TCG reference `AllocateSequenceSlot()`: "A sequence object is
+                // considered to be in the NULL hierarchy").
+                if self.context.state.find_active_sequence(handle).is_some() {
+                    return Ok(Handle::RH_NULL.0);
+                }
                 Ok(self.resolve_object(handle, Position::handle(1))?.hierarchy)
             }
             Some(TpmHt::PCR) => Ok(Handle::RH_OWNER.0),

@@ -124,9 +124,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if integrity.get_size() as usize != CONTEXT_INTEGRITY_DIGEST_SIZE {
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
-        // The protected area must at least hold the encrypted size field and
-        // the sequence fingerprint.
-        if slice.len() < 2 + CONTEXT_FINGERPRINT_SIZE {
+        // The protected area must at least be the size of the sequence fingerprint before the
+        // integrity check (the TCG reference: "Make sure that the context blob has enough space
+        // for the fingerprint.", `size < sizeof(in->context.sequence)`), so a short blob of a
+        // limited hierarchy reaches the unavailable proof (`TPM_RC_FW_LIMITED`/
+        // `TPM_RC_SVN_LIMITED`) first. The encrypted size field is checked after it.
+        if slice.len() < CONTEXT_FINGERPRINT_SIZE {
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
         // Everything after the integrity value is integrity protected.
@@ -151,7 +154,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let enc_size = u16::unmarshal(&mut protected_slice)
             .map_err(|_| TpmRc::INTEGRITY.with(Position::parameter(1)))?
             as usize;
-        if protected_slice.len() != enc_size {
+        if protected_slice.len() != enc_size || enc_size < CONTEXT_FINGERPRINT_SIZE {
             // An authentic blob of another context layout (see `malformed_context`).
             return Err(TpmRc::INTEGRITY.with(Position::parameter(1)));
         }

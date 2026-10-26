@@ -331,3 +331,94 @@ fn tpm_reset_preserves_clock() {
     assert_eq!(rsp2.clock_info.reset_count, initial_reset + 1);
     assert_eq!(rsp2.clock_info.restart_count, 0);
 }
+
+/// After TPM2_ClockRateAdjust, elapsed platform time is converted to TPM time as the TCG
+/// reference platform does (`_plat__TimerRead()`: `timeDiff * CLOCK_NOMINAL / adjustRate`,
+/// consuming only the platform time that maps back), so the times TPM2_ReadClock reports after
+/// long sleeps are byte-identical to the references (checked in differential mode). TPM 2.0
+/// Part 3, TPM2_ClockRateAdjust: "This command adjusts the rate of advance of *Clock* and *Time*
+/// to provide a better approximation to real time.", with the step size left to the platform.
+/// Found by differential fuzzing.
+#[test]
+fn clock_rate_adjustment_rounds_like_the_platform() {
+    let response_code = |rsp: &[u8]| u32::from_be_bytes(rsp[6..10].try_into().unwrap());
+    let mut tpm = testing::tpm::Tpm::with_seed(testing::seed::ReferenceSeed {
+        pid: 4242,
+        realtime_ms: 1000000,
+    });
+
+    // Round 0: TPM2_ClockRateAdjust.
+    let rsp = tpm.send_command(
+        0,
+        &[
+            0x80, 0x02, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x01, 0x30, 0x40, 0x00, 0x00, 0x0c,
+            0x00, 0x00, 0x00, 0x09, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00, 0xfd,
+        ],
+    );
+    assert_eq!(response_code(&rsp), 0x0);
+
+    // Round 1: 268435549 ms pass.
+    testing::tpm::sleep(std::time::Duration::from_millis(268435549));
+
+    // Round 2: TPM2_ReadClock.
+    let rsp = tpm.send_command(
+        0,
+        &[0x80, 0x01, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x01, 0x81],
+    );
+    assert_eq!(response_code(&rsp), 0x0);
+
+    // Round 3: 4244635741 ms pass.
+    testing::tpm::sleep(std::time::Duration::from_millis(4244635741));
+
+    // Round 4: TPM2_ReadClock.
+    let rsp = tpm.send_command(
+        0,
+        &[0x80, 0x01, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x01, 0x81],
+    );
+    assert_eq!(response_code(&rsp), 0x0);
+}
+
+/// Every command, even one with an unimplemented command code, first brings Clock up to date
+/// and writes it to NV when it crosses an `NV_CLOCK_UPDATE_INTERVAL` boundary (TCG reference
+/// `ExecuteCommand()`: `TimeUpdateToCurrent()` runs before the command header is parsed), so the
+/// Clock survives the following power cycle. TPM 2.0 Part 1, "Clock": "A non-volatile value
+/// (*NV Clock*) is updated periodically from *Clock*." Found by differential fuzzing.
+#[test]
+fn rejected_command_updates_clock_in_nv() {
+    let mut tpm = Tpm::new();
+    testing::tpm::sleep(std::time::Duration::from_millis(1 << 22));
+    // An unimplemented command code (TPM2_VerifyDigestSignature).
+    let rsp = tpm.send_command(0, &[0x80, 0x01, 0, 0, 0, 10, 0, 0, 0x01, 0xa5]);
+    assert_eq!(crate::_common::rc_of(&rsp), 0x143);
+    tpm.signal_platform(testing::tpm::SimulatorPlatformSignal::PowerOff)
+        .unwrap();
+    tpm.signal_platform(testing::tpm::SimulatorPlatformSignal::PowerOn)
+        .unwrap();
+    let rsp = tpm.send_command(0, &[0x80, 0x01, 0, 0, 0, 12, 0, 0, 0x01, 0x44, 0, 0]);
+    assert_eq!(crate::_common::rc_of(&rsp), 0);
+    // TPM2_ReadClock: currentTime.clockInfo.clock.
+    let rsp = tpm.send_command(0, &[0x80, 0x01, 0, 0, 0, 10, 0, 0, 0x01, 0x81]);
+    assert_eq!(crate::_common::rc_of(&rsp), 0);
+    assert!(u64::from_be_bytes(rsp[18..26].try_into().unwrap()) >= 1 << 22);
+}
+
+/// `Time` counts how long "the circuit providing *Time* has been powered" (TPM 2.0 Part 1,
+/// "Time"), so a `_TPM_Init` without a power loss (the platform `Reset` signal) followed by
+/// `TPM2_Startup` keeps it running, while a power cycle restarts it.
+#[test]
+fn time_continues_across_reset_without_power_loss() {
+    let mut sim = Tpm::new();
+    sleep(std::time::Duration::from_millis(5_000));
+    let before = read_clock(&mut sim).time;
+    assert!(before >= 5_000);
+    for startup in [SU_CLEAR as u8, 1] {
+        assert_eq!(shutdown_with_type(&mut sim, startup), 0);
+        sim.signal_platform(testing::tpm::SimulatorPlatformSignal::Reset)
+            .unwrap();
+        assert_eq!(startup_with_type(&mut sim, startup), 0);
+        assert!(read_clock(&mut sim).time >= before);
+    }
+    power_cycle(&mut sim);
+    assert_eq!(startup_with_type(&mut sim, SU_CLEAR as u8), 0);
+    assert!(read_clock(&mut sim).time < before);
+}

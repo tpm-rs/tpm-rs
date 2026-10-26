@@ -74,7 +74,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Position::parameter(2),
         )?;
 
-        // 4. Resolve the certified object (used only for its Name and Qualified Name).
+        // 4. Resolve the certified object (used only for its Name and Qualified Name). TPM 2.0
+        // Part 3, TPM2_Certify: "The object may be any object that is loaded with `TPM2_Load()`
+        // or `TPM2_CreatePrimary()`." A sequence object is neither; the specification gives no
+        // response code for it, so the TCG reference's (version 185, "Cannot certify a sequence
+        // object") `TPM_RC_TYPE + RC_Certify_objectHandle` is used.
+        if self
+            .context
+            .state
+            .find_active_sequence(object_handle.0)
+            .is_some()
+        {
+            return Err(TpmRc::TYPE.with(Position::handle(1)));
+        }
         let certified_obj = self.resolve_object(object_handle.0, Position::handle(1))?;
 
         // 5. Construct attestation structure
@@ -198,6 +210,25 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
+        // 0. A sequence object was never created with creation data (TPM 2.0 Part 3,
+        // TPM2_CertifyCreation: "This command is used to prove the association between an
+        // object and its creation data."). The specification gives no response code for it, so
+        // the TCG reference's (version 185, "Cannot certify creation of a sequence object")
+        // `TPM_RC_TYPE + RC_CertifyCreation_objectHandle` is used, checked before the signer key
+        // (but after the session area, so a missing authorization still wins).
+        if self
+            .context
+            .state
+            .find_active_sequence(object_handle.0)
+            .is_some()
+        {
+            let expected_sessions = if sign_handle.0 == 0x40000007 { 0 } else { 1 };
+            if num_sessions < expected_sessions {
+                return Err(TpmRc::AUTH_MISSING);
+            }
+            return Err(TpmRc::TYPE.with(Position::handle(2)));
+        }
+
         // 1. Resolve the signer key; the certified object is needed only for its Name, when the
         // ticket is checked (C `TPM2_CertifyCreation()`: `IsSigningObject()` and the scheme
         // first). TPM 2.0 Part 3 does not order these checks, so the reference's order is used.
@@ -228,23 +259,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 5. Verify the creation ticket (`TicketComputeCreation`). The ticket is recomputed for the
         //    hierarchy named in the ticket itself; its tag and hierarchy value were already
-        //    validated when unmarshaling `TPMT_TK_CREATION`. A sequence object was never created
-        //    with a creation ticket, so no ticket can match it (TPM 2.0 Part 3,
-        //    TPM2_CertifyCreation: "This command is used to prove the association between an
-        //    object and its creation data."): `TPM_RC_TICKET`, as in the reference. The ticket's
-        //    proof is obtained first, so a firmware-limited/SVN-limited ticket hierarchy fails
-        //    with its error before that (`limited_hierarchy_error`).
+        //    validated when unmarshaling `TPMT_TK_CREATION`. The ticket's proof is obtained
+        //    first, so a firmware-limited/SVN-limited ticket hierarchy fails with its error
+        //    before that (`limited_hierarchy_error`).
         if let Some(rc) = crate::engine::limited_hierarchy_error(cmd.creation_ticket.hierarchy().0)
         {
             return Err(rc.to_rc());
-        }
-        if self
-            .context
-            .state
-            .find_active_sequence(object_handle.0)
-            .is_some()
-        {
-            return Err(TpmRc::TICKET.with(Position::parameter(4)));
         }
         let certified_obj = self.resolve_object(object_handle.0, Position::handle(2))?;
         let expected_digest = self.compute_creation_ticket(

@@ -1,0 +1,45 @@
+read-public-null-name-alg: TPM2_ReadPublic of an object with nameAlg = TPM_ALG_NULL
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 2, "TPMT_PUBLIC" (Table: Definition of
+TPMT_PUBLIC Structure)):
+
+  "nameAlg +TPMI_ALG_HASH algorithm used for computing the Name of the
+  object ... The "+" indicates that the instance of a TPMT_PUBLIC may have a
+  "+" to indicate that the nameAlg may be TPM_ALG_NULL."
+
+Specification (TPM 2.0 Library, Part 3, "TPM2_LoadExternal", "General
+Description"):
+
+  "If nameAlg is TPM_ALG_NULL, then the Name is the Empty Buffer. ... If
+  hierarchy is TPM_RH_NULL or nameAlg is TPM_ALG_NULL, a ticket produced
+  using the object shall be a NULL Ticket."
+
+Specification (TPM 2.0 Library, Part 3, "Notation", "Type Decoration +"
+(Note)):
+
+  "This decoration is not appended to response parameters"
+
+Version 185 validates values while marshaling responses, and marshals the
+outPublic of TPM2_ReadPublic as a TPM2B_PUBLIC whose nameAlg is a
+TPMI_ALG_HASH without '+'. For an object loaded by TPM2_LoadExternal with
+nameAlg = TPM_ALG_NULL (which Part 3 permits) the marshaling fails and the
+TPM enters failure mode. The response is marshaled as TPM2B_PUBLIC+ (the
+public area as it was loaded).
+diff --git a/TPMCmd/tpm/include/private/CommandDispatch.inl b/TPMCmd/tpm/include/private/CommandDispatch.inl
+--- a/TPMCmd/tpm/include/private/CommandDispatch.inl
++++ b/TPMCmd/tpm/include/private/CommandDispatch.inl
+@@ -1775,7 +1775,11 @@
+ 
+     MAKE_DISPATCH_SEPARATOR(START_OUTPUT_PARAMETERS),
+     // Response output parameters
+-    MAKE_OUTPUT_DISPATCH_ENTRY(MARSHAL_ID_TPM2B_PUBLIC, outPublic),
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the public area of an object loaded with nameAlg = TPM_ALG_NULL (only
++    // possible with TPM2_LoadExternal) failed the TPMI_ALG_HASH check of the
++    // (validating) marshaling code and put the TPM into failure mode.
++    MAKE_OUTPUT_DISPATCH_ENTRY(MARSHAL_ID_TPM2B_PUBLIC_Plus, outPublic),
+     MAKE_OUTPUT_DISPATCH_ENTRY(MARSHAL_ID_TPM2B_NAME, name),
+     MAKE_OUTPUT_DISPATCH_ENTRY(MARSHAL_ID_TPM2B_NAME, qualifiedName),
+ );

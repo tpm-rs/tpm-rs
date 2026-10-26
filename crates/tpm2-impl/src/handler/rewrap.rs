@@ -478,7 +478,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let name_alg = parent.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
         let digest_size = name_alg.digest_size();
         match &parent.public.parms_and_id {
-            OwnedPublicParmsAndId::Rsa(_, unique) => {
+            OwnedPublicParmsAndId::Rsa(parms, unique) => {
                 self.context.random_crypto(&mut seed[..digest_size])?;
                 let mut label_buf = [0u8; 32];
                 let label_len = oaep_label(label, &mut label_buf);
@@ -490,6 +490,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     self.reference_rsa_encrypt(
                         Some(name_alg),
                         unique.get_buffer(),
+                        parms.exponent,
                         &label_buf[..label_len],
                         &seed[..digest_size],
                         &mut secret_out[..n_len],
@@ -501,6 +502,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     Alg::OAEP,
                     Alg::from(name_alg),
                     unique.get_buffer(),
+                    parms.exponent,
                     &seed[..digest_size],
                     secret_out,
                     &label_buf[..label_len],

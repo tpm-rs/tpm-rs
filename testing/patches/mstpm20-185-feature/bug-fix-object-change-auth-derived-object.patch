@@ -1,0 +1,36 @@
+object-change-auth-derived-object: TPM2_ObjectChangeAuth rejects a derivation parent
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, TPM2_CreateLoaded): "If *parentHandle*
+references a Derivation Parent or a Primary Seed, then *outPrivate* will be an
+Empty Buffer." with the note "Returning *outPrivate* would imply that the
+returned primary or derived object can be loaded, and it cannot. It can only
+be re-derived."; Part 3, TPM2_ObjectChangeAuth: "This command may not be used
+to change the authorization value for an NV Index or a Primary Object."
+
+TPM2_ObjectChangeAuth of a Derived Object (created by TPM2_CreateLoaded under
+a Derivation Parent) protects the new sensitive area with the Derivation
+Parent, a KEYEDHASH object without a symmetric definition: the TCG reference
+reads an uninitialized TPMT_SYM_DEF_OBJECT (CryptoCommon_SelectSymDefObject()
+fails for it) and may crash, ibmswtpm2 reinterprets the KEYEDHASH scheme as a
+symmetric definition. A Derived Object cannot be loaded, so no private area may
+be returned for it; the specification gives no response code, so the patch
+returns TPM_RC_TYPE + RC_ObjectChangeAuth_parentHandle (the code for a
+parentHandle that cannot be used as the parent), as tpm-rs does. Found by
+differential fuzzing.
+diff --git a/TPMCmd/tpm/src/command/Object/ObjectChangeAuth.c b/TPMCmd/tpm/src/command/Object/ObjectChangeAuth.c
+--- a/TPMCmd/tpm/src/command/Object/ObjectChangeAuth.c
++++ b/TPMCmd/tpm/src/command/Object/ObjectChangeAuth.c
+@@ -45,6 +45,11 @@
+         in->parentHandle, object->publicArea.nameAlg, &object->name, &QNCompare);
+     if(!MemoryEqual2B(&object->qualifiedName.b, &QNCompare.b))
+         return TPM_RCS_TYPE + RC_ObjectChangeAuth_parentHandle;
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // a Derived Object cannot be loaded, so its Derivation Parent (which has no
++    // symmetric definition) cannot protect a new private area for it.
++    if(HandleToObject(in->parentHandle)->attributes.derivation == SET)
++        return TPM_RCS_TYPE + RC_ObjectChangeAuth_parentHandle;
+ 
+     // Command Output
+     // Prepare the sensitive area with the new authorization value
