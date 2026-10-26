@@ -1,174 +1,138 @@
-use super::{CryptoError, Finalize, Update};
+//! HMAC calculation.
+
+use core::ffi::CStr;
+
+use super::{
+    CryptoError,
+    backend::{Hmac, HmacState},
+    match_hash_alg,
+};
 use crate::{TpmiAlgHash, TpmtHa};
 
-/// Cryptographic HMAC interfaces for TPM implementations and clients.
+/// Streaming HMAC context for a runtime-selected hash algorithm.
 ///
-/// This is extremely similar to [`Hash`] except that the context constructors
-/// (like [`Hmac::sha256`]) take in a key.
-#[allow(unused_variables)]
-pub trait Hmac {
-    type Sha1Context: Update + Finalize<20>;
-    fn sha1(&self, key: &[u8]) -> Result<Self::Sha1Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha256Context: Update + Finalize<32>;
-    fn sha256(&self, key: &[u8]) -> Result<Self::Sha256Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha384Context: Update + Finalize<48>;
-    fn sha384(&self, key: &[u8]) -> Result<Self::Sha384Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha512Context: Update + Finalize<64>;
-    fn sha512(&self, key: &[u8]) -> Result<Self::Sha512Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sm3_256Context: Update + Finalize<32>;
-    fn sm3_256(&self, key: &[u8]) -> Result<Self::Sm3_256Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha3_256Context: Update + Finalize<32>;
-    fn sha3_256(&self, key: &[u8]) -> Result<Self::Sha3_256Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha3_384Context: Update + Finalize<48>;
-    fn sha3_384(&self, key: &[u8]) -> Result<Self::Sha3_384Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    type Sha3_512Context: Update + Finalize<64>;
-    fn sha3_512(&self, key: &[u8]) -> Result<Self::Sha3_512Context, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-}
-
-/// Dynamic HMAC context wrapping algorithm-specific contexts.
+/// Use [`hmac`] instead if all the data is available at once.
 ///
-/// This is for streaming HMAC calculation. One-shot users should use [`hmac`].
-///
-/// While a [`Hmac`] implementation can implement whichever algorithms it
+/// While an [`Hmac`] implementation can implement whichever algorithms it
 /// wants, the variants of this enum will only exist if the corresponding
-/// hash algorithm [crate feature](crate#algorithm-feature-flags) is enabled.
-pub enum HmacStream<H: Hmac> {
+/// [crate feature](crate#algorithm-feature-flags) is enabled.
+pub enum HmacContext<H: Hmac> {
     #[cfg(feature = "sha1")]
-    Sha1(H::Sha1Context),
+    Sha1(H::Sha1),
     #[cfg(feature = "sha256")]
-    Sha256(H::Sha256Context),
+    Sha256(H::Sha256),
     #[cfg(feature = "sha384")]
-    Sha384(H::Sha384Context),
+    Sha384(H::Sha384),
     #[cfg(feature = "sha512")]
-    Sha512(H::Sha512Context),
+    Sha512(H::Sha512),
     #[cfg(feature = "sm3_256")]
-    Sm3_256(H::Sm3_256Context),
+    Sm3_256(H::Sm3_256),
     #[cfg(feature = "sha3_256")]
-    Sha3_256(H::Sha3_256Context),
+    Sha3_256(H::Sha3_256),
     #[cfg(feature = "sha3_384")]
-    Sha3_384(H::Sha3_384Context),
+    Sha3_384(H::Sha3_384),
     #[cfg(feature = "sha3_512")]
-    Sha3_512(H::Sha3_512Context),
+    Sha3_512(H::Sha3_512),
 }
 
-impl<H: Hmac> HmacStream<H> {
-    /// Initializes an HMAC context for `alg` using backend `h` and `key`.
-    pub fn new(h: &H, alg: TpmiAlgHash, key: &[u8]) -> Result<Self, CryptoError> {
-        match alg {
-            #[cfg(feature = "sha1")]
-            TpmiAlgHash::Sha1 => h.sha1(key).map(HmacStream::Sha1),
-            #[cfg(feature = "sha256")]
-            TpmiAlgHash::Sha256 => h.sha256(key).map(HmacStream::Sha256),
-            #[cfg(feature = "sha384")]
-            TpmiAlgHash::Sha384 => h.sha384(key).map(HmacStream::Sha384),
-            #[cfg(feature = "sha512")]
-            TpmiAlgHash::Sha512 => h.sha512(key).map(HmacStream::Sha512),
-            #[cfg(feature = "sm3_256")]
-            TpmiAlgHash::Sm3_256 => h.sm3_256(key).map(HmacStream::Sm3_256),
-            #[cfg(feature = "sha3_256")]
-            TpmiAlgHash::Sha3_256 => h.sha3_256(key).map(HmacStream::Sha3_256),
-            #[cfg(feature = "sha3_384")]
-            TpmiAlgHash::Sha3_384 => h.sha3_384(key).map(HmacStream::Sha3_384),
-            #[cfg(feature = "sha3_512")]
-            TpmiAlgHash::Sha3_512 => h.sha3_512(key).map(HmacStream::Sha3_512),
-        }
+impl<H: Hmac> HmacContext<H> {
+    /// Initializes a new [`HmacContext`] for `alg` with `key`.
+    pub fn new(alg: TpmiAlgHash, key: &[u8]) -> Result<Self, CryptoError> {
+        match_hash_alg!(match alg {
+            TpmiAlgHash::$Alg => { Ok(Self::$Alg(HmacState::init(key)?)) },
+        })
     }
 
-    /// Feeds `data` into the active HMAC stream.
+    /// Returns the hash algorithm of this context.
+    pub const fn alg(&self) -> TpmiAlgHash {
+        match_hash_alg!(match self {
+            Self::$Alg(_) => { TpmiAlgHash::$Alg },
+        })
+    }
+
+    /// Feeds `data` into the context.
     pub fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        match self {
-            #[cfg(feature = "sha1")]
-            HmacStream::Sha1(ctx) => ctx.update(data),
-            #[cfg(feature = "sha256")]
-            HmacStream::Sha256(ctx) => ctx.update(data),
-            #[cfg(feature = "sha384")]
-            HmacStream::Sha384(ctx) => ctx.update(data),
-            #[cfg(feature = "sha512")]
-            HmacStream::Sha512(ctx) => ctx.update(data),
-            #[cfg(feature = "sm3_256")]
-            HmacStream::Sm3_256(ctx) => ctx.update(data),
-            #[cfg(feature = "sha3_256")]
-            HmacStream::Sha3_256(ctx) => ctx.update(data),
-            #[cfg(feature = "sha3_384")]
-            HmacStream::Sha3_384(ctx) => ctx.update(data),
-            #[cfg(feature = "sha3_512")]
-            HmacStream::Sha3_512(ctx) => ctx.update(data),
-        }
+        match_hash_alg!(match self {
+            Self::$Alg(ctx) => { ctx.update(data) },
+        })
     }
 
-    /// Finalizes the MAC into `out` and returns the tagged [`TpmtHa`].
-    pub fn finalize<'a>(
-        self,
-        out: &'a mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
-    ) -> Result<TpmtHa<'a>, CryptoError> {
-        /// Bridge between a digest-specific sized output buffer needed for
-        /// [`Finalize`] and the generic [`TpmiAlgHash::MAX_DIGEST_BYTES`].
-        fn helper<'a, const N: usize>(
-            ctx: impl Finalize<N>,
-            out: &'a mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
-        ) -> Result<&'a [u8; N], CryptoError> {
-            const { assert!(N <= TpmiAlgHash::MAX_DIGEST_BYTES) };
-            let digest: &'a mut [u8; N] = out.first_chunk_mut().unwrap();
-            ctx.finalize(digest)?;
-            Ok(digest)
-        }
-
-        match self {
-            #[cfg(feature = "sha1")]
-            HmacStream::Sha1(ctx) => helper(ctx, out).map(TpmtHa::Sha1),
-            #[cfg(feature = "sha256")]
-            HmacStream::Sha256(ctx) => helper(ctx, out).map(TpmtHa::Sha256),
-            #[cfg(feature = "sha384")]
-            HmacStream::Sha384(ctx) => helper(ctx, out).map(TpmtHa::Sha384),
-            #[cfg(feature = "sha512")]
-            HmacStream::Sha512(ctx) => helper(ctx, out).map(TpmtHa::Sha512),
-            #[cfg(feature = "sm3_256")]
-            HmacStream::Sm3_256(ctx) => helper(ctx, out).map(TpmtHa::Sm3_256),
-            #[cfg(feature = "sha3_256")]
-            HmacStream::Sha3_256(ctx) => helper(ctx, out).map(TpmtHa::Sha3_256),
-            #[cfg(feature = "sha3_384")]
-            HmacStream::Sha3_384(ctx) => helper(ctx, out).map(TpmtHa::Sha3_384),
-            #[cfg(feature = "sha3_512")]
-            HmacStream::Sha3_512(ctx) => helper(ctx, out).map(TpmtHa::Sha3_512),
-        }
+    /// Writes the MAC into the start of `out` and returns the tagged
+    /// [`TpmtHa`].
+    ///
+    /// Consumes the context. `out` can be longer than the MAC (e.g.
+    /// [`TpmiAlgHash::MAX_DIGEST_BYTES`]). Returns [`CryptoError::Internal`] if
+    /// `out.len() < alg.digest_size()`.
+    pub fn finalize(mut self, out: &mut [u8]) -> Result<TpmtHa<'_>, CryptoError> {
+        Ok(match_hash_alg!(match (&mut self) {
+            Self::$Alg(ctx) => {
+                TpmtHa::$Alg({
+                    let out = out.first_chunk_mut().ok_or(CryptoError::Internal)?;
+                    ctx.finalize(out)?;
+                    out
+                })
+            },
+        }))
     }
 }
 
-/// Write a MAC into a caller-provided buffer.
+/// Writes the MAC of the concatenation of `data` into the start of a
+/// caller-provided buffer.
 ///
-/// This is for one-shot HMAC calculation. [`HmacStream`] allows for streaming
-/// HMAC calculation.
-pub fn hmac<'a>(
-    h: &impl Hmac,
+/// This is for one-shot HMAC calculation, e.g. `hmac::<H>(alg, key, &[a, b],
+/// out)` computes `HMAC(key, a || b)`. [`HmacContext`] allows for streaming
+/// HMAC calculation. `out` can be longer than the MAC (e.g.
+/// [`TpmiAlgHash::MAX_DIGEST_BYTES`]). Returns [`CryptoError::Internal`] if
+/// `out.len() < alg.digest_size()`.
+pub fn hmac<'a, H: Hmac>(
     alg: TpmiAlgHash,
     key: &[u8],
-    data: &[u8],
-    out: &'a mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
+    data: &[&[u8]],
+    out: &'a mut [u8],
 ) -> Result<TpmtHa<'a>, CryptoError> {
-    let mut ctx = HmacStream::new(h, alg, key)?;
-    ctx.update(data)?;
-    ctx.finalize(out)
+    match_hash_alg!(match alg {
+        TpmiAlgHash::$Alg => {
+            let out = out.first_chunk_mut().ok_or(CryptoError::Internal)?;
+            H::$Alg::hmac(key, data, out)?;
+            Ok(TpmtHa::$Alg(out))
+        },
+    })
+}
+
+/// NIST SP 800-108 KDF in Counter Mode (`KDFa`), as specified in TPM 2.0 Part 1.
+///
+/// The `alg` and `key` parameters are used to initialize the HMAC state for
+/// each block, filling `out` with derived key material. The `label` is a
+/// [`CStr`], ensuring a separation indicator (`0x00`) is always present. The
+/// "Context" used is the concatenation of `context.0` (`contextU`) and
+/// `context.1` (`contextV`).
+///
+/// There is no explicit `bits` parameter: `out` is always completely filled,
+/// giving an effective `bits` of `8 * out.len()`.
+///
+/// ## Example Bound Session Key Generation
+///
+/// ```
+/// # use tpm2::{TpmiAlgHash, crypto::{kdfa, Crypto, CryptoError}};
+/// # fn gen_session_key<C: Crypto>() -> Result<(), CryptoError> {
+/// const ALG: TpmiAlgHash = TpmiAlgHash::Sha256;
+/// let auth = b"secret auth value";
+/// let nonce_tpm = [0x11; 8];
+/// let nonce_caller = [0x22; 8];
+///
+/// let mut key = [0x00; ALG.digest_size()];
+/// kdfa::<C>(ALG, auth, c"ATH", (&nonce_tpm, &nonce_caller), &mut key)?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn kdfa<H: Hmac>(
+    alg: TpmiAlgHash,
+    key: &[u8],
+    label: &CStr,
+    context: (&[u8], &[u8]),
+    out: &mut [u8],
+) -> Result<(), CryptoError> {
+    match_hash_alg!(match alg {
+        TpmiAlgHash::$Alg => { H::$Alg::kdfa(key, label, context, out) },
+    })
 }

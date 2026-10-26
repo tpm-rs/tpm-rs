@@ -1,267 +1,224 @@
-use super::{CryptoError, Direction};
+//! Symmetric encryption and decryption.
+
+use super::{
+    CryptoError,
+    backend::{Symmetric, SymmetricState},
+    match_sym_alg,
+};
 use crate::{AlgSym, TpmiAlgCipherMode};
 
-/// A tagged symmetric key containing a symmetric algorithm ([`AlgSym`])
-/// and its fixed-size key buffer.
+/// A single cipher block.
 ///
-/// While a [`Symmetric`] implementation can implement whichever algorithms it
-/// wants, the variants of this enum will only exist if the corresponding
-/// symmetric cipher [crate feature](crate#algorithm-feature-flags) is enabled.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SymmetricKey<'a> {
-    #[cfg(feature = "aes128")]
-    Aes128(&'a [u8; AlgSym::Aes128.key_bytes()]),
-    #[cfg(feature = "aes192")]
-    Aes192(&'a [u8; AlgSym::Aes192.key_bytes()]),
-    #[cfg(feature = "aes256")]
-    Aes256(&'a [u8; AlgSym::Aes256.key_bytes()]),
-    #[cfg(feature = "sm4_128")]
-    Sm4_128(&'a [u8; AlgSym::Sm4_128.key_bytes()]),
-    #[cfg(feature = "camellia128")]
-    Camellia128(&'a [u8; AlgSym::Camellia128.key_bytes()]),
-    #[cfg(feature = "camellia192")]
-    Camellia192(&'a [u8; AlgSym::Camellia192.key_bytes()]),
-    #[cfg(feature = "camellia256")]
-    Camellia256(&'a [u8; AlgSym::Camellia256.key_bytes()]),
+/// All symmetric ciphers supported by the TPM have a block size of
+/// [`AlgSym::BLOCK_SIZE`] (`16`).
+pub type Block = [u8; AlgSym::BLOCK_SIZE];
+
+/// Selects between encryption and decryption operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Encrypt,
+    Decrypt,
 }
 
-impl<'a> SymmetricKey<'a> {
-    /// Creates a [`SymmetricKey`] for `alg` from `key`, returning `None` if
-    /// `key.len()` does not match `alg`'s required key length.
-    pub fn new(alg: AlgSym, key: &'a [u8]) -> Option<Self> {
-        Some(match alg {
-            #[cfg(feature = "aes128")]
-            AlgSym::Aes128 => Self::Aes128(key.try_into().ok()?),
-            #[cfg(feature = "aes192")]
-            AlgSym::Aes192 => Self::Aes192(key.try_into().ok()?),
-            #[cfg(feature = "aes256")]
-            AlgSym::Aes256 => Self::Aes256(key.try_into().ok()?),
-            #[cfg(feature = "sm4_128")]
-            AlgSym::Sm4_128 => Self::Sm4_128(key.try_into().ok()?),
-            #[cfg(feature = "camellia128")]
-            AlgSym::Camellia128 => Self::Camellia128(key.try_into().ok()?),
-            #[cfg(feature = "camellia192")]
-            AlgSym::Camellia192 => Self::Camellia192(key.try_into().ok()?),
-            #[cfg(feature = "camellia256")]
-            AlgSym::Camellia256 => Self::Camellia256(key.try_into().ok()?),
-        })
-    }
-
-    pub const fn alg(self) -> AlgSym {
-        match self {
-            #[cfg(feature = "aes128")]
-            Self::Aes128(_) => AlgSym::Aes128,
-            #[cfg(feature = "aes192")]
-            Self::Aes192(_) => AlgSym::Aes192,
-            #[cfg(feature = "aes256")]
-            Self::Aes256(_) => AlgSym::Aes256,
-            #[cfg(feature = "sm4_128")]
-            Self::Sm4_128(_) => AlgSym::Sm4_128,
-            #[cfg(feature = "camellia128")]
-            Self::Camellia128(_) => AlgSym::Camellia128,
-            #[cfg(feature = "camellia192")]
-            Self::Camellia192(_) => AlgSym::Camellia192,
-            #[cfg(feature = "camellia256")]
-            Self::Camellia256(_) => AlgSym::Camellia256,
-        }
-    }
-
-    pub const fn key(self) -> &'a [u8] {
-        match self {
-            #[cfg(feature = "aes128")]
-            Self::Aes128(k) => k,
-            #[cfg(feature = "aes192")]
-            Self::Aes192(k) => k,
-            #[cfg(feature = "aes256")]
-            Self::Aes256(k) => k,
-            #[cfg(feature = "sm4_128")]
-            Self::Sm4_128(k) => k,
-            #[cfg(feature = "camellia128")]
-            Self::Camellia128(k) => k,
-            #[cfg(feature = "camellia192")]
-            Self::Camellia192(k) => k,
-            #[cfg(feature = "camellia256")]
-            Self::Camellia256(k) => k,
-        }
-    }
+/// The input to a symmetric cipher operation: a cipher mode
+/// ([`TpmiAlgCipherMode`]), its chaining value / initialization vector (`iv`),
+/// and the `data` to be encrypted or decrypted in place.
+///
+/// The variants of this enum will only exist if the corresponding
+/// [crate feature](crate#algorithm-feature-flags) is enabled (CFB is always
+/// enabled). Block modes (CBC and ECB) take their data as whole [`Block`]s,
+/// while stream modes (CTR, OFB, and CFB) accept arbitrary data lengths.
+///
+/// ## Chaining (`ivOut`)
+///
+/// After an operation, `iv` holds the chaining value (`ivOut`) to use as the
+/// IV of a subsequent operation, as defined in TPM 2.0 Part 3 (Table 61,
+/// "Symmetric Chaining Process") and the TPM reference implementation:
+///
+/// | Mode | `ivOut` |
+/// |------|---------|
+/// | CTR  | the next counter value: `iv` plus the number of blocks processed (a partial final block counts as a block) |
+/// | OFB  | the final keystream block |
+/// | CBC  | the final ciphertext block |
+/// | CFB  | the final ciphertext block, zero padded if it is partial |
+///
+/// If `data` is empty, `iv` is unchanged.
+pub enum CipherInput<'a> {
+    /// Counter mode: `(iv, data)`.
+    #[cfg(feature = "ctr")]
+    Ctr(&'a mut Block, &'a mut [u8]),
+    /// Output Feedback mode: `(iv, data)`.
+    #[cfg(feature = "ofb")]
+    Ofb(&'a mut Block, &'a mut [u8]),
+    /// Cipher Block Chaining mode: `(iv, data)`.
+    #[cfg(feature = "cbc")]
+    Cbc(&'a mut Block, &'a mut [Block]),
+    /// Cipher Feedback mode: `(iv, data)`.
+    Cfb(&'a mut Block, &'a mut [u8]),
+    /// Electronic Codebook mode: `data` (no IV).
+    #[cfg(feature = "ecb")]
+    Ecb(&'a mut [Block]),
 }
 
-/// A symmetric block cipher mode ([`TpmiAlgCipherMode`]) paired with its
-/// mutable chaining value / initialization vector (`iv`).
-///
-/// All the variants of this enum will exist, regardless of which cipher mode
-/// [crate features](crate#algorithm-feature-flags) are enabled. If such a
-/// feature is disabled, the [`Symmetric`] methods will never be called with
-/// the corresponding [`ModeIv`] variant.
-///
-/// ## Preconditions for `data`
-/// - Block modes ([`ModeIv::Ecb`] and [`ModeIv::Cbc`]) require
-///   `data.len()` to be a multiple of [`AlgSym::BLOCK_SIZE`] (`16`).
-/// - Stream modes ([`ModeIv::Ctr`], [`ModeIv::Ofb`], and
-///   [`ModeIv::Cfb`]) accept arbitrary `data` lengths.
-///
-/// For modes with an IV, the buffer is updated in place with the final chaining
-/// value (`ivOut`) upon completion.
-#[derive(PartialEq, Eq, Debug)]
-pub enum ModeIv<'a> {
-    Ctr(&'a mut [u8; AlgSym::BLOCK_SIZE]),
-    Ofb(&'a mut [u8; AlgSym::BLOCK_SIZE]),
-    Cbc(&'a mut [u8; AlgSym::BLOCK_SIZE]),
-    Cfb(&'a mut [u8; AlgSym::BLOCK_SIZE]),
-    Ecb,
-}
-
-impl<'a> ModeIv<'a> {
-    /// Creates a [`ModeIv`] from `mode` and `iv`, returning `None` if
-    /// `iv.len()` is invalid for `mode` (must be `0` for `Ecb`, and
-    /// [`AlgSym::BLOCK_SIZE`] for all other modes).
-    pub fn new(mode: TpmiAlgCipherMode, iv: &'a mut [u8]) -> Option<Self> {
+impl<'a> CipherInput<'a> {
+    /// Creates a [`CipherInput`] from `mode`, `iv`, and `data`.
+    ///
+    /// Returns `None` if:
+    /// - `iv.len()` is invalid for `mode` (it must be `0` for ECB, and
+    ///   [`AlgSym::BLOCK_SIZE`] for all other modes), or
+    /// - `mode` is a block mode (CBC or ECB) and `data.len()` is not a
+    ///   multiple of [`AlgSym::BLOCK_SIZE`].
+    pub fn new(mode: TpmiAlgCipherMode, iv: &'a mut [u8], data: &'a mut [u8]) -> Option<Self> {
         Some(match mode {
             #[cfg(feature = "ctr")]
-            TpmiAlgCipherMode::Ctr => Self::Ctr(iv.try_into().ok()?),
+            TpmiAlgCipherMode::Ctr => Self::Ctr(iv.try_into().ok()?, data),
             #[cfg(feature = "ofb")]
-            TpmiAlgCipherMode::Ofb => Self::Ofb(iv.try_into().ok()?),
+            TpmiAlgCipherMode::Ofb => Self::Ofb(iv.try_into().ok()?, data),
             #[cfg(feature = "cbc")]
-            TpmiAlgCipherMode::Cbc => Self::Cbc(iv.try_into().ok()?),
-            TpmiAlgCipherMode::Cfb => Self::Cfb(iv.try_into().ok()?),
+            TpmiAlgCipherMode::Cbc => Self::Cbc(iv.try_into().ok()?, as_blocks(data)?),
+            TpmiAlgCipherMode::Cfb => Self::Cfb(iv.try_into().ok()?, data),
             #[cfg(feature = "ecb")]
             TpmiAlgCipherMode::Ecb => {
                 if !iv.is_empty() {
                     return None;
                 }
-                Self::Ecb
+                Self::Ecb(as_blocks(data)?)
             }
         })
     }
 
-    /// Returns `true` if `data_len` satisfies the block-alignment requirements of `self`.
-    pub const fn is_valid_data_len(&self, data_len: usize) -> bool {
+    /// Returns the cipher mode of this input.
+    pub const fn mode(&self) -> TpmiAlgCipherMode {
         match self {
-            Self::Cbc(_) | Self::Ecb => data_len.is_multiple_of(AlgSym::BLOCK_SIZE),
-            Self::Ctr(_) | Self::Ofb(_) | Self::Cfb(_) => true,
+            #[cfg(feature = "ctr")]
+            Self::Ctr(..) => TpmiAlgCipherMode::Ctr,
+            #[cfg(feature = "ofb")]
+            Self::Ofb(..) => TpmiAlgCipherMode::Ofb,
+            #[cfg(feature = "cbc")]
+            Self::Cbc(..) => TpmiAlgCipherMode::Cbc,
+            Self::Cfb(..) => TpmiAlgCipherMode::Cfb,
+            #[cfg(feature = "ecb")]
+            Self::Ecb(..) => TpmiAlgCipherMode::Ecb,
         }
     }
 }
 
-/// Cryptographic symmetric encryption and decryption interfaces for TPM implementations and clients.
+/// Splits `data` into whole blocks, or returns `None` if it isn't block-aligned.
+#[cfg(any(feature = "cbc", feature = "ecb"))]
+fn as_blocks(data: &mut [u8]) -> Option<&mut [Block]> {
+    let (blocks, tail) = data.as_chunks_mut();
+    tail.is_empty().then_some(blocks)
+}
+
+/// Symmetric key state for a runtime-selected cipher algorithm.
 ///
-/// Users should call [`encrypt_decrypt`], [`encrypt`], or [`decrypt`] rather than invoking trait
-/// methods directly.
-#[allow(unused_variables)]
-pub trait Symmetric {
-    fn aes128(
-        &self,
-        key: &[u8; 16],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        Err(CryptoError::Unsupported)
+/// Use [`SymmetricKey::crypt`] instead if the key is only used once.
+///
+/// While a [`Symmetric`] implementation can implement whichever algorithms it
+/// wants, the variants of this enum will only exist if the corresponding
+/// [crate feature](crate#algorithm-feature-flags) is enabled.
+pub enum SymmetricContext<S: Symmetric> {
+    #[cfg(feature = "aes128")]
+    Aes128(S::Aes128),
+    #[cfg(feature = "aes192")]
+    Aes192(S::Aes192),
+    #[cfg(feature = "aes256")]
+    Aes256(S::Aes256),
+    #[cfg(feature = "sm4_128")]
+    Sm4_128(S::Sm4_128),
+    #[cfg(feature = "camellia128")]
+    Camellia128(S::Camellia128),
+    #[cfg(feature = "camellia192")]
+    Camellia192(S::Camellia192),
+    #[cfg(feature = "camellia256")]
+    Camellia256(S::Camellia256),
+}
+
+impl<S: Symmetric> SymmetricContext<S> {
+    /// Initializes a new [`SymmetricContext`] from `key`.
+    // Inlining this reduces peak stack usage (see "Dispatch design notes" in
+    // the backend module docs).
+    #[inline]
+    pub fn new(key: SymmetricKey<'_>) -> Result<Self, CryptoError> {
+        match_sym_alg!(match key {
+            SymmetricKey::$Alg(k) => { Ok(Self::$Alg(SymmetricState::init(k)?)) },
+        })
     }
 
-    fn aes192(
-        &self,
-        key: &[u8; 24],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        Err(CryptoError::Unsupported)
+    /// Returns the cipher algorithm of this context.
+    pub const fn alg(&self) -> AlgSym {
+        match_sym_alg!(match self {
+            Self::$Alg(_) => { AlgSym::$Alg },
+        })
     }
 
-    fn aes256(
-        &self,
-        key: &[u8; 32],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    fn sm4_128(
-        &self,
-        key: &[u8; 16],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    fn camellia128(
-        &self,
-        key: &[u8; 16],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    fn camellia192(
-        &self,
-        key: &[u8; 24],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-
-    fn camellia256(
-        &self,
-        key: &[u8; 32],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        Err(CryptoError::Unsupported)
+    /// Encrypts or decrypts `input` in place, updating its IV (see
+    /// [`CipherInput`]).
+    pub fn crypt(&self, dir: Direction, input: CipherInput<'_>) -> Result<(), CryptoError> {
+        match_sym_alg!(match self {
+            Self::$Alg(state) => { state.crypt(dir, input) },
+        })
     }
 }
 
-/// Encrypts or decrypts `data` in-place using `key` and `mode` (updating `mode`'s IV in-place).
-pub fn encrypt_decrypt(
-    s: &impl Symmetric,
-    key: SymmetricKey<'_>,
-    mode: ModeIv<'_>,
-    dir: Direction,
-    data: &mut [u8],
-) -> Result<(), CryptoError> {
-    match key {
-        #[cfg(feature = "aes128")]
-        SymmetricKey::Aes128(key) => s.aes128(key, mode, dir, data),
-        #[cfg(feature = "aes192")]
-        SymmetricKey::Aes192(key) => s.aes192(key, mode, dir, data),
-        #[cfg(feature = "aes256")]
-        SymmetricKey::Aes256(key) => s.aes256(key, mode, dir, data),
-        #[cfg(feature = "sm4_128")]
-        SymmetricKey::Sm4_128(key) => s.sm4_128(key, mode, dir, data),
-        #[cfg(feature = "camellia128")]
-        SymmetricKey::Camellia128(key) => s.camellia128(key, mode, dir, data),
-        #[cfg(feature = "camellia192")]
-        SymmetricKey::Camellia192(key) => s.camellia192(key, mode, dir, data),
-        #[cfg(feature = "camellia256")]
-        SymmetricKey::Camellia256(key) => s.camellia256(key, mode, dir, data),
+/// Raw key bytes for a symmetric cipher algorithm, with the correct length for
+/// that algorithm.
+///
+/// The variants of this enum will only exist if the corresponding
+/// [crate feature](crate#algorithm-feature-flags) is enabled.
+#[derive(Clone, Copy)]
+pub enum SymmetricKey<'a> {
+    #[cfg(feature = "aes128")]
+    Aes128(&'a [u8; 16]),
+    #[cfg(feature = "aes192")]
+    Aes192(&'a [u8; 24]),
+    #[cfg(feature = "aes256")]
+    Aes256(&'a [u8; 32]),
+    #[cfg(feature = "sm4_128")]
+    Sm4_128(&'a [u8; 16]),
+    #[cfg(feature = "camellia128")]
+    Camellia128(&'a [u8; 16]),
+    #[cfg(feature = "camellia192")]
+    Camellia192(&'a [u8; 24]),
+    #[cfg(feature = "camellia256")]
+    Camellia256(&'a [u8; 32]),
+}
+
+impl<'a> SymmetricKey<'a> {
+    /// Creates a [`SymmetricKey`] for `alg` from `bytes`, returning `None` if
+    /// `bytes.len() != alg.key_bytes()`.
+    pub fn new(alg: AlgSym, bytes: &'a [u8]) -> Option<Self> {
+        Some(match_sym_alg!(match alg {
+            AlgSym::$Alg => { Self::$Alg(bytes.try_into().ok()?) },
+        }))
     }
-}
 
-/// Encrypts `data` in-place using `key` and `mode` (updating `mode`'s IV in-place).
-pub fn encrypt(
-    s: &impl Symmetric,
-    key: SymmetricKey<'_>,
-    mode: ModeIv<'_>,
-    data: &mut [u8],
-) -> Result<(), CryptoError> {
-    encrypt_decrypt(s, key, mode, Direction::Encrypt, data)
-}
+    /// Returns the symmetric algorithm for this key.
+    pub const fn alg(&self) -> AlgSym {
+        match_sym_alg!(match self {
+            Self::$Alg(_) => { AlgSym::$Alg },
+        })
+    }
 
-/// Decrypts `data` in-place using `key` and `mode` (updating `mode`'s IV in-place).
-pub fn decrypt(
-    s: &impl Symmetric,
-    key: SymmetricKey<'_>,
-    mode: ModeIv<'_>,
-    data: &mut [u8],
-) -> Result<(), CryptoError> {
-    encrypt_decrypt(s, key, mode, Direction::Decrypt, data)
+    /// Returns the raw key bytes.
+    pub const fn bytes(&self) -> &'a [u8] {
+        match_sym_alg!(match (*self) {
+            Self::$Alg(k) => { k.as_slice() },
+        })
+    }
+
+    /// Encrypts or decrypts `input` in place with this key, updating its IV
+    /// (see [`CipherInput`]).
+    ///
+    /// This is for keys used once. [`SymmetricContext`] allows for reusing a
+    /// key.
+    pub fn crypt<S: Symmetric>(
+        &self,
+        dir: Direction,
+        input: CipherInput<'_>,
+    ) -> Result<(), CryptoError> {
+        match_sym_alg!(match (*self) {
+            Self::$Alg(k) => { S::$Alg::crypt_once(k, dir, input) },
+        })
+    }
 }

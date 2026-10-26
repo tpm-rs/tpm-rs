@@ -42,8 +42,9 @@
 //! in types (like [`TpmiAlgHash`], [`TpmtHa`], [`AlgSym`], [`TpmiAlgSymMode`],
 //! and [`TpmiAlgCipherMode`]), size limits (like
 //! [`TpmiAlgHash::MAX_DIGEST_BYTES`] and [`AlgSym::MAX_KEY_BYTES`]), and
-//! [`crypto`] wrappers. All algorithm features are enabled by default;
-//! constrained builds can set `default-features = false` and enable a subset:
+//! [`crypto`] dispatch functions and enums. All algorithm features are enabled
+//! by default; constrained builds can set `default-features = false` and enable
+//! a subset:
 //!
 //! - **Hash algorithms** (at least one required): `sha1`, `sha256`, `sha384`,
 //!   `sha512`, `sm3_256`, `sha3_256`, `sha3_384`, `sha3_512`
