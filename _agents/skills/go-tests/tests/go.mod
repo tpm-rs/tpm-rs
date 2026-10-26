@@ -4,7 +4,7 @@ go 1.24
 
 require (
 	github.com/google/go-cmp v0.5.9
-	github.com/google/go-tpm v0.9.9-0.20260602212016-9f0977c7f65a
+	github.com/google/go-tpm v0.9.9-0.20261001180303-e05fb8b1ca4e
 )
 
 require (

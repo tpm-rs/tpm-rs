@@ -16,7 +16,12 @@ This document describes how to run the Go end-to-end (E2E) integration test suit
 
 The tests under `go-tests/tests/` exercise the Rust TPM 2.0 simulator (`tpm2-simulator`) against an external Go client library over network/IPC sockets. This verifies that the Rust simulator behaves correctly when called by external clients.
 
-These tests are copied from https://github.com/google/go-tpm/tree/main/tpm2/test (commit `9f0977c`).
+These tests are copied from https://github.com/google/go-tpm/tree/main/tpm2/test (commit `e05fb8b`), and `go.mod` pins the `go-tpm` library at the same commit.
+
+To update them, clone `go-tpm` to `/tmp/` (or your artifact folder), and do the following:
+1. Replace the `*_test.go` files here with those of `tpm2/test/`, deleting the ones upstream removed. Keep `go.mod`, `go.sum` and `.gitignore`.
+2. Bump the library with `go get github.com/google/go-tpm@<commit> && go mod tidy`.
+3. Update the Rust ports in `testing/tests/go/` so every Go test function has a port marked `// Original Go test: <file>_test.go - <TestName>`.
 
 > [!NOTE]
 > These Go E2E integration tests are also ported to native Rust integration tests under *testing/src/go* to ensure behavioral parity and allow fast testing within standard Cargo workflows.
@@ -84,4 +89,4 @@ go test -v -run ^TestGetTime$ -args --tpm-sim-path ../../../../target/debug/tpm2
 ## Notice
 
 > [!CAUTION]
-> **DO NOT MODIFY GO TESTS**: Never modify, edit, or delete any of the Go test files or dependencies under `go-tests/tests/`. These tests represent external client verification suites and must remain unmodified.
+> **DO NOT MODIFY GO TESTS**: Never modify, edit, or delete any of the Go test files or dependencies under `go-tests/tests/`. These tests represent external client verification suites and must remain unmodified. The only exception is syncing them verbatim from upstream `go-tpm` when the user asks for it.
