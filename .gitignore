@@ -13,4 +13,8 @@ __pycache__
 /GEMINI.md
 /pyrightconfig.json
 /.agents
-/_agents
+/_agents/*
+!/_agents/skills/
+/_agents/skills/*
+!/_agents/skills/fuzz/
+!/_agents/skills/go-tests/
