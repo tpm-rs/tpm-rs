@@ -16,10 +16,11 @@ TPM 2.0 Implementation in Rust, consisting of:
   - Includes bindings to the TCP-based simulator.
 - [`tpm2-impl`](./crates/tpm2-impl/): engine code implementing the TPM's core logic
   - Currently _quite_ incomplete.
+- [`tpm2-rustcrypto`](./crates/tpm2-rustcrypto/): [RustCrypto] cryptography backend for `tpm2`
 
 ## Status
 
-While `tpm2` is mostly stable, both `tpm2-client` and `tpm2-impl` are expected
+While `tpm2` is mostly stable, the other crates in this workspace are expected
 to undergo significant changes, perhaps on a daily basis. This crate follows
 [SemVer], so any `v0.y.z` code may experience breaking changes.
 
@@ -75,6 +76,7 @@ integrated into our CI pipeline.
 [Dependency Status]: https://deps.rs/repo/github/tpm-rs/tpm-rs/status.svg
 
 [v185]: https://www.trustedcomputinggroup.org/resources/documents/tpm-library-specification
+[RustCrypto]: https://github.com/RustCrypto
 [semver]: https://semver.org/spec/v2.0.0.html
 [coding style]: ./docs/coding-style.md
 [contribution guide]: ./CONTRIBUTING.md
