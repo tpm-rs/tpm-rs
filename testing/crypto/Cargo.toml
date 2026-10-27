@@ -15,11 +15,15 @@ categories.workspace = true
 tpm2 = { workspace = true }
 hex-literal = "1"
 aes = "0.9"
+tpm2-boringssl = { path = "../../crates/tpm2-boringssl", optional = true }
 tpm2-openssl = { path = "../../crates/tpm2-openssl", optional = true }
 tpm2-rustcrypto = { path = "../../crates/tpm2-rustcrypto", features = ["rsa"], optional = true }
 
 [features]
 default = ["rustcrypto", "openssl"]
+# Requires a local BoringSSL build; see crates/tpm2-boringssl/README.md.
+boringssl = ["dep:tpm2-boringssl"]
+boringssl-non-fips = ["boringssl", "tpm2-boringssl/non-fips"]
 openssl = ["dep:tpm2-openssl"]
 rustcrypto = ["dep:tpm2-rustcrypto"]
 
@@ -38,3 +42,11 @@ required-features = ["openssl", "rustcrypto"]
 [[test]]
 name = "openssl_schnorr_sm2"
 required-features = ["openssl"]
+
+[[test]]
+name = "boringssl"
+required-features = ["boringssl", "openssl", "rustcrypto"]
+
+[[test]]
+name = "boringssl_crypto"
+required-features = ["boringssl"]

@@ -1,0 +1,21 @@
+[package]
+name = "tpm2-boringssl"
+description = "BoringSSL cryptography backend for tpm2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+# Enables algorithms implemented outside BoringSSL's FIPS module (`bcm`),
+# such as Ed25519 and X25519.
+non-fips = []
+
+[dependencies]
+tpm2.workspace = true
+
