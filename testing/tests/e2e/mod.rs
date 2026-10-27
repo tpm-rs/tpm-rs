@@ -172,3 +172,4 @@ mod transient_handle_numbering;
 mod transient_object_capacity;
 mod unmarshal_error_positions;
 mod verify_signature;
+mod wrapped_digest_size_limit;

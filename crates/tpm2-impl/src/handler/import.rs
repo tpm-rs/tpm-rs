@@ -214,7 +214,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 return Err(TpmRc::INSUFFICIENT.with(Position::parameter(3)));
             }
             let mac_len = u16::from_be_bytes([duplicate_bytes[0], duplicate_bytes[1]]) as usize;
-            if mac_len > 64 {
+            if mac_len > crate::handler::MAX_DIGEST_SIZE {
                 return Err(TpmRc::SIZE.with(Position::parameter(3)));
             }
             if duplicate_bytes.len() < 2 + mac_len {
@@ -353,7 +353,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             let inner_integrity_len =
                 u16::from_be_bytes([decrypted_inner[0], decrypted_inner[1]]) as usize;
-            if inner_integrity_len > 64 {
+            if inner_integrity_len > crate::handler::MAX_DIGEST_SIZE {
                 return Err(TpmRc::SIZE.with(Position::parameter(3)));
             }
             let sensitive_offset = 2 + inner_integrity_len;

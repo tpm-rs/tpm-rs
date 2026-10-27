@@ -187,7 +187,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let mac_len = u16::from_be_bytes([private_bytes[0], private_bytes[1]]) as usize;
-        if mac_len > 64 {
+        if mac_len > crate::handler::MAX_DIGEST_SIZE {
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
         if private_bytes.len() < 2 + mac_len {

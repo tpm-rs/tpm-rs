@@ -310,6 +310,14 @@ pub struct CommandHandler<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, 
     pub context: &'b mut TpmEngine<'a, C, S, T, R>,
 }
 
+/// `sizeof(TPMU_HA)`: the largest digest of the implemented hashes (64 octets, or 48 without
+/// SHA-512), which bounds every `TPM2B_DIGEST` ("buffer\[size\]{:sizeof(TPMU_HA)}", TPM 2.0
+/// Part 2). A larger *size* is `TPM_RC_SIZE` ("the value of a size parameter is larger or
+/// smaller than allowed", Part 2, "Unmarshaling Errors"), checked before the buffer octets are
+/// required (`TPM_RC_INSUFFICIENT`). For the digests the handlers unmarshal by hand from a
+/// decrypted or wrapped blob (`integrityOuter`, `integrityInner`).
+pub(crate) const MAX_DIGEST_SIZE: usize = TpmiAlgHash::MAX_DIGEST_BYTES;
+
 /// Hash algorithm for context integrity, tickets and the other proof-keyed HMACs
 /// (`CONTEXT_INTEGRITY_HASH_ALG`, reported as `TPM_PT_CONTEXT_HASH`).
 ///

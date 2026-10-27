@@ -145,7 +145,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 return Err(TpmRc::INSUFFICIENT.with(Position::parameter(1)));
             }
             let mac_len = u16::from_be_bytes([duplicate_bytes[0], duplicate_bytes[1]]) as usize;
-            if mac_len > 64 {
+            if mac_len > crate::handler::MAX_DIGEST_SIZE {
                 return Err(TpmRc::SIZE.with(Position::parameter(1)));
             }
             if duplicate_bytes.len() < 2 + mac_len {
