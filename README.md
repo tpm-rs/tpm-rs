@@ -17,6 +17,7 @@ TPM 2.0 Implementation in Rust, consisting of:
 - [`tpm2-impl`](./crates/tpm2-impl/): engine code implementing the TPM's core logic
   - Currently _quite_ incomplete.
 - [`tpm2-rustcrypto`](./crates/tpm2-rustcrypto/): [RustCrypto] cryptography backend for `tpm2`
+- [`tpm2-openssl`](./crates/tpm2-openssl/): [OpenSSL] cryptography backend for `tpm2`
 - [`tpm2-boringssl`](./crates/tpm2-boringssl/): [BoringSSL] cryptography backend for `tpm2`
 
 ## Status
@@ -78,6 +79,7 @@ integrated into our CI pipeline.
 
 [v185]: https://www.trustedcomputinggroup.org/resources/documents/tpm-library-specification
 [RustCrypto]: https://github.com/RustCrypto
+[OpenSSL]: https://www.openssl.org/
 [BoringSSL]: https://boringssl.googlesource.com/boringssl
 [semver]: https://semver.org/spec/v2.0.0.html
 [coding style]: ./docs/coding-style.md

@@ -3,7 +3,7 @@
 //! The tests live in this crate's `tests/` directory: `tests/common/suite.rs`
 //! tests a single backend and `tests/common/interop.rs` tests a pair of
 //! backends against each other. Each top-level test target (e.g.
-//! `tests/rustcrypto.rs` or `tests/boringssl_rustcrypto.rs`) selects the
+//! `tests/rustcrypto.rs` or `tests/openssl_rustcrypto.rs`) selects the
 //! backend(s) with type aliases and includes one of these files.
 //!
 //! ## Sources
@@ -18,6 +18,8 @@ use tpm2::crypto::CryptoError;
 // The backends are only used by the tests.
 #[cfg(feature = "boringssl")]
 use tpm2_boringssl as _;
+#[cfg(feature = "openssl")]
+use tpm2_openssl as _;
 #[cfg(feature = "rustcrypto")]
 use tpm2_rustcrypto as _;
 

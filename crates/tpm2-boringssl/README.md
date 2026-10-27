@@ -67,7 +67,8 @@ it has run, building fails with `Could not copy bindings from
 `BINDGEN` (the `bindgen` CLI, default: `bindgen` on `PATH`). CMake's own
 variables, such as `CMAKE_GENERATOR=Ninja`, also apply.
 
-Then run the shared backend tests, and the interop tests against RustCrypto:
+Then run the shared backend tests, and the interop tests against RustCrypto
+(not with the `openssl` feature, see above):
 
 ```sh
 cargo test -p testing-crypto --no-default-features --features boringssl,rustcrypto

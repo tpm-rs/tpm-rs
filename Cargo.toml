@@ -6,6 +6,7 @@ members = [
     "crates/tpm2-boringssl",
     "crates/tpm2-client",
     "crates/tpm2-impl",
+    "crates/tpm2-openssl",
     "crates/tpm2-rustcrypto",
     "testing/crypto",
 ]
@@ -15,6 +16,7 @@ default-members = [
     "crates/tpm2",
     "crates/tpm2-client",
     "crates/tpm2-impl",
+    "crates/tpm2-openssl",
     "crates/tpm2-rustcrypto",
     "testing/crypto",
 ]

@@ -1,0 +1,22 @@
+[package]
+name = "tpm2-openssl"
+description = "OpenSSL cryptography backend for tpm2"
+publish = false
+
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories = ["cryptography"]
+
+[dependencies]
+tpm2 = { workspace = true }
+openssl = "0.10"
+openssl-sys = "0.9.117"
+foreign-types = "0.3"
+
