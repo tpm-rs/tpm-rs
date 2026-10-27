@@ -406,14 +406,14 @@ These are the only specification-deviation fixes (`bug-fix-*.patch`). `tpm-rs` f
 ### 9. Profile Configuration of `mstpm20`
 
 - **Classification**: **Profile difference** (`#define` only).
-- **Test & Implementation Code**: [`testing/patches/mstpm20/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/mstpm20) (`profile-algorithms`, `profile-command-list`, `profile-no-act`, `profile-no-sec-channel`, `profile-no-vendor-commands`, `profile-max-context-size`, `profile-rsa-private-prime-only`, `profile-production-context-slot`, `profile-no-self-tests`, `platform-no-debug-print`, `platform-pcr-banks`, `profile-enable-vendor-permanent-auth`, `platform-vendor-info`, `platform-vendor-unique-value`, `platform-ram-backed-nv`, `platform-manufacture-zero-state`, `build-fix-openssl-version-check`).
+- **Test & Implementation Code**: [`testing/patches/mstpm20/`](file:///usr/local/google/home/wenyuzhao/projects/tpm-rs/testing/patches/mstpm20) (`profile-algorithms`, `profile-command-list`, `profile-no-act`, `profile-no-sec-channel`, `profile-no-vendor-commands`, `profile-max-context-size`, `profile-rsa-private-prime-only`, `profile-production-context-slot`, `profile-no-self-tests`, `platform-no-debug-print`, `profile-enable-vendor-permanent-auth`, `platform-vendor-info`, `platform-vendor-unique-value`, `platform-ram-backed-nv`, `platform-manufacture-zero-state`, `build-fix-openssl-version-check`).
 - **Settings**:
 
   | Setting | Value | Reason |
   |---|---|---|
   | Algorithms | +SHA-512; no Camellia, CMAC, SM2, SM4, EC-Schnorr, ECMQV, RSA-3072/4096, P-192, BN-P638, SM2-P256 | The set `tpm-rs` implements (so the context-integrity hash is SHA-512, and `0x15B` is `TPM2_HMAC_Start`). |
   | Commands | `CC_NO` for the 14 commands `tpm-rs` lacks (`ECC_Decrypt`, `ECC_Encrypt`, `EC_Ephemeral`, `ZGen_2Phase`, `PolicyCapability`, `PolicyParameters`, `PolicyPhysicalPresence`, `Policy_AC_SendSelect`, `PolicyTransportSPDM` with `SEC_CHANNEL_SUPPORT NO`, `SetAlgorithmSet`, `NV_DefineSpace2`, `NV_ReadPublic2`, `ReadOnlyControl`, `PP_Commands`), the vendor test command, and ACT | `tpm-rs`'s command set. |
-  | PCR banks | SHA-1 + SHA-256 | `tpm-rs` default allocation. |
+  | PCR banks | SHA-256 + SHA-384 (unpatched) | The reference platform's default allocation (`DefaultActivePcrBanks`), which `tpm-rs` uses too (`TPM_PROFILE.default_pcr_banks`, `tpm2::profile::DEFAULT_PCR_BANKS`). |
   | `RSA_PRIVATE_PRIME_ONLY` | YES | RSA private storage is vendor-specific (Part 2, `RSA_PRIVATE_SIZE`). |
   | `VENDOR_PERMANENT_AUTH` | on | `tpm-rs` implements `TPM_RH_AUTH_00`. |
   | `ENABLE_SELF_TESTS` | NO | The `toDoList` is implementation-defined (Rule 4). |

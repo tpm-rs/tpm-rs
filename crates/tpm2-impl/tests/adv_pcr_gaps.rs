@@ -152,7 +152,7 @@ fn test_pcr_update_counter_wrap_around() {
 
     // Extend PCR 16 to trigger update_counter increment
     let mut digests = TpmlDigestValues::default();
-    digests.add(&TpmtHa::Sha1(&[0xdd; 20])).unwrap();
+    digests.add(&TpmtHa::Sha256(&[0xdd; 32])).unwrap();
     let extend_cmd = PCRExtend {
         pcr_handle: Handle(16),
         digests,

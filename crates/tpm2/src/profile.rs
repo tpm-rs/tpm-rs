@@ -35,10 +35,13 @@
 //!   most as many entries as [`Profile::algorithms`] lists hash algorithms (`TPM_RC_SIZE`; Part 2,
 //!   Table "Definition of TPML_PCR_SELECTION Structure": "pcrSelections\[count\]{:HASH_COUNT}"
 //!   and "#TPM_RC_SIZE | response code when *count* is greater than the possible number of
-//!   banks").
+//!   banks");
+//! * [`PcrState::default`](crate::platform::pcr::PcrState) allocates all PCRs of the banks of
+//!   [`Profile::default_pcr_banks`] and no PCR of the other implemented banks (without a profile,
+//!   the banks of [`DEFAULT_PCR_BANKS`]).
 //!
 //! Without an installed profile (the default, e.g. in clients and in the crypto tests) nothing
-//! changes. The profile is a `&'static` value installed at most once per process: installing an
+//! changes (apart from the default PCR allocation, see [`DEFAULT_PCR_BANKS`]). The profile is a `&'static` value installed at most once per process: installing an
 //! equal profile again is a no-op, a different one is rejected
 //! ([`InstallError::ProfileAlreadyInstalled`]).
 //! Code in the same process that unmarshals TPM structures (e.g. the test client of an in-process
@@ -46,7 +49,8 @@
 //! accepts.
 //!
 //! The crate forbids `unsafe` and is `no_std`, so the installed profile is kept as a copy in
-//! atomics (bitmaps of the algorithm IDs, curves and key sizes, and the buffer limits).
+//! atomics (bitmaps of the algorithm IDs, curves, key sizes and default PCR banks, and the buffer
+//! limits).
 
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
@@ -65,7 +69,21 @@ pub struct Profile {
     pub sym_key_bits: &'static [u16],
     /// The capacities of the profile-dependent sized buffers.
     pub buffer_limits: BufferLimits,
+    /// The hash algorithms whose PCR banks are allocated (all PCRs) when the TPM is manufactured;
+    /// the banks of the other implemented hash algorithms start with no PCR allocated and can be
+    /// allocated with `TPM2_PCR_Allocate`. Each must be a hash algorithm listed in
+    /// [`Profile::algorithms`].
+    ///
+    /// The default allocation is a platform choice (TPM 2.0 Part 1, "PCR Allocation"). The TCG
+    /// reference platform (`DefaultActivePcrBanks` in `PlatformPcr.c`) allocates the SHA-256
+    /// and SHA-384 banks ([`DEFAULT_PCR_BANKS`]).
+    pub default_pcr_banks: &'static [Alg],
 }
+
+/// The banks allocated by [`PcrState::default`](crate::platform::pcr::PcrState) without an
+/// installed profile: SHA-256 and SHA-384, like the TCG reference platform
+/// (`DefaultActivePcrBanks` in `PlatformPcr.c`).
+pub const DEFAULT_PCR_BANKS: &[Alg] = &[Alg::SHA256, Alg::SHA384];
 
 /// The capacities (in bytes) of a profile's profile-dependent sized buffers (the `sizeof()` of
 /// their buffers in the TPM's profile).
@@ -110,6 +128,9 @@ pub enum InstallError {
     /// The profile lists an algorithm, curve or key size outside the representable range (see
     /// the field docs of [`Profile`]).
     Unrepresentable,
+    /// [`Profile::default_pcr_banks`] lists an algorithm that is not a hash algorithm of
+    /// [`Profile::algorithms`].
+    InvalidDefaultPcrBank,
 }
 
 impl core::fmt::Display for InstallError {
@@ -119,6 +140,9 @@ impl core::fmt::Display for InstallError {
                 "a different TPM unmarshal profile is already installed"
             }
             Self::Unrepresentable => "the TPM unmarshal profile cannot be represented",
+            Self::InvalidDefaultPcrBank => {
+                "a default PCR bank of the TPM profile is not an implemented hash algorithm"
+            }
         })
     }
 }
@@ -142,6 +166,8 @@ static CURVES: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
 static RSA_KEY_BITS: AtomicU8 = AtomicU8::new(0);
 /// Bitmap of the installed symmetric key sizes (bit `n`: `64 * (n + 2)` bits).
 static SYM_KEY_BITS: AtomicU8 = AtomicU8::new(0);
+/// Bitmap of the installed default PCR banks' algorithm IDs (`0x0000..0x0100`).
+static DEFAULT_PCR_BANK_BITS: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
 /// The installed [`BufferLimits`], in the order of [`LimitedBuffer`].
 static LIMITS: [AtomicUsize; LIMIT_COUNT] = [const { AtomicUsize::new(0) }; LIMIT_COUNT];
 /// The number of [`LimitedBuffer`]s, followed in [`LIMITS`] by the hash count.
@@ -151,12 +177,58 @@ const LIMIT_COUNT: usize = BUFFER_COUNT + 1;
 /// The index of the hash count (`HASH_COUNT`) in [`LIMITS`].
 const HASH_COUNT_INDEX: usize = BUFFER_COUNT;
 
-/// The bitmaps of `profile`: algorithms, curves and RSA key sizes.
-fn bitmaps(profile: &Profile) -> Option<([u32; 8], [u32; 4], u8, u8)> {
+/// The bitmaps of a [`Profile`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Bitmaps {
+    /// [`Profile::algorithms`] (see [`ALGORITHMS`]).
+    algorithms: [u32; 8],
+    /// [`Profile::curves`] (see [`CURVES`]).
+    curves: [u32; 4],
+    /// [`Profile::rsa_key_bits`] (see [`RSA_KEY_BITS`]).
+    rsa_key_bits: u8,
+    /// [`Profile::sym_key_bits`] (see [`SYM_KEY_BITS`]).
+    sym_key_bits: u8,
+    /// [`Profile::default_pcr_banks`] (see [`DEFAULT_PCR_BANK_BITS`]).
+    default_pcr_banks: [u32; 8],
+}
+
+/// Sets the bit of `alg` in an algorithm ID bitmap; `None` if its ID is `0x0100` or above.
+fn set_alg_bit(bitmap: &mut [u32; 8], alg: Alg) -> Option<()> {
+    let id = usize::from(alg.id());
+    *bitmap.get_mut(id / 32)? |= 1 << (id % 32);
+    Some(())
+}
+
+/// Whether the bit of `alg` is set in an atomic algorithm ID bitmap.
+fn has_alg_bit(bitmap: &[AtomicU32; 8], alg: Alg) -> bool {
+    let id = usize::from(alg.id());
+    bitmap
+        .get(id / 32)
+        .is_some_and(|w| w.load(Ordering::Acquire) & (1 << (id % 32)) != 0)
+}
+
+/// The bitmaps of `profile`.
+fn bitmaps(profile: &Profile) -> Result<Bitmaps, InstallError> {
+    let maps = representable_bitmaps(profile).ok_or(InstallError::Unrepresentable)?;
+    let mut default_pcr_banks = [0u32; 8];
+    for &alg in profile.default_pcr_banks {
+        if !is_hash(alg) || !profile.algorithms.contains(&alg) {
+            return Err(InstallError::InvalidDefaultPcrBank);
+        }
+        set_alg_bit(&mut default_pcr_banks, alg).ok_or(InstallError::InvalidDefaultPcrBank)?;
+    }
+    Ok(Bitmaps {
+        default_pcr_banks,
+        ..maps
+    })
+}
+
+/// The bitmaps of `profile` without the default PCR banks; `None` if a value is outside the
+/// representable range.
+fn representable_bitmaps(profile: &Profile) -> Option<Bitmaps> {
     let mut algorithms = [0u32; 8];
-    for alg in profile.algorithms {
-        let id = usize::from(alg.id());
-        *algorithms.get_mut(id / 32)? |= 1 << (id % 32);
+    for &alg in profile.algorithms {
+        set_alg_bit(&mut algorithms, alg)?;
     }
     let mut curves = [0u32; 4];
     for &curve in profile.curves {
@@ -174,7 +246,13 @@ fn bitmaps(profile: &Profile) -> Option<([u32; 8], [u32; 4], u8, u8)> {
     for &bits in profile.sym_key_bits {
         sym |= 1 << sym_key_bits_index(bits)?;
     }
-    Some((algorithms, curves, rsa, sym))
+    Some(Bitmaps {
+        algorithms,
+        curves,
+        rsa_key_bits: rsa,
+        sym_key_bits: sym,
+        default_pcr_banks: [0; 8],
+    })
 }
 
 /// The bit of a symmetric key size in [`SYM_KEY_BITS`].
@@ -223,17 +301,21 @@ fn is_hash(alg: Alg) -> bool {
 }
 
 /// Whether the installed profile equals the given bitmaps and limits.
-fn installed_equals(maps: &([u32; 8], [u32; 4], u8, u8), limits: &[usize; LIMIT_COUNT]) -> bool {
+fn installed_equals(maps: &Bitmaps, limits: &[usize; LIMIT_COUNT]) -> bool {
     ALGORITHMS
         .iter()
-        .zip(maps.0)
+        .zip(maps.algorithms)
         .all(|(a, v)| a.load(Ordering::Acquire) == v)
         && CURVES
             .iter()
-            .zip(maps.1)
+            .zip(maps.curves)
             .all(|(a, v)| a.load(Ordering::Acquire) == v)
-        && RSA_KEY_BITS.load(Ordering::Acquire) == maps.2
-        && SYM_KEY_BITS.load(Ordering::Acquire) == maps.3
+        && RSA_KEY_BITS.load(Ordering::Acquire) == maps.rsa_key_bits
+        && SYM_KEY_BITS.load(Ordering::Acquire) == maps.sym_key_bits
+        && DEFAULT_PCR_BANK_BITS
+            .iter()
+            .zip(maps.default_pcr_banks)
+            .all(|(a, v)| a.load(Ordering::Acquire) == v)
         && LIMITS
             .iter()
             .zip(limits)
@@ -244,19 +326,22 @@ fn installed_equals(maps: &([u32; 8], [u32; 4], u8, u8), limits: &[usize; LIMIT_
 ///
 /// Installing a profile equal to the installed one is a no-op.
 pub fn install(profile: &'static Profile) -> Result<(), InstallError> {
-    let maps = bitmaps(profile).ok_or(InstallError::Unrepresentable)?;
+    let maps = bitmaps(profile)?;
     let limits = limit_values(profile);
     loop {
         match STATE.compare_exchange(EMPTY, INSTALLING, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => {
-                for (a, v) in ALGORITHMS.iter().zip(maps.0) {
+                for (a, v) in ALGORITHMS.iter().zip(maps.algorithms) {
                     a.store(v, Ordering::Release);
                 }
-                for (a, v) in CURVES.iter().zip(maps.1) {
+                for (a, v) in CURVES.iter().zip(maps.curves) {
                     a.store(v, Ordering::Release);
                 }
-                RSA_KEY_BITS.store(maps.2, Ordering::Release);
-                SYM_KEY_BITS.store(maps.3, Ordering::Release);
+                RSA_KEY_BITS.store(maps.rsa_key_bits, Ordering::Release);
+                SYM_KEY_BITS.store(maps.sym_key_bits, Ordering::Release);
+                for (a, v) in DEFAULT_PCR_BANK_BITS.iter().zip(maps.default_pcr_banks) {
+                    a.store(v, Ordering::Release);
+                }
                 for (a, v) in LIMITS.iter().zip(limits) {
                     a.store(v, Ordering::Release);
                 }
@@ -286,10 +371,16 @@ pub fn allows_algorithm(alg: Alg) -> bool {
     if !is_installed() {
         return true;
     }
-    let id = usize::from(alg.id());
-    ALGORITHMS
-        .get(id / 32)
-        .is_some_and(|w| w.load(Ordering::Acquire) & (1 << (id % 32)) != 0)
+    has_alg_bit(&ALGORITHMS, alg)
+}
+
+/// Whether the PCR bank of `hash` is allocated by default: the installed profile lists it in
+/// [`Profile::default_pcr_banks`], or no profile is installed and [`DEFAULT_PCR_BANKS`] lists it.
+pub fn is_default_pcr_bank(hash: Alg) -> bool {
+    if !is_installed() {
+        return DEFAULT_PCR_BANKS.contains(&hash);
+    }
+    has_alg_bit(&DEFAULT_PCR_BANK_BITS, hash)
 }
 
 /// Whether `curve` is allowed: no profile is installed, or it lists `curve`.

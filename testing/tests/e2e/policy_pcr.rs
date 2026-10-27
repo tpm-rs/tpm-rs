@@ -17,13 +17,13 @@ use tpm2::{
 #[test]
 fn banks_in_caller_order_and_sha1_trial() {
     let mut sim = Tpm::new();
-    // Banks deliberately not in algorithm-ID order: SHA-256 (0x0B) before SHA-1 (0x04).
+    // Banks deliberately not in algorithm-ID order: SHA-384 (0x0C) before SHA-256 (0x0B).
     let pcrs = [
+        pcr_sel(TpmiAlgHash::Sha384, &[1, 0, 0]),
         pcr_sel(TpmiAlgHash::Sha256, &[1, 0, 0]),
-        pcr_sel(TpmiAlgHash::Sha1, &[1, 0, 0]),
     ];
     // PCR 0 is all-zero after TPM2_Startup(CLEAR).
-    let expected = expected_policy_pcr(TpmiAlgHash::Sha256, &pcrs, &[&[0; 32], &[0; 20]]);
+    let expected = expected_policy_pcr(TpmiAlgHash::Sha256, &pcrs, &[&[0; 48], &[0; 32]]);
 
     let trial = start_session_with_hash(&mut sim, TpmSe::Trial, TpmiAlgHash::Sha256).session_handle;
     policy_pcr(&mut sim, trial, &[], &pcrs).unwrap();
@@ -879,7 +879,7 @@ fn trial_empty_digest_uses_current_pcrs_sha1() {
     let session = start_session_with_nonce(&mut sim, TpmSe::Trial, TpmiAlgHash::Sha1, &[1; 20]);
 
     let pcr_selection_sha1 = TpmlPcrSelection::from_slice(&[
-        TpmsPcrSelection::new(TpmiAlgHash::Sha1, &[0x00, 0x00, 0x01]).unwrap(), // PCR 16
+        TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0x00, 0x00, 0x01]).unwrap(), // PCR 16
     ])
     .unwrap();
 
@@ -898,8 +898,9 @@ fn trial_empty_digest_uses_current_pcrs_sha1() {
     let policy_digest = policy_get_digest_checked(&mut sim, session);
 
     // Expected for SHA1: H_SHA1(zeros_20 || TPM_CC_PolicyPCR || pcrs || digestTPM), where
-    // digestTPM = H_SHA1(PCR16 in the SHA1 bank, which is all zeros after Startup).
-    let digest_tpm_sha1 = hash_bytes(TpmiAlgHash::Sha1, &[0u8; 20]);
+    // digestTPM = H_SHA1(PCR16 in the SHA256 bank, which is all zeros after Startup; the SHA1
+    // bank is not allocated by default).
+    let digest_tpm_sha1 = hash_bytes(TpmiAlgHash::Sha1, &[0u8; 32]);
     let mut data_to_hash_sha1 = Vec::new();
     data_to_hash_sha1.extend_from_slice(&[0u8; 20]);
     data_to_hash_sha1.extend_from_slice(&(TpmCc::PolicyPCR.code()).to_be_bytes());
@@ -960,10 +961,10 @@ fn trial_empty_digest_uses_current_pcrs_sha256() {
 #[test]
 fn unallocated_and_repeated_banks() {
     let mut sim = Tpm::new();
-    // The SHA-384 bank is not allocated by default: FilterPcr clears its selection, so both the
+    // The SHA-1 bank is not allocated by default: FilterPcr clears its selection, so both the
     // hashed selection and the PCR digest are those of an empty selection.
-    let requested = [pcr_sel(TpmiAlgHash::Sha384, &[0x81, 0, 0])];
-    let filtered = [pcr_sel(TpmiAlgHash::Sha384, &[0, 0, 0])];
+    let requested = [pcr_sel(TpmiAlgHash::Sha1, &[0x81, 0, 0])];
+    let filtered = [pcr_sel(TpmiAlgHash::Sha1, &[0, 0, 0])];
     let expected = expected_policy_pcr(TpmiAlgHash::Sha256, &filtered, &[]);
     for session_type in [TpmSe::Trial, TpmSe::Policy] {
         let s = start_session_with_hash(&mut sim, session_type, TpmiAlgHash::Sha256).session_handle;

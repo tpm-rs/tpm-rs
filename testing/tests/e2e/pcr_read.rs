@@ -1,7 +1,7 @@
 //! TPM2_PCR_Read: selections, bank limits and digest count caps.
 
 use crate::_common::{
-    ALG_SHA1, ALG_SHA256, CC_PCR_READ, ST_NO_SESSIONS, build_raw_cmd as build_cmd,
+    ALG_SHA256, ALG_SHA384, CC_PCR_READ, ST_NO_SESSIONS, build_raw_cmd as build_cmd,
     execute_tpm_command_at_locality0 as execute_tpm_command, pcr_read, pcr_read_selection,
     pcr_selection, send_with_rc as send,
 };
@@ -92,17 +92,17 @@ fn oversized_bank_count_and_select_size() {
 
     // C. Requesting more digests than max limit (8) across multiple banks.
     // Bank 1 (SHA-256): select 6 PCRs (0..5)
-    // Bank 2 (SHA-1): select 6 PCRs (0..5)
+    // Bank 2 (SHA-384): select 6 PCRs (0..5)
     // Total requested: 12. Only 8 should be returned.
-    // (Bank 2 uses SHA-1 because the default allocation is SHA1+SHA256 and, like C
-    // PCRRead/FilterPcr, unallocated banks such as SHA-384 return no digests.)
+    // (Bank 2 uses SHA-384 because the default allocation is SHA256+SHA384 and, like C
+    // PCRRead/FilterPcr, unallocated banks such as SHA-1 return no digests.)
     // The response should have the first 8 digests (Bank 1 PCR 0..5, Bank 2 PCR 0..1),
     // and the selection out should reflect exactly which PCRs were read.
     let resp_multi = pcr_read(
         &mut sim,
         &[
             (ALG_SHA256, [0x3f, 0x00, 0x00]),
-            (ALG_SHA1, [0x3f, 0x00, 0x00]),
+            (ALG_SHA384, [0x3f, 0x00, 0x00]),
         ],
     );
     // Verify total digests returned is exactly 8
@@ -112,8 +112,8 @@ fn oversized_bank_count_and_select_size() {
     // Bank 1 (SHA-256) selection out should have all 6 PCRs read
     assert_eq!(resp_multi.selection_out[0].0, ALG_SHA256);
     assert_eq!(resp_multi.selection_out[0].1, vec![0x3f, 0x00, 0x00]);
-    // Bank 2 (SHA-1) selection out should have only 2 PCRs read (PCR 0 and 1)
-    assert_eq!(resp_multi.selection_out[1].0, ALG_SHA1);
+    // Bank 2 (SHA-384) selection out should have only 2 PCRs read (PCR 0 and 1)
+    assert_eq!(resp_multi.selection_out[1].0, ALG_SHA384);
     assert_eq!(resp_multi.selection_out[1].1, vec![0x03, 0x00, 0x00]);
 }
 
@@ -185,21 +185,21 @@ fn pcr_read_selection_limits() {
     }
 }
 
-/// PCR_Read walks selections in caller order (SHA-256 before SHA-1) and caps at 8 digests.
+/// PCR_Read walks selections in caller order (SHA-256 before SHA-384) and caps at 8 digests.
 #[test]
 fn selections_returned_in_caller_order() {
     let mut sim = Tpm::new();
 
-    // Build selection: SHA256 first, then SHA1.
+    // Build selection: SHA256 first, then SHA384.
     // Select PCR 0..6 (6 PCRs) for each.
     let mut pcr_selection_in = TpmlPcrSelection::default();
     // Add SHA256 bank first
     pcr_selection_in
         .add(&TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0x3F, 0x00, 0x00]).unwrap())
         .unwrap();
-    // Add SHA1 bank second
+    // Add SHA384 bank second
     pcr_selection_in
-        .add(&TpmsPcrSelection::new(TpmiAlgHash::Sha1, &[0x3F, 0x00, 0x00]).unwrap())
+        .add(&TpmsPcrSelection::new(TpmiAlgHash::Sha384, &[0x3F, 0x00, 0x00]).unwrap())
         .unwrap();
 
     let read_cmd = PCRRead { pcr_selection_in };
@@ -209,13 +209,13 @@ fn selections_returned_in_caller_order() {
     assert_eq!(resp.pcr_values.count(), 8);
 
     // C PCRRead (PCR.c:827) walks the selections in the caller's order without sorting, so
-    // the first 6 digests are SHA256 (size 32) and the remaining 2 are SHA1 (size 20).
+    // the first 6 digests are SHA256 (size 32) and the remaining 2 are SHA384 (size 48).
     let digests = resp.pcr_values.digests();
     for (i, digest) in digests.iter().enumerate().take(6) {
         assert_eq!(digest.get_size(), 32, "Digest {} should be SHA256", i);
     }
     for (i, digest) in digests.iter().enumerate().take(8).skip(6) {
-        assert_eq!(digest.get_size(), 20, "Digest {} should be SHA1", i);
+        assert_eq!(digest.get_size(), 48, "Digest {} should be SHA384", i);
     }
 }
 

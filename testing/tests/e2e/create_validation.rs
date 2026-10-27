@@ -114,13 +114,13 @@ fn create_with_unloaded_parent_fails() {
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
 }
 
-/// Create accepts a SHA-384/SHA-512 creationPCR; unallocated banks are filtered and pcrDigest is the empty hash.
+/// Create accepts a SHA-1/SHA-512 creationPCR; unallocated banks are filtered and pcrDigest is the empty hash.
 #[test]
 fn creation_pcr_filters_unallocated_banks() {
     let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     let selection = TpmlPcrSelection::from_slice(&[
-        TpmsPcrSelection::new(TpmiAlgHash::Sha384, &[0x01, 0x00, 0x00]).unwrap(),
+        TpmsPcrSelection::new(TpmiAlgHash::Sha1, &[0x01, 0x00, 0x00]).unwrap(),
         TpmsPcrSelection::new(TpmiAlgHash::Sha512, &[0x01, 0x00, 0x00]).unwrap(),
     ])
     .unwrap();

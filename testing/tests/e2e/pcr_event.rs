@@ -4,9 +4,8 @@ use crate::_common::{
     ALG_SHA1, ALG_SHA256, ALG_SHA384, RH_NULL, compute_expected_extend,
     compute_hash_single as compute_hash, exec_command as exec,
     execute_tpm_command_at_locality0 as execute_tpm_command, execute_with_password_sessions_status,
-    expected_extend_sha1, expected_extend_sha256, hash, hash_array as hash_bytes,
-    pcr_event_at_digests as pcr_event_at, pcr_read_selection as pcr_read, pw, read_pcr,
-    read_pcr_by_alg_id,
+    expected_extend_sha256, hash, hash_array as hash_bytes, pcr_event_at_digests as pcr_event_at,
+    pcr_read_selection as pcr_read, pw, read_pcr, read_pcr_by_alg_id,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::PCREvent;
@@ -19,8 +18,8 @@ fn event_digests_and_extension() {
     let mut sim = Tpm::new();
 
     let pcr_idx = 10usize;
-    let initial_sha1 = read_pcr_by_alg_id(&mut sim, ALG_SHA1, pcr_idx).unwrap();
     let initial_sha256 = read_pcr_by_alg_id(&mut sim, ALG_SHA256, pcr_idx).unwrap();
+    let initial_sha384 = read_pcr_by_alg_id(&mut sim, ALG_SHA384, pcr_idx).unwrap();
 
     let event_bytes = b"Event message data";
 
@@ -61,32 +60,33 @@ fn event_digests_and_extension() {
     assert!(found_sha1 && found_sha256 && found_sha384);
 
     // Verify PCR extended correctly with computed event digests
-    let expected_sha1 = compute_expected_extend(TpmiAlgHash::Sha1, &initial_sha1, &computed_sha1);
     let expected_sha256 =
         compute_expected_extend(TpmiAlgHash::Sha256, &initial_sha256, &computed_sha256);
+    let expected_sha384 =
+        compute_expected_extend(TpmiAlgHash::Sha384, &initial_sha384, &computed_sha384);
 
-    assert_eq!(
-        read_pcr_by_alg_id(&mut sim, ALG_SHA1, pcr_idx).unwrap(),
-        expected_sha1
-    );
     assert_eq!(
         read_pcr_by_alg_id(&mut sim, ALG_SHA256, pcr_idx).unwrap(),
         expected_sha256
     );
-    // The default PCR allocation is SHA1+SHA256 only; like C PCRExtend (PCR.c), banks that
-    // are not allocated (SHA384) are not extended.
-    assert_eq!(read_pcr_by_alg_id(&mut sim, ALG_SHA384, pcr_idx), None);
+    assert_eq!(
+        read_pcr_by_alg_id(&mut sim, ALG_SHA384, pcr_idx).unwrap(),
+        expected_sha384
+    );
+    // The default PCR allocation is SHA256+SHA384 only; like C PCRExtend (PCR.c), banks that
+    // are not allocated (SHA1) are not extended.
+    assert_eq!(read_pcr_by_alg_id(&mut sim, ALG_SHA1, pcr_idx), None);
 
     // Test with RHNull handle: shouldn't extend PCR but should return digests
-    let initial_pcr_null_sha1 = read_pcr_by_alg_id(&mut sim, ALG_SHA1, pcr_idx).unwrap();
+    let initial_pcr_null_sha256 = read_pcr_by_alg_id(&mut sim, ALG_SHA256, pcr_idx).unwrap();
     let (rc, digests_null) = pcr_event_at(&mut sim, 0, RH_NULL, event_bytes);
     assert_eq!(rc, 0, "PCR_Event(TPM_RH_NULL) failed: {rc:#x}");
     // Digests are still returned (one per implemented hash: SHA1/256/384/512)
     assert_eq!(digests_null.unwrap().count(), 4);
     // But PCR state did not change
     assert_eq!(
-        read_pcr_by_alg_id(&mut sim, ALG_SHA1, pcr_idx).unwrap(),
-        initial_pcr_null_sha1
+        read_pcr_by_alg_id(&mut sim, ALG_SHA256, pcr_idx).unwrap(),
+        initial_pcr_null_sha256
     );
 }
 
@@ -96,8 +96,8 @@ fn event_with_empty_data() {
     let mut sim = Tpm::new();
 
     let pcr_idx = 5usize;
-    let initial_sha1 = read_pcr(&mut sim, TpmiAlgHash::Sha1, pcr_idx).unwrap();
     let initial_sha256 = read_pcr(&mut sim, TpmiAlgHash::Sha256, pcr_idx).unwrap();
+    let initial_sha384 = read_pcr(&mut sim, TpmiAlgHash::Sha384, pcr_idx).unwrap();
 
     // Empty event data
     let event_data = Tpm2bEvent::from_bytes(&[]).unwrap();
@@ -141,21 +141,22 @@ fn event_with_empty_data() {
     assert!(found_sha384);
 
     // Verify PCRs are extended by the empty data digests
-    let expected_sha1 = compute_expected_extend(TpmiAlgHash::Sha1, &initial_sha1, &empty_hash_sha1);
     let expected_sha256 =
         compute_expected_extend(TpmiAlgHash::Sha256, &initial_sha256, &empty_hash_sha256);
+    let expected_sha384 =
+        compute_expected_extend(TpmiAlgHash::Sha384, &initial_sha384, &empty_hash_sha384);
 
-    assert_eq!(
-        read_pcr(&mut sim, TpmiAlgHash::Sha1, pcr_idx).unwrap(),
-        expected_sha1
-    );
     assert_eq!(
         read_pcr(&mut sim, TpmiAlgHash::Sha256, pcr_idx).unwrap(),
         expected_sha256
     );
-    // The default PCR allocation is SHA1+SHA256 only; like C PCRExtend (PCR.c), the
-    // unallocated SHA384 bank is not extended (and PCR_Read returns no value for it).
-    assert_eq!(read_pcr(&mut sim, TpmiAlgHash::Sha384, pcr_idx), None);
+    assert_eq!(
+        read_pcr(&mut sim, TpmiAlgHash::Sha384, pcr_idx).unwrap(),
+        expected_sha384
+    );
+    // The default PCR allocation is SHA256+SHA384 only; like C PCRExtend (PCR.c), the
+    // unallocated SHA1 bank is not extended (and PCR_Read returns no value for it).
+    assert_eq!(read_pcr(&mut sim, TpmiAlgHash::Sha1, pcr_idx), None);
 }
 
 /// PCR_Event returns a digest per implemented hash and extends allocated banks; on TPM_RH_NULL nothing is extended
@@ -204,19 +205,20 @@ fn pcr_event_returns_digests_and_extends_banks() {
     }
     let read_resp = pcr_read(&mut sim, selection).unwrap();
 
-    let expected_sha1_val = expected_extend_sha1(&[0u8; 20], &expected_sha1_hash);
     let expected_sha256_val = expected_extend_sha256(&[0u8; 32], &expected_sha256_hash);
-    // The default PCR allocation is SHA1+SHA256; like C (PCRExtend only extends allocated
-    // banks, PCRRead/FilterPcr drops unallocated ones, PCR.c), SHA384 is neither extended
+    let expected_sha384_val =
+        compute_expected_extend(TpmiAlgHash::Sha384, &[0u8; 48], &expected_sha384_hash);
+    // The default PCR allocation is SHA256+SHA384; like C (PCRExtend only extends allocated
+    // banks, PCRRead/FilterPcr drops unallocated ones, PCR.c), SHA1 is neither extended
     // nor read back.
     assert_eq!(read_resp.pcr_values.count(), 2);
     assert_eq!(
         read_resp.pcr_values.digests()[0].get_buffer(),
-        &expected_sha1_val
+        &expected_sha256_val
     );
     assert_eq!(
         read_resp.pcr_values.digests()[1].get_buffer(),
-        &expected_sha256_val
+        &expected_sha384_val[..]
     );
 
     // 2. PCR_Event with RHNull
@@ -239,7 +241,7 @@ fn pcr_event_returns_digests_and_extends_banks() {
     let read_resp2 = pcr_read(&mut sim, selection).unwrap();
     assert_eq!(
         read_resp2.pcr_values.digests()[0].get_buffer(),
-        &expected_sha1_val
+        &expected_sha256_val
     );
 }
 

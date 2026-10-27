@@ -125,7 +125,7 @@ fn validates_handle_and_extends_allocated_banks() {
     let allocated_banks = allocated_banks_for_pcr(&mut sim, 16);
     assert!(
         allocated_banks >= 2,
-        "default allocation has SHA-1 and SHA-256"
+        "default allocation has SHA-256 and SHA-384"
     );
 
     let ev = start_hash_sequence(&mut sim, None);

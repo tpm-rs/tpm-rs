@@ -14,30 +14,30 @@ use tpm2::*;
 fn allocation_takes_effect_after_reset() {
     let mut sim = Tpm::new();
     let before = cap_pcrs(&mut sim);
-    let sha1_before = before
+    let sha384_before = before
         .iter()
-        .find(|(a, _)| *a == ALG_SHA1)
+        .find(|(a, _)| *a == ALG_SHA384)
         .unwrap()
         .1
         .clone();
-    assert_eq!(sha1_before, vec![0xFF, 0xFF, 0xFF]);
+    assert_eq!(sha384_before, vec![0xFF, 0xFF, 0xFF]);
 
-    // Deallocate the SHA-1 bank.
-    let (rc, rsp) = pcr_allocate(&mut sim, &[(ALG_SHA1, [0, 0, 0])]);
+    // Deallocate the SHA-384 bank (allocated by default).
+    let (rc, rsp) = pcr_allocate(&mut sim, &[(ALG_SHA384, [0, 0, 0])]);
     assert_eq!(rc, 0);
     assert_eq!(rsp.unwrap().0, 1, "allocationSuccess");
     // The active allocation is unchanged until the next TPM Reset.
     assert_eq!(cap_pcrs(&mut sim), before);
-    let rsp = pcr_read(&mut sim, &[(ALG_SHA1, bit(0))]);
+    let rsp = pcr_read(&mut sim, &[(ALG_SHA384, bit(0))]);
     assert_eq!(rsp.values.len(), 1);
 
     tpm_reset(&mut sim);
     let after = cap_pcrs(&mut sim);
     assert_eq!(
-        after.iter().find(|(a, _)| *a == ALG_SHA1).unwrap().1,
+        after.iter().find(|(a, _)| *a == ALG_SHA384).unwrap().1,
         vec![0, 0, 0]
     );
-    let rsp = pcr_read(&mut sim, &[(ALG_SHA1, bit(0))]);
+    let rsp = pcr_read(&mut sim, &[(ALG_SHA384, bit(0))]);
     assert!(rsp.values.is_empty());
 
     // The allocation survives another reset.
@@ -81,21 +81,21 @@ fn drtm_pcr_required_and_size_reporting() {
     let (rc, _) = pcr_allocate(
         &mut sim,
         &[
-            (ALG_SHA1, no17),
+            (ALG_SHA1, [0, 0, 0]),
             (ALG_SHA256, no17),
-            (ALG_SHA384, [0, 0, 0]),
+            (ALG_SHA384, no17),
             (ALG_SHA512, [0, 0, 0]),
         ],
     );
     assert_eq!(rc, TpmRc::PCR.get());
 
     // sizeNeeded = sum over the new allocation of popcount * digest size.
-    let (rc, rsp) = pcr_allocate(&mut sim, &[(ALG_SHA384, [0x01, 0x00, 0x02])]);
+    let (rc, rsp) = pcr_allocate(&mut sim, &[(ALG_SHA1, [0x01, 0x00, 0x02])]);
     assert_eq!(rc, 0);
     let (success, max_pcr, size_needed, size_available) = rsp.unwrap();
     assert_eq!(success, 1);
     assert_eq!(max_pcr, 24);
-    assert_eq!(size_needed, 24 * 20 + 24 * 32 + 2 * 48);
+    assert_eq!(size_needed, 2 * 20 + 24 * 32 + 24 * 48);
     assert_eq!(size_available, 24 * (20 + 32 + 48 + 64));
 
     // NV unavailable -> TPM_RC_NV_UNAVAILABLE, even though the TPM is not orderly.
@@ -185,36 +185,36 @@ fn platform_allocate_reports_sizes() {
     assert!(rsp.allocation_success);
     assert_eq!(rsp.max_pcr, 24);
     // C PCRAllocate sums the digest sizes of every PCR in the resulting allocation
-    // (PCR.c:939-972): existing SHA1 bank 24 * 20 + new SHA256 bank 24 * 32 = 1248.
-    assert_eq!(rsp.size_needed, 1248);
+    // (PCR.c:939-972): new SHA256 bank 24 * 32 + existing SHA384 bank 24 * 48 = 1920.
+    assert_eq!(rsp.size_needed, 1920);
     // C reports sizeof(s_pcrs), i.e. room for every implemented bank (PCR.c:981):
     // 24 * (20 + 32 + 48 + 64) = 3936.
     assert_eq!(rsp.size_available, 3936);
 }
 
-/// A new PCR allocation is inactive until Shutdown(CLEAR) + _TPM_Init + Startup(CLEAR) allocates SHA-384.
+/// A new PCR allocation is inactive until Shutdown(CLEAR) + _TPM_Init + Startup(CLEAR) allocates SHA-1.
 ///
 /// A `TPM2_PCR_Allocate` only takes effect at the next TPM Reset: the active
 /// allocation is unchanged until then, and after Shutdown(CLEAR), `_TPM_Init`
-/// and Startup(CLEAR) the new SHA-384 bank is allocated.
+/// and Startup(CLEAR) the new SHA-1 bank is allocated.
 #[test]
-fn sha384_bank_active_after_startup_clear() {
+fn sha1_bank_active_after_startup_clear() {
     let mut sim = Tpm::new();
 
-    // 1. Allocate PCRs: enable sha256 and sha384 with [0xFF, 0xFF, 0xFF]
+    // 1. Allocate PCRs: enable sha256 and sha1 (SHA-1 is not allocated by default) with [0xFF, 0xFF, 0xFF]
     let sha256_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0xFF, 0xFF, 0xFF]).unwrap();
-    let sha384_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha384, &[0xFF, 0xFF, 0xFF]).unwrap();
+    let sha1_sel = TpmsPcrSelection::new(TpmiAlgHash::Sha1, &[0xFF, 0xFF, 0xFF]).unwrap();
     let rsp = send_at(
         &mut sim,
         0,
-        &pcr_allocate_cmd(Handle::RH_PLATFORM, &[sha256_sel, sha384_sel]),
+        &pcr_allocate_cmd(Handle::RH_PLATFORM, &[sha256_sel, sha1_sel]),
     );
     assert_eq!(rc_of(&rsp), 0, "TPM2_PCR_Allocate should succeed");
 
     // Like C (PCRAllocate only writes the new allocation to NV, PCR.c:983-987), the active
-    // allocation is unchanged until the next TPM Reset, so Sha384 is still unallocated.
+    // allocation is unchanged until the next TPM Reset, so Sha1 is still unallocated.
     assert_eq!(
-        allocated_pcrs(&mut sim, TpmiAlgHash::Sha384),
+        allocated_pcrs(&mut sim, TpmiAlgHash::Sha1),
         vec![0x00, 0x00, 0x00]
     );
 
@@ -232,7 +232,7 @@ fn sha384_bank_active_after_startup_clear() {
 
     // 4. Verify that the configured PCR allocation took effect at the TPM Reset
     assert_eq!(
-        allocated_pcrs(&mut sim, TpmiAlgHash::Sha384),
+        allocated_pcrs(&mut sim, TpmiAlgHash::Sha1),
         vec![0xFF, 0xFF, 0xFF]
     );
 }

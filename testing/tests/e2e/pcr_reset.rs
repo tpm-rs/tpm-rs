@@ -1,7 +1,7 @@
 //! TPM2_PCR_Reset: resettable PCRs, locality and handle checks.
 
 use crate::_common::{
-    ALG_SHA1, ALG_SHA256, exec_command as exec,
+    ALG_SHA256, ALG_SHA384, exec_command as exec,
     execute_tpm_command_at_locality0 as execute_tpm_command,
     pcr_extend_at_no_continue as pcr_extend_at, pcr_read_selection as pcr_read,
     pcr_reset_at_no_continue as pcr_reset_at, pw, read_pcr_by_alg_id as read_pcr,
@@ -75,21 +75,21 @@ fn reset_resettable_pcrs_only() {
     let mut sim = Tpm::new();
 
     // Extend non-zero values into PCR 16 and PCR 23
-    let digests = [(ALG_SHA1, vec![0x55u8; 20])];
+    let digests = [(ALG_SHA384, vec![0x55u8; 48])];
     assert_eq!(pcr_extend_at(&mut sim, 0, 16, &digests), 0);
     assert_eq!(pcr_extend_at(&mut sim, 0, 23, &digests), 0);
 
-    assert_ne!(read_pcr(&mut sim, ALG_SHA1, 16).unwrap(), vec![0u8; 20]);
-    assert_ne!(read_pcr(&mut sim, ALG_SHA1, 23).unwrap(), vec![0u8; 20]);
+    assert_ne!(read_pcr(&mut sim, ALG_SHA384, 16).unwrap(), vec![0u8; 48]);
+    assert_ne!(read_pcr(&mut sim, ALG_SHA384, 23).unwrap(), vec![0u8; 48]);
 
     // Reset PCR 16
     assert_eq!(pcr_reset_at(&mut sim, 0, 16), 0);
-    assert_eq!(read_pcr(&mut sim, ALG_SHA1, 16).unwrap(), vec![0u8; 20]);
+    assert_eq!(read_pcr(&mut sim, ALG_SHA384, 16).unwrap(), vec![0u8; 48]);
     assert_eq!(read_pcr(&mut sim, ALG_SHA256, 16).unwrap(), vec![0u8; 32]);
 
     // Reset PCR 23
     assert_eq!(pcr_reset_at(&mut sim, 0, 23), 0);
-    assert_eq!(read_pcr(&mut sim, ALG_SHA1, 23).unwrap(), vec![0u8; 20]);
+    assert_eq!(read_pcr(&mut sim, ALG_SHA384, 23).unwrap(), vec![0u8; 48]);
     assert_eq!(read_pcr(&mut sim, ALG_SHA256, 23).unwrap(), vec![0u8; 32]);
 
     // PCR 0 cannot be reset -> should fail with TpmRc::LOCALITY (0x907)

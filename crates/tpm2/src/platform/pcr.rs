@@ -54,33 +54,39 @@ pub struct PcrState {
 impl Default for PcrState {
     fn default() -> Self {
         // Every bank of an implemented hash, without the hashes an installed unmarshal profile
-        // (`crate::profile`) excludes: the TPM does not implement those.
-        let banks = [
+        // (`crate::profile`) excludes: the TPM does not implement those. The banks of the
+        // default allocation (`crate::profile::is_default_pcr_bank`) have all PCRs allocated,
+        // the others none.
+        let hashes = [
             #[cfg(feature = "sha1")]
-            crate::TpmsPcrSelection::new(crate::TpmiAlgHash::Sha1, &[0xFF, 0xFF, 0xFF]).unwrap(),
+            crate::TpmiAlgHash::Sha1,
             #[cfg(feature = "sha256")]
-            crate::TpmsPcrSelection::new(crate::TpmiAlgHash::Sha256, &[0xFF, 0xFF, 0xFF]).unwrap(),
+            crate::TpmiAlgHash::Sha256,
             #[cfg(feature = "sha384")]
-            crate::TpmsPcrSelection::new(crate::TpmiAlgHash::Sha384, &[0x00, 0x00, 0x00]).unwrap(),
+            crate::TpmiAlgHash::Sha384,
             #[cfg(feature = "sha512")]
-            crate::TpmsPcrSelection::new(crate::TpmiAlgHash::Sha512, &[0x00, 0x00, 0x00]).unwrap(),
+            crate::TpmiAlgHash::Sha512,
             #[cfg(feature = "sm3_256")]
-            crate::TpmsPcrSelection::new(crate::TpmiAlgHash::Sm3_256, &[0x00, 0x00, 0x00]).unwrap(),
+            crate::TpmiAlgHash::Sm3_256,
             #[cfg(feature = "sha3_256")]
-            crate::TpmsPcrSelection::new(crate::TpmiAlgHash::Sha3_256, &[0x00, 0x00, 0x00])
-                .unwrap(),
+            crate::TpmiAlgHash::Sha3_256,
             #[cfg(feature = "sha3_384")]
-            crate::TpmsPcrSelection::new(crate::TpmiAlgHash::Sha3_384, &[0x00, 0x00, 0x00])
-                .unwrap(),
+            crate::TpmiAlgHash::Sha3_384,
             #[cfg(feature = "sha3_512")]
-            crate::TpmsPcrSelection::new(crate::TpmiAlgHash::Sha3_512, &[0x00, 0x00, 0x00])
-                .unwrap(),
+            crate::TpmiAlgHash::Sha3_512,
         ];
-        let mut implemented = banks;
+        let mut implemented =
+            [crate::TpmsPcrSelection::default(); crate::TPM2_NUM_PCR_BANKS as usize];
         let mut count = 0;
-        for bank in banks {
-            if crate::profile::allows_algorithm(crate::Alg::from(bank.hash())) {
-                implemented[count] = bank;
+        for hash in hashes {
+            let alg = crate::Alg::from(hash);
+            if crate::profile::allows_algorithm(alg) {
+                let select = if crate::profile::is_default_pcr_bank(alg) {
+                    [0xFF, 0xFF, 0xFF]
+                } else {
+                    [0x00, 0x00, 0x00]
+                };
+                implemented[count] = crate::TpmsPcrSelection::new(hash, &select).unwrap();
                 count += 1;
             }
         }

@@ -26,6 +26,7 @@ static PROFILE: Profile = Profile {
         template: 350,
         ecc_parameter: 32,
     },
+    default_pcr_banks: &[Alg::SHA256],
 };
 
 /// An equal profile in another static (installing it again is a no-op).
@@ -79,6 +80,8 @@ fn installed_profile_restricts_unmarshaling() {
     assert!(parse::<Tpm2bEccParameter>(&tpm2b(33)).is_ok());
     assert!(parse::<TpmlPcrSelection>(&pcr_selection(2)).is_ok());
     assert!(profile::allows_algorithm(Alg::SHA1));
+    assert!(profile::is_default_pcr_bank(Alg::SHA384));
+    assert!(!profile::is_default_pcr_bank(Alg::SHA1));
 
     profile::install(&PROFILE).unwrap();
     assert!(profile::is_installed());
@@ -88,6 +91,17 @@ fn installed_profile_restricts_unmarshaling() {
         profile::install(&OTHER_PROFILE),
         Err(InstallError::ProfileAlreadyInstalled)
     );
+    // A profile that differs only in its default PCR banks is a different profile.
+    static OTHER_BANKS: Profile = Profile {
+        default_pcr_banks: &[],
+        ..PROFILE
+    };
+    assert_eq!(
+        profile::install(&OTHER_BANKS),
+        Err(InstallError::ProfileAlreadyInstalled)
+    );
+    assert!(profile::is_default_pcr_bank(Alg::SHA256));
+    assert!(!profile::is_default_pcr_bank(Alg::SHA384));
 
     // Algorithms outside the profile fail with the type's error; NULL stays NULL.
     assert_eq!(TpmiAlgHash::try_from(Alg::SHA256), Ok(TpmiAlgHash::Sha256));
@@ -182,5 +196,22 @@ fn unrepresentable_profiles_are_rejected() {
     assert_eq!(
         profile::install(&BAD_BITS),
         Err(InstallError::Unrepresentable)
+    );
+    // A default PCR bank must be an implemented hash algorithm.
+    static UNIMPLEMENTED_BANK: Profile = Profile {
+        default_pcr_banks: &[Alg::SHA384],
+        ..PROFILE
+    };
+    assert_eq!(
+        profile::install(&UNIMPLEMENTED_BANK),
+        Err(InstallError::InvalidDefaultPcrBank)
+    );
+    static NON_HASH_BANK: Profile = Profile {
+        default_pcr_banks: &[Alg::RSA],
+        ..PROFILE
+    };
+    assert_eq!(
+        profile::install(&NON_HASH_BANK),
+        Err(InstallError::InvalidDefaultPcrBank)
     );
 }

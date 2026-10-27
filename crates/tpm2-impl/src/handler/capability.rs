@@ -142,6 +142,10 @@ pub(crate) static TPM_PROFILE: tpm2::profile::Profile = tpm2::profile::Profile {
         template: SIZEOF_TPMT_PUBLIC,
         ecc_parameter: MAX_ECC_KEY_BYTES,
     },
+    // The SHA-256 and SHA-384 banks, like the TCG reference platform (`DefaultActivePcrBanks`
+    // in `PlatformPcr.c`, also in `ibmswtpm2`); SHA-1 and SHA-512 can be allocated with
+    // `TPM2_PCR_Allocate`.
+    default_pcr_banks: tpm2::profile::DEFAULT_PCR_BANKS,
 };
 
 const _: () = assert!(

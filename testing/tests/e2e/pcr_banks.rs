@@ -14,23 +14,23 @@ use tpm2::*;
 fn read_order_unallocated_banks_and_reset_localities() {
     let mut sim = Tpm::new();
 
-    // 1. Input order is preserved (SHA-256 before SHA-1).
-    let rsp = pcr_read(&mut sim, &[(ALG_SHA256, bit(0)), (ALG_SHA1, bit(0))]);
+    // 1. Input order is preserved (SHA-384 before SHA-256).
+    let rsp = pcr_read(&mut sim, &[(ALG_SHA384, bit(0)), (ALG_SHA256, bit(0))]);
     let algs: Vec<u16> = rsp.selection_out.iter().map(|(a, _)| *a).collect();
-    assert_eq!(algs, vec![ALG_SHA256, ALG_SHA1]);
+    assert_eq!(algs, vec![ALG_SHA384, ALG_SHA256]);
     assert_eq!(rsp.values.len(), 2);
-    assert_eq!(rsp.values[0].len(), 32);
-    assert_eq!(rsp.values[1].len(), 20);
+    assert_eq!(rsp.values[0].len(), 48);
+    assert_eq!(rsp.values[1].len(), 32);
 
-    // 2. The SHA-384 bank is not allocated by default: no values, bits cleared (FilterPcr).
-    let rsp = pcr_read(&mut sim, &[(ALG_SHA384, bit(1))]);
-    assert_eq!(rsp.selection_out, vec![(ALG_SHA384, vec![0, 0, 0])]);
+    // 2. The SHA-1 bank is not allocated by default: no values, bits cleared (FilterPcr).
+    let rsp = pcr_read(&mut sim, &[(ALG_SHA1, bit(1))]);
+    assert_eq!(rsp.selection_out, vec![(ALG_SHA1, vec![0, 0, 0])]);
     assert!(rsp.values.is_empty());
 
     // 3. Extending only an unallocated bank changes nothing (no update counter increment).
     let before = update_counter(&mut sim);
     assert_eq!(
-        pcr_extend_at(&mut sim, 0, 1, &[(ALG_SHA384, vec![0xAB; 48])]),
+        pcr_extend_at(&mut sim, 0, 1, &[(ALG_SHA1, vec![0xAB; 20])]),
         0
     );
     assert_eq!(update_counter(&mut sim), before);
@@ -40,7 +40,7 @@ fn read_order_unallocated_banks_and_reset_localities() {
             &mut sim,
             0,
             1,
-            &[(ALG_SHA1, vec![1; 20]), (ALG_SHA256, vec![2; 32])]
+            &[(ALG_SHA256, vec![2; 32]), (ALG_SHA384, vec![1; 48])]
         ),
         0
     );

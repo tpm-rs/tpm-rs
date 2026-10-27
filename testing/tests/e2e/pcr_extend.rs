@@ -4,9 +4,9 @@ use crate::_common::{
     ALG_SHA1, ALG_SHA256, ALG_SHA384, ALG_SHA512, CC_PCR_EXTEND, PW_SESSION, ST_SESSIONS,
     build_raw_cmd as build_cmd, compute_expected_extend, exec_command as exec,
     execute_tpm_command_at_locality0 as execute_tpm_command, execute_with_password_sessions,
-    expected_extend_sha1, expected_extend_sha256, hex_checked as hex,
-    pcr_extend_at_no_continue as pcr_extend_at, pcr_read_selection as pcr_read, pw, raw_rc,
-    read_pcr, read_pcr_by_alg_id, send_with_rc as send, update_counter,
+    expected_extend_sha256, hex_checked as hex, pcr_extend_at_no_continue as pcr_extend_at,
+    pcr_read_selection as pcr_read, pw, raw_rc, read_pcr, read_pcr_by_alg_id, send_with_rc as send,
+    update_counter,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::{PCREvent, PCRExtend, PCRRead, PCRReset};
@@ -14,16 +14,16 @@ use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 
 // 1. Correctness of PCR_Extend (matching SHA-1, SHA-256, SHA-384 mathematical output)
-/// PCR_Extend updates allocated SHA-1/SHA-256 banks correctly, skips unallocated SHA-384 and bumps the update counter.
+/// PCR_Extend updates allocated SHA-256/SHA-384 banks correctly, skips unallocated SHA-1 and bumps the update counter.
 #[test]
 fn extend_matches_reference_digests() {
     let mut sim = Tpm::new();
 
     let pcr_idx = 5usize;
-    let initial_sha1 = read_pcr_by_alg_id(&mut sim, ALG_SHA1, pcr_idx).unwrap();
     let initial_sha256 = read_pcr_by_alg_id(&mut sim, ALG_SHA256, pcr_idx).unwrap();
-    // The default PCR allocation is SHA1+SHA256 only.
-    assert_eq!(read_pcr_by_alg_id(&mut sim, ALG_SHA384, pcr_idx), None);
+    let initial_sha384 = read_pcr_by_alg_id(&mut sim, ALG_SHA384, pcr_idx).unwrap();
+    // The default PCR allocation is SHA256+SHA384 only.
+    assert_eq!(read_pcr_by_alg_id(&mut sim, ALG_SHA1, pcr_idx), None);
     let initial_counter = update_counter(&mut sim);
 
     let extend_val_sha1 = vec![0x11u8; 20];
@@ -36,32 +36,33 @@ fn extend_matches_reference_digests() {
         0,
         pcr_idx as u32,
         &[
-            (ALG_SHA1, extend_val_sha1.clone()),
+            (ALG_SHA1, extend_val_sha1),
             (ALG_SHA256, extend_val_sha256.clone()),
-            (ALG_SHA384, extend_val_sha384),
+            (ALG_SHA384, extend_val_sha384.clone()),
         ],
     );
     assert_eq!(rc, 0, "PCR_Extend failed: {rc:#x}");
 
     // Verify digests extended correctly
-    let expected_sha1 = compute_expected_extend(TpmiAlgHash::Sha1, &initial_sha1, &extend_val_sha1);
     let expected_sha256 =
         compute_expected_extend(TpmiAlgHash::Sha256, &initial_sha256, &extend_val_sha256);
+    let expected_sha384 =
+        compute_expected_extend(TpmiAlgHash::Sha384, &initial_sha384, &extend_val_sha384);
 
-    assert_eq!(
-        read_pcr_by_alg_id(&mut sim, ALG_SHA1, pcr_idx).unwrap(),
-        expected_sha1
-    );
     assert_eq!(
         read_pcr_by_alg_id(&mut sim, ALG_SHA256, pcr_idx).unwrap(),
         expected_sha256
     );
-    // Like C PCRExtend (PCR.c), banks that are not allocated (SHA384) are not extended (and
+    assert_eq!(
+        read_pcr_by_alg_id(&mut sim, ALG_SHA384, pcr_idx).unwrap(),
+        expected_sha384
+    );
+    // Like C PCRExtend (PCR.c), banks that are not allocated (SHA1) are not extended (and
     // still are not readable).
-    assert_eq!(read_pcr_by_alg_id(&mut sim, ALG_SHA384, pcr_idx), None);
+    assert_eq!(read_pcr_by_alg_id(&mut sim, ALG_SHA1, pcr_idx), None);
 
     // Verify update_counter incremented: C PCRExtend calls PCRChanged() once per allocated
-    // bank that is extended (PCR.c:751), i.e. twice here (SHA1 and SHA256).
+    // bank that is extended (PCR.c:751), i.e. twice here (SHA256 and SHA384).
     assert_eq!(update_counter(&mut sim), initial_counter + 2);
 }
 
@@ -213,13 +214,13 @@ fn pcr_extend_sha256_bank() {
 /// PCR_Extend extends every allocated bank (SHA-1, SHA-256) correctly; the unallocated SHA-384 bank is ignored
 ///
 /// PCR_Extend extends every allocated bank with the matching digest; the
-/// unallocated SHA-384 bank is neither extended nor read back.
+/// unallocated SHA-1 bank is neither extended nor read back.
 #[test]
 fn pcr_extend_updates_allocated_banks() {
     let mut sim = Tpm::new();
 
-    let sha1_init = [0u8; 20];
     let sha256_init = [0u8; 32];
+    let sha384_init = [0u8; 48];
 
     let sha1_ext = [0x11; 20];
     let sha256_ext = [0x22; 32];
@@ -247,20 +248,20 @@ fn pcr_extend_updates_allocated_banks() {
     }
     let read_resp = pcr_read(&mut sim, selection).unwrap();
 
-    // The default PCR allocation is SHA1+SHA256; like C (PCRExtend only extends allocated
-    // banks, PCRRead/FilterPcr drops unallocated ones, PCR.c), SHA384 is neither extended
+    // The default PCR allocation is SHA256+SHA384; like C (PCRExtend only extends allocated
+    // banks, PCRRead/FilterPcr drops unallocated ones, PCR.c), SHA1 is neither extended
     // nor read back.
     assert_eq!(read_resp.pcr_values.count(), 2);
 
-    let expected_sha1 = expected_extend_sha1(&sha1_init, &sha1_ext);
     let expected_sha256 = expected_extend_sha256(&sha256_init, &sha256_ext);
+    let expected_sha384 = compute_expected_extend(TpmiAlgHash::Sha384, &sha384_init, &sha384_ext);
     assert_eq!(
         read_resp.pcr_values.digests()[0].get_buffer(),
-        &expected_sha1
+        &expected_sha256
     );
     assert_eq!(
         read_resp.pcr_values.digests()[1].get_buffer(),
-        &expected_sha256
+        &expected_sha384[..]
     );
 }
 
@@ -311,7 +312,7 @@ fn update_counter_tracks_extend_and_reset() {
 
     // 1. Extend PCR 16
     let mut digests = TpmlDigestValues::default();
-    digests.add(&TpmtHa::Sha1(&[0xdd; 20])).unwrap();
+    digests.add(&TpmtHa::Sha256(&[0xdd; 32])).unwrap();
     let extend_cmd = PCRExtend {
         pcr_handle: Handle(16),
         digests,
