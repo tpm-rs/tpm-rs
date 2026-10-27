@@ -15,6 +15,7 @@ categories.workspace = true
 [dependencies]
 tpm2 = { workspace = true }
 hex-literal = "1"
+tpm2-boringssl = { path = "../../crates/tpm2-boringssl", optional = true }
 tpm2-openssl = { path = "../../crates/tpm2-openssl", optional = true }
 tpm2-rustcrypto = { path = "../../crates/tpm2-rustcrypto", features = ["rsa"], optional = true }
 
@@ -23,6 +24,8 @@ aes = "0.9"
 
 [features]
 default = ["rustcrypto", "openssl"]
+# Builds BoringSSL from source; see crates/tpm2-boringssl/README.md.
+boringssl = ["dep:tpm2-boringssl"]
 openssl = ["dep:tpm2-openssl"]
 rustcrypto = ["dep:tpm2-rustcrypto"]
 
@@ -35,5 +38,17 @@ name = "openssl"
 required-features = ["openssl"]
 
 [[test]]
+name = "boringssl"
+required-features = ["boringssl"]
+
+[[test]]
 name = "openssl_rustcrypto"
 required-features = ["openssl", "rustcrypto"]
+
+[[test]]
+name = "boringssl_openssl"
+required-features = ["boringssl", "openssl"]
+
+[[test]]
+name = "boringssl_rustcrypto"
+required-features = ["boringssl", "rustcrypto"]

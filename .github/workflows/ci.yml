@@ -76,7 +76,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustc --version
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      # tpm2-boringssl (and the `boringssl` tests) are checked by the BoringSSL job.
+      - run: cargo clippy --workspace --exclude tpm2-boringssl --exclude testing-crypto --all-targets --all-features -- -D warnings
+      - run: cargo clippy -p testing-crypto --all-targets -- -D warnings
+
+  boringssl:
+    name: BoringSSL Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
+      - run: rustc --version
+      - run: cargo clippy -p tpm2-boringssl -p testing-crypto --all-targets --features testing-crypto/boringssl -- -D warnings
+      - run: cargo test -p testing-crypto --features boringssl
 
   docs:
     name: Docs
@@ -95,4 +109,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup component add miri --toolchain nightly
       - run: rustc +nightly --version
-      - run: cargo +nightly miri test --workspace --exclude tpm2-openssl --exclude testing-crypto
+      - run: cargo +nightly miri test --workspace --exclude tpm2-boringssl --exclude tpm2-openssl --exclude testing-crypto

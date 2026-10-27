@@ -16,6 +16,8 @@
 
 use tpm2::crypto::CryptoError;
 // The backends are only used by the tests.
+#[cfg(feature = "boringssl")]
+use tpm2_boringssl as _;
 #[cfg(feature = "openssl")]
 use tpm2_openssl as _;
 #[cfg(feature = "rustcrypto")]
