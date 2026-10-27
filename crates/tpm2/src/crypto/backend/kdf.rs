@@ -42,6 +42,26 @@ pub fn default_kdfa<S: HmacState<N>, const N: usize>(
     Ok(())
 }
 
+/// The default implementation of [`HmacState::kdfa_xor`].
+#[inline(never)]
+pub fn default_kdfa_xor<S: HmacState<N>, const N: usize>(
+    key: &[u8],
+    label: &CStr,
+    context: (&[u8], &[u8]),
+    data: &mut [u8],
+) -> Result<(), CryptoError> {
+    let bits = bytes_to_bits(data.len()).ok_or(CryptoError::Internal)?;
+    let mut mask = [0u8; N];
+    // `bytes_to_bits` ensures the counter can't overflow.
+    for (chunk, counter) in data.chunks_mut(N).zip(1u32..) {
+        kdfa_block::<S, N>(counter, bits, key, label, context, &mut mask)?;
+        for (d, m) in chunk.iter_mut().zip(&mask) {
+            *d ^= m;
+        }
+    }
+    Ok(())
+}
+
 /// Computes a single `KDFa` block.
 #[inline(never)]
 fn kdfa_block<S: HmacState<N>, const N: usize>(

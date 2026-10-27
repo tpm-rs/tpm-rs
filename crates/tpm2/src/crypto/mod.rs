@@ -14,7 +14,7 @@
 //! Most use-cases can use the simple "one-shot" functions for:
 //! - Hashing: [`hash`](hash::hash)
 //! - HMACs: [`hmac`](hmac::hmac)
-//! - KDFs: [`kdfa`], [`kdfe`]
+//! - KDFs: [`kdfa`], [`kdfa_xor`], [`kdfe`]
 //! - Encryption and Decryption: [`SymmetricKey::crypt`]
 //! - CMACs: [`SymmetricKey::cmac`]
 //! - Random bytes: [`Random::rand_bytes`]

@@ -51,6 +51,7 @@
 //! |--------|------------------------|
 //! | [`HashState::kdfe`] | [`default_kdfe`] |
 //! | [`HmacState::kdfa`] | [`default_kdfa`] |
+//! | [`HmacState::kdfa_xor`] | [`default_kdfa_xor`] |
 //! | [`SymmetricState::crypt`] | [`default_crypt`] |
 //!
 //! ## Example

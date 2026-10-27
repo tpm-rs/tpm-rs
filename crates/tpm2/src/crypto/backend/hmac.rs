@@ -2,7 +2,7 @@
 
 use core::ffi::CStr;
 
-use super::default_kdfa;
+use super::{default_kdfa, default_kdfa_xor};
 use crate::crypto::CryptoError;
 
 /// HMAC, with one associated type per hash algorithm.
@@ -59,6 +59,19 @@ pub trait HmacState<const DIGEST_SIZE: usize>: Sized {
         out: &mut [u8],
     ) -> Result<(), CryptoError> {
         default_kdfa::<Self, DIGEST_SIZE>(key, label, context, out)
+    }
+
+    /// XORs the output of `KDFa` into `data`, as described by
+    /// [`kdfa_xor`](crate::crypto::kdfa_xor).
+    ///
+    /// Defaults to [`default_kdfa_xor`].
+    fn kdfa_xor(
+        key: &[u8],
+        label: &CStr,
+        context: (&[u8], &[u8]),
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        default_kdfa_xor::<Self, DIGEST_SIZE>(key, label, context, data)
     }
 }
 

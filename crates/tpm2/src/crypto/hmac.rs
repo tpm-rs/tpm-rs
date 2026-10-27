@@ -136,3 +136,22 @@ pub fn kdfa<H: Hmac>(
         TpmiAlgHash::$Alg => { H::$Alg::kdfa(key, label, context, out) },
     })
 }
+
+/// XORs the output of [`kdfa`] into `data`, as used by XOR obfuscation in TPM
+/// 2.0 Part 1.
+///
+/// This computes `data ^= KDFa(alg, key, label, context, 8 * data.len())`
+/// without a buffer the size of `data`. For XOR obfuscation, `label` is
+/// `c"XOR"`. XOR obfuscation is its own inverse, so this both obfuscates and
+/// deobfuscates.
+pub fn kdfa_xor<H: Hmac>(
+    alg: TpmiAlgHash,
+    key: &[u8],
+    label: &CStr,
+    context: (&[u8], &[u8]),
+    data: &mut [u8],
+) -> Result<(), CryptoError> {
+    match_hash_alg!(match alg {
+        TpmiAlgHash::$Alg => { H::$Alg::kdfa_xor(key, label, context, data) },
+    })
+}
