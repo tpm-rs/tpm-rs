@@ -118,6 +118,43 @@ fn loaded_curves_counts_every_implemented_curve() {
     );
 }
 
+/// `TPM_CAP_ECC_CURVES` lists the curves in ascending order from `property`, so reading the list
+/// one curve at a time, continuing after the last returned curve, yields the whole list: TPM 2.0
+/// Part 3, TPM2_GetCapability: "The *property* parameter selects the first value of the selected
+/// category to be returned. If there is no property that corresponds to the value of
+/// *property*, the next higher value is returned, if it exists."
+#[test]
+fn ecc_curves_are_listed_in_ascending_order() {
+    /// `TPM_CAP_ECC_CURVES`.
+    const CAP_ECC_CURVES: u32 = 8;
+    let curves_of = |data: &[u8]| -> Vec<u16> {
+        let count = u32::from_be_bytes(data[0..4].try_into().unwrap()) as usize;
+        assert_eq!(data.len(), 4 + 2 * count);
+        (0..count)
+            .map(|i| u16::from_be_bytes([data[4 + 2 * i], data[5 + 2 * i]]))
+            .collect()
+    };
+    let mut sim = Tpm::new();
+    let (more, data) = get_cap(&mut sim, CAP_ECC_CURVES, 0, 64).unwrap();
+    assert!(!more);
+    let all = curves_of(&data);
+    assert!(all.len() > 1, "{all:x?}");
+    assert!(all.windows(2).all(|w| w[0] < w[1]), "{all:x?}");
+    let mut paged = Vec::new();
+    let mut property = 0;
+    loop {
+        let (more, data) = get_cap(&mut sim, CAP_ECC_CURVES, property, 1).unwrap();
+        let curves = curves_of(&data);
+        assert_eq!(curves.len(), 1, "property {property:#x}");
+        paged.push(curves[0]);
+        if !more {
+            break;
+        }
+        property = u32::from(curves[0]) + 1;
+    }
+    assert_eq!(paged, all);
+}
+
 /// `TPM_CAP_ALGS` reports MGF1 and the KDFs, and the full `KEYEDHASH` attributes.
 #[test]
 fn algorithms_list_complete_and_sorted() {

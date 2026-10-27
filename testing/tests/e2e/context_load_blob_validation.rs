@@ -61,6 +61,38 @@ fn short_blobs_return_size() {
     }
 }
 
+/// An integrity value larger than the largest digest of the TPM fails with a bare
+/// `TPM_RC_SIZE`, also when the blob holds fewer bytes than that size: TPM 2.0 Part 2,
+/// Table "Definition of TPM2B_DIGEST Structure": "buffer[size]{:sizeof(TPMU_HA)}",
+/// "#TPM_RC_SIZE"; the C references return the result of `TPM2B_DIGEST_Unmarshal()` of the
+/// integrity value unmodified. The largest digest is SHA-512 (64 bytes).
+///
+/// Found by differential fuzzing.
+#[test]
+fn integrity_larger_than_largest_digest_returns_size() {
+    const LARGEST_DIGEST_SIZE: usize = 64;
+    let mut sim = Tpm::new();
+    let context = save_object_context(&mut sim);
+    let saved = context.context_blob.get_buffer();
+    let bare_size = TpmRc::SIZE.get();
+    for integrity_size in [LARGEST_DIGEST_SIZE + 1, 0xFFFF] {
+        let mut blob = (integrity_size as u16).to_be_bytes().to_vec();
+        // The rest of the saved blob: enough bytes for an integrity value of up to 65 bytes.
+        blob.extend_from_slice(&saved[2..]);
+        let what = format!("integrity size {integrity_size}");
+        assert_load_rejected(&mut sim, context, blob.clone(), bare_size, &what);
+        // Fewer bytes than the integrity size: TPM_RC_SIZE before TPM_RC_INSUFFICIENT.
+        blob.truncate(10);
+        assert_load_rejected(
+            &mut sim,
+            context,
+            blob,
+            bare_size,
+            &format!("{what}, truncated"),
+        );
+    }
+}
+
 /// A context blob whose encrypted size is decreased fails with TPM_RC_INTEGRITY.
 #[test]
 fn shrunken_encrypted_size_returns_integrity() {

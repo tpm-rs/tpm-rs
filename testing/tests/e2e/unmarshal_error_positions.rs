@@ -861,3 +861,68 @@ fn sign_validation_ticket_error() {
         "Sign with invalid hierarchy in validation ticket (param 3) must return TPM_RC_VALUE + P3"
     );
 }
+
+/// TPM2_GetCapability validates `capability` while it is unmarshaled, before `property`: with a
+/// truncated `property`, a capability the TPM's `TPM_CAP` unmarshaler rejects is `TPM_RC_VALUE`
+/// on parameter 1, while an accepted one is `TPM_RC_INSUFFICIENT` on parameter 2.
+///
+/// TPM 2.0 Part 2, \"Definition of (UINT32) TPM_CAP Constants\" ends with `#TPM_RC_VALUE`.
+#[test]
+fn get_capability_validates_capability_before_property() {
+    let mut sim = Tpm::new();
+    // TPM2_GetCapability(capability, property truncated to 2 bytes).
+    let cmd = |capability: u32| {
+        let mut cmd = hex("8001 00000010 0000017a");
+        cmd.extend_from_slice(&capability.to_be_bytes());
+        cmd.extend_from_slice(&[0x40, 0x00]);
+        cmd
+    };
+    // TPM_CAP_AUTH_POLICIES: accepted, then property is truncated.
+    assert_eq!(
+        transact_rc_of(&mut sim, &cmd(0x9)),
+        TpmRc::INSUFFICIENT.with(Position::parameter(2)).get()
+    );
+    // TPM_CAP_PUB_KEYS: not a capability of this TPM.
+    assert_eq!(
+        transact_rc_of(&mut sim, &cmd(0xB)),
+        TpmRc::VALUE.with(Position::parameter(1)).get()
+    );
+    // TPM_CAP_ACT.
+    assert_eq!(
+        transact_rc_of(&mut sim, &cmd(0xA)),
+        TpmRc::INSUFFICIENT.with(Position::parameter(2)).get()
+    );
+}
+
+/// A `TPM2B_NAME` parameter may be as large as `sizeof(TPMU_NAME)`, one byte more is
+/// `TPM_RC_SIZE`: TPM2_PolicyDuplicationSelect with an `objectName` of exactly that size and
+/// nothing after it fails on the missing `newParentName` (`TPM_RC_INSUFFICIENT` + P2), with one
+/// byte more on `objectName` (`TPM_RC_SIZE` + P1).
+///
+/// TPM 2.0 Part 2, `TPM2B_NAME`: "name[size]{:sizeof(TPMU_NAME)}", where `TPMU_NAME` is a
+/// `TPMT_HA` or a `TPM_HANDLE`: 66 bytes with SHA-512.
+#[test]
+fn name_parameter_bounded_by_sizeof_tpmu_name() {
+    let name_cap: usize = 66;
+    let mut sim = Tpm::new();
+    let (session, _) = crate::_common::start_policy(&mut sim, TpmSe::Policy);
+    for (size, expected) in [
+        (name_cap, TpmRc::INSUFFICIENT.with(Position::parameter(2))),
+        (name_cap + 1, TpmRc::SIZE.with(Position::parameter(1))),
+    ] {
+        let mut params = (size as u16).to_be_bytes().to_vec();
+        params.extend(std::iter::repeat_n(0x11, size));
+        let cmd = crate::_common::build_raw_cmd(
+            crate::_common::ST_NO_SESSIONS,
+            0x188, // TPM_CC_PolicyDuplicationSelect
+            &[session.0],
+            None,
+            &params,
+        );
+        assert_eq!(
+            transact_rc_of(&mut sim, &cmd),
+            expected.get(),
+            "objectName size {size}"
+        );
+    }
+}

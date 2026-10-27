@@ -402,6 +402,33 @@ fn rejected_command_updates_clock_in_nv() {
     assert!(u64::from_be_bytes(rsp[18..26].try_into().unwrap()) >= 1 << 22);
 }
 
+/// After an unorderly power cycle, `clockInfo.safe` is CLEAR at TPM2_Startup, but an NV update
+/// of `Clock` during that TPM2_Startup (here after more than `2^NV_CLOCK_UPDATE_INTERVAL` ms of
+/// power before it) SETs it again: TPM 2.0 Part 1, "Clock": "a flag (*safe*) is CLEAR after a
+/// non-orderly shutdown. After the next NV update of *Clock,* safe is SET to indicate that
+/// *Clock* is not a repeat." Found by differential fuzzing (the references clear the flag before
+/// the startup time update, `TimeStartup()` before `DAStartup()`).
+#[test]
+fn clock_update_during_startup_after_power_loss_is_safe() {
+    /// `NV_CLOCK_UPDATE_INTERVAL` of the TPM profile: Clock is written to NV whenever it
+    /// crosses a multiple of `2^22` ms.
+    const NV_CLOCK_UPDATE_INTERVAL: u32 = 22;
+    let mut sim = Tpm::new();
+    sim.signal_platform(testing::tpm::SimulatorPlatformSignal::PowerOff)
+        .unwrap();
+    sim.signal_platform(testing::tpm::SimulatorPlatformSignal::PowerOn)
+        .unwrap();
+    nv_on(&mut sim);
+    sleep(std::time::Duration::from_millis(
+        1 << NV_CLOCK_UPDATE_INTERVAL,
+    ));
+    assert_eq!(startup_with_type(&mut sim, SU_CLEAR as u8), 0);
+    assert!(read_clock(&mut sim).clock_info.safe);
+    // Without such an update, it stays CLEAR.
+    assert_eq!(power_cycle_with(&mut sim, None, SU_CLEAR), 0);
+    assert!(!read_clock(&mut sim).clock_info.safe);
+}
+
 /// `Time` counts how long "the circuit providing *Time* has been powered" (TPM 2.0 Part 1,
 /// "Time"), so a `_TPM_Init` without a power loss (the platform `Reset` signal) followed by
 /// `TPM2_Startup` keeps it running, while a power cycle restarts it.

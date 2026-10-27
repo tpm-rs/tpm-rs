@@ -208,6 +208,14 @@ fn srand(implementation: Implementation, seed: u32) {
         .unwrap_or_else(|e| e.into_inner()) = Some(GlibcRand::new(seed));
 }
 
+/// Returns the `rand()` generator of `implementation` to the state of a new
+/// process (never seeded, i.e. `srand(1)` on first use).
+fn reset_rand(implementation: Implementation) {
+    *GENERATORS[implementation as usize]
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// `rand()` of `mstpm20` (redirected by `testing/build.rs`).
 #[unsafe(no_mangle)]
 pub extern "C" fn difftest_mstpm20_rand() -> i32 {
@@ -280,6 +288,12 @@ impl Drop for CReference {
 
 impl Backend for CReference {
     fn init(&mut self) {
+        // Like a new process, the reference starts with an unseeded
+        // `rand()`, so a re-init (`Server::reinit`) never keeps the previous
+        // conversation's generator state and draws the same random values as
+        // a new process, even if the reference draws from `rand()` before
+        // seeding it.
+        reset_rand(self.implementation);
         // SAFETY (this and the other entry-point calls below): the entry
         // points take no pointers or only the given valid buffers, and
         // `self` is the only handle to this C reference (see `acquire`), so
@@ -452,6 +466,8 @@ mod tests {
     /// seeding or drawing from one leaves the other's sequence unchanged.
     #[test]
     fn references_have_separate_rand_generators() {
+        // Hosting a reference (re)seeds and resets its generator.
+        let _hosting = HOSTING.lock().unwrap_or_else(|e| e.into_inner());
         difftest_mstpm20_srand(1234);
         difftest_ibmswtpm2_srand(1234);
         let mut expected = GlibcRand::new(1234);
@@ -464,6 +480,18 @@ mod tests {
         assert_eq!(difftest_mstpm20_rand(), expected.next() as i32);
         difftest_ibmswtpm2_srand(1234);
         assert_eq!(difftest_ibmswtpm2_rand(), first);
+    }
+
+    /// Initializing a reference returns its `rand()` to the state of a new
+    /// process (glibc's implicit `srand(1)`), whatever it drew before, so a
+    /// re-initialized reference draws the same values as a new process.
+    #[test]
+    fn init_resets_the_rand_generator() {
+        let _hosting = HOSTING.lock().unwrap_or_else(|e| e.into_inner());
+        difftest_ibmswtpm2_srand(99);
+        difftest_ibmswtpm2_rand();
+        reset_rand(Implementation::Ibmswtpm2);
+        assert_eq!(difftest_ibmswtpm2_rand(), GlibcRand::new(1).next() as i32);
     }
 
     /// `getpid()` of the references returns the seed's process ID once set.

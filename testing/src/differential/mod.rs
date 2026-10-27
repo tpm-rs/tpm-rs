@@ -43,14 +43,13 @@
 //! new processes (e.g. once per fuzz input).
 //!
 //! The references are selected with the `DIFFERENTIAL_REFERENCES`
-//! environment variable: `mstpm20` or `ibmswtpm2` to compare with only that
-//! reference; unset (or both) to run every test against both, in parallel
-//! (the test compares with `mstpm20` and runs itself against `ibmswtpm2` in
-//! a [`CompanionRun`]). A reference binary is located through its environment
-//! variable (`MSTPM20_BIN`, `IBMSWTPM2_BIN`) or, by default, next to the
-//! running test executable (in it or in one of its ancestor directories,
-//! e.g. `target/release/mstpm20`); `cargo test -p testing --features
-//! differential` builds both automatically.
+//! environment variable (a comma-separated list of implementation names);
+//! unset, every `Tpm` is mirrored to `mstpm20` and `ibmswtpm2`. A reference
+//! binary is located through its environment variable (`MSTPM20_BIN`,
+//! `IBMSWTPM2_BIN`) or, by default, next to the running test executable (in
+//! it or in one of its ancestor directories, e.g. `target/release/mstpm20`);
+//! `cargo test -p testing --features differential` builds them
+//! automatically.
 
 use std::fmt;
 use std::io::{BufReader, BufWriter, Write as _};

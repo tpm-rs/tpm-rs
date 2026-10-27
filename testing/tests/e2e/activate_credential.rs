@@ -1,10 +1,10 @@
 //! TPM2_ActivateCredential: credential blob integrity, key handle and protector key type checks.
 
 use crate::_common::{
-    AES128_CFB, command_rc, create_and_load, ecc_sign_template, exec_command,
+    AES128_CFB, build_pw_cmd, command_rc, create_and_load, ecc_sign_template, exec_command,
     execute_with_hmac_sessions, execute_with_password_sessions, get_ecc_ek_template,
     get_ecc_sign_restricted_template, get_ecc_srk_template, leak_bytes,
-    load_stripped_ecc_storage_key, owner_srk, pw, rc_h, rc_p, read_public, rsa_public, run,
+    load_stripped_ecc_storage_key, owner_srk, pw, rc_h, rc_of, rc_p, read_public, rsa_public, run,
     start_auth_session, storage_attrs, try_create_owner_primary,
 };
 use testing::tpm::Tpm;
@@ -412,4 +412,60 @@ fn credential_round_trips_under_ctr_mode_protector() {
     )
     .expect("ActivateCredential failed");
     assert_eq!(activated.cert_info.get_buffer(), b"Secrets!!!");
+}
+
+/// A credentialBlob whose `integrityHMAC` is one octet larger than the largest digest of the TPM
+/// is `TPM_RC_SIZE + RC_ActivateCredential_credentialBlob`: the integrity value is unmarshaled as
+/// a `TPM2B_DIGEST` (TPM 2.0 Part 2, Table "Definition of TPM2B_DIGEST Structure":
+/// "buffer[size]{:sizeof(TPMU_HA)}" and "#TPM_RC_SIZE"), before it is compared with the expected
+/// HMAC (`TPM_RC_INTEGRITY`).
+#[test]
+fn integrity_larger_than_largest_digest_is_size_error() {
+    const TPM_CC_ACTIVATE_CREDENTIAL: u32 = 0x0000_0147;
+    const LARGEST_DIGEST: usize = 64;
+    let mut sim = Tpm::new();
+    let srk = owner_srk(&mut sim);
+    let name = read_public(&mut sim, srk).expect("ReadPublic").name;
+    let made = execute_with_password_sessions(
+        &mut sim,
+        &MakeCredential {
+            handle: srk,
+            credential: Tpm2bDigest::from_bytes(b"Secrets!!!").unwrap(),
+            object_name: name,
+        },
+        0,
+        &[],
+    )
+    .expect("MakeCredential failed");
+    // Replace the integrity HMAC of the valid blob by LARGEST_DIGEST + 1 octets.
+    let blob = made.credential_blob.get_buffer();
+    let integrity_len = u16::from_be_bytes([blob[0], blob[1]]) as usize;
+    let mut forged = ((LARGEST_DIGEST + 1) as u16).to_be_bytes().to_vec();
+    forged.extend_from_slice(&[0x5a; LARGEST_DIGEST + 1]);
+    forged.extend_from_slice(&blob[2 + integrity_len..]);
+    let secret = made.secret.get_buffer();
+    let mut params = (forged.len() as u16).to_be_bytes().to_vec();
+    params.extend_from_slice(&forged);
+    params.extend_from_slice(&(secret.len() as u16).to_be_bytes());
+    params.extend_from_slice(secret);
+    let cmd = build_pw_cmd(TPM_CC_ACTIVATE_CREDENTIAL, &[srk.0, srk.0], 2, &params);
+    assert_eq!(rc_of(&sim.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 1));
+}
+
+/// A credentialBlob whose size is one octet larger than `sizeof(TPMS_ID_OBJECT)` is
+/// `TPM_RC_SIZE + RC_ActivateCredential_credentialBlob` before its octets are read, even when
+/// the command is too short to hold them (TPM 2.0 Part 2, Table "Definition of TPM2B_ID_OBJECT
+/// Structure": "credential[size]{:sizeof(TPMS_ID_OBJECT)}"; a `TPMS_ID_OBJECT` is two
+/// `TPM2B_DIGEST`s).
+#[test]
+fn credential_blob_larger_than_id_object_is_size_error() {
+    const TPM_CC_ACTIVATE_CREDENTIAL: u32 = 0x0000_0147;
+    const SIZEOF_TPMS_ID_OBJECT: usize = 2 * (2 + 64);
+    let mut sim = Tpm::new();
+    let srk = owner_srk(&mut sim);
+    // credentialBlob.size = sizeof(TPMS_ID_OBJECT) + 1, followed by only four octets.
+    let mut params = ((SIZEOF_TPMS_ID_OBJECT + 1) as u16).to_be_bytes().to_vec();
+    params.extend_from_slice(&[0x01, 0x00, 0x28, 0x00]);
+    let cmd = build_pw_cmd(TPM_CC_ACTIVATE_CREDENTIAL, &[srk.0, srk.0], 2, &params);
+    assert_eq!(rc_of(&sim.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 1));
 }

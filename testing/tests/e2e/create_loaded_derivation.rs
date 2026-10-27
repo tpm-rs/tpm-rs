@@ -462,3 +462,62 @@ fn derived_template_with_sensitive_data_origin_rejected() {
     let rsp = tpm.send_command(0, &child);
     assert_eq!(&rsp[6..10], 0x082u32.to_be_bytes(), "{rsp:02x?}");
 }
+
+/// A derivation label larger than `LABEL_MAX_BUFFER` is `TPM_RC_SIZE + P2` (inPublic) even
+/// when fewer bytes than its size follow in the template: the size is checked before the
+/// label is read (Part 2 `TPM2B_LABEL`: `buffer[size] {:LABEL_MAX_BUFFER}`).
+#[test]
+fn derived_label_size_checked_before_label_bytes() {
+    use crate::_common::{PW_SESSION_CONTINUE, ST_SESSIONS, build_raw_cmd, mssim_rc_of};
+    const CC_CREATE_LOADED: u32 = 0x191;
+    let mut sim = Tpm::new();
+    // inSensitive (empty) || inPublic.
+    let params = |template: &[u8]| {
+        let mut p = vec![0x00, 0x04, 0x00, 0x00, 0x00, 0x00];
+        p.extend_from_slice(&(template.len() as u16).to_be_bytes());
+        p.extend_from_slice(template);
+        p
+    };
+    // A derivation parent: restricted decrypt KEYEDHASH with the XOR scheme (SHA-256, KDF1
+    // SP800-108) in the owner hierarchy.
+    let parent_template = [
+        0x00, 0x08, 0x00, 0x0b, 0x00, 0x03, 0x00, 0x60, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x0b, 0x00,
+        0x22, 0x00, 0x00,
+    ];
+    let cmd = build_raw_cmd(
+        ST_SESSIONS,
+        CC_CREATE_LOADED,
+        &[0x4000_0001],
+        Some(&PW_SESSION_CONTINUE),
+        &params(&parent_template),
+    );
+    let (rc, rsp) = crate::_common::send_with_rc(&mut sim, &cmd);
+    assert_eq!(rc, 0);
+    let parent = u32::from_be_bytes(rsp[10..14].try_into().unwrap());
+    // A derived HMAC key (sign | userWithAuth | fixedParent, HMAC-SHA-256) whose label claims
+    // 49 bytes.
+    let derived = |label_bytes: usize| {
+        let mut t = vec![
+            0x00, 0x08, 0x00, 0x0b, 0x00, 0x04, 0x00, 0x50, 0x00, 0x00, 0x00, 0x05, 0x00, 0x0b,
+            0x00, 49,
+        ];
+        t.extend(std::iter::repeat_n(0x6c, label_bytes));
+        t.extend_from_slice(&[0x00, 0x07]);
+        t.extend_from_slice(b"context");
+        t
+    };
+    for label_bytes in [9, 49] {
+        let cmd = build_raw_cmd(
+            ST_SESSIONS,
+            CC_CREATE_LOADED,
+            &[parent],
+            Some(&PW_SESSION_CONTINUE),
+            &params(&derived(label_bytes)),
+        );
+        assert_eq!(
+            mssim_rc_of(&mut sim, &cmd),
+            0x2D5,
+            "{label_bytes} label bytes"
+        );
+    }
+}

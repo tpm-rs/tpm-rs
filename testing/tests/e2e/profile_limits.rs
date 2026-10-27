@@ -1,7 +1,7 @@
 //! Unmarshal limits that depend on the TPM's profile rather than on every algorithm `tpm2` can
 //! represent: the capacities of `TPM2B_TEMPLATE` (`sizeof(TPMT_PUBLIC)`, unpadded) and
-//! `TPM2B_ECC_PARAMETER` (`MAX_ECC_KEY_BYTES`), and the `HASH_COUNT` bound of
-//! `TPML_PCR_SELECTION`. A larger value is `TPM_RC_SIZE` at its parameter, before any later
+//! `TPM2B_ECC_PARAMETER` (`MAX_ECC_KEY_BYTES`), `TPM2B_DIGEST` (the largest implemented digest),
+//! and the `HASH_COUNT` bound of `TPML_PCR_SELECTION`. A larger value is `TPM_RC_SIZE` at its parameter, before any later
 //! parameter is read.
 
 use crate::_common::{PW_SESSION, build, rc_of, rc_p};
@@ -127,4 +127,59 @@ fn pcr_selection_with_more_banks_than_hash_algorithms_rejected() {
             "count {count}"
         );
     }
+}
+
+/// The largest digest of this TPM's profile (SHA-512), in bytes.
+const DIGEST_CAP: u16 = 64;
+
+/// `TPM_CC_HashSequenceStart`.
+const TPM_CC_HASH_SEQUENCE_START: u32 = 0x0000_0186;
+/// `TPM_CC_PolicyTemplate`.
+const TPM_CC_POLICY_TEMPLATE: u32 = 0x0000_0190;
+
+/// A `TPM2B_DIGEST` (and `TPM2B_AUTH`) holds at most the largest digest of the TPM's hashes,
+/// [`DIGEST_CAP`]: TPM 2.0 Part 2, Table "Definition of TPM2B_DIGEST Structure":
+/// "buffer\[size\]{:sizeof(TPMU_HA)}" and "#TPM_RC_SIZE". A complete buffer of one byte more is
+/// `TPM_RC_SIZE` at its parameter, before its bytes and the later parameters are read: the
+/// `auth` of `TPM2_HashSequenceStart`, the `templateHash` of `TPM2_PolicyTemplate` and the
+/// `authValue` in the `inPrivate` of `TPM2_LoadExternal`. Found by differential fuzzing.
+#[test]
+fn digest_larger_than_largest_hash_rejected() {
+    let mut tpm = Tpm::new();
+    let too_long = vec![0x42u8; usize::from(DIGEST_CAP) + 1];
+    let sized = |bytes: &[u8]| {
+        let mut out = (bytes.len() as u16).to_be_bytes().to_vec();
+        out.extend_from_slice(bytes);
+        out
+    };
+
+    // TPM2_HashSequenceStart(auth, hashAlg = SHA-256).
+    let mut params = sized(&too_long);
+    params.extend_from_slice(&[0x00, 0x0B]);
+    let cmd = build(0x8001, TPM_CC_HASH_SEQUENCE_START, &[], None, &params);
+    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 1));
+
+    // TPM2_PolicyTemplate(policySession, templateHash).
+    let session = crate::_common::start_session_of_type(&mut tpm, tpm2::TpmSe::Policy);
+    let cmd = build(
+        0x8001,
+        TPM_CC_POLICY_TEMPLATE,
+        &[session.session_handle.0],
+        None,
+        &sized(&too_long),
+    );
+    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 1));
+
+    // TPM2_LoadExternal(inPrivate = {TPM_ALG_KEYEDHASH, authValue, seedValue, bits}, ...).
+    let mut sensitive = vec![0x00, 0x08];
+    sensitive.extend_from_slice(&sized(&too_long));
+    sensitive.extend_from_slice(&sized(&[0x11; 32]));
+    sensitive.extend_from_slice(&sized(&[0x22; 16]));
+    let mut params = sized(&sensitive);
+    params.extend_from_slice(&sized(&[
+        0x00, 0x08, 0x00, 0x0B, 0, 0, 0, 0x40, 0, 0, 0, 0x10, 0, 0,
+    ]));
+    params.extend_from_slice(&Handle::RH_NULL.0.to_be_bytes());
+    let cmd = build(0x8001, TPM_CC_LOAD_EXTERNAL, &[], None, &params);
+    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 1));
 }

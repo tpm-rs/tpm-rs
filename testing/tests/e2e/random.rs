@@ -31,6 +31,36 @@ fn get_random_returns_requested_bytes() {
     );
 }
 
+/// GetRandom returns at most one largest digest of bytes: TPM 2.0 Part 3, TPM2_GetRandom: "If
+/// *bytesRequested* is more than will fit into a `TPM2B_DIGEST` on the TPM, no error is returned
+/// but the TPM will only return as much data as will fit into a `TPM2B_DIGEST` buffer for the
+/// TPM." That is 64 bytes (SHA-512).
+///
+/// Found by differential fuzzing.
+#[test]
+fn get_random_returns_at_most_one_largest_digest() {
+    const LARGEST_DIGEST_SIZE: usize = 64;
+    let mut sim = Tpm::new();
+    for requested in [
+        LARGEST_DIGEST_SIZE as u16,
+        LARGEST_DIGEST_SIZE as u16 + 1,
+        256,
+        0xFFFF,
+    ] {
+        let mut request = hx("80010000000c0000017B");
+        request.extend_from_slice(&requested.to_be_bytes());
+        let response = send_raw(&mut sim, &request);
+        let returned = (requested as usize).min(LARGEST_DIGEST_SIZE);
+        assert_eq!(response.len(), 12 + returned, "requested {requested}");
+        assert_eq!(&response[6..10], &[0, 0, 0, 0], "requested {requested}");
+        assert_eq!(
+            &response[10..12],
+            &(returned as u16).to_be_bytes(),
+            "requested {requested}"
+        );
+    }
+}
+
 /// StirRandom with 32 bytes of input succeeds.
 #[test]
 fn stir_random_accepts_32_bytes() {

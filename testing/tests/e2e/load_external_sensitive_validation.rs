@@ -2,11 +2,11 @@
 //! public/sensitive consistency.
 
 use crate::_common::{
-    AES128_CFB, ECC_D, ECC_X, ECC_Y, RSA_N, ecc_sign_template, execute_with_password_sessions,
-    leak_bytes, load_external, make_ecc_public_area, make_ecc_public_area_exact_attrs,
-    make_keyed_hash_public_area_no_scheme, make_keyed_hash_public_area_obfuscated,
-    make_rsa_public_area_exact_attrs, make_rsa_public_area_opt_name_alg, rc_p, rc1,
-    rsa_storage_template_with, sym_template_with,
+    AES128_CFB, ECC_D, ECC_X, ECC_Y, RSA_N, RSA_P, ecc_sign_template,
+    execute_with_password_sessions, leak_bytes, load_external, make_ecc_public_area,
+    make_ecc_public_area_exact_attrs, make_keyed_hash_public_area_no_scheme,
+    make_keyed_hash_public_area_obfuscated, make_rsa_public_area_exact_attrs,
+    make_rsa_public_area_opt_name_alg, rc_p, rc1, rsa_storage_template_with, sym_template_with,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::LoadExternal;
@@ -639,4 +639,63 @@ fn keyed_hash_seed_size_checked_before_unique_size() {
     ));
     let (rc, _) = crate::_common::send_with_rc(&mut tpm, &cmd);
     assert_eq!(rc, rc_p(TpmRc::KEY_SIZE, 1), "TPM_RC_KEY_SIZE + P1");
+}
+
+/// An RSA key whose prime factors the modulus but whose public exponent is not coprime to
+/// phi(n) (here the even exponent 256) has no private exponent: TPM_RC_BINDING without a
+/// parameter number (Part 3 TPM2_LoadExternal: "TPM_RC_BINDING | the inPublic and inPrivate
+/// structures are not cryptographically bound"), never TPM_RC_FAILURE. The same key with the
+/// default exponent loads.
+#[test]
+fn rsa_exponent_without_private_exponent_is_binding_error() {
+    let mut sim = Tpm::new();
+    let load = |sim: &mut Tpm, exponent: u32| {
+        let mut public = make_rsa_public_area_opt_name_alg(
+            RSA_N,
+            Some(TpmiAlgHash::Sha256),
+            TpmaObject::SIGN_ENCRYPT,
+        );
+        if let PublicParmsAndId::Rsa(parms, _) = &mut public.parms_and_id {
+            parms.exponent = exponent;
+        }
+        let sensitive = TpmtSensitive {
+            auth_value: Tpm2bAuth::default(),
+            seed_value: Tpm2bDigest::default(),
+            sensitive: TpmuSensitiveComposite::Rsa(Tpm2bPrivateKeyRsa::from_bytes(RSA_P).unwrap()),
+        };
+        load_external(sim, public, Some(sensitive), Handle::RH_NULL)
+    };
+    assert_eq!(load(&mut sim, 256).unwrap_err(), rc1(TpmRc::BINDING));
+    load(&mut sim, 0).expect("the key with the default exponent loads");
+}
+
+/// An RSA private key one octet larger than the TPM's `TPM2B_PRIVATE_KEY_RSA` capacity is
+/// `TPM_RC_SIZE + RC_LoadExternal_inPrivate` (TPM 2.0 Part 2, Table "Definition of
+/// TPM2B_PRIVATE_KEY_RSA Structure": "buffer[size]{:RSA_PRIVATE_SIZE }" and "`RSA_PRIVATE_SIZE`
+/// is a vendor specific value that can be (`MAX_RSA_KEY_BYTES` / 2) or ((`MAX_RSA_KEY_BYTES` \*
+/// 5) / 2)"). tpm-rs uses the larger value (640 octets for RSA 2048).
+#[test]
+fn rsa_private_key_larger_than_capacity_rejected() {
+    const RSA_PRIVATE_KEY_CAP: usize = 640;
+    let mut sim = Tpm::new();
+    let sensitive_create = TpmtSensitive {
+        auth_value: Tpm2bAuth::default(),
+        seed_value: Tpm2bDigest::default(),
+        sensitive: TpmuSensitiveComposite::Rsa(
+            Tpm2bPrivateKeyRsa::from_bytes(&[0x01; RSA_PRIVATE_KEY_CAP + 1]).unwrap(),
+        ),
+    };
+    let cmd = LoadExternal {
+        in_private: Some(tpm2::Tpm2b(sensitive_create)),
+        in_public: tpm2::Tpm2b(make_rsa_public_area_exact_attrs(
+            RSA_N,
+            TpmiAlgHash::Sha256,
+            TpmaObject::SIGN_ENCRYPT,
+        )),
+        hierarchy: Handle::RH_NULL,
+    };
+    assert_eq!(
+        execute_with_password_sessions(&mut sim, &cmd, 0, &[]).err(),
+        Some(TpmRc::SIZE.with(Position::parameter(1)).get())
+    );
 }

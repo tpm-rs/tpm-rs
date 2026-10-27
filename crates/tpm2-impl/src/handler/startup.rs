@@ -222,6 +222,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.nv_load_persistent_da_timers()?;
         }
 
+        // `TimeStartup`: after an unorderly shutdown the clock may have rolled back. TPM 2.0 Part
+        // 1, "Clock": "To indicate that a value reported in Clock may be a repeat of a previously
+        // reported value, a flag (*safe*) is CLEAR after a non-orderly shutdown. After the next NV
+        // update of *Clock,* safe is SET to indicate that *Clock* is not a repeat." As in the
+        // references (`TimeStartup()` before `DAStartup()`), this is done before the time update
+        // of the state transition below, whose NV update of Clock (e.g. after a long power-on
+        // before TPM2_Startup) SETs it again.
+        if !is_orderly(prev_orderly_state) {
+            self.context.state.clock_safe = false;
+        }
+
         // 2. Perform state updates on reset/restart counters
         self.perform_startup_state_transition(kind, prev_orderly_state)?;
 
@@ -264,11 +275,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.context.state.null_seed = value;
                 self.context.state.null_seed_size = 64;
             }
-        }
-
-        // `TimeStartup`: after an unorderly shutdown the clock may have rolled back.
-        if !is_orderly(prev_orderly_state) {
-            self.context.state.clock_safe = false;
         }
 
         self.context.state.orderly_state = SU_NONE_VALUE;

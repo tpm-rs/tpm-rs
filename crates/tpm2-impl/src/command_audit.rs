@@ -368,6 +368,7 @@ mod tests {
             0x0000_013F,
             0x0000_01FF,
             0x2000_0000,
+            0x2000_0001,
         ] {
             let cc = TpmCc::new(code);
             assert!(!list.set(cc), "{code:#x}");
@@ -398,9 +399,9 @@ mod tests {
         let bytes = *list.as_bytes();
         assert_eq!(CommandAuditList::from_bytes(&bytes), list);
 
-        // 0x13F (bit 32, TPM2_SetAlgorithmSet) is not an implemented command.
+        // 0x123 (bit 4) is not a command.
         let mut tampered = bytes;
-        tampered[32 / 8] |= 1 << (32 % 8);
+        tampered[0] |= 1 << 4;
         assert_eq!(CommandAuditList::from_bytes(&tampered), list);
     }
 

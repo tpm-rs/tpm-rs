@@ -120,7 +120,8 @@ fn validates_handle_and_extends_allocated_banks() {
         rc_at(TpmRc::MODE, Position::handle(2))
     );
 
-    // PCRExtend() changes (and counts) every *allocated* bank of PCR 16 once.
+    // PCRExtend() changes (and counts) every *allocated* bank of PCR 16 once. PCR 16 is not in
+    // the TCB group (20-22), whose changes are not counted.
     let allocated_banks = allocated_banks_for_pcr(&mut sim, 16);
     assert!(
         allocated_banks >= 2,
