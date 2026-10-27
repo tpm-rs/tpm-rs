@@ -32,9 +32,19 @@ use super::context_save::{CONTEXT_ENCRYPTION_ALG, CONTEXT_FINGERPRINT_SIZE};
 
 /// `MAX_CONTEXT_SIZE` of this TPM's profile: the capacity of `TPM2B_CONTEXT_SENSITIVE` (TPM 2.0
 /// Part 2, Table "Definition of TPM2B_CONTEXT_SENSITIVE Structure": "buffer\[size\]{:MAX_CONTEXT_SIZE}").
-/// The value is implementation-specific; the C references are configured with the same value
-/// (`testing/patches/*/profile-max-context-size.patch`).
-const MAX_CONTEXT_SIZE: usize = 2264;
+/// The value is implementation-specific: 2264 octets by default, or the value of a C reference
+/// TPM with the `max-context-size-2168` (the public TCG reference), `max-context-size-2680`
+/// (`ibmswtpm2`) or `max-context-size-4344` (the TCG reference version 185) feature; with several,
+/// the largest applies.
+const MAX_CONTEXT_SIZE: usize = if cfg!(feature = "max-context-size-4344") {
+    4344
+} else if cfg!(feature = "max-context-size-2680") {
+    2680
+} else if cfg!(feature = "max-context-size-2168") {
+    2168
+} else {
+    2264
+};
 
 /// The capacity of `TPM2B_CONTEXT_DATA`: TPM 2.0 Part 2, Table "Definition of TPM2B_CONTEXT_DATA
 /// Structure": "buffer\[size\] {:sizeof(TPMS_CONTEXT_DATA)}", where Table "Definition of

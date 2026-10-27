@@ -12,8 +12,8 @@ use tpm2::commands::responses;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
-    PublicParmsAndId, Tpm2bSensitive, TpmaObject, TpmiAlgHash, TpmtKeyedHashScheme, TpmtPublic,
-    TpmtSensitive, TpmuSensitiveComposite,
+    PublicParmsAndId, Tpm2bSensitive, TpmaObject, TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive,
+    TpmuSensitiveComposite,
 };
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -106,10 +106,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 3. Name validation & computation
         if let Some(alg) = public_struct.name_alg
-            && !matches!(
-                alg,
-                TpmiAlgHash::Sha1 | TpmiAlgHash::Sha256 | TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512
-            )
+            && !crate::handler::capability::is_implemented_algorithm(tpm2::Alg::from(alg))
         {
             return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
@@ -273,7 +270,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             (PublicParmsAndId::Ecc(ecc_parms, _), TpmuSensitiveComposite::Ecc(d)) => {
                 let param_size = match ecc_parms.curve_id {
-                    tpm2::TpmEccCurve::NistP192 => 24,
                     tpm2::TpmEccCurve::NistP224 => 28,
                     tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
                     tpm2::TpmEccCurve::NistP384 => 48,
@@ -377,7 +373,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             PublicParmsAndId::Ecc(ecc_parms, point) => {
                 let curve = ecc_parms.curve_id;
                 let param_size = match curve {
-                    tpm2::TpmEccCurve::NistP192 => 24,
                     tpm2::TpmEccCurve::NistP224 => 28,
                     tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
                     tpm2::TpmEccCurve::NistP384 => 48,
@@ -582,8 +577,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let curve = ecc_parms.curve_id;
                 if !matches!(
                     curve,
-                    tpm2::TpmEccCurve::NistP192
-                        | tpm2::TpmEccCurve::NistP224
+                    tpm2::TpmEccCurve::NistP224
                         | tpm2::TpmEccCurve::NistP256
                         | tpm2::TpmEccCurve::BNP256
                         | tpm2::TpmEccCurve::NistP384
@@ -654,7 +648,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         match &public_struct.parms_and_id {
             PublicParmsAndId::Ecc(ecc_parms, point) => {
                 let key_size = match ecc_parms.curve_id {
-                    tpm2::TpmEccCurve::NistP192 => 24,
                     tpm2::TpmEccCurve::NistP224 => 28,
                     tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
                     tpm2::TpmEccCurve::NistP384 => 48,
@@ -680,7 +673,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         {
             let curve = ecc_parms.curve_id;
             let param_size = match curve {
-                tpm2::TpmEccCurve::NistP192 => 24,
                 tpm2::TpmEccCurve::NistP224 => 28,
                 tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
                 tpm2::TpmEccCurve::NistP384 => 48,
@@ -709,9 +701,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 /// Returns the order `n` (big-endian) of the supported ECC curves.
 fn ecc_curve_order(curve: tpm2::TpmEccCurve) -> Option<&'static [u8]> {
     match curve {
-        tpm2::TpmEccCurve::NistP192 => {
-            Some(&hex!("FFFFFFFFFFFFFFFFFFFFFFFF99DEF836146BC9B1B4D22831"))
-        }
         tpm2::TpmEccCurve::NistP224 => Some(&hex!(
             "FFFFFFFFFFFFFFFFFFFFFFFFFFFF16A2E0B8F03E13DD29455C5C2A3D"
         )),

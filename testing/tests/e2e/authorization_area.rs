@@ -333,8 +333,8 @@ fn invalid_first_handle_reported_before_missing_second_handle() {
     assert_eq!(rc_of(&transact(&mut sim, &cmd)), 0x29A);
 }
 
-/// A command larger than the TPM's `MAX_COMMAND_SIZE` (`4096 - 0x80` octets, the value reported
-/// as `TPM_PT_MAX_COMMAND_SIZE`) is `TPM_RC_COMMAND_SIZE`, before its handles or sessions are
+/// A command larger than the TPM's `MAX_COMMAND_SIZE` (`4096 - 0x80` octets by default, the value
+/// reported as `TPM_PT_MAX_COMMAND_SIZE`) is `TPM_RC_COMMAND_SIZE`, before its handles or sessions are
 /// examined. TPM 2.0 Part 2, `TPM_PT_MAX_COMMAND_SIZE`: "the maximum value for *commandSize* in a
 /// command"; Part 3, "Command Header Validation": "2. The TPM shall successfully unmarshal a
 /// UINT32 as the *commandSize*. [...] (`TPM_RC_COMMAND_SIZE`)." The specification does not name
@@ -344,7 +344,8 @@ fn invalid_first_handle_reported_before_missing_second_handle() {
 #[test]
 fn command_larger_than_max_command_size_rejected() {
     let mut sim = new_sim();
-    for (len, expected) in [(4096 - 0x80 + 1, 0x142), (4096, 0x142)] {
+    let max = tpm2_impl::MAX_COMMAND_SIZE;
+    for (len, expected) in [(max + 1, 0x142), (max + 0x80, 0x142)] {
         // `TPM2_NV_UndefineSpaceSpecial` with an invalid handle and padding.
         let mut cmd = vec![0x80, 0x02, 0, 0, 0, 0, 0, 0, 0x01, 0x1F, 0, 0, 0, 0];
         cmd.resize(len, 0);

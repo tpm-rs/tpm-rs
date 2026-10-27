@@ -79,12 +79,12 @@ mod engine;
 mod req_resp;
 mod rng;
 pub use engine::{
-    ActiveSequence, DRBG_MAGIC, DrbgState, GlobalState, MAX_ACTIVE_SEQUENCES, MAX_LOADED_OBJECTS,
-    MAX_LOADED_SESSIONS, MAX_SEQUENCE_BUFFER, ResponseBufferTooSmall, SequenceType, TpmEngine,
-    command_handles_count, command_returns_handle, get_command_attribute, handle_requires_auth,
+    ActiveSequence, DRBG_MAGIC, DrbgState, GlobalState, MAX_ACTIVE_SEQUENCES, MAX_COMMAND_SIZE,
+    MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS, MAX_RESPONSE_SIZE, MAX_SEQUENCE_BUFFER,
+    ResponseBufferTooSmall, SequenceType, TpmEngine, command_handles_count, command_returns_handle,
+    get_command_attribute, handle_requires_auth,
 };
 pub use error::InternalError;
-pub use handler::capability::{TPM_PROFILE, TPM_PROFILE_NO_SHA512};
 pub use hash_state::StreamingHashState;
 pub use platform_connection::SimulatorPlatformSignal;
 #[cfg(feature = "std")]
@@ -92,6 +92,11 @@ pub use platform_connection::{NO_STREAM, PlatformConnection};
 pub use storage::translator::{Ibmswtpm2StateDto, TpmStateTranslator};
 
 pub use tpm2::platform::TpmPlatform;
+
+/// Whether `TPM2_ECC_Parameters` reports a recommended KDF for the NIST curves
+/// (`KDF1_SP800_56A` with the hash of the curve's strength); without (the
+/// `ecc-parameters-null-kdf` feature) it reports `TPM_ALG_NULL` for every curve.
+pub const ECC_PARAMETERS_REPORT_KDF: bool = !cfg!(feature = "ecc-parameters-null-kdf");
 
 pub mod pcr {
     pub use tpm2::platform::PcrState;

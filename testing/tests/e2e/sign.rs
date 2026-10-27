@@ -711,10 +711,14 @@ fn sign_rejects_unsupported_sm2_scheme() {
     let sign_cmd = Sign {
         key_handle: load_rsp.object_handle,
         digest: Tpm2bDigest::from_bytes(&[0x01; 32]).unwrap(),
-        in_scheme: Some(TpmtSigScheme::Sm2(TpmiAlgHash::Sha256)),
+        in_scheme: Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
         validation: TpmtTkHashcheck::default(),
     };
-    let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, 1, &[]);
+    // inScheme = TPM_ALG_SM2 (not a `TpmtSigScheme` of this TPM), after the digest.
+    let res =
+        crate::_common::execute_with_corrupted_bytes_status(&mut sim, &sign_cmd, 1, &[], |p| {
+            crate::_common::put_u16(p, crate::_common::tpm2b_end(p, 0), tpm2::Alg::SM2.id());
+        });
     // Sign.c: TPM_RCS_SCHEME + RC_Sign_inScheme (SM2 is not implemented).
     assert_eq!(
         res.err(),

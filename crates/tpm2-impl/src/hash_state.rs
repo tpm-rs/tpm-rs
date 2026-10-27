@@ -151,7 +151,8 @@ impl StreamingHashState {
                 0xdb0c2e0d64f98fa7,
                 0x47b5481dbefa4fa4,
             ],
-            TpmiAlgHash::Sha512 => [
+            #[allow(unreachable_patterns)]
+            h if crate::handler::capability::is_sha512(h) => [
                 0x6a09e667f3bcc908,
                 0xbb67ae8584caa73b,
                 0x3c6ef372fe94f82b,
@@ -161,6 +162,7 @@ impl StreamingHashState {
                 0x1f83d9abfb41bd6b,
                 0x5be0cd19137e2179,
             ],
+            #[allow(unreachable_patterns)]
             _ => [0; 8],
         };
         Self {
@@ -174,21 +176,12 @@ impl StreamingHashState {
 
     /// Returns the block size in bytes for the algorithm (`64` for SHA-1/256, `128` for SHA-384/512).
     pub const fn block_size(&self) -> usize {
-        match self.alg {
-            TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512 => 128,
-            _ => 64,
-        }
+        self.alg.block_size() as usize
     }
 
     /// Returns the digest size in bytes for the algorithm.
     pub const fn digest_size(&self) -> usize {
-        match self.alg {
-            TpmiAlgHash::Sha1 => 20,
-            TpmiAlgHash::Sha256 => 32,
-            TpmiAlgHash::Sha384 => 48,
-            TpmiAlgHash::Sha512 => 64,
-            _ => 0,
-        }
+        self.alg.digest_size()
     }
 
     /// Updates the streaming hash state with a slice of input bytes.
@@ -272,11 +265,13 @@ impl StreamingHashState {
                     out[i * 8..(i + 1) * 8].copy_from_slice(&state.h[i].to_be_bytes());
                 }
             }
-            TpmiAlgHash::Sha512 => {
+            #[allow(unreachable_patterns)]
+            h if crate::handler::capability::is_sha512(h) => {
                 for i in 0..8 {
                     out[i * 8..(i + 1) * 8].copy_from_slice(&state.h[i].to_be_bytes());
                 }
             }
+            #[allow(unreachable_patterns)]
             _ => {}
         }
         (out, digest_len)
@@ -340,7 +335,10 @@ impl StreamingHashState {
         match self.alg {
             TpmiAlgHash::Sha1 => self.compress_sha1(block),
             TpmiAlgHash::Sha256 => self.compress_sha256(block),
-            TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512 => self.compress_sha512(block),
+            TpmiAlgHash::Sha384 => self.compress_sha512(block),
+            #[allow(unreachable_patterns)]
+            h if crate::handler::capability::is_sha512(h) => self.compress_sha512(block),
+            #[allow(unreachable_patterns)]
             _ => {}
         }
     }

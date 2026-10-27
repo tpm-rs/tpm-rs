@@ -13,22 +13,6 @@ fn test_unsupported_algorithm_id() {
     // hmac sm3_256 should fail
     let res_hmac = tpm2::crypto::Hmac::sm3_256(&provider, &[0u8; 16]);
     assert!(matches!(res_hmac, Err(CryptoError::Unsupported)));
-
-    // direct hash should fail
-    let mut out = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
-    let res_hash_direct =
-        tpm2::crypto::hash(&provider, tpm2::TpmiAlgHash::Sm3_256, &[1, 2, 3], &mut out);
-    assert!(matches!(res_hash_direct, Err(CryptoError::Unsupported)));
-
-    // direct hmac should fail
-    let res_hmac_direct = tpm2::crypto::hmac(
-        &provider,
-        tpm2::TpmiAlgHash::Sm3_256,
-        &[0u8; 16],
-        &[1, 2, 3],
-        &mut out,
-    );
-    assert!(matches!(res_hmac_direct, Err(CryptoError::Unsupported)));
 }
 
 #[test]

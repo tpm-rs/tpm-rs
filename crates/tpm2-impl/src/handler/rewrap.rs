@@ -35,7 +35,6 @@ fn oaep_label(label: &[u8], buf: &mut [u8; 32]) -> usize {
 /// Returns the coordinate size in bytes of an ECC curve, or `None` if unsupported.
 fn ecc_param_size(curve: TpmEccCurve) -> Option<usize> {
     match curve {
-        TpmEccCurve::NistP192 => Some(24),
         TpmEccCurve::NistP224 => Some(28),
         TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => Some(32),
         TpmEccCurve::NistP384 => Some(48),
@@ -218,7 +217,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // TPM 2.0 Part 2, Table "Definition of TPM2B_PRIVATE Structure":
             // "buffer[size] {:sizeof(_PRIVATE)} | BYTE | an encrypted private area".
             let hash_size = 2 + new_name_alg.digest_size();
-            if private_blob_len + hash_size > Tpm2bPrivate::capacity() {
+            if private_blob_len + hash_size > Tpm2bPrivate::CAP {
                 return Err(TpmRc::VALUE.with(Position::parameter(1)));
             }
 

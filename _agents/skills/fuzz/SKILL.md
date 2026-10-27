@@ -69,7 +69,7 @@ Read these first; this skill does not repeat them:
      are gitignored, and the user does not want the corpus committed.
    - Tests in `testing` are strictly black-box: use the `Tpm` command interface
      only.
-   - Follow the `GEMINI.md` naming and doc rules.
+   - Follow the `AGENTS.md` naming and doc rules.
 
 ## Scripts
 
@@ -89,9 +89,12 @@ root themselves):
 ### 0. Prerequisites
 
 ```sh
-# Reference binaries (process mode: to_test, trace2conv, rendering in triage.py)
-cargo build --release -p testing --features differential --bins
-export MSTPM20_BIN=$PWD/target/release/mstpm20 IBMSWTPM2_BIN=$PWD/target/release/ibmswtpm2
+# Reference binary of the target (process mode: to_test, trace2conv, rendering
+# in triage.py). A differential build compares tpm-rs with one C reference, its
+# `target-*` feature (mstpm20, mstpm20-v185 or ibmswtpm2); the fuzz crate
+# defaults to target-mstpm20 (`--no-default-features --features target-<name>`).
+cargo build --release -p testing --features target-mstpm20 --bin reference
+export REFERENCE_BIN=$PWD/target/release/reference
 ```
 
 The seed corpus `testing/fuzz/corpus/diff_conversation/` is generated
@@ -206,9 +209,10 @@ series, the file must have no active entries.
     use `test_`, `findings` or `probe` names.
   - Write a `///` doc that quotes the spec.
   - Replace the `TODO(triage)` with the specified response code.
-- Run the test against both `mstpm20` versions:
-  `cargo test --release -p testing --features differential <name>`, then the
-  same with `MSTPM20_VERSION=public`.
+- Run the test against every target:
+  `cargo test --release -p testing --features target-<target> <name>` for
+  `mstpm20`, `mstpm20-v185` and `ibmswtpm2` (`make test-differential` runs
+  the whole suite against all three).
 - Update any `tpm2-impl` unit test that encoded the old behavior.
 - Delete temporary probe tests and examples before you hand off. In the first
   run, they broke `fmt`, `clippy` and the differential suite.
@@ -225,9 +229,12 @@ Recurring `tpm-rs` bug classes (details and spec quotes are in `report.md`
   `TestParms`, `PolicyPCR`, `Create` `inPublic` and capabilities). Replace
   them with the plain profile-aware unmarshal, where the first bad field in
   wire order wins.
-- **Profile limits:** `tpm2::profile` defines the algorithms, curves, RSA
-  bits, TPM2B capacities (`TPM2B_TEMPLATE` 350, `TPM2B_ECC_PARAMETER` 66) and
-  `HASH_COUNT` lists. `MAX_COMMAND_SIZE` follows the profile.
+- **Profile limits:** the default features of `tpm2` define the algorithms,
+  curves, RSA bits, TPM2B capacities (`TPM2B_TEMPLATE` 350,
+  `TPM2B_ECC_PARAMETER` 66) and `HASH_COUNT` lists; profile values that differ
+  between the references (`MAX_COMMAND_SIZE`, `NV_MEMORY_SIZE`, ...) are
+  features of `tpm2`/`tpm2-impl` that each `target-*` feature of `testing`
+  enables (`testing/Cargo.toml`, `differential.md` M.1).
 - **Object, load and import check order:**
   - `Import` recovers the seed before it validates `objectPublic`.
   - A zero-padded ECC private key is valid.
@@ -269,11 +276,12 @@ Recurring `tpm-rs` bug classes (details and spec quotes are in `report.md`
   narrow: an over-broad `ibmswtpm2` patch once also accepted handles where
   `TPMI_RH_BASE_HIERARCHY` forbids them.
 - Verify the patch:
-  - `cargo build --release -p testing --features differential` rebuilds v185
-    and `ibmswtpm2` when the patches change.
-  - `MSTPM20_VERSION=public cargo test --release -p testing --features differential`
-    builds and tests the public `mstpm20`. Afterwards, rebuild v185 by
-    running a differential test without the variable.
+  - `cargo build --release -p testing --features target-<target>` rebuilds
+    the target's reference when its patches change; run the differential
+    tests of every target whose patches changed (`make test-<target>`).
+  - Prefer a `tpm2`/`tpm2-impl` profile feature enabled by the target over a
+    `profile-*` patch when a reference's profile value differs from
+    `tpm-rs`'s default.
   - Do not use `git init`/`git apply` to check a patch, even in `/tmp`; use
     `patch -p1 --dry-run`.
 - Add a `differential.md` item: Part II for `mstpm20`, Part VI for
@@ -322,8 +330,7 @@ Recurring `tpm-rs` bug classes (details and spec quotes are in `report.md`
    Check that every link and line anchor resolves, and do not mention
    swarm-internal identifiers.
 6. Keep the docs in sync with behavior changes: `differential.md`,
-   `testing/fuzz/README.md`, and the `GEMINI.md` architecture notes
-   (`GEMINI.md` is gitignored; do not force-add it).
+   `testing/fuzz/README.md`, and the `AGENTS.md` architecture notes.
 
 ## Working as a swarm
 

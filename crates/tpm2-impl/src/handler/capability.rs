@@ -13,7 +13,7 @@ use tpm2::{
     TpmlTaggedTpmProperty, TpmsAlgProperty, TpmsCapabilityData, TpmsTaggedProperty,
 };
 
-/// ECC curves implemented by this TPM (`TPM_CAP_ECC_CURVES`, the TPM's unmarshal profile).
+/// ECC curves implemented by this TPM (`TPM_CAP_ECC_CURVES`; the `ecc_curve_*` features of `tpm2`).
 pub(crate) const IMPLEMENTED_CURVES: [TpmEccCurve; 5] = [
     TpmEccCurve::NistP224,
     TpmEccCurve::NistP256,
@@ -22,24 +22,40 @@ pub(crate) const IMPLEMENTED_CURVES: [TpmEccCurve; 5] = [
     TpmEccCurve::BNP256,
 ];
 
-/// The algorithm IDs of [`IMPLEMENTED_ALGORITHMS`].
-const IMPLEMENTED_ALGORITHM_IDS: [Alg; IMPLEMENTED_ALGORITHMS.len()] = {
-    let mut ids = [Alg::NULL; IMPLEMENTED_ALGORITHMS.len()];
-    let mut i = 0;
-    while i < ids.len() {
-        ids[i] = IMPLEMENTED_ALGORITHMS[i].0;
-        i += 1;
+/// Whether the `tpm2` features of this build enable `alg`: SHA-512 is optional (the `sha512`
+/// feature of `tpm2`; without it the TPM is like a C reference built without `ALG_SHA512`),
+/// every other algorithm of [`IMPLEMENTED_ALGORITHMS`] is a default feature.
+pub(crate) fn is_enabled_by_features(alg: Alg) -> bool {
+    match alg {
+        Alg::SHA1 | Alg::SHA256 | Alg::SHA384 | Alg::SHA512 => {
+            tpm2::TpmiAlgHash::try_from(alg).is_ok()
+        }
+        _ => true,
     }
-    ids
-};
+}
 
-/// Whether `alg` is implemented by this TPM: listed in [`IMPLEMENTED_ALGORITHMS`] and implemented
-/// by the installed profile (SHA-512 only with [`tpm2::profile::Profile::sha512`]).
+/// Whether `alg` is implemented by this TPM: listed in [`IMPLEMENTED_ALGORITHMS`] and enabled by
+/// the `tpm2` features of the build ([`is_enabled_by_features`]).
 pub(crate) fn is_implemented_algorithm(alg: Alg) -> bool {
     IMPLEMENTED_ALGORITHMS
         .iter()
         .any(|&(implemented, _)| implemented == alg)
-        && tpm2::profile::allows_algorithm(alg)
+        && is_enabled_by_features(alg)
+}
+
+/// Whether this TPM implements SHA-512 (the `sha512` feature of `tpm2`): the largest digest of
+/// `TpmiAlgHash` is then 64 octets.
+const SHA512: bool = tpm2::TpmiAlgHash::MAX_DIGEST_BYTES == 64;
+
+/// Whether `hash` is SHA-512, compared by its algorithm ID: the `TpmiAlgHash::Sha512` variant exists
+/// only with the `sha512` feature of `tpm2`.
+pub(crate) fn is_sha512(hash: tpm2::TpmiAlgHash) -> bool {
+    Alg::from(hash) == Alg::SHA512
+}
+
+/// SHA-512, if this TPM implements it (the `sha512` feature of `tpm2`).
+pub(crate) fn sha512() -> Option<tpm2::TpmiAlgHash> {
+    tpm2::TpmiAlgHash::try_from(Alg::SHA512).ok()
 }
 
 /// The largest RSA key of this TPM's profile, in bits (`RSA_1024` and `RSA_2048`).
@@ -51,7 +67,7 @@ const MAX_RSA_KEY_BYTES: usize = MAX_RSA_KEY_BITS / 8;
 /// This TPM (like the TCG reference profile) uses the larger value.
 const RSA_PRIVATE_SIZE: usize = (MAX_RSA_KEY_BYTES * 5) / 2;
 /// The largest digest of the implemented hashes, in bytes: SHA-512, or SHA-384 without SHA-512
-/// (`sha512`, see [`tpm2::profile::Profile::sha512`]).
+/// (`sha512`, the `sha512` feature of `tpm2`).
 const fn max_digest_size(sha512: bool) -> usize {
     if sha512 { 64 } else { 48 }
 }
@@ -132,54 +148,8 @@ const SIZEOF_TPMU_PUBLIC_ID: usize = 2 + MAX_RSA_KEY_BYTES;
 const fn sizeof_tpmt_public(sha512: bool) -> usize {
     2 + 2 + 4 + sizeof_tpm2b_digest(sha512) + SIZEOF_TPMU_PUBLIC_PARMS + SIZEOF_TPMU_PUBLIC_ID
 }
-/// The largest `sizeof(TPMT_PUBLIC)` of the profiles of [`profile`] (the one with SHA-512).
-pub(crate) const SIZEOF_TPMT_PUBLIC: usize = sizeof_tpmt_public(true);
-
-/// The unmarshal profile of this TPM ([`tpm2::profile`], installed by `TpmEngine::new`): its
-/// implemented algorithms and curves, RSA keys of 1024 and 2048 bits, and the buffer capacities
-/// that follow from them (TPM 2.0 Part 2):
-///
-/// * `TPM2B_PUBLIC_KEY_RSA`: "buffer\[size\] {: MAX_RSA_KEY_BYTES}";
-/// * `TPM2B_PRIVATE_KEY_RSA`: "buffer\[size\]{:RSA_PRIVATE_SIZE }";
-/// * `TPM2B_ENCRYPTED_SECRET`: "secret\[size\]{:sizeof(TPMU_ENCRYPTED_SECRET)}";
-/// * `TPM2B_PRIVATE`: "buffer\[size\] {:sizeof(_PRIVATE)}";
-/// * `TPM2B_TEMPLATE`: "buffer\[size\]{:sizeof(TPMT_PUBLIC)}";
-/// * `TPM2B_ECC_PARAMETER`: "buffer\[size\] {:MAX_ECC_KEY_BYTES}".
-///
-/// The values (256, 640, 256, 910, 350 and 66 bytes) equal those of the C references with the
-/// same profile (with `bug-fix-template-size.patch`), which reject larger buffers with
-/// `TPM_RC_SIZE` (checked by the differential tests). The lists bounded by `HASH_COUNT` follow
-/// from the implemented hash algorithms.
-pub static TPM_PROFILE: tpm2::profile::Profile = profile(true);
-
-/// [`TPM_PROFILE`] without SHA-512 ([`tpm2::profile::Profile::sha512`]): the largest digest is
-/// SHA-384's, so the `TPM2B_DIGEST`-dependent buffers shrink accordingly (`TPM2B_PRIVATE`: 846,
-/// `TPM2B_TEMPLATE`: 334 bytes), like those of a C reference built without `ALG_SHA512`.
-pub static TPM_PROFILE_NO_SHA512: tpm2::profile::Profile = profile(false);
-
-/// The profile of this TPM with (`sha512`) or without SHA-512.
-const fn profile(sha512: bool) -> tpm2::profile::Profile {
-    tpm2::profile::Profile {
-        algorithms: &IMPLEMENTED_ALGORITHM_IDS,
-        curves: &IMPLEMENTED_CURVES,
-        rsa_key_bits: &[1024, 2048],
-        // `AES_128` and `AES_256` (no AES-192; SM4 and Camellia are not implemented).
-        sym_key_bits: &[128, 256],
-        buffer_limits: tpm2::profile::BufferLimits {
-            public_key_rsa: MAX_RSA_KEY_BYTES,
-            private_key_rsa: RSA_PRIVATE_SIZE,
-            encrypted_secret: sizeof_tpmu_encrypted_secret(sha512),
-            private: sizeof_private(sha512),
-            template: sizeof_tpmt_public(sha512),
-            ecc_parameter: MAX_ECC_KEY_BYTES,
-        },
-        // The SHA-256 and SHA-384 banks, like the TCG reference platform (`DefaultActivePcrBanks`
-        // in `PlatformPcr.c`, also in `ibmswtpm2`); SHA-1 and SHA-512 can be allocated with
-        // `TPM2_PCR_Allocate`.
-        default_pcr_banks: tpm2::profile::DEFAULT_PCR_BANKS,
-        sha512,
-    }
-}
+/// `sizeof(TPMT_PUBLIC)` of this TPM (350 octets, or 334 without SHA-512).
+pub(crate) const SIZEOF_TPMT_PUBLIC: usize = sizeof_tpmt_public(SHA512);
 
 const _: () = assert!(
     sizeof_private(true) == 910
@@ -188,6 +158,16 @@ const _: () = assert!(
         && sizeof_private(false) == 846
         && sizeof_tpmu_encrypted_secret(false) == 256
         && sizeof_tpmt_public(false) == 334
+);
+
+// The capacities of the profile-dependent buffers of `tpm2`, which follow from its features, are
+// those of this TPM's profile (TPM 2.0 Part 2): `TPM2B_PRIVATE` "buffer\[size\]
+// {:sizeof(_PRIVATE)}", `TPM2B_ENCRYPTED_SECRET` "secret\[size\]{:sizeof(TPMU_ENCRYPTED_SECRET)}"
+// and `TPM2B_TEMPLATE` "buffer\[size\]{:sizeof(TPMT_PUBLIC)}".
+const _: () = assert!(
+    tpm2::Tpm2bPrivate::CAP == sizeof_private(SHA512)
+        && tpm2::Tpm2bEncryptedSecret::CAP == sizeof_tpmu_encrypted_secret(SHA512)
+        && tpm2::Tpm2bTemplate::CAP == SIZEOF_TPMT_PUBLIC
 );
 
 /// Algorithms implemented by this TPM together with their attributes (`s_algorithms` in the C
@@ -442,7 +422,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     (TpmPt::PCR_SELECT_MIN, 3),
                     (TpmPt::CONTEXT_GAP_MAX, 0xFFFF),
                     (TpmPt::NV_COUNTERS_MAX, 8),
-                    (TpmPt::NV_INDEX_MAX, 2048),
+                    (
+                        TpmPt::NV_INDEX_MAX,
+                        crate::handler::nv_storage::MAX_NV_INDEX_SIZE as u32,
+                    ),
                     (TpmPt::MEMORY, tpm2::TpmaMemory::SHARED_NV.bits()),
                     (TpmPt::CLOCK_UPDATE, 8192),
                     (
@@ -456,7 +439,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         TpmPt::MAX_COMMAND_SIZE,
                         crate::engine::MAX_COMMAND_SIZE as u32,
                     ),
-                    (TpmPt::MAX_RESPONSE_SIZE, 4096),
+                    (
+                        TpmPt::MAX_RESPONSE_SIZE,
+                        crate::engine::MAX_RESPONSE_SIZE as u32,
+                    ),
                     (
                         TpmPt::MAX_DIGEST,
                         crate::handler::context_integrity_hash_alg().digest_size() as u32,
@@ -490,7 +476,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     (TpmPt::VENDOR_COMMANDS, 0),
                     (TpmPt::NV_BUFFER_MAX, 1024),
                     (TpmPt::MODES, tpm2::TpmaModes::empty().bits()),
-                    (TpmPt::MAX_CAP_BUFFER, 1024),
+                    (TpmPt::MAX_CAP_BUFFER, tpm2::limits::MAX_CAP_BUFFER as u32),
                     (TpmPt::PERMANENT, permanent_attr.bits()),
                     (TpmPt::STARTUP_CLEAR, startup_clear_attr.bits()),
                     (TpmPt::HR_NV_INDEX, nv_index_count),
@@ -771,10 +757,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             TpmCap::Algs => {
                 let mut algs = IMPLEMENTED_ALGORITHMS;
                 algs.sort_unstable_by_key(|&(alg, _)| alg.id() as u32);
-                // Without the algorithms the engine's configuration excludes.
-                let algs = algs
-                    .iter()
-                    .filter(|&&(alg, _)| tpm2::profile::allows_algorithm(alg));
+                // Without the algorithms the `tpm2` features of the build exclude (SHA-512).
+                let algs = algs.iter().filter(|&&(alg, _)| is_enabled_by_features(alg));
                 let mut alg_properties = [TpmsAlgProperty::default(); tpm2::TPM2_MAX_CAP_ALGS];
                 let mut count = 0;
                 // TPM 2.0 Part 3, TPM2_GetCapability, capability table: "TPM_CAP_ALGS |
@@ -1044,13 +1028,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         tpm2::TpmtEccScheme::Ecdaa(scheme) => {
                             validate_hash_alg(Some(scheme.hash_alg))?;
                         }
-                        // `TPMI_ALG_ECC_SCHEME` only includes implemented schemes; SM2, EC-Schnorr,
-                        // ECMQV and EdDSA are not implemented by this TPM (not in TPM_CAP_ALGS).
-                        tpm2::TpmtEccScheme::Sm2(_)
-                        | tpm2::TpmtEccScheme::Ecschnorr(_)
-                        | tpm2::TpmtEccScheme::Ecmqv(_)
-                        | tpm2::TpmtEccScheme::Eddsa
-                        | tpm2::TpmtEccScheme::HashEddsa => {
+                        // `TPMI_ALG_ECC_SCHEME` only includes implemented schemes; the other
+                        // schemes (e.g. EdDSA) are not implemented by this TPM (not in
+                        // TPM_CAP_ALGS).
+                        #[allow(unreachable_patterns)]
+                        _ => {
                             return Err(TpmRc::SCHEME.with(Position::parameter(1)));
                         }
                     }
@@ -1129,7 +1111,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // An unimplemented curve fails while unmarshaling `TPMI_ECC_CURVE` (`TPM_RC_CURVE + RC_P1`),
         // i.e. before the dispatcher checks for trailing parameter bytes (`TPM_RC_SIZE`).
         let curve_id = cmd.curve_id;
-        let parameters = match curve_id {
+        #[allow(unused_mut)]
+        let mut parameters = match curve_id {
             tpm2::TpmEccCurve::NistP224 => {
                 let curve_p = Tpm2bEccParameter::from_bytes(&[
                     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -1359,8 +1342,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 tpm2::TpmsAlgorithmDetailEcc {
                     curve_id,
                     key_size: 521,
+                    // Without SHA-512, the strongest implemented hash.
                     kdf: Some(tpm2::TpmtKdfScheme::Kdf1Sp800_56a(
-                        tpm2::TpmiAlgHash::Sha512,
+                        crate::handler::context_integrity_hash_alg(),
                     )),
                     sign: None,
                     curve_p,
@@ -1428,6 +1412,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 return Err(TpmRc::CURVE.with(Position::parameter(1)));
             }
         };
+        // The `kdf` of `TPMS_ALGORITHM_DETAIL_ECC` is an informative recommendation that may be
+        // `TPM_ALG_NULL` (TPM 2.0 Part 2; deprecated in version 185, whose reference reports
+        // `TPM_ALG_NULL` for every curve).
+        #[cfg(feature = "ecc-parameters-null-kdf")]
+        {
+            parameters.kdf = None;
+        }
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());
         }
@@ -1441,10 +1432,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
 fn validate_hash_alg(hash_alg: Option<tpm2::TpmiAlgHash>) -> Result<(), TpmRc> {
     if let Some(alg) = hash_alg
-        && alg != tpm2::TpmiAlgHash::Sha1
-        && alg != tpm2::TpmiAlgHash::Sha256
-        && alg != tpm2::TpmiAlgHash::Sha384
-        && alg != tpm2::TpmiAlgHash::Sha512
+        && !is_implemented_algorithm(Alg::from(alg))
     {
         return Err(TpmRc::HASH.with(Position::parameter(1)));
     }
@@ -1468,10 +1456,12 @@ fn validate_symmetric(symmetric: Option<tpm2::TpmtSymDefObject>) -> Result<(), T
         None => {}
         // AES is implemented but `TPMI_AES_KEY_BITS` only admits the implemented key sizes
         // (128 and 256); other values are `TPM_RC_VALUE` (the default interface-type error).
+        #[allow(unreachable_patterns)]
         Some(sym) if sym.algorithm() == tpm2::Alg::AES => {
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
         }
         // Other block ciphers are not in `TPMI_ALG_SYM_OBJECT` (`#TPM_RC_SYMMETRIC`).
+        #[allow(unreachable_patterns)]
         _ => {
             return Err(TpmRc::SYMMETRIC.with(Position::parameter(1)));
         }

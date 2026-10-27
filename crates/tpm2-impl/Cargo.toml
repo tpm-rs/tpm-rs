@@ -28,7 +28,10 @@ tpm2-crypto-crux = { workspace = true }
 tpm2-crypto-bssl = { workspace = true }
 
 [features]
-default = ["dev_crypto_bssl"]
+default = ["dev_crypto_bssl", "sha512"]
+# SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
+# reference built without `ALG_SHA512`) is built with every crate without it.
+sha512 = ["tpm2/sha512"]
 dev_crypto_rust = []
 dev_crypto_crux = []
 dev_crypto_bssl = []
@@ -42,6 +45,29 @@ std = ["dep:anyhow"]
 # C compiler, binutils, libclang and OpenSSL's `libcrypto.a`); the crate then uses
 # `unsafe` (confined to `reference_rng::ffi`) and libc. For differential testing.
 reference-rng = ["dep:libc", "dep:bindgen"]
+
+# Profile settings that differ between TPM implementations. All are disabled by
+# default (the TCG reference profile); they are enabled e.g. to match a C
+# reference TPM in differential testing (see `testing`'s `target-*` features).
+# With several values of one setting, the largest applies.
+#
+# `MAX_COMMAND_SIZE` and `MAX_RESPONSE_SIZE` are 8192 (default: 4096 - 0x80 and
+# 4096).
+max-command-size-8192 = []
+# `MAX_CONTEXT_SIZE` (the capacity of `TPM2B_CONTEXT_SENSITIVE`, which bounds the
+# `contextBlob` `TPM2_ContextLoad` accepts) is 2168, 2680 or 4344 (default: 2264).
+max-context-size-2168 = []
+max-context-size-2680 = []
+max-context-size-4344 = []
+# `MIN_EVICT_OBJECTS` is 7 or 9 (default: 2).
+min-evict-objects-7 = []
+min-evict-objects-9 = []
+# `NV_MEMORY_SIZE` (the NV space accounting) is 32768 or 131072 (default: 16384).
+nv-memory-size-32k = []
+nv-memory-size-128k = []
+# `TPM2_ECC_Parameters` reports `TPM_ALG_NULL` as the recommended KDF of every
+# curve (default: KDF1_SP800_56A with the hash of the curve's strength).
+ecc-parameters-null-kdf = []
 
 
 

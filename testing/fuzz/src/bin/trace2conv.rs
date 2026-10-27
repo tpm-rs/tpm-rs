@@ -31,8 +31,7 @@
 //! driver on `Tpm::with_seed(FIXED_SEED)` (the traces must be recorded with
 //! `TPM_REFERENCE_SEED=4242:1000000`) and must reproduce the recorded
 //! commands and responses; conversations are cut before their first
-//! mismatching round. This needs the reference binaries (`MSTPM20_BIN`,
-//! `IBMSWTPM2_BIN`), because the fuzz crate's `Tpm` is differential.
+//! mismatching round. This needs the reference binaries (`REFERENCE_BIN`), because the fuzz crate's `Tpm` is differential.
 //!
 //! With `--ecc-variants` (needs `--verify`), every conversation with an RSA
 //! key template (`TPM2_CreatePrimary`/`Create`/`CreateLoaded`) also yields

@@ -929,6 +929,7 @@ pub fn start_auth_session(
             TpmiAlgHash::Sha256 => 32,
             TpmiAlgHash::Sha384 => 48,
             TpmiAlgHash::Sha512 => 64,
+            #[allow(unreachable_patterns)]
             _ => 32,
         };
         let session_key_bits = (hash_size as u32) * 8;
@@ -2420,6 +2421,7 @@ impl PolicyCalculator {
             TpmiAlgHash::Sha256 => 32,
             TpmiAlgHash::Sha384 => 48,
             TpmiAlgHash::Sha512 => 64,
+            #[allow(unreachable_patterns)]
             _ => panic!("Unsupported auth hash"),
         };
         Self {
@@ -6713,6 +6715,7 @@ pub fn policy_or_expected(alg: TpmiAlgHash, digests: &[&[u8]]) -> Vec<u8> {
         TpmiAlgHash::Sha256 => 32,
         TpmiAlgHash::Sha384 => 48,
         TpmiAlgHash::Sha512 => 64,
+        #[allow(unreachable_patterns)]
         _ => panic!("Unsupported hash"),
     };
     let zero_digest = vec![0u8; digest_size];
@@ -6732,6 +6735,7 @@ pub fn policy_or_go(alg: TpmiAlgHash, digests: &[&[u8]]) -> Vec<u8> {
         TpmiAlgHash::Sha256 => 32,
         TpmiAlgHash::Sha384 => 48,
         TpmiAlgHash::Sha512 => 64,
+        #[allow(unreachable_patterns)]
         _ => panic!("Unsupported hash"),
     };
     let zero_digest = vec![0u8; digest_size];
@@ -7579,16 +7583,13 @@ pub fn gen_ecc_scheme(rng: &mut SimpleRng, make_valid: bool) -> Option<TpmtEccSc
         rng.choose(&[
             Some(TpmtEccScheme::Ecdsa(hash_alg)),
             Some(TpmtEccScheme::Ecdaa(TpmsSchemeEcdaa { hash_alg, count: 0 })),
-            Some(TpmtEccScheme::Sm2(hash_alg)),
-            Some(TpmtEccScheme::Ecschnorr(hash_alg)),
             None,
         ])
     } else {
         let hash_alg = gen_hash_alg(rng, false);
         rng.choose(&[
             Some(TpmtEccScheme::Ecdsa(hash_alg)),
-            Some(TpmtEccScheme::Sm2(hash_alg)),
-            Some(TpmtEccScheme::Ecschnorr(hash_alg)),
+            Some(TpmtEccScheme::Ecdh(hash_alg)),
         ])
     }
 }
@@ -7604,11 +7605,14 @@ pub fn gen_hash_alg(rng: &mut SimpleRng, make_valid: bool) -> TpmiAlgHash {
             TpmiAlgHash::Sha512,
         ])
     } else {
+        // The hash algorithms this TPM does not implement (SM3, SHA-3) are not `TpmiAlgHash`
+        // values (the `tpm2` features of the TPM), so invalid parameter sets are invalid
+        // elsewhere (e.g. a hash where `TPM_ALG_NULL` is required or a missing KDF).
         rng.choose(&[
-            TpmiAlgHash::Sm3_256,
-            TpmiAlgHash::Sha3_256,
-            TpmiAlgHash::Sha3_384,
-            TpmiAlgHash::Sha3_512,
+            TpmiAlgHash::Sha1,
+            TpmiAlgHash::Sha256,
+            TpmiAlgHash::Sha384,
+            TpmiAlgHash::Sha512,
         ])
     }
 }
@@ -7638,11 +7642,7 @@ pub fn gen_keyed_hash_scheme(rng: &mut SimpleRng, make_valid: bool) -> Option<Tp
         rng.choose(&[
             Some(TpmtKeyedHashScheme::Hmac(hash_alg)),
             Some(TpmtKeyedHashScheme::ExclusiveOr(TpmsSchemeXor {
-                hash_alg: TpmiAlgHash::Sm3_256,
-                kdf: Some(TpmiAlgKdf::Mgf1),
-            })),
-            Some(TpmtKeyedHashScheme::ExclusiveOr(TpmsSchemeXor {
-                hash_alg: TpmiAlgHash::Sha3_256,
+                hash_alg,
                 kdf: None,
             })),
         ])
@@ -7720,8 +7720,8 @@ pub fn gen_random_parms(rng: &mut SimpleRng) -> TpmtPublicParms {
             } else {
                 rng.choose(&[
                     TpmtSymDefObject {
-                        alg: AlgSym::Aes192,
-                        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                        alg: AlgSym::Aes256,
+                        mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Ofb)),
                     },
                     TpmtSymDefObject {
                         alg: AlgSym::Aes128,
@@ -7769,8 +7769,8 @@ pub fn gen_symmetric(rng: &mut SimpleRng, make_valid: bool) -> Option<TpmtSymDef
     } else {
         rng.choose(&[
             Some(TpmtSymDefObject {
-                alg: AlgSym::Aes192,
-                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                alg: AlgSym::Aes256,
+                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Ecb)),
             }),
             Some(TpmtSymDefObject {
                 alg: AlgSym::Aes128,
@@ -7781,8 +7781,8 @@ pub fn gen_symmetric(rng: &mut SimpleRng, make_valid: bool) -> Option<TpmtSymDef
                 mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Ctr)),
             }),
             Some(TpmtSymDefObject {
-                alg: AlgSym::Sm4_128,
-                mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
+                alg: AlgSym::Aes128,
+                mode: None,
             }),
             None,
         ])
@@ -8583,9 +8583,11 @@ pub fn oracle_validate_symmetric(symmetric: Option<TpmtSymDefObject>) -> Result<
         }
         None => {}
         // `TPMI_AES_KEY_BITS` only admits implemented key sizes (128, 256): TPM_RC_VALUE.
+        #[allow(unreachable_patterns)]
         Some(sym) if sym.algorithm() == tpm2::Alg::AES => {
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
         }
+        #[allow(unreachable_patterns)]
         _ => {
             return Err(TpmRc::SYMMETRIC.with(Position::parameter(1)));
         }
@@ -11686,6 +11688,7 @@ pub fn compute_hash(alg: TpmiAlgHash, data: &[&[u8]]) -> Vec<u8> {
             }
             hasher.finalize().to_vec()
         }
+        #[allow(unreachable_patterns)]
         _ => panic!("Unsupported hash"),
     }
 }
@@ -11755,12 +11758,19 @@ pub fn create_aes_key(sim: &mut Tpm, mode: TpmiAlgSymMode) -> Handle {
 
 /// Like [`create_aes_key`], but returns the `TPM2_CreatePrimary` response code on failure.
 pub fn try_create_aes_key(sim: &mut Tpm, mode: TpmiAlgSymMode) -> Result<Handle, u32> {
+    try_create_aes_key_with_mode(sim, Alg::from(mode))
+}
+
+/// Like [`try_create_aes_key`], but the mode is any algorithm ID, including modes this TPM does
+/// not implement (e.g. `TPM_ALG_CMAC`, which is not a [`TpmiAlgSymMode`] of this TPM): the
+/// template is marshaled with CFB and its mode is then replaced by `mode`.
+pub fn try_create_aes_key_with_mode(sim: &mut Tpm, mode: Alg) -> Result<Handle, u32> {
     let mut attributes = TpmaObject::USER_WITH_AUTH
         | TpmaObject::SIGN_ENCRYPT
         | TpmaObject::FIXED_TPM
         | TpmaObject::FIXED_PARENT
         | TpmaObject::SENSITIVE_DATA_ORIGIN;
-    if mode != TpmiAlgSymMode::Cmac {
+    if mode != Alg::CMAC {
         attributes |= TpmaObject::DECRYPT;
     }
     let cmd = CreatePrimary {
@@ -11776,7 +11786,7 @@ pub fn try_create_aes_key(sim: &mut Tpm, mode: TpmiAlgSymMode) -> Result<Handle,
             parms_and_id: PublicParmsAndId::Sym(
                 TpmtSymDefObject {
                     alg: AlgSym::Aes128,
-                    mode: Some(mode),
+                    mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
                 },
                 Tpm2bDigest::default(),
             ),
@@ -11784,8 +11794,44 @@ pub fn try_create_aes_key(sim: &mut Tpm, mode: TpmiAlgSymMode) -> Result<Handle,
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let handles = execute_with_password_sessions(sim, &cmd, 1, &[])?;
-    Ok(handles.object_handle)
+    let handles = execute_with_corrupted_bytes_status(sim, &cmd, 1, &[], |params| {
+        // inSensitive, then inPublic: size, type, nameAlg, objectAttributes, authPolicy and the
+        // TPMT_SYM_DEF_OBJECT (algorithm, keyBits, mode).
+        let auth_policy = tpm2b_public_name_alg(tpm2b_end(params, 0)) + 2 + 4;
+        put_u16(params, tpm2b_end(params, auth_policy) + 4, mode.id());
+    })?;
+    Ok(handles.as_ref()[0])
+}
+
+/// The offset just past the `TPM2B` (a `UINT16` size and its buffer) at `offset` in `buf`.
+pub fn tpm2b_end(buf: &[u8], offset: usize) -> usize {
+    offset + 2 + usize::from(u16::from_be_bytes([buf[offset], buf[offset + 1]]))
+}
+
+/// The offset of `nameAlg` in the `TPM2B_PUBLIC` at `offset` (after its size and `type`).
+pub fn tpm2b_public_name_alg(offset: usize) -> usize {
+    offset + 2 + 2
+}
+
+/// Inserts `extra` at offset `at` of the raw command `cmd` (e.g. into the buffer of a `TPM2B`, to
+/// exceed the capacity that the `tpm2` types of this TPM can represent), adds its length to the
+/// `UINT16` size fields at the offsets `sizes` (the enclosing `TPM2B`s) and updates the command
+/// size.
+pub fn grow_command(cmd: &mut Vec<u8>, sizes: &[usize], at: usize, extra: &[u8]) {
+    cmd.splice(at..at, extra.iter().copied());
+    for &offset in sizes {
+        let size = u16::from_be_bytes([cmd[offset], cmd[offset + 1]]) + extra.len() as u16;
+        put_u16(cmd, offset, size);
+    }
+    let len = cmd.len() as u32;
+    cmd[2..6].copy_from_slice(&len.to_be_bytes());
+}
+
+/// Replaces the big-endian `UINT16` at `offset` in `buf` by `value`. Used to send values that the
+/// `tpm2` types of this TPM cannot represent (algorithms, curves and key sizes whose `tpm2`
+/// features are disabled), which the TPM must reject while unmarshaling.
+pub fn put_u16(buf: &mut [u8], offset: usize, value: u16) {
+    buf[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
 
 /// Creates an ECDSA P-256 signing primary key in `hierarchy` (optionally `restricted`) and returns
@@ -13400,6 +13446,7 @@ pub fn run_hash_sequence(
         TpmiAlgHash::Sha256 => Sha256::digest(&data).to_vec(),
         TpmiAlgHash::Sha384 => Sha384::digest(&data).to_vec(),
         TpmiAlgHash::Sha512 => Sha512::digest(&data).to_vec(),
+        #[allow(unreachable_patterns)]
         _ => panic!("Unsupported hash algorithm for test"),
     };
 
@@ -15936,6 +15983,7 @@ pub fn encapsulate_secret(public: &[u8], label: &str, seed: u64) -> Option<(Vec<
                     rsa::Oaep::new_with_label::<Sha512, _>(label),
                     &secret,
                 ),
+                #[allow(unreachable_patterns)]
                 _ => return None,
             }
             .ok()?;

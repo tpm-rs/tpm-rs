@@ -51,12 +51,17 @@ pub struct PcrState {
     pub pcr_allocation: crate::TpmlPcrSelection,
 }
 
+/// The hash algorithms whose PCR banks [`PcrState::default`] allocates (all PCRs) when the TPM is
+/// manufactured: SHA-256 and SHA-384, like the TCG reference platform (`DefaultActivePcrBanks`
+/// in `PlatformPcr.c`). The banks of the other implemented hash algorithms (enabled by the Cargo
+/// features) start with no PCR allocated and can be allocated with `TPM2_PCR_Allocate`. The
+/// default allocation is a platform choice (TPM 2.0 Part 1, "PCR Allocation").
+pub const DEFAULT_PCR_BANKS: &[crate::Alg] = &[crate::Alg::SHA256, crate::Alg::SHA384];
+
 impl Default for PcrState {
     fn default() -> Self {
-        // Every bank of an implemented hash, without the hashes an installed unmarshal profile
-        // (`crate::profile`) excludes: the TPM does not implement those. The banks of the
-        // default allocation (`crate::profile::is_default_pcr_bank`) have all PCRs allocated,
-        // the others none.
+        // Every bank of an implemented hash (enabled by the Cargo features). The banks of the
+        // default allocation ([`DEFAULT_PCR_BANKS`]) have all PCRs allocated, the others none.
         let hashes = [
             #[cfg(feature = "sha1")]
             crate::TpmiAlgHash::Sha1,
@@ -77,20 +82,16 @@ impl Default for PcrState {
         ];
         let mut implemented =
             [crate::TpmsPcrSelection::default(); crate::TPM2_NUM_PCR_BANKS as usize];
-        let mut count = 0;
-        for hash in hashes {
-            let alg = crate::Alg::from(hash);
-            if crate::profile::allows_algorithm(alg) {
-                let select = if crate::profile::is_default_pcr_bank(alg) {
-                    [0xFF, 0xFF, 0xFF]
-                } else {
-                    [0x00, 0x00, 0x00]
-                };
-                implemented[count] = crate::TpmsPcrSelection::new(hash, &select).unwrap();
-                count += 1;
-            }
+        for (selection, hash) in implemented.iter_mut().zip(hashes) {
+            let select = if DEFAULT_PCR_BANKS.contains(&crate::Alg::from(hash)) {
+                [0xFF, 0xFF, 0xFF]
+            } else {
+                [0x00, 0x00, 0x00]
+            };
+            *selection = crate::TpmsPcrSelection::new(hash, &select).unwrap();
         }
-        let pcr_allocation = crate::TpmlPcrSelection::from_slice(&implemented[..count]).unwrap();
+        let pcr_allocation =
+            crate::TpmlPcrSelection::from_slice(&implemented[..hashes.len()]).unwrap();
 
         Self {
             #[cfg(feature = "sha1")]

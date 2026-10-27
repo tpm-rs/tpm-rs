@@ -682,9 +682,10 @@ fn rsa_private_key_larger_than_capacity_rejected() {
         auth_value: Tpm2bAuth::default(),
         seed_value: Tpm2bDigest::default(),
         sensitive: TpmuSensitiveComposite::Rsa(
-            Tpm2bPrivateKeyRsa::from_bytes(&[0x01; RSA_PRIVATE_KEY_CAP + 1]).unwrap(),
+            Tpm2bPrivateKeyRsa::from_bytes(&[0x01; RSA_PRIVATE_KEY_CAP]).unwrap(),
         ),
     };
+    assert_eq!(Tpm2bPrivateKeyRsa::CAP, RSA_PRIVATE_KEY_CAP);
     let cmd = LoadExternal {
         in_private: Some(tpm2::Tpm2b(sensitive_create)),
         in_public: tpm2::Tpm2b(make_rsa_public_area_exact_attrs(
@@ -694,8 +695,15 @@ fn rsa_private_key_larger_than_capacity_rejected() {
         )),
         hierarchy: Handle::RH_NULL,
     };
+    // The `tpm2` types cannot hold the larger key, so it is grown by one octet in the raw
+    // command: inPrivate's size, then its sensitiveType, authValue (empty), seedValue (empty)
+    // and the private key.
+    let (mut raw, params) = crate::_common::build_cmd_with_param_offset(&cmd, &[]);
+    let key = params + 2 + 2 + 2 + 2;
+    let key_end = crate::_common::tpm2b_end(&raw, key);
+    crate::_common::grow_command(&mut raw, &[params, key], key_end, &[0x01]);
     assert_eq!(
-        execute_with_password_sessions(&mut sim, &cmd, 0, &[]).err(),
-        Some(TpmRc::SIZE.with(Position::parameter(1)).get())
+        crate::_common::raw_rc(&mut sim, &raw),
+        TpmRc::SIZE.with(Position::parameter(1)).get()
     );
 }

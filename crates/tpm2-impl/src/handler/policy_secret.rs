@@ -143,7 +143,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             && self.read_nv_public(auth_handle).is_some_and(|nv_public| {
                 nv_public.attributes.get_index_type() == Ok(TpmNt::PinPass)
             });
-        let mut hmac_digest_bytes = [0u8; 64];
+        let mut hmac_digest_bytes = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
         let timeout_bytes;
         let (timeout, policy_ticket) = if cmd.expiration < 0
             && session_type == TpmSe::Policy

@@ -200,6 +200,20 @@ fn execute_tpm_command_with_auths<C: Command>(
 where
     for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
+    execute_tpm_command_with_patched_parameters(tpm, cmd, auths, |_| {})
+}
+
+/// Like [`execute_tpm_command_with_auths`], but `patch` may modify the marshaled parameter area
+/// before the command is sent (e.g. to send a value the `tpm2` types cannot represent).
+fn execute_tpm_command_with_patched_parameters<C: Command>(
+    tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
+    cmd: &C,
+    auths: &[TpmsAuthCommand],
+    patch: impl FnOnce(&mut [u8]),
+) -> Result<C::Response<'static>, u32>
+where
+    for<'b> &'b mut <C as Marshal>::MaxBuffer: TryFrom<&'b mut [u8]>,
+{
     let mut request_buf = [0u8; 16384];
     let mut offset = 10;
 
@@ -246,6 +260,7 @@ where
         .map_err(|_| ())
         .unwrap();
     let cmd_len = cmd.marshal(cmd_slice);
+    patch(&mut request_buf[offset..offset + cmd_len]);
     offset += cmd_len;
 
     // Fill in total Size
@@ -639,17 +654,24 @@ fn test_duplicate_import_load_roundtrip() {
         Some(TpmRc::INTEGRITY.with(Position::parameter(1)).get())
     );
 
-    // D. Name alg is invalid (neither SHA256 nor SHA384 nor SHA1) -> returns TpmRc::VALUE
-    let mut bad_name_alg_public = target_public;
-    bad_name_alg_public.name_alg = Some(TpmiAlgHash::Sm3_256);
-    let bad_name_alg_public_2b = tpm2::Tpm2b(bad_name_alg_public);
+    // D. Name alg is not implemented (SM3_256, which the `tpm2` types of this TPM cannot represent,
+    // so it is patched into the marshaled `inPublic`).
     let load_cmd_bad_alg = tpm2::commands::Load {
         parent_handle: Handle(parent_handle),
         in_private: import_resp.out_private,
-        in_public: bad_name_alg_public_2b,
+        in_public: tpm2::Tpm2b(target_public),
     };
-    let res =
-        execute_tpm_command_with_auths(&mut tpm, &load_cmd_bad_alg, &[common::password_auth(b"")]);
+    let res = execute_tpm_command_with_patched_parameters(
+        &mut tpm,
+        &load_cmd_bad_alg,
+        &[common::password_auth(b"")],
+        |params| {
+            // inPrivate (UINT16 size and buffer), then inPublic: UINT16 size, type, nameAlg.
+            let private_size = usize::from(u16::from_be_bytes([params[0], params[1]]));
+            let name_alg = 2 + private_size + 2 + 2;
+            params[name_alg..name_alg + 2].copy_from_slice(&tpm2::Alg::SM3_256.id().to_be_bytes());
+        },
+    );
     // SM3_256 is not implemented: TPMT_PUBLIC unmarshal of nameAlg fails with TPM_RC_HASH,
     // reported against inPublic (+P2).
     assert_eq!(

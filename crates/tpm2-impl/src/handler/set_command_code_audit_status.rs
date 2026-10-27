@@ -72,7 +72,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             && !crate::handler::capability::IMPLEMENTED_ALGORITHMS
                 .iter()
                 .any(|&(implemented, _)| {
-                    implemented.id() == id && tpm2::profile::allows_algorithm(implemented)
+                    implemented.id() == id
+                        && crate::handler::capability::is_enabled_by_features(implemented)
                 })
         {
             return Err(TpmRc::HASH.with(Position::parameter(1)));

@@ -1,15 +1,22 @@
 //! NV capacity: TPM2_EvictControl and TPM2_NV_DefineSpace run out of NV space
 //! (`TPM_RC_NV_SPACE`) exactly where the reference does. NV capacity is implementation-specific
 //! (TPM 2.0 Part 2, `TPM_PT_HR_PERSISTENT_AVAIL`/`TPM_PT_NV_COUNTERS_AVAIL`: "This value is an
-//! estimate"), so tpm-rs follows the reference's `NvTestSpace()` accounting: a dynamic area of
-//! 11364 bytes, every persistent object taking 1288 bytes whatever its key type, an Index
-//! `4 + 148` bytes plus its data (orderly data in a 512-byte RAM area with 12-byte headers),
-//! and room reserved for 2 persistent objects (when defining an Index) and 8 counter Indices
-//! (unless defining a counter).
+//! estimate"), so tpm-rs follows the reference's `NvTestSpace()` accounting
+//! (`tpm2_impl::storage::nv_capacity`, whose model [`NvUsage`] gives the expected results): with
+//! the default profile (`NV_MEMORY_SIZE` 16384, `MIN_EVICT_OBJECTS` 2), a dynamic area of 11364
+//! bytes, every persistent object taking 1288 bytes whatever its key type, an Index `4 + 148`
+//! bytes plus its data (orderly data in a 512-byte RAM area with 12-byte headers), and room
+//! reserved for 2 persistent objects (when defining an Index) and 8 counter Indices (unless
+//! defining a counter). The profile features of `tpm2-impl` (e.g. of a differential target)
+//! change `NV_MEMORY_SIZE` and `MIN_EVICT_OBJECTS`.
 
 use crate::_common::{create_ecc_parent_key, create_parent_key, evict_control_rc, try_define};
 use testing::tpm::Tpm;
 use tpm2::{Handle, TpmaNv, TpmiAlgHash, TpmsNvPublic};
+use tpm2_impl::storage::nv_capacity::{MIN_EVICT_OBJECTS, NV_MEMORY_SIZE, NvUsage};
+
+/// Whether the TPM has the default NV profile, whose results the tests also check literally.
+const DEFAULT_NV_PROFILE: bool = NV_MEMORY_SIZE == 16384 && MIN_EVICT_OBJECTS == 2;
 
 /// `TPM_RC_NV_SPACE`.
 const RC_NV_SPACE: u32 = 0x14B;
@@ -32,10 +39,21 @@ fn counter() -> TpmaNv {
     TpmaNv::from_bits_retain(1 << 4)
 }
 
+/// The number of persistent objects that fit into empty NV ([`NvUsage`]).
+fn persistent_capacity() -> u32 {
+    let mut usage = NvUsage::default();
+    let mut count = 0;
+    while usage.can_add_evict_object() {
+        usage.add_evict_object();
+        count += 1;
+    }
+    count
+}
+
 /// Evicts `object` to consecutive persistent handles until EvictControl fails; returns the
 /// number of successes and the failing response code.
 fn evict_until_full(tpm: &mut Tpm, object: Handle) -> (u32, u32) {
-    for i in 0..16 {
+    for i in 0..=persistent_capacity() {
         let rc = evict_control_rc(tpm, Handle(OWNER), object.0, 0x8100_0300 + i);
         if rc != 0 {
             return (i, rc);
@@ -44,43 +62,66 @@ fn evict_until_full(tpm: &mut Tpm, object: Handle) -> (u32, u32) {
     panic!("NV never filled up");
 }
 
-/// Seven persistent copies of an ECC key fit into empty NV; the eighth would use the space
-/// reserved for the minimum number of counter Indices (`TPM_RC_NV_SPACE`).
+/// Persistent copies of an ECC key fit into empty NV until the next one would use the space
+/// reserved for the minimum number of counter Indices (`TPM_RC_NV_SPACE`): seven with the default
+/// profile.
 #[test]
-fn seven_ecc_persistent_objects_fit() {
+fn ecc_persistent_objects_fill_nv() {
     let mut tpm = Tpm::new();
     let key = create_ecc_parent_key(&mut tpm);
-    assert_eq!(evict_until_full(&mut tpm, key), (7, RC_NV_SPACE));
+    assert_eq!(
+        evict_until_full(&mut tpm, key),
+        (persistent_capacity(), RC_NV_SPACE)
+    );
+    if DEFAULT_NV_PROFILE {
+        assert_eq!(persistent_capacity(), 7);
+    }
 }
 
-/// A persistent RSA-2048 key takes as much NV space as an ECC key: seven fit as well.
+/// A persistent RSA-2048 key takes as much NV space as an ECC key: as many fit.
 #[test]
-fn seven_rsa_persistent_objects_fit() {
+fn rsa_persistent_objects_fill_nv() {
     let mut tpm = Tpm::new();
     let key = create_parent_key(&mut tpm);
-    assert_eq!(evict_until_full(&mut tpm, key), (7, RC_NV_SPACE));
+    assert_eq!(
+        evict_until_full(&mut tpm, key),
+        (persistent_capacity(), RC_NV_SPACE)
+    );
 }
 
-/// Indices must leave room for two persistent objects and eight counters: after three
-/// 2048-byte Indices, a fourth Index fits with at most 744 data bytes.
+/// Indices must leave room for `MIN_EVICT_OBJECTS` persistent objects and eight counters: after
+/// as many 2048-byte Indices as fit, the next Index fits with at most the remaining data bytes
+/// (with the default profile: three Indices, then 744 data bytes).
 #[test]
 fn index_definition_reserves_persistent_and_counter_space() {
+    let ordinary = TpmaNv::AUTHWRITE | TpmaNv::AUTHREAD | TpmaNv::NO_DA;
+    let mut usage = NvUsage::default();
     let mut tpm = Tpm::new();
-    for i in 0..3 {
+    let mut full = 0;
+    while usage.can_define_index(ordinary.bits(), 2048) {
         try_define(
             &mut tpm,
             Handle(OWNER),
             b"",
-            index(0x0150_0100 + i, TpmaNv::empty(), 2048),
+            index(0x0150_0100 + full, TpmaNv::empty(), 2048),
         )
         .unwrap();
+        usage.add_index(ordinary.bits(), 2048);
+        full += 1;
+    }
+    let last = (0..2048u16)
+        .rev()
+        .find(|&size| usage.can_define_index(ordinary.bits(), size))
+        .expect("room for a smaller Index");
+    if DEFAULT_NV_PROFILE {
+        assert_eq!((full, last), (3, 744));
     }
     assert_eq!(
         try_define(
             &mut tpm,
             Handle(OWNER),
             b"",
-            index(0x0150_0110, TpmaNv::empty(), 745)
+            index(0x0150_0000, TpmaNv::empty(), last + 1)
         )
         .err(),
         Some(RC_NV_SPACE)
@@ -89,7 +130,7 @@ fn index_definition_reserves_persistent_and_counter_space() {
         &mut tpm,
         Handle(OWNER),
         b"",
-        index(0x0150_0110, TpmaNv::empty(), 744),
+        index(0x0150_0000, TpmaNv::empty(), last),
     )
     .unwrap();
     // A counter needs no room reserved for counters.
@@ -97,7 +138,7 @@ fn index_definition_reserves_persistent_and_counter_space() {
         &mut tpm,
         Handle(OWNER),
         b"",
-        index(0x0150_0111, counter(), 8),
+        index(0x0150_0001, counter(), 8),
     )
     .unwrap();
 }
@@ -157,24 +198,48 @@ fn nv_availability_properties_follow_the_accounting() {
             get_tpm_property(tpm, TpmPt::NV_COUNTERS_AVAIL),
         )
     };
-    // Empty NV: (11364 - 12 - 8 * 160) / 1288 persistent objects; counters limited by the
-    // orderly RAM (512 / 20) rather than NV ((11364 - 12 - 2 * 1288) / 160).
-    assert_eq!(props(&mut tpm), (7, 0, 25));
+    let expected = |usage: &NvUsage| {
+        (
+            usage.persistent_avail(),
+            usage.counters,
+            usage.counter_avail(),
+        )
+    };
+    let mut usage = NvUsage::default();
+    // Empty NV, with the default profile: (11364 - 12 - 8 * 160) / 1288 persistent objects;
+    // counters limited by the orderly RAM (512 / 20) rather than NV ((11364 - 12 - 2 * 1288) /
+    // 160).
+    assert_eq!(props(&mut tpm), expected(&usage));
+    if DEFAULT_NV_PROFILE {
+        assert_eq!(expected(&usage), (7, 0, 25));
+    }
+    let orderly_counter = counter() | TpmaNv::ORDERLY;
     try_define(
         &mut tpm,
         Handle(OWNER),
         b"",
-        index(0x0150_0300, counter() | TpmaNv::ORDERLY, 8),
+        index(0x0150_0300, orderly_counter, 8),
     )
     .unwrap();
-    assert_eq!(props(&mut tpm), (7, 1, 24));
+    usage.add_index(
+        (orderly_counter | TpmaNv::AUTHWRITE | TpmaNv::AUTHREAD | TpmaNv::NO_DA).bits(),
+        8,
+    );
+    assert_eq!(props(&mut tpm), expected(&usage));
+    if DEFAULT_NV_PROFILE {
+        assert_eq!(expected(&usage), (7, 1, 24));
+    }
     let key = create_ecc_parent_key(&mut tpm);
     for i in 0..3 {
         assert_eq!(
             evict_control_rc(&mut tpm, Handle(OWNER), key.0, 0x8100_0400 + i),
             0
         );
+        usage.add_evict_object();
     }
-    // 11364 - 152 - 3 * 1288 free; less 12 + 7 * 160 for counters.
-    assert_eq!(props(&mut tpm), (4, 1, 24));
+    // With the default profile: 11364 - 152 - 3 * 1288 free; less 12 + 7 * 160 for counters.
+    assert_eq!(props(&mut tpm), expected(&usage));
+    if DEFAULT_NV_PROFILE {
+        assert_eq!(expected(&usage), (4, 1, 24));
+    }
 }

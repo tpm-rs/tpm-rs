@@ -172,11 +172,14 @@ fn hash_rejects_unsupported_alg() {
 
     let cmd = Hash {
         data: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
-        hash_alg: TpmiAlgHash::Sm3_256, // invalid/unsupported alg for Hash command
+        hash_alg: TpmiAlgHash::Sha256,
         hierarchy: Handle::RH_NULL,
     };
 
-    let res = execute_tpm_command_via_run(&mut sim, &cmd, &[]);
+    // hashAlg = SM3_256, which this TPM does not implement (not a `TpmiAlgHash` of this TPM).
+    let res = crate::_common::execute_with_corrupted_bytes_status(&mut sim, &cmd, 0, &[], |p| {
+        crate::_common::put_u16(p, crate::_common::tpm2b_end(p, 0), tpm2::Alg::SM3_256.id());
+    });
     assert_eq!(
         res.err(),
         Some(TpmRc::HASH.with(Position::parameter(2)).get())
@@ -267,11 +270,14 @@ fn sha1_sha384_sha512_and_unsupported() {
     let expected = Sha512::digest(data);
     assert_eq!(resp.out_hash.as_ref(), expected.as_slice());
 
-    // Test invalid hash algorithm
+    // Test an unimplemented hash algorithm (SM3_256, not a `TpmiAlgHash` of this TPM)
     let cmd = Hash {
         data: Tpm2bMaxBuffer::from_bytes(data).unwrap(),
-        hash_alg: TpmiAlgHash::Sm3_256,
+        hash_alg: TpmiAlgHash::Sha256,
         hierarchy: Handle::RH_NULL,
     };
-    assert!(sim.execute(cmd).is_err());
+    let res = crate::_common::execute_with_corrupted_bytes_status(&mut sim, &cmd, 0, &[], |p| {
+        crate::_common::put_u16(p, crate::_common::tpm2b_end(p, 0), tpm2::Alg::SM3_256.id());
+    });
+    assert!(res.is_err());
 }

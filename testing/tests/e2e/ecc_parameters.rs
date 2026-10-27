@@ -119,6 +119,15 @@ fn nist_p224_domain_parameters() {
         assert_eq!(rc, 0);
         let p = &resp[10..];
         assert_eq!(u16::from_be_bytes(p[0..2].try_into().unwrap()), curve);
+        if !tpm2_impl::ECC_PARAMETERS_REPORT_KDF {
+            // `ecc-parameters-null-kdf`: the KDF is `TPM_ALG_NULL` (no details).
+            assert_eq!(
+                u16::from_be_bytes(p[4..6].try_into().unwrap()),
+                0x0010,
+                "kdf scheme"
+            );
+            continue;
+        }
         assert_eq!(
             u16::from_be_bytes(p[4..6].try_into().unwrap()),
             0x0020,
@@ -184,10 +193,12 @@ fn p256_curves_parameters() {
         })
         .expect("TPM2_ECC_Parameters(NistP256) should succeed");
     assert_eq!(rsp.parameters.key_size, 256);
-    // C CryptEccData.c: NIST P-256 carries {TPM_ALG_KDF1_SP800_56A, SHA256} as its KDF.
+    // C CryptEccData.c: NIST P-256 carries {TPM_ALG_KDF1_SP800_56A, SHA256} as its KDF (none
+    // with the `ecc-parameters-null-kdf` profile).
     assert_eq!(
         rsp.parameters.kdf,
-        Some(TpmtKdfScheme::Kdf1Sp800_56a(TpmiAlgHash::Sha256))
+        tpm2_impl::ECC_PARAMETERS_REPORT_KDF
+            .then_some(TpmtKdfScheme::Kdf1Sp800_56a(TpmiAlgHash::Sha256))
     );
     assert_eq!(rsp.parameters.sign, None);
     assert_eq!(rsp.parameters.curve_id, TpmEccCurve::NistP256);

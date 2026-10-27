@@ -204,13 +204,6 @@ impl<'a, Tag: limits::Tag> Tpm2bSized<'a, Tag> {
     pub const CAP: usize = Tag::CAP;
     pub const MAX_BUFFER_SIZE: usize = Tag::CAP;
 
-    /// The capacity this TPM enforces: [`Self::CAP`], lowered by an installed unmarshal profile
-    /// for the RSA-dependent buffers ([`crate::profile`]). The size a `TPM2B` of this type may
-    /// have on the wire (when received or sent).
-    pub fn capacity() -> usize {
-        Tag::unmarshal_cap()
-    }
-
     pub const fn new(buf: &'a [u8]) -> Option<Self> {
         if buf.len() > Self::CAP {
             return None;
@@ -265,7 +258,7 @@ impl<'a, Tag: limits::Tag> Tpm2bSized<'a, Tag> {
 impl<'a, Tag: limits::Tag> Unmarshal<'a> for Tpm2bSized<'a, Tag> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let len: usize = u16::unmarshal(src)?.into();
-        if len > Tag::unmarshal_cap() {
+        if len > Self::CAP {
             return Err(UnmarshalError::SIZE);
         }
         let Some((buf, rest)) = src.split_at_checked(len) else {

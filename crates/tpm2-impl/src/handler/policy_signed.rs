@@ -185,7 +185,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     crate::owned::OwnedPublicParmsAndId::Ecc(parms, ref point) => {
                         let curve = parms.curve_id;
                         let param_size = match curve {
-                            tpm2::TpmEccCurve::NistP192 => 24,
                             tpm2::TpmEccCurve::NistP224 => 28,
                             tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
                             tpm2::TpmEccCurve::NistP384 => 48,
@@ -221,9 +220,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 );
                 let sig_matches_key = match cmd.auth {
                     TpmtSignature::Rsassa(_) | TpmtSignature::Rsapss(_) => is_rsa_key,
-                    TpmtSignature::Ecdsa(_)
-                    | TpmtSignature::Ecschnorr(_)
-                    | TpmtSignature::Sm2(_) => !is_rsa_key,
+                    TpmtSignature::Ecdsa(_) => !is_rsa_key,
                     _ => false,
                 };
                 if !sig_matches_key {
@@ -346,7 +343,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         // 4. Generate policy ticket & response timeout
-        let mut hmac_digest_bytes = [0u8; 64];
+        let mut hmac_digest_bytes = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
         let timeout_bytes;
         let (timeout, policy_ticket) = if cmd.expiration < 0 && session_type == TpmSe::Policy {
             let key_hierarchy = obj.hierarchy;

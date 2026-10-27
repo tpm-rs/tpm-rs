@@ -2,8 +2,14 @@ use super::types::{Handle, ItemMetadata};
 use super::{NvStorage, StorageError, Tpm2Storage};
 
 /// The maximum number of persistent objects or NV indices that can be stored simultaneously.
-/// This is a custom storage limitation.
-pub const MAX_ITEMS: usize = 64;
+/// This is a custom storage limitation: 64 items, or more with a larger accounted NV memory
+/// (`nv_capacity::NV_MEMORY_SIZE`, one item per 256 octets), so that the table never fills up
+/// before the NV space accounting (`TPM_RC_NV_SPACE`) does.
+pub const MAX_ITEMS: usize = if super::nv_capacity::NV_MEMORY_SIZE as usize / 256 > 64 {
+    super::nv_capacity::NV_MEMORY_SIZE as usize / 256
+} else {
+    64
+};
 /// Serialized byte size of the Table of Contents (TOC) index tracking NV storage items.
 /// Calculated as MAX_ITEMS * ItemMetadata::SIZE. Custom storage design property.
 pub const TOC_SIZE: usize = MAX_ITEMS * ItemMetadata::SIZE;

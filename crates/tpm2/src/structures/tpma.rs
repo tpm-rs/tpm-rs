@@ -919,8 +919,16 @@ bitflags! {
 }
 
 impl TpmaObject {
-    /// Reserved bits mask for `TPMA_OBJECT` (TPM 2.0 Part 2, Section 8.3, Table 33): bits 31:20, 15:12, 3, and 0 (`0xfff0_f009`).
-    pub const RESERVED_BITS_MASK: u32 = 0xfff0_f009;
+    /// Reserved bits mask for `TPMA_OBJECT` (TPM 2.0 Part 2, Section 8.3, Table 33): bits 31:20,
+    /// 15:12, 3, and 0 (`0xfff0_f009`). With the `tpma-object-fixed-firmware` feature, bit 3 is
+    /// not reserved (`0xfff0_f001`): the TCG reference implementation defines it as the draft
+    /// attribute `fixedFirmware`, which none of its code evaluates, and a value with it SET is
+    /// unmarshaled with the bit retained.
+    pub const RESERVED_BITS_MASK: u32 = if cfg!(feature = "tpma-object-fixed-firmware") {
+        0xfff0_f001
+    } else {
+        0xfff0_f009
+    };
 }
 
 impl Marshal for TpmaObject {

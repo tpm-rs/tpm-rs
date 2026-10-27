@@ -31,3 +31,9 @@ aes = "0.8.4"
 cfb-mode = "0.8.2"
 rand_core = "0.6.4"
 subtle = { version = "2.6.1", default-features = false }
+
+[features]
+default = ["sha512"]
+# SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
+# reference built without `ALG_SHA512`) is built with every crate without it.
+sha512 = ["tpm2/sha512"]

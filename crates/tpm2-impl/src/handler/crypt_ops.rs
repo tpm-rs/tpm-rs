@@ -962,10 +962,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 /// Returns `true` if `hash_alg` is a hash algorithm implemented (and advertised in
 /// `TPM_CAP_ALGS`) by this TPM, i.e. `CryptHashIsValidAlg(hash_alg, FALSE)`.
 fn is_implemented_hash(hash_alg: TpmiAlgHash) -> bool {
-    matches!(
-        hash_alg,
-        TpmiAlgHash::Sha1 | TpmiAlgHash::Sha256 | TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512
-    )
+    crate::handler::capability::is_implemented_algorithm(tpm2::Alg::from(hash_alg))
 }
 
 /// Selects the signing scheme for `TPM2_Sign`, mirroring `CryptSelectSignScheme` and
@@ -1000,8 +997,6 @@ fn select_sign_scheme(
             None => Ok(None),
             Some(TpmtEccScheme::Ecdsa(h)) => Ok(Some(TpmtSigScheme::Ecdsa(h))),
             Some(TpmtEccScheme::Ecdaa(s)) => Ok(Some(TpmtSigScheme::Ecdaa(s))),
-            Some(TpmtEccScheme::Sm2(h)) => Ok(Some(TpmtSigScheme::Sm2(h))),
-            Some(TpmtEccScheme::Ecschnorr(h)) => Ok(Some(TpmtSigScheme::Ecschnorr(h))),
             Some(_) => Err(()),
         },
         OwnedPublicParmsAndId::KeyedHash(scheme, _) => match scheme {

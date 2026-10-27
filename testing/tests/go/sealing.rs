@@ -143,6 +143,7 @@ fn digest_size(hash: TpmiAlgHash) -> usize {
         TpmiAlgHash::Sha256 => 32,
         TpmiAlgHash::Sha384 => 48,
         TpmiAlgHash::Sha512 => 64,
+        #[allow(unreachable_patterns)]
         other => panic!("unsupported session hash {other:?}"),
     }
 }
@@ -353,6 +354,7 @@ impl GoHmacSession {
         let key_bytes = match sym.alg {
             AlgSym::Aes128 => 16,
             AlgSym::Aes256 => 32,
+            #[allow(unreachable_patterns)]
             _ => panic!("unsupported session symmetric {sym:?}"),
         };
         let mut session_value = self.session_key.clone();

@@ -8,6 +8,7 @@ use crate::{errors::*, marshal::max, *};
 #[repr(u16)]
 pub enum TpmiAlgKdf {
     Mgf1 = Alg::MGF1.tag(),
+    /// `TPM_ALG_HKDF` (converted and unmarshaled only with the `hkdf` Cargo feature).
     Hkdf = Alg::HKDF.tag(),
     Kdf1Sp800_56a = Alg::KDF1_SP800_56A.tag(),
     Kdf2 = Alg::KDF2.tag(),
@@ -17,12 +18,9 @@ pub enum TpmiAlgKdf {
 impl TryFrom<Alg> for TpmiAlgKdf {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<TpmiAlgKdf, Self::Error> {
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if a != Alg::NULL && !crate::profile::allows_algorithm(a) {
-            return Err(UnmarshalError::KDF);
-        }
         match a {
             Alg::MGF1 => Ok(Self::Mgf1),
+            #[cfg(feature = "hkdf")]
             Alg::HKDF => Ok(Self::Hkdf),
             Alg::KDF1_SP800_56A => Ok(Self::Kdf1Sp800_56a),
             Alg::KDF2 => Ok(Self::Kdf2),
@@ -123,10 +121,6 @@ pub enum TpmiAlgCipherMode {
 impl TryFrom<Alg> for TpmiAlgCipherMode {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<TpmiAlgCipherMode, Self::Error> {
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if a != Alg::NULL && !crate::profile::allows_algorithm(a) {
-            return Err(UnmarshalError::MODE);
-        }
         match a {
             #[cfg(feature = "ctr")]
             Alg::CTR => Ok(Self::Ctr),
@@ -157,8 +151,8 @@ impl From<TpmiAlgCipherMode> for Alg {
 
 /// Extracts the encryption mode from a [`TpmiAlgSymMode`].
 ///
-/// Fails with `TPM_RC_MODE` ([`UnmarshalError::MODE`]) for [`TpmiAlgSymMode::Cmac`], which is not
-/// a `TPMI_ALG_CIPHER_MODE`.
+/// Fails with `TPM_RC_MODE` ([`UnmarshalError::MODE`]) for `TpmiAlgSymMode::Cmac` (with the `cmac`
+/// feature), which is not a `TPMI_ALG_CIPHER_MODE`.
 impl TryFrom<TpmiAlgSymMode> for TpmiAlgCipherMode {
     type Error = UnmarshalError;
     fn try_from(mode: TpmiAlgSymMode) -> Result<Self, Self::Error> {
@@ -256,10 +250,6 @@ impl From<TpmiAlgSymMode> for Alg {
 impl TryFrom<Alg> for Option<TpmiAlgSymMode> {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<Self, Self::Error> {
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if a != Alg::NULL && !crate::profile::allows_algorithm(a) {
-            return Err(UnmarshalError::MODE);
-        }
         match a {
             #[cfg(feature = "cmac")]
             Alg::CMAC => Ok(Some(TpmiAlgSymMode::Cmac)),
@@ -315,10 +305,6 @@ impl TpmiRsaKeyBits {
 impl TryFrom<u16> for TpmiRsaKeyBits {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if !crate::profile::allows_rsa_key_bits(val) {
-            return Err(UnmarshalError::VALUE);
-        }
         match val {
             #[cfg(feature = "rsa1024")]
             1024 => Ok(Self(val)),
@@ -612,10 +598,6 @@ impl Default for TpmiAlgHash {
 impl TryFrom<Alg> for TpmiAlgHash {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<TpmiAlgHash, Self::Error> {
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if a != Alg::NULL && !crate::profile::allows_algorithm(a) {
-            return Err(UnmarshalError::HASH);
-        }
         match a {
             #[cfg(feature = "sha1")]
             Alg::SHA1 => Ok(Self::Sha1),
@@ -1329,6 +1311,7 @@ impl_handle_tpmi!(TpmiRhAct);
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum TpmiAlgMacScheme {
+    /// `TPM_ALG_CMAC` (converted and unmarshaled only with the `cmac` Cargo feature).
     Cmac = Alg::CMAC.tag(),
     #[cfg(feature = "sha1")]
     Sha1 = Alg::SHA1.tag(),
@@ -1351,11 +1334,8 @@ pub enum TpmiAlgMacScheme {
 impl TryFrom<Alg> for TpmiAlgMacScheme {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<Self, Self::Error> {
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if a != Alg::NULL && !crate::profile::allows_algorithm(a) {
-            return Err(UnmarshalError::SYMMETRIC);
-        }
         match a {
+            #[cfg(feature = "cmac")]
             Alg::CMAC => Ok(Self::Cmac),
             #[cfg(feature = "sha1")]
             Alg::SHA1 => Ok(Self::Sha1),
@@ -1485,7 +1465,9 @@ pub enum TpmiAlgSigScheme {
     Sm2 = Alg::SM2.tag(),
     #[cfg(feature = "ecschnorr")]
     Ecschnorr = Alg::ECSCHNORR.tag(),
+    /// `TPM_ALG_EDDSA` (converted and unmarshaled only with the `eddsa` Cargo feature).
     Eddsa = Alg::EDDSA.tag(),
+    /// `TPM_ALG_HASH_EDDSA` (converted and unmarshaled only with the `eddsa` Cargo feature).
     HashEddsa = Alg::HASH_EDDSA.tag(),
     Hmac = Alg::HMAC.tag(),
 }
@@ -1493,10 +1475,6 @@ pub enum TpmiAlgSigScheme {
 impl TryFrom<Alg> for TpmiAlgSigScheme {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<Self, Self::Error> {
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if a != Alg::NULL && !crate::profile::allows_algorithm(a) {
-            return Err(UnmarshalError::SCHEME);
-        }
         match a {
             #[cfg(feature = "rsassa")]
             Alg::RSASSA => Ok(Self::Rsassa),
@@ -1510,7 +1488,9 @@ impl TryFrom<Alg> for TpmiAlgSigScheme {
             Alg::SM2 => Ok(Self::Sm2),
             #[cfg(feature = "ecschnorr")]
             Alg::ECSCHNORR => Ok(Self::Ecschnorr),
+            #[cfg(feature = "eddsa")]
             Alg::EDDSA => Ok(Self::Eddsa),
+            #[cfg(feature = "eddsa")]
             Alg::HASH_EDDSA => Ok(Self::HashEddsa),
             Alg::HMAC => Ok(Self::Hmac),
             _ => Err(UnmarshalError::SCHEME),
@@ -1605,10 +1585,6 @@ pub enum TpmiEccKeyExchange {
 impl TryFrom<Alg> for TpmiEccKeyExchange {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<Self, Self::Error> {
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if a != Alg::NULL && !crate::profile::allows_algorithm(a) {
-            return Err(UnmarshalError::SCHEME);
-        }
         match a {
             #[cfg(feature = "ecdh")]
             Alg::ECDH => Ok(Self::Ecdh),
@@ -1882,8 +1858,11 @@ pub enum TpmiAlgPublic {
     KeyedHash = Alg::KEYEDHASH.tag(),
     Ecc = Alg::ECC.tag(),
     SymCipher = Alg::SYMCIPHER.tag(),
+    /// `TPM_ALG_MLKEM` (converted and unmarshaled only with the `mlkem` Cargo feature).
     Mlkem = Alg::MLKEM.tag(),
+    /// `TPM_ALG_MLDSA` (converted and unmarshaled only with the `mldsa` Cargo feature).
     Mldsa = Alg::MLDSA.tag(),
+    /// `TPM_ALG_HASH_MLDSA` (converted and unmarshaled only with the `mldsa` Cargo feature).
     HashMldsa = Alg::HASH_MLDSA.tag(),
 }
 
@@ -1891,10 +1870,6 @@ impl TryFrom<Alg> for TpmiAlgPublic {
     type Error = UnmarshalError;
     #[inline]
     fn try_from(a: Alg) -> Result<Self, Self::Error> {
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if a != Alg::NULL && !crate::profile::allows_algorithm(a) {
-            return Err(UnmarshalError::TYPE);
-        }
         match a {
             #[cfg(feature = "rsa")]
             Alg::RSA => Ok(Self::Rsa),
@@ -1902,8 +1877,11 @@ impl TryFrom<Alg> for TpmiAlgPublic {
             #[cfg(feature = "ecc")]
             Alg::ECC => Ok(Self::Ecc),
             Alg::SYMCIPHER => Ok(Self::SymCipher),
+            #[cfg(feature = "mlkem")]
             Alg::MLKEM => Ok(Self::Mlkem),
+            #[cfg(feature = "mldsa")]
             Alg::MLDSA => Ok(Self::Mldsa),
+            #[cfg(feature = "mldsa")]
             Alg::HASH_MLDSA => Ok(Self::HashMldsa),
             _ => Err(UnmarshalError::TYPE),
         }

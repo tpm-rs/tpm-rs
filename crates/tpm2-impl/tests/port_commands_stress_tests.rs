@@ -216,7 +216,7 @@ where
 fn compute_key_name(
     crypto: &TestCryptoProvider,
     public: &TpmtPublic,
-) -> tpm2_impl::owned::OwnedTpm2b<66> {
+) -> tpm2_impl::owned::OwnedName {
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(public, &mut buf);
     let alg = public.name_alg.unwrap_or(TpmiAlgHash::Sha256);

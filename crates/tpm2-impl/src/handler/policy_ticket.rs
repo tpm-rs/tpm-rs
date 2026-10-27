@@ -151,7 +151,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
-        let mut hmac_digest_bytes = [0u8; 64];
+        let mut hmac_digest_bytes = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = tpm2::crypto::hmac(
             self.crypto(),
             crate::handler::context_integrity_hash_alg(),

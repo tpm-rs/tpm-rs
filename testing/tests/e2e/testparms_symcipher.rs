@@ -38,13 +38,16 @@ fn all_block_modes_accepted() {
 fn invalid_aes_key_size_rejected() {
     let mut sim = Tpm::new();
 
-    // Test invalid AES key size (192 bits)
+    // Test invalid AES key size (192 bits; not an `AlgSym` of this TPM): AES-128 is marshaled
+    // and its keyBits replaced (header, then type and algorithm).
     let parms = TpmtPublicParms::Sym(TpmtSymDefObject {
-        alg: AlgSym::Aes192,
+        alg: AlgSym::Aes128,
         mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
     });
     let cmd = TestParms { parameters: parms };
-    let response = run_raw(&mut sim, &no_session_command(TpmCc::TestParms, &cmd));
+    let mut command = no_session_command(TpmCc::TestParms, &cmd);
+    command[14..16].copy_from_slice(&192u16.to_be_bytes());
+    let response = run_raw(&mut sim, &command);
     let expected_rc = TpmRc::VALUE.with(Position::parameter(1)).get();
     assert_eq!(rc_of(&response), expected_rc);
 

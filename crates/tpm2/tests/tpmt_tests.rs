@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "eddsa")]
 #[allow(deprecated)] // TPM2_Sign and TPM2_VerifySignature are deprecated.
 use tpm2::commands::{PolicySigned, Sign, VerifySignature};
 use tpm2::errors::UnmarshalError;
@@ -344,6 +345,7 @@ fn test_tpmt_rsa_decrypt_marshal_unmarshal() {
 }
 
 #[test]
+#[cfg(feature = "eddsa")]
 #[allow(deprecated)] // TPM2_Sign and TPM2_VerifySignature are deprecated.
 fn test_eddsa_schemes_and_signatures() {
     // 1. TpmtSigScheme::Eddsa and TpmtSigScheme::HashEddsa
@@ -522,6 +524,7 @@ fn test_eddsa_schemes_and_signatures() {
 }
 
 #[test]
+#[cfg(all(feature = "mlkem", feature = "mldsa"))]
 fn test_pqc_tpmi_mldsa_mlkem_parms_and_alg_public() {
     // 1. TpmiMlkemParms
     let mlkem_cases = [
@@ -607,6 +610,7 @@ fn test_pqc_tpmi_mldsa_mlkem_parms_and_alg_public() {
 }
 
 #[test]
+#[cfg(all(feature = "mlkem", feature = "mldsa"))]
 fn test_pqc_tpm2b_and_tpms_structures() {
     assert_eq!(Tpm2bPublicKeyMlkem::CAP, 1568);
     assert_eq!(Tpm2bPrivateKeyMlkem::CAP, 64);
@@ -671,6 +675,7 @@ fn test_pqc_tpm2b_and_tpms_structures() {
 }
 
 #[test]
+#[cfg(all(feature = "mlkem", feature = "mldsa"))]
 fn test_pqc_tpmt_public_parms_public_and_sensitive_roundtrip() {
     let mldsa_key_bytes = [0x42u8; 1312];
     let mldsa_pub_key = Tpm2bPublicKeyMldsa::from_bytes(&mldsa_key_bytes).unwrap();

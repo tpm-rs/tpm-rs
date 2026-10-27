@@ -16,25 +16,41 @@ categories.workspace = true
 # Implement conversions/traits which require std
 std = []
 
-# We enable all hash, symmetric and mode algorithms by default, plus RSA-2048+
-# and NIST P-256+.
+# Profile settings that differ between TPM implementations (all disabled by
+# default; enabled e.g. to match a C reference TPM in differential testing):
+# `MAX_CAP_BUFFER` (`limits::MAX_CAP_BUFFER`) is 3072 instead of 1024.
+max-cap-buffer-3072 = []
+# `MAX_NV_INDEX_SIZE` (`TPM2_MAX_NV_INDEX_SIZE`, the bound of
+# `TPMS_NV_PUBLIC.dataSize`) is 8500 instead of 2048.
+max-nv-index-size-8500 = []
+# `TPMA_OBJECT` bit 3 is `fixedFirmware` (a draft attribute, not evaluated)
+# instead of reserved (`TPM_RC_RESERVED_BITS`).
+tpma-object-fixed-firmware = []
+
+# The default features are the algorithms, ECC curves and key sizes implemented by
+# the `tpm-rs` TPM (`tpm2-impl`, `TPM_CAP_ALGS` and `TPM_CAP_ECC_CURVES`): the types
+# of this crate accept exactly the values of the enabled features (an algorithm
+# that is not enabled is rejected when unmarshaled, e.g. `TPM_RC_HASH` for a
+# `TPMI_ALG_HASH`), and they size the profile-dependent buffers and lists
+# (`TPM2B_PUBLIC_KEY_RSA`, `TPM2B_PRIVATE`, `TPM2B_TEMPLATE`, `HASH_COUNT`, ...).
+# Cargo unifies the features of a build, so enabling more features (e.g. for a
+# client that talks to other TPMs) also widens the TPM built with it.
 default = [
-    "sha1", "sha256", "sha384", "sha512", "sm3_256", "sha3_256", "sha3_384", "sha3_512",
-    "aes128", "aes192", "aes256", "sm4_128", "camellia128", "camellia192", "camellia256",
-    "cmac", "ctr", "ofb", "cbc", "ecb",
+    "sha1", "sha256", "sha384", "sha512",
+    # AES-128 and AES-256 (no AES-192); CFB is always enabled.
+    "aes128", "aes256",
+    "ctr", "ofb", "cbc", "ecb",
+    "ecc_curve_nist_p224",
     "ecc_curve_nist_p256",
     "ecc_curve_nist_p384",
     "ecc_curve_nist_p521",
+    "ecc_curve_bn_p256",
+    "rsa1024",
     "rsa2048",
-    "rsa3072",
-    "rsa4096",
     "rsassa",
     "rsapss",
     "rsaes",
     "oaep",
-    "nist_p256",
-    "nist_p384",
-    "nist_p521",
     "ecdsa",
     "ecdh",
     "ecdaa",
@@ -106,6 +122,17 @@ ecdaa = ["ecc"]
 sm2 = ["ecc"]
 ecschnorr = ["ecc"]
 ecmqv = ["ecc"]
+# EdDSA signatures (`TPM_ALG_EDDSA` and `TPM_ALG_HASH_EDDSA`)
+eddsa = ["ecc"]
+
+# Key Derivation Functions (MGF1, KDF1_SP800_56A, KDF2 and KDF1_SP800_108 always enabled)
+hkdf = []
+
+# Post-Quantum Algorithms
+# ML-KEM key encapsulation keys (`TPM_ALG_MLKEM`)
+mlkem = []
+# ML-DSA signing keys (`TPM_ALG_MLDSA` and `TPM_ALG_HASH_MLDSA`)
+mldsa = []
 
 [dependencies]
 bitflags = { workspace = true }

@@ -3,11 +3,12 @@
 //! The tests themselves live in `testing/tests/`: the Go parity tests in
 //! `tests/go/` (test target `go`) and the topic-focused E2E tests in
 //! `tests/e2e/` (test target `e2e`). Every test talks to a [`tpm::Tpm`]: a
-//! pinned (seeded, virtual-clock) `tpm-rs` simulator that, with the
-//! `differential` feature, mirrors every interaction to C reference TPMs (the
-//! TCG reference `mstpm20` and the IBM `ibmswtpm2`) and fails the test on any
-//! undocumented difference between `tpm-rs`'s and a reference's responses. The same tests are therefore both the `tpm-rs`
-//! E2E tests and the differential tests.
+//! pinned (seeded, virtual-clock) `tpm-rs` simulator that, in a differential
+//! build (one `target-*` feature), mirrors every interaction to the C
+//! reference TPM of the target (the public or version 185 TCG reference
+//! `mstpm20`, or the IBM `ibmswtpm2`) and fails the test on any undocumented
+//! difference between `tpm-rs`'s and the reference's responses. The same tests
+//! are therefore both the `tpm-rs` E2E tests and the differential tests.
 //!
 //! The crate provides:
 //!
@@ -16,8 +17,8 @@
 //! * [`_common`] (also reachable as [`test_utils`]): reusable helpers of the
 //!   E2E tests (command execution with sessions, templates, reference crypto,
 //!   constants);
-//! * `differential` (with the `differential` feature): the client of the
-//!   reference processes (`src/bin/mstpm20.rs`, `src/bin/ibmswtpm2.rs`) that
+//! * `differential` (in a differential build): the client of the
+//!   reference process (`src/bin/reference.rs`) that
 //!   host one C reference TPM per `Tpm` and implementation, and the server
 //!   logic they run to compare its responses with those of `tpm-rs`.
 

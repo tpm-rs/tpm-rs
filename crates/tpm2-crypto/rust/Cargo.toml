@@ -27,3 +27,9 @@ rand = { version = "0.9.4", default-features = false, features = ["os_rng"] }
 rand_chacha = { version = "0.3.1", default-features = false }
 rand_core = { version = "0.6.4", default-features = false, features = ["getrandom"] }
 hex-literal = { workspace = true }
+
+[features]
+default = ["sha512"]
+# SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
+# reference built without `ALG_SHA512`) is built with every crate without it.
+sha512 = ["tpm2/sha512"]

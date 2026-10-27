@@ -2,7 +2,7 @@ use hex_literal::hex;
 use tpm2::Alg;
 use tpm2::crypto::CryptoError;
 use tpm2::crypto::CryptoProvider;
-use tpm2::crypto::asymmetric::{Asymmetric, AsymmetricSign, TpmiRsaKeyBits};
+use tpm2::crypto::asymmetric::{Asymmetric, TpmiRsaKeyBits};
 use tpm2::crypto::ecc::Ecc;
 use tpm2_crypto_tests::TestProvider;
 
@@ -301,34 +301,9 @@ fn test_rsa_decrypt_oaep_non_utf8_label() {
 
 #[test]
 fn test_rsa_sign_mismatched_digest_size() {
-    let provider = TestProvider;
-    let mut public_key = [0u8; 1024];
-    let mut private_key = [0u8; 2048];
-    let (_, priv_len) = provider
-        .generate_key(
-            Alg::RSA,
-            Some(tpm2::crypto::asymmetric::KeyParams::Rsa(TpmiRsaKeyBits(
-                1024,
-            ))),
-            &mut public_key,
-            &mut private_key,
-            None,
-        )
-        .unwrap();
-
     // Digest size is 10 bytes instead of 32 (for SHA-256). TpmtHa rejects it at construction.
     let digest = [0u8; 10];
     assert!(tpm2::TpmtHa::new(tpm2::TpmiAlgHash::Sha256, &digest).is_none());
-
-    let mut signature = [0u8; 128];
-    let sm3_digest = [0u8; 32];
-    let res = provider.sign_inner(
-        Alg::RSAPSS,
-        &private_key[..priv_len],
-        tpm2::TpmtHa::Sm3_256(&sm3_digest),
-        &mut signature,
-    );
-    assert!(res.is_err());
 }
 
 #[test]

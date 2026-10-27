@@ -28,6 +28,8 @@ tpm2-platform-linux = { path = "../crates/tpm2-platforms/linux", default-feature
     "reference-rng",
 ] }
 tpm2 = { workspace = true }
+# For the profile features of the `target-*` features.
+tpm2-impl = { workspace = true }
 rsa = { version = "0.9.10", features = ["sha2", "sha1", "getrandom"] }
 sha2 = "0.10.9"
 sha1 = "0.10.6"
@@ -40,31 +42,66 @@ hmac = "0.12.1"
 # The E2E tests currently support only the BoringSSL backend.
 
 [features]
-# Clones, patches and builds the C reference TPMs (build.rs) into the
-# `mstpm20` (TCG reference) and `ibmswtpm2` (IBM software TPM) binaries, and
-# runs every test against tpm-rs and every reference TPM (one process per
-# `Tpm` and reference) in lockstep, comparing every response (see
-# `src/differential/`).
+default = ["sha512"]
+# SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
+# reference built without `ALG_SHA512`) is built with every crate without it.
+sha512 = ["tpm2/sha512", "tpm2-impl/sha512", "tpm2-simulator/sha512", "tpm2-platform-linux/sha512"]
+# Differential testing: compares tpm-rs with one C reference TPM, the target,
+# selected by exactly one `target-*` feature (enable that, not `differential`).
+# build.rs clones, patches and builds the target into the `reference` binary,
+# and every test runs against tpm-rs and the reference (one reference process
+# per `Tpm`) in lockstep, comparing every response (see `src/differential/`).
+#
+# Each target also gives tpm-rs the profile of its reference with the profile
+# features of `tpm2` and `tpm2-impl`, so that the reference needs fewer
+# profile patches (`testing/patches/<target>/`). The features unify with the
+# rest of the build, so every test of a target run sees that profile.
 differential = []
 
-# With `differential`: `differential::inproc::InProcReferences`, both C
-# reference TPMs in the calling process (no reference processes or pipes),
-# for fast single-threaded users such as the fuzz targets. The C references
-# keep their state in globals, so a process hosts at most one at a time.
+# The public TCG reference implementation
+# (https://github.com/TrustedComputingGroup/TPM), `testing/patches/mstpm20/`.
+target-mstpm20 = [
+    "differential",
+    "tpm2/tpma-object-fixed-firmware",
+    "tpm2-impl/max-context-size-2168",
+]
+
+# The TCG reference implementation version 185 (the TCG-internal
+# https://github.com/TrustedComputingGroup/TPM-Internal, `185-feature` branch),
+# `testing/patches/mstpm20-185-feature/`.
+target-mstpm20-v185 = [
+    "differential",
+    "tpm2/tpma-object-fixed-firmware",
+    "tpm2/max-cap-buffer-3072",
+    "tpm2-impl/max-command-size-8192",
+    "tpm2-impl/max-context-size-4344",
+    "tpm2/max-nv-index-size-8500",
+    "tpm2-impl/min-evict-objects-9",
+    "tpm2-impl/nv-memory-size-128k",
+    "tpm2-impl/ecc-parameters-null-kdf",
+]
+
+# The IBM software TPM (https://github.com/kgoldman/ibmswtpm2),
+# `testing/patches/ibmswtpm2/`.
+target-ibmswtpm2 = [
+    "differential",
+    "tpm2-impl/max-context-size-2680",
+    "tpm2-impl/min-evict-objects-7",
+    "tpm2-impl/nv-memory-size-32k",
+]
+
+# With a target: `differential::inproc::InProcReferences`, the C reference TPM
+# in the calling process (no reference process or pipes), for fast
+# single-threaded users such as the fuzz targets. The C reference keeps its
+# state in globals, so a process hosts at most one at a time.
 fuzz-inproc = ["differential"]
 
-# The C reference TPM servers launched by every `Tpm` with `differential`.
-# Each hosts its C reference through `differential::inproc` (the library links
-# both C archives, see build.rs); they have no unit tests of their own.
+# The C reference TPM server launched by every `Tpm` of a differential build.
+# It hosts the target through `differential::inproc` (the library links its C
+# archive, see build.rs); it has no unit tests of its own.
 [[bin]]
-name = "mstpm20"
-path = "src/bin/mstpm20.rs"
-required-features = ["differential"]
-test = false
-
-[[bin]]
-name = "ibmswtpm2"
-path = "src/bin/ibmswtpm2.rs"
+name = "reference"
+path = "src/bin/reference.rs"
 required-features = ["differential"]
 test = false
 

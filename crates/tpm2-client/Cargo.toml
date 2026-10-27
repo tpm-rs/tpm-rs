@@ -11,7 +11,10 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["connection-tcp"]
+default = ["connection-tcp", "sha512"]
+# SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
+# reference built without `ALG_SHA512`) is built with every crate without it.
+sha512 = ["tpm2/sha512"]
 
 # Enable the TCP TPM connection (e.g. for the TPM simulator)
 connection-tcp = ["dep:zerocopy", "tpm2/std"]

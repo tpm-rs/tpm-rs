@@ -14,9 +14,7 @@ use tpm2::commands::Create;
 use tpm2::commands::responses;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{
-    Alg, Tpm2bDigest, Tpm2bName, TpmaLocality, TpmiAlgHash, TpmsCreationData, TpmtTkCreation,
-};
+use tpm2::{Alg, Tpm2bDigest, Tpm2bName, TpmaLocality, TpmsCreationData, TpmtTkCreation};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -112,11 +110,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let name_alg = in_public_struct
             .name_alg
             .ok_or(TpmRc::HASH.with(Position::parameter(2)))?;
-        if name_alg != TpmiAlgHash::Sha1
-            && name_alg != TpmiAlgHash::Sha256
-            && name_alg != TpmiAlgHash::Sha384
-            && name_alg != TpmiAlgHash::Sha512
-        {
+        if !crate::handler::capability::is_implemented_algorithm(tpm2::Alg::from(name_alg)) {
             return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
 

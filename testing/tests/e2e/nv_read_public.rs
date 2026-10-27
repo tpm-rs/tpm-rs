@@ -202,7 +202,8 @@ fn name_alg_nv_index_names_and_unsupported_primary() {
         };
 
         let public_area = TpmtPublic {
-            name_alg: Some(TpmiAlgHash::Sm3_256), // unsupported name_alg in create_primary
+            // Replaced by SM3_256 (unsupported) below.
+            name_alg: Some(TpmiAlgHash::Sha256),
             object_attributes: TpmaObject::FIXED_TPM
                 | TpmaObject::FIXED_PARENT
                 | TpmaObject::SENSITIVE_DATA_ORIGIN
@@ -235,7 +236,19 @@ fn name_alg_nv_index_names_and_unsupported_primary() {
 
         // One password session: with none, C returns AUTH_MISSING before the
         // template is checked (SessionProcess.c:1650).
-        let err = match execute_with_password_sessions(&mut sim, &create_primary, 1, &[]) {
+        // nameAlg = SM3_256, which this TPM does not implement (not a `TpmiAlgHash` of this
+        // TPM).
+        let err = match crate::_common::execute_with_corrupted_bytes_status(
+            &mut sim,
+            &create_primary,
+            1,
+            &[],
+            |p| {
+                let name_alg =
+                    crate::_common::tpm2b_public_name_alg(crate::_common::tpm2b_end(p, 0));
+                crate::_common::put_u16(p, name_alg, tpm2::Alg::SM3_256.id());
+            },
+        ) {
             Ok(_) => panic!("expected create_primary to fail"),
             Err(e) => e,
         };

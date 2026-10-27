@@ -568,16 +568,20 @@ fn hmac_rejects_unsupported_hash_alg() {
     };
     let resp_handles = sim.execute(load_cmd).unwrap();
 
-    // Send MAC command with SM3256 hash alg (unsupported)
+    // Send MAC command with SM3256 hash alg (unsupported; not a `TpmiAlgHash` of this TPM)
     let hmac_cmd = LocalHmacCmdExplicitNullAlg {
         handle: resp_handles.object_handle,
         in_buffer: Tpm2bMaxBuffer::from_bytes(b"hello").unwrap(),
-        hash_alg: Some(TpmiAlgHash::Sm3_256),
+        hash_alg: Some(TpmiAlgHash::Sha256),
     };
-    let res = exec_pw(&mut sim, hmac_cmd);
-    assert!(res.is_err());
-    let err = res.err().unwrap();
-    assert_eq!(err.get(), TpmRc::HASH.with(Position::parameter(2)).get());
+    let res =
+        crate::_common::execute_with_corrupted_bytes_status(&mut sim, &hmac_cmd, 1, &[], |p| {
+            crate::_common::put_u16(p, crate::_common::tpm2b_end(p, 0), tpm2::Alg::SM3_256.id());
+        });
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::HASH.with(Position::parameter(2)).get())
+    );
 
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }

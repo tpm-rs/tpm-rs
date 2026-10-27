@@ -46,66 +46,36 @@ trybuild = { version = "1.0.89", features = ["diff"] }
 zerocopy = { version = "0.8.33", features = ["derive"] }
 
 # Common workspace crates
-tpm2 = { path = "crates/tpm2", features = [
-    "sha1",
-    "sha256",
-    "sha384",
-    "sha512",
-    "sm3_256",
-    "sha3_256",
-    "sha3_384",
-    "sha3_512",
-    "aes128",
-    "aes192",
-    "aes256",
-    "sm4_128",
-    "camellia128",
-    "camellia192",
-    "camellia256",
-    "cmac",
-    "ctr",
-    "ofb",
-    "cbc",
-    "ecb",
-    "ecc_curve_nist_p192",
+# The algorithms of the TPM are the default features of `tpm2` (see
+# crates/tpm2/Cargo.toml), except SHA-512: it is optional, enabled by the
+# default `sha512` feature of every crate that uses `tpm2` (which forwards it to
+# `tpm2/sha512`), so that a build without it (every dependency with
+# `default-features = false`) is a TPM without SHA-512.
+tpm2 = { path = "crates/tpm2", default-features = false, features = [
+    "sha1", "sha256", "sha384",
+    "aes128", "aes256",
+    "ctr", "ofb", "cbc", "ecb",
     "ecc_curve_nist_p224",
     "ecc_curve_nist_p256",
     "ecc_curve_nist_p384",
     "ecc_curve_nist_p521",
     "ecc_curve_bn_p256",
-    "ecc_curve_bn_p638",
-    "ecc_curve_sm2_p256",
-    "ecc_curve_bp_p256_r1",
-    "ecc_curve_bp_p384_r1",
-    "ecc_curve_bp_p512_r1",
-    "ecc_curve_curve25519",
-    "ecc_curve_curve448",
     "rsa1024",
     "rsa2048",
-    "rsa3072",
-    "rsa4096",
     "rsassa",
     "rsapss",
     "rsaes",
     "oaep",
-    "nist_p224",
-    "nist_p256",
-    "nist_p384",
-    "nist_p521",
-    "bn_p256",
-    "sm2_p256",
     "ecdsa",
     "ecdh",
     "ecdaa",
-    "sm2",
-    "ecschnorr",
-    "ecmqv",
 ] }
 tpm2-client = { path = "crates/tpm2-client" }
-tpm2-impl = { path = "crates/tpm2-impl" }
-tpm2-crypto-rust = { path = "crates/tpm2-crypto/rust" }
-tpm2-crypto-crux = { path = "crates/tpm2-crypto/crux" }
-tpm2-crypto-bssl = { path = "crates/tpm2-crypto/bssl" }
+# Without their default features (`sha512`), which each dependent forwards from its own `sha512`.
+tpm2-impl = { path = "crates/tpm2-impl", default-features = false }
+tpm2-crypto-rust = { path = "crates/tpm2-crypto/rust", default-features = false }
+tpm2-crypto-crux = { path = "crates/tpm2-crypto/crux", default-features = false }
+tpm2-crypto-bssl = { path = "crates/tpm2-crypto/bssl", default-features = false }
 tpm2-crypto-tests = { path = "crates/tpm2-crypto/tests" }
 
 [profile.release]

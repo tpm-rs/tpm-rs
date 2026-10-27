@@ -684,20 +684,23 @@ fn verify_signature_rejects_unsupported_scheme() {
     let verify_cmd = VerifySignature {
         key_handle: load_rsp.object_handle,
         digest: Tpm2bDigest::from_bytes(&[0x01; 32]).unwrap(),
-        signature: TpmtSignature::Sm2(tpm2::TpmsSignatureEcc {
+        signature: TpmtSignature::Ecdsa(tpm2::TpmsSignatureEcc {
             hash: TpmiAlgHash::Sha256,
             signature_r: Tpm2bEccParameter::default(),
             signature_s: Tpm2bEccParameter::default(),
         }),
     };
-    let res = sim.execute(verify_cmd);
-    assert!(
-        res.is_err(),
-        "VerifySignature should fail for non-Null signature schemes"
-    );
-    let err = res.err().unwrap();
+    // sigAlg = TPM_ALG_SM2 (not a `TpmtSignature` of this TPM), after the digest.
+    let res =
+        crate::_common::execute_with_corrupted_bytes_status(&mut sim, &verify_cmd, 0, &[], |p| {
+            crate::_common::put_u16(p, crate::_common::tpm2b_end(p, 0), tpm2::Alg::SM2.id());
+        });
     // VerifySignature.c: RcSafeAddToResult(TPM_RC_SCHEME, RC_VerifySignature_signature).
-    assert_eq!(err.get(), TpmRc::SCHEME.with(Position::parameter(2)).get());
+    assert_eq!(
+        res.err(),
+        Some(TpmRc::SCHEME.with(Position::parameter(2)).get()),
+        "VerifySignature should fail for unimplemented signature schemes"
+    );
 
     flush_context(&mut sim, load_rsp.object_handle).unwrap();
 }

@@ -30,7 +30,10 @@ tpm2-crypto-crux = { path = "../crux", optional = true }
 tpm2-crypto-bssl = { path = "../bssl", optional = true }
 
 [features]
-default = ["bssl"]
+default = ["bssl", "sha512"]
+# SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
+# reference built without `ALG_SHA512`) is built with every crate without it.
+sha512 = ["tpm2/sha512", "tpm2-crypto-rust?/sha512", "tpm2-crypto-crux?/sha512", "tpm2-crypto-bssl?/sha512"]
 rust = ["dep:tpm2-crypto-rust"]
 crux = ["dep:tpm2-crypto-crux"]
 bssl = ["dep:tpm2-crypto-bssl"]

@@ -73,18 +73,23 @@ mode and needs no reference binaries:
 cargo fuzz build --fuzz-dir testing/fuzz -O -s none --features inproc diff_conversation
 ```
 
-For debugging, the default (process) mode runs the references as child
-processes, so build them first and point the fuzzer at them (the tools in
-`src/bin/` always use this mode):
+The fuzzer compares `tpm-rs` with one C reference TPM, selected by a
+`target-*` feature (default `target-mstpm20`; e.g. `--no-default-features
+--features target-ibmswtpm2,inproc`), which also gives `tpm-rs` the profile of
+that reference (see `testing/Cargo.toml`). To fuzz against every reference,
+run one campaign per target.
+
+For debugging, the default (process) mode runs the reference as child
+processes, so build it first (with the same target) and point the fuzzer at it
+(the tools in `src/bin/` always use this mode):
 
 ```sh
-cargo build --release -p testing --features differential --bins
-export MSTPM20_BIN=$PWD/target/release/mstpm20 IBMSWTPM2_BIN=$PWD/target/release/ibmswtpm2
+cargo build --release -p testing --features target-mstpm20 --bin reference
+export REFERENCE_BIN=$PWD/target/release/reference
 cargo fuzz build --fuzz-dir testing/fuzz
 ```
 
-`DIFFERENTIAL_REFERENCES=mstpm20` (or `ibmswtpm2`) restricts the comparison to
-one reference. Pass the same build options (`-O -s none --features inproc`)
+Pass the same build options (`-O -s none --features inproc`, and the target)
 to every later `cargo fuzz run`/`tmin`/`cmin`, or it rebuilds the target in
 another mode.
 
@@ -135,9 +140,10 @@ cargo fuzz run --fuzz-dir testing/fuzz -O -s none --features inproc diff_convers
    ```
 
    Paste it into `testing/tests/e2e/<topic>.rs`, give it a name that describes
-   the behavior under test and complete its `///` doc (GEMINI.md rules), and
+   the behavior under test and complete its `///` doc (AGENTS.md rules), and
    replace the `TODO` with the specified behavior. Run it with
-   `cargo test --release -p testing --features differential <name>`.
+   `cargo test --release -p testing --features target-<name> <test>` for every
+   target (`make test-differential`).
 4. **Classify** it (as in `differential.md`):
    - `tpm-rs` bug: fix it in `crates/tpm2-impl` and keep the test;
    - reference bug: add `testing/patches/<impl>/bug-fix-<fix>.patch` and a
@@ -178,7 +184,7 @@ TPM_FUZZ_RECORD_DIR=/tmp/traces TPM_REFERENCE_SEED=4242:1000000 \
 #    through the driver and cuts it before the first round that does not
 #    reproduce the recorded response; --ecc-variants adds cheaper variants of
 #    the conversations with RSA key templates (see below). Needs the reference
-#    binaries (MSTPM20_BIN/IBMSWTPM2_BIN, see Build).
+#    binary (REFERENCE_BIN, see Build).
 rm -rf /tmp/converted
 cargo run --release --manifest-path testing/fuzz/Cargo.toml --bin trace2conv -- \
     --verify --ecc-variants /tmp/converted /tmp/traces
@@ -252,7 +258,7 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 The `trace2conv` and `to_test` tests replay conversations on a differential
-`Tpm`, so they need `MSTPM20_BIN`/`IBMSWTPM2_BIN` (see Build). The trace
+`Tpm`, so they need `REFERENCE_BIN` (see Build). The trace
 fixtures in `src/bin/shared/testdata/` are E2E traces recorded with the fixed
 seed; if a `tpm-rs` change alters their responses, re-record them (step 1
 above) and copy the traces of the same tests.

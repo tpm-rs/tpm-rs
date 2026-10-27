@@ -147,9 +147,10 @@ impl CommandAuditList {
 
 impl GlobalState {
     /// The command audit hash algorithm (`gp.auditHashAlg`). An invalid stored value (which a
-    /// TPM state never contains) falls back to the manufacture default, SHA-512.
+    /// TPM state never contains) falls back to the manufacture default, SHA-512 (SHA-384 without SHA-512).
     pub fn command_audit_hash_alg(&self) -> TpmiAlgHash {
-        TpmiAlgHash::try_from(self.audit_hash_alg).unwrap_or(TpmiAlgHash::Sha512)
+        TpmiAlgHash::try_from(self.audit_hash_alg)
+            .unwrap_or_else(|_| crate::handler::context_integrity_hash_alg())
     }
 }
 

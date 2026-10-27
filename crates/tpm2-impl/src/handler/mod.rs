@@ -315,17 +315,13 @@ pub struct CommandHandler<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, 
 ///
 /// TPM 2.0 Part 1, "Context Integrity Protection": the algorithm "is required to have the
 /// highest security strength of any hash algorithm implemented on the TPM", i.e. SHA-512, or
-/// SHA-384 when the installed profile has no SHA-512 ([`tpm2::profile::Profile::sha512`]; the C
+/// SHA-384 when the TPM has no SHA-512 (without the `sha512` feature of `tpm2`; the C
 /// references' `CONTEXT_HASH_ALGORITHM` follows `ALG_SHA512` the same way).
 /// Tickets are HMACs with this algorithm (Part 2, `TPMT_TK_*`), and the hierarchy authValue
 /// limit of `TPM2_HierarchyChangeAuth` is its digest size (Part 1, "Authorization Size
 /// Convention").
 pub(crate) fn context_integrity_hash_alg() -> TpmiAlgHash {
-    if tpm2::profile::allows_algorithm(tpm2::Alg::SHA512) {
-        TpmiAlgHash::Sha512
-    } else {
-        TpmiAlgHash::Sha384
-    }
+    TpmiAlgHash::try_from(tpm2::Alg::SHA512).unwrap_or(TpmiAlgHash::Sha384)
 }
 
 /// Returns the first `size` bytes of a Primary Seed or hierarchy proof buffer.
@@ -658,7 +654,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .finalize(&mut digest_buf)
             .map_err(|_| TpmRc::FAILURE)?;
         let len = digest.digest().len();
-        Ok((digest_buf, len))
+        let mut out = [0u8; 64];
+        out[..len].copy_from_slice(&digest_buf[..len]);
+        Ok((out, len))
     }
 
     /// [`sym_encrypt_decrypt`] with this TPM's crypto provider: encrypts or decrypts `data` in
@@ -730,11 +728,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         TpmiAlgHash::Sha1 => &pcrs.sha1[pcr][..],
                         TpmiAlgHash::Sha256 => &pcrs.sha256[pcr][..],
                         TpmiAlgHash::Sha384 => &pcrs.sha384[pcr][..],
+                        #[cfg(feature = "sha512")]
                         TpmiAlgHash::Sha512 => &pcrs.sha512[pcr][..],
-                        TpmiAlgHash::Sm3_256 => &pcrs.sm3_256[pcr][..],
-                        TpmiAlgHash::Sha3_256 => &pcrs.sha3_256[pcr][..],
-                        TpmiAlgHash::Sha3_384 => &pcrs.sha3_384[pcr][..],
-                        TpmiAlgHash::Sha3_512 => &pcrs.sha3_512[pcr][..],
                         #[allow(unreachable_patterns)]
                         _ => return Err(TpmRc::HASH.to_rc()),
                     };
@@ -1177,7 +1172,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// the null hierarchy) as `(buffer, length, hierarchy handle)`.
     ///
     /// Fails with `TPM_RC_FAILURE` if the proof is not provisioned (see
-    /// [`provisioned_secret`]), and with `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED` for a
+    /// `provisioned_secret`), and with `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED` for a
     /// firmware-limited/SVN-limited hierarchy.
     pub fn resolve_hierarchy_proof(&self, hierarchy: u32) -> Result<(&[u8], usize, u32), TpmRc> {
         // The proof of a firmware-limited or SVN-limited hierarchy is not available (the TCG
@@ -1556,10 +1551,11 @@ mod tests {
     #[test]
     fn sym_encrypt_decrypt_without_a_cipher_mode_is_unsupported() {
         let mut data = [0xAA; 16];
-        for mode in [None, Some(TpmiAlgSymMode::Cmac)] {
+        // Without a mode (CMAC, also not a cipher mode, is not a mode of this TPM's profile).
+        {
             let alg = TpmtSymDefObject {
                 alg: AlgSym::Aes128,
-                mode,
+                mode: None,
             };
             // The mode is checked first: the IV and key sizes are wrong as well.
             assert_eq!(

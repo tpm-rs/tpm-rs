@@ -149,8 +149,11 @@ impl<'a> TpmuSensitiveComposite<'a> {
             Alg::ECC => Ok(Self::Ecc(Tpm2bEccParameter::unmarshal(src)?)),
             Alg::KEYEDHASH => Ok(Self::KeyedHash(Tpm2bSensitiveData::unmarshal(src)?)),
             Alg::SYMCIPHER => Ok(Self::Sym(Tpm2bSymKey::unmarshal(src)?)),
+            #[cfg(feature = "mldsa")]
             Alg::MLDSA => Ok(Self::Mldsa(Tpm2bPrivateKeyMldsa::unmarshal(src)?)),
+            #[cfg(feature = "mldsa")]
             Alg::HASH_MLDSA => Ok(Self::HashMldsa(Tpm2bPrivateKeyMldsa::unmarshal(src)?)),
+            #[cfg(feature = "mlkem")]
             Alg::MLKEM => Ok(Self::Mlkem(Tpm2bPrivateKeyMlkem::unmarshal(src)?)),
             _ => Err(UnmarshalError::SELECTOR),
         }
@@ -185,8 +188,11 @@ impl<'a> TpmuPublicId<'a> {
             Alg::RSA => Ok(Self::Rsa(Unmarshal::unmarshal(src)?)),
             #[cfg(feature = "ecc")]
             Alg::ECC => Ok(Self::Ecc(Unmarshal::unmarshal(src)?)),
+            #[cfg(feature = "mldsa")]
             Alg::MLDSA => Ok(Self::Mldsa(Unmarshal::unmarshal(src)?)),
+            #[cfg(feature = "mldsa")]
             Alg::HASH_MLDSA => Ok(Self::HashMldsa(Unmarshal::unmarshal(src)?)),
+            #[cfg(feature = "mlkem")]
             Alg::MLKEM => Ok(Self::Mlkem(Unmarshal::unmarshal(src)?)),
             _ => Err(UnmarshalError::SELECTOR),
         }
@@ -279,14 +285,17 @@ impl<'a> PublicParmsAndId<'a> {
                 Unmarshal::unmarshal(src)?,
                 Unmarshal::unmarshal(src)?,
             )),
+            #[cfg(feature = "mldsa")]
             Alg::MLDSA => Ok(Self::Mldsa(
                 Unmarshal::unmarshal(src)?,
                 Unmarshal::unmarshal(src)?,
             )),
+            #[cfg(feature = "mldsa")]
             Alg::HASH_MLDSA => Ok(Self::HashMldsa(
                 Unmarshal::unmarshal(src)?,
                 Unmarshal::unmarshal(src)?,
             )),
+            #[cfg(feature = "mlkem")]
             Alg::MLKEM => Ok(Self::Mlkem(
                 Unmarshal::unmarshal(src)?,
                 Unmarshal::unmarshal(src)?,
@@ -310,10 +319,13 @@ impl<'a> PublicParmsAndId<'a> {
             Alg::RSA => Self::Rsa(Unmarshal::unmarshal(src)?, Tpm2bPublicKeyRsa::default()),
             #[cfg(feature = "ecc")]
             Alg::ECC => Self::Ecc(Unmarshal::unmarshal(src)?, TpmsEccPoint::default()),
+            #[cfg(feature = "mldsa")]
             Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?, Tpm2bPublicKeyMldsa::default()),
+            #[cfg(feature = "mldsa")]
             Alg::HASH_MLDSA => {
                 Self::HashMldsa(Unmarshal::unmarshal(src)?, Tpm2bPublicKeyMldsa::default())
             }
+            #[cfg(feature = "mlkem")]
             Alg::MLKEM => Self::Mlkem(Unmarshal::unmarshal(src)?, Tpm2bPublicKeyMlkem::default()),
             _ => return Err(UnmarshalError::SELECTOR),
         };

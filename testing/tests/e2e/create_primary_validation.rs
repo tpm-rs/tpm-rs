@@ -275,9 +275,9 @@ fn unsupported_rsa_exponent_fails_key_generation_with_range() {
 /// `TPMA_OBJECT` bit 3 is reserved, so a public area with it SET fails to unmarshal
 /// (`TPM_RC_RESERVED_BITS + P2`) before anything later in the template is examined. TPM 2.0
 /// Part 2, Table "Definition of (UINT32) TPMA_OBJECT Bits": "3 | Reserved | shall be zero". (The
-/// TCG reference version 185 defines the bit as `fixedFirmware`, see
-/// `testing/patches/mstpm20-185-feature/profile-tpma-object-fixed-firmware-reserved.patch`.) Found by
-/// differential fuzzing.
+/// TCG reference implementation defines the bit as `fixedFirmware`, which the `tpm2` feature
+/// `tpma-object-fixed-firmware` reproduces for its differential targets.) Found by differential
+/// fuzzing.
 #[test]
 fn reserved_object_attribute_bit_3_rejected() {
     let mut tpm = testing::tpm::Tpm::new();
@@ -297,12 +297,17 @@ fn reserved_object_attribute_bit_3_rejected() {
             0x2e1,
         ),
     ];
+    // With the `tpma-object-fixed-firmware` profile of `tpm2` (the TCG reference targets), bit 3
+    // is `fixedFirmware` and the public areas fail later (the differential tests compare the
+    // response code with the reference).
+    let bit_3_reserved = tpm2::TpmaObject::RESERVED_BITS_MASK & (1 << 3) != 0;
     for (i, (cmd, rc)) in steps.into_iter().enumerate() {
         let rsp = tpm.send_command(0, &crate::_common::hex_checked(cmd));
-        assert_eq!(
-            u32::from_be_bytes(rsp[6..10].try_into().unwrap()),
-            rc,
-            "step {i}: {rsp:02x?}"
-        );
+        let actual = u32::from_be_bytes(rsp[6..10].try_into().unwrap());
+        if bit_3_reserved {
+            assert_eq!(actual, rc, "step {i}: {rsp:02x?}");
+        } else {
+            assert_ne!(actual, rc, "step {i}: {rsp:02x?}");
+        }
     }
 }

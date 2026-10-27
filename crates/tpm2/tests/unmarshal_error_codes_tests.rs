@@ -924,7 +924,8 @@ fn test_non_null_scheme_structures_reject_tpm_alg_null_inner_algorithms() {
     // 8. TpmtKdfScheme non-null variants with inner 0x0010 -> HASH
     for kdf_alg in [
         0x0007u16, // MGF1
-        0x001F,    // HKDF
+        #[cfg(feature = "hkdf")]
+        0x001F, // HKDF
         0x0020,    // KDF1_SP800_56A
         0x0021,    // KDF2
         0x0022,    // KDF1_SP800_108
@@ -1893,6 +1894,7 @@ fn test_attestation_command_handles_tpmi_validation() {
 }
 
 #[test]
+#[cfg(feature = "hkdf")]
 fn test_tpmi_alg_kdf_and_tpmt_kdf_scheme_hkdf_support() {
     use tpm2::{
         Marshal, TpmEccCurve, TpmiAlgHash, TpmiAlgKdf, TpmsEccParms, TpmsSchemeXor, TpmtKdfScheme,

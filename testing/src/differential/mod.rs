@@ -1,21 +1,27 @@
-//! Differential testing against C reference TPMs (`differential` feature).
+//! Differential testing against a C reference TPM (`target-*` features).
 //!
-//! Every [`crate::tpm::Tpm`] owns one [`Reference`]: a child process (the
-//! `mstpm20` or `ibmswtpm2` binary of this crate, `src/bin/`) that hosts its
-//! own instance of a patched C reference TPM:
+//! A differential build compares `tpm-rs` with one C reference TPM, the
+//! target ([`Implementation::TARGET`]), selected by exactly one `target-*`
+//! feature, which also gives `tpm-rs` the profile of that reference (see
+//! `testing/Cargo.toml`):
 //!
-//! * [`Implementation::Mstpm20`]: the TCG reference implementation
-//!   (the Microsoft `ms-tpm-20-ref` code base): version 185 of the
-//!   TCG-internal `https://github.com/TrustedComputingGroup/TPM-Internal`,
-//!   patched by `testing/patches/mstpm20-185-feature/`, when the user's `git` may
-//!   clone it, and otherwise `https://github.com/TrustedComputingGroup/TPM`,
-//!   patched by `testing/patches/mstpm20/` (see `testing/build.rs`);
-//! * [`Implementation::Ibmswtpm2`]: the IBM software TPM
+//! * `target-mstpm20` ([`Implementation::Mstpm20`]): the TCG reference
+//!   implementation (the Microsoft `ms-tpm-20-ref` code base) from
+//!   `https://github.com/TrustedComputingGroup/TPM`, patched by
+//!   `testing/patches/mstpm20/`;
+//! * `target-mstpm20-v185` ([`Implementation::Mstpm20`]): version 185 of the
+//!   TCG reference implementation from the TCG-internal
+//!   `https://github.com/TrustedComputingGroup/TPM-Internal`, patched by
+//!   `testing/patches/mstpm20-185-feature/`;
+//! * `target-ibmswtpm2` ([`Implementation::Ibmswtpm2`]): the IBM software TPM
 //!   (`https://github.com/kgoldman/ibmswtpm2`), patched by
 //!   `testing/patches/ibmswtpm2/`.
 //!
-//! Both keep their state in globals, so one process per TPM is what lets
-//! tests run in parallel and a single test use several TPMs.
+//! Every [`crate::tpm::Tpm`] owns one [`Reference`]: a child process (the
+//! `reference` binary of this crate, `src/bin/reference.rs`) that hosts its
+//! own instance of the patched C reference TPM. The C references keep their
+//! state in globals, so one process per TPM is what lets tests run in
+//! parallel and a single test use several TPMs.
 //!
 //! The C references run their own, unmodified random number generation:
 //! glibc `rand()` seeded from their real-time clock and their process ID,
@@ -42,14 +48,10 @@
 //! ones with the same seed (`Reinit`), which is much cheaper than launching
 //! new processes (e.g. once per fuzz input).
 //!
-//! The references are selected with the `DIFFERENTIAL_REFERENCES`
-//! environment variable (a comma-separated list of implementation names);
-//! unset, every `Tpm` is mirrored to `mstpm20` and `ibmswtpm2`. A reference
-//! binary is located through its environment variable (`MSTPM20_BIN`,
-//! `IBMSWTPM2_BIN`) or, by default, next to the running test executable (in
-//! it or in one of its ancestor directories, e.g. `target/release/mstpm20`);
-//! `cargo test -p testing --features differential` builds them
-//! automatically.
+//! The reference binary is located through the `REFERENCE_BIN` environment
+//! variable or, by default, next to the running test executable (in it or in
+//! one of its ancestor directories, e.g. `target/release/reference`);
+//! `cargo test -p testing --features target-<name>` builds it automatically.
 
 use std::fmt;
 use std::io::{BufReader, BufWriter, Write as _};
@@ -94,9 +96,27 @@ pub enum Implementation {
     Ibmswtpm2,
 }
 
+#[cfg(not(any(
+    feature = "target-mstpm20",
+    feature = "target-mstpm20-v185",
+    feature = "target-ibmswtpm2"
+)))]
+compile_error!(
+    "a differential build of `testing` needs a target: enable one of the features \
+     `target-mstpm20`, `target-mstpm20-v185` and `target-ibmswtpm2`"
+);
+
 impl Implementation {
     /// Every implementation.
     pub const ALL: [Self; 2] = [Self::Mstpm20, Self::Ibmswtpm2];
+
+    /// The implementation of the target of this build (its `target-*` feature): the only
+    /// implementation linked into it.
+    pub const TARGET: Self = if cfg!(feature = "target-ibmswtpm2") {
+        Self::Ibmswtpm2
+    } else {
+        Self::Mstpm20
+    };
 
     /// The name of the implementation, which is also the name of its
     /// reference binary.
@@ -107,54 +127,16 @@ impl Implementation {
         }
     }
 
-    /// The environment variable that overrides the path of the reference
-    /// binary.
-    pub const fn binary_env(self) -> &'static str {
-        match self {
-            Self::Mstpm20 => "MSTPM20_BIN",
-            Self::Ibmswtpm2 => "IBMSWTPM2_BIN",
-        }
-    }
-
     /// Parses an implementation name (see [`Self::name`]).
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|i| i.name() == name)
     }
 }
 
-/// The references every `Tpm` is mirrored to, selected by
-/// `DIFFERENTIAL_REFERENCES` (see the module docs): every implementation by
-/// default.
-///
-/// # Panics
-/// If the variable names an unknown implementation.
+/// The references every `Tpm` is mirrored to: the target of this build
+/// ([`Implementation::TARGET`]).
 pub fn selected() -> &'static [Implementation] {
-    static SELECTED: OnceLock<Vec<Implementation>> = OnceLock::new();
-    SELECTED.get_or_init(|| {
-        let value = std::env::var(REFERENCES_ENV).unwrap_or_default();
-        parse_selection(&value).unwrap_or_else(|e| panic!("{e}"))
-    })
-}
-
-/// Parses a `DIFFERENTIAL_REFERENCES` value: a comma-separated list of
-/// implementation names (surrounding whitespace and duplicates are ignored;
-/// an empty value means every implementation).
-pub fn parse_selection(value: &str) -> Result<Vec<Implementation>, String> {
-    let mut selected = Vec::new();
-    for name in value.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-        let implementation = Implementation::from_name(name).ok_or_else(|| {
-            format!(
-                "{REFERENCES_ENV}: unknown reference `{name}` (expected mstpm20 and/or ibmswtpm2)"
-            )
-        })?;
-        if !selected.contains(&implementation) {
-            selected.push(implementation);
-        }
-    }
-    if selected.is_empty() {
-        selected = Implementation::ALL.to_vec();
-    }
-    Ok(selected)
+    &[Implementation::TARGET]
 }
 
 impl fmt::Display for Implementation {
@@ -163,35 +145,36 @@ impl fmt::Display for Implementation {
     }
 }
 
-/// Environment variable selecting the references (see the module docs).
-pub const REFERENCES_ENV: &str = "DIFFERENTIAL_REFERENCES";
+/// Environment variable that overrides the path of the reference binary.
+pub const REFERENCE_BIN_ENV: &str = "REFERENCE_BIN";
 
-/// Locates the binary of `implementation` (see the module docs).
-fn locate_binary(implementation: Implementation) -> PathBuf {
-    let env = implementation.binary_env();
-    if let Some(path) = std::env::var_os(env) {
+/// The name of the reference binary (`src/bin/reference.rs`).
+const REFERENCE_BIN: &str = "reference";
+
+/// Locates the reference binary (see the module docs).
+fn locate_binary() -> PathBuf {
+    if let Some(path) = std::env::var_os(REFERENCE_BIN_ENV) {
         return PathBuf::from(path);
     }
-    let name = implementation.name();
     let exe = std::env::current_exe().expect("cannot locate the test executable");
     exe.ancestors()
         .skip(1)
-        .map(|dir| dir.join(name))
+        .map(|dir| dir.join(REFERENCE_BIN))
         .find(|candidate| candidate.is_file())
         .unwrap_or_else(|| {
             panic!(
-                "cannot find the `{name}` binary near {}; build it with `cargo build \
-                 --release -p testing --features differential --bin {name}` or set {env}",
+                "cannot find the `{REFERENCE_BIN}` binary near {}; build it with `cargo build \
+                 --release -p testing --features target-<name> --bin {REFERENCE_BIN}` or set \
+                 {REFERENCE_BIN_ENV}",
                 exe.display()
             )
         })
 }
 
-/// The path of the binary of `implementation`, located once.
-fn reference_binary(implementation: Implementation) -> &'static PathBuf {
-    static BINARIES: [OnceLock<PathBuf>; Implementation::ALL.len()] =
-        [const { OnceLock::new() }; Implementation::ALL.len()];
-    BINARIES[implementation as usize].get_or_init(|| locate_binary(implementation))
+/// The path of the reference binary, located once.
+fn reference_binary() -> &'static PathBuf {
+    static BINARY: OnceLock<PathBuf> = OnceLock::new();
+    BINARY.get_or_init(locate_binary)
 }
 
 /// A reference child process hosting a C reference TPM that mirrors one
@@ -234,7 +217,7 @@ impl Reference {
             .name()
             .unwrap_or("<unnamed>")
             .to_owned();
-        let binary = reference_binary(implementation);
+        let binary = reference_binary();
         let mut child = Command::new(binary)
             .arg(&test)
             .env(SEED_ENV, seed.to_string())
@@ -496,22 +479,4 @@ pub fn join_messages(divergences: &[Divergence]) -> String {
         .map(|d| d.message.as_str())
         .collect::<Vec<_>>()
         .join("\n\n")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn references_are_selected_by_name() {
-        use Implementation::{Ibmswtpm2, Mstpm20};
-        assert_eq!(parse_selection(""), Ok(vec![Mstpm20, Ibmswtpm2]));
-        assert_eq!(
-            parse_selection("ibmswtpm2, mstpm20"),
-            Ok(vec![Ibmswtpm2, Mstpm20])
-        );
-        assert_eq!(parse_selection(" ibmswtpm2 "), Ok(vec![Ibmswtpm2]));
-        assert_eq!(parse_selection("mstpm20,mstpm20"), Ok(vec![Mstpm20]));
-        assert!(parse_selection("mstpm2").is_err());
-    }
 }

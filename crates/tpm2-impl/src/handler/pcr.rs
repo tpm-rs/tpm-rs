@@ -377,7 +377,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// This command resets a resettable PCR index to zero in every allocated bank.
     ///
     /// Whether the PCR may be reset depends only on its reset localities
-    /// ([`PCR_RESET_LOCALITY`]) and the command locality (`PCRIsResetAllowed`); resets from
+    /// (`PCR_RESET_LOCALITY`) and the command locality (`PCRIsResetAllowed`); resets from
     /// locality 4 are never allowed because this TPM implements DRTM. Resetting a PCR of the TCB
     /// group (PCRs 20-22) does not increment the PCR update counter.
     ///
@@ -447,7 +447,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// As in the C reference (`PCRAllocate`), the new allocation is built from the active one
     /// (banks that are not listed keep their current allocation, the last entry for a bank
     /// wins), must keep the H-CRTM PCR (0) and the DRTM PCR (17) allocated in at least one bank
-    /// (`TPM_RC_PCR`), and is only written to NV ([`crate::engine::PCR_ALLOCATION_HANDLE`]): the
+    /// (`TPM_RC_PCR`), and is only written to NV (`crate::engine::PCR_ALLOCATION_HANDLE`): the
     /// active allocation is unchanged until the next `_TPM_Init`.
     ///
     /// # Spec Citation

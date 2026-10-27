@@ -74,19 +74,19 @@ fn accepts_mgf1_ecc_kdf() {
 #[test]
 fn rejects_unimplemented_ecc_schemes() {
     let mut sim = Tpm::new();
-    for scheme in [
-        TpmtEccScheme::Sm2(TpmiAlgHash::Sha256),
-        TpmtEccScheme::Ecschnorr(TpmiAlgHash::Sha256),
-        TpmtEccScheme::Ecmqv(TpmiAlgHash::Sha256),
-    ] {
+    // The schemes are not `TpmtEccScheme`s of this TPM: an ECDSA scheme is marshaled and its
+    // algorithm replaced (type, symmetric (NULL), then scheme).
+    for scheme in [tpm2::Alg::SM2, tpm2::Alg::ECSCHNORR, tpm2::Alg::ECMQV] {
         let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
             symmetric: None,
-            scheme: Some(scheme),
+            scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),
             curve_id: TpmEccCurve::NistP256,
             kdf: None,
         });
         assert_eq!(
-            execute_test_parms(&mut sim, ecc_parms),
+            execute_test_parms_corrupted(&mut sim, ecc_parms, |buf| {
+                buf[4..6].copy_from_slice(&scheme.id().to_be_bytes());
+            }),
             Err(TpmRc::SCHEME.with(Position::parameter(1)).get()),
             "{scheme:?}"
         );

@@ -39,11 +39,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        if cmd.hash_alg != TpmiAlgHash::Sha1
-            && cmd.hash_alg != TpmiAlgHash::Sha256
-            && cmd.hash_alg != TpmiAlgHash::Sha384
-            && cmd.hash_alg != TpmiAlgHash::Sha512
-        {
+        if !crate::handler::capability::is_implemented_algorithm(tpm2::Alg::from(cmd.hash_alg)) {
             return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
 
@@ -113,10 +109,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         if let Some(alg) = cmd.hash_alg
-            && alg != TpmiAlgHash::Sha1
-            && alg != TpmiAlgHash::Sha256
-            && alg != TpmiAlgHash::Sha384
-            && alg != TpmiAlgHash::Sha512
+            && !crate::handler::capability::is_implemented_algorithm(tpm2::Alg::from(alg))
         {
             // C rejects unimplemented hashes while unmarshaling `hashAlg`
             // (`TPM_RC_HASH + RC_HashSequenceStart_hashAlg`).
@@ -391,7 +384,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // the engine's configuration excludes it, SHA-512). The state of an excluded hash
             // is skipped (its digest stays empty and is not reported).
             for (digest, state) in digests.iter_mut().zip(seq_obj.hash_states.iter()) {
-                if !tpm2::profile::allows_algorithm(tpm2::Alg::from(state.alg)) {
+                if !crate::handler::capability::is_enabled_by_features(tpm2::Alg::from(state.alg)) {
                     continue;
                 }
                 let mut state = *state;
@@ -580,12 +573,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         for buf in buffers {
             state.update(buf).map_err(|_| TpmRc::FAILURE)?;
         }
-        let mut digest_buf = [0u8; 64];
+        let mut digest_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let digest = state
             .finalize(&mut digest_buf)
             .map_err(|_| TpmRc::FAILURE)?;
         let len = digest.digest().len();
-        Ok((digest_buf, len))
+        let mut out = [0u8; 64];
+        out[..len].copy_from_slice(&digest_buf[..len]);
+        Ok((out, len))
     }
 }
 

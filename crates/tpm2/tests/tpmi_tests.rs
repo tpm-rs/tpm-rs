@@ -341,6 +341,7 @@ fn test_tpmi_alg_reserved_ids_return_specific_errors() {
 }
 
 #[test]
+#[cfg(feature = "cmac")]
 fn test_tpmi_alg_mac_scheme_valid() {
     let mut buf = [0u8; 4];
     buf[0..2].copy_from_slice(&0x003Fu16.to_be_bytes()); // TPM_ALG_CMAC
@@ -610,7 +611,9 @@ fn test_tpmi_alg_sig_scheme() {
         (Alg::SM2, TpmiAlgSigScheme::Sm2),
         #[cfg(feature = "ecschnorr")]
         (Alg::ECSCHNORR, TpmiAlgSigScheme::Ecschnorr),
+        #[cfg(feature = "eddsa")]
         (Alg::EDDSA, TpmiAlgSigScheme::Eddsa),
+        #[cfg(feature = "eddsa")]
         (Alg::HASH_EDDSA, TpmiAlgSigScheme::HashEddsa),
         (Alg::HMAC, TpmiAlgSigScheme::Hmac),
     ];

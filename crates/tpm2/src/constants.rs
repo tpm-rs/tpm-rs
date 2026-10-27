@@ -493,10 +493,17 @@ pub const TPM2_MAX_NV_BUFFER_SIZE: u32 = 1024;
 /// Maximum data size of an NV Index (`MAX_NV_INDEX_SIZE`).
 ///
 /// Per TPM 2.0 Part 2 Section 13.6 (Table 227 — `TPMS_NV_PUBLIC`), `dataSize` is bounded
-/// by `MAX_NV_INDEX_SIZE` (2048 bytes).
+/// by `MAX_NV_INDEX_SIZE`: 2048 bytes (the TCG reference profile), or 8500 with the
+/// `max-nv-index-size-8500` feature (the TCG reference implementation version 185).
 #[doc(alias = "MAX_NV_INDEX_SIZE")]
-pub const TPM2_MAX_NV_INDEX_SIZE: u16 = 2048;
-pub const TPM2_MAX_CAP_BUFFER: u32 = 1024;
+pub const TPM2_MAX_NV_INDEX_SIZE: u16 = if cfg!(feature = "max-nv-index-size-8500") {
+    8500
+} else {
+    2048
+};
+/// Implementation-defined maximum marshaled size of `TPMS_CAPABILITY_DATA`
+/// ([`crate::limits::MAX_CAP_BUFFER`]).
+pub const TPM2_MAX_CAP_BUFFER: u32 = crate::limits::MAX_CAP_BUFFER as u32;
 /// The number of implemented hash algorithms and PCR banks (`HASH_COUNT`).
 ///
 /// Computed dynamically from the enabled hash algorithm features (`sha1`, `sha256`,
@@ -681,18 +688,6 @@ impl TpmEccCurve {
 impl TryFrom<u16> for TpmEccCurve {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
-        let curve = Self::try_from_enabled(val)?;
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if curve != Self::None && !crate::profile::allows_curve(curve) {
-            return Err(UnmarshalError::CURVE);
-        }
-        Ok(curve)
-    }
-}
-
-impl TpmEccCurve {
-    /// The curve `val` among the curves enabled by the Cargo features.
-    fn try_from_enabled(val: u16) -> Result<Self, UnmarshalError> {
         match val {
             0x0000 => Ok(Self::None),
             #[cfg(feature = "ecc_curve_nist_p192")]

@@ -19,14 +19,23 @@ use tpm2::*;
 fn test_tpma_object_flags_and_reserved_bits() {
     assert_eq!(TpmaObject::FIRMWARE_LIMITED.bits(), 1 << 8);
     assert_eq!(TpmaObject::SVN_LIMITED.bits(), 1 << 9);
-    assert_eq!(TpmaObject::RESERVED_BITS_MASK, 0xfff0_f009);
-    assert_eq!(!TpmaObject::all().bits(), TpmaObject::RESERVED_BITS_MASK);
-
-    // Bit 3 (0x0000_0008) is reserved (fixedFirmware was moved to bit 8 firmwareLimited in spec)
-    assert_eq!(
-        TpmaObject::unmarshal(&mut &0x0000_0008u32.to_be_bytes()[..]),
-        Err(UnmarshalError::RESERVED_BITS)
-    );
+    assert_eq!(!TpmaObject::all().bits(), 0xfff0_f009);
+    if cfg!(feature = "tpma-object-fixed-firmware") {
+        // Bit 3 is the TCG reference's draft attribute `fixedFirmware`: retained.
+        assert_eq!(TpmaObject::RESERVED_BITS_MASK, 0xfff0_f001);
+        assert_eq!(
+            TpmaObject::unmarshal(&mut &0x0000_0008u32.to_be_bytes()[..]),
+            Ok(TpmaObject(0x0000_0008))
+        );
+    } else {
+        assert_eq!(TpmaObject::RESERVED_BITS_MASK, 0xfff0_f009);
+        // Bit 3 (0x0000_0008) is reserved (fixedFirmware was moved to bit 8 firmwareLimited in
+        // spec)
+        assert_eq!(
+            TpmaObject::unmarshal(&mut &0x0000_0008u32.to_be_bytes()[..]),
+            Err(UnmarshalError::RESERVED_BITS)
+        );
+    }
 
     // All valid bits should marshal/unmarshal cleanly
     let valid = TpmaObject::all();

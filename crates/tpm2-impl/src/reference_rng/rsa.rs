@@ -292,6 +292,7 @@ mod tests {
             ),
             Err(TpmRc::VALUE.to_rc())
         );
+        #[cfg(feature = "sha512")]
         assert_eq!(
             oaep_encode(
                 &mut tpm(&mut state),

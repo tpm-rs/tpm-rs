@@ -5,8 +5,18 @@ use tpm2::{Handle, TpmiStCommandTag};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{TpmCc, TpmSt};
 
-const CMD_BUFFER_SIZE: usize = 4096;
-const RESP_BUFFER_SIZE: usize = 4096;
+/// The command buffer: 4096 octets, or the TPM's `MAX_COMMAND_SIZE` if larger.
+const CMD_BUFFER_SIZE: usize = if tpm2_impl::MAX_COMMAND_SIZE > 4096 {
+    tpm2_impl::MAX_COMMAND_SIZE
+} else {
+    4096
+};
+/// The response buffer: 4096 octets, or the TPM's `MAX_RESPONSE_SIZE` if larger.
+const RESP_BUFFER_SIZE: usize = if tpm2_impl::MAX_RESPONSE_SIZE > 4096 {
+    tpm2_impl::MAX_RESPONSE_SIZE
+} else {
+    4096
+};
 
 /// Errors that can occur during simulator execution.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

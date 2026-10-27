@@ -91,8 +91,9 @@ fn log_errors() -> bool {
 /// accounting (`tpm2_impl::storage::nv_capacity`) does: that ledger admits up to seven persistent
 /// objects whatever their type, and an RSA object takes more bytes in this store than an ECC
 /// one, so the store needs room for the largest records the ledger admits (a 4 KiB store held
-/// only three RSA persistent objects).
-pub const NV_STORAGE_SIZE: usize = 32768;
+/// only three RSA persistent objects). It is twice the size of the accounted NV memory
+/// (`NV_MEMORY_SIZE`, 16384 octets by default).
+pub const NV_STORAGE_SIZE: usize = 2 * tpm2_impl::storage::nv_capacity::NV_MEMORY_SIZE as usize;
 
 /// An in-process TPM simulator.
 ///
@@ -197,8 +198,15 @@ impl<'a> Simulator<'a> {
                 let mut len_buf = [0u8; 4];
                 stream.read_exact(&mut len_buf)?;
                 let length = u32::from_be_bytes(len_buf) as usize;
-                if length > 8192 {
-                    anyhow::bail!("Command length {} exceeds maximum of 8192", length);
+                // Larger than the TPM's `MAX_COMMAND_SIZE`, so that oversized commands reach
+                // the TPM (`TPM_RC_COMMAND_SIZE`).
+                const MAX_LENGTH: usize = if tpm2_impl::MAX_COMMAND_SIZE + 4096 > 8192 {
+                    tpm2_impl::MAX_COMMAND_SIZE + 4096
+                } else {
+                    8192
+                };
+                if length > MAX_LENGTH {
+                    anyhow::bail!("Command length {length} exceeds maximum of {MAX_LENGTH}");
                 }
 
                 let mut input_buffer = vec![0u8; length];
@@ -211,7 +219,7 @@ impl<'a> Simulator<'a> {
 
                 // Execute command
                 self.context.set_locality(loc_buf[0]);
-                let mut output_buffer = vec![0u8; 4096];
+                let mut output_buffer = vec![0u8; tpm2_impl::MAX_RESPONSE_SIZE.max(4096)];
                 let written = self
                     .context
                     .execute_command_separate(&input_buffer[..], &mut output_buffer[..]);

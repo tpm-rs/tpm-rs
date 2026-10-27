@@ -556,17 +556,6 @@ fn test_aes_cfb_sp800_38a_kat() {
         ),
     );
 
-    // F.3.15 / F.3.16: CFB128-AES192.Encrypt / Decrypt
-    check_aes_cfb_sp800_38a(
-        SymmetricKey::Aes192(&hex!("8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b")),
-        &hex!(
-            "cdc80d6fddf18cab34c25909c99a4174"
-            "67ce7f7f81173621961a2b70171d3d7a"
-            "2e1e8a1dd59b88b1c8e60fed1efac4c9"
-            "c05f9f9ca9834fa042ae8fba584b09ff"
-        ),
-    );
-
     // F.3.17 / F.3.18: CFB128-AES256.Encrypt / Decrypt
     check_aes_cfb_sp800_38a(
         SymmetricKey::Aes256(&hex!(
@@ -2513,10 +2502,5 @@ fn test_constant_time_eq() {
         &provider,
         TpmtHa::Sha256(&a),
         TpmtHa::Sha256(&last)
-    ));
-    assert!(!tpm2::crypto::digest_eq(
-        &provider,
-        TpmtHa::Sha256(&a),
-        TpmtHa::Sm3_256(&a)
     ));
 }

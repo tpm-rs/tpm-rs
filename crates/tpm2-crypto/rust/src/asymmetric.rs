@@ -45,9 +45,11 @@ impl AsymmetricSign for RustCryptoProvider {
             TpmtHa::Sha384(d) => {
                 priv_key.sign(rsa::pkcs1v15::Pkcs1v15Sign::new::<sha2::Sha384>(), d)
             }
+            #[cfg(feature = "sha512")]
             TpmtHa::Sha512(d) => {
                 priv_key.sign(rsa::pkcs1v15::Pkcs1v15Sign::new::<sha2::Sha512>(), d)
             }
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         let Ok(sig) = sig else {
@@ -86,11 +88,13 @@ impl AsymmetricSign for RustCryptoProvider {
                 rsa::pss::Pss::new::<sha2::Sha384>(),
                 d,
             ),
+            #[cfg(feature = "sha512")]
             TpmtHa::Sha512(d) => priv_key.sign_with_rng(
                 &mut rand_core::OsRng,
                 rsa::pss::Pss::new::<sha2::Sha512>(),
                 d,
             ),
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         let Ok(sig) = sig else {
@@ -211,11 +215,13 @@ impl Asymmetric for RustCryptoProvider {
                 d,
                 signature,
             ),
+            #[cfg(feature = "sha512")]
             TpmtHa::Sha512(d) => pub_key.verify(
                 rsa::pkcs1v15::Pkcs1v15Sign::new::<sha2::Sha512>(),
                 d,
                 signature,
             ),
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         Ok(verified.is_ok())
@@ -266,6 +272,7 @@ impl Asymmetric for RustCryptoProvider {
                         signature,
                     )
                 }),
+            #[cfg(feature = "sha512")]
             TpmtHa::Sha512(d) => pub_key
                 .verify(rsa::pss::Pss::new::<sha2::Sha512>(), d, signature)
                 .or_else(|_| {
@@ -276,6 +283,7 @@ impl Asymmetric for RustCryptoProvider {
                         signature,
                     )
                 }),
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         Ok(verified.is_ok())
@@ -418,6 +426,7 @@ impl Asymmetric for RustCryptoProvider {
                 },
                 data,
             ),
+            #[cfg(feature = "sha512")]
             TpmiAlgHash::Sha512 => pub_key.encrypt(
                 &mut rand_core::OsRng,
                 if label.is_empty() {
@@ -427,6 +436,7 @@ impl Asymmetric for RustCryptoProvider {
                 },
                 data,
             ),
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         // Fails if `data` (or `label`) is too large for the key.
@@ -535,6 +545,7 @@ impl Asymmetric for RustCryptoProvider {
                 },
                 ciphertext,
             ),
+            #[cfg(feature = "sha512")]
             TpmiAlgHash::Sha512 => priv_key.decrypt(
                 if label.is_empty() {
                     rsa::Oaep::new::<sha2::Sha512>()
@@ -543,6 +554,7 @@ impl Asymmetric for RustCryptoProvider {
                 },
                 ciphertext,
             ),
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         // Fails if the ciphertext, its padding, or the label is invalid.

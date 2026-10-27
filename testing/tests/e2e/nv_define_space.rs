@@ -20,12 +20,18 @@ fn attribute_and_size_error_positions() {
     .unwrap_err();
     assert_eq!(rc, TpmRc::ATTRIBUTES.with(Position::parameter(2)).get());
 
-    let rc = try_define(
-        &mut sim,
-        Handle::RH_OWNER,
-        &[],
-        nv_public(0x0150_0206, OWNER_RW, 2049, &[]),
-    )
+    // One octet more than `MAX_NV_INDEX_SIZE` (2048 by default): `dataSize` is the last field of
+    // `publicInfo` (after an empty `auth`).
+    let max = tpm2::TPM2_MAX_NV_INDEX_SIZE;
+    let cmd = tpm2::commands::NVDefineSpace {
+        auth_handle: Handle::RH_OWNER,
+        auth: tpm2::Tpm2bAuth::default(),
+        public_info: tpm2::Tpm2b(nv_public(0x0150_0206, OWNER_RW, max, &[])),
+    };
+    let rc = crate::_common::execute_with_corrupted_bytes_status(&mut sim, &cmd, 1, &[], |p| {
+        let last = p.len() - 2;
+        crate::_common::put_u16(p, last, max + 1);
+    })
     .unwrap_err();
     assert_eq!(rc, TpmRc::SIZE.with(Position::parameter(2)).get());
 

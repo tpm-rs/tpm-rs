@@ -656,9 +656,7 @@ fn unsupported_ecc_child_name_alg_rejected() {
         user_auth: Tpm2bAuth::default(),
         data: Tpm2bSensitiveData::default(),
     });
-    let mut pub_area = get_ecc_template();
-    pub_area.name_alg = Some(TpmiAlgHash::Sm3_256); // unsupported hash alg for name
-    let in_public = tpm2::Tpm2b(pub_area);
+    let in_public = tpm2::Tpm2b(get_ecc_template());
     let cmd = Create {
         parent_handle,
         in_sensitive: t_sens,
@@ -666,7 +664,11 @@ fn unsupported_ecc_child_name_alg_rejected() {
         outside_info: Tpm2bData::default(),
         creation_pcr: TpmlPcrSelection::default(),
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
+    // nameAlg = SM3_256, which this TPM does not implement (not a `TpmiAlgHash` of this TPM).
+    let res = crate::_common::execute_with_corrupted_bytes_status(&mut sim, &cmd, 1, &[], |p| {
+        let name_alg = crate::_common::tpm2b_public_name_alg(crate::_common::tpm2b_end(p, 0));
+        crate::_common::put_u16(p, name_alg, tpm2::Alg::SM3_256.id());
+    });
     // C TPMI_ALG_HASH unmarshal of nameAlg in inPublic returns TPM_RC_HASH,
     // reported as HASH+P2 (0x2C3).
     assert_eq!(
@@ -686,9 +688,7 @@ fn unsupported_name_alg_rejected() {
         data: Tpm2bSensitiveData::default(),
     };
     let in_sensitive = tpm2::Tpm2b(t_sens);
-    let mut pub_area = get_ecc_signing_key_template();
-    pub_area.name_alg = Some(TpmiAlgHash::Sm3_256); // unsupported hash alg for name!
-    let in_public = tpm2::Tpm2b(pub_area);
+    let in_public = tpm2::Tpm2b(get_ecc_signing_key_template());
 
     let cmd = Create {
         parent_handle,
@@ -698,7 +698,11 @@ fn unsupported_name_alg_rejected() {
         creation_pcr: TpmlPcrSelection::default(),
     };
 
-    let res = execute_with_password_sessions(&mut sim, &cmd, 1, &[]);
+    // nameAlg = SM3_256, which this TPM does not implement (not a `TpmiAlgHash` of this TPM).
+    let res = crate::_common::execute_with_corrupted_bytes_status(&mut sim, &cmd, 1, &[], |p| {
+        let name_alg = crate::_common::tpm2b_public_name_alg(crate::_common::tpm2b_end(p, 0));
+        crate::_common::put_u16(p, name_alg, tpm2::Alg::SM3_256.id());
+    });
     // C TPMI_ALG_HASH unmarshal of nameAlg in inPublic returns TPM_RC_HASH,
     // reported as HASH+P2 (0x2C3).
     assert_eq!(

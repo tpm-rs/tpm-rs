@@ -17,7 +17,10 @@ tpm2-platform-linux = { path = "../tpm2-platforms/linux", default-features = fal
 anyhow = { version = "1.0.102", features = ["backtrace"] }
 
 [features]
-default = ["bssl"]
+default = ["bssl", "sha512"]
+# SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
+# reference built without `ALG_SHA512`) is built with every crate without it.
+sha512 = ["tpm2/sha512", "tpm2-impl/sha512", "tpm2-platform-linux/sha512"]
 rust = ["tpm2-platform-linux/rust"]
 crux = ["tpm2-platform-linux/crux"]
 bssl = ["tpm2-platform-linux/bssl"]

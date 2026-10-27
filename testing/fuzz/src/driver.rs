@@ -719,7 +719,7 @@ mod tests {
     /// ContextSave → FlushContext → ContextLoad → Create (sealed "secret",
     /// parent auth from the context facts) → Load → Unseal.
     ///
-    /// Needs the reference binaries (`MSTPM20_BIN`/`IBMSWTPM2_BIN`).
+    /// Needs the reference binaries (`REFERENCE_BIN`).
     #[test]
     fn deep_conversation_reuses_earlier_outputs() {
         let last = HandleOperand::Response { back: 0 };
@@ -796,7 +796,7 @@ mod tests {
     /// `TPM2_Startup(STATE)`, D-RTM, time and locality: commands sent while the
     /// TPM is off are skipped, and the TPM answers again after the startup.
     ///
-    /// Needs the reference binaries (`MSTPM20_BIN`/`IBMSWTPM2_BIN`).
+    /// Needs the reference binaries (`REFERENCE_BIN`).
     #[test]
     fn event_steps_power_cycle_the_tpm() {
         use crate::model::PlatformOp;

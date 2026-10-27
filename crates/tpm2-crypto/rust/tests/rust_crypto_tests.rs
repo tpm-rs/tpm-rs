@@ -83,7 +83,6 @@ const NIST_IV: [u8; 16] = hex!("000102030405060708090a0b0c0d0e0f");
 
 /// NIST SP 800-38A / SP 800-38B example keys.
 const AES128_KEY: [u8; 16] = hex!("2b7e151628aed2a6abf7158809cf4f3c");
-const AES192_KEY: [u8; 24] = hex!("8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b");
 const AES256_KEY: [u8; 32] =
     hex!("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4");
 
@@ -93,14 +92,6 @@ const AES128_CFB_CIPHERTEXT: [u8; 64] = hex!(
     "c8a64537a0b3a93fcde3cdad9f1ce58b"
     "26751f67a3cbb140b1808cf187a4f4df"
     "c04b05357c5d1c0eeac4c66f9ff7f2e6"
-);
-
-/// NIST SP 800-38A, F.3.15 (CFB128-AES192.Encrypt).
-const AES192_CFB_CIPHERTEXT: [u8; 64] = hex!(
-    "cdc80d6fddf18cab34c25909c99a4174"
-    "67ce7f7f81173621961a2b70171d3d7a"
-    "2e1e8a1dd59b88b1c8e60fed1efac4c9"
-    "c05f9f9ca9834fa042ae8fba584b09ff"
 );
 
 /// NIST SP 800-38A, F.3.17 (CFB128-AES256.Encrypt).
@@ -128,9 +119,8 @@ fn aes_cfb(
 #[test]
 fn test_rust_crypto_provider_aes_cfb_known_answer() {
     let provider = RustCryptoProvider;
-    let vectors: [(AlgSym, &[u8], &[u8; 64]); 3] = [
+    let vectors: [(AlgSym, &[u8], &[u8; 64]); 2] = [
         (AlgSym::Aes128, &AES128_KEY, &AES128_CFB_CIPHERTEXT),
-        (AlgSym::Aes192, &AES192_KEY, &AES192_CFB_CIPHERTEXT),
         (AlgSym::Aes256, &AES256_KEY, &AES256_CFB_CIPHERTEXT),
     ];
     for (alg, key, ciphertext) in vectors {
@@ -317,30 +307,6 @@ fn test_rust_crypto_provider_symmetric_unsupported() {
             assert_eq!(iv, NIST_IV);
         }
     }
-
-    // SM4 and Camellia are not implemented.
-    let key16 = [0x11u8; 16];
-    let key24 = [0x22u8; 24];
-    let key32 = [0x33u8; 32];
-    let keys = [
-        SymmetricKey::new(AlgSym::Sm4_128, &key16).unwrap(),
-        SymmetricKey::new(AlgSym::Camellia128, &key16).unwrap(),
-        SymmetricKey::new(AlgSym::Camellia192, &key24).unwrap(),
-        SymmetricKey::new(AlgSym::Camellia256, &key32).unwrap(),
-    ];
-    for key in keys {
-        let mut iv = NIST_IV;
-        let mut data = NIST_PLAINTEXT;
-        let res = encrypt_decrypt(
-            &provider,
-            key,
-            ModeIv::Cfb(&mut iv),
-            Direction::Encrypt,
-            &mut data,
-        );
-        assert_eq!(res, Err(CryptoError::Unsupported), "{:?}", key.alg());
-        assert_eq!(data, NIST_PLAINTEXT);
-    }
 }
 
 /// A CMAC test vector: the cipher, its key, and the MACs of the first 0, 16,
@@ -351,7 +317,7 @@ type CmacVector = (AlgSym, &'static [u8], [[u8; 16]; 4]);
 fn test_rust_crypto_provider_cmac_known_answer() {
     let provider = RustCryptoProvider;
     // NIST SP 800-38B, Appendix D.1-D.3 (messages of 0, 16, 40 and 64 bytes).
-    let vectors: [CmacVector; 3] = [
+    let vectors: [CmacVector; 2] = [
         (
             AlgSym::Aes128,
             &AES128_KEY,
@@ -360,16 +326,6 @@ fn test_rust_crypto_provider_cmac_known_answer() {
                 hex!("070a16b46b4d4144f79bdd9dd04a287c"),
                 hex!("dfa66747de9ae63030ca32611497c827"),
                 hex!("51f0bebf7e3b9d92fc49741779363cfe"),
-            ],
-        ),
-        (
-            AlgSym::Aes192,
-            &AES192_KEY,
-            [
-                hex!("d17ddf46adaacde531cac483de7a9367"),
-                hex!("9e99a7bf31e710900662f65e617c5184"),
-                hex!("8a1de5be2eb31aad089a82e6ee908b0e"),
-                hex!("a1d5df0eed790f794d77589659f39a11"),
             ],
         ),
         (
@@ -411,17 +367,23 @@ fn test_rust_crypto_provider_cmac_unsupported() {
     let key16 = [0x11u8; 16];
     let key24 = [0x22u8; 24];
     let key32 = [0x33u8; 32];
-    let keys = [
-        SymmetricKey::new(AlgSym::Sm4_128, &key16).unwrap(),
-        SymmetricKey::new(AlgSym::Camellia128, &key16).unwrap(),
-        SymmetricKey::new(AlgSym::Camellia192, &key24).unwrap(),
-        SymmetricKey::new(AlgSym::Camellia256, &key32).unwrap(),
-    ];
-    for key in keys {
-        let mut mac = [0u8; 16];
-        let res = cmac(&provider, key, b"data", &mut mac);
-        assert_eq!(res, Err(CryptoError::Unsupported), "{:?}", key.alg());
-    }
+    use tpm2::crypto::Cmac;
+    assert!(matches!(
+        provider.sm4_128(&key16),
+        Err(CryptoError::Unsupported)
+    ));
+    assert!(matches!(
+        provider.camellia128(&key16),
+        Err(CryptoError::Unsupported)
+    ));
+    assert!(matches!(
+        provider.camellia192(&key24),
+        Err(CryptoError::Unsupported)
+    ));
+    assert!(matches!(
+        provider.camellia256(&key32),
+        Err(CryptoError::Unsupported)
+    ));
 }
 
 #[test]
@@ -487,7 +449,7 @@ fn test_rust_crypto_provider_constant_time_eq() {
     assert!(!digest_eq(
         &provider,
         TpmtHa::Sha256(&a),
-        TpmtHa::Sm3_256(&b)
+        TpmtHa::Sha384(&[0x5Au8; 48])
     ));
 }
 
@@ -657,11 +619,11 @@ fn test_rust_crypto_provider_ecc_result_conventions() {
     // Curves without an implementation are unsupported.
     let mut out = [0u8; 64];
     assert_eq!(
-        provider.point_multiply_generator(TpmEccCurve::NistP192, &[2], &mut out),
+        provider.point_multiply_generator(TpmEccCurve::None, &[2], &mut out),
         Err(CryptoError::Unsupported)
     );
     assert_eq!(
-        provider.validate_point(TpmEccCurve::Curve25519, &[0u8; 64]),
+        provider.validate_point(TpmEccCurve::None, &[0u8; 64]),
         Err(CryptoError::Unsupported)
     );
 }
@@ -882,17 +844,6 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
         ),
         Ok(None)
     );
-    assert_eq!(
-        provider.oaep_encrypt(
-            TpmiAlgHash::Sm3_256,
-            public_key,
-            0,
-            b"secret",
-            &[],
-            &mut ciphertext
-        ),
-        Err(CryptoError::Unsupported)
-    );
 
     // Raw RSA round trip; an input that is not smaller than the modulus is
     // rejected.
@@ -939,6 +890,7 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
         assert_eq!(verify(&corrupted), Ok(false));
         assert_eq!(verify(&signature[..127]), Ok(false));
     }
+    #[cfg(feature = "sha512")]
     assert_eq!(
         provider.rsapss_sign(private_key, TpmtHa::Sha512(&[0x5A; 64]), &mut signature),
         Ok(None)
@@ -946,10 +898,6 @@ fn test_rust_crypto_provider_rsa_result_conventions() {
     assert_eq!(
         provider.rsassa_sign(private_key, TpmtHa::Sha256(&digest), &mut signature[..127]),
         Err(CryptoError::Internal)
-    );
-    assert_eq!(
-        provider.rsassa_sign(private_key, TpmtHa::Sm3_256(&digest), &mut signature),
-        Err(CryptoError::Unsupported)
     );
     assert_eq!(
         provider.rsassa_sign(b"not a key", TpmtHa::Sha256(&digest), &mut signature),

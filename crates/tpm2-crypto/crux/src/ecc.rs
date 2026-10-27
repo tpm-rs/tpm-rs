@@ -646,14 +646,7 @@ mod tests {
             );
         }
         let mut out = [0u8; 160];
-        for curve in [
-            TpmEccCurve::None,
-            TpmEccCurve::NistP192,
-            TpmEccCurve::NistP224,
-            TpmEccCurve::BNP638,
-            TpmEccCurve::SM2P256,
-            TpmEccCurve::Curve25519,
-        ] {
+        for curve in [TpmEccCurve::None, TpmEccCurve::NistP224] {
             assert_eq!(
                 Ecc::point_multiply_generator(&c, curve, &[1], &mut out),
                 Err(CryptoError::Unsupported),

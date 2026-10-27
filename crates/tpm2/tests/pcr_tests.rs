@@ -97,17 +97,18 @@ fn test_pcr_state_default_banks_and_allocation() {
     assert!(hashes.contains(&TpmiAlgHash::Sha3_512));
 }
 
-/// Without an installed profile, the SHA-256 and SHA-384 banks (`profile::DEFAULT_PCR_BANKS`)
+/// The SHA-256 and SHA-384 banks (`platform::pcr::DEFAULT_PCR_BANKS`)
 /// have every PCR allocated and the other banks none.
 #[test]
 fn test_pcr_state_default_allocates_sha256_and_sha384() {
     let pcr = PcrState::default();
     for sel in pcr.pcr_allocation.pcr_selections() {
-        let expected: &[u8] = if tpm2::profile::DEFAULT_PCR_BANKS.contains(&Alg::from(sel.hash())) {
-            &[0xFF, 0xFF, 0xFF]
-        } else {
-            &[0x00, 0x00, 0x00]
-        };
+        let expected: &[u8] =
+            if tpm2::platform::pcr::DEFAULT_PCR_BANKS.contains(&Alg::from(sel.hash())) {
+                &[0xFF, 0xFF, 0xFF]
+            } else {
+                &[0x00, 0x00, 0x00]
+            };
         assert_eq!(sel.pcr_select(), expected, "{:?}", sel.hash());
     }
 }

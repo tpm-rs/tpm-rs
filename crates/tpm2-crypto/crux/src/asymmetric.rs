@@ -63,9 +63,11 @@ impl AsymmetricSign for CruxCryptoProvider {
             TpmtHa::Sha384(d) => {
                 priv_key.sign(rsa::pkcs1v15::Pkcs1v15Sign::new::<sha2::Sha384>(), d)
             }
+            #[cfg(feature = "sha512")]
             TpmtHa::Sha512(d) => {
                 priv_key.sign(rsa::pkcs1v15::Pkcs1v15Sign::new::<sha2::Sha512>(), d)
             }
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         // The key cannot sign the digest (e.g. too small for it and its padding).
@@ -105,11 +107,13 @@ impl AsymmetricSign for CruxCryptoProvider {
                 rsa::pss::Pss::new::<sha2::Sha384>(),
                 d,
             ),
+            #[cfg(feature = "sha512")]
             TpmtHa::Sha512(d) => priv_key.sign_with_rng(
                 &mut rand_core::OsRng,
                 rsa::pss::Pss::new::<sha2::Sha512>(),
                 d,
             ),
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         // The key cannot sign the digest (e.g. too small for it and its padding).
@@ -244,11 +248,13 @@ impl Asymmetric for CruxCryptoProvider {
                 d,
                 signature,
             ),
+            #[cfg(feature = "sha512")]
             TpmtHa::Sha512(d) => pub_key.verify(
                 rsa::pkcs1v15::Pkcs1v15Sign::new::<sha2::Sha512>(),
                 d,
                 signature,
             ),
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         Ok(verified.is_ok())
@@ -272,7 +278,9 @@ impl Asymmetric for CruxCryptoProvider {
             TpmtHa::Sha1(d) => pub_key.verify(rsa::pss::Pss::new::<sha1::Sha1>(), d, signature),
             TpmtHa::Sha256(d) => pub_key.verify(rsa::pss::Pss::new::<sha2::Sha256>(), d, signature),
             TpmtHa::Sha384(d) => pub_key.verify(rsa::pss::Pss::new::<sha2::Sha384>(), d, signature),
+            #[cfg(feature = "sha512")]
             TpmtHa::Sha512(d) => pub_key.verify(rsa::pss::Pss::new::<sha2::Sha512>(), d, signature),
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         Ok(verified.is_ok())
@@ -388,6 +396,7 @@ impl Asymmetric for CruxCryptoProvider {
                 },
                 data,
             ),
+            #[cfg(feature = "sha512")]
             TpmiAlgHash::Sha512 => pub_key.encrypt(
                 &mut rand_core::OsRng,
                 if label.is_empty() {
@@ -397,6 +406,7 @@ impl Asymmetric for CruxCryptoProvider {
                 },
                 data,
             ),
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         // `data` is too large for the key.
@@ -486,6 +496,7 @@ impl Asymmetric for CruxCryptoProvider {
                 },
                 ciphertext,
             ),
+            #[cfg(feature = "sha512")]
             TpmiAlgHash::Sha512 => priv_key.decrypt(
                 if label.is_empty() {
                     rsa::Oaep::new::<sha2::Sha512>()
@@ -494,6 +505,7 @@ impl Asymmetric for CruxCryptoProvider {
                 },
                 ciphertext,
             ),
+            #[allow(unreachable_patterns)]
             _ => return Err(CryptoError::Unsupported),
         };
         let Ok(decrypted) = decrypted else {
@@ -856,14 +868,11 @@ mod tests {
             c.rsassa_sign(&d, sha256, &mut sig[..64]),
             Err(CryptoError::Internal)
         );
-        assert_eq!(
-            c.rsassa_sign(&d, TpmtHa::Sm3_256(&digest), &mut sig),
-            Err(CryptoError::Unsupported)
-        );
 
         // RSA-PSS: a 1024-bit key cannot sign SHA-512 with a 64-byte salt.
         let len = c.rsapss_sign(&d, sha256, &mut sig).unwrap().unwrap();
         assert_eq!(c.rsapss_verify(&n, 0, sha256, &sig[..len]), Ok(true));
+        #[cfg(feature = "sha512")]
         assert_eq!(
             c.rsapss_sign(&d, TpmtHa::Sha512(&[7; 64]), &mut sig),
             Ok(None)
@@ -897,10 +906,6 @@ mod tests {
         assert_eq!(
             c.oaep_encrypt(TpmiAlgHash::Sha256, &n, 0, b"m", &[0xff], &mut ct),
             Ok(None)
-        );
-        assert_eq!(
-            c.oaep_encrypt(TpmiAlgHash::Sm3_256, &n, 0, b"m", b"", &mut ct),
-            Err(CryptoError::Unsupported)
         );
 
         // Raw RSA: round trip, and a message not smaller than the modulus.
@@ -955,6 +960,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sha512")]
     fn ecdsa_sign_and_verify_on_each_nist_curve() {
         let c = CruxCryptoProvider;
         let digests: [(TpmEccCurve, TpmtHa<'_>); 3] = [
@@ -1151,11 +1157,14 @@ mod ecdsa_tests {
         );
 
         // SHA-512: truncated to the leftmost 32 bytes.
-        let d512: [u8; 64] = core::array::from_fn(|i| (i * 3 + 1) as u8);
-        let sig = sign(&private, TpmtHa::Sha512(&d512));
-        assert_eq!(verify(&public, TpmtHa::Sha512(&d512), &sig), Ok(true));
-        let truncated: [u8; 32] = d512[..32].try_into().unwrap();
-        assert_eq!(verify(&public, TpmtHa::Sha256(&truncated), &sig), Ok(true));
+        #[cfg(feature = "sha512")]
+        {
+            let d512: [u8; 64] = core::array::from_fn(|i| (i * 3 + 1) as u8);
+            let sig = sign(&private, TpmtHa::Sha512(&d512));
+            assert_eq!(verify(&public, TpmtHa::Sha512(&d512), &sig), Ok(true));
+            let truncated: [u8; 32] = d512[..32].try_into().unwrap();
+            assert_eq!(verify(&public, TpmtHa::Sha256(&truncated), &sig), Ok(true));
+        }
 
         // SHA-1: shorter than the order, zero-padded (no panic in libcrux).
         let d1 = [0x5Au8; 20];
@@ -1191,19 +1200,22 @@ mod ecdsa_tests {
         let sig = sign(&private, TpmtHa::Sha1(&d1));
         assert_eq!(verify(&public, TpmtHa::Sha1(&d1), &sig), Ok(true));
 
-        let d512: [u8; 64] = core::array::from_fn(|i| (255 - i) as u8);
-        let sig = sign(&private, TpmtHa::Sha512(&d512));
-        assert_eq!(verify(&public, TpmtHa::Sha512(&d512), &sig), Ok(true));
-        let truncated: [u8; 48] = d512[..48].try_into().unwrap();
-        assert_eq!(verify(&public, TpmtHa::Sha384(&truncated), &sig), Ok(true));
+        #[cfg(feature = "sha512")]
+        {
+            let d512: [u8; 64] = core::array::from_fn(|i| (255 - i) as u8);
+            let sig = sign(&private, TpmtHa::Sha512(&d512));
+            assert_eq!(verify(&public, TpmtHa::Sha512(&d512), &sig), Ok(true));
+            let truncated: [u8; 48] = d512[..48].try_into().unwrap();
+            assert_eq!(verify(&public, TpmtHa::Sha384(&truncated), &sig), Ok(true));
 
-        let mut sec1 = [0u8; 97];
-        sec1[0] = 0x04;
-        sec1[1..].copy_from_slice(&public);
-        let vk = p384::ecdsa::VerifyingKey::from_sec1_bytes(&sec1).unwrap();
-        let reference = p384::ecdsa::Signature::from_slice(&sig).unwrap();
-        use p384::ecdsa::signature::hazmat::PrehashVerifier as _;
-        vk.verify_prehash(&d512, &reference).unwrap();
+            let mut sec1 = [0u8; 97];
+            sec1[0] = 0x04;
+            sec1[1..].copy_from_slice(&public);
+            let vk = p384::ecdsa::VerifyingKey::from_sec1_bytes(&sec1).unwrap();
+            let reference = p384::ecdsa::Signature::from_slice(&sig).unwrap();
+            use p384::ecdsa::signature::hazmat::PrehashVerifier as _;
+            vk.verify_prehash(&d512, &reference).unwrap();
+        }
     }
 
     /// P-521 accepts digests shorter than its order (SHA-1/SHA-256/SHA-384).

@@ -127,6 +127,8 @@ macro_rules! impl_owned_marshal {
 
 impl_owned_marshal!(
     32 => 34,
+    48 => 50,
+    50 => 52,
     64 => 66,
     66 => 68,
     128 => 130,
@@ -519,16 +521,6 @@ pub enum OwnedSignature {
         signature_r: OwnedEccParameter,
         signature_s: OwnedEccParameter,
     },
-    Sm2 {
-        hash: TpmiAlgHash,
-        signature_r: OwnedEccParameter,
-        signature_s: OwnedEccParameter,
-    },
-    Ecschnorr {
-        hash: TpmiAlgHash,
-        signature_r: OwnedEccParameter,
-        signature_s: OwnedEccParameter,
-    },
     /// An HMAC signature (`TPM_ALG_HMAC`) produced by a keyed-hash signing key. Only the first
     /// `hash.digest_size()` bytes of `digest` are meaningful.
     Hmac { hash: TpmiAlgHash, digest: [u8; 64] },
@@ -559,24 +551,6 @@ impl OwnedSignature {
                 signature_r,
                 signature_s,
             } => TpmtSignature::Ecdaa(TpmsSignatureEcc {
-                hash: *hash,
-                signature_r: signature_r.as_tpm2b(),
-                signature_s: signature_s.as_tpm2b(),
-            }),
-            Self::Sm2 {
-                hash,
-                signature_r,
-                signature_s,
-            } => TpmtSignature::Sm2(TpmsSignatureEcc {
-                hash: *hash,
-                signature_r: signature_r.as_tpm2b(),
-                signature_s: signature_s.as_tpm2b(),
-            }),
-            Self::Ecschnorr {
-                hash,
-                signature_r,
-                signature_s,
-            } => TpmtSignature::Ecschnorr(TpmsSignatureEcc {
                 hash: *hash,
                 signature_r: signature_r.as_tpm2b(),
                 signature_s: signature_s.as_tpm2b(),

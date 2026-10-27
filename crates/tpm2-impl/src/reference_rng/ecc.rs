@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(
             new_key_pair(
                 &mut tpm(&mut state),
-                TpmEccCurve::BNP638,
+                TpmEccCurve::None,
                 &mut [0; 80],
                 &mut [0; 160]
             ),

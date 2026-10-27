@@ -1,12 +1,15 @@
 # Differential fuzzing of tpm-rs against the C reference TPMs (`cargo fuzz`).
 #
 # One fuzz input is a multi-round conversation with a fresh, started TPM;
-# every command goes to tpm-rs and to every C reference (`testing` with its
-# `differential` feature), and any undocumented response difference is a
-# finding. Build and run from the repository root:
+# every command goes to tpm-rs and to the C reference of the selected target
+# (`testing` with that `target-*` feature, which also gives tpm-rs the profile
+# of that reference), and any undocumented response difference is a finding.
+# Build and run from the repository root (default target: `target-mstpm20`):
 #
 #   cargo fuzz build --fuzz-dir testing/fuzz
 #   cargo fuzz run --fuzz-dir testing/fuzz diff_conversation
+#   cargo fuzz build --fuzz-dir testing/fuzz --no-default-features \
+#       --features target-ibmswtpm2
 #
 # The crate is its own workspace (and excluded from the root workspace), so
 # the root `cargo test`/`cargo clippy` are unaffected by its nightly-only,
@@ -26,7 +29,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4.13"
 arbitrary = { version = "1.4.2", features = ["derive"] }
-testing = { path = "..", features = ["differential"] }
+testing = { path = ".." }
 # The features are unified with those `testing` enables.
 tpm2 = { path = "../../crates/tpm2" }
 
@@ -34,9 +37,15 @@ tpm2 = { path = "../../crates/tpm2" }
 path = "src/lib.rs"
 
 [features]
-# Mirror to the C references linked into the fuzzer process (`testing`'s
+default = ["target-mstpm20"]
+# The C reference TPM the conversations are compared with (exactly one; see
+# `testing`'s features of the same names).
+target-mstpm20 = ["testing/target-mstpm20"]
+target-mstpm20-v185 = ["testing/target-mstpm20-v185"]
+target-ibmswtpm2 = ["testing/target-ibmswtpm2"]
+# Mirror to the C reference linked into the fuzzer process (`testing`'s
 # `fuzz-inproc`) instead of reference processes: no pipe round trips and no
-# MSTPM20_BIN/IBMSWTPM2_BIN needed (`cargo fuzz build --features inproc`).
+# REFERENCE_BIN needed (`cargo fuzz build --features inproc`).
 inproc = ["testing/fuzz-inproc"]
 
 [[bin]]

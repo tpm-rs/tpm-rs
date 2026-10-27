@@ -297,10 +297,6 @@ impl Marshal for Option<TpmtKeyedHashScheme> {
 impl<'a> Unmarshal<'a> for Option<TpmtKeyedHashScheme> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let selector = Alg::unmarshal(src)?;
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if selector != Alg::NULL && !crate::profile::allows_algorithm(selector) {
-            return Err(UnmarshalError::VALUE);
-        }
         match selector {
             Alg::NULL => Ok(None),
             Alg::HMAC => Ok(Some(TpmtKeyedHashScheme::Hmac(Unmarshal::unmarshal(src)?))),
@@ -476,18 +472,10 @@ impl AlgSym {
     /// The algorithm is validated before `keyBits` is read (`TPM_RC_SYMMETRIC`), and the key size
     /// is then validated for that algorithm (`TPM_RC_VALUE`).
     fn unmarshal_with_algorithm(algorithm: Alg, src: &mut &[u8]) -> Result<Self, UnmarshalError> {
-        // Also the TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if !Self::is_enabled_algorithm(algorithm) || !crate::profile::allows_algorithm(algorithm) {
+        if !Self::is_enabled_algorithm(algorithm) {
             return Err(UnmarshalError::SYMMETRIC);
         }
         let key_bits = u16::unmarshal(src)?;
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed. TPM 2.0 Part 2,
-        // Table "Definition of Types for Symmetric Cipher Key Sizes": "TPMI_AES_KEY_BITS |
-        // {128, 192, 256}" (the sizes the TPM implements are a subset, its profile), and
-        // "TPM_RC_VALUE | a parameter does not have one of its allowed values".
-        if !crate::profile::allows_sym_key_bits(key_bits) {
-            return Err(UnmarshalError::VALUE);
-        }
         Self::from_parts(algorithm, key_bits)
     }
 }
@@ -1181,10 +1169,6 @@ impl Marshal for Option<TpmtRsaScheme> {
 impl<'a> Unmarshal<'a> for Option<TpmtRsaScheme> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let selector = Alg::unmarshal(src)?;
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if selector != Alg::NULL && !crate::profile::allows_algorithm(selector) {
-            return Err(UnmarshalError::VALUE);
-        }
         match selector {
             Alg::NULL => Ok(None),
             #[cfg(feature = "rsassa")]
@@ -1255,10 +1239,6 @@ impl Marshal for TpmtRsaDecrypt {
 impl<'a> Unmarshal<'a> for TpmtRsaDecrypt {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let selector = Alg::unmarshal(src)?;
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if selector != Alg::NULL && !crate::profile::allows_algorithm(selector) {
-            return Err(UnmarshalError::VALUE);
-        }
         match selector {
             #[cfg(feature = "oaep")]
             Alg::OAEP => Ok(Self::Oaep(Unmarshal::unmarshal(src)?)),
@@ -1284,10 +1264,6 @@ impl Marshal for Option<TpmtRsaDecrypt> {
 impl<'a> Unmarshal<'a> for Option<TpmtRsaDecrypt> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let selector = Alg::unmarshal(src)?;
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if selector != Alg::NULL && !crate::profile::allows_algorithm(selector) {
-            return Err(UnmarshalError::VALUE);
-        }
         match selector {
             Alg::NULL => Ok(None),
             #[cfg(feature = "oaep")]
@@ -1429,10 +1405,6 @@ impl Marshal for Option<TpmtEccScheme> {
 impl<'a> Unmarshal<'a> for Option<TpmtEccScheme> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let selector = Alg::unmarshal(src)?;
-        // The TPM's unmarshal profile (`crate::profile`), if one is installed.
-        if selector != Alg::NULL && !crate::profile::allows_algorithm(selector) {
-            return Err(UnmarshalError::SCHEME);
-        }
         match selector {
             Alg::NULL => Ok(None),
             #[cfg(feature = "ecdsa")]
@@ -1443,7 +1415,9 @@ impl<'a> Unmarshal<'a> for Option<TpmtEccScheme> {
             Alg::SM2 => Ok(Some(TpmtEccScheme::Sm2(Unmarshal::unmarshal(src)?))),
             #[cfg(feature = "ecschnorr")]
             Alg::ECSCHNORR => Ok(Some(TpmtEccScheme::Ecschnorr(Unmarshal::unmarshal(src)?))),
+            #[cfg(feature = "eddsa")]
             Alg::EDDSA => Ok(Some(TpmtEccScheme::Eddsa)),
+            #[cfg(feature = "eddsa")]
             Alg::HASH_EDDSA => Ok(Some(TpmtEccScheme::HashEddsa)),
             #[cfg(feature = "ecdh")]
             Alg::ECDH => Ok(Some(TpmtEccScheme::Ecdh(Unmarshal::unmarshal(src)?))),
@@ -1697,8 +1671,11 @@ impl<'a> Unmarshal<'a> for TpmtPublicParms {
             Alg::RSA => Ok(Self::Rsa(Unmarshal::unmarshal(src)?)),
             #[cfg(feature = "ecc")]
             Alg::ECC => Ok(Self::Ecc(Unmarshal::unmarshal(src)?)),
+            #[cfg(feature = "mldsa")]
             Alg::MLDSA => Ok(Self::Mldsa(Unmarshal::unmarshal(src)?)),
+            #[cfg(feature = "mldsa")]
             Alg::HASH_MLDSA => Ok(Self::HashMldsa(Unmarshal::unmarshal(src)?)),
+            #[cfg(feature = "mlkem")]
             Alg::MLKEM => Ok(Self::Mlkem(Unmarshal::unmarshal(src)?)),
             _ => Err(UnmarshalError::TYPE),
         }

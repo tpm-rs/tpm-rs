@@ -781,7 +781,10 @@ fn hash_alg_to_nid(hash_alg: TpmiAlgHash) -> Result<c_int, BsslError> {
         TpmiAlgHash::Sha1 => Ok(bssl_sys::NID_sha1 as c_int),
         TpmiAlgHash::Sha256 => Ok(bssl_sys::NID_sha256 as c_int),
         TpmiAlgHash::Sha384 => Ok(bssl_sys::NID_sha384 as c_int),
-        TpmiAlgHash::Sha512 => Ok(bssl_sys::NID_sha512 as c_int),
+        // SHA-512 by its algorithm ID: the variant exists only with the `sha512` feature of `tpm2`.
+        #[allow(unreachable_patterns)]
+        h if tpm2::Alg::from(h) == tpm2::Alg::SHA512 => Ok(bssl_sys::NID_sha512 as c_int),
+        #[allow(unreachable_patterns)]
         _ => Err(BsslError::Unsupported),
     }
 }
@@ -793,7 +796,10 @@ fn hash_alg_to_evp_md(hash_alg: TpmiAlgHash) -> Result<*const bssl_sys::EVP_MD, 
             TpmiAlgHash::Sha1 => Ok(bssl_sys::EVP_sha1()),
             TpmiAlgHash::Sha256 => Ok(bssl_sys::EVP_sha256()),
             TpmiAlgHash::Sha384 => Ok(bssl_sys::EVP_sha384()),
-            TpmiAlgHash::Sha512 => Ok(bssl_sys::EVP_sha512()),
+            // SHA-512 by its algorithm ID (see `hash_alg_to_nid`).
+            #[allow(unreachable_patterns)]
+            h if tpm2::Alg::from(h) == tpm2::Alg::SHA512 => Ok(bssl_sys::EVP_sha512()),
+            #[allow(unreachable_patterns)]
             _ => Err(BsslError::Unsupported),
         }
     }

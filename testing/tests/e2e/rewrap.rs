@@ -7,8 +7,8 @@ use tpm2::errors::TpmRc;
 use tpm2::{Handle, Tpm2bEncryptedSecret, Tpm2bName, Tpm2bPrivate, *};
 
 /// The capacity of this TPM's `TPM2B_PRIVATE` (`sizeof(_PRIVATE)` of its profile: RSA keys of up
-/// to 2048 bits, see `tpm2::profile`).
-const PRIVATE_CAP: usize = 910;
+/// to 2048 bits, the default features of `tpm2`; 910 octets with SHA-512).
+const PRIVATE_CAP: usize = tpm2::Tpm2bPrivate::CAP;
 
 /// Rewrap to an ECC/NULL parent produces a fresh seed that imports and loads; max-size unwrapped duplicate is VALUE+P1.
 ///

@@ -1,33 +1,28 @@
-//! Builds the C reference TPMs for differential testing.
+//! Builds the C reference TPM for differential testing.
 //!
-//! With the `differential` feature, the build clones every reference
-//! implementation at a pinned commit, applies its patches, compiles it into a
-//! symbol-isolated static library (exporting only its entry points, prefixed
-//! with its name: `difftest_<name>_*`) and links both libraries into the
-//! crate's library (`src/differential/inproc.rs` holds their FFI), so that
-//! the reference binaries (`src/bin/`) and in-process users (the
-//! `fuzz-inproc` feature) can host them:
+//! A differential build compares `tpm-rs` with one C reference TPM, the
+//! *target*, selected by exactly one `target-*` feature (each of which also
+//! enables the `differential` feature and the `tpm2`/`tpm2-impl` features that
+//! give `tpm-rs` the profile of that reference, see `Cargo.toml`):
 //!
-//! * `mstpm20`: the TCG / Microsoft reference implementation, in one of two
-//!   versions (see [`Version`]):
-//!   * `v185`: the TCG-internal repository
-//!     `https://github.com/TrustedComputingGroup/TPM-Internal` on its
-//!     `185-feature` branch (specification version 185), patched by
-//!     `testing/patches/mstpm20-185-feature/*.patch`, used whenever the user's `git`
-//!     may clone it;
-//!   * `public`: the public repository
-//!     `https://github.com/TrustedComputingGroup/TPM`, patched by
-//!     `testing/patches/mstpm20/*.patch`, used otherwise;
-//! * `ibmswtpm2`: `https://github.com/kgoldman/ibmswtpm2` (the IBM software
-//!   TPM), patched by `testing/patches/ibmswtpm2/*.patch`.
+//! * `target-mstpm20`: the TCG / Microsoft reference implementation from the
+//!   public repository `https://github.com/TrustedComputingGroup/TPM`, patched
+//!   by `testing/patches/mstpm20/*.patch`;
+//! * `target-mstpm20-v185`: the TCG reference implementation version 185, from
+//!   the TCG-internal repository
+//!   `https://github.com/TrustedComputingGroup/TPM-Internal` on its
+//!   `185-feature` branch (only TCG members can clone it), patched by
+//!   `testing/patches/mstpm20-185-feature/*.patch`;
+//! * `target-ibmswtpm2`: `https://github.com/kgoldman/ibmswtpm2` (the IBM
+//!   software TPM), patched by `testing/patches/ibmswtpm2/*.patch`.
 //!
-//! The version of a reference is the first of its [`Reference::versions`]
-//! that is available (already checked out at its pinned commit, or its
-//! repository can be listed by `git ls-remote` without prompting for
-//! credentials). The environment variable `<NAME>_VERSION` (e.g.
-//! `MSTPM20_VERSION=public` or `MSTPM20_VERSION=v185`) selects a version
-//! explicitly; the build fails if that version cannot be cloned. The selected
-//! version is passed to the crate as the compile-time environment variable
+//! The build clones the target at a pinned commit, applies its patches,
+//! compiles it into a symbol-isolated static library (exporting only its
+//! entry points, prefixed with its name: `difftest_<name>_*`) and links it
+//! into the crate's library (`src/differential/inproc.rs` holds its FFI), so
+//! that the reference binary (`src/bin/reference.rs`) and in-process users
+//! (the `fuzz-inproc` feature) can host it. The version label of the target
+//! is passed to the crate as the compile-time environment variable
 //! `DIFFERENTIAL_<NAME>_VERSION`.
 //!
 //! Every patch file holds one individual fix (a spec-deviation bug fix, a
@@ -39,27 +34,24 @@
 //! `FUZZ_C_COVERAGE=1` adds coverage instrumentation for libFuzzer to the C
 //! code (see [`C_COVERAGE_ENV`]).
 //!
-//! Without the feature, nothing is built.
+//! Without the `differential` feature, nothing is built.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// A C reference TPM implementation built for differential testing.
 struct Reference {
-    /// Name of the implementation, of its static library (`lib<name>.a`), of
-    /// the prefix of its entry points (`difftest_<name>_*`) and of its
-    /// reference binary.
+    /// Name of the implementation, of its static library (`lib<name>.a`) and
+    /// of the prefix of its entry points (`difftest_<name>_*`).
     name: &'static str,
-    /// The versions the implementation can be built from, in order of
-    /// preference: the first available one is used unless `<NAME>_VERSION`
-    /// selects one (see [`select_version`]).
+    /// The versions the implementation can be built from (see [`TARGETS`]).
     versions: &'static [Version],
 }
 
 /// One version of a reference implementation: where its code comes from, how
 /// it is patched and how it is compiled.
 struct Version {
-    /// Label of the version (the value of `<NAME>_VERSION` that selects it).
+    /// Label of the version (see [`TARGETS`]).
     label: &'static str,
     /// Git repository of the version.
     repo: &'static str,
@@ -230,96 +222,74 @@ fn main() {
     println!("cargo:rerun-if-env-changed={C_COVERAGE_ENV}");
 
     if std::env::var_os("CARGO_FEATURE_DIFFERENTIAL").is_some() {
-        let versions: Vec<&Version> = REFERENCES
-            .iter()
-            .map(|reference| select_version(reference, &out))
-            .collect();
-        // The references are independent; build them concurrently.
-        std::thread::scope(|s| {
-            for (reference, version) in REFERENCES.iter().zip(&versions) {
-                let (manifest, out) = (&manifest, &out);
-                s.spawn(move || build_reference(reference.name, version, manifest, out));
-            }
-        });
-        // Both archives are linked into the library (and through it into
-        // every binary using it, including dependent crates such as the fuzz
-        // targets): their entry points have distinct names (see
-        // `prefixed`), so they coexist in one binary.
+        let (reference, version) = select_target();
+        build_reference(reference.name, version, &manifest, &out);
+        // The archive is linked into the library (and through it into every
+        // binary using it, including dependent crates such as the fuzz
+        // targets).
         println!("cargo:rustc-link-search=native={}", out.display());
-        for (reference, version) in REFERENCES.iter().zip(&versions) {
-            let name = reference.name;
-            println!(
-                "cargo:rustc-env=DIFFERENTIAL_{}_VERSION={}",
-                name.to_uppercase(),
-                version.label
-            );
-            println!("cargo:rustc-link-lib=static={name}");
-            // The archive's path for dependent build scripts
-            // (`DEP_TPM_REFERENCES_<NAME>_ARCHIVE`, see `links` in
-            // Cargo.toml).
-            println!(
-                "cargo:{name}_archive={}",
-                out.join(format!("lib{name}.a")).display()
-            );
-        }
+        let name = reference.name;
+        println!(
+            "cargo:rustc-env=DIFFERENTIAL_{}_VERSION={}",
+            name.to_uppercase(),
+            version.label
+        );
+        println!("cargo:rustc-link-lib=static={name}");
+        // The archive's path for dependent build scripts
+        // (`DEP_TPM_REFERENCES_<NAME>_ARCHIVE`, see `links` in Cargo.toml).
+        println!(
+            "cargo:{name}_archive={}",
+            out.join(format!("lib{name}.a")).display()
+        );
         // `libcrypto.a` (inside the archives) needs zlib and zstd.
         println!("cargo:rustc-link-lib=dylib=z");
         println!("cargo:rustc-link-lib=dylib=zstd");
     }
 }
 
-/// Selects the version of `reference` to build: the one `<NAME>_VERSION`
-/// names, or else the first of [`Reference::versions`] that is available
-/// (see [`version_available`]), falling back to the last one.
+/// The `target-*` features: the feature (without `target-`), the name of its
+/// reference and the label of its version.
+const TARGETS: [(&str, &str, &str); 3] = [
+    ("mstpm20", "mstpm20", "public"),
+    ("mstpm20-v185", "mstpm20", "v185"),
+    ("ibmswtpm2", "ibmswtpm2", "public"),
+];
+
+/// The reference and version selected by the `target-*` feature.
 ///
 /// # Panics
-/// If `<NAME>_VERSION` names no version of `reference`.
-fn select_version<'a>(reference: &'a Reference, out: &Path) -> &'a Version {
-    let env = format!("{}_VERSION", reference.name.to_uppercase());
-    println!("cargo:rerun-if-env-changed={env}");
-    let labels = || {
-        reference
-            .versions
-            .iter()
-            .map(|v| v.label)
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    if let Some(label) = std::env::var(&env).ok().filter(|l| !l.is_empty()) {
-        return reference
-            .versions
-            .iter()
-            .find(|v| v.label == label)
-            .unwrap_or_else(|| {
-                panic!(
-                    "{env}={label} names no {} version ({})",
-                    reference.name,
-                    labels()
-                )
-            });
-    }
-    let (last, preferred) = reference.versions.split_last().expect("versions");
-    preferred
+/// Unless exactly one `target-*` feature is enabled.
+fn select_target() -> (&'static Reference, &'static Version) {
+    let enabled: Vec<_> = TARGETS
         .iter()
-        .find(|v| version_available(v, out))
-        .unwrap_or(last)
-}
-
-/// Whether `version` can be built: its checkout in `out` already holds its
-/// pinned commit, or the user's `git` can list its repository (without
-/// prompting for credentials, so a repository the user may not access is
-/// reported unavailable instead of blocking the build).
-fn version_available(version: &Version, out: &Path) -> bool {
-    has_commit(&out.join(version.patch_dir), version.commit)
-        || Command::new("git")
-            .args(["ls-remote", "--exit-code", version.repo, "HEAD"])
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+        .filter(|(feature, _, _)| {
+            let env = format!(
+                "CARGO_FEATURE_TARGET_{}",
+                feature.to_uppercase().replace('-', "_")
+            );
+            std::env::var_os(env).is_some()
+        })
+        .collect();
+    let [(_, name, label)] = enabled[..] else {
+        panic!(
+            "a differential build of `testing` compares tpm-rs with exactly one C reference TPM: \
+             enable exactly one of the features {} (enabled: {})",
+            TARGETS
+                .map(|(feature, _, _)| format!("target-{feature}"))
+                .join(", "),
+            enabled.len()
+        );
+    };
+    let reference = REFERENCES
+        .iter()
+        .find(|reference| reference.name == *name)
+        .expect("reference");
+    let version = reference
+        .versions
+        .iter()
+        .find(|version| version.label == *label)
+        .expect("version");
+    (reference, version)
 }
 
 /// Whether the git checkout `repo_dir` exists and holds `commit`.

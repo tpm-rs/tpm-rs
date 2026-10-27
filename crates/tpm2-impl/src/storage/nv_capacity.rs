@@ -27,8 +27,17 @@
 use super::manager::StorageManager;
 use super::{StorageError, Tpm2Storage};
 
-/// `NV_MEMORY_SIZE`: the size of the reference's NV memory image.
-pub const NV_MEMORY_SIZE: u32 = 16384;
+/// `NV_MEMORY_SIZE`: the size of the reference's NV memory image: 16384 octets (the TCG
+/// reference profile), 32768 with the `nv-memory-size-32k` feature (`ibmswtpm2`) or 131072 with
+/// the `nv-memory-size-128k` feature (the TCG reference implementation version 185). With both,
+/// the larger applies.
+pub const NV_MEMORY_SIZE: u32 = if cfg!(feature = "nv-memory-size-128k") {
+    131072
+} else if cfg!(feature = "nv-memory-size-32k") {
+    32768
+} else {
+    16384
+};
 /// `NV_INDEX_RAM_DATA`: the offset of the orderly Index RAM image in NV (after `gp`, `gr`, `gc`
 /// and `go`).
 pub const NV_INDEX_RAM_DATA: u32 = 4508;
@@ -52,8 +61,16 @@ pub const SIZEOF_NV_INDEX: u32 = 148;
 pub const SIZEOF_NV_LIST_TERMINATOR: u32 = 12;
 /// `sizeof(NV_RAM_HEADER)`: the header of an orderly Index in `s_indexOrderlyRam`.
 pub const SIZEOF_NV_RAM_HEADER: u32 = 12;
-/// `MIN_EVICT_OBJECTS`: persistent objects the TPM keeps room for.
-pub const MIN_EVICT_OBJECTS: u32 = 2;
+/// `MIN_EVICT_OBJECTS`: persistent objects the TPM keeps room for: 2 (the TCG reference profile),
+/// 7 with the `min-evict-objects-7` feature (`ibmswtpm2`) or 9 with the `min-evict-objects-9`
+/// feature (the TCG reference implementation version 185). With both, the larger applies.
+pub const MIN_EVICT_OBJECTS: u32 = if cfg!(feature = "min-evict-objects-9") {
+    9
+} else if cfg!(feature = "min-evict-objects-7") {
+    7
+} else {
+    2
+};
 /// `MIN_COUNTER_INDICES`: counter Indices the TPM keeps room for.
 pub const MIN_COUNTER_INDICES: u32 = 8;
 /// `NV_EVICT_OBJECT_SIZE`: the dynamic space of one evict object.

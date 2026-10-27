@@ -6,7 +6,7 @@
 use crate::_common::{
     AES128_CFB, ST_SESSIONS, build_raw_cmd, create_aes_key, execute_with_corrupted_bytes,
     execute_with_corrupted_bytes_status, execute_with_password_sessions, load_public_only_sym_key,
-    send_with_rc, start_trial_session, try_create_aes_key,
+    send_with_rc, start_trial_session,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, EncryptDecrypt, EncryptDecrypt2};
@@ -55,7 +55,7 @@ fn cmac_mode_rejected() {
     // 1. `TPMI_ALG_SYM_MODE` excludes unimplemented modes, so the CMAC key template of
     //    TPM2_CreatePrimary (parameter 2, inPublic) fails with TPM_RC_MODE + TPM_RC_P + TPM_RC_2.
     assert_eq!(
-        try_create_aes_key(&mut sim, TpmiAlgSymMode::Cmac).unwrap_err(),
+        crate::_common::try_create_aes_key_with_mode(&mut sim, tpm2::Alg::CMAC).unwrap_err(),
         TpmRc::MODE.with(Position::parameter(2)).get()
     );
     let key_handle = create_aes_key(&mut sim, TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb));

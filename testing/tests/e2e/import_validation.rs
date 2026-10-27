@@ -317,11 +317,18 @@ fn import_checks_seed_size_before_attributes() {
         encryption_key: Tpm2bData::default(),
         object_public: tpm2::Tpm2b(target_pub),
         duplicate: Tpm2bPrivate::from_bytes(&[0u8; 10]).unwrap(),
-        in_sym_seed: Tpm2bEncryptedSecret::from_bytes(&[0x55u8; 512]).unwrap(), // 512 bytes > 256
+        // Grown to 512 octets below (> 256, more than the `tpm2` types of this TPM can hold).
+        in_sym_seed: Tpm2bEncryptedSecret::from_bytes(&[0x55u8; 256]).unwrap(),
         symmetric_alg: None,
     };
 
-    let rc = execute_with_password_sessions(&mut sim, &import_cmd, 1, &[]).unwrap_err();
+    let (mut raw, params) =
+        crate::_common::build_cmd_with_param_offset(&import_cmd, &[empty_password_auth()]);
+    // encryptionKey, objectPublic and duplicate, then inSymSeed.
+    let seed = (0..3).fold(params, |offset, _| crate::_common::tpm2b_end(&raw, offset));
+    let seed_end = crate::_common::tpm2b_end(&raw, seed);
+    crate::_common::grow_command(&mut raw, &[seed], seed_end, &[0x55; 256]);
+    let rc = crate::_common::raw_rc(&mut sim, &raw);
     assert_eq!(rc, TpmRc::SIZE.with(Position::parameter(4)).get());
 }
 

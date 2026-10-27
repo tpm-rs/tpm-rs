@@ -13,9 +13,7 @@ use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use tpm2::crypto::kdf::kdfa_bits;
 use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
-use tpm2::{
-    TpmaObject, TpmiAlgSymMode, TpmsSensitiveCreate, TpmtSensitive, TpmuSensitiveComposite,
-};
+use tpm2::{TpmaObject, TpmsSensitiveCreate, TpmtSensitive, TpmuSensitiveComposite};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -85,7 +83,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             if bits != 128 && bits != 256 && bits != 192 {
                 return Err(TpmRc::SYMMETRIC.with(Position::parameter(5)));
             }
-            if matches!(sym_def.mode(), Some(TpmiAlgSymMode::Cmac)) {
+            if sym_def.mode().map(tpm2::Alg::from) == Some(tpm2::Alg::CMAC) {
                 return Err(TpmRc::MODE.with(Position::parameter(5)));
             }
         }

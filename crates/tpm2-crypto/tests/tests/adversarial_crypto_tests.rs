@@ -181,9 +181,9 @@ fn test_cmac_unsupported_algorithms() {
     let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let data = b"some data to mac";
 
-    let mut mac = [0u8; 16];
-    let res = tpm2::crypto::cmac(&provider, SymmetricKey::Sm4_128(&key), data, &mut mac);
-    assert_eq!(res.unwrap_err(), CryptoError::Unsupported);
+    let _ = data;
+    let res = tpm2::crypto::Cmac::sm4_128(&provider, &key);
+    assert!(matches!(res, Err(CryptoError::Unsupported)));
 }
 
 #[test]

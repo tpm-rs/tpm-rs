@@ -33,13 +33,6 @@ pub const TPM2_MAX_ALG_LIST_SIZE: usize = 64;
 pub trait TpmlElement: Copy {
     const DEFAULT: Self;
     const COUNT_OVERFLOW_ERROR: UnmarshalError = UnmarshalError::SIZE;
-
-    /// The most entries an unmarshaled list may hold: `cap` (the list's compile-time capacity),
-    /// lowered by an installed unmarshal profile ([`crate::profile`]) for lists bounded by
-    /// `HASH_COUNT`.
-    fn unmarshal_cap(cap: usize) -> usize {
-        cap
-    }
 }
 
 /// A length-prefixed (`u32`) list of up to `CAP` elements of type `T` (representing `TPML_*` structures in TPM 2.0 Part 2, Section 10.5).
@@ -174,7 +167,7 @@ impl<'a, T: TpmlElement + Unmarshal<'a>, const CAP: usize> Tpml<T, CAP> {
         if count < min_count {
             return Err(UnmarshalError::SIZE);
         }
-        if count > (CAP as u32) || count as usize > T::unmarshal_cap(CAP) {
+        if count > (CAP as u32) {
             return Err(T::COUNT_OVERFLOW_ERROR);
         }
         let mut array = [T::DEFAULT; CAP];
@@ -221,13 +214,6 @@ impl TpmlElement for TpmsPcrSelection {
         sizeof_select: TPM2_PCR_SELECT_MIN as u8,
         pcr_select: [0u8; TPM2_PCR_SELECT_MAX as usize],
     };
-
-    /// TPM 2.0 Part 2, Table "Definition of TPML_PCR_SELECTION Structure":
-    /// "pcrSelections\[count\]{:HASH_COUNT}" and "#TPM_RC_SIZE | response code when *count* is
-    /// greater than the possible number of banks"; `HASH_COUNT` is the profile's.
-    fn unmarshal_cap(cap: usize) -> usize {
-        crate::profile::hash_count_cap(cap)
-    }
 }
 impl<const CAP: usize> Tpml<TpmsPcrSelection, CAP> {
     pub fn pcr_selections(&self) -> core::slice::Iter<'_, TpmsPcrSelection> {
@@ -420,13 +406,6 @@ pub type TpmlDigestValues<'a> = Tpml<TpmtHa<'a>, { TpmiAlgHash::HASH_COUNT }>;
 impl_marshal!(TpmlDigestValues<'_>);
 impl<'a> TpmlElement for TpmtHa<'a> {
     const DEFAULT: Self = Self::DEFAULT_HA;
-
-    /// TPM 2.0 Part 2, Table "Definition of TPML_DIGEST_VALUES Structure":
-    /// "digests\[count\]{:HASH_COUNT}" and "#TPM_RC_SIZE | response code when *count* is
-    /// greater than the possible number of banks"; `HASH_COUNT` is the profile's.
-    fn unmarshal_cap(cap: usize) -> usize {
-        crate::profile::hash_count_cap(cap)
-    }
 }
 impl<'a, const CAP: usize> Tpml<TpmtHa<'a>, CAP> {
     pub fn digests(&self) -> core::slice::Iter<'_, TpmtHa<'a>> {

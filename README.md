@@ -22,10 +22,10 @@ To check compilation:
 cargo check -p tpm2-simulator --features rust
 
 # Check with Crux
-cargo check -p tpm2-simulator --no-default-features --features crux
+cargo check -p tpm2-simulator --no-default-features --features crux,sha512
 
 # Check with BoringSSL (BORINGSSL_BUILD_DIR defaults to <project-dir>/boringssl-build)
-cargo check -p tpm2-simulator --no-default-features --features bssl
+cargo check -p tpm2-simulator --no-default-features --features bssl,sha512
 ```
 
 ### Running Unit and Integration Tests
@@ -33,13 +33,13 @@ cargo check -p tpm2-simulator --no-default-features --features bssl
 Run the test suite for the selected cryptographic backend:
 ```bash
 # Rust
-cargo test --workspace --no-default-features --features rust
+cargo test --workspace --no-default-features --features rust,sha512
 
 # Crux
-cargo test --workspace --no-default-features --features crux
+cargo test --workspace --no-default-features --features crux,sha512
 
 # BoringSSL (BORINGSSL_BUILD_DIR defaults to <project-dir>/boringssl-build)
-cargo test --workspace --no-default-features --features bssl
+cargo test --workspace --no-default-features --features bssl,sha512
 
 # Build the simulator, and run only the simulator tests
 cd crates/tpm2-client && docker compose run --rm simulator_tests

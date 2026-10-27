@@ -332,9 +332,10 @@ fn context_fields_fail_in_unmarshaling_order() {
     let cases: [(&str, u32); 2] = [
         // sequence 0, savedHandle 0x02010000, one byte of hierarchy.
         ("8001000000170000016100000000000000000201000000", 0x1C4),
-        // sequence 1, savedHandle 0x80000000, owner, blob size 0x1000 and no blob bytes.
+        // sequence 1, savedHandle 0x80000000, owner, blob size 0xFFFF (above the capacity of
+        // every profile's `MAX_CONTEXT_SIZE`) and no blob bytes.
         (
-            "80010000001c00000161000000000000000180000000400000011000",
+            "80010000001c0000016100000000000000018000000040000001ffff",
             0x1D5,
         ),
     ];

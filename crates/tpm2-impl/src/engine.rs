@@ -147,8 +147,21 @@ pub const MAX_SEQUENCE_BUFFER: usize = 4096;
 ///
 /// The size is implementation-defined (TPM 2.0 Part 2, `TPM_PT_MAX_COMMAND_SIZE`: "the maximum
 /// value for *commandSize* in a command"); this TPM uses the TCG reference profile's `MAX_COMMAND_SIZE`
-/// (`4096 - 0x80`), so that the same commands are accepted.
-pub(crate) const MAX_COMMAND_SIZE: usize = 4096 - 0x80;
+/// (`4096 - 0x80`), so that the same commands are accepted, or 8192 with the
+/// `max-command-size-8192` feature (the TCG reference implementation version 185).
+pub const MAX_COMMAND_SIZE: usize = if cfg!(feature = "max-command-size-8192") {
+    8192
+} else {
+    4096 - 0x80
+};
+
+/// The value reported for `TPM_PT_MAX_RESPONSE_SIZE` ("the maximum value for *responseSize* in a
+/// response"): 4096, or 8192 with the `max-command-size-8192` feature.
+pub const MAX_RESPONSE_SIZE: usize = if cfg!(feature = "max-command-size-8192") {
+    8192
+} else {
+    4096
+};
 
 /// Buffer size for decrypted command parameters.
 /// The parameter area can never be larger than the whole command, so sizing the buffer to
@@ -497,7 +510,7 @@ pub struct GlobalState {
     /// clock is written to NV (`TimeClockUpdate`), by `TPM2_Clear`, and at manufacture.
     pub clock_safe: bool,
     /// Cumulative clock-rate divisor applied to elapsed platform time (`s_adjustRate` in the C
-    /// platform `Clock.c`); [`CLOCK_NOMINAL`] means no adjustment. Changed by
+    /// platform `Clock.c`); `CLOCK_NOMINAL` means no adjustment. Changed by
     /// `TPM2_ClockRateAdjust` within `CLOCK_NOMINAL ± CLOCK_ADJUST_LIMIT`.
     pub clock_adjust_rate: u32,
     /// Platform milliseconds not yet consumed by rate-adjusted time updates
@@ -567,7 +580,9 @@ impl ActiveSequence {
                 hash_states[0] = crate::hash_state::StreamingHashState::new(TpmiAlgHash::Sha1);
                 hash_states[1] = crate::hash_state::StreamingHashState::new(TpmiAlgHash::Sha256);
                 hash_states[2] = crate::hash_state::StreamingHashState::new(TpmiAlgHash::Sha384);
-                hash_states[3] = crate::hash_state::StreamingHashState::new(TpmiAlgHash::Sha512);
+                if let Some(sha512) = crate::handler::capability::sha512() {
+                    hash_states[3] = crate::hash_state::StreamingHashState::new(sha512);
+                }
             }
         }
         Self {
@@ -1482,12 +1497,12 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     }
 
     /// Loads the persistent object `handle` for use by a command (`ObjectLoadEvict` without the
-    /// object-slot accounting, which [`Self::validate_command_handles`] performs).
+    /// object-slot accounting, which `Self::validate_command_handles` performs).
     ///
     /// A persistent handle whose hierarchy is disabled looks undefined, as in the C reference:
     /// platform handles (`0x8180_0000..`) need `phEnable`, all others `shEnable`, and objects of
     /// the endorsement hierarchy additionally `ehEnable`. Every failure to find or use the object
-    /// is reported as `TPM_RC_HANDLE` (without position); see [`Self::read_persistent_object`]
+    /// is reported as `TPM_RC_HANDLE` (without position); see `Self::read_persistent_object`
     /// for an unchecked read.
     pub fn load_persistent_object(&mut self, handle: u32) -> Result<TransientObject, TpmRc> {
         let hierarchy_enabled = if handle >= 0x8180_0000 {
@@ -1600,27 +1615,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     }
 
     /// Creates a new [`TpmEngine`] over `platform` with a default (unmanufactured)
-    /// [`GlobalState`] and the profile [`crate::TPM_PROFILE`].
+    /// [`GlobalState`].
     pub fn new(platform: TpmPlatform<'a, C, S, T, R>) -> Result<Self, InternalError> {
-        Self::with_profile(platform, &crate::handler::capability::TPM_PROFILE)
-    }
-
-    /// Creates a new [`TpmEngine`] over `platform` with a default (unmanufactured)
-    /// [`GlobalState`] and the unmarshal profile `profile`: [`crate::TPM_PROFILE`], or
-    /// [`crate::TPM_PROFILE_NO_SHA512`] for a TPM without SHA-512 (like a C reference built without
-    /// `ALG_SHA512`: SHA-512 is not in `TPM_CAP_ALGS` nor a PCR bank, and SHA-384 is the context
-    /// integrity hash and the largest digest).
-    ///
-    /// The profile is installed process-wide ([`tpm2::profile::install`]): every engine of a
-    /// process must use the same profile, otherwise this fails with
-    /// [`InternalError::ProfileConflict`].
-    pub fn with_profile(
-        platform: TpmPlatform<'a, C, S, T, R>,
-        profile: &'static tpm2::profile::Profile,
-    ) -> Result<Self, InternalError> {
-        // Commands are unmarshaled per this TPM's profile (algorithms, curves, RSA key sizes and
-        // RSA-dependent buffer sizes), not per the `tpm2` features of the build.
-        tpm2::profile::install(profile).map_err(|_| InternalError::ProfileConflict)?;
         Ok(Self {
             platform,
             state: GlobalState::default(),
@@ -2263,7 +2259,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// Process a TPM request and write the response back into the same buffer. Returns the number
     /// of bytes written to the response buffer.
     pub fn execute_command_in_place(&mut self, in_out: &mut [u8], request_size: usize) -> usize {
-        let mut tmp_request = [0u8; 4096];
+        let mut tmp_request = [0u8; MAX_COMMAND_SIZE];
         if request_size > tmp_request.len() {
             return self.fill_error(in_out, TpmRc::SIZE.to_rc());
         }
@@ -2439,6 +2435,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         self.state.pcrs.update_counter =
                             self.state.pcrs.update_counter.wrapping_add(1);
                     }
+                    #[allow(unreachable_patterns)]
                     _ => {}
                 }
             }
@@ -6877,7 +6874,7 @@ pub(crate) fn infer_alg_from_digest_size(size: usize) -> Option<tpm2::TpmiAlgHas
         20 => Some(tpm2::TpmiAlgHash::Sha1),
         32 => Some(tpm2::TpmiAlgHash::Sha256),
         48 => Some(tpm2::TpmiAlgHash::Sha384),
-        64 => Some(tpm2::TpmiAlgHash::Sha512),
+        64 => crate::handler::capability::sha512(),
         _ => None,
     }
 }
@@ -6887,16 +6884,8 @@ pub(crate) fn digest_to_tpmt_ha<'a>(
     digest: &'a OwnedDigest,
 ) -> tpm2::TpmtHa<'a> {
     let slice = digest.get_buffer();
-    match alg {
-        tpm2::TpmiAlgHash::Sha256 => tpm2::TpmtHa::Sha256(slice[..32].try_into().unwrap()),
-        tpm2::TpmiAlgHash::Sha384 => tpm2::TpmtHa::Sha384(slice[..48].try_into().unwrap()),
-        tpm2::TpmiAlgHash::Sha512 => tpm2::TpmtHa::Sha512(slice[..64].try_into().unwrap()),
-        tpm2::TpmiAlgHash::Sm3_256 => tpm2::TpmtHa::Sm3_256(slice[..32].try_into().unwrap()),
-        tpm2::TpmiAlgHash::Sha3_256 => tpm2::TpmtHa::Sha3_256(slice[..32].try_into().unwrap()),
-        tpm2::TpmiAlgHash::Sha3_384 => tpm2::TpmtHa::Sha3_384(slice[..48].try_into().unwrap()),
-        tpm2::TpmiAlgHash::Sha3_512 => tpm2::TpmtHa::Sha3_512(slice[..64].try_into().unwrap()),
-        tpm2::TpmiAlgHash::Sha1 => tpm2::TpmtHa::Sha1(slice[..20].try_into().unwrap()),
-    }
+    tpm2::TpmtHa::new(alg, &slice[..alg.digest_size()])
+        .expect("the digest length always matches its hash algorithm")
 }
 
 fn is_pcr_allocated(

@@ -23,8 +23,9 @@ Tags: `us-only` (every reference answers TPM_RC_COMMAND_CODE and tpm-rs does
 not), `them-only` (tpm-rs answers TPM_RC_COMMAND_CODE and the references
 succeed), `spec` (everything else: check the spec).
 
-Rendering with `to_test` uses process mode, so the reference binaries must be
-built (`cargo build --release -p testing --features differential --bins`).
+Rendering with `to_test` uses process mode, so the reference binary of the
+fuzz crate's target must be built (e.g. `cargo build --release -p testing
+--features target-mstpm20 --bin reference`).
 """
 import collections
 import concurrent.futures as cf
@@ -120,8 +121,7 @@ def build_to_test():
 
 
 def render(to_test, rep):
-    env = dict(ENV, MSTPM20_BIN=f"{R}/target/release/mstpm20",
-               IBMSWTPM2_BIN=f"{R}/target/release/ibmswtpm2")
+    env = dict(ENV, REFERENCE_BIN=f"{R}/target/release/reference")
     p = subprocess.run([to_test, rep], cwd=R, capture_output=True, text=True,
                        errors="replace", env=env, timeout=600)
     note = ("// NOTE: no finding when replayed on the current source (fixed since?)\n"

@@ -11,7 +11,7 @@ use tpm2::commands::LoadExternal;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bPublic, Tpm2bPublicKeyRsa, Tpm2bSymKey,
-    TpmEccCurve, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmsRsaParms, TpmtPublic, TpmtSensitive,
+    TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmsRsaParms, TpmtPublic, TpmtSensitive,
     TpmuSensitiveComposite,
 };
 
@@ -82,17 +82,26 @@ fn ecc_point_not_on_curve_rejected() {
 #[test]
 fn ecc_unsupported_curve_rejected() {
     let mut sim = Tpm::new();
-    let mut pub_struct = make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT);
-    if let PublicParmsAndId::Ecc(ref mut parms, _) = pub_struct.parms_and_id {
-        parms.curve_id = TpmEccCurve::BNP638;
-    }
+    let pub_struct = make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT);
+    let PublicParmsAndId::Ecc(parms, _) = pub_struct.parms_and_id else {
+        unreachable!("an ECC public area");
+    };
+    // curveID = TPM_ECC_BN_P638, which this TPM does not implement (not a `TpmEccCurve` of
+    // this TPM). It follows nameAlg, objectAttributes, authPolicy, symmetric and scheme.
+    let curve_offset = 4
+        + crate::_common::marshal_to_vec(&pub_struct.auth_policy).len()
+        + crate::_common::marshal_to_vec(&parms.symmetric).len()
+        + crate::_common::marshal_to_vec(&parms.scheme).len();
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute(cmd);
+    let res = crate::_common::execute_with_corrupted_bytes_status(&mut sim, &cmd, 0, &[], |p| {
+        let name_alg = crate::_common::tpm2b_public_name_alg(crate::_common::tpm2b_end(p, 0));
+        crate::_common::put_u16(p, name_alg + 2 + curve_offset, 0x0011);
+    });
     assert!(res.is_err());
 }
 
@@ -236,7 +245,9 @@ fn scheme_seed_unique_and_key_size_checks() {
     //    the supported key", "#TPM_RC_VALUE | error when key size is not supported". (Its note
     //    allows "limited support for smaller RSA key sizes" in `TPM2_LoadExternal()`, not larger
     //    ones.)
-    let mut modulus = [0x33u8; 384];
+    //    The `tpm2` types of this TPM cannot hold an RSA-3072 key, so a 2048-bit key is
+    //    marshaled, its keyBits replaced and its modulus grown to 384 octets.
+    let mut modulus = [0x33u8; 256];
     modulus[0] = 0xd5;
     let t = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -246,14 +257,32 @@ fn scheme_seed_unique_and_key_size_checks() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(3072),
+                key_bits: TpmiRsaKeyBits(2048),
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(leak_bytes(&modulus)).unwrap(),
         ),
     };
+    let cmd = tpm2::commands::LoadExternal {
+        in_private: None,
+        in_public: tpm2::Tpm2b(t),
+        hierarchy: Handle::RH_OWNER,
+    };
+    let (mut raw, params) = crate::_common::build_cmd_with_param_offset(&cmd, &[]);
+    // inPrivate (empty), then inPublic: size, type, nameAlg, objectAttributes, authPolicy
+    // (empty), symmetric (NULL), scheme (NULL), keyBits, exponent and the modulus.
+    let in_public = params + 2;
+    let key_bits = crate::_common::tpm2b_public_name_alg(in_public) + 2 + 4 + 2 + 2 + 2;
+    crate::_common::put_u16(&mut raw, key_bits, 3072);
+    let modulus_end = crate::_common::tpm2b_end(&raw, key_bits + 2 + 4);
+    crate::_common::grow_command(
+        &mut raw,
+        &[in_public, key_bits + 6],
+        modulus_end,
+        &[0x33; 128],
+    );
     assert_eq!(
-        load_external(&mut sim, t, None, Handle::RH_OWNER).unwrap_err(),
+        crate::_common::raw_rc(&mut sim, &raw),
         rc_p(TpmRc::VALUE, 2)
     );
 }
@@ -293,7 +322,7 @@ fn unsupported_name_alg_rejected() {
     let mut sim = Tpm::new();
     let in_public = tpm2::Tpm2b(make_rsa_public_area_exact_attrs(
         RSA_N,
-        TpmiAlgHash::Sm3_256,
+        TpmiAlgHash::Sha256,
         TpmaObject::SIGN_ENCRYPT,
     ));
     let cmd = LoadExternal {
@@ -301,7 +330,11 @@ fn unsupported_name_alg_rejected() {
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = execute_with_password_sessions(&mut sim, &cmd, 0, &[]);
+    // nameAlg = SM3_256, which this TPM does not implement (not a `TpmiAlgHash` of this TPM).
+    let res = crate::_common::execute_with_corrupted_bytes_status(&mut sim, &cmd, 0, &[], |p| {
+        let name_alg = crate::_common::tpm2b_public_name_alg(crate::_common::tpm2b_end(p, 0));
+        crate::_common::put_u16(p, name_alg, tpm2::Alg::SM3_256.id());
+    });
     match res {
         Err(e) => assert_eq!(e, TpmRc::HASH.with(Position::parameter(2)).get()),
         Ok(_) => panic!("Expected error, got Ok"),
@@ -312,19 +345,20 @@ fn unsupported_name_alg_rejected() {
 #[test]
 fn unsupported_name_alg_returns_hash() {
     let mut sim = Tpm::new();
-    let mut pub_struct = make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT);
-    pub_struct.name_alg = Some(TpmiAlgHash::Sm3_256);
+    let pub_struct = make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT);
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
         in_public,
         hierarchy: Handle::RH_NULL,
     };
-    let res = sim.execute(cmd);
-    assert!(res.is_err());
-    let err = res.err().unwrap();
+    // nameAlg = SM3_256, which this TPM does not implement (not a `TpmiAlgHash` of this TPM).
+    let res = crate::_common::execute_with_corrupted_bytes_status(&mut sim, &cmd, 0, &[], |p| {
+        let name_alg = crate::_common::tpm2b_public_name_alg(crate::_common::tpm2b_end(p, 0));
+        crate::_common::put_u16(p, name_alg, tpm2::Alg::SM3_256.id());
+    });
     let expected = TpmRc::HASH.with(Position::parameter(2));
-    assert_eq!(err.get(), expected.get());
+    assert_eq!(res.err(), Some(expected.get()));
 }
 
 /// A `nameAlg` the TPM does not implement (SM3-256) is `TPM_RC_HASH + P2` and a curve it does not

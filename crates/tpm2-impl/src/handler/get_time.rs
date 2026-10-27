@@ -36,10 +36,7 @@ enum KeySignScheme {
 /// Returns `true` if `hash_alg` is a hash algorithm implemented by this TPM for signing
 /// (`CryptHashIsValidAlg(hashAlg, FALSE)`).
 fn is_implemented_sign_hash(hash_alg: TpmiAlgHash) -> bool {
-    matches!(
-        hash_alg,
-        TpmiAlgHash::Sha1 | TpmiAlgHash::Sha256 | TpmiAlgHash::Sha384 | TpmiAlgHash::Sha512
-    )
+    crate::handler::capability::is_implemented_algorithm(tpm2::Alg::from(hash_alg))
 }
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -191,10 +188,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 None => KeySignScheme::Null,
                 Some(TpmtEccScheme::Ecdsa(h)) => KeySignScheme::Sign(TpmtSigScheme::Ecdsa(h)),
                 Some(TpmtEccScheme::Ecdaa(s)) => KeySignScheme::Sign(TpmtSigScheme::Ecdaa(s)),
-                Some(TpmtEccScheme::Sm2(h)) => KeySignScheme::Sign(TpmtSigScheme::Sm2(h)),
-                Some(TpmtEccScheme::Ecschnorr(h)) => {
-                    KeySignScheme::Sign(TpmtSigScheme::Ecschnorr(h))
-                }
                 Some(_) => KeySignScheme::NonSign,
             },
             OwnedPublicParmsAndId::KeyedHash(scheme, _) => match scheme {

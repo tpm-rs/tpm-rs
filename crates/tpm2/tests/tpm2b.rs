@@ -637,6 +637,7 @@ fn test_option_tpm2b_sensitive() {
 }
 
 #[test]
+#[cfg(feature = "rsa4096")]
 fn test_tpm2b_private_key_rsa_spec_max_buffer_size() {
     assert_eq!(Tpm2bPrivateKeyRsa::CAP, 1280);
     assert_eq!(Tpm2bPrivateKeyRsa::CAP, TPM2_RSA_PRIVATE_SIZE);
@@ -673,6 +674,7 @@ fn test_tpm2b_private_key_rsa_spec_max_buffer_size() {
 }
 
 #[test]
+#[cfg(feature = "rsa4096")]
 fn test_tpm2b_private_spec_max_buffer_size_rsa_4096() {
     let expected_max_private =
         Tpm2bDigest::MAX_SIZE + Tpm2bDigest::MAX_SIZE + Tpm2bSensitive::MAX_SIZE;
@@ -737,7 +739,42 @@ fn test_tpm2b_private_spec_max_buffer_size_rsa_4096() {
     );
 }
 
+/// With the default features (RSA-1024/2048, the NIST P-224 to P-521 and BN P-256 curves and
+/// SHA-1 to SHA-512), the profile-dependent buffers have the sizes of the C reference TPMs with
+/// the same profile (TPM 2.0 Part 2): `TPM2B_PUBLIC_KEY_RSA` "buffer\[size\] {: MAX_RSA_KEY_BYTES}"
+/// (256), `TPM2B_PRIVATE_KEY_RSA` "buffer\[size\]{:RSA_PRIVATE_SIZE }" (640),
+/// `TPM2B_ENCRYPTED_SECRET` "secret\[size\]{:sizeof(TPMU_ENCRYPTED_SECRET)}" (256),
+/// `TPM2B_PRIVATE` "buffer\[size\] {:sizeof(_PRIVATE)}" (910), `TPM2B_TEMPLATE`
+/// "buffer\[size\]{:sizeof(TPMT_PUBLIC)}" (350), `TPM2B_ECC_PARAMETER`
+/// "buffer\[size\] {:MAX_ECC_KEY_BYTES}" (66) and `HASH_COUNT` (4).
 #[test]
+#[cfg(all(
+    feature = "rsa2048",
+    not(feature = "rsa3072"),
+    not(feature = "rsa4096"),
+    feature = "ecc_curve_nist_p521",
+    not(feature = "ecc_curve_bn_p638"),
+    not(feature = "ecc_curve_bp_p512_r1"),
+    not(feature = "ecc_curve_curve448"),
+    not(feature = "mlkem"),
+    not(feature = "mldsa"),
+    not(feature = "sm3_256"),
+    not(feature = "sha3_256"),
+    not(feature = "sha3_384"),
+    not(feature = "sha3_512"),
+))]
+fn test_default_profile_buffer_sizes() {
+    assert_eq!(Tpm2bPublicKeyRsa::CAP, 256);
+    assert_eq!(Tpm2bPrivateKeyRsa::CAP, 640);
+    assert_eq!(Tpm2bEncryptedSecret::CAP, 256);
+    assert_eq!(Tpm2bPrivate::CAP, 910);
+    assert_eq!(Tpm2bTemplate::CAP, 350);
+    assert_eq!(Tpm2bEccParameter::CAP, 66);
+    assert_eq!(TpmiAlgHash::HASH_COUNT, 4);
+}
+
+#[test]
+#[cfg(feature = "rsa4096")]
 fn test_tpm2b_encrypted_secret_spec_max_buffer_size() {
     // Per TPM 2.0 Spec Part 2 Section 11.4.2 & 11.4.3 (and C reference TpmTypes.h),
     // TPM2B_ENCRYPTED_SECRET has buffer size sizeof(TPMU_ENCRYPTED_SECRET),

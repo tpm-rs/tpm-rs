@@ -6,15 +6,13 @@
 //! locality, platform signals and `_TPM_Hash_*` indications), exactly like a
 //! real TPM.
 //!
-//! With the `differential` feature, every interaction is additionally mirrored
-//! to the patched C reference TPMs selected by `DIFFERENTIAL_REFERENCES`
-//! (default: both the TCG reference `mstpm20` and the IBM `ibmswtpm2`), each
-//! running in a child process of its own (see [`crate::differential`]): each
-//! command is first executed by `tpm-rs`, then by every reference (in
-//! parallel), and each reference's response must be identical to the
-//! `tpm-rs` response except for the documented, implementation-defined
-//! differences, so the references are also compared with each other. A
-//! mismatch panics at the command that diverged, so the same test suite
+//! In a differential build (a `target-*` feature), every interaction is
+//! additionally mirrored to the patched C reference TPM of the target (the
+//! public or version 185 TCG reference `mstpm20`, or the IBM `ibmswtpm2`),
+//! running in a child process of its own (see `crate::differential`): each
+//! command is first executed by `tpm-rs`, then by the reference, and the
+//! reference's response must be identical to the `tpm-rs` response except for
+//! the documented, implementation-defined differences. A mismatch panics at the command that diverged, so the same test suite
 //! serves as both the `tpm-rs` E2E tests and the differential tests. The test
 //! always continues with the `tpm-rs` response.
 //!
@@ -347,7 +345,7 @@ impl Tpm {
     /// Returns the `tpm-rs` response (empty while the TPM is powered off), or
     /// [`SendError::Transport`] if the simulator rejected the command at the
     /// transport level (e.g. an oversized buffer), in which case it is not
-    /// mirrored, or [`SendError::Divergence`] if a reference's response
+    /// mirrored, or `SendError::Divergence` (in a differential build) if a reference's response
     /// differs other than as documented. Unlike [`Self::send_command`] it
     /// never panics on a divergence, so a fuzzer can classify it.
     pub fn try_exchange(&mut self, locality: u8, command: &[u8]) -> Result<Vec<u8>, SendError> {

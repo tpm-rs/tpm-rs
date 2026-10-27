@@ -3,7 +3,7 @@
 use hex_literal::hex;
 use tpm2::crypto::ecc::{Ecc, EccCurve};
 use tpm2::crypto::{Asymmetric, AsymmetricSign};
-use tpm2::{TpmEccCurve, TpmiAlgHash, TpmtHa};
+use tpm2::{Alg, TpmEccCurve, TpmiAlgHash, TpmtHa};
 use tpm2_crypto_bssl::*;
 
 // =========================================================================
@@ -88,12 +88,11 @@ fn test_ecdsa_cross_hash_algorithms() {
         .ecc_generate_key(TpmEccCurve::NistP256, &mut pub_p256, &mut priv_p256, None)
         .unwrap();
 
-    for hash_alg in [
-        TpmiAlgHash::Sha1,
-        TpmiAlgHash::Sha256,
-        TpmiAlgHash::Sha384,
-        TpmiAlgHash::Sha512,
-    ] {
+    // SHA-512 by its algorithm ID: it is a `TpmiAlgHash` only with the `sha512` feature of `tpm2`.
+    for hash_alg in [Alg::SHA1, Alg::SHA256, Alg::SHA384, Alg::SHA512]
+        .into_iter()
+        .filter_map(|alg| TpmiAlgHash::try_from(alg).ok())
+    {
         let digest_bytes = [0x6Bu8; 64];
         let digest_size = hash_alg.digest_size();
         let digest_ha = TpmtHa::new(hash_alg, &digest_bytes[..digest_size]).unwrap();
@@ -116,11 +115,10 @@ fn test_ecdsa_cross_hash_algorithms() {
         .ecc_generate_key(TpmEccCurve::NistP384, &mut pub_p384, &mut priv_p384, None)
         .unwrap();
 
-    for hash_alg in [
-        TpmiAlgHash::Sha256,
-        TpmiAlgHash::Sha384,
-        TpmiAlgHash::Sha512,
-    ] {
+    for hash_alg in [Alg::SHA256, Alg::SHA384, Alg::SHA512]
+        .into_iter()
+        .filter_map(|alg| TpmiAlgHash::try_from(alg).ok())
+    {
         let digest_bytes = [0x7Cu8; 64];
         let digest_size = hash_alg.digest_size();
         let digest_ha = TpmtHa::new(hash_alg, &digest_bytes[..digest_size]).unwrap();
@@ -619,14 +617,7 @@ fn test_provider_symmetric_cfb_matches_nist_vectors_and_updates_iv() {
     encrypt(&provider, sym_key, ModeIv::Cfb(&mut iv), second).unwrap();
     assert_eq!(chained, expected_ct);
 
-    // NIST SP 800-38A CFB128-AES192 and CFB128-AES256 (first block)
-    let key192 = hex!("8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b");
-    let mut block = hex!("6bc1bee22e409f96e93d7e117393172a");
-    let mut iv = iv0;
-    let sym_key = SymmetricKey::new(AlgSym::Aes192, &key192).unwrap();
-    encrypt(&provider, sym_key, ModeIv::Cfb(&mut iv), &mut block).unwrap();
-    assert_eq!(block, hex!("cdc80d6fddf18cab34c25909c99a4174"));
-
+    // NIST SP 800-38A CFB128-AES256 (first block)
     let key256 = hex!("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914df1a");
     let mut block = hex!("6bc1bee22e409f96e93d7e117393172a");
     let mut iv = iv0;
@@ -655,17 +646,6 @@ fn test_provider_symmetric_rejects_unsupported_modes_and_ciphers() {
             aes,
             ModeIv::Cbc(&mut iv),
             Direction::Decrypt,
-            &mut data
-        ),
-        Err(CryptoError::Unsupported)
-    );
-    let sm4 = SymmetricKey::new(AlgSym::Sm4_128, &key).unwrap();
-    assert_eq!(
-        encrypt_decrypt(
-            &provider,
-            sm4,
-            ModeIv::Cfb(&mut iv),
-            Direction::Encrypt,
             &mut data
         ),
         Err(CryptoError::Unsupported)
@@ -708,10 +688,10 @@ fn test_provider_hash_hmac_and_cmac_vectors() {
     );
 
     // SM3 is not implemented by this provider.
-    assert_eq!(
-        hash(&provider, TpmiAlgHash::Sm3_256, b"abc", &mut out),
+    assert!(matches!(
+        tpm2::crypto::Hash::sm3_256(&provider),
         Err(CryptoError::Unsupported)
-    );
+    ));
 
     // NIST SP 800-38B AES-128-CMAC (empty message)
     let key128 = hex!("2b7e151628aed2a6abf7158809cf4f3c");
@@ -829,12 +809,14 @@ fn test_provider_rsa_semantic_failures_are_ok_none_or_false() {
 
     // Signatures: a 1024-bit key cannot hold a SHA-512 PSS signature with a digest-sized salt.
     let digest = [0x11u8; 64];
-    let digest_ha = TpmtHa::new(TpmiAlgHash::Sha512, &digest).unwrap();
     let mut sig = [0u8; 128];
-    assert_eq!(
-        provider.rsapss_sign(priv_key, digest_ha, &mut sig),
-        Ok(None)
-    );
+    if let Ok(sha512) = TpmiAlgHash::try_from(Alg::SHA512) {
+        let digest_ha = TpmtHa::new(sha512, &digest).unwrap();
+        assert_eq!(
+            provider.rsapss_sign(priv_key, digest_ha, &mut sig),
+            Ok(None)
+        );
+    }
     let digest_ha = TpmtHa::new(TpmiAlgHash::Sha256, &digest[..32]).unwrap();
     let sig_len = provider
         .rsassa_sign(priv_key, digest_ha, &mut sig)

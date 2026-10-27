@@ -123,12 +123,17 @@ fn forge_integrity(
 ) -> Vec<u8> {
     let crypto = TestCryptoProvider;
     let proof = &gs.sh_proof[..gs.sh_proof_size as usize];
-    let mut hmac = HmacStream::new(&crypto, TpmiAlgHash::Sha512, proof).unwrap();
+    let mut hmac = HmacStream::new(
+        &crypto,
+        TpmiAlgHash::try_from(tpm2::Alg::SHA512).unwrap_or(TpmiAlgHash::Sha384),
+        proof,
+    )
+    .unwrap();
     hmac.update(&gs.total_reset_count.to_be_bytes()).unwrap();
     hmac.update(&context.sequence.to_be_bytes()).unwrap();
     hmac.update(&context.saved_handle.0.to_be_bytes()).unwrap();
     hmac.update(enc_context).unwrap();
-    let mut out = [0u8; 64];
+    let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
     hmac.finalize(&mut out).unwrap().digest().to_vec()
 }
 
@@ -159,7 +164,7 @@ fn context_cfb(
     let mut key_iv = [0u8; 32];
     tpm2::crypto::kdf::kdfa_bits(
         &crypto,
-        TpmiAlgHash::Sha512,
+        TpmiAlgHash::try_from(tpm2::Alg::SHA512).unwrap_or(TpmiAlgHash::Sha384),
         proof,
         b"CONTEXT",
         &context.sequence.to_be_bytes(),

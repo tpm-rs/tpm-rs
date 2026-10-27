@@ -1,10 +1,11 @@
-//! The C reference TPMs linked into this process: the FFI of both patched C
-//! references and the hosts built on it.
+//! The C reference TPM linked into this process: the FFI of the patched C
+//! reference of the build's target ([`Implementation::TARGET`]) and the hosts
+//! built on it.
 //!
-//! `testing/build.rs` compiles every reference into a symbol-isolated static
+//! `testing/build.rs` compiles the target into a symbol-isolated static
 //! archive whose only global symbols are its entry points, prefixed with its
-//! name (`difftest_mstpm20_*`, `difftest_ibmswtpm2_*`), and links both
-//! archives into this crate. The archives call back into the harness through
+//! name (`difftest_mstpm20_*` or `difftest_ibmswtpm2_*`), and links the
+//! archive into this crate. The archives call back into the harness through
 //! symbols this module defines:
 //!
 //! * `difftest_getpid()`: the reference's `getpid()` (redirected at link
@@ -20,11 +21,10 @@
 //! On top of the FFI ([`CReference`], a [`Backend`]), this module provides
 //! the two ways to host the references:
 //!
-//! * [`serve_process`]: the reference processes (`src/bin/mstpm20.rs`,
-//!   `src/bin/ibmswtpm2.rs`) that [`super::References`] launches, one per
-//!   `Tpm` and reference;
-//! * `InProcReferences` (with the `fuzz-inproc` feature): both references
-//!   in the calling process, with the same interface as
+//! * [`serve_process`]: the reference processes (`src/bin/reference.rs`)
+//!   that [`super::References`] launches, one per `Tpm`;
+//! * `InProcReferences` (with the `fuzz-inproc` feature): the reference in
+//!   the calling process, with the same interface as
 //!   [`super::References`] but without processes and pipes.
 //!
 //! The C references keep their state in globals, so each can be hosted at
@@ -148,15 +148,27 @@ macro_rules! entry_points {
     };
 }
 
+// Only the archive of the target is linked (see `testing/build.rs`).
+#[cfg(any(feature = "target-mstpm20", feature = "target-mstpm20-v185"))]
 entry_points!(mstpm20, "difftest_mstpm20_");
+#[cfg(feature = "target-ibmswtpm2")]
 entry_points!(ibmswtpm2, "difftest_ibmswtpm2_");
 
 /// The entry points of `implementation`.
+///
+/// # Panics
+/// Unless `implementation` is the target of this build ([`Implementation::TARGET`]), the only
+/// implementation linked into it.
 fn entry_points(implementation: Implementation) -> &'static EntryPoints {
-    match implementation {
-        Implementation::Mstpm20 => &mstpm20::ENTRY_POINTS,
-        Implementation::Ibmswtpm2 => &ibmswtpm2::ENTRY_POINTS,
-    }
+    assert_eq!(
+        implementation,
+        Implementation::TARGET,
+        "only the target's C reference is linked into this build"
+    );
+    #[cfg(feature = "target-ibmswtpm2")]
+    return &ibmswtpm2::ENTRY_POINTS;
+    #[cfg(not(feature = "target-ibmswtpm2"))]
+    return &mstpm20::ENTRY_POINTS;
 }
 
 /// The process ID the C references see; `0` until [`set_reference_pid`]
@@ -407,7 +419,7 @@ fn take_stdout() -> std::fs::File {
 }
 
 /// Runs the reference process of `implementation` (the `main` of
-/// `src/bin/mstpm20.rs` and `src/bin/ibmswtpm2.rs`, see [`server::serve`]);
+/// `src/bin/reference.rs`, see [`server::serve`]);
 /// the first command-line argument names the test.
 ///
 /// The seed chosen by the parent (`TPM_REFERENCE_SEED`, always set by
@@ -448,18 +460,15 @@ mod tests {
     /// server tests' lock, so they do not race with those either.
     pub(super) use super::super::server::VIRTUAL_CLOCK_TEST_LOCK as HOSTING;
 
-    /// A C reference can be acquired only once at a time, independently of
-    /// the other reference.
+    /// A C reference can be acquired only once at a time.
     #[test]
     fn c_reference_is_exclusive() {
         let _hosting = HOSTING.lock().unwrap_or_else(|e| e.into_inner());
-        let first = CReference::acquire(Implementation::Mstpm20).expect("free");
-        assert_eq!(first.implementation(), Implementation::Mstpm20);
-        assert!(CReference::acquire(Implementation::Mstpm20).is_none());
-        let other = CReference::acquire(Implementation::Ibmswtpm2).expect("independent");
+        let first = CReference::acquire(Implementation::TARGET).expect("free");
+        assert_eq!(first.implementation(), Implementation::TARGET);
+        assert!(CReference::acquire(Implementation::TARGET).is_none());
         drop(first);
-        assert!(CReference::acquire(Implementation::Mstpm20).is_some());
-        drop(other);
+        assert!(CReference::acquire(Implementation::TARGET).is_some());
     }
 
     /// Every reference's `rand()` is glibc's generator on state of its own:
@@ -836,17 +845,17 @@ mod references {
                 .map(|command| mirrored(&mut sim, references, command))
                 .collect::<Vec<_>>()
             };
-            let mut references = InProcReferences::launch(&Implementation::ALL, seed);
+            let mut references = InProcReferences::launch(&[Implementation::TARGET], seed);
             assert_eq!(
                 references.implementations().collect::<Vec<_>>(),
-                Implementation::ALL
+                [Implementation::TARGET]
             );
             let first = conversation(&mut references);
             references.advance_clock(1500);
             references.reinit();
             assert_eq!(conversation(&mut references), first, "after reinit");
             drop(references);
-            let mut references = InProcReferences::launch(&Implementation::ALL, seed);
+            let mut references = InProcReferences::launch(&[Implementation::TARGET], seed);
             assert_eq!(conversation(&mut references), first, "hosted anew");
         }
 
@@ -862,7 +871,7 @@ mod references {
                 realtime_ms: 5_000,
             };
             let mut sim = create_reference_simulator!(seed.pid, seed.realtime_ms);
-            let mut references = InProcReferences::launch(&[Implementation::Ibmswtpm2], seed);
+            let mut references = InProcReferences::launch(&[Implementation::TARGET], seed);
             let mut wrong = tpm_rs(&mut sim, &GET_RANDOM_32);
             let last = wrong.len() - 1;
             wrong[last] ^= 1;
@@ -870,7 +879,7 @@ mod references {
                 .try_exchange(0, &GET_RANDOM_32, &wrong)
                 .unwrap_err();
             assert_eq!(divergences.len(), 1);
-            assert_eq!(divergences[0].implementation, Implementation::Ibmswtpm2);
+            assert_eq!(divergences[0].implementation, Implementation::TARGET);
             let reference = divergences[0]
                 .reference_response
                 .as_ref()
@@ -891,9 +900,9 @@ mod references {
                 pid: 1,
                 realtime_ms: 1,
             };
-            let _first = InProcReferences::launch(&[Implementation::Mstpm20], seed);
+            let _first = InProcReferences::launch(&[Implementation::TARGET], seed);
             let second = std::panic::catch_unwind(|| {
-                InProcReferences::launch(&[Implementation::Mstpm20], seed);
+                InProcReferences::launch(&[Implementation::TARGET], seed);
             });
             assert!(second.is_err());
         }

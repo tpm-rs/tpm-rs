@@ -80,11 +80,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let name_alg = public_struct
             .name_alg
             .ok_or(TpmRc::HASH.with(Position::parameter(2)))?;
-        if name_alg != TpmiAlgHash::Sha1
-            && name_alg != TpmiAlgHash::Sha256
-            && name_alg != TpmiAlgHash::Sha384
-            && name_alg != TpmiAlgHash::Sha512
-        {
+        if !crate::handler::capability::is_implemented_algorithm(tpm2::Alg::from(name_alg)) {
             return Err(TpmRc::HASH.with(Position::parameter(2)));
         }
 

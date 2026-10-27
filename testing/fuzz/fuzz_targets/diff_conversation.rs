@@ -9,9 +9,9 @@
 //! [`tpm2_fuzz::driver`]) unless `known_divergences.txt` suppresses it, in
 //! which case the conversation ends quietly.
 //!
-//! By default the C references run in child processes (set `MSTPM20_BIN`/
-//! `IBMSWTPM2_BIN`); with the `inproc` feature they are linked into the fuzz
-//! binary and driven in-process ([`Tpm::with_seed_in_process`]).
+//! By default the C reference (of the fuzz crate's `target-*` feature) runs in
+//! child processes (set `REFERENCE_BIN`); with the `inproc` feature it is
+//! linked into the fuzz binary and driven in-process ([`Tpm::with_seed_in_process`]).
 //!
 //! Every [`Tpm::reset`] leaks the simulator's small `'static` platform
 //! components, so run with `-detect_leaks=0`.

@@ -12,7 +12,7 @@
 //! assert the correct behavior. The replay stops at the first finding, so
 //! later rounds are not printed.
 //!
-//! The replay needs the reference binaries (`MSTPM20_BIN`, `IBMSWTPM2_BIN`),
+//! The replay needs the reference binaries (`REFERENCE_BIN`),
 //! because the fuzz crate's `Tpm` is differential.
 //!
 //! Usage:
@@ -22,7 +22,7 @@
 //!     [--name <test fn name>] <crash file>
 //! ```
 //!
-//! Follow the GEMINI.md rules when pasting: pick a test name that describes
+//! Follow the AGENTS.md rules when pasting: pick a test name that describes
 //! the behavior under test (`--name`), and complete the `///` doc.
 #![forbid(unsafe_code)]
 
@@ -229,7 +229,7 @@ fn render_test(name: &str, source: &str, rounds: &[Replayed]) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "/// TODO: describe the behavior under test (GEMINI.md naming and doc rules)."
+        "/// TODO: describe the behavior under test (AGENTS.md naming and doc rules)."
     );
     let _ = writeln!(out, "///");
     let _ = writeln!(

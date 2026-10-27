@@ -115,8 +115,8 @@ pub(crate) fn unmarshal_nv_header_bytes<'a>(
 const NV_HEADER_BUF_SIZE: usize =
     Tpm2bAuth::<'static>::MAX_SIZE + Tpm2bNvPublic::<'static>::MAX_SIZE;
 
-/// Maximum data size of an NV Index (`MAX_NV_INDEX_SIZE`).
-const MAX_NV_INDEX_SIZE: u16 = 2048;
+/// Maximum data size of an NV Index (`MAX_NV_INDEX_SIZE`, see [`tpm2::TPM2_MAX_NV_INDEX_SIZE`]).
+pub(crate) const MAX_NV_INDEX_SIZE: u16 = tpm2::TPM2_MAX_NV_INDEX_SIZE;
 
 /// Mask of the counter bits that may change without forcing an NV update of an
 /// orderly counter (`MAX_ORDERLY_COUNT = (1 << ORDERLY_BITS) - 1`, `ORDERLY_BITS = 8`).
