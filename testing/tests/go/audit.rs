@@ -353,6 +353,7 @@ fn parse_name_size(buf: &[u8]) -> usize {
                 0x0004 => TpmiAlgHash::Sha1,
                 0x000B => TpmiAlgHash::Sha256,
                 0x000C => TpmiAlgHash::Sha384,
+                #[cfg(feature = "sha512")]
                 0x000D => TpmiAlgHash::Sha512,
                 _ => panic!("unsupported hash algorithm 0x{alg:x} in name"),
             };

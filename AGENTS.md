@@ -38,7 +38,7 @@ cargo clippy --all-targets -- -D warnings
 # The full test suite (every test with --release): workspace, reference-rng, crypto backends,
 # the differential tests against every target and the in-process reference tests
 make test
-# Formatting, clippy (also of every differential target and reference-rng) and docs
+# Formatting, clippy (also of every differential target, reference-rng and without SHA-512) and docs
 make lint
 
 # Individual parts of `make test`:

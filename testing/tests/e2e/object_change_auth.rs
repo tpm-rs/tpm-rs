@@ -337,11 +337,12 @@ fn non_storage_parent_and_sha512_seed_preserved() {
     let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     // SHA-512 sealed object: the re-encrypted sensitive area must keep the 64-byte seedValue,
-    // otherwise the reloaded object fails its binding check.
+    // otherwise the reloaded object fails its binding check. (SHA-384 and its 48-byte seedValue
+    // without the `sha512` feature.)
     let (obj, obj_rsp) = create_and_load(
         &mut sim,
         srk,
-        sealed_template(TpmiAlgHash::Sha512, TpmaObject::empty()),
+        sealed_template(STRONGEST_HASH_ALG, TpmaObject::empty()),
         &[],
         b"payload",
     );

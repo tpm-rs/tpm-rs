@@ -1,11 +1,11 @@
 //! Bound sessions: bind entity recognition, SHA-512 names and evicting a bound entity.
 
 use crate::_common::{
-    ATTR_CONTINUE, AuthEntry, RC_SUCCESS, create_primary, create_primary_obj, create_sealed,
-    ecc_signing_template, execute_with_hmac_sessions, execute_with_password_sessions,
-    get_rsa_srk_template, hmac_entry, object_name, sealed_template_with_policy,
-    send_rc_with_auth_entries, start_auth_session, start_bound, start_salted,
-    unseal_with_auth_entry,
+    ATTR_CONTINUE, AuthEntry, RC_SUCCESS, STRONGEST_DIGEST_SIZE, STRONGEST_HASH_ALG,
+    create_primary, create_primary_obj, create_sealed, ecc_signing_template,
+    execute_with_hmac_sessions, execute_with_password_sessions, get_rsa_srk_template, hmac_entry,
+    object_name, sealed_template_with_policy, send_rc_with_auth_entries, start_auth_session,
+    start_bound, start_salted, unseal_with_auth_entry,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::{
@@ -20,12 +20,12 @@ use tpm2::{
 /// entity is referenced by, and SHA-512 Names are supported (C `IsSessionBindEntity()`).
 #[test]
 fn bound_session_matches_entity_by_bind_value() {
-    // SHA-512 Name.
+    // SHA-512 Name (SHA-384 without the `sha512` feature).
     {
         let mut sim = Tpm::new();
         let mut public =
             sealed_template_with_policy(TpmaObject::USER_WITH_AUTH | TpmaObject::NO_DA, &[]);
-        public.name_alg = Some(TpmiAlgHash::Sha512);
+        public.name_alg = Some(STRONGEST_HASH_ALG);
         let item = create_primary_obj(&mut sim, public, b"key", b"data");
         let session = start_auth_session(
             &mut sim,
@@ -163,7 +163,8 @@ fn persist_bind_policy_session_and_evict() {
 fn salted_session_bound_to_sha512_entity() {
     // StartAuthSession side of the SHA-512 bind panic (the engine side is fix-auth's).
     let mut sim = Tpm::new();
-    let (key, _) = create_primary(&mut sim, ecc_signing_template(TpmiAlgHash::Sha512));
+    // (SHA-384 without the `sha512` feature.)
+    let (key, _) = create_primary(&mut sim, ecc_signing_template(STRONGEST_HASH_ALG));
     start_salted(&mut sim, Handle::RH_NULL, key, &[]).expect("bind to a SHA-512 object");
 }
 
@@ -173,8 +174,9 @@ fn sha512_named_bind_entity() {
     // Part 1 (StartAuthSession side): binding to an entity with a 66-byte SHA-512 Name must not
     // panic. Parts 2-3 are engine-side (fix-auth / fix-sessions).
     let mut sim = Tpm::new();
-    let (key, name) = create_primary(&mut sim, ecc_signing_template(TpmiAlgHash::Sha512));
-    assert_eq!(name.len(), 66);
+    // (A 50-byte SHA-384 Name without the `sha512` feature.)
+    let (key, name) = create_primary(&mut sim, ecc_signing_template(STRONGEST_HASH_ALG));
+    assert_eq!(name.len(), 2 + STRONGEST_DIGEST_SIZE);
     let mut session = start_bound(&mut sim, key, &[], TpmSe::HMAC);
     session
         .attributes

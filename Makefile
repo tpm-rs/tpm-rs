@@ -79,6 +79,7 @@ clippy: $(DIFFERENTIAL_CLIPPY)
 	$(CARGO) clippy --all-targets -p tpm2-impl -p tpm2-crypto-rust -p tpm2-crypto-crux \
 		-p tpm2-crypto-bssl -p tpm2-client --no-default-features \
 		--features tpm2-impl/dev_crypto_bssl,tpm2-impl/reference-rng -- -D warnings
+	$(CARGO) clippy --all-targets -p testing --no-default-features --features target-mstpm20 -- -D warnings
 
 $(DIFFERENTIAL_CLIPPY): clippy-%:
 	$(CARGO) clippy --all-targets -p testing --features target-$* -- -D warnings

@@ -3,12 +3,12 @@
 #![allow(deprecated)] // TPM2_CreateLoaded is deprecated upstream, but the TPM implements it.
 
 use crate::_common::{
-    AES128_CFB, command_rc, compute_object_name, create_and_load, create_dup_target,
-    create_duplicate_challenged, create_owner_primary, create_parent, create_srk,
-    create_storage_primary, create_test_primary, create_unwrap, derivation_parent_template,
-    duplicable_sign_template, duplicate_alg, duplicate_command, duplicate_command_with_name_alg,
-    ecc_public_with_policy, ecc_sign_template, empty_password_auth, exec_command,
-    execute_tpm_command_offsets, execute_with_password_sessions,
+    AES128_CFB, STRONGEST_DIGEST_SIZE, STRONGEST_HASH_ALG, command_rc, compute_object_name,
+    create_and_load, create_dup_target, create_duplicate_challenged, create_owner_primary,
+    create_parent, create_srk, create_storage_primary, create_test_primary, create_unwrap,
+    derivation_parent_template, duplicable_sign_template, duplicate_alg, duplicate_command,
+    duplicate_command_with_name_alg, ecc_public_with_policy, ecc_sign_template,
+    empty_password_auth, exec_command, execute_tpm_command_offsets, execute_with_password_sessions,
     execute_with_password_sessions_status, expected_inner_wrapper_rc, flush_context,
     get_ecc_srk_template, get_rsa_srk_template, hex_checked, import, import_command,
     import_encapsulation_key, import_request, leak_bytes, load_with_name, make_sealed_blob,
@@ -504,12 +504,13 @@ fn outer_and_inner_integrity_errors() {
     let (obj, obj_rsp) = create_and_load(
         &mut sim,
         srk,
-        duplicable_sign_template(TpmiAlgHash::Sha512),
+        // SHA-512 (SHA-384 without the `sha512` feature): not the parent's nameAlg.
+        duplicable_sign_template(STRONGEST_HASH_ALG),
         &[],
         &[],
     );
     let name = read_public(&mut sim, obj).unwrap().name;
-    let dup = duplicate_alg(&mut sim, obj, parent, None, TpmiAlgHash::Sha512).unwrap();
+    let dup = duplicate_alg(&mut sim, obj, parent, None, STRONGEST_HASH_ALG).unwrap();
     rewrap(
         &mut sim,
         parent,
@@ -521,7 +522,7 @@ fn outer_and_inner_integrity_errors() {
     .expect("outer wrapper hash must be the parent's nameAlg");
 
     // Corrupted outer integrity -> INTEGRITY + RC_P3 (RC_Import_duplicate).
-    let dup = duplicate_alg(&mut sim, obj, parent, None, TpmiAlgHash::Sha512).unwrap();
+    let dup = duplicate_alg(&mut sim, obj, parent, None, STRONGEST_HASH_ALG).unwrap();
     let mut blob = dup.duplicate.get_buffer().to_vec();
     blob[4] ^= 0x80;
     assert_eq!(
@@ -554,11 +555,12 @@ fn outer_and_inner_integrity_errors() {
             1,
         )
     };
-    let mut plain = vec![0x00, 0x41];
+    // (64 is `STRONGEST_DIGEST_SIZE`; 48 without the `sha512` feature.)
+    let mut plain = ((STRONGEST_DIGEST_SIZE + 1) as u16).to_be_bytes().to_vec();
     plain.extend([0u8; 8]);
     assert_eq!(inner_import(&mut sim, &plain), rc_p(TpmRc::SIZE, 3));
-    let mut plain = vec![0x00, 0x40];
-    plain.extend([0u8; 64 + 8]);
+    let mut plain = (STRONGEST_DIGEST_SIZE as u16).to_be_bytes().to_vec();
+    plain.extend([0u8; STRONGEST_DIGEST_SIZE + 8]);
     assert_eq!(inner_import(&mut sim, &plain), rc_p(TpmRc::INTEGRITY, 3));
 
     // Truncated duplicate -> INSUFFICIENT + RC_P3.

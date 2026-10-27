@@ -7,7 +7,9 @@ use crate::_common::{
     hash_request, raw_rc,
 };
 use sha1::Sha1;
-use sha2::{Digest, Sha384, Sha512};
+#[cfg(feature = "sha512")]
+use sha2::Sha512;
+use sha2::{Digest, Sha384};
 use testing::tpm::Tpm;
 use tpm2::commands::Hash;
 use tpm2::errors::{Position, TpmRc};
@@ -22,6 +24,7 @@ fn algorithms_and_hierarchy_validation() {
         (TpmiAlgHash::Sha1, 20),
         (TpmiAlgHash::Sha256, 32),
         (TpmiAlgHash::Sha384, 48),
+        #[cfg(feature = "sha512")]
         (TpmiAlgHash::Sha512, 64),
     ];
 
@@ -106,6 +109,7 @@ fn hash_every_alg_and_hierarchy() {
         (TpmiAlgHash::Sha1, Handle::RH_OWNER),
         (TpmiAlgHash::Sha256, Handle::RH_ENDORSEMENT),
         (TpmiAlgHash::Sha384, Handle::RH_PLATFORM),
+        #[cfg(feature = "sha512")]
         (TpmiAlgHash::Sha512, Handle::RH_NULL),
     ];
 
@@ -261,14 +265,35 @@ fn sha1_sha384_sha512_and_unsupported() {
     assert_eq!(resp.out_hash.as_ref(), expected.as_slice());
 
     // Test SHA-512
-    let cmd = Hash {
-        data: Tpm2bMaxBuffer::from_bytes(data).unwrap(),
-        hash_alg: TpmiAlgHash::Sha512,
-        hierarchy: Handle::RH_NULL,
-    };
-    let resp = sim.execute(cmd).unwrap();
-    let expected = Sha512::digest(data);
-    assert_eq!(resp.out_hash.as_ref(), expected.as_slice());
+    #[cfg(feature = "sha512")]
+    {
+        let cmd = Hash {
+            data: Tpm2bMaxBuffer::from_bytes(data).unwrap(),
+            hash_alg: TpmiAlgHash::Sha512,
+            hierarchy: Handle::RH_NULL,
+        };
+        let resp = sim.execute(cmd).unwrap();
+        let expected = Sha512::digest(data);
+        assert_eq!(resp.out_hash.as_ref(), expected.as_slice());
+    }
+    // Without the `sha512` feature, SHA-512 is not a `TpmiAlgHash` of this TPM: it is sent as raw
+    // bytes and rejected with TPM_RC_HASH.
+    #[cfg(not(feature = "sha512"))]
+    {
+        let cmd = Hash {
+            data: Tpm2bMaxBuffer::from_bytes(data).unwrap(),
+            hash_alg: TpmiAlgHash::Sha256,
+            hierarchy: Handle::RH_NULL,
+        };
+        let res =
+            crate::_common::execute_with_corrupted_bytes_status(&mut sim, &cmd, 0, &[], |p| {
+                crate::_common::put_u16(p, crate::_common::tpm2b_end(p, 0), tpm2::Alg::SHA512.id());
+            });
+        assert_eq!(
+            res.err(),
+            Some(TpmRc::HASH.with(Position::parameter(2)).get())
+        );
+    }
 
     // Test an unimplemented hash algorithm (SM3_256, not a `TpmiAlgHash` of this TPM)
     let cmd = Hash {

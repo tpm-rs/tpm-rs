@@ -110,7 +110,12 @@ fn name_alg_nv_index_names_and_unsupported_primary() {
 
         let public_info_struct = TpmsNvPublic {
             nv_index: Handle(0x01800011),
+            #[cfg(feature = "sha512")]
             name_alg: TpmiAlgHash::Sha512,
+            // Without the `sha512` feature, a SHA-256 placeholder replaced by TPM_ALG_SHA512 in
+            // the command bytes (see below).
+            #[cfg(not(feature = "sha512"))]
+            name_alg: TpmiAlgHash::Sha256,
             attributes,
             auth_policy: Tpm2bDigest::default(),
             data_size: 4,
@@ -123,35 +128,62 @@ fn name_alg_nv_index_names_and_unsupported_primary() {
             public_info,
         };
 
-        execute_with_password_sessions(&mut sim, &define_space, 1, &[])
-            .expect("could not call TPM2_DefineSpace with SHA512");
+        #[cfg(feature = "sha512")]
+        {
+            execute_with_password_sessions(&mut sim, &define_space, 1, &[])
+                .expect("could not call TPM2_DefineSpace with SHA512");
 
-        let read_public = tpm2::commands::NVReadPublic {
-            nv_index: Handle(0x01800011),
-        };
+            let read_public = tpm2::commands::NVReadPublic {
+                nv_index: Handle(0x01800011),
+            };
 
-        let rsp = execute_with_password_sessions(&mut sim, &read_public, 0, &[])
-            .expect("could not call TPM2_ReadPublic");
+            let rsp = execute_with_password_sessions(&mut sim, &read_public, 0, &[])
+                .expect("could not call TPM2_ReadPublic");
 
-        let mut pub_buf = [0u8; 1024];
-        let pub_len = marshal_to_slice(&public_info_struct, &mut pub_buf);
+            let mut pub_buf = [0u8; 1024];
+            let pub_len = marshal_to_slice(&public_info_struct, &mut pub_buf);
 
-        let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-        let digest = tpm2::crypto::hash(
-            CLIENT_CRYPTO,
-            TpmiAlgHash::Sha512,
-            &pub_buf[..pub_len],
-            &mut digest_buf,
-        )
-        .unwrap()
-        .digest();
-        let mut name_bytes = [0u8; 66];
-        name_bytes[0..2].copy_from_slice(&Alg::from(TpmiAlgHash::Sha512).id().to_be_bytes());
-        name_bytes[2..66].copy_from_slice(digest);
-        let expected_name =
-            Tpm2bName::from_bytes(crate::test_utils::leak_bytes(&name_bytes)).unwrap();
+            let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+            let digest = tpm2::crypto::hash(
+                CLIENT_CRYPTO,
+                TpmiAlgHash::Sha512,
+                &pub_buf[..pub_len],
+                &mut digest_buf,
+            )
+            .unwrap()
+            .digest();
+            let mut name_bytes = [0u8; 66];
+            name_bytes[0..2].copy_from_slice(&Alg::SHA512.id().to_be_bytes());
+            name_bytes[2..66].copy_from_slice(digest);
+            let expected_name =
+                Tpm2bName::from_bytes(crate::test_utils::leak_bytes(&name_bytes)).unwrap();
 
-        assert_eq!(rsp.nv_name.get_buffer(), expected_name.get_buffer());
+            assert_eq!(rsp.nv_name.get_buffer(), expected_name.get_buffer());
+        }
+        // Without the `sha512` feature, SHA-512 is not an implemented hash: the nameAlg
+        // (`TPMI_ALG_HASH`, after auth (TPM2B), publicInfo.size and nvIndex) is sent as
+        // TPM_ALG_SHA512, and unmarshaling it fails with TPM_RC_HASH + P2.
+        #[cfg(not(feature = "sha512"))]
+        {
+            let res = crate::_common::execute_with_corrupted_bytes_status(
+                &mut sim,
+                &define_space,
+                1,
+                &[],
+                |p| {
+                    let name_alg = crate::_common::tpm2b_end(p, 0) + 2 + 4;
+                    crate::_common::put_u16(p, name_alg, tpm2::Alg::SHA512.id());
+                },
+            );
+            assert_eq!(
+                res.err(),
+                Some(
+                    tpm2::errors::TpmRc::HASH
+                        .with(tpm2::errors::Position::parameter(2))
+                        .get()
+                )
+            );
+        }
     }
 
     // 3. Supported SHA1 name_alg (define succeeds, read_public succeeds and returns valid SHA1 name)

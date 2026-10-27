@@ -3,19 +3,17 @@
 
 use crate::_common::Connection;
 use crate::_common::{
-    CAP_ACT, CAP_ALGS, CAP_PCRS, CmdHeader, TPMA_CC_EXTENSIVE, TPMA_CC_FLUSHED, TPMA_CC_NV,
-    cap_handles, cap_pcr_properties, command_attributes, context_save_raw, create_primary,
-    create_storage_primary_in, da_parameters_unwrap, execute_get_capability, execute_raw_transact,
-    execute_with_corrupted_bytes_status, get_cap, get_tpm_property, hash_sequence_start,
-    marshal_to_slice, no_session_command, power_cycle_orderly, rc_of, rc_p, rsa_ek_template,
-    run_raw, start_auth_session, start_session_raw,
+    CAP_ACT, CAP_ALGS, CAP_PCRS, CmdHeader, STRONGEST_HASH_ALG, TPMA_CC_EXTENSIVE, TPMA_CC_FLUSHED,
+    TPMA_CC_NV, cap_handles, cap_pcr_properties, command_attributes, context_save_raw,
+    create_primary, create_storage_primary_in, da_parameters_unwrap, execute_get_capability,
+    execute_raw_transact, execute_with_corrupted_bytes_status, get_cap, get_tpm_property,
+    hash_sequence_start, marshal_to_slice, no_session_command, power_cycle_orderly, rc_of, rc_p,
+    rsa_ek_template, run_raw, start_auth_session, start_session_raw,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::GetCapability;
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{
-    Handle, Marshal, TpmCap, TpmCc, TpmPt, TpmSe, TpmiAlgHash, TpmiStCommandTag, Unmarshal,
-};
+use tpm2::{Handle, Marshal, TpmCap, TpmCc, TpmPt, TpmSe, TpmiStCommandTag, Unmarshal};
 
 /// `TPM_CAP_ACT` reports `TPM_RC_VALUE + RC_P2`, not `RC_P1`.
 #[test]
@@ -865,7 +863,8 @@ fn max_context_sizes_bound_saved_contexts() {
         &[],
         TpmSe::Policy,
         None,
-        TpmiAlgHash::Sha512,
+        // The largest implemented digest (SHA-512 with the `sha512` feature).
+        STRONGEST_HASH_ALG,
     )
     .unwrap();
     let session_context = context_save_raw(&mut sim, session.session_handle.0).unwrap();

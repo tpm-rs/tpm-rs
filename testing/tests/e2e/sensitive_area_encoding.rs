@@ -20,25 +20,31 @@ fn sha512_keyedhash_seed_and_auth_padding() {
     let mut sim = Tpm::new();
     let srk = owner_srk(&mut sim);
     // A SHA-512 KEYEDHASH object: its 64-byte seedValue must survive creation and loading.
-    let mut t = sealed_template(TpmiAlgHash::Sha512, TpmaObject::empty());
-    t.auth_policy = dup_policy_digest_for(TpmiAlgHash::Sha512);
+    // (SHA-384 and 48 bytes without the `sha512` feature.)
+    let name_alg = STRONGEST_HASH_ALG;
+    let mut t = sealed_template(name_alg, TpmaObject::empty());
+    t.auth_policy = dup_policy_digest_for(name_alg);
     let (obj, rsp) = create_and_load(&mut sim, srk, t, &[], b"data");
-    let dup = duplicate_with_policy(&mut sim, obj, TpmiAlgHash::Sha512);
+    let dup = duplicate_with_policy(&mut sim, obj, name_alg);
     let sensitive = parse_plain_duplicate(dup.duplicate.get_buffer());
-    assert_eq!(sensitive.seed_value.get_size(), 64, "seedValue truncated");
+    assert_eq!(
+        sensitive.seed_value.get_size() as usize,
+        STRONGEST_DIGEST_SIZE,
+        "seedValue truncated"
+    );
     let unique = match rsp.out_public.0.parms_and_id {
         PublicParmsAndId::KeyedHash(_, u) => u.get_buffer().to_vec(),
         _ => unreachable!(),
     };
     assert_eq!(
-        hash_parts(
-            TpmiAlgHash::Sha512,
-            &[sensitive.seed_value.get_buffer(), b"data"]
-        ),
+        hash_parts(name_alg, &[sensitive.seed_value.get_buffer(), b"data"]),
         unique
     );
     // MarshalSensitive pads the (empty) authValue to the nameAlg digest size.
-    assert_eq!(sensitive.auth_value.get_size(), 64);
+    assert_eq!(
+        sensitive.auth_value.get_size() as usize,
+        STRONGEST_DIGEST_SIZE
+    );
 }
 
 /// A SHA-384 SYMCIPHER key keeps its 48-byte seedValue; non-parent asymmetric keys drop it (checked via plain Duplicate).

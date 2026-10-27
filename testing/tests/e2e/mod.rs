@@ -50,6 +50,7 @@ mod ecc_parameters;
 mod ecdh;
 mod ek_templates;
 mod encrypt_decrypt;
+mod event_digest_banks;
 mod event_sequence;
 mod evict_control_authorization;
 mod evict_control_public_only;

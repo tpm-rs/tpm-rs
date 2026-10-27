@@ -1004,11 +1004,15 @@ fn unallocated_sha512_bank_is_filtered() {
 
     let mut select_bytes = [0u8; 3];
     select_bytes[0] = 0x01; // PCR 0
-    let selection =
-        TpmlPcrSelection::from_slice(&[
-            TpmsPcrSelection::new(TpmiAlgHash::Sha512, &select_bytes).unwrap()
-        ])
-        .unwrap();
+    let selection = TpmlPcrSelection::from_slice(&[
+        #[cfg(feature = "sha512")]
+        TpmsPcrSelection::new(TpmiAlgHash::Sha512, &select_bytes).unwrap(),
+        // Without the `sha512` feature, a SHA-256 placeholder whose hash is replaced by
+        // TPM_ALG_SHA512 in the command bytes (see below).
+        #[cfg(not(feature = "sha512"))]
+        TpmsPcrSelection::new(TpmiAlgHash::Sha256, &select_bytes).unwrap(),
+    ])
+    .unwrap();
 
     let policy_pcr = PolicyPCR {
         policy_session: start_rsp_handles.session_handle,
@@ -1018,12 +1022,27 @@ fn unallocated_sha512_bank_is_filtered() {
 
     // SHA-512 is an implemented hash: C accepts the selection and FilterPcr clears it because
     // the SHA-512 bank is not allocated by default.
-    let res = execute_with_password_sessions(&mut sim, &policy_pcr, 0, &[]);
-    assert!(
-        res.is_ok(),
-        "PolicyPCR with an unallocated SHA-512 bank selection succeeds: {:?}",
-        res.err()
-    );
+    #[cfg(feature = "sha512")]
+    {
+        let res = execute_with_password_sessions(&mut sim, &policy_pcr, 0, &[]);
+        assert!(
+            res.is_ok(),
+            "PolicyPCR with an unallocated SHA-512 bank selection succeeds: {:?}",
+            res.err()
+        );
+    }
+    // Without the `sha512` feature, SHA-512 is not an implemented hash: unmarshaling the bank's
+    // `TPMI_ALG_HASH` (after pcrDigest (TPM2B) and the selection count) fails with TPM_RC_HASH.
+    #[cfg(not(feature = "sha512"))]
+    {
+        let res = execute_with_corrupted_bytes_status(&mut sim, &policy_pcr, 0, &[], |p| {
+            put_u16(p, tpm2b_end(p, 0) + 4, tpm2::Alg::SHA512.id());
+        });
+        assert_eq!(
+            res.err(),
+            Some(TpmRc::HASH.with(Position::parameter(2)).get())
+        );
+    }
 
     let _ = flush_context(&mut sim, start_rsp_handles.session_handle);
 }

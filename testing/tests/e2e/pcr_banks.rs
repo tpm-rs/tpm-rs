@@ -77,7 +77,12 @@ fn read_order_unallocated_banks_and_reset_localities() {
         algs.push(alg);
         off += 2 + size;
     }
-    assert_eq!(algs, vec![ALG_SHA1, ALG_SHA256, ALG_SHA384, ALG_SHA512]);
+    // (Every implemented hash: no SHA-512 without the `sha512` feature.)
+    let expected: Vec<u16> = IMPLEMENTED_HASH_ALGS
+        .iter()
+        .map(|&h| Alg::from(h).id())
+        .collect();
+    assert_eq!(algs, expected);
 }
 
 /// After allocating SHA-512 and resetting, its bank can be extended and read in the requested order.
@@ -91,23 +96,32 @@ fn sha512_bank_readable_after_allocation() {
     assert_eq!(rsp.selection_out[0].0, ALG_SHA256);
     assert_eq!(rsp.selection_out[1].0, ALG_SHA1);
 
+    #[cfg(feature = "sha512")]
+    let (alg, hash_alg, size) = (ALG_SHA512, TpmiAlgHash::Sha512, 64);
+    // Without the `sha512` feature, SHA-512 is not implemented (TPMI_ALG_HASH unmarshaling fails
+    // with TPM_RC_HASH + RC_P1); the test uses the SHA-1 bank, also unallocated by default,
+    // instead.
+    #[cfg(not(feature = "sha512"))]
+    let (alg, hash_alg, size) = {
+        let (rc, _) = pcr_allocate(&mut sim, &[(ALG_SHA512, [0xFF, 0xFF, 0xFF])]);
+        assert_eq!(rc, rc_p(TpmRc::HASH, 1));
+        (ALG_SHA1, TpmiAlgHash::Sha1, 20)
+    };
+
     // Allocate the SHA-512 bank (all PCRs) and reset the TPM so it becomes active.
-    let (rc, _) = pcr_allocate(&mut sim, &[(ALG_SHA512, [0xFF, 0xFF, 0xFF])]);
+    let (rc, _) = pcr_allocate(&mut sim, &[(alg, [0xFF, 0xFF, 0xFF])]);
     assert_eq!(rc, 0);
     tpm_reset(&mut sim);
-    let rsp = pcr_read(&mut sim, &[(ALG_SHA512, bit(0))]);
-    assert_eq!(rsp.selection_out, vec![(ALG_SHA512, bit(0).to_vec())]);
-    assert_eq!(rsp.values, vec![vec![0u8; 64]]);
+    let rsp = pcr_read(&mut sim, &[(alg, bit(0))]);
+    assert_eq!(rsp.selection_out, vec![(alg, bit(0).to_vec())]);
+    assert_eq!(rsp.values, vec![vec![0u8; size]]);
 
     // Extending the SHA-512 bank works and is visible through PCR_Read.
-    assert_eq!(
-        pcr_extend_at(&mut sim, 0, 0, &[(ALG_SHA512, vec![5; 64])]),
-        0
-    );
-    let rsp = pcr_read(&mut sim, &[(ALG_SHA512, bit(0))]);
-    let mut data = vec![0u8; 64];
-    data.extend_from_slice(&[5u8; 64]);
-    assert_eq!(rsp.values[0], client_hash(TpmiAlgHash::Sha512, &data));
+    assert_eq!(pcr_extend_at(&mut sim, 0, 0, &[(alg, vec![5; size])]), 0);
+    let rsp = pcr_read(&mut sim, &[(alg, bit(0))]);
+    let mut data = vec![0u8; size];
+    data.resize(2 * size, 5);
+    assert_eq!(rsp.values[0], client_hash(hash_alg, &data));
 }
 
 /// Extending/resetting TCB PCRs 20-22 does not bump the update counter; PCR_SetAuthPolicy needs NV.

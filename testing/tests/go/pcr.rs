@@ -109,6 +109,7 @@ fn extends_tpm2(hash: TpmiAlgHash) -> [TpmtHa<'static>; 3] {
         TpmiAlgHash::Sha1 => SHA1.each_ref().map(TpmtHa::Sha1),
         TpmiAlgHash::Sha256 => SHA256.each_ref().map(TpmtHa::Sha256),
         TpmiAlgHash::Sha384 => SHA384.each_ref().map(TpmtHa::Sha384),
+        #[allow(unreachable_patterns)]
         _ => panic!("unsupported hash {hash:?}"),
     }
 }

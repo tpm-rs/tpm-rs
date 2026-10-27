@@ -3,7 +3,7 @@
 
 use crate::_common::{
     BUF_1000_AA, BUF_1000_BB, BUF_1000_CC, BUF_1024_55, BUF_A, CONTEXT_INTEGRITY_DIGEST_SIZE, Lcg,
-    compute_hash_single, compute_sha256, execute_tpm_command_auto_pw_unwrap,
+    STRONGEST_HASH_ALG, compute_hash_single, compute_sha256, execute_tpm_command_auto_pw_unwrap,
     execute_tpm_command_via_send, is_null_hashcheck, pw, rc_at, run_differential_case,
     run_hash_sequence, sequence_complete, sequence_update, sha256_sequence, start_hash_sequence,
     start_sequence, start_sequence_alg,
@@ -22,6 +22,7 @@ fn chunked_inputs_match_reference() {
         TpmiAlgHash::Sha1,
         TpmiAlgHash::Sha256,
         TpmiAlgHash::Sha384,
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512,
     ];
 
@@ -214,6 +215,7 @@ fn digest_for_every_hash_alg() {
         TpmiAlgHash::Sha1,
         TpmiAlgHash::Sha256,
         TpmiAlgHash::Sha384,
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512,
     ] {
         let handle = start_sequence_alg(&mut sim, alg);
@@ -266,8 +268,8 @@ fn interleaved_sequences() {
     // Start Sequence A (SHA256)
     let handle_a = start_sequence_alg(&mut sim, TpmiAlgHash::Sha256);
 
-    // Start Sequence B (SHA512)
-    let handle_b = start_sequence_alg(&mut sim, TpmiAlgHash::Sha512);
+    // Start Sequence B (SHA512; SHA384 without the `sha512` feature)
+    let handle_b = start_sequence_alg(&mut sim, STRONGEST_HASH_ALG);
 
     // Update Sequence A
     let update_cmd_a1 = SequenceUpdate {
@@ -314,7 +316,7 @@ fn interleaved_sequences() {
     assert_eq!(complete_resp_a.result.get_buffer(), &expected_a[..]);
 
     let expected_b = compute_hash_single(
-        TpmiAlgHash::Sha512,
+        STRONGEST_HASH_ALG,
         b"Sequence B: Part 1. Sequence B: Final.",
     );
     assert_eq!(complete_resp_b.result.get_buffer(), &expected_b[..]);
@@ -329,6 +331,7 @@ fn random_chunks_match_reference() {
         TpmiAlgHash::Sha1,
         TpmiAlgHash::Sha256,
         TpmiAlgHash::Sha384,
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512,
     ];
 
@@ -382,6 +385,7 @@ fn random_splits_match_reference() {
         (TpmiAlgHash::Sha1, 20),
         (TpmiAlgHash::Sha256, 32),
         (TpmiAlgHash::Sha384, 48),
+        #[cfg(feature = "sha512")]
         (TpmiAlgHash::Sha512, 64),
     ];
 
@@ -468,7 +472,12 @@ fn sha1_sha384_sha512_sequences() {
     let mut sim = Tpm::new();
     let password = "password";
     let buffer_sizes = [512, 1024, 2048, 4096];
-    let hash_algs = [TpmiAlgHash::Sha1, TpmiAlgHash::Sha384, TpmiAlgHash::Sha512];
+    let hash_algs = [
+        TpmiAlgHash::Sha1,
+        TpmiAlgHash::Sha384,
+        #[cfg(feature = "sha512")]
+        TpmiAlgHash::Sha512,
+    ];
 
     for &size in &buffer_sizes {
         for &alg in &hash_algs {

@@ -53,6 +53,7 @@ fn event_digests_and_extension() {
             }
             // C PCR_Event returns a digest for every implemented hash (HASH_COUNT),
             // PCR_Event.c, which includes SHA512.
+            #[cfg(feature = "sha512")]
             TpmtHa::Sha512(val) => assert_eq!(val.len(), 64),
             #[allow(unreachable_patterns)]
             _ => panic!("Unexpected digest algorithm in event response"),
@@ -133,6 +134,7 @@ fn event_with_empty_data() {
                 assert_eq!(val, &empty_hash_sha384[..]);
                 found_sha384 = true;
             }
+            #[allow(unreachable_patterns)]
             _ => {}
         }
     }

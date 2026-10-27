@@ -383,7 +383,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // Event sequences track every implemented hash (SHA-1, SHA-256, SHA-384 and, unless
             // the engine's configuration excludes it, SHA-512). The state of an excluded hash
             // is skipped (its digest stays empty and is not reported).
-            for (digest, state) in digests.iter_mut().zip(seq_obj.hash_states.iter()) {
+            for (digest, state) in digests.iter_mut().zip(seq_obj.event_hash_states()) {
                 if !crate::handler::capability::is_enabled_by_features(tpm2::Alg::from(state.alg)) {
                     continue;
                 }

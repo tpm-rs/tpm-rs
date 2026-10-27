@@ -377,6 +377,7 @@ fn supported_algorithms_and_invalid_hash() {
         (TpmiAlgHash::Sha1, 20),
         (TpmiAlgHash::Sha256, 32),
         (TpmiAlgHash::Sha384, 48),
+        #[cfg(feature = "sha512")]
         (TpmiAlgHash::Sha512, 64),
     ];
 

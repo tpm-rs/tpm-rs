@@ -142,6 +142,7 @@ fn digest_size(hash: TpmiAlgHash) -> usize {
         TpmiAlgHash::Sha1 => 20,
         TpmiAlgHash::Sha256 => 32,
         TpmiAlgHash::Sha384 => 48,
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512 => 64,
         #[allow(unreachable_patterns)]
         other => panic!("unsupported session hash {other:?}"),

@@ -188,7 +188,7 @@ fn oversized_name_rejected() {
     // object_name: size 67; first 2 bytes are the SHA512 alg id, then dummy bytes
     request.extend_from_slice(&67u16.to_be_bytes());
     let mut object_name = [0u8; 67];
-    object_name[..2].copy_from_slice(&Alg::from(TpmiAlgHash::Sha512).id().to_be_bytes());
+    object_name[..2].copy_from_slice(&Alg::SHA512.id().to_be_bytes());
     request.extend_from_slice(&object_name);
 
     // new_parent_name: size 34
@@ -287,7 +287,7 @@ fn policy_duplication_select_accepts_sha512_name() {
 
     // A SHA512 Name structure is 66 bytes: 2 bytes alg ID (0x000D) + 64 bytes digest
     let mut name_bytes = [0x11u8; 66];
-    name_bytes[0..2].copy_from_slice(&Alg::from(TpmiAlgHash::Sha512).id().to_be_bytes());
+    name_bytes[0..2].copy_from_slice(&Alg::SHA512.id().to_be_bytes());
 
     let object_name = Tpm2bName::from_bytes(leak_bytes(&name_bytes)).unwrap();
     let new_parent_name = Tpm2bName::from_bytes(leak_bytes(
@@ -478,8 +478,11 @@ fn policy_duplication_select_digest_for_every_hash_alg() {
     run_policy_dup_select_for_alg(TpmiAlgHash::Sha256, false);
     run_policy_dup_select_for_alg(TpmiAlgHash::Sha384, true);
     run_policy_dup_select_for_alg(TpmiAlgHash::Sha384, false);
-    run_policy_dup_select_for_alg(TpmiAlgHash::Sha512, true);
-    run_policy_dup_select_for_alg(TpmiAlgHash::Sha512, false);
+    #[cfg(feature = "sha512")]
+    {
+        run_policy_dup_select_for_alg(TpmiAlgHash::Sha512, true);
+        run_policy_dup_select_for_alg(TpmiAlgHash::Sha512, false);
+    }
 }
 
 /// TPM2_PolicyDuplicationSelect succeeds on a policy session started with a bind entity
@@ -672,7 +675,7 @@ fn policy_duplication_select_rejects_oversized_name() {
     // A name structure of 67 bytes (greater than 66)
     let mut name_bytes = vec![0x11u8; 67];
     // Write hash alg ID (e.g. SHA-512 = 0x000D)
-    name_bytes[0..2].copy_from_slice(&Alg::from(TpmiAlgHash::Sha512).id().to_be_bytes());
+    name_bytes[0..2].copy_from_slice(&Alg::SHA512.id().to_be_bytes());
 
     let object_name = OversizedTpm2bName {
         size: 67,

@@ -46,6 +46,7 @@ use sha1::Sha1;
 use sha2::Digest;
 use sha2::Sha256;
 use sha2::Sha384;
+#[cfg(feature = "sha512")]
 use sha2::Sha512;
 use std::time::Duration;
 use tpm2::Alg;
@@ -928,6 +929,7 @@ pub fn start_auth_session(
             TpmiAlgHash::Sha1 => 20,
             TpmiAlgHash::Sha256 => 32,
             TpmiAlgHash::Sha384 => 48,
+            #[cfg(feature = "sha512")]
             TpmiAlgHash::Sha512 => 64,
             #[allow(unreachable_patterns)]
             _ => 32,
@@ -2420,6 +2422,7 @@ impl PolicyCalculator {
             TpmiAlgHash::Sha1 => 20,
             TpmiAlgHash::Sha256 => 32,
             TpmiAlgHash::Sha384 => 48,
+            #[cfg(feature = "sha512")]
             TpmiAlgHash::Sha512 => 64,
             #[allow(unreachable_patterns)]
             _ => panic!("Unsupported auth hash"),
@@ -3318,11 +3321,50 @@ pub const EMPTY_POLICY: [u8; 32] = [0u8; 32];
 
 /// Size of a context integrity HMAC or ticket digest: the digest size of the context-integrity
 /// hash, which is the strongest implemented hash (TPM 2.0 Part 1, "Context Integrity
-/// Protection"): SHA-512.
-pub const CONTEXT_INTEGRITY_DIGEST_SIZE: usize = 64;
+/// Protection"): SHA-512, or SHA-384 without SHA-512 (the `sha512` feature).
+pub const CONTEXT_INTEGRITY_DIGEST_SIZE: usize = TpmiAlgHash::MAX_DIGEST_BYTES;
 
-/// Offset of `encrypted.size` in the blob: `integrity.size (2) || integrity (64)`.
+/// Offset of `encrypted.size` in the blob: `integrity.size (2) || integrity`.
 pub const ENC_SIZE_OFFSET: usize = 2 + CONTEXT_INTEGRITY_DIGEST_SIZE;
+
+/// Hash algorithms implemented by the TPM under test, in `TPM_ALG_ID` order: SHA-1, SHA-256,
+/// SHA-384 and SHA-512.
+#[cfg(feature = "sha512")]
+pub const IMPLEMENTED_HASH_ALGS: &[TpmiAlgHash] = &[
+    TpmiAlgHash::Sha1,
+    TpmiAlgHash::Sha256,
+    TpmiAlgHash::Sha384,
+    TpmiAlgHash::Sha512,
+];
+
+/// Hash algorithms implemented by the TPM under test without SHA-512 (the `sha512` feature, like
+/// a C reference built without `ALG_SHA512`): SHA-1, SHA-256 and SHA-384; `TPMI_ALG_HASH`
+/// unmarshaling rejects every other hash (SHA-512 included) with `TPM_RC_HASH`.
+#[cfg(not(feature = "sha512"))]
+pub const IMPLEMENTED_HASH_ALGS: &[TpmiAlgHash] =
+    &[TpmiAlgHash::Sha1, TpmiAlgHash::Sha256, TpmiAlgHash::Sha384];
+
+/// Whether the TPM under test implements SHA-512 (the `sha512` feature, see
+/// [`IMPLEMENTED_HASH_ALGS`]).
+pub const SHA512_IMPLEMENTED: bool = TpmiAlgHash::MAX_DIGEST_BYTES == 64;
+
+/// Whether `hash_alg` is one of the [`IMPLEMENTED_HASH_ALGS`].
+pub fn hash_alg_implemented(hash_alg: TpmiAlgHash) -> bool {
+    IMPLEMENTED_HASH_ALGS.contains(&hash_alg)
+}
+
+/// The strongest implemented hash algorithm: SHA-512 (SHA-384 without SHA-512, see
+/// [`IMPLEMENTED_HASH_ALGS`]).
+#[cfg(feature = "sha512")]
+pub const STRONGEST_HASH_ALG: TpmiAlgHash = TpmiAlgHash::Sha512;
+/// The strongest implemented hash algorithm: SHA-384 without SHA-512 (see
+/// [`IMPLEMENTED_HASH_ALGS`]).
+#[cfg(not(feature = "sha512"))]
+pub const STRONGEST_HASH_ALG: TpmiAlgHash = TpmiAlgHash::Sha384;
+
+/// Digest size of [`STRONGEST_HASH_ALG`]: the size of `TPMU_HA`, so the largest size a
+/// `TPM2B_DIGEST` unmarshals with.
+pub const STRONGEST_DIGEST_SIZE: usize = TpmiAlgHash::MAX_DIGEST_BYTES;
 
 /// Size of the sequence fingerprint at the start of the encrypted plaintext.
 pub const FINGERPRINT_SIZE: usize = 8;
@@ -6646,7 +6688,7 @@ pub fn policy_duplication_select_66(include_object: bool) -> Result<(), u32> {
     let session = start_policy_session(&mut sim);
 
     let mut object_name_bytes = [0u8; 66];
-    object_name_bytes[0..2].copy_from_slice(&Alg::from(TpmiAlgHash::Sha512).id().to_be_bytes()); // SHA512
+    object_name_bytes[0..2].copy_from_slice(&Alg::SHA512.id().to_be_bytes()); // SHA512
     let object_name = Tpm2bName::from_bytes(&object_name_bytes).unwrap();
 
     let mut parent_name_bytes = [0u8; 34];
@@ -6714,6 +6756,7 @@ pub fn policy_or_expected(alg: TpmiAlgHash, digests: &[&[u8]]) -> Vec<u8> {
         TpmiAlgHash::Sha1 => 20,
         TpmiAlgHash::Sha256 => 32,
         TpmiAlgHash::Sha384 => 48,
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512 => 64,
         #[allow(unreachable_patterns)]
         _ => panic!("Unsupported hash"),
@@ -6734,6 +6777,7 @@ pub fn policy_or_go(alg: TpmiAlgHash, digests: &[&[u8]]) -> Vec<u8> {
         TpmiAlgHash::Sha1 => 20,
         TpmiAlgHash::Sha256 => 32,
         TpmiAlgHash::Sha384 => 48,
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512 => 64,
         #[allow(unreachable_patterns)]
         _ => panic!("Unsupported hash"),
@@ -7598,22 +7642,12 @@ pub fn gen_ecc_scheme(rng: &mut SimpleRng, make_valid: bool) -> Option<TpmtEccSc
 /// `make_valid`.
 pub fn gen_hash_alg(rng: &mut SimpleRng, make_valid: bool) -> TpmiAlgHash {
     if make_valid {
-        rng.choose(&[
-            TpmiAlgHash::Sha1,
-            TpmiAlgHash::Sha256,
-            TpmiAlgHash::Sha384,
-            TpmiAlgHash::Sha512,
-        ])
+        rng.choose(IMPLEMENTED_HASH_ALGS)
     } else {
         // The hash algorithms this TPM does not implement (SM3, SHA-3) are not `TpmiAlgHash`
         // values (the `tpm2` features of the TPM), so invalid parameter sets are invalid
         // elsewhere (e.g. a hash where `TPM_ALG_NULL` is required or a missing KDF).
-        rng.choose(&[
-            TpmiAlgHash::Sha1,
-            TpmiAlgHash::Sha256,
-            TpmiAlgHash::Sha384,
-            TpmiAlgHash::Sha512,
-        ])
+        rng.choose(IMPLEMENTED_HASH_ALGS)
     }
 }
 
@@ -11658,7 +11692,9 @@ pub fn client_hash(alg: TpmiAlgHash, data: &[u8]) -> Vec<u8> {
 /// SHA-256/SHA-384/SHA-512).
 pub fn compute_hash(alg: TpmiAlgHash, data: &[&[u8]]) -> Vec<u8> {
     use sha1::Sha1;
-    use sha2::{Digest, Sha256, Sha384, Sha512};
+    #[cfg(feature = "sha512")]
+    use sha2::Sha512;
+    use sha2::{Digest, Sha256, Sha384};
     match alg {
         TpmiAlgHash::Sha1 => {
             let mut hasher = Sha1::new();
@@ -11681,6 +11717,7 @@ pub fn compute_hash(alg: TpmiAlgHash, data: &[&[u8]]) -> Vec<u8> {
             }
             hasher.finalize().to_vec()
         }
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512 => {
             let mut hasher = Sha512::new();
             for d in data {
@@ -13113,7 +13150,7 @@ pub fn hash_parts(alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
     for p in parts {
         ctx.update(p).unwrap();
     }
-    let mut out = [0u8; 64];
+    let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
     ctx.finalize(&mut out).unwrap().digest().to_vec()
 }
 
@@ -13172,7 +13209,7 @@ pub fn hmac256(key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
     for p in parts {
         ctx.update(p).unwrap();
     }
-    let mut out = [0u8; 64];
+    let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
     ctx.finalize(&mut out).unwrap().digest().to_vec()
 }
 
@@ -13342,11 +13379,7 @@ pub fn make_keyed_hash_key(sim: &mut Tpm, key_bytes: &'static [u8]) -> Handle {
 /// Reference check that `hash_alg` is an implemented hash (`TPM_RC_HASH + TPM_RC_P + TPM_RC_1`
 /// otherwise).
 pub fn oracle_validate_hash_alg(hash_alg: TpmiAlgHash) -> Result<(), TpmRc> {
-    if hash_alg != TpmiAlgHash::Sha1
-        && hash_alg != TpmiAlgHash::Sha256
-        && hash_alg != TpmiAlgHash::Sha384
-        && hash_alg != TpmiAlgHash::Sha512
-    {
+    if !hash_alg_implemented(hash_alg) {
         return Err(TpmRc::HASH.with(Position::parameter(1)));
     }
     Ok(())
@@ -13445,6 +13478,7 @@ pub fn run_hash_sequence(
         TpmiAlgHash::Sha1 => Sha1::digest(&data).to_vec(),
         TpmiAlgHash::Sha256 => Sha256::digest(&data).to_vec(),
         TpmiAlgHash::Sha384 => Sha384::digest(&data).to_vec(),
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512 => Sha512::digest(&data).to_vec(),
         #[allow(unreachable_patterns)]
         _ => panic!("Unsupported hash algorithm for test"),
@@ -13518,7 +13552,12 @@ pub fn sha256_array(data: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
     let mut state = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
     state.update(data).unwrap();
-    out.copy_from_slice(state.finalize(&mut [0u8; 64]).unwrap().digest());
+    out.copy_from_slice(
+        state
+            .finalize(&mut [0u8; TpmiAlgHash::MAX_DIGEST_BYTES])
+            .unwrap()
+            .digest(),
+    );
     out
 }
 
@@ -15978,6 +16017,7 @@ pub fn encapsulate_secret(public: &[u8], label: &str, seed: u64) -> Option<(Vec<
                     rsa::Oaep::new_with_label::<Sha384, _>(label),
                     &secret,
                 ),
+                #[cfg(feature = "sha512")]
                 TpmiAlgHash::Sha512 => key.encrypt(
                     &mut rng,
                     rsa::Oaep::new_with_label::<Sha512, _>(label),

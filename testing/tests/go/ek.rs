@@ -31,6 +31,7 @@ fn hash_size(alg: TpmiAlgHash) -> usize {
     match alg {
         TpmiAlgHash::Sha256 => 32,
         TpmiAlgHash::Sha384 => 48,
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512 => 64,
         _ => panic!("unsupported hash"),
     }
@@ -48,6 +49,7 @@ fn policy_a(alg: TpmiAlgHash) -> Vec<u8> {
             "4f432611dc386e6f532050c3278c930e",
             "143e8bb1133824ccb431053871c6db53",
         ]),
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512 => hex_to_bytes(&[
             "1e3b76502c8a1425aa0b7b3fc646a1b0",
             "fae063b03b5368f9c4cddecaff0891dd",
@@ -63,6 +65,7 @@ fn policy_index(alg: TpmiAlgHash) -> Handle {
     match alg {
         TpmiAlgHash::Sha256 => Handle(0x01C07F01),
         TpmiAlgHash::Sha384 => Handle(0x01C07F02),
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512 => Handle(0x01C07F03),
         _ => panic!("no PolicyIndex for {alg:?}"),
     }
@@ -82,6 +85,7 @@ fn policy_index_name(alg: TpmiAlgHash) -> Vec<u8> {
             "858be82586486504f7d02e621f8d7d61",
             "ae32cfc60c4d120609ed6768afcf090c",
         ]),
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512 => hex_to_bytes(&[
             "000d", // TPM_ALG_SHA512
             "1c47c0bbcbd3cf7d7cae6987d31937c1",
@@ -105,6 +109,7 @@ fn policy_c(alg: TpmiAlgHash) -> Vec<u8> {
             "2b6a16f4293c22b455e261cffd217ad5",
             "b4947c2d73e63005eed2dc2b3593d165",
         ]),
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512 => hex_to_bytes(&[
             "589ee1e146544716e8deafe6db247b01",
             "b81e9f9c7dd16b814aa159138749105f",
@@ -127,6 +132,7 @@ fn policy_b(alg: TpmiAlgHash) -> Vec<u8> {
             "074148bb35d3b4e4cb1c0ad9bde419ca",
             "cb47ba09699646150f9fc000f3f80e12",
         ]),
+        #[cfg(feature = "sha512")]
         TpmiAlgHash::Sha512 => hex_to_bytes(&[
             "b8221ca69e8550a4914de3faa6a18c07",
             "2cc01208073a928d5d66d59ef79e49a4",
@@ -163,6 +169,7 @@ fn test_calculate_policy_a_sha_384() {
 
 // Original Go test: ek_test.go - TestCalculatePolicyA/SHA-512
 #[test]
+#[cfg(feature = "sha512")]
 fn test_calculate_policy_a_sha_512() {
     calculate_policy_a(TpmiAlgHash::Sha512);
 }
@@ -210,6 +217,7 @@ fn test_calculate_policy_index_name_sha_384() {
 
 // Original Go test: ek_test.go - TestCalculatePolicyIndexName/SHA-512
 #[test]
+#[cfg(feature = "sha512")]
 fn test_calculate_policy_index_name_sha_512() {
     calculate_policy_index_name(TpmiAlgHash::Sha512);
 }
@@ -242,6 +250,7 @@ fn test_calculate_policy_c_sha_384() {
 
 // Original Go test: ek_test.go - TestCalculatePolicyC/SHA-512
 #[test]
+#[cfg(feature = "sha512")]
 fn test_calculate_policy_c_sha_512() {
     calculate_policy_c(TpmiAlgHash::Sha512);
 }
@@ -279,6 +288,7 @@ fn test_calculate_policy_b_sha_384() {
 
 // Original Go test: ek_test.go - TestCalculatePolicyB/SHA-512
 #[test]
+#[cfg(feature = "sha512")]
 fn test_calculate_policy_b_sha_512() {
     calculate_policy_b(TpmiAlgHash::Sha512);
 }

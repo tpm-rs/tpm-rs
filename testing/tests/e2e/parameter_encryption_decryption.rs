@@ -134,7 +134,9 @@ fn decrypt_and_encrypt_across_session_hashes() {
         (TpmiAlgHash::Sha256, 256),
         (TpmiAlgHash::Sha384, 128),
         (TpmiAlgHash::Sha384, 256),
+        #[cfg(feature = "sha512")]
         (TpmiAlgHash::Sha512, 128),
+        #[cfg(feature = "sha512")]
         (TpmiAlgHash::Sha512, 256),
     ];
 
@@ -166,7 +168,7 @@ fn decrypt_and_encrypt_across_session_hashes() {
                 Ok(s) => s,
                 Err(e) => {
                     // If SHA384/SHA512 is not supported, we skip it
-                    if hash_alg == TpmiAlgHash::Sha384 || hash_alg == TpmiAlgHash::Sha512 {
+                    if hash_alg != TpmiAlgHash::Sha256 {
                         println!("SKIPPED hash={:?} (not supported by simulator)", hash_alg);
                         continue;
                     }

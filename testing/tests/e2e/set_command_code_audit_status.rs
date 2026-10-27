@@ -7,10 +7,11 @@
 
 use crate::_common::{
     ALG_SHA1, CLIENT_CRYPTO, RC_AUTH_MISSING, RC_BAD_AUTH_S1, RC_NV_UNAVAILABLE, RC_VALUE_H1,
-    RC_VALUE_P1, ST_NO_SESSIONS, ST_SESSIONS, aes_cfb, audit_commands, build_pw_cmd, build_raw_cmd,
-    command_audit_report, create_primary, get_ecc_signing_key_template, hash_parts, hmac_sha256,
-    kdfa_by_alg, nv_off, nv_on, parse_command_audit_report, power_cycle, power_cycle_with,
-    send_raw, send_rc, set_command_code_audit_status, start_auth_session,
+    RC_VALUE_P1, SHA512_IMPLEMENTED, ST_NO_SESSIONS, ST_SESSIONS, STRONGEST_DIGEST_SIZE,
+    STRONGEST_HASH_ALG, aes_cfb, audit_commands, build_pw_cmd, build_raw_cmd, command_audit_report,
+    create_primary, get_ecc_signing_key_template, hash_parts, hmac_sha256, kdfa_by_alg, nv_off,
+    nv_on, parse_command_audit_report, power_cycle, power_cycle_with, send_raw, send_rc,
+    set_command_code_audit_status, start_auth_session,
 };
 use testing::tpm::Tpm;
 use tpm2::{Handle, TpmSe, TpmiAlgHash, TpmtSymDefObject};
@@ -31,7 +32,17 @@ const RC_HASH_P1: u32 = 0x1C3;
 /// ECDSA/SHA-256.
 const ECDSA_SHA256_AUDIT_PARAMS: [u8; 6] = [0, 0, 0, 0x18, 0, 0x0B];
 const ALG_SHA256: u16 = 0x000B;
+const ALG_SHA384: u16 = 0x000C;
 const ALG_SHA512: u16 = 0x000D;
+/// The manufacture-default command audit hash algorithm (`CONTEXT_INTEGRITY_HASH_ALG`): SHA-512
+/// (SHA-384 without the `sha512` feature).
+const DEFAULT_AUDIT_HASH: TpmiAlgHash = STRONGEST_HASH_ALG;
+/// [`DEFAULT_AUDIT_HASH`] as a raw algorithm ID.
+const DEFAULT_AUDIT_ALG: u16 = if SHA512_IMPLEMENTED {
+    ALG_SHA512
+} else {
+    ALG_SHA384
+};
 const ALG_NULL: u16 = 0x0010;
 const TPM_SU_CLEAR: u16 = 0x0000;
 const TPM_SU_STATE: u16 = 0x0001;
@@ -104,12 +115,12 @@ fn manufacture_default_audits_only_set_command_code_audit_status() {
         (false, vec![CC_SET_COMMAND_CODE_AUDIT_STATUS])
     );
     let report = command_audit_report(&mut sim);
-    assert_eq!(report.digest_alg, ALG_SHA512);
+    assert_eq!(report.digest_alg, DEFAULT_AUDIT_ALG);
     assert_eq!(report.audit_counter, 0);
     assert!(report.audit_digest.is_empty());
     assert_eq!(
         report.command_digest,
-        command_list_digest(TpmiAlgHash::Sha512, &[CC_SET_COMMAND_CODE_AUDIT_STATUS])
+        command_list_digest(DEFAULT_AUDIT_HASH, &[CC_SET_COMMAND_CODE_AUDIT_STATUS])
     );
 }
 
@@ -166,7 +177,7 @@ fn set_list_adds_and_clear_list_removes_commands() {
     assert_eq!(audit_commands(&mut sim, 0, 254).1, expected);
     assert_eq!(
         command_audit_report(&mut sim).command_digest,
-        command_list_digest(TpmiAlgHash::Sha512, &expected)
+        command_list_digest(DEFAULT_AUDIT_HASH, &expected)
     );
 }
 
@@ -235,7 +246,7 @@ fn audit_alg_change_with_command_list_is_rejected() {
         audit_commands(&mut sim, 0, 254).1,
         [CC_SET_COMMAND_CODE_AUDIT_STATUS]
     );
-    assert_eq!(command_audit_report(&mut sim).digest_alg, ALG_SHA512);
+    assert_eq!(command_audit_report(&mut sim).digest_alg, DEFAULT_AUDIT_ALG);
 }
 
 /// auditAlg equal to the current algorithm processes the command lists
@@ -246,7 +257,7 @@ fn audit_alg_change_with_command_list_is_rejected() {
 fn current_audit_alg_processes_command_lists() {
     let mut sim = Tpm::new();
     assert_eq!(
-        set_command_code_audit_status(&mut sim, OWNER, ALG_SHA512, &[CC_GET_RANDOM], &[]),
+        set_command_code_audit_status(&mut sim, OWNER, DEFAULT_AUDIT_ALG, &[CC_GET_RANDOM], &[]),
         0
     );
     assert_eq!(
@@ -254,7 +265,7 @@ fn current_audit_alg_processes_command_lists() {
         [CC_SET_COMMAND_CODE_AUDIT_STATUS, CC_GET_RANDOM]
     );
     let report = command_audit_report(&mut sim);
-    assert_eq!(report.digest_alg, ALG_SHA512);
+    assert_eq!(report.digest_alg, DEFAULT_AUDIT_ALG);
     assert_eq!(report.audit_counter, 1, "the list change was audited");
 }
 
@@ -273,7 +284,7 @@ fn audit_alg_change_clears_digest_without_auditing() {
     );
     let report = command_audit_report(&mut sim);
     assert_eq!(report.audit_counter, 1);
-    assert_eq!(report.audit_digest.len(), 64);
+    assert_eq!(report.audit_digest.len(), STRONGEST_DIGEST_SIZE);
 
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_SHA256, &[], &[]),
@@ -310,7 +321,7 @@ fn audit_alg_change_clears_digest_without_auditing() {
 #[test]
 fn audited_commands_extend_audit_digest() {
     let mut sim = Tpm::new();
-    let alg = TpmiAlgHash::Sha512;
+    let alg = DEFAULT_AUDIT_HASH;
     let set_params = audit_status_params(ALG_NULL, &[CC_GET_RANDOM], &[]);
     let rsp = send_raw(
         &mut sim,
@@ -320,7 +331,7 @@ fn audited_commands_extend_audit_digest() {
     let owner_name = OWNER.to_be_bytes();
     let mut expected = extend_audit_digest(
         alg,
-        &[0; 64],
+        &[0; STRONGEST_DIGEST_SIZE],
         CC_SET_COMMAND_CODE_AUDIT_STATUS,
         &[&owner_name],
         &set_params,
@@ -356,7 +367,7 @@ fn audited_commands_extend_audit_digest() {
 #[test]
 fn audited_session_command_hashes_names_and_parameter_areas() {
     let mut sim = Tpm::new();
-    let alg = TpmiAlgHash::Sha512;
+    let alg = DEFAULT_AUDIT_HASH;
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &[CC_PCR_EVENT], &[]),
         0
@@ -467,7 +478,7 @@ fn audited_commands_require_nv_to_start_an_audit_log() {
     );
     // Clear the digest again by changing the algorithm back.
     assert_eq!(
-        set_command_code_audit_status(&mut sim, OWNER, ALG_SHA512, &[], &[]),
+        set_command_code_audit_status(&mut sim, OWNER, DEFAULT_AUDIT_ALG, &[], &[]),
         0
     );
 
@@ -679,7 +690,14 @@ fn signed_get_command_audit_digest_ends_audit_log() {
     assert_eq!(report.audit_counter, 2);
     assert_eq!(
         report.audit_digest,
-        extend_audit_digest(TpmiAlgHash::Sha512, &[0; 64], CC_GET_RANDOM, &[], &cp, &rp)
+        extend_audit_digest(
+            DEFAULT_AUDIT_HASH,
+            &[0; STRONGEST_DIGEST_SIZE],
+            CC_GET_RANDOM,
+            &[],
+            &cp,
+            &rp
+        )
     );
 }
 
@@ -692,7 +710,7 @@ fn signed_get_command_audit_digest_ends_audit_log() {
 #[test]
 fn audited_get_command_audit_digest_needs_nv_and_audits_itself() {
     let mut sim = Tpm::new();
-    let alg = TpmiAlgHash::Sha512;
+    let alg = DEFAULT_AUDIT_HASH;
     let (key, key_name) = create_primary(&mut sim, get_ecc_signing_key_template());
     assert_eq!(
         set_command_code_audit_status(
@@ -751,7 +769,7 @@ fn audited_get_command_audit_digest_needs_nv_and_audits_itself() {
     let param_size = u32::from_be_bytes(rsp[10..14].try_into().unwrap()) as usize;
     let d3 = extend_audit_digest(
         alg,
-        &[0; 64],
+        &[0; STRONGEST_DIGEST_SIZE],
         CC_GET_COMMAND_AUDIT_DIGEST,
         &[&endorsement, &key_name],
         &ECDSA_SHA256_AUDIT_PARAMS,
@@ -850,7 +868,7 @@ fn audited_command_with_parameter_encryption_hashes_ciphertext() {
 
     assert_eq!(
         command_audit_report(&mut sim).audit_digest,
-        extend_audit_digest(TpmiAlgHash::Sha512, &before, CC_HASH, &[], &params, rp)
+        extend_audit_digest(DEFAULT_AUDIT_HASH, &before, CC_HASH, &[], &params, rp)
     );
 }
 
@@ -875,7 +893,7 @@ fn unsupported_audit_alg_is_hash_error() {
         );
     }
     let report = command_audit_report(&mut sim);
-    assert_eq!(report.digest_alg, ALG_SHA512);
+    assert_eq!(report.digest_alg, DEFAULT_AUDIT_ALG);
     assert_eq!(report.audit_counter, 0);
     assert!(report.audit_digest.is_empty());
     assert_eq!(

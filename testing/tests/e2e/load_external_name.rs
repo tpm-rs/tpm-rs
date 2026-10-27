@@ -1,7 +1,7 @@
 //! Names returned by TPM2_LoadExternal match nameAlg || H(public area).
 
 use crate::_common::{
-    ECC_D, ECC_X, ECC_Y, RSA_N, flush_context, make_ecc_public_area,
+    ECC_D, ECC_X, ECC_Y, RSA_N, STRONGEST_HASH_ALG, flush_context, make_ecc_public_area,
     make_keyed_hash_public_area_obfuscated, make_rsa_public_area_opt_name_alg, marshal_to_slice,
 };
 use testing::tpm::Tpm;
@@ -165,12 +165,39 @@ fn rsa_name_matches_public_digest() {
     flush_context(&mut sim, resp.object_handle).unwrap();
 }
 
-/// A key with SHA-512 nameAlg loads and its Name is the SHA-512 public digest.
+/// A key with SHA-512 nameAlg loads and its Name is the SHA-512 public digest (without the
+/// `sha512` feature, the SHA-512 nameAlg is rejected and SHA-384 is checked).
 #[test]
 fn sha512_name_alg_name() {
     let mut sim = Tpm::new();
     let mut pub_struct = make_ecc_public_area(ECC_X, ECC_Y, TpmaObject::SIGN_ENCRYPT);
-    pub_struct.name_alg = Some(TpmiAlgHash::Sha512);
+    #[cfg(not(feature = "sha512"))]
+    {
+        // Without the `sha512` feature, SHA-512 is not an implemented hash: unmarshaling the
+        // nameAlg (`TPMI_ALG_HASH+`) of inPublic, sent as raw bytes, fails with TPM_RC_HASH + P2.
+        let cmd = LoadExternal {
+            in_private: None,
+            in_public: tpm2::Tpm2b(pub_struct),
+            hierarchy: Handle::RH_NULL,
+        };
+        let res =
+            crate::_common::execute_with_corrupted_bytes_status(&mut sim, &cmd, 0, &[], |p| {
+                let name_alg =
+                    crate::_common::tpm2b_public_name_alg(crate::_common::tpm2b_end(p, 0));
+                crate::_common::put_u16(p, name_alg, tpm2::Alg::SHA512.id());
+            });
+        assert_eq!(
+            res.err(),
+            Some(
+                tpm2::errors::TpmRc::HASH
+                    .with(tpm2::errors::Position::parameter(2))
+                    .get()
+            )
+        );
+    }
+    // SHA-512 (SHA-384 without the `sha512` feature).
+    let name_alg = STRONGEST_HASH_ALG;
+    pub_struct.name_alg = Some(name_alg);
     let in_public = tpm2::Tpm2b(pub_struct);
     let cmd = LoadExternal {
         in_private: None,
@@ -183,11 +210,11 @@ fn sha512_name_alg_name() {
     let len = marshal_to_slice(&pub_struct, &mut buf);
     let provider = PlatformCryptoProvider;
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(&provider, TpmiAlgHash::Sha512, &buf[..len], &mut digest_buf)
+    let digest = tpm2::crypto::hash(&provider, name_alg, &buf[..len], &mut digest_buf)
         .unwrap()
         .digest();
     let mut name_bytes = Vec::new();
-    name_bytes.extend_from_slice(&Alg::from(TpmiAlgHash::Sha512).id().to_be_bytes());
+    name_bytes.extend_from_slice(&Alg::from(name_alg).id().to_be_bytes());
     name_bytes.extend_from_slice(digest);
     let expected_name = Tpm2bName::from_bytes(crate::_common::leak_bytes(&name_bytes)).unwrap();
 

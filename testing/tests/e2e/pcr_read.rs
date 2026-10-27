@@ -227,21 +227,43 @@ fn unallocated_bank_returns_no_digests() {
     // Create selection containing unsupported SHA-512 bank
     let mut pcr_selection_in = TpmlPcrSelection::default();
     // Select PCR 1, 2, 3 in SHA-512 bank
+    // (Without the `sha512` feature, a SHA-256 placeholder whose hash is replaced by
+    // TPM_ALG_SHA512 in the command bytes, see below.)
+    #[cfg(feature = "sha512")]
+    let hash = TpmiAlgHash::Sha512;
+    #[cfg(not(feature = "sha512"))]
+    let hash = TpmiAlgHash::Sha256;
     pcr_selection_in
-        .add(&TpmsPcrSelection::new(TpmiAlgHash::Sha512, &[0x0E, 0x00, 0x00]).unwrap())
+        .add(&TpmsPcrSelection::new(hash, &[0x0E, 0x00, 0x00]).unwrap())
         .unwrap();
 
     let read_cmd = PCRRead { pcr_selection_in };
-    let resp = execute_tpm_command(&mut sim, &read_cmd, &[]).unwrap();
+    #[cfg(feature = "sha512")]
+    {
+        let resp = execute_tpm_command(&mut sim, &read_cmd, &[]).unwrap();
 
-    // The output selection count should match (contains the bank we requested)
-    assert_eq!(resp.pcr_selection_out.count(), 1);
-    let out_sel = resp.pcr_selection_out.pcr_selections().next().unwrap();
-    assert_eq!(out_sel.hash(), TpmiAlgHash::Sha512);
-    // But since the bank is unsupported, all bits in selection out should be cleared (0)
-    for &b in out_sel.pcr_select() {
-        assert_eq!(b, 0);
+        // The output selection count should match (contains the bank we requested)
+        assert_eq!(resp.pcr_selection_out.count(), 1);
+        let out_sel = resp.pcr_selection_out.pcr_selections().next().unwrap();
+        assert_eq!(out_sel.hash(), TpmiAlgHash::Sha512);
+        // But since the bank is unsupported, all bits in selection out should be cleared (0)
+        for &b in out_sel.pcr_select() {
+            assert_eq!(b, 0);
+        }
+        // No digests should be returned in values list
+        assert_eq!(resp.pcr_values.count(), 0);
     }
-    // No digests should be returned in values list
-    assert_eq!(resp.pcr_values.count(), 0);
+    // Without the `sha512` feature, SHA-512 is not an implemented hash: the bank's
+    // `TPMI_ALG_HASH` (after the selection count) is sent as TPM_ALG_SHA512: TPM_RC_HASH.
+    #[cfg(not(feature = "sha512"))]
+    {
+        let res =
+            crate::_common::execute_with_corrupted_bytes_status(&mut sim, &read_cmd, 0, &[], |p| {
+                crate::_common::put_u16(p, 4, tpm2::Alg::SHA512.id())
+            });
+        assert_eq!(
+            res.err(),
+            Some(TpmRc::HASH.with(Position::parameter(1)).get())
+        );
+    }
 }

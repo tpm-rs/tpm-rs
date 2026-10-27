@@ -241,7 +241,7 @@ fn verify_signature_accepts_hmac_signature() {
         hmac_key,
     );
 
-    let mut hmac_buf = [0u8; 64];
+    let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
     let expected_ha = tpm2::crypto::hmac(
         CLIENT_CRYPTO,
         TpmiAlgHash::Sha256,

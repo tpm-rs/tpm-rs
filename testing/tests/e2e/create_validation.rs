@@ -8,9 +8,9 @@ use crate::_common::{
     create_parent_key, ecc_sign_template, ecc_storage_template_with, empty_password_auth,
     empty_sensitive, execute_tpm_command_offsets, execute_tpm_command_uncorrupted,
     execute_tpm_command_with_corrupted_bytes, execute_with_password_sessions, finish,
-    get_ecc_signing_key_template, get_ecc_template, get_test_template, hash_parts, leak_bytes,
-    load, make_template, owner_srk, rc_h, rc_p, rsa_storage_template_with, run, run_raw,
-    sealed_template, sensitive_create, sym_template_with, try_create_primary_in,
+    get_ecc_signing_key_template, get_ecc_template, get_test_template, leak_bytes, load,
+    make_template, owner_srk, rc_h, rc_p, rsa_storage_template_with, run_raw, sealed_template,
+    sensitive_create, sym_template_with, try_create_primary_in,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::{Create, CreateLoaded, CreatePrimary, ObjectChangeAuth};
@@ -121,7 +121,12 @@ fn creation_pcr_filters_unallocated_banks() {
     let srk = owner_srk(&mut sim);
     let selection = TpmlPcrSelection::from_slice(&[
         TpmsPcrSelection::new(TpmiAlgHash::Sha1, &[0x01, 0x00, 0x00]).unwrap(),
+        #[cfg(feature = "sha512")]
         TpmsPcrSelection::new(TpmiAlgHash::Sha512, &[0x01, 0x00, 0x00]).unwrap(),
+        // Without the `sha512` feature, a SHA-256 placeholder whose hash is replaced by
+        // TPM_ALG_SHA512 in the command bytes (see below).
+        #[cfg(not(feature = "sha512"))]
+        TpmsPcrSelection::new(TpmiAlgHash::Sha256, &[0x01, 0x00, 0x00]).unwrap(),
     ])
     .unwrap();
     let cmd = Create {
@@ -131,18 +136,34 @@ fn creation_pcr_filters_unallocated_banks() {
         outside_info: Tpm2bData::default(),
         creation_pcr: selection,
     };
-    let rsp = run(&mut sim, &cmd, 1).expect("SHA-512 creationPCR must be accepted");
-    let creation = rsp.creation_data.0;
-    // Both banks are unallocated by default: their bits are filtered out and nothing is hashed.
-    for sel in creation.pcr_select.pcr_selections() {
-        assert!(
-            sel.pcr_select().iter().all(|&b| b == 0),
-            "unfiltered selection: {sel:?}"
+    #[cfg(feature = "sha512")]
+    {
+        let rsp =
+            crate::_common::run(&mut sim, &cmd, 1).expect("SHA-512 creationPCR must be accepted");
+        let creation = rsp.creation_data.0;
+        // Both banks are unallocated by default: their bits are filtered out and nothing is hashed.
+        for sel in creation.pcr_select.pcr_selections() {
+            assert!(
+                sel.pcr_select().iter().all(|&b| b == 0),
+                "unfiltered selection: {sel:?}"
+            );
+        }
+        assert_eq!(
+            creation.pcr_digest.get_buffer(),
+            crate::_common::hash_parts(TpmiAlgHash::Sha256, &[]).as_slice()
         );
     }
+    // Without the `sha512` feature, SHA-512 is not an implemented hash: unmarshaling the SHA-512
+    // bank's `TPMI_ALG_HASH` (last in the parameter area: hash (2) || sizeofSelect (1) ||
+    // pcrSelect (3)) fails with TPM_RC_HASH + P4.
+    #[cfg(not(feature = "sha512"))]
     assert_eq!(
-        creation.pcr_digest.get_buffer(),
-        hash_parts(TpmiAlgHash::Sha256, &[]).as_slice()
+        crate::_common::execute_with_corrupted_bytes_status(&mut sim, &cmd, 1, &[], |params| {
+            let at = params.len() - 6;
+            crate::_common::put_u16(params, at, tpm2::Alg::SHA512.id());
+        })
+        .err(),
+        Some(rc_p(TpmRc::HASH, 4))
     );
 }
 

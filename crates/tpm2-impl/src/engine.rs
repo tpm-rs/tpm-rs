@@ -559,11 +559,25 @@ pub struct ActiveSequence {
     pub first_bytes_len: usize,
     /// Portable streaming hash contexts (`HASH_STATE` parity with `ibmswtpm2`).
     /// For Hash/HMAC sequences, index 0 holds the active hash/inner-HMAC state.
-    /// For Event sequences, indices 0..4 hold SHA-1, SHA-256, SHA-384, and SHA-512 states.
+    /// For Event sequences, indices 0..4 hold SHA-1, SHA-256, SHA-384, and SHA-512 states (the
+    /// first [`Self::EVENT_HASH_COUNT`]: without SHA-512, the last slot is unused).
     pub hash_states: [crate::hash_state::StreamingHashState; 4],
 }
 
 impl ActiveSequence {
+    /// The number of hash states of an Event sequence: one per implemented hash (SHA-1,
+    /// SHA-256, SHA-384 and, with the `sha512` feature of `tpm2`, SHA-512).
+    pub const EVENT_HASH_COUNT: usize = if TpmiAlgHash::HASH_COUNT < 4 {
+        TpmiAlgHash::HASH_COUNT
+    } else {
+        4
+    };
+
+    /// The hash states of an Event sequence ([`Self::EVENT_HASH_COUNT`]).
+    pub fn event_hash_states(&self) -> &[crate::hash_state::StreamingHashState] {
+        &self.hash_states[..Self::EVENT_HASH_COUNT]
+    }
+
     /// Creates a new `ActiveSequence` with its streaming `hash_states` initialized for `sequence_type`.
     pub fn new(handle: u32, auth: impl Into<OwnedAuth>, sequence_type: SequenceType) -> Self {
         let auth = auth.into();
@@ -605,7 +619,7 @@ impl ActiveSequence {
                 self.hash_states[0].update(data);
             }
             SequenceType::Event => {
-                for state in &mut self.hash_states {
+                for state in &mut self.hash_states[..Self::EVENT_HASH_COUNT] {
                     state.update(data);
                 }
             }
@@ -2343,7 +2357,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             return false;
         };
 
-        for state in &mut seq.hash_states {
+        for state in &mut seq.hash_states[..ActiveSequence::EVENT_HASH_COUNT] {
             if is_pcr_allocated(&pcr_alloc, state.alg, target_pcr) {
                 state.update(data);
             }
@@ -2375,11 +2389,14 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         let _ = self.state.remove_active_sequence(old_handle);
 
         let target_pcr: usize = if self.state.initialized {
-            // PCRResetDynamics: reset PCRs 17..=22 to 0 across all banks
+            // PCRResetDynamics: reset PCRs 17..=22 to 0 across all banks (every implemented
+            // hash, SHA-512 included).
             for pcr in 17..=22 {
-                self.state.pcrs.sha1[pcr] = [0u8; 20];
-                self.state.pcrs.sha256[pcr] = [0u8; 32];
-                self.state.pcrs.sha384[pcr] = [0u8; 48];
+                for alg in seq.event_hash_states().iter().map(|state| state.alg) {
+                    if let Some(value) = self.state.pcrs.value_mut(alg, pcr) {
+                        value.fill(0);
+                    }
+                }
             }
             self.state.restart_count = self.state.restart_count.wrapping_add(1);
             17
@@ -2388,57 +2405,29 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             0
         };
 
+        // Each allocated bank of the target PCR is set to its initial value (0, or 4 in the
+        // last octet for the H-CRTM PCR 0 before Startup) and extended once with the event
+        // digest of its algorithm; each extension counts as a PCR change.
         let pcr_alloc = self.state.pcrs.pcr_allocation;
-        for state in &seq.hash_states {
-            if is_pcr_allocated(&pcr_alloc, state.alg, target_pcr as u32) {
-                let (digest, digest_len) = state.finalize();
-                match state.alg {
-                    TpmiAlgHash::Sha1 => {
-                        let pcr_data = &mut self.state.pcrs.sha1[target_pcr];
-                        pcr_data.fill(0);
-                        if !self.state.initialized {
-                            pcr_data[19] = 4;
-                        }
-                        let mut h = crate::hash_state::StreamingHashState::new(TpmiAlgHash::Sha1);
-                        h.update(pcr_data);
-                        h.update(&digest[..digest_len]);
-                        let (new_pcr, _) = h.finalize();
-                        pcr_data.copy_from_slice(&new_pcr[..20]);
-                        self.state.pcrs.update_counter =
-                            self.state.pcrs.update_counter.wrapping_add(1);
-                    }
-                    TpmiAlgHash::Sha256 => {
-                        let pcr_data = &mut self.state.pcrs.sha256[target_pcr];
-                        pcr_data.fill(0);
-                        if !self.state.initialized {
-                            pcr_data[31] = 4;
-                        }
-                        let mut h = crate::hash_state::StreamingHashState::new(TpmiAlgHash::Sha256);
-                        h.update(pcr_data);
-                        h.update(&digest[..digest_len]);
-                        let (new_pcr, _) = h.finalize();
-                        pcr_data.copy_from_slice(&new_pcr[..32]);
-                        self.state.pcrs.update_counter =
-                            self.state.pcrs.update_counter.wrapping_add(1);
-                    }
-                    TpmiAlgHash::Sha384 => {
-                        let pcr_data = &mut self.state.pcrs.sha384[target_pcr];
-                        pcr_data.fill(0);
-                        if !self.state.initialized {
-                            pcr_data[47] = 4;
-                        }
-                        let mut h = crate::hash_state::StreamingHashState::new(TpmiAlgHash::Sha384);
-                        h.update(pcr_data);
-                        h.update(&digest[..digest_len]);
-                        let (new_pcr, _) = h.finalize();
-                        pcr_data.copy_from_slice(&new_pcr[..48]);
-                        self.state.pcrs.update_counter =
-                            self.state.pcrs.update_counter.wrapping_add(1);
-                    }
-                    #[allow(unreachable_patterns)]
-                    _ => {}
-                }
+        for state in seq.event_hash_states() {
+            if !is_pcr_allocated(&pcr_alloc, state.alg, target_pcr as u32) {
+                continue;
             }
+            let (digest, digest_len) = state.finalize();
+            let initialized = self.state.initialized;
+            let Some(pcr_data) = self.state.pcrs.value_mut(state.alg, target_pcr) else {
+                continue;
+            };
+            pcr_data.fill(0);
+            if !initialized && let Some(last) = pcr_data.last_mut() {
+                *last = 4;
+            }
+            let mut h = crate::hash_state::StreamingHashState::new(state.alg);
+            h.update(pcr_data);
+            h.update(&digest[..digest_len]);
+            let (new_pcr, new_len) = h.finalize();
+            pcr_data.copy_from_slice(&new_pcr[..new_len]);
+            self.state.pcrs.update_counter = self.state.pcrs.update_counter.wrapping_add(1);
         }
         true
     }

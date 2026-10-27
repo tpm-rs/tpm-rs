@@ -260,6 +260,7 @@ fn policy_cp_hash_digest_for_every_hash_alg() {
     run_policy_cphash_for_alg(TpmiAlgHash::Sha1, 20);
     run_policy_cphash_for_alg(TpmiAlgHash::Sha256, 32);
     run_policy_cphash_for_alg(TpmiAlgHash::Sha384, 48);
+    #[cfg(feature = "sha512")]
     run_policy_cphash_for_alg(TpmiAlgHash::Sha512, 64);
 }
 

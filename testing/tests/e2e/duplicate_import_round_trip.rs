@@ -1,9 +1,9 @@
 //! Duplicate -> Import -> Load round trips over key types, name algorithms and wrapper algorithms.
 
 use crate::_common::{
-    AES128_CFB, AES256_CFB, create_srk, create_unwrap, dup_import_load, dup_policy, dup_sign_attrs,
-    ecc_public_with_policy, flush_context, load_with_name, rsa_dup_target, rsa_public,
-    storage_attrs, try_create_owner_primary,
+    AES128_CFB, AES256_CFB, IMPLEMENTED_HASH_ALGS, create_srk, create_unwrap, dup_import_load,
+    dup_policy, dup_sign_attrs, ecc_public_with_policy, flush_context, load_with_name,
+    rsa_dup_target, rsa_public, storage_attrs, try_create_owner_primary,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::responses::Create as CreateRsp;
@@ -22,12 +22,7 @@ fn hash_and_symmetric_algorithm_matrix() {
     let mut sim = Tpm::new();
     let srk = create_srk(&mut sim);
 
-    let hash_algos = [
-        TpmiAlgHash::Sha1,
-        TpmiAlgHash::Sha256,
-        TpmiAlgHash::Sha384,
-        TpmiAlgHash::Sha512,
-    ];
+    let hash_algos = IMPLEMENTED_HASH_ALGS;
     let sym_algos = [None, Some(AES128_CFB), Some(AES256_CFB)];
 
     // Target signing keys (created once; loaded under the SRK for every combination).
@@ -41,7 +36,7 @@ fn hash_and_symmetric_algorithm_matrix() {
         })
         .collect();
 
-    for &parent_hash in &hash_algos {
+    for &parent_hash in hash_algos {
         for parent_sym in [AES128_CFB, AES256_CFB] {
             // 1. A parent storage key with parent_hash and parent_sym
             let (parent, _) = try_create_owner_primary(
@@ -100,12 +95,7 @@ fn parent_and_target_key_type_matrix() {
         KeyGenType::Ecc(TpmEccCurve::NistP256),
         KeyGenType::Ecc(TpmEccCurve::BNP256),
     ];
-    let hash_algos = [
-        TpmiAlgHash::Sha1,
-        TpmiAlgHash::Sha256,
-        TpmiAlgHash::Sha384,
-        TpmiAlgHash::Sha512,
-    ];
+    let hash_algos = IMPLEMENTED_HASH_ALGS;
 
     // Target signing keys (created once; loaded under the SRK for every combination).
     let targets = [
@@ -136,7 +126,7 @@ fn parent_and_target_key_type_matrix() {
     ];
 
     for &parent_type in &parent_types {
-        for &parent_hash in &hash_algos {
+        for &parent_hash in hash_algos {
             // 1. Create parent storage key
             let parent_public = match parent_type {
                 KeyGenType::Rsa => rsa_public(parent_hash, storage_attrs(), &[], Some(AES128_CFB)),
