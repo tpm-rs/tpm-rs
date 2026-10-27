@@ -197,17 +197,6 @@ pub enum AlgSym {
     Camellia256,
 }
 
-#[cfg(not(any(
-    feature = "aes128",
-    feature = "aes192",
-    feature = "aes256",
-    feature = "sm4_128",
-    feature = "camellia128",
-    feature = "camellia192",
-    feature = "camellia256",
-)))]
-compile_error!("at least one symmetric algorithm feature must be enabled");
-
 impl AlgSym {
     const ALL: &[Self] = &[
         #[cfg(feature = "aes128")]
@@ -408,39 +397,78 @@ impl<'a> Unmarshal<'a> for Option<TpmtSymDef> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TpmtSignature<'a> {
     Hmac(TpmtHa<'a>),
+    #[cfg(feature = "rsassa")]
     Rsassa(TpmsSignatureRsa<'a>),
+    #[cfg(feature = "rsapss")]
     Rsapss(TpmsSignatureRsa<'a>),
+    #[cfg(feature = "ecdsa")]
     Ecdsa(TpmsSignatureEcc<'a>),
+    #[cfg(feature = "ecdaa")]
     Ecdaa(TpmsSignatureEcc<'a>),
+    #[cfg(feature = "sm2")]
     Sm2(TpmsSignatureEcc<'a>),
+    #[cfg(feature = "ecschnorr")]
     Ecschnorr(TpmsSignatureEcc<'a>),
+    #[cfg(feature = "eddsa")]
     Eddsa(Tpm2bSignatureEddsa<'a>),
+    #[cfg(feature = "hash_eddsa")]
     HashEddsa(Tpm2bSignatureEddsa<'a>),
+    #[cfg(feature = "mldsa")]
     Mldsa(Tpm2bSignatureMldsa<'a>),
+    #[cfg(feature = "hash_mldsa")]
     HashMldsa(TpmsSignatureHashMldsa<'a>),
 }
 
 impl<'a> TpmtSignature<'a> {
-    /// Maximum size of `TPMU_SIGNATURE_CTX` (255-byte EdDSA/ML-DSA context strings and
-    /// implementation-dependent `id[MAX_SM2_ID_BYTES]` SM2 user IDs).
+    /// Maximum size of `TPMU_SIGNATURE_CTX` across the enabled signature
+    /// schemes: the 2-byte ECDAA commit count, implementation-dependent
+    /// `id[MAX_SM2_ID_BYTES]` SM2 user IDs (up to 255 bytes here), and 255-byte
+    /// ML-DSA/HashML-DSA context strings.
     #[doc(alias = "TPMU_SIGNATURE_CTX")]
-    pub const MAX_CTX_BYTES: usize = 255;
+    pub const MAX_CTX_BYTES: usize = max!(
+        0,
+        #[cfg(feature = "ecdaa")]
+        2,
+        #[cfg(feature = "sm2")]
+        255,
+        #[cfg(feature = "mldsa")]
+        255,
+    );
+    /// Maximum size of a `TPM2B_SIGNATURE_HINT` across the enabled signature
+    /// schemes: the encoded `R` of a (pure) EdDSA signature, 32 bytes for
+    /// Ed25519 or 57 bytes for Ed448.
     #[doc(alias = "MAX_SIGNATURE_HINT_SIZE")]
-    pub const MAX_HINT_BYTES: usize = 57;
+    pub const MAX_HINT_BYTES: usize = max!(
+        0,
+        #[cfg(all(feature = "eddsa", feature = "curve25519"))]
+        32,
+        #[cfg(all(feature = "eddsa", feature = "curve448"))]
+        57,
+    );
 
     #[doc(alias = "TPMI_ALG_SIG_SCHEME")]
     pub const fn sig_alg(self) -> Alg {
         match self {
             Self::Hmac(_) => Alg::HMAC,
+            #[cfg(feature = "rsassa")]
             Self::Rsassa(_) => Alg::RSASSA,
+            #[cfg(feature = "rsapss")]
             Self::Rsapss(_) => Alg::RSAPSS,
+            #[cfg(feature = "ecdsa")]
             Self::Ecdsa(_) => Alg::ECDSA,
+            #[cfg(feature = "ecdaa")]
             Self::Ecdaa(_) => Alg::ECDAA,
+            #[cfg(feature = "sm2")]
             Self::Sm2(_) => Alg::SM2,
+            #[cfg(feature = "ecschnorr")]
             Self::Ecschnorr(_) => Alg::ECSCHNORR,
+            #[cfg(feature = "eddsa")]
             Self::Eddsa(_) => Alg::EDDSA,
+            #[cfg(feature = "hash_eddsa")]
             Self::HashEddsa(_) => Alg::HASH_EDDSA,
+            #[cfg(feature = "mldsa")]
             Self::Mldsa(_) => Alg::MLDSA,
+            #[cfg(feature = "hash_mldsa")]
             Self::HashMldsa(_) => Alg::HASH_MLDSA,
         }
     }
@@ -450,10 +478,20 @@ impl Marshal for TpmtSignature<'_> {
     const MAX_SIZE: usize = Alg::MAX_SIZE
         + max!(
             TpmtHa::MAX_SIZE,
+            #[cfg(any(feature = "rsassa", feature = "rsapss"))]
             TpmsSignatureRsa::MAX_SIZE,
+            #[cfg(any(
+                feature = "ecdsa",
+                feature = "ecdaa",
+                feature = "sm2",
+                feature = "ecschnorr"
+            ))]
             TpmsSignatureEcc::MAX_SIZE,
+            #[cfg(feature = "eddsa")]
             Tpm2bSignatureEddsa::MAX_SIZE,
+            #[cfg(feature = "mldsa")]
             Tpm2bSignatureMldsa::MAX_SIZE,
+            #[cfg(feature = "hash_mldsa")]
             TpmsSignatureHashMldsa::MAX_SIZE,
         );
     type MaxBuffer = [u8; TpmtSignature::MAX_SIZE];
@@ -462,12 +500,25 @@ impl Marshal for TpmtSignature<'_> {
         let count = marshal_helper(&self.sig_alg(), dst, 0);
         match self {
             Self::Hmac(x) => marshal_helper(x, dst, count),
-            Self::Rsassa(x) | Self::Rsapss(x) => marshal_helper(x, dst, count),
-            Self::Ecdsa(x) | Self::Ecdaa(x) | Self::Sm2(x) | Self::Ecschnorr(x) => {
-                marshal_helper(x, dst, count)
-            }
-            Self::Eddsa(x) | Self::HashEddsa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "rsassa")]
+            Self::Rsassa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "rsapss")]
+            Self::Rsapss(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "ecdsa")]
+            Self::Ecdsa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "ecdaa")]
+            Self::Ecdaa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "sm2")]
+            Self::Sm2(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "ecschnorr")]
+            Self::Ecschnorr(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "eddsa")]
+            Self::Eddsa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "hash_eddsa")]
+            Self::HashEddsa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "mldsa")]
             Self::Mldsa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "hash_mldsa")]
             Self::HashMldsa(x) => marshal_helper(x, dst, count),
         }
     }
@@ -477,15 +528,25 @@ impl<'a> Unmarshal<'a> for TpmtSignature<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match Alg::unmarshal(src)? {
             Alg::HMAC => Self::Hmac(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "rsassa")]
             Alg::RSASSA => Self::Rsassa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "rsapss")]
             Alg::RSAPSS => Self::Rsapss(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecdsa")]
             Alg::ECDSA => Self::Ecdsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecdaa")]
             Alg::ECDAA => Self::Ecdaa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "sm2")]
             Alg::SM2 => Self::Sm2(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecschnorr")]
             Alg::ECSCHNORR => Self::Ecschnorr(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "eddsa")]
             Alg::EDDSA => Self::Eddsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "hash_eddsa")]
             Alg::HASH_EDDSA => Self::HashEddsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "mldsa")]
             Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "hash_mldsa")]
             Alg::HASH_MLDSA => Self::HashMldsa(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
         })
@@ -525,15 +586,25 @@ impl<'a> Unmarshal<'a> for Option<TpmtSignature<'a>> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TpmtSigScheme {
     Hmac(TpmiAlgHash),
+    #[cfg(feature = "rsassa")]
     Rsassa(TpmiAlgHash),
+    #[cfg(feature = "rsapss")]
     Rsapss(TpmiAlgHash),
+    #[cfg(feature = "ecdsa")]
     Ecdsa(TpmiAlgHash),
+    #[cfg(feature = "ecdaa")]
     Ecdaa(TpmsSchemeEcdaa),
+    #[cfg(feature = "sm2")]
     Sm2(TpmiAlgHash),
+    #[cfg(feature = "ecschnorr")]
     Ecschnorr(TpmiAlgHash),
+    #[cfg(feature = "eddsa")]
     Eddsa,
+    #[cfg(feature = "hash_eddsa")]
     HashEddsa,
+    #[cfg(feature = "mldsa")]
     Mldsa,
+    #[cfg(feature = "hash_mldsa")]
     HashMldsa,
 }
 
@@ -542,22 +613,37 @@ impl TpmtSigScheme {
     pub const fn scheme(self) -> Alg {
         match self {
             Self::Hmac(_) => Alg::HMAC,
+            #[cfg(feature = "rsassa")]
             Self::Rsassa(_) => Alg::RSASSA,
+            #[cfg(feature = "rsapss")]
             Self::Rsapss(_) => Alg::RSAPSS,
+            #[cfg(feature = "ecdsa")]
             Self::Ecdsa(_) => Alg::ECDSA,
+            #[cfg(feature = "ecdaa")]
             Self::Ecdaa(_) => Alg::ECDAA,
+            #[cfg(feature = "sm2")]
             Self::Sm2(_) => Alg::SM2,
+            #[cfg(feature = "ecschnorr")]
             Self::Ecschnorr(_) => Alg::ECSCHNORR,
+            #[cfg(feature = "eddsa")]
             Self::Eddsa => Alg::EDDSA,
+            #[cfg(feature = "hash_eddsa")]
             Self::HashEddsa => Alg::HASH_EDDSA,
+            #[cfg(feature = "mldsa")]
             Self::Mldsa => Alg::MLDSA,
+            #[cfg(feature = "hash_mldsa")]
             Self::HashMldsa => Alg::HASH_MLDSA,
         }
     }
 }
 
 impl Marshal for Option<TpmtSigScheme> {
-    const MAX_SIZE: usize = Alg::MAX_SIZE + max!(TpmiAlgHash::MAX_SIZE, TpmsSchemeEcdaa::MAX_SIZE);
+    const MAX_SIZE: usize = Alg::MAX_SIZE
+        + max!(
+            TpmiAlgHash::MAX_SIZE,
+            #[cfg(feature = "ecdaa")]
+            TpmsSchemeEcdaa::MAX_SIZE,
+        );
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
@@ -566,15 +652,27 @@ impl Marshal for Option<TpmtSigScheme> {
         };
         let count = marshal_helper(&s.scheme(), dst, 0);
         match s {
-            TpmtSigScheme::Hmac(x)
-            | TpmtSigScheme::Rsassa(x)
-            | TpmtSigScheme::Rsapss(x)
-            | TpmtSigScheme::Ecdsa(x)
-            | TpmtSigScheme::Sm2(x)
-            | TpmtSigScheme::Ecschnorr(x) => marshal_helper(x, dst, count),
+            TpmtSigScheme::Hmac(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "rsassa")]
+            TpmtSigScheme::Rsassa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "rsapss")]
+            TpmtSigScheme::Rsapss(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "ecdsa")]
+            TpmtSigScheme::Ecdsa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "ecdaa")]
             TpmtSigScheme::Ecdaa(x) => marshal_helper(x, dst, count),
-            TpmtSigScheme::Eddsa | TpmtSigScheme::HashEddsa => count,
-            TpmtSigScheme::Mldsa | TpmtSigScheme::HashMldsa => count,
+            #[cfg(feature = "sm2")]
+            TpmtSigScheme::Sm2(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "ecschnorr")]
+            TpmtSigScheme::Ecschnorr(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "eddsa")]
+            TpmtSigScheme::Eddsa => count,
+            #[cfg(feature = "hash_eddsa")]
+            TpmtSigScheme::HashEddsa => count,
+            #[cfg(feature = "mldsa")]
+            TpmtSigScheme::Mldsa => count,
+            #[cfg(feature = "hash_mldsa")]
+            TpmtSigScheme::HashMldsa => count,
         }
     }
 }
@@ -587,15 +685,25 @@ impl<'a> Unmarshal<'a> for Option<TpmtSigScheme> {
         }
         Ok(Some(match alg {
             Alg::HMAC => TpmtSigScheme::Hmac(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "rsassa")]
             Alg::RSASSA => TpmtSigScheme::Rsassa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "rsapss")]
             Alg::RSAPSS => TpmtSigScheme::Rsapss(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecdsa")]
             Alg::ECDSA => TpmtSigScheme::Ecdsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecdaa")]
             Alg::ECDAA => TpmtSigScheme::Ecdaa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "sm2")]
             Alg::SM2 => TpmtSigScheme::Sm2(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecschnorr")]
             Alg::ECSCHNORR => TpmtSigScheme::Ecschnorr(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "eddsa")]
             Alg::EDDSA => TpmtSigScheme::Eddsa,
+            #[cfg(feature = "hash_eddsa")]
             Alg::HASH_EDDSA => TpmtSigScheme::HashEddsa,
+            #[cfg(feature = "mldsa")]
             Alg::MLDSA => TpmtSigScheme::Mldsa,
+            #[cfg(feature = "hash_mldsa")]
             Alg::HASH_MLDSA => TpmtSigScheme::HashMldsa,
             _ => return Err(UnmarshalError),
         }))
@@ -607,26 +715,35 @@ impl<'a> Unmarshal<'a> for Option<TpmtSigScheme> {
 /// Tagged RSA scheme structure specifying an RSA scheme (RSAPSS, RSASSA, OAEP, RSAES) and associated hash algorithm.
 #[doc(alias = "TPMT_RSA_SCHEME")]
 #[doc(alias = "TPMU_RSA_SCHEME")]
+#[cfg(feature = "rsa")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TpmtRsaScheme {
+    #[cfg(feature = "rsassa")]
     Rsassa(TpmiAlgHash),
+    #[cfg(feature = "rsaes")]
     Rsaes,
+    #[cfg(feature = "rsapss")]
     Rsapss(TpmiAlgHash),
     Oaep(TpmiAlgHash),
 }
 
+#[cfg(feature = "rsa")]
 impl TpmtRsaScheme {
     #[doc(alias = "TPMI_ALG_RSA_SCHEME")]
     pub const fn scheme(self) -> Alg {
         match self {
+            #[cfg(feature = "rsassa")]
             Self::Rsassa(_) => Alg::RSASSA,
+            #[cfg(feature = "rsaes")]
             Self::Rsaes => Alg::RSAES,
+            #[cfg(feature = "rsapss")]
             Self::Rsapss(_) => Alg::RSAPSS,
             Self::Oaep(_) => Alg::OAEP,
         }
     }
 }
 
+#[cfg(feature = "rsa")]
 impl Marshal for Option<TpmtRsaScheme> {
     const MAX_SIZE: usize = Alg::MAX_SIZE + TpmiAlgHash::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
@@ -636,14 +753,18 @@ impl Marshal for Option<TpmtRsaScheme> {
         };
         let count = marshal_helper(&s.scheme(), dst, 0);
         match s {
-            TpmtRsaScheme::Rsassa(x) | TpmtRsaScheme::Rsapss(x) | TpmtRsaScheme::Oaep(x) => {
-                marshal_helper(x, dst, count)
-            }
+            #[cfg(feature = "rsassa")]
+            TpmtRsaScheme::Rsassa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "rsaes")]
             TpmtRsaScheme::Rsaes => count,
+            #[cfg(feature = "rsapss")]
+            TpmtRsaScheme::Rsapss(x) => marshal_helper(x, dst, count),
+            TpmtRsaScheme::Oaep(x) => marshal_helper(x, dst, count),
         }
     }
 }
 
+#[cfg(feature = "rsa")]
 impl<'a> Unmarshal<'a> for Option<TpmtRsaScheme> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let alg = Alg::unmarshal(src)?;
@@ -651,8 +772,11 @@ impl<'a> Unmarshal<'a> for Option<TpmtRsaScheme> {
             return Ok(None);
         }
         Ok(Some(match alg {
+            #[cfg(feature = "rsassa")]
             Alg::RSASSA => TpmtRsaScheme::Rsassa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "rsaes")]
             Alg::RSAES => TpmtRsaScheme::Rsaes,
+            #[cfg(feature = "rsapss")]
             Alg::RSAPSS => TpmtRsaScheme::Rsapss(Unmarshal::unmarshal(src)?),
             Alg::OAEP => TpmtRsaScheme::Oaep(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
@@ -666,6 +790,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtRsaScheme> {
 #[doc(alias = "TPMT_RSA_DECRYPT")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TpmtRsaDecrypt {
+    #[cfg(feature = "rsaes")]
     Rsaes,
     Oaep(TpmiAlgHash),
 }
@@ -674,6 +799,7 @@ impl TpmtRsaDecrypt {
     #[doc(alias = "TPMI_ALG_RSA_DECRYPT")]
     pub const fn scheme(self) -> Alg {
         match self {
+            #[cfg(feature = "rsaes")]
             Self::Rsaes => Alg::RSAES,
             Self::Oaep(_) => Alg::OAEP,
         }
@@ -691,6 +817,7 @@ impl Marshal for Option<TpmtRsaDecrypt> {
         let count = marshal_helper(&s.scheme(), dst, 0);
         match s {
             TpmtRsaDecrypt::Oaep(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "rsaes")]
             TpmtRsaDecrypt::Rsaes => count,
         }
     }
@@ -703,6 +830,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtRsaDecrypt> {
             return Ok(None);
         }
         Ok(Some(match alg {
+            #[cfg(feature = "rsaes")]
             Alg::RSAES => TpmtRsaDecrypt::Rsaes,
             Alg::OAEP => TpmtRsaDecrypt::Oaep(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
@@ -710,21 +838,26 @@ impl<'a> Unmarshal<'a> for Option<TpmtRsaDecrypt> {
     }
 }
 
+#[cfg(feature = "rsa")]
 impl TryFrom<TpmtRsaScheme> for TpmtRsaDecrypt {
     type Error = ();
 
     fn try_from(scheme: TpmtRsaScheme) -> Result<Self, Self::Error> {
         match scheme {
+            #[cfg(feature = "rsaes")]
             TpmtRsaScheme::Rsaes => Ok(Self::Rsaes),
             TpmtRsaScheme::Oaep(s) => Ok(Self::Oaep(s)),
+            #[cfg(any(feature = "rsassa", feature = "rsapss"))]
             _ => Err(()),
         }
     }
 }
 
+#[cfg(feature = "rsa")]
 impl From<TpmtRsaDecrypt> for TpmtRsaScheme {
     fn from(scheme: TpmtRsaDecrypt) -> Self {
         match scheme {
+            #[cfg(feature = "rsaes")]
             TpmtRsaDecrypt::Rsaes => Self::Rsaes,
             TpmtRsaDecrypt::Oaep(s) => Self::Oaep(s),
         }
@@ -738,13 +871,21 @@ impl From<TpmtRsaDecrypt> for TpmtRsaScheme {
 #[doc(alias = "TPMU_ECC_SCHEME")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TpmtEccScheme {
+    #[cfg(feature = "ecdsa")]
     Ecdsa(TpmiAlgHash),
+    #[cfg(feature = "ecc")]
     Ecdh(TpmiAlgHash),
+    #[cfg(feature = "ecdaa")]
     Ecdaa(TpmsSchemeEcdaa),
+    #[cfg(feature = "sm2")]
     Sm2(TpmiAlgHash),
+    #[cfg(feature = "ecschnorr")]
     Ecschnorr(TpmiAlgHash),
+    #[cfg(feature = "ecmqv")]
     Ecmqv(TpmiAlgHash),
+    #[cfg(feature = "eddsa")]
     Eddsa,
+    #[cfg(feature = "hash_eddsa")]
     HashEddsa,
 }
 
@@ -752,65 +893,104 @@ impl TpmtEccScheme {
     #[doc(alias = "TPMI_ALG_ECC_SCHEME")]
     pub const fn scheme(self) -> Alg {
         match self {
+            #[cfg(feature = "ecdsa")]
             Self::Ecdsa(_) => Alg::ECDSA,
+            #[cfg(feature = "ecc")]
             Self::Ecdh(_) => Alg::ECDH,
+            #[cfg(feature = "ecdaa")]
             Self::Ecdaa(_) => Alg::ECDAA,
+            #[cfg(feature = "sm2")]
             Self::Sm2(_) => Alg::SM2,
+            #[cfg(feature = "ecschnorr")]
             Self::Ecschnorr(_) => Alg::ECSCHNORR,
+            #[cfg(feature = "ecmqv")]
             Self::Ecmqv(_) => Alg::ECMQV,
+            #[cfg(feature = "eddsa")]
             Self::Eddsa => Alg::EDDSA,
+            #[cfg(feature = "hash_eddsa")]
             Self::HashEddsa => Alg::HASH_EDDSA,
         }
     }
 }
 
 impl Marshal for Option<TpmtEccScheme> {
-    const MAX_SIZE: usize = Alg::MAX_SIZE + max!(TpmiAlgHash::MAX_SIZE, TpmsSchemeEcdaa::MAX_SIZE);
+    const MAX_SIZE: usize = Alg::MAX_SIZE
+        + max!(
+            TpmiAlgHash::MAX_SIZE,
+            #[cfg(feature = "ecdaa")]
+            TpmsSchemeEcdaa::MAX_SIZE,
+        );
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
+    // If `ecc` is disabled, `TpmtEccScheme` is empty.
+    #[cfg_attr(not(feature = "ecc"), allow(unused_variables))]
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let Some(s) = self else {
             return marshal_helper(&Alg::NULL, dst, 0);
         };
         let count = marshal_helper(&s.scheme(), dst, 0);
-        match s {
-            TpmtEccScheme::Ecdsa(x)
-            | TpmtEccScheme::Ecdh(x)
-            | TpmtEccScheme::Sm2(x)
-            | TpmtEccScheme::Ecschnorr(x)
-            | TpmtEccScheme::Ecmqv(x) => marshal_helper(x, dst, count),
-            TpmtEccScheme::Ecdaa(x) => marshal_helper(x, dst, count),
-            TpmtEccScheme::Eddsa | TpmtEccScheme::HashEddsa => count,
+        // Match on the value (not the reference) so that this compiles even if
+        // `ecc` is disabled (i.e. `TpmtEccScheme` is empty).
+        match *s {
+            #[cfg(feature = "ecdsa")]
+            TpmtEccScheme::Ecdsa(x) => marshal_helper(&x, dst, count),
+            #[cfg(feature = "ecc")]
+            TpmtEccScheme::Ecdh(x) => marshal_helper(&x, dst, count),
+            #[cfg(feature = "ecdaa")]
+            TpmtEccScheme::Ecdaa(x) => marshal_helper(&x, dst, count),
+            #[cfg(feature = "sm2")]
+            TpmtEccScheme::Sm2(x) => marshal_helper(&x, dst, count),
+            #[cfg(feature = "ecschnorr")]
+            TpmtEccScheme::Ecschnorr(x) => marshal_helper(&x, dst, count),
+            #[cfg(feature = "ecmqv")]
+            TpmtEccScheme::Ecmqv(x) => marshal_helper(&x, dst, count),
+            #[cfg(feature = "eddsa")]
+            TpmtEccScheme::Eddsa => count,
+            #[cfg(feature = "hash_eddsa")]
+            TpmtEccScheme::HashEddsa => count,
         }
     }
 }
 
 impl<'a> Unmarshal<'a> for Option<TpmtEccScheme> {
+    // If `ecc` is disabled, `TpmtEccScheme` is empty.
+    #[cfg_attr(not(feature = "ecc"), allow(unreachable_code))]
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let alg = Alg::unmarshal(src)?;
         if alg == Alg::NULL {
             return Ok(None);
         }
         Ok(Some(match alg {
+            #[cfg(feature = "ecdsa")]
             Alg::ECDSA => TpmtEccScheme::Ecdsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecc")]
             Alg::ECDH => TpmtEccScheme::Ecdh(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecdaa")]
             Alg::ECDAA => TpmtEccScheme::Ecdaa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "sm2")]
             Alg::SM2 => TpmtEccScheme::Sm2(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecschnorr")]
             Alg::ECSCHNORR => TpmtEccScheme::Ecschnorr(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecmqv")]
             Alg::ECMQV => TpmtEccScheme::Ecmqv(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "eddsa")]
             Alg::EDDSA => TpmtEccScheme::Eddsa,
+            #[cfg(feature = "hash_eddsa")]
             Alg::HASH_EDDSA => TpmtEccScheme::HashEddsa,
             _ => return Err(UnmarshalError),
         }))
     }
 }
 
+#[cfg(feature = "rsa")]
 impl TryFrom<TpmtRsaScheme> for TpmtSigScheme {
     type Error = ();
 
     fn try_from(scheme: TpmtRsaScheme) -> Result<Self, Self::Error> {
         match scheme {
+            #[cfg(feature = "rsassa")]
             TpmtRsaScheme::Rsassa(s) => Ok(Self::Rsassa(s)),
+            #[cfg(feature = "rsapss")]
             TpmtRsaScheme::Rsapss(s) => Ok(Self::Rsapss(s)),
             _ => Err(()),
         }
@@ -822,12 +1002,19 @@ impl TryFrom<TpmtEccScheme> for TpmtSigScheme {
 
     fn try_from(scheme: TpmtEccScheme) -> Result<Self, Self::Error> {
         match scheme {
+            #[cfg(feature = "ecdsa")]
             TpmtEccScheme::Ecdsa(s) => Ok(Self::Ecdsa(s)),
+            #[cfg(feature = "ecdaa")]
             TpmtEccScheme::Ecdaa(s) => Ok(Self::Ecdaa(s)),
+            #[cfg(feature = "sm2")]
             TpmtEccScheme::Sm2(s) => Ok(Self::Sm2(s)),
+            #[cfg(feature = "ecschnorr")]
             TpmtEccScheme::Ecschnorr(s) => Ok(Self::Ecschnorr(s)),
+            #[cfg(feature = "eddsa")]
             TpmtEccScheme::Eddsa => Ok(Self::Eddsa),
+            #[cfg(feature = "hash_eddsa")]
             TpmtEccScheme::HashEddsa => Ok(Self::HashEddsa),
+            #[cfg(feature = "ecc")]
             _ => Err(()),
         }
     }
@@ -914,27 +1101,43 @@ impl<'a> Unmarshal<'a> for Option<TpmtKdfScheme> {
 pub enum TpmtPublicParms {
     KeyedHash(Option<TpmtKeyedHashScheme>),
     Sym(TpmtSymDefObject),
+    #[cfg(feature = "rsa")]
     Rsa(TpmsRsaParms),
+    #[cfg(feature = "ecc")]
     Ecc(TpmsEccParms),
+    #[cfg(feature = "mldsa")]
     Mldsa(TpmsMldsaParms),
+    #[cfg(feature = "hash_mldsa")]
     HashMldsa(TpmsHashMldsaParms),
+    #[cfg(feature = "mlkem")]
     Mlkem(TpmsMlkemParms),
 }
 
 impl TpmtPublicParms {
     #[doc(alias = "MAX_SHARED_SECRET_SIZE")]
     pub const MAX_SHARED_SECRET_BYTES: usize = max!(
+        0,
+        #[cfg(feature = "ecc")]
         TpmEccCurve::MAX_ECC_KEY_BYTES,
+        #[cfg(feature = "mlkem")]
         TpmiMlkemParms::SHARED_SECRET_BYTES,
     );
     #[doc(alias = "TPMU_KEM_CIPHERTEXT")]
-    pub const MAX_KEM_CIPHERTEXT_BYTES: usize =
-        max!(TpmsEccPoint::MAX_SIZE, TpmiMlkemParms::MAX_CT_BYTES);
-    pub const MAX_ENCRYPTED_SECRET_BYTES: usize = max!(
-        TpmiRsaKeyBits::MAX_PUB_KEY_BYTES,
+    pub const MAX_KEM_CIPHERTEXT_BYTES: usize = max!(
+        0,
+        #[cfg(feature = "ecc")]
         TpmsEccPoint::MAX_SIZE,
+        #[cfg(feature = "mlkem")]
         TpmiMlkemParms::MAX_CT_BYTES,
+    );
+    pub const MAX_ENCRYPTED_SECRET_BYTES: usize = max!(
         Tpm2bDigest::MAX_SIZE,
+        #[cfg(feature = "rsa")]
+        TpmiRsaKeyBits::MAX_PUB_KEY_BYTES,
+        #[cfg(feature = "ecc")]
+        TpmsEccPoint::MAX_SIZE,
+        #[cfg(feature = "mlkem")]
+        TpmiMlkemParms::MAX_CT_BYTES,
     );
 
     #[doc(alias = "TPMI_ALG_PUBLIC")]
@@ -942,10 +1145,15 @@ impl TpmtPublicParms {
         match self {
             Self::KeyedHash(_) => Alg::KEYEDHASH,
             Self::Sym(_) => Alg::SYMCIPHER,
+            #[cfg(feature = "rsa")]
             Self::Rsa(_) => Alg::RSA,
+            #[cfg(feature = "ecc")]
             Self::Ecc(_) => Alg::ECC,
+            #[cfg(feature = "mldsa")]
             Self::Mldsa(_) => Alg::MLDSA,
+            #[cfg(feature = "hash_mldsa")]
             Self::HashMldsa(_) => Alg::HASH_MLDSA,
+            #[cfg(feature = "mlkem")]
             Self::Mlkem(_) => Alg::MLKEM,
         }
     }
@@ -956,10 +1164,15 @@ impl Marshal for TpmtPublicParms {
         + max!(
             <Option<TpmtKeyedHashScheme>>::MAX_SIZE,
             TpmtSymDefObject::MAX_SIZE,
+            #[cfg(feature = "rsa")]
             TpmsRsaParms::MAX_SIZE,
+            #[cfg(feature = "ecc")]
             TpmsEccParms::MAX_SIZE,
+            #[cfg(feature = "mldsa")]
             TpmsMldsaParms::MAX_SIZE,
+            #[cfg(feature = "hash_mldsa")]
             TpmsHashMldsaParms::MAX_SIZE,
+            #[cfg(feature = "mlkem")]
             TpmsMlkemParms::MAX_SIZE,
         );
     type MaxBuffer = [u8; Self::MAX_SIZE];
@@ -969,10 +1182,15 @@ impl Marshal for TpmtPublicParms {
         match self {
             Self::KeyedHash(x) => marshal_helper(x, dst, count),
             Self::Sym(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "rsa")]
             Self::Rsa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "ecc")]
             Self::Ecc(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "mldsa")]
             Self::Mldsa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "hash_mldsa")]
             Self::HashMldsa(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "mlkem")]
             Self::Mlkem(x) => marshal_helper(x, dst, count),
         }
     }
@@ -983,10 +1201,15 @@ impl<'a> Unmarshal<'a> for TpmtPublicParms {
         Ok(match Alg::unmarshal(src)? {
             Alg::KEYEDHASH => Self::KeyedHash(Unmarshal::unmarshal(src)?),
             Alg::SYMCIPHER => Self::Sym(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "rsa")]
             Alg::RSA => Self::Rsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecc")]
             Alg::ECC => Self::Ecc(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "mldsa")]
             Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "hash_mldsa")]
             Alg::HASH_MLDSA => Self::HashMldsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "mlkem")]
             Alg::MLKEM => Self::Mlkem(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
         })

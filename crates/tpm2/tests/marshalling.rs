@@ -38,6 +38,12 @@ fn test_marshal_enum_override() {
 }
 
 #[test]
+#[cfg(all(
+    feature = "sha256",
+    feature = "aes128",
+    feature = "rsassa",
+    feature = "rsa2048"
+))]
 fn test_marshal_tpmt_public() {
     let aes_sym_def_obj = Some(TpmtSymDefObject {
         alg: AlgSym::Aes128,
@@ -189,6 +195,7 @@ fn test_tpml_pcr_selection_marshalling() {
 }
 
 #[test]
+#[cfg(all(feature = "sha256", feature = "aes128", feature = "nist_p256"))]
 fn test_print_ecc_parent() {
     let public_area = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),

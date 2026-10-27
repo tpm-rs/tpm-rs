@@ -59,8 +59,11 @@ impl<'a> Unmarshal<'a> for Option<TpmiAlgKdf> {
 #[doc(alias = "TPMI_ECC_KEY_EXCHANGE")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmiEccKeyExchange {
+    #[cfg(feature = "ecc")]
     Ecdh = Alg::ECDH.tag(),
+    #[cfg(feature = "ecmqv")]
     Ecmqv = Alg::ECMQV.tag(),
+    #[cfg(feature = "sm2")]
     Sm2 = Alg::SM2.tag(),
 }
 
@@ -68,8 +71,11 @@ impl TryFrom<Alg> for TpmiEccKeyExchange {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<Self, Self::Error> {
         match a {
+            #[cfg(feature = "ecc")]
             Alg::ECDH => Ok(Self::Ecdh),
+            #[cfg(feature = "ecmqv")]
             Alg::ECMQV => Ok(Self::Ecmqv),
+            #[cfg(feature = "sm2")]
             Alg::SM2 => Ok(Self::Sm2),
             _ => Err(UnmarshalError),
         }
@@ -219,18 +225,32 @@ impl<'a> Unmarshal<'a> for Option<TpmiAlgSymMode> {
 ///
 /// While [Part 2: Structures] allows for an implementation to support any
 /// set of RSA key sizes, this implementation only allows for RSA keys sizes of
-/// 1024, 2048, 3072, and 4096.
+/// 1024, 2048, 3072, and 4096 (each controlled by the corresponding `rsa*`
+/// Cargo feature).
 #[doc(alias = "TPMI_RSA_KEY_BITS")]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum TpmiRsaKeyBits {
+    #[cfg(feature = "rsa1024")]
     Rsa1024 = 1024,
+    #[cfg(feature = "rsa2048")]
     Rsa2048 = 2048,
+    #[cfg(feature = "rsa3072")]
     Rsa3072 = 3072,
+    #[cfg(feature = "rsa4096")]
     Rsa4096 = 4096,
 }
 
 impl TpmiRsaKeyBits {
-    const ALL: &[Self] = &[Self::Rsa1024, Self::Rsa2048, Self::Rsa3072, Self::Rsa4096];
+    const ALL: &[Self] = &[
+        #[cfg(feature = "rsa1024")]
+        Self::Rsa1024,
+        #[cfg(feature = "rsa2048")]
+        Self::Rsa2048,
+        #[cfg(feature = "rsa3072")]
+        Self::Rsa3072,
+        #[cfg(feature = "rsa4096")]
+        Self::Rsa4096,
+    ];
 
     pub const MAX_PUB_KEY_BITS: u16 = max_by!(Self::ALL, Self::as_u16);
     pub const MAX_PUB_KEY_BYTES: usize = bits_to_bytes(Self::MAX_PUB_KEY_BITS);
@@ -281,15 +301,27 @@ impl<'a> Unmarshal<'a> for TpmiRsaKeyBits {
 ///
 /// Selects an ML-KEM parameter set (`TPM_MLKEM_512`, `TPM_MLKEM_768`, or `TPM_MLKEM_1024`).
 #[doc(alias = "TPMI_MLKEM_PARMS")]
+#[cfg(feature = "mlkem")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum TpmiMlkemParms {
+    #[cfg(feature = "mlkem_512")]
     Mlkem512 = 0x0001,
+    #[cfg(feature = "mlkem_768")]
     Mlkem768 = 0x0002,
+    #[cfg(feature = "mlkem_1024")]
     Mlkem1024 = 0x0003,
 }
 
+#[cfg(feature = "mlkem")]
 impl TpmiMlkemParms {
-    const ALL: &[Self] = &[Self::Mlkem512, Self::Mlkem768, Self::Mlkem1024];
+    const ALL: &[Self] = &[
+        #[cfg(feature = "mlkem_512")]
+        Self::Mlkem512,
+        #[cfg(feature = "mlkem_768")]
+        Self::Mlkem768,
+        #[cfg(feature = "mlkem_1024")]
+        Self::Mlkem1024,
+    ];
 
     #[doc(alias = "MAX_MLKEM_PUB_SIZE")]
     pub const MAX_PUB_KEY_BYTES: usize = max_by!(Self::ALL, Self::pub_key_bytes);
@@ -299,8 +331,11 @@ impl TpmiMlkemParms {
 
     const fn info(self) -> (usize, usize) {
         match self {
+            #[cfg(feature = "mlkem_512")]
             Self::Mlkem512 => (800, 768),
+            #[cfg(feature = "mlkem_768")]
             Self::Mlkem768 => (1184, 1088),
+            #[cfg(feature = "mlkem_1024")]
             Self::Mlkem1024 => (1568, 1568),
         }
     }
@@ -314,6 +349,7 @@ impl TpmiMlkemParms {
     }
 }
 
+#[cfg(feature = "mlkem")]
 impl TryFrom<u16> for TpmiMlkemParms {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
@@ -321,12 +357,14 @@ impl TryFrom<u16> for TpmiMlkemParms {
     }
 }
 
+#[cfg(feature = "mlkem")]
 impl From<TpmiMlkemParms> for u16 {
     fn from(val: TpmiMlkemParms) -> Self {
         val as u16
     }
 }
 
+#[cfg(feature = "mlkem")]
 impl Marshal for TpmiMlkemParms {
     const MAX_SIZE: usize = u16::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
@@ -336,6 +374,7 @@ impl Marshal for TpmiMlkemParms {
     }
 }
 
+#[cfg(feature = "mlkem")]
 impl<'a> Unmarshal<'a> for TpmiMlkemParms {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         u16::unmarshal(src)?.try_into()
@@ -346,15 +385,27 @@ impl<'a> Unmarshal<'a> for TpmiMlkemParms {
 ///
 /// Selects an ML-DSA parameter set (`TPM_MLDSA_44`, `TPM_MLDSA_65`, or `TPM_MLDSA_87`).
 #[doc(alias = "TPMI_MLDSA_PARMS")]
+#[cfg(feature = "mldsa")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum TpmiMldsaParms {
+    #[cfg(feature = "mldsa_44")]
     Mldsa44 = 0x0001,
+    #[cfg(feature = "mldsa_65")]
     Mldsa65 = 0x0002,
+    #[cfg(feature = "mldsa_87")]
     Mldsa87 = 0x0003,
 }
 
+#[cfg(feature = "mldsa")]
 impl TpmiMldsaParms {
-    const ALL: &[Self] = &[Self::Mldsa44, Self::Mldsa65, Self::Mldsa87];
+    const ALL: &[Self] = &[
+        #[cfg(feature = "mldsa_44")]
+        Self::Mldsa44,
+        #[cfg(feature = "mldsa_65")]
+        Self::Mldsa65,
+        #[cfg(feature = "mldsa_87")]
+        Self::Mldsa87,
+    ];
 
     #[doc(alias = "MAX_MLDSA_PUB_SIZE")]
     pub const MAX_PUB_KEY_BYTES: usize = max_by!(Self::ALL, Self::pub_key_bytes);
@@ -364,8 +415,11 @@ impl TpmiMldsaParms {
 
     const fn info(self) -> (usize, usize) {
         match self {
+            #[cfg(feature = "mldsa_44")]
             Self::Mldsa44 => (1312, 2420),
+            #[cfg(feature = "mldsa_65")]
             Self::Mldsa65 => (1952, 3309),
+            #[cfg(feature = "mldsa_87")]
             Self::Mldsa87 => (2592, 4627),
         }
     }
@@ -379,6 +433,7 @@ impl TpmiMldsaParms {
     }
 }
 
+#[cfg(feature = "mldsa")]
 impl TryFrom<u16> for TpmiMldsaParms {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
@@ -386,12 +441,14 @@ impl TryFrom<u16> for TpmiMldsaParms {
     }
 }
 
+#[cfg(feature = "mldsa")]
 impl From<TpmiMldsaParms> for u16 {
     fn from(val: TpmiMldsaParms) -> Self {
         val as u16
     }
 }
 
+#[cfg(feature = "mldsa")]
 impl Marshal for TpmiMldsaParms {
     const MAX_SIZE: usize = u16::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
@@ -401,6 +458,7 @@ impl Marshal for TpmiMldsaParms {
     }
 }
 
+#[cfg(feature = "mldsa")]
 impl<'a> Unmarshal<'a> for TpmiMldsaParms {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         u16::unmarshal(src)?.try_into()
@@ -475,18 +533,6 @@ pub enum TpmiAlgHash {
     #[cfg(feature = "sha3_512")]
     Sha3_512 = Alg::SHA3_512.tag(),
 }
-
-#[cfg(not(any(
-    feature = "sha1",
-    feature = "sha256",
-    feature = "sha384",
-    feature = "sha512",
-    feature = "sm3_256",
-    feature = "sha3_256",
-    feature = "sha3_384",
-    feature = "sha3_512",
-)))]
-compile_error!("at least one hash algorithm feature must be enabled");
 
 impl TpmiAlgHash {
     const ALL: &[Self] = &[

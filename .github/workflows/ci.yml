@@ -25,6 +25,33 @@ jobs:
       - run: rustc --version
       - run: cargo test
 
+  features:
+    name: Feature Subsets (tpm2)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each entry is added to a minimal base of hash and symmetric features.
+        features:
+          - ""
+          - "cmac"
+          - "rsa2048"
+          - "rsa2048,rsassa,rsapss,rsaes"
+          - "nist_p256"
+          - "nist_p256,ecdsa"
+          - "sm2_p256,sm2,ecdaa,ecschnorr,ecmqv"
+          - "curve25519,eddsa"
+          - "curve448,hash_eddsa"
+          - "mldsa_44,hash_mldsa"
+          - "mlkem_768"
+    env:
+      FEATURES: sha256,sha384,aes128,${{ matrix.features }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustc --version
+      - run: cargo clippy -p tpm2 --all-targets --no-default-features --features "$FEATURES" -- -D warnings
+      - run: cargo test -p tpm2 --no-default-features --features "$FEATURES"
+
   integration_test:
     name: Client Integration Test Suite
     runs-on: ubuntu-latest

@@ -61,12 +61,13 @@ pub const MAX_CONTEXT_SIZE: usize = Private::CAP + TpmtPublic::MAX_SIZE + Tpm2bN
 /// wire in plaintext; plaintext [`Tpm2bSensitive`] buffers always carry the
 /// compact single-prime or seed form.
 ///
-/// By default, sized to fit the 5-prime CRT representation.
+/// By default, sized to fit the 5-prime CRT representation of the largest
+/// enabled RSA key. This is `0` (no expanded format) if the `rsa` feature is
+/// disabled.
 pub const PRIVATE_VENDOR_SPECIFIC_BYTES: usize = TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES * 5;
 
 const _: () = assert!(MAX_2B_BUFFER_SIZE >= 1024);
 const _: () = assert!(TpmsCapabilityData::MAX_SIZE == MAX_CAP_BUFFER);
-const _: () = assert!(2 + PRIVATE_VENDOR_SPECIFIC_BYTES >= TpmuSensitiveComposite::MAX_SIZE);
 
 /// Specifies the maximum capacity (`CAP`) in bytes for a [`Tpm2bSized`] buffer.
 pub trait Tag {
@@ -148,7 +149,9 @@ impl Tag for PublicKeyRsa {
     const CAP: usize = TpmiRsaKeyBits::MAX_PUB_KEY_BYTES;
 }
 /// Sized to the maximum supported RSA prime factor ([`TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES`]).
+#[cfg(feature = "rsa")]
 pub struct PrivateKeyRsa;
+#[cfg(feature = "rsa")]
 impl Tag for PrivateKeyRsa {
     const CAP: usize = TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES;
 }
@@ -158,22 +161,30 @@ impl Tag for EccParameter {
     const CAP: usize = TpmEccCurve::MAX_ECC_KEY_BYTES;
 }
 /// Sized to the maximum supported EdDSA signature length (`2 * TpmEccCurve::MAX_ECC_KEY_BYTES`).
+#[cfg(feature = "eddsa")]
 pub struct SignatureEddsa;
+#[cfg(feature = "eddsa")]
 impl Tag for SignatureEddsa {
     const CAP: usize = 2 * TpmEccCurve::MAX_ECC_KEY_BYTES;
 }
 /// Sized to the maximum supported ML-KEM public key length ([`TpmiMlkemParms::MAX_PUB_KEY_BYTES`]).
+#[cfg(feature = "mlkem")]
 pub struct PublicKeyMlkem;
+#[cfg(feature = "mlkem")]
 impl Tag for PublicKeyMlkem {
     const CAP: usize = TpmiMlkemParms::MAX_PUB_KEY_BYTES;
 }
 /// Sized to the maximum supported ML-DSA public key length ([`TpmiMldsaParms::MAX_PUB_KEY_BYTES`]).
+#[cfg(feature = "mldsa")]
 pub struct PublicKeyMldsa;
+#[cfg(feature = "mldsa")]
 impl Tag for PublicKeyMldsa {
     const CAP: usize = TpmiMldsaParms::MAX_PUB_KEY_BYTES;
 }
 /// Sized to the maximum supported ML-DSA signature length ([`TpmiMldsaParms::MAX_SIG_BYTES`]).
+#[cfg(feature = "mldsa")]
 pub struct SignatureMldsa;
+#[cfg(feature = "mldsa")]
 impl Tag for SignatureMldsa {
     const CAP: usize = TpmiMldsaParms::MAX_SIG_BYTES;
 }
@@ -208,13 +219,17 @@ impl Tag for SignatureHint {
 /// - `integrityOuter`: An outer [`Tpm2bDigest`] HMAC for integrity
 /// - `integrityInner`: An inner [`Tpm2bDigest`] HMAC or IV
 /// - `sensitive`: An encrypted [`Tpm2bSensitive`] whose union member may be
-///   sized up to [`PRIVATE_VENDOR_SPECIFIC_BYTES`]
+///   replaced by a vendor-specific format of up to
+///   [`PRIVATE_VENDOR_SPECIFIC_BYTES`]
 #[doc(alias = "_PRIVATE")]
 pub struct Private;
 impl Tag for Private {
     const CAP: usize = Tpm2bDigest::MAX_SIZE * 2 + Tpm2bSensitive::MAX_SIZE
         - TpmuSensitiveComposite::MAX_SIZE
-        + (2 + PRIVATE_VENDOR_SPECIFIC_BYTES);
+        + max!(
+            TpmuSensitiveComposite::MAX_SIZE,
+            2 + PRIVATE_VENDOR_SPECIFIC_BYTES
+        );
 }
 /// Sized to hold an encrypted credential object.
 ///

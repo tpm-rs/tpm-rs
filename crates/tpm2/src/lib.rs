@@ -50,8 +50,42 @@
 //!   `sha512`, `sm3_256`, `sha3_256`, `sha3_384`, `sha3_512`
 //! - **Symmetric ciphers** (at least one required): `aes128`, `aes192`,
 //!   `aes256`, `sm4_128`, `camellia128`, `camellia192`, `camellia256`
-//! - **Symmetric modes** (`CFB` is always enabled): `cmac`, `ctr`, `ofb`,
-//!   `cbc`, `ecb`
+//! - **Symmetric modes** (`CFB` is always enabled): `ctr`, `ofb`, `cbc`, `ecb`
+//! - **CMAC**: `cmac`
+//! - **Asymmetric families**: `rsa`, `ecc`, `mldsa` (pure ML-DSA), `mlkem`.
+//!   These are implied by the more specific features below. Each family always
+//!   includes its TPM secret sharing primitive: RSA-OAEP, ECDH (including
+//!   X25519/X448), or ML-KEM.
+//! - **RSA key sizes** (at least one required with `rsa`): `rsa1024`,
+//!   `rsa2048`, `rsa3072`, `rsa4096`
+//! - **RSA schemes** (`OAEP` is always enabled with `rsa`): `rsassa`,
+//!   `rsapss`, `rsaes`
+//! - **ECC curves** (at least one required with `ecc`): `nist_p192`,
+//!   `nist_p224`, `nist_p256`, `nist_p384`, `nist_p521`, `bn_p256`, `bn_p638`,
+//!   `sm2_p256`, `bp_p256_r1`, `bp_p384_r1`, `bp_p512_r1`, `curve25519`,
+//!   `curve448`
+//! - **ECC schemes** (`ECDH` is always enabled with `ecc`): `ecdsa`, `ecdaa`,
+//!   `ecschnorr`, `eddsa`, `hash_eddsa`, `sm2` (signing and key exchange),
+//!   `ecmqv`. `eddsa` and `hash_eddsa` require `curve25519` or `curve448`, and
+//!   `hash_eddsa` implies `eddsa`.
+//! - **ML-DSA** (at least one parameter set required with `mldsa`):
+//!   `mldsa_44`, `mldsa_65`, `mldsa_87`, and the `hash_mldsa` scheme (which
+//!   implies `mldsa`)
+//! - **ML-KEM** (at least one parameter set required with `mlkem`):
+//!   `mlkem_512`, `mlkem_768`, `mlkem_1024`
+//!
+//! These features control which wire-format variants exist (e.g.
+//! [`TpmtPublicParms`], [`TpmtSignature`], [`TpmtSigScheme`], and
+//! [`TpmEccCurve`]), and therefore which values can be unmarshalled, as well as
+//! derived buffer sizes (like [`TpmtPublicParms::MAX_ENCRYPTED_SECRET_BYTES`]
+//! and [`TpmtSignature`]'s maximum size).
+//!
+//! All [`commands`] are always available. If an algorithm family is disabled,
+//! the types used by its commands still exist, but their enums have no
+//! variants (e.g. [`TpmEccCurve`] or [`TpmiRsaKeyBits`]) and their buffers
+//! have a capacity of zero (e.g. [`Tpm2bPublicKeyRsa`] or
+//! [`Tpm2bEccParameter`]). Such commands can't be meaningfully constructed or
+//! unmarshalled.
 //!
 //! ## Platform Support
 //!
@@ -146,3 +180,77 @@ pub trait Connection {
 pub(crate) const fn bits_to_bytes(bits: u16) -> usize {
     bits.div_ceil(8) as usize
 }
+
+// Algorithm feature checks
+
+#[cfg(not(any(
+    feature = "sha1",
+    feature = "sha256",
+    feature = "sha384",
+    feature = "sha512",
+    feature = "sm3_256",
+    feature = "sha3_256",
+    feature = "sha3_384",
+    feature = "sha3_512",
+)))]
+compile_error!("at least one hash algorithm feature must be enabled");
+
+#[cfg(not(any(
+    feature = "aes128",
+    feature = "aes192",
+    feature = "aes256",
+    feature = "sm4_128",
+    feature = "camellia128",
+    feature = "camellia192",
+    feature = "camellia256",
+)))]
+compile_error!("at least one symmetric algorithm feature must be enabled");
+
+#[cfg(all(
+    feature = "rsa",
+    not(any(
+        feature = "rsa1024",
+        feature = "rsa2048",
+        feature = "rsa3072",
+        feature = "rsa4096",
+    ))
+))]
+compile_error!("the `rsa` feature requires at least one RSA key size feature (e.g. `rsa2048`)");
+
+#[cfg(all(
+    feature = "ecc",
+    not(any(
+        feature = "nist_p192",
+        feature = "nist_p224",
+        feature = "nist_p256",
+        feature = "nist_p384",
+        feature = "nist_p521",
+        feature = "bn_p256",
+        feature = "bn_p638",
+        feature = "sm2_p256",
+        feature = "bp_p256_r1",
+        feature = "bp_p384_r1",
+        feature = "bp_p512_r1",
+        feature = "curve25519",
+        feature = "curve448",
+    ))
+))]
+compile_error!("the `ecc` feature requires at least one ECC curve feature (e.g. `nist_p256`)");
+
+#[cfg(all(
+    feature = "eddsa",
+    not(any(feature = "curve25519", feature = "curve448"))
+))]
+compile_error!("the `eddsa` feature requires the `curve25519` or `curve448` feature");
+
+#[cfg(all(
+    feature = "mldsa",
+    not(any(feature = "mldsa_44", feature = "mldsa_65", feature = "mldsa_87"))
+))]
+compile_error!("the `mldsa` feature requires at least one ML-DSA parameter set feature");
+
+#[cfg(all(
+    feature = "mlkem",
+    not(any(feature = "mlkem_512", feature = "mlkem_768", feature = "mlkem_1024"))
+))]
+compile_error!("the `mlkem` feature requires at least one ML-KEM parameter set feature");

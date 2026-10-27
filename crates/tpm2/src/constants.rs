@@ -219,52 +219,101 @@ impl fmt::Debug for Alg {
 #[doc(alias = "TPMI_ECC_CURVE")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmEccCurve {
+    #[cfg(feature = "nist_p192")]
     NistP192 = 0x0001,
+    #[cfg(feature = "nist_p224")]
     NistP224 = 0x0002,
+    #[cfg(feature = "nist_p256")]
     NistP256 = 0x0003,
+    #[cfg(feature = "nist_p384")]
     NistP384 = 0x0004,
+    #[cfg(feature = "nist_p521")]
     NistP521 = 0x0005,
+    #[cfg(feature = "bn_p256")]
     BNP256 = 0x0010,
+    #[cfg(feature = "bn_p638")]
     BNP638 = 0x0011,
+    #[cfg(feature = "sm2_p256")]
     SM2P256 = 0x0020,
+    #[cfg(feature = "bp_p256_r1")]
     BpP256R1 = 0x0030,
+    #[cfg(feature = "bp_p384_r1")]
     BpP384R1 = 0x0031,
+    #[cfg(feature = "bp_p512_r1")]
     BpP512R1 = 0x0032,
+    #[cfg(feature = "curve25519")]
     Curve25519 = 0x0040,
+    #[cfg(feature = "curve448")]
     Curve448 = 0x0041,
 }
 
 impl TpmEccCurve {
-    const ALL: &[Self] = &[
+    pub(crate) const ALL: &[Self] = &[
+        #[cfg(feature = "nist_p192")]
         Self::NistP192,
+        #[cfg(feature = "nist_p224")]
         Self::NistP224,
+        #[cfg(feature = "nist_p256")]
         Self::NistP256,
+        #[cfg(feature = "nist_p384")]
         Self::NistP384,
+        #[cfg(feature = "nist_p521")]
         Self::NistP521,
+        #[cfg(feature = "bn_p256")]
         Self::BNP256,
+        #[cfg(feature = "bn_p638")]
         Self::BNP638,
+        #[cfg(feature = "sm2_p256")]
         Self::SM2P256,
+        #[cfg(feature = "bp_p256_r1")]
         Self::BpP256R1,
+        #[cfg(feature = "bp_p384_r1")]
         Self::BpP384R1,
+        #[cfg(feature = "bp_p512_r1")]
         Self::BpP512R1,
+        #[cfg(feature = "curve25519")]
         Self::Curve25519,
+        #[cfg(feature = "curve448")]
         Self::Curve448,
     ];
 
     pub const MAX_ECC_KEY_BITS: u16 = max_by!(Self::ALL, Self::key_bits);
-    pub const MAX_ECC_KEY_BYTES: usize = bits_to_bytes(Self::MAX_ECC_KEY_BITS);
+    /// Maximum size of an ECC coordinate, scalar, or encoded point. Ed448
+    /// (RFC 8032) uses 57-byte keys and points, one byte more than
+    /// `bits_to_bytes(448)`.
+    pub const MAX_ECC_KEY_BYTES: usize = max!(
+        bits_to_bytes(Self::MAX_ECC_KEY_BITS),
+        #[cfg(all(feature = "curve448", feature = "eddsa"))]
+        57,
+    );
 
     pub const fn key_bits(self) -> u16 {
         match self {
+            #[cfg(feature = "nist_p192")]
             Self::NistP192 => 192,
+            #[cfg(feature = "nist_p224")]
             Self::NistP224 => 224,
-            Self::NistP256 | Self::BNP256 | Self::SM2P256 | Self::BpP256R1 | Self::Curve25519 => {
-                256
-            }
-            Self::NistP384 | Self::BpP384R1 => 384,
+            #[cfg(feature = "nist_p256")]
+            Self::NistP256 => 256,
+            #[cfg(feature = "bn_p256")]
+            Self::BNP256 => 256,
+            #[cfg(feature = "sm2_p256")]
+            Self::SM2P256 => 256,
+            #[cfg(feature = "bp_p256_r1")]
+            Self::BpP256R1 => 256,
+            #[cfg(feature = "curve25519")]
+            Self::Curve25519 => 256,
+            #[cfg(feature = "nist_p384")]
+            Self::NistP384 => 384,
+            #[cfg(feature = "bp_p384_r1")]
+            Self::BpP384R1 => 384,
+            #[cfg(feature = "curve448")]
             Self::Curve448 => 448,
+            #[cfg(feature = "bp_p512_r1")]
             Self::BpP512R1 => 512,
+            #[cfg(feature = "nist_p521")]
             Self::NistP521 => 521,
+            #[cfg(feature = "bn_p638")]
             Self::BNP638 => 638,
         }
     }
@@ -1512,6 +1561,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(all(feature = "nist_p192", feature = "bp_p256_r1", feature = "curve448"))]
     fn test_tpm_ecc_curve_conversions() {
         assert_eq!(core::mem::size_of::<TpmEccCurve>(), 1);
         assert_eq!(u16::from(TpmEccCurve::NistP192), 0x0001);

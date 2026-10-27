@@ -85,6 +85,7 @@ fn test_try_unmarshal_tpm2b_digest() {
 }
 
 #[test]
+#[cfg(feature = "ecc")]
 fn test_try_unmarshal_tpm2b_ecc_parameter() {
     impl_test_tpm2b_simple! {Tpm2bEccParameter};
 }
@@ -125,11 +126,13 @@ fn test_try_unmarshal_tpm2b_private() {
 }
 
 #[test]
+#[cfg(feature = "rsa")]
 fn test_try_unmarshal_tpm2b_private_key_rsa() {
     impl_test_tpm2b_simple! {Tpm2bPrivateKeyRsa};
 }
 
 #[test]
+#[cfg(feature = "rsa")]
 fn test_try_unmarshal_tpm2b_public_key_rsa() {
     impl_test_tpm2b_simple! {Tpm2bPublicKeyRsa};
 }
@@ -177,10 +180,15 @@ fn test_all_tpm2b_simple_marshalling_bounds() {
     impl_stress_test_tpm2b_simple! {Tpm2bContextData};
     impl_stress_test_tpm2b_simple! {Tpm2bData};
     impl_stress_test_tpm2b_simple! {Tpm2bDigest};
+    #[cfg(feature = "ecc")]
     impl_stress_test_tpm2b_simple! {Tpm2bEccParameter};
+    #[cfg(feature = "eddsa")]
     impl_stress_test_tpm2b_simple! {Tpm2bSignatureEddsa};
+    #[cfg(feature = "mlkem")]
     impl_stress_test_tpm2b_simple! {Tpm2bPublicKeyMlkem};
+    #[cfg(feature = "mldsa")]
     impl_stress_test_tpm2b_simple! {Tpm2bPublicKeyMldsa};
+    #[cfg(feature = "mldsa")]
     impl_stress_test_tpm2b_simple! {Tpm2bSignatureMldsa};
     impl_stress_test_tpm2b_simple! {Tpm2bEncryptedSecret};
     impl_stress_test_tpm2b_simple! {Tpm2bSharedSecret};
@@ -193,13 +201,16 @@ fn test_all_tpm2b_simple_marshalling_bounds() {
     impl_stress_test_tpm2b_simple! {Tpm2bMaxBuffer};
     impl_stress_test_tpm2b_simple! {Tpm2bMaxNvBuffer};
     impl_stress_test_tpm2b_simple! {Tpm2bPrivate};
+    #[cfg(feature = "rsa")]
     impl_stress_test_tpm2b_simple! {Tpm2bPrivateKeyRsa};
+    #[cfg(feature = "rsa")]
     impl_stress_test_tpm2b_simple! {Tpm2bPublicKeyRsa};
     impl_stress_test_tpm2b_simple! {Tpm2bSensitiveData};
     impl_stress_test_tpm2b_simple! {Tpm2bSymKey};
     impl_stress_test_tpm2b_simple! {Tpm2bTimeout};
 }
 
+#[cfg(any(feature = "mlkem", feature = "mldsa"))]
 macro_rules! impl_test_tpm2b_exact_size {
     ($T:ty) => {
         const N: usize = <$T>::CAP;
@@ -228,11 +239,13 @@ macro_rules! impl_test_tpm2b_exact_size {
 }
 
 #[test]
+#[cfg(feature = "mlkem")]
 fn test_tpm2b_private_key_mlkem_exact_size() {
     impl_test_tpm2b_exact_size! {Tpm2bPrivateKeyMlkem};
 }
 
 #[test]
+#[cfg(feature = "mldsa")]
 fn test_tpm2b_private_key_mldsa_exact_size() {
     impl_test_tpm2b_exact_size! {Tpm2bPrivateKeyMldsa};
 }
@@ -254,6 +267,7 @@ fn test_unmarshal_invalid_public_type() {
 }
 
 #[test]
+#[cfg(feature = "ecc")]
 fn test_tpm2b_trailing_bytes_rejected() {
     // Empty TpmsEccPoint marshals to 4 bytes (x.size = 0, y.size = 0),
     // so an outer Tpm2bEccPoint size of 5 leaves 1 trailing byte inside the Tpm2b payload.
