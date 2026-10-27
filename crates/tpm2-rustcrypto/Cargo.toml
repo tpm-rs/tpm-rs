@@ -1,0 +1,124 @@
+[package]
+name = "tpm2-rustcrypto"
+description = "Implementation of the tpm2 cryptography traits using the RustCrypto crates"
+
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tpm2 = { workspace = true }
+aes = { version = "0.9", default-features = false }
+cbc = { version = "0.2", default-features = false }
+cfb-mode = { version = "0.9", default-features = false }
+cipher = { version = "0.5", default-features = false }
+ctr = { version = "0.10", default-features = false }
+ctutils = { version = "0.4", default-features = false }
+getrandom = { version = "0.4", default-features = false }
+hmac = { version = "0.13", default-features = false }
+ofb = { version = "0.7", default-features = false }
+rand_chacha = { version = "0.10", default-features = false }
+sha1 = { version = "0.11", default-features = false }
+sha2 = { version = "0.11", default-features = false }
+signature = { version = "3.0.0", default-features = false, features = ["digest"] }
+rand_core = { version = "0.10", default-features = false }
+
+[features]
+rsa = ["dep:rsa"]
+
+[dependencies.sha3]
+version = "0.12.0"
+default-features = false
+
+[dependencies.shake]
+version = "0.1"
+default-features = false
+
+[dependencies.sm3]
+version = "0.5"
+default-features = false
+
+[dependencies.sm4]
+version = "0.6"
+default-features = false
+
+[dependencies.camellia]
+version = "0.2"
+default-features = false
+
+[dependencies.cmac]
+version = "0.8"
+default-features = false
+
+[dependencies.rsa]
+version = "0.10.0-rc.19"
+default-features = false
+features = ["hazmat"]
+optional = true
+
+[dependencies.elliptic-curve]
+version = "0.14.3"
+default-features = false
+features = ["arithmetic", "sec1"]
+
+[dependencies.ecdsa]
+version = "0.17.0"
+default-features = false
+features = ["algorithm"]
+
+[dependencies.p192]
+version = "0.14.0-rc.15"
+default-features = false
+features = ["arithmetic", "ecdsa"]
+
+[dependencies.p224]
+version = "0.14.0-rc.15"
+default-features = false
+features = ["arithmetic", "ecdsa"]
+
+[dependencies.p256]
+version = "0.14.0"
+default-features = false
+features = ["ecdh", "ecdsa"]
+
+[dependencies.p384]
+version = "0.14.0"
+default-features = false
+features = ["ecdh", "ecdsa"]
+
+[dependencies.p521]
+version = "0.14.0"
+default-features = false
+features = ["digest", "ecdh", "ecdsa"]
+
+[dependencies.sm2]
+features = ["arithmetic", "dsa"]
+version = "0.14.0"
+default-features = false
+
+[dependencies.ed25519-dalek]
+features = ["digest", "hazmat"]
+version = "3.0.0"
+default-features = false
+
+[dependencies.x25519-dalek]
+version = "3.0.0"
+default-features = false
+features = ["static_secrets"]
+
+
+[dependencies.ml-kem]
+version = "0.3.3"
+default-features = false
+
+[dependencies.ml-dsa]
+features = ["rand_core"]
+version = "0.1.1"
+default-features = false
+
