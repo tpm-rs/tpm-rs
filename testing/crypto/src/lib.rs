@@ -1,9 +1,10 @@
 //! Known-answer test vectors for the `tpm2` crypto backends.
 //!
 //! The tests live in this crate's `tests/` directory: `tests/common/suite.rs`
-//! tests a single backend. Each top-level test target (e.g.
-//! `tests/rustcrypto.rs`) selects the backend with a type alias and includes
-//! that file.
+//! tests a single backend and `tests/common/interop.rs` tests a pair of
+//! backends against each other. Each top-level test target (e.g.
+//! `tests/rustcrypto.rs` or `tests/openssl_rustcrypto.rs`) selects the
+//! backend(s) with type aliases and includes one of these files.
 //!
 //! ## Sources
 //!
@@ -15,6 +16,8 @@
 
 use tpm2::crypto::CryptoError;
 // The backends are only used by the tests.
+#[cfg(feature = "openssl")]
+use tpm2_openssl as _;
 #[cfg(feature = "rustcrypto")]
 use tpm2_rustcrypto as _;
 
