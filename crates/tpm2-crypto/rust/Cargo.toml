@@ -11,17 +11,19 @@ categories.workspace = true
 
 [dependencies]
 tpm2 = { workspace = true }
-sha2 = "0.10.9"
-sha1 = "0.10.6"
-hmac = "0.12.1"
-cmac = "0.7.2"
-aes = "0.8.4"
-cfb-mode = "0.8.2"
-rsa = { version = "0.9.10", features = ["sha2", "sha1", "getrandom"] }
-p256 = { version = "0.13.2", features = ["ecdsa", "arithmetic"] }
-p384 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
-p521 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
-rand = "0.9.4"
-rand_chacha = "0.3.1"
-rand_core = "0.6.4"
+# Default features are disabled so that this crate stays usable on `no_std`
+# targets (e.g. bare-metal firmware such as COCONUT-SVSM).
+sha2 = { version = "0.10.9", default-features = false }
+sha1 = { version = "0.10.6", default-features = false }
+hmac = { version = "0.12.1", default-features = false }
+cmac = { version = "0.7.2", default-features = false }
+aes = { version = "0.8.4", default-features = false }
+cfb-mode = { version = "0.8.2", default-features = false }
+rsa = { version = "0.9.10", default-features = false, features = ["sha2", "sha1", "getrandom", "u64_digit"] }
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "arithmetic"] }
+p384 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic"] }
+p521 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic", "getrandom"] }
+rand = { version = "0.9.4", default-features = false, features = ["os_rng"] }
+rand_chacha = { version = "0.3.1", default-features = false }
+rand_core = { version = "0.6.4", default-features = false, features = ["getrandom"] }
 hex-literal = { workspace = true }
