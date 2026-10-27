@@ -6,6 +6,7 @@ members = [
     "crates/tpm2-client",
     "crates/tpm2-impl",
     "crates/tpm2-rustcrypto",
+    "testing/crypto",
 ]
 
 # Package keys that should be used by all packages.
