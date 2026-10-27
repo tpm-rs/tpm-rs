@@ -141,8 +141,5 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 /// `TPM_RC_VALUE + RC_P1`. (The to-do list's own entries, e.g. `TPM_ALG_ECSCHNORR`, are not
 /// implementation evidence: ECSCHNORR is not in `TPM_CAP_ALGS`.)
 fn is_implemented_algorithm(alg: Alg) -> bool {
-    alg != Alg::NULL
-        && crate::handler::capability::IMPLEMENTED_ALGORITHMS
-            .iter()
-            .any(|&(implemented, _)| implemented == alg)
+    alg != Alg::NULL && crate::handler::capability::is_implemented_algorithm(alg)
 }

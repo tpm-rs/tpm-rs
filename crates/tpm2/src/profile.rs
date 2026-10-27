@@ -22,7 +22,8 @@
 //! * the algorithm interface types ([`TpmiAlgHash`], [`TpmiAlgKdf`], [`TpmiAlgCipherMode`],
 //!   [`TpmiAlgSymMode`], [`TpmiAlgMacScheme`], [`TpmiAlgSigScheme`], [`TpmiEccKeyExchange`],
 //!   [`TpmiAlgPublic`] and the symmetric algorithms of [`AlgSym`]) reject algorithms that are not
-//!   in [`Profile::algorithms`], with the type's usual error;
+//!   [`Profile::implements`] (listed in [`Profile::algorithms`], SHA-512 only with
+//!   [`Profile::sha512`]), with the type's usual error;
 //! * [`TpmEccCurve`] rejects curves that are not in [`Profile::curves`] (`TPM_RC_CURVE`);
 //! * [`TpmiRsaKeyBits`] rejects key sizes that are not in [`Profile::rsa_key_bits`]
 //!   (`TPM_RC_VALUE`), and the `keyBits` of a symmetric block cipher ([`AlgSym`]) the sizes that
@@ -32,7 +33,7 @@
 //!   [`Tpm2bEncryptedSecret`], [`Tpm2bPrivate`], [`Tpm2bTemplate`] and [`Tpm2bEccParameter`])
 //!   hold at most the sizes of [`Profile::buffer_limits`] (`TPM_RC_SIZE`);
 //! * the lists bounded by `HASH_COUNT` ([`TpmlPcrSelection`] and [`TpmlDigestValues`]) hold at
-//!   most as many entries as [`Profile::algorithms`] lists hash algorithms (`TPM_RC_SIZE`; Part 2,
+//!   most as many entries as the profile implements hash algorithms (`TPM_RC_SIZE`; Part 2,
 //!   Table "Definition of TPML_PCR_SELECTION Structure": "pcrSelections\[count\]{:HASH_COUNT}"
 //!   and "#TPM_RC_SIZE | response code when *count* is greater than the possible number of
 //!   banks");
@@ -78,6 +79,20 @@ pub struct Profile {
     /// reference platform (`DefaultActivePcrBanks` in `PlatformPcr.c`) allocates the SHA-256
     /// and SHA-384 banks ([`DEFAULT_PCR_BANKS`]).
     pub default_pcr_banks: &'static [Alg],
+    /// Whether the TPM implements SHA-512. Without it, SHA-512 is not implemented even if
+    /// [`Profile::algorithms`] lists it: [`allows_algorithm`] rejects it, it does not count
+    /// towards `HASH_COUNT` and it is not a PCR bank. The TPM then has no hash larger than
+    /// SHA-384, so [`Profile::buffer_limits`] should be those of a 48-octet `TPMU_HA` (like a C
+    /// reference built without `ALG_SHA512`).
+    pub sha512: bool,
+}
+
+impl Profile {
+    /// Whether the profile implements `alg`: [`Profile::algorithms`] lists it, and it is not
+    /// SHA-512 of a profile without [`Profile::sha512`].
+    pub fn implements(&self, alg: Alg) -> bool {
+        self.algorithms.contains(&alg) && (self.sha512 || alg != Alg::SHA512)
+    }
 }
 
 /// The banks allocated by [`PcrState::default`](crate::platform::pcr::PcrState) without an
@@ -212,7 +227,7 @@ fn bitmaps(profile: &Profile) -> Result<Bitmaps, InstallError> {
     let maps = representable_bitmaps(profile).ok_or(InstallError::Unrepresentable)?;
     let mut default_pcr_banks = [0u32; 8];
     for &alg in profile.default_pcr_banks {
-        if !is_hash(alg) || !profile.algorithms.contains(&alg) {
+        if !is_hash(alg) || !profile.implements(alg) {
             return Err(InstallError::InvalidDefaultPcrBank);
         }
         set_alg_bit(&mut default_pcr_banks, alg).ok_or(InstallError::InvalidDefaultPcrBank)?;
@@ -228,7 +243,9 @@ fn bitmaps(profile: &Profile) -> Result<Bitmaps, InstallError> {
 fn representable_bitmaps(profile: &Profile) -> Option<Bitmaps> {
     let mut algorithms = [0u32; 8];
     for &alg in profile.algorithms {
-        set_alg_bit(&mut algorithms, alg)?;
+        if profile.implements(alg) {
+            set_alg_bit(&mut algorithms, alg)?;
+        }
     }
     let mut curves = [0u32; 4];
     for &curve in profile.curves {
@@ -279,7 +296,7 @@ fn limit_values(profile: &Profile) -> [usize; LIMIT_COUNT] {
         profile
             .algorithms
             .iter()
-            .filter(|&&alg| is_hash(alg))
+            .filter(|&&alg| is_hash(alg) && profile.implements(alg))
             .count(),
     ]
 }

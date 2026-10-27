@@ -314,11 +314,19 @@ pub struct CommandHandler<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, 
 /// (`CONTEXT_INTEGRITY_HASH_ALG`, reported as `TPM_PT_CONTEXT_HASH`).
 ///
 /// TPM 2.0 Part 1, "Context Integrity Protection": the algorithm "is required to have the
-/// highest security strength of any hash algorithm implemented on the TPM", i.e. SHA-512 here.
+/// highest security strength of any hash algorithm implemented on the TPM", i.e. SHA-512, or
+/// SHA-384 when the installed profile has no SHA-512 ([`tpm2::profile::Profile::sha512`]; the C
+/// references' `CONTEXT_HASH_ALGORITHM` follows `ALG_SHA512` the same way).
 /// Tickets are HMACs with this algorithm (Part 2, `TPMT_TK_*`), and the hierarchy authValue
 /// limit of `TPM2_HierarchyChangeAuth` is its digest size (Part 1, "Authorization Size
 /// Convention").
-pub(crate) const CONTEXT_INTEGRITY_HASH_ALG: TpmiAlgHash = TpmiAlgHash::Sha512;
+pub(crate) fn context_integrity_hash_alg() -> TpmiAlgHash {
+    if tpm2::profile::allows_algorithm(tpm2::Alg::SHA512) {
+        TpmiAlgHash::Sha512
+    } else {
+        TpmiAlgHash::Sha384
+    }
+}
 
 /// Returns the first `size` bytes of a Primary Seed or hierarchy proof buffer.
 ///
@@ -333,8 +341,12 @@ pub(crate) fn provisioned_secret(buf: &[u8; 64], size: u16) -> Result<&[u8], Tpm
     }
 }
 
-/// Digest size of [`CONTEXT_INTEGRITY_HASH_ALG`]: the size of every ticket digest.
+/// The largest digest size of [`context_integrity_hash_alg`] (SHA-512): the capacity of every
+/// ticket digest.
 pub(crate) const TICKET_DIGEST_SIZE: usize = 64;
+
+/// A ticket digest: an HMAC with [`context_integrity_hash_alg`].
+pub(crate) type TicketDigest = crate::owned::OwnedTpm2b<TICKET_DIGEST_SIZE>;
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -1126,7 +1138,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut obfuscation = [0u8; 16];
             kdfa_bits(
                 self.crypto(),
-                CONTEXT_INTEGRITY_HASH_ALG,
+                context_integrity_hash_alg(),
                 provisioned_secret(
                     &self.context.state.sh_proof,
                     self.context.state.sh_proof_size,
@@ -1192,7 +1204,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         hierarchy: u32,
         digest: &[u8],
         key_name: &[u8],
-    ) -> Result<[u8; TICKET_DIGEST_SIZE], TpmRc> {
+    ) -> Result<TicketDigest, TpmRc> {
         self.compute_verified_ticket_with_meta(hierarchy, 0x8022, digest, key_name, &[])
     }
 
@@ -1203,7 +1215,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         digest_or_message: &[u8],
         key_name: &[u8],
         metadata: &[u8],
-    ) -> Result<[u8; TICKET_DIGEST_SIZE], TpmRc> {
+    ) -> Result<TicketDigest, TpmRc> {
         let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy)?;
 
         let mut hmac_input = [0u8; 512];
@@ -1224,16 +1236,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = tpm2::crypto::hmac(
             self.crypto(),
-            CONTEXT_INTEGRITY_HASH_ALG,
+            context_integrity_hash_alg(),
             &proof_bytes[..proof_len],
             &hmac_input[..offset],
             &mut hmac_buf,
         )
         .map_err(|_| TpmRc::FAILURE)?;
 
-        let mut hmac_bytes = [0u8; TICKET_DIGEST_SIZE];
-        hmac_bytes.copy_from_slice(hmac_digest.digest());
-        Ok(hmac_bytes)
+        TicketDigest::new(hmac_digest.digest()).ok_or(TpmRc::FAILURE)
     }
 
     pub fn compute_hashcheck_ticket(
@@ -1241,7 +1251,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         hierarchy: Handle,
         hash_alg: TpmiAlgHash,
         digest: &[u8],
-    ) -> Result<[u8; TICKET_DIGEST_SIZE], TpmRc> {
+    ) -> Result<TicketDigest, TpmRc> {
         // The proof of a firmware-limited or SVN-limited hierarchy is unavailable
         // (`resolve_hierarchy_proof`), whatever the hierarchy check below would say.
         if let Some(rc) = crate::engine::limited_hierarchy_error(hierarchy.0) {
@@ -1273,16 +1283,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = tpm2::crypto::hmac(
             self.crypto(),
-            CONTEXT_INTEGRITY_HASH_ALG,
+            context_integrity_hash_alg(),
             &proof_bytes[..proof_len],
             &hmac_input[..offset],
             &mut hmac_buf,
         )
         .map_err(|_| TpmRc::FAILURE)?;
 
-        let mut hmac_bytes = [0u8; TICKET_DIGEST_SIZE];
-        hmac_bytes.copy_from_slice(hmac_digest.digest());
-        Ok(hmac_bytes)
+        TicketDigest::new(hmac_digest.digest()).ok_or(TpmRc::FAILURE)
     }
 
     /// Validates the `policySession` handle (`TPMI_SH_POLICY`) of a policy command.

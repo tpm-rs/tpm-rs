@@ -92,7 +92,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 )?;
                 (
                     Handle(_obj.hierarchy),
-                    Tpm2bDigest::from_bytes(&ticket_hmac).unwrap(),
+                    Tpm2bDigest::from_bytes(ticket_hmac.get_buffer()).unwrap(),
                 )
             }
             _ => (Handle::RH_NULL, Tpm2bDigest::default()),
@@ -300,7 +300,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 scheme_hash_alg,
                 cmd.digest.get_buffer(),
             )?;
-            if cmd.validation.digest().get_buffer() != ticket_hmac {
+            if cmd.validation.digest().get_buffer() != ticket_hmac.get_buffer() {
                 return Err(TpmRc::TICKET.with(Position::parameter(3)));
             }
         } else if cmd.digest.get_size() as usize != scheme_hash_alg.digest_size() {

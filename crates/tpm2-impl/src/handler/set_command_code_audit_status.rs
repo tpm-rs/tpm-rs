@@ -71,7 +71,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             && TpmiAlgHash::try_from(id).is_ok()
             && !crate::handler::capability::IMPLEMENTED_ALGORITHMS
                 .iter()
-                .any(|&(implemented, _)| implemented.id() == id)
+                .any(|&(implemented, _)| {
+                    implemented.id() == id && tpm2::profile::allows_algorithm(implemented)
+                })
         {
             return Err(TpmRc::HASH.with(Position::parameter(1)));
         }

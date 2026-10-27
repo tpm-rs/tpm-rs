@@ -75,7 +75,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             )?;
             tpm2::TpmtTkHashcheck::Hashcheck(
                 hierarchy,
-                Tpm2bDigest::from_bytes(&ticket_hmac).unwrap(),
+                Tpm2bDigest::from_bytes(ticket_hmac.get_buffer()).unwrap(),
             )
         };
 
@@ -301,7 +301,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         )?;
                         tpm2::TpmtTkHashcheck::Hashcheck(
                             hierarchy,
-                            Tpm2bDigest::from_bytes(&ticket_hmac).unwrap(),
+                            Tpm2bDigest::from_bytes(ticket_hmac.get_buffer()).unwrap(),
                         )
                     };
                     (digest_bytes, digest_len, validation)
@@ -387,8 +387,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 return Err(TpmRc::MODE.with(Position::handle(2)));
             }
 
-            // Event sequences track every implemented hash (SHA-1, SHA-256, SHA-384, SHA-512).
+            // Event sequences track every implemented hash (SHA-1, SHA-256, SHA-384 and, unless
+            // the engine's configuration excludes it, SHA-512). The state of an excluded hash
+            // is skipped (its digest stays empty and is not reported).
             for (digest, state) in digests.iter_mut().zip(seq_obj.hash_states.iter()) {
+                if !tpm2::profile::allows_algorithm(tpm2::Alg::from(state.alg)) {
+                    continue;
+                }
                 let mut state = *state;
                 state.update(final_chunk);
                 let (bytes, len) = state.finalize();
@@ -413,7 +418,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let mut results = TpmlDigestValues::default();
-        for (alg, bytes, len) in digests.iter() {
+        // Skipped (excluded) hashes have no digest.
+        for (alg, bytes, len) in digests.iter().filter(|&&(_, _, len)| len != 0) {
             let ha = TpmtHa::new(*alg, &bytes[..*len]).ok_or(TpmRc::FAILURE)?;
             results.add(&ha)?;
             // PCRExtend(): only allocated banks are extended, and changes to the TCB group

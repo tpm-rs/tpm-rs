@@ -251,7 +251,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut sym_key_iv = [0u8; 32];
         kdfa_bits(
             self.crypto(),
-            crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
+            crate::handler::context_integrity_hash_alg(),
             proof,
             b"CONTEXT",
             sequence_bytes,
@@ -294,7 +294,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<OwnedDigest, TpmRc> {
         let mut mac_ctx = HmacStream::new(
             self.crypto(),
-            crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
+            crate::handler::context_integrity_hash_alg(),
             proof,
         )
         .map_err(|_| TpmRc::FAILURE)?;

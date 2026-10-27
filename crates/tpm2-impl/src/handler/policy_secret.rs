@@ -201,7 +201,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
             let hmac_digest = tpm2::crypto::hmac(
                 self.crypto(),
-                crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
+                crate::handler::context_integrity_hash_alg(),
                 &proof_bytes[..proof_len],
                 &hmac_input[..offset],
                 &mut hmac_digest_bytes,

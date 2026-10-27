@@ -257,7 +257,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.compute_creation_ticket(parent_info.hierarchy_val, &object_name, &creation_hash)?;
         let creation_ticket = TpmtTkCreation::Creation(
             Handle(parent_info.hierarchy_val),
-            Tpm2bDigest::from_bytes(&computed_digest).unwrap(),
+            Tpm2bDigest::from_bytes(computed_digest.get_buffer()).unwrap(),
         );
 
         let rsp = responses::Create {

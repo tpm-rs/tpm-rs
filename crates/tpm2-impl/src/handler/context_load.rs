@@ -44,9 +44,6 @@ const MAX_CONTEXT_SIZE: usize = 2264;
 /// is unmarshaled, before any missing bytes (`TPM_RC_INSUFFICIENT`).
 pub(crate) const CONTEXT_DATA_CAPACITY: usize = (2 + 64) + (2 + MAX_CONTEXT_SIZE);
 
-/// Size of the context integrity HMAC (`CONTEXT_INTEGRITY_HASH_ALG`).
-const CONTEXT_INTEGRITY_DIGEST_SIZE: usize = crate::handler::TICKET_DIGEST_SIZE;
-
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
@@ -121,7 +118,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // `TPM_RC_INSUFFICIENT` for an empty or truncated blob) is returned unmodified.
         let integrity = tpm2::Tpm2bDigest::unmarshal(&mut slice).map_err(|e| e.to_rc())?;
         // The integrity value must be exactly one digest of the integrity hash.
-        if integrity.get_size() as usize != CONTEXT_INTEGRITY_DIGEST_SIZE {
+        if integrity.get_size() as usize
+            != crate::handler::context_integrity_hash_alg().digest_size()
+        {
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
         // The protected area must at least be the size of the sequence fingerprint before the
@@ -302,7 +301,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut mac_ctx = HmacStream::new(
             self.crypto(),
-            crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
+            crate::handler::context_integrity_hash_alg(),
             proof,
         )
         .map_err(|_| TpmRc::FAILURE)?;
@@ -344,7 +343,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut sym_key_iv = [0u8; 32];
         kdfa_bits(
             self.crypto(),
-            crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
+            crate::handler::context_integrity_hash_alg(),
             proof,
             b"CONTEXT",
             &sequence_bytes,

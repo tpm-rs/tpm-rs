@@ -27,6 +27,7 @@ static PROFILE: Profile = Profile {
         ecc_parameter: 32,
     },
     default_pcr_banks: &[Alg::SHA256],
+    sha512: true,
 };
 
 /// An equal profile in another static (installing it again is a no-op).
@@ -214,4 +215,21 @@ fn unrepresentable_profiles_are_rejected() {
         profile::install(&NON_HASH_BANK),
         Err(InstallError::InvalidDefaultPcrBank)
     );
+}
+
+#[test]
+fn sha512_flag_excludes_sha512() {
+    static WITH_SHA512: Profile = Profile {
+        algorithms: &[Alg::SHA256, Alg::SHA384, Alg::SHA512],
+        sha512: true,
+        ..PROFILE
+    };
+    static WITHOUT_SHA512: Profile = Profile {
+        sha512: false,
+        ..WITH_SHA512
+    };
+    assert!(WITH_SHA512.implements(Alg::SHA512));
+    assert!(!WITHOUT_SHA512.implements(Alg::SHA512));
+    assert!(WITHOUT_SHA512.implements(Alg::SHA384));
+    assert!(!WITHOUT_SHA512.implements(Alg::SHA1));
 }

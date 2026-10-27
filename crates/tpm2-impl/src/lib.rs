@@ -84,6 +84,7 @@ pub use engine::{
     command_handles_count, command_returns_handle, get_command_attribute, handle_requires_auth,
 };
 pub use error::InternalError;
+pub use handler::capability::{TPM_PROFILE, TPM_PROFILE_NO_SHA512};
 pub use hash_state::StreamingHashState;
 pub use platform_connection::SimulatorPlatformSignal;
 #[cfg(feature = "std")]

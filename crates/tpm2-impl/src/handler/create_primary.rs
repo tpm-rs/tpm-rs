@@ -198,7 +198,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.compute_creation_ticket(primary_handle.0, &name, &creation_hash)?;
         let creation_ticket = TpmtTkCreation::Creation(
             primary_handle,
-            Tpm2bDigest::from_bytes(&computed_digest).unwrap(),
+            Tpm2bDigest::from_bytes(computed_digest.get_buffer()).unwrap(),
         );
 
         let rsp = responses::CreatePrimary {

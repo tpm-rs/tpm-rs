@@ -507,7 +507,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // C marshals the full (64-bit) commit counter; the upper 48 bits are always zero here
         // because the counter is 16 bits wide.
         let cntr = u64::from(count).to_be_bytes();
-        let digest_size = COMMIT_KDF_HASH.digest_size();
+        let digest_size = commit_kdf_hash().digest_size();
 
         let mut r = [0u8; MAX_ECC_ORDER_SIZE];
         let mut iterations: u32 = 1;
@@ -518,7 +518,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 iterations += 1;
                 let mut hmac = HmacStream::new(
                     self.crypto(),
-                    COMMIT_KDF_HASH,
+                    commit_kdf_hash(),
                     &self.context.state.commit_nonce,
                 )
                 .ok()?;
@@ -555,7 +555,9 @@ const COMMIT_STRING: &[u8] = b"ECDAA Commit\0";
 
 /// The KDF hash used for commit values (`CONTEXT_INTEGRITY_HASH_ALG`, SHA-512 in the reference
 /// profile).
-const COMMIT_KDF_HASH: tpm2::TpmiAlgHash = crate::handler::CONTEXT_INTEGRITY_HASH_ALG;
+fn commit_kdf_hash() -> tpm2::TpmiAlgHash {
+    crate::handler::context_integrity_hash_alg()
+}
 
 /// Size in bytes of the largest supported curve order (NIST P-521).
 pub(crate) const MAX_ECC_ORDER_SIZE: usize = 66;

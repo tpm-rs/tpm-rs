@@ -84,10 +84,7 @@ pub(crate) fn pcr_is_state_saved(pcr: u32) -> bool {
 /// Returns `true` if `alg` is a hash algorithm implemented by this TPM, i.e. advertised in
 /// `TPM_CAP_ALGS` (the `HASH_COUNT` algorithms enumerated by `CryptHashGetAlgByIndex`).
 fn is_implemented_hash(alg: TpmiAlgHash) -> bool {
-    let alg = tpm2::Alg::from(alg);
-    crate::handler::capability::IMPLEMENTED_ALGORITHMS
-        .iter()
-        .any(|&(implemented, _)| implemented == alg)
+    crate::handler::capability::is_implemented_algorithm(tpm2::Alg::from(alg))
 }
 
 /// Iterates over the hash algorithms implemented by this TPM that have a PCR bank, in

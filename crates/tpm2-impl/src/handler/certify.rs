@@ -153,7 +153,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         hierarchy: u32,
         name: &OwnedName,
         creation_hash: &tpm2::Tpm2bDigest,
-    ) -> Result<[u8; crate::handler::TICKET_DIGEST_SIZE], TpmRc> {
+    ) -> Result<crate::handler::TicketDigest, TpmRc> {
         let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy)?;
         let proof = &proof_bytes[..proof_len];
 
@@ -163,7 +163,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let mut hmac_ctx = tpm2::crypto::HmacStream::new(
             self.crypto(),
-            crate::handler::CONTEXT_INTEGRITY_HASH_ALG,
+            crate::handler::context_integrity_hash_alg(),
             proof,
         )
         .map_err(|_| TpmRc::FAILURE)?;
@@ -175,9 +175,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mac = hmac_ctx
             .finalize(&mut mac_buf)
             .map_err(|_| TpmRc::FAILURE)?;
-        let mut out = [0u8; crate::handler::TICKET_DIGEST_SIZE];
-        out.copy_from_slice(mac.digest());
-        Ok(out)
+        crate::handler::TicketDigest::new(mac.digest()).ok_or(TpmRc::FAILURE)
     }
 
     /// Handles the [TpmCc::CertifyCreation] (`0x14a`) command.
@@ -272,7 +270,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &certified_obj.name,
             &cmd.creation_hash,
         )?;
-        if cmd.creation_ticket.digest().get_buffer() != expected_digest {
+        if cmd.creation_ticket.digest().get_buffer() != expected_digest.get_buffer() {
             return Err(TpmRc::TICKET.with(Position::parameter(4)));
         }
 

@@ -1600,12 +1600,27 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     }
 
     /// Creates a new [`TpmEngine`] over `platform` with a default (unmanufactured)
-    /// [`GlobalState`].
+    /// [`GlobalState`] and the profile [`crate::TPM_PROFILE`].
     pub fn new(platform: TpmPlatform<'a, C, S, T, R>) -> Result<Self, InternalError> {
+        Self::with_profile(platform, &crate::handler::capability::TPM_PROFILE)
+    }
+
+    /// Creates a new [`TpmEngine`] over `platform` with a default (unmanufactured)
+    /// [`GlobalState`] and the unmarshal profile `profile`: [`crate::TPM_PROFILE`], or
+    /// [`crate::TPM_PROFILE_NO_SHA512`] for a TPM without SHA-512 (like a C reference built without
+    /// `ALG_SHA512`: SHA-512 is not in `TPM_CAP_ALGS` nor a PCR bank, and SHA-384 is the context
+    /// integrity hash and the largest digest).
+    ///
+    /// The profile is installed process-wide ([`tpm2::profile::install`]): every engine of a
+    /// process must use the same profile, otherwise this fails with
+    /// [`InternalError::ProfileConflict`].
+    pub fn with_profile(
+        platform: TpmPlatform<'a, C, S, T, R>,
+        profile: &'static tpm2::profile::Profile,
+    ) -> Result<Self, InternalError> {
         // Commands are unmarshaled per this TPM's profile (algorithms, curves, RSA key sizes and
         // RSA-dependent buffer sizes), not per the `tpm2` features of the build.
-        tpm2::profile::install(&crate::handler::capability::TPM_PROFILE)
-            .map_err(|_| InternalError::ProfileConflict)?;
+        tpm2::profile::install(profile).map_err(|_| InternalError::ProfileConflict)?;
         Ok(Self {
             platform,
             state: GlobalState::default(),
