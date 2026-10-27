@@ -1109,3 +1109,54 @@ fn test_policy_secret_handles_rejects_rh_null() {
         })
     );
 }
+
+#[test]
+fn test_ntc2_cfg_struct_marshals_18_raw_bytes_in_field_order() {
+    let bytes: [u8; 18] = core::array::from_fn(|i| i as u8 + 1);
+    let cfg = Ntc2CfgStruct::from_bytes(bytes);
+    assert_eq!(cfg.i2c_loc1_2, 1);
+    assert_eq!(cfg.alt_cfg, 3);
+    assert_eq!(cfg.cfg_j, 16);
+    assert_eq!(cfg.is_valid, 17);
+    assert_eq!(cfg.is_locked, 18);
+    assert_eq!(cfg.to_bytes(), bytes);
+
+    let mut buf = [0u8; Ntc2CfgStruct::MAX_SIZE];
+    assert_eq!(cfg.marshal(&mut buf), 18);
+    assert_eq!(buf, bytes);
+    let mut src = &[&bytes[..], &[0xEE]].concat()[..];
+    assert_eq!(Ntc2CfgStruct::unmarshal(&mut src).unwrap(), cfg);
+    assert_eq!(src, [0xEE]);
+}
+
+#[test]
+fn test_ntc2_commands_marshal_and_unmarshal() {
+    let cfg = Ntc2CfgStruct::from_bytes([0x5A; 18]);
+    let pre = Ntc2PreConfig { pre_config: cfg };
+    let mut buf = [0u8; Ntc2PreConfig::MAX_SIZE];
+    assert_eq!(pre.marshal(&mut buf), 18);
+    let mut src = &buf[..];
+    assert_eq!(
+        Ntc2PreConfig::unmarshal_with_handles([], &mut src).unwrap(),
+        pre
+    );
+    assert!(pre.handles().is_empty());
+
+    // A truncated configuration is TPM_RC_INSUFFICIENT on parameter 1.
+    let mut short = &buf[..17];
+    assert_eq!(
+        Ntc2PreConfig::unmarshal_with_handles([], &mut short),
+        Err(UnmarshalError::INSUFFICIENT.in_parameter(1))
+    );
+
+    assert_eq!(Ntc2LockPreConfig.marshal(&mut []), 0);
+    assert_eq!(Ntc2GetConfig.marshal(&mut []), 0);
+    let rsp = responses::Ntc2GetConfig { pre_config: cfg };
+    let mut buf = [0u8; responses::Ntc2GetConfig::MAX_SIZE];
+    assert_eq!(rsp.marshal(&mut buf), 18);
+    let mut src = &buf[..];
+    assert_eq!(
+        responses::Ntc2GetConfig::unmarshal_with_handles([], &mut src).unwrap(),
+        rsp
+    );
+}

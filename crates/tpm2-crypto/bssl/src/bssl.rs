@@ -1617,6 +1617,67 @@ pub fn rsa_private_key_to_prime_p(
     Ok(p_len)
 }
 
+/// Writes the CRT form `p | q | dP | dQ | qInv` of a PKCS#8 DER RSA private key, where `p` is
+/// the larger prime, `dP = d mod (p - 1)`, `dQ = d mod (q - 1)` and `qInv = q^-1 mod p`, each
+/// big-endian and zero-padded to the byte size of `p` (see
+/// `tpm2::crypto::Asymmetric::rsa_private_key_to_crt`). Returns the total length.
+pub fn rsa_private_key_to_crt(
+    private_key_der: &[u8],
+    crt_out: &mut [u8],
+) -> Result<usize, BsslError> {
+    let rsa = RsaKey::from_private_key_der(private_key_der)?;
+    // SAFETY: `rsa.as_ptr()` is a valid private `RSA` key; the getters return borrowed
+    // pointers (or NULL) that live as long as `rsa`.
+    let (p, q, d) = unsafe {
+        (
+            bssl_sys::RSA_get0_p(rsa.as_ptr()),
+            bssl_sys::RSA_get0_q(rsa.as_ptr()),
+            bssl_sys::RSA_get0_d(rsa.as_ptr()),
+        )
+    };
+    if p.is_null() || q.is_null() || d.is_null() {
+        return Err(BsslError::InvalidData);
+    }
+    // SAFETY: `p` and `q` are valid non-null `BIGNUM`s.
+    let (p, q) = if unsafe { bssl_sys::BN_cmp(p, q) } < 0 {
+        (q, p)
+    } else {
+        (p, q)
+    };
+    let ctx = BnCtx::new()?;
+    let one = Bignum::from_u32(1)?;
+    let (pm1, qm1) = (Bignum::new()?, Bignum::new()?);
+    let (dp, dq, qinv) = (Bignum::new()?, Bignum::new()?, Bignum::new()?);
+    // SAFETY: valid `BIGNUM` and `BN_CTX` pointers; the outputs are distinct from the inputs.
+    let ok = unsafe {
+        bssl_sys::BN_sub(pm1.as_ptr(), p, one.as_ptr()) == 1
+            && bssl_sys::BN_sub(qm1.as_ptr(), q, one.as_ptr()) == 1
+            && bssl_sys::BN_div(ptr::null_mut(), dp.as_ptr(), d, pm1.as_ptr(), ctx.as_ptr()) == 1
+            && bssl_sys::BN_div(ptr::null_mut(), dq.as_ptr(), d, qm1.as_ptr(), ctx.as_ptr()) == 1
+    };
+    if !ok {
+        return Err(BsslError::Internal);
+    }
+    // SAFETY: valid `BIGNUM` and `BN_CTX` pointers; NULL if `q` is not invertible mod `p`.
+    if unsafe { bssl_sys::BN_mod_inverse(qinv.as_ptr(), q, p, ctx.as_ptr()) }.is_null() {
+        return Err(BsslError::InvalidData);
+    }
+    // SAFETY: `p` is a valid non-null `BIGNUM`.
+    let size = unsafe { bssl_sys::BN_num_bytes(p) as usize };
+    if crt_out.len() < 5 * size {
+        return Err(BsslError::BufferTooSmall);
+    }
+    let values = [p, q, dp.as_ptr(), dq.as_ptr(), qinv.as_ptr()];
+    for (value, out) in values.into_iter().zip(crt_out.chunks_exact_mut(size)) {
+        // SAFETY: `out` is valid for `size` bytes and `value` is a valid `BIGNUM` (every value
+        // is below `p`, so it fits).
+        if unsafe { bssl_sys::BN_bn2bin_padded(out.as_mut_ptr(), size, value) } != 1 {
+            return Err(BsslError::Internal);
+        }
+    }
+    Ok(5 * size)
+}
+
 // ============================================================================
 // Elliptic Curve Safe Bindings over `bssl-sys` (P-256, P-384, P-521, BN-P256)
 // ============================================================================

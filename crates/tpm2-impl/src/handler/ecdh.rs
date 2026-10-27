@@ -86,6 +86,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let len = self.reference_ecc_new_key_pair(curve, &mut de_buf, &mut qe_buf)?;
             (2 * len, len)
         };
+        // (`CryptEccNewKeyPair()` tests ECDH before it generates the key.)
+        #[cfg(not(feature = "reference-rng"))]
+        self.do_self_test(tpm2::Alg::ECDH)?;
         #[cfg(not(feature = "reference-rng"))]
         let (pub_len, priv_len) = self
             .crypto()

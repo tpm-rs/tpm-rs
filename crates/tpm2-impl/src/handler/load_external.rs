@@ -1,3 +1,4 @@
+use crate::handler::rsa_sensitive::{RSA_PRIVATE_SIZE, split_sensitive_value};
 use crate::handler::{CommandHandler, TransientObject};
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
@@ -164,8 +165,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
-    /// Validates the request hierarchy rules (Owner, Endorsement, Platform, or Null)
-    /// and checks attribute constraints on loaded private parts.
+    /// Validates the request hierarchy rules and checks attribute constraints on loaded private
+    /// parts (C `TPM2_LoadExternal`):
+    ///
+    /// 1. The hierarchy must be available (`HierarchyIsEnabled`, [`TpmEngine::validate_hierarchy`]:
+    ///    its base hierarchy enabled, and the additional secret of a firmware-limited or
+    ///    SVN-limited hierarchy available), else `TPM_RC_HIERARCHY` + `hierarchy`.
+    /// 2. An object with a sensitive area can only be loaded in `TPM_RH_NULL`
+    ///    (`TPM_RC_HIERARCHY`) and must have `fixedTPM`, `fixedParent` and `restricted` CLEAR
+    ///    (`TPM_RC_ATTRIBUTES` + `inPublic`).
+    /// 3. `firmwareLimited` and `svnLimited` must be CLEAR (`TPM_RC_ATTRIBUTES` + `inPublic`),
+    ///    also for a public-only object: TPM 2.0 Part 2, TPMA_OBJECT Bit[8] *firmwareLimited* and
+    ///    Bit[9] *svnLimited*, "External: shall be CLEAR" (unconditionally, unlike *fixedTPM*'s
+    ///    "if both public and sensitive portions are loaded"). The TCG references accept them on a
+    ///    public-only object (they validate the attributes only with a sensitive area), which the
+    ///    differential tests fix (`bug-fix-svn-fw-limited-load-external.patch`).
+    ///
+    /// [`TpmEngine::validate_hierarchy`]: crate::TpmEngine
     fn validate_load_external_hierarchy(
         &self,
         hierarchy: u32,
@@ -173,32 +189,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         public_struct: &TpmtPublic<'_>,
     ) -> Result<(), TpmRc> {
         let param_err = TpmRc::HIERARCHY.with(Position::parameter(3));
-        if hierarchy == Handle::RH_OWNER.0 {
-            if !self.context.state.sh_enable {
-                return Err(param_err);
-            }
-        } else if hierarchy == Handle::RH_ENDORSEMENT.0 {
-            if !self.context.state.eh_enable {
-                return Err(param_err);
-            }
-        } else if hierarchy == Handle::RH_PLATFORM.0 {
-            // Platform hierarchy is always enabled.
-        } else if hierarchy == Handle::RH_NULL.0 {
-            // Null hierarchy is always enabled.
-        } else {
+        if !self.context.hierarchy_is_enabled(hierarchy) {
             return Err(param_err);
         }
-
+        let attrs = public_struct.object_attributes;
         if in_private_present {
             if hierarchy != Handle::RH_NULL.0 {
                 return Err(param_err);
             }
-            let attrs = public_struct.object_attributes;
             if attrs.intersects(
                 TpmaObject::FIXED_TPM | TpmaObject::FIXED_PARENT | TpmaObject::RESTRICTED,
             ) {
                 return Err(TpmRc::ATTRIBUTES.with(Position::parameter(2)));
             }
+        }
+        if attrs.intersects(TpmaObject::FIRMWARE_LIMITED | TpmaObject::SVN_LIMITED) {
+            return Err(TpmRc::ATTRIBUTES.with(Position::parameter(2)));
         }
         Ok(())
     }
@@ -235,7 +241,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ///
     /// Only the conversions needed to use the key remain: an RSA private exponent is still
     /// computed from the prime (`CryptRsaLoadPrivateExponent`, bare `TPM_RC_BINDING` on
-    /// failure), and an ECC scalar is left-padded to the curve size. A sensitive type that does
+    /// failure; the sensitive value may also be the CRT form that this TPM stores under
+    /// fixedTPM parents, see `rsa_sensitive`), and an ECC scalar is left-padded to the curve
+    /// size. A sensitive type that does
     /// not match the public type is still rejected (`TPM_RC_TYPE`).
     pub(crate) fn import_sensitive_unvalidated(
         &self,
@@ -253,10 +261,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
         match (&public_struct.parms_and_id, &sensitive_struct.sensitive) {
             (PublicParmsAndId::Rsa(rsa_parms, rsa_unique), TpmuSensitiveComposite::Rsa(p)) => {
+                // The prime or the CRT form (`rsa_sensitive`); any other size is a binding error
+                // (`CryptoRsa_LoadPrivateExponent()`).
+                let (prime, crt) =
+                    split_sensitive_value(p.get_buffer(), usize::from(rsa_unique.get_size()))
+                        .ok_or(TpmRc::BINDING.to_rc())?;
                 // Exp mapped every failure (`InvalidData` included) to `TPM_RC_BINDING`.
-                match self.crypto().rsa_import_private_key(
+                let len = match self.crypto().rsa_import_private_key(
                     rsa_unique.get_buffer(),
-                    p.get_buffer(),
+                    prime,
                     if rsa_parms.exponent == 0 {
                         65537
                     } else {
@@ -264,9 +277,29 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     },
                     actual_private_key,
                 ) {
-                    Ok(Some(len)) => Ok(len),
-                    Ok(None) | Err(_) => Err(TpmRc::BINDING.to_rc()),
+                    Ok(Some(len)) => len,
+                    Ok(None) | Err(_) => return Err(TpmRc::BINDING.to_rc()),
+                };
+                if !self.rsa_primes_in_range(&actual_private_key[..len], rsa_unique.get_buffer()) {
+                    return Err(TpmRc::BINDING.to_rc());
                 }
+                // The reference uses the stored CRT values without checking them (only this TPM
+                // can have produced the blob). TPM 2.0 Part 3, TPM2_Load: "Before use, a loaded
+                // object shall be checked to validate that the public and sensitive portions
+                // are properly linked, cryptographically. ... If the parts of the object are not
+                // properly linked, the TPM shall return `TPM_RC_BINDING`." Here the key is
+                // rebuilt from the prime (whose pairing with the modulus is checked), so the
+                // other values must be those of that key.
+                if crt {
+                    let mut expected = [0u8; RSA_PRIVATE_SIZE];
+                    let expected_len = self
+                        .rsa_sensitive_value(&actual_private_key[..len], true, &mut expected)?
+                        .ok_or(TpmRc::BINDING.to_rc())?;
+                    if expected[..expected_len] != *p.get_buffer() {
+                        return Err(TpmRc::BINDING.to_rc());
+                    }
+                }
+                Ok(len)
             }
             (PublicParmsAndId::Ecc(ecc_parms, _), TpmuSensitiveComposite::Ecc(d)) => {
                 let param_size = match ecc_parms.curve_id {
@@ -352,6 +385,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         Ok(buf.len())
                     } else {
                         // Exp mapped every failure (`InvalidData` included) to `TPM_RC_BINDING`.
+                        // Both primes must also be in the acceptable range (`rsa_sensitive`).
                         match self.crypto().rsa_import_private_key(
                             rsa_unique.get_buffer(),
                             rsa_private.get_buffer(),
@@ -362,8 +396,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                             },
                             actual_private_key,
                         ) {
-                            Ok(Some(len)) => Ok(len),
-                            Ok(None) | Err(_) => Err(TpmRc::BINDING.to_rc()),
+                            Ok(Some(len))
+                                if self.rsa_primes_in_range(
+                                    &actual_private_key[..len],
+                                    rsa_unique.get_buffer(),
+                                ) =>
+                            {
+                                Ok(len)
+                            }
+                            Ok(_) | Err(_) => Err(TpmRc::BINDING.to_rc()),
                         }
                     }
                 } else {

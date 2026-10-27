@@ -1068,6 +1068,24 @@ impl TpmCc {
     pub const VEND: Self = Self::new(0x20000000);
     #[doc(alias = "TPM_CC_Vendor_TCG_Test")]
     pub const VendorTcgTest: Self = Self::new(Self::VEND.code());
+    /// Nuvoton `NTC2_PreConfig` (`CC_VEND + 0x211`; not in the TPM 2.0 specification, as
+    /// emulated by `ibmswtpm2`).
+    #[doc(alias = "NTC2_CC_PreConfig")]
+    pub const NTC2PreConfig: Self = Self::new(Self::VEND.code() | 0x0211);
+    /// Nuvoton `NTC2_LockPreConfig` (`CC_VEND + 0x212`; not in the TPM 2.0 specification, as
+    /// emulated by `ibmswtpm2`).
+    #[doc(alias = "NTC2_CC_LockPreConfig")]
+    pub const NTC2LockPreConfig: Self = Self::new(Self::VEND.code() | 0x0212);
+    /// Nuvoton `NTC2_GetConfig` (`CC_VEND + 0x213`; not in the TPM 2.0 specification, as
+    /// emulated by `ibmswtpm2`).
+    #[doc(alias = "NTC2_CC_GetConfig")]
+    pub const NTC2GetConfig: Self = Self::new(Self::VEND.code() | 0x0213);
+
+    /// Returns whether this is a vendor-specific command code (the `V` bit,
+    /// [`TpmCc::VEND`], is SET).
+    pub const fn is_vendor(self) -> bool {
+        self.code() & Self::VEND.code() != 0
+    }
 }
 
 impl From<u32> for TpmCc {

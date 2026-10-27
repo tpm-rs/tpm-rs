@@ -17,8 +17,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ///
     /// # Description
     /// This command allows setting of the authorization policy for the lockout (`lockoutPolicy`),
-    /// the platform hierarchy (`platformPolicy`), the storage hierarchy (`ownerPolicy`), and the
-    /// endorsement hierarchy (`endorsementPolicy`).
+    /// the platform hierarchy (`platformPolicy`), the storage hierarchy (`ownerPolicy`), the
+    /// endorsement hierarchy (`endorsementPolicy`) and the implemented Authenticated Countdown
+    /// Timers (the ACT-specific `authPolicy`, see [`crate::act`]).
     ///
     /// # Spec Citation
     /// TCG TPM 2.0 Library Specification, Part 3: Commands, Section 24.3 (TPM2_SetPrimaryPolicy).
@@ -48,7 +49,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             if !self.context.state.ph_enable {
                 return Err(TpmRc::HIERARCHY.with(Position::handle(1)));
             }
-        } else if auth_handle != Handle::RH_LOCKOUT.0 {
+        } else if auth_handle != Handle::RH_LOCKOUT.0
+            && !crate::act::is_implemented_act(auth_handle)
+        {
             return Err(TpmRc::VALUE.with(Position::handle(1)));
         }
 
@@ -88,6 +91,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else if auth_handle == Handle::RH_LOCKOUT.0 {
             self.context.state.lockout_policy = policy;
             self.context.state.lockout_alg = cmd.hash_alg;
+        } else if let Some(index) = crate::act::act_index(auth_handle) {
+            // The ACT policies are orderly data, saved by TPM2_Shutdown(TPM_SU_STATE) and kept by
+            // TPM Resume only (Part 1, "Authenticated Countdown Timer (ACT)": "The *authPolicy*
+            // of an ACT is initialized to an Empty Policy by TPM Reset or TPM Restart but is
+            // preserved during TPM Resume"), so changing one clears the orderly state.
+            self.nv_clear_orderly()?;
+            self.context.state.act.policies[index] = crate::act::ActPolicy {
+                hash_alg: cmd.hash_alg,
+                auth_policy: policy,
+            };
         }
 
         self.context.state.state_saved = false;

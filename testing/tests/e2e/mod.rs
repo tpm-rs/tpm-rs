@@ -9,8 +9,12 @@
 
 use testing::{_common, test_utils};
 
+mod act_capability;
+mod act_countdown;
+mod act_set_timeout;
 mod activate_credential;
 mod activate_credential_secret;
+mod algorithm_self_tests;
 mod attestation_key_validation;
 mod attestation_orderly_state;
 mod attestation_privacy;
@@ -80,6 +84,7 @@ mod load_external_sensitive_validation;
 mod load_validation;
 mod make_credential;
 mod no_sessions_commands;
+mod ntc2_vendor_commands;
 mod nv_authorization;
 mod nv_availability;
 mod nv_capacity;
@@ -137,6 +142,8 @@ mod reset_determinism;
 mod rewrap;
 mod rsa_decrypt_ciphertext;
 mod rsa_encrypt_decrypt;
+mod rsa_prime_range;
+mod rsa_sensitive_crt_form;
 mod seal_unseal;
 mod self_test_commands;
 mod sensitive_area_encoding;
@@ -171,5 +178,7 @@ mod tickets;
 mod transient_handle_numbering;
 mod transient_object_capacity;
 mod unmarshal_error_positions;
+mod vendor_command_capabilities;
+mod vendor_tcg_test;
 mod verify_signature;
 mod wrapped_digest_size_limit;

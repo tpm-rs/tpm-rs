@@ -1,0 +1,38 @@
+svn-fw-limited-evict-control: TPM2_EvictControl rejects objects of limited hierarchies with TPM_RC_ATTRIBUTES
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, version 185, TPM2_EvictControl): "If
+*objectHandle* references a Transient Object: 1. The TPM shall return
+`TPM_RC_ATTRIBUTES` if 1. it is in the hierarchy of `TPM_RH_NULL` or a
+firmware-limited or SVN-limited hierarchy, or 2. the *stClear* is SET in the
+object or in an ancestor key." (Part 1, "EvictControl of objects in
+firmware-limited and SVN-limited hierarchies": "Objects in a firmware-limited
+or SVN-limited hierarchy (including objects without
+*firmwareLimited/svnLimited* SET), cannot be made persistent by
+`TPM2_EvictControl()`.")
+
+The reference returns TPM_RC_HIERARCHY + RC_EvictControl_objectHandle for an
+object of a firmware-limited or SVN-limited hierarchy (the response code the
+specification reserves for an object "not in the proper hierarchy as
+determined by *auth*"). tpm-rs returns TPM_RC_ATTRIBUTES +
+RC_EvictControl_objectHandle, as specified; the patch changes the reference's
+response code accordingly.
+diff --git a/TPMCmd/tpm/src/command/Context/EvictControl.c b/TPMCmd/tpm/src/command/Context/EvictControl.c
+--- a/TPMCmd/tpm/src/command/Context/EvictControl.c
++++ b/TPMCmd/tpm/src/command/Context/EvictControl.c
+@@ -34,9 +34,13 @@ TPM2_EvictControl(EvictControl_In* in  // IN: input parameter list
+ 
+     // Objects in a firmware-limited or SVN-limited hierarchy cannot be made
+     // persistent.
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // TPM 2.0 Part 3, TPM2_EvictControl: "The TPM shall return
++    // TPM_RC_ATTRIBUTES if it is in the hierarchy of TPM_RH_NULL or a
++    // firmware-limited or SVN-limited hierarchy".
+     if(HierarchyIsFirmwareLimited(evictObject->hierarchy)
+        || HierarchyIsSvnLimited(evictObject->hierarchy))
+-        return TPM_RCS_HIERARCHY + RC_EvictControl_objectHandle;
++        return TPM_RCS_ATTRIBUTES + RC_EvictControl_objectHandle;
+ 
+     // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
+     // public-only objects may be made persistent since revision 185 of Part 3

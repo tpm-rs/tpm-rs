@@ -30,7 +30,8 @@
 //! - `capability` (e.g., [`GetCapability`])
 //! - `nv_storage` (e.g., [`NVDefineSpace`], [`NVRead`])
 //! - `attached_components` (e.g., [`ACGetCapability`])
-//! - `vendor` (Vendor-specific command placeholders, e.g., [`VendorTcgTest`])
+//! - `vendor` (Vendor-specific commands: [`VendorTcgTest`] and the Nuvoton
+//!   `NTC2_*` commands emulated by `ibmswtpm2`, e.g., [`Ntc2GetConfig`])
 //!
 //! The response type of each command is available in the [`responses`] module
 //! under the command's name (e.g., [`responses::GetRandom`] for [`GetRandom`]).
@@ -295,7 +296,7 @@ pub use {
     startup::{Init, Shutdown, Startup},
     symmetric::{EncryptDecrypt, EncryptDecrypt2, HMAC, Hash},
     testing::{GetTestResult, IncrementalSelfTest, SelfTest},
-    vendor::VendorTcgTest,
+    vendor::{Ntc2CfgStruct, Ntc2GetConfig, Ntc2LockPreConfig, Ntc2PreConfig, VendorTcgTest},
 };
 
 /// Response [`Message`] types corresponding to commands in [`crate::commands`].
@@ -370,5 +371,6 @@ pub mod responses {
     pub use super::symmetric::HashRsp as Hash;
     pub use super::testing::GetTestResultRsp as GetTestResult;
     pub use super::testing::IncrementalSelfTestRsp as IncrementalSelfTest;
+    pub use super::vendor::Ntc2GetConfigRsp as Ntc2GetConfig;
     pub use super::vendor::VendorTcgTestRsp as VendorTcgTest;
 }

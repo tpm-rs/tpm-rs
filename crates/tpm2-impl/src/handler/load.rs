@@ -10,10 +10,10 @@ use tpm2::commands::Load;
 use tpm2::commands::responses;
 use tpm2::errors::{Position, TpmRc};
 
+use crate::self_test::kdfa_bits;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
+use tpm2::crypto::{CryptoProvider, Direction, Rng};
 use tpm2::{Tpm2bPrivate, TpmaObject, TpmiAlgHash, TpmtSensitive};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -203,7 +203,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let parent_digest_size = parent_name_alg.digest_size();
         let parent_bits = (parent_digest_size * 8) as u32;
         kdfa_bits(
-            self.crypto(),
+            &self.crypto(),
             parent_name_alg,
             parent_seed_val,
             b"INTEGRITY",
@@ -214,12 +214,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )
         .map_err(|_| TpmRc::FAILURE)?;
 
-        let mut hmac_ctx = HmacStream::new(
-            self.crypto(),
-            parent_name_alg,
-            &integrity_key[..parent_digest_size],
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
+        let mut hmac_ctx = self
+            .crypto()
+            .hmac_stream(parent_name_alg, &integrity_key[..parent_digest_size])
+            .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(iv_and_enc).map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx
             .update(object_name.get_buffer())
@@ -254,7 +252,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut sym_key_buf = [0u8; 32];
         let sym_key_len = (sym_key_bits / 8) as usize;
         kdfa_bits(
-            self.crypto(),
+            &self.crypto(),
             parent_name_alg,
             parent_seed_val,
             b"STORAGE",

@@ -154,19 +154,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         name: &OwnedName,
         creation_hash: &tpm2::Tpm2bDigest,
     ) -> Result<crate::handler::TicketDigest, TpmRc> {
-        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy)?;
-        let proof = &proof_bytes[..proof_len];
+        let (proof, _) = self.resolve_hierarchy_proof(hierarchy)?;
+        let proof = proof.as_bytes();
 
         let tag_bytes = 0x8021u16.to_be_bytes();
         let name_bytes = name.get_buffer();
         let hash_bytes = creation_hash.get_buffer();
 
-        let mut hmac_ctx = tpm2::crypto::HmacStream::new(
-            self.crypto(),
-            crate::handler::context_integrity_hash_alg(),
-            proof,
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
+        let mut hmac_ctx = self
+            .crypto()
+            .hmac_stream(crate::handler::context_integrity_hash_alg(), proof)
+            .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(&tag_bytes).map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(name_bytes).map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(hash_bytes).map_err(|_| TpmRc::FAILURE)?;
@@ -258,11 +256,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 5. Verify the creation ticket (`TicketComputeCreation`). The ticket is recomputed for the
         //    hierarchy named in the ticket itself; its tag and hierarchy value were already
         //    validated when unmarshaling `TPMT_TK_CREATION`. The ticket's proof is obtained
-        //    first, so a firmware-limited/SVN-limited ticket hierarchy fails with its error
-        //    before that (`limited_hierarchy_error`).
-        if let Some(rc) = crate::engine::limited_hierarchy_error(cmd.creation_ticket.hierarchy().0)
-        {
-            return Err(rc.to_rc());
+        //    first, so a firmware-limited/SVN-limited ticket hierarchy whose additional secret is
+        //    unavailable fails with its error (`TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`) before
+        //    that.
+        if crate::hierarchy::is_limited(cmd.creation_ticket.hierarchy().0) {
+            self.resolve_hierarchy_proof(cmd.creation_ticket.hierarchy().0)?;
         }
         let certified_obj = self.resolve_object(object_handle.0, Position::handle(2))?;
         let expected_digest = self.compute_creation_ticket(

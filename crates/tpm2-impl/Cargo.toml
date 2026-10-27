@@ -65,9 +65,17 @@ min-evict-objects-9 = []
 # `NV_MEMORY_SIZE` (the NV space accounting) is 32768 or 131072 (default: 16384).
 nv-memory-size-32k = []
 nv-memory-size-128k = []
+# The Authenticated Countdown Timer `TPM_RH_ACT_A` is implemented in addition
+# to `TPM_RH_ACT_0` (default: only `TPM_RH_ACT_0`).
+act-a = []
 # `TPM2_ECC_Parameters` reports `TPM_ALG_NULL` as the recommended KDF of every
 # curve (default: KDF1_SP800_56A with the hash of the curve's strength).
 ecc-parameters-null-kdf = []
+# The Nuvoton vendor commands `NTC2_PreConfig`, `NTC2_LockPreConfig` and
+# `NTC2_GetConfig` (`CC_VEND + 0x211..=0x213`, not in the TPM 2.0 specification)
+# as emulated by `ibmswtpm2` (built with `TPM_NUVOTON`), in addition to
+# `TPM2_Vendor_TCG_Test` (default: only `TPM2_Vendor_TCG_Test`).
+ntc2-vendor-commands = []
 
 
 

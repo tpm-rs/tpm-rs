@@ -64,6 +64,7 @@ target-mstpm20 = [
     "differential",
     "tpm2/tpma-object-fixed-firmware",
     "tpm2-impl/max-context-size-2168",
+    "tpm2-impl/act-a",
 ]
 
 # The TCG reference implementation version 185 (the TCG-internal
@@ -88,6 +89,8 @@ target-ibmswtpm2 = [
     "tpm2-impl/max-context-size-2680",
     "tpm2-impl/min-evict-objects-7",
     "tpm2-impl/nv-memory-size-32k",
+    "tpm2-impl/ntc2-vendor-commands",
+    "tpm2-impl/act-a",
 ]
 
 # With a target: `differential::inproc::InProcReferences`, the C reference TPM

@@ -59,16 +59,19 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod act;
 pub mod command_audit;
 mod error;
 mod handle_checks;
 pub mod handler;
 pub mod hash_state;
+mod hierarchy;
 mod modular;
 pub mod owned;
 pub mod platform_connection;
 #[cfg(feature = "reference-rng")]
 pub mod reference_rng;
+pub mod self_test;
 pub mod storage;
 #[cfg(test)]
 pub mod test_support;
@@ -97,6 +100,11 @@ pub use tpm2::platform::TpmPlatform;
 /// (`KDF1_SP800_56A` with the hash of the curve's strength); without (the
 /// `ecc-parameters-null-kdf` feature) it reports `TPM_ALG_NULL` for every curve.
 pub const ECC_PARAMETERS_REPORT_KDF: bool = !cfg!(feature = "ecc-parameters-null-kdf");
+
+/// Whether the TPM implements the Nuvoton `NTC2_PreConfig`, `NTC2_LockPreConfig` and
+/// `NTC2_GetConfig` vendor commands of `ibmswtpm2` (the `ntc2-vendor-commands` feature) in
+/// addition to `TPM2_Vendor_TCG_Test`.
+pub const NTC2_VENDOR_COMMANDS: bool = cfg!(feature = "ntc2-vendor-commands");
 
 pub mod pcr {
     pub use tpm2::platform::PcrState;

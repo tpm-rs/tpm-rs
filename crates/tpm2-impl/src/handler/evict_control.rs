@@ -193,7 +193,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         is_st_clear: bool,
         ancestor_has_st_clear: bool,
     ) -> Result<(), TpmRc> {
-        if is_st_clear || ancestor_has_st_clear || object_hierarchy == Handle::RH_NULL.0 {
+        // TPM 2.0 Part 3, TPM2_EvictControl: "The TPM shall return `TPM_RC_ATTRIBUTES` if it is
+        // in the hierarchy of `TPM_RH_NULL` or a firmware-limited or SVN-limited hierarchy, or
+        // the *stClear* is SET in the object or in an ancestor key". Part 1, "EvictControl of
+        // objects in firmware-limited and SVN-limited hierarchies": "Objects in a
+        // firmware-limited or SVN-limited hierarchy (including objects without
+        // *firmwareLimited/svnLimited* SET), cannot be made persistent". (The TCG references
+        // return `TPM_RC_HIERARCHY` for the limited hierarchies, which the differential tests
+        // fix: `bug-fix-svn-fw-limited-evict-control.patch`.)
+        if is_st_clear
+            || ancestor_has_st_clear
+            || object_hierarchy == Handle::RH_NULL.0
+            || crate::hierarchy::is_limited(object_hierarchy)
+        {
             return Err(TpmRc::ATTRIBUTES.with(Position::handle(2)));
         }
 

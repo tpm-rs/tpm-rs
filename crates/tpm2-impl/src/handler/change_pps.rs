@@ -70,7 +70,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Flush loaded objects in platform hierarchy
         for (i, slot) in self.context.state.transient_objects.iter_mut().enumerate() {
             if let Some(obj) = slot
-                && obj.hierarchy == Handle::RH_PLATFORM.0
+                && crate::hierarchy::normalize(obj.hierarchy) == Handle::RH_PLATFORM.0
             {
                 *slot = None;
                 self.context.state.transient_parents[i] = None;

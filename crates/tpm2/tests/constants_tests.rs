@@ -398,6 +398,9 @@ fn test_tpm_cc_constants_and_marshalling() {
         (TpmCc::SignSequenceStart, 0x000001AA),
         (TpmCc::VendorTcgTest, 0x20000000),
         (TpmCc::VEND, 0x20000000),
+        (TpmCc::NTC2PreConfig, 0x20000211),
+        (TpmCc::NTC2LockPreConfig, 0x20000212),
+        (TpmCc::NTC2GetConfig, 0x20000213),
     ];
 
     for &(cc, expected_val) in expected_codes {
@@ -473,6 +476,38 @@ fn test_tpm_cc_constants_and_marshalling() {
         tpm2::commands::VendorTcgTest::CMD_CODE,
         TpmCc::VendorTcgTest
     );
+    assert_eq!(
+        tpm2::commands::Ntc2PreConfig::CMD_CODE,
+        TpmCc::NTC2PreConfig
+    );
+    assert_eq!(
+        tpm2::commands::Ntc2LockPreConfig::CMD_CODE,
+        TpmCc::NTC2LockPreConfig
+    );
+    assert_eq!(
+        tpm2::commands::Ntc2GetConfig::CMD_CODE,
+        TpmCc::NTC2GetConfig
+    );
+}
+
+#[test]
+fn tpm_cc_is_vendor_tests_the_v_bit() {
+    for cc in [
+        TpmCc::VendorTcgTest,
+        TpmCc::NTC2PreConfig,
+        TpmCc::NTC2GetConfig,
+        TpmCc::new(0xFFFF_FFFF),
+    ] {
+        assert!(cc.is_vendor(), "{cc:?}");
+    }
+    for cc in [
+        TpmCc::FIRST,
+        TpmCc::LAST,
+        TpmCc::new(0x1000_0000),
+        TpmCc::new(0x4000_0000),
+    ] {
+        assert!(!cc.is_vendor(), "{cc:?}");
+    }
 }
 
 #[test]

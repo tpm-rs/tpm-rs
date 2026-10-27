@@ -1,6 +1,6 @@
 #[cfg(not(feature = "reference-rng"))]
 use super::KeyDerivationArgs;
-use super::{TransientObject, provisioned_secret};
+use super::TransientObject;
 use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
@@ -42,14 +42,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let handles = request.try_unmarshal_handles::<CreatePrimary>()?;
         let [primary_handle] = handles;
         check(primary_handle, Tpmi::RhHierarchy, Position::handle(1))?;
-
-        if primary_handle.0 != Handle::RH_OWNER.0
-            && primary_handle.0 != Handle::RH_ENDORSEMENT.0
-            && primary_handle.0 != Handle::RH_PLATFORM.0
-            && primary_handle.0 != Handle::RH_NULL.0
-        {
-            return Err(TpmRc::VALUE.with(tpm2::errors::Position::handle(1)));
-        }
 
         let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
 
@@ -103,7 +95,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.reference_create_object(
                 Some(super::reference_ops::PrimaryCreation {
                     seed: &parent_seed_val[..parent_seed_len],
-                    endorsement: primary_handle == tpm2::Handle::RH_ENDORSEMENT,
+                    // C `HierarchyNormalizeHandle(in->primaryHandle) == TPM_RH_ENDORSEMENT`.
+                    endorsement: crate::hierarchy::normalize(primary_handle.0)
+                        == tpm2::Handle::RH_ENDORSEMENT.0,
                 }),
                 &template.as_tpmt(),
                 in_sensitive_struct.data.get_buffer(),
@@ -241,37 +235,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
-    /// Resolves the storage primary seed values forOwner, Platform, or Endorsement hierarchies.
+    /// Resolves the Primary Seed of `primary_handle` (the reference's `HierarchyGetPrimarySeed`):
+    /// the PPS, SPS, EPS or null seed, or for a firmware-limited or SVN-limited hierarchy the
+    /// seed derived from its base hierarchy's seed and its additional secret
+    /// (`TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED` if that is unavailable).
     fn resolve_primary_parent_seed(
         &self,
         primary_handle: Handle,
         parent_seed_val: &mut [u8; 64],
     ) -> Result<usize, TpmRc> {
-        if primary_handle.0 == Handle::RH_PLATFORM.0 {
-            let seed =
-                provisioned_secret(&self.context.state.pp_seed, self.context.state.pp_seed_size)?;
-            parent_seed_val[..seed.len()].copy_from_slice(seed);
-            Ok(seed.len())
-        } else if primary_handle.0 == Handle::RH_OWNER.0 {
-            let seed =
-                provisioned_secret(&self.context.state.sp_seed, self.context.state.sp_seed_size)?;
-            parent_seed_val[..seed.len()].copy_from_slice(seed);
-            Ok(seed.len())
-        } else if primary_handle.0 == Handle::RH_ENDORSEMENT.0 {
-            let seed =
-                provisioned_secret(&self.context.state.ep_seed, self.context.state.ep_seed_size)?;
-            parent_seed_val[..seed.len()].copy_from_slice(seed);
-            Ok(seed.len())
-        } else if primary_handle.0 == Handle::RH_NULL.0 {
-            let seed = provisioned_secret(
-                &self.context.state.null_seed,
-                self.context.state.null_seed_size,
-            )?;
-            parent_seed_val[..seed.len()].copy_from_slice(seed);
-            Ok(seed.len())
-        } else {
-            // `primaryHandle` is a validated `TPMI_RH_HIERARCHY+`, so this is unreachable.
-            Err(TpmRc::FAILURE)
-        }
+        let seed = self.context.hierarchy_primary_seed(primary_handle.0)?;
+        let seed = seed.as_bytes();
+        parent_seed_val[..seed.len()].copy_from_slice(seed);
+        Ok(seed.len())
     }
 }

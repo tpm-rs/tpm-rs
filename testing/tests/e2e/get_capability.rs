@@ -15,11 +15,12 @@ use tpm2::commands::GetCapability;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Marshal, TpmCap, TpmCc, TpmPt, TpmSe, TpmiStCommandTag, Unmarshal};
 
-/// `TPM_CAP_ACT` reports `TPM_RC_VALUE + RC_P2`, not `RC_P1`.
+/// A `TPM_CAP_ACT` property that is not an ACT handle is `TPM_RC_VALUE + RC_P2`, not `RC_P1`
+/// (the ACTs themselves are covered by `act_capability`).
 #[test]
 fn act_capability_rejected_on_property() {
     let mut sim = Tpm::new();
-    for property in [0x4000_0110, 0x4000_011F, 0x0000_0000] {
+    for property in [0x4000_010F, 0x4000_0120, 0x0000_0000] {
         assert_eq!(
             get_cap(&mut sim, CAP_ACT, property, 1).map(|_| ()),
             Err(rc_p(TpmRc::VALUE, 2)),
@@ -199,7 +200,8 @@ fn auth_policies_after_set_primary_policy() {
     let mut sim = Tpm::new();
 
     // 1. Query TPM2_GetCapability(TPM_CAP_AUTH_POLICIES, 0x40000001, 4)
-    // Initially, all permanent handles have no policy set.
+    // Initially, all permanent handles have no policy set. The policies of the ACTs follow the
+    // four hierarchies, so moreData is YES.
     let cmd = GetCapability {
         capability: TpmCap::AuthPolicies,
         property: 0x40000001,
@@ -211,8 +213,9 @@ fn auth_policies_after_set_primary_policy() {
     let res_len = response.len();
 
     let mut unmarsh = &response[10..res_len];
+    // The firmware-limited and SVN-limited hierarchies follow (`limited_hierarchies.rs`).
     let more_data = bool::unmarshal(&mut unmarsh).unwrap();
-    assert!(!more_data);
+    assert!(more_data);
     let cap_data = tpm2::TpmsCapabilityData::unmarshal(&mut unmarsh).unwrap();
     assert!(unmarsh.is_empty());
 
@@ -503,9 +506,9 @@ fn handles_pcrs_and_pcr_properties_edge_cases() {
     assert_eq!(props.len(), 1);
     assert!(more);
 
-    // ACT is not implemented: TPM_RC_VALUE + RC_P2 for every property.
+    // TPM_CAP_ACT: a property past TPM_RH_ACT_F is TPM_RC_VALUE + RC_P2.
     assert_eq!(
-        get_cap(&mut sim, CAP_ACT, 0x4000_0110, 1).map(|_| ()),
+        get_cap(&mut sim, CAP_ACT, 0x4000_0120, 1).map(|_| ()),
         Err(rc_p(TpmRc::VALUE, 2))
     );
 }
@@ -879,8 +882,9 @@ fn max_context_sizes_bound_saved_contexts() {
 /// past the last fixed property this TPM reports: the response lists every implemented property
 /// of the group from 0x10C on, in order, and `moreData` is NO, as no value remains (TPM 2.0
 /// Part 3, TPM2_GetCapability: "The *moreData* parameter will have a value of YES if there are
-/// more values of the requested type that were not returned."). The C references also report the
-/// firmware-SVN properties, so their list is cut there (`differential.md` rule 2).
+/// more values of the requested type that were not returned."). `mstpm20` version 185 also reports
+/// `TPM_PT_ML_PARAMETER_SETS`, so its list is cut there, and `ibmswtpm2` does not report the
+/// firmware-SVN properties (`differential.md` rule 2).
 #[test]
 fn fixed_properties_to_the_end_of_the_group() {
     let mut tpm = Tpm::new();
@@ -893,17 +897,30 @@ fn fixed_properties_to_the_end_of_the_group() {
 }
 
 /// TPM_CAP_TPM_PROPERTIES of the last fixed property this TPM reports
-/// (`TPM_PT_MAX_CAP_BUFFER`, 0x12E) with `propertyCount` 1: that property, and `moreData` NO, as
-/// no further value of this TPM remains (TPM 2.0 Part 3, TPM2_GetCapability: "The *moreData* parameter will have a value of
-/// YES if there are more values of the requested type that were not returned."). The C
-/// references have their firmware-SVN properties after it (`differential.md` rule 2).
+/// (`TPM_PT_FIRMWARE_MAX_SVN`, 0x130) with `propertyCount` 1: that property, and `moreData` NO,
+/// as no further value of this TPM remains (TPM 2.0 Part 3, TPM2_GetCapability: "The *moreData*
+/// parameter will have a value of YES if there are more values of the requested type that were
+/// not returned."), while `TPM_PT_MAX_CAP_BUFFER` (0x12E) is followed by the firmware-SVN
+/// properties. `mstpm20` version 185 has `TPM_PT_ML_PARAMETER_SETS` after them, and
+/// `ibmswtpm2` does not report the firmware-SVN properties (`differential.md` rule 2).
 #[test]
 fn last_fixed_property_has_no_more_data() {
     let mut tpm = Tpm::new();
-    let cmd = [
-        0x80, 0x01, 0, 0, 0, 0x16, 0, 0, 0x01, 0x7A, 0, 0, 0, 6, 0, 0, 0x01, 0x2E, 0, 0, 0, 0x01,
-    ];
-    let rsp = tpm.send_command(0, &cmd);
+    let query = |property: u8| {
+        [
+            0x80, 0x01, 0, 0, 0, 0x16, 0, 0, 0x01, 0x7A, 0, 0, 0, 6, 0, 0, 0x01, property, 0, 0, 0,
+            0x01,
+        ]
+    };
+    let rsp = tpm.send_command(0, &query(0x30));
     assert_eq!(rc_of(&rsp), 0);
     assert_eq!(rsp[10], 0, "moreData");
+    assert_eq!(
+        rsp[19..23],
+        0x130u32.to_be_bytes(),
+        "TPM_PT_FIRMWARE_MAX_SVN"
+    );
+    let rsp = tpm.send_command(0, &query(0x2E));
+    assert_eq!(rc_of(&rsp), 0);
+    assert_eq!(rsp[10], 1, "moreData");
 }

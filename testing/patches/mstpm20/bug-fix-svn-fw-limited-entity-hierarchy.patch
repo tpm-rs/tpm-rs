@@ -1,0 +1,46 @@
+svn-fw-limited-entity-hierarchy: an object of a limited hierarchy is in that hierarchy for its tickets
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 2, version 185): TPMT_TK_CREATION "hierarchy |
+the hierarchy containing *name*"; TPMT_TK_AUTH "hierarchy | hierarchy of the
+object used to produce the ticket"; Part 1, "EvictControl of objects in
+firmware-limited and SVN-limited hierarchies": "Objects in a firmware-limited
+or SVN-limited hierarchy (including objects without
+*firmwareLimited/svnLimited* SET)". An object created under a parent in a
+firmware-limited or SVN-limited hierarchy (or a primary/external object of
+one) is contained in that limited hierarchy, whose proof protects its tickets
+(Part 1, "Enrollment of SVN-Limited Objects": the hierarchies protect "from
+vulnerable firmware that has access to base hierarchy seeds and proof
+values").
+
+The reference's EntityGetHierarchy() identifies an object's hierarchy by its
+ppsHierarchy/spsHierarchy/epsHierarchy attributes, which hold the base
+hierarchy, so TPM2_Create's creation ticket and the TPM2_PolicySigned/
+TPM2_PolicySecret auth tickets of such an object are made for the base
+hierarchy with its proof (while TPM2_VerifySignature, via GetHierarchy(),
+already uses the limited hierarchy). tpm-rs uses the object's limited
+hierarchy for all of them; the patch makes EntityGetHierarchy() return it for
+objects of limited hierarchies (every other object is unchanged).
+diff --git a/TPMCmd/tpm/src/support/Entity.c b/TPMCmd/tpm/src/support/Entity.c
+--- a/TPMCmd/tpm/src/support/Entity.c
++++ b/TPMCmd/tpm/src/support/Entity.c
+@@ -507,7 +507,17 @@ EntityGetHierarchy(TPMI_DH_ENTITY handle  // IN :handle of entity
+                 object = HandleToObject(handle);
+                 VERIFY(object != NULL, FATAL_ERROR_ASSERT, TPM_RH_NULL);
+ 
+-                if(object->attributes.ppsHierarchy)
++                // tpm-rs differential testing -- C-ref spec deviation fix (NOT
++                // determinism): an object of a firmware-limited or SVN-limited
++                // hierarchy is contained in that hierarchy (TPM 2.0 Part 2,
++                // TPMT_TK_CREATION: "the hierarchy containing name"; TPMT_TK_AUTH:
++                // "hierarchy of the object used to produce the ticket").
++                if(HierarchyIsFirmwareLimited(object->hierarchy)
++                   || HierarchyIsSvnLimited(object->hierarchy))
++                {
++                    hierarchy = object->hierarchy;
++                }
++                else if(object->attributes.ppsHierarchy)
+                 {
+                     hierarchy = TPM_RH_PLATFORM;
+                 }

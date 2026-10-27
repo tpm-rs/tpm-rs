@@ -1,0 +1,28 @@
+fix-self-test-ecschnorr: compile AlgorithmTests.c without ECSCHNORR
+
+Classification: build fix.
+
+With ENABLE_SELF_TESTS = YES and ALG_ECSCHNORR = NO (profile-algorithms.patch),
+TestEccSignAndVerify() does not compile: its ECSCHNORR case loads the
+signature into TPMU_SIGNATURE's `ecschnorr` member, which only exists with
+ALG_ECSCHNORR. The case is compiled only with ALG_ECSCHNORR, as in version 185
+(an unimplemented algorithm never reaches TestAlgorithm()'s dispatch).
+
+diff --git a/src/AlgorithmTests.c b/src/AlgorithmTests.c
+--- a/src/AlgorithmTests.c
++++ b/src/AlgorithmTests.c
+@@ -646,12 +646,14 @@ static TPM_RC TestEccSignAndVerify(TPM_ALG_ID scheme, ALGORITHM_VECTOR* toTest)
+ 	    LoadEccParameter(&testSig.signature.ecdsa.signatureR, &c_TestEcDsa_r);
+ 	    LoadEccParameter(&testSig.signature.ecdsa.signatureS, &c_TestEcDsa_s);
+ 	    break;
++#if ALG_ECSCHNORR
+ 	  case TPM_ALG_ECSCHNORR:
+ 	    LoadEccParameter(&testSig.signature.ecschnorr.signatureR,
+ 			     &c_TestEcSchnorr_r);
+ 	    LoadEccParameter(&testSig.signature.ecschnorr.signatureS,
+ 			     &c_TestEcSchnorr_s);
+ 	    break;
++#endif
+ 	  case TPM_ALG_SM2:
+ 	    // don't have a test for SM2
+ 	    return TPM_RC_SUCCESS;

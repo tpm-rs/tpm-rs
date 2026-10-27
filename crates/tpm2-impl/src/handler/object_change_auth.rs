@@ -5,10 +5,11 @@ use tpm2::commands::responses;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bPrivate, Tpm2bPrivateKeyRsa,
-    Tpm2bSensitiveData, Tpm2bSymKey, TpmtSensitive, TpmuSensitiveComposite,
+    Tpm2bSensitiveData, Tpm2bSymKey, TpmaObject, TpmtSensitive, TpmuSensitiveComposite,
 };
 
 use crate::handle_checks::{Tpmi, check};
+use crate::handler::rsa_sensitive::RSA_PRIVATE_SIZE;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -110,23 +111,24 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::TYPE.with(Position::handle(2)));
         }
         // Construct new TpmtSensitive
-        let mut prime_p = [0u8; 256];
+        let mut rsa_value = [0u8; RSA_PRIVATE_SIZE];
         let sensitive_comp = match &object.public.parms_and_id {
             crate::owned::OwnedPublicParmsAndId::Ecc(_, _) => TpmuSensitiveComposite::Ecc(
                 Tpm2bEccParameter::from_bytes(&object.private[..object.private_len])
                     .map_err(|_| TpmRc::FAILURE)?,
             ),
             crate::owned::OwnedPublicParmsAndId::Rsa(_, _) => {
-                // Exp mapped every failure (`InvalidData` included) to `TPM_RC_FAILURE`.
-                let prime_p_len = match self
-                    .crypto()
-                    .rsa_private_key_to_prime_p(&object.private[..object.private_len], &mut prime_p)
-                {
-                    Ok(Some(len)) => len,
-                    Ok(None) | Err(_) => return Err(TpmRc::FAILURE),
-                };
+                // `SensitiveToPrivate()` with the parent: the CRT form under a fixedTPM parent,
+                // otherwise the prime (see `rsa_sensitive`).
+                let len = self
+                    .rsa_sensitive_value(
+                        &object.private[..object.private_len],
+                        parent_info.attributes.contains(TpmaObject::FIXED_TPM),
+                        &mut rsa_value,
+                    )?
+                    .ok_or(TpmRc::FAILURE)?;
                 TpmuSensitiveComposite::Rsa(
-                    Tpm2bPrivateKeyRsa::from_bytes(&prime_p[..prime_p_len])
+                    Tpm2bPrivateKeyRsa::from_bytes(&rsa_value[..len])
                         .map_err(|_| TpmRc::FAILURE)?,
                 )
             }

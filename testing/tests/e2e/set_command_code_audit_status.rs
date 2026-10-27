@@ -211,7 +211,7 @@ fn command_in_both_lists_is_not_audited() {
 #[test]
 fn shutdown_and_unimplemented_commands_are_ignored() {
     let mut sim = Tpm::new();
-    let ignored = [CC_SHUTDOWN, CC_SET_ALGORITHM_SET, 0x1FF, 0x2000_0000];
+    let ignored = [CC_SHUTDOWN, CC_SET_ALGORITHM_SET, 0x1FF, 0x2000_0100];
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &ignored, &ignored),
         0

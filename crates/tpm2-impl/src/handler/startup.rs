@@ -300,6 +300,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.context.state.pcr_auth_value = crate::owned::OwnedAuth::default();
         }
         self.pcr_startup(kind);
+        // `ActStartup()`: TPM Reset/Restart zero the ACTs and their policies, TPM Resume restores
+        // the state saved by TPM2_Shutdown(TPM_SU_STATE); from now on the ACTs count down.
+        self.context
+            .state
+            .act
+            .startup(if kind == StartupKind::Resume {
+                crate::act::ActStartupKind::Resume
+            } else {
+                crate::act::ActStartupKind::ResetOrRestart
+            });
         // `SessionStartup`: saved session contexts survive TPM Restart and Resume, but not a
         // TPM Reset. Loaded sessions never survive.
         if kind == StartupKind::Reset {

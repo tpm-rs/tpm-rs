@@ -22,8 +22,8 @@ pub const RSA_DEFAULT_PUBLIC_EXPONENT: u32 = 65537;
 /// (0 for the default) from `rand` (`None`: the TPM's DRBG).
 ///
 /// Writes the modulus (`key_bits / 8` bytes) to the front of `modulus` and the prime the
-/// reference stores first in the sensitive area (`key_bits / 16` bytes; the private key with
-/// `RSA_PRIVATE_PRIME_ONLY`) to the front of `prime`, and returns the public exponent used. For a
+/// reference stores first in the sensitive area (`key_bits / 16` bytes; the prime-only form of
+/// the private key) to the front of `prime`, and returns the public exponent used. For a
 /// signing key (`sign`), the reference's pairwise consistency test is run as well, which draws a
 /// random value in `[1, n)` from `rand`.
 ///
@@ -38,7 +38,7 @@ pub fn generate_key(
     modulus: &mut [u8],
     prime: &mut [u8],
 ) -> Result<u32, TpmRc> {
-    ffi::rsa_generate_key(rng, rand, key_bits, exponent, sign, modulus, prime)?;
+    ffi::rsa_generate_key(rng, rand, key_bits, exponent, sign, modulus, prime, None)?;
     Ok(if exponent == 0 {
         RSA_DEFAULT_PUBLIC_EXPONENT
     } else {
@@ -228,6 +228,55 @@ mod tests {
         for h in handles {
             h.join().unwrap();
         }
+    }
+
+    /// The CRT form that tpm-rs stores under fixedTPM parents (`handler::rsa_sensitive`: the
+    /// provider's CRT values rearranged around the prime-only form) is byte for byte the packed
+    /// sensitive area of the C reference's `CryptRsaGenerateKey()`, both when the reference's
+    /// first prime is the larger and when it is the smaller one.
+    #[test]
+    fn crt_form_matches_the_reference_packed_sensitive_area() {
+        use crate::handler::rsa_sensitive::order_crt_for_prime;
+        use tpm2::crypto::Asymmetric as _;
+        let (mut larger_first, mut smaller_first) = (0, 0);
+        for (i, key_bits) in (0u8..12).zip([1024u16, 2048].into_iter().cycle()) {
+            let mut seeded = drbg::instantiate_seeded(b"crt", &[i], b"", b"").unwrap();
+            let len = usize::from(key_bits) / 8;
+            let (mut n, mut p, mut c_crt) = ([0u8; 256], [0u8; 128], [0u8; 640]);
+            ffi::rsa_generate_key(
+                &mut RefRng::seeded_only(),
+                Some(&mut seeded),
+                key_bits,
+                0,
+                i % 3 == 0,
+                &mut n[..len],
+                &mut p[..len / 2],
+                Some(&mut c_crt[..5 * len / 2]),
+            )
+            .unwrap();
+            let (n, p, c_crt) = (&n[..len], &p[..len / 2], &c_crt[..5 * len / 2]);
+            if p >= &c_crt[len / 2..len] {
+                larger_first += 1;
+            } else {
+                smaller_first += 1;
+            }
+            let mut key = [0u8; 1536];
+            let key_len = Crypto
+                .rsa_import_private_key(n, p, RSA_DEFAULT_PUBLIC_EXPONENT, &mut key)
+                .unwrap()
+                .unwrap();
+            let mut crt = [0u8; 640];
+            let crt_len = Crypto
+                .rsa_private_key_to_crt(&key[..key_len], &mut crt)
+                .unwrap()
+                .unwrap();
+            assert!(order_crt_for_prime(p, &mut crt[..crt_len]));
+            assert_eq!(&crt[..crt_len], c_crt, "key {i} ({key_bits} bits)");
+        }
+        assert!(
+            larger_first > 0 && smaller_first > 0,
+            "{larger_first} / {smaller_first}"
+        );
     }
 
     #[test]

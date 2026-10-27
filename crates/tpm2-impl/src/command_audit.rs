@@ -24,13 +24,13 @@
 //! digest register is cleared and that execution is not audited.
 
 use crate::engine::{
-    AUDIT_EXT_LEN, AUDIT_EXT_MARKER, GlobalState, TpmEngine, command_resp_handles_size,
-    is_command_supported,
+    AUDIT_EXT_LEN, AUDIT_EXT_MARKER, GlobalState, TpmEngine, VENDOR_COMMANDS,
+    command_resp_handles_size, is_command_supported,
 };
 use crate::owned::OwnedDigest;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use tpm2::crypto::{CryptoProvider, HashStream, Rng};
+use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::TpmRc;
 use tpm2::{TpmCc, TpmiAlgHash, TpmtHa};
 
@@ -38,9 +38,18 @@ use tpm2::{TpmCc, TpmiAlgHash, TpmtHa};
 /// code `AUDIT_CC_FIRST + i`.
 const AUDIT_CC_FIRST: u32 = 0x0000_011F;
 
+/// Bit of the first vendor command in the audit bitmap: as in the reference's (uncompressed)
+/// command table, the vendor commands follow the slots of every library command code
+/// `TPM_CC_FIRST..=TPM_CC_LAST`, so bit `LIBRARY_COMMAND_SLOTS + i` belongs to
+/// `VENDOR_COMMANDS[i]`.
+const LIBRARY_COMMAND_SLOTS: usize = (TpmCc::LAST.code() - AUDIT_CC_FIRST + 1) as usize;
+
 /// Size in bytes of the persistent audit bitmap ([`CommandAuditList::as_bytes`]). It covers the
-/// command codes `0x11F..=0x1DE`, which includes every command this TPM implements.
+/// library command codes `0x11F..=TPM_CC_LAST` and then the vendor commands (see
+/// `LIBRARY_COMMAND_SLOTS`), which includes every command this TPM implements.
 pub const COMMAND_AUDIT_LIST_SIZE: usize = 24;
+
+const _: () = assert!(LIBRARY_COMMAND_SLOTS + VENDOR_COMMANDS.len() <= COMMAND_AUDIT_LIST_SIZE * 8);
 
 /// The set of audited commands (`gp.auditCommands`).
 ///
@@ -76,8 +85,22 @@ impl CommandAuditList {
         if !is_command_supported(cc) {
             return None;
         }
+        if cc.is_vendor() {
+            let position = VENDOR_COMMANDS.iter().position(|&v| v == cc)?;
+            return Some(LIBRARY_COMMAND_SLOTS + position);
+        }
         let index = cc.code().checked_sub(AUDIT_CC_FIRST)? as usize;
-        (index < COMMAND_AUDIT_LIST_SIZE * 8).then_some(index)
+        (index < LIBRARY_COMMAND_SLOTS).then_some(index)
+    }
+
+    /// Returns the command of bit `index` of the bitmap (the inverse of [`Self::bit_index`]
+    /// for implemented commands).
+    fn command_of_bit(index: usize) -> Option<TpmCc> {
+        if index < LIBRARY_COMMAND_SLOTS {
+            Some(TpmCc::new(AUDIT_CC_FIRST + index as u32))
+        } else {
+            VENDOR_COMMANDS.get(index - LIBRARY_COMMAND_SLOTS).copied()
+        }
     }
 
     /// Returns whether `cc` is audited (`CommandAuditIsRequired()` /
@@ -117,15 +140,17 @@ impl CommandAuditList {
         }
     }
 
-    /// Iterates over the audited commands in ascending command-code order.
+    /// Iterates over the audited commands in ascending command-code order (the library
+    /// commands, then the vendor commands).
     pub fn iter(&self) -> impl Iterator<Item = TpmCc> + '_ {
         (0..COMMAND_AUDIT_LIST_SIZE * 8)
             .filter(|&i| self.bits[i / 8] & (1 << (i % 8)) != 0)
-            .map(|i| TpmCc::new(AUDIT_CC_FIRST + i as u32))
+            .filter_map(Self::command_of_bit)
     }
 
     /// The persistent (NV) encoding of the list: a bitmap where bit `i % 8` of byte `i / 8`
-    /// represents command code `0x11F + i`.
+    /// represents command code `0x11F + i` for the library commands and
+    /// `VENDOR_COMMANDS[i - LIBRARY_COMMAND_SLOTS]` for the vendor commands.
     pub fn as_bytes(&self) -> &[u8; COMMAND_AUDIT_LIST_SIZE] {
         &self.bits
     }
@@ -137,8 +162,10 @@ impl CommandAuditList {
             bits: [0; COMMAND_AUDIT_LIST_SIZE],
         };
         for i in 0..COMMAND_AUDIT_LIST_SIZE * 8 {
-            if bytes[i / 8] & (1 << (i % 8)) != 0 {
-                list.set(TpmCc::new(AUDIT_CC_FIRST + i as u32));
+            if bytes[i / 8] & (1 << (i % 8)) != 0
+                && let Some(cc) = Self::command_of_bit(i)
+            {
+                list.set(cc);
             }
         }
         list
@@ -214,7 +241,7 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
             return Err(TpmRc::NV_UNAVAILABLE);
         }
         let alg = self.state.command_audit_hash_alg();
-        let mut ctx = HashStream::new(&*self.platform.crypto, alg).map_err(|_| TpmRc::FAILURE)?;
+        let mut ctx = self.crypto().hash_stream(alg).map_err(|_| TpmRc::FAILURE)?;
         ctx.update(&cc.code().to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         for &handle in handles {
@@ -250,7 +277,7 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
         let alg = self.state.command_audit_hash_alg();
         let digest_size = alg.digest_size();
 
-        let mut ctx = HashStream::new(&*self.platform.crypto, alg).map_err(|_| TpmRc::FAILURE)?;
+        let mut ctx = self.crypto().hash_stream(alg).map_err(|_| TpmRc::FAILURE)?;
         ctx.update(&0u32.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
         ctx.update(&cc.code().to_be_bytes())
@@ -268,7 +295,7 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
             self.save_hierarchy_auths();
         }
 
-        let mut ctx = HashStream::new(&*self.platform.crypto, alg).map_err(|_| TpmRc::FAILURE)?;
+        let mut ctx = self.crypto().hash_stream(alg).map_err(|_| TpmRc::FAILURE)?;
         ctx.update(self.state.command_audit_digest.get_buffer())
             .map_err(|_| TpmRc::FAILURE)?;
         ctx.update(cp_hash.get_buffer())
@@ -287,7 +314,7 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
     /// ascending order.
     pub(crate) fn command_audit_list_digest(&self) -> Result<OwnedDigest, TpmRc> {
         let alg = self.state.command_audit_hash_alg();
-        let mut ctx = HashStream::new(&*self.platform.crypto, alg).map_err(|_| TpmRc::FAILURE)?;
+        let mut ctx = self.crypto().hash_stream(alg).map_err(|_| TpmRc::FAILURE)?;
         for cc in self.state.audit_commands.iter() {
             ctx.update(&cc.code().to_be_bytes())
                 .map_err(|_| TpmRc::FAILURE)?;
@@ -315,7 +342,7 @@ fn response_parameters(cc: TpmCc, response: &[u8]) -> Option<&[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::SUPPORTED_COMMANDS;
+    use crate::engine::{SUPPORTED_COMMANDS, implemented_commands_in_order};
 
     #[test]
     fn manufacture_default_audits_only_set_command_code_audit_status() {
@@ -327,12 +354,48 @@ mod tests {
 
     #[test]
     fn bitmap_covers_every_supported_command() {
-        for cc in SUPPORTED_COMMANDS {
+        for cc in SUPPORTED_COMMANDS.iter().chain(VENDOR_COMMANDS) {
+            let bit = CommandAuditList::bit_index(*cc);
             assert!(
-                CommandAuditList::bit_index(cc).is_some(),
+                bit.is_some(),
                 "command {cc:?} does not fit in the audit bitmap"
             );
+            assert_eq!(CommandAuditList::command_of_bit(bit.unwrap()), Some(*cc));
         }
+    }
+
+    #[test]
+    fn vendor_commands_follow_the_library_command_slots() {
+        assert_eq!(LIBRARY_COMMAND_SLOTS, 0x1AA - 0x11F + 1);
+        assert_eq!(
+            CommandAuditList::bit_index(TpmCc::VendorTcgTest),
+            Some(LIBRARY_COMMAND_SLOTS)
+        );
+        let mut list = CommandAuditList::manufacture_default();
+        assert!(list.set(TpmCc::VendorTcgTest));
+        let bytes = *list.as_bytes();
+        assert_ne!(
+            bytes[LIBRARY_COMMAND_SLOTS / 8] & (1 << (LIBRARY_COMMAND_SLOTS % 8)),
+            0
+        );
+        assert_eq!(CommandAuditList::from_bytes(&bytes), list);
+        assert!(list.clear(TpmCc::VendorTcgTest));
+        assert_eq!(list, CommandAuditList::manufacture_default());
+    }
+
+    #[test]
+    fn every_implemented_command_can_be_audited_in_table_order() {
+        let mut list = CommandAuditList::manufacture_default();
+        for cc in implemented_commands_in_order() {
+            list.set(cc);
+        }
+        let audited: alloc::vec::Vec<TpmCc> = list.iter().collect();
+        let expected: alloc::vec::Vec<TpmCc> = implemented_commands_in_order()
+            .into_iter()
+            .filter(|&cc| cc != TpmCc::Shutdown)
+            .collect();
+        assert_eq!(audited, expected);
+        assert_eq!(audited.last(), VENDOR_COMMANDS.last());
     }
 
     #[test]
@@ -368,8 +431,11 @@ mod tests {
             0x0000_011E,
             0x0000_013F,
             0x0000_01FF,
-            0x2000_0000,
+            0x0000_01AB,
             0x2000_0001,
+            0x2000_0100,
+            0x2001_0000,
+            0x4000_0000,
         ] {
             let cc = TpmCc::new(code);
             assert!(!list.set(cc), "{code:#x}");

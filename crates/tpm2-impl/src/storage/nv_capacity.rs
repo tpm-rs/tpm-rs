@@ -39,8 +39,12 @@ pub const NV_MEMORY_SIZE: u32 = if cfg!(feature = "nv-memory-size-128k") {
     16384
 };
 /// `NV_INDEX_RAM_DATA`: the offset of the orderly Index RAM image in NV (after `gp`, `gr`, `gc`
-/// and `go`).
-pub const NV_INDEX_RAM_DATA: u32 = 4508;
+/// and `go`). Each implemented ACT (see [`crate::act`]) adds its `ACT_STATE` to `go` and an
+/// unused `TPMT_HA` policy slot to `gc`: 4644 with `TPM_RH_ACT_0` (the TCG reference
+/// implementation version 185), 4784 with `TPM_RH_ACT_0` and `TPM_RH_ACT_A` (the `act-a`
+/// feature: the public TCG reference implementation and `ibmswtpm2`); without ACTs it would be
+/// 4508.
+pub const NV_INDEX_RAM_DATA: u32 = if cfg!(feature = "act-a") { 4784 } else { 4644 };
 /// `RAM_INDEX_SPACE`: the size of `s_indexOrderlyRam`, the RAM backing of orderly Indices.
 pub const RAM_INDEX_SPACE: u32 = 512;
 /// `NV_USER_DYNAMIC`: the start of the dynamic area of Indices and evict objects.
@@ -268,6 +272,10 @@ pub fn scan(storage: &StorageManager<'_>) -> Result<NvUsage, StorageError> {
 mod tests {
     use super::*;
 
+    /// The free dynamic area of empty NV: 11228 octets with the TCG reference profile (11088
+    /// with the `act-a` feature).
+    const FREE: u32 = NV_USER_DYNAMIC_END - NV_USER_DYNAMIC;
+
     /// The reference fits seven persistent objects into empty NV (the eighth would eat into the
     /// space reserved for `MIN_COUNTER_INDICES` counters), whatever the key type.
     #[test]
@@ -278,7 +286,7 @@ mod tests {
             usage.add_evict_object();
         }
         assert!(!usage.can_add_evict_object());
-        assert_eq!(usage.free_bytes(), 11364 - 7 * 1288);
+        assert_eq!(usage.free_bytes(), FREE - 7 * 1288);
     }
 
     /// Indices must leave room for `MIN_EVICT_OBJECTS` persistent objects and, unless they are
@@ -289,9 +297,9 @@ mod tests {
         let ordinary = 0u32;
         let counter = TPM_NT_COUNTER << TPMA_NV_TPM_NT_SHIFT;
         let usage = NvUsage::default();
-        // Free 11364; an ordinary Index reserves 16 + 2 * 1288 + 8 * 160 = 3872.
-        assert!(usage.can_define_index(ordinary, (11364 - 3872 - 148) as u16));
-        assert!(!usage.can_define_index(ordinary, (11364 - 3872 - 147) as u16));
+        // An ordinary Index reserves 16 + 2 * 1288 + 8 * 160 = 3872.
+        assert!(usage.can_define_index(ordinary, (FREE - 3872 - 148) as u16));
+        assert!(!usage.can_define_index(ordinary, (FREE - 3872 - 147) as u16));
         // A counter reserves no counter space.
         assert!(usage.can_define_index(counter, 8));
         let mut orderly = NvUsage::default();

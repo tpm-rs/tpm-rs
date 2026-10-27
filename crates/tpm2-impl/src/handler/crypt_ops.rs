@@ -79,7 +79,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.validate_signature(&_obj, cmd.digest.get_buffer(), &cmd.signature)
             .map_err(|rc| rc.with_position(Position::parameter(2)))?;
 
-        // If key is in TPM_RH_NULL or nameAlg is TPM_ALG_NULL, return NULL ticket
+        // If key is in TPM_RH_NULL or nameAlg is TPM_ALG_NULL, return NULL ticket. A key in a
+        // firmware-limited or SVN-limited hierarchy (including `TPM_RH_FW_NULL` and the
+        // SVN-limited NULL hierarchies) gets a ticket of that hierarchy, with its derived proof
+        // (C `GetHierarchy()` returns the object's own hierarchy).
         let ticket_hmac;
         let (hierarchy, digest) = match Handle(_obj.hierarchy) {
             Handle::RH_OWNER | Handle::RH_PLATFORM | Handle::RH_ENDORSEMENT
@@ -92,6 +95,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 )?;
                 (
                     Handle(_obj.hierarchy),
+                    Tpm2bDigest::from_bytes(ticket_hmac.get_buffer()).unwrap(),
+                )
+            }
+            h if crate::hierarchy::is_limited(h.0) && _obj.public.name_alg.is_some() => {
+                ticket_hmac = self.compute_verified_ticket(
+                    h.0,
+                    cmd.digest.get_buffer(),
+                    _obj.name.get_buffer(),
+                )?;
+                (
+                    h,
                     Tpm2bDigest::from_bytes(ticket_hmac.get_buffer()).unwrap(),
                 )
             }
@@ -122,7 +136,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// - `TPM_RC_SIGNATURE`: the signature is malformed or not genuine;
     /// - `TPM_RC_VALUE`: the key's curve is not supported.
     fn validate_signature(
-        &self,
+        &mut self,
         obj: &super::TransientObject,
         digest: &[u8],
         signature: &TpmtSignature<'_>,
@@ -152,6 +166,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 pub_key[offset..key_size].copy_from_slice(modulus);
                 sig_buf[offset..key_size].copy_from_slice(sig_bytes);
                 rsa_exponent = parms.exponent;
+                // `CryptRsaValidateSignature()` tests the scheme (the RSASSA-PSS test draws
+                // from the TPM's DRBG), then `RSAEP()` rejects a signature that is not below the
+                // modulus before `PssDecode()` hashes with the signature's hash algorithm.
+                self.do_self_test(sign_alg)?;
+                if sign_alg == Alg::RSAPSS && sig_bytes < modulus {
+                    self.do_self_test(Alg::from(sig_rsa.hash))?;
+                }
                 (sign_alg, Alg::from(sig_rsa.hash), key_size, key_size)
             }
             OwnedPublicParmsAndId::Ecc(parms, point) => {
@@ -192,6 +213,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         return Err(TpmRc::SIGNATURE.to_rc());
                     }
                 }
+                // `TpmEcc_ValidateSignatureEcdsa()` multiplies points (`TpmEcc_PointMult()`
+                // tests ECDH); ECDSA itself is tested by signing only.
+                self.crypto()
+                    .do_self_test(Alg::ECDH)
+                    .map_err(|_| TpmRc::FAILURE)?;
                 (
                     Alg::ECDSA,
                     Alg::from(sig_ecc.hash),
@@ -441,6 +467,29 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         digest: tpm2::TpmtHa<'_>,
         out: &mut [u8],
     ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
+        // `CryptRsaSign()`/`CryptEccSign()` test the signature scheme first (the RSASSA-PSS and
+        // ECDSA tests draw from the TPM's DRBG).
+        self.do_self_test(sign_alg)
+            .map_err(|_| tpm2::crypto::CryptoError::Internal)?;
+        let signed = self.sign_asymmetric_tested(sign_alg, key, private_key, digest, out);
+        // `PssEncode()` hashes with the signature's hash algorithm (RSASSA's encoding does not
+        // hash).
+        if sign_alg == Alg::RSAPSS && matches!(signed, Ok(Some(_))) {
+            self.do_self_test(Alg::from(digest.hash_alg()))
+                .map_err(|_| tpm2::crypto::CryptoError::Internal)?;
+        }
+        signed
+    }
+
+    /// [`Self::sign_asymmetric`] after the self test of `sign_alg`.
+    fn sign_asymmetric_tested(
+        &mut self,
+        sign_alg: Alg,
+        key: &OwnedPublicParmsAndId,
+        private_key: &[u8],
+        digest: tpm2::TpmtHa<'_>,
+        out: &mut [u8],
+    ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
         #[cfg(feature = "reference-rng")]
         match (sign_alg, key) {
             (Alg::ECDSA, OwnedPublicParmsAndId::Ecc(parms, _)) => {
@@ -537,6 +586,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Resolve the padding scheme
         let (resolved_scheme, resolved_hash_alg) =
             self.resolve_rsa_scheme(key_scheme, cmd.in_scheme)?;
+        // `CryptRsaEncrypt()` tests the scheme first (the RSAES and OAEP tests draw from the
+        // TPM's DRBG; `TPM_ALG_NULL` is raw RSA, which needs no test of its own here).
+        self.do_self_test(resolved_scheme)?;
 
         // Call self.crypto().encrypt(...) using resolved scheme/hash alg. CryptRsaEncrypt()
         // errors are returned without a position; a message that is too large for the key is
@@ -596,6 +648,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Ok(Some(len)) => len,
             Ok(None) | Err(_) => return Err(TpmRc::VALUE.to_rc()),
         };
+        // `OaepEncode()` hashes the label once its size checks passed.
+        if resolved_scheme == Alg::OAEP {
+            self.do_self_test(resolved_hash_alg)?;
+        }
 
         let rsp = responses::RSAEncrypt {
             out_data: Tpm2bPublicKeyRsa::from_bytes(&encrypted_data[..encrypted_len])
@@ -674,22 +730,35 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             OwnedPublicParmsAndId::Rsa(_, unique) => unique.get_buffer(),
             _ => &[],
         };
-        if cmd.cipher_text.get_buffer().len() != modulus_len
-            || cmd.cipher_text.get_buffer() >= modulus
-        {
+        if cmd.cipher_text.get_buffer().len() != modulus_len {
+            return Err(TpmRc::SIZE.to_rc());
+        }
+        // The scheme's self test follows the size check (the RSAES and OAEP tests draw from the
+        // TPM's DRBG), and precedes `RSADP()`.
+        self.do_self_test(resolved_scheme)?;
+        if cmd.cipher_text.get_buffer() >= modulus {
             return Err(TpmRc::SIZE.to_rc());
         }
 
         let key_size = (u16::from(key_bits) / 8) as usize;
         let mut decrypted_message = [0u8; 512];
-        let decrypted_len = match self.crypto().decrypt(
+        let decrypted = self.crypto().decrypt(
             resolved_scheme,
             resolved_hash_alg,
             &obj.private[..obj.private_len],
             cmd.cipher_text.get_buffer(),
             &mut decrypted_message,
             label_bytes,
-        ) {
+        );
+        if resolved_scheme == Alg::OAEP {
+            self.oaep_decode_hash_test(
+                &obj.private[..obj.private_len],
+                cmd.cipher_text.get_buffer(),
+                resolved_hash_alg,
+                matches!(decrypted, Ok(Some(_))),
+            )?;
+        }
+        let decrypted_len = match decrypted {
             Ok(Some(len)) => len,
             Ok(None) | Err(_) => return Err(TpmRc::VALUE.to_rc()),
         };
@@ -707,6 +776,34 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let response = request.into_response();
         self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
+        Ok(())
+    }
+
+    /// The hash self test of `OaepDecode()`, which hashes (MGF1, the label) unless the decrypted
+    /// block is too small for two digests or does not start with a zero octet. `decoded`: the
+    /// OAEP decryption succeeded (so the block was well formed); otherwise the raw RSA
+    /// decryption of `ciphertext` with `private_key` decides.
+    pub(crate) fn oaep_decode_hash_test(
+        &mut self,
+        private_key: &[u8],
+        ciphertext: &[u8],
+        hash_alg: Alg,
+        decoded: bool,
+    ) -> Result<(), TpmRc> {
+        let hash_runs = decoded || {
+            let digest_size = tpm2::TpmiAlgHash::try_from(hash_alg)
+                .map(|h| h.digest_size())
+                .unwrap_or(0);
+            let mut block = [0u8; 512];
+            ciphertext.len() >= 2 * digest_size + 2
+                && matches!(
+                    self.crypto().rsa_null_decrypt(private_key, ciphertext, &mut block),
+                    Ok(Some(len)) if len < ciphertext.len() || block[0] == 0
+                )
+        };
+        if hash_runs {
+            self.do_self_test(hash_alg)?;
+        }
         Ok(())
     }
 
@@ -826,7 +923,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let key = &obj.private[..obj.private_len];
         let mut digest_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let digest = tpm2::crypto::hmac(
-            self.crypto(),
+            &self.crypto(),
             key_hash_alg,
             key,
             cmd.buffer.get_buffer(),
@@ -1044,6 +1141,20 @@ fn select_sign_scheme(
 }
 
 /// Returns `bytes` without its leading zero bytes (the magnitude of a big-endian integer).
+/// Whether the ECDSA signature components `r` and `s` are in `[1, n - 1]` for the order `n` of
+/// `curve` (`CryptEccValidateSignature()` rejects other values before it multiplies points).
+pub(crate) fn ecdsa_signature_in_range(curve: TpmEccCurve, r: &[u8], s: &[u8]) -> bool {
+    let Some(order) = super::commit::curve_order(curve) else {
+        return false;
+    };
+    [r, s].into_iter().all(|component| {
+        let bytes = strip_leading_zeros(component);
+        let order = strip_leading_zeros(order);
+        !bytes.is_empty()
+            && (bytes.len() < order.len() || (bytes.len() == order.len() && bytes < order))
+    })
+}
+
 fn strip_leading_zeros(bytes: &[u8]) -> &[u8] {
     let first_non_zero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
     &bytes[first_non_zero..]

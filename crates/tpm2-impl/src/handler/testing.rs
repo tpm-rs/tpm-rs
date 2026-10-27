@@ -26,7 +26,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        self.context.state.untested_algorithms_len = 0;
+        // `CryptSelfTest()`: the requested tests complete before the response (no
+        // `TPM_RC_TESTING`, TPM 2.0 Part 3, TPM2_SelfTest, option b); a failed test is
+        // `TPM_RC_FAILURE` (Failure mode).
+        self.context.self_tester().self_test(_cmd.full_test)?;
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;
@@ -56,49 +59,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
-        for &alg in cmd.to_test.algorithms() {
-            let mut new_untested = [Alg::NULL; 32];
-            let mut new_len = 0;
-            for &existing in self
-                .context
-                .state
-                .untested_algorithms
-                .iter()
-                .take(self.context.state.untested_algorithms_len)
-            {
-                let mut remove = existing == alg;
-                if alg == Alg::RSA
-                    && matches!(
-                        existing,
-                        Alg::RSA | Alg::RSASSA | Alg::RSAES | Alg::RSAPSS | Alg::OAEP
-                    )
-                {
-                    remove = true;
-                }
-                if alg == Alg::AES && matches!(existing, Alg::AES | Alg::CFB) {
-                    remove = true;
-                }
-                if alg == Alg::ECC
-                    && matches!(
-                        existing,
-                        Alg::ECC | Alg::ECDSA | Alg::ECDAA | Alg::ECSCHNORR
-                    )
-                {
-                    remove = true;
-                }
-                if !remove {
-                    new_untested[new_len] = existing;
-                    new_len += 1;
-                }
+        // `CryptIncrementalSelfTest()`: the requested algorithms are tested before the response
+        // (an algorithm that has been tested is not tested again; the implementation tests each
+        // requested algorithm completely, e.g. a block cipher in all its untested modes).
+        if cmd.to_test.count() > 0 {
+            let mut to_test = crate::self_test::AlgorithmVector::default();
+            for &alg in cmd.to_test.algorithms() {
+                to_test.set(alg.id());
             }
-            self.context.state.untested_algorithms = new_untested;
-            self.context.state.untested_algorithms_len = new_len;
+            self.context.self_tester().run_self_tests(&mut to_test)?;
         }
-
-        let to_do_list = TpmlAlg::from_slice(
-            &self.context.state.untested_algorithms[..self.context.state.untested_algorithms_len],
-        )
-        .ok_or(TpmRc::FAILURE)?;
+        // The `toDoList`: every algorithm that still needs a test, in ascending order.
+        let mut untested = [Alg::NULL; crate::self_test::MAX_ALG_LIST_SIZE];
+        let mut count = 0;
+        for alg in self.context.self_test.load().iter() {
+            if count == untested.len() {
+                break;
+            }
+            untested[count] = Alg::new(alg);
+            count += 1;
+        }
+        let to_do_list = TpmlAlg::from_slice(&untested[..count]).ok_or(TpmRc::FAILURE)?;
         let rsp = responses::IncrementalSelfTest { to_do_list };
 
         let response = request.into_response();
@@ -120,9 +101,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        // We will match the response of mstpm20 dynamically after we see the mismatch log.
-        // For now, return default (empty out_data, success).
-        let rsp = responses::GetTestResult::default();
+        // TPM 2.0 Part 3, TPM2_GetTestResult: "If TPM2_SelfTest() has not been executed and a
+        // testable function has not been tested, testResult will be TPM_RC_NEEDS_TEST. If
+        // TPM2_SelfTest() has been received and the tests are not complete, testResult will be
+        // TPM_RC_TESTING. If testing of all functions is complete without functional failures,
+        // testResult will be TPM_RC_SUCCESS." The tests are synchronous (TPM2_SelfTest completes
+        // every test before it returns), so testing is never in progress: an untested algorithm
+        // is `TPM_RC_NEEDS_TEST`. (The C references always return `TPM_RC_SUCCESS`, a deviation
+        // fixed by `bug-fix-get-test-result-needs-test.patch`.) There is no manufacturer-specific
+        // information outside Failure mode, which the engine handles before the command.
+        let rsp = responses::GetTestResult {
+            test_result: if self.context.self_test.all_tested() {
+                Ok(())
+            } else {
+                Err(TpmRc::NEEDS_TEST)
+            },
+            ..Default::default()
+        };
 
         let response = request.into_response();
         self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;

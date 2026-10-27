@@ -60,6 +60,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context.state.shutdown_time_ms = self.context.state.tpm_time_ms;
         self.context.state.da_used = false;
         if shutdown_type == 0x0001 {
+            // `ActShutdown(TPM_SU_STATE)`: the ACT timeouts (halved unless written since
+            // TPM2_Startup) and `signaled` attributes, saved with the other orderly data.
+            self.context.state.act.shutdown_state();
             // Save the STATE_RESET and STATE_CLEAR data for a subsequent TPM Restart / Resume.
             // If it cannot be saved, the next TPM2_Startup(STATE) reports
             // TPM_RC_NV_UNINITIALIZED and Startup(CLEAR) performs a TPM Reset.

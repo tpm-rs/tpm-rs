@@ -49,8 +49,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tpm2_platform_linux::GlibcRand;
 
 use super::Implementation;
+use super::protocol::FirmwareSetting;
 use super::server::{self, Backend, Signal};
 use crate::seed::ReferenceSeed;
+use tpm2::platform::SimulatedFirmware;
 
 /// The entry points of one linked C reference (see the reference patches
 /// `harness-difftest-entry-points.patch`).
@@ -71,6 +73,11 @@ struct EntryPoints {
     signal_hash_start: unsafe extern "C" fn(),
     signal_hash_data: unsafe extern "C" fn(data: *const u8, size: u32),
     signal_hash_end: unsafe extern "C" fn(),
+    /// Installs a firmware image with another hash (`_plat__SetTpmFirmwareHash`,
+    /// `harness-difftest-firmware.patch`).
+    set_firmware_hash: unsafe extern "C" fn(hash: u32),
+    /// Installs a firmware image with another SVN (`_plat__SetTpmFirmwareSvn`).
+    set_firmware_svn: unsafe extern "C" fn(svn: u16),
     /// Executes `in_buf[..in_size]` at `locality`, writes the response to
     /// `out_buf[..out_cap]` and returns its length.
     run_command: unsafe extern "C" fn(
@@ -117,6 +124,10 @@ macro_rules! entry_points {
                 fn signal_hash_data(data: *const u8, size: u32);
                 #[link_name = concat!($prefix, "signal_hash_end")]
                 fn signal_hash_end();
+                #[link_name = concat!($prefix, "set_firmware_hash")]
+                fn set_firmware_hash(hash: u32);
+                #[link_name = concat!($prefix, "set_firmware_svn")]
+                fn set_firmware_svn(svn: u16);
                 #[link_name = concat!($prefix, "run_command")]
                 fn run_command(
                     locality: u8,
@@ -142,6 +153,8 @@ macro_rules! entry_points {
                 signal_hash_start,
                 signal_hash_data,
                 signal_hash_end,
+                set_firmware_hash,
+                set_firmware_svn,
                 run_command,
             };
         }
@@ -311,6 +324,18 @@ impl Backend for CReference {
         // `self` is the only handle to this C reference (see `acquire`), so
         // no other call into it runs concurrently.
         unsafe { (self.entry_points.init)() };
+        // The firmware of a new reference process (the platform's statics
+        // `currentHash`/`currentSvn` survive `init`).
+        self.set_firmware(FirmwareSetting::Hash(SimulatedFirmware::DEFAULT_HASH));
+        self.set_firmware(FirmwareSetting::Svn(SimulatedFirmware::DEFAULT_SVN));
+    }
+
+    fn set_firmware(&mut self, setting: FirmwareSetting) {
+        // SAFETY: see `init`.
+        match setting {
+            FirmwareSetting::Hash(hash) => unsafe { (self.entry_points.set_firmware_hash)(hash) },
+            FirmwareSetting::Svn(svn) => unsafe { (self.entry_points.set_firmware_svn)(svn) },
+        }
     }
 
     fn advance_clock(&mut self, ms: u64) {
@@ -520,7 +545,7 @@ pub use self::references::InProcReferences;
 mod references {
     use tpm2_simulator::SimulatorPlatformSignal;
 
-    use super::super::protocol::{Failure, Request};
+    use super::super::protocol::{Failure, FirmwareSetting, Request};
     use super::super::server::{self, Server};
     use super::super::{Divergence, Implementation, join_messages};
     use super::{CReference, set_reference_pid};
@@ -722,9 +747,17 @@ mod references {
         ///
         /// # Panics
         /// For signals the reference harness does not support (`Restart`,
-        /// `TestFailureMode`, `SetFirmwareHash`, `SetFirmwareSvn`).
+        /// `TestFailureMode`, and `SetFirmwareHash`/`SetFirmwareSvn`, which
+        /// carry a value: see [`Self::set_firmware`]).
         pub fn signal(&mut self, signal: SimulatorPlatformSignal) {
             self.call(Request::Signal(signal as u32));
+        }
+
+        /// Installs a firmware image with another hash or SVN on the
+        /// references (the `SetFirmwareHash`/`SetFirmwareSvn` platform
+        /// signals).
+        pub fn set_firmware(&mut self, setting: FirmwareSetting) {
+            self.call(Request::SetFirmware(setting));
         }
 
         /// Sends `_TPM_Hash_Start` to the references.

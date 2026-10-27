@@ -64,6 +64,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         d_out: &mut [u8],
         q_out: &mut [u8],
     ) -> Result<usize, TpmRc> {
+        // `CryptEccNewKeyPair()` tests ECDH first (no random values).
+        self.do_self_test(tpm2::Alg::ECDH)?;
         ecc::new_key_pair(&mut self.context.ref_rng(), curve, d_out, q_out)
     }
 
@@ -122,6 +124,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             sensitive_data
         };
         let sign = attributes.contains(TpmaObject::SIGN_ENCRYPT);
+        // `CryptEccGenerateKey()` starts with the ECDSA self test ("ECDSA is used to verify each
+        // key"), which draws from the TPM's DRBG before the key does.
+        if matches!(parms_and_id, OwnedPublicParmsAndId::Ecc(..)) {
+            self.do_self_test(tpm2::Alg::ECDSA)?;
+        }
 
         // `DRBG_AdditionalData()` input of endorsement Primary Objects: shProof and ehProof.
         let endorsement_proofs = match &primary {

@@ -100,11 +100,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.context.state.ph_enable_nv = state;
             }
 
-            // If a hierarchy was just disabled, flush its loaded objects (`ObjectFlushHierarchy`).
+            // If a hierarchy was just disabled, flush its loaded objects (`ObjectFlushHierarchy`),
+            // including those of its firmware-limited and SVN-limited hierarchies (C flushes by
+            // the `ppsHierarchy`/`spsHierarchy`/`epsHierarchy` attributes, which are set from the
+            // normalized hierarchy).
             if !state && enable != Handle::RH_PLATFORM_NV.0 {
                 for (i, slot) in self.context.state.transient_objects.iter_mut().enumerate() {
                     if let Some(obj) = slot
-                        && obj.hierarchy == enable
+                        && crate::hierarchy::normalize(obj.hierarchy) == enable
                     {
                         *slot = None;
                         self.context.state.transient_parents[i] = None;

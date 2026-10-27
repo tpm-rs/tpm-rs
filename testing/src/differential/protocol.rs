@@ -79,6 +79,19 @@ pub enum Request {
     /// forget the comparison state. A cheap replacement for a new process
     /// (e.g. one per fuzz input).
     Reinit,
+    /// Install a firmware image with another hash or SVN (the MSSIM platform
+    /// signals `TPM_SET_FW_HASH`/`TPM_SET_FW_SVN`, which carry a value).
+    SetFirmware(FirmwareSetting),
+}
+
+/// A firmware change of [`Request::SetFirmware`] (the reference platform's
+/// `_plat__SetTpmFirmwareHash`/`_plat__SetTpmFirmwareSvn`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirmwareSetting {
+    /// The firmware hash the Firmware Secret is derived from.
+    Hash(u32),
+    /// The firmware SVN (capped at the maximum SVN by the platform).
+    Svn(u16),
 }
 
 /// A failure reply: why a request failed and, for a command whose responses
@@ -156,6 +169,14 @@ pub fn write_request(w: &mut impl Write, request: &Request) -> io::Result<()> {
         }
         Request::HashEnd => w.write_all(&[6]),
         Request::Reinit => w.write_all(&[7]),
+        Request::SetFirmware(setting) => {
+            let (kind, value) = match *setting {
+                FirmwareSetting::Hash(hash) => (0, hash),
+                FirmwareSetting::Svn(svn) => (1, u32::from(svn)),
+            };
+            w.write_all(&[8, kind])?;
+            w.write_all(&value.to_be_bytes())
+        }
     }
 }
 
@@ -180,6 +201,20 @@ pub fn read_request(r: &mut impl Read) -> io::Result<Option<Request>> {
         5 => Request::HashData(read_bytes(r)?),
         6 => Request::HashEnd,
         7 => Request::Reinit,
+        8 => {
+            let [kind] = read_array(r)?;
+            let value = u32::from_be_bytes(read_array(r)?);
+            Request::SetFirmware(match kind {
+                0 => FirmwareSetting::Hash(value),
+                1 => FirmwareSetting::Svn(value as u16),
+                k => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("unknown firmware setting {k}"),
+                    ));
+                }
+            })
+        }
         t => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -251,6 +286,8 @@ mod tests {
             Request::HashEnd,
             Request::Reinit,
             Request::AdvanceClock(0),
+            Request::SetFirmware(FirmwareSetting::Hash(0x0102_0304)),
+            Request::SetFirmware(FirmwareSetting::Svn(0xFFFF)),
         ];
         let mut buf = Vec::new();
         for r in &requests {

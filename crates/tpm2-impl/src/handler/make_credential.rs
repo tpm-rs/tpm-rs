@@ -1,6 +1,7 @@
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
+use crate::self_test::kdfa_bits;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use tpm2::Marshal;
@@ -8,8 +9,7 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::commands::MakeCredential;
 use tpm2::commands::responses;
-use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
+use tpm2::crypto::{CryptoProvider, Direction, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bIdObject, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash,
@@ -116,7 +116,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let digest_bits = (digest_size * 8) as u32;
         kdfa_bits(
-            self.crypto(),
+            &self.crypto(),
             name_alg,
             &seed[..digest_size],
             b"STORAGE",
@@ -127,7 +127,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )
         .map_err(|_| TpmRc::FAILURE)?;
         kdfa_bits(
-            self.crypto(),
+            &self.crypto(),
             name_alg,
             &seed[..digest_size],
             b"INTEGRITY",
@@ -155,7 +155,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         .map_err(|_| TpmRc::FAILURE)?;
 
         // 6. Compute integrity HMAC over the encrypted credential (includes encrypted size prefix)
-        let mut hmac_ctx = HmacStream::new(self.crypto(), name_alg, &integrity_key[..digest_size])
+        let mut hmac_ctx = self
+            .crypto()
+            .hmac_stream(name_alg, &integrity_key[..digest_size])
             .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx
             .update(&credential_to_encrypt[..encrypt_len])

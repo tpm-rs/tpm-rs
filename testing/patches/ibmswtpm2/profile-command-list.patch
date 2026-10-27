@@ -6,13 +6,15 @@ The implemented command set is a profile choice. Commands that tpm-rs does
 not implement (tpm2-impl engine.rs SUPPORTED_COMMANDS) are configured CC_NO
 so that both TPMs expose the same command set (TPM_CAP_COMMANDS,
 TPM_PT_TOTAL_COMMANDS, TPM_PT_LIBRARY_COMMANDS) and reject the same command
-codes with TPM_RC_COMMAND_CODE. TPM2_CertifyX509 and the vendor commands are
-disabled by profile-no-certify-x509.patch and profile-no-vendor-commands.patch.
+codes with TPM_RC_COMMAND_CODE. TPM2_CertifyX509 is disabled by
+profile-no-certify-x509.patch. The vendor commands (TPM2_Vendor_TCG_Test and
+the Nuvoton NTC2_* commands, compiled with TPM_NUVOTON as in ibmswtpm2's
+makefile) stay enabled: tpm-rs implements them (testing's target-ibmswtpm2
+enables tpm2-impl's ntc2-vendor-commands feature).
 
-Commands configured CC_NO here: ACT_SetTimeout, ECC_Decrypt, ECC_Encrypt,
-EC_Ephemeral, PP_Commands, PolicyCapability, PolicyParameters,
-PolicyPhysicalPresence, SetAlgorithmSet, ZGen_2Phase, NV_DefineSpace2,
-NV_ReadPublic2. Commands that tpm-rs implements but the reference does not:
+Commands configured CC_NO here: ECC_Decrypt, ECC_Encrypt, EC_Ephemeral,
+PP_Commands, PolicyCapability, PolicyParameters, PolicyPhysicalPresence,
+SetAlgorithmSet, ZGen_2Phase, NV_DefineSpace2, NV_ReadPublic2. Commands that tpm-rs implements but the reference does not:
 none (so no harness exception is needed); the TPM2_HMAC/TPM2_HMAC_Start and
 TPM2_MAC/TPM2_MAC_Start variants share their command codes.
 
@@ -30,15 +32,6 @@ diff --git a/src/TpmProfile_CommandList.h b/src/TpmProfile_CommandList.h
  #define CC_YES YES
  #define CC_NO  NO
  
-@@ -99,7 +103,7 @@
- 
- // Normal commands:
- 
--#define CC_ACT_SetTimeout             (CC_YES && ACT_SUPPORT)
-+#define CC_ACT_SetTimeout             CC_NO  // tpm-rs differential testing: not implemented by tpm-rs
- #define CC_ActivateCredential         CC_YES
- #define CC_Certify                    CC_YES
- #define CC_CertifyCreation            CC_YES
 @@ -118,12 +122,12 @@
  #define CC_DictionaryAttackLockReset  CC_YES
  #define CC_DictionaryAttackParameters CC_YES

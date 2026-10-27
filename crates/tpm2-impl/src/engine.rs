@@ -55,10 +55,10 @@ use crate::owned::{
     OwnedSensitiveData,
 };
 use crate::req_resp::RequestResponseCursor;
+use crate::self_test::kdfa_bits;
 use crate::storage::manager::StorageManager;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
-use tpm2::crypto::kdf::kdfa_bits;
 use tpm2::crypto::{CryptoProvider, Direction, HashStream, HmacStream, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::platform::PcrState;
@@ -89,6 +89,10 @@ pub struct TpmEngine<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + 
     pub platform: TpmPlatform<'a, C, S, T, R>,
     /// The volatile and persistent TPM state.
     pub state: GlobalState,
+    /// The algorithm self-test state (`g_toTest`, and whether a self test failed, i.e. Failure
+    /// mode), which TPM 2.0 Part 1 ("Command Dispatch") considers "different from the command
+    /// execution state": see [`crate::self_test`].
+    pub self_test: crate::self_test::SelfTestState,
 }
 
 /// Error returned by the [`tpm2::Connection`] implementation of [`TpmEngine`] when the response
@@ -443,10 +447,6 @@ pub struct GlobalState {
     pub platform_alg: Option<tpm2::TpmiAlgHash>,
     /// The hash algorithm used when setting the Lockout policy.
     pub lockout_alg: Option<tpm2::TpmiAlgHash>,
-    /// List of algorithms that have not yet undergone self-testing.
-    pub untested_algorithms: [tpm2::Alg; 32],
-    /// Number of valid entries in `untested_algorithms`.
-    pub untested_algorithms_len: usize,
     /// Counter tracking the number of failed authorization attempts (`failedTries`).
     pub failed_tries: u32,
     /// Count of authorization failures before the lockout is imposed (`maxTries`).
@@ -545,6 +545,16 @@ pub struct GlobalState {
     /// execution is not audited and leaves the digest cleared (the C reference marks this case
     /// with a digest size of 1).
     pub command_audit_alg_changed: bool,
+    /// The Authenticated Countdown Timers (counters, policies, the state saved by
+    /// `TPM2_Shutdown(TPM_SU_STATE)` and the tick bookkeeping).
+    pub act: crate::act::ActState,
+    /// The Nuvoton configuration of the `NTC2_*` vendor commands (`ntc2state` of
+    /// `ibmswtpm2`'s `ntc2.c`). As in `ibmswtpm2`, it lives in RAM only ("This emulation does
+    /// not store the configuration in NV memory"): it starts at
+    /// [`crate::handler::vendor::NTC2_INITIAL_CONFIG`] when the TPM is created and is kept
+    /// across `_TPM_Init` (power cycles, TPM Reset/Restart/Resume), but not in NV.
+    #[cfg(feature = "ntc2-vendor-commands")]
+    pub ntc2_config: tpm2::commands::Ntc2CfgStruct,
 }
 
 #[derive(Debug, Clone)]
@@ -677,41 +687,6 @@ struct PolicyAuthCheck<'a> {
     pos: Position,
 }
 
-pub(crate) const INITIAL_UNTESTED_ALGORITHMS: [tpm2::Alg; 32] = [
-    tpm2::Alg::SHA1,
-    tpm2::Alg::AES,
-    tpm2::Alg::SHA256,
-    tpm2::Alg::SHA384,
-    tpm2::Alg::SHA512,
-    tpm2::Alg::RSASSA,
-    tpm2::Alg::RSAES,
-    tpm2::Alg::RSAPSS,
-    tpm2::Alg::OAEP,
-    tpm2::Alg::ECDSA,
-    tpm2::Alg::ECDAA,
-    tpm2::Alg::ECSCHNORR,
-    tpm2::Alg::KDF1_SP800_108,
-    tpm2::Alg::CFB,
-    tpm2::Alg::RSA,
-    tpm2::Alg::ECC,
-    tpm2::Alg::KEYEDHASH,
-    tpm2::Alg::HMAC,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-    tpm2::Alg::NULL,
-];
-
 /// Nominal clock-rate divisor of the platform timer (`CLOCK_NOMINAL` in the C platform `Clock.c`).
 pub(crate) const CLOCK_NOMINAL: u32 = 30000;
 /// Divisor step for `TPM_CLOCK_COARSE_SLOWER/FASTER` (`CLOCK_ADJUST_COARSE`).
@@ -744,7 +719,10 @@ const STATE_SAVE_HANDLE: u32 = 0x00FF_FFFE;
 /// Marker byte identifying the layout of the saved-state blob.
 const STATE_SAVE_MARKER: u8 = 0x5A;
 /// Upper bound of the saved-state blob size.
-const STATE_SAVE_MAX_LEN: usize = 512 + MAX_ACTIVE_SESSIONS * (1 + 4 + 8);
+const STATE_SAVE_MAX_LEN: usize =
+    512 + MAX_ACTIVE_SESSIONS * (1 + 4 + 8) + 2 + crate::act::ACT_COUNT * ACT_SAVE_LEN;
+/// The saved state of one ACT: its timeout, policy algorithm and policy digest.
+const ACT_SAVE_LEN: usize = 4 + TpmiAlgHash::MAX_SIZE + tpm2::Tpm2bDigest::MAX_SIZE;
 /// Implementation-specific virtual NV handle holding the NV copy of the PCR bank allocation
 /// (`NV_WRITE_PERSISTENT(pcrAllocated, ...)` in `PCRAllocate`). `TPM2_PCR_Allocate` only writes
 /// this NV copy; the active (RAM) allocation is replaced by it at the next `_TPM_Init`
@@ -823,8 +801,6 @@ impl Default for GlobalState {
             endorsement_alg: None,
             platform_alg: None,
             lockout_alg: None,
-            untested_algorithms: INITIAL_UNTESTED_ALGORITHMS,
-            untested_algorithms_len: 18,
             failed_tries: 0,
             max_tries: 3,
             recovery_time: 1000,
@@ -872,6 +848,9 @@ impl Default for GlobalState {
             command_audit_digest: OwnedDigest::default(),
             command_audit_cp_hash: None,
             command_audit_alg_changed: false,
+            act: crate::act::ActState::default(),
+            #[cfg(feature = "ntc2-vendor-commands")]
+            ntc2_config: crate::handler::vendor::NTC2_INITIAL_CONFIG,
         }
     }
 }
@@ -903,8 +882,6 @@ impl GlobalState {
         self.lockout_auth_enabled = true;
         self.da_pending_on_nv = false;
         self.commit_nonce = [0x5a; 64];
-        self.untested_algorithms = INITIAL_UNTESTED_ALGORITHMS;
-        self.untested_algorithms_len = 18;
         self.audit_hash_alg = tpm2::Alg::SHA512.id();
         self.audit_commands = crate::command_audit::CommandAuditList::manufacture_default();
     }
@@ -981,8 +958,6 @@ impl GlobalState {
         self.endorsement_alg = None;
         self.platform_alg = None;
         self.lockout_alg = None;
-        self.untested_algorithms = INITIAL_UNTESTED_ALGORITHMS;
-        self.untested_algorithms_len = 18;
         self.commit_counter = 0;
         self.commit_array = [0u8; 16];
         self.commit_nonce = [0x5a; 64];
@@ -1314,11 +1289,16 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
     /// Gets the authorization value associated with a handle (either a hierarchy, a transient object, an NV Index, or a persistent object).
     pub fn handle_auth(&mut self, handle: u32) -> OwnedAuth {
+        // A firmware-limited or SVN-limited hierarchy is authorized by its base hierarchy (TPM
+        // 2.0 Part 1, "Primary Seed Authorizations"; C `HierarchyNormalizeHandle`).
+        let handle = crate::hierarchy::normalize(handle);
         if handle == Handle::RH_OWNER.0 {
             self.state.owner_auth
         } else if handle == Handle::RH_ENDORSEMENT.0 {
             self.state.endorsement_auth
-        } else if handle == Handle::RH_PLATFORM.0 {
+        } else if handle == Handle::RH_PLATFORM.0 || crate::act::is_implemented_act(handle) {
+            // Part 1, "Authenticated Countdown Timer (ACT)": "The *authValue* is the same as the
+            // current *platformAuth*".
             self.state.platform_auth
         } else if handle == Handle::RH_LOCKOUT.0 {
             self.state.lockout_auth
@@ -1365,6 +1345,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
     /// Gets the auth policy associated with a handle.
     pub fn handle_policy(&mut self, handle: u32) -> Result<OwnedDigest, TpmRc> {
+        // A firmware-limited or SVN-limited hierarchy is authorized by its base hierarchy (TPM
+        // 2.0 Part 1, "Primary Seed Authorizations"; C `HierarchyNormalizeHandle`).
+        let handle = crate::hierarchy::normalize(handle);
         if handle == Handle::RH_OWNER.0 {
             return Ok(self.state.owner_policy);
         }
@@ -1376,6 +1359,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         }
         if handle == Handle::RH_LOCKOUT.0 {
             return Ok(self.state.lockout_policy);
+        }
+        if let Some(index) = crate::act::act_index(handle) {
+            return Ok(self.state.act.policies[index].auth_policy);
         }
         if let Some(obj) = self.state.find_transient_object(handle) {
             Ok(obj.public.auth_policy)
@@ -1407,6 +1393,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     }
 
     pub fn has_da_protection(&mut self, handle: u32) -> bool {
+        // A firmware-limited or SVN-limited hierarchy is authorized by its base hierarchy (TPM
+        // 2.0 Part 1, "Primary Seed Authorizations"; C `HierarchyNormalizeHandle`).
+        let handle = crate::hierarchy::normalize(handle);
         if handle == Handle::RH_OWNER.0
             || handle == Handle::RH_ENDORSEMENT.0
             || handle == Handle::RH_PLATFORM.0
@@ -1634,6 +1623,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         Ok(Self {
             platform,
             state: GlobalState::default(),
+            self_test: Default::default(),
         })
     }
 
@@ -1694,7 +1684,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         #[cfg(feature = "reference-rng")]
         self.crypt_rand_init();
         self.time_power_on();
+        // `_plat__ACT_EnableTicks(FALSE)`: the ACTs do not count until the next TPM2_Startup.
+        self.act_catch_up();
+        self.state.act.disable_ticks();
         self.state.reset_in_place();
+        // `CryptInitializeToTest()` (`CryptInit()`): every algorithm needs its test again, and
+        // Failure mode ends.
+        self.self_test.initialize();
         self.restore_hierarchy_auths();
         self.restore_persistent_state();
         self.restore_pcr_allocation();
@@ -2101,7 +2097,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// `STATE_RESET_DATA` (restored on Restart and Resume): `nullSeed`, `nullProof`,
     /// `restartCount`, `objectContextID`, the context counters, the saved-session table,
     /// `commitCounter`, `commitNonce`, `commitArray` and `commandAuditDigest`. `STATE_CLEAR_DATA` (restored on Resume only): `platformAuth`,
-    /// `platformPolicy`, `platformAlg`, `shEnable`, `ehEnable` and `phEnableNV`.
+    /// `platformPolicy`, `platformAlg`, `shEnable`, `ehEnable` and `phEnableNV`. The ACT state
+    /// of `ORDERLY_DATA` (restored on Resume only): the timeouts and `signaled` attributes
+    /// saved by [`crate::act::ActState::shutdown_state`] and the ACT policies.
     ///
     /// PCR values and the remaining `GlobalState` fields are not written here; they are kept by
     /// the platform RAM, which `_TPM_Init` ([`GlobalState::reset_in_place`]) does not clear.
@@ -2164,6 +2162,25 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 .try_into()
                 .unwrap(),
         );
+        // The ACT state of `go` (`go.signaledACT`, `go.ACT_x`), restored by TPM Resume.
+        w += self
+            .state
+            .act
+            .saved_signaled
+            .marshal((&mut buf[w..w + 2]).try_into().unwrap());
+        for index in 0..crate::act::ACT_COUNT {
+            let policy = self.state.act.policies[index];
+            w += self.state.act.saved_timeouts[index]
+                .marshal((&mut buf[w..w + 4]).try_into().unwrap());
+            w += policy
+                .hash_alg
+                .marshal((&mut buf[w..w + TpmiAlgHash::MAX_SIZE]).try_into().unwrap());
+            w += policy.auth_policy.marshal(
+                (&mut buf[w..w + tpm2::Tpm2bDigest::MAX_SIZE])
+                    .try_into()
+                    .unwrap(),
+            );
+        }
 
         let mut storage = StorageManager::new(&mut *self.platform.storage);
         let _ = storage.undefine_space(STATE_SAVE_HANDLE);
@@ -2235,6 +2252,16 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             let platform_policy = OwnedDigest::unmarshal(&mut slice).ok()?;
             let platform_alg = <Option<tpm2::TpmiAlgHash>>::unmarshal(&mut slice).ok()?;
             let command_audit_digest = OwnedDigest::unmarshal(&mut slice).ok()?;
+            let act_saved_signaled = u16::unmarshal(&mut slice).ok()?;
+            let mut act_saved_timeouts = [0u32; crate::act::ACT_COUNT];
+            let mut act_policies = [crate::act::ActPolicy::default(); crate::act::ACT_COUNT];
+            for index in 0..crate::act::ACT_COUNT {
+                act_saved_timeouts[index] = u32::unmarshal(&mut slice).ok()?;
+                act_policies[index] = crate::act::ActPolicy {
+                    hash_alg: <Option<tpm2::TpmiAlgHash>>::unmarshal(&mut slice).ok()?,
+                    auth_policy: OwnedDigest::unmarshal(&mut slice).ok()?,
+                };
+            }
 
             self.state.null_seed_size = null_seed_size;
             self.state.null_seed = null_seed;
@@ -2256,6 +2283,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             self.state.platform_policy = platform_policy;
             self.state.platform_alg = platform_alg;
             self.state.command_audit_digest = command_audit_digest;
+            self.state.act.saved_signaled = act_saved_signaled;
+            self.state.act.saved_timeouts = act_saved_timeouts;
+            self.state.act.policies = act_policies;
             Some(())
         })();
         parsed.is_some()
@@ -2336,6 +2366,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             }
         };
 
+        // The event sequence starts a hash of every implemented algorithm (a failed self test
+        // has put the TPM into Failure mode).
+        let _ = self.self_test_sequence_start(&SequenceType::Event);
         let seq = ActiveSequence::new(handle, Tpm2bAuth::default(), SequenceType::Event);
         self.state.active_sequences[index] = Some(seq);
         self.state.drtm_handle = handle;
@@ -2473,7 +2506,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             .clock_offset
             .wrapping_add(self.state.tpm_time_ms as i64);
         self.state.tpm_time_ms = 0;
-        self.state.last_timer_read_ms = Some(self.platform.timer.timer_read());
+        let now_ms = self.platform.timer.timer_read();
+        self.state.last_timer_read_ms = Some(now_ms);
+        // The once-per-second ACT ticks restart with the platform timer.
+        self.state.act.power_on(now_ms);
         self.state.clock_adjust_rate = CLOCK_NOMINAL;
         self.state.clock_adjust_remainder = 0;
         self.state.timer_stopped = true;
@@ -2578,7 +2614,98 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         }
     }
 
+    /// Processes the once-per-second ACT ticks that elapsed since the last call (see
+    /// [`crate::act`]). The ticks are applied lazily, before each command and at `_TPM_Init`:
+    /// only commands observe the ACTs.
+    pub(crate) fn act_catch_up(&mut self) {
+        let now_ms = self.platform.timer.timer_read();
+        self.state.act.catch_up(now_ms);
+    }
+
+    /// The `signaled` attribute of the ACT with handle `handle` (`_plat__ACT_GetSignaled()`,
+    /// the MSSIM `TPM_ACT_GET_SIGNALED` platform signal), after the ticks that elapsed;
+    /// `false` if `handle` is not an implemented ACT.
+    pub fn act_signaled(&mut self, handle: u32) -> bool {
+        self.act_catch_up();
+        crate::act::act_index(handle).is_some_and(|index| self.state.act.counters[index].signaled)
+    }
+
     pub fn execute_command(&mut self, cmd_buf: &[u8], resp_buf: &mut [u8]) -> Result<usize, TpmRc> {
+        // The ACTs count down with the platform timer, whatever the state of the TPM (the ticks
+        // are dropped before TPM2_Startup; Part 1, ACT "Failure Mode": "the ACT should continue
+        // to count down").
+        self.act_catch_up();
+        // TPM 2.0 Part 1, "Failure Mode": "While in Failure mode, the TPM returns
+        // `TPM_RC_FAILURE` in response to any command except `TPM2_GetTestResult()` or
+        // `TPM2_GetCapability()`." A self test that fails during a command puts the TPM into
+        // Failure mode and fails the command (`TPM_RC_FAILURE`), whatever it would have returned.
+        if self.self_test.failed() {
+            return self.execute_in_failure_mode(cmd_buf, resp_buf);
+        }
+        let result = self.execute_command_tested(cmd_buf, resp_buf);
+        if self.self_test.failed() {
+            return Err(TpmRc::FAILURE);
+        }
+        result
+    }
+
+    /// A command in Failure mode (`TpmFailureMode()`): `TPM2_GetTestResult` returns the failure
+    /// information (`outData`: the 64-bit failure location, which is 0 here, and the failure
+    /// code `FATAL_ERROR_SELF_TEST`; `testResult`: `TPM_RC_FAILURE`), and `TPM2_GetCapability` of
+    /// `TPM_CAP_TPM_PROPERTIES` executes normally (the specification requires only a few
+    /// properties; "An implementation is allowed to return other property values"). Both must
+    /// be sent without sessions (Part 3, TPM2_GetTestResult: "If the TPM is in Failure mode, then
+    /// *tag* is required to be `TPM_ST_NO_SESSIONS` or the TPM shall return `TPM_RC_FAILURE`").
+    /// Every other command is `TPM_RC_FAILURE`.
+    fn execute_in_failure_mode(
+        &mut self,
+        cmd_buf: &[u8],
+        resp_buf: &mut [u8],
+    ) -> Result<usize, TpmRc> {
+        const GET_TEST_RESULT_SIZE: usize = CommandHeader::MAX_SIZE;
+        const GET_CAPABILITY_SIZE: usize = CommandHeader::MAX_SIZE + 12;
+        if cmd_buf.len() < CommandHeader::MAX_SIZE {
+            return Err(TpmRc::FAILURE);
+        }
+        let be16 = |i: usize| u16::from_be_bytes([cmd_buf[i], cmd_buf[i + 1]]);
+        let be32 = |i: usize| {
+            u32::from_be_bytes([cmd_buf[i], cmd_buf[i + 1], cmd_buf[i + 2], cmd_buf[i + 3]])
+        };
+        if be16(0) != u16::from(TpmiStCommandTag::NoSessions) || be32(2) as usize != cmd_buf.len() {
+            return Err(TpmRc::FAILURE);
+        }
+        let code = be32(6);
+        if code == TpmCc::GetTestResult.code() && cmd_buf.len() == GET_TEST_RESULT_SIZE {
+            let mut body = [0u8; 2 + 12 + 4];
+            body[..2].copy_from_slice(&12u16.to_be_bytes());
+            // The failure location (8 octets, 0) and the failure code.
+            body[10..14].copy_from_slice(&crate::self_test::FATAL_ERROR_SELF_TEST.to_be_bytes());
+            body[14..].copy_from_slice(&TpmRc::FAILURE.get().to_be_bytes());
+            let size = ResponseHeader::MAX_SIZE + body.len();
+            let out = resp_buf.get_mut(..size).ok_or(TpmRc::FAILURE)?;
+            let header = ResponseHeader {
+                tag: TpmSt::NO_SESSIONS,
+                size: size as u32,
+                rc: Ok(()),
+            };
+            header.marshal((&mut out[..ResponseHeader::MAX_SIZE]).try_into().unwrap());
+            out[ResponseHeader::MAX_SIZE..].copy_from_slice(&body);
+            return Ok(size);
+        }
+        if code == TpmCc::GetCapability.code()
+            && cmd_buf.len() == GET_CAPABILITY_SIZE
+            && be32(CommandHeader::MAX_SIZE) == tpm2::TpmCap::TPMProperties as u32
+        {
+            return self.execute_command_tested(cmd_buf, resp_buf);
+        }
+        Err(TpmRc::FAILURE)
+    }
+
+    fn execute_command_tested(
+        &mut self,
+        cmd_buf: &[u8],
+        resp_buf: &mut [u8],
+    ) -> Result<usize, TpmRc> {
         // The temporary object slots of the persistent objects referenced by the previous command
         // are released when it ends (`ObjectCleanupEvict()` in `ExecCommand.c`).
         self.state.command_persistent_objects = 0;
@@ -3364,7 +3491,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
                 if is_xor {
                     xor_obfuscation(
-                        self.platform.crypto,
+                        &self.crypto(),
                         auth_hash,
                         &kdfa_key[..kdfa_key_len],
                         auth_session.nonce.get_buffer(),
@@ -3376,7 +3503,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     let mut derived_key = [0u8; 64];
                     let mut derived_iv = [0u8; 16];
                     derive_key_and_iv(
-                        self.platform.crypto,
+                        &self.crypto(),
                         auth_hash,
                         &kdfa_key[..kdfa_key_len],
                         b"CFB",
@@ -3389,7 +3516,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
                     let mut iv = derived_iv;
                     crate::handler::sym_encrypt_decrypt(
-                        self.platform.crypto,
+                        &self.crypto(),
                         sym_obj,
                         &derived_key[..(key_bits / 8) as usize],
                         &mut iv,
@@ -3440,6 +3567,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// - a PCR in the policy group requires one once `TPM2_PCR_SetAuthPolicy` set a policy
     ///   algorithm for it.
     fn is_policy_session_required(&mut self, cc: TpmCc, handle_index: usize, handle: u32) -> bool {
+        // A firmware-limited or SVN-limited hierarchy is authorized by its base hierarchy (TPM
+        // 2.0 Part 1, "Primary Seed Authorizations"; C `HierarchyNormalizeHandle`).
+        let handle = crate::hierarchy::normalize(handle);
         match command_auth_role(cc, handle_index) {
             AuthRole::Dup => true,
             AuthRole::Admin => {
@@ -3464,7 +3594,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
     /// Returns whether the authValue of `handle` may be used to authorize handle `handle_index`
     /// of command `cc` with a password or HMAC session (C `IsAuthValueAvailable()`):
-    /// - permanent handles: only the hierarchies, `TPM_RH_LOCKOUT` and `TPM_RH_NULL`;
+    /// - permanent handles: only the hierarchies, `TPM_RH_LOCKOUT` and `TPM_RH_NULL`, and the
+    ///   implemented ACTs while `phEnable` is SET;
     /// - sequence objects: always;
     /// - other objects: only if the sensitive area is loaded (not public-only) and either
     ///   `userWithAuth` is SET or the ADMIN role is required and `adminWithPolicy` is CLEAR;
@@ -3472,7 +3603,15 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     ///   need `TPMA_NV_WRITTEN` and `pinCount < pinLimit`, other indices `TPMA_NV_AUTHREAD`;
     /// - PCRs: always.
     fn is_auth_value_available(&mut self, cc: TpmCc, handle_index: usize, handle: u32) -> bool {
+        // A firmware-limited or SVN-limited hierarchy is authorized by its base hierarchy (TPM
+        // 2.0 Part 1, "Primary Seed Authorizations"; C `HierarchyNormalizeHandle`).
+        let handle = crate::hierarchy::normalize(handle);
         match Handle(handle).handle_type() {
+            // Part 1, "Authenticated Countdown Timer (ACT)": the ACT authValue "can only be used
+            // if *phEnable* is SET".
+            Some(TpmHt::Permanent) if crate::act::is_implemented_act(handle) => {
+                self.state.ph_enable
+            }
             Some(TpmHt::Permanent) => matches!(
                 Handle(handle),
                 Handle::RH_OWNER
@@ -3531,6 +3670,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         handle_index: usize,
         handle: u32,
     ) -> bool {
+        // A firmware-limited or SVN-limited hierarchy is authorized by its base hierarchy (TPM
+        // 2.0 Part 1, "Primary Seed Authorizations"; C `HierarchyNormalizeHandle`).
+        let handle = crate::hierarchy::normalize(handle);
         match Handle(handle).handle_type() {
             Some(TpmHt::Transient) | Some(TpmHt::Persistent) => self
                 .authorized_object(handle)
@@ -3847,9 +3989,12 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     None
                 };
 
+                // C `s_associatedHandles[i] = HierarchyNormalizeHandle(command->handles[i])`: a
+                // firmware-limited or SVN-limited hierarchy is authorized as its base hierarchy
+                // (its authValue, authPolicy, and the entity a session can be bound to).
                 let entity_handle = if i < cmd.session_to_handle_idx_len {
                     let h_idx = cmd.session_to_handle_idx[i];
-                    Some(cmd.handles[h_idx])
+                    Some(crate::hierarchy::normalize(cmd.handles[h_idx]))
                 } else {
                     None
                 };
@@ -3996,7 +4141,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 let mut computed_hmac = [0u8; 64];
                 let mut cp_hash = [0u8; 64];
                 let (cp_hash_len, computed_hmac_len) = compute_hash_and_hmac(
-                    self.platform.crypto,
+                    &self.crypto(),
                     auth_hash,
                     &hmac_key[..hmac_key_len],
                     &updates_hash_refs[..updates_hash_refs_len],
@@ -4084,6 +4229,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// indices use their `nameAlg`, and the PCR policy group (PCR 20–22) uses the algorithm set
     /// by `TPM2_PCR_SetAuthPolicy`.
     fn handle_policy_alg(&mut self, handle: u32) -> Option<TpmiAlgHash> {
+        // A firmware-limited or SVN-limited hierarchy is authorized by its base hierarchy (TPM
+        // 2.0 Part 1, "Primary Seed Authorizations"; C `HierarchyNormalizeHandle`).
+        let handle = crate::hierarchy::normalize(handle);
         if handle == Handle::RH_OWNER.0 {
             self.state.owner_alg
         } else if handle == Handle::RH_ENDORSEMENT.0 {
@@ -4092,6 +4240,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             self.state.platform_alg
         } else if handle == Handle::RH_LOCKOUT.0 {
             self.state.lockout_alg
+        } else if let Some(index) = crate::act::act_index(handle) {
+            self.state.act.policies[index].hash_alg
         } else if let Some(obj) = self.state.find_transient_object(handle) {
             obj.public.name_alg
         } else if (0x81000000..=0x81FFFFFF).contains(&handle) {
@@ -4231,7 +4381,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 }
                 let mut name_hash = [0u8; 64];
                 let name_hash_len = compute_hash(
-                    self.platform.crypto,
+                    &self.crypto(),
                     session.auth_hash,
                     &name_hash_input[..name_hash_offset],
                     &mut name_hash,
@@ -4307,7 +4457,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         };
         let mut template_hash = [0u8; 64];
         let template_hash_len = compute_hash(
-            self.platform.crypto,
+            &self.crypto(),
             auth_hash,
             template_bytes,
             &mut template_hash,
@@ -4455,7 +4605,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
                 if is_xor {
                     xor_obfuscation(
-                        self.platform.crypto,
+                        &self.crypto(),
                         auth_hash,
                         &kdfa_key[..kdfa_key_len],
                         nonce_tpm_new.get_buffer(),
@@ -4468,7 +4618,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     let mut derived_key = [0u8; 64];
                     let mut derived_iv = [0u8; 16];
                     derive_key_and_iv(
-                        self.platform.crypto,
+                        &self.crypto(),
                         auth_hash,
                         &kdfa_key[..kdfa_key_len],
                         b"CFB",
@@ -4481,7 +4631,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
                     let mut iv = derived_iv;
                     crate::handler::sym_encrypt_decrypt(
-                        self.platform.crypto,
+                        &self.crypto(),
                         sym_obj,
                         &derived_key[..(key_bits / 8) as usize],
                         &mut iv,
@@ -4575,7 +4725,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
             let mut rp_hash = [0u8; 64];
             let rp_hash_len = compute_hash(
-                self.platform.crypto,
+                &self.crypto(),
                 auth_hash,
                 &rp_hash_input[..rp_hash_input_len],
                 &mut rp_hash,
@@ -4622,7 +4772,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     0
                 } else {
                     compute_response_hmac(
-                        self.platform.crypto,
+                        &self.crypto(),
                         auth_hash,
                         &hmac_key[..hmac_key_len],
                         &updates_hmac_refs,
@@ -4673,7 +4823,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
                     let mut new_digest = [0u8; 64];
                     let new_digest_len = compute_hash(
-                        self.platform.crypto,
+                        &crate::self_test::Tested::new(&*self.platform.crypto, &self.self_test),
                         auth_hash,
                         &extend_buf[..d_len + cp_len + rp_hash_len],
                         &mut new_digest,
@@ -4871,7 +5021,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
             if is_xor {
                 xor_obfuscation(
-                    self.platform.crypto,
+                    &self.crypto(),
                     auth_hash,
                     &kdfa_key[..kdfa_key_len],
                     nonce_tpm_new.get_buffer(),
@@ -4883,7 +5033,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 let mut derived_key = [0u8; 64];
                 let mut derived_iv = [0u8; 16];
                 derive_key_and_iv(
-                    self.platform.crypto,
+                    &self.crypto(),
                     auth_hash,
                     &kdfa_key[..kdfa_key_len],
                     b"CFB",
@@ -4896,7 +5046,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
                 let mut iv = derived_iv;
                 crate::handler::sym_encrypt_decrypt(
-                    self.platform.crypto,
+                    &self.crypto(),
                     sym_obj,
                     &derived_key[..(key_bits / 8) as usize],
                     &mut iv,
@@ -4983,7 +5133,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
             let mut rp_hash = [0u8; 64];
             let rp_hash_len = compute_hash(
-                self.platform.crypto,
+                &self.crypto(),
                 auth_hash,
                 &rp_hash_input[..rp_hash_input_len],
                 &mut rp_hash,
@@ -5030,7 +5180,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     0
                 } else {
                     compute_response_hmac(
-                        self.platform.crypto,
+                        &self.crypto(),
                         auth_hash,
                         &hmac_key[..hmac_key_len],
                         &updates_hmac_refs,
@@ -5081,7 +5231,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
                     let mut new_digest = [0u8; 64];
                     let new_digest_len = compute_hash(
-                        self.platform.crypto,
+                        &crate::self_test::Tested::new(&*self.platform.crypto, &self.self_test),
                         auth_hash,
                         &extend_buf[..d_len + cp_len + rp_hash_len],
                         &mut new_digest,
@@ -5263,10 +5413,12 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             // (`NvIndexIsAccessible`), whatever command it is passed to. Positions whose
             // interface type cannot hold an NV Index (objects, contexts, sessions, permanent
             // handles) reject it at handle unmarshaling instead (`TPM_RC_VALUE`, below).
-            // Firmware-limited and SVN-limited hierarchies (valid `TPMI_RH_HIERARCHY` and
-            // `TPMI_DH_PARENT` values) are not available: see [`limited_hierarchy_error`].
-            if let Some(rc) = limited_hierarchy_error(handle) {
-                return Err(rc.with(pos));
+            // A firmware-limited or SVN-limited hierarchy (a `TPMI_RH_HIERARCHY` and
+            // `TPMI_DH_PARENT` value) is present only if it is available: its base hierarchy is
+            // enabled and the firmware provides its additional secret (`EntityGetLoadStatus` →
+            // `ValidateHierarchy`, [`TpmEngine::validate_hierarchy`]).
+            if crate::hierarchy::is_limited(handle) {
+                self.validate_hierarchy(handle).map_err(|rc| rc.with(pos))?;
             }
             // External and permanent NV Indexes (valid `TPMI_RH_NV_INDEX` values) are not
             // implemented. The specification is silent on their load status; this follows the TCG
@@ -5311,9 +5463,12 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         return Err(TpmRc::VALUE.with(pos));
                     }
                     if let Some(obj) = self.state.find_transient_object(handle) {
-                        if (obj.hierarchy == 0x40000001 && !self.state.sh_enable)
-                            || (obj.hierarchy == 0x4000000B && !self.state.eh_enable)
-                            || (obj.hierarchy == 0x4000000C && !self.state.ph_enable)
+                        // An object of a firmware-limited or SVN-limited hierarchy belongs to its
+                        // base hierarchy.
+                        let base = crate::hierarchy::normalize(obj.hierarchy);
+                        if (base == 0x40000001 && !self.state.sh_enable)
+                            || (base == 0x4000000B && !self.state.eh_enable)
+                            || (base == 0x4000000C && !self.state.ph_enable)
                         {
                             return Err(TpmRc::HIERARCHY.with(pos));
                         }
@@ -5452,14 +5607,28 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         return Err(TpmRc::VALUE.with(pos));
                     }
                 }
+            } else if cc == TpmCc::SetPrimaryPolicy
+                && (Handle::RH_ACT_0.0..=Handle::RH_ACT_F.0).contains(&handle)
+            {
+                // `TPMI_RH_HIERARCHY_POLICY` admits every ACT handle; an ACT that is not
+                // implemented is not loaded (the reference's `EntityGetLoadStatus` reports it
+                // like an invalid hierarchy, `TPM_RC_VALUE`).
+                if !crate::act::is_implemented_act(handle) {
+                    return Err(TpmRc::VALUE.with(pos));
+                }
             } else if expects_permanent_handle(cc, h_idx) {
                 if !(0x40000000..=0x40FFFFFF).contains(&handle) {
                     return Err(TpmRc::VALUE.with(pos));
                 }
                 // The exact `TPMI_RH_*` interface type of the handle (e.g. `TPMI_RH_ENDORSEMENT`,
                 // `TPMI_RH_PROVISION`): any other value fails at handle unmarshaling.
+                // `TPMI_RH_HIERARCHY` (`TPM2_CreatePrimary`) also holds the firmware-limited and
+                // SVN-limited hierarchies.
+                let limited_hierarchy =
+                    cc == TpmCc::CreatePrimary && crate::hierarchy::is_limited(handle);
                 if let Some(allowed) = permanent_handle_type(cc, h_idx)
                     && !allowed.contains(&handle)
+                    && !limited_hierarchy
                 {
                     return Err(TpmRc::VALUE.with(pos));
                 }
@@ -5470,11 +5639,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     | 0x4000000C // Platform
                     | 0x4000000A // Lockout
                     | 0x40000007 // Null
-                );
+                ) || crate::hierarchy::is_limited(handle);
                 if !is_valid_hierarchy {
                     return Err(TpmRc::VALUE.with(pos));
                 }
             } else if (0x40000000..=0x40FFFFFF).contains(&handle) {
+                // The implemented ACTs are always loaded (`EntityGetLoadStatus`); whether
+                // their authValue may be used depends on phEnable (`is_auth_value_available`).
                 let is_valid_hierarchy = matches!(
                     handle,
                     0x40000001 // Owner
@@ -5483,7 +5654,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     | 0x4000000A // Lockout
                     | 0x40000007 // Null
                     | 0x40000010 // RH_AUTH_00 (VENDOR_PERMANENT)
-                );
+                ) || crate::hierarchy::is_limited(handle)
+                    || crate::act::is_implemented_act(handle);
                 if !is_valid_hierarchy {
                     return Err(TpmRc::VALUE.with(pos));
                 }
@@ -5658,6 +5830,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             TpmCc::ReadClock => handler.read_clock(request),
             TpmCc::ClockSet => handler.clock_set(request),
             TpmCc::ClockRateAdjust => handler.clock_rate_adjust(request),
+            TpmCc::ACTSetTimeout => handler.act_set_timeout(request),
             TpmCc::ContextSave => handler.context_save(request),
             TpmCc::ContextLoad => handler.context_load(request),
             TpmCc::ReadPublic => handler.read_public(request),
@@ -5738,6 +5911,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             TpmCc::PolicyRestart => handler.policy_restart(request),
             TpmCc::ECDHKeyGen => handler.ecdh_keygen(request),
             TpmCc::ECCParameters => handler.ecc_parameters(request),
+            TpmCc::VendorTcgTest => handler.vendor_tcg_test(request),
+            #[cfg(feature = "ntc2-vendor-commands")]
+            TpmCc::NTC2PreConfig => handler.ntc2_pre_config(request),
+            #[cfg(feature = "ntc2-vendor-commands")]
+            TpmCc::NTC2LockPreConfig => handler.ntc2_lock_pre_config(request),
+            #[cfg(feature = "ntc2-vendor-commands")]
+            TpmCc::NTC2GetConfig => handler.ntc2_get_config(request),
             _ => Err(TpmRc::COMMAND_CODE),
         }?;
 
@@ -5793,6 +5973,7 @@ pub fn command_handles_count(cc: TpmCc) -> usize {
         TpmCc::ReadClock => 0,
         TpmCc::ClockSet => 1,
         TpmCc::ClockRateAdjust => 1,
+        TpmCc::ACTSetTimeout => 1,
         TpmCc::ContextSave => 1,
         TpmCc::ContextLoad => 0,
         TpmCc::ReadPublic => 1,
@@ -5934,6 +6115,19 @@ pub fn get_command_attribute(cc: TpmCc) -> tpm2::TpmaCc {
     if matches!(cc, TpmCc::SequenceComplete | TpmCc::EventSequenceComplete) {
         attr |= tpm2::TpmaCc::FLUSHED;
     }
+    // Vendor commands (`TPMA_CC_INITIALIZER(..., v = 1, ...)`): `commandIndex` is the low 16
+    // bits of the command code and `V` is SET. `ibmswtpm2` gives its Nuvoton `NTC2_*` commands
+    // the `nv` attribute.
+    if cc.is_vendor() {
+        attr |= tpm2::TpmaCc::V;
+    }
+    #[cfg(feature = "ntc2-vendor-commands")]
+    if matches!(
+        cc,
+        TpmCc::NTC2PreConfig | TpmCc::NTC2LockPreConfig | TpmCc::NTC2GetConfig
+    ) {
+        attr |= tpm2::TpmaCc::NV;
+    }
     attr
 }
 
@@ -5941,16 +6135,26 @@ pub fn get_command_attribute(cc: TpmCc) -> tpm2::TpmaCc {
 /// `CommandAttributeData.h` (`IsSessionAllowed`): `TPM2_Startup`, `TPM2_ContextLoad`,
 /// `TPM2_ContextSave` and `TPM2_FlushContext`. Sending them with `TPM_ST_SESSIONS` fails with
 /// `TPM_RC_AUTH_CONTEXT`.
+///
+/// `ibmswtpm2` also gives its Nuvoton `NTC2_*` vendor commands `NO_SESSIONS`.
 pub(crate) fn is_session_allowed(cc: TpmCc) -> bool {
+    #[cfg(feature = "ntc2-vendor-commands")]
+    if matches!(
+        cc,
+        TpmCc::NTC2PreConfig | TpmCc::NTC2LockPreConfig | TpmCc::NTC2GetConfig
+    ) {
+        return false;
+    }
     !matches!(
         cc,
         TpmCc::Startup | TpmCc::ContextLoad | TpmCc::ContextSave | TpmCc::FlushContext
     )
 }
 
-/// List of TPM 2.0 command codes supported by this engine implementation.
+/// List of the TPM 2.0 library command codes supported by this engine implementation (the
+/// vendor-specific commands are in [`VENDOR_COMMANDS`]).
 /// The command codes (`TpmCc`) are defined in TCG TPM 2.0 Library Specification Part 3: Commands.
-pub(crate) const SUPPORTED_COMMANDS: [TpmCc; 104] = [
+pub(crate) const SUPPORTED_COMMANDS: [TpmCc; 105] = [
     TpmCc::GetRandom,
     TpmCc::StirRandom,
     TpmCc::Startup,
@@ -6055,22 +6259,78 @@ pub(crate) const SUPPORTED_COMMANDS: [TpmCc; 104] = [
     TpmCc::DictionaryAttackLockReset,
     TpmCc::DictionaryAttackParameters,
     TpmCc::PCRAllocate,
+    TpmCc::ACTSetTimeout,
 ];
 
+/// The vendor-specific commands (command codes with the `V` bit, `CC_VEND`) this engine
+/// implements, in ascending command-code order (the order of the vendor part of the
+/// reference's `s_ccAttr`, which follows the library commands):
+///
+/// * `TPM2_Vendor_TCG_Test` (TPM 2.0 Part 3, "Vendor Specific"), which every C reference
+///   implements (`CC_Vendor_TCG_Test CC_YES`);
+/// * with the `ntc2-vendor-commands` profile feature, the Nuvoton `NTC2_PreConfig`,
+///   `NTC2_LockPreConfig` and `NTC2_GetConfig` commands as emulated by `ibmswtpm2`
+///   (`TPM_NUVOTON`).
+pub(crate) const VENDOR_COMMANDS: &[TpmCc] = &[
+    TpmCc::VendorTcgTest,
+    #[cfg(feature = "ntc2-vendor-commands")]
+    TpmCc::NTC2PreConfig,
+    #[cfg(feature = "ntc2-vendor-commands")]
+    TpmCc::NTC2LockPreConfig,
+    #[cfg(feature = "ntc2-vendor-commands")]
+    TpmCc::NTC2GetConfig,
+];
+
+/// The number of implemented commands, library and vendor (`COMMAND_COUNT`,
+/// `TPM_PT_TOTAL_COMMANDS`).
+pub(crate) const TOTAL_COMMAND_COUNT: usize = SUPPORTED_COMMANDS.len() + VENDOR_COMMANDS.len();
+
 pub(crate) fn is_command_supported(cc: TpmCc) -> bool {
-    SUPPORTED_COMMANDS.contains(&cc)
+    SUPPORTED_COMMANDS.contains(&cc) || VENDOR_COMMANDS.contains(&cc)
+}
+
+/// Returns every implemented command in the order of the reference's command table
+/// (`s_ccAttr`): the library commands in ascending command-code order, then the vendor
+/// commands in ascending order (since every vendor code has the `V` bit, this is ascending
+/// order of the 32-bit command codes). `TPM_CAP_COMMANDS`, `TPM_CAP_AUDIT_COMMANDS` and the
+/// command audit digest list the commands in this order.
+pub(crate) fn implemented_commands_in_order() -> [TpmCc; TOTAL_COMMAND_COUNT] {
+    let mut all = [TpmCc::default(); TOTAL_COMMAND_COUNT];
+    all[..SUPPORTED_COMMANDS.len()].copy_from_slice(&SUPPORTED_COMMANDS);
+    all[SUPPORTED_COMMANDS.len()..].copy_from_slice(VENDOR_COMMANDS);
+    all.sort_unstable_by_key(|cc| cc.code());
+    all
+}
+
+/// The lowest command code a capability list of commands (`TPM_CAP_COMMANDS`,
+/// `TPM_CAP_PP_COMMANDS`, `TPM_CAP_AUDIT_COMMANDS`) starting at `property` may report, or
+/// `None` if it reports none.
+///
+/// TPM 2.0 Part 3, TPM2_GetCapability: the list starts "with the `TPM_CC` indicated by the
+/// *property* parameter. If vendor specific commands are implemented, the vendor-specific
+/// command attribute with the lowest *commandIndex*, is returned after the
+/// non-vendor-specific (base) command." The spec is silent on a `property` that is not a
+/// command code; as in the reference (`GetClosestCommandIndex()`), a `property` with a bit
+/// other than `V` set above its low 16 bits starts no list at all. Otherwise, the list starts
+/// at the first implemented command whose code is at least `property` in the order of
+/// [`implemented_commands_in_order`]: a library `property` continues with the vendor
+/// commands, a vendor `property` (`V` SET) only lists vendor commands with a `commandIndex`
+/// of at least its low 16 bits.
+pub(crate) fn command_list_start(property: u32) -> Option<u32> {
+    (property & !TpmCc::VEND.code() <= 0xFFFF).then_some(property)
 }
 
 /// Returns whether `cc` allows a session with `TPMA_SESSION_DECRYPT` (i.e. its first command
 /// parameter is a `TPM2B` that may be encrypted).
 ///
 /// Mirrors the `DECRYPT_2` attribute in the C reference `CommandAttributeData.h`, restricted to
-/// the commands in [`SUPPORTED_COMMANDS`]. Notably `TPM2_EncryptDecrypt` is absent because its
+/// the commands in [`SUPPORTED_COMMANDS`] and [`VENDOR_COMMANDS`]. Notably `TPM2_EncryptDecrypt` is absent because its
 /// first parameter is a `TPMI_YES_NO`, not a `TPM2B`.
 fn command_supports_decryption(cc: TpmCc) -> bool {
     matches!(
         cc,
-        TpmCc::ActivateCredential
+        TpmCc::VendorTcgTest
+            | TpmCc::ActivateCredential
             | TpmCc::Certify
             | TpmCc::CertifyCreation
             | TpmCc::Commit
@@ -6131,11 +6391,12 @@ fn command_supports_decryption(cc: TpmCc) -> bool {
 /// parameter is a `TPM2B` that may be encrypted).
 ///
 /// Mirrors the `ENCRYPT_2` attribute in the C reference `CommandAttributeData.h`, restricted to
-/// the commands in [`SUPPORTED_COMMANDS`].
+/// the commands in [`SUPPORTED_COMMANDS`] and [`VENDOR_COMMANDS`].
 fn command_supports_encryption(cc: TpmCc) -> bool {
     matches!(
         cc,
-        TpmCc::ActivateCredential
+        TpmCc::VendorTcgTest
+            | TpmCc::ActivateCredential
             | TpmCc::Certify
             | TpmCc::CertifyCreation
             | TpmCc::Commit
@@ -6191,7 +6452,7 @@ pub(crate) fn command_resp_handles_size(cc: TpmCc) -> usize {
 }
 
 fn compute_nv_name<C: CryptoProvider>(
-    crypto: &C,
+    crypto: &crate::self_test::Tested<'_, C>,
     name_alg: TpmiAlgHash,
     public_area_bytes: &[u8],
 ) -> Result<OwnedName, TpmRc> {
@@ -6227,11 +6488,8 @@ fn handle_name<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>(
                 .is_ok()
                 && let Ok((_, nv_public_struct, _, _, hash_target)) =
                     crate::handler::nv_storage::unmarshal_nv_header_bytes(&read_buf[..read_len])
-                && let Ok(nv_name) = compute_nv_name(
-                    &*ctx.platform.crypto,
-                    nv_public_struct.name_alg,
-                    hash_target,
-                )
+                && let Ok(nv_name) =
+                    compute_nv_name(&ctx.crypto(), nv_public_struct.name_alg, hash_target)
             {
                 return nv_name;
             }
@@ -6249,31 +6507,6 @@ fn handle_name<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>(
     }
     let handle_bytes = handle.to_be_bytes();
     OwnedName::from_bytes(&handle_bytes).unwrap_or_default()
-}
-
-/// The error for using a firmware-limited or SVN-limited hierarchy, `None` for any other handle
-/// (the counterpart of the TCG reference's `ValidateHierarchy()`/`GetAdditionalSecret()` built
-/// without `FW_LIMITED_SUPPORT`/`SVN_LIMITED_SUPPORT`).
-///
-/// TPM 2.0 Part 2, Table "Definition of (TPM_HANDLE) TPMI_RH_HIERARCHY Type" lists them
-/// unconditionally ("TPM_RH_FW_OWNER | Firmware-limited Storage hierarchy", ...,
-/// "{SVN_OWNER_FIRST:SVN_OWNER_LAST} | SVN-limited Storage hierarchies", ...), so they are valid
-/// handle values. Their seeds and proofs need a firmware secret (Part 1, "Firmware-limited
-/// Hierarchy": "a hierarchy whose seed and proof values are derived from a Primary Seed and a
-/// Firmware Secret"; "SVN-limited Hierarchy": "... a Primary Seed and a Firmware SVN Secret"),
-/// which this TPM does not have, so every use fails with Part 2, "TPM_RC_FW_LIMITED | the
-/// hierarchy is firmware-limited but the Firmware Secret is unavailable" or "TPM_RC_SVN_LIMITED
-/// | the hierarchy is SVN-limited but the Firmware SVN Secret associated with the given SVN is
-/// unavailable". Where the error is reported (the handle's load status, or the proof of a
-/// ticket or context) follows the TCG reference version 185.
-pub(crate) fn limited_hierarchy_error(handle: u32) -> Option<tpm2::errors::Fmt1> {
-    if (Handle::RH_FW_OWNER.0..=Handle::RH_FW_NULL.0).contains(&handle) {
-        Some(TpmRc::FW_LIMITED)
-    } else if (Handle::SVN_OWNER_FIRST.0..=Handle::SVN_NULL_LAST.0).contains(&handle) {
-        Some(TpmRc::SVN_LIMITED)
-    } else {
-        None
-    }
 }
 
 fn expects_permanent_handle(cc: TpmCc, handle_index: usize) -> bool {
@@ -6324,7 +6557,8 @@ fn permanent_handle_type(cc: TpmCc, handle_index: usize) -> Option<&'static [u32
         TpmCc::CreatePrimary => &[OWNER, ENDORSEMENT, PLATFORM, NULL],
         // TPMI_RH_HIERARCHY
         TpmCc::HierarchyControl => &[OWNER, ENDORSEMENT, PLATFORM],
-        // TPMI_RH_HIERARCHY_AUTH / TPMI_RH_HIERARCHY_POLICY (ACTs are not implemented)
+        // TPMI_RH_HIERARCHY_AUTH / TPMI_RH_HIERARCHY_POLICY (the ACT handles of
+        // `TPMI_RH_HIERARCHY_POLICY` are checked by `check_command_handles`)
         TpmCc::HierarchyChangeAuth | TpmCc::SetPrimaryPolicy => {
             &[OWNER, ENDORSEMENT, PLATFORM, LOCKOUT]
         }
@@ -6595,6 +6829,7 @@ pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::GetTime
                 | TpmCc::ClockSet
                 | TpmCc::ClockRateAdjust
+                | TpmCc::ACTSetTimeout
                 | TpmCc::Commit
                 | TpmCc::Sign
                 | TpmCc::RSADecrypt
@@ -6683,7 +6918,7 @@ fn handle_is_authorized(
 }
 
 fn compute_hash_and_hmac(
-    crypto: &impl CryptoProvider,
+    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
     auth_hash: TpmiAlgHash,
     key: &[u8],
     updates_hash: &[&[u8]],
@@ -6724,7 +6959,7 @@ fn compute_hash_and_hmac(
 
 #[allow(clippy::too_many_arguments)]
 fn derive_key_and_iv(
-    crypto: &impl CryptoProvider,
+    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
     auth_hash: TpmiAlgHash,
     key: &[u8],
     label: &[u8],
@@ -6771,7 +7006,7 @@ fn reference_s(session_index: usize) -> TpmRc {
 }
 
 fn xor_obfuscation(
-    crypto: &impl CryptoProvider,
+    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
     auth_hash: TpmiAlgHash,
     key: &[u8],
     context_u: &[u8],
@@ -6808,7 +7043,7 @@ fn xor_obfuscation(
 }
 
 fn compute_hash(
-    crypto: &impl CryptoProvider,
+    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
     auth_hash: TpmiAlgHash,
     data: &[u8],
     hash_out: &mut [u8],
@@ -6823,7 +7058,7 @@ fn compute_hash(
 }
 
 fn compute_response_hmac(
-    crypto: &impl CryptoProvider,
+    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
     auth_hash: TpmiAlgHash,
     key: &[u8],
     updates_hmac: &[&[u8]],

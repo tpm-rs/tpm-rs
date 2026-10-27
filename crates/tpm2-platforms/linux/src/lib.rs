@@ -24,6 +24,7 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Instant;
 use tpm2::crypto::Rng;
 use tpm2::crypto::{CryptoError, CryptoProvider};
+use tpm2::platform::TpmFirmware;
 use tpm2_impl::TpmPlatform;
 use tpm2_impl::storage::NvStorage;
 use tpm2_impl::timer::TpmTimer;
@@ -252,18 +253,22 @@ impl Rng for LinuxRng {
     }
 }
 
-/// Helper function to instantiate a `TpmPlatform` with Linux hardware components.
+/// Helper function to instantiate a `TpmPlatform` with Linux hardware components and the
+/// firmware identity `firmware` (the Firmware Secret, Firmware SVN Secrets and SVNs of the
+/// firmware-limited and SVN-limited hierarchies; a simulator uses
+/// [`tpm2::platform::SimulatedFirmware`]).
 pub fn create_linux_platform<'a, C, S>(
     crypto: &'a mut C,
     storage: &'a mut S,
     timer: &'a mut LinuxTimer,
     platform_rng: &'a mut LinuxRng,
+    firmware: &'a (dyn TpmFirmware + Sync),
 ) -> TpmPlatform<'a, C, S, LinuxTimer, LinuxRng>
 where
     C: CryptoProvider,
     S: NvStorage,
 {
-    TpmPlatform::new(crypto, storage, timer, platform_rng)
+    TpmPlatform::new(crypto, storage, timer, platform_rng).with_firmware(firmware)
 }
 
 impl Default for LinuxTimer {

@@ -187,6 +187,14 @@ pub trait CryptoProvider:
     ///   (e.g. the TRNG ran out of entropy or a continuous health test failed).
     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError>;
 
+    /// Whether the TPM's algorithm self tests (TPM 2.0 Part 1, "Self-Test Modes") compare this
+    /// provider's results with their known answers (default `true`).
+    ///
+    /// Only a test double whose algorithms are not the real ones (e.g. a fake hash) sets this to
+    /// `false`: the self tests then still run and mark the algorithms as tested, but a result
+    /// that differs from the known answer does not put the TPM into Failure mode.
+    const KNOWN_ANSWER_TESTS: bool = true;
+
     /// Mixes `data` into the provider's CSPRNG state (`TPM2_StirRandom`).
     ///
     /// The default implementation ignores `data` and returns `Ok(())`.

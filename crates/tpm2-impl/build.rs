@@ -115,12 +115,16 @@ mod reference_rng {
     const STATIC_ENTRY_POINTS: [&str; 3] = ["OaepEncode", "RSAES_PKCS1v1_5Encode", "PssEncode"];
 
     /// The platform functions the reference code calls, implemented in Rust (renamed
-    /// `tpmrs_refrng_<name>` in the C objects).
-    const PLATFORM_FUNCTIONS: [&str; 4] = [
+    /// `tpmrs_refrng_<name>` in the C objects). `CryptTestAlgorithm` is the self test that the
+    /// reference's `TPM_DO_SELF_TEST()` runs for an untested algorithm (`ENABLE_SELF_TESTS`):
+    /// `tpm-rs` runs the algorithm self tests itself (`crate::self_test`), so the linked code's
+    /// `g_toTest` (a zero-initialized global that no linked code sets) never requests one.
+    const PLATFORM_FUNCTIONS: [&str; 5] = [
         "_plat__GetEntropy",
         "_plat__InFailureMode",
         "_plat__IsCanceled",
         "EnterFailureMode",
+        "CryptTestAlgorithm",
     ];
 
     /// The mutable globals of the compiled reference code, redirected by command-line macros to

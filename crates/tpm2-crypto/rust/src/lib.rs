@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
 
+extern crate alloc;
+
 use tpm2::crypto::{ConstantTimeEq, CryptoError, CryptoProvider, Random};
 
 /// A cryptographic provider implementation using RustCrypto crates (such as `aes`, `rsa`, `p256`, `sha2`, `hmac`).

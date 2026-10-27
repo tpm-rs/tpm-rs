@@ -3,8 +3,8 @@
 //! (TPM 2.0 Part 2, `TPM_PT_HR_PERSISTENT_AVAIL`/`TPM_PT_NV_COUNTERS_AVAIL`: "This value is an
 //! estimate"), so tpm-rs follows the reference's `NvTestSpace()` accounting
 //! (`tpm2_impl::storage::nv_capacity`, whose model [`NvUsage`] gives the expected results): with
-//! the default profile (`NV_MEMORY_SIZE` 16384, `MIN_EVICT_OBJECTS` 2), a dynamic area of 11364
-//! bytes, every persistent object taking 1288 bytes whatever its key type, an Index `4 + 148`
+//! the default profile (`NV_MEMORY_SIZE` 16384, `MIN_EVICT_OBJECTS` 2), a dynamic area of 11228
+//! bytes (11088 with the `act-a` feature: the ACT state moves `NV_INDEX_RAM_DATA`), every persistent object taking 1288 bytes whatever its key type, an Index `4 + 148`
 //! bytes plus its data (orderly data in a 512-byte RAM area with 12-byte headers), and room
 //! reserved for 2 persistent objects (when defining an Index) and 8 counter Indices (unless
 //! defining a counter). The profile features of `tpm2-impl` (e.g. of a differential target)
@@ -13,7 +13,9 @@
 use crate::_common::{create_ecc_parent_key, create_parent_key, evict_control_rc, try_define};
 use testing::tpm::Tpm;
 use tpm2::{Handle, TpmaNv, TpmiAlgHash, TpmsNvPublic};
-use tpm2_impl::storage::nv_capacity::{MIN_EVICT_OBJECTS, NV_MEMORY_SIZE, NvUsage};
+use tpm2_impl::storage::nv_capacity::{
+    MIN_EVICT_OBJECTS, NV_INDEX_RAM_DATA, NV_MEMORY_SIZE, NvUsage,
+};
 
 /// Whether the TPM has the default NV profile, whose results the tests also check literally.
 const DEFAULT_NV_PROFILE: bool = NV_MEMORY_SIZE == 16384 && MIN_EVICT_OBJECTS == 2;
@@ -91,7 +93,7 @@ fn rsa_persistent_objects_fill_nv() {
 
 /// Indices must leave room for `MIN_EVICT_OBJECTS` persistent objects and eight counters: after
 /// as many 2048-byte Indices as fit, the next Index fits with at most the remaining data bytes
-/// (with the default profile: three Indices, then 744 data bytes).
+/// (with the default profile: three Indices, then 608 data bytes; 468 with the `act-a` feature).
 #[test]
 fn index_definition_reserves_persistent_and_counter_space() {
     let ordinary = TpmaNv::AUTHWRITE | TpmaNv::AUTHREAD | TpmaNv::NO_DA;
@@ -114,7 +116,8 @@ fn index_definition_reserves_persistent_and_counter_space() {
         .find(|&size| usage.can_define_index(ordinary.bits(), size))
         .expect("room for a smaller Index");
     if DEFAULT_NV_PROFILE {
-        assert_eq!((full, last), (3, 744));
+        // 744 data bytes in the reference's NV layout without ACTs (`NV_INDEX_RAM_DATA` 4508).
+        assert_eq!((full, last), (3, (744 + 4508 - NV_INDEX_RAM_DATA) as u16));
     }
     assert_eq!(
         try_define(
@@ -206,9 +209,9 @@ fn nv_availability_properties_follow_the_accounting() {
         )
     };
     let mut usage = NvUsage::default();
-    // Empty NV, with the default profile: (11364 - 12 - 8 * 160) / 1288 persistent objects;
-    // counters limited by the orderly RAM (512 / 20) rather than NV ((11364 - 12 - 2 * 1288) /
-    // 160).
+    // Empty NV, with the default profile (FREE = 11228 dynamic bytes): (FREE - 12 - 8 * 160) /
+    // 1288 persistent objects; counters limited by the orderly RAM (512 / 20) rather than NV
+    // ((FREE - 12 - 2 * 1288) / 160).
     assert_eq!(props(&mut tpm), expected(&usage));
     if DEFAULT_NV_PROFILE {
         assert_eq!(expected(&usage), (7, 0, 25));
@@ -237,7 +240,7 @@ fn nv_availability_properties_follow_the_accounting() {
         );
         usage.add_evict_object();
     }
-    // With the default profile: 11364 - 152 - 3 * 1288 free; less 12 + 7 * 160 for counters.
+    // With the default profile: FREE - 152 - 3 * 1288 free; less 12 + 7 * 160 for counters.
     assert_eq!(props(&mut tpm), expected(&usage));
     if DEFAULT_NV_PROFILE {
         assert_eq!(expected(&usage), (4, 1, 24));

@@ -12,7 +12,8 @@
 //!   (`go` → [`tpmrs_refrng_go`], `g_cryptoSelfTestState` → [`tpmrs_refrng_self_test`],
 //!   `primeLimit` → [`tpmrs_refrng_prime_limit`]), and the platform functions it calls
 //!   (`_plat__GetEntropy()`, `_plat__InFailureMode()`, `_plat__IsCanceled()`,
-//!   `EnterFailureMode()`), all operating on the state of the current call;
+//!   `EnterFailureMode()`, and `CryptTestAlgorithm()`, which is never reached), all operating on
+//!   the state of the current call;
 //! - safe wrappers of the entry points that do the API-level conversions ([`DrbgState`] ↔
 //!   `DRBG_STATE`, slices ↔ `TPM2B`s and `TPMT_PUBLIC`/`TPMT_SENSITIVE`/`OBJECT` areas), check
 //!   buffer sizes, and turn the reference's failure mode into `TPM_RC_FAILURE`.
@@ -334,6 +335,18 @@ pub extern "C" fn tpmrs_refrng_EnterFailureMode(
     unsafe { (*current()).failed = true };
 }
 
+/// `CryptTestAlgorithm()`, called by the reference's `TPM_DO_SELF_TEST()` for an algorithm whose
+/// bit is SET in `g_toTest`. `tpm-rs` runs the algorithm self tests itself (`crate::self_test`,
+/// before it calls into the linked code where the reference would test), and the linked code's
+/// `g_toTest` is never set, so this is unreachable; if it were reached, the call fails like a
+/// failed self test.
+#[unsafe(no_mangle)]
+pub extern "C" fn tpmrs_refrng_CryptTestAlgorithm(_alg: u16, _to_test: *mut u8) -> u32 {
+    // SAFETY: as above.
+    unsafe { (*current()).failed = true };
+    TpmRc::FAILURE.get()
+}
+
 // ---------------------------------------------------------------------------------------------
 // Conversions.
 // ---------------------------------------------------------------------------------------------
@@ -612,7 +625,10 @@ pub(super) fn additional_data(state: &mut DrbgState, data: &[u8]) -> Result<(), 
 }
 
 /// `CryptRsaGenerateKey()` for a `key_bits`-bit key: writes the modulus (`key_bits / 8` bytes)
-/// and the prime stored first in the sensitive area (`key_bits / 16` bytes).
+/// and the prime stored first in the sensitive area (`key_bits / 16` bytes), and, if `crt` is
+/// given, the whole packed CRT form of the sensitive area (`5 * key_bits / 16` bytes, see
+/// `handler::rsa_sensitive`).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn rsa_generate_key(
     rng: &mut RefRng<'_>,
     mut rand: Option<&mut DrbgState>,
@@ -621,6 +637,7 @@ pub(super) fn rsa_generate_key(
     sign: bool,
     modulus: &mut [u8],
     prime: &mut [u8],
+    crt: Option<&mut [u8]>,
 ) -> Result<(), TpmRc> {
     let n_len = usize::from(key_bits) / 8;
     if modulus.len() < n_len || prime.len() < n_len / 2 {
@@ -642,12 +659,15 @@ pub(super) fn rsa_generate_key(
     // SAFETY: `CryptRsaGenerateKey()` set the RSA members.
     let (n, packed) = unsafe { (&public.unique.rsa.t, &sensitive.sensitive.rsa.t) };
     // The sensitive area holds P, Q, dP, dQ and qInv, in this order, each the size of a prime;
-    // the first one is the private key with `RSA_PRIVATE_PRIME_ONLY`.
+    // the first one is the prime-only form of the private key.
     let prime_size = usize::from(packed.size & !(sys::RSA_prime_flag as u16)) / 5;
     if usize::from(n.size) != n_len || prime_size != n_len / 2 {
         return Err(TpmRc::FAILURE);
     }
     copy_out(modulus, &n.buffer[..n_len])?;
+    if let Some(crt) = crt {
+        copy_out(crt, &packed.buffer[..5 * prime_size])?;
+    }
     copy_out(prime, &packed.buffer[..prime_size])
 }
 

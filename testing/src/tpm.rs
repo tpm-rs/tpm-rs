@@ -181,6 +181,10 @@ impl Mirror {
         dispatch!(self, r => r.signal(signal))
     }
 
+    fn set_firmware(&mut self, setting: crate::differential::protocol::FirmwareSetting) {
+        dispatch!(self, r => r.set_firmware(setting))
+    }
+
     fn hash_start(&mut self) {
         dispatch!(self, r => r.hash_start())
     }
@@ -450,6 +454,44 @@ impl Tpm {
         #[cfg(feature = "differential")]
         self.references.signal(signal);
         Ok(())
+    }
+
+    /// Installs a firmware image with the hash `hash` (the MSSIM platform signal
+    /// `TPM_SET_FW_HASH`, `_plat__SetTpmFirmwareHash`): the Firmware Secret of the
+    /// firmware-limited hierarchies changes.
+    ///
+    /// # Panics
+    /// If the simulator rejects the signal.
+    pub fn set_firmware_hash(&mut self, hash: u32) {
+        self.firmware_signal(SimulatorPlatformSignal::SetFirmwareHash, hash);
+        #[cfg(feature = "differential")]
+        self.references
+            .set_firmware(crate::differential::protocol::FirmwareSetting::Hash(hash));
+    }
+
+    /// Installs a firmware image with the SVN `svn` (the MSSIM platform signal
+    /// `TPM_SET_FW_SVN`, `_plat__SetTpmFirmwareSvn`, which caps it at the maximum SVN):
+    /// the SVN-limited hierarchies of larger SVNs become unavailable.
+    ///
+    /// # Panics
+    /// If the simulator rejects the signal.
+    pub fn set_firmware_svn(&mut self, svn: u16) {
+        self.firmware_signal(SimulatorPlatformSignal::SetFirmwareSvn, u32::from(svn));
+        #[cfg(feature = "differential")]
+        self.references
+            .set_firmware(crate::differential::protocol::FirmwareSetting::Svn(svn));
+    }
+
+    /// Delivers the firmware platform signal `signal` with its 32-bit `value` to `tpm-rs`.
+    fn firmware_signal(&mut self, signal: SimulatorPlatformSignal, value: u32) {
+        self.sync_clock();
+        self.record(&Event::Signal(format!("{signal:?}={value:#x}")));
+        let mut stream = Cursor::new(value.to_be_bytes().to_vec());
+        self.sim
+            .signal_platform(signal, Some(&mut stream))
+            .unwrap_or_else(|e| panic!("TPM transport error: {e}"));
+        let reply = stream.into_inner();
+        assert_eq!(reply[4..], 0u32.to_be_bytes(), "{signal:?} failed");
     }
 
     /// Sends a `_TPM_Hash_*` indication (MSSIM command `code` with `payload`,

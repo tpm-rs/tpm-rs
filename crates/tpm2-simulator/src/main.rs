@@ -112,8 +112,17 @@ fn main() {
         { ::tpm2_simulator::NV_STORAGE_SIZE },
     > = ::tpm2_impl::storage::ram_storage_mock::RamStorageMock::new();
     let mut timer: ::tpm2_platform_linux::LinuxTimer = ::tpm2_platform_linux::LinuxTimer::new();
-    let sim =
-        Mutex::new(Simulator::new(&mut crypto, &mut storage, &mut timer, &mut plat_rng).unwrap());
+    let firmware = ::tpm2::platform::SimulatedFirmware::default();
+    let sim = Mutex::new(
+        Simulator::new(
+            &mut crypto,
+            &mut storage,
+            &mut timer,
+            &mut plat_rng,
+            &firmware,
+        )
+        .unwrap(),
+    );
 
     thread::scope(|s| {
         s.spawn(|| {

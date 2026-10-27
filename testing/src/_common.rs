@@ -894,6 +894,22 @@ fn compute_client_hmac(
     state.finalize(&mut out).unwrap().digest().to_vec()
 }
 
+/// The entity whose authorization a session provides for `handle` (the TCG reference's
+/// `s_associatedHandles`): a firmware-limited or SVN-limited hierarchy is authorized by its base
+/// hierarchy (TPM 2.0 Part 1, "Primary Seed Authorizations": "For Primary Objects created in
+/// firmware-limited or SVN-limited hierarchies, the required authorization is that of the
+/// associated base hierarchy"), so a session bound to the base hierarchy is bound to it; any
+/// other handle is its own entity.
+pub fn authorized_entity(handle: Handle) -> Handle {
+    match handle.0 {
+        0x4000_0140 | 0x4001_0000..=0x4001_FFFF => Handle::RH_OWNER,
+        0x4000_0141 | 0x4002_0000..=0x4002_FFFF => Handle::RH_ENDORSEMENT,
+        0x4000_0142 | 0x4003_0000..=0x4003_FFFF => Handle::RH_PLATFORM,
+        0x4000_0143 | 0x4004_0000..=0x4004_FFFF => Handle::RH_NULL,
+        _ => handle,
+    }
+}
+
 /// Starts an unsalted authorization session (`TPM2_StartAuthSession`) with a random caller nonce
 /// and returns its client-side state (handle, nonces, session key), or the TPM response code.
 pub fn start_auth_session(
@@ -1098,7 +1114,7 @@ where
         .map(|(i, session)| {
             let is_bound = session.bind_entity != Handle::RH_NULL
                 && i < session_to_handle_idx_len
-                && session.bind_entity == handles[session_to_handle_idx[i]];
+                && session.bind_entity == authorized_entity(handles[session_to_handle_idx[i]]);
             session_includes_auth(session, is_bound)
         })
         .collect();
@@ -7099,6 +7115,67 @@ pub fn set_primary_policy(sim: &mut Tpm, auth_handle: Handle, policy: &[u8]) -> 
         Ok([]) => 0,
         Err(rc) => rc,
     }
+}
+
+/// The handles of the Authenticated Countdown Timers this build implements (a profile
+/// setting, `tpm2_impl::act::IMPLEMENTED_ACTS`): `TPM_RH_ACT_0`, plus `TPM_RH_ACT_A` with
+/// `tpm2-impl`'s `act-a` feature.
+pub fn implemented_act_handles() -> Vec<u32> {
+    tpm2_impl::act::IMPLEMENTED_ACTS
+        .iter()
+        .map(|&act| tpm2_impl::act::act_handle(act).0)
+        .collect()
+}
+
+/// `TPM2_ACT_SetTimeout(act_handle, start_timeout)` authorized with the password `auth` (the
+/// ACT authValue is platformAuth); returns the response code.
+pub fn act_set_timeout_with(
+    sim: &mut Tpm,
+    act_handle: u32,
+    start_timeout: u32,
+    auth: &[u8],
+) -> u32 {
+    let cmd = tpm2::commands::ACTSetTimeout {
+        act_handle: Handle(act_handle),
+        start_timeout,
+    };
+    match execute_with_password_sessions_status(sim, &cmd, 1, auth) {
+        Ok([]) => 0,
+        Err(rc) => rc,
+    }
+}
+
+/// `TPM2_ACT_SetTimeout(act_handle, start_timeout)` with the (empty) platformAuth; returns the
+/// response code.
+pub fn act_set_timeout(sim: &mut Tpm, act_handle: u32, start_timeout: u32) -> u32 {
+    act_set_timeout_with(sim, act_handle, start_timeout, &[])
+}
+
+/// One `TPMS_ACT_DATA`: `(handle, timeout, attributes)`.
+pub type ActData = (u32, u32, u32);
+
+/// `TPM2_GetCapability(TPM_CAP_ACT, property, count)`: the `(handle, timeout, attributes)` of
+/// each `TPMS_ACT_DATA` and `moreData`.
+pub fn cap_act(sim: &mut Tpm, property: u32, count: u32) -> Result<(Vec<ActData>, bool), u32> {
+    let (more, data) = get_cap(sim, CAP_ACT, property, count)?;
+    let n = u32::from_be_bytes(data[..4].try_into().unwrap()) as usize;
+    assert_eq!(data.len(), 4 + 12 * n, "TPML_ACT_DATA size");
+    let be32 = |o: usize| u32::from_be_bytes(data[o..o + 4].try_into().unwrap());
+    let list = (0..n)
+        .map(|i| (be32(4 + 12 * i), be32(8 + 12 * i), be32(12 + 12 * i)))
+        .collect();
+    Ok((list, more))
+}
+
+/// The `(timeout, TPMA_ACT)` of the ACT `act_handle` (`TPM_CAP_ACT`).
+pub fn act_state(sim: &mut Tpm, act_handle: u32) -> (u32, u32) {
+    let (list, _) = cap_act(sim, act_handle, 1).expect("TPM_CAP_ACT failed");
+    assert_eq!(
+        list.first().map(|e| e.0),
+        Some(act_handle),
+        "ACT not listed"
+    );
+    (list[0].1, list[0].2)
 }
 
 /// Parameters of `TPM2_SetPrimaryPolicy` with a SHA-256 policy.

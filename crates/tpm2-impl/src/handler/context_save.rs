@@ -1,3 +1,4 @@
+use crate::self_test::kdfa_bits;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{
@@ -11,8 +12,7 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::TpmaObject;
 use tpm2::commands::ContextSave;
-use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
+use tpm2::crypto::{CryptoProvider, Direction, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     AlgSym, Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
@@ -126,10 +126,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         );
 
         let handle_bytes = out_saved_handle.to_be_bytes();
-        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(obj_hierarchy)?;
-        let mut proof_buf = [0u8; 64];
-        proof_buf[..proof_len].copy_from_slice(&proof_bytes[..proof_len]);
-        let proof = &proof_buf[..proof_len];
+        let (proof_secret, _) = self.resolve_hierarchy_proof(obj_hierarchy)?;
+        let proof = proof_secret.as_bytes();
 
         let sequence = if is_session {
             // `SessionContextSave`: assigns the context ID (checking the context gap) and moves
@@ -250,7 +248,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut sym_key_iv = [0u8; 32];
         kdfa_bits(
-            self.crypto(),
+            &self.crypto(),
             crate::handler::context_integrity_hash_alg(),
             proof,
             b"CONTEXT",
@@ -292,12 +290,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         saved_handle: u32,
         sensitive_buf: &[u8],
     ) -> Result<OwnedDigest, TpmRc> {
-        let mut mac_ctx = HmacStream::new(
-            self.crypto(),
-            crate::handler::context_integrity_hash_alg(),
-            proof,
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
+        let mut mac_ctx = self
+            .crypto()
+            .hmac_stream(crate::handler::context_integrity_hash_alg(), proof)
+            .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx
             .update(&self.context.state.total_reset_count.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;

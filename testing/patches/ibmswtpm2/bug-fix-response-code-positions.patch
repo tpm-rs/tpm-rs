@@ -18,9 +18,9 @@ Specification (TPM 2.0 Library, Part 2, "Response Code Formats" (Note)):
   plus TPM_RC_P."
 
 Response-code positions follow the Part 3 command layout: handles are
-TPM_RC_H + n and parameters TPM_RC_P + n counted after the handles. Six
-command headers (ChangePPS, ContextSave, HierarchyChangeAuth, NV_ReadPublic,
-PolicyGetDigest, SequenceUpdate) number them wrongly.
+TPM_RC_H + n and parameters TPM_RC_P + n counted after the handles. Seven
+command headers (ACT_SetTimeout, ChangePPS, ContextSave, HierarchyChangeAuth,
+NV_ReadPublic, PolicyGetDigest, SequenceUpdate) number them wrongly.
 
 diff --git a/src/ChangePPS_fp.h b/src/ChangePPS_fp.h
 --- a/src/ChangePPS_fp.h
@@ -114,3 +114,16 @@ diff --git a/src/SequenceUpdate_fp.h b/src/SequenceUpdate_fp.h
  
  TPM_RC
  TPM2_SequenceUpdate(
+diff --git a/src/ACT_SetTimeout_fp.h b/src/ACT_SetTimeout_fp.h
+index 8137538..5fa92a9 100644
+--- a/src/ACT_SetTimeout_fp.h
++++ b/src/ACT_SetTimeout_fp.h
+@@ -68,7 +68,7 @@ typedef struct {
+ } ACT_SetTimeout_In;
+ 
+ #define RC_ACT_SetTimeout_actHandle 	(TPM_RC_H + TPM_RC_1)
+-#define RC_ACT_SetTimeout_startTimeout 	(TPM_RC_H + TPM_RC_2)
++#define RC_ACT_SetTimeout_startTimeout 	(TPM_RC_P + TPM_RC_1)
+ 
+ TPM_RC
+ TPM2_ACT_SetTimeout(

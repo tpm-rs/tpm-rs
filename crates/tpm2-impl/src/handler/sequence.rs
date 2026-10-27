@@ -49,8 +49,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             && hierarchy.0 != Handle::RH_PLATFORM.0
             && hierarchy.0 != Handle::RH_NULL.0
             // The firmware-limited and SVN-limited hierarchies are `TPMI_RH_HIERARCHY+` values;
-            // their (unavailable) proof fails the ticket (`limited_hierarchy_error`).
-            && crate::engine::limited_hierarchy_error(hierarchy.0).is_none()
+            // their tickets use their derived proof (which fails if the additional secret is
+            // unavailable, `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`).
+            && !crate::hierarchy::is_limited(hierarchy.0)
         {
             return Err(TpmRc::VALUE.with(Position::parameter(3)));
         }
@@ -122,6 +123,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             None => crate::SequenceType::Event,
             Some(alg) => crate::SequenceType::Hash { alg },
         };
+        self.context.self_test_sequence_start(&sequence_type)?;
 
         self.context.state.active_sequences[index] = Some(crate::ActiveSequence::new(
             handle,
@@ -243,8 +245,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             && hierarchy.0 != Handle::RH_PLATFORM.0
             && hierarchy.0 != Handle::RH_NULL.0
             // The firmware-limited and SVN-limited hierarchies are `TPMI_RH_HIERARCHY+` values;
-            // their (unavailable) proof fails the ticket (`limited_hierarchy_error`).
-            && crate::engine::limited_hierarchy_error(hierarchy.0).is_none()
+            // their tickets use their derived proof (which fails if the additional secret is
+            // unavailable, `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`).
+            && !crate::hierarchy::is_limited(hierarchy.0)
         {
             return Err(TpmRc::VALUE.with(Position::parameter(2)));
         }
@@ -543,13 +546,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             crate::owned::OwnedSensitiveData::from_bytes(&key_obj.private[..key_obj.private_len])
                 .map_err(|_| TpmRc::FAILURE)?;
 
+        let sequence_type = crate::SequenceType::Hmac {
+            hash_alg: key_hash_alg,
+            key: key_data,
+        };
+        self.context.self_test_sequence_start(&sequence_type)?;
         self.context.state.active_sequences[index] = Some(crate::ActiveSequence::new(
             handle,
             crate::owned::OwnedAuth::from(cmd.auth),
-            crate::SequenceType::Hmac {
-                hash_alg: key_hash_alg,
-                key: key_data,
-            },
+            sequence_type,
         ));
 
         let rsp = responses::HMACStart {
@@ -568,7 +573,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         key: &[u8],
         buffers: &[&[u8]],
     ) -> Result<([u8; 64], usize), TpmRc> {
-        let mut state = tpm2::crypto::HmacStream::new(self.crypto(), hash_alg, key)
+        let mut state = self
+            .crypto()
+            .hmac_stream(hash_alg, key)
             .map_err(|_| TpmRc::VALUE.to_rc())?;
         for buf in buffers {
             state.update(buf).map_err(|_| TpmRc::FAILURE)?;

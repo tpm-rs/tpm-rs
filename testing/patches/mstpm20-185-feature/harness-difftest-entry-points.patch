@@ -9,17 +9,30 @@ TPM in RAM and powers it on with NV available; the difftest_signal_*()
 functions forward the MSSIM platform signals and the _TPM_Hash_* indications
 to the simulator's _rpc__* layer; difftest_run_command() executes one
 command at a locality through _rpc__Send_Command(). difftest_advance_clock()
-is a no-op because the platform reads the harness's virtual clock directly
-(see harness-virtual-clock.patch).
+delivers the once-per-second ACT ticks (_plat__ACT_Tick()) of the whole
+seconds of the virtual clock since the last power on that the advance
+crossed, as tpm-rs counts them (the TCP simulator's ACT timer thread is not
+run; the platform reads the virtual clock directly, see
+harness-virtual-clock.patch).
 diff --git a/TPMCmd/Simulator/src/TPMCmdp.c b/TPMCmd/Simulator/src/TPMCmdp.c
+index c06f97cd..7e4c28be 100644
 --- a/TPMCmd/Simulator/src/TPMCmdp.c
 +++ b/TPMCmd/Simulator/src/TPMCmdp.c
-@@ -241,3 +241,104 @@
+@@ -241,3 +241,127 @@ void _rpc__SetTpmFirmwareSvn(uint16_t svn)
      _plat__SetTpmFirmwareSvn(svn);
  #endif
  }
 +
 +//*** tpm-rs differential testing entry points
++
++// The harness's virtual clock (see harness-virtual-clock.patch).
++extern uint64_t difftest_virtual_ms(void);
++
++// The virtual time of the last power on. The once-per-second ACT ticks
++// (_plat__ACT_Tick(), driven by a timer thread of the TCP simulator, which
++// the harness does not run) are the whole seconds of the virtual clock since
++// then, as in tpm-rs.
++static uint64_t s_difftestPowerOnMs = 0;
 +
 +void difftest_init(void)
 +{
@@ -32,17 +45,31 @@ diff --git a/TPMCmd/Simulator/src/TPMCmdp.c b/TPMCmd/Simulator/src/TPMCmdp.c
 +    TPM_TearDown();
 +    TPM_Manufacture(1);
 +    _plat__NvCommit();
++    s_difftestPowerOnMs = difftest_virtual_ms();
 +    _rpc__Signal_PowerOn(false);
 +    _rpc__Signal_NvOn();
 +}
 +
 +void difftest_advance_clock(uint64_t ms)
 +{
++#if ACT_SUPPORT
++    // The virtual clock has already been advanced by ms: deliver the ticks of
++    // the whole seconds since the last power on that were crossed (they are
++    // dropped while ticks are disabled, from _TPM_Init until TPM2_Startup).
++    uint64_t now    = difftest_virtual_ms() - s_difftestPowerOnMs;
++    uint64_t before = now > ms ? now - ms : 0;
++    uint64_t ticks  = now / 1000 - before / 1000;
++    while(ticks-- > 0)
++        _plat__ACT_Tick();
++#else
 +    (void)ms;
++#endif
 +}
 +
 +void difftest_signal_power_on(void)
 +{
++    if(!s_isPowerOn)
++        s_difftestPowerOnMs = difftest_virtual_ms();
 +    _rpc__Signal_PowerOn(false);
 +}
 +

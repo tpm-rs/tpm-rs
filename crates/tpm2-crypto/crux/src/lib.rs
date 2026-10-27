@@ -26,6 +26,8 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+extern crate alloc;
+
 use tpm2::crypto::{ConstantTimeEq, CryptoError, CryptoProvider, Random};
 
 /// The `libcrux`-based cryptography provider.

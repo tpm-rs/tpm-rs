@@ -18,6 +18,7 @@ pub struct Args {
 
 use tpm2::Connection;
 use tpm2::commands::Command;
+use tpm2::platform::SimulatedFirmware;
 use tpm2_impl::{GlobalState, InternalError, TpmEngine};
 pub use tpm2_impl::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
 use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform};
@@ -113,6 +114,9 @@ pub struct Simulator<'a> {
     >,
     is_power_on: bool,
     is_nv_on: bool,
+    /// The simulated firmware the TPM's platform borrows; the `SetFirmwareHash` and
+    /// `SetFirmwareSvn` platform signals change it.
+    firmware: &'a SimulatedFirmware,
 }
 
 impl<'a> Simulator<'a> {
@@ -121,14 +125,16 @@ impl<'a> Simulator<'a> {
         storage: &'a mut RamStorageMock<NV_STORAGE_SIZE>,
         timer: &'a mut LinuxTimer,
         platform_rng: &'a mut LinuxRng,
+        firmware: &'a SimulatedFirmware,
     ) -> Result<Self, InternalError> {
-        let platform = create_linux_platform(crypto, storage, timer, platform_rng);
+        let platform = create_linux_platform(crypto, storage, timer, platform_rng, firmware);
         let mut context = Box::new(TpmEngine::new(platform)?);
         context.init_storage();
         Ok(Self {
             context,
             is_power_on: false,
             is_nv_on: false,
+            firmware,
         })
     }
 
@@ -145,6 +151,11 @@ impl<'a> Simulator<'a> {
         *platform.storage = RamStorageMock::new();
         *platform.timer = timer;
         *platform.rng = platform_rng;
+        // The firmware of a new simulator (`SimulatedFirmware::default`).
+        self.firmware
+            .set_firmware_hash(SimulatedFirmware::DEFAULT_HASH);
+        self.firmware
+            .set_firmware_svn(SimulatedFirmware::DEFAULT_SVN);
         // What `TpmEngine::new` + `Simulator::new` do.
         self.context.state = GlobalState::default();
         self.context.init_storage();
@@ -329,11 +340,13 @@ impl<'a> Simulator<'a> {
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             SimulatorPlatformSignal::ActGetSignaled => {
-                // ActGetSignaled
-                let mut _payload = [0u8; 4];
-                stream.read_exact(&mut _payload)?;
-                let data = 0u32.to_be_bytes(); // signaled (false)
-                stream.write_all(&data)?;
+                // `_rpc__ACT_GetSignaled(actHandle)`: the `signaled` attribute of the ACT, or
+                // false while the power is off or for a handle that is not an implemented ACT.
+                let mut payload = [0u8; 4];
+                stream.read_exact(&mut payload)?;
+                let act_handle = u32::from_be_bytes(payload);
+                let signaled = self.is_power_on && self.context.act_signaled(act_handle);
+                stream.write_all(&u32::from(signaled).to_be_bytes())?;
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             // The power and reset signals follow the MSSIM platform port of the TCG reference
@@ -387,10 +400,21 @@ impl<'a> Simulator<'a> {
                 }
                 stream.write_all(&0u32.to_be_bytes())?;
             }
-            SimulatorPlatformSignal::SetFirmwareHash | SimulatorPlatformSignal::SetFirmwareSvn => {
-                // SetFirmwareHash / SetFirmwareSvn
-                let mut _payload = [0u8; 4];
-                stream.read_exact(&mut _payload)?;
+            SimulatorPlatformSignal::SetFirmwareHash => {
+                // `_rpc__SetTpmFirmwareHash(ReadUINT32())`: installs a firmware image with
+                // another hash (and so another Firmware Secret), whatever the power state.
+                let mut payload = [0u8; 4];
+                stream.read_exact(&mut payload)?;
+                self.firmware.set_firmware_hash(u32::from_be_bytes(payload));
+                stream.write_all(&0u32.to_be_bytes())?;
+            }
+            SimulatorPlatformSignal::SetFirmwareSvn => {
+                // `_rpc__SetTpmFirmwareSvn((uint16_t)ReadUINT32())`: installs a firmware image
+                // with another SVN (capped at the maximum SVN), whatever the power state.
+                let mut payload = [0u8; 4];
+                stream.read_exact(&mut payload)?;
+                self.firmware
+                    .set_firmware_svn(u32::from_be_bytes(payload) as u16);
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             SimulatorPlatformSignal::TestFailureMode => {
@@ -516,7 +540,8 @@ fn new_started_simulator(timer: LinuxTimer, platform_rng: LinuxRng) -> Simulator
         Box::leak(Box::new(RamStorageMock::new()));
     let timer: &'static mut LinuxTimer = Box::leak(Box::new(timer));
     let platform_rng: &'static mut LinuxRng = Box::leak(Box::new(platform_rng));
-    let mut sim = Simulator::new(crypto, storage, timer, platform_rng)
+    let firmware: &'static SimulatedFirmware = Box::leak(Box::new(SimulatedFirmware::default()));
+    let mut sim = Simulator::new(crypto, storage, timer, platform_rng, firmware)
         .expect("failed to create TPM simulator");
     power_on_start_up(&mut sim);
     sim

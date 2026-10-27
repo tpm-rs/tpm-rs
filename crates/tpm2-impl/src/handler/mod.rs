@@ -24,6 +24,7 @@
 //! - **Signature Validation**: [crypt_ops::verify_signature](crypt_ops.rs) (validates signature integrity).
 //! - **Key Management Security**: [duplicate::duplicate](duplicate.rs) (encrypts object payloads for migration), [import::import](import.rs) (decrypts imported objects).
 
+mod act_set_timeout;
 mod activate_credential;
 pub(crate) mod capability;
 mod certify;
@@ -81,6 +82,7 @@ mod read_public;
 #[cfg(feature = "reference-rng")]
 pub(crate) mod reference_ops;
 mod rewrap;
+pub(crate) mod rsa_sensitive;
 mod sequence;
 pub(crate) mod session;
 mod set_command_code_audit_status;
@@ -89,21 +91,20 @@ mod shutdown;
 mod startup;
 mod testing;
 mod unseal;
+pub(crate) mod vendor;
 
 use crate::owned::{
     AuthCommandLike, OwnedAuth, OwnedAuthCommand, OwnedDigest, OwnedEccPoint, OwnedName,
     OwnedNonce, OwnedPublic, OwnedPublicKeyRsa, OwnedPublicParmsAndId, OwnedTpm2b,
 };
 use crate::req_resp::RequestThenResponse;
+use crate::self_test::kdfa_bits;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{GlobalState, TpmEngine};
 use tpm2::Alg;
 use tpm2::crypto::asymmetric::KeyParams;
-use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{
-    CryptoError, CryptoProvider, Direction, HashStream, ModeIv, Rng, Symmetric, SymmetricKey,
-};
+use tpm2::crypto::{CryptoError, CryptoProvider, Direction, ModeIv, Rng, Symmetric, SymmetricKey};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmSe};
 use tpm2::{Marshal, Unmarshal};
@@ -371,8 +372,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 
     #[inline]
-    pub fn crypto(&self) -> &C {
-        self.context.platform.crypto
+    pub fn crypto(&self) -> crate::self_test::Tested<'_, C> {
+        self.context.crypto()
+    }
+
+    /// `TPM_DO_SELF_TEST(alg)`: see [`TpmEngine::do_self_test`].
+    pub(crate) fn do_self_test(&mut self, alg: tpm2::Alg) -> Result<(), TpmRc> {
+        self.context.do_self_test(alg)
     }
 
     #[inline]
@@ -652,8 +658,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         hash_alg: TpmiAlgHash,
         buffers: &[&[u8]],
     ) -> Result<([u8; 64], usize), TpmRc> {
-        let mut state =
-            HashStream::new(self.crypto(), hash_alg).map_err(|_| TpmRc::VALUE.to_rc())?;
+        let mut state = self
+            .crypto()
+            .hash_stream(hash_alg)
+            .map_err(|_| TpmRc::VALUE.to_rc())?;
         for buf in buffers {
             state.update(buf).map_err(|_| TpmRc::FAILURE)?;
         }
@@ -677,7 +685,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         dir: Direction,
         data: &mut [u8],
     ) -> Result<(), CryptoError> {
-        sym_encrypt_decrypt(self.crypto(), alg, key, iv, dir, data)
+        sym_encrypt_decrypt(&self.crypto(), alg, key, iv, dir, data)
     }
 
     /// Filters a PCR selection against the current PCR allocation (C `FilterPcr`).
@@ -718,8 +726,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         pcr_select: &TpmlPcrSelection,
         hash_alg: TpmiAlgHash,
     ) -> Result<OwnedDigest, TpmRc> {
-        let mut state =
-            HashStream::new(self.crypto(), hash_alg).map_err(|_| TpmRc::VALUE.to_rc())?;
+        let mut state = self
+            .crypto()
+            .hash_stream(hash_alg)
+            .map_err(|_| TpmRc::VALUE.to_rc())?;
 
         let filtered = self.filter_pcr_selection(pcr_select);
         for in_sel in filtered.pcr_selections() {
@@ -842,6 +852,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         actual_private_key: &mut [u8],
     ) -> Result<usize, TpmRc> {
         let curve = parms.curve_id;
+        // `CryptEccGenerateKey()`: "ECDSA is used to verify each key" (`TPM_DO_SELF_TEST`).
+        self.crypto()
+            .do_self_test(Alg::ECDSA)
+            .map_err(|_| TpmRc::FAILURE)?;
         let mut priv_buf = [0u8; 128];
         let mut pub_buf = [0u8; 256];
         let (pub_len, priv_len) = self
@@ -920,7 +934,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else if let Some(seed) = args.gen_seed {
             let mut generated_key = [0u8; 64];
             kdfa_bits(
-                self.crypto(),
+                &self.crypto(),
                 name_alg,
                 seed,
                 b"Symmetric Key",
@@ -963,7 +977,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else if let Some(seed) = args.gen_seed {
             let mut generated_key = [0u8; 64];
             kdfa_bits(
-                self.crypto(),
+                &self.crypto(),
                 name_alg,
                 seed,
                 b"Symmetric Key",
@@ -1129,18 +1143,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut firmware_version = ATTEST_FIRMWARE_VERSION;
 
         // Signers outside the Endorsement and Platform hierarchies (and TPM_RH_NULL) must not
-        // reveal the plain reset/restart counts and firmware version.
+        // reveal the plain reset/restart counts and firmware version. A signer in a
+        // firmware-limited or SVN-limited hierarchy belongs to its base hierarchy (C
+        // `epsHierarchy`/`ppsHierarchy`, set from `HierarchyNormalizeHandle`).
         let needs_obfuscation = match signer_obj_opt {
             None => true,
             Some(signer) => {
-                signer.hierarchy != Handle::RH_ENDORSEMENT.0
-                    && signer.hierarchy != Handle::RH_PLATFORM.0
+                let base = crate::hierarchy::normalize(signer.hierarchy);
+                base != Handle::RH_ENDORSEMENT.0 && base != Handle::RH_PLATFORM.0
             }
         };
         if needs_obfuscation {
             let mut obfuscation = [0u8; 16];
             kdfa_bits(
-                self.crypto(),
+                &self.crypto(),
                 context_integrity_hash_alg(),
                 provisioned_secret(
                     &self.context.state.sh_proof,
@@ -1176,30 +1192,28 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         })
     }
 
-    /// Returns the proof of `hierarchy` (owner, endorsement, platform; anything else selects
-    /// the null hierarchy) as `(buffer, length, hierarchy handle)`.
+    /// Returns the proof of `hierarchy` and the hierarchy handle a ticket made with it carries:
+    /// the base hierarchies owner, endorsement and platform select their proofs and anything else
+    /// the null hierarchy's; a firmware-limited or SVN-limited hierarchy selects the proof derived
+    /// from its base hierarchy's proof and its additional secret
+    /// (`TpmEngine::hierarchy_proof`).
     ///
-    /// Fails with `TPM_RC_FAILURE` if the proof is not provisioned (see
-    /// `provisioned_secret`), and with `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED` for a
-    /// firmware-limited/SVN-limited hierarchy.
-    pub fn resolve_hierarchy_proof(&self, hierarchy: u32) -> Result<(&[u8], usize, u32), TpmRc> {
-        // The proof of a firmware-limited or SVN-limited hierarchy is not available (the TCG
-        // reference's `HierarchyGetProof()`), see `limited_hierarchy_error`.
-        if let Some(rc) = crate::engine::limited_hierarchy_error(hierarchy) {
-            return Err(rc.to_rc());
-        }
-        let gs = &self.context.state;
-        let (proof, size, handle) = if hierarchy == 0x40000001 {
-            (&gs.sh_proof, gs.sh_proof_size, 0x40000001)
-        } else if hierarchy == 0x4000000B {
-            (&gs.eh_proof, gs.eh_proof_size, 0x4000000B)
-        } else if hierarchy == 0x4000000C {
-            (&gs.ph_proof, gs.ph_proof_size, 0x4000000C)
+    /// Fails with `TPM_RC_FAILURE` if the proof is not provisioned (see `provisioned_secret`),
+    /// and with `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED` if the additional secret of a limited
+    /// hierarchy is unavailable.
+    pub fn resolve_hierarchy_proof(
+        &self,
+        hierarchy: u32,
+    ) -> Result<(crate::hierarchy::HierarchySecret, u32), TpmRc> {
+        let proof = self.context.hierarchy_proof(hierarchy)?;
+        let handle = if crate::hierarchy::is_limited(hierarchy)
+            || matches!(hierarchy, 0x40000001 | 0x4000000B | 0x4000000C)
+        {
+            hierarchy
         } else {
-            (&gs.null_proof, gs.null_proof_size, 0x40000007)
+            0x40000007
         };
-        let proof = provisioned_secret(proof, size)?;
-        Ok((proof, proof.len(), handle))
+        Ok((proof, handle))
     }
 
     pub fn compute_verified_ticket(
@@ -1219,7 +1233,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         key_name: &[u8],
         metadata: &[u8],
     ) -> Result<TicketDigest, TpmRc> {
-        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy)?;
+        let (proof, _) = self.resolve_hierarchy_proof(hierarchy)?;
 
         let mut hmac_input = [0u8; 512];
         let mut offset = 0;
@@ -1238,9 +1252,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = tpm2::crypto::hmac(
-            self.crypto(),
+            &self.crypto(),
             context_integrity_hash_alg(),
-            &proof_bytes[..proof_len],
+            proof.as_bytes(),
             &hmac_input[..offset],
             &mut hmac_buf,
         )
@@ -1255,19 +1269,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         hash_alg: TpmiAlgHash,
         digest: &[u8],
     ) -> Result<TicketDigest, TpmRc> {
-        // The proof of a firmware-limited or SVN-limited hierarchy is unavailable
-        // (`resolve_hierarchy_proof`), whatever the hierarchy check below would say.
-        if let Some(rc) = crate::engine::limited_hierarchy_error(hierarchy.0) {
-            return Err(rc.to_rc());
-        }
-        if hierarchy != Handle::RH_NULL
-            && hierarchy != Handle::RH_OWNER
-            && hierarchy != Handle::RH_PLATFORM
-            && hierarchy != Handle::RH_ENDORSEMENT
-        {
+        // Any `TPMI_RH_HIERARCHY` value, including the firmware-limited and SVN-limited
+        // hierarchies, whose proof needs their additional secret (`TPM_RC_FW_LIMITED`/
+        // `TPM_RC_SVN_LIMITED` if it is unavailable, as the reference's
+        // `TicketComputeHashCheck` → `HierarchyGetProof`).
+        if tpm2::TpmiRhHierarchy::try_from(hierarchy).is_err() {
             return Err(TpmRc::HIERARCHY.to_rc());
         }
-        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy.0)?;
+        let (proof, _) = self.resolve_hierarchy_proof(hierarchy.0)?;
 
         let mut hmac_input = [0u8; 512];
         let mut offset = 0;
@@ -1285,9 +1294,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = tpm2::crypto::hmac(
-            self.crypto(),
+            &self.crypto(),
             context_integrity_hash_alg(),
-            &proof_bytes[..proof_len],
+            proof.as_bytes(),
             &hmac_input[..offset],
             &mut hmac_buf,
         )

@@ -276,6 +276,38 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let digest_ha = tpm2::TpmtHa::new(tpmi_hash, &digest_bytes[..digest_len])
                     .ok_or_else(|| TpmRc::SIGNATURE.with(Position::parameter(5)))?;
 
+                // The self tests of `CryptRsaValidateSignature()` (after its signature size check;
+                // `PssDecode()` hashes once `RSAEP()` accepted the signature) and of
+                // `CryptEccValidateSignature()` (ECDH, once r and s are in range).
+                match (&cmd.auth, &obj.public.parms_and_id) {
+                    (
+                        TpmtSignature::Rsassa(sig) | TpmtSignature::Rsapss(sig),
+                        crate::owned::OwnedPublicParmsAndId::Rsa(_, unique),
+                    ) => {
+                        let bytes = sig.sig.get_buffer();
+                        if bytes.len() == unique.get_buffer().len() {
+                            self.do_self_test(sign_alg)?;
+                            if sign_alg == tpm2::Alg::RSAPSS && bytes < unique.get_buffer() {
+                                self.do_self_test(hash_alg)?;
+                            }
+                        }
+                    }
+                    (
+                        TpmtSignature::Ecdsa(sig),
+                        crate::owned::OwnedPublicParmsAndId::Ecc(parms, _),
+                    ) if super::crypt_ops::ecdsa_signature_in_range(
+                        parms.curve_id,
+                        sig.signature_r.get_buffer(),
+                        sig.signature_s.get_buffer(),
+                    ) =>
+                    {
+                        self.crypto()
+                            .do_self_test(tpm2::Alg::ECDH)
+                            .map_err(|_| TpmRc::FAILURE)?;
+                    }
+                    _ => {}
+                }
+
                 // `Ok(false)` (bad signature or unusable key) and any crypto error both fail
                 // with `TPM_RC_SIGNATURE` (`RC_PolicySigned_auth`), as exp's catch-all did.
                 if !matches!(
@@ -346,10 +378,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut hmac_digest_bytes = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
         let timeout_bytes;
         let (timeout, policy_ticket) = if cmd.expiration < 0 && session_type == TpmSe::Policy {
+            // TPM 2.0 Part 2, TPMT_TK_AUTH: "hierarchy | hierarchy of the object used to produce
+            // the ticket", for an object of a firmware-limited or SVN-limited hierarchy that
+            // limited hierarchy (`bug-fix-svn-fw-limited-entity-hierarchy.patch` for the TCG
+            // references, which use the base hierarchy).
             let key_hierarchy = obj.hierarchy;
 
-            let (proof_bytes, proof_len, ticket_hierarchy) =
-                self.resolve_hierarchy_proof(key_hierarchy)?;
+            let (proof, ticket_hierarchy) = self.resolve_hierarchy_proof(key_hierarchy)?;
 
             let mut hmac_input = [0u8; 512];
             let mut offset = 0;
@@ -397,9 +432,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
 
             let hmac_digest = tpm2::crypto::hmac(
-                self.crypto(),
+                &self.crypto(),
                 crate::handler::context_integrity_hash_alg(),
-                &proof_bytes[..proof_len],
+                proof.as_bytes(),
                 &hmac_input[..offset],
                 &mut hmac_digest_bytes,
             )

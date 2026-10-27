@@ -314,6 +314,7 @@ fn describe(request: &Request) -> &'static str {
         Request::Signal(_) => "a platform signal",
         Request::HashStart | Request::HashData(_) | Request::HashEnd => "a _TPM_Hash indication",
         Request::Reinit => "a re-initialization",
+        Request::SetFirmware(_) => "a firmware change",
     }
 }
 
@@ -422,9 +423,16 @@ impl References {
     ///
     /// # Panics
     /// For signals the reference harness does not support (`Restart`,
-    /// `TestFailureMode`, `SetFirmwareHash`, `SetFirmwareSvn`).
+    /// `TestFailureMode`, and `SetFirmwareHash`/`SetFirmwareSvn`, which
+    /// carry a value: see [`Self::set_firmware`]).
     pub fn signal(&mut self, signal: SimulatorPlatformSignal) {
         self.call(Request::Signal(signal as u32));
+    }
+
+    /// Installs a firmware image with another hash or SVN on the references
+    /// (the `SetFirmwareHash`/`SetFirmwareSvn` platform signals).
+    pub fn set_firmware(&mut self, setting: protocol::FirmwareSetting) {
+        self.call(Request::SetFirmware(setting));
     }
 
     /// Sends `_TPM_Hash_Start` to the references.

@@ -9,10 +9,10 @@ use tpm2::commands::{Import, responses};
 use tpm2::errors::{Position, TpmRc};
 
 use crate::owned::OwnedPublicParmsAndId;
+use crate::self_test::kdfa_bits;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
+use tpm2::crypto::{CryptoProvider, Direction, Rng};
 use tpm2::{TpmaObject, TpmsSensitiveCreate, TpmtSensitive, TpmuSensitiveComposite};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -248,7 +248,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let obj_digest_size = obj_name_alg.digest_size();
             let obj_bits = (obj_digest_size * 8) as u32;
             kdfa_bits(
-                self.crypto(),
+                &self.crypto(),
                 obj_name_alg,
                 &seed[..seed_len],
                 b"INTEGRITY",
@@ -259,7 +259,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             )
             .map_err(|_| TpmRc::FAILURE)?;
             kdfa_bits(
-                self.crypto(),
+                &self.crypto(),
                 obj_name_alg,
                 &seed[..seed_len],
                 b"STORAGE",
@@ -270,12 +270,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             )
             .map_err(|_| TpmRc::FAILURE)?;
 
-            let mut hmac_ctx = HmacStream::new(
-                self.crypto(),
-                obj_name_alg,
-                &integrity_key[..obj_digest_size],
-            )
-            .map_err(|_| TpmRc::FAILURE)?;
+            let mut hmac_ctx = self
+                .crypto()
+                .hmac_stream(obj_name_alg, &integrity_key[..obj_digest_size])
+                .map_err(|_| TpmRc::FAILURE)?;
             hmac_ctx
                 .update(encrypted_blob)
                 .map_err(|_| TpmRc::FAILURE)?;
@@ -533,6 +531,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             false,
             parent_info.name_alg,
             parent_info.sym_bits,
+            parent_obj
+                .public
+                .object_attributes
+                .contains(TpmaObject::FIXED_TPM),
             &mut private_buf,
         )?;
 

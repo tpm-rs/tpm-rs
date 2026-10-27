@@ -40,7 +40,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tpm2_simulator::SimulatorPlatformSignal;
 
 use super::Implementation;
-use super::protocol::{self, Failure, Handshake, Request};
+use super::protocol::{self, Failure, FirmwareSetting, Handshake, Request};
 
 /// Environment variable that makes reference processes log every applied
 /// documented exception and `TPM_RC_RETRY` re-issue on stderr.
@@ -115,6 +115,9 @@ pub trait Backend {
     fn hash_data(&mut self, data: &[u8]);
     /// `_TPM_Hash_End`.
     fn hash_end(&mut self);
+    /// Installs a firmware image with another hash or SVN
+    /// (`_plat__SetTpmFirmwareHash`/`_plat__SetTpmFirmwareSvn`).
+    fn set_firmware(&mut self, setting: FirmwareSetting);
     /// Executes `command` at `locality` and returns the response.
     fn run_command(&mut self, locality: u8, command: &[u8]) -> Vec<u8>;
 }
@@ -434,6 +437,10 @@ impl<B: Backend> Server<B> {
                 Ok(())
             }
             Request::Reinit => self.reinit(),
+            Request::SetFirmware(setting) => {
+                self.backend.set_firmware(setting);
+                Ok(())
+            }
         }
     }
 
@@ -870,7 +877,11 @@ fn capability_list(rsp: &[u8]) -> Option<(u8, u32, Vec<&[u8]>)> {
 /// Exception 2 (`TPM2_GetCapability`): the capability lists may differ
 /// only by the documented implementation-specific entries; every other
 /// entry, the entry order, `moreData` and the selector must be identical.
-fn capability_difference_is_documented(expected: &[u8], actual: &[u8]) -> bool {
+fn capability_difference_is_documented(
+    implementation: Implementation,
+    expected: &[u8],
+    actual: &[u8],
+) -> bool {
     let (Some((e_more, e_cap, e)), Some((a_more, a_cap, a))) =
         (capability_list(expected), capability_list(actual))
     else {
@@ -885,13 +896,13 @@ fn capability_difference_is_documented(expected: &[u8], actual: &[u8]) -> bool {
             .map(|x| x.to_vec())
             .collect()
     };
-    let none = |_: &[u8]| false;
     match e_cap {
         // TPM_CAP_TPM_PROPERTIES: values of implementation-specific
-        // properties may differ; C additionally reports
-        // TPM_PT_FIRMWARE_SVN/TPM_PT_FIRMWARE_MAX_SVN (0x12F/0x130, spec
-        // 1.83+) and, from version 185 on, TPM_PT_ML_PARAMETER_SETS (0x131)
-        // with no ML-KEM/ML-DSA parameter set implemented (value 0). All
+        // properties may differ; C additionally reports, from version 185
+        // on, TPM_PT_ML_PARAMETER_SETS (0x131) with no ML-KEM/ML-DSA
+        // parameter set implemented (value 0), and ibmswtpm2 (an older code
+        // base) does not report TPM_PT_FIRMWARE_SVN/TPM_PT_FIRMWARE_MAX_SVN
+        // (0x12F/0x130, spec 1.83+), which tpm-rs and mstpm20 report. All
         // other properties must match exactly.
         6 => {
             const IMPLEMENTATION_SPECIFIC: &[u32] = &[
@@ -910,8 +921,9 @@ fn capability_difference_is_documented(expected: &[u8], actual: &[u8]) -> bool {
                 0x12D, // TPM_PT_MODES (vendor certification modes)
             ];
             let prop = |x: &[u8]| be32(x, 0).unwrap_or(0);
-            let ref_only = |x: &[u8]| {
-                matches!(prop(x), 0x12F | 0x130) || (prop(x) == 0x131 && be32(x, 4) == Some(0))
+            let ref_only = |x: &[u8]| prop(x) == 0x131 && be32(x, 4) == Some(0);
+            let rs_only = |x: &[u8]| {
+                implementation == Implementation::Ibmswtpm2 && matches!(prop(x), 0x12F | 0x130)
             };
             let mask = |list: Vec<Vec<u8>>| -> Vec<Vec<u8>> {
                 list.into_iter()
@@ -925,10 +937,17 @@ fn capability_difference_is_documented(expected: &[u8], actual: &[u8]) -> bool {
             };
             // C's `moreData` may be YES where tpm-rs's is NO: tpm-rs returned every property
             // it has from the requested one on, and C's list (equal up to the C-only entries)
-            // was cut by `propertyCount` before or within its C-only tail
-            // (0x12F/0x130/0x131), the only properties C has beyond tpm-rs's last.
-            let more_matches = e_more == a_more || (e_more == 0 && a_more == 1);
-            more_matches && mask(keep(&e, &none)) == mask(keep(&a, &ref_only))
+            // was cut by `propertyCount` before or within its C-only tail (0x131), the only
+            // property C has beyond tpm-rs's last. Conversely (ibmswtpm2), tpm-rs's
+            // `moreData` may be YES where C's is NO if tpm-rs's list was cut before or within
+            // its tpm-rs-only tail (0x12F/0x130): C returned every property it has, and
+            // tpm-rs's last returned property is the one before that tail (0x12E) or in it.
+            let rs_tail_cut = implementation == Implementation::Ibmswtpm2
+                && e_more == 1
+                && a_more == 0
+                && e.last().is_some_and(|x| matches!(prop(x), 0x12E | 0x12F));
+            let more_matches = e_more == a_more || (e_more == 0 && a_more == 1) || rs_tail_cut;
+            more_matches && mask(keep(&e, &rs_only)) == mask(keep(&a, &ref_only))
         }
         _ => false,
     }
@@ -1000,7 +1019,7 @@ fn compare_differential_response(
         (cc::GET_CAPABILITY, Some(0), Some(0)) => {
             header(expected).is_some_and(|(tag, _)| tag == 0x8001)
                 && same_tag
-                && capability_difference_is_documented(expected, actual)
+                && capability_difference_is_documented(implementation, expected, actual)
         }
         // 3. TPM2_ECC_Parameters: tpm-rs pads every curve parameter to the
         //    curve's byte width; C's `CryptEccData.c` constants omit leading
@@ -1031,20 +1050,8 @@ fn compare_differential_response(
                     _ => false,
                 }
         }
-        // 4. TPM2_IncrementalSelfTest: `toDoList` is TPM-dependent (Part 3
-        //    §10.3: the list of algorithms that still need testing); the C
-        //    reference is built with ENABLE_SELF_TESTS = NO and a different
-        //    algorithm set, so the lists differ in content and order. Both
-        //    must be well-formed TPML_ALG responses with identical headers
-        //    and no other content.
-        (cc::INCREMENTAL_SELF_TEST, Some(0), Some(0)) => {
-            let well_formed = |r: &[u8]| {
-                header(r).is_some_and(|(tag, _)| tag == 0x8001)
-                    && response_params(r, 0)
-                        .is_some_and(|p| be32(p, 0).is_some_and(|n| p.len() == 4 + 2 * n as usize))
-            };
-            well_formed(expected) && well_formed(actual)
-        }
+        // 4. Retired: TPM2_IncrementalSelfTest's `toDoList` is compared exactly (tpm-rs and
+        //    the references run the same algorithm self tests).
         // 8. Retired: tpm-rs selects locality 0 for a reserved locality (5..=31)
         //    like the C simulator's platform layer (`_plat__LocalitySet`).
         // 9. TPM2_ContextLoad of a `contextBlob` that is not byte-identical
@@ -1160,6 +1167,8 @@ mod tests {
         commands: Vec<Vec<u8>>,
         /// The response to every command but `TPM2_Startup`.
         response: Vec<u8>,
+        /// Every firmware change.
+        firmware: Vec<FirmwareSetting>,
     }
 
     impl Backend for MockBackend {
@@ -1171,6 +1180,9 @@ mod tests {
         fn hash_start(&mut self) {}
         fn hash_data(&mut self, _data: &[u8]) {}
         fn hash_end(&mut self) {}
+        fn set_firmware(&mut self, setting: FirmwareSetting) {
+            self.firmware.push(setting);
+        }
         fn run_command(&mut self, _locality: u8, command: &[u8]) -> Vec<u8> {
             self.commands.push(command.to_vec());
             if header(command).map(|(_, code)| code) == Some(cc::STARTUP) {
@@ -1238,6 +1250,23 @@ mod tests {
         reinit_reports_a_failed_startup();
     }
 
+    /// A firmware change is passed to the backend.
+    #[test]
+    fn set_firmware_reaches_the_backend() {
+        let _clock = VIRTUAL_CLOCK_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut server =
+            Server::new(Implementation::Mstpm20, MockBackend::default(), "fw".into()).unwrap();
+        for setting in [FirmwareSetting::Hash(7), FirmwareSetting::Svn(3)] {
+            server.handle(Request::SetFirmware(setting)).unwrap();
+        }
+        assert_eq!(
+            server.backend.firmware,
+            [FirmwareSetting::Hash(7), FirmwareSetting::Svn(3)]
+        );
+    }
+
     /// A failed `TPM2_Startup` fails the re-initialization (part of
     /// [`reinit_restarts_the_reference_like_a_new_process`], which holds the
     /// virtual clock lock).
@@ -1247,6 +1276,7 @@ mod tests {
             fn init(&mut self) {}
             fn advance_clock(&mut self, _ms: u64) {}
             fn signal(&mut self, _signal: Signal) {}
+            fn set_firmware(&mut self, _setting: FirmwareSetting) {}
             fn hash_start(&mut self) {}
             fn hash_data(&mut self, _data: &[u8]) {}
             fn hash_end(&mut self) {}

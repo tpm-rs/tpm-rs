@@ -166,6 +166,9 @@ impl Asymmetric for StressTestCrypto {
 }
 
 impl CryptoProvider for StressTestCrypto {
+    /// Its algorithms are fakes, which fail the known-answer self tests.
+    const KNOWN_ANSWER_TESTS: bool = false;
+
     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
         dest.fill(0xaa);
         Ok(())

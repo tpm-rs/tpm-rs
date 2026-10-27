@@ -1034,6 +1034,9 @@ impl tpm2::crypto::Ecc for FakeCrypto {
 }
 
 impl CryptoProvider for FakeCrypto {
+    /// Its algorithms are fakes, which fail the known-answer self tests.
+    const KNOWN_ANSWER_TESTS: bool = false;
+
     fn get_random(&self, _dest: &mut [u8]) -> Result<(), CryptoError> {
         todo!()
     }

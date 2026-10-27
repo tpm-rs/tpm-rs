@@ -66,9 +66,9 @@ fn all_commands_execute() {
 fn failed_incremental_run_keeps_todo_list() {
     let mut sim = Tpm::new();
     let todo = incremental_self_test(&mut sim, &[]).unwrap();
-    assert!(todo.contains(&Alg::RSA));
+    assert!(todo.contains(&Alg::RSASSA));
     assert_eq!(
-        incremental_self_test(&mut sim, &[Alg::RSA, Alg::NULL]),
+        incremental_self_test(&mut sim, &[Alg::RSASSA, Alg::NULL]),
         Err(TpmRc::VALUE.with(Position::parameter(1)).get())
     );
     let todo_after = incremental_self_test(&mut sim, &[]).unwrap();

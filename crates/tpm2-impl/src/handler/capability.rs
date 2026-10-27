@@ -13,6 +13,24 @@ use tpm2::{
     TpmlTaggedTpmProperty, TpmsAlgProperty, TpmsCapabilityData, TpmsTaggedProperty,
 };
 
+/// The firmware-limited and SVN-limited hierarchy handles reported by `TPM_CAP_HANDLES`
+/// (`TPM_HT_PERMANENT`) and, except for those of `TPM_RH_NULL`, `TPM_CAP_AUTH_POLICIES`, on a TPM
+/// that supports them. TPM 2.0 Part 3, TPM2_GetCapability: "For this capability,
+/// `TPM_RH_SVN_OWNER_BASE`, `TPM_RH_SVN_ENDORSEMENT_BASE`, `TPM_RH_SVN_PLATFORM_BASE`, and
+/// `TPM_RH_NULL_BASE` handles may be returned. There are separate handles for each SVN from 0 to
+/// the firmware's current SVN (up to `UINT16_MAX`), which are not returned. Instead, only the
+/// handles associated with SVN 0 are returned".
+const LIMITED_HIERARCHY_HANDLES: [u32; 8] = [
+    tpm2::Handle::RH_FW_OWNER.0,
+    tpm2::Handle::RH_FW_ENDORSEMENT.0,
+    tpm2::Handle::RH_FW_PLATFORM.0,
+    tpm2::Handle::RH_FW_NULL.0,
+    tpm2::Handle::RH_SVN_OWNER_BASE.0,
+    tpm2::Handle::RH_SVN_ENDORSEMENT_BASE.0,
+    tpm2::Handle::RH_SVN_PLATFORM_BASE.0,
+    tpm2::Handle::RH_SVN_NULL_BASE.0,
+];
+
 /// ECC curves implemented by this TPM (`TPM_CAP_ECC_CURVES`; the `ecc_curve_*` features of `tpm2`).
 pub(crate) const IMPLEMENTED_CURVES: [TpmEccCurve; 5] = [
     TpmEccCurve::NistP224,
@@ -395,6 +413,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     startup_clear_attr |= tpm2::TpmaStartupClear::PH_ENABLE_NV;
                 }
 
+                let (firmware_svn, firmware_max_svn) = match self.context.platform.firmware {
+                    Some(firmware) => (
+                        u32::from(firmware.firmware_svn()),
+                        u32::from(firmware.firmware_max_svn()),
+                    ),
+                    None => (0, 0),
+                };
                 let all_properties = [
                     (TpmPt::FAMILY_INDICATOR, tpm2::TPM_SPEC_FAMILY), // "2.0\0"
                     (TpmPt::LEVEL, tpm2::TPM_SPEC_LEVEL),
@@ -467,16 +492,26 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     (TpmPt::SPLIT_MAX, 128),
                     (
                         TpmPt::TOTAL_COMMANDS,
-                        crate::engine::SUPPORTED_COMMANDS.len() as u32,
+                        crate::engine::TOTAL_COMMAND_COUNT as u32,
                     ),
                     (
                         TpmPt::LIBRARY_COMMANDS,
                         crate::engine::SUPPORTED_COMMANDS.len() as u32,
                     ),
-                    (TpmPt::VENDOR_COMMANDS, 0),
+                    (
+                        TpmPt::VENDOR_COMMANDS,
+                        crate::engine::VENDOR_COMMANDS.len() as u32,
+                    ),
                     (TpmPt::NV_BUFFER_MAX, 1024),
                     (TpmPt::MODES, tpm2::TpmaModes::empty().bits()),
                     (TpmPt::MAX_CAP_BUFFER, tpm2::limits::MAX_CAP_BUFFER as u32),
+                    // TPM 2.0 Part 2, TPM_PT: "TPM_PT_FIRMWARE_SVN | PT_FIXED + 47 | the TPM
+                    // vendor-specific value indicating the SVN of the firmware" and
+                    // "TPM_PT_FIRMWARE_MAX_SVN | PT_FIXED + 48 | ... the maximum value that
+                    // TPM_PT_FIRMWARE_SVN may take in the future", from the platform's firmware
+                    // (0 on a platform without one, which has no SVN-limited hierarchies).
+                    (TpmPt::FIRMWARE_SVN, firmware_svn),
+                    (TpmPt::FIRMWARE_MAX_SVN, firmware_max_svn),
                     (TpmPt::PERMANENT, permanent_attr.bits()),
                     (TpmPt::STARTUP_CLEAR, startup_clear_attr.bits()),
                     (TpmPt::HR_NV_INDEX, nv_index_count),
@@ -700,8 +735,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         tpm2::Handle::RH_PLATFORM.0,
                         tpm2::Handle::RH_PLATFORM_NV.0,
                         tpm2::Handle::RH_AUTH_00.0,
+                        // The implemented ACTs (`NextPermanentHandle`), see `crate::act`.
+                        crate::act::act_handle(0).0,
+                        #[cfg(feature = "act-a")]
+                        crate::act::act_handle(0xA).0,
                     ];
-                    for &h in permanent.iter() {
+                    // The firmware-limited and SVN-limited hierarchies of a TPM that supports
+                    // them follow (in ascending handle order).
+                    let limited: &[u32] = if self.context.supports_limited_hierarchies() {
+                        &LIMITED_HIERARCHY_HANDLES
+                    } else {
+                        &[]
+                    };
+                    for &h in permanent.iter().chain(limited) {
                         if h >= cmd.property {
                             if count < cmd.property_count as usize
                                 && count < tpm2::TPM2_MAX_CAP_HANDLES
@@ -737,11 +783,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             TpmCap::Commands => {
                 let mut command_attributes = [TpmaCc::default(); tpm2::TPM2_MAX_CAP_CC];
                 let mut count = 0;
-                let mut sorted_cmds = crate::engine::SUPPORTED_COMMANDS;
-                sorted_cmds.sort_unstable_by_key(|&cc| cc.code());
-
-                for &cc in sorted_cmds.iter() {
-                    if cc.code() >= cmd.property {
+                // `CommandCapGetCCList`: the library commands, then the vendor commands, from
+                // the first one at or after `property` (see `command_list_start`).
+                let first = crate::engine::command_list_start(cmd.property);
+                for cc in crate::engine::implemented_commands_in_order() {
+                    if first.is_some_and(|first| cc.code() >= first) {
                         if count < cmd.property_count as usize && count < tpm2::TPM2_MAX_CAP_CC {
                             command_attributes[count] = crate::engine::get_command_attribute(cc);
                             count += 1;
@@ -819,13 +865,25 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     tpm2::Handle::RH_LOCKOUT.0,
                     tpm2::Handle::RH_ENDORSEMENT.0,
                     tpm2::Handle::RH_PLATFORM.0,
+                    // The implemented ACTs, with their ACT-specific policies.
+                    crate::act::act_handle(0).0,
+                    #[cfg(feature = "act-a")]
+                    crate::act::act_handle(0xA).0,
                 ];
-                for &h in handles.iter() {
+                // The firmware-limited and SVN-limited hierarchies have the policy of their base
+                // hierarchy (C `EntityGetAuthPolicy` → `HierarchyNormalizeHandle`); those of
+                // `TPM_RH_NULL` have none and are skipped (`TPM_ALG_ERROR`).
+                let limited: &[u32] = if self.context.supports_limited_hierarchies() {
+                    &LIMITED_HIERARCHY_HANDLES
+                } else {
+                    &[]
+                };
+                for &h in handles.iter().chain(limited) {
                     if h >= cmd.property {
                         if tagged_policies.count() < cmd.property_count as usize
                             && tagged_policies.count() < tpm2::TPM2_MAX_TAGGED_POLICIES
                         {
-                            let (policy_digest, policy_alg) = match h {
+                            let (policy_digest, policy_alg) = match crate::hierarchy::normalize(h) {
                                 0x40000001 => (
                                     &self.context.state.owner_policy,
                                     self.context.state.owner_alg,
@@ -842,7 +900,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                                     &self.context.state.platform_policy,
                                     self.context.state.platform_alg,
                                 ),
-                                _ => continue,
+                                _ => match crate::act::act_index(h) {
+                                    Some(index) => {
+                                        let policy = &self.context.state.act.policies[index];
+                                        (&policy.auth_policy, policy.hash_alg)
+                                    }
+                                    None => continue,
+                                },
                             };
                             let policy_hash = policy_alg
                                 .or_else(|| {
@@ -863,9 +927,31 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 TpmsCapabilityData::AuthPolicies(tagged_policies)
             }
             TpmCap::ACT => {
-                // ACTs are not implemented (`!ACT_SUPPORT`): always
-                // `TPM_RCS_VALUE + RC_GetCapability_property`.
-                return Err(TpmRc::VALUE.with(Position::parameter(2)));
+                // Part 3, TPM2_GetCapability: "TPM_CAP_ACT | TPM_HANDLE | TPML_ACT_DATA", "Returns
+                // a list of TPMS_ACT_DATA, each of which contains the handle for the ACT, the
+                // remaining time before it expires, and the ACT attributes". The specification
+                // is silent on a property that is not an ACT handle; as the TCG reference
+                // (`TPM2_GetCapability()`), it is `TPM_RC_VALUE + RC_P2`. The list holds the
+                // implemented ACTs from `property` on, at most `propertyCount` (and
+                // `MAX_ACT_DATA`) of them; `moreData` is YES if an implemented ACT is left out
+                // (`ActGetCapabilityData()`).
+                if !(tpm2::Handle::RH_ACT_0.0..=tpm2::Handle::RH_ACT_F.0).contains(&cmd.property) {
+                    return Err(TpmRc::VALUE.with(Position::parameter(2)));
+                }
+                let max = (cmd.property_count as usize).min(tpm2::TPM2_MAX_ACT_DATA);
+                let mut act_data = tpm2::TpmlActData::default();
+                for (index, &act) in crate::act::IMPLEMENTED_ACTS.iter().enumerate() {
+                    if crate::act::act_handle(act).0 < cmd.property {
+                        continue;
+                    }
+                    if act_data.count() < max {
+                        let _ = act_data.add(&self.context.state.act.act_data(index));
+                    } else {
+                        more_data = true;
+                        break;
+                    }
+                }
+                TpmsCapabilityData::ActData(act_data)
             }
             TpmCap::PCRProperties => {
                 // Bitmaps derived from the PCR attributes of the C reference platform
@@ -924,14 +1010,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // `PhysicalPresenceCapGetCCList`: `TPM2_PP_Commands` is not implemented, so the list
             // of commands that require physical presence (`gp.ppList`) is always empty.
             TpmCap::PPCommands => TpmsCapabilityData::PPCommands(tpm2::TpmlCc::default()),
-            // `CommandAuditCapGetCCList`: the audited commands with a command code of at least
-            // `property`, in ascending order; `moreData` is YES if more audited commands follow
-            // a full list.
+            // `CommandAuditCapGetCCList`: the audited commands from the first implemented
+            // command at or after `property` (see `command_list_start`), library commands then
+            // vendor commands; `moreData` is YES if more audited commands follow a full list.
             TpmCap::AuditCommands => {
                 let max = (cmd.property_count as usize).min(tpm2::TPM2_MAX_CAP_CC);
                 let mut list = tpm2::TpmlCc::default();
+                let first = crate::engine::command_list_start(cmd.property);
                 for cc in self.context.state.audit_commands.iter() {
-                    if cc.code() < cmd.property {
+                    if !first.is_some_and(|first| cc.code() >= first) {
                         continue;
                     }
                     if list.count() < max {

@@ -3,6 +3,7 @@ use crate::handle_checks::{Tpmi, check};
 use crate::handler::{CommandHandler, TransientObject};
 use crate::owned::OwnedPublicParmsAndId;
 use crate::req_resp::RequestThenResponse;
+use crate::self_test::kdfa_bits;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use tpm2::Handle;
@@ -13,8 +14,7 @@ use tpm2::Unmarshal;
 use tpm2::commands::{Rewrap, responses};
 #[cfg(not(feature = "reference-rng"))]
 use tpm2::crypto::KeyParams;
-use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
+use tpm2::crypto::{CryptoProvider, Direction, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bPrivate, TpmEccCurve, TpmaObject,
@@ -290,7 +290,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let digest_size = hash_alg.digest_size();
         let mut integrity_key = [0u8; 64];
         kdfa_bits(
-            self.crypto(),
+            &self.crypto(),
             hash_alg,
             seed,
             b"INTEGRITY",
@@ -300,7 +300,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &mut integrity_key,
         )
         .map_err(|_| TpmRc::FAILURE)?;
-        let mut hmac_ctx = HmacStream::new(self.crypto(), hash_alg, &integrity_key[..digest_size])
+        let mut hmac_ctx = self
+            .crypto()
+            .hmac_stream(hash_alg, &integrity_key[..digest_size])
             .map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(data).map_err(|_| TpmRc::FAILURE)?;
         hmac_ctx.update(name).map_err(|_| TpmRc::FAILURE)?;
@@ -323,7 +325,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let key_len = (sym_bits / 8) as usize;
         let mut key = [0u8; 32];
         kdfa_bits(
-            self.crypto(),
+            &self.crypto(),
             hash_alg,
             seed,
             b"STORAGE",
@@ -368,7 +370,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// Returns the seed length. Errors carry no position; callers add the parameter position of
     /// `secret`.
     pub(crate) fn crypt_secret_decrypt(
-        &self,
+        &mut self,
         parent: &TransientObject,
         label: &[u8],
         secret: &[u8],
@@ -391,23 +393,33 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     return Err(TpmRc::SCHEME.to_rc());
                 }
                 let modulus = unique.get_buffer();
-                if secret.len() != modulus.len() || secret >= modulus {
+                if secret.len() != modulus.len() {
+                    return Err(TpmRc::SIZE.to_rc());
+                }
+                // `CryptRsaDecrypt()`: the OAEP self test (which draws from the TPM's DRBG)
+                // follows the size check and precedes `RSADP()`.
+                self.do_self_test(Alg::OAEP)?;
+                if secret >= modulus {
                     return Err(TpmRc::SIZE.to_rc());
                 }
                 let mut label_buf = [0u8; 32];
                 let label_len = oaep_label(label, &mut label_buf);
                 let mut plaintext = [0u8; 512];
-                let len = crypto_len(
-                    self.crypto().decrypt(
-                        Alg::OAEP,
-                        Alg::from(hash),
-                        &parent.private[..parent.private_len],
-                        secret,
-                        &mut plaintext,
-                        &label_buf[..label_len],
-                    ),
-                    TpmRc::VALUE.to_rc(),
+                let decrypted = self.crypto().decrypt(
+                    Alg::OAEP,
+                    Alg::from(hash),
+                    &parent.private[..parent.private_len],
+                    secret,
+                    &mut plaintext,
+                    &label_buf[..label_len],
+                );
+                self.oaep_decode_hash_test(
+                    &parent.private[..parent.private_len],
+                    secret,
+                    Alg::from(hash),
+                    matches!(decrypted, Ok(Some(_))),
                 )?;
+                let len = crypto_len(decrypted, TpmRc::VALUE.to_rc())?;
                 // The recovered seed may not be larger than the scheme hash's digest.
                 if len > digest_size || len > seed.len() {
                     return Err(TpmRc::VALUE.to_rc());
@@ -445,7 +457,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 )?;
                 let digest_size = name_alg.digest_size();
                 tpm2::crypto::kdf::kdfe_bits(
-                    self.crypto(),
+                    &self.crypto(),
                     name_alg,
                     &z[..param_size],
                     label,
@@ -479,6 +491,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         match &parent.public.parms_and_id {
             OwnedPublicParmsAndId::Rsa(parms, unique) => {
                 self.context.random_crypto(&mut seed[..digest_size])?;
+                // `CryptRsaEncrypt()` tests OAEP (drawing from the TPM's DRBG) after the seed
+                // was drawn and before it is encoded.
+                self.do_self_test(Alg::OAEP)?;
                 let mut label_buf = [0u8; 32];
                 let label_len = oaep_label(label, &mut label_buf);
                 // With `reference-rng`, the OAEP seed is drawn from the TPM's DRBG as in the
@@ -507,6 +522,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     &label_buf[..label_len],
                 );
                 let secret_len = crypto_len(encrypted, TpmRc::VALUE.to_rc())?;
+                // `OaepEncode()` hashes the label with the nameAlg.
+                self.do_self_test(Alg::from(name_alg))?;
                 Ok((digest_size, secret_len))
             }
             OwnedPublicParmsAndId::Ecc(parms, unique) => {
@@ -527,6 +544,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .map_err(|_| TpmRc::KEY.to_rc())?;
                 let mut eph_pub = [0u8; 256];
                 let mut eph_priv = [0u8; 128];
+                // `CryptEccNewKeyPair()` tests ECDH (no random values) before it generates the
+                // key.
+                #[cfg(not(feature = "reference-rng"))]
+                self.do_self_test(Alg::ECDH)?;
                 // `CryptEccNewKeyPair()`: with `reference-rng`, from the TPM's DRBG.
                 #[cfg(feature = "reference-rng")]
                 let priv_len =
@@ -553,7 +574,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     TpmRc::KEY.to_rc(),
                 )?;
                 tpm2::crypto::kdf::kdfe_bits(
-                    self.crypto(),
+                    &self.crypto(),
                     name_alg,
                     &z[..param_size],
                     label,

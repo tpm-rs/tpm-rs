@@ -798,6 +798,57 @@ impl Asymmetric for CruxCryptoProvider {
         prime_p_out[..prime_p_bytes.len()].copy_from_slice(&prime_p_bytes);
         Ok(Some(prime_p_bytes.len()))
     }
+
+    fn rsa_private_key_to_crt(
+        &self,
+        private_key: &[u8],
+        crt_out: &mut [u8],
+    ) -> Result<Option<usize>, CryptoError> {
+        use rsa::pkcs8::DecodePrivateKey as _;
+        use rsa::traits::{PrivateKeyParts as _, PublicKeyParts as _};
+        let Ok(priv_key) = rsa::RsaPrivateKey::from_pkcs8_der(private_key) else {
+            return Ok(None);
+        };
+        let [first, second] = priv_key.primes() else {
+            return Ok(None);
+        };
+        // The larger prime first, so that `qinv` is the inverse of the smaller one.
+        let (p, q) = if first >= second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let Ok(key) = rsa::RsaPrivateKey::from_components(
+            priv_key.n().clone(),
+            priv_key.e().clone(),
+            priv_key.d().clone(),
+            alloc::vec![p.clone(), q.clone()],
+        ) else {
+            return Ok(None);
+        };
+        let (Some(dp), Some(dq), Some(qinv)) = (key.dp(), key.dq(), key.qinv()) else {
+            return Ok(None);
+        };
+        let Some(qinv) = qinv.to_biguint() else {
+            return Ok(None);
+        };
+        let size = p.to_bytes_be().len();
+        if crt_out.len() < 5 * size {
+            return Err(CryptoError::Internal);
+        }
+        for (value, out) in [p, q, dp, dq, &qinv]
+            .into_iter()
+            .zip(crt_out.chunks_exact_mut(size))
+        {
+            let bytes = value.to_bytes_be();
+            if bytes.len() > size {
+                return Err(CryptoError::Internal);
+            }
+            out[..size - bytes.len()].fill(0);
+            out[size - bytes.len()..].copy_from_slice(&bytes);
+        }
+        Ok(Some(5 * size))
+    }
 }
 
 #[cfg(test)]

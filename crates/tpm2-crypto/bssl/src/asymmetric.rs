@@ -1,8 +1,8 @@
 use crate::bssl::{
     EcGroup, ec_generate_key, ecdsa_sign, ecdsa_verify, rsa_decrypt_null, rsa_decrypt_oaep,
     rsa_decrypt_pkcs1v15, rsa_encrypt_null, rsa_encrypt_oaep, rsa_encrypt_pkcs1v15,
-    rsa_generate_key, rsa_import_private_key, rsa_private_key_to_prime_p, rsa_sign_pkcs1v15,
-    rsa_sign_pss, rsa_verify_pkcs1v15, rsa_verify_pss,
+    rsa_generate_key, rsa_import_private_key, rsa_private_key_to_crt, rsa_private_key_to_prime_p,
+    rsa_sign_pkcs1v15, rsa_sign_pss, rsa_verify_pkcs1v15, rsa_verify_pss,
 };
 use crate::{BsslCryptoProvider, RngWrapper, output, verified};
 use tpm2::crypto::{Asymmetric, AsymmetricSign, CryptoError, TpmiRsaKeyBits};
@@ -238,5 +238,13 @@ impl Asymmetric for BsslCryptoProvider {
         prime_p_out: &mut [u8],
     ) -> Result<Option<usize>, CryptoError> {
         output(rsa_private_key_to_prime_p(private_key, prime_p_out))
+    }
+
+    fn rsa_private_key_to_crt(
+        &self,
+        private_key: &[u8],
+        crt_out: &mut [u8],
+    ) -> Result<Option<usize>, CryptoError> {
+        output(rsa_private_key_to_crt(private_key, crt_out))
     }
 }

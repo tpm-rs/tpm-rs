@@ -1,0 +1,38 @@
+act-preserve-signaled: preserveSignaled is CLEAR on TPM Reset/Restart and
+a copy of signaled on TPM Resume
+
+Classification: spec-deviation bug fix.
+
+TPM 2.0 Part 2, TPMA_ACT: "On a TPM Reset or Restart, preservedSignaled is
+CLEAR for all ACT. On a TPM Resume, the state of each ACT signaled is copied
+to the corresponding preservedSignaled." ActStartup() instead clears
+go.preservedSignaled only after a power loss and otherwise ORs go.signaledACT
+into it for every startup type: after a _TPM_Init without power loss, TPM
+Reset and TPM Restart keep a stale preserveSignaled (and a TPM Restart after
+TPM2_Shutdown(TPM_SU_STATE) sets it), TPM Resume keeps bits of ACTs that no
+longer signal, and a TPM Resume after a power loss clears preserveSignaled
+(signaled itself is restored by _ActResume()). The fix sets go.preservedSignaled from go.signaledACT (saved by
+TPM2_Shutdown(TPM_SU_STATE)) on TPM Resume and clears it otherwise, as tpm-rs
+does (tpm2-impl src/act.rs, ActState::startup).
+
+diff --git a/TPMCmd/tpm/src/command/ClockTimer/ACT_spt.c b/TPMCmd/tpm/src/command/ClockTimer/ACT_spt.c
+index 9b2ad8d6..22837c5d 100644
+--- a/TPMCmd/tpm/src/command/ClockTimer/ACT_spt.c
++++ b/TPMCmd/tpm/src/command/ClockTimer/ACT_spt.c
+@@ -41,10 +41,13 @@ BOOL ActStartup(STARTUP_TYPE type)
+ 
+     // If this not a cold start, copy all the current 'signaled' settings to
+     // 'preservedSignaled'.
+-    if(g_powerWasLost)
+-        go.preservedSignaled = 0;
++    // tpm-rs differential testing: TPM 2.0 Part 2, TPMA_ACT: "On a TPM Reset or
++    // Restart, preservedSignaled is CLEAR for all ACT. On a TPM Resume, the state
++    // of each ACT signaled is copied to the corresponding preservedSignaled."
++    if(type == SU_RESUME)
++        go.preservedSignaled = go.signaledACT;
+     else
+-        go.preservedSignaled |= go.signaledACT;
++        go.preservedSignaled = 0;
+ 
+     // For TPM_RESET or TPM_RESTART, the ACTs will all be disabled and the output
+     // de-asserted.

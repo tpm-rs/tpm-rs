@@ -1,0 +1,34 @@
+svn-fw-limited-load-external: TPM2_LoadExternal rejects firmwareLimited and svnLimited
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 2, version 185, TPMA_OBJECT, "Bit[8] -
+*firmwareLimited*" and "Bit[9] - *svnLimited*"): "**External** | shall be
+CLEAR" -- unconditionally, unlike *fixedTPM* ("if both public and sensitive
+portions are loaded, shall be CLEAR").
+
+The reference validates the attributes of an external object only when its
+sensitive area is loaded (ObjectLoad() runs PublicAttributesValidation() only
+with a sensitive area, where firmwareLimited/svnLimited then fail because
+fixedTPM must be CLEAR), so it loads a public-only object with
+firmwareLimited or svnLimited SET. tpm-rs rejects both attributes for every
+external object with TPM_RC_ATTRIBUTES + RC_LoadExternal_inPublic, after the
+hierarchy and sensitive-area checks; the patch adds the same check to the
+reference.
+diff --git a/src/ObjectCommands.c b/src/ObjectCommands.c
+--- a/src/ObjectCommands.c
++++ b/src/ObjectCommands.c
+@@ -301,6 +301,13 @@ TPM2_LoadExternal(
+ 	    // initialization will load the sensitive part too
+ 	    sensitive = &in->inPrivate.sensitiveArea;
+ 	}
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // TPM 2.0 Part 2, TPMA_OBJECT Bit[8] firmwareLimited and Bit[9]
++    // svnLimited, "External: shall be CLEAR" (also for a public-only object,
++    // whose attributes ObjectLoad() does not validate).
++    if(IS_ATTRIBUTE(in->inPublic.publicArea.objectAttributes, TPMA_OBJECT, firmwareLimited)
++       || IS_ATTRIBUTE(in->inPublic.publicArea.objectAttributes, TPMA_OBJECT, svnLimited))
++	return TPM_RCS_ATTRIBUTES + RC_LoadExternal_inPublic;
+     // Need the name to initialize the object structure
+     PublicMarshalAndComputeName(&in->inPublic.publicArea, &out->name);
+     // Load and validate key

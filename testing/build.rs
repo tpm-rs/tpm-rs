@@ -142,6 +142,8 @@ const REFERENCES: [Reference; 2] = [
                 "-std=gnu11",
                 "-DTPM_POSIX",
                 "-D_POSIX_",
+                // As in ibmswtpm2's makefile: the Nuvoton NTC2_* vendor commands.
+                "-DTPM_NUVOTON",
                 "-DUSE_BIT_FIELD_STRUCTURES=NO",
                 "-DSYM_LIB=Ossl",
                 "-DHASH_LIB=Ossl",
@@ -157,7 +159,7 @@ const REFERENCES: [Reference; 2] = [
 /// each of them as `difftest_<name>_<entry point>` (see [`prefixed`]), so
 /// that both archives can be linked into one binary; every other symbol is
 /// localized.
-const EXPORTED_SYMBOLS: [&str; 15] = [
+const EXPORTED_SYMBOLS: [&str; 17] = [
     "difftest_init",
     "difftest_advance_clock",
     "difftest_signal_power_on",
@@ -173,6 +175,9 @@ const EXPORTED_SYMBOLS: [&str; 15] = [
     "difftest_signal_hash_data",
     "difftest_signal_hash_end",
     "difftest_run_command",
+    // `harness-difftest-firmware.patch`
+    "difftest_set_firmware_hash",
+    "difftest_set_firmware_svn",
 ];
 
 /// The C library functions whose state is global to a process and that the
@@ -752,16 +757,18 @@ fn ibmswtpm2_sources(repo: &Path) -> Vec<PathBuf> {
         .expect("OBJFILES in ibmswtpm2 makefile-common")
         .1;
     let mut c_files = Vec::new();
-    for line in list.lines() {
-        let line = line.trim().trim_end_matches('\\').trim();
-        if line.is_empty() && !c_files.is_empty() {
-            break;
-        }
-        let Some(stem) = line.strip_suffix(".o") else {
-            continue;
-        };
-        if stem != "TPMCmds" {
+    // The list ends at the first line without a `\` continuation (it contains an
+    // empty continued line before the Nuvoton `ntc2lib.o`/`ntc2.o`).
+    for raw in list.lines() {
+        let continued = raw.trim_end().ends_with('\\');
+        let line = raw.trim().trim_end_matches('\\').trim();
+        if let Some(stem) = line.strip_suffix(".o")
+            && stem != "TPMCmds"
+        {
             c_files.push(src.join(format!("{stem}.c")));
+        }
+        if !continued && !c_files.is_empty() {
+            break;
         }
     }
     assert!(c_files.len() > 100, "unexpected ibmswtpm2 OBJFILES list");

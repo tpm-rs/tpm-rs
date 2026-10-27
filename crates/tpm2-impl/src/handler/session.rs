@@ -1,13 +1,13 @@
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::{CommandHandler, SessionState};
 use crate::req_resp::RequestThenResponse;
+use crate::self_test::kdfa_bits;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{PolicyCommandCode, PolicyGetDigest, PolicyRestart, StartAuthSession};
-use tpm2::crypto::kdf::kdfa_bits;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TPM2_MAX_ACTIVE_SESSIONS, TpmSe};
@@ -474,7 +474,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut derived_key = [0u8; 128];
 
             kdfa_bits(
-                self.crypto(),
+                &self.crypto(),
                 auth_hash,
                 &secret[..secret_len],
                 b"ATH",
@@ -565,7 +565,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let mut new_digest = [0u8; 64];
         let new_digest_len = compute_hash(
-            self.crypto(),
+            &self.crypto(),
             auth_hash,
             &updates[..offset],
             &mut new_digest,
@@ -746,7 +746,7 @@ pub(crate) fn compute_bound_entity(
 }
 
 fn compute_hash<C: CryptoProvider>(
-    crypto: &C,
+    crypto: &crate::self_test::Tested<'_, C>,
     auth_hash: TpmiAlgHash,
     data: &[u8],
     hash_out: &mut [u8],

@@ -8,7 +8,6 @@ use tpm2::Handle;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-#[cfg(not(feature = "reference-rng"))]
 use tpm2::TpmaObject;
 use tpm2::commands::Create;
 use tpm2::commands::responses;
@@ -194,6 +193,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             is_derived,
             parent_info.name_alg,
             parent_info.sym_bits,
+            parent_info.attributes.contains(TpmaObject::FIXED_TPM),
             &mut private_buf,
         )?;
 
@@ -247,10 +247,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let creation_hash = Tpm2bDigest::from_bytes(&creation_hash_bytes[..creation_hash_len])
             .map_err(|_| TpmRc::FAILURE)?;
 
+        // TPM 2.0 Part 2, TPMT_TK_CREATION: "hierarchy | the hierarchy containing *name*", the
+        // parent's hierarchy, which for an object in a firmware-limited or SVN-limited hierarchy
+        // is that limited hierarchy (Part 1, "EvictControl of objects in firmware-limited and
+        // SVN-limited hierarchies": "Objects in a firmware-limited or SVN-limited hierarchy
+        // (including objects without *firmwareLimited/svnLimited* SET)"), so the ticket is
+        // protected by its proof. (The TCG references use the base hierarchy, which the
+        // differential tests fix: `bug-fix-svn-fw-limited-entity-hierarchy.patch`.)
+        let ticket_hierarchy = parent_info.hierarchy_val;
         let computed_digest =
-            self.compute_creation_ticket(parent_info.hierarchy_val, &object_name, &creation_hash)?;
+            self.compute_creation_ticket(ticket_hierarchy, &object_name, &creation_hash)?;
         let creation_ticket = TpmtTkCreation::Creation(
-            Handle(parent_info.hierarchy_val),
+            Handle(ticket_hierarchy),
             Tpm2bDigest::from_bytes(computed_digest.get_buffer()).unwrap(),
         );
 

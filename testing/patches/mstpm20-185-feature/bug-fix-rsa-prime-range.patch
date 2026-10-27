@@ -1,0 +1,48 @@
+rsa-prime-range: validate that both RSA primes are in the acceptable range
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 1, "RSA", "Introduction"): "When
+loading an RSA key, the TPM validates that its public and private portions
+are properly paired by dividing the public modulus by the single private prime
+and requiring that the remainder be zero. ... The TPM will also validate that
+the provided and computed prime factors are in an acceptable range. To be
+acceptable, the square of the prime is required to have the same number of
+significant bits as the public modulus." (also Part 2, TPM2B_PRIVATE_KEY_RSA:
+"All primes are required to have exactly half the number of significant bits
+as the public modulus, and the square of each prime is required to have the
+same number of significant bits as the public modulus.")
+
+The reference only checks that the provided prime has half the size of the
+modulus with its most significant bit SET (CryptoCommon_ValidateKeys()); the
+computed prime Q = N / P is not checked at all. A key whose Q has one bit more
+than half the modulus is therefore accepted, and under a fixedTPM parent its
+CRT form gets a prime size larger than half the modulus (RSA-1024: a 325-byte
+sensitive value that TPM2_Load then rejects; RSA-2048: PackExponent() exceeds
+RSA_MAX_PRIME and the TPM enters failure mode). CryptRsaLoadPrivateExponent()
+now checks both primes after the division and returns TPM_RC_BINDING (its
+code for a key whose parts do not fit together), as tpm-rs does.
+diff --git a/TPMCmd/tpm/cryptolibs/implementations/RsaRef/CryptRsa.c b/TPMCmd/tpm/cryptolibs/implementations/RsaRef/CryptRsa.c
+--- a/TPMCmd/tpm/cryptolibs/implementations/RsaRef/CryptRsa.c
++++ b/TPMCmd/tpm/cryptolibs/implementations/RsaRef/CryptRsa.c
+@@ -194,6 +194,20 @@ CryptoRsa_LoadPrivateExponent(TPMT_PUBLIC* publicArea, TPMT_SENSITIVE* sensitive
+                     // Non-Zero Q remainder - binding error
+                     ERROR_EXIT(TPM_RC_BINDING);
+                 }
++                // tpm-rs differential testing (bug fix): both primes must be in the
++                // acceptable range (Part 1: "the square of the prime is required to
++                // have the same number of significant bits as the public modulus").
++                {
++                    CRYPT_INT_VAR(bnSquare, MAX_RSA_KEY_BITS * 2);
++                    int nBits = CryptoMath_MostSigBitNum(bnN);
++                    if(!CryptoMath_Multiply(bnSquare, Z->P, Z->P)
++                       || CryptoMath_MostSigBitNum(bnSquare) != nBits
++                       || !CryptoMath_Multiply(bnSquare, Z->Q, Z->Q)
++                       || CryptoMath_MostSigBitNum(bnSquare) != nBits)
++                    {
++                        ERROR_EXIT(TPM_RC_BINDING);
++                    }
++                }
+ 
+                 // Compute the private exponent and return it if found
+                 if(!TpmRsaUtil_ComputePrivateExponent(bnE, bnN, Z))

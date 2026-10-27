@@ -1,0 +1,39 @@
+self-test-clear-untestable: algorithms without a test leave the toDoList
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, TPM2_IncrementalSelfTest): "The TPM will return
+in toDoList a list of algorithms that are yet to be tested. [...] Only the
+algorithms on the toTest list are scheduled to be tested by this command."
+and "If toDoList is empty, then no additional tests are required"; TPM2_SelfTest
+with fullTest = YES "will test all functions".
+
+TestAlgorithm() clears the bit of an algorithm that has no test (KEYEDHASH,
+XOR, MGF1, ECDAA, SYMCIPHER, the KDFs, ...) only in the caller's vector, not in
+g_toTest. After TPM2_SelfTest(fullTest = YES), which sets g_toTest to every
+implemented algorithm, these algorithms therefore stay on the toDoList forever:
+no TPM2_SelfTest or TPM2_IncrementalSelfTest naming them removes them, although
+the TPM has nothing left to test (after _TPM_Init they are not listed at all).
+They are now cleared in both vectors (CLEAR_BOTH), as in mstpm20 and tpm-rs.
+
+diff --git a/src/AlgorithmTests.c b/src/AlgorithmTests.c
+--- a/src/AlgorithmTests.c
++++ b/src/AlgorithmTests.c
+@@ -807,7 +807,7 @@ TestAlgorithm(TPM_ALG_ID alg, ALGORITHM_VECTOR* toTest)
+ 	    // silently CLEAR it. Decided to just clear.
+ 	    if(!TEST_BIT(alg, g_implementedAlgorithms))
+ 		{
+-		    CLEAR_BIT(alg, *toTest);
++		    CLEAR_BOTH(alg);  // tpm-rs differential testing (bug fix): also g_toTest, as mstpm20
+ 		    continue;
+ 		}
+ 	    // Process whatever is left.
+@@ -928,7 +928,7 @@ TestAlgorithm(TPM_ALG_ID alg, ALGORITHM_VECTOR* toTest)
+ 		    break;
+ #  endif  // ALG_ECC
+ 		  default:
+-		    CLEAR_BIT(alg, *toTest);
++		    CLEAR_BOTH(alg);  // tpm-rs differential testing (bug fix): also g_toTest, as mstpm20
+ 		    break;
+ 		}
+ 	    if(result != TPM_RC_SUCCESS)

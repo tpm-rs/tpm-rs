@@ -3,6 +3,7 @@ use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::owned::OwnedPublicParmsAndId;
 use crate::req_resp::RequestThenResponse;
+use crate::self_test::kdfa_bits;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use tpm2::Alg;
@@ -13,8 +14,7 @@ use tpm2::TpmCc;
 use tpm2::TpmEccCurve;
 use tpm2::commands::{Duplicate, responses};
 use tpm2::crypto::asymmetric::KeyParams;
-use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
+use tpm2::crypto::{CryptoProvider, Direction, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bData, Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bPrivate,
@@ -395,7 +395,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     _ => return Err(TpmRc::VALUE.to_rc()),
                 };
                 // ECC seed encryption (ECDH point multiply and KDFe)
-                // 1. Generate ephemeral ECC key pair
+                // 1. Generate ephemeral ECC key pair (`CryptEccNewKeyPair()` tests ECDH first)
+                self.do_self_test(Alg::ECDH)?;
                 let mut eph_pub = [0u8; 256];
                 let mut eph_priv = [0u8; 128];
                 let (_pub_len, priv_len) = self
@@ -443,7 +444,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let total_bits = (digest_size * 8) as u32;
 
                 tpm2::crypto::kdf::kdfe_bits(
-                    self.crypto(),
+                    &self.crypto(),
                     parent_name_alg,
                     &ecdh_point[..param_size],
                     b"DUPLICATE",
@@ -459,6 +460,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 // (`CryptSecretEncrypt`).
                 let digest_size = parent_name_alg.digest_size();
                 self.context.random_crypto(&mut seed[..digest_size])?;
+                // `CryptRsaEncrypt()` tests OAEP before it encodes the seed.
+                self.do_self_test(Alg::OAEP)?;
 
                 // RSA seed encryption
                 let encrypted_seed_len = crypto_len(
@@ -473,6 +476,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     ),
                     TpmRc::FAILURE,
                 )?;
+                // `OaepEncode()` hashes the label with the nameAlg.
+                self.do_self_test(Alg::from(parent_name_alg))?;
                 out_sym_seed =
                     Tpm2bEncryptedSecret::from_bytes(&encrypted_seed[..encrypted_seed_len])
                         .unwrap();
@@ -504,7 +509,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let target_digest_size = target_name_alg.digest_size();
             let target_bits = (target_digest_size * 8) as u32;
             kdfa_bits(
-                self.crypto(),
+                &self.crypto(),
                 target_name_alg,
                 &seed[..seed_len],
                 b"STORAGE",
@@ -515,7 +520,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             )
             .map_err(|_| TpmRc::FAILURE)?;
             kdfa_bits(
-                self.crypto(),
+                &self.crypto(),
                 target_name_alg,
                 &seed[..seed_len],
                 b"INTEGRITY",
@@ -543,12 +548,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .map_err(|_| TpmRc::FAILURE)?;
 
             // 3. Compute outer HMAC dynamically over the ENCRYPTED inner_blob ciphertext
-            let mut hmac_ctx = HmacStream::new(
-                self.crypto(),
-                target_name_alg,
-                &integrity_key[..target_digest_size],
-            )
-            .map_err(|_| TpmRc::FAILURE)?;
+            let mut hmac_ctx = self
+                .crypto()
+                .hmac_stream(target_name_alg, &integrity_key[..target_digest_size])
+                .map_err(|_| TpmRc::FAILURE)?;
             hmac_ctx
                 .update(&inner_blob[..inner_blob_len])
                 .map_err(|_| TpmRc::FAILURE)?;

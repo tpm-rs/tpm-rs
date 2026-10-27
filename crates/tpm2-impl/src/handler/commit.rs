@@ -7,7 +7,7 @@ use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{Commit, responses};
-use tpm2::crypto::{CryptoProvider, HmacStream, Rng};
+use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bEccParameter, TpmEccCurve, TpmaObject, TpmsEccPoint};
 
@@ -502,6 +502,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         curve: TpmEccCurve,
     ) -> Option<([u8; MAX_ECC_ORDER_SIZE], usize)> {
         let n = curve_order(curve)?;
+        // `CryptKDFa()` tests KDFa first (`TPM_DO_SELF_TEST(TPM_ALG_KDF1_SP800_108)`).
+        self.crypto().do_self_test(tpm2::Alg::KDF1_SP800_108).ok()?;
         let n_len = n.len();
         let size_in_bits = (n_len as u32) * 8;
         // C marshals the full (64-bit) commit counter; the upper 48 bits are always zero here
@@ -516,12 +518,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut generated = 0;
             while generated < n_len {
                 iterations += 1;
-                let mut hmac = HmacStream::new(
-                    self.crypto(),
-                    commit_kdf_hash(),
-                    &self.context.state.commit_nonce,
-                )
-                .ok()?;
+                let mut hmac = self
+                    .crypto()
+                    .hmac_stream(commit_kdf_hash(), &self.context.state.commit_nonce)
+                    .ok()?;
                 hmac.update(&iterations.to_be_bytes()).ok()?;
                 hmac.update(COMMIT_STRING).ok()?;
                 hmac.update(name).ok()?;

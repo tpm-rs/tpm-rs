@@ -106,7 +106,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             )?;
         }
 
-        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(cmd.ticket.hierarchy().0)?;
+        let (proof, _) = self.resolve_hierarchy_proof(cmd.ticket.hierarchy().0)?;
 
         let mut hmac_input = [0u8; 512];
         let mut offset = 0;
@@ -153,9 +153,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let mut hmac_digest_bytes = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
         let hmac_digest = tpm2::crypto::hmac(
-            self.crypto(),
+            &self.crypto(),
             crate::handler::context_integrity_hash_alg(),
-            &proof_bytes[..proof_len],
+            proof.as_bytes(),
             &hmac_input[..offset],
             &mut hmac_digest_bytes,
         )

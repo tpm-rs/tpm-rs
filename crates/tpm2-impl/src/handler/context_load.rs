@@ -18,12 +18,12 @@ struct TransientObjectFields {
     private_len: usize,
     qualified_name: OwnedName,
 }
+use crate::self_test::kdfa_bits;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::responses;
-use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{CryptoProvider, Direction, HmacStream, Rng};
+use tpm2::crypto::{CryptoProvider, Direction, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt};
 use tpm2::{TpmSe, TpmiAlgHash};
@@ -95,8 +95,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .try_unmarshal::<Handle>()
             .map_err(|e| e.with_position(Position::parameter(1)))?;
         // `TPMI_RH_HIERARCHY+`, including the firmware-limited and SVN-limited hierarchies (Part 2,
-        // Table "Definition of (TPM_HANDLE) TPMI_RH_HIERARCHY Type"), whose unavailable proof
-        // then fails the integrity check (`resolve_hierarchy_proof`, `limited_hierarchy_error`).
+        // Table "Definition of (TPM_HANDLE) TPMI_RH_HIERARCHY Type"), whose derived proof
+        // protects the context (`resolve_hierarchy_proof`; `TPM_RC_FW_LIMITED`/
+        // `TPM_RC_SVN_LIMITED` if their additional secret is unavailable).
         if tpm2::TpmiRhHierarchy::try_from(hierarchy).is_err() {
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
         }
@@ -144,8 +145,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // Everything after the integrity value is integrity protected.
         let protected = slice;
 
-        let (proof_bytes, proof_len, _) = self.resolve_hierarchy_proof(hierarchy.0)?;
-        let proof = &proof_bytes[..proof_len];
+        let (proof, _) = self.resolve_hierarchy_proof(hierarchy.0)?;
+        let proof = proof.as_bytes();
 
         // 1. Verify HMAC integrity signature before looking at any protected
         // byte (TPM 2.0 Part 1, "Context Confidentiality Protection").
@@ -207,12 +208,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::HIERARCHY.with(Position::parameter(1)));
         }
 
-        // `HierarchyIsEnabled` is checked for object contexts after the integrity check.
-        let hierarchy_disabled = (hierarchy.0 == Handle::RH_OWNER.0
-            && !self.context.state.sh_enable)
-            || (hierarchy.0 == Handle::RH_ENDORSEMENT.0 && !self.context.state.eh_enable)
-            || (hierarchy.0 == Handle::RH_PLATFORM.0 && !self.context.state.ph_enable);
-        if !is_session && hierarchy_disabled {
+        // `HierarchyIsEnabled` is checked for object contexts after the integrity check: the
+        // (base) hierarchy must be enabled and an SVN-limited hierarchy's SVN must not exceed the
+        // firmware's current SVN (`TpmEngine::validate_hierarchy`).
+        if !is_session && !self.context.hierarchy_is_enabled(hierarchy.0) {
             return Err(TpmRc::HIERARCHY.with(Position::parameter(1)));
         }
 
@@ -309,12 +308,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         protected_data: &[u8],
         expected_mac: &[u8],
     ) -> Result<(), TpmRc> {
-        let mut mac_ctx = HmacStream::new(
-            self.crypto(),
-            crate::handler::context_integrity_hash_alg(),
-            proof,
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
+        let mut mac_ctx = self
+            .crypto()
+            .hmac_stream(crate::handler::context_integrity_hash_alg(), proof)
+            .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx
             .update(&self.context.state.total_reset_count.to_be_bytes())
             .map_err(|_| TpmRc::FAILURE)?;
@@ -352,7 +349,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let handle_bytes = saved_handle.0.to_be_bytes();
         let mut sym_key_iv = [0u8; 32];
         kdfa_bits(
-            self.crypto(),
+            &self.crypto(),
             crate::handler::context_integrity_hash_alg(),
             proof,
             b"CONTEXT",

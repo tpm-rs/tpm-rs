@@ -404,6 +404,22 @@ pub trait Asymmetric {
         Err(CryptoError::Unsupported)
     }
 
+    /// Writes the Chinese Remainder Theorem (CRT) form of a PKCS#8 DER-encoded RSA private key
+    /// (RFC 8017, clause 3.2, second representation) to `crt_out`: the five values `p`, `q`,
+    /// `dP = e^-1 mod (p - 1)`, `dQ = e^-1 mod (q - 1)` and `qInv = q^-1 mod p`, where `p` is
+    /// the **larger** and `q` the smaller of the two primes. Each value is big-endian and
+    /// left-padded with zeros to the byte size of `p`.
+    ///
+    /// Returns `Ok(Some(len))` with the total length written (five times the byte size of `p`),
+    /// or `Ok(None)` if `private_key` is not a valid two-prime private key.
+    fn rsa_private_key_to_crt(
+        &self,
+        private_key: &[u8],
+        crt_out: &mut [u8],
+    ) -> Result<Option<usize>, CryptoError> {
+        Err(CryptoError::Unsupported)
+    }
+
     /// Verifies `signature` over `digest` using the requested `sign_alg`.
     ///
     /// Dispatches to the algorithm-specific method for each signature scheme
@@ -646,4 +662,15 @@ pub fn rsa_private_key_to_prime_p<A: Asymmetric>(
     prime_p_out: &mut [u8],
 ) -> Result<Option<usize>, CryptoError> {
     a.rsa_private_key_to_prime_p(private_key, prime_p_out)
+}
+
+/// Writes the CRT form of a PKCS#8 DER-encoded RSA private key via backend `a`.
+///
+/// See [`Asymmetric::rsa_private_key_to_crt`].
+pub fn rsa_private_key_to_crt<A: Asymmetric>(
+    a: &A,
+    private_key: &[u8],
+    crt_out: &mut [u8],
+) -> Result<Option<usize>, CryptoError> {
+    a.rsa_private_key_to_crt(private_key, crt_out)
 }

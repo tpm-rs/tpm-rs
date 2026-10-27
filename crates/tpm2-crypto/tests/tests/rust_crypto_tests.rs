@@ -2504,3 +2504,61 @@ fn test_constant_time_eq() {
         TpmtHa::Sha256(&last)
     ));
 }
+
+/// `rsa_private_key_to_crt` writes `p | q | dP | dQ | qInv` with `p` the larger prime, each
+/// padded to the size of `p`, whichever prime the private key lists first; an invalid key is
+/// `Ok(None)` and a short buffer an error.
+#[test]
+fn test_rsa_private_key_to_crt() {
+    use rsa::BigUint;
+    use rsa::pkcs8::DecodePrivateKey;
+    use rsa::traits::{PrivateKeyParts, PublicKeyParts};
+    let provider = TestProvider;
+    let mut public_key = [0u8; 1024];
+    let mut private_key = [0u8; 2048];
+    let (_, priv_len) = provider
+        .generate_key(
+            Alg::RSA,
+            Some(tpm2::crypto::asymmetric::KeyParams::Rsa(TpmiRsaKeyBits(
+                1024,
+            ))),
+            &mut public_key,
+            &mut private_key,
+            None,
+        )
+        .unwrap();
+    let key = rsa::RsaPrivateKey::from_pkcs8_der(&private_key[..priv_len]).unwrap();
+    let modulus = key.n().to_bytes_be();
+    let one = BigUint::from(1u32);
+    // Import the key with each prime first.
+    for prime in key.primes() {
+        let mut imported = [0u8; 2048];
+        let imported_len = provider
+            .rsa_import_private_key(&modulus, &prime.to_bytes_be(), 65537, &mut imported)
+            .unwrap()
+            .unwrap();
+        let mut crt = [0u8; 640];
+        let len = provider
+            .rsa_private_key_to_crt(&imported[..imported_len], &mut crt)
+            .unwrap()
+            .unwrap();
+        assert_eq!(len, 5 * 64);
+        let v: Vec<BigUint> = crt[..len].chunks(64).map(BigUint::from_bytes_be).collect();
+        let (p, q) = (&v[0], &v[1]);
+        assert!(p > q, "the larger prime comes first");
+        assert_eq!(p * q, *key.n());
+        let e = BigUint::from(65537u32);
+        assert_eq!((&e * &v[2]) % (p - &one), one, "dP");
+        assert_eq!((&e * &v[3]) % (q - &one), one, "dQ");
+        assert_eq!((q * &v[4]) % p, one, "qInv");
+        assert!(
+            provider
+                .rsa_private_key_to_crt(&imported[..imported_len], &mut crt[..5 * 64 - 1])
+                .is_err()
+        );
+    }
+    assert_eq!(
+        provider.rsa_private_key_to_crt(b"not a key", &mut [0u8; 640]),
+        Ok(None)
+    );
+}

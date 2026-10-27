@@ -98,13 +98,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let ticket_hierarchy = cmd.check_ticket.hierarchy().0;
             // The ticket is recomputed with the proof of its hierarchy first (C
             // `TicketComputeVerified()` -> `HierarchyGetProof()`), so a firmware-limited or
-            // SVN-limited hierarchy fails with its own error before the ticket is compared.
-            if let Some(rc) = crate::engine::limited_hierarchy_error(ticket_hierarchy) {
-                return Err(rc.to_rc());
+            // SVN-limited hierarchy whose additional secret is unavailable fails with its own
+            // error (`TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`) before the ticket is compared.
+            if crate::hierarchy::is_limited(ticket_hierarchy) {
+                self.resolve_hierarchy_proof(ticket_hierarchy)?;
             }
+            // A `TPM_RH_NULL` ticket (empty digest) never matches. The limited hierarchies,
+            // including `TPM_RH_FW_NULL` and the SVN-limited NULL hierarchies, have real tickets
+            // (`TPM2_VerifySignature` of a key in such a hierarchy).
             if ticket_hierarchy != Handle::RH_OWNER.0
                 && ticket_hierarchy != Handle::RH_ENDORSEMENT.0
                 && ticket_hierarchy != Handle::RH_PLATFORM.0
+                && !crate::hierarchy::is_limited(ticket_hierarchy)
             {
                 return Err(TpmRc::VALUE.with(Position::parameter(4)));
             }

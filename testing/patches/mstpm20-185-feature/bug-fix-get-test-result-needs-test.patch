@@ -1,0 +1,39 @@
+get-test-result-needs-test: TPM2_GetTestResult reports untested functions
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, TPM2_GetTestResult): "If TPM2_SelfTest() has
+not been executed and a testable function has not been tested, testResult
+will be TPM_RC_NEEDS_TEST. If TPM2_SelfTest() has been received and the tests
+are not complete, testResult will be TPM_RC_TESTING. If testing of all
+functions is complete without functional failures, testResult will be
+TPM_RC_SUCCESS."
+
+The reference always returns TPM_RC_SUCCESS (its comment: "the behavior in
+this function is NOT the correct behavior for a real TPM implementation").
+Self tests run synchronously (TPM2_SelfTest() completes every test before it
+returns, and an untested algorithm is tested on its first use), so testing
+is never "in progress": testResult is TPM_RC_NEEDS_TEST while any algorithm
+remains to be tested (a bit of g_toTest is SET, the toDoList of
+TPM2_IncrementalSelfTest() is not empty) and TPM_RC_SUCCESS otherwise, as in
+tpm-rs.
+
+diff --git a/TPMCmd/tpm/cryptolibs/common/CryptUtil.c b/TPMCmd/tpm/cryptolibs/common/CryptUtil.c
+--- a/TPMCmd/tpm/cryptolibs/common/CryptUtil.c
++++ b/TPMCmd/tpm/cryptolibs/common/CryptUtil.c
+@@ -1409,6 +1409,15 @@ CryptoCommon_GetTestResult(TPM2B_MAX_BUFFER* outData  // OUT: test result data
+ )
+ {
+     outData->t.size = 0;
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // TPM_RC_NEEDS_TEST while a testable function is untested (Part 3
++    // TPM2_GetTestResult; the tests run synchronously, so never TPM_RC_TESTING).
++    {
++        UINT32 i;
++        for(i = 0; i < sizeof(g_toTest); i++)
++            if(g_toTest[i] != 0)
++                return TPM_RC_NEEDS_TEST;
++    }
+     return TPM_RC_SUCCESS;
+ }
+ 

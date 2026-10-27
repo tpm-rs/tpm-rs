@@ -14,11 +14,15 @@
 //! - [`storage`]: Low-level non-volatile memory (NV) access.
 //! - [`timer`]: Monotonic clock/timer interface.
 //! - [`pcr`]: Structure containing platform configuration register banks.
+//! - [`firmware`]: Firmware identity (Firmware Secret, Firmware SVN Secrets, SVNs) for the
+//!   firmware-limited and SVN-limited hierarchies.
 
+pub mod firmware;
 pub mod pcr;
 pub mod storage;
 pub mod timer;
 
+pub use firmware::{FirmwareSecretUnavailable, SimulatedFirmware, TpmFirmware};
 pub use pcr::PcrState;
 pub use storage::{NvStorage, StorageError};
 pub use timer::TpmTimer;
@@ -42,6 +46,14 @@ where
     /// Platform random number generator ([`Rng::fill_bytes`] draws random bytes and
     /// [`Rng::reseed`] mixes additional entropy into its state).
     pub rng: &'a mut R,
+    /// Firmware identity ([`TpmFirmware`]: the Firmware Secret, the Firmware SVN Secrets and
+    /// the current and maximum firmware SVN). `None` (the default of [`TpmPlatform::new`]) is a
+    /// TPM without firmware-limited and SVN-limited hierarchies: their handles fail with
+    /// `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`, they are not listed by `TPM2_GetCapability`,
+    /// and `TPM_PT_FIRMWARE_SVN`/`TPM_PT_FIRMWARE_MAX_SVN` are 0. The firmware is shared
+    /// (`Sync`) so that a platform can change it (e.g. a simulated firmware update) while the
+    /// TPM borrows it.
+    pub firmware: Option<&'a (dyn TpmFirmware + Sync)>,
 }
 
 impl<'a, C, S, T, R> TpmPlatform<'a, C, S, T, R>
@@ -58,6 +70,14 @@ where
             storage,
             timer,
             rng,
+            firmware: None,
         }
+    }
+
+    /// Gives the TPM the firmware identity `firmware`, enabling the firmware-limited and
+    /// SVN-limited hierarchies (see [`TpmPlatform::firmware`]).
+    pub fn with_firmware(mut self, firmware: &'a (dyn TpmFirmware + Sync)) -> Self {
+        self.firmware = Some(firmware);
+        self
     }
 }
