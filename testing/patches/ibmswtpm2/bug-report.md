@@ -180,7 +180,7 @@ The specification gives no response code for this case. The patch returns `TPM_R
 
 The caller needs a Derived Object it controls: `TPM2_CreateLoaded` under any Derivation Parent it can use, then ADMIN authorization of the derived object, whose auth value it chose. This is available to an ordinary user, for example with a Derivation Parent made by `TPM2_CreatePrimary` in the NULL hierarchy. The type confusion feeds attacker-influenced selectors (the KEYEDHASH scheme, hash and KDF the caller picked for the Derivation Parent) into the symmetric-protection code as algorithm, key size and mode. Depending on the values, this can hit asserts (failure mode), produce out-of-spec IV/key sizes, or return a private blob for a non-loadable object, protected by a meaningless key. No secret disclosure has been demonstrated. Severity is medium because a DoS or memory-safety problem is reachable by an unprivileged caller.
 
-**Spec:** [TPM 2.0 (version 185), Part 3, "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L3152-L3157)
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_CreateLoaded", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L3152-L3157)
 
 > If *parentHandle* references a Derivation Parent or a Primary Seed, then
 > *outPrivate* will be an Empty Buffer.
@@ -188,7 +188,7 @@ The caller needs a Derived Object it controls: `TPM2_CreateLoaded` under any Der
 > ... Returning *outPrivate* would imply that the returned primary or
 > derived object can be loaded, and it cannot. It can only be re-derived.
 
-**Spec:** [TPM 2.0 (version 185), Part 3, "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L3050-L3051)
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_ObjectChangeAuth", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L3050-L3051)
 
 > This command may not be used to change the authorization value for an NV
 > Index or a Primary Object.
@@ -211,7 +211,7 @@ The patch squares both P and Q after the division and requires each square to ha
 
 Any caller can trigger this. `TPM2_LoadExternal` of an RSA-2048 key with a sensitive area into `TPM_RH_NULL` needs no authorization, and the crafted key (P a 1024-bit factor with its top bit SET, Q a 1025-bit cofactor) is easy to build offline. The result is a failure-mode denial of service until the next `_TPM_Init`. No key material is disclosed and no authorization is bypassed, so the severity is medium. The cost to the attacker is minimal, which places it at the upper end of medium.
 
-**Spec:** [TPM 2.0 (version 185), Part 1, "Introduction"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L15962-L15977)
+**Spec:** [TPM 2.0 (version 185), Part 1, "RSA", "Introduction"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L15962-L15977)
 
 > When loading an RSA key, the TPM validates that its public and private
 > portions are properly paired by dividing the public modulus by the
@@ -250,7 +250,7 @@ The patch returns TPM_RC_TYPE + RC_ActivateCredential_activateHandle for a seque
 
 Any caller with USER-role authorization of `keyHandle` can activate a credential that was made for the empty Name, using a sequence object whose authValue it chose. A legitimate credential issuer computes `objectName` from a real public area, so it never binds a credential to an empty Name, and no stale Name from another object can be reused. The practical impact is therefore limited to the TPM performing an operation that the specification does not allow (associating a credential with an object it never validated). The severity is low.
 
-**Spec:** [TPM 2.0 (version 185), Part 3, "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L2772-L2774)
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_ActivateCredential", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L2772-L2774)
 
 > This command enables the association of a credential with an object in a
 > way that ensures that the TPM has validated the parameters of the
@@ -274,7 +274,7 @@ The patch returns TPM_RC_TYPE + RC_Certify_objectHandle for a sequence object, a
 
 Any caller with USER-role authorization of a signing key, plus a sequence object they created (whose authValue they chose), can get the TPM to sign an attestation of an object with an empty Name. That attestation does not identify any real object, and no stale Name from another object can leak into it, so a verifier gains no false claim about a specific key. The impact is limited to the TPM signing a TPM_ST_ATTEST_CERTIFY structure that the specification does not allow. The severity is low.
 
-**Spec:** [TPM 2.0 (version 185), Part 3, "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L6143-L6152)
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_Certify", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L6143-L6152)
 
 > The object may be any object that is loaded with `TPM2_Load()` or
 > `TPM2_CreatePrimary()`. An object that only has its public area loaded
@@ -615,7 +615,7 @@ TPM2_CertifyCreation accepts a hash, HMAC or event sequence object as `objectHan
 
 The patch returns TPM_RC_TYPE + RC_CertifyCreation_objectHandle for a sequence object, before the `signHandle` and scheme checks. This matches the TCG reference's version 185 ("Cannot certify creation of a sequence object") and tpm-rs.
 
-**Spec:** [TPM 2.0 (version 185), Part 3, "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L6228-L6231)
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_CertifyCreation", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L6228-L6231)
 
 > This command is used to prove the association between an object and its
 > creation data. The TPM will validate that the ticket was produced by the
@@ -981,7 +981,7 @@ SET while `audit` is CLEAR. Found by differential fuzzing.
 > command and will be CLEAR in the response. In a future version, this
 > bit may have a different meaning if *audit* is CLEAR.
 
-**Spec:** [TPM 2.0 (version 185), Part 2, "Table "Definition of (UINT8) TPMA_SESSION Bits""](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L5023-L5034)
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of (UINT8) TPMA_SESSION Bits"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L5023-L5034)
 
 > 1 | auditExclusive | **SET (1):** In a command, this setting indicates that
 > the command should only be executed if the session is exclusive at the start of
@@ -1005,7 +1005,7 @@ SET while `audit` is CLEAR. Found by differential fuzzing.
 
 `TPM2_EvictControl` (`src/ContextCommands.c`) correctly refuses to make persistent a transient object that is in a firmware-limited or SVN-limited hierarchy (`HierarchyIsFirmwareLimited()`/`HierarchyIsSvnLimited()` on `evictObject->hierarchy`). However, it reports this with `TPM_RC_HIERARCHY + RC_EvictControl_objectHandle`. Part 3 (version 185) lists this case under `TPM_RC_ATTRIBUTES`, together with objects of `TPM_RH_NULL` and objects with *stClear* SET in themselves or an ancestor. `TPM_RC_HIERARCHY` is meant for an object that is not in the proper hierarchy as determined by *auth*. The object is still rejected, so only the response code differs. The patch returns `TPM_RC_ATTRIBUTES + RC_EvictControl_objectHandle` instead. Upstream, this difference is latent: `TPMI_RH_HIERARCHY`/`TPMI_DH_PARENT` unmarshaling rejects the limited handles, so an object can be in a limited hierarchy only when `bug-fix-fw-svn-limited-hierarchy-handles` is also applied.
 
-**Spec:** [TPM 2.0 (version 185), Part 3, "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L13748-L13761)
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_EvictControl", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L13748-L13761)
 
 > If *objectHandle* references a Transient Object:
 >
@@ -1131,7 +1131,7 @@ valid on this TPM (it implements neither `TPM2_VerifySequenceComplete` nor
 `TPM2_VerifyDigestSignature`), so `TPM2_PolicyAuthorize` still rejects it when it
 checks the ticket.
 
-**Spec:** [TPM 2.0 (version 185), Part 2, "Table "Definition of TPMT_TK_VERIFIED Structure""](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7539-L7554)
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMT_TK_VERIFIED Structure"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7539-L7554)
 
 > Table: Definition of TPMT_TK_VERIFIED Structure
 >
@@ -1140,7 +1140,7 @@ checks the ticket.
 > hierarchy | TPMI_RH_HIERARCHY+ | the hierarchy containing *keyName*.
 > \[tag\]metadata | TPMU_TK_VERIFIED_META | Additional (if any) metadata required in order to validate the ticket.
 
-**Spec:** [TPM 2.0 (version 185), Part 2, "Table "TPM_ST Values For Signature Verification Commands""](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7527-L7537)
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "TPM_ST Values For Signature Verification Commands"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7527-L7537)
 
 > Table: TPM_ST Values For Signature Verification Commands
 >
@@ -1148,7 +1148,7 @@ checks the ticket.
 > `TPM2_VerifySequenceComplete()`; `TPM_ST_DIGEST_VERIFIED`:
 > `TPM2_VerifyDigestSignature()`.
 
-**Spec:** [TPM 2.0 (version 185), Part 2, "Table "Definition of TPMU_TK_VERIFIED_META Union""](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7462-L7476)
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMU_TK_VERIFIED_META Union"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7462-L7476)
 
 > verified | TPMS_EMPTY | `TPM_ST_VERIFIED`; messageVerified | TPMS_EMPTY |
 > `TPM_ST_MESSAGE_VERIFIED`; digestVerified | TPMI_ALG_HASH |
