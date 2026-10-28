@@ -1,4 +1,4 @@
-//! [`Ecc`] and [`EccCurve`].
+//! [`Ecc`], [`EccCurve`], [`EdwardsCurve`], and [`MontgomeryCurve`].
 
 use super::{AsymmetricKey, Hash};
 use crate::{
@@ -14,16 +14,15 @@ pub enum EccSigScheme {
     Ecschnorr,
 }
 
-/// Weierstrass elliptic-curve cryptography, with one associated type per curve.
+/// Elliptic-curve cryptography, with one associated type per curve (and key
+/// kind for [`Curve25519`](crate::TpmEccCurve::Curve25519) /
+/// [`Curve448`](crate::TpmEccCurve::Curve448)).
 ///
-/// Each associated type implements [`EccCurve`] parameterized by its coordinate
-/// (and scalar) size `ceil(key_bits / 8)` and point size `2 * COORD_SIZE` in
-/// bytes.
-///
-/// Edwards and Montgomery curves ([`TpmEccCurve::Curve25519`](crate::TpmEccCurve::Curve25519)
-/// and [`TpmEccCurve::Curve448`](crate::TpmEccCurve::Curve448)) use little-endian
-/// single-coordinate encodings and message-level signing (`EdDSA`), so they are
-/// not modeled by this trait.
+/// Weierstrass curves implement [`EccCurve`] parameterized by coordinate (and
+/// scalar) size `ceil(key_bits / 8)` and point size `2 * COORD_SIZE` in bytes.
+/// Twisted Edwards signing keys (`Ed25519`, `Ed448`) implement
+/// [`EdwardsCurve`] and Montgomery Diffie-Hellman keys (`X25519`, `X448`)
+/// implement [`MontgomeryCurve`].
 ///
 /// See the [module documentation](super) for how to implement this trait.
 pub trait Ecc {
@@ -38,6 +37,10 @@ pub trait Ecc {
     type BpP256R1: EccCurve<32, 64>;
     type BpP384R1: EccCurve<48, 96>;
     type BpP512R1: EccCurve<64, 128>;
+    type Ed25519: EdwardsCurve<32>;
+    type Ed448: EdwardsCurve<57>;
+    type X25519: MontgomeryCurve<32>;
+    type X448: MontgomeryCurve<56>;
 }
 
 /// Elliptic-curve operations for a single Weierstrass curve, with coordinates
@@ -116,5 +119,126 @@ impl<const COORD_SIZE: usize, const POINT_SIZE: usize> EccCurve<COORD_SIZE, POIN
         _: &[u8; COORD_SIZE],
     ) -> Result<bool, CryptoError> {
         match *public {}
+    }
+}
+
+/// Twisted Edwards curve operations for `EdDSA` (`TPM_ALG_EDDSA`) and
+/// `HashEdDSA` (`TPM_ALG_HASH_EDDSA`, RFC 8032), with compressed points, secret
+/// keys, and signature halves `(R, S)` of `KEY_SIZE` bytes (32 for Ed25519, 57
+/// for Ed448).
+///
+/// Per TPM 2.0 Part 1 (EdDSA and ECC Parameter Encoding), public keys are
+/// encoded in `TPMS_ECC_POINT.x` with `y` empty, and context strings are always
+/// empty (`""`).
+///
+/// [`AsymmetricKey`] encodings:
+/// - Public: the canonical RFC 8032 little-endian compressed point, which must
+///   be on the curve.
+/// - Private: the RFC 8032 secret seed, which must derive `public`.
+pub trait EdwardsCurve<const KEY_SIZE: usize>: AsymmetricKey<KEY_SIZE, KEY_SIZE> {
+    /// Signs the concatenation of `msg` slices using pure `EdDSA` (`Ed25519` or
+    /// `Ed448` with an empty context string), writing the RFC 8032 signature
+    /// halves `(R, S)` into `out_r` and `out_s`.
+    fn sign_message(
+        private: &Self::Private,
+        msg: &[&[u8]],
+        out_r: &mut [u8; KEY_SIZE],
+        out_s: &mut [u8; KEY_SIZE],
+    ) -> Result<(), CryptoError>;
+
+    /// Signs a 64-byte prehash digest (`SHA-512(M)` for `Ed25519ph` or
+    /// `SHAKE256(M, 512)` for `Ed448ph`, with an empty context string) using
+    /// `HashEdDSA`, writing `(R, S)` into `out_r` and `out_s`.
+    fn sign_prehash(
+        private: &Self::Private,
+        prehash: &[u8; 64],
+        out_r: &mut [u8; KEY_SIZE],
+        out_s: &mut [u8; KEY_SIZE],
+    ) -> Result<(), CryptoError>;
+
+    /// Verifies pure `EdDSA` signature `(sig_r, sig_s)` over the concatenation
+    /// of `msg` slices under `public` (with an empty context string).
+    fn verify_message(
+        public: &Self::Public,
+        msg: &[&[u8]],
+        sig_r: &[u8; KEY_SIZE],
+        sig_s: &[u8; KEY_SIZE],
+    ) -> Result<bool, CryptoError>;
+
+    /// Verifies `HashEdDSA` (`Ed25519ph` / `Ed448ph`) signature `(sig_r, sig_s)`
+    /// over the 64-byte `prehash` under `public` (with an empty context string).
+    fn verify_prehash(
+        public: &Self::Public,
+        prehash: &[u8; 64],
+        sig_r: &[u8; KEY_SIZE],
+        sig_s: &[u8; KEY_SIZE],
+    ) -> Result<bool, CryptoError>;
+}
+
+impl<const KEY_SIZE: usize> EdwardsCurve<KEY_SIZE> for ! {
+    fn sign_message(
+        private: &Self::Private,
+        _: &[&[u8]],
+        _: &mut [u8; KEY_SIZE],
+        _: &mut [u8; KEY_SIZE],
+    ) -> Result<(), CryptoError> {
+        match *private {}
+    }
+    fn sign_prehash(
+        private: &Self::Private,
+        _: &[u8; 64],
+        _: &mut [u8; KEY_SIZE],
+        _: &mut [u8; KEY_SIZE],
+    ) -> Result<(), CryptoError> {
+        match *private {}
+    }
+    fn verify_message(
+        public: &Self::Public,
+        _: &[&[u8]],
+        _: &[u8; KEY_SIZE],
+        _: &[u8; KEY_SIZE],
+    ) -> Result<bool, CryptoError> {
+        match *public {}
+    }
+    fn verify_prehash(
+        public: &Self::Public,
+        _: &[u8; 64],
+        _: &[u8; KEY_SIZE],
+        _: &[u8; KEY_SIZE],
+    ) -> Result<bool, CryptoError> {
+        match *public {}
+    }
+}
+
+/// Montgomery curve operations for `X25519` and `X448` Diffie-Hellman (RFC 7748),
+/// with little-endian `u`-coordinates and scalars of `KEY_SIZE` bytes (32 for
+/// X25519, 56 for X448).
+///
+/// Per TPM 2.0 Part 1 (ECC Parameter Encoding), public keys and ECDH shared
+/// secrets are encoded in `TPMS_ECC_POINT.x` with `y` empty.
+///
+/// [`AsymmetricKey`] encodings:
+/// - Public: the RFC 7748 little-endian `u`-coordinate.
+/// - Private: the RFC 7748 scalar, which must derive `public`.
+pub trait MontgomeryCurve<const KEY_SIZE: usize>: AsymmetricKey<KEY_SIZE, KEY_SIZE> {
+    /// Computes the RFC 7748 shared secret `X25519(private, peer_public)` or
+    /// `X448(private, peer_public)` into `out_u`.
+    ///
+    /// Returns `Ok(None)` if the shared secret is the all-zero low-order point
+    /// result (`TPM_RC_NO_RESULT`).
+    fn ecdh(
+        private: &Self::Private,
+        peer_public: &Self::Public,
+        out_u: &mut [u8; KEY_SIZE],
+    ) -> Result<Option<()>, CryptoError>;
+}
+
+impl<const KEY_SIZE: usize> MontgomeryCurve<KEY_SIZE> for ! {
+    fn ecdh(
+        private: &Self::Private,
+        _: &Self::Public,
+        _: &mut [u8; KEY_SIZE],
+    ) -> Result<Option<()>, CryptoError> {
+        match *private {}
     }
 }
