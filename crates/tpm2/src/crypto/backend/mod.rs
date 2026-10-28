@@ -14,40 +14,45 @@
 //! - [`Symmetric`]
 //! - [`Rsa`]
 //! - [`Ecc`]
+//! - [`Mldsa`]
+//! - [`Mlkem`]
 //!
-//! with one associated type per algorithm, key size, or curve. Each associated
-//! type implements the family's *state trait* or *key trait*:
+//! with one associated type per algorithm, key size, curve, or parameter set.
+//! Each associated type implements the family's *state trait* or *key trait*:
 //! - [`HashState`]
 //! - [`HmacState`]
 //! - [`CmacState`]
 //! - [`SymmetricState`]
 //! - [`RsaKey`]
-//! - [`EccCurve`]
+//! - [`EccCurve`], [`EdwardsCurve`], or [`MontgomeryCurve`]
+//! - [`MldsaKey`]
+//! - [`MlkemKey`]
 //!
-//! whose digest, key, modulus, or coordinate size is a `const` generic
-//! parameter. Backends never see a runtime algorithm identifier, and only ever
-//! receive correctly sized input/output buffers (digests, keys, data blocks,
-//! moduli, coordinates).
+//! whose digest, key, modulus, coordinate, or signature/ciphertext size is a
+//! `const` generic parameter. Backends never see a runtime algorithm
+//! identifier, and only ever receive correctly sized input/output buffers
+//! (digests, keys, data blocks, moduli, coordinates, signatures, ciphertexts).
 //!
 //! All asymmetric key traits extend [`PrivateKey`], which handles key
 //! generation and loading/storing encoded public and private keys. These traits
 //! have a matching [`PublicKey`](PrivateKey::PublicKey) associated type.
 //!
-//! The asymmetric family traits ([`Rsa`] and [`Ecc`]) extend
+//! The asymmetric family traits ([`Rsa`], [`Ecc`], [`Mldsa`], [`Mlkem`]) extend
 //! [`Random`](super::Random), and their key traits are parameterized by the
-//! backend's [`Random::Rng`](super::Random::Rng) type. Randomized key operations
-//! (e.g. [`PrivateKey::generate`] or [`RsaKey::rsassa_sign`]) receive that
-//! concrete RNG type, so a backend can use the RNG's internals (e.g. to call a
-//! native implementation when the RNG uses the system entropy source).
+//! backend's [`Random::Rng`](super::Random::Rng) type. Randomized key
+//! operations (e.g. [`PrivateKey::generate`] or [`RsaKey::rsassa_sign`])
+//! receive that concrete RNG type, so a backend can use the RNG's internals
+//! (e.g. to call a native implementation when the RNG uses the system entropy
+//! source).
 //!
 //! A complete backend implements all the family traits,
 //! [`Random`](super::Random), and the [`Crypto`](super::Crypto) supertrait.
 //!
 //! ## Unsupported Algorithms
 //!
-//! Algorithms, key sizes, or curves a backend does not implement bind their
-//! associated type to [`!`]. The `!` implementations of the state and key
-//! traits return
+//! Algorithms, key sizes, curves, or parameter sets a backend does not
+//! implement bind their associated type to [`!`]. The `!` implementations of
+//! the state and key traits return
 //! `Err(`[`CryptoError::Unsupported`](super::CryptoError::Unsupported)`)` from
 //! their entry-point constructors (`init`, `load_public`, `generate`), so
 //! every operation on an unsupported algorithm returns that error. A backend
@@ -90,7 +95,7 @@
 //! ```
 //! use tpm2::crypto::{
 //!     Crypto, CryptoError, Random, Rng,
-//!     backend::{Cmac, Ecc, Hash, HashState, Hmac, Rsa, Symmetric},
+//!     backend::{Cmac, Ecc, Hash, HashState, Hmac, Mldsa, Mlkem, Rsa, Symmetric},
 //! };
 //!
 //! struct MyBackend;
@@ -166,6 +171,20 @@
 //!     type BpP256R1 = !;
 //!     type BpP384R1 = !;
 //!     type BpP512R1 = !;
+//!     type Ed25519 = !;
+//!     type Ed448 = !;
+//!     type X25519 = !;
+//!     type X448 = !;
+//! }
+//! impl Mldsa for MyBackend {
+//!     type Mldsa44 = !;
+//!     type Mldsa65 = !;
+//!     type Mldsa87 = !;
+//! }
+//! impl Mlkem for MyBackend {
+//!     type Mlkem512 = !;
+//!     type Mlkem768 = !;
+//!     type Mlkem1024 = !;
 //! }
 //!
 //! // Random number generation is always required.
@@ -254,6 +273,11 @@ mod ecc;
 mod hash;
 mod hmac;
 mod kdf;
+mod mldsa;
+mod mlkem;
 mod rsa;
 mod symmetric;
-pub use {asymmetric::*, cmac::*, ecc::*, hash::*, hmac::*, kdf::*, rsa::*, symmetric::*};
+pub use {
+    asymmetric::*, cmac::*, ecc::*, hash::*, hmac::*, kdf::*, mldsa::*, mlkem::*, rsa::*,
+    symmetric::*,
+};

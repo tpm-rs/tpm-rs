@@ -31,7 +31,12 @@
 //!   [`Random::from_seed`])
 //! - RSA: [`RsaPublicKey`] (`encrypt`, `verify`) and [`RsaPrivateKey`]
 //!   (`decrypt`, `sign`)
-//! - ECC: [`EccPublicKey`] (`verify`) and [`EccPrivateKey`] (`ecdh`, `sign`)
+//! - ECC: [`EccPublicKey`] (`verify`, `verify_message`) and [`EccPrivateKey`]
+//!   (`ecdh`, `sign`, `sign_message`)
+//! - ML-DSA: [`MldsaPublicKey`] (`verify`, `verify_message`) and
+//!   [`MldsaPrivateKey`] (`sign_mu`, `sign_prehash`, `sign_message`)
+//! - ML-KEM: [`MlkemPublicKey`] (`encapsulate`) and [`MlkemPrivateKey`]
+//!   (`decapsulate`)
 //!
 //! For stack usage and code size guidance, see the
 //! [backend optimization notes](backend#optimization-notes).
@@ -42,10 +47,14 @@ mod cmac;
 mod ecc;
 mod hash;
 mod hmac;
+#[cfg(feature = "mldsa")]
+mod mldsa;
+#[cfg(feature = "mlkem")]
+mod mlkem;
 mod rng;
 #[cfg(feature = "rsa")]
 mod rsa;
-#[cfg(any(feature = "rsa", feature = "ecc"))]
+#[cfg(any(feature = "rsa", feature = "ecc", feature = "mldsa"))]
 mod signing;
 mod symmetric;
 
@@ -54,9 +63,13 @@ pub mod backend;
 pub use cmac::*;
 #[cfg(feature = "ecc")]
 pub use ecc::*;
+#[cfg(feature = "mldsa")]
+pub use mldsa::*;
+#[cfg(feature = "mlkem")]
+pub use mlkem::*;
 #[cfg(feature = "rsa")]
 pub use rsa::*;
-#[cfg(any(feature = "rsa", feature = "ecc"))]
+#[cfg(any(feature = "rsa", feature = "ecc", feature = "mldsa"))]
 pub use signing::*;
 pub use {hash::*, hmac::*, rng::*, symmetric::*};
 
@@ -105,6 +118,8 @@ pub trait Crypto:
     + backend::Symmetric
     + backend::Rsa
     + backend::Ecc
+    + backend::Mldsa
+    + backend::Mlkem
 {
     /// Returns `a == b`, in time independent of the slice contents.
     fn ct_eq(a: &[u8], b: &[u8]) -> bool;
@@ -234,6 +249,36 @@ macro_rules! match_ecc_curve {
 }
 #[cfg(feature = "ecc")]
 use match_ecc_curve;
+
+/// [`match_variants`] over the [`TpmiMldsaParms`](crate::TpmiMldsaParms)
+/// variants.
+#[cfg(feature = "mldsa")]
+macro_rules! match_mldsa_parms {
+    ($($t:tt)*) => {
+        $crate::crypto::match_variants!([
+            #[cfg(feature = "mldsa_44")] Mldsa44,
+            #[cfg(feature = "mldsa_65")] Mldsa65,
+            #[cfg(feature = "mldsa_87")] Mldsa87,
+        ] $($t)*)
+    };
+}
+#[cfg(feature = "mldsa")]
+use match_mldsa_parms;
+
+/// [`match_variants`] over the [`TpmiMlkemParms`](crate::TpmiMlkemParms)
+/// variants.
+#[cfg(feature = "mlkem")]
+macro_rules! match_mlkem_parms {
+    ($($t:tt)*) => {
+        $crate::crypto::match_variants!([
+            #[cfg(feature = "mlkem_512")] Mlkem512,
+            #[cfg(feature = "mlkem_768")] Mlkem768,
+            #[cfg(feature = "mlkem_1024")] Mlkem1024,
+        ] $($t)*)
+    };
+}
+#[cfg(feature = "mlkem")]
+use match_mlkem_parms;
 
 use {match_hash_alg, match_sym_alg, match_variants};
 
