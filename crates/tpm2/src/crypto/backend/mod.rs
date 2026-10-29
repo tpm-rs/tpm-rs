@@ -12,35 +12,49 @@
 //! - [`Hmac`]
 //! - [`Cmac`]
 //! - [`Symmetric`]
+//! - [`Rsa`]
+//! - [`Ecc`]
+//! - [`Mldsa`]
+//! - [`Mlkem`]
 //!
-//! with one associated type per algorithm. Each associated type implements
-//! the family's *state trait*:
+//! with one associated type per algorithm, key size, curve, or parameter set.
+//! Each associated type implements the family's *state trait* or *key trait*:
 //! - [`HashState`]
 //! - [`HmacState`]
 //! - [`CmacState`]
 //! - [`SymmetricState`]
+//! - [`RsaKey`]
+//! - [`EccCurve`], [`EdwardsCurve`], or [`MontgomeryCurve`]
+//! - [`MldsaKey`]
+//! - [`MlkemKey`]
 //!
-//! whose digest or key size is a `const` generic parameter. Backends
-//! never see a runtime algorithm identifier, and only ever receive
-//! correctly sized input/output buffers (digests, keys, data blocks).
+//! whose digest, key, modulus, coordinate, or signature/ciphertext size is a
+//! `const` generic parameter. Backends never see a runtime algorithm
+//! identifier, and only ever receive correctly sized input/output buffers
+//! (digests, keys, data blocks, moduli, coordinates, signatures, ciphertexts).
+//!
+//! All key traits extend [`AsymmetricKey`], which handles key generation and
+//! loading/storing encoded public and private keys.
 //!
 //! A complete backend implements all the family traits,
 //! [`Random`](super::Random), and the [`Crypto`](super::Crypto) supertrait.
 //!
 //! ## Unsupported Algorithms
 //!
-//! Algorithms a backend does not implement bind their associated type to
-//! [`!`]. The `!` implementations of the state traits return
+//! Algorithms, key sizes, curves, or parameter sets a backend does not
+//! implement bind their associated type to [`!`]. The `!` implementations of
+//! the state and key traits return
 //! `Err(`[`CryptoError::Unsupported`](super::CryptoError::Unsupported)`)` from
-//! `init`, so every operation on an unsupported algorithm returns that error.
-//! A backend can leave out an entire family this way (see the example below).
+//! their entry-point constructors (`init`, `load_public`, `generate`), so
+//! every operation on an unsupported algorithm returns that error. A backend
+//! can leave out an entire family this way (see the example below).
 //!
 //! Random number generation ([`Random`](super::Random)) is not optional, so
 //! there is no `!` implementation of [`Rng`](super::Rng).
 //!
 //! ## Default Methods
 //!
-//! Some state trait methods have default implementations built on the
+//! Some state and key trait methods have default implementations built on the
 //! required methods. Backends may override them for hardware acceleration,
 //! compliance, or code-size reasons, but must preserve the documented
 //! behavior. The defaults which implement complex TPM-specific behavior are
@@ -54,6 +68,10 @@
 //! | [`HmacState::kdfa_xor`] | [`default_kdfa_xor`] |
 //! | [`SymmetricState::crypt`] | [`default_crypt`] |
 //!
+//! Asymmetric operations (e.g. [`RsaKey::sign`] or [`EccCurve::ecdh`]) have no
+//! default implementations, as backends must implement them securely (e.g. in
+//! constant time).
+//!
 //! ## Example
 //!
 //! A backend which only implements SHA-256 (and random number generation):
@@ -61,7 +79,7 @@
 //! ```
 //! use tpm2::crypto::{
 //!     Crypto, CryptoError, Random, Rng,
-//!     backend::{Cmac, Hash, HashState, Hmac, Symmetric},
+//!     backend::{Cmac, Ecc, Hash, HashState, Hmac, Mldsa, Mlkem, Rsa, Symmetric},
 //! };
 //!
 //! struct MyBackend;
@@ -119,6 +137,39 @@
 //!     type Camellia192 = !;
 //!     type Camellia256 = !;
 //! }
+//! impl Rsa for MyBackend {
+//!     type Rsa1024 = !;
+//!     type Rsa2048 = !;
+//!     type Rsa3072 = !;
+//!     type Rsa4096 = !;
+//! }
+//! impl Ecc for MyBackend {
+//!     type NistP192 = !;
+//!     type NistP224 = !;
+//!     type NistP256 = !;
+//!     type NistP384 = !;
+//!     type NistP521 = !;
+//!     type BNP256 = !;
+//!     type BNP638 = !;
+//!     type SM2P256 = !;
+//!     type BpP256R1 = !;
+//!     type BpP384R1 = !;
+//!     type BpP512R1 = !;
+//!     type Ed25519 = !;
+//!     type Ed448 = !;
+//!     type X25519 = !;
+//!     type X448 = !;
+//! }
+//! impl Mldsa for MyBackend {
+//!     type Mldsa44 = !;
+//!     type Mldsa65 = !;
+//!     type Mldsa87 = !;
+//! }
+//! impl Mlkem for MyBackend {
+//!     type Mlkem512 = !;
+//!     type Mlkem768 = !;
+//!     type Mlkem1024 = !;
+//! }
 //!
 //! // Random number generation is always required.
 //! struct MyRng { /* ... */ }
@@ -164,8 +215,9 @@
 //!   stack). Operating on an already-stored enum (e.g. `&mut HashContext`)
 //!   copies nothing.
 //! - **Disable unused [algorithm features](crate#algorithm-feature-flags).**
-//!   Dropping `sha384`, `sha512`, `aes256`, or unused cipher modes shrinks the
-//!   dispatch enums and removes those algorithms from runtime dispatch.
+//!   Dropping `sha384`, `sha512`, `aes256`, `rsa4096`, `bn_p638`, or unused
+//!   cipher modes shrinks the dispatch enums and scratch buffers and removes
+//!   those algorithms from runtime dispatch.
 //! - **Use `opt-level = "s"` (or higher), not `"z"`.** `"z"` suppresses
 //!   inlining of small helpers, which increases peak stack and leaves slice
 //!   bounds-check panics that higher levels eliminate.
@@ -179,10 +231,9 @@
 //!   `match &mut Self::init(key) { Ok(state) => .., Err(e) => .. }`), as
 //!   moving a state out copies it.
 //! - **Override one-shot methods.** Hardware, ROM, or C backends can override
-//!   the one-shot methods (e.g. [`HashState::hash`],
-//!   [`SymmetricState::crypt_once`], or
-//!   [`Random::rand_bytes`](super::Random::rand_bytes)) to skip software state
-//!   entirely.
+//!   one-shot methods (e.g. [`HashState::hash`], [`SymmetricState::crypt_once`],
+//!   or [`Random::rand_bytes`](super::Random::rand_bytes)) to skip software
+//!   state entirely.
 //!
 //! ### Dispatch design notes
 //!
@@ -200,9 +251,17 @@
 //!   `opt-level = 3` (±100–250 bytes), so the helper was removed for
 //!   simplicity.
 
+mod asymmetric;
 mod cmac;
+mod ecc;
 mod hash;
 mod hmac;
 mod kdf;
+mod mldsa;
+mod mlkem;
+mod rsa;
 mod symmetric;
-pub use {cmac::*, hash::*, hmac::*, kdf::*, symmetric::*};
+pub use {
+    asymmetric::*, cmac::*, ecc::*, hash::*, hmac::*, kdf::*, mldsa::*, mlkem::*, rsa::*,
+    symmetric::*,
+};
