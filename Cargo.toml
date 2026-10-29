@@ -1,7 +1,13 @@
 [workspace]
 resolver = "3"
 
-members = ["crates/tpm2", "crates/tpm2-client", "crates/tpm2-impl"]
+members = [
+    "crates/tpm2",
+    "crates/tpm2-client",
+    "crates/tpm2-impl",
+    "crates/tpm2-rustcrypto",
+    "testing/crypto",
+]
 
 # Package keys that should be used by all packages.
 # We don't set: authors (deprecated), license-file, exclude, include, or publish

@@ -1,0 +1,26 @@
+[package]
+name = "testing-crypto"
+description = "Shared test vectors and tests for tpm2 crypto backends"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tpm2 = { workspace = true }
+hex-literal = "1"
+aes = "0.9"
+tpm2-rustcrypto = { path = "../../crates/tpm2-rustcrypto", features = ["rsa"], optional = true }
+
+[features]
+default = ["rustcrypto"]
+rustcrypto = ["dep:tpm2-rustcrypto"]
+
+[[test]]
+name = "rustcrypto"
+required-features = ["rustcrypto"]
