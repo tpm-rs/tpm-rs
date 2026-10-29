@@ -3,6 +3,17 @@ resolver = "3"
 
 members = [
     "crates/tpm2",
+    "crates/tpm2-boringssl",
+    "crates/tpm2-client",
+    "crates/tpm2-impl",
+    "crates/tpm2-openssl",
+    "crates/tpm2-rustcrypto",
+    "testing/crypto",
+]
+# tpm2-boringssl requires a local BoringSSL build (see its README), so it is
+# not built by default.
+default-members = [
+    "crates/tpm2",
     "crates/tpm2-client",
     "crates/tpm2-impl",
     "crates/tpm2-openssl",

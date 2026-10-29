@@ -76,7 +76,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustc --version
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      # tpm2-boringssl (and the `boringssl` tests) need a local BoringSSL build.
+      - run: cargo clippy --workspace --exclude tpm2-boringssl --exclude testing-crypto --all-targets --all-features -- -D warnings
+      - run: cargo clippy -p testing-crypto --all-targets -- -D warnings
 
   docs:
     name: Docs
