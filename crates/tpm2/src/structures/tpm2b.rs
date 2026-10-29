@@ -335,7 +335,9 @@ impl_marshal!(Tpm2bPublicKeyRsa<'_>);
 /// A sized buffer holding an RSA private prime factor (P or Q), up to
 /// [`TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES`] bytes.
 #[doc(alias = "TPM2B_PRIVATE_KEY_RSA")]
+#[cfg(feature = "rsa")]
 pub type Tpm2bPrivateKeyRsa<'a> = Tpm2bSized<'a, limits::PrivateKeyRsa>;
+#[cfg(feature = "rsa")]
 impl_marshal!(Tpm2bPrivateKeyRsa<'_>);
 
 // ---------------------------------------------------------------------------
@@ -366,7 +368,9 @@ impl_marshal!(Tpm2bEccPoint<'_>);
 /// A sized buffer holding an EdDSA or HashEdDSA signature (`R || S`), up to
 /// `2 * TpmEccCurve::MAX_ECC_KEY_BYTES` bytes.
 #[doc(alias = "TPM2B_SIGNATURE_EDDSA")]
+#[cfg(feature = "eddsa")]
 pub type Tpm2bSignatureEddsa<'a> = Tpm2bSized<'a, limits::SignatureEddsa>;
+#[cfg(feature = "eddsa")]
 impl_marshal!(Tpm2bSignatureEddsa<'_>);
 
 // ---------------------------------------------------------------------------
@@ -377,7 +381,9 @@ impl_marshal!(Tpm2bSignatureEddsa<'_>);
 /// A sized buffer holding an encoded ML-KEM encapsulation key, up to
 /// [`TpmiMlkemParms::MAX_PUB_KEY_BYTES`] bytes.
 #[doc(alias = "TPM2B_PUBLIC_KEY_MLKEM")]
+#[cfg(feature = "mlkem")]
 pub type Tpm2bPublicKeyMlkem<'a> = Tpm2bSized<'a, limits::PublicKeyMlkem>;
+#[cfg(feature = "mlkem")]
 impl_marshal!(Tpm2bPublicKeyMlkem<'_>);
 
 // ---------------------------------------------------------------------------
@@ -388,7 +394,9 @@ impl_marshal!(Tpm2bPublicKeyMlkem<'_>);
 /// A sized buffer holding the 64-byte `(d || z)` seed of an ML-KEM decapsulation key. The size
 /// must be exactly 64 bytes.
 #[doc(alias = "TPM2B_PRIVATE_KEY_MLKEM")]
+#[cfg(feature = "mlkem")]
 pub type Tpm2bPrivateKeyMlkem<'a> = Tpm2b<&'a [u8; 64]>;
+#[cfg(feature = "mlkem")]
 impl_marshal!(Tpm2bPrivateKeyMlkem<'_>);
 
 // ---------------------------------------------------------------------------
@@ -399,7 +407,9 @@ impl_marshal!(Tpm2bPrivateKeyMlkem<'_>);
 /// A sized buffer holding an encoded ML-DSA public key, up to
 /// [`TpmiMldsaParms::MAX_PUB_KEY_BYTES`] bytes.
 #[doc(alias = "TPM2B_PUBLIC_KEY_MLDSA")]
+#[cfg(feature = "mldsa")]
 pub type Tpm2bPublicKeyMldsa<'a> = Tpm2bSized<'a, limits::PublicKeyMldsa>;
+#[cfg(feature = "mldsa")]
 impl_marshal!(Tpm2bPublicKeyMldsa<'_>);
 
 // ---------------------------------------------------------------------------
@@ -410,7 +420,9 @@ impl_marshal!(Tpm2bPublicKeyMldsa<'_>);
 /// A sized buffer holding the 32-byte private seed (`xi`) of an ML-DSA key. The size must be
 /// exactly 32 bytes.
 #[doc(alias = "TPM2B_PRIVATE_KEY_MLDSA")]
+#[cfg(feature = "mldsa")]
 pub type Tpm2bPrivateKeyMldsa<'a> = Tpm2b<&'a [u8; 32]>;
+#[cfg(feature = "mldsa")]
 impl_marshal!(Tpm2bPrivateKeyMldsa<'_>);
 
 // ---------------------------------------------------------------------------
@@ -421,7 +433,9 @@ impl_marshal!(Tpm2bPrivateKeyMldsa<'_>);
 /// A sized buffer holding an ML-DSA signature, up to
 /// [`TpmiMldsaParms::MAX_SIG_BYTES`] bytes.
 #[doc(alias = "TPM2B_SIGNATURE_MLDSA")]
+#[cfg(feature = "mldsa")]
 pub type Tpm2bSignatureMldsa<'a> = Tpm2bSized<'a, limits::SignatureMldsa>;
+#[cfg(feature = "mldsa")]
 impl_marshal!(Tpm2bSignatureMldsa<'_>);
 
 // ---------------------------------------------------------------------------

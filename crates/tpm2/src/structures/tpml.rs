@@ -219,10 +219,13 @@ impl TpmlElement for TpmsTaggedPcrSelect {
 /// Holds a count and an array of ECC curve identifiers (`TPM_ECC_CURVE`).
 /// Returned in response to `TPM2_GetCapability(TPM_CAP_ECC_CURVES)`.
 #[doc(alias = "TPML_ECC_CURVE")]
+#[cfg(feature = "ecc")]
 pub type TpmlEccCurve = Tpml<TpmEccCurve, { MAX_CAP_DATA / TpmEccCurve::MAX_SIZE }>;
+#[cfg(feature = "ecc")]
 impl_marshal!(TpmlEccCurve);
+#[cfg(feature = "ecc")]
 impl TpmlElement for TpmEccCurve {
-    const DEFAULT: Self = Self::NistP192;
+    const DEFAULT: Self = Self::ALL[0];
 }
 
 /// `TPML_TAGGED_POLICY` structure defined in TPM 2.0 Part 2: Structures, Section 10.5.13 (Table 132).

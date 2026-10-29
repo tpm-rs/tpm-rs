@@ -84,10 +84,15 @@ impl Marshal for TpmuAttest<'_> {
 pub enum TpmuSensitiveComposite<'a> {
     KeyedHash(Tpm2bSensitiveData<'a>),
     Sym(Tpm2bSymKey<'a>),
+    #[cfg(feature = "rsa")]
     Rsa(Tpm2bPrivateKeyRsa<'a>),
+    #[cfg(feature = "ecc")]
     Ecc(Tpm2bEccParameter<'a>),
+    #[cfg(feature = "mldsa")]
     Mldsa(Tpm2bPrivateKeyMldsa<'a>),
+    #[cfg(feature = "hash_mldsa")]
     HashMldsa(Tpm2bPrivateKeyMldsa<'a>),
+    #[cfg(feature = "mlkem")]
     Mlkem(Tpm2bPrivateKeyMlkem<'a>),
 }
 
@@ -97,10 +102,15 @@ impl TpmuSensitiveComposite<'_> {
         match self {
             Self::KeyedHash(_) => Alg::KEYEDHASH,
             Self::Sym(_) => Alg::SYMCIPHER,
+            #[cfg(feature = "rsa")]
             Self::Rsa(_) => Alg::RSA,
+            #[cfg(feature = "ecc")]
             Self::Ecc(_) => Alg::ECC,
+            #[cfg(feature = "mldsa")]
             Self::Mldsa(_) => Alg::MLDSA,
+            #[cfg(feature = "hash_mldsa")]
             Self::HashMldsa(_) => Alg::HASH_MLDSA,
+            #[cfg(feature = "mlkem")]
             Self::Mlkem(_) => Alg::MLKEM,
         }
     }
@@ -110,10 +120,15 @@ impl<'a> TpmuSensitiveComposite<'a> {
         Ok(match selector {
             Alg::KEYEDHASH => Self::KeyedHash(Unmarshal::unmarshal(src)?),
             Alg::SYMCIPHER => Self::Sym(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "rsa")]
             Alg::RSA => Self::Rsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecc")]
             Alg::ECC => Self::Ecc(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "mldsa")]
             Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "hash_mldsa")]
             Alg::HASH_MLDSA => Self::HashMldsa(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "mlkem")]
             Alg::MLKEM => Self::Mlkem(Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
         })
@@ -124,9 +139,13 @@ impl Marshal for TpmuSensitiveComposite<'_> {
     const MAX_SIZE: usize = max!(
         Tpm2bSensitiveData::MAX_SIZE,
         Tpm2bSymKey::MAX_SIZE,
+        #[cfg(feature = "rsa")]
         Tpm2bPrivateKeyRsa::MAX_SIZE,
+        #[cfg(feature = "ecc")]
         Tpm2bEccParameter::MAX_SIZE,
+        #[cfg(feature = "mldsa")]
         Tpm2bPrivateKeyMldsa::MAX_SIZE,
+        #[cfg(feature = "mlkem")]
         Tpm2bPrivateKeyMlkem::MAX_SIZE,
     );
     type MaxBuffer = [u8; TpmuSensitiveComposite::MAX_SIZE];
@@ -135,9 +154,15 @@ impl Marshal for TpmuSensitiveComposite<'_> {
         match self {
             Self::KeyedHash(x) => marshal_helper(x, dst, 0),
             Self::Sym(x) => marshal_helper(x, dst, 0),
+            #[cfg(feature = "rsa")]
             Self::Rsa(x) => marshal_helper(x, dst, 0),
+            #[cfg(feature = "ecc")]
             Self::Ecc(x) => marshal_helper(x, dst, 0),
-            Self::Mldsa(x) | Self::HashMldsa(x) => marshal_helper(x, dst, 0),
+            #[cfg(feature = "mldsa")]
+            Self::Mldsa(x) => marshal_helper(x, dst, 0),
+            #[cfg(feature = "hash_mldsa")]
+            Self::HashMldsa(x) => marshal_helper(x, dst, 0),
+            #[cfg(feature = "mlkem")]
             Self::Mlkem(x) => marshal_helper(x, dst, 0),
         }
     }

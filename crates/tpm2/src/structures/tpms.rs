@@ -606,11 +606,13 @@ impl<'a> Unmarshal<'a> for TpmsSchemeXor {
 ///
 /// Signature structure for RSA signatures, containing hash algorithm and signature buffer.
 #[doc(alias = "TPMS_SIGNATURE_RSA")]
+#[cfg(feature = "rsa")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsSignatureRsa<'a> {
     pub hash: TpmiAlgHash,
     pub sig: Tpm2bPublicKeyRsa<'a>,
 }
+#[cfg(feature = "rsa")]
 impl Marshal for TpmsSignatureRsa<'_> {
     const MAX_SIZE: usize = TpmiAlgHash::MAX_SIZE + Tpm2bPublicKeyRsa::MAX_SIZE;
     type MaxBuffer = [u8; TpmsSignatureRsa::MAX_SIZE];
@@ -621,6 +623,7 @@ impl Marshal for TpmsSignatureRsa<'_> {
     }
 }
 
+#[cfg(feature = "rsa")]
 impl<'a> Unmarshal<'a> for TpmsSignatureRsa<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -634,12 +637,14 @@ impl<'a> Unmarshal<'a> for TpmsSignatureRsa<'a> {
 ///
 /// Signature structure for ECC signatures, containing hash algorithm and (r, s) signature coordinates.
 #[doc(alias = "TPMS_SIGNATURE_ECC")]
+#[cfg(feature = "ecc")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsSignatureEcc<'a> {
     pub hash: TpmiAlgHash,
     pub signature_r: Tpm2bEccParameter<'a>,
     pub signature_s: Tpm2bEccParameter<'a>,
 }
+#[cfg(feature = "ecc")]
 impl Marshal for TpmsSignatureEcc<'_> {
     const MAX_SIZE: usize =
         TpmiAlgHash::MAX_SIZE + Tpm2bEccParameter::MAX_SIZE + Tpm2bEccParameter::MAX_SIZE;
@@ -652,6 +657,7 @@ impl Marshal for TpmsSignatureEcc<'_> {
     }
 }
 
+#[cfg(feature = "ecc")]
 impl<'a> Unmarshal<'a> for TpmsSignatureEcc<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -666,11 +672,13 @@ impl<'a> Unmarshal<'a> for TpmsSignatureEcc<'a> {
 ///
 /// Signature structure for pre-hash ML-DSA (`Hash-ML-DSA`) signatures, containing the pre-hash algorithm and signature buffer.
 #[doc(alias = "TPMS_SIGNATURE_HASH_MLDSA")]
+#[cfg(feature = "hash_mldsa")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsSignatureHashMldsa<'a> {
     pub hash: TpmiAlgHash,
     pub signature: Tpm2bSignatureMldsa<'a>,
 }
+#[cfg(feature = "hash_mldsa")]
 impl Marshal for TpmsSignatureHashMldsa<'_> {
     const MAX_SIZE: usize = TpmiAlgHash::MAX_SIZE + Tpm2bSignatureMldsa::MAX_SIZE;
     type MaxBuffer = [u8; TpmsSignatureHashMldsa::MAX_SIZE];
@@ -681,6 +689,7 @@ impl Marshal for TpmsSignatureHashMldsa<'_> {
     }
 }
 
+#[cfg(feature = "hash_mldsa")]
 impl<'a> Unmarshal<'a> for TpmsSignatureHashMldsa<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -694,11 +703,13 @@ impl<'a> Unmarshal<'a> for TpmsSignatureHashMldsa<'a> {
 ///
 /// Parameter structure for ECDAA scheme specifying hash algorithm and commit count.
 #[doc(alias = "TPMS_SCHEME_ECDAA")]
+#[cfg(feature = "ecdaa")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsSchemeEcdaa {
     pub hash_alg: TpmiAlgHash,
     pub count: u16,
 }
+#[cfg(feature = "ecdaa")]
 impl Marshal for TpmsSchemeEcdaa {
     const MAX_SIZE: usize = TpmiAlgHash::MAX_SIZE + u16::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
@@ -709,6 +720,7 @@ impl Marshal for TpmsSchemeEcdaa {
     }
 }
 
+#[cfg(feature = "ecdaa")]
 impl<'a> Unmarshal<'a> for TpmsSchemeEcdaa {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let hash_alg = Unmarshal::unmarshal(src)?;
@@ -721,6 +733,7 @@ impl<'a> Unmarshal<'a> for TpmsSchemeEcdaa {
 ///
 /// Parameter structure for RSA objects, specifying symmetric cipher, scheme, key bits, and public exponent.
 #[doc(alias = "TPMS_RSA_PARMS")]
+#[cfg(feature = "rsa")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsRsaParms {
     pub symmetric: Option<TpmtSymDefObject>,
@@ -728,6 +741,7 @@ pub struct TpmsRsaParms {
     pub key_bits: TpmiRsaKeyBits,
     pub exponent: u32,
 }
+#[cfg(feature = "rsa")]
 impl Marshal for TpmsRsaParms {
     const MAX_SIZE: usize = <Option<TpmtSymDefObject>>::MAX_SIZE
         + <Option<TpmtRsaScheme>>::MAX_SIZE
@@ -743,6 +757,7 @@ impl Marshal for TpmsRsaParms {
     }
 }
 
+#[cfg(feature = "rsa")]
 impl<'a> Unmarshal<'a> for TpmsRsaParms {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let symmetric = Unmarshal::unmarshal(src)?;
@@ -762,6 +777,7 @@ impl<'a> Unmarshal<'a> for TpmsRsaParms {
 ///
 /// Parameter structure for ECC objects, specifying symmetric cipher, scheme, curve ID, and KDF.
 #[doc(alias = "TPMS_ECC_PARMS")]
+#[cfg(feature = "ecc")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsEccParms {
     pub symmetric: Option<TpmtSymDefObject>,
@@ -769,6 +785,7 @@ pub struct TpmsEccParms {
     pub curve_id: TpmEccCurve,
     pub kdf: Option<TpmtKdfScheme>,
 }
+#[cfg(feature = "ecc")]
 impl Marshal for TpmsEccParms {
     const MAX_SIZE: usize = <Option<TpmtSymDefObject>>::MAX_SIZE
         + <Option<TpmtEccScheme>>::MAX_SIZE
@@ -784,6 +801,7 @@ impl Marshal for TpmsEccParms {
     }
 }
 
+#[cfg(feature = "ecc")]
 impl<'a> Unmarshal<'a> for TpmsEccParms {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let symmetric = Unmarshal::unmarshal(src)?;
@@ -803,11 +821,13 @@ impl<'a> Unmarshal<'a> for TpmsEccParms {
 ///
 /// Parameter structure for ML-DSA objects, specifying parameter set and whether external `mu` is allowed.
 #[doc(alias = "TPMS_MLDSA_PARMS")]
+#[cfg(feature = "mldsa")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsMldsaParms {
     pub parameter_set: TpmiMldsaParms,
     pub allow_external_mu: bool,
 }
+#[cfg(feature = "mldsa")]
 impl Marshal for TpmsMldsaParms {
     const MAX_SIZE: usize = TpmiMldsaParms::MAX_SIZE + bool::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
@@ -818,6 +838,7 @@ impl Marshal for TpmsMldsaParms {
     }
 }
 
+#[cfg(feature = "mldsa")]
 impl<'a> Unmarshal<'a> for TpmsMldsaParms {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -831,11 +852,13 @@ impl<'a> Unmarshal<'a> for TpmsMldsaParms {
 ///
 /// Parameter structure for pre-hash ML-DSA (`Hash-ML-DSA`) objects, specifying parameter set and pre-hash algorithm.
 #[doc(alias = "TPMS_HASH_MLDSA_PARMS")]
+#[cfg(feature = "hash_mldsa")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsHashMldsaParms {
     pub parameter_set: TpmiMldsaParms,
     pub hash_alg: TpmiAlgHash,
 }
+#[cfg(feature = "hash_mldsa")]
 impl Marshal for TpmsHashMldsaParms {
     const MAX_SIZE: usize = TpmiMldsaParms::MAX_SIZE + TpmiAlgHash::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
@@ -846,6 +869,7 @@ impl Marshal for TpmsHashMldsaParms {
     }
 }
 
+#[cfg(feature = "hash_mldsa")]
 impl<'a> Unmarshal<'a> for TpmsHashMldsaParms {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -859,11 +883,13 @@ impl<'a> Unmarshal<'a> for TpmsHashMldsaParms {
 ///
 /// Parameter structure for ML-KEM objects, specifying symmetric cipher (for restricted parent keys) and parameter set.
 #[doc(alias = "TPMS_MLKEM_PARMS")]
+#[cfg(feature = "mlkem")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsMlkemParms {
     pub symmetric: Option<TpmtSymDefObject>,
     pub parameter_set: TpmiMlkemParms,
 }
+#[cfg(feature = "mlkem")]
 impl Marshal for TpmsMlkemParms {
     const MAX_SIZE: usize = <Option<TpmtSymDefObject>>::MAX_SIZE + TpmiMlkemParms::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
@@ -874,6 +900,7 @@ impl Marshal for TpmsMlkemParms {
     }
 }
 
+#[cfg(feature = "mlkem")]
 impl<'a> Unmarshal<'a> for TpmsMlkemParms {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -978,6 +1005,7 @@ pub enum TpmsCapabilityData<'a> {
     AssignedPcr(TpmlPcrSelection),
     TpmProperties(TpmlTaggedTpmProperty),
     PcrProperties(TpmlTaggedPcrProperty),
+    #[cfg(feature = "ecc")]
     EccCurves(TpmlEccCurve),
     AuthPolicies(TpmlTaggedPolicy<'a>),
     ActData(TpmlActData),
@@ -994,6 +1022,7 @@ impl<'a> TpmsCapabilityData<'a> {
             Self::AssignedPcr(_) => TpmCap::PCRs,
             Self::TpmProperties(_) => TpmCap::TPMProperties,
             Self::PcrProperties(_) => TpmCap::PCRProperties,
+            #[cfg(feature = "ecc")]
             Self::EccCurves(_) => TpmCap::ECCCurves,
             Self::AuthPolicies(_) => TpmCap::AuthPolicies,
             Self::ActData(_) => TpmCap::ACT,
@@ -1011,6 +1040,7 @@ impl Marshal for TpmsCapabilityData<'_> {
             TpmlPcrSelection::MAX_SIZE,
             TpmlTaggedTpmProperty::MAX_SIZE,
             TpmlTaggedPcrProperty::MAX_SIZE,
+            #[cfg(feature = "ecc")]
             TpmlEccCurve::MAX_SIZE,
             TpmlTaggedPolicy::MAX_SIZE,
             TpmlActData::MAX_SIZE,
@@ -1028,6 +1058,7 @@ impl Marshal for TpmsCapabilityData<'_> {
             Self::AssignedPcr(x) => marshal_helper(x, dst, count),
             Self::TpmProperties(x) => marshal_helper(x, dst, count),
             Self::PcrProperties(x) => marshal_helper(x, dst, count),
+            #[cfg(feature = "ecc")]
             Self::EccCurves(x) => marshal_helper(x, dst, count),
             Self::AuthPolicies(x) => marshal_helper(x, dst, count),
             Self::ActData(x) => marshal_helper(x, dst, count),
@@ -1046,6 +1077,7 @@ impl<'a> Unmarshal<'a> for TpmsCapabilityData<'a> {
             TpmCap::PCRs => Self::AssignedPcr(Unmarshal::unmarshal(src)?),
             TpmCap::TPMProperties => Self::TpmProperties(Unmarshal::unmarshal(src)?),
             TpmCap::PCRProperties => Self::PcrProperties(Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecc")]
             TpmCap::ECCCurves => Self::EccCurves(Unmarshal::unmarshal(src)?),
             TpmCap::AuthPolicies => Self::AuthPolicies(Unmarshal::unmarshal(src)?),
             TpmCap::ACT => Self::ActData(Unmarshal::unmarshal(src)?),

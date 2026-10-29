@@ -63,10 +63,15 @@ use crate::{Alg, Marshal, Unmarshal, errors::UnmarshalError, marshal::marshal_he
 pub enum PublicParmsAndId<'a> {
     KeyedHash(Option<TpmtKeyedHashScheme>, Tpm2bDigest<'a>),
     Sym(TpmtSymDefObject, Tpm2bDigest<'a>),
+    #[cfg(feature = "rsa")]
     Rsa(TpmsRsaParms, Tpm2bPublicKeyRsa<'a>),
+    #[cfg(feature = "ecc")]
     Ecc(TpmsEccParms, TpmsEccPoint<'a>),
+    #[cfg(feature = "mldsa")]
     Mldsa(TpmsMldsaParms, Tpm2bPublicKeyMldsa<'a>),
+    #[cfg(feature = "hash_mldsa")]
     HashMldsa(TpmsHashMldsaParms, Tpm2bPublicKeyMldsa<'a>),
+    #[cfg(feature = "mlkem")]
     Mlkem(TpmsMlkemParms, Tpm2bPublicKeyMlkem<'a>),
 }
 
@@ -75,10 +80,15 @@ impl PublicParmsAndId<'_> {
         match self {
             Self::KeyedHash(p, _) => TpmtPublicParms::KeyedHash(p),
             Self::Sym(p, _) => TpmtPublicParms::Sym(p),
+            #[cfg(feature = "rsa")]
             Self::Rsa(p, _) => TpmtPublicParms::Rsa(p),
+            #[cfg(feature = "ecc")]
             Self::Ecc(p, _) => TpmtPublicParms::Ecc(p),
+            #[cfg(feature = "mldsa")]
             Self::Mldsa(p, _) => TpmtPublicParms::Mldsa(p),
+            #[cfg(feature = "hash_mldsa")]
             Self::HashMldsa(p, _) => TpmtPublicParms::HashMldsa(p),
+            #[cfg(feature = "mlkem")]
             Self::Mlkem(p, _) => TpmtPublicParms::Mlkem(p),
         }
     }
@@ -97,12 +107,17 @@ impl<'a> PublicParmsAndId<'a> {
                 Self::KeyedHash(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
             }
             Alg::SYMCIPHER => Self::Sym(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "rsa")]
             Alg::RSA => Self::Rsa(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "ecc")]
             Alg::ECC => Self::Ecc(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "mldsa")]
             Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?),
+            #[cfg(feature = "hash_mldsa")]
             Alg::HASH_MLDSA => {
                 Self::HashMldsa(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
             }
+            #[cfg(feature = "mlkem")]
             Alg::MLKEM => Self::Mlkem(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?),
             _ => return Err(UnmarshalError),
         })
@@ -113,11 +128,21 @@ impl Marshal for PublicParmsAndId<'_> {
     const MAX_SIZE: usize = max!(
         <Option<TpmtKeyedHashScheme>>::MAX_SIZE + Tpm2bDigest::MAX_SIZE,
         TpmtSymDefObject::MAX_SIZE + Tpm2bDigest::MAX_SIZE,
-        TpmsRsaParms::MAX_SIZE + Tpm2bPublicKeyRsa::MAX_SIZE,
-        TpmsEccParms::MAX_SIZE + TpmsEccPoint::MAX_SIZE,
-        TpmsMldsaParms::MAX_SIZE + Tpm2bPublicKeyMldsa::MAX_SIZE,
-        TpmsHashMldsaParms::MAX_SIZE + Tpm2bPublicKeyMldsa::MAX_SIZE,
-        TpmsMlkemParms::MAX_SIZE + Tpm2bPublicKeyMlkem::MAX_SIZE,
+        #[cfg(feature = "rsa")]
+        TpmsRsaParms::MAX_SIZE
+            + Tpm2bPublicKeyRsa::MAX_SIZE,
+        #[cfg(feature = "ecc")]
+        TpmsEccParms::MAX_SIZE
+            + TpmsEccPoint::MAX_SIZE,
+        #[cfg(feature = "mldsa")]
+        TpmsMldsaParms::MAX_SIZE
+            + Tpm2bPublicKeyMldsa::MAX_SIZE,
+        #[cfg(feature = "hash_mldsa")]
+        TpmsHashMldsaParms::MAX_SIZE
+            + Tpm2bPublicKeyMldsa::MAX_SIZE,
+        #[cfg(feature = "mlkem")]
+        TpmsMlkemParms::MAX_SIZE
+            + Tpm2bPublicKeyMlkem::MAX_SIZE,
     );
     type MaxBuffer = [u8; PublicParmsAndId::MAX_SIZE];
 
@@ -131,22 +156,27 @@ impl Marshal for PublicParmsAndId<'_> {
                 let count = marshal_helper(parms, dst, 0);
                 marshal_helper(id, dst, count)
             }
+            #[cfg(feature = "rsa")]
             Self::Rsa(parms, id) => {
                 let count = marshal_helper(parms, dst, 0);
                 marshal_helper(id, dst, count)
             }
+            #[cfg(feature = "ecc")]
             Self::Ecc(parms, point) => {
                 let count = marshal_helper(parms, dst, 0);
                 marshal_helper(point, dst, count)
             }
+            #[cfg(feature = "mldsa")]
             Self::Mldsa(parms, id) => {
                 let count = marshal_helper(parms, dst, 0);
                 marshal_helper(id, dst, count)
             }
+            #[cfg(feature = "hash_mldsa")]
             Self::HashMldsa(parms, id) => {
                 let count = marshal_helper(parms, dst, 0);
                 marshal_helper(id, dst, count)
             }
+            #[cfg(feature = "mlkem")]
             Self::Mlkem(parms, id) => {
                 let count = marshal_helper(parms, dst, 0);
                 marshal_helper(id, dst, count)

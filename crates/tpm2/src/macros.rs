@@ -23,14 +23,32 @@ macro_rules! max_by {
 }
 
 /// Returns the maximum of one or more integer values.
+///
+/// Values after the first may be preceded by `#[cfg(...)]` attributes, in
+/// which case they only contribute to the maximum if the configuration
+/// predicate holds. Use `0` as the first value if all other values are
+/// conditional.
 macro_rules! max {
-    ($first:expr $(, $rest:expr)* $(,)?) => {{
+    // Internal rules: update `$max` with each remaining value, collecting any
+    // attributes in `[...]` so they can be applied to that value's block.
+    (@rest $max:ident; []) => {};
+    (@rest $max:ident; [$($attrs:tt)*] #[$m:meta] $($rest:tt)*) => {
+        max!(@rest $max; [$($attrs)* #[$m]] $($rest)*)
+    };
+    (@rest $max:ident; [$($attrs:tt)*] $val:expr $(, $($rest:tt)*)?) => {
+        $($attrs)*
+        {
+            let v = $val;
+            if v > $max {
+                $max = v;
+            }
+        }
+        max!(@rest $max; [] $($($rest)*)?)
+    };
+    ($first:expr $(, $($rest:tt)*)?) => {{
         #[allow(unused_mut)]
         let mut max_val = $first;
-        $(
-            let v = $rest;
-            if v > max_val { max_val = v; }
-        )*
+        max!(@rest max_val; [] $($($rest)*)?);
         max_val
     }};
 }
@@ -68,6 +86,28 @@ mod tests {
         assert_eq!(M1, 5);
         assert_eq!(M2, 9);
         assert_eq!(M3, 30);
+    }
+
+    #[test]
+    fn test_max_cfg() {
+        const M1: usize = max!(
+            1,
+            #[cfg(any())]
+            50,
+            #[cfg(all())]
+            7,
+            3
+        );
+        const M2: u16 = max!(
+            0,
+            #[cfg(any())]
+            8,
+            #[cfg(all())]
+            #[cfg(any())]
+            9
+        );
+        assert_eq!(M1, 7);
+        assert_eq!(M2, 0);
     }
 
     #[test]
