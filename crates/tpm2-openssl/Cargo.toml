@@ -1,0 +1,18 @@
+[package]
+name = "tpm2-openssl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tpm2 = { path = "../tpm2" }
+openssl = "0.10"
+openssl-sys = "0.9"
+libc = "0.2"
+foreign-types = "0.3"
+
