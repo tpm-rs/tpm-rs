@@ -149,8 +149,6 @@ pub mod crypto;
 pub mod errors;
 pub mod limits;
 mod marshal;
-#[cfg(feature = "std")]
-mod std;
 mod structures;
 
 pub use commands::{Command, Message, UnmarshalMessage};

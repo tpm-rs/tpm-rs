@@ -14,7 +14,7 @@ categories.workspace = true
 default = ["connection-tcp"]
 
 # Enable the TCP TPM connection (e.g. for the TPM simulator)
-connection-tcp = ["dep:zerocopy", "tpm2/std"]
+connection-tcp = ["dep:zerocopy"]
 
 [dependencies]
 tpm2 = { workspace = true }

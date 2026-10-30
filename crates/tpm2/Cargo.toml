@@ -13,9 +13,6 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-# Implement conversions/traits which require std
-std = []
-
 # We enable all algorithms by default.
 default = [
     # Hash Algorithms
