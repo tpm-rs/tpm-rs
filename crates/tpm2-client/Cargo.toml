@@ -18,10 +18,10 @@ connection-tcp = ["dep:zerocopy"]
 
 [dependencies]
 tpm2 = { workspace = true }
-zerocopy = { workspace = true, optional = true }
+zerocopy = { version = "0.8", features = ["derive"], optional = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+tempfile = { version = "3.27", default-features = false }
 
 [[test]]
 name = "simulator"

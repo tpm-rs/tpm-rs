@@ -18,15 +18,12 @@ keywords = ["tpm", "tss", "tpm2"]
 categories = ["cryptography", "no-std"]
 
 [workspace.dependencies]
-# Third party dependencies
+# Common third-party dependencies used across crates.
+# Dependencies only used by a single crate are in that crate's Cargo.toml.
 bitflags = "2.13"
-tempfile = { version = "3.27", default-features = false }
-zerocopy = { version = "0.8", features = ["derive"] }
 
-# Common workspace crates
+# Workspace crates used by other workspace crates.
 tpm2 = { path = "crates/tpm2" }
-tpm2-client = { path = "crates/tpm2-client" }
-tpm2-impl = { path = "crates/tpm2-impl" }
 
 [profile.release]
 lto = true        # default is lto = false
