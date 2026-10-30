@@ -1,5 +1,6 @@
 [package]
 name = "tpm2-impl"
+publish = false
 # Inherit from Workspace Settings
 version.workspace = true
 edition.workspace = true

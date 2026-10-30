@@ -1,0 +1,36 @@
+name: Publish to crates.io
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  dry-run:
+    name: Dry Run
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      crates: ${{ steps.meta.outputs.crates }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Get publishable crates
+        id: meta
+        run: |
+          crates=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.publish != []) | "\(.name)@\(.version)"')
+          echo crates=${crates} >> "$GITHUB_OUTPUT"
+      - run: cargo publish --dry-run
+
+  publish:
+    needs: dry-run
+    name: Publish ${{ needs.dry-run.outputs.crates }}
+    runs-on: ubuntu-latest
+    environment: publish # Requires manual approval from Maintainers to run
+    permissions:
+      id-token: write    # Required for OIDC token exchange
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
