@@ -8,7 +8,7 @@ members = ["crates/tpm2", "crates/tpm2-client", "crates/tpm2-impl"]
 # Defaults are fine for: documentation (crates.io)
 # Packages should set their own: name and description
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.100"
 readme = "README.md"
