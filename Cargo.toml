@@ -5,12 +5,13 @@ members = ["crates/tpm2", "crates/tpm2-client", "crates/tpm2-impl"]
 
 # Package keys that should be used by all packages.
 # We don't set: authors (deprecated), license-file, exclude, include, or publish
-# Defaults are fine for: documentation (crates.io) and readme (README.md)
+# Defaults are fine for: documentation (crates.io)
 # Packages should set their own: name and description
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
+readme = "README.md"
 homepage = "https://github.com/tpm-rs"
 repository = "https://github.com/tpm-rs/tpm-rs"
 license = "Apache-2.0"
