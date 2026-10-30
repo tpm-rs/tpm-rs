@@ -1,5 +1,5 @@
 [toolchain]
-# Update to Rust 1.100 when on Beta/Stable
-channel = "nightly-2026-09-01"
+# Update to Rust 1.100 when on Stable
+channel = "beta"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
