@@ -1,19 +1,8 @@
-use core::{error::Error, fmt::Display};
-
 use crate::platform::crypto::{
     Drbg, DrbgError,
     drbg_helpers::{next_u32_via_fill, next_u64_via_fill},
 };
 
-#[derive(Debug)]
-pub struct FakeDrbgError;
-
-impl Display for FakeDrbgError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:#?}", self)
-    }
-}
-impl Error for FakeDrbgError {}
 /// Implements fake cryptographic operations to be used in unit testing.
 pub struct FakeDrbg {
     counter: u8,
