@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      RUSTDOCFLAGS: "-D warnings"
+      RUSTDOCFLAGS: "-D warnings --cfg docsrs"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,11 +27,11 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: List Tool Versions
-        run: rustc --version
+        run: rustc +nightly --version
 
       - name: Build Docs
         id: build
-        run: cargo doc --no-deps
+        run: cargo +nightly doc --no-deps
 
         # This step is needed because rustdoc doesn't generate a main landing
         # page. The approach here is to redirect the main page to one of the

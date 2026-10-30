@@ -82,11 +82,11 @@ jobs:
     name: Docs
     runs-on: ubuntu-latest
     env:
-      RUSTDOCFLAGS: "-D warnings"
+      RUSTDOCFLAGS: "-D warnings --cfg docsrs"
     steps:
       - uses: actions/checkout@v4
-      - run: rustc --version
-      - run: cargo doc
+      - run: rustc +nightly --version
+      - run: cargo +nightly doc
 
   miri:
     name: Miri UB Test Suite

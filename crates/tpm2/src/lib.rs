@@ -135,6 +135,7 @@
 //! flat API to external users, with the exception of the [`commands`],
 //! [`errors`], and [`limits`] submodules.
 #![cfg_attr(not(test), no_std)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![forbid(unreachable_pub)]
 #![allow(clippy::large_enum_variant)]

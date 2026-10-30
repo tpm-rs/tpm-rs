@@ -24,8 +24,9 @@
 //! # Ok(())
 //! # }
 //! ```
-#![forbid(unsafe_code)]
 #![no_std]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![forbid(unsafe_code)]
 
 use connection::Connection;
 use core::fmt;
