@@ -270,7 +270,7 @@ impl Conv {
         self.engine.prepare_params(&info, &mut params);
         let auth = (!reqs.is_empty()).then(|| self.engine.authorize(&info, &mut params, reqs));
         let command = build_command(code, handles, auth.as_deref(), &params);
-        let response = self.tpm.send_command(0, &command);
+        let response = self.tpm.send_command(&command);
         let decrypted = self.engine.on_response(&info, &command, &response);
         self.round += 1;
         Outcome {
@@ -1076,7 +1076,7 @@ fn manual_round(c: &mut Conv) -> (SessionEngine, Vec<Vec<u8>>, Vec<u8>, Vec<u8>)
         .engine
         .authorize(&info, &mut params, &[hmac_req(0, b"owner-secret", 1)]);
     let command = build_command(CC_NV_DEFINE_SPACE, &[RH_OWNER], Some(&area), &params);
-    let response = c.tpm.send_command(0, &command);
+    let response = c.tpm.send_command(&command);
     assert_eq!(rc_of(&response), 0);
     (c.engine.clone(), names, command, response)
 }

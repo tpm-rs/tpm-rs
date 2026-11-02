@@ -64,7 +64,7 @@ fn load_external_off_curve_point_with_private_key_is_binding_error() {
     params.extend_from_slice(&ecc_public_off_curve());
     params.extend_from_slice(&Handle::RH_NULL.0.to_be_bytes());
     let cmd = build(0x8001, TPM_CC_LOAD_EXTERNAL, &[], None, &params);
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), TPM_RC_BINDING);
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), TPM_RC_BINDING);
 }
 
 /// TPM2_Import of an unwrapped ECC duplicate whose public point is not on the
@@ -81,5 +81,5 @@ fn import_off_curve_point_under_fixed_tpm_parent_is_binding_error() {
     params.extend_from_slice(&tpm2b(&[])); // inSymSeed
     params.extend_from_slice(&[0x00, 0x10]); // symmetricAlg: TPM_ALG_NULL
     let cmd = build_pw_cmd(TPM_CC_IMPORT, &[parent.0], 1, &params);
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), TPM_RC_BINDING);
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), TPM_RC_BINDING);
 }

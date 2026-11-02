@@ -263,7 +263,7 @@ fn unsupported_rsa_exponent_fails_key_generation_with_range() {
         0x08d,
     )];
     for (i, (cmd, rc)) in steps.into_iter().enumerate() {
-        let rsp = tpm.send_command(0, &crate::_common::hex_checked(cmd));
+        let rsp = tpm.send_command(&crate::_common::hex_checked(cmd));
         assert_eq!(
             u32::from_be_bytes(rsp[6..10].try_into().unwrap()),
             rc,
@@ -302,7 +302,7 @@ fn reserved_object_attribute_bit_3_rejected() {
     // response code with the reference).
     let bit_3_reserved = tpm2::TpmaObject::RESERVED_BITS_MASK & (1 << 3) != 0;
     for (i, (cmd, rc)) in steps.into_iter().enumerate() {
-        let rsp = tpm.send_command(0, &crate::_common::hex_checked(cmd));
+        let rsp = tpm.send_command(&crate::_common::hex_checked(cmd));
         let actual = u32::from_be_bytes(rsp[6..10].try_into().unwrap());
         if bit_3_reserved {
             assert_eq!(actual, rc, "step {i}: {rsp:02x?}");

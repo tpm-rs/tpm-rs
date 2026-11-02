@@ -307,7 +307,7 @@ fn unloaded_session_reported_before_later_sessions_are_unmarshaled() {
         ),
     ];
     for (i, (cmd, rc)) in steps.into_iter().enumerate() {
-        let rsp = tpm.send_command(0, &crate::_common::hex_checked(cmd));
+        let rsp = tpm.send_command(&crate::_common::hex_checked(cmd));
         assert_eq!(
             u32::from_be_bytes(rsp[6..10].try_into().unwrap()),
             rc,

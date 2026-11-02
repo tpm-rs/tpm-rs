@@ -32,7 +32,7 @@ fn activate_credential_rc(tpm: &mut Tpm, activate: Handle, key: Handle, secret: 
     params.extend_from_slice(&(secret.len() as u16).to_be_bytes());
     params.extend_from_slice(secret);
     let cmd = build_pw_cmd(TPM_CC_ACTIVATE_CREDENTIAL, &[activate.0, key.0], 2, &params);
-    rc_of(&tpm.send_command(0, &cmd))
+    rc_of(&tpm.send_command(&cmd))
 }
 
 /// The expected response code `rc` for the `secret` parameter (P2).
@@ -130,7 +130,7 @@ const HASH_SEQUENCE_START: [u8; 14] = [0x80, 0x01, 0, 0, 0, 14, 0, 0, 0x01, 0x86
 #[test]
 fn sequence_object_protector_is_type_error() {
     let mut tpm = Tpm::new();
-    let rsp = tpm.send_command(0, &HASH_SEQUENCE_START);
+    let rsp = tpm.send_command(&HASH_SEQUENCE_START);
     assert_eq!(rc_of(&rsp), 0, "HashSequenceStart: {rsp:02x?}");
     let sequence = Handle(u32::from_be_bytes(rsp[10..14].try_into().unwrap()));
     assert_eq!(
@@ -152,7 +152,7 @@ fn sequence_object_protector_is_type_error() {
 fn sequence_object_activated_is_type_error() {
     let mut tpm = Tpm::new();
     let srk = owner_srk(&mut tpm);
-    let rsp = tpm.send_command(0, &HASH_SEQUENCE_START);
+    let rsp = tpm.send_command(&HASH_SEQUENCE_START);
     assert_eq!(rc_of(&rsp), 0, "HashSequenceStart: {rsp:02x?}");
     let sequence = Handle(u32::from_be_bytes(rsp[10..14].try_into().unwrap()));
     assert_eq!(

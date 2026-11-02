@@ -3,14 +3,13 @@
 //! conversations the `diff_conversation` fuzz target can replay.
 //!
 //! A fuzz conversation always starts on a fresh TPM that is powered on, has NV
-//! available and has received `TPM2_Startup(CLEAR)`, with commands sent at
-//! locality 0. A trace starts in that state (and returns to it after every
+//! available and has received `TPM2_Startup(CLEAR)`, and every command is
+//! sent at locality 0 (as in every recorded trace). A trace starts in that state (and returns to it after every
 //! `Z` reset), so a conversation is the run of events from such a starting
 //! point up to the first event the fuzzer cannot express (a platform signal
 //! outside [`PLATFORM_SIGNALS`]). Commands become command rounds; platform
 //! signals, `_TPM_Hash_*` indications and clock advances become event rounds
-//! ([`Step::Platform`], [`Step::Sleep`]), and a command at another locality
-//! than the previous one is preceded by a [`Step::Locality`] event round.
+//! ([`Step::Platform`], [`Step::Sleep`]).
 
 use testing::tpm::trace::{Event, Trace};
 use tpm2_fuzz::model::{PLATFORM_SIGNALS, PlatformOp, Step};
@@ -83,25 +82,15 @@ pub fn conversations(trace: &Trace) -> Vec<Vec<Round>> {
     let mut out = Vec::new();
     let mut current = Vec::new();
     let mut open = true;
-    let mut current_locality = 0;
     for event in &trace.events {
         match event {
             Event::Reset => {
                 out.push(std::mem::take(&mut current));
                 open = true;
-                current_locality = 0;
             }
             _ if !open => {}
             Event::Rejected { .. } => {}
-            Event::Command {
-                locality,
-                command,
-                response,
-            } => {
-                if *locality != current_locality {
-                    current.push(Round::event(Step::Locality(*locality)));
-                    current_locality = *locality;
-                }
+            Event::Command { command, response } => {
                 current.push(Round::command(command.clone(), response.clone()));
             }
             Event::Signal(name) if NO_OP_SIGNALS.contains(&name.as_str()) => {}
@@ -126,18 +115,17 @@ mod tests {
     use super::*;
     use testing::tpm::trace::parse;
 
-    const HEADER: &str = "# tpm-rs-trace v1 seed=1234:5678 test=e2e::nv::define";
+    const HEADER: &str = "# tpm-rs-trace v2 seed=1234:5678 test=e2e::nv::define";
 
-    /// Conversations start fresh, turn events into event rounds (with a
-    /// locality round before a command at a new locality), skip rejected
+    /// Conversations start fresh, turn events into event rounds, skip rejected
     /// commands, stop at events the fuzzer cannot express and restart after
     /// a reset.
     #[test]
     fn splits_conversations() {
         let text = format!(
-            "{HEADER}\nC 0 01\nR 11\nX 0 99\nC 0 02\nR 12\nC 3 03\nR 13\nC 0 04\nR 14\nZ\n\
-             C 0 05\nR 15\nT 10\nC 0 06\nR 16\nZ\nZ\nC 0 07\nR 17\nH start\nH data 0a0b\n\
-             S PowerOff\nS Restart\nC 0 08\nR 18\n"
+            "{HEADER}\nC 01\nR 11\nX 99\nC 02\nR 12\nC 03\nR 13\nC 04\nR 14\nZ\n\
+             C 05\nR 15\nT 10\nC 06\nR 16\nZ\nZ\nC 07\nR 17\nH start\nH data 0a0b\n\
+             S PowerOff\nS Restart\nC 08\nR 18\n"
         );
         let convs = conversations(&parse(&text).unwrap());
         let steps: Vec<Vec<Result<Vec<u8>, Step>>> = convs
@@ -151,14 +139,7 @@ mod tests {
         assert_eq!(
             steps,
             vec![
-                vec![
-                    Ok(vec![1]),
-                    Ok(vec![2]),
-                    Err(Step::Locality(3)),
-                    Ok(vec![3]),
-                    Err(Step::Locality(0)),
-                    Ok(vec![4]),
-                ],
+                vec![Ok(vec![1]), Ok(vec![2]), Ok(vec![3]), Ok(vec![4]),],
                 vec![Ok(vec![5]), Err(Step::Sleep(10)), Ok(vec![6])],
                 vec![
                     Ok(vec![7]),
@@ -174,7 +155,7 @@ mod tests {
     /// A conversation of events only (no command) is omitted.
     #[test]
     fn event_only_conversation_yields_nothing() {
-        let text = format!("{HEADER}\nS PowerOff\nS Restart\nC 0 01\nR 11\n");
+        let text = format!("{HEADER}\nS PowerOff\nS Restart\nC 01\nR 11\n");
         assert!(conversations(&parse(&text).unwrap()).is_empty());
     }
 

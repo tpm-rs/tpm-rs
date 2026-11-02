@@ -2,9 +2,11 @@
 //!
 //! Every test drives a [`Tpm`]: a `tpm-rs` simulator on a virtual clock
 //! (see `tpm2_simulator::create_reference_simulator!`), reachable only
-//! through its command interface (typed commands, raw command buffers at any
-//! locality, platform signals and `_TPM_Hash_*` indications), exactly like a
-//! real TPM.
+//! through its command interface (typed commands, raw command buffers,
+//! platform signals and `_TPM_Hash_*` indications), exactly like a real TPM.
+//! Commands are sent at locality 0; only a `Tpm` that is not mirrored to a C
+//! reference ([`Tpm::new_unmirrored`]) can send them at another locality
+//! ([`Tpm::send_command_at_locality`]).
 //!
 //! In a differential build (a `target-*` feature), every interaction is
 //! additionally mirrored to the patched C reference TPM of the target (the
@@ -14,7 +16,9 @@
 //! reference's response must be identical to the `tpm-rs` response except for
 //! the documented, implementation-defined differences. A mismatch panics at the command that diverged, so the same test suite
 //! serves as both the `tpm-rs` E2E tests and the differential tests. The test
-//! always continues with the `tpm-rs` response.
+//! always continues with the `tpm-rs` response. The differential tests run
+//! every command at locality 0: tests of other localities use
+//! [`Tpm::new_unmirrored`], which is never mirrored.
 //!
 //! The C references seed their random number generation from their process
 //! ID and their real-time clock. The `Tpm` chooses both values
@@ -129,10 +133,12 @@ pub struct Tpm {
     seed: ReferenceSeed,
     /// The value of this thread's [`sleep`] clock last applied to the TPMs.
     clock_ms: u64,
-    /// The C reference TPMs mirroring `sim`.
+    /// The C reference TPMs mirroring `sim`; `None` for a `Tpm` that is not
+    /// mirrored ([`Tpm::new_unmirrored`]).
     #[cfg(feature = "differential")]
-    references: Mirror,
-    /// The trace file, with `TPM_FUZZ_RECORD_DIR` (see [`trace`]).
+    references: Option<Mirror>,
+    /// The trace file, with `TPM_FUZZ_RECORD_DIR` (see [`trace`]); never for
+    /// a `Tpm` that is not mirrored ([`Tpm::new_unmirrored`]).
     recorder: Option<Recorder>,
 }
 
@@ -199,11 +205,10 @@ impl Mirror {
 
     fn try_exchange(
         &mut self,
-        locality: u8,
         command: &[u8],
         expected: &[u8],
     ) -> Result<(), Vec<crate::differential::Divergence>> {
-        dispatch!(self, r => r.try_exchange(locality, command, expected))
+        dispatch!(self, r => r.try_exchange(command, expected))
     }
 }
 
@@ -242,8 +247,28 @@ impl Tpm {
         Self::from_parts(
             seed,
             #[cfg(feature = "differential")]
-            references,
+            Some(references),
         )
+    }
+
+    /// Like [`Self::new`], but never mirrored to a C reference TPM, not even
+    /// in a differential build, and never recorded (see [`trace`]).
+    ///
+    /// Only for tests that send commands at a locality other than 0
+    /// ([`Self::send_command_at_locality`]): the differential tests (and
+    /// the C references, the differential fuzzer and its traces) always use
+    /// locality 0, so these tests check `tpm-rs` alone.
+    pub fn new_unmirrored() -> Self {
+        let seed = ReferenceSeed::choose();
+        eprintln!("tpm-rs: {SEED_ENV}={seed} (not mirrored)");
+        Self {
+            sim: create_reference_simulator!(seed.pid, seed.realtime_ms),
+            seed,
+            clock_ms: THREAD_CLOCK_MS.with(Cell::get),
+            #[cfg(feature = "differential")]
+            references: None,
+            recorder: None,
+        }
     }
 
     /// Like [`Self::with_seed`], but mirrored to the C references linked
@@ -260,22 +285,24 @@ impl Tpm {
             crate::differential::selected(),
             seed,
         ));
-        Self::from_parts(seed, references)
+        Self::from_parts(seed, Some(references))
     }
 
     /// A new `Tpm` with `seed` mirrored to `references`, which are already
     /// seeded with it.
     fn from_parts(
         seed: ReferenceSeed,
-        #[cfg(feature = "differential")] references: Mirror,
+        #[cfg(feature = "differential")] references: Option<Mirror>,
     ) -> Self {
         // Shown with the output of a failing test: setting the variable
         // reproduces this TPM's random values.
         #[cfg(feature = "differential")]
-        eprintln!(
-            "tpm-rs: {SEED_ENV}={seed} (compared with {})",
-            references.names()
-        );
+        if let Some(references) = &references {
+            eprintln!(
+                "tpm-rs: {SEED_ENV}={seed} (compared with {})",
+                references.names()
+            );
+        }
         #[cfg(not(feature = "differential"))]
         eprintln!("tpm-rs: {SEED_ENV}={seed}");
         Self {
@@ -314,7 +341,9 @@ impl Tpm {
             .reset_reference(self.seed.pid, self.seed.realtime_ms);
         self.clock_ms = THREAD_CLOCK_MS.with(Cell::get);
         #[cfg(feature = "differential")]
-        self.references.reinit();
+        if let Some(references) = &mut self.references {
+            references.reinit();
+        }
     }
 
     /// Appends `event` to the trace, if one is recorded.
@@ -339,10 +368,12 @@ impl Tpm {
             "the simulator has no virtual clock"
         );
         #[cfg(feature = "differential")]
-        self.references.advance_clock(ms);
+        if let Some(references) = &mut self.references {
+            references.advance_clock(ms);
+        }
     }
 
-    /// Sends `command` at `locality` to `tpm-rs` (MSSIM `TPM_SEND_COMMAND`)
+    /// Sends `command` at locality 0 to `tpm-rs` (MSSIM `TPM_SEND_COMMAND`)
     /// and, with `differential`, to every C reference, comparing the
     /// responses.
     ///
@@ -352,25 +383,25 @@ impl Tpm {
     /// mirrored, or `SendError::Divergence` (in a differential build) if a reference's response
     /// differs other than as documented. Unlike [`Self::send_command`] it
     /// never panics on a divergence, so a fuzzer can classify it.
-    pub fn try_exchange(&mut self, locality: u8, command: &[u8]) -> Result<Vec<u8>, SendError> {
+    pub fn try_exchange(&mut self, command: &[u8]) -> Result<Vec<u8>, SendError> {
         self.sync_clock();
-        let response = match self.run_on_simulator(locality, command) {
+        let response = match self.run_on_simulator(0, command) {
             Ok(response) => response,
             Err(e) => {
                 self.record(&Event::Rejected {
-                    locality,
                     command: command.to_vec(),
                 });
                 return Err(SendError::Transport(e));
             }
         };
         self.record(&Event::Command {
-            locality,
             command: command.to_vec(),
             response: response.clone(),
         });
         #[cfg(feature = "differential")]
-        if let Err(divergences) = self.references.try_exchange(locality, command, &response) {
+        if let Some(references) = &mut self.references
+            && let Err(divergences) = references.try_exchange(command, &response)
+        {
             return Err(SendError::Divergence {
                 response,
                 divergences,
@@ -409,8 +440,8 @@ impl Tpm {
     /// # Panics
     /// With `differential`, if a reference's response differs other than as
     /// documented.
-    pub fn try_send_command(&mut self, locality: u8, command: &[u8]) -> Result<Vec<u8>, String> {
-        match self.try_exchange(locality, command) {
+    pub fn try_send_command(&mut self, command: &[u8]) -> Result<Vec<u8>, String> {
+        match self.try_exchange(command) {
             Ok(response) => Ok(response),
             Err(SendError::Transport(e)) => Err(e),
             #[cfg(feature = "differential")]
@@ -418,13 +449,34 @@ impl Tpm {
         }
     }
 
-    /// Sends the raw command buffer `command` at `locality` and returns the
+    /// Sends the raw command buffer `command` at locality 0 and returns the
     /// raw response (empty while the TPM is powered off).
     ///
     /// # Panics
     /// If the simulator rejects the command at the transport level.
-    pub fn send_command(&mut self, locality: u8, command: &[u8]) -> Vec<u8> {
-        self.try_send_command(locality, command)
+    pub fn send_command(&mut self, command: &[u8]) -> Vec<u8> {
+        self.try_send_command(command)
+            .unwrap_or_else(|e| panic!("TPM transport error: {e}"))
+    }
+
+    /// Sends the raw command buffer `command` at `locality` to `tpm-rs` only
+    /// and returns the raw response (empty while the TPM is powered off).
+    ///
+    /// # Panics
+    /// If the `Tpm` is mirrored to a C reference TPM (the differential tests
+    /// run every command at locality 0; use [`Self::new_unmirrored`]), or if
+    /// the simulator rejects the command at the transport level.
+    pub fn send_command_at_locality(&mut self, locality: u8, command: &[u8]) -> Vec<u8> {
+        if locality == 0 {
+            return self.send_command(command);
+        }
+        assert!(
+            !self.is_differential(),
+            "locality {locality}: the differential tests run every command at locality 0; \
+             use `Tpm::new_unmirrored()`"
+        );
+        self.sync_clock();
+        self.run_on_simulator(locality, command)
             .unwrap_or_else(|e| panic!("TPM transport error: {e}"))
     }
 
@@ -452,7 +504,9 @@ impl Tpm {
             .signal_platform(signal, NO_STREAM)
             .map_err(|e| e.to_string())?;
         #[cfg(feature = "differential")]
-        self.references.signal(signal);
+        if let Some(references) = &mut self.references {
+            references.signal(signal);
+        }
         Ok(())
     }
 
@@ -465,8 +519,9 @@ impl Tpm {
     pub fn set_firmware_hash(&mut self, hash: u32) {
         self.firmware_signal(SimulatorPlatformSignal::SetFirmwareHash, hash);
         #[cfg(feature = "differential")]
-        self.references
-            .set_firmware(crate::differential::protocol::FirmwareSetting::Hash(hash));
+        if let Some(references) = &mut self.references {
+            references.set_firmware(crate::differential::protocol::FirmwareSetting::Hash(hash));
+        }
     }
 
     /// Installs a firmware image with the SVN `svn` (the MSSIM platform signal
@@ -478,8 +533,9 @@ impl Tpm {
     pub fn set_firmware_svn(&mut self, svn: u16) {
         self.firmware_signal(SimulatorPlatformSignal::SetFirmwareSvn, u32::from(svn));
         #[cfg(feature = "differential")]
-        self.references
-            .set_firmware(crate::differential::protocol::FirmwareSetting::Svn(svn));
+        if let Some(references) = &mut self.references {
+            references.set_firmware(crate::differential::protocol::FirmwareSetting::Svn(svn));
+        }
     }
 
     /// Delivers the firmware platform signal `signal` with its 32-bit `value` to `tpm-rs`.
@@ -508,7 +564,9 @@ impl Tpm {
     pub fn hash_start(&mut self) {
         self.hash_indication(TPM_SIGNAL_HASH_START, Vec::new(), Event::HashStart);
         #[cfg(feature = "differential")]
-        self.references.hash_start();
+        if let Some(references) = &mut self.references {
+            references.hash_start();
+        }
     }
 
     /// Sends the `_TPM_Hash_Data` indication with `data`.
@@ -521,20 +579,27 @@ impl Tpm {
             Event::HashData(data.to_vec()),
         );
         #[cfg(feature = "differential")]
-        self.references.hash_data(data);
+        if let Some(references) = &mut self.references {
+            references.hash_data(data);
+        }
     }
 
     /// Sends the `_TPM_Hash_End` indication.
     pub fn hash_end(&mut self) {
         self.hash_indication(TPM_SIGNAL_HASH_END, Vec::new(), Event::HashEnd);
         #[cfg(feature = "differential")]
-        self.references.hash_end();
+        if let Some(references) = &mut self.references {
+            references.hash_end();
+        }
     }
 
     /// Whether every interaction with this TPM is mirrored to (and compared
-    /// with) a C reference TPM.
+    /// with) a C reference TPM (always, except for [`Self::new_unmirrored`]).
     pub fn is_differential(&self) -> bool {
-        cfg!(feature = "differential")
+        #[cfg(feature = "differential")]
+        return self.references.is_some();
+        #[cfg(not(feature = "differential"))]
+        false
     }
 }
 
@@ -551,7 +616,7 @@ impl Connection for Tpm {
         rsp: &'b mut [u8],
     ) -> Result<&'b mut [u8], ExecuteError> {
         let response = self
-            .try_send_command(0, cmd)
+            .try_send_command(cmd)
             .map_err(|_| ExecuteError::Unexpected)?;
         let out = rsp
             .get_mut(..response.len())
@@ -570,7 +635,7 @@ mod tests {
 
     /// `TPMS_TIME_INFO.time` of a `TPM2_ReadClock` response.
     fn time_ms(tpm: &mut Tpm) -> u64 {
-        let rsp = tpm.send_command(0, &READ_CLOCK);
+        let rsp = tpm.send_command(&READ_CLOCK);
         assert_eq!(&rsp[6..10], &[0, 0, 0, 0], "ReadClock failed: {rsp:02x?}");
         u64::from_be_bytes(rsp[10..18].try_into().unwrap())
     }
@@ -591,7 +656,7 @@ mod tests {
     #[test]
     fn get_random_draws_fresh_values() {
         let mut tpm = Tpm::new();
-        let first = tpm.send_command(0, &GET_RANDOM_16);
+        let first = tpm.send_command(&GET_RANDOM_16);
         assert_eq!(
             &first[6..10],
             &[0, 0, 0, 0],
@@ -599,7 +664,7 @@ mod tests {
         );
         assert_eq!(first.len(), 12 + 16);
         sleep(Duration::from_millis(1500));
-        let second = tpm.send_command(0, &GET_RANDOM_16);
+        let second = tpm.send_command(&GET_RANDOM_16);
         assert_eq!(second.len(), first.len());
         assert_ne!(first, second, "the DRBG advances");
     }
@@ -614,9 +679,27 @@ mod tests {
         // Powering one TPM off leaves the other running.
         a.signal_platform(SimulatorPlatformSignal::PowerOff)
             .unwrap();
-        assert!(a.send_command(0, &READ_CLOCK).is_empty());
+        assert!(a.send_command(&READ_CLOCK).is_empty());
         assert!(time_ms(&mut b) >= tb);
         assert_eq!(a.is_differential(), cfg!(feature = "differential"));
+    }
+
+    /// A `Tpm` that is not mirrored sends commands at any locality.
+    #[test]
+    fn unmirrored_tpm_sends_at_other_localities() {
+        let mut tpm = Tpm::new_unmirrored();
+        assert!(!tpm.is_differential());
+        let rsp = tpm.send_command_at_locality(3, &READ_CLOCK);
+        assert_eq!(&rsp[6..10], &[0, 0, 0, 0], "ReadClock failed: {rsp:02x?}");
+    }
+
+    /// A mirrored `Tpm` sends commands at locality 0 only: the differential
+    /// tests never compare another locality.
+    #[cfg(feature = "differential")]
+    #[test]
+    #[should_panic(expected = "every command at locality 0")]
+    fn mirrored_tpm_rejects_other_localities() {
+        Tpm::new().send_command_at_locality(3, &READ_CLOCK);
     }
 
     #[test]
@@ -624,7 +707,7 @@ mod tests {
         let mut tpm = Tpm::new();
         tpm.signal_platform(SimulatorPlatformSignal::PowerOff)
             .unwrap();
-        assert!(tpm.send_command(0, &READ_CLOCK).is_empty());
+        assert!(tpm.send_command(&READ_CLOCK).is_empty());
         crate::_common::power_on_start_up(&mut tpm);
         time_ms(&mut tpm);
     }

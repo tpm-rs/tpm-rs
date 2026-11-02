@@ -4,9 +4,9 @@
 //! Every request is answered by exactly one reply. All integers are
 //! big-endian; byte strings are a `u32` length followed by the bytes.
 //!
-//! * Request: a tag byte followed by its fields — `1` `Exchange` (locality
-//!   `u8`, command bytes, `tpm-rs` response bytes), `2` `AdvanceClock` (`u64`
-//!   milliseconds), `3` `Signal` (`u32` MSSIM platform signal code), `4`
+//! * Request: a tag byte followed by its fields — `1` `Exchange` (command
+//!   bytes, `tpm-rs` response bytes; always at locality 0), `2`
+//!   `AdvanceClock` (`u64` milliseconds), `3` `Signal` (`u32` MSSIM platform signal code), `4`
 //!   `HashStart`, `5` `HashData` (bytes), `6` `HashEnd`, `7` `Reinit`.
 //! * Reply: a status byte followed by a message (bytes, UTF-8; empty on
 //!   success): `0` success, `1` failure, or `2` failure of an `Exchange` that
@@ -53,11 +53,9 @@ pub fn read_handshake(r: &mut impl Read) -> io::Result<Handshake> {
 /// A request to a reference TPM process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
-    /// Execute `command` at `locality` and compare the response with
+    /// Execute `command` (at locality 0) and compare the response with
     /// `expected`, the `tpm-rs` response.
     Exchange {
-        /// Locality of the command.
-        locality: u8,
         /// The command buffer.
         command: Vec<u8>,
         /// The response `tpm-rs` gave to `command`.
@@ -145,12 +143,8 @@ fn read_bytes(r: &mut impl Read) -> io::Result<Vec<u8>> {
 /// Writes `request` (without flushing).
 pub fn write_request(w: &mut impl Write, request: &Request) -> io::Result<()> {
     match request {
-        Request::Exchange {
-            locality,
-            command,
-            expected,
-        } => {
-            w.write_all(&[1, *locality])?;
+        Request::Exchange { command, expected } => {
+            w.write_all(&[1])?;
             write_bytes(w, command)?;
             write_bytes(w, expected)
         }
@@ -187,14 +181,10 @@ pub fn read_request(r: &mut impl Read) -> io::Result<Option<Request>> {
         return Ok(None);
     }
     Ok(Some(match tag[0] {
-        1 => {
-            let [locality] = read_array(r)?;
-            Request::Exchange {
-                locality,
-                command: read_bytes(r)?,
-                expected: read_bytes(r)?,
-            }
-        }
+        1 => Request::Exchange {
+            command: read_bytes(r)?,
+            expected: read_bytes(r)?,
+        },
         2 => Request::AdvanceClock(u64::from_be_bytes(read_array(r)?)),
         3 => Request::Signal(u32::from_be_bytes(read_array(r)?)),
         4 => Request::HashStart,
@@ -275,7 +265,6 @@ mod tests {
     fn requests_round_trip() {
         let requests = [
             Request::Exchange {
-                locality: 3,
                 command: vec![0x80, 0x01, 2],
                 expected: vec![],
             },

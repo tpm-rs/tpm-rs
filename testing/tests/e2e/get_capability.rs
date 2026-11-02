@@ -891,7 +891,7 @@ fn fixed_properties_to_the_end_of_the_group() {
     let cmd = [
         0x80, 0x01, 0, 0, 0, 0x16, 0, 0, 0x01, 0x7A, 0, 0, 0, 6, 0, 0, 0x01, 0x0C, 0, 0, 0, 0x24,
     ];
-    let rsp = tpm.send_command(0, &cmd);
+    let rsp = tpm.send_command(&cmd);
     assert_eq!(rc_of(&rsp), 0);
     assert_eq!(rsp[10], 0, "moreData");
 }
@@ -912,7 +912,7 @@ fn last_fixed_property_has_no_more_data() {
             0x01,
         ]
     };
-    let rsp = tpm.send_command(0, &query(0x30));
+    let rsp = tpm.send_command(&query(0x30));
     assert_eq!(rc_of(&rsp), 0);
     assert_eq!(rsp[10], 0, "moreData");
     assert_eq!(
@@ -920,7 +920,7 @@ fn last_fixed_property_has_no_more_data() {
         0x130u32.to_be_bytes(),
         "TPM_PT_FIRMWARE_MAX_SVN"
     );
-    let rsp = tpm.send_command(0, &query(0x2E));
+    let rsp = tpm.send_command(&query(0x2E));
     assert_eq!(rc_of(&rsp), 0);
     assert_eq!(rsp[10], 1, "moreData");
 }

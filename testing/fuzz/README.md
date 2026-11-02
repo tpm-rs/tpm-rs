@@ -4,16 +4,16 @@ This crate fuzzes `tpm-rs` against the C reference TPMs (`tcgtpm` and
 `ibmswtpm2`) with [`cargo fuzz`](https://rust-fuzz.github.io/book/cargo-fuzz.html)
 (libFuzzer). One fuzz input is a **conversation**: up to 32 rounds with a
 fresh TPM that is powered on, has NV available and has received
-`TPM2_Startup(CLEAR)`. A round is a TPM command (at locality 0 unless a
-locality round changed it) or an event: a platform signal (`PowerOff`,
+`TPM2_Startup(CLEAR)`. A round is a TPM command (always at locality 0, like
+every differential test) or an event: a platform signal (`PowerOff`,
 `PowerOn`, `NvOn`, `NvOff`, `Reset`), a `_TPM_Hash_Start`/`Data`/`End`
-indication, a virtual clock advance, or a locality change. Later commands can
+indication, or a virtual clock advance. Later commands can
 reuse values from earlier responses (handles, names, public/private blobs,
 nonces, context blobs, tickets, NV indices), so the fuzzer reaches stateful
 behavior such as keys loaded under parents, authorized sessions, policy
 chains, context management and NV lifecycles, and the events reach power
 cycles with `TPM2_Startup`/`TPM2_Shutdown` (reset, restart, resume), NV
-unavailability, D-RTM sequences, timeouts and locality checks.
+unavailability, D-RTM sequences and timeouts.
 
 Every command goes to `tpm-rs` and to every C reference through
 `testing::tpm::Tpm`, which compares the responses round by round. A finding
@@ -130,7 +130,7 @@ cargo fuzz run --fuzz-dir testing/fuzz -O -s none --features inproc diff_convers
 
 3. **Turn it into a test**: `to_test` replays the input exactly like the
    target and prints an E2E test that sends the resolved command bytes with
-   `tpm.send_command(0, ...)` on a `Tpm` with the fixed seed, asserts the
+   `tpm.send_command(...)` on a `Tpm` with the fixed seed, asserts the
    response codes of the rounds before the finding, and marks the finding's
    round with the references' response codes and a `TODO(triage)`:
 
@@ -174,7 +174,7 @@ recorded conversations depend on (literal HMACs and nonces only replay while
 the responses stay the same):
 
 ```sh
-# 1. Record a trace of every Tpm of both suites (`testing::tpm::trace`, format v1),
+# 1. Record a trace of every Tpm of both suites (`testing::tpm::trace`, format v2),
 #    with the fuzzer's fixed seed so literal values replay.
 rm -rf /tmp/traces && mkdir /tmp/traces
 TPM_FUZZ_RECORD_DIR=/tmp/traces TPM_REFERENCE_SEED=4242:1000000 \
@@ -217,8 +217,7 @@ A trace is split into conversations at the start and after every
 (a platform signal other than `PowerOff`, `PowerOn`, `NvOn`, `NvOff` and
 `Reset`; transport-level signals such as `KeyCacheOn` are skipped), and
 truncated to 32 rounds. Platform signals, `_TPM_Hash_*` indications and clock
-advances become event rounds, and a command at another locality than the
-previous one is preceded by a locality round. `trace2conv` turns every command handle that equals
+advances become event rounds. `trace2conv` turns every command handle that equals
 an earlier response handle or NV index into a `HandleOperand::Response`/`Nv`
 reference, every parameter byte range that equals an extracted response field
 into a `Segment::Value` reference, and password sessions into

@@ -31,7 +31,7 @@ fn create_primary(tpm: &mut Tpm, template: &[u8]) -> u32 {
     params.extend_from_slice(&tpm2b(template));
     params.extend_from_slice(&[0, 0]); // outsideInfo
     params.extend_from_slice(&[0, 0, 0, 0]); // creationPCR: empty
-    let rsp = tpm.send_command(0, &build_pw_cmd(CC_CREATE_PRIMARY, &[RH_OWNER], 1, &params));
+    let rsp = tpm.send_command(&build_pw_cmd(CC_CREATE_PRIMARY, &[RH_OWNER], 1, &params));
     assert_eq!(rc_of(&rsp), 0, "CreatePrimary: {rsp:02x?}");
     u32::from_be_bytes(rsp[10..14].try_into().unwrap())
 }
@@ -45,7 +45,7 @@ fn import(tpm: &mut Tpm, parent: u32, public: &[u8], duplicate: &[u8], seed: &[u
     params.extend_from_slice(&tpm2b(duplicate));
     params.extend_from_slice(&tpm2b(seed));
     params.extend_from_slice(&[0x00, 0x10]); // symmetricAlg: TPM_ALG_NULL
-    rc_of(&tpm.send_command(0, &build_pw_cmd(CC_IMPORT, &[parent], 1, &params)))
+    rc_of(&tpm.send_command(&build_pw_cmd(CC_IMPORT, &[parent], 1, &params)))
 }
 
 /// A restricted-decrypt AES-128-CFB `TPM_ALG_SYMCIPHER` storage key (SHA-256,

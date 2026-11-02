@@ -52,7 +52,7 @@ fn create_primary_checks_attributes_before_auth_size() {
     params.extend_from_slice(&tpm2b(&FIXED_TPM_WITHOUT_FIXED_PARENT));
     params.extend_from_slice(&tpm2b(&[])); // outsideInfo
     params.extend_from_slice(&[0, 0, 0, 0]); // creationPCR: empty
-    let rsp = tpm.send_command(0, &build_pw_cmd(CC_CREATE_PRIMARY, &[RH_OWNER], 1, &params));
+    let rsp = tpm.send_command(&build_pw_cmd(CC_CREATE_PRIMARY, &[RH_OWNER], 1, &params));
     assert_eq!(rc_of(&rsp), rc_p(TpmRc::ATTRIBUTES, 2));
 }
 
@@ -63,6 +63,6 @@ fn create_loaded_checks_auth_size_before_attributes() {
     let mut tpm = Tpm::new();
     let mut params = oversized_auth_sensitive();
     params.extend_from_slice(&tpm2b(&FIXED_TPM_WITHOUT_FIXED_PARENT));
-    let rsp = tpm.send_command(0, &build_pw_cmd(CC_CREATE_LOADED, &[RH_OWNER], 1, &params));
+    let rsp = tpm.send_command(&build_pw_cmd(CC_CREATE_LOADED, &[RH_OWNER], 1, &params));
     assert_eq!(rc_of(&rsp), rc_p(TpmRc::SIZE, 1));
 }

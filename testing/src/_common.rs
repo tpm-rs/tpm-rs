@@ -3551,7 +3551,7 @@ pub const TRANSIENT_FIRST: u32 = 0x8000_0000;
 // ===========================================================================
 // Raw command transport and response decoding
 //
-// Building raw command buffers, sending them to the simulator (optionally at a locality) and decoding response codes/headers.
+// Building raw command buffers, sending them to the simulator (at locality 0, or at another locality on a `Tpm::new_unmirrored`) and decoding response codes/headers.
 // ===========================================================================
 
 /// Response code with the same `get()` accessor as the simulator's execute errors.
@@ -4411,12 +4411,12 @@ pub fn raw(sim: &mut Tpm, cmd: &[u8]) -> Vec<u8> {
 /// Sends the raw command `cmd` at `locality` and
 /// returns the full response.
 pub fn raw_at(sim: &mut Tpm, locality: u8, cmd: &[u8]) -> Vec<u8> {
-    sim.send_command(locality, cmd)
+    sim.send_command_at_locality(locality, cmd)
 }
 
 /// Sends a raw command at `locality` and returns the full response.
 pub fn raw_at_checked(sim: &mut Tpm, locality: u8, cmd: &[u8]) -> Vec<u8> {
-    let rsp = sim.send_command(locality, cmd);
+    let rsp = sim.send_command_at_locality(locality, cmd);
     assert!(rsp.len() >= 10, "short response");
     rsp
 }

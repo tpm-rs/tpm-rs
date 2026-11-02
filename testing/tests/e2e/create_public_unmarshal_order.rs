@@ -34,7 +34,7 @@ fn reserved_attribute_bits_precede_scheme_errors() {
     params.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // creationPCR
     let cmd = build_pw_cmd(TPM_CC_CREATE, &[srk.0], 1, &params);
     assert_eq!(
-        rc_of(&tpm.send_command(0, &cmd)),
+        rc_of(&tpm.send_command(&cmd)),
         rc_p(TpmRc::RESERVED_BITS, 2)
     );
 }

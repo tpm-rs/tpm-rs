@@ -40,11 +40,11 @@ const CREATE_SHA384_STORAGE_CHILD: [u8; 67] = [
 #[test]
 fn null_hierarchy_parent_allows_fixed_tpm_children() {
     let mut tpm = Tpm::new();
-    let rsp = tpm.send_command(0, &CREATE_PRIMARY_NULL_STORAGE);
+    let rsp = tpm.send_command(&CREATE_PRIMARY_NULL_STORAGE);
     assert_eq!(rc_of(&rsp), 0, "CreatePrimary: {rsp:02x?}");
     assert_eq!(&rsp[10..14], &[0x80, 0, 0, 0]);
     assert_eq!(
-        rc_of(&tpm.send_command(0, &CREATE_SHA384_STORAGE_CHILD)),
+        rc_of(&tpm.send_command(&CREATE_SHA384_STORAGE_CHILD)),
         rc_p(TpmRc::HASH, 2)
     );
 }

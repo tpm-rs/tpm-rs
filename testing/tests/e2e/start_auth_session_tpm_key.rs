@@ -15,7 +15,7 @@ const HASH_SEQUENCE_START: [u8; 14] = [0x80, 0x01, 0, 0, 0, 14, 0, 0, 0x01, 0x86
 
 /// Starts a hash sequence and returns its (sequence object) handle.
 fn hash_sequence(tpm: &mut Tpm) -> u32 {
-    let rsp = tpm.send_command(0, &HASH_SEQUENCE_START);
+    let rsp = tpm.send_command(&HASH_SEQUENCE_START);
     assert_eq!(rc_of(&rsp), 0, "HashSequenceStart: {rsp:02x?}");
     u32::from_be_bytes(rsp[10..14].try_into().unwrap())
 }
@@ -38,7 +38,7 @@ fn start_auth_session_rc(tpm: &mut Tpm, tpm_key: u32, symmetric_alg: u16) -> u32
         None,
         &params,
     );
-    rc_of(&tpm.send_command(0, &cmd))
+    rc_of(&tpm.send_command(&cmd))
 }
 
 /// A sequence object is a loaded object but not an asymmetric key: as
@@ -97,7 +97,7 @@ fn sequence_object_bind_is_loaded() {
         None,
         &params,
     );
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 2));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_p(TpmRc::SIZE, 2));
 }
 
 /// A sequence object can be the `bind` entity of a session: it is a loaded
@@ -122,5 +122,5 @@ fn sequence_object_can_be_bind_entity() {
         None,
         &params,
     );
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), 0);
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), 0);
 }

@@ -450,13 +450,13 @@ impl References {
     }
 
     /// Executes `command` (which `tpm-rs` answered with `expected`) on every
-    /// reference at `locality`; each reference compares its response with
+    /// reference (at locality 0); each reference compares its response with
     /// `expected`.
     ///
     /// # Panics
     /// If a reference's response differs other than as documented.
-    pub fn exchange(&mut self, locality: u8, command: &[u8], expected: &[u8]) {
-        if let Err(divergences) = self.try_exchange(locality, command, expected) {
+    pub fn exchange(&mut self, command: &[u8], expected: &[u8]) {
+        if let Err(divergences) = self.try_exchange(command, expected) {
             panic!("{}", join_messages(&divergences));
         }
     }
@@ -465,14 +465,8 @@ impl References {
     /// differ (or that failed) instead of panicking. Every reference has
     /// executed the command either way, so the `References` stay usable
     /// (unless a process died).
-    pub fn try_exchange(
-        &mut self,
-        locality: u8,
-        command: &[u8],
-        expected: &[u8],
-    ) -> Result<(), Vec<Divergence>> {
+    pub fn try_exchange(&mut self, command: &[u8], expected: &[u8]) -> Result<(), Vec<Divergence>> {
         self.try_call(Request::Exchange {
-            locality,
             command: command.to_vec(),
             expected: expected.to_vec(),
         })

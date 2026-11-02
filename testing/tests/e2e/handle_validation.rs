@@ -331,7 +331,7 @@ fn external_and_permanent_nv_indexes_are_unmarshaled_but_not_implemented() {
         &[],
     );
     assert_eq!(
-        crate::_common::rc_of(&sim.send_command(0, &cmd)),
+        crate::_common::rc_of(&sim.send_command(&cmd)),
         rc_h(TpmRc::HANDLE, 1)
     );
     let cmd = crate::_common::build(
@@ -342,12 +342,12 @@ fn external_and_permanent_nv_indexes_are_unmarshaled_but_not_implemented() {
         &[],
     );
     assert_eq!(
-        crate::_common::rc_of(&sim.send_command(0, &cmd)),
+        crate::_common::rc_of(&sim.send_command(&cmd)),
         rc_h(TpmRc::VALUE, 2)
     );
     let cmd = crate::_common::build(0x8001, CC_NV_READ_PUBLIC, &[0x1200_0001], None, &[]);
     assert_eq!(
-        crate::_common::rc_of(&sim.send_command(0, &cmd)),
+        crate::_common::rc_of(&sim.send_command(&cmd)),
         rc_h(TpmRc::VALUE, 1)
     );
 }

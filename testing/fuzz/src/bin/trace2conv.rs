@@ -3,9 +3,9 @@
 //! target.
 //!
 //! Each trace is split into conversations (see `shared/trace.rs`), truncated
-//! to [`MAX_ROUNDS`]. Platform signals, `_TPM_Hash_*` indications, clock
-//! advances and locality changes become event steps ([`Step::Platform`],
-//! [`Step::Sleep`], [`Step::Locality`]). Every command becomes a structured
+//! to [`MAX_ROUNDS`]. Platform signals, `_TPM_Hash_*` indications and clock
+//! advances become event steps ([`Step::Platform`], [`Step::Sleep`]). Every
+//! command becomes a structured
 //! [`Step::Cmd`] whose
 //! operands refer to earlier responses wherever the recorded bytes equal what
 //! the driver's value pool holds at that round:
@@ -315,7 +315,7 @@ fn count_refs(conv: &Conversation) -> usize {
                     .count()
                     + segs(&c.params)
             }
-            Step::Raw(_) | Step::Platform(_) | Step::Sleep(_) | Step::Locality(_) => 0,
+            Step::Raw(_) | Step::Platform(_) | Step::Sleep(_) => 0,
         })
         .sum()
 }

@@ -140,7 +140,7 @@ fn oversized_private_under_xor_decrypt_session_is_a_parameter_size_error() {
     ));
     let n = cp.len() as u32;
     cp[2..6].copy_from_slice(&n.to_be_bytes());
-    let rsp = tpm.send_command(0, &cp);
+    let rsp = tpm.send_command(&cp);
     assert_eq!(&rsp[6..10], [0, 0, 0, 0], "CreatePrimary: {rsp:02x?}");
     let parent = rsp[10..14].to_vec();
     // Unbound, unsalted HMAC session with XOR/SHA-256 parameter obfuscation: its HMAC key is
@@ -149,7 +149,7 @@ fn oversized_private_under_xor_decrypt_session_is_a_parameter_size_error() {
         "80010000002d00000176400000074000000700105a5b58595e5f5c5d5253505156575455",
         "000000000a000b000b",
     ));
-    let rsp = tpm.send_command(0, &sas);
+    let rsp = tpm.send_command(&sas);
     assert_eq!(&rsp[6..10], [0, 0, 0, 0], "StartAuthSession: {rsp:02x?}");
     let session = rsp[10..14].to_vec();
     // Load(parent): password session for the parent, then the decrypt-only session.
@@ -167,6 +167,6 @@ fn oversized_private_under_xor_decrypt_session_is_a_parameter_size_error() {
     cmd.extend_from_slice(&[0, 0]); // inPublic
     let n = cmd.len() as u32;
     cmd[2..6].copy_from_slice(&n.to_be_bytes());
-    let rsp = tpm.send_command(0, &cmd);
+    let rsp = tpm.send_command(&cmd);
     assert_eq!(&rsp[6..10], 0x1D5u32.to_be_bytes(), "{rsp:02x?}");
 }

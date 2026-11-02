@@ -340,7 +340,7 @@ fn context_fields_fail_in_unmarshaling_order() {
         ),
     ];
     for (cmd, rc) in cases {
-        let rsp = tpm.send_command(0, &crate::_common::hex(cmd));
+        let rsp = tpm.send_command(&crate::_common::hex(cmd));
         assert_eq!(&rsp[6..10], rc.to_be_bytes(), "{cmd}: {rsp:02x?}");
     }
 }

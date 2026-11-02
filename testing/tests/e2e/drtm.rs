@@ -11,15 +11,29 @@ use tpm2::{TpmCc, TpmiAlgHash, TpmlDigestValues, TpmtHa};
 /// _TPM_Hash_Start/Data/End resets PCRs 17-22, bumps restartCount and extends PCR 17; a command aborts the sequence.
 ///
 /// A post-Startup DRTM sequence (`_TPM_Hash_Start/Data/End`) resets the
-/// dynamic PCRs 17..=22, increments `restartCount` and extends PCR 17 with the
-/// digest of the hashed data; any regular command aborts an in-flight
-/// sequence, so a later `_TPM_Hash_End` leaves PCR 17 unchanged.
+/// dynamic PCRs 17..=22 (which start as all ones), increments `restartCount`
+/// and extends PCR 17 with the digest of the hashed data; any regular command
+/// aborts an in-flight sequence, so a later `_TPM_Hash_End` leaves PCR 17
+/// unchanged.
 #[test]
 fn hash_sequence_resets_dynamic_pcrs() {
     let mut sim = Tpm::new();
+    assert_eq!(
+        read_pcr_value(&mut sim, TpmiAlgHash::Sha256, 18),
+        vec![0xFFu8; 32]
+    );
+    run_hash_sequence_and_check(&mut sim);
+}
 
-    // Pre-populate PCR 18 with non-zero data (extend at locality 3) to verify that
-    // PCRResetDynamics resets 17..=22.
+/// A DRTM sequence also resets a dynamic PCR extended at locality 3.
+///
+/// PCR 18 extended at locality 3 (its extend localities are 2-4) is reset to
+/// zero by `_TPM_Hash_Start/Data/End` (`PCRResetDynamics`). Runs on `tpm-rs`
+/// alone (`Tpm::new_unmirrored`): the differential tests send every command at
+/// locality 0.
+#[test]
+fn hash_sequence_resets_pcr_extended_at_locality_3() {
+    let mut sim = Tpm::new_unmirrored();
     let mut digests = TpmlDigestValues::default();
     digests.add(&TpmtHa::Sha256(&[0xAA; 32])).unwrap();
     let mut extend = Vec::new();
@@ -35,44 +49,40 @@ fn hash_sequence_resets_dynamic_pcrs() {
     let len = extend.len() as u32;
     extend[2..6].copy_from_slice(&len.to_be_bytes());
     assert_eq!(rc_of(&send_raw_at(&mut sim, 3, &extend)), 0);
-    assert_ne!(
-        read_pcr_value(&mut sim, TpmiAlgHash::Sha256, 18),
-        vec![0u8; 32]
-    );
-    let initial_restart_count = restart_count(&mut sim);
+    let extended = read_pcr_value(&mut sim, TpmiAlgHash::Sha256, 18);
+    assert_ne!(extended, vec![0u8; 32]);
+    assert_ne!(extended, vec![0xFFu8; 32]);
+    run_hash_sequence_and_check(&mut sim);
+}
+
+/// Runs a DRTM sequence on `sim` and checks its effects (see
+/// [`hash_sequence_resets_dynamic_pcrs`]).
+fn run_hash_sequence_and_check(sim: &mut Tpm) {
+    let initial_restart_count = restart_count(sim);
 
     // Run a DRTM sequence (_TPM_Hash_Start / _TPM_Hash_Data / _TPM_Hash_End)
     let payload = b"DRTM Measurement Payload";
-    hash_start(&mut sim);
-    hash_data(&mut sim, payload);
-    hash_end(&mut sim);
+    hash_start(sim);
+    hash_data(sim, payload);
+    hash_end(sim);
 
     // Dynamic PCRs 17..=22 were reset; PCR 18 must be 0x00
-    assert_eq!(
-        read_pcr_value(&mut sim, TpmiAlgHash::Sha256, 18),
-        vec![0u8; 32]
-    );
+    assert_eq!(read_pcr_value(sim, TpmiAlgHash::Sha256, 18), vec![0u8; 32]);
     // restart_count must have incremented
-    assert_eq!(restart_count(&mut sim), initial_restart_count + 1);
+    assert_eq!(restart_count(sim), initial_restart_count + 1);
 
     // Expected PCR 17 value: Hash(0x00..00 || Hash(payload))
     let expected_pcr17 = sha256(&[&[0u8; 32], &sha256(&[payload])]);
-    assert_eq!(
-        read_pcr_value(&mut sim, TpmiAlgHash::Sha256, 17),
-        expected_pcr17
-    );
+    assert_eq!(read_pcr_value(sim, TpmiAlgHash::Sha256, 17), expected_pcr17);
 
     // Executing any regular TPM command aborts an in-flight DRTM sequence
-    hash_start(&mut sim);
-    hash_data(&mut sim, b"interrupted");
+    hash_start(sim);
+    hash_data(sim, b"interrupted");
     let get_random_req = [
         0x80, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x01, 0x7b, 0x00, 0x08,
     ];
-    assert_eq!(rc_of(&send_raw_at(&mut sim, 0, &get_random_req)), 0);
+    assert_eq!(rc_of(&send_raw_at(sim, 0, &get_random_req)), 0);
     // A subsequent _TPM_Hash_End must not modify PCR 17
-    hash_end(&mut sim);
-    assert_eq!(
-        read_pcr_value(&mut sim, TpmiAlgHash::Sha256, 17),
-        expected_pcr17
-    );
+    hash_end(sim);
+    assert_eq!(read_pcr_value(sim, TpmiAlgHash::Sha256, 17), expected_pcr17);
 }

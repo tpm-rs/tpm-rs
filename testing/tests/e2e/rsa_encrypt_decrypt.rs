@@ -306,14 +306,14 @@ fn encrypt_uses_the_public_exponent() {
     ];
     let size = cmd.len() as u32;
     cmd[2..6].copy_from_slice(&size.to_be_bytes());
-    let rsp = tpm.send_command(0, &cmd);
+    let rsp = tpm.send_command(&cmd);
     assert_eq!(crate::_common::rc_of(&rsp), 0, "CreatePrimary: {rsp:02x?}");
     let key = u32::from_be_bytes(rsp[10..14].try_into().unwrap());
     // TPM2_RSA_Encrypt(key, message = [2], inScheme = TPM_ALG_NULL, label = empty).
     let mut cmd = vec![0x80, 0x01, 0x00, 0x00, 0x00, 0x15, 0x00, 0x00, 0x01, 0x74];
     cmd.extend_from_slice(&key.to_be_bytes());
     cmd.extend_from_slice(&[0x00, 0x01, 0x02, 0x00, 0x10, 0x00, 0x00]);
-    let rsp = tpm.send_command(0, &cmd);
+    let rsp = tpm.send_command(&cmd);
     assert_eq!(crate::_common::rc_of(&rsp), 0, "RSA_Encrypt: {rsp:02x?}");
     assert_eq!(rsp[10..12], [0x01, 0x00]);
     let ciphertext = rsp[12..12 + 256].to_vec();
@@ -326,7 +326,7 @@ fn encrypt_uses_the_public_exponent() {
     cmd.extend_from_slice(&[0x00, 0x10, 0x00, 0x00]);
     let size = cmd.len() as u32;
     cmd[2..6].copy_from_slice(&size.to_be_bytes());
-    let rsp = tpm.send_command(0, &cmd);
+    let rsp = tpm.send_command(&cmd);
     assert_eq!(crate::_common::rc_of(&rsp), 0, "RSA_Decrypt: {rsp:02x?}");
     // message: the plaintext value 2 (with leading zero octets).
     let len = usize::from(u16::from_be_bytes([rsp[14], rsp[15]]));

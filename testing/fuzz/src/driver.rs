@@ -4,8 +4,8 @@
 //! Per round the driver **resolves** the step against the value pool and the
 //! session table, **builds** the command bytes (with the authorization area
 //! from the [`SessionEngine`]), **sends** them through
-//! [`Tpm::try_exchange`] at the current locality (initially 0; which compares
-//! the responses of `tpm-rs` and the C references), **checks** that the
+//! [`Tpm::try_exchange`] (at locality 0, like every differential test; it
+//! compares the responses of `tpm-rs` and the C references), **checks** that the
 //! `tpm-rs` response is well formed, lets the session engine **update** its
 //! sessions, and **extracts** the response fields into the [`ValuePool`].
 //! Rounds the simulator rejects at the transport level, and commands sent
@@ -15,9 +15,8 @@
 //! ([`Tpm::signal_platform`]; a power or reset signal also ends every session
 //! the session engine tracks, because the TPM loses its loaded sessions) or a
 //! `_TPM_Hash_*` indication (skipped while the TPM is powered off; the data is
-//! cut at [`MAX_HASH_DATA`] bytes, the simulator's limit), [`Step::Sleep`]
-//! lets time pass ([`testing::tpm::sleep`]) and [`Step::Locality`] sets the
-//! locality of the following commands.
+//! cut at [`MAX_HASH_DATA`] bytes, the simulator's limit) and [`Step::Sleep`]
+//! lets time pass ([`testing::tpm::sleep`]).
 //!
 //! # Findings
 //!
@@ -199,8 +198,7 @@ pub enum RoundOutcome {
     /// The simulator rejected the command at the transport level (or the TPM
     /// is powered off), so it was neither executed nor mirrored.
     Skipped,
-    /// An event step ([`Step::Platform`], [`Step::Sleep`],
-    /// [`Step::Locality`]) was applied.
+    /// An event step ([`Step::Platform`], [`Step::Sleep`]) was applied.
     Event,
 }
 
@@ -242,8 +240,6 @@ pub struct Driver {
     last_command: Vec<u8>,
     /// The last `tpm-rs` response (empty if the round was skipped).
     last_response: Vec<u8>,
-    /// The locality commands are sent at ([`Step::Locality`]).
-    locality: u8,
     /// Whether the last power signal was `PowerOff`.
     powered_off: bool,
 }
@@ -275,18 +271,12 @@ impl Driver {
         &self.last_response
     }
 
-    /// The locality the next command is sent at.
-    pub fn locality(&self) -> u8 {
-        self.locality
-    }
-
     /// Applies the event step `step` (see the module docs); `None` if it is
     /// a command step.
     fn apply_event(&mut self, tpm: &mut Tpm, step: &Step) -> Option<RoundOutcome> {
         match step {
             Step::Raw(_) | Step::Cmd(_) => return None,
             Step::Sleep(ms) => testing::tpm::sleep(Duration::from_millis(u64::from(*ms))),
-            Step::Locality(locality) => self.locality = *locality,
             Step::Platform(op) => {
                 if let Some(signal) = op.platform_signal() {
                     if tpm.signal_platform(signal).is_err() {
@@ -433,7 +423,7 @@ impl Driver {
                     bytes: bytes.clone(),
                 }
             }
-            Step::Platform(_) | Step::Sleep(_) | Step::Locality(_) => Prepared {
+            Step::Platform(_) | Step::Sleep(_) => Prepared {
                 bytes: Vec::new(),
                 code: None,
                 handles: Vec::new(),
@@ -441,8 +431,7 @@ impl Driver {
         }
     }
 
-    /// Runs one round: builds `step`, sends it to `tpm` at the current
-    /// locality, checks the response and updates the session table and the
+    /// Runs one round: builds `step`, sends it to `tpm`, checks the response and updates the session table and the
     /// value pool, or applies an event step (see the module docs).
     ///
     /// # Errors
@@ -472,7 +461,7 @@ impl Driver {
         self.last_command.clone_from(&prepared.bytes);
         self.last_response.clear();
         let command = prepared.bytes;
-        let response = match tpm.try_exchange(self.locality, &command) {
+        let response = match tpm.try_exchange(&command) {
             // A powered-off TPM does not answer.
             Ok(response) if response.is_empty() && self.powered_off => {
                 self.sessions.abort_pending();
@@ -793,7 +782,7 @@ mod tests {
     }
 
     /// Event steps reach a power cycle with `TPM2_Shutdown(STATE)` and
-    /// `TPM2_Startup(STATE)`, D-RTM, time and locality: commands sent while the
+    /// `TPM2_Startup(STATE)`, D-RTM and time: commands sent while the
     /// TPM is off are skipped, and the TPM answers again after the startup.
     ///
     /// Needs the reference binaries (`REFERENCE_BIN`).
@@ -817,7 +806,6 @@ mod tests {
                 Step::Platform(PlatformOp::HashData(vec![0xAB; 5000])),
                 Step::Platform(PlatformOp::HashEnd),
                 Step::Sleep(1500),
-                Step::Locality(3),
                 // TPM2_ReadClock.
                 step(0x181, vec![], vec![], vec![]),
             ],
@@ -848,12 +836,10 @@ mod tests {
                 Event,
                 Event,
                 Event,
-                Event,
                 Executed(0),
             ]
         );
-        assert_eq!(driver.locality(), 3);
-        assert_eq!(driver.stats.events, 7);
+        assert_eq!(driver.stats.events, 6);
         assert_eq!(driver.stats.skipped, 1);
     }
 

@@ -685,22 +685,22 @@ fn null_name_alg_external_object_round_trips() {
         "00180023001000040040000000100018000b000300100000000040000007",
     ]
     .concat();
-    let rsp = tpm.send_command(0, &crate::_common::hex(&load));
+    let rsp = tpm.send_command(&crate::_common::hex(&load));
     assert_eq!(&rsp[6..10], [0, 0, 0, 0], "LoadExternal: {rsp:02x?}");
     let handle = rsp[10..14].to_vec();
     let mut save = vec![0x80, 0x01, 0, 0, 0, 0x0E, 0, 0, 0x01, 0x62];
     save.extend_from_slice(&handle);
-    let rsp = tpm.send_command(0, &save);
+    let rsp = tpm.send_command(&save);
     assert_eq!(&rsp[6..10], [0, 0, 0, 0], "ContextSave: {rsp:02x?}");
     // Flush the object, then load its context (the TPMS_CONTEXT response parameter).
     let mut flush = vec![0x80, 0x01, 0, 0, 0, 0x0E, 0, 0, 0x01, 0x65];
     flush.extend_from_slice(&handle);
-    assert_eq!(&tpm.send_command(0, &flush)[6..10], [0, 0, 0, 0]);
+    assert_eq!(&tpm.send_command(&flush)[6..10], [0, 0, 0, 0]);
     let context = &rsp[10..];
     let mut load_ctx = vec![0x80, 0x01, 0, 0, 0, 0, 0, 0, 0x01, 0x61];
     load_ctx.extend_from_slice(context);
     let size = load_ctx.len() as u32;
     load_ctx[2..6].copy_from_slice(&size.to_be_bytes());
-    let rsp = tpm.send_command(0, &load_ctx);
+    let rsp = tpm.send_command(&load_ctx);
     assert_eq!(&rsp[6..10], [0, 0, 0, 0], "ContextLoad: {rsp:02x?}");
 }

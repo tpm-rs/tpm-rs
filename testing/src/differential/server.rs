@@ -118,8 +118,8 @@ pub trait Backend {
     /// Installs a firmware image with another hash or SVN
     /// (`_plat__SetTpmFirmwareHash`/`_plat__SetTpmFirmwareSvn`).
     fn set_firmware(&mut self, setting: FirmwareSetting);
-    /// Executes `command` at `locality` and returns the response.
-    fn run_command(&mut self, locality: u8, command: &[u8]) -> Vec<u8>;
+    /// Executes `command` (at locality 0) and returns the response.
+    fn run_command(&mut self, command: &[u8]) -> Vec<u8>;
 }
 
 /// Runs a reference process: starts the virtual clock at `seed.realtime_ms`
@@ -372,7 +372,7 @@ impl<B: Backend> Server<B> {
         let startup_clear = [
             0x80, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x01, 0x44, 0x00, 0x00,
         ];
-        let startup_rsp = backend.run_command(0, &startup_clear);
+        let startup_rsp = backend.run_command(&startup_clear);
         if response_code(&startup_rsp) != Some(0) {
             return Err(format!(
                 "test `{test}`: initial {implementation} TPM2_Startup(CLEAR) failed: {}",
@@ -403,14 +403,10 @@ impl<B: Backend> Server<B> {
     /// Handles one protocol request.
     pub fn handle(&mut self, request: Request) -> Result<(), Failure> {
         match request {
-            Request::Exchange {
-                locality,
-                command,
-                expected,
-            } => {
+            Request::Exchange { command, expected } => {
                 let index = self.commands;
                 self.commands += 1;
-                self.exchange(index, locality, &command, &expected)
+                self.exchange(index, &command, &expected)
             }
             Request::AdvanceClock(ms) => {
                 VIRTUAL_MS.fetch_add(ms, Ordering::Relaxed);
@@ -478,19 +474,13 @@ impl<B: Backend> Server<B> {
     }
 
     /// Executes `command` (which `tpm-rs` answered with `expected`) on
-    /// the C reference at `locality` and compares the responses; a failure
-    /// carries the C reference's response.
-    fn exchange(
-        &mut self,
-        index: usize,
-        locality: u8,
-        command: &[u8],
-        expected: &[u8],
-    ) -> Result<(), Failure> {
+    /// the C reference and compares the responses; a failure carries the C
+    /// reference's response.
+    fn exchange(&mut self, index: usize, command: &[u8], expected: &[u8]) -> Result<(), Failure> {
         let test = self.test.as_str();
         let implementation = self.implementation;
         let ref_command = self.state.to_ref_command(command);
-        let mut actual = self.backend.run_command(locality, &ref_command);
+        let mut actual = self.backend.run_command(&ref_command);
         // TPM_RC_RETRY rule: the C reference (upstream `CheckLockedOut`)
         // answers the first DA-protected authorization after a boot with
         // the TPM_RC_RETRY warning while it records `daUsed` in NV;
@@ -508,7 +498,7 @@ impl<B: Backend> Server<B> {
                     self.retries
                 );
             }
-            actual = self.backend.run_command(locality, &ref_command);
+            actual = self.backend.run_command(&ref_command);
         }
         let st = &mut self.state;
         st.post_command(command, expected, &actual);
@@ -517,7 +507,6 @@ impl<B: Backend> Server<B> {
             implementation,
             test,
             index,
-            locality,
             command,
             expected,
             &actual,
@@ -979,13 +968,11 @@ fn log_exception(
 /// narrowly-scoped, documented divergences below (each also listed in
 /// `differential.md`). Every exception requires the same command code and
 /// checks every response field it does not explicitly exempt.
-#[allow(clippy::too_many_arguments)]
 fn compare_differential_response(
     st: &DiffState,
     implementation: Implementation,
     test: &str,
     index: usize,
-    locality: u8,
     command: &[u8],
     expected: &[u8],
     actual: &[u8],
@@ -1052,8 +1039,8 @@ fn compare_differential_response(
         }
         // 4. Retired: TPM2_IncrementalSelfTest's `toDoList` is compared exactly (tpm-rs and
         //    the references run the same algorithm self tests).
-        // 8. Retired: tpm-rs selects locality 0 for a reserved locality (5..=31)
-        //    like the C simulator's platform layer (`_plat__LocalitySet`).
+        // 8. Retired: every command runs at locality 0 in the differential
+        //    tests, so reserved localities (5..=31) are never compared.
         // 9. TPM2_ContextLoad of a `contextBlob` that is not byte-identical
         //    to one tpm-rs returned (truncated or modified by the test): the
         //    blob layout is implementation-defined, so both must reject it
@@ -1089,7 +1076,7 @@ fn compare_differential_response(
 
     Err(format!(
         "differential mismatch with {implementation} in test `{test}`, command {index} \
-         (cc={code:#010x}, locality {locality}):\n\
+         (cc={code:#010x}):\n\
          command:              {}\n\
          tpm-rs    (rc={exp_rc:#x?}): {}\n\
          {implementation:<9} (rc={act_rc:#x?}): {}",
@@ -1183,7 +1170,7 @@ mod tests {
         fn set_firmware(&mut self, setting: FirmwareSetting) {
             self.firmware.push(setting);
         }
-        fn run_command(&mut self, _locality: u8, command: &[u8]) -> Vec<u8> {
+        fn run_command(&mut self, command: &[u8]) -> Vec<u8> {
             self.commands.push(command.to_vec());
             if header(command).map(|(_, code)| code) == Some(cc::STARTUP) {
                 vec![0x80, 0x01, 0, 0, 0, 10, 0, 0, 0, 0]
@@ -1215,7 +1202,6 @@ mod tests {
         // A diverging command fails with the reference's response.
         let failure = server
             .handle(Request::Exchange {
-                locality: 0,
                 command: GET_RANDOM_8.to_vec(),
                 expected: vec![0x80, 0x01, 0, 0, 0, 10, 0, 0, 0x01, 0x01],
             })
@@ -1242,7 +1228,6 @@ mod tests {
         let expected = server.backend.response.clone();
         server
             .handle(Request::Exchange {
-                locality: 0,
                 command: GET_RANDOM_8.to_vec(),
                 expected,
             })
@@ -1280,7 +1265,7 @@ mod tests {
             fn hash_start(&mut self) {}
             fn hash_data(&mut self, _data: &[u8]) {}
             fn hash_end(&mut self) {}
-            fn run_command(&mut self, _locality: u8, _command: &[u8]) -> Vec<u8> {
+            fn run_command(&mut self, _command: &[u8]) -> Vec<u8> {
                 let rc = if self.0 { 0x100u32 } else { 0 };
                 let mut rsp = vec![0x80, 0x01, 0, 0, 0, 10];
                 rsp.extend_from_slice(&rc.to_be_bytes());

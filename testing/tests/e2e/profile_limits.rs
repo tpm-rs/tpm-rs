@@ -46,7 +46,7 @@ fn create_loaded_template_rc(tpm: &mut Tpm, len: u16) -> u32 {
         Some(&PW_SESSION),
         &params,
     );
-    rc_of(&tpm.send_command(0, &cmd))
+    rc_of(&tpm.send_command(&cmd))
 }
 
 /// `TPM2B_TEMPLATE` holds at most `sizeof(TPMT_PUBLIC)`, the unpadded size (350 bytes with RSA
@@ -87,7 +87,7 @@ fn ecc_parameter_larger_than_max_ecc_key_bytes_rejected() {
         params.extend_from_slice(&public);
         params.extend_from_slice(&Handle::RH_NULL.0.to_be_bytes());
         let cmd = build(0x8001, TPM_CC_LOAD_EXTERNAL, &[], None, &params);
-        let rc = rc_of(&tpm.send_command(0, &cmd));
+        let rc = rc_of(&tpm.send_command(&cmd));
         assert_eq!(
             rc == rc_p(TpmRc::SIZE, 2),
             rejected,
@@ -122,7 +122,7 @@ fn pcr_selection_with_more_banks_than_hash_algorithms_rejected() {
             &params,
         );
         assert_eq!(
-            rc_of(&tpm.send_command(0, &cmd)),
+            rc_of(&tpm.send_command(&cmd)),
             rc_p(TpmRc::SIZE, 4),
             "count {count}"
         );
@@ -157,7 +157,7 @@ fn digest_larger_than_largest_hash_rejected() {
     let mut params = sized(&too_long);
     params.extend_from_slice(&[0x00, 0x0B]);
     let cmd = build(0x8001, TPM_CC_HASH_SEQUENCE_START, &[], None, &params);
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 1));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_p(TpmRc::SIZE, 1));
 
     // TPM2_PolicyTemplate(policySession, templateHash).
     let session = crate::_common::start_session_of_type(&mut tpm, tpm2::TpmSe::Policy);
@@ -168,7 +168,7 @@ fn digest_larger_than_largest_hash_rejected() {
         None,
         &sized(&too_long),
     );
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 1));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_p(TpmRc::SIZE, 1));
 
     // TPM2_LoadExternal(inPrivate = {TPM_ALG_KEYEDHASH, authValue, seedValue, bits}, ...).
     let mut sensitive = vec![0x00, 0x08];
@@ -181,5 +181,5 @@ fn digest_larger_than_largest_hash_rejected() {
     ]));
     params.extend_from_slice(&Handle::RH_NULL.0.to_be_bytes());
     let cmd = build(0x8001, TPM_CC_LOAD_EXTERNAL, &[], None, &params);
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 1));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_p(TpmRc::SIZE, 1));
 }

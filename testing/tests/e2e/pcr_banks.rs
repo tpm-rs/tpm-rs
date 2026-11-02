@@ -46,17 +46,10 @@ fn read_order_unallocated_banks_and_reset_localities() {
     );
     assert_eq!(update_counter(&mut sim), before + 2);
 
-    // 4. PCR 20 can be reset from locality 2 (resetLocality 0x14) but not from locality 0.
+    // 4. PCR 20 cannot be reset from locality 0 (resetLocality 0x14; see
+    //    `pcr_resets_follow_reset_localities` for the other localities), nor PCR 17.
     assert_eq!(pcr_reset_at(&mut sim, 0, 20), TpmRc::LOCALITY.get());
-    let before = update_counter(&mut sim);
-    assert_eq!(pcr_reset_at(&mut sim, 2, 20), 0);
-    // ...and as a TCB PCR its reset does not bump the update counter.
-    assert_eq!(update_counter(&mut sim), before);
-    let rsp = pcr_read(&mut sim, &[(ALG_SHA256, bit(20))]);
-    assert_eq!(rsp.values[0], vec![0u8; 32]);
-    // PCR 17 is reset only by locality 4, which TPM2_PCR_Reset never accepts (DRTM).
-    assert_eq!(pcr_reset_at(&mut sim, 2, 17), TpmRc::LOCALITY.get());
-    assert_eq!(pcr_reset_at(&mut sim, 4, 17), TpmRc::LOCALITY.get());
+    assert_eq!(pcr_reset_at(&mut sim, 0, 17), TpmRc::LOCALITY.get());
 
     // 5. PCR_Event reports SHA-1, SHA-256, SHA-384 and SHA-512 digests.
     let (rc, resp) = pcr_event_at(&mut sim, 0, Handle::RH_NULL.0, b"event");
@@ -83,6 +76,24 @@ fn read_order_unallocated_banks_and_reset_localities() {
         .map(|&h| Alg::from(h).id())
         .collect();
     assert_eq!(algs, expected);
+}
+
+/// PCR resets follow the PC Client reset localities at localities 2 and 4.
+///
+/// PCR 20 can be reset from locality 2 (resetLocality 0x14), and as a TCB PCR its reset does not
+/// bump the update counter; PCR 17 is reset only by locality 4, which `TPM2_PCR_Reset` never
+/// accepts (DRTM). Runs on `tpm-rs` alone (`Tpm::new_unmirrored`): the differential tests send
+/// every command at locality 0.
+#[test]
+fn pcr_resets_follow_reset_localities() {
+    let mut sim = Tpm::new_unmirrored();
+    let before = update_counter(&mut sim);
+    assert_eq!(pcr_reset_at(&mut sim, 2, 20), 0);
+    assert_eq!(update_counter(&mut sim), before);
+    let rsp = pcr_read(&mut sim, &[(ALG_SHA256, bit(20))]);
+    assert_eq!(rsp.values[0], vec![0u8; 32]);
+    assert_eq!(pcr_reset_at(&mut sim, 2, 17), TpmRc::LOCALITY.get());
+    assert_eq!(pcr_reset_at(&mut sim, 4, 17), TpmRc::LOCALITY.get());
 }
 
 /// After allocating SHA-512 and resetting, its bank can be extended and read in the requested order.
@@ -124,15 +135,15 @@ fn sha512_bank_readable_after_allocation() {
     assert_eq!(rsp.values[0], client_hash(hash_alg, &data));
 }
 
-/// Extending/resetting TCB PCRs 20-22 does not bump the update counter; PCR_SetAuthPolicy needs NV.
+/// Extending/resetting TCB PCRs 20-22 does not bump the update counter.
 ///
 /// Extending, event-extending or resetting a TCB PCR (20-22) does not increment the PCR update
-/// counter; `TPM2_PCR_SetAuthPolicy` requires NV; the PCR properties match `PlatformPcr.c`.
+/// counter; a non-TCB PCR still does. PCRs 21 and 22 are extendable only from locality 2, so this
+/// runs on `tpm-rs` alone (`Tpm::new_unmirrored`): the differential tests send every command at
+/// locality 0.
 #[test]
 fn tcb_pcrs_do_not_bump_update_counter() {
-    let mut sim = Tpm::new();
-
-    // PCR 21/22 are extendable only from locality 2.
+    let mut sim = Tpm::new_unmirrored();
     let before = update_counter(&mut sim);
     assert_eq!(
         pcr_extend_at(&mut sim, 2, 21, &[(ALG_SHA256, vec![7; 32])]),
@@ -147,6 +158,15 @@ fn tcb_pcrs_do_not_bump_update_counter() {
         0
     );
     assert_eq!(update_counter(&mut sim), before + 1);
+}
+
+/// `TPM2_PCR_SetAuthPolicy` needs NV, and the PCR properties match `PlatformPcr.c`.
+///
+/// `TPM2_PCR_SetAuthPolicy` requires NV (`RETURN_IF_NV_IS_NOT_AVAILABLE`); the
+/// `TPM_CAP_PCR_PROPERTIES` of the whole range match `PlatformPcr.c`.
+#[test]
+fn set_auth_policy_needs_nv_and_pcr_properties() {
+    let mut sim = Tpm::new();
 
     // TPM2_PCR_SetAuthPolicy: RETURN_IF_NV_IS_NOT_AVAILABLE.
     let mut params = 0u16.to_be_bytes().to_vec(); // authPolicy (empty)

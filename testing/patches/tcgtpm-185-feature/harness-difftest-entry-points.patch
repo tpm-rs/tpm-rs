@@ -8,7 +8,7 @@ testing/src/bin/shared/ffi.rs calls: difftest_init() manufactures a fresh
 TPM in RAM and powers it on with NV available; the difftest_signal_*()
 functions forward the MSSIM platform signals and the _TPM_Hash_* indications
 to the simulator's _rpc__* layer; difftest_run_command() executes one
-command at a locality through _rpc__Send_Command(). difftest_advance_clock()
+command at locality 0 through _rpc__Send_Command(). difftest_advance_clock()
 delivers the once-per-second ACT ticks (_plat__ACT_Tick()) of the whole
 seconds of the virtual clock since the last power on that the advance
 crossed, as tpm-rs counts them (the TCP simulator's ACT timer thread is not
@@ -131,8 +131,7 @@ index c06f97cd..7e4c28be 100644
 +    _rpc__Signal_HashEnd();
 +}
 +
-+uint32_t difftest_run_command(uint8_t        locality,
-+                            const uint8_t* in_buf,
++uint32_t difftest_run_command(const uint8_t* in_buf,
 +                            uint32_t       in_size,
 +                            uint8_t*       out_buf,
 +                            uint32_t       out_cap)
@@ -143,7 +142,8 @@ index c06f97cd..7e4c28be 100644
 +    req.Buffer      = (uint8_t*)in_buf;
 +    resp.BufferSize = out_cap;
 +    resp.Buffer     = out_buf;
-+    _rpc__Send_Command(locality, req, &resp);
++    // The harness sends every command at locality 0.
++    _rpc__Send_Command(0, req, &resp);
 +    return resp.BufferSize;
 +}
 \ No newline at end of file

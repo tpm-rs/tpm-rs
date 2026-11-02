@@ -6,7 +6,7 @@
 //! corpus of the differential fuzzer (`testing/fuzz/`), whose converter reads
 //! them with [`parse`].
 //!
-//! # Format (`v1`)
+//! # Format (`v2`)
 //!
 //! One UTF-8 text file per `Tpm`, named
 //! `<test>-<pid>-<n>.trace`: `<test>` is the name of the thread that created
@@ -17,18 +17,18 @@
 //! an empty field, i.e. the line ends with the separating space).
 //!
 //! The first line is the header
-//! `# tpm-rs-trace v1 seed=<pid>:<realtime_ms> test=<thread name>` (the seed
+//! `# tpm-rs-trace v2 seed=<pid>:<realtime_ms> test=<thread name>` (the seed
 //! of the `Tpm`, see [`crate::seed`]; the test name extends to the end of the
 //! line). The `Tpm` starts powered on, with NV available and
 //! `TPM2_Startup(TPM_SU_CLEAR)` done. Every following line is one event, in
 //! order:
 //!
-//! * `C <locality> <command>` followed by the line `R <response>`: a command
-//!   (sent raw, typed or through `tpm2::Connection`) and the `tpm-rs`
+//! * `C <command>` followed by the line `R <response>`: a command (sent
+//!   raw, typed or through `tpm2::Connection`, always at locality 0) and the `tpm-rs`
 //!   response to it (empty while the TPM is powered off). The pair is
 //!   written before the command is mirrored to the references, so the trace
 //!   of a diverging test ends with the diverging command;
-//! * `X <locality> <command>`: a command the simulator rejected at the
+//! * `X <command>`: a command the simulator rejected at the
 //!   transport level (not executed, not mirrored);
 //! * `S <signal>`: a platform signal (the `SimulatorPlatformSignal` variant
 //!   name, e.g. `PowerOff`);
@@ -40,6 +40,10 @@
 //!
 //! Every event is written with one `write` call as it happens, so the trace
 //! of a test that panics is complete up to the panic.
+//!
+//! Version `v1` also carried the locality of every command (`C <locality>
+//! <command>`); only `Tpm`s mirrored to a C reference record traces, and they
+//! always send at locality 0.
 
 use std::fmt::Write as _;
 use std::fs::File;
@@ -54,15 +58,13 @@ use crate::seed::ReferenceSeed;
 pub const RECORD_DIR_ENV: &str = "TPM_FUZZ_RECORD_DIR";
 
 /// The first word after `#` in the header line, with the format version.
-const MAGIC: &str = "tpm-rs-trace v1";
+const MAGIC: &str = "tpm-rs-trace v2";
 
 /// One recorded event (see the module docs).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     /// A command and the `tpm-rs` response (`C` + `R` lines).
     Command {
-        /// The locality the command was sent at.
-        locality: u8,
         /// The command bytes.
         command: Vec<u8>,
         /// The `tpm-rs` response bytes.
@@ -70,8 +72,6 @@ pub enum Event {
     },
     /// A command rejected at the transport level (`X`).
     Rejected {
-        /// The locality the command was sent at.
-        locality: u8,
         /// The command bytes.
         command: Vec<u8>,
     },
@@ -127,12 +127,10 @@ fn unhex(s: &str) -> Result<Vec<u8>, String> {
 /// The text of `event` (one or two lines, each ending with `\n`).
 pub fn format_event(event: &Event) -> String {
     match event {
-        Event::Command {
-            locality,
-            command,
-            response,
-        } => format!("C {locality} {}\nR {}\n", hex(command), hex(response)),
-        Event::Rejected { locality, command } => format!("X {locality} {}\n", hex(command)),
+        Event::Command { command, response } => {
+            format!("C {}\nR {}\n", hex(command), hex(response))
+        }
+        Event::Rejected { command } => format!("X {}\n", hex(command)),
         Event::Signal(name) => format!("S {name}\n"),
         Event::HashStart => "H start\n".into(),
         Event::HashData(data) => format!("H data {}\n", hex(data)),
@@ -177,16 +175,9 @@ pub fn parse(text: &str) -> Result<Trace, String> {
     while let Some((n, line)) = lines.next() {
         let err = |e: String| format!("line {}: {e}: `{line}`", n + 1);
         let (kind, args) = line.split_once(' ').unwrap_or((line, ""));
-        let locality_and_command = || -> Result<(u8, Vec<u8>), String> {
-            let (locality, command) = args.split_once(' ').unwrap_or((args, ""));
-            let locality = locality
-                .parse()
-                .map_err(|_| format!("invalid locality `{locality}`"))?;
-            Ok((locality, unhex(command)?))
-        };
         let event = match kind {
             "C" => {
-                let (locality, command) = locality_and_command().map_err(err)?;
+                let command = unhex(args).map_err(err)?;
                 let (_, response_line) = lines
                     .next()
                     .ok_or_else(|| err("command without an `R` line".into()))?;
@@ -195,15 +186,13 @@ pub fn parse(text: &str) -> Result<Trace, String> {
                     .or_else(|| (response_line == "R").then_some(""))
                     .ok_or_else(|| err(format!("expected an `R` line, got `{response_line}`")))?;
                 Event::Command {
-                    locality,
                     command,
                     response: unhex(response).map_err(err)?,
                 }
             }
-            "X" => {
-                let (locality, command) = locality_and_command().map_err(err)?;
-                Event::Rejected { locality, command }
-            }
+            "X" => Event::Rejected {
+                command: unhex(args).map_err(err)?,
+            },
             "S" if !args.is_empty() => Event::Signal(args.to_owned()),
             "H" => match args.split_once(' ').unwrap_or((args, "")) {
                 ("start", "") => Event::HashStart,
@@ -303,23 +292,17 @@ mod tests {
     fn all_events() -> Vec<Event> {
         vec![
             Event::Command {
-                locality: 0,
                 command: vec![0x80, 0x01, 0, 0, 0, 12, 0, 0, 0x01, 0x7B, 0, 16],
                 response: vec![0x80, 0x01, 0, 0, 0, 10, 0, 0, 0, 0],
             },
             Event::Command {
-                locality: 3,
                 command: vec![0xAB],
                 response: vec![],
             },
             Event::Rejected {
-                locality: 4,
                 command: vec![1, 2, 3],
             },
-            Event::Rejected {
-                locality: 0,
-                command: vec![],
-            },
+            Event::Rejected { command: vec![] },
             Event::Signal("PowerOff".into()),
             Event::HashStart,
             Event::HashData(vec![0xde, 0xad]),
@@ -351,7 +334,7 @@ mod tests {
         let text: String = all_events()[..3].iter().map(format_event).collect();
         assert_eq!(
             text,
-            "C 0 80010000000c0000017b0010\nR 80010000000a00000000\nC 3 ab\nR \nX 4 010203\n"
+            "C 80010000000c0000017b0010\nR 80010000000a00000000\nC ab\nR \nX 010203\n"
         );
         assert_eq!(
             format_header(
@@ -361,21 +344,22 @@ mod tests {
                 },
                 "t"
             ),
-            "# tpm-rs-trace v1 seed=1:2 test=t\n"
+            "# tpm-rs-trace v2 seed=1:2 test=t\n"
         );
     }
 
     #[test]
     fn malformed_traces_are_rejected() {
-        let header = "# tpm-rs-trace v1 seed=1:2 test=t\n";
+        let header = "# tpm-rs-trace v2 seed=1:2 test=t\n";
         assert!(parse("").is_err());
-        assert!(parse("# tpm-rs-trace v2 seed=1:2 test=t\n").is_err());
-        assert!(parse("# tpm-rs-trace v1 seed=1:2\n").is_err());
+        assert!(parse("# tpm-rs-trace v1 seed=1:2 test=t\n").is_err());
+        assert!(parse("# tpm-rs-trace v2 seed=1:2\n").is_err());
         for body in [
-            "C 0 0102\n",
-            "C 0 0102\nX 0 01\n",
-            "C 0 012\nR \n",
-            "C x 01\nR \n",
+            "C 0102\n",
+            "C 0102\nX 01\n",
+            "C 012\nR \n",
+            "C 0 01\nR \n",
+            "X 0 01\n",
             "H middle\n",
             "T -1\n",
             "Q\n",

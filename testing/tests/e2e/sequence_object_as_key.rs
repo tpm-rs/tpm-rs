@@ -14,7 +14,7 @@ const HASH_SEQUENCE_START: [u8; 14] = [0x80, 0x01, 0, 0, 0, 14, 0, 0, 0x01, 0x86
 
 /// Starts a hash sequence and returns its handle.
 fn hash_sequence(tpm: &mut Tpm) -> u32 {
-    let rsp = tpm.send_command(0, &HASH_SEQUENCE_START);
+    let rsp = tpm.send_command(&HASH_SEQUENCE_START);
     assert_eq!(rc_of(&rsp), 0, "HashSequenceStart: {rsp:02x?}");
     u32::from_be_bytes(rsp[10..14].try_into().unwrap())
 }
@@ -44,7 +44,7 @@ fn mac_start_with_sequence_object_is_type_error() {
     let mut params = tpm2b(&[]);
     params.extend_from_slice(&[0x00, 0x0b]);
     let cmd = build_pw_cmd(0x0000_015B, &[sequence], 1, &params);
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_h(TpmRc::TYPE, 1));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_h(TpmRc::TYPE, 1));
 }
 
 /// TPM2_MAC with a sequence object is `TPM_RC_TYPE` on `handle` (TPM 2.0 Part
@@ -57,7 +57,7 @@ fn mac_with_sequence_object_is_type_error() {
     let mut params = tpm2b(&[0x61]);
     params.extend_from_slice(&[0x00, 0x0b]);
     let cmd = build_pw_cmd(0x0000_0155, &[sequence], 1, &params);
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_h(TpmRc::TYPE, 1));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_h(TpmRc::TYPE, 1));
 }
 
 /// TPM2_VerifySignature with a sequence object is `TPM_RC_ATTRIBUTES` on
@@ -69,10 +69,7 @@ fn verify_signature_with_sequence_object_is_attributes_error() {
     let mut params = tpm2b(&[0x5a; 32]);
     params.extend_from_slice(&ecdsa_signature());
     let cmd = build(0x8001, 0x0000_0177, &[sequence], None, &params);
-    assert_eq!(
-        rc_of(&tpm.send_command(0, &cmd)),
-        rc_h(TpmRc::ATTRIBUTES, 1)
-    );
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_h(TpmRc::ATTRIBUTES, 1));
 }
 
 /// TPM2_Certify checks `signHandle` before it uses the certified object: a
@@ -85,7 +82,7 @@ fn certify_checks_sign_handle_first() {
     let mut params = tpm2b(&[]); // qualifyingData
     params.extend_from_slice(&[0x00, 0x10]); // inScheme: TPM_ALG_NULL
     let cmd = build_pw_cmd(0x0000_0148, &[sequence, sequence], 2, &params);
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_h(TpmRc::KEY, 2));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_h(TpmRc::KEY, 2));
 }
 
 /// The parameters of TPM2_CertifyCreation after the handles: `qualifyingData`
@@ -119,7 +116,7 @@ fn certify_creation_checks_sequence_object_before_sign_handle() {
         1,
         &certify_creation_params(),
     );
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_h(TpmRc::TYPE, 2));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_h(TpmRc::TYPE, 2));
 }
 
 /// TPM2_CertifyCreation checks `signHandle` before it uses a certified object
@@ -141,7 +138,7 @@ fn certify_creation_checks_sign_handle_first() {
         1,
         &certify_creation_params(),
     );
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_h(TpmRc::KEY, 1));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_h(TpmRc::KEY, 1));
 }
 
 /// TPM2_CertifyCreation of a sequence object (unsigned) is `TPM_RC_TYPE` on
@@ -159,7 +156,7 @@ fn certify_creation_of_sequence_object_is_type_error() {
         1,
         &certify_creation_params(),
     );
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_h(TpmRc::TYPE, 2));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_h(TpmRc::TYPE, 2));
 }
 
 /// TPM2_PolicySigned with a sequence object as `authObject` checks the policy
@@ -180,7 +177,7 @@ fn policy_signed_with_sequence_object_is_scheme_error() {
         None,
         &start,
     );
-    let rsp = tpm.send_command(0, &start);
+    let rsp = tpm.send_command(&start);
     assert_eq!(rc_of(&rsp), 0, "StartAuthSession: {rsp:02x?}");
     let session = u32::from_be_bytes(rsp[10..14].try_into().unwrap());
     let mut params = tpm2b(&[]); // nonceTPM
@@ -189,7 +186,7 @@ fn policy_signed_with_sequence_object_is_scheme_error() {
     params.extend_from_slice(&0i32.to_be_bytes()); // expiration
     params.extend_from_slice(&ecdsa_signature());
     let cmd = build(0x8001, 0x0000_0160, &[sequence, session], None, &params);
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_p(TpmRc::SCHEME, 5));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_p(TpmRc::SCHEME, 5));
 }
 
 /// TPM2_Certify of a sequence object (with a valid signer key) fails with
@@ -212,7 +209,7 @@ fn certify_of_sequence_object_is_type_error() {
     // inScheme: TPM_ALG_ECDSA with SHA-256 (the signer's own scheme is NULL).
     params.extend_from_slice(&[0x00, 0x18, 0x00, 0x0B]);
     let cmd = build_pw_cmd(0x0000_0148, &[sequence, signer.0], 2, &params);
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), rc_h(TpmRc::TYPE, 1));
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), rc_h(TpmRc::TYPE, 1));
 }
 
 /// TPM2_PolicySecret authorized with a hash sequence object's authValue succeeds: a sequence
@@ -229,46 +226,32 @@ fn policy_secret_with_sequence_object_is_in_null_hierarchy() {
     });
 
     // Round 0: TPM2_HashSequenceStart.
-    let rsp = tpm.send_command(
-        0,
-        &[
-            0x80, 0x01, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x01, 0x86, 0x00, 0x00, 0x00, 0x0b,
-        ],
-    );
+    let rsp = tpm.send_command(&[
+        0x80, 0x01, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x01, 0x86, 0x00, 0x00, 0x00, 0x0b,
+    ]);
     assert_eq!(response_code(&rsp), 0x0);
 
     // Round 1: TPM2_NV_UndefineSpaceSpecial.
-    let rsp = tpm.send_command(
-        0,
-        &[
-            0x80, 0x02, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x01, 0x1f, 0x40, 0x00, 0x01, 0x10,
-            0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00,
-            0x01, 0x00, 0x00, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00, 0x80, 0x00,
-            0x00, 0x00,
-        ],
-    );
+    let rsp = tpm.send_command(&[
+        0x80, 0x02, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x01, 0x1f, 0x40, 0x00, 0x01, 0x10, 0x80,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x01, 0x00,
+        0x00, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00,
+    ]);
     assert_eq!(response_code(&rsp), 0x184);
 
     // Round 2: TPM2_StartAuthSession.
-    let rsp = tpm.send_command(
-        0,
-        &[
-            0x80, 0x01, 0x00, 0x00, 0x00, 0x2b, 0x00, 0x00, 0x01, 0x76, 0x40, 0x00, 0x00, 0x07,
-            0x40, 0x00, 0x00, 0x07, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x10, 0x00,
-            0x0b,
-        ],
-    );
+    let rsp = tpm.send_command(&[
+        0x80, 0x01, 0x00, 0x00, 0x00, 0x2b, 0x00, 0x00, 0x01, 0x76, 0x40, 0x00, 0x00, 0x07, 0x40,
+        0x00, 0x00, 0x07, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x10, 0x00, 0x0b,
+    ]);
     assert_eq!(response_code(&rsp), 0x0);
 
     // Round 3: TPM2_PolicySecret.
-    let rsp = tpm.send_command(
-        0,
-        &[
-            0x80, 0x02, 0x00, 0x00, 0x00, 0x29, 0x00, 0x00, 0x01, 0x51, 0x80, 0x00, 0x00, 0x00,
-            0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00,
-            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x74,
-        ],
-    );
+    let rsp = tpm.send_command(&[
+        0x80, 0x02, 0x00, 0x00, 0x00, 0x29, 0x00, 0x00, 0x01, 0x51, 0x80, 0x00, 0x00, 0x00, 0x03,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x74,
+    ]);
     assert_eq!(response_code(&rsp), 0x0);
 }

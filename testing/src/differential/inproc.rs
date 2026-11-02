@@ -78,10 +78,9 @@ struct EntryPoints {
     set_firmware_hash: unsafe extern "C" fn(hash: u32),
     /// Installs a firmware image with another SVN (`_plat__SetTpmFirmwareSvn`).
     set_firmware_svn: unsafe extern "C" fn(svn: u16),
-    /// Executes `in_buf[..in_size]` at `locality`, writes the response to
+    /// Executes `in_buf[..in_size]` at locality 0, writes the response to
     /// `out_buf[..out_cap]` and returns its length.
     run_command: unsafe extern "C" fn(
-        locality: u8,
         in_buf: *const u8,
         in_size: u32,
         out_buf: *mut u8,
@@ -130,7 +129,6 @@ macro_rules! entry_points {
                 fn set_firmware_svn(svn: u16);
                 #[link_name = concat!($prefix, "run_command")]
                 fn run_command(
-                    locality: u8,
                     in_buf: *const u8,
                     in_size: u32,
                     out_buf: *mut u8,
@@ -376,14 +374,13 @@ impl Backend for CReference {
         unsafe { (self.entry_points.signal_hash_end)() };
     }
 
-    fn run_command(&mut self, locality: u8, command: &[u8]) -> Vec<u8> {
+    fn run_command(&mut self, command: &[u8]) -> Vec<u8> {
         let size = u32::try_from(command.len()).expect("command larger than 4 GiB");
         let mut out = vec![0u8; RESPONSE_CAPACITY];
         // SAFETY: `command` is valid for `size` bytes and `out` is writable
         // for its length; see also `init`.
         let len = unsafe {
             (self.entry_points.run_command)(
-                locality,
                 command.as_ptr(),
                 size,
                 out.as_mut_ptr(),
@@ -776,13 +773,13 @@ mod references {
         }
 
         /// Executes `command` (which `tpm-rs` answered with `expected`) on
-        /// every reference at `locality`; each reference compares its
+        /// every reference (at locality 0); each reference compares its
         /// response with `expected`.
         ///
         /// # Panics
         /// If a reference's response differs other than as documented.
-        pub fn exchange(&mut self, locality: u8, command: &[u8], expected: &[u8]) {
-            if let Err(divergences) = self.try_exchange(locality, command, expected) {
+        pub fn exchange(&mut self, command: &[u8], expected: &[u8]) {
+            if let Err(divergences) = self.try_exchange(command, expected) {
                 panic!("{}", join_messages(&divergences));
             }
         }
@@ -793,12 +790,10 @@ mod references {
         /// `InProcReferences` stay usable.
         pub fn try_exchange(
             &mut self,
-            locality: u8,
             command: &[u8],
             expected: &[u8],
         ) -> Result<(), Vec<Divergence>> {
             self.try_call(Request::Exchange {
-                locality,
                 command: command.to_vec(),
                 expected: expected.to_vec(),
             })
@@ -847,7 +842,7 @@ mod references {
             command: &[u8],
         ) -> Vec<u8> {
             let rsp = tpm_rs(sim, command);
-            references.exchange(0, command, &rsp);
+            references.exchange(command, &rsp);
             rsp
         }
 
@@ -908,9 +903,7 @@ mod references {
             let mut wrong = tpm_rs(&mut sim, &GET_RANDOM_32);
             let last = wrong.len() - 1;
             wrong[last] ^= 1;
-            let divergences = references
-                .try_exchange(0, &GET_RANDOM_32, &wrong)
-                .unwrap_err();
+            let divergences = references.try_exchange(&GET_RANDOM_32, &wrong).unwrap_err();
             assert_eq!(divergences.len(), 1);
             assert_eq!(divergences[0].implementation, Implementation::TARGET);
             let reference = divergences[0]

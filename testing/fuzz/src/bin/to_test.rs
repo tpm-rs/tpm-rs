@@ -4,7 +4,7 @@
 //! The input is decoded as a [`Conversation`] and replayed through the fuzz
 //! driver on `Tpm::with_seed(FIXED_SEED)`, exactly as the fuzz target runs
 //! it. Every round's resolved command bytes are then printed as a
-//! `tpm.send_command(0, &[...])` call on a `Tpm` with the same fixed seed, so
+//! `tpm.send_command(&[...])` call on a `Tpm` with the same fixed seed, so
 //! the test sends the same bytes and gets the same responses (all random
 //! values are deterministic under the seed). The rounds before the finding
 //! assert the `tpm-rs` response code; the finding's round is annotated with
@@ -130,8 +130,7 @@ fn finding_summary(outcome: &Outcome) -> Option<String> {
 }
 
 /// The lines that apply the event step of `r` (a platform signal, a
-/// `_TPM_Hash_*` indication or a sleep; a locality change is only a comment,
-/// since every command line passes its locality).
+/// `_TPM_Hash_*` indication or a sleep).
 fn event_lines(i: usize, r: &Replayed) -> String {
     let mut out = String::new();
     match &r.step {
@@ -164,12 +163,6 @@ fn event_lines(i: usize, r: &Replayed) -> String {
             let _ = writeln!(
                 out,
                 "    testing::tpm::sleep(std::time::Duration::from_millis({ms}));"
-            );
-        }
-        Step::Locality(locality) => {
-            let _ = writeln!(
-                out,
-                "    // Round {i}: the following commands are sent at locality {locality}."
             );
         }
         Step::Raw(_) | Step::Cmd(_) => {}
@@ -261,7 +254,6 @@ fn render_test(name: &str, source: &str, rounds: &[Replayed]) -> String {
     for (i, r) in rounds.iter().enumerate() {
         let label = command_label(&r.command);
         let _ = writeln!(out);
-        let locality = r.locality;
         match &r.outcome {
             Outcome::Event => {
                 let _ = write!(out, "{}", event_lines(i, r));
@@ -278,31 +270,22 @@ fn render_test(name: &str, source: &str, rounds: &[Replayed]) -> String {
                     "    // Round {i}: {label}, rejected at the transport level or not answered\n    \
                      // (the TPM is powered off)."
                 );
-                let _ = write!(
-                    out,
-                    "    let _ = tpm.try_send_command(\n        {locality},\n        &[\n"
-                );
-                let _ = write!(out, "{}", byte_lines(&r.command, 12));
-                let _ = writeln!(out, "        ],\n    );");
+                let _ = writeln!(out, "    let _ = tpm.try_send_command(&[");
+                let _ = write!(out, "{}", byte_lines(&r.command, 8));
+                let _ = writeln!(out, "    ]);");
             }
             Outcome::Executed(rc) => {
                 let _ = writeln!(out, "    // Round {i}: {label}.");
-                let _ = write!(
-                    out,
-                    "    let rsp = tpm.send_command(\n        {locality},\n        &[\n"
-                );
-                let _ = write!(out, "{}", byte_lines(&r.command, 12));
-                let _ = writeln!(out, "        ],\n    );");
+                let _ = writeln!(out, "    let rsp = tpm.send_command(&[");
+                let _ = write!(out, "{}", byte_lines(&r.command, 8));
+                let _ = writeln!(out, "    ]);");
                 let _ = writeln!(out, "    assert_eq!(response_code(&rsp), {rc:#x});");
             }
             Outcome::Finding(_) | Outcome::Panic(_) => {
                 let _ = writeln!(out, "    // Round {i}: {label}: the finding.");
-                let _ = write!(
-                    out,
-                    "    let rsp = tpm.send_command(\n        {locality},\n        &[\n"
-                );
-                let _ = write!(out, "{}", byte_lines(&r.command, 12));
-                let _ = writeln!(out, "        ],\n    );");
+                let _ = writeln!(out, "    let rsp = tpm.send_command(&[");
+                let _ = write!(out, "{}", byte_lines(&r.command, 8));
+                let _ = writeln!(out, "    ]);");
                 let _ = write!(out, "{}", finding_lines(r));
             }
         }
@@ -451,7 +434,7 @@ mod tests {
         // fresh TPM with the same seed reproduces the responses.
         let mut fresh = Tpm::with_seed(FIXED_SEED);
         for r in &rounds {
-            assert_eq!(fresh.send_command(0, &r.command), r.response);
+            assert_eq!(fresh.send_command(&r.command), r.response);
         }
     }
 }

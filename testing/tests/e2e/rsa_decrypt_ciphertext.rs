@@ -25,7 +25,7 @@ const CREATE_PRIMARY_RSA_DECRYPT: [u8; 65] = [
 #[test]
 fn ciphertext_not_below_modulus_is_size_error() {
     let mut tpm = Tpm::new();
-    let rsp = tpm.send_command(0, &CREATE_PRIMARY_RSA_DECRYPT);
+    let rsp = tpm.send_command(&CREATE_PRIMARY_RSA_DECRYPT);
     assert_eq!(rc_of(&rsp), 0, "CreatePrimary: {rsp:02x?}");
     let key = u32::from_be_bytes(rsp[10..14].try_into().unwrap());
     let mut params = vec![0x01, 0x00];
@@ -33,5 +33,5 @@ fn ciphertext_not_below_modulus_is_size_error() {
     params.extend_from_slice(&[0x00, 0x10]); // inScheme: TPM_ALG_NULL
     params.extend_from_slice(&[0x00, 0x00]); // label
     let cmd = build_pw_cmd(0x0000_0159, &[key], 1, &params);
-    assert_eq!(rc_of(&tpm.send_command(0, &cmd)), TPM_RC_SIZE);
+    assert_eq!(rc_of(&tpm.send_command(&cmd)), TPM_RC_SIZE);
 }

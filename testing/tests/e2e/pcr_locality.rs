@@ -1,4 +1,8 @@
 //! Locality restrictions of PCR extend and reset.
+//!
+//! The differential tests send every command at locality 0, so only
+//! [`locality_0_restrictions`] is compared with the C reference; the tests of
+//! other localities run on `tpm-rs` alone (`Tpm::new_unmirrored`).
 
 use crate::_common::{
     ALG_SHA256, execute_at, pcr_event_at_digests as pcr_event_at,
@@ -9,10 +13,30 @@ use tpm2::commands::*;
 use tpm2::errors::TpmRc;
 use tpm2::*;
 
+/// At locality 0, PCRs 17 and 21 cannot be extended (or event-extended), and PCR 16 can be reset.
+#[test]
+fn locality_0_restrictions() {
+    let mut sim = Tpm::new();
+    let digests = [(ALG_SHA256, vec![0x22u8; 32])];
+    for pcr in [17, 21] {
+        assert_eq!(
+            pcr_extend_at(&mut sim, 0, pcr, &digests),
+            TpmRc::LOCALITY.get(),
+            "PCR {pcr}"
+        );
+        assert_eq!(
+            pcr_event_at(&mut sim, 0, pcr, b"event").0,
+            TpmRc::LOCALITY.get(),
+            "PCR {pcr}"
+        );
+    }
+    assert_eq!(pcr_reset_at(&mut sim, 0, 16), 0);
+}
+
 /// PCR 17 extend only at localities 2-4; PCR 16 reset fails at locality 4 and works at 0.
 #[test]
 fn drtm_extend_and_resettable_reset_localities() {
-    let mut sim = Tpm::new();
+    let mut sim = Tpm::new_unmirrored();
 
     // 1. Extend PCR 17 at locality 0 (should fail, 17 expects 2, 3, 4)
     let mut digests = TpmlDigestValues::default();
@@ -44,7 +68,7 @@ fn drtm_extend_and_resettable_reset_localities() {
 /// PCR 21 extend/event only at locality 2 and reset locality checks.
 #[test]
 fn extend_event_reset_locality_masks() {
-    let mut sim = Tpm::new();
+    let mut sim = Tpm::new_unmirrored();
 
     // Test 1: PCRExtend on PCR 21 (extend locality is 2 only)
     let digests = [(ALG_SHA256, vec![0x22u8; 32])];
@@ -82,7 +106,7 @@ fn extend_event_reset_locality_masks() {
 /// extended.
 #[test]
 fn reset_and_extend_from_unauthorized_locality() {
-    let mut sim = Tpm::new();
+    let mut sim = Tpm::new_unmirrored();
 
     // PCR 16 Reset: reset mask allows 0..3; locality 5 selects locality 0.
     assert_eq!(pcr_reset_at(&mut sim, 5, 16), 0);

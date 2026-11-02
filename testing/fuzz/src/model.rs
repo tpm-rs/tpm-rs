@@ -6,10 +6,10 @@
 //! values that earlier rounds returned (see [`crate::pool`]): response
 //! handles, names, blobs, nonces, context blobs and so on, or an out-of-band
 //! event: a platform signal or `_TPM_Hash_*` indication ([`Step::Platform`]),
-//! a virtual clock advance ([`Step::Sleep`]) or a change of the locality of
-//! the following commands ([`Step::Locality`]). References index by kind and
-//! recency, modulo what is available, so almost every byte string decodes to
-//! a meaningful conversation.
+//! or a virtual clock advance ([`Step::Sleep`]). Every command is sent at
+//! locality 0 (the differential tests compare only locality 0). References
+//! index by kind and recency, modulo what is available, so almost every byte
+//! string decodes to a meaningful conversation.
 //!
 //! # Byte encoding
 //!
@@ -34,7 +34,7 @@
 //! | length | one byte `< 0xFF`, or `0xFF` followed by a `u16` |
 //! | byte string | length, then that many bytes (truncated at the end of the input) |
 //! | [`Conversation`] | steps until the input ends (at most [`MAX_ROUNDS`]) |
-//! | [`Step`] | selector byte: `< 0xF0`: [`Step::Cmd`]; `0xFC`: [`Step::Platform`]; `0xFD`: [`Step::Sleep`] + `u32` ms; `0xFE`: [`Step::Locality`] + `u8`; else [`Step::Raw`] + byte string |
+//! | [`Step`] | selector byte: `< 0xF0`: [`Step::Cmd`]; `0xFC`: [`Step::Platform`]; `0xFD`: [`Step::Sleep`] + `u32` ms; else [`Step::Raw`] + byte string |
 //! | [`PlatformOp`] | `b % 8`: `0..=4`: [`PlatformOp::Signal`] of [`PLATFORM_SIGNALS`]`[b % 8]`; 5: `HashStart`; 6: `HashData` + byte string; 7: `HashEnd` |
 //! | [`Cmd`] | tag, code, handle list, session list, segment list, fix-ups |
 //! | [`TagSel`] | `< 0xF0`: `Auto`; else `(b - 0xF0) % 4`: `NoSessions`, `Sessions`, `Raw(u16)` (2 and 3) |
@@ -213,8 +213,6 @@ pub enum Step {
     /// Lets this many milliseconds pass on the TPMs' virtual clocks
     /// (timeouts, clock and timer values, dictionary-attack recovery).
     Sleep(u32),
-    /// Sends the following commands at this locality (initially 0).
-    Locality(u8),
 }
 
 /// The platform signals a [`PlatformOp::Signal`] can deliver: the signals
@@ -602,8 +600,6 @@ impl<'a> Arbitrary<'a> for Conversation {
 const STEP_PLATFORM: u8 = 0xFC;
 /// The [`Step`] selector of [`Step::Sleep`].
 const STEP_SLEEP: u8 = 0xFD;
-/// The [`Step`] selector of [`Step::Locality`].
-const STEP_LOCALITY: u8 = 0xFE;
 
 impl Step {
     fn decode(d: &mut Decoder<'_>) -> Self {
@@ -611,7 +607,6 @@ impl Step {
             0..0xF0 => Step::Cmd(Cmd::decode(d)),
             STEP_PLATFORM => Step::Platform(PlatformOp::decode(d)),
             STEP_SLEEP => Step::Sleep(d.u32()),
-            STEP_LOCALITY => Step::Locality(d.u8()),
             _ => Step::Raw(d.bytes()),
         }
     }
@@ -633,10 +628,6 @@ impl Step {
             Step::Sleep(ms) => {
                 e.u8(STEP_SLEEP);
                 e.u32(*ms);
-            }
-            Step::Locality(locality) => {
-                e.u8(STEP_LOCALITY);
-                e.u8(*locality);
             }
         }
     }
@@ -1107,7 +1098,6 @@ mod tests {
                 Step::Platform(PlatformOp::HashData(vec![1, 2, 3])),
                 Step::Platform(PlatformOp::HashEnd),
                 Step::Sleep(0x0102_0304),
-                Step::Locality(3),
             ],
         }
     }
@@ -1117,14 +1107,14 @@ mod tests {
     #[test]
     fn event_step_selectors() {
         let conv = Conversation::from_bytes(&[
-            0xFC, 9, 0xFD, 0, 0, 1, 0, 0xFE, 4, 0xFF, 1, 0xAA, 0xFC, 14, 2, 7, 8,
+            0xFC, 9, 0xFD, 0, 0, 1, 0, 0xFE, 0, 0xFF, 1, 0xAA, 0xFC, 14, 2, 7, 8,
         ]);
         assert_eq!(
             conv.steps,
             vec![
                 Step::Platform(PlatformOp::Signal(1)),
                 Step::Sleep(256),
-                Step::Locality(4),
+                Step::Raw(vec![]),
                 Step::Raw(vec![0xAA]),
                 Step::Platform(PlatformOp::HashData(vec![7, 8])),
             ]

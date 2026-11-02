@@ -19,7 +19,7 @@ pub enum Outcome {
     /// Rejected at the transport level, or sent while the TPM was powered
     /// off (not executed, not mirrored).
     Skipped,
-    /// An event step (platform signal, `_TPM_Hash_*`, sleep, locality).
+    /// An event step (platform signal, `_TPM_Hash_*`, sleep).
     Event,
     /// The round ended the conversation with a driver finding.
     Finding(Finding),
@@ -34,9 +34,6 @@ pub enum Outcome {
 pub struct Replayed {
     /// The step of the round.
     pub step: Step,
-    /// The locality the command was sent at (for an event step: the
-    /// locality after it).
-    pub locality: u8,
     /// The resolved command bytes that were sent.
     pub command: Vec<u8>,
     /// The `tpm-rs` response (empty if the round was skipped or panicked
@@ -80,7 +77,6 @@ pub fn replay(tpm: &mut Tpm, conv: &Conversation) -> Vec<Replayed> {
         };
         let replayed = Replayed {
             step: step.clone(),
-            locality: driver.locality(),
             command: driver.last_command().to_vec(),
             response: driver.last_response().to_vec(),
             outcome,

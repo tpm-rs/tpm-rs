@@ -449,7 +449,7 @@ fn integrity_larger_than_largest_digest_is_size_error() {
     params.extend_from_slice(&(secret.len() as u16).to_be_bytes());
     params.extend_from_slice(secret);
     let cmd = build_pw_cmd(TPM_CC_ACTIVATE_CREDENTIAL, &[srk.0, srk.0], 2, &params);
-    assert_eq!(rc_of(&sim.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 1));
+    assert_eq!(rc_of(&sim.send_command(&cmd)), rc_p(TpmRc::SIZE, 1));
 }
 
 /// A credentialBlob whose size is one octet larger than `sizeof(TPMS_ID_OBJECT)` is
@@ -467,5 +467,5 @@ fn credential_blob_larger_than_id_object_is_size_error() {
     let mut params = ((SIZEOF_TPMS_ID_OBJECT + 1) as u16).to_be_bytes().to_vec();
     params.extend_from_slice(&[0x01, 0x00, 0x28, 0x00]);
     let cmd = build_pw_cmd(TPM_CC_ACTIVATE_CREDENTIAL, &[srk.0, srk.0], 2, &params);
-    assert_eq!(rc_of(&sim.send_command(0, &cmd)), rc_p(TpmRc::SIZE, 1));
+    assert_eq!(rc_of(&sim.send_command(&cmd)), rc_p(TpmRc::SIZE, 1));
 }

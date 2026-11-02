@@ -453,13 +453,13 @@ fn derived_template_with_sensitive_data_origin_rejected() {
     let parent = crate::_common::hex(
         "80020000003500000191400000010000000940000009000001000000040000000000120008000b000300600000000a000b00220000",
     );
-    let rsp = tpm.send_command(0, &parent);
+    let rsp = tpm.send_command(&parent);
     assert_eq!(&rsp[6..10], [0, 0, 0, 0], "derivation parent: {rsp:02x?}");
     let mut child = crate::_common::hex(
         "800200000041000001918000000000000009400000090000010000000c00087040737377307264000000160023000b000400600000001000100003001000000000",
     );
     child[10..14].copy_from_slice(&rsp[10..14]);
-    let rsp = tpm.send_command(0, &child);
+    let rsp = tpm.send_command(&child);
     assert_eq!(&rsp[6..10], 0x082u32.to_be_bytes(), "{rsp:02x?}");
 }
 

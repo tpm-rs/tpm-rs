@@ -7,7 +7,6 @@ The bugs of the C reference `ibmswtpm2` that the `bug-fix-*.patch` files in this
 - [Summary](#summary)
 - [Categories](#categories)
 - [Bugs](#bugs)
-  - [pcr-extended-locality](#pcr-extended-locality)
   - [bind-entity-public-only](#bind-entity-public-only)
   - [object-change-auth-derived-object](#object-change-auth-derived-object)
   - [rsa-prime-range](#rsa-prime-range)
@@ -39,12 +38,13 @@ The bugs of the C reference `ibmswtpm2` that the `bug-fix-*.patch` files in this
   - [tk-verified-tags](#tk-verified-tags)
   - [tpm-st-unmarshal](#tpm-st-unmarshal)
   - [tpmu-name-size](#tpmu-name-size)
+- [Locality problems (not patched)](#locality-problems-not-patched)
+  - [pcr-extended-locality](#pcr-extended-locality)
 
 ## Summary
 
 | Patch | Categories | Security Severity | Description |
 |---|---|---|---|
-| [pcr-extended-locality](bug-fix-pcr-extended-locality.patch) ([details](#pcr-extended-locality)) | `security`, `ub`, `spec` | high | PCR reset/extend checks shift by an extended locality (UB), so localities 32+ alias localities 0-4 and can modify D-RTM PCRs. |
 | [bind-entity-public-only](bug-fix-bind-entity-public-only.patch) ([details](#bind-entity-public-only)) | `security`, `dos`, `spec` | medium | A bound HMAC session authorizing a public-only object hits an assertion in the bind check (failure mode) instead of TPM_RC_AUTH_UNAVAILABLE. |
 | [object-change-auth-derived-object](bug-fix-object-change-auth-derived-object.patch) ([details](#object-change-auth-derived-object)) | `security`, `memory-safety`, `dos`, `spec` | medium | TPM2_ObjectChangeAuth of a derived object reads the Derivation Parent's KEYEDHASH scheme as a symmetric definition. |
 | [rsa-prime-range](bug-fix-rsa-prime-range.patch) ([details](#rsa-prime-range)) | `security`, `dos`, `crypto`, `input-validation`, `spec` | medium | RSA key loading does not check the range of the computed prime Q, so a crafted key can put the TPM in failure mode. |
@@ -99,41 +99,6 @@ Categories form a tree; a child category implies its parent.
 - `fw-limited`: concerns the firmware-limited / SVN-limited hierarchies.
 
 ## Bugs
-
-### pcr-extended-locality
-
-**Categories:** `security`, `ub`, `spec`.
-
-**Severity:** high
-
-**Description:**
-
-`PCRIsResetAllowed()` and `PCRIsExtendAllowed()` (`src/PCR.c`) turn the command locality into a bit with `localityBits << commandLocality` and test it against the PCR's 5-bit reset/extend locality bitmap (localities 0-4). For an extended locality (32-255) the shift amount is at least the width of the promoted `int`, which is C undefined behavior. With the usual x86 code generation the shift count is taken modulo 32 and the result is truncated to the `UINT8` `localityBits`, so localities 32-36, 64-68, 96-100, ... alias localities 0-4 (e.g. locality 67 acts as locality 3 and locality 68 as locality 4). TPM2_PCR_Extend, TPM2_PCR_Event and TPM2_PCR_Reset sent from such an extended locality are then accepted on PCRs whose attributes restrict them to localities 2-4: the D-RTM PCRs 17-22 can be extended, and PCRs 20-22 (reset localities 2 and 4) can be reset. The `DRTM_PCR` check, which forbids PCR_Reset at locality 4, compares `commandLocality == 4` and so does not stop an extended locality that aliases locality 4. Other compilers or optimizations may produce different results.
-
-An extended locality is a single integer, not a member of the 0-4 bitmap, so the patch makes both functions return FALSE for any locality above 4. The commands then fail with TPM_RC_LOCALITY.
-
-**Security:**
-
-To trigger this, the caller must be able to send commands at an extended locality. The platform asserts the locality (hardware or interface signaling), so software at locality 0 cannot choose it. On a platform that defines extended localities, though, any software that is given such a locality (for example a TEE or management engine assigned locality 32+) can extend or reset the D-RTM PCRs. Those PCRs are meant to be changed only by the D-RTM sequence or by localities 2-4. As a result the attacker can forge or replay a D-RTM measurement chain, and sealed data, PolicyPCR-protected keys and remote attestation that trust PCRs 17-22 would accept it. The severity is high because this breaks the locality-based integrity of the D-RTM PCRs. The behavior also depends on undefined behavior, so it can change with the compiler. It is mitigated on platforms that never assert extended localities (most PC-client systems).
-
-**Spec:** [TPM 2.0 (version 185), Part 1, "Locality"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L12447-L12460)
-
-> The locality value is represented as a byte and locality values have two
-> separate representations. Localities 0 through 4 are represented as bits
-> in the byte with 0000 0001$_{2}$ representing locality 0 and
-> 0001 0000$_{2}$ representing locality 4. This representation
-> allows multiple localities to be represented in a single byte as long as
-> the localities are in the range of 0-4. This representation of locality
-> is compatible with previous families of this specification.
->
-> A second representation is for localities above 4. These are called
-> *extended localities*. For extended localities, the locality byte is an
-> integer value representing the locality. Because of the format for
-> localities 0-4, the first extended locality is 32. The range of extended
-> localities is 32-255. The locality value may indicate only one extended
-> locality at a time.
-
----
 
 ### bind-entity-public-only
 
@@ -1233,3 +1198,44 @@ The patch declares the `handle` member as `BYTE handle[sizeof(TPM_HANDLE)]` (sam
 > structures. When used in a table to indicate a maximum size, the
 > sizeof() function returns the octet-aligned size of the structure, with
 > no padding.
+
+## Locality problems (not patched)
+
+The differential tests run every command at locality 0: the harness entry point `difftest_run_command()` (`harness-difftest-entry-points.patch`) has no locality parameter and always calls `_rpc__Send_Command(0, ...)`, `testing::tpm::Tpm` mirrors only locality-0 commands to the reference, and the fuzzer has no locality step. Problems that need a command at another locality can therefore not be reached by the differential tests, and this directory ships no patch for them. They are listed here for the record; `tpm-rs` behaves as described in the specification, which its own (unmirrored, `Tpm::new_unmirrored`) E2E tests check.
+
+The `platform-pcr-attributes.patch` of this directory is not a locality fix: it aligns the PCR attributes of PCRs 16-23 with `tpm-rs` (a platform choice), which are also visible at locality 0 (`TPM_CAP_PCR_PROPERTIES`, the PCR auth/policy attributes), so it stays.
+
+### pcr-extended-locality
+
+Not patched (previously `bug-fix-pcr-extended-locality.patch`, `src/PCR.c` `PCRIsResetAllowed`/`PCRIsExtendAllowed`); `tpm-rs` test: `e2e::platform_signals::extended_locality_cannot_extend_or_reset_pcrs`.
+
+**Categories:** `security`, `ub`, `spec`.
+
+**Severity:** high
+
+**Description:**
+
+`PCRIsResetAllowed()` and `PCRIsExtendAllowed()` (`src/PCR.c`) turn the command locality into a bit with `localityBits << commandLocality` and test it against the PCR's 5-bit reset/extend locality bitmap (localities 0-4). For an extended locality (32-255) the shift amount is at least the width of the promoted `int`, which is C undefined behavior. With the usual x86 code generation the shift count is taken modulo 32 and the result is truncated to the `UINT8` `localityBits`, so localities 32-36, 64-68, 96-100, ... alias localities 0-4 (e.g. locality 67 acts as locality 3 and locality 68 as locality 4). TPM2_PCR_Extend, TPM2_PCR_Event and TPM2_PCR_Reset sent from such an extended locality are then accepted on PCRs whose attributes restrict them to localities 2-4: the D-RTM PCRs 17-22 can be extended, and PCRs 20-22 (reset localities 2 and 4) can be reset. The `DRTM_PCR` check, which forbids PCR_Reset at locality 4, compares `commandLocality == 4` and so does not stop an extended locality that aliases locality 4. Other compilers or optimizations may produce different results.
+
+An extended locality is a single integer, not a member of the 0-4 bitmap, so both functions should return FALSE for any locality above 4 and the commands should fail with TPM_RC_LOCALITY, as they do in `tpm-rs`.
+
+**Security:**
+
+To trigger this, the caller must be able to send commands at an extended locality. The platform asserts the locality (hardware or interface signaling), so software at locality 0 cannot choose it. On a platform that defines extended localities, though, any software that is given such a locality (for example a TEE or management engine assigned locality 32+) can extend or reset the D-RTM PCRs. Those PCRs are meant to be changed only by the D-RTM sequence or by localities 2-4. As a result the attacker can forge or replay a D-RTM measurement chain, and sealed data, PolicyPCR-protected keys and remote attestation that trust PCRs 17-22 would accept it. The severity is high because this breaks the locality-based integrity of the D-RTM PCRs. The behavior also depends on undefined behavior, so it can change with the compiler. It is mitigated on platforms that never assert extended localities (most PC-client systems).
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "Locality"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L12447-L12460)
+
+> The locality value is represented as a byte and locality values have two
+> separate representations. Localities 0 through 4 are represented as bits
+> in the byte with 0000 0001$_{2}$ representing locality 0 and
+> 0001 0000$_{2}$ representing locality 4. This representation
+> allows multiple localities to be represented in a single byte as long as
+> the localities are in the range of 0-4. This representation of locality
+> is compatible with previous families of this specification.
+>
+> A second representation is for localities above 4. These are called
+> *extended localities*. For extended localities, the locality byte is an
+> integer value representing the locality. Because of the format for
+> localities 0-4, the first extended locality is 32. The range of extended
+> localities is 32-255. The locality value may indicate only one extended
+> locality at a time.

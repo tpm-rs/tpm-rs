@@ -348,33 +348,24 @@ fn clock_rate_adjustment_rounds_like_the_platform() {
     });
 
     // Round 0: TPM2_ClockRateAdjust.
-    let rsp = tpm.send_command(
-        0,
-        &[
-            0x80, 0x02, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x01, 0x30, 0x40, 0x00, 0x00, 0x0c,
-            0x00, 0x00, 0x00, 0x09, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00, 0xfd,
-        ],
-    );
+    let rsp = tpm.send_command(&[
+        0x80, 0x02, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x01, 0x30, 0x40, 0x00, 0x00, 0x0c, 0x00,
+        0x00, 0x00, 0x09, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00, 0xfd,
+    ]);
     assert_eq!(response_code(&rsp), 0x0);
 
     // Round 1: 268435549 ms pass.
     testing::tpm::sleep(std::time::Duration::from_millis(268435549));
 
     // Round 2: TPM2_ReadClock.
-    let rsp = tpm.send_command(
-        0,
-        &[0x80, 0x01, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x01, 0x81],
-    );
+    let rsp = tpm.send_command(&[0x80, 0x01, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x01, 0x81]);
     assert_eq!(response_code(&rsp), 0x0);
 
     // Round 3: 4244635741 ms pass.
     testing::tpm::sleep(std::time::Duration::from_millis(4244635741));
 
     // Round 4: TPM2_ReadClock.
-    let rsp = tpm.send_command(
-        0,
-        &[0x80, 0x01, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x01, 0x81],
-    );
+    let rsp = tpm.send_command(&[0x80, 0x01, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x01, 0x81]);
     assert_eq!(response_code(&rsp), 0x0);
 }
 
@@ -388,16 +379,16 @@ fn rejected_command_updates_clock_in_nv() {
     let mut tpm = Tpm::new();
     testing::tpm::sleep(std::time::Duration::from_millis(1 << 22));
     // An unimplemented command code (TPM2_VerifyDigestSignature).
-    let rsp = tpm.send_command(0, &[0x80, 0x01, 0, 0, 0, 10, 0, 0, 0x01, 0xa5]);
+    let rsp = tpm.send_command(&[0x80, 0x01, 0, 0, 0, 10, 0, 0, 0x01, 0xa5]);
     assert_eq!(crate::_common::rc_of(&rsp), 0x143);
     tpm.signal_platform(testing::tpm::SimulatorPlatformSignal::PowerOff)
         .unwrap();
     tpm.signal_platform(testing::tpm::SimulatorPlatformSignal::PowerOn)
         .unwrap();
-    let rsp = tpm.send_command(0, &[0x80, 0x01, 0, 0, 0, 12, 0, 0, 0x01, 0x44, 0, 0]);
+    let rsp = tpm.send_command(&[0x80, 0x01, 0, 0, 0, 12, 0, 0, 0x01, 0x44, 0, 0]);
     assert_eq!(crate::_common::rc_of(&rsp), 0);
     // TPM2_ReadClock: currentTime.clockInfo.clock.
-    let rsp = tpm.send_command(0, &[0x80, 0x01, 0, 0, 0, 10, 0, 0, 0x01, 0x81]);
+    let rsp = tpm.send_command(&[0x80, 0x01, 0, 0, 0, 10, 0, 0, 0x01, 0x81]);
     assert_eq!(crate::_common::rc_of(&rsp), 0);
     assert!(u64::from_be_bytes(rsp[18..26].try_into().unwrap()) >= 1 << 22);
 }

@@ -42,7 +42,7 @@ fn create_primary(hierarchy: Handle, public: TpmtPublic<'static>) -> Vec<u8> {
 
 /// Sends `command` and checks that it succeeded; returns the response.
 fn send_ok(tpm: &mut Tpm, command: &[u8]) -> Vec<u8> {
-    let rsp = tpm.send_command(0, command);
+    let rsp = tpm.send_command(command);
     assert_eq!(
         rsp.get(6..10),
         Some(&[0, 0, 0, 0][..]),
@@ -127,8 +127,8 @@ fn try_exchange_returns_the_response() {
     let seed = ReferenceSeed::choose();
     let mut a = Tpm::with_seed(seed);
     let mut b = Tpm::with_seed(seed);
-    let rsp = a.try_exchange(0, &GET_RANDOM_32).unwrap();
-    assert_eq!(rsp, b.send_command(0, &GET_RANDOM_32));
+    let rsp = a.try_exchange(&GET_RANDOM_32).unwrap();
+    assert_eq!(rsp, b.send_command(&GET_RANDOM_32));
     assert_eq!(rsp.len(), 12 + 32);
 }
 

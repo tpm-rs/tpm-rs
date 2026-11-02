@@ -5,7 +5,9 @@
 //! `_rpc__Signal_NvOff()`): power on while the power is on, and a reset or NV
 //! off while the power is off, are ignored; a power cycle makes NV available
 //! again, a reset without a power loss does not; localities 5-31 select
-//! locality 0, and extended localities match no PCR locality attribute.
+//! locality 0, and extended localities match no PCR locality attribute (the
+//! locality tests run on `tpm-rs` alone, `Tpm::new_unmirrored`: the
+//! differential tests run every command at locality 0).
 //!
 //! TPM 2.0 Part 1, "_TPM_Init": "_TPM_Init indicates that a TPM is to be
 //! initialized. [...] The method of signaling _TPM_Init is platform
@@ -36,11 +38,8 @@ fn power_on_while_powered_on_is_ignored() {
     let mut tpm = Tpm::new();
     tpm.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
-    assert_eq!(
-        rc_of(&tpm.send_command(0, &STARTUP_CLEAR)),
-        TPM_RC_INITIALIZE
-    );
-    assert_eq!(rc_of(&tpm.send_command(0, &GET_RANDOM)), 0);
+    assert_eq!(rc_of(&tpm.send_command(&STARTUP_CLEAR)), TPM_RC_INITIALIZE);
+    assert_eq!(rc_of(&tpm.send_command(&GET_RANDOM)), 0);
 }
 
 /// A reset while the TPM is powered off is ignored: the TPM stays off (no
@@ -51,11 +50,11 @@ fn reset_while_powered_off_is_ignored() {
     tpm.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
     tpm.signal_platform(SimulatorPlatformSignal::Reset).unwrap();
-    assert!(tpm.send_command(0, &GET_RANDOM).is_empty());
+    assert!(tpm.send_command(&GET_RANDOM).is_empty());
     tpm.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
-    assert_eq!(rc_of(&tpm.send_command(0, &GET_RANDOM)), TPM_RC_INITIALIZE);
-    assert_eq!(rc_of(&tpm.send_command(0, &STARTUP_CLEAR)), 0);
+    assert_eq!(rc_of(&tpm.send_command(&GET_RANDOM)), TPM_RC_INITIALIZE);
+    assert_eq!(rc_of(&tpm.send_command(&STARTUP_CLEAR)), 0);
 }
 
 /// A reset initializes the TPM (`_TPM_Init`) but, without a power loss,
@@ -67,14 +66,14 @@ fn reset_keeps_nv_unavailable_and_power_cycle_restores_it() {
     tpm.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     tpm.signal_platform(SimulatorPlatformSignal::Reset).unwrap();
     assert_eq!(
-        rc_of(&tpm.send_command(0, &STARTUP_CLEAR)),
+        rc_of(&tpm.send_command(&STARTUP_CLEAR)),
         TPM_RC_NV_UNAVAILABLE
     );
     tpm.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
     tpm.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
-    assert_eq!(rc_of(&tpm.send_command(0, &STARTUP_CLEAR)), 0);
+    assert_eq!(rc_of(&tpm.send_command(&STARTUP_CLEAR)), 0);
 }
 
 /// NV off while the TPM is powered off is ignored, and powering on makes NV
@@ -87,7 +86,7 @@ fn nv_off_while_powered_off_is_ignored() {
     tpm.signal_platform(SimulatorPlatformSignal::NvOff).unwrap();
     tpm.signal_platform(SimulatorPlatformSignal::PowerOn)
         .unwrap();
-    assert_eq!(rc_of(&tpm.send_command(0, &STARTUP_CLEAR)), 0);
+    assert_eq!(rc_of(&tpm.send_command(&STARTUP_CLEAR)), 0);
 }
 
 /// A command at a locality from 5 to 31 runs at locality 0: TPM 2.0 Part 1, "Locality":
@@ -96,10 +95,10 @@ fn nv_off_while_powered_off_is_ignored() {
 /// only locality 0 may extend, succeeds at locality 5.
 #[test]
 fn locality_5_to_31_selects_locality_0() {
-    let mut tpm = Tpm::new();
+    let mut tpm = Tpm::new_unmirrored();
     for locality in [5, 31] {
         assert_eq!(
-            rc_of(&tpm.send_command(locality, &pcr_extend(0))),
+            rc_of(&tpm.send_command_at_locality(locality, &pcr_extend(0))),
             0,
             "locality {locality}"
         );
@@ -110,19 +109,19 @@ fn locality_5_to_31_selects_locality_0() {
 /// attributes: TPM 2.0 Part 1, "Locality": "Localities 0 through 4 are represented as bits in
 /// the byte [...] For extended localities, the locality byte is an integer value representing
 /// the locality." So `TPM2_PCR_Extend` of PCR 0 and `TPM2_PCR_Reset` of PCR 16 fail with
-/// `TPM_RC_LOCALITY` at localities 67 and 68 (which the references once aliased to localities 3
-/// and 4). Found by differential fuzzing.
+/// `TPM_RC_LOCALITY` at localities 67 and 68 (which the C references alias to localities 3 and 4
+/// by an undefined shift). Found by differential fuzzing.
 #[test]
 fn extended_locality_cannot_extend_or_reset_pcrs() {
-    let mut tpm = Tpm::new();
+    let mut tpm = Tpm::new_unmirrored();
     for locality in [32, 67, 68, 255] {
         assert_eq!(
-            rc_of(&tpm.send_command(locality, &pcr_extend(0))),
+            rc_of(&tpm.send_command_at_locality(locality, &pcr_extend(0))),
             TPM_RC_LOCALITY,
             "extend at locality {locality}"
         );
         assert_eq!(
-            rc_of(&tpm.send_command(locality, &pcr_reset(16))),
+            rc_of(&tpm.send_command_at_locality(locality, &pcr_reset(16))),
             TPM_RC_LOCALITY,
             "reset at locality {locality}"
         );
@@ -169,6 +168,6 @@ fn reset_before_startup_after_power_loss_restores_nv() {
         tpm.signal_platform(signal).unwrap();
     }
     let startup_state = [0x80, 0x01, 0, 0, 0, 12, 0, 0, 0x01, 0x44, 0, 1];
-    assert_eq!(rc_of(&tpm.send_command(0, &startup_state)), 0x1c4);
-    assert_eq!(rc_of(&tpm.send_command(0, &STARTUP_CLEAR)), 0);
+    assert_eq!(rc_of(&tpm.send_command(&startup_state)), 0x1c4);
+    assert_eq!(rc_of(&tpm.send_command(&STARTUP_CLEAR)), 0);
 }

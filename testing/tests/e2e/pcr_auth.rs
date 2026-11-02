@@ -14,9 +14,12 @@ use tpm2::*;
 /// digest of `TPM2_PolicyPassword`, so a policy session that ran
 /// `TPM2_PolicyPassword` can authorize `TPM2_PCR_Extend` of PCR 20 until
 /// `TPM2_ChangePPS` clears the policy.
+///
+/// PCR 20 is extendable only from localities 1-3, so this runs on `tpm-rs` alone
+/// (`Tpm::new_unmirrored`): the differential tests send every command at locality 0.
 #[test]
 fn set_auth_policy_cleared_by_change_pps() {
-    let mut sim = Tpm::new();
+    let mut sim = Tpm::new_unmirrored();
 
     // 1. Attempt TPM2_PCR_SetAuthPolicy with mismatched digest size -> should fail with TPM_RC_SIZE (P1)
     let set_policy_bad_size = hx(concat!(
@@ -157,9 +160,12 @@ fn set_auth_policy_nv_and_set_auth_value_range() {
 }
 
 /// PCR_SetAuthValue only works on auth-group PCRs and the new auth then controls PCR_Extend.
+///
+/// PCR 20 is extendable only from localities 1-3, so this runs on `tpm-rs` alone
+/// (`Tpm::new_unmirrored`): the differential tests send every command at locality 0.
 #[test]
 fn set_auth_value_controls_extend() {
-    let mut sim = Tpm::new();
+    let mut sim = Tpm::new_unmirrored();
 
     // 1. Attempt TPM2_PCR_SetAuthValue on PCR 0 (not in auth group 20-22) -> should fail with TPM_RC_VALUE
     let set_auth_pcr0 = hx(concat!(

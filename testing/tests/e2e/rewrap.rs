@@ -81,7 +81,7 @@ fn fresh_seed_for_new_parent() {
     cmd.extend_from_slice(&[0, 0, 0, 0]);
     let len = cmd.len() as u32;
     cmd[2..6].copy_from_slice(&len.to_be_bytes());
-    let rsp = sim.send_command(0, &cmd);
+    let rsp = sim.send_command(&cmd);
     assert_eq!(&rsp[6..10], &rc_p(TpmRc::SIZE, 1).to_be_bytes());
 
     // A maximum-size unwrapped duplicate can not get an outer wrapper: VALUE + RC_P1 (no panic).

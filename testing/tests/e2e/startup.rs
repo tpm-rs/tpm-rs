@@ -68,7 +68,8 @@ fn invalid_startup_types_rejected() {
 /// sequence (`_TPM_Hash_Start`/`_TPM_Hash_End` before Startup).
 #[test]
 fn locality_4_rejected_after_hcrtm() {
-    let mut sim = unstarted_simulator();
+    let mut sim = Tpm::new_unmirrored();
+    power_cycle(&mut sim);
     sim.hash_start();
     sim.hash_end();
     let rc = rc_of(&raw_at_checked(
@@ -401,9 +402,9 @@ fn startup_state_requires_orderly_state_shutdown() {
 }
 
 /// Startup: startupType is validated (VALUE+P1) before NV availability; NV_UNAVAILABLE when NV
-/// is off; LOCALITY when a Resume happens at a different startup locality.
+/// is off.
 #[test]
-fn startup_type_nv_and_locality_checks() {
+fn startup_type_and_nv_checks() {
     let mut sim = Tpm::new();
     sim.signal_platform(SimulatorPlatformSignal::PowerOff)
         .unwrap();
@@ -416,6 +417,17 @@ fn startup_type_nv_and_locality_checks() {
     );
     assert_eq!(startup_raw(&mut sim, 0, SU_CLEAR), nv_unavailable());
     nv_on(&mut sim);
+    assert_eq!(startup_raw(&mut sim, 0, SU_CLEAR), 0);
+}
+
+/// Startup: LOCALITY when a Resume happens at a different startup locality than locality 3.
+///
+/// Runs on `tpm-rs` alone (`Tpm::new_unmirrored`): the differential tests send every command at
+/// locality 0.
+#[test]
+fn resume_at_other_startup_locality_fails() {
+    let mut sim = Tpm::new_unmirrored();
+    power_cycle(&mut sim);
     assert_eq!(startup_raw(&mut sim, 3, SU_CLEAR), 0);
     // Shutdown(STATE) after a locality-3 startup; resuming at locality 0 is a LOCALITY error.
     assert_eq!(shutdown_raw(&mut sim, SU_STATE), 0);
