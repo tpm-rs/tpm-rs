@@ -1,4 +1,4 @@
-use tpm2::crypto::{CryptoError, Hash, HashStream};
+use tpm2::crypto::{Crypto, CryptoError, HashContext, hash};
 use tpm2::{
     Handle, Tpm2bName, TpmCc, TpmHt, TpmiAlgHash, TpmsAuthCommand, TpmsAuthResponse, TpmtHa,
 };
@@ -74,16 +74,15 @@ impl CommandData<'_> {
     /// NOTE: This matches the TPM 2.0 reference implementation (C code),
     /// which we integrate against for now. We may review this against the
     /// latest spec later.
-    pub fn cp_hash<'o>(
+    pub fn cp_hash<'o, C: Crypto>(
         &self,
-        h: &impl Hash,
         alg: TpmiAlgHash,
         out: &'o mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
     ) -> Result<TpmtHa<'o>, AuthError> {
         if self.names.len() > self.handles.len() {
             return Err(AuthError::MissingName);
         }
-        let mut stream = HashStream::new(h, alg)?;
+        let mut stream = HashContext::<C>::new(alg)?;
         stream.update(&self.code.code().to_be_bytes())?;
         for i in 0..self.handles.len() {
             stream.update(self.name(i)?.as_slice())?;
@@ -130,17 +129,17 @@ impl ResponseData<'_> {
     /// NOTE: The latest spec omits `commandCode`, but the TPM 2.0 reference
     /// implementation (C code), which we integrate against for now,
     /// includes it. We may review this later.
-    pub fn rp_hash<'o>(
+    pub fn rp_hash<'o, C: Crypto>(
         &self,
-        h: &impl Hash,
         alg: TpmiAlgHash,
         out: &'o mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
     ) -> Result<TpmtHa<'o>, AuthError> {
-        let mut stream = HashStream::new(h, alg)?;
-        stream.update(&0u32.to_be_bytes())?;
-        stream.update(&self.code.code().to_be_bytes())?;
-        stream.update(self.params)?;
-        Ok(stream.finalize(out)?)
+        let parts: [&[u8]; 3] = [
+            &0u32.to_be_bytes(),
+            &self.code.code().to_be_bytes(),
+            self.params,
+        ];
+        Ok(hash::<C>(alg, &parts, out)?)
     }
 }
 

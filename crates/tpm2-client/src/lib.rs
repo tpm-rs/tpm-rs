@@ -33,12 +33,28 @@ use core::fmt;
 use protocol::*;
 use sessions::{AuthError, AuthorizationArea};
 use tpm2::{Command, Marshal, Tpm2bName, TpmiAlgHash, TpmsNvPublic, TpmtHa};
-use tpm2::crypto::{CryptoError, Hash, hash};
+use tpm2::crypto::{Crypto, CryptoError, hash};
 use tpm2::errors::{TpmRc, UnmarshalError};
 
 pub mod connection;
 pub mod protocol;
 pub mod sessions;
+
+/// The default cryptography backend, used by sessions (and policy digests)
+/// whose backend isn't specified, e.g. [`HmacSession`](sessions::HmacSession).
+///
+/// This is RustCrypto with the `rustcrypto` feature (enabled by default).
+#[cfg(feature = "rustcrypto")]
+pub type CryptoBackend = tpm2_rustcrypto::RustCrypto;
+
+/// The default cryptography backend, used by sessions (and policy digests)
+/// whose backend isn't specified, e.g. [`HmacSession`](sessions::HmacSession).
+///
+/// Without the `rustcrypto` feature, there is no default backend: this
+/// placeholder doesn't implement [`Crypto`], so a backend must be specified
+/// (e.g. `HmacSession<MyCrypto>`).
+#[cfg(not(feature = "rustcrypto"))]
+pub enum CryptoBackend {}
 
 /// Errors that can occur during TPM client operations.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -142,8 +158,7 @@ impl<E> PartialEq<AuthError> for ClientError<E> {
 /// Note that the TPM sets [`TpmaNv::WRITTEN`](tpm2::TpmaNv::WRITTEN) on the
 /// first write to an index, which changes its Name. Commands after that
 /// (e.g. `TPM2_NV_Read`) need the Name computed with that attribute set.
-pub fn nv_name<'a>(
-    h: &impl Hash,
+pub fn nv_name<'a, C: Crypto>(
     public: &TpmsNvPublic,
     out: &'a mut [u8; Tpm2bName::CAP],
 ) -> Result<Tpm2bName<'a>, CryptoError> {
@@ -151,10 +166,9 @@ pub fn nv_name<'a>(
     let public_size = public.marshal(&mut public_buf);
 
     let mut digest_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    let digest = hash(
-        h,
+    let digest = hash::<C>(
         public.name_alg,
-        &public_buf[..public_size],
+        &[&public_buf[..public_size]],
         &mut digest_buf,
     )?;
 
@@ -218,6 +232,15 @@ pub fn run_command_with_sessions<
         .transact(&cmd_buffer[..written], resp_buffer)
         .map_err(ClientError::Connection)?;
 
+    // BUGBUG/FIXME: The TPM computes the response HMAC with the authValue the
+    // authorized entity has *after* the command executes (see
+    // `ComputeResponseHMAC()` in the reference implementation). Sessions
+    // still validate the response with the old authValue, so commands that
+    // change or remove it (e.g. `TPM2_HierarchyChangeAuth`,
+    // `TPM2_NV_ChangeAuth`, or `TPM2_NV_UndefineSpaceSpecial` after
+    // `TPM2_PolicyAuthValue`) fail with `AuthError::InvalidResponse`, even
+    // though the TPM executed them and rolled nonceTPM. Sessions need a way to
+    // take the new authValue for validating the response only.
     unmarshal_response(C::CMD_CODE, cmd_sessions, resp_buffer)
 }
 
