@@ -3,7 +3,7 @@ mod common;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use tpm2::Handle;
 use tpm2::TpmiAlgHash;
-use tpm2_impl::{TpmEngine, TpmPlatform};
+use tpm2_engine::{TpmEngine, TpmPlatform};
 
 #[test]
 fn test_hcrtm_pre_startup_sequence_and_slot_eviction() {
@@ -21,10 +21,10 @@ fn test_hcrtm_pre_startup_sequence_and_slot_eviction() {
 
     // Fill all 3 sequence/transient slots before starting H-CRTM sequence
     for (i, slot) in tpm.state.active_sequences.iter_mut().enumerate().take(3) {
-        *slot = Some(tpm2_impl::ActiveSequence::new(
+        *slot = Some(tpm2_engine::ActiveSequence::new(
             0x8000_0000 | (i as u32),
             tpm2::Tpm2bAuth::default(),
-            tpm2_impl::SequenceType::Event,
+            tpm2_engine::SequenceType::Event,
         ));
     }
 
@@ -42,7 +42,7 @@ fn test_hcrtm_pre_startup_sequence_and_slot_eviction() {
     assert_eq!(tpm.state.drtm_handle, Handle::RH_UNASSIGNED.0);
 
     // Expected PCR 0 before and after Startup(CLEAR): Hash(0x00..04 || Hash(hcrtm_data))
-    use tpm2_impl::hash_state::StreamingHashState;
+    use tpm2_engine::hash_state::StreamingHashState;
     let mut h_payload = StreamingHashState::new(TpmiAlgHash::Sha256);
     h_payload.update(hcrtm_data);
     let (digest, _) = h_payload.finalize();

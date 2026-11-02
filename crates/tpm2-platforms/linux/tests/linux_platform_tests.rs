@@ -1,5 +1,5 @@
 use tpm2::crypto::Rng;
-use tpm2_impl::timer::TpmTimer;
+use tpm2_engine::timer::TpmTimer;
 use tpm2_platform_linux::{LinuxRng, LinuxTimer};
 
 #[test]

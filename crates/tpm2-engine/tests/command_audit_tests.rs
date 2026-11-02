@@ -2,7 +2,7 @@ mod common;
 
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
-use tpm2_impl::{TpmEngine, TpmPlatform};
+use tpm2_engine::{TpmEngine, TpmPlatform};
 
 #[test]
 fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
@@ -11,7 +11,7 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
         PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bName, Tpm2bPublicKeyRsa, TpmaObject,
         TpmiAlgHash, TpmsRsaParms, TpmtPublic,
     };
-    use tpm2_impl::handler::TransientObject;
+    use tpm2_engine::handler::TransientObject;
 
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
@@ -211,7 +211,7 @@ fn rejected_commands_leave_command_audit_state_unchanged() {
 #[test]
 fn command_audit_state_round_trips_through_s_nv_image() {
     use tpm2::TpmCc;
-    use tpm2_impl::storage::transcoder::{
+    use tpm2_engine::storage::transcoder::{
         NV_AUDIT_OFFSET, NV_MEMORY_SIZE, transcode_s_nv_to_storage, transcode_storage_to_s_nv,
     };
 
@@ -237,7 +237,7 @@ fn command_audit_state_round_trips_through_s_nv_image() {
 
     transcode_s_nv_to_storage(&s_nv, &mut *tpm.platform.storage).unwrap();
     let audit_commands = tpm.state.audit_commands;
-    tpm.state = tpm2_impl::GlobalState::default();
+    tpm.state = tpm2_engine::GlobalState::default();
     tpm.restore_hierarchy_auths();
     assert_eq!(tpm.state.audit_hash_alg, 0x000C);
     assert_eq!(tpm.state.audit_counter, 0x0102_0304_0506_0708);

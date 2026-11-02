@@ -10,7 +10,7 @@
 //! (with a port of glibc's `rand()`, [`GlibcRand`]), given the process ID of
 //! the reference process and the same clock ([`VirtualClock`]).
 //!
-//! Together with the references' DRBG, which `tpm2-impl`'s `reference-rng` links,
+//! Together with the references' DRBG, which `tpm2-engine`'s `reference-rng` links,
 //! this makes `tpm-rs` draw exactly the random values a C reference TPM draws.
 
 use std::sync::Arc;
@@ -212,15 +212,15 @@ mod tests {
     }
 
     /// `DRBG_Instantiate()` and `DRBG_Generate()` of the same C process on top
-    /// of this entropy source, through the C DRBG linked by `tpm2-impl`.
+    /// of this entropy source, through the C DRBG linked by `tpm2-engine`.
     #[test]
     fn reference_drbg_on_reference_entropy_matches_c() {
-        use tpm2_impl::reference_rng::{RefRng, drbg};
+        use tpm2_engine::reference_rng::{RefRng, drbg};
         let clock = VirtualClock::new(123_456_789);
         let mut rng = crate::LinuxRng::reference(ReferenceEntropy::new(814_633, clock.clone()));
         tpm2::crypto::Rng::init(&mut rng).unwrap();
         clock.advance(5);
-        let mut state = tpm2_impl::DrbgState::default();
+        let mut state = tpm2_engine::DrbgState::default();
         let mut ref_rng = RefRng {
             drbg: Some(&mut state),
             entropy: Some(&mut rng),

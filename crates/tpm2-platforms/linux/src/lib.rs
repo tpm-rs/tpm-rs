@@ -25,9 +25,9 @@ use std::time::Instant;
 use tpm2::crypto::Rng;
 use tpm2::crypto::{CryptoError, CryptoProvider};
 use tpm2::platform::TpmFirmware;
-use tpm2_impl::TpmPlatform;
-use tpm2_impl::storage::NvStorage;
-use tpm2_impl::timer::TpmTimer;
+use tpm2_engine::TpmPlatform;
+use tpm2_engine::storage::NvStorage;
+use tpm2_engine::timer::TpmTimer;
 
 #[cfg(feature = "rust")]
 pub use tpm2_crypto_rust::RustCryptoProvider as PlatformCryptoProvider;

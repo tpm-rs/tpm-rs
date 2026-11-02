@@ -6,8 +6,8 @@ mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use tpm2::errors::TpmRc;
-use tpm2_impl::TpmEngine;
-use tpm2_impl::TpmPlatform;
+use tpm2_engine::TpmEngine;
+use tpm2_engine::TpmPlatform;
 
 /// Executes `request` and returns the response.
 fn execute(

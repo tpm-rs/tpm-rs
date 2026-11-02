@@ -4,7 +4,7 @@ resolver = "3"
 members = [
     "crates/tpm2",
     "crates/tpm2-client",
-    "crates/tpm2-impl",
+    "crates/tpm2-engine",
     "crates/tpm2-platforms/linux",
     "crates/tpm2-simulator",
     "crates/tpm2-crypto/rust",
@@ -72,7 +72,7 @@ tpm2 = { path = "crates/tpm2", default-features = false, features = [
 ] }
 tpm2-client = { path = "crates/tpm2-client" }
 # Without their default features (`sha512`), which each dependent forwards from its own `sha512`.
-tpm2-impl = { path = "crates/tpm2-impl", default-features = false }
+tpm2-engine = { path = "crates/tpm2-engine", default-features = false }
 tpm2-crypto-rust = { path = "crates/tpm2-crypto/rust", default-features = false }
 tpm2-crypto-crux = { path = "crates/tpm2-crypto/crux", default-features = false }
 tpm2-crypto-bssl = { path = "crates/tpm2-crypto/bssl", default-features = false }

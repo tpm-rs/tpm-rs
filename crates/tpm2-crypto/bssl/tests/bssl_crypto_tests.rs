@@ -197,7 +197,7 @@ fn test_bssl_ecc_nist_p224_operations() {
 
 #[test]
 fn test_bssl_ecc_nist_p256_ecdaa_sign() {
-    // ECDAA signing is implemented in tpm2-impl (it needs the scheme hash); the provider
+    // ECDAA signing is implemented in tpm2-engine (it needs the scheme hash); the provider
     // primitive reports that it is not supported instead of producing non-spec signatures.
     let provider = BsslCryptoProvider;
     let ctx = provider.nist_p256().unwrap();

@@ -7,11 +7,11 @@ mod common;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 
-use tpm2_impl::{TpmEngine, TpmPlatform};
+use tpm2_engine::{TpmEngine, TpmPlatform};
 
 #[test]
 fn test_time_epoch_monotonic_persistence_and_resume_preservation() {
-    use tpm2_impl::storage::NvStorage;
+    use tpm2_engine::storage::NvStorage;
 
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();

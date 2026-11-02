@@ -2,18 +2,18 @@
 //! (`TPM_RC_NV_SPACE`) exactly where the reference does. NV capacity is implementation-specific
 //! (TPM 2.0 Part 2, `TPM_PT_HR_PERSISTENT_AVAIL`/`TPM_PT_NV_COUNTERS_AVAIL`: "This value is an
 //! estimate"), so tpm-rs follows the reference's `NvTestSpace()` accounting
-//! (`tpm2_impl::storage::nv_capacity`, whose model [`NvUsage`] gives the expected results): with
+//! (`tpm2_engine::storage::nv_capacity`, whose model [`NvUsage`] gives the expected results): with
 //! the default profile (`NV_MEMORY_SIZE` 16384, `MIN_EVICT_OBJECTS` 2), a dynamic area of 11228
 //! bytes (11088 with the `act-a` feature: the ACT state moves `NV_INDEX_RAM_DATA`), every persistent object taking 1288 bytes whatever its key type, an Index `4 + 148`
 //! bytes plus its data (orderly data in a 512-byte RAM area with 12-byte headers), and room
 //! reserved for 2 persistent objects (when defining an Index) and 8 counter Indices (unless
-//! defining a counter). The profile features of `tpm2-impl` (e.g. of a differential target)
+//! defining a counter). The profile features of `tpm2-engine` (e.g. of a differential target)
 //! change `NV_MEMORY_SIZE` and `MIN_EVICT_OBJECTS`.
 
 use crate::_common::{create_ecc_parent_key, create_parent_key, evict_control_rc, try_define};
 use testing::tpm::Tpm;
 use tpm2::{Handle, TpmaNv, TpmiAlgHash, TpmsNvPublic};
-use tpm2_impl::storage::nv_capacity::{
+use tpm2_engine::storage::nv_capacity::{
     MIN_EVICT_OBJECTS, NV_INDEX_RAM_DATA, NV_MEMORY_SIZE, NvUsage,
 };
 

@@ -11,7 +11,7 @@ mod common;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tpm2::crypto::{CryptoError, Rng};
-use tpm2_impl::{GlobalState, TpmEngine, TpmPlatform};
+use tpm2_engine::{GlobalState, TpmEngine, TpmPlatform};
 
 /// Builds a `TPM_ST_SESSIONS` command authorized with one empty password session per handle.
 fn pw_command(cc: u32, handles: &[u32], params: &[u8]) -> Vec<u8> {

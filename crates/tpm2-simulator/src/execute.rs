@@ -6,14 +6,14 @@ use tpm2::{Marshal, Unmarshal};
 use tpm2::{TpmCc, TpmSt};
 
 /// The command buffer: 4096 octets, or the TPM's `MAX_COMMAND_SIZE` if larger.
-const CMD_BUFFER_SIZE: usize = if tpm2_impl::MAX_COMMAND_SIZE > 4096 {
-    tpm2_impl::MAX_COMMAND_SIZE
+const CMD_BUFFER_SIZE: usize = if tpm2_engine::MAX_COMMAND_SIZE > 4096 {
+    tpm2_engine::MAX_COMMAND_SIZE
 } else {
     4096
 };
 /// The response buffer: 4096 octets, or the TPM's `MAX_RESPONSE_SIZE` if larger.
-const RESP_BUFFER_SIZE: usize = if tpm2_impl::MAX_RESPONSE_SIZE > 4096 {
-    tpm2_impl::MAX_RESPONSE_SIZE
+const RESP_BUFFER_SIZE: usize = if tpm2_engine::MAX_RESPONSE_SIZE > 4096 {
+    tpm2_engine::MAX_RESPONSE_SIZE
 } else {
     4096
 };
@@ -176,7 +176,7 @@ impl<'a> Unmarshal<'a> for RespHeader {
 /// The command's handles ([`Message::handles`]) are written to the handle
 /// area. One empty password session (`TPM_RS_PW`) is added for each handle
 /// that requires authorization, as reported by
-/// [`tpm2_impl::handle_requires_auth`]. The response handles are returned
+/// [`tpm2_engine::handle_requires_auth`]. The response handles are returned
 /// inside the response.
 ///
 /// # Errors
@@ -196,9 +196,9 @@ where
     for<'b> &'b mut CmdT::MaxBuffer: TryFrom<&'b mut [u8]>,
 {
     let mut num_sessions = 0;
-    let num_handles = tpm2_impl::command_handles_count(CmdT::CMD_CODE);
+    let num_handles = tpm2_engine::command_handles_count(CmdT::CMD_CODE);
     for h_idx in 0..num_handles {
-        if tpm2_impl::handle_requires_auth(CmdT::CMD_CODE, h_idx) {
+        if tpm2_engine::handle_requires_auth(CmdT::CMD_CODE, h_idx) {
             num_sessions += 1;
         }
     }

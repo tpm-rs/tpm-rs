@@ -117,7 +117,7 @@ macro_rules! setup {
 /// Recomputes the context integrity HMAC over `enc_context` (white-box: uses
 /// the owner hierarchy proof and `totalResetCount`).
 fn forge_integrity(
-    gs: &tpm2_impl::GlobalState,
+    gs: &tpm2_engine::GlobalState,
     context: &TpmsContext<'_>,
     enc_context: &[u8],
 ) -> Vec<u8> {
@@ -139,7 +139,7 @@ fn forge_integrity(
 
 /// Builds `integrity || enc_context` with a correctly forged integrity value.
 fn forge_blob(
-    gs: &tpm2_impl::GlobalState,
+    gs: &tpm2_engine::GlobalState,
     context: &TpmsContext<'_>,
     enc_context: &[u8],
 ) -> Vec<u8> {
@@ -154,7 +154,7 @@ fn forge_blob(
 /// AES-128-CFB keystream for the context, as derived by the TPM
 /// (white-box: uses the owner hierarchy proof).
 fn context_cfb(
-    gs: &tpm2_impl::GlobalState,
+    gs: &tpm2_engine::GlobalState,
     context: &TpmsContext<'_>,
     data: &mut [u8],
     encrypt: bool,

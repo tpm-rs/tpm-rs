@@ -4,9 +4,9 @@ mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
-use tpm2_impl::TpmEngine;
-use tpm2_impl::TpmPlatform;
-use tpm2_impl::handler::TransientObject;
+use tpm2_engine::TpmEngine;
+use tpm2_engine::TpmPlatform;
+use tpm2_engine::handler::TransientObject;
 
 #[test]
 #[cfg_attr(
@@ -58,7 +58,7 @@ fn get_random_in_place() {
 
 #[test]
 fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
-    let mut state = tpm2_impl::GlobalState::default();
+    let mut state = tpm2_engine::GlobalState::default();
     // 1. When empty, both primary and child allocations assign sequential slots starting at index 0
     let (slot0, handle0) = state.find_empty_transient_slot(true).unwrap();
     assert_eq!(slot0, 0);
@@ -128,7 +128,7 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
     let mut resp = [0u8; 256];
     tpm.execute_command_separate(&startup_clear[..], &mut resp[..]);
 
-    assert_eq!(tpm.state.drbg_state.magic, tpm2_impl::DRBG_MAGIC);
+    assert_eq!(tpm.state.drbg_state.magic, tpm2_engine::DRBG_MAGIC);
     assert_eq!(tpm.state.drbg_state.reseed_counter, 1);
     let seed_after_boot = tpm.state.drbg_state.seed;
 
@@ -143,8 +143,8 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
 
     let mut nv_drbg_buf = [0u8; 76];
     tpm.platform.storage.read_nv(36, &mut nv_drbg_buf).unwrap();
-    let persisted_drbg = tpm2_impl::DrbgState::from_bytes(&nv_drbg_buf);
-    assert_eq!(persisted_drbg.magic, tpm2_impl::DRBG_MAGIC);
+    let persisted_drbg = tpm2_engine::DrbgState::from_bytes(&nv_drbg_buf);
+    assert_eq!(persisted_drbg.magic, tpm2_engine::DRBG_MAGIC);
     assert_eq!(persisted_drbg.seed, seed_after_boot);
 
     // 3. Orderly Startup (SU_STATE) restores the DRBG state from NV and reseeds it (XORing fresh entropy)
@@ -159,7 +159,7 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
     tpm.execute_command_separate(&startup_state[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
 
-    assert_eq!(tpm.state.drbg_state.magic, tpm2_impl::DRBG_MAGIC);
+    assert_eq!(tpm.state.drbg_state.magic, tpm2_engine::DRBG_MAGIC);
     assert_eq!(tpm.state.drbg_state.reseed_counter, 1);
     assert_ne!(
         tpm.state.drbg_state.seed, seed_after_boot,
@@ -169,8 +169,8 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
 
 #[test]
 fn test_platform_construction_with_generic_rng() {
-    use tpm2_impl::storage::ram_storage_mock::RamStorageMock;
-    use tpm2_impl::timer::SoftwareTimer;
+    use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
+    use tpm2_engine::timer::SoftwareTimer;
 
     let mut crypto = FakeCrypto;
     let mut storage = RamStorageMock::<128>::new();

@@ -81,7 +81,7 @@ root themselves):
 | [`campaign.sh`](scripts/campaign.sh) `<dir> [secs=1800] [forks]` | Builds the in-process target into its own target dir and freezes the binary in `<dir>`. Fuzzes a scratch copy of the seed corpus and writes artifacts to `<dir>/art`. Records the tree state in `<dir>/tree.txt`. |
 | [`triage.py`](scripts/triage.py) `group <dir> [--top N]` | Computes signatures (cached), groups them into families, minimizes the top N representatives and renders them with `to_test` into `<dir>/families.md`, with `us-only`/`them-only`/`spec` tags. |
 | [`triage.py`](scripts/triage.py) `replay <old dir> [binary]` | Replays an old campaign's artifacts on a new build and lists, per family, what still reproduces. |
-| [`coverage.sh`](scripts/coverage.sh) `[corpus] [out]` | Source-based coverage (`cargo fuzz coverage` + `llvm-cov`), including the `tpm2-impl` handler table. |
+| [`coverage.sh`](scripts/coverage.sh) `[corpus] [out]` | Source-based coverage (`cargo fuzz coverage` + `llvm-cov`), including the `tpm2-engine` handler table. |
 | [`final_check.sh`](scripts/final_check.sh) | The 19-step verification list plus a check that `known_divergences.txt` has no active entries. |
 
 ## Workflow
@@ -199,7 +199,7 @@ series, the file must have no active entries.
 
 ### 5. Fix `tpm-rs` and add the regression test
 
-- Put the fix in `crates/tpm2-impl` (or in `crates/tpm2` for unmarshal and
+- Put the fix in `crates/tpm2-engine` (or in `crates/tpm2` for unmarshal and
   profile limits), with a comment that quotes the spec at the fixed check.
 - Generate the test with `to_test --name <behavior> <crash.min>`.
   - Paste it into `testing/tests/e2e/<topic>.rs`: an existing topic file, or a
@@ -213,7 +213,7 @@ series, the file must have no active entries.
   `cargo test --release -p testing --features target-<target> <name>` for
   `tcgtpm`, `tcgtpm-v185` and `ibmswtpm2` (`make test-differential` runs
   the whole suite against all three).
-- Update any `tpm2-impl` unit test that encoded the old behavior.
+- Update any `tpm2-engine` unit test that encoded the old behavior.
 - Delete temporary probe tests and examples before you hand off. In the first
   run, they broke `fmt`, `clippy` and the differential suite.
 
@@ -233,7 +233,7 @@ Recurring `tpm-rs` bug classes (details and spec quotes are in `report.md`
   curves, RSA bits, TPM2B capacities (`TPM2B_TEMPLATE` 350,
   `TPM2B_ECC_PARAMETER` 66) and `HASH_COUNT` lists; profile values that differ
   between the references (`MAX_COMMAND_SIZE`, `NV_MEMORY_SIZE`, ...) are
-  features of `tpm2`/`tpm2-impl` that each `target-*` feature of `testing`
+  features of `tpm2`/`tpm2-engine` that each `target-*` feature of `testing`
   enables (`testing/Cargo.toml`, `differential.md` M.1).
 - **Object, load and import check order:**
   - `Import` recovers the seed before it validates `objectPublic`.
@@ -279,7 +279,7 @@ Recurring `tpm-rs` bug classes (details and spec quotes are in `report.md`
   - `cargo build --release -p testing --features target-<target>` rebuilds
     the target's reference when its patches change; run the differential
     tests of every target whose patches changed (`make test-<target>`).
-  - Prefer a `tpm2`/`tpm2-impl` profile feature enabled by the target over a
+  - Prefer a `tpm2`/`tpm2-engine` profile feature enabled by the target over a
     `profile-*` patch when a reference's profile value differs from
     `tpm-rs`'s default.
   - Do not use `git init`/`git apply` to check a patch, even in `/tmp`; use

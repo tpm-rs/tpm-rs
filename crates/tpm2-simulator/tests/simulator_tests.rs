@@ -1,6 +1,6 @@
 use std::io::Cursor;
 use tpm2::platform::SimulatedFirmware;
-use tpm2_impl::storage::ram_storage_mock::RamStorageMock;
+use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
 use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider};
 use tpm2_simulator::{PlatformConnection, Simulator, SimulatorPlatformSignal};
 

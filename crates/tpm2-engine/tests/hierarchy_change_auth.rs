@@ -5,8 +5,8 @@ mod common;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use tpm2::Handle;
 use tpm2::commands::HierarchyChangeAuth;
-use tpm2_impl::TpmEngine;
-use tpm2_impl::TpmPlatform;
+use tpm2_engine::TpmEngine;
+use tpm2_engine::TpmPlatform;
 
 #[test]
 fn test_no_direct_nv_write() {
@@ -68,7 +68,7 @@ struct CountingStorage {
     writes: usize,
 }
 
-impl tpm2_impl::storage::NvStorage for CountingStorage {
+impl tpm2_engine::storage::NvStorage for CountingStorage {
     fn capacity(&self) -> usize {
         self.data.len()
     }
@@ -76,7 +76,7 @@ impl tpm2_impl::storage::NvStorage for CountingStorage {
         &self,
         offset: usize,
         buffer: &mut [u8],
-    ) -> Result<usize, tpm2_impl::storage::StorageError> {
+    ) -> Result<usize, tpm2_engine::storage::StorageError> {
         let end = core::cmp::min(offset + buffer.len(), self.data.len());
         let len = end - offset;
         buffer[..len].copy_from_slice(&self.data[offset..end]);
@@ -86,7 +86,7 @@ impl tpm2_impl::storage::NvStorage for CountingStorage {
         &mut self,
         offset: usize,
         buffer: &[u8],
-    ) -> Result<usize, tpm2_impl::storage::StorageError> {
+    ) -> Result<usize, tpm2_engine::storage::StorageError> {
         self.writes += 1;
         if offset + buffer.len() > self.data.len() {
             self.data.resize(offset + buffer.len(), 0);
@@ -94,7 +94,7 @@ impl tpm2_impl::storage::NvStorage for CountingStorage {
         self.data[offset..offset + buffer.len()].copy_from_slice(buffer);
         Ok(buffer.len())
     }
-    fn flush(&mut self) -> Result<(), tpm2_impl::storage::StorageError> {
+    fn flush(&mut self) -> Result<(), tpm2_engine::storage::StorageError> {
         Ok(())
     }
 }

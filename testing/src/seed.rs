@@ -2,7 +2,7 @@
 //! reproducing a test run.
 //!
 //! A [`crate::tpm::Tpm`] reproduces the random-number generation of the C
-//! reference TPMs (see `tpm2_impl::reference_rng`), which is seeded from the
+//! reference TPMs (see `tpm2_engine::reference_rng`), which is seeded from the
 //! process ID (`getpid()`) and the initial real-time clock
 //! (`_plat__RealTime()`) of the reference. The `Tpm` chooses these values
 //! itself ([`ReferenceSeed::choose`]: by default the test process's ID and

@@ -1,5 +1,5 @@
 //! Owned, fixed-capacity equivalents of borrowed `Tpm2bSized<'a, Tag>` and `TpmtPublic<'a>`
-//! structures for persistent state in `tpm2-impl` (`GlobalState`, `TransientObject`, `SessionState`, etc.).
+//! structures for persistent state in `tpm2-engine` (`GlobalState`, `TransientObject`, `SessionState`, etc.).
 
 use tpm2::errors::UnmarshalError;
 use tpm2::{

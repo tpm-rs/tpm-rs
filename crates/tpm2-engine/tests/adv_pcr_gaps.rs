@@ -8,8 +8,8 @@ use hex_literal::hex;
 use tpm2::Handle;
 use tpm2::commands::{Command, Message, PCRExtend, PCRRead, UnmarshalMessage};
 use tpm2::{TpmlDigestValues, TpmlPcrSelection, TpmsAuthCommand, TpmtHa};
-use tpm2_impl::TpmEngine;
-use tpm2_impl::TpmPlatform;
+use tpm2_engine::TpmEngine;
+use tpm2_engine::TpmPlatform;
 
 fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,

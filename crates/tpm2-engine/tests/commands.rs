@@ -2,8 +2,8 @@ mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
-use tpm2_impl::TpmEngine;
-use tpm2_impl::TpmPlatform;
+use tpm2_engine::TpmEngine;
+use tpm2_engine::TpmPlatform;
 
 #[test]
 fn test_clear_overflow() {

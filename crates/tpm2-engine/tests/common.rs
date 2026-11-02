@@ -9,9 +9,9 @@ use tpm2::crypto::{Asymmetric, AsymmetricSign, Cmac, ConstantTimeEq, Random, Rng
 use tpm2::crypto::{CryptoError, CryptoProvider, Direction, ModeIv};
 use tpm2::{Handle, TpmSe};
 use tpm2::{Tpm2bNonce, TpmiAlgHash};
-use tpm2_impl::handler::SessionState;
-use tpm2_impl::storage::{NvStorage, StorageError};
-use tpm2_impl::timer::TpmTimer;
+use tpm2_engine::handler::SessionState;
+use tpm2_engine::storage::{NvStorage, StorageError};
+use tpm2_engine::timer::TpmTimer;
 
 #[cfg(not(any(
     feature = "dev_crypto_rust",
@@ -94,7 +94,7 @@ pub fn make_test_session_state(
 /// A deterministic platform RNG ([`Rng`]): fills buffers with an incrementing (wrapping) byte
 /// counter that starts at 1 and continues across calls.
 ///
-/// [`TpmPlatform`](tpm2_impl::TpmPlatform) borrows its RNG mutably, so pass `&mut rng`. A
+/// [`TpmPlatform`](tpm2_engine::TpmPlatform) borrows its RNG mutably, so pass `&mut rng`. A
 /// `FakeRng` that is reused for several engines one after the other keeps counting where the
 /// previous engine stopped.
 pub struct FakeRng {
@@ -1124,12 +1124,12 @@ where
     len
 }
 
-/// A [`tpm2_impl::TpmEngine`] backed by the real test crypto provider and the
+/// A [`tpm2_engine::TpmEngine`] backed by the real test crypto provider and the
 /// fake storage/timer/RNG.
 pub type RealCryptoEngine<'a> =
-    tpm2_impl::TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>;
+    tpm2_engine::TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>;
 
-/// Builds a [`RealCryptoEngine`] plus its [`tpm2_impl::GlobalState`] and runs
+/// Builds a [`RealCryptoEngine`] plus its [`tpm2_engine::GlobalState`] and runs
 /// `TPM2_Startup(TPM_SU_CLEAR)`, so white-box tests can drive real commands
 /// while still being able to inspect and modify the internal state.
 pub fn setup_real_crypto_tpm<'a>(
@@ -1138,8 +1138,8 @@ pub fn setup_real_crypto_tpm<'a>(
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
 ) -> RealCryptoEngine<'a> {
-    let platform = tpm2_impl::TpmPlatform::new(crypto, storage, timer, rng);
-    let mut tpm = tpm2_impl::TpmEngine::new(platform).unwrap();
+    let platform = tpm2_engine::TpmPlatform::new(crypto, storage, timer, rng);
+    let mut tpm = tpm2_engine::TpmEngine::new(platform).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.locality = 0;

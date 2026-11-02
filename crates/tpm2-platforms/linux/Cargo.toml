@@ -12,7 +12,7 @@ categories.workspace = true
 
 [dependencies]
 tpm2 = { workspace = true }
-tpm2-impl = { workspace = true }
+tpm2-engine = { workspace = true }
 tpm2-crypto-rust = { workspace = true, optional = true }
 tpm2-crypto-crux = { workspace = true, optional = true }
 tpm2-crypto-bssl = { workspace = true, optional = true }
@@ -21,12 +21,12 @@ tpm2-crypto-bssl = { workspace = true, optional = true }
 default = ["bssl", "sha512"]
 # SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
 # reference built without `ALG_SHA512`) is built with every crate without it.
-sha512 = ["tpm2/sha512", "tpm2-impl/sha512", "tpm2-crypto-rust?/sha512", "tpm2-crypto-crux?/sha512", "tpm2-crypto-bssl?/sha512"]
+sha512 = ["tpm2/sha512", "tpm2-engine/sha512", "tpm2-crypto-rust?/sha512", "tpm2-crypto-crux?/sha512", "tpm2-crypto-bssl?/sha512"]
 rust = ["dep:tpm2-crypto-rust"]
 crux = ["dep:tpm2-crypto-crux"]
 bssl = ["dep:tpm2-crypto-bssl"]
 # Reproduce the simulator-platform entropy source and clock of the C reference
 # TPMs (`LinuxRng::reference`, `LinuxTimer::new_virtual`, `VirtualClock`) and
-# enable `tpm2-impl`'s linked C code of their DRBG, for differential testing.
-reference-rng = ["tpm2-impl/reference-rng"]
+# enable `tpm2-engine`'s linked C code of their DRBG, for differential testing.
+reference-rng = ["tpm2-engine/reference-rng"]
 

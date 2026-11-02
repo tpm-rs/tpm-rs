@@ -28,7 +28,7 @@ max-nv-index-size-8500 = []
 tpma-object-fixed-firmware = []
 
 # The default features are the algorithms, ECC curves and key sizes implemented by
-# the `tpm-rs` TPM (`tpm2-impl`, `TPM_CAP_ALGS` and `TPM_CAP_ECC_CURVES`): the types
+# the `tpm-rs` TPM (`tpm2-engine`, `TPM_CAP_ALGS` and `TPM_CAP_ECC_CURVES`): the types
 # of this crate accept exactly the values of the enabled features (an algorithm
 # that is not enabled is rejected when unmarshaled, e.g. `TPM_RC_HASH` for a
 # `TPMI_ALG_HASH`), and they size the profile-dependent buffers and lists

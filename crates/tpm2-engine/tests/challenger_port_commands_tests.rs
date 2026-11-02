@@ -14,9 +14,9 @@ use tpm2::{
     TpmtSymDefObject,
 };
 use tpm2::{Handle, Marshal};
-use tpm2_impl::TpmEngine;
-use tpm2_impl::TpmPlatform;
-use tpm2_impl::handler::TransientObject;
+use tpm2_engine::TpmEngine;
+use tpm2_engine::TpmPlatform;
+use tpm2_engine::handler::TransientObject;
 
 use hex_literal::hex;
 use tpm2::crypto::{Asymmetric, AsymmetricSign};
@@ -297,7 +297,7 @@ where
 /// `commandCode` is `TPM2_Duplicate` (C `IsPolicySessionRequired()` / `CheckPolicyAuthSession()`).
 /// Installs such a session (its policyDigest equals the object's empty authPolicy) and returns the
 /// authorization that uses it.
-fn dup_policy_auth(global_state: &mut tpm2_impl::GlobalState) -> TpmsAuthCommand<'static> {
+fn dup_policy_auth(global_state: &mut tpm2_engine::GlobalState) -> TpmsAuthCommand<'static> {
     const SESSION: u32 = 0x0300_0000;
     let _ = global_state.flush_session(SESSION);
     let mut session = common::make_test_session_state(
@@ -351,7 +351,7 @@ fn test_duplicate_import_load_roundtrip() {
     };
     let mut pub_buf = [0u8; 1024];
     let pub_len = marshal_to_slice(&target_public, &mut pub_buf);
-    let handler = tpm2_impl::handler::CommandHandler::new(&mut tpm);
+    let handler = tpm2_engine::handler::CommandHandler::new(&mut tpm);
     let target_name = handler
         .compute_name(target_public.name_alg, &pub_buf[..pub_len])
         .unwrap();

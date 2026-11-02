@@ -15,9 +15,9 @@ use tpm2::{
     TpmiAlgSymMode, TpmsAuthCommand, TpmsRsaParms, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2::{Handle, TpmCc, TpmSe};
-use tpm2_impl::TpmEngine;
-use tpm2_impl::TpmPlatform;
-use tpm2_impl::handler::TransientObject;
+use tpm2_engine::TpmEngine;
+use tpm2_engine::TpmPlatform;
+use tpm2_engine::handler::TransientObject;
 
 fn leak_bytes(bytes: &[u8]) -> &'static [u8] {
     std::vec::Vec::leak(bytes.to_vec())
@@ -216,7 +216,7 @@ where
 fn compute_key_name(
     crypto: &TestCryptoProvider,
     public: &TpmtPublic,
-) -> tpm2_impl::owned::OwnedName {
+) -> tpm2_engine::owned::OwnedName {
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(public, &mut buf);
     let alg = public.name_alg.unwrap_or(TpmiAlgHash::Sha256);
@@ -227,7 +227,7 @@ fn compute_key_name(
         .unwrap()
         .digest();
     name_bytes[2..2 + digest.len()].copy_from_slice(digest);
-    tpm2_impl::owned::OwnedTpm2b::new(&name_bytes[..2 + digest.len()]).unwrap()
+    tpm2_engine::owned::OwnedTpm2b::new(&name_bytes[..2 + digest.len()]).unwrap()
 }
 
 fn create_transient_key(
@@ -371,7 +371,7 @@ fn test_duplicate_unsupported_curve() {
         TpmaObject::DECRYPT | TpmaObject::RESTRICTED | TpmaObject::USER_WITH_AUTH,
         tpm2::TpmEccCurve::NistP256,
     );
-    if let tpm2_impl::owned::OwnedPublicParmsAndId::Ecc(ref mut parms, _) =
+    if let tpm2_engine::owned::OwnedPublicParmsAndId::Ecc(ref mut parms, _) =
         parent.public.parms_and_id
     {
         parms.curve_id = tpm2::TpmEccCurve::NistP224;
@@ -418,7 +418,7 @@ fn test_make_credential_panic_vulnerability_oversized_ecc_point() {
         TpmaObject::DECRYPT | TpmaObject::RESTRICTED | TpmaObject::USER_WITH_AUTH,
         tpm2::TpmEccCurve::NistP256,
     );
-    if let tpm2_impl::owned::OwnedPublicParmsAndId::Ecc(ref mut parms, _) =
+    if let tpm2_engine::owned::OwnedPublicParmsAndId::Ecc(ref mut parms, _) =
         protector.public.parms_and_id
     {
         parms.symmetric = Some(TpmtSymDefObject {
@@ -428,10 +428,10 @@ fn test_make_credential_panic_vulnerability_oversized_ecc_point() {
     }
 
     // Modify its public unique coordinates to be oversized (33 bytes)
-    if let tpm2_impl::owned::OwnedPublicParmsAndId::Ecc(_, ref mut point) =
+    if let tpm2_engine::owned::OwnedPublicParmsAndId::Ecc(_, ref mut point) =
         protector.public.parms_and_id
     {
-        point.x = tpm2_impl::owned::OwnedTpm2b::new(&[0u8; 33]).unwrap();
+        point.x = tpm2_engine::owned::OwnedTpm2b::new(&[0u8; 33]).unwrap();
     }
     tpm.state.transient_objects[0] = Some(protector);
 
@@ -464,7 +464,7 @@ fn test_cpc_2_14_01_01_create_sym_under_null_parent() {
         0x80000001,
         TpmaObject::DECRYPT | TpmaObject::RESTRICTED | TpmaObject::USER_WITH_AUTH,
     );
-    if let tpm2_impl::owned::OwnedPublicParmsAndId::Rsa(ref mut parms, _) =
+    if let tpm2_engine::owned::OwnedPublicParmsAndId::Rsa(ref mut parms, _) =
         parent.public.parms_and_id
     {
         parms.symmetric = None;

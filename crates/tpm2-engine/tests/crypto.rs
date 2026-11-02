@@ -2,13 +2,13 @@ mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
-use tpm2_impl::TpmEngine;
-use tpm2_impl::TpmPlatform;
+use tpm2_engine::TpmEngine;
+use tpm2_engine::TpmPlatform;
 
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bName, TpmaObject, TpmiAlgHash, TpmtPublic,
 };
-use tpm2_impl::handler::TransientObject;
+use tpm2_engine::handler::TransientObject;
 
 /// Converts a `TPM_ST_NO_SESSIONS` request with `num_handles` handles into a `TPM_ST_SESSIONS`
 /// request carrying one empty password session. Commands whose handles have an authorization

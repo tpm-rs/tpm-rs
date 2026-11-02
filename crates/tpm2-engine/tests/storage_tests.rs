@@ -1,15 +1,15 @@
 use tpm2::{Handle, TpmSe, TpmiAlgHash};
-use tpm2_impl::handler::SessionState;
-use tpm2_impl::storage::manager::StorageManager;
-use tpm2_impl::storage::ram_storage_mock::RamStorageMock;
-use tpm2_impl::storage::transcoder::{
+use tpm2_engine::handler::SessionState;
+use tpm2_engine::storage::manager::StorageManager;
+use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
+use tpm2_engine::storage::transcoder::{
     HIERARCHY_AUTH_HANDLE, NV_MEMORY_SIZE, transcode_s_nv_to_storage, transcode_storage_to_s_nv,
 };
-use tpm2_impl::storage::translator::{
+use tpm2_engine::storage::translator::{
     Ibmswtpm2StateDto, S_OBJECTS_SIZE, S_PCRS_SIZE, S_SESSIONS_SIZE, TpmStateTranslator,
 };
-use tpm2_impl::storage::{NvStorage, StorageError, Tpm2Storage};
-use tpm2_impl::{ActiveSequence, GlobalState, SequenceType};
+use tpm2_engine::storage::{NvStorage, StorageError, Tpm2Storage};
+use tpm2_engine::{ActiveSequence, GlobalState, SequenceType};
 
 // =========================================================================
 // Tests from src/storage/ram_storage_mock.rs

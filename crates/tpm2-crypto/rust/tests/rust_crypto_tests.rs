@@ -630,7 +630,7 @@ fn test_rust_crypto_provider_ecc_result_conventions() {
 
 #[test]
 fn test_rust_crypto_provider_ecdaa_sign_p256() {
-    // ECDAA signing is implemented in tpm2-impl (it needs the scheme hash); the provider
+    // ECDAA signing is implemented in tpm2-engine (it needs the scheme hash); the provider
     // primitive reports that it is not supported instead of producing non-spec signatures.
     let provider = RustCryptoProvider;
     let digest = [0xA5u8; 32];

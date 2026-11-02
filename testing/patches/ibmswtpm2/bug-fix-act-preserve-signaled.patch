@@ -13,7 +13,7 @@ TPM2_Shutdown(TPM_SU_STATE) sets it), TPM Resume keeps bits of ACTs that no
 longer signal, and a TPM Resume after a power loss clears preserveSignaled
 (signaled itself is restored by _ActResume()). The fix sets go.preservedSignaled from go.signaledACT (saved by
 TPM2_Shutdown(TPM_SU_STATE)) on TPM Resume and clears it otherwise, as tpm-rs
-does (tpm2-impl src/act.rs, ActState::startup).
+does (tpm2-engine src/act.rs, ActState::startup).
 
 diff --git a/src/ACT_spt.c b/src/ACT_spt.c
 index ed50bfb..4a50fd0 100644

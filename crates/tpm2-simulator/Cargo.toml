@@ -11,7 +11,7 @@ categories.workspace = true
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-tpm2-impl = { workspace = true, features = ["std"] }
+tpm2-engine = { workspace = true, features = ["std"] }
 tpm2 = { workspace = true }
 tpm2-platform-linux = { path = "../tpm2-platforms/linux", default-features = false }
 anyhow = { version = "1.0.102", features = ["backtrace"] }
@@ -20,7 +20,7 @@ anyhow = { version = "1.0.102", features = ["backtrace"] }
 default = ["bssl", "sha512"]
 # SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
 # reference built without `ALG_SHA512`) is built with every crate without it.
-sha512 = ["tpm2/sha512", "tpm2-impl/sha512", "tpm2-platform-linux/sha512"]
+sha512 = ["tpm2/sha512", "tpm2-engine/sha512", "tpm2-platform-linux/sha512"]
 rust = ["tpm2-platform-linux/rust"]
 crux = ["tpm2-platform-linux/crux"]
 bssl = ["tpm2-platform-linux/bssl"]

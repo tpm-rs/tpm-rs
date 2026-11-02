@@ -51,14 +51,14 @@
 //! additional validation to ensure handles are in the correct range.
 //!
 //! Until then, a TPM implementation has to validate the handle area itself:
-//! the `tpm2-impl` engine checks every handle against its `TPMI_*` interface
+//! the `tpm2-engine` engine checks every handle against its `TPMI_*` interface
 //! type (in handle order, reporting the failing handle's position in the
 //! response code) before it unmarshals the parameter area.
 //!
 //! ### Deprecated commands omitted upstream
 //!
 //! Upstream `tpm-rs` intentionally omits the following commands, which are
-//! deprecated in v184. They are defined here because the `tpm2-impl` TPM
+//! deprecated in v184. They are defined here because the `tpm2-engine` TPM
 //! implementation needs them, and are annotated with Rust's `#[deprecated]`
 //! attribute. The reasons upstream gives for omitting them still apply:
 //! - [`CreateLoaded`]: deprecated in v184

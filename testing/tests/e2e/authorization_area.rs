@@ -344,7 +344,7 @@ fn invalid_first_handle_reported_before_missing_second_handle() {
 #[test]
 fn command_larger_than_max_command_size_rejected() {
     let mut sim = new_sim();
-    let max = tpm2_impl::MAX_COMMAND_SIZE;
+    let max = tpm2_engine::MAX_COMMAND_SIZE;
     for (len, expected) in [(max + 1, 0x142), (max + 0x80, 0x142)] {
         // `TPM2_NV_UndefineSpaceSpecial` with an invalid handle and padding.
         let mut cmd = vec![0x80, 0x02, 0, 0, 0, 0, 0, 0, 0x01, 0x1F, 0, 0, 0, 0];

@@ -4,7 +4,7 @@ mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
-use tpm2_impl::{TpmEngine, TpmPlatform};
+use tpm2_engine::{TpmEngine, TpmPlatform};
 
 fn setup_tpm() -> TpmEngine<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng> {
     // Create static references or owned items that match the test common setup

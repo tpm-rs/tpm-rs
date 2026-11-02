@@ -8,7 +8,7 @@
 //! [`SimulatorPlatformSignal`] mirrors.
 //!
 //! [`SimulatorPlatformSignal`] is available in every build. [`PlatformConnection`] uses
-//! `std::io` and `anyhow`, so it requires the `std` feature (`tpm2-impl` itself stays
+//! `std::io` and `anyhow`, so it requires the `std` feature (`tpm2-engine` itself stays
 //! `no_std`).
 
 /// A signal that can be sent to the platform port of a TPM simulator.

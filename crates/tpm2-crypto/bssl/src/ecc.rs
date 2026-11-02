@@ -97,7 +97,7 @@ impl EccCurve<32> for BsslEccNistP256 {
     }
 
     /// Not provided: ECDAA signing (TPM 2.0 Part 1, "ECDAA Sign Operation") needs the
-    /// signing scheme's hash, which this interface does not carry, so `tpm2-impl` computes it
+    /// signing scheme's hash, which this interface does not carry, so `tpm2-engine` computes it
     /// itself from the generic primitives. The previous implementation did not follow the
     /// spec (it derived the nonce from the digest and special-cased fixed test points).
     fn ecdaa_sign(

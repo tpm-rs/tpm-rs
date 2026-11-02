@@ -15,9 +15,9 @@ use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bPublicKeyRsa, TpmaObject,
     TpmiAlgHash, TpmsAuthCommand, TpmsRsaParms, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_impl::TpmEngine;
-use tpm2_impl::TpmPlatform;
-use tpm2_impl::handler::TransientObject;
+use tpm2_engine::TpmEngine;
+use tpm2_engine::TpmPlatform;
+use tpm2_engine::handler::TransientObject;
 
 fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
@@ -273,7 +273,7 @@ fn create_transient_ecc_key(
 /// `commandCode` is `TPM2_Duplicate` (C `IsPolicySessionRequired()` / `CheckPolicyAuthSession()`).
 /// Installs such a session (its policyDigest equals the object's empty authPolicy) and returns the
 /// authorization that uses it.
-fn dup_policy_auth(global_state: &mut tpm2_impl::GlobalState) -> TpmsAuthCommand<'static> {
+fn dup_policy_auth(global_state: &mut tpm2_engine::GlobalState) -> TpmsAuthCommand<'static> {
     const SESSION: u32 = 0x0300_0000;
     let _ = global_state.flush_session(SESSION);
     let mut session = common::make_test_session_state(

@@ -2,7 +2,7 @@
 //!
 //! Moved from the black-box `testing` crate: recomputing the HMAC requires the
 //! TPM-internal hierarchy proof and `totalResetCount`, which are only reachable
-//! through [`tpm2_impl::GlobalState`].
+//! through [`tpm2_engine::GlobalState`].
 
 mod common;
 

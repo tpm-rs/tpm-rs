@@ -7118,12 +7118,12 @@ pub fn set_primary_policy(sim: &mut Tpm, auth_handle: Handle, policy: &[u8]) -> 
 }
 
 /// The handles of the Authenticated Countdown Timers this build implements (a profile
-/// setting, `tpm2_impl::act::IMPLEMENTED_ACTS`): `TPM_RH_ACT_0`, plus `TPM_RH_ACT_A` with
-/// `tpm2-impl`'s `act-a` feature.
+/// setting, `tpm2_engine::act::IMPLEMENTED_ACTS`): `TPM_RH_ACT_0`, plus `TPM_RH_ACT_A` with
+/// `tpm2-engine`'s `act-a` feature.
 pub fn implemented_act_handles() -> Vec<u32> {
-    tpm2_impl::act::IMPLEMENTED_ACTS
+    tpm2_engine::act::IMPLEMENTED_ACTS
         .iter()
-        .map(|&act| tpm2_impl::act::act_handle(act).0)
+        .map(|&act| tpm2_engine::act::act_handle(act).0)
         .collect()
 }
 

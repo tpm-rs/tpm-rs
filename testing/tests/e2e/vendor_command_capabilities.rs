@@ -28,7 +28,7 @@ const ALG_NULL: u16 = 0x0010;
 /// `ibmswtpm2` profile, the Nuvoton `NTC2_*` commands.
 fn vendor_commands() -> Vec<u32> {
     let mut commands = vec![CC_VENDOR_TCG_TEST];
-    if tpm2_impl::NTC2_VENDOR_COMMANDS {
+    if tpm2_engine::NTC2_VENDOR_COMMANDS {
         commands.extend([0x2000_0211, 0x2000_0212, 0x2000_0213]);
     }
     commands

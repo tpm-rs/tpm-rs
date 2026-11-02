@@ -1,5 +1,5 @@
 [package]
-name = "tpm2-impl"
+name = "tpm2-engine"
 # Inherit from Workspace Settings
 version.workspace = true
 edition.workspace = true

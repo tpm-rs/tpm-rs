@@ -7,7 +7,7 @@ use common::make_test_session_state;
 fn test_global_state_session_lifecycle() {
     use tpm2::{Handle, TpmSe};
     use tpm2::{Tpm2bNonce, TpmiAlgHash};
-    use tpm2_impl::GlobalState;
+    use tpm2_engine::GlobalState;
 
     let mut state = GlobalState::default();
 
@@ -37,7 +37,7 @@ fn test_global_state_session_lifecycle() {
     assert!(state.session(0x20000001).is_none());
 
     // Fill up slots (up to MAX_LOADED_SESSIONS)
-    for i in 2..=tpm2_impl::MAX_LOADED_SESSIONS as u32 {
+    for i in 2..=tpm2_engine::MAX_LOADED_SESSIONS as u32 {
         let handle = 0x02000000 | i;
         let session = make_test_session_state(
             handle,

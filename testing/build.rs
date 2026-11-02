@@ -2,7 +2,7 @@
 //!
 //! A differential build compares `tpm-rs` with one C reference TPM, the
 //! *target*, selected by exactly one `target-*` feature (each of which also
-//! enables the `differential` feature and the `tpm2`/`tpm2-impl` features that
+//! enables the `differential` feature and the `tpm2`/`tpm2-engine` features that
 //! give `tpm-rs` the profile of that reference, see `Cargo.toml`):
 //!
 //! * `target-tcgtpm`: the TCG reference implementation from the
@@ -576,7 +576,7 @@ fn build_reference(name: &str, version: &Version, manifest: &Path, out: &Path) {
 /// symbols, and the only harness symbols (`difftest_*`) and redirected C
 /// library functions it needs are [`SHARED_CALLBACKS`] and its own
 /// [`PER_REFERENCE_LIBC`] replacements. This is what lets both references
-/// (and the localized `libtpmrs_refrng.a` of `tpm2-impl`'s
+/// (and the localized `libtpmrs_refrng.a` of `tpm2-engine`'s
 /// `reference-rng`, which exports only `tpmrs_refrng_*`) share one binary.
 ///
 /// # Panics

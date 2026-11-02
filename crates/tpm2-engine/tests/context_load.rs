@@ -5,9 +5,9 @@ use tpm2::{Unmarshal, UnmarshalMessage};
 mod common;
 
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
-use tpm2_impl::TpmEngine;
-use tpm2_impl::TpmPlatform;
-use tpm2_impl::handler::TransientObject;
+use tpm2_engine::TpmEngine;
+use tpm2_engine::TpmPlatform;
+use tpm2_engine::handler::TransientObject;
 
 #[test]
 fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {

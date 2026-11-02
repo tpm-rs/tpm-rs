@@ -2,7 +2,7 @@
 #
 #   make test               the full suite: every target below
 #   make test-workspace     `cargo test --release` (BoringSSL backend)
-#   make test-reference-rng the tpm2-impl tests with the reference RNG port
+#   make test-reference-rng the tpm2-engine tests with the reference RNG port
 #   make test-backends      the crypto backend tests (Rust and Crux)
 #   make test-differential  the differential tests, one run per target
 #   make test-<target>      the differential tests against one target (see DIFFERENTIAL_TARGETS)
@@ -13,7 +13,7 @@
 # Every test runs with `--release` (AGENTS.md, "Build Profile Guideline").
 #
 # A differential run builds `testing` with one `target-*` feature: tpm-rs gets
-# the profile of that C reference TPM (its `tpm2`/`tpm2-impl` features, see
+# the profile of that C reference TPM (its `tpm2`/`tpm2-engine` features, see
 # testing/Cargo.toml) and every E2E and Go parity test is compared with it.
 # `tcgtpm-v185` needs access to the TCG-internal TPM-Internal repository;
 # without it, run e.g. `make test DIFFERENTIAL_TARGETS="tcgtpm ibmswtpm2"`.
@@ -42,15 +42,15 @@ test-workspace:
 	$(CARGO) test --release $(CARGO_TEST_ARGS)
 
 test-reference-rng:
-	$(CARGO) test --release -p tpm2-impl --features reference-rng $(CARGO_TEST_ARGS)
+	$(CARGO) test --release -p tpm2-engine --features reference-rng $(CARGO_TEST_ARGS)
 
 # The crates that support other crypto backends (AGENTS.md, "Testing Different
 # Cryptographic Backends"); `testing` supports only BoringSSL.
 test-backends:
 	$(CARGO) test --release -p tpm2-crypto-tests --no-default-features --features rust,sha512 $(CARGO_TEST_ARGS)
 	$(CARGO) test --release -p tpm2-crypto-tests --no-default-features --features crux,sha512 $(CARGO_TEST_ARGS)
-	$(CARGO) test --release -p tpm2-impl --no-default-features --features dev_crypto_rust,sha512 $(CARGO_TEST_ARGS)
-	$(CARGO) test --release -p tpm2-impl --no-default-features --features dev_crypto_crux,sha512 $(CARGO_TEST_ARGS)
+	$(CARGO) test --release -p tpm2-engine --no-default-features --features dev_crypto_rust,sha512 $(CARGO_TEST_ARGS)
+	$(CARGO) test --release -p tpm2-engine --no-default-features --features dev_crypto_crux,sha512 $(CARGO_TEST_ARGS)
 
 # The targets run one after the other: each builds the tpm-rs stack with its
 # own features into the same target directory (and the `reference` binary that
@@ -74,11 +74,11 @@ fmt:
 
 clippy: $(DIFFERENTIAL_CLIPPY)
 	$(CARGO) clippy --all-targets -- -D warnings
-	$(CARGO) clippy --all-targets -p tpm2-impl --features reference-rng -- -D warnings
+	$(CARGO) clippy --all-targets -p tpm2-engine --features reference-rng -- -D warnings
 	# A TPM without SHA-512 (every crate without its default `sha512` feature).
-	$(CARGO) clippy --all-targets -p tpm2-impl -p tpm2-crypto-rust -p tpm2-crypto-crux \
+	$(CARGO) clippy --all-targets -p tpm2-engine -p tpm2-crypto-rust -p tpm2-crypto-crux \
 		-p tpm2-crypto-bssl -p tpm2-client --no-default-features \
-		--features tpm2-impl/dev_crypto_bssl,tpm2-impl/reference-rng -- -D warnings
+		--features tpm2-engine/dev_crypto_bssl,tpm2-engine/reference-rng -- -D warnings
 	$(CARGO) clippy --all-targets -p testing --no-default-features --features target-tcgtpm -- -D warnings
 
 $(DIFFERENTIAL_CLIPPY): clippy-%:

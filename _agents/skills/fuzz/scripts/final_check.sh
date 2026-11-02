@@ -25,9 +25,9 @@ for t in tcgtpm tcgtpm-v185 ibmswtpm2; do
   step "clippy target-$t" "$C clippy --all-targets -p testing --features target-$t -- -D warnings"
 done
 step "clippy fuzz-inproc" "$C clippy --all-targets -p testing --features target-tcgtpm,fuzz-inproc -- -D warnings"
-step "clippy reference-rng" "$C clippy --all-targets -p tpm2-impl --features reference-rng -- -D warnings"
+step "clippy reference-rng" "$C clippy --all-targets -p tpm2-engine --features reference-rng -- -D warnings"
 step "test" "$C test --release"
-step "test reference-rng" "$C test --release -p tpm2-impl --features reference-rng"
+step "test reference-rng" "$C test --release -p tpm2-engine --features reference-rng"
 for t in tcgtpm tcgtpm-v185 ibmswtpm2; do
   step "differential (target-$t)" "$C test --release -p testing --features target-$t"
 done

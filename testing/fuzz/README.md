@@ -145,7 +145,7 @@ cargo fuzz run --fuzz-dir testing/fuzz -O -s none --features inproc diff_convers
    `cargo test --release -p testing --features target-<name> <test>` for every
    target (`make test-differential`).
 4. **Classify** it (as in `differential.md`):
-   - `tpm-rs` bug: fix it in `crates/tpm2-impl` and keep the test;
+   - `tpm-rs` bug: fix it in `crates/tpm2-engine` and keep the test;
    - reference bug: add `testing/patches/<impl>/bug-fix-<fix>.patch` and a
      doc section;
    - implementation-defined: add a narrow exception in

@@ -10,9 +10,9 @@ use tpm2::crypto::{Asymmetric, AsymmetricSign};
 use tpm2::crypto::{CryptoError, CryptoProvider};
 use tpm2::{Handle, Marshal};
 use tpm2::{TpmiAlgHash, TpmsAuthCommand};
-use tpm2_impl::TpmEngine;
-use tpm2_impl::TpmPlatform;
-use tpm2_impl::handler::SessionState;
+use tpm2_engine::TpmEngine;
+use tpm2_engine::TpmPlatform;
+use tpm2_engine::handler::SessionState;
 
 struct StressTestCrypto;
 

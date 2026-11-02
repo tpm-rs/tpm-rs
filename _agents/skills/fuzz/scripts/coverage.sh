@@ -2,7 +2,7 @@
 # Source-based coverage of the `diff_conversation` target over a corpus: builds
 # the coverage-instrumented target, runs it once per corpus file (one process
 # per file, so a failing input does not stop the run), merges the profiles and
-# reports coverage, in particular of crates/tpm2-impl/src/handler/.
+# reports coverage, in particular of crates/tpm2-engine/src/handler/.
 #
 # Usage: coverage.sh [corpus dir] [output dir]
 # Defaults: testing/fuzz/corpus/diff_conversation, /tmp/tpm-rs-fuzz/coverage.
@@ -29,7 +29,7 @@ ls "$CORPUS" | xargs -P "$(nproc)" -I{} env ASAN_OPTIONS=detect_leaks=0 \
 "$TOOLS/llvm-cov" report "$BIN" -instr-profile="$OUT/merged.profdata" \
     --ignore-filename-regex='(\.cargo|rustc|/rust/)' > "$OUT/report_all.txt"
 "$TOOLS/llvm-cov" report "$BIN" -instr-profile="$OUT/merged.profdata" \
-    "$R/crates/tpm2-impl/src/handler" > "$OUT/report_handlers.txt"
+    "$R/crates/tpm2-engine/src/handler" > "$OUT/report_handlers.txt"
 echo "per-line details: $TOOLS/llvm-cov show $BIN -instr-profile=$OUT/merged.profdata <file>"
 echo "reports: $OUT/report_all.txt $OUT/report_handlers.txt"
 tail -1 "$OUT/report_handlers.txt"

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 use std::io::{Read, Write};
 
-use tpm2_impl::storage::ram_storage_mock::RamStorageMock;
+use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
 pub mod execute;
 pub use execute::ExecuteError;
 
@@ -19,8 +19,8 @@ pub struct Args {
 use tpm2::Connection;
 use tpm2::commands::Command;
 use tpm2::platform::SimulatedFirmware;
-use tpm2_impl::{GlobalState, InternalError, TpmEngine};
-pub use tpm2_impl::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
+use tpm2_engine::{GlobalState, InternalError, TpmEngine};
+pub use tpm2_engine::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
 use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform};
 
 /// Commands for the command server.
@@ -89,12 +89,12 @@ fn log_errors() -> bool {
 /// Byte size of the simulator's NV backing store ([`RamStorageMock`]).
 ///
 /// Large enough that the backing store never runs out before the reference's NV space
-/// accounting (`tpm2_impl::storage::nv_capacity`) does: that ledger admits up to seven persistent
+/// accounting (`tpm2_engine::storage::nv_capacity`) does: that ledger admits up to seven persistent
 /// objects whatever their type, and an RSA object takes more bytes in this store than an ECC
 /// one, so the store needs room for the largest records the ledger admits (a 4 KiB store held
 /// only three RSA persistent objects). It is twice the size of the accounted NV memory
 /// (`NV_MEMORY_SIZE`, 16384 octets by default).
-pub const NV_STORAGE_SIZE: usize = 2 * tpm2_impl::storage::nv_capacity::NV_MEMORY_SIZE as usize;
+pub const NV_STORAGE_SIZE: usize = 2 * tpm2_engine::storage::nv_capacity::NV_MEMORY_SIZE as usize;
 
 /// An in-process TPM simulator.
 ///
@@ -211,8 +211,8 @@ impl<'a> Simulator<'a> {
                 let length = u32::from_be_bytes(len_buf) as usize;
                 // Larger than the TPM's `MAX_COMMAND_SIZE`, so that oversized commands reach
                 // the TPM (`TPM_RC_COMMAND_SIZE`).
-                const MAX_LENGTH: usize = if tpm2_impl::MAX_COMMAND_SIZE + 4096 > 8192 {
-                    tpm2_impl::MAX_COMMAND_SIZE + 4096
+                const MAX_LENGTH: usize = if tpm2_engine::MAX_COMMAND_SIZE + 4096 > 8192 {
+                    tpm2_engine::MAX_COMMAND_SIZE + 4096
                 } else {
                     8192
                 };
@@ -230,7 +230,7 @@ impl<'a> Simulator<'a> {
 
                 // Execute command
                 self.context.set_locality(loc_buf[0]);
-                let mut output_buffer = vec![0u8; tpm2_impl::MAX_RESPONSE_SIZE.max(4096)];
+                let mut output_buffer = vec![0u8; tpm2_engine::MAX_RESPONSE_SIZE.max(4096)];
                 let written = self
                     .context
                     .execute_command_separate(&input_buffer[..], &mut output_buffer[..]);
@@ -508,13 +508,13 @@ impl PlatformConnection for Simulator<'_> {
 /// Implementation details used by [`create_simulator!`].
 ///
 /// These re-exports let the macro expand in downstream crates without
-/// requiring them to depend on (or import anything from) `tpm2-impl` or
+/// requiring them to depend on (or import anything from) `tpm2-engine` or
 /// `tpm2-platform-linux`. Not part of the public API.
 #[doc(hidden)]
 pub mod __private {
     pub use tpm2::TpmSu;
     pub use tpm2::commands::Startup;
-    pub use tpm2_impl::storage::ram_storage_mock::RamStorageMock;
+    pub use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
     pub use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider};
 }
 
@@ -620,7 +620,7 @@ pub fn __new_reference_simulator(pid: u32, realtime_ms: u64) -> Simulator<'stati
 ///   that only moves via [`Simulator::advance_clock`];
 /// * the platform entropy reproduces the reference's `_plat__GetEntropy()`
 ///   (glibc `rand()` seeded from the real time and `$pid`), which feeds
-///   `tpm2-impl`'s port of the reference DRBG (`reference-rng` feature).
+///   `tpm2-engine`'s port of the reference DRBG (`reference-rng` feature).
 ///
 /// Two simulators created with the same `$pid` and `$realtime_ms` and fed the
 /// same inputs (including clock advances) produce byte-identical responses,

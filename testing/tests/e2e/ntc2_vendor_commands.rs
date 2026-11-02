@@ -1,6 +1,6 @@
 //! The Nuvoton vendor commands `NTC2_PreConfig` (`0x20000211`), `NTC2_LockPreConfig`
 //! (`0x20000212`) and `NTC2_GetConfig` (`0x20000213`) as emulated by `ibmswtpm2` (not in the
-//! TPM 2.0 specification), implemented in the `ibmswtpm2` profile (`tpm2-impl`'s
+//! TPM 2.0 specification), implemented in the `ibmswtpm2` profile (`tpm2-engine`'s
 //! `ntc2-vendor-commands`): the initial configuration, setting and locking it, its RAM-only
 //! lifetime (kept across power cycles and TPM Resets, reset with a new TPM), the
 //! `NO_SESSIONS` attribute and the parameter checks. Without the profile feature the three
@@ -76,7 +76,7 @@ fn get_config(sim: &mut Tpm) -> Vec<u8> {
 /// (the profile itself is covered by the other tests of this file).
 #[test]
 fn commands_are_unimplemented_without_profile() {
-    if tpm2_impl::NTC2_VENDOR_COMMANDS {
+    if tpm2_engine::NTC2_VENDOR_COMMANDS {
         return;
     }
     let mut sim = Tpm::new();
@@ -98,7 +98,7 @@ fn commands_are_unimplemented_without_profile() {
 /// `NTC2_GetConfig` returns the 18 raw bytes of the initial configuration.
 #[test]
 fn new_tpm_reports_initial_config() {
-    if !tpm2_impl::NTC2_VENDOR_COMMANDS {
+    if !tpm2_engine::NTC2_VENDOR_COMMANDS {
         return;
     }
     let mut sim = Tpm::new();
@@ -111,7 +111,7 @@ fn new_tpm_reports_initial_config() {
 /// `IsLocked` at 0xFF, and can be repeated while the configuration is unlocked.
 #[test]
 fn pre_config_replaces_configuration() {
-    if !tpm2_impl::NTC2_VENDOR_COMMANDS {
+    if !tpm2_engine::NTC2_VENDOR_COMMANDS {
         return;
     }
     let mut sim = Tpm::new();
@@ -128,7 +128,7 @@ fn pre_config_replaces_configuration() {
 /// unchanged.
 #[test]
 fn lock_pre_config_disables_pre_config() {
-    if !tpm2_impl::NTC2_VENDOR_COMMANDS {
+    if !tpm2_engine::NTC2_VENDOR_COMMANDS {
         return;
     }
     let mut sim = Tpm::new();
@@ -152,7 +152,7 @@ fn lock_pre_config_disables_pre_config() {
 /// signal, and `Tpm::reset` (a new TPM) restores the initial configuration.
 #[test]
 fn configuration_survives_power_cycles_until_new_tpm() {
-    if !tpm2_impl::NTC2_VENDOR_COMMANDS {
+    if !tpm2_engine::NTC2_VENDOR_COMMANDS {
         return;
     }
     let mut sim = Tpm::new();
@@ -185,7 +185,7 @@ fn configuration_survives_power_cycles_until_new_tpm() {
 /// password session, each fails with `TPM_RC_AUTH_CONTEXT` and changes nothing.
 #[test]
 fn sessions_are_rejected() {
-    if !tpm2_impl::NTC2_VENDOR_COMMANDS {
+    if !tpm2_engine::NTC2_VENDOR_COMMANDS {
         return;
     }
     let mut sim = Tpm::new();
@@ -210,7 +210,7 @@ fn sessions_are_rejected() {
 /// unchanged.
 #[test]
 fn malformed_parameters_are_rejected() {
-    if !tpm2_impl::NTC2_VENDOR_COMMANDS {
+    if !tpm2_engine::NTC2_VENDOR_COMMANDS {
         return;
     }
     let mut sim = Tpm::new();
@@ -236,7 +236,7 @@ fn malformed_parameters_are_rejected() {
 /// command-code bits as `commandIndex`.
 #[test]
 fn command_attributes_are_vendor_and_nv() {
-    if !tpm2_impl::NTC2_VENDOR_COMMANDS {
+    if !tpm2_engine::NTC2_VENDOR_COMMANDS {
         return;
     }
     let mut sim = Tpm::new();
