@@ -11,14 +11,19 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["connection-tcp"]
+default = ["connection-tcp", "rustcrypto"]
 
 # Enable the TCP TPM connection (e.g. for the TPM simulator)
 connection-tcp = ["dep:zerocopy", "tpm2/std"]
 
+# Use RustCrypto as the default cryptography backend (`Backend`). Sessions are
+# generic over the backend, so another can be used without this feature.
+rustcrypto = ["dep:tpm2-rustcrypto"]
+
 [dependencies]
 tpm2 = { workspace = true }
 zerocopy = { workspace = true, optional = true }
+tpm2-rustcrypto = { path = "../tpm2-rustcrypto", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

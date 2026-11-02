@@ -1,7 +1,9 @@
 use crate::sessions::session_auth_core::{Buf, MAX_DIGEST, SessionCore, trim_trailing_zeros};
+use crate::CryptoBackend;
 use crate::sessions::{AuthError, CommandData, ResponseData, Session};
 use core::fmt;
-use tpm2::crypto::{ConstantTimeEq, CryptoError, Hash, HashStream, Hmac, Random};
+use core::marker::PhantomData;
+use tpm2::crypto::{Crypto, CryptoError, HashContext, hash};
 use tpm2::{
     Handle, Marshal, Tpm2bAuth, Tpm2bDigest, Tpm2bName, Tpm2bNonce, Tpm2bOperand, TpmCap, TpmCc,
     TpmEo, TpmaLocality, TpmaSession, TpmiAlgHash, TpmlPcrSelection, TpmsAuthCommand,
@@ -25,21 +27,36 @@ use tpm2::{
 /// The TPM also checks some commands' arguments against its state (e.g.
 /// `TPM2_PolicyOR` checks that the current digest is in `pHashList`). These
 /// checks are not replicated here.
-#[derive(Clone)]
-pub struct PolicyDigest<C> {
-    crypto: C,
+///
+/// The digest is computed using the cryptography backend `C`, which defaults
+/// to [`CryptoBackend`].
+pub struct PolicyDigest<C = CryptoBackend> {
+    crypto: PhantomData<C>,
     alg: TpmiAlgHash,
     digest: Buf,
+}
+
+// Manual impl, as the backend `C` itself needn't be `Clone`. Unlike a
+// session, a policyDigest has no TPM state, so it can be cloned (e.g. to
+// compute the branches of a `TPM2_PolicyOR` from a common prefix).
+impl<C> Clone for PolicyDigest<C> {
+    fn clone(&self) -> Self {
+        PolicyDigest {
+            crypto: PhantomData,
+            alg: self.alg,
+            digest: self.digest.clone(),
+        }
+    }
 }
 
 impl<C> PolicyDigest<C> {
     /// Creates a new policyDigest for the hash algorithm `alg`, which is
     /// initially all zeros, like that of a new policy session.
-    pub fn new(crypto: C, alg: TpmiAlgHash) -> Self {
+    pub fn new(alg: TpmiAlgHash) -> Self {
         let mut digest = Buf::EMPTY;
         digest.len = alg.digest_size();
         PolicyDigest {
-            crypto,
+            crypto: PhantomData,
             alg,
             digest,
         }
@@ -61,14 +78,14 @@ impl<C> PolicyDigest<C> {
     }
 }
 
-impl<C: Hash> PolicyDigest<C> {
+impl<C: Crypto> PolicyDigest<C> {
     /// Updates the digest:
     ///
     /// ```text
     /// policyDigest := H(policyDigest || parts[0] || parts[1] || ...)
     /// ```
     fn extend(&mut self, parts: &[&[u8]]) -> Result<(), CryptoError> {
-        let mut stream = HashStream::new(&self.crypto, self.alg)?;
+        let mut stream = HashContext::<C>::new(self.alg)?;
         stream.update(self.digest.as_slice())?;
         for part in parts {
             stream.update(part)?;
@@ -80,12 +97,8 @@ impl<C: Hash> PolicyDigest<C> {
 
     /// Computes `H(parts[0] || parts[1] || ...)`, e.g. for an `args` hash.
     fn hash(&self, parts: &[&[u8]]) -> Result<Buf, CryptoError> {
-        let mut stream = HashStream::new(&self.crypto, self.alg)?;
-        for part in parts {
-            stream.update(part)?;
-        }
         let mut out = [0u8; MAX_DIGEST];
-        Ok(Buf::new(stream.finalize(&mut out)?.digest()))
+        Ok(Buf::new(hash::<C>(self.alg, parts, &mut out)?.digest()))
     }
 
     /// The update shared by `TPM2_PolicySigned`, `TPM2_PolicySecret`,
@@ -157,7 +170,7 @@ impl<C: Hash> PolicyDigest<C> {
     /// ```
     pub fn policy_or(&mut self, digests: &[Tpm2bDigest<'_>]) -> Result<(), CryptoError> {
         self.reset();
-        let mut stream = HashStream::new(&self.crypto, self.alg)?;
+        let mut stream = HashContext::<C>::new(self.alg)?;
         stream.update(self.digest.as_slice())?;
         stream.update(&TpmCc::PolicyOR.code().to_be_bytes())?;
         for digest in digests {
@@ -438,11 +451,18 @@ enum PolicyAuth {
 /// `nonceDecrypt`/`nonceEncrypt` are not yet included in the HMAC, so this
 /// session must not be combined with separate encrypt/decrypt sessions.
 ///
-/// This is intentionally not `Copy`, as using a stale copy of the session
-/// would send a stale `nonceTPM`.
-#[derive(Clone)]
-pub struct PolicySession<C> {
+/// The session uses the cryptography backend `C`, which defaults to
+/// [`CryptoBackend`].
+///
+/// This is intentionally neither `Clone` nor `Copy`: only the copy used for a
+/// command would see the new `nonceTPM`, so the others would desynchronize
+/// from the TPM.
+pub struct PolicySession<C = CryptoBackend> {
     core: SessionCore<C>,
+    // TODO: Validate these. `decrypt`, `encrypt`, and the audit attributes
+    // aren't supported yet (parameters aren't encrypted, and
+    // `nonceDecrypt`/`nonceEncrypt` aren't included in the HMAC), but nothing
+    // prevents setting them.
     /// Session attributes sent with this session;
     /// defaults to [`TpmaSession::CONTINUE_SESSION`].
     pub session_attributes: TpmaSession,
@@ -451,7 +471,7 @@ pub struct PolicySession<C> {
     policy: PolicyDigest<C>,
 }
 
-impl<C: Clone + Hash + Hmac + Random + ConstantTimeEq> PolicySession<C> {
+impl<C: Crypto> PolicySession<C> {
     /// Creates a new unsalted policy session (i.e. `tpmKey` was
     /// `TPM_RH_NULL` in `TPM2_StartAuthSession`), with an empty session key.
     /// If `bind` was not `TPM_RH_NULL`, use
@@ -464,15 +484,14 @@ impl<C: Clone + Hash + Hmac + Random + ConstantTimeEq> PolicySession<C> {
     /// (e.g. `session.session_attributes.set(TpmaSession::CONTINUE_SESSION, false)`)
     /// to request that the command terminate the session.
     pub fn new(
-        crypto: C,
         session_handle: Handle,
         auth_hash: TpmiAlgHash,
         nonce_caller: Tpm2bNonce<'_>,
         nonce_tpm: Tpm2bNonce<'_>,
     ) -> Self {
         PolicySession {
-            policy: PolicyDigest::new(crypto.clone(), auth_hash),
-            core: SessionCore::new(crypto, session_handle, auth_hash, nonce_caller, nonce_tpm),
+            policy: PolicyDigest::new(auth_hash),
+            core: SessionCore::new(session_handle, auth_hash, nonce_caller, nonce_tpm),
             session_attributes: TpmaSession::CONTINUE_SESSION,
             auth_value: Buf::EMPTY,
             auth: PolicyAuth::Policy,
@@ -488,7 +507,6 @@ impl<C: Clone + Hash + Hmac + Random + ConstantTimeEq> PolicySession<C> {
     /// key after `TPM2_PolicyAuthValue`, whether or not it is the bound
     /// entity.
     pub fn new_bound_or_salted(
-        crypto: C,
         session_handle: Handle,
         auth_hash: TpmiAlgHash,
         nonce_caller: Tpm2bNonce<'_>,
@@ -497,9 +515,8 @@ impl<C: Clone + Hash + Hmac + Random + ConstantTimeEq> PolicySession<C> {
         salt: Tpm2bDigest<'_>,
     ) -> Result<Self, CryptoError> {
         Ok(PolicySession {
-            policy: PolicyDigest::new(crypto.clone(), auth_hash),
+            policy: PolicyDigest::new(auth_hash),
             core: SessionCore::new_bound_or_salted(
-                crypto,
                 session_handle,
                 auth_hash,
                 nonce_caller,
@@ -590,6 +607,10 @@ impl<C> PolicySession<C> {
     }
 
     /// Updates the length of nonceCaller.
+    // FIXME/ATTN: This is only meant for testing (e.g. that the TPM tolerates
+    // nonceCaller changing size, or rejects one longer than nonceTPM), so it
+    // should only be compiled with a testing feature. It panics (via a slice
+    // bounds check) on the next command if `len` exceeds `MAX_DIGEST`.
     pub fn set_new_nonce_caller_length(&mut self, len: usize) {
         self.core.nonce_caller.len = len;
     }
@@ -610,7 +631,7 @@ impl<C> fmt::Debug for PolicySession<C> {
     }
 }
 
-impl<C: Hash + Hmac + Random + ConstantTimeEq> Session for PolicySession<C> {
+impl<C: Crypto> Session for PolicySession<C> {
     fn auth_command(&mut self, cmd: &CommandData) -> Result<TpmsAuthCommand<'_>, AuthError> {
         match self.auth {
             PolicyAuth::Policy => self.core.auth_command(cmd, self.session_attributes, &[]),

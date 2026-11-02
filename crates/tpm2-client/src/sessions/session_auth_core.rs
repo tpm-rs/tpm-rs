@@ -1,5 +1,6 @@
 use crate::sessions::{AuthError, CommandData, ResponseData};
-use tpm2::crypto::{ConstantTimeEq, CryptoError, Hash, Hmac, HmacStream, Random, Rng, kdfa};
+use core::marker::PhantomData;
+use tpm2::crypto::{Crypto, CryptoError, hmac, kdfa};
 use tpm2::{
     Handle, Tpm2bAuth, Tpm2bDigest, Tpm2bNonce, TpmaSession, TpmiAlgHash, TpmsAuthCommand,
     TpmsAuthResponse,
@@ -9,7 +10,19 @@ pub(super) const MAX_DIGEST: usize = TpmiAlgHash::MAX_DIGEST_BYTES;
 
 /// Fixed-capacity storage for nonces, keys, and HMACs, which are all at most
 /// [`TpmiAlgHash::MAX_DIGEST_BYTES`] long.
-#[derive(Clone, Copy)]
+///
+/// This is intentionally not `Copy`, so that copies are explicit (via
+/// `clone()`).
+//
+// ATTN/NOTE: This may hold secrets (session keys, authValues, and passwords), which
+// aren't overwritten when no longer needed. Neither are the other copies of
+// them, e.g. in the temporary HMAC and KDFa key buffers below, or in the
+// marshaled command in `run_command_with_sessions()`. Whether this matters
+// depends on the environment (e.g. a discrete TPM has no other software that
+// could read them, unlike a userspace process), so this needs a consistent
+// approach (e.g. `zeroize` on drop) across the call stack, rather than
+// piecemeal overwriting.
+#[derive(Clone)]
 pub(super) struct Buf {
     pub(super) bytes: [u8; MAX_DIGEST],
     pub(super) len: usize,
@@ -54,9 +67,8 @@ pub(super) fn trim_trailing_zeros(s: &[u8]) -> &[u8] {
 ///
 /// Which authValue (if any) is part of the HMAC key depends on the session
 /// type, so it is passed in by the caller.
-#[derive(Clone)]
 pub(super) struct SessionCore<C> {
-    pub(super) crypto: C,
+    crypto: PhantomData<C>,
     pub(super) session_handle: Handle,
     pub(super) auth_hash: TpmiAlgHash,
     pub(super) session_key: Buf,
@@ -69,14 +81,13 @@ impl<C> SessionCore<C> {
     /// Creates the state of an unbound, unsalted session, which has an empty
     /// session key.
     pub(super) fn new(
-        crypto: C,
         session_handle: Handle,
         auth_hash: TpmiAlgHash,
         nonce_caller: Tpm2bNonce<'_>,
         nonce_tpm: Tpm2bNonce<'_>,
     ) -> Self {
         SessionCore {
-            crypto,
+            crypto: PhantomData,
             session_handle,
             auth_hash,
             session_key: Buf::EMPTY,
@@ -95,7 +106,7 @@ impl<C> SessionCore<C> {
     }
 }
 
-impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
+impl<C: Crypto> SessionCore<C> {
     /// Creates the state of a bound and/or salted session, deriving the
     /// session key (TPM 2.0 Part 1, Section 19.6.8):
     ///
@@ -103,7 +114,6 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
     /// sessionKey := KDFa(authHash, bindAuth || salt, "ATH", nonceTPM, nonceCaller, bits)
     /// ```
     pub(super) fn new_bound_or_salted(
-        crypto: C,
         session_handle: Handle,
         auth_hash: TpmiAlgHash,
         nonce_caller: Tpm2bNonce<'_>,
@@ -111,7 +121,7 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
         bind_auth: Tpm2bAuth<'_>,
         salt: Tpm2bDigest<'_>,
     ) -> Result<Self, CryptoError> {
-        let mut core = Self::new(crypto, session_handle, auth_hash, nonce_caller, nonce_tpm);
+        let mut core = Self::new(session_handle, auth_hash, nonce_caller, nonce_tpm);
 
         let bind_auth = trim_trailing_zeros(bind_auth.as_slice());
         let salt = salt.as_slice();
@@ -126,13 +136,11 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
 
         let mut session_key = [0u8; MAX_DIGEST];
         let session_key = &mut session_key[..auth_hash.digest_size()];
-        kdfa(
-            &core.crypto,
+        kdfa::<C>(
             auth_hash,
             secret,
             c"ATH",
-            core.nonce_tpm.as_slice(),
-            core.nonce_caller.as_slice(),
+            (core.nonce_tpm.as_slice(), core.nonce_caller.as_slice()),
             session_key,
         )?;
         core.session_key = Buf::new(session_key);
@@ -147,19 +155,15 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
         key[session_key.len()..][..auth_value.len()].copy_from_slice(auth_value);
         let key = &key[..session_key.len() + auth_value.len()];
 
-        let mut stream = HmacStream::new(&self.crypto, self.auth_hash, key)?;
-        for part in parts {
-            stream.update(part)?;
-        }
         let mut out = [0u8; MAX_DIGEST];
-        Ok(Buf::new(stream.finalize(&mut out)?.digest()))
+        Ok(Buf::new(hmac::<C>(self.auth_hash, key, parts, &mut out)?.digest()))
     }
 
     /// Generates a fresh `nonceCaller`, the same length as the current one.
     fn fresh_nonce_caller(&self) -> Result<Buf, AuthError> {
         let mut nonce = Buf::EMPTY;
         nonce.len = self.nonce_caller.len;
-        self.crypto.rng()?.fill_bytes(&mut nonce.bytes[..nonce.len])?;
+        C::rand_bytes(&mut nonce.bytes[..nonce.len])?;
         Ok(nonce)
     }
 
@@ -179,7 +183,7 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
             Buf::EMPTY
         } else {
             let mut cp_buf = [0u8; MAX_DIGEST];
-            let cp_hash = cmd.cp_hash(&self.crypto, self.auth_hash, &mut cp_buf)?;
+            let cp_hash = cmd.cp_hash::<C>(self.auth_hash, &mut cp_buf)?;
 
             self.compute_hmac(
                 auth_value,
@@ -211,14 +215,13 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
         auth: &TpmsAuthResponse,
         auth_value: &[u8],
     ) -> Result<(), AuthError> {
-        let digest_size = self.auth_hash.digest_size();
         let expected_hmac_len = if self.session_key.len == 0 && auth_value.is_empty() {
             0
         } else {
-            digest_size
+            self.auth_hash.digest_size()
         };
 
-        if auth.nonce.as_slice().len() != digest_size || auth.hmac.as_slice().len() != expected_hmac_len {
+        if auth.nonce.as_slice().len() != self.nonce_tpm.len || auth.hmac.as_slice().len() != expected_hmac_len {
             return Err(AuthError::InvalidResponse);
         }
 
@@ -229,7 +232,7 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
             Buf::EMPTY
         } else {
             let mut rp_buf = [0u8; MAX_DIGEST];
-            let rp_hash = rsp.rp_hash(&self.crypto, self.auth_hash, &mut rp_buf)?;
+            let rp_hash = rsp.rp_hash::<C>(self.auth_hash, &mut rp_buf)?;
 
             self.compute_hmac(
                 auth_value,
@@ -245,10 +248,7 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
         // Both are digest-sized (checked above), so comparing the
         // zero-padded buffers is equivalent.
         let received = Buf::new(auth.hmac.as_slice());
-        if !self
-            .crypto
-            .constant_time_eq(&expected.bytes, &received.bytes)
-        {
+        if !C::ct_eq(&expected.bytes, &received.bytes) {
             return Err(AuthError::InvalidResponse);
         }
 
@@ -281,7 +281,7 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> SessionCore<C> {
         &mut self,
         auth: &TpmsAuthResponse,
     ) -> Result<(), AuthError> {
-        if auth.nonce.as_slice().len() != self.auth_hash.digest_size()
+        if auth.nonce.as_slice().len() != self.nonce_tpm.len
             || !auth.hmac.as_slice().is_empty()
         {
             return Err(AuthError::InvalidResponse);

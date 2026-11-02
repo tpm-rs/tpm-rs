@@ -7,7 +7,7 @@ mod password;
 mod policy;
 mod session;
 mod session_auth_core;
-#[cfg(test)]
+#[cfg(all(test, feature = "rustcrypto"))]
 mod tests;
 
 pub use authorization_area::*;
