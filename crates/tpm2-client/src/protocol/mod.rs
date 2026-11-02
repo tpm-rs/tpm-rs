@@ -5,10 +5,10 @@ use tpm2::errors::UnmarshalError;
 use tpm2::*;
 
 /// Maximum buffer size for sending TPM commands.
-pub const CMD_BUFFER_SIZE: usize = 4096;
+pub const CMD_BUFFER_SIZE: usize = 8192;
 
 /// Maximum buffer size for receiving TPM responses.
-pub const RESP_BUFFER_SIZE: usize = 4096;
+pub const RESP_BUFFER_SIZE: usize = 8192;
 
 /// Marshals a full command, returning the number of bytes written to `dst`.
 ///
