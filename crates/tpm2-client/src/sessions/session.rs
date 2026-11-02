@@ -25,6 +25,20 @@ pub trait Session {
     fn validate_auth_response(&self, auth: &TpmsAuthResponse) -> Result<(), AuthError>;
 }
 
+// Forward methods, so that a tuple of `&mut` sessions is an `AuthorizationArea`.
+impl<S: Session + ?Sized> Session for &mut S {
+    fn auth_command(&mut self, cmd: &CommandData) -> Result<TpmsAuthCommand<'_>, AuthError> {
+        (**self).auth_command(cmd)
+    }
+    fn validate_auth_response(
+        &mut self,
+        rsp: &ResponseData,
+        auth: &TpmsAuthResponse,
+    ) -> Result<(), AuthError> {
+        (**self).validate_auth_response(rsp, auth)
+    }
+}
+
 impl Session for ! {
     fn auth_command(&self) -> TpmsAuthCommand<'_> {
         match *self {}
