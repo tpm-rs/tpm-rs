@@ -1,9 +1,9 @@
-use tpm2::crypto::{HashStream, HmacStream};
+use tpm2::crypto::{hash, hmac};
 use tpm2::{
     Handle, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce, TpmCc, TpmaSession,
     TpmiAlgHash, TpmsAuthResponse,
 };
-use tpm2_rustcrypto::RustCrypto;
+use crate::CryptoBackend;
 
 use super::*;
 use crate::nv_name;
@@ -15,9 +15,8 @@ const CODE: TpmCc = TpmCc::NVWrite;
 const NONCE_CALLER: [u8; 32] = [0x11; 32];
 const NONCE_TPM: [u8; 32] = [0x22; 32];
 
-fn new_hmac_session() -> HmacSession<RustCrypto> {
+fn new_hmac_session() -> HmacSession {
     HmacSession::new(
-        RustCrypto,
         SESSION_HANDLE,
         ALG,
         Tpm2bNonce::new(&NONCE_CALLER).unwrap(),
@@ -26,13 +25,8 @@ fn new_hmac_session() -> HmacSession<RustCrypto> {
 }
 
 fn sha256(parts: &[&[u8]]) -> [u8; 32] {
-    let mut stream = HashStream::new(&RustCrypto, ALG).unwrap();
-    for part in parts {
-        stream.update(part).unwrap();
-    }
     let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    stream
-        .finalize(&mut out)
+    hash::<CryptoBackend>(ALG, parts, &mut out)
         .unwrap()
         .digest()
         .try_into()
@@ -40,13 +34,8 @@ fn sha256(parts: &[&[u8]]) -> [u8; 32] {
 }
 
 fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    let mut stream = HmacStream::new(&RustCrypto, ALG, key).unwrap();
-    for part in parts {
-        stream.update(part).unwrap();
-    }
     let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    stream
-        .finalize(&mut out)
+    hmac::<CryptoBackend>(ALG, key, parts, &mut out)
         .unwrap()
         .digest()
         .try_into()
@@ -265,7 +254,7 @@ fn test_nv_name() {
         data_size: 16,
     };
     let mut name_buf = [0u8; Tpm2bName::CAP];
-    let name = nv_name(&RustCrypto, &public, &mut name_buf).unwrap();
+    let name = nv_name::<CryptoBackend>(&public, &mut name_buf).unwrap();
 
     // Name := nameAlg || H(nvIndex || nameAlg || attributes || authPolicy || dataSize)
     let digest = sha256(&[
@@ -282,7 +271,7 @@ fn test_nv_name() {
     // Setting TPMA_NV_WRITTEN changes the Name.
     public.attributes |= tpm2::TpmaNv::WRITTEN;
     let mut written_buf = [0u8; Tpm2bName::CAP];
-    let written_name = nv_name(&RustCrypto, &public, &mut written_buf).unwrap();
+    let written_name = nv_name::<CryptoBackend>(&public, &mut written_buf).unwrap();
     assert_ne!(written_name, name);
 }
 
@@ -300,7 +289,7 @@ const POLICY_AUTH_VALUE: &str = "8fcd2169ab92694e0c633f1ab772842b8241bbc20288981
 
 #[test]
 fn test_policy_digest_known_values() {
-    let mut policy = PolicyDigest::new(RustCrypto, ALG);
+    let mut policy: PolicyDigest = PolicyDigest::new(ALG);
     assert_eq!(policy.digest().as_slice(), [0u8; 32]);
 
     policy.policy_auth_value().unwrap();
@@ -313,7 +302,7 @@ fn test_policy_digest_known_values() {
 
     // The policy of the default EK templates (TPM 2.0 EK Credential Profile):
     // PolicySecret(TPM_RH_ENDORSEMENT) with an empty policyRef.
-    let mut policy = PolicyDigest::new(RustCrypto, ALG);
+    let mut policy: PolicyDigest = PolicyDigest::new(ALG);
     let name = Handle::RH_ENDORSEMENT.0.to_be_bytes();
     policy
         .policy_secret(Tpm2bName::new(&name).unwrap(), Tpm2bNonce::default())
@@ -329,7 +318,7 @@ fn test_policy_digest_updates() {
     let cc = |code: TpmCc| code.code().to_be_bytes();
 
     // PolicyCommandCode extends the current digest.
-    let mut policy = PolicyDigest::new(RustCrypto, ALG);
+    let mut policy: PolicyDigest = PolicyDigest::new(ALG);
     policy.policy_command_code(TpmCc::NVRead).unwrap();
     let expected = sha256(&[&[0u8; 32], &cc(TpmCc::PolicyCommandCode), &cc(TpmCc::NVRead)]);
     assert_eq!(policy.digest().as_slice(), expected);
@@ -368,7 +357,7 @@ fn test_policy_digest_updates() {
     assert_eq!(policy.digest().as_slice(), expected);
 
     // PolicyDuplicationSelect only includes objectName if includeObject.
-    let mut policy = PolicyDigest::new(RustCrypto, ALG);
+    let mut policy: PolicyDigest = PolicyDigest::new(ALG);
     let object_name = [0x11; 34];
     let parent_name = [0x22; 34];
     policy
@@ -387,7 +376,7 @@ fn test_policy_digest_updates() {
     assert_eq!(policy.digest().as_slice(), expected);
 
     // PolicyPCR includes the marshaled TPML_PCR_SELECTION.
-    let mut policy = PolicyDigest::new(RustCrypto, ALG);
+    let mut policy: PolicyDigest = PolicyDigest::new(ALG);
     let pcr_digest = [0x33; 32];
     policy
         .policy_pcr(
@@ -406,9 +395,8 @@ fn test_policy_digest_updates() {
 
 const POLICY_SESSION_HANDLE: Handle = Handle(0x03000000);
 
-fn new_policy_session() -> PolicySession<RustCrypto> {
+fn new_policy_session() -> PolicySession {
     PolicySession::new(
-        RustCrypto,
         POLICY_SESSION_HANDLE,
         ALG,
         Tpm2bNonce::new(&NONCE_CALLER).unwrap(),

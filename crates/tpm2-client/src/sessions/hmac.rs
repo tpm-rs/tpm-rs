@@ -1,7 +1,8 @@
 use crate::sessions::session_auth_core::{Buf, SessionCore, trim_trailing_zeros};
+use crate::CryptoBackend;
 use crate::sessions::{AuthError, CommandData, ResponseData, Session};
 use core::fmt;
-use tpm2::crypto::{ConstantTimeEq, CryptoError, Hash, Hmac, Random};
+use tpm2::crypto::{Crypto, CryptoError};
 use tpm2::{
     Handle, Tpm2bAuth, Tpm2bDigest, Tpm2bNonce, TpmaSession, TpmiAlgHash, TpmsAuthCommand,
     TpmsAuthResponse,
@@ -30,18 +31,25 @@ use tpm2::{
 /// `nonceDecrypt`/`nonceEncrypt` are not yet included in the HMAC, so this
 /// session must not be combined with separate encrypt/decrypt sessions.
 ///
-/// This is intentionally not `Copy`, as using a stale copy of the session
-/// would send a stale `nonceTPM`.
-#[derive(Clone)]
-pub struct HmacSession<C> {
+/// The session uses the cryptography backend `C`, which defaults to
+/// [`CryptoBackend`].
+///
+/// This is intentionally neither `Clone` nor `Copy`: only the copy used for a
+/// command would see the new `nonceTPM`, so the others would desynchronize
+/// from the TPM.
+pub struct HmacSession<C = CryptoBackend> {
     core: SessionCore<C>,
+    // TODO: Validate these. `decrypt`, `encrypt`, and the audit attributes
+    // aren't supported yet (parameters aren't encrypted, and
+    // `nonceDecrypt`/`nonceEncrypt` aren't included in the HMAC), but nothing
+    // prevents setting them.
     /// Session attributes sent with this session;
     /// defaults to [`TpmaSession::CONTINUE_SESSION`].
     pub session_attributes: TpmaSession,
     auth_value: Buf,
 }
 
-impl<C: Hash + Hmac + Random + ConstantTimeEq> HmacSession<C> {
+impl<C: Crypto> HmacSession<C> {
     /// Creates a new unbound, unsalted HMAC session (i.e. `bind` and `tpmKey`
     /// were both `TPM_RH_NULL` in `TPM2_StartAuthSession`), which has an
     /// empty session key.
@@ -53,14 +61,13 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> HmacSession<C> {
     /// (e.g. `session.session_attributes.set(TpmaSession::CONTINUE_SESSION, false)`)
     /// to request that the command terminate the session.
     pub fn new(
-        crypto: C,
         session_handle: Handle,
         auth_hash: TpmiAlgHash,
         nonce_caller: Tpm2bNonce<'_>,
         nonce_tpm: Tpm2bNonce<'_>,
     ) -> Self {
         HmacSession {
-            core: SessionCore::new(crypto, session_handle, auth_hash, nonce_caller, nonce_tpm),
+            core: SessionCore::new(session_handle, auth_hash, nonce_caller, nonce_tpm),
             session_attributes: TpmaSession::CONTINUE_SESSION,
             auth_value: Buf::EMPTY,
         }
@@ -77,7 +84,6 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> HmacSession<C> {
     /// decrypted `encryptedSalt`. Either may be empty; if both are, this is
     /// equivalent to [`HmacSession::new`].
     pub fn new_bound_or_salted(
-        crypto: C,
         session_handle: Handle,
         auth_hash: TpmiAlgHash,
         nonce_caller: Tpm2bNonce<'_>,
@@ -87,7 +93,6 @@ impl<C: Hash + Hmac + Random + ConstantTimeEq> HmacSession<C> {
     ) -> Result<Self, CryptoError> {
         Ok(HmacSession {
             core: SessionCore::new_bound_or_salted(
-                crypto,
                 session_handle,
                 auth_hash,
                 nonce_caller,
@@ -132,6 +137,10 @@ impl<C> HmacSession<C> {
     }
 
     /// Updates the length of nonceCaller.
+    // FIXME/ATTN: This is only meant for testing (e.g. that the TPM tolerates
+    // nonceCaller changing size, or rejects one longer than nonceTPM), so it
+    // should only be compiled with a testing feature. It panics (via a slice
+    // bounds check) on the next command if `len` exceeds `MAX_DIGEST`.
     pub fn set_new_nonce_caller_length(&mut self, len: usize) {
         self.core.nonce_caller.len = len;
     }
@@ -151,7 +160,7 @@ impl<C> fmt::Debug for HmacSession<C> {
     }
 }
 
-impl<C: Hash + Hmac + Random + ConstantTimeEq> Session for HmacSession<C> {
+impl<C: Crypto> Session for HmacSession<C> {
     fn auth_command(&mut self, cmd: &CommandData) -> Result<TpmsAuthCommand<'_>, AuthError> {
         self.core
             .auth_command(cmd, self.session_attributes, self.auth_value.as_slice())
