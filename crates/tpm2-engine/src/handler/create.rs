@@ -1,6 +1,7 @@
 #[cfg(not(feature = "reference-rng"))]
 use super::KeyDerivationArgs;
 use crate::handle_checks::{Tpmi, check};
+use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -114,7 +115,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let mut obj_seed = [0u8; 64];
-        let mut actual_private_key = [0u8; 1536];
+        let mut actual_private_key = [0u8; MAX_PRIVATE_KEY_SIZE];
         // 3-4. Generate the seed, the key pair and the unique identifier. With `reference-rng`,
         // as the reference's `CryptCreateObject()` with the TPM's DRBG.
         #[cfg(feature = "reference-rng")]
@@ -192,7 +193,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             is_primary,
             is_derived,
             parent_info.name_alg,
-            parent_info.sym_bits,
+            parent_info.sym_alg,
             parent_info.attributes.contains(TpmaObject::FIXED_TPM),
             &mut private_buf,
         )?;

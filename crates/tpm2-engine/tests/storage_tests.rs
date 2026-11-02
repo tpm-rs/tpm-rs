@@ -352,6 +352,8 @@ fn test_live_migration_state_translator_roundtrip() {
         is_cp_hash_defined: true,
         is_name_hash_defined: false,
         is_template_hash_defined: false,
+        is_parameters_hash_defined: false,
+        is_pp_required: false,
         policy_digest: [0x22; 64],
         policy_digest_len: 32,
         command_code: 0x0000_017A,
@@ -367,6 +369,7 @@ fn test_live_migration_state_translator_roundtrip() {
         include_auth: true,
         is_da_bound: false,
         is_lockout_bound: false,
+        sec_channel: Default::default(),
     };
     src_state.active_sessions[0] = Some(sess);
 

@@ -10,7 +10,7 @@ use tpm2::errors::{Position, TpmRc};
 use tpm2::{AlgSym, TpmCc, TpmiAlgCipherMode, TpmiAlgSymMode, TpmtPublicParms, TpmtSymDefObject};
 
 /// `TPM2_TestParms` accepts every implemented block-cipher mode (also as the symmetric
-/// definition of an RSA key). RSA-3072/4096 stay unsupported (see the log: go-tpm parity).
+/// definition of an RSA key).
 #[test]
 fn all_block_modes_accepted() {
     let mut sim = Tpm::new();

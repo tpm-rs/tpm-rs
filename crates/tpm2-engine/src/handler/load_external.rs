@@ -1,9 +1,9 @@
+use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::handler::rsa_sensitive::{RSA_PRIVATE_SIZE, split_sensitive_value};
 use crate::handler::{CommandHandler, TransientObject};
 use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use hex_literal::hex;
 use tpm2::Handle;
 use tpm2::Marshal;
 #[allow(unused_imports)]
@@ -98,7 +98,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.validate_public_parameters(&public_struct, false)?;
 
         // 2. Public-Private Consistency and Cryptographic Validation
-        let mut actual_private_key = [0u8; 1536];
+        let mut actual_private_key = [0u8; MAX_PRIVATE_KEY_SIZE];
         let actual_private_key_len = self.validate_load_external_public_private(
             &public_struct,
             &cmd.in_private,
@@ -216,7 +216,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         &self,
         public_struct: &TpmtPublic<'_>,
         in_private: &Option<Tpm2bSensitive<'_>>,
-        actual_private_key: &mut [u8; 1536],
+        actual_private_key: &mut [u8; MAX_PRIVATE_KEY_SIZE],
     ) -> Result<usize, TpmRc> {
         if let Some(in_private) = in_private {
             let sensitive_struct = in_private
@@ -249,13 +249,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         &self,
         public_struct: &TpmtPublic,
         sensitive_struct: &TpmtSensitive,
-        actual_private_key: &mut [u8; 1536],
+        actual_private_key: &mut [u8; MAX_PRIVATE_KEY_SIZE],
         pos_sensitive: Position,
     ) -> Result<usize, TpmRc> {
         if public_struct.parms_and_id.algorithm() != sensitive_struct.sensitive_type() {
             return Err(TpmRc::TYPE.with(pos_sensitive));
         }
-        let copy = |bytes: &[u8], out: &mut [u8; 1536]| {
+        let copy = |bytes: &[u8], out: &mut [u8; MAX_PRIVATE_KEY_SIZE]| {
             out[..bytes.len()].copy_from_slice(bytes);
             Ok(bytes.len())
         };
@@ -302,12 +302,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 Ok(len)
             }
             (PublicParmsAndId::Ecc(ecc_parms, _), TpmuSensitiveComposite::Ecc(d)) => {
-                let param_size = match ecc_parms.curve_id {
-                    tpm2::TpmEccCurve::NistP224 => 28,
-                    tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                    tpm2::TpmEccCurve::NistP384 => 48,
-                    tpm2::TpmEccCurve::NistP521 => 66,
-                    _ => return Err(TpmRc::CURVE.to_rc()),
+                let param_size = match crate::ecc_curves::param_size(ecc_parms.curve_id) {
+                    Some(size) => size,
+                    None => return Err(TpmRc::CURVE.to_rc()),
                 };
                 let d = d.get_buffer();
                 if d.len() > param_size {
@@ -332,7 +329,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         &self,
         public_struct: &TpmtPublic,
         sensitive_struct: &TpmtSensitive,
-        actual_private_key: &mut [u8; 1536],
+        actual_private_key: &mut [u8; MAX_PRIVATE_KEY_SIZE],
         pos_sensitive: Position,
         pos_public: Position,
         allow_empty_unique: bool,
@@ -413,12 +410,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             PublicParmsAndId::Ecc(ecc_parms, point) => {
                 let curve = ecc_parms.curve_id;
-                let param_size = match curve {
-                    tpm2::TpmEccCurve::NistP224 => 28,
-                    tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                    tpm2::TpmEccCurve::NistP384 => 48,
-                    tpm2::TpmEccCurve::NistP521 => 66,
-                    _ => return Err(TpmRc::CURVE.with(pos_public)),
+                let param_size = match crate::ecc_curves::param_size(curve) {
+                    Some(size) => size,
+                    None => return Err(TpmRc::CURVE.with(pos_public)),
                 };
                 // With a sensitive area, the public point is not validated on its own (C
                 // `CryptoCommon_ValidateKeys()` checks the point on the curve only for a
@@ -561,32 +555,54 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     Err(TpmRc::TYPE.with(pos_sensitive))
                 }
             }
-            PublicParmsAndId::Mldsa(_, _) => {
-                if let TpmuSensitiveComposite::Mldsa(priv_key) = &sensitive_struct.sensitive {
-                    let key_bytes = priv_key.get_buffer();
-                    actual_private_key[..key_bytes.len()].copy_from_slice(key_bytes);
-                    Ok(key_bytes.len())
-                } else {
-                    Err(TpmRc::TYPE.with(pos_sensitive))
+            // `CryptoCommon_ValidateKeys()` (version 185): the seed must have the seed size
+            // (`TPM_RC_KEY_SIZE` on the sensitive area) and, with a nameAlg, generate the public
+            // key (`CryptoMldsa_ValidateKeyPair()`/`CryptoMlkem_ValidateKeyPair()`: bare
+            // `TPM_RC_BINDING`). The public key size is checked by
+            // `validate_public_parameters`. TPM 2.0 Part 3, TPM2_Load: "For all objects, the size
+            // of the key in the sensitive area shall be consistent with the key size indicated in
+            // the public area or the TPM shall return `TPM_RC_KEY_SIZE`. ... If the parts of the
+            // object are not properly linked, the TPM shall return `TPM_RC_BINDING`."
+            PublicParmsAndId::Mldsa(tpm2::TpmsMldsaParms { parameter_set, .. }, unique)
+            | PublicParmsAndId::HashMldsa(tpm2::TpmsHashMldsaParms { parameter_set, .. }, unique) =>
+            {
+                let priv_key = match &sensitive_struct.sensitive {
+                    TpmuSensitiveComposite::Mldsa(k) | TpmuSensitiveComposite::HashMldsa(k) => k,
+                    _ => return Err(TpmRc::TYPE.with(pos_sensitive)),
+                };
+                let seed: &[u8; tpm2::crypto::MLDSA_SEED_SIZE] =
+                    priv_key
+                        .get_buffer()
+                        .try_into()
+                        .map_err(|_| TpmRc::KEY_SIZE.with(pos_sensitive))?;
+                if public_struct.name_alg.is_some() {
+                    let mut public_key = [0u8; tpm2::TPM2_MAX_MLDSA_PUB_SIZE];
+                    let len = self.mldsa_public_key(*parameter_set, seed, &mut public_key)?;
+                    if public_key[..len] != *unique.get_buffer() {
+                        return Err(TpmRc::BINDING.to_rc());
+                    }
                 }
+                actual_private_key[..seed.len()].copy_from_slice(seed);
+                Ok(seed.len())
             }
-            PublicParmsAndId::HashMldsa(_, _) => {
-                if let TpmuSensitiveComposite::HashMldsa(priv_key) = &sensitive_struct.sensitive {
-                    let key_bytes = priv_key.get_buffer();
-                    actual_private_key[..key_bytes.len()].copy_from_slice(key_bytes);
-                    Ok(key_bytes.len())
-                } else {
-                    Err(TpmRc::TYPE.with(pos_sensitive))
+            PublicParmsAndId::Mlkem(parms, unique) => {
+                let TpmuSensitiveComposite::Mlkem(priv_key) = &sensitive_struct.sensitive else {
+                    return Err(TpmRc::TYPE.with(pos_sensitive));
+                };
+                let seed: &[u8; tpm2::crypto::MLKEM_SEED_SIZE] =
+                    priv_key
+                        .get_buffer()
+                        .try_into()
+                        .map_err(|_| TpmRc::KEY_SIZE.with(pos_sensitive))?;
+                if public_struct.name_alg.is_some() {
+                    let mut public_key = [0u8; tpm2::TPM2_MAX_MLKEM_PUB_SIZE];
+                    let len = self.mlkem_public_key(parms.parameter_set, seed, &mut public_key)?;
+                    if public_key[..len] != *unique.get_buffer() {
+                        return Err(TpmRc::BINDING.to_rc());
+                    }
                 }
-            }
-            PublicParmsAndId::Mlkem(_, _) => {
-                if let TpmuSensitiveComposite::Mlkem(priv_key) = &sensitive_struct.sensitive {
-                    let key_bytes = priv_key.get_buffer();
-                    actual_private_key[..key_bytes.len()].copy_from_slice(key_bytes);
-                    Ok(key_bytes.len())
-                } else {
-                    Err(TpmRc::TYPE.with(pos_sensitive))
-                }
+                actual_private_key[..seed.len()].copy_from_slice(seed);
+                Ok(seed.len())
             }
         }
     }
@@ -616,14 +632,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             PublicParmsAndId::Ecc(ecc_parms, _) => {
                 let curve = ecc_parms.curve_id;
-                if !matches!(
-                    curve,
-                    tpm2::TpmEccCurve::NistP224
-                        | tpm2::TpmEccCurve::NistP256
-                        | tpm2::TpmEccCurve::BNP256
-                        | tpm2::TpmEccCurve::NistP384
-                        | tpm2::TpmEccCurve::NistP521
-                ) {
+                if crate::ecc_curves::curve_params(curve).is_none() {
                     return Err(TpmRc::CURVE.with(Position::parameter(2)));
                 }
                 // The coordinate sizes are not checked on their own when a sensitive area is
@@ -688,13 +697,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let digest_size = public_struct.name_alg.map_or(0, |a| a.digest_size());
         match &public_struct.parms_and_id {
             PublicParmsAndId::Ecc(ecc_parms, point) => {
-                let key_size = match ecc_parms.curve_id {
-                    tpm2::TpmEccCurve::NistP224 => 28,
-                    tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                    tpm2::TpmEccCurve::NistP384 => 48,
-                    tpm2::TpmEccCurve::NistP521 => 66,
-                    _ => 0,
-                };
+                let key_size =
+                    crate::ecc_curves::param_size(ecc_parms.curve_id).unwrap_or_default();
                 if point.x.get_size() as usize != key_size
                     || point.y.get_size() as usize != key_size
                 {
@@ -713,12 +717,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             && public_struct.name_alg.is_some()
         {
             let curve = ecc_parms.curve_id;
-            let param_size = match curve {
-                tpm2::TpmEccCurve::NistP224 => 28,
-                tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                tpm2::TpmEccCurve::NistP384 => 48,
-                tpm2::TpmEccCurve::NistP521 => 66,
-                _ => return Err(TpmRc::CURVE.with(Position::parameter(2))),
+            let param_size = match crate::ecc_curves::param_size(curve) {
+                Some(size) => size,
+                None => return Err(TpmRc::CURVE.with(Position::parameter(2))),
             };
             let mut ecc_pub_key = [0u8; 256];
             let px = point.x.get_buffer();
@@ -741,26 +742,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
 /// Returns the order `n` (big-endian) of the supported ECC curves.
 fn ecc_curve_order(curve: tpm2::TpmEccCurve) -> Option<&'static [u8]> {
-    match curve {
-        tpm2::TpmEccCurve::NistP224 => Some(&hex!(
-            "FFFFFFFFFFFFFFFFFFFFFFFFFFFF16A2E0B8F03E13DD29455C5C2A3D"
-        )),
-        tpm2::TpmEccCurve::NistP256 => Some(&hex!(
-            "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551"
-        )),
-        tpm2::TpmEccCurve::BNP256 => Some(&hex!(
-            "FFFFFFFFFFFCF0CD46E5F25EEE71A49E0CDC65FB1299921AF62D536CD10B500D"
-        )),
-        tpm2::TpmEccCurve::NistP384 => Some(&hex!(
-            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF"
-            "581A0DB248B0A77AECEC196ACCC52973"
-        )),
-        tpm2::TpmEccCurve::NistP521 => Some(&hex!(
-            "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFA"
-            "51868783BF2F966B7FCC0148F709A5D03BB5C9B8899C47AEBB6FB71E91386409"
-        )),
-        _ => None,
-    }
+    crate::handler::commit::curve_order(curve)
 }
 
 /// C `CryptEccIsValidPrivateKey`: returns `true` iff `0 < d < n` for the curve's order `n`.

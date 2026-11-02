@@ -118,6 +118,9 @@ impl Asymmetric for StressTestCrypto {
     }
 }
 
+impl tpm2::crypto::Mlkem for StressTestCrypto {}
+impl tpm2::crypto::Mldsa for StressTestCrypto {}
+
 impl CryptoProvider for StressTestCrypto {
     /// Its algorithms are fakes, which fail the known-answer self tests.
     const KNOWN_ANSWER_TESTS: bool = false;
@@ -238,6 +241,8 @@ fn test_flush_exclusive_audit_session_clears_exclusivity() {
         is_cp_hash_defined: false,
         is_name_hash_defined: false,
         is_template_hash_defined: false,
+        is_parameters_hash_defined: false,
+        is_pp_required: false,
         policy_digest: [0u8; 64],
         policy_digest_len: 0,
         command_code: 0,
@@ -253,6 +258,7 @@ fn test_flush_exclusive_audit_session_clears_exclusivity() {
         include_auth: false,
         is_da_bound: false,
         is_lockout_bound: false,
+        sec_channel: Default::default(),
     };
     tpm.state.add_session(s).unwrap();
     tpm.state.exclusive_audit_session = Some(session_handle);

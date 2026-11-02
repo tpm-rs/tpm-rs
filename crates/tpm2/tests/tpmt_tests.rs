@@ -841,3 +841,41 @@ fn test_tpmt_public_unmarshal_for_template_derivation_rejects_trailing_bytes_and
         );
     }
 }
+
+/// `TpmtSignature::hash_alg` is the hash of RSA/ECC signatures and the HMAC's hash, and `None`
+/// for EdDSA signatures, which carry no hash.
+#[test]
+fn signature_hash_alg() {
+    let rsa = TpmsSignatureRsa {
+        hash: TpmiAlgHash::Sha384,
+        sig: Tpm2bPublicKeyRsa::from_bytes(&[1, 2, 3]).unwrap(),
+    };
+    assert_eq!(
+        TpmtSignature::Rsassa(rsa).hash_alg(),
+        Some(TpmiAlgHash::Sha384)
+    );
+    assert_eq!(
+        TpmtSignature::Rsapss(rsa).hash_alg(),
+        Some(TpmiAlgHash::Sha384)
+    );
+    let ecc = TpmsSignatureEcc {
+        hash: TpmiAlgHash::Sha256,
+        signature_r: Tpm2bEccParameter::from_bytes(&[1]).unwrap(),
+        signature_s: Tpm2bEccParameter::from_bytes(&[2]).unwrap(),
+    };
+    assert_eq!(
+        TpmtSignature::Ecdsa(ecc).hash_alg(),
+        Some(TpmiAlgHash::Sha256)
+    );
+    assert_eq!(
+        TpmtSignature::Ecdaa(ecc).hash_alg(),
+        Some(TpmiAlgHash::Sha256)
+    );
+    let hmac = TpmtHa::new(TpmiAlgHash::Sha1, &[0; 20]).unwrap();
+    assert_eq!(
+        TpmtSignature::Hmac(hmac).hash_alg(),
+        Some(TpmiAlgHash::Sha1)
+    );
+    let eddsa = Tpm2bSignatureEddsa::from_bytes(&[0; 64]).unwrap();
+    assert_eq!(TpmtSignature::Eddsa(eddsa).hash_alg(), None);
+}

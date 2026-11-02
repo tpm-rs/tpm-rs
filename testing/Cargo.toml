@@ -38,6 +38,8 @@ p256 = { version = "0.13.2", features = ["ecdh", "arithmetic"] }
 aes = "0.8.4"
 cfb-mode = "0.8.2"
 hmac = "0.12.1"
+# SHAKE256, for the message representative of ML-DSA signatures.
+shake = "0.1"
 
 # The E2E tests currently support only the BoringSSL backend.
 
@@ -46,6 +48,80 @@ default = ["sha512"]
 # SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
 # reference built without `ALG_SHA512`) is built with every crate without it.
 sha512 = ["tpm2/sha512", "tpm2-engine/sha512", "tpm2-simulator/sha512", "tpm2-platform-linux/sha512"]
+# Optional algorithms and ECC curves of tpm-rs (forwarding to the `tpm2-engine`
+# features of the same names), so that E2E tests can be gated on them.
+ecc_curve_nist_p192 = ["tpm2-engine/ecc_curve_nist_p192"]
+ecc_curve_bn_p638 = ["tpm2-engine/ecc_curve_bn_p638"]
+ecc_curve_sm2_p256 = ["tpm2-engine/ecc_curve_sm2_p256"]
+sm2 = ["tpm2-engine/sm2"]
+ecschnorr = ["tpm2-engine/ecschnorr"]
+
+# Optional commands and features of tpm2-engine, forwarded under the same names so that
+# the E2E tests can be gated on them (`#[cfg(feature = "...")]`).
+cc-nv-define-space2 = ["tpm2-engine/cc-nv-define-space2"]
+cc-nv-read-public2 = ["tpm2-engine/cc-nv-read-public2"]
+cc-read-only-control = ["tpm2-engine/cc-read-only-control"]
+# `TPM_RH_AUTH_00` (on by default in tpm2-engine and tpm2-simulator, but not here: the
+# differential targets need it off, like the references). Since another crate of a build can
+# turn it on, the tests branch on `tpm2_engine::VENDOR_PERMANENT_AUTH` rather than on this
+# feature.
+vendor-permanent-auth = ["tpm2-engine/vendor-permanent-auth"]
+# The version 185 signing commands (the `cc-*` features of `tpm2-engine`), for
+# the E2E tests gated on them.
+cc-sign-digest = ["tpm2-engine/cc-sign-digest"]
+cc-verify-digest-signature = ["tpm2-engine/cc-verify-digest-signature"]
+cc-sign-sequence-start = ["tpm2-engine/cc-sign-sequence-start"]
+cc-sign-sequence-complete = ["tpm2-engine/cc-sign-sequence-complete"]
+cc-verify-sequence-start = ["tpm2-engine/cc-verify-sequence-start"]
+cc-verify-sequence-complete = ["tpm2-engine/cc-verify-sequence-complete"]
+# ML-KEM (`TPM_ALG_MLKEM`), ML-DSA (`TPM_ALG_MLDSA`), HashML-DSA
+# (`TPM_ALG_HASH_MLDSA`) and `TPM2_Encapsulate()`/`TPM2_Decapsulate()` (the
+# `tpm2-engine` features of the same names).
+mlkem = ["tpm2-engine/mlkem"]
+mldsa = ["tpm2-engine/mldsa"]
+hash_mldsa = ["tpm2-engine/hash_mldsa"]
+cc-encapsulate = ["tpm2-engine/cc-encapsulate"]
+cc-decapsulate = ["tpm2-engine/cc-decapsulate"]
+# Secure channel (SPDM) support: `TPM2_PolicyTransportSPDM`, `TPM_CAP_PUB_KEYS`
+# and `TPM_CAP_SPDM_SESSION_INFO` (`tpm2-engine`'s `sec-channel`, which implies
+# `cc-policy-transport-spdm`).
+sec-channel = ["tpm2-engine/sec-channel"]
+cc-policy-transport-spdm = ["tpm2-engine/cc-policy-transport-spdm"]
+
+# Forwarding features of the `tpm2-engine` profile features (same names), so
+# that E2E tests can be gated with `#[cfg(feature = ...)]`.
+cc-policy-capability = ["tpm2-engine/cc-policy-capability"]
+cc-policy-parameters = ["tpm2-engine/cc-policy-parameters"]
+cc-policy-physical-presence = ["tpm2-engine/cc-policy-physical-presence"]
+cc-pp-commands = ["tpm2-engine/cc-pp-commands"]
+cc-policy-ac-send-select = ["tpm2-engine/cc-policy-ac-send-select"]
+cc-set-algorithm-set = ["tpm2-engine/cc-set-algorithm-set"]
+# RSA key sizes beyond RSA-1024 and RSA-2048 (the `rsa3072`/`rsa4096` features
+# of `tpm2-engine`), for the tests of these key sizes. Every target enables both
+# (all three C references implement `RSA_3072` and `RSA_4096` upstream).
+rsa3072 = ["tpm2-engine/rsa3072"]
+rsa4096 = ["tpm2-engine/rsa4096"]
+
+# Profile features of `tpm2-engine`, forwarded with the same names so that the
+# E2E tests can be gated on them (`#[cfg(feature = "...")]`).
+#
+# Camellia with 128-, 192- and 256-bit keys (`TPM_ALG_CAMELLIA`).
+camellia128 = ["tpm2-engine/camellia128"]
+camellia192 = ["tpm2-engine/camellia192"]
+camellia256 = ["tpm2-engine/camellia256"]
+# CMAC (`TPM_ALG_CMAC`): `TPM2_MAC`/`TPM2_MAC_Start` in place of
+# `TPM2_HMAC`/`TPM2_HMAC_Start`.
+cmac = ["tpm2-engine/cmac"]
+
+# Features of `tpm2-engine` beyond its defaults, forwarded so that the E2E tests of
+# what they implement can be gated on them (`#[cfg(feature = "...")]`); the
+# `target-*` features enable those of their reference.
+ecmqv = ["tpm2-engine/ecmqv"]
+cc-ec-ephemeral = ["tpm2-engine/cc-ec-ephemeral"]
+cc-zgen-2phase = ["tpm2-engine/cc-zgen-2phase"]
+cc-ecc-encrypt = ["tpm2-engine/cc-ecc-encrypt"]
+cc-ecc-decrypt = ["tpm2-engine/cc-ecc-decrypt"]
+
 # Differential testing: compares tpm-rs with one C reference TPM, the target,
 # selected by exactly one `target-*` feature (enable that, not `differential`).
 # build.rs clones, patches and builds the target into the `reference` binary,
@@ -60,11 +136,38 @@ differential = []
 
 # The public TCG reference implementation
 # (https://github.com/TrustedComputingGroup/TPM), `testing/patches/tcgtpm/`.
+# It has no SHA-512 (`ALG_SHA512 NO` upstream): build `testing` with
+# `--no-default-features` (without `sha512`) for it.
 target-tcgtpm = [
     "differential",
+    "ecc_curve_nist_p192",
+    "ecc_curve_bn_p638",
+    "ecc_curve_sm2_p256",
+    "sm2",
+    "ecschnorr",
+    "camellia128",
+    "camellia256",
+    "cmac",
+    "rsa3072",
+    "rsa4096",
     "tpm2/tpma-object-fixed-firmware",
     "tpm2-engine/max-context-size-2168",
     "tpm2-engine/act-a",
+    "cc-nv-define-space2",
+    "cc-nv-read-public2",
+    "cc-read-only-control",
+    "sec-channel",
+    "cc-policy-capability",
+    "cc-policy-parameters",
+    "cc-policy-physical-presence",
+    "cc-pp-commands",
+    "cc-policy-ac-send-select",
+    "cc-set-algorithm-set",
+    "ecmqv",
+    "cc-ec-ephemeral",
+    "cc-zgen-2phase",
+    "cc-ecc-encrypt",
+    "cc-ecc-decrypt",
 ]
 
 # The TCG reference implementation version 185 (the TCG-internal
@@ -72,6 +175,16 @@ target-tcgtpm = [
 # `testing/patches/tcgtpm-185-feature/`.
 target-tcgtpm-v185 = [
     "differential",
+    "ecc_curve_nist_p192",
+    "ecc_curve_bn_p638",
+    "ecc_curve_sm2_p256",
+    "sm2",
+    "ecschnorr",
+    "camellia128",
+    "camellia256",
+    "cmac",
+    "rsa3072",
+    "rsa4096",
     "tpm2/tpma-object-fixed-firmware",
     "tpm2/max-cap-buffer-3072",
     "tpm2-engine/max-command-size-8192",
@@ -80,17 +193,63 @@ target-tcgtpm-v185 = [
     "tpm2-engine/min-evict-objects-9",
     "tpm2-engine/nv-memory-size-128k",
     "tpm2-engine/ecc-parameters-null-kdf",
+    "cc-nv-define-space2",
+    "cc-nv-read-public2",
+    "cc-read-only-control",
+    "cc-sign-digest",
+    "cc-verify-digest-signature",
+    "cc-sign-sequence-start",
+    "cc-sign-sequence-complete",
+    "cc-verify-sequence-start",
+    "cc-verify-sequence-complete",
+    "mlkem",
+    "mldsa",
+    "cc-encapsulate",
+    "cc-decapsulate",
+    "sec-channel",
+    "cc-policy-capability",
+    "cc-policy-parameters",
+    "cc-policy-physical-presence",
+    "cc-pp-commands",
+    "cc-set-algorithm-set",
+    "ecmqv",
+    "cc-ec-ephemeral",
+    "cc-zgen-2phase",
+    "cc-ecc-encrypt",
+    "cc-ecc-decrypt",
 ]
 
 # The IBM software TPM (https://github.com/kgoldman/ibmswtpm2),
 # `testing/patches/ibmswtpm2/`.
 target-ibmswtpm2 = [
     "differential",
+    "ecc_curve_nist_p192",
+    "ecc_curve_bn_p638",
+    "ecc_curve_sm2_p256",
+    "sm2",
+    "ecschnorr",
+    "camellia128",
+    "camellia256",
+    "cmac",
+    "rsa3072",
+    "rsa4096",
     "tpm2-engine/max-context-size-2680",
     "tpm2-engine/min-evict-objects-7",
     "tpm2-engine/nv-memory-size-32k",
     "tpm2-engine/ntc2-vendor-commands",
     "tpm2-engine/act-a",
+    "cc-policy-capability",
+    "cc-policy-parameters",
+    "cc-policy-physical-presence",
+    "cc-pp-commands",
+    "cc-set-algorithm-set",
+    "cc-nv-define-space2",
+    "cc-nv-read-public2",
+    "ecmqv",
+    "cc-ec-ephemeral",
+    "cc-zgen-2phase",
+    "cc-ecc-encrypt",
+    "cc-ecc-decrypt",
 ]
 
 # With a target: `differential::inproc::InProcReferences`, the C reference TPM

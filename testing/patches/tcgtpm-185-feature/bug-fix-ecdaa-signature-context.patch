@@ -1,0 +1,145 @@
+ecdaa-signature-context: TPM2_SignDigest and TPM2_SignSequenceStart take the ECDAA commit counter from context
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 2 (version 185), "TPMU_SIGNATURE_CTX"):
+
+  "commitCount[sizeof(UINT16)] | BYTE | TPM_ALG_ECDAA | the counter value that
+  is used between TPM2_Commit() and the sign operation"
+
+Specification (TPM 2.0 Library, Part 3 (version 185), "TPM2_SignSequenceStart",
+"General Description"):
+
+  "If the scheme of keyHandle uses a counter value (e.g., TPM_ALG_ECDAA), then
+  context shall contain the counter value from TPM2_Commit() to use for the
+  signature."
+
+Specification (TPM 2.0 Library, Part 2 (version 185), "TPM2B_SIGNATURE_CTX"):
+
+  "context[size]{:sizeof(TPMU_SIGNATURE_CTX)}"
+
+Without ML-DSA, the reference unmarshals a TPM2B_SIGNATURE_CTX with the limit
+MAX_SIG_CTX_SIZE = 0 ("185TODO: Incorporate DAA context size"), although its
+TPMU_SIGNATURE_CTX has the 2-octet commitCount of ECDAA, so any non-empty
+context is TPM_RC_SIZE. The limit is now 2 with ECDAA (and still
+MLDSA_CTX_MAX_SIZE with ML-DSA). Also, TPM2_SignDigest and
+TPM2_SignSequenceStart select the key's scheme with a NULL selector, which fails for a split signing scheme, and accept no context for
+any key other than ML-DSA, so a key whose scheme is TPM_ALG_ECDAA always fails
+(TPM_RC_VALUE for its counter in context, TPM_RC_SCHEME without one). For such
+a key, context must now be exactly the 2-octet (big-endian) counter
+(otherwise TPM_RC_VALUE + RC_<command>_context), and the scheme is the key's
+scheme with that counter (CryptoCommon_SelectSignScheme(); failure is
+TPM_RC_VALUE + RC_<command>_context). TPM2_SignDigest signs with it, and a
+signing sequence keeps it for TPM2_SignSequenceComplete, which consumes the
+commit. The other keys are unchanged. As in tpm-rs.
+diff --git a/TPMCmd/tpm/include/tpm_public/TpmAlgorithmDefines.h b/TPMCmd/tpm/include/tpm_public/TpmAlgorithmDefines.h
+--- a/TPMCmd/tpm/include/tpm_public/TpmAlgorithmDefines.h
++++ b/TPMCmd/tpm/include/tpm_public/TpmAlgorithmDefines.h
+@@ -233,8 +233,13 @@
+ #endif
+ 
+ // 185TODO: Incorporate DAA context size into the calculation of MAX_SIG_CTX_SIZE.
++// tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++// a TPM2B_SIGNATURE_CTX holds up to sizeof(TPMU_SIGNATURE_CTX) octets (Part 2),
++// which is sizeof(UINT16) (commitCount) for ECDAA without ML-DSA.
+ #if ALG_MLDSA
+ #  define MAX_SIG_CTX_SIZE MLDSA_CTX_MAX_SIZE
++#elif ALG_ECDAA
++#  define MAX_SIG_CTX_SIZE 2
+ #else
+ #  define MAX_SIG_CTX_SIZE 0
+ #endif
+diff --git a/TPMCmd/tpm/src/command/Signature/SignDigest.c b/TPMCmd/tpm/src/command/Signature/SignDigest.c
+--- a/TPMCmd/tpm/src/command/Signature/SignDigest.c
++++ b/TPMCmd/tpm/src/command/Signature/SignDigest.c
+@@ -85,18 +85,44 @@ TPM2_SignDigest(SignDigest_In*  in,  // IN: input parameter list
+     }
+ #  endif  // ALG_MLDSA
+ 
+-    // No other key type has a use for a signing context.
+-    if(in->context.t.size != 0)
++#  if ALG_ECDAA
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the commit counter of a key whose scheme is TPM_ALG_ECDAA is 'context'
++    // (Part 2, TPMU_SIGNATURE_CTX: "commitCount[sizeof(UINT16)] | BYTE |
++    // TPM_ALG_ECDAA | the counter value that is used between TPM2_Commit() and
++    // the sign operation"; Part 3, TPM2_SignSequenceStart: "If the scheme of
++    // keyHandle uses a counter value (e.g., TPM_ALG_ECDAA), then context shall
++    // contain the counter value from TPM2_Commit() to use for the signature.").
++    if(signObject->publicArea.type == TPM_ALG_ECC
++       && signObject->publicArea.parameters.eccDetail.scheme.scheme
++              == TPM_ALG_ECDAA)
+     {
+-        return TPM_RCS_VALUE + RC_SignDigest_context;
++        if(in->context.t.size != sizeof(UINT16))
++            return TPM_RCS_VALUE + RC_SignDigest_context;
++        objectScheme.scheme = TPM_ALG_ECDAA;
++        objectScheme.details.ecdaa.hashAlg =
++            signObject->publicArea.parameters.eccDetail.scheme.details.ecdaa.hashAlg;
++        objectScheme.details.ecdaa.count =
++            BYTE_ARRAY_TO_UINT16(in->context.t.context);
++        if(!CryptoCommon_SelectSignScheme(signObject, &objectScheme))
++            return TPM_RCS_VALUE + RC_SignDigest_context;
+     }
+-
+-    // The signature scheme is dictated by the signObject. Specify a NULL selector
+-    // so it gets picked up from signObject and validated.
+-    objectScheme.scheme = TPM_ALG_NULL;
+-    if(!CryptoCommon_SelectSignScheme(signObject, &objectScheme))
++    else
++#  endif  // ALG_ECDAA
+     {
+-        return TPM_RCS_SCHEME + RC_SignDigest_keyHandle;
++        // No other key type has a use for a signing context.
++        if(in->context.t.size != 0)
++        {
++            return TPM_RCS_VALUE + RC_SignDigest_context;
++        }
++
++        // The signature scheme is dictated by the signObject. Specify a NULL
++        // selector so it gets picked up from signObject and validated.
++        objectScheme.scheme = TPM_ALG_NULL;
++        if(!CryptoCommon_SelectSignScheme(signObject, &objectScheme))
++        {
++            return TPM_RCS_SCHEME + RC_SignDigest_keyHandle;
++        }
+     }
+     hashAlg = CryptoCommon_GetSignSchemeHashAlg(&objectScheme);
+ 
+diff --git a/TPMCmd/tpm/src/command/Signature/SignSequenceStart.c b/TPMCmd/tpm/src/command/Signature/SignSequenceStart.c
+--- a/TPMCmd/tpm/src/command/Signature/SignSequenceStart.c
++++ b/TPMCmd/tpm/src/command/Signature/SignSequenceStart.c
+@@ -116,6 +116,33 @@ TPM2_SignSequenceStart(SignSequenceStart_In*  in,  // IN: input parameter list
+     if(IS_ATTRIBUTE(signObject->publicArea.objectAttributes, TPMA_OBJECT, x509sign))
+         return TPM_RCS_ATTRIBUTES + RC_SignSequenceStart_keyHandle;
+ 
++#  if ALG_ECDAA
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the commit counter of a key whose scheme is TPM_ALG_ECDAA is 'context'
++    // (Part 2, TPMU_SIGNATURE_CTX: "commitCount[sizeof(UINT16)] | BYTE |
++    // TPM_ALG_ECDAA | the counter value that is used between TPM2_Commit() and
++    // the sign operation"; Part 3, TPM2_SignSequenceStart: "If the scheme of
++    // keyHandle uses a counter value (e.g., TPM_ALG_ECDAA), then context shall
++    // contain the counter value from TPM2_Commit() to use for the signature.").
++    // The sequence keeps the scheme with the counter, and
++    // TPM2_SignSequenceComplete() signs with it.
++    if(signObject->publicArea.type == TPM_ALG_ECC
++       && signObject->publicArea.parameters.eccDetail.scheme.scheme
++              == TPM_ALG_ECDAA)
++    {
++        if(in->context.t.size != sizeof(UINT16))
++            return TPM_RCS_VALUE + RC_SignSequenceStart_context;
++        scheme.scheme = TPM_ALG_ECDAA;
++        scheme.details.ecdaa.hashAlg =
++            signObject->publicArea.parameters.eccDetail.scheme.details.ecdaa.hashAlg;
++        scheme.details.ecdaa.count = BYTE_ARRAY_TO_UINT16(in->context.t.context);
++        if(!CryptoCommon_SelectSignScheme(signObject, &scheme))
++            return TPM_RCS_VALUE + RC_SignSequenceStart_context;
++        return ObjectCreateSignSequence(
++            signObject, &scheme, &in->auth, &in->context, &out->sequenceHandle);
++    }
++#  endif  // ALG_ECDAA
++
+     // Fix the scheme of the sequence to the scheme of the key.
+     if(!SelectSignSequenceScheme(signObject, &scheme))
+         return TPM_RCS_SCHEME + RC_SignSequenceStart_keyHandle;

@@ -1,0 +1,63 @@
+read-only-before-authorization: reject commands not permitted in Read-Only mode before authorization
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 1, "Read-Only Mode of Operation", "Description"):
+"A device supporting Read-Only mode must reject any affected command before
+performing authorization checks which would be evaluated during the execution
+of the command." Part 3, TPM2_ReadOnlyControl, Table "Commands Permitted in
+Read-Only Mode": TPM2_NV_Write, TPM2_NV_Extend, TPM2_NV_SetBits,
+TPM2_NV_WriteLock and TPM2_NV_ReadLock are "Permitted only when the NV index is
+defined with TPMA_NV_ORDERLY and TPMA_NV_CLEAR_STCLEAR"; TPM2_PolicySecret is
+"Not permitted when used with a PIN Pass/Fail NV index".
+
+The reference rejects the commands that are never permitted (RO_DISALLOW)
+right after the command code, but checks the entity-dependent ones in the
+command actions (NvReadOnlyModeChecks(), TPM2_PolicySecret()), i.e. after the
+authorization area has been processed: a failed authorization is reported
+instead of TPM_RC_READ_ONLY and, for a PIN index authorizing
+TPM2_PolicySecret, increments its pinCount (an NV write in Read-Only mode), or
+the DA failure counter. The checks now also run in ExecuteCommand() once the
+handles are validated (EntityGetLoadStatus()) and before the authorization
+area, as in tpm-rs (TpmEngine::check_read_only_entities).
+diff --git a/TPMCmd/tpm/src/main/ExecCommand.c b/TPMCmd/tpm/src/main/ExecCommand.c
+--- a/TPMCmd/tpm/src/main/ExecCommand.c
++++ b/TPMCmd/tpm/src/main/ExecCommand.c
+@@ -192,6 +192,37 @@ LIB_EXPORT void ExecuteCommand(
+     result = EntityGetLoadStatus(&command);
+     if(result != TPM_RC_SUCCESS)
+         goto Cleanup;
++#if CC_ReadOnlyControl
++    // tpm-rs differential testing -- spec deviation fix (NOT determinism): Part 1,
++    // "Read-Only Mode of Operation": "A device supporting Read-Only mode must reject
++    // any affected command before performing authorization checks which would be
++    // evaluated during the execution of the command." Upstream checks the commands
++    // that are permitted only on some entities (Part 3, TPM2_ReadOnlyControl) in
++    // their actions, i.e. after the authorization (whose failure updates the DA
++    // counter or a PIN index's pinCount); check them before the authorization area.
++    if(gc.readOnly)
++    {
++        switch(command.code)
++        {
++            case TPM_CC_NV_Write:
++            case TPM_CC_NV_Extend:
++            case TPM_CC_NV_SetBits:
++            case TPM_CC_NV_WriteLock:
++            case TPM_CC_NV_ReadLock:
++                result = NvReadOnlyModeChecks(
++                    NvGetIndexInfo(command.handles[1], NULL)->publicArea.attributes);
++                break;
++            case TPM_CC_PolicySecret:
++                if(NvIsPinCountedIndex(command.handles[0]))
++                    result = TPM_RC_READ_ONLY;
++                break;
++            default:
++                break;
++        }
++        if(result != TPM_RC_SUCCESS)
++            goto Cleanup;
++    }
++#endif
+     // Authorization session handling for the command.
+     ClearCpRpHashes(&command);
+     if(command.tag == TPM_ST_SESSIONS)

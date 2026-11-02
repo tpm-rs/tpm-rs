@@ -551,8 +551,35 @@ pub const TPM2_MAX_MLDSA_PUB_SIZE: usize = 2592;
 pub const TPM2_MAX_MLDSA_PRIV_SIZE: usize = 32;
 #[doc(alias = "MAX_MLDSA_SIG_SIZE")]
 pub const TPM2_MAX_MLDSA_SIG_SIZE: usize = 4627;
+/// `MAX_SM2_ID_BYTES`, the largest SM2 identity `ID_A` (the `id` member of
+/// `TPMU_SIGNATURE_CTX`). The specification leaves the value to the implementation; this TPM
+/// accepts identities as long as the ML-DSA context strings (255 octets).
+#[doc(alias = "MAX_SM2_ID_BYTES")]
+pub const TPM2_MAX_SM2_ID_BYTES: usize = 255;
+/// `sizeof(TPMU_SIGNATURE_CTX)`, the capacity of `TPM2B_SIGNATURE_CTX`: the largest member of
+/// the union for the implemented schemes (TPM 2.0 Part 2, TPMU_SIGNATURE_CTX): 255 octets
+/// (`buffer[255]`, `MLDSA_CTX_MAX_SIZE`) with ML-DSA, [`TPM2_MAX_SM2_ID_BYTES`] (`id`) with SM2,
+/// otherwise 2 octets (`commitCount`) with ECDAA, otherwise 0 (`empty[0]`).
 #[doc(alias = "MAX_SIGNATURE_CTX_SIZE")]
-pub const TPM2_MAX_SIGNATURE_CTX_SIZE: usize = 255;
+pub const TPM2_MAX_SIGNATURE_CTX_SIZE: usize = if cfg!(feature = "mldsa") {
+    255
+} else if cfg!(feature = "sm2") {
+    TPM2_MAX_SM2_ID_BYTES
+} else if cfg!(feature = "ecdaa") {
+    2
+} else {
+    0
+};
+/// `MAX_SIGNATURE_HINT_SIZE`, the capacity of `TPM2B_SIGNATURE_HINT`: "the maximum hint size
+/// across all signature verification algorithms supported by the TPM" (TPM 2.0 Part 2,
+/// TPM2B_SIGNATURE_HINT), i.e. the size of an EdDSA *R* (`MAX_ECC_KEY_BYTES`) with EdDSA and 0
+/// without it (no other algorithm takes a hint), so that any non-empty hint is `TPM_RC_SIZE`.
+#[doc(alias = "MAX_SIGNATURE_HINT_SIZE")]
+pub const TPM2_MAX_SIGNATURE_HINT_SIZE: usize = if cfg!(feature = "eddsa") {
+    crate::TpmEccCurve::MAX_ECC_KEY_BYTES
+} else {
+    0
+};
 
 pub const TPM2_MAX_CONTEXT_SIZE: u32 = 5120;
 /// Maximum buffer size of `TPM2B_PRIVATE` (`sizeof(_PRIVATE)`).

@@ -80,6 +80,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // PolicyTemplate, PolicyNameHash does not accept a repeat of the same value.
             let is_occupied = session_state.is_cp_hash_defined
                 || session_state.is_name_hash_defined
+                || session_state.is_parameters_hash_defined
                 || session_state.is_template_hash_defined;
 
             if is_occupied {

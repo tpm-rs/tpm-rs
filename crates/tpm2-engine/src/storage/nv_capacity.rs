@@ -21,7 +21,7 @@
 //!   each with an `NV_RAM_HEADER` (`NvRamTestSpaceIndex()`).
 //!
 //! The constants are the values of the reference build `testing` compiles (`tcgtpm` `public`
-//! and `v185`, and `ibmswtpm2`, all with the RSA 1024/2048 and ECC profile; `sizeof` taken from
+//! and `v185`, and `ibmswtpm2`, with the RSA and ECC profile of the build; `sizeof` taken from
 //! the compiled C structures).
 
 use super::manager::StorageManager;
@@ -38,13 +38,28 @@ pub const NV_MEMORY_SIZE: u32 = if cfg!(feature = "nv-memory-size-128k") {
 } else {
     16384
 };
+/// Whether this TPM implements SHA-512 (the `sha512` feature of `tpm2`), which enlarges every
+/// digest-sized member of the reference's structures (64 instead of 48 octets).
+const SHA512: bool = tpm2::TpmiAlgHash::MAX_DIGEST_BYTES == 64;
+
 /// `NV_INDEX_RAM_DATA`: the offset of the orderly Index RAM image in NV (after `gp`, `gr`, `gc`
 /// and `go`). Each implemented ACT (see [`crate::act`]) adds its `ACT_STATE` to `go` and an
 /// unused `TPMT_HA` policy slot to `gc`: 4644 with `TPM_RH_ACT_0` (the TCG reference
 /// implementation version 185), 4784 with `TPM_RH_ACT_0` and `TPM_RH_ACT_A` (the `act-a`
 /// feature: the public TCG reference implementation and `ibmswtpm2`); without ACTs it would be
-/// 4508.
-pub const NV_INDEX_RAM_DATA: u32 = if cfg!(feature = "act-a") { 4784 } else { 4644 };
+/// 4508. Without SHA-512 (the public TCG reference upstream): 3380, or 3488 with `act-a`. A TPM
+/// with `TPM2_ReadOnlyControl` (the `cc-read-only-control` feature) has `gc.readOnly` (a 4-octet
+/// `BOOL` of `STATE_CLEAR_DATA`, only with `CC_ReadOnlyControl`), which adds 4.
+pub const NV_INDEX_RAM_DATA: u32 = match (SHA512, cfg!(feature = "act-a")) {
+    (true, true) => 4784,
+    (true, false) => 4644,
+    (false, true) => 3488,
+    (false, false) => 3380,
+} + if cfg!(feature = "cc-read-only-control") {
+    4
+} else {
+    0
+};
 /// `RAM_INDEX_SPACE`: the size of `s_indexOrderlyRam`, the RAM backing of orderly Indices.
 pub const RAM_INDEX_SPACE: u32 = 512;
 /// `NV_USER_DYNAMIC`: the start of the dynamic area of Indices and evict objects.
@@ -57,10 +72,37 @@ pub const SIZEOF_UINT32: u32 = 4;
 pub const SIZEOF_TPM_HANDLE: u32 = 4;
 /// `sizeof(UINT64)`: the counter value of a counter Index.
 pub const SIZEOF_UINT64: u32 = 8;
-/// `sizeof(OBJECT)`: an evict object, whatever its type.
-pub const SIZEOF_OBJECT: u32 = 1280;
-/// `sizeof(NV_INDEX)`: the descriptor (public area and authValue) of an Index.
-pub const SIZEOF_NV_INDEX: u32 = 148;
+/// `sizeof(OBJECT)`: an evict object, whatever its type. It grows with the largest RSA key
+/// (`TPMT_PUBLIC` holds `MAX_RSA_KEY_BYTES` of modulus and `TPMT_SENSITIVE` `RSA_PRIVATE_SIZE` of
+/// CRT values): 1280 with RSA-2048, 1728 with RSA-3072 (the `rsa3072` feature) and 2176 with
+/// RSA-4096 (the `rsa4096` feature), the same in all three references; 80 octets less without
+/// SHA-512 (1200, 1648 and 2096). With ML-KEM (`mlkem`, a 1568-octet encapsulation key) or ML-DSA
+/// (`mldsa`, a 2592-octet verification key) the `unique` of the `TPMT_PUBLIC` is that key instead
+/// of the RSA modulus (with RSA-2048: 2592 with ML-KEM and 3616 with ML-DSA; with RSA-4096 and
+/// ML-DSA 4256, the version 185 reference's `sizeof(OBJECT)` in its target profile).
+pub const SIZEOF_OBJECT: u32 = {
+    let rsa_bytes = tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BITS as u32 / 8;
+    let classical = match rsa_bytes * 8 {
+        4096 => 2176,
+        3072 => 1728,
+        _ => 1280,
+    } - if SHA512 { 0 } else { 80 };
+    let unique = if cfg!(feature = "mldsa") {
+        2592
+    } else if cfg!(feature = "mlkem") {
+        1568
+    } else {
+        0
+    };
+    if unique > rsa_bytes {
+        classical + unique - rsa_bytes
+    } else {
+        classical
+    }
+};
+/// `sizeof(NV_INDEX)`: the descriptor (public area and authValue) of an Index: 148, or 116
+/// without SHA-512.
+pub const SIZEOF_NV_INDEX: u32 = if SHA512 { 148 } else { 116 };
 /// `sizeof(NV_LIST_TERMINATOR)`: the end marker of the dynamic list (with `maxCount`).
 pub const SIZEOF_NV_LIST_TERMINATOR: u32 = 12;
 /// `sizeof(NV_RAM_HEADER)`: the header of an orderly Index in `s_indexOrderlyRam`.
@@ -276,17 +318,29 @@ mod tests {
     /// with the `act-a` feature).
     const FREE: u32 = NV_USER_DYNAMIC_END - NV_USER_DYNAMIC;
 
-    /// The reference fits seven persistent objects into empty NV (the eighth would eat into the
-    /// space reserved for `MIN_COUNTER_INDICES` counters), whatever the key type.
+    /// The persistent objects that fit into empty NV: the free area less the next forward pointer,
+    /// the list terminator and the reservation for `MIN_COUNTER_INDICES` counters, in units of
+    /// `NV_EVICT_OBJECT_SIZE` (seven with the TCG reference profile, four with RSA-4096).
+    const PERSISTENT: u32 = (FREE
+        - SIZEOF_UINT32
+        - SIZEOF_NV_LIST_TERMINATOR
+        - MIN_COUNTER_INDICES * NV_INDEX_COUNTER_SIZE)
+        / NV_EVICT_OBJECT_SIZE;
+
+    const _: () = assert!(SIZEOF_OBJECT != 1280 || PERSISTENT == 7);
+
+    /// The reference fits seven persistent objects into empty NV (four with RSA-4096; the next one
+    /// would eat into the space reserved for `MIN_COUNTER_INDICES` counters), whatever the key
+    /// type.
     #[test]
     fn seven_persistent_objects_fit_into_empty_nv() {
         let mut usage = NvUsage::default();
-        for _ in 0..7 {
+        for _ in 0..PERSISTENT {
             assert!(usage.can_add_evict_object());
             usage.add_evict_object();
         }
         assert!(!usage.can_add_evict_object());
-        assert_eq!(usage.free_bytes(), FREE - 7 * 1288);
+        assert_eq!(usage.free_bytes(), FREE - PERSISTENT * NV_EVICT_OBJECT_SIZE);
     }
 
     /// Indices must leave room for `MIN_EVICT_OBJECTS` persistent objects and, unless they are
@@ -297,16 +351,17 @@ mod tests {
         let ordinary = 0u32;
         let counter = TPM_NT_COUNTER << TPMA_NV_TPM_NT_SHIFT;
         let usage = NvUsage::default();
-        // An ordinary Index reserves 16 + 2 * 1288 + 8 * 160 = 3872.
-        assert!(usage.can_define_index(ordinary, (FREE - 3872 - 148) as u16));
-        assert!(!usage.can_define_index(ordinary, (FREE - 3872 - 147) as u16));
+        // An ordinary Index reserves 16 + 2 * 1288 + 8 * 160 = 3872 (with RSA-4096: 2 * 2184).
+        let reserved = 16 + 2 * NV_EVICT_OBJECT_SIZE + 8 * NV_INDEX_COUNTER_SIZE;
+        assert!(usage.can_define_index(ordinary, (FREE - reserved - SIZEOF_NV_INDEX) as u16));
+        assert!(!usage.can_define_index(ordinary, (FREE - reserved - SIZEOF_NV_INDEX + 1) as u16));
         // A counter reserves no counter space.
         assert!(usage.can_define_index(counter, 8));
         let mut orderly = NvUsage::default();
         assert!(orderly.can_define_index(TPMA_NV_ORDERLY, 500));
         assert!(!orderly.can_define_index(TPMA_NV_ORDERLY, 501));
         orderly.add_index(TPMA_NV_ORDERLY, 100);
-        assert_eq!(orderly.dynamic_bytes, 4 + 148);
+        assert_eq!(orderly.dynamic_bytes, 4 + SIZEOF_NV_INDEX);
         assert_eq!(orderly.orderly_ram_bytes, 112);
         assert!(!orderly.can_define_index(TPMA_NV_ORDERLY, 389));
         assert!(orderly.can_define_index(TPMA_NV_ORDERLY, 388));
@@ -316,18 +371,45 @@ mod tests {
     /// `NvCapGetPersistentAvail()` / `NvCapGetCounterAvail()` compute them.
     #[test]
     fn availability_estimates_match_the_reference() {
+        // The orderly RAM limits the counters to 25 unless the `MIN_EVICT_OBJECTS` reservation
+        // of a large `sizeof(OBJECT)` (ML-KEM or ML-DSA) leaves fewer in the dynamic area.
+        let counters = |usage: &NvUsage, ram: u32| {
+            let mut avail = usage.free_bytes() - SIZEOF_NV_LIST_TERMINATOR;
+            if usage.persistent < MIN_EVICT_OBJECTS {
+                avail = avail
+                    .saturating_sub((MIN_EVICT_OBJECTS - usage.persistent) * NV_EVICT_OBJECT_SIZE);
+            }
+            (avail / NV_INDEX_COUNTER_SIZE).min(ram)
+        };
         let mut usage = NvUsage::default();
-        assert_eq!((usage.persistent_avail(), usage.counter_avail()), (7, 25));
+        assert_eq!(
+            (usage.persistent_avail(), usage.counter_avail()),
+            (PERSISTENT, counters(&usage, 25))
+        );
+        if SIZEOF_OBJECT <= 2176 {
+            assert_eq!(usage.counter_avail(), 25);
+        }
         usage.add_index(
             TPMA_NV_ORDERLY | (TPM_NT_COUNTER << TPMA_NV_TPM_NT_SHIFT),
             8,
         );
-        assert_eq!((usage.persistent_avail(), usage.counter_avail()), (7, 24));
-        for _ in 0..3 {
+        assert_eq!(
+            (usage.persistent_avail(), usage.counter_avail()),
+            (PERSISTENT, counters(&usage, 24))
+        );
+        // (Large `sizeof(OBJECT)`s, e.g. with ML-DSA, leave room for fewer than 3 objects.)
+        let first = PERSISTENT.min(3);
+        for _ in 0..first {
             usage.add_evict_object();
         }
-        assert_eq!((usage.persistent_avail(), usage.counter_avail()), (4, 24));
-        for _ in 0..4 {
+        assert_eq!(
+            (usage.persistent_avail(), usage.counter_avail()),
+            (PERSISTENT - first, counters(&usage, 24))
+        );
+        if SIZEOF_OBJECT <= 2176 {
+            assert_eq!(usage.counter_avail(), 24);
+        }
+        for _ in 0..PERSISTENT - first {
             usage.add_evict_object();
         }
         assert_eq!(usage.persistent_avail(), 0);

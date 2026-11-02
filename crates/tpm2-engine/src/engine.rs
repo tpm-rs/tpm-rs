@@ -159,6 +159,10 @@ pub const MAX_COMMAND_SIZE: usize = if cfg!(feature = "max-command-size-8192") {
     4096 - 0x80
 };
 
+/// The size of `gr.commitNonce` (a `TPM2B_DIGEST` the reference fills completely): the largest
+/// digest of the profile, 64 octets with SHA-512 and 48 without.
+pub(crate) const COMMIT_NONCE_SIZE: usize = tpm2::TpmiAlgHash::MAX_DIGEST_BYTES;
+
 /// The value reported for `TPM_PT_MAX_RESPONSE_SIZE` ("the maximum value for *responseSize* in a
 /// response"): 4096, or 8192 with the `max-command-size-8192` feature.
 pub const MAX_RESPONSE_SIZE: usize = if cfg!(feature = "max-command-size-8192") {
@@ -363,6 +367,13 @@ pub struct GlobalState {
     pub ph_enable_nv: bool,
     /// Flag indicating whether the Platform Hierarchy is enabled.
     pub ph_enable: bool,
+    /// Whether the TPM is in the Read-Only mode of operation (`TPMA_STARTUP_CLEAR.readOnly`,
+    /// `gc.readOnly`; set by `TPM2_ReadOnlyControl`, the `cc-read-only-control` feature, and
+    /// always CLEAR without it). Part 2, TPMA_STARTUP_CLEAR: "*readOnly* is CLEAR on TPM Reset
+    /// or TPM Restart and preserved by TPM Resume" (it is part of the state saved by
+    /// `TPM2_Shutdown(TPM_SU_STATE)`). Like the reference's `gc`, it is kept by `_TPM_Init`
+    /// ([`GlobalState::reset_in_place`]) until the next `TPM2_Startup`.
+    pub read_only: bool,
     /// Indicates whether the Non-Volatile (NV) memory is locked against certain operations.
     pub nv_locked: bool,
     /// The proof value for the Storage Hierarchy.
@@ -478,12 +489,13 @@ pub struct GlobalState {
     /// committed `r` can be used for at most one signature.
     pub commit_array: [u8; 16],
     /// A secret nonce used to derive commit scalars (`r`) deterministically via KDFa per `CryptGenerateR`.
+    /// Only the first `COMMIT_NONCE_SIZE` bytes are drawn and used.
     pub commit_nonce: [u8; 64],
     /// The X coordinate of the point committed during the last TPM2_Commit (`E` if `P1` was present, else `L`).
-    /// Sized for the largest supported curve (NIST P-521, 66 bytes).
-    pub commit_x: [u8; 66],
-    /// The P1 point passed to the last TPM2_Commit (`x || y`), if any. Sized for NIST P-521.
-    pub commit_p1: [u8; 132],
+    /// Sized for the largest supported curve (`MAX_ECC_KEY_BYTES`).
+    pub commit_x: [u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
+    /// The P1 point passed to the last TPM2_Commit (`x || y`), if any. Sized for the largest supported curve.
+    pub commit_p1: [u8; 2 * tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
     pub debug_expected_auth: [u8; 64],
     pub debug_expected_auth_len: usize,
     pub debug_provided_auth: [u8; 64],
@@ -555,6 +567,17 @@ pub struct GlobalState {
     /// across `_TPM_Init` (power cycles, TPM Reset/Restart/Resume), but not in NV.
     #[cfg(feature = "ntc2-vendor-commands")]
     pub ntc2_config: tpm2::commands::Ntc2CfgStruct,
+    /// Whether Physical Presence is asserted (`_plat__PhysicalPresenceAsserted()`), a platform
+    /// input (the simulator's `PhysicalPresenceOn`/`Off` signals). The platform keeps it across
+    /// `_TPM_Init`; `false` when the TPM is created.
+    pub physical_presence: bool,
+    /// The commands that require Physical Presence when authorized with `TPM_RH_PLATFORM`
+    /// (`gp.ppList`, changed by `TPM2_PP_Commands`). Persistent
+    /// ([`crate::physical_presence`]).
+    pub pp_list: crate::physical_presence::PpList,
+    /// The vendor-dependent algorithm set (`gp.algorithmSet`, `TPM_PT_ALGORITHM_SET`, changed
+    /// by `TPM2_SetAlgorithmSet`). Persistent; 0 at manufacture.
+    pub algorithm_set: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -572,6 +595,11 @@ pub struct ActiveSequence {
     /// For Event sequences, indices 0..4 hold SHA-1, SHA-256, SHA-384, and SHA-512 states (the
     /// first [`Self::EVENT_HASH_COUNT`]: without SHA-512, the last slot is unused).
     pub hash_states: [crate::hash_state::StreamingHashState; 4],
+    /// The running SHAKE256 computation of the ML-DSA message representative `mu` of an ML-DSA
+    /// or HashML-DSA signing/verification sequence ([`SignatureSequence`]); `None` for every
+    /// other sequence. It is saved in place of `hash_states[MU_STATE_SLOT]`, which such a
+    /// sequence does not use.
+    pub(crate) mu_state: Option<crate::shake256::Shake256>,
 }
 
 impl ActiveSequence {
@@ -600,6 +628,9 @@ impl ActiveSequence {
                 hash_states[0] =
                     crate::hash_state::init_hmac_inner_state(hash_alg, key.get_buffer());
             }
+            // The CMAC state is in the sequence type.
+            #[cfg(feature = "cmac")]
+            SequenceType::Cmac { .. } => {}
             SequenceType::Event => {
                 hash_states[0] = crate::hash_state::StreamingHashState::new(TpmiAlgHash::Sha1);
                 hash_states[1] = crate::hash_state::StreamingHashState::new(TpmiAlgHash::Sha256);
@@ -607,6 +638,12 @@ impl ActiveSequence {
                 if let Some(sha512) = crate::handler::capability::sha512() {
                     hash_states[3] = crate::hash_state::StreamingHashState::new(sha512);
                 }
+            }
+            // The message state of a signing or verification sequence; the ticket states of a
+            // verification sequence are keyed by the handler, which knows the hierarchy proof
+            // (see [`SignatureSequence::ticket_hierarchy`]).
+            SequenceType::Sign(seq) | SequenceType::Verify(seq) => {
+                hash_states[0] = seq.initial_message_state();
             }
         }
         Self {
@@ -619,14 +656,73 @@ impl ActiveSequence {
             first_bytes: [0u8; 4],
             first_bytes_len: 0,
             hash_states,
+            mu_state: None,
         }
     }
 
-    /// Feeds input data into the active streaming hash state(s).
+    /// The index of `hash_states` whose place the ML-DSA `mu_state` takes when the sequence is
+    /// saved.
+    pub const MU_STATE_SLOT: usize = 3;
+
+    /// Whether a sequence of `sequence_type` keeps an ML-DSA `mu_state`.
+    pub fn has_mu_state(sequence_type: &SequenceType) -> bool {
+        matches!(
+            sequence_type,
+            SequenceType::Sign(seq) | SequenceType::Verify(seq)
+                if matches!(seq.scheme, tpm2::TpmtSigScheme::Mldsa | tpm2::TpmtSigScheme::HashMldsa)
+        )
+    }
+
+    /// Serializes the state of slot `i` for a saved sequence:
+    /// `hash_states[i]`, or for [`Self::MU_STATE_SLOT`] of an ML-DSA sequence its `mu_state`
+    /// (zero-padded), always [`crate::hash_state::StreamingHashState::SERIALIZED_SIZE`] bytes.
+    pub fn serialize_state(&self, i: usize, dst: &mut [u8]) -> usize {
+        const SIZE: usize = crate::hash_state::StreamingHashState::SERIALIZED_SIZE;
+        const _: () = assert!(crate::shake256::SHAKE256_EXPORT_SIZE <= SIZE);
+        if i == Self::MU_STATE_SLOT
+            && let Some(mu) = &self.mu_state
+        {
+            let bytes = mu.to_bytes();
+            dst[..bytes.len()].copy_from_slice(&bytes);
+            dst[bytes.len()..SIZE].fill(0);
+            return SIZE;
+        }
+        self.hash_states[i].serialize(dst)
+    }
+
+    /// Restores the `mu_state` of an ML-DSA sequence from the saved slot
+    /// [`Self::MU_STATE_SLOT`] (see [`Self::serialize_state`]).
+    pub(crate) fn mu_state_from_slot(slot: &[u8]) -> Option<crate::shake256::Shake256> {
+        let bytes = slot.get(..crate::shake256::SHAKE256_EXPORT_SIZE)?;
+        crate::shake256::Shake256::from_bytes(bytes.try_into().ok()?)
+    }
+
+    /// Feeds `data` into the message state of a signing or verification sequence: the running
+    /// `mu` of pure ML-DSA, which signs the message itself, or `hash_states[0]` (the digest of the
+    /// message, its HMAC, or the pre-hash of HashML-DSA).
+    fn update_message_state(&mut self, seq: &SignatureSequence, data: &[u8]) {
+        match (seq.scheme, &mut self.mu_state) {
+            (tpm2::TpmtSigScheme::Mldsa, Some(mu)) => mu.update(data),
+            _ => self.hash_states[0].update(data),
+        }
+    }
+
+    /// Feeds input data into the active streaming hash state(s). A CMAC sequence (whose
+    /// update needs the block cipher of the crypto provider) is updated by
+    /// `TPM2_SequenceUpdate` itself.
     pub fn update_hash_states(&mut self, data: &[u8]) {
         match self.sequence_type {
             SequenceType::Hash { .. } | SequenceType::Hmac { .. } => {
                 self.hash_states[0].update(data);
+            }
+            #[cfg(feature = "cmac")]
+            SequenceType::Cmac { .. } => {}
+            SequenceType::Sign(seq) => self.update_message_state(&seq, data),
+            SequenceType::Verify(seq) => {
+                self.update_message_state(&seq, data);
+                if seq.ticket_hierarchy.is_some() {
+                    self.hash_states[SignatureSequence::TICKET_INNER_STATE].update(data);
+                }
             }
             SequenceType::Event => {
                 for state in &mut self.hash_states[..Self::EVENT_HASH_COUNT] {
@@ -647,7 +743,125 @@ pub enum SequenceType {
         hash_alg: TpmiAlgHash,
         key: OwnedSensitiveData,
     },
+    /// A MAC sequence of `TPM2_MAC_Start` with `TPM_ALG_CMAC` (the `cmac` feature): the
+    /// streaming CMAC state, which includes the key.
+    #[cfg(feature = "cmac")]
+    Cmac {
+        state: crate::cmac::CmacState,
+    },
     Event,
+    /// A signing sequence started by `TPM2_SignSequenceStart` (C `attributes.signSeq`).
+    Sign(SignatureSequence),
+    /// A signature verification sequence started by `TPM2_VerifySequenceStart` (C
+    /// `attributes.verifySeq`).
+    Verify(SignatureSequence),
+}
+
+/// The state of a signing (`TPM2_SignSequenceStart`) or verification
+/// (`TPM2_VerifySequenceStart`) sequence that is not in its streaming hash states (C
+/// `SEQUENCE_OBJECT.signScheme`/`associatedName`).
+///
+/// `ActiveSequence::hash_states[0]` accumulates the message: a running hash with the hash of
+/// [`Self::scheme`] for a scheme that signs a digest of the message (RSASSA, RSAPSS, ECDSA), or
+/// the inner state of a running HMAC keyed with [`Self::hmac_key`] for `TPM_ALG_HMAC`, which signs
+/// the message itself. For a verification sequence with a ticket,
+/// `hash_states[TICKET_INNER_STATE]` and `hash_states[TICKET_OUTER_STATE]` are the inner state (with
+/// the tag and the message so far) and the outer state of the running HMAC of the
+/// `TPM_ST_MESSAGE_VERIFIED` ticket, keyed with the proof of [`Self::ticket_hierarchy`] when the
+/// sequence was started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignatureSequence {
+    /// The signing scheme of the key that started the sequence: the scheme the signature is
+    /// produced or checked with (the sequence commands cannot override it).
+    pub scheme: tpm2::TpmtSigScheme,
+    /// The Name of the key that started the sequence: `TPM2_SignSequenceComplete` /
+    /// `TPM2_VerifySequenceComplete` require a key with the same Name
+    /// (`TPM_RC_SIGN_CONTEXT_KEY`).
+    pub key_name: OwnedName,
+    /// The HMAC key (the key's sensitive `bits`) of a `TPM_ALG_HMAC` sequence, needed to finish
+    /// the running HMAC; empty for the other schemes.
+    pub hmac_key: OwnedSensitiveData,
+    /// For a verification sequence, the hierarchy of the `TPM_ST_MESSAGE_VERIFIED` ticket the
+    /// sequence produces (the hierarchy of the key when the sequence was started), whose proof
+    /// keys the running ticket HMAC; `None` for a signing sequence and when the ticket is a NULL
+    /// Ticket (a key in `TPM_RH_NULL` or with nameAlg `TPM_ALG_NULL`).
+    pub ticket_hierarchy: Option<u32>,
+    /// The pre-hash function of a HashML-DSA sequence (the key's `hashAlg`), whose running
+    /// digest of the message is `hash_states[0]`; `None` for the other schemes.
+    pub pre_hash: Option<TpmiAlgHash>,
+}
+
+impl SignatureSequence {
+    /// The index of the inner state of the running ticket HMAC in `ActiveSequence::hash_states`.
+    pub const TICKET_INNER_STATE: usize = 1;
+    /// The index of the outer state of the running ticket HMAC in `ActiveSequence::hash_states`.
+    pub const TICKET_OUTER_STATE: usize = 2;
+
+    /// The largest serialization of [`Self::serialize`].
+    pub const SERIALIZED_MAX_SIZE: usize = tpm2::TpmtSigScheme::MAX_SIZE
+        + tpm2::Tpm2bName::MAX_SIZE
+        + tpm2::Tpm2bSensitiveData::MAX_SIZE
+        + 4
+        + 2;
+
+    /// Serializes the sequence state into `dst` (at least [`Self::SERIALIZED_MAX_SIZE`] bytes)
+    /// for a saved context or the state-save data: the scheme (`TPMT_SIG_SCHEME`), the key
+    /// Name and the HMAC key (`TPM2B`s), and the ticket hierarchy (0 for none). Returns the
+    /// number of bytes written.
+    pub fn serialize(&self, dst: &mut [u8]) -> usize {
+        let mut offset = self.scheme.marshal(
+            (&mut dst[..tpm2::TpmtSigScheme::MAX_SIZE])
+                .try_into()
+                .unwrap(),
+        );
+        offset += self.key_name.marshal(
+            (&mut dst[offset..offset + tpm2::Tpm2bName::MAX_SIZE])
+                .try_into()
+                .unwrap(),
+        );
+        offset += self.hmac_key.marshal(
+            (&mut dst[offset..offset + tpm2::Tpm2bSensitiveData::MAX_SIZE])
+                .try_into()
+                .unwrap(),
+        );
+        dst[offset..offset + 4].copy_from_slice(&self.ticket_hierarchy.unwrap_or(0).to_be_bytes());
+        let pre_hash = self.pre_hash.map_or(0, |alg| tpm2::Alg::from(alg).id());
+        dst[offset + 4..offset + 6].copy_from_slice(&pre_hash.to_be_bytes());
+        offset + 6
+    }
+
+    /// Deserializes a state written by [`Self::serialize`], advancing `src`.
+    pub fn deserialize(src: &mut &[u8]) -> Option<Self> {
+        let scheme = tpm2::TpmtSigScheme::unmarshal(src).ok()?;
+        let key_name = OwnedName::unmarshal(src).ok()?;
+        let hmac_key = OwnedSensitiveData::unmarshal(src).ok()?;
+        let ticket_hierarchy = u32::unmarshal(src).ok()?;
+        let pre_hash_id = u16::unmarshal(src).ok()?;
+        let pre_hash = match pre_hash_id {
+            0 => None,
+            id => Some(TpmiAlgHash::unmarshal(&mut &id.to_be_bytes()[..]).ok()?),
+        };
+        Some(Self {
+            scheme,
+            key_name,
+            hmac_key,
+            ticket_hierarchy: (ticket_hierarchy != 0).then_some(ticket_hierarchy),
+            pre_hash,
+        })
+    }
+
+    /// The initial message state for [`Self::scheme`] (see the type documentation).
+    pub fn initial_message_state(&self) -> crate::hash_state::StreamingHashState {
+        match self.scheme {
+            tpm2::TpmtSigScheme::Hmac(hash_alg) => {
+                crate::hash_state::init_hmac_inner_state(hash_alg, self.hmac_key.get_buffer())
+            }
+            scheme => match scheme.hash_alg().or(self.pre_hash) {
+                Some(hash_alg) => crate::hash_state::StreamingHashState::new(hash_alg),
+                None => crate::hash_state::StreamingHashState::default(),
+            },
+        }
+    }
 }
 
 /// A parsed representation of an incoming TPM command with authorization sessions (tag 0x8002).
@@ -762,6 +976,7 @@ impl Default for GlobalState {
             eh_enable: true,
             ph_enable_nv: true,
             ph_enable: true,
+            read_only: false,
             nv_locked: false,
             sh_proof: [0; 64],
             eh_proof: [0; 64],
@@ -815,8 +1030,8 @@ impl Default for GlobalState {
             commit_counter: 0,
             commit_array: [0u8; 16],
             commit_nonce: [0x5a; 64],
-            commit_x: [0u8; 66],
-            commit_p1: [0u8; 132],
+            commit_x: [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
+            commit_p1: [0u8; 2 * tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
             debug_expected_auth: [0u8; 64],
             debug_expected_auth_len: 0,
             debug_provided_auth: [0u8; 64],
@@ -843,7 +1058,7 @@ impl Default for GlobalState {
             pcr_policy: OwnedDigest::default(),
             pcr_reconfig: false,
             audit_counter: 0,
-            audit_hash_alg: tpm2::Alg::SHA512.id(),
+            audit_hash_alg: tpm2::Alg::from(crate::handler::context_integrity_hash_alg()).id(),
             audit_commands: crate::command_audit::CommandAuditList::manufacture_default(),
             command_audit_digest: OwnedDigest::default(),
             command_audit_cp_hash: None,
@@ -851,6 +1066,9 @@ impl Default for GlobalState {
             act: crate::act::ActState::default(),
             #[cfg(feature = "ntc2-vendor-commands")]
             ntc2_config: crate::handler::vendor::NTC2_INITIAL_CONFIG,
+            physical_presence: false,
+            pp_list: crate::physical_presence::PpList::manufacture_default(),
+            algorithm_set: 0,
         }
     }
 }
@@ -882,7 +1100,7 @@ impl GlobalState {
         self.lockout_auth_enabled = true;
         self.da_pending_on_nv = false;
         self.commit_nonce = [0x5a; 64];
-        self.audit_hash_alg = tpm2::Alg::SHA512.id();
+        self.audit_hash_alg = tpm2::Alg::from(crate::handler::context_integrity_hash_alg()).id();
         self.audit_commands = crate::command_audit::CommandAuditList::manufacture_default();
     }
 
@@ -977,11 +1195,16 @@ impl GlobalState {
         // (`_plat__TimerReset()`, [`TpmEngine::platform_timer_reset`]).
         // The persistent command audit state is reloaded from NV by `restore_hierarchy_auths`;
         // these manufacture defaults only remain if NV holds no audit record.
-        self.audit_hash_alg = tpm2::Alg::SHA512.id();
+        self.audit_hash_alg = tpm2::Alg::from(crate::handler::context_integrity_hash_alg()).id();
         self.audit_commands = crate::command_audit::CommandAuditList::manufacture_default();
         self.audit_counter = 0;
         self.command_audit_cp_hash = None;
         self.command_audit_alg_changed = false;
+        // `gp.ppList` and `gp.algorithmSet` are reloaded from NV by
+        // `restore_platform_settings`; these manufacture defaults only remain without a record.
+        // Physical Presence is a platform input and is kept.
+        self.pp_list = crate::physical_presence::PpList::manufacture_default();
+        self.algorithm_set = 0;
     }
     /// Adds a session to the active sessions array.
     /// Returns `Err(TpmRc::SESSION_MEMORY)` if there are no available slots.
@@ -1302,7 +1525,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             self.state.platform_auth
         } else if handle == Handle::RH_LOCKOUT.0 {
             self.state.lockout_auth
-        } else if handle == Handle::RH_AUTH_00.0 {
+        } else if is_vendor_permanent_auth(handle) {
             self.state.platform_unique_details
         } else if let Some(seq) = self.state.find_active_sequence(handle) {
             seq.auth
@@ -1399,7 +1622,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         if handle == Handle::RH_OWNER.0
             || handle == Handle::RH_ENDORSEMENT.0
             || handle == Handle::RH_PLATFORM.0
-            || handle == Handle::RH_AUTH_00.0
+            || is_vendor_permanent_auth(handle)
         {
             return false;
         }
@@ -1549,7 +1772,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         if slice.len() < priv_len {
             return Err(TpmRc::FAILURE);
         }
-        let mut private = [0u8; 1536];
+        let mut private = [0u8; crate::handler::MAX_PRIVATE_KEY_SIZE];
         private[..priv_len].copy_from_slice(&slice[..priv_len]);
         slice = &slice[priv_len..];
 
@@ -1611,6 +1834,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         let mut storage = StorageManager::new(&mut *self.platform.storage);
         let _ = storage.undefine_space(0x00FFFFFF);
         let _ = storage.undefine_space(PCR_ALLOCATION_HANDLE);
+        // `PhysicalPresencePreInstall_Init()` and `gp.algorithmSet = 0`.
+        self.clear_platform_settings();
         self.save_hierarchy_auths();
         // `NvWrite(NV_ORDERLY_DATA, ...)`: the DRBG state after manufacture is persisted.
         #[cfg(feature = "reference-rng")]
@@ -1692,6 +1917,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         // Failure mode ends.
         self.self_test.initialize();
         self.restore_hierarchy_auths();
+        self.restore_platform_settings();
         self.restore_persistent_state();
         self.restore_pcr_allocation();
         // `NvRead(&go, NV_ORDERLY_DATA, ...)`: the DRBG reverts to its last persisted state.
@@ -2097,7 +2323,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// `STATE_RESET_DATA` (restored on Restart and Resume): `nullSeed`, `nullProof`,
     /// `restartCount`, `objectContextID`, the context counters, the saved-session table,
     /// `commitCounter`, `commitNonce`, `commitArray` and `commandAuditDigest`. `STATE_CLEAR_DATA` (restored on Resume only): `platformAuth`,
-    /// `platformPolicy`, `platformAlg`, `shEnable`, `ehEnable` and `phEnableNV`. The ACT state
+    /// `platformPolicy`, `platformAlg`, `shEnable`, `ehEnable`, `phEnableNV` and `readOnly`. The ACT state
     /// of `ORDERLY_DATA` (restored on Resume only): the timeouts and `signaled` attributes
     /// saved by [`crate::act::ActState::shutdown_state`] and the ACT policies.
     ///
@@ -2140,6 +2366,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 u8::from(self.state.sh_enable),
                 u8::from(self.state.eh_enable),
                 u8::from(self.state.ph_enable_nv),
+                u8::from(self.state.read_only),
             ],
             &mut w,
         );
@@ -2248,6 +2475,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             let sh_enable = u8::unmarshal(&mut slice).ok()? != 0;
             let eh_enable = u8::unmarshal(&mut slice).ok()? != 0;
             let ph_enable_nv = u8::unmarshal(&mut slice).ok()? != 0;
+            let read_only = u8::unmarshal(&mut slice).ok()? != 0;
             let platform_auth = OwnedAuth::unmarshal(&mut slice).ok()?;
             let platform_policy = OwnedDigest::unmarshal(&mut slice).ok()?;
             let platform_alg = <Option<tpm2::TpmiAlgHash>>::unmarshal(&mut slice).ok()?;
@@ -2279,6 +2507,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             self.state.sh_enable = sh_enable;
             self.state.eh_enable = eh_enable;
             self.state.ph_enable_nv = ph_enable_nv;
+            self.state.read_only = read_only;
             self.state.platform_auth = platform_auth;
             self.state.platform_policy = platform_policy;
             self.state.platform_alg = platform_alg;
@@ -2764,6 +2993,19 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         // `TimeUpdateToCurrent`) before any handle or session processing.
         if self.state.initialized == (cc == TpmCc::Startup) {
             return Err(TpmRc::INITIALIZE);
+        }
+
+        // Read-Only mode (Part 1, "Read-Only Mode of Operation"): a command that is not
+        // permitted fails with `TPM_RC_READ_ONLY` "before performing authorization checks".
+        // Before `TPM2_Startup` every command but `TPM2_Startup` fails with
+        // `TPM_RC_INITIALIZE` (the mode is part of the state that `TPM2_Startup` establishes),
+        // so the check follows the initialization check and precedes any handle or session
+        // processing.
+        if cfg!(feature = "cc-read-only-control")
+            && self.state.read_only
+            && crate::read_only::is_disallowed_in_read_only_mode(cc)
+        {
+            return Err(TpmRc::READ_ONLY);
         }
 
         // Reset per-command state-tracking flags at the beginning of each command
@@ -3612,15 +3854,16 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             Some(TpmHt::Permanent) if crate::act::is_implemented_act(handle) => {
                 self.state.ph_enable
             }
-            Some(TpmHt::Permanent) => matches!(
-                Handle(handle),
-                Handle::RH_OWNER
-                    | Handle::RH_ENDORSEMENT
-                    | Handle::RH_PLATFORM
-                    | Handle::RH_LOCKOUT
-                    | Handle::RH_NULL
-                    | Handle::RH_AUTH_00
-            ),
+            Some(TpmHt::Permanent) => {
+                matches!(
+                    Handle(handle),
+                    Handle::RH_OWNER
+                        | Handle::RH_ENDORSEMENT
+                        | Handle::RH_PLATFORM
+                        | Handle::RH_LOCKOUT
+                        | Handle::RH_NULL
+                ) || is_vendor_permanent_auth(handle)
+            }
             Some(TpmHt::Transient) | Some(TpmHt::Persistent) => {
                 if self.state.find_active_sequence(handle).is_some() {
                     return true;
@@ -3878,6 +4121,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 let h_idx = cmd.session_to_handle_idx[i];
                 let handle = cmd.handles[h_idx];
                 let cc = TpmCc::new(command_code);
+                // Physical Presence comes before any other authorization check (TPM 2.0 Part 1,
+                // "Physical Presence Authorization"; C `CheckAuthSession()`).
+                if crate::hierarchy::normalize(handle) == Handle::RH_PLATFORM.0
+                    && self.physical_presence_missing(cc)
+                {
+                    return Err(TpmRc::PP.with(pos));
+                }
                 let lockout_auth = handle == Handle::RH_LOCKOUT.0;
                 let da_protected = self.has_da_protection(handle);
 
@@ -3950,6 +4200,17 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     )
                 {
                     return Err(TpmRc::ATTRIBUTES.with(pos));
+                }
+
+                // Physical Presence comes before any other authorization check (TPM 2.0 Part 1,
+                // "Physical Presence Authorization"; C `CheckAuthSession()`), for HMAC and
+                // policy sessions alike (Part 3, TPM2_PP_Commands).
+                if i < cmd.session_to_handle_idx_len
+                    && crate::hierarchy::normalize(cmd.handles[cmd.session_to_handle_idx[i]])
+                        == Handle::RH_PLATFORM.0
+                    && self.physical_presence_missing(TpmCc::new(command_code))
+                {
+                    return Err(TpmRc::PP.with(pos));
                 }
 
                 let entity_auth = if i < cmd.session_to_handle_idx_len {
@@ -4285,6 +4546,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// 7. Locality: `TPM_RC_LOCALITY`.
     /// 8. cpHash / nameHash / templateHash: `TPM_RC_POLICY_FAIL`.
     /// 9. `TPM2_PolicyNvWritten` state: `TPM_RC_POLICY_FAIL`.
+    /// 10. `TPM2_PolicyTransportSPDM` restrictions: `TPM_RC_CHANNEL`, `TPM_RC_CHANNEL_KEY`.
     fn check_policy_auth_session(&mut self, check: PolicyAuthCheck) -> Result<(), TpmRc> {
         let PolicyAuthCheck {
             session_handle,
@@ -4366,10 +4628,30 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             }
         }
 
+        // TPM 2.0 Part 3, TPM2_PolicyPhysicalPresence: "If this command is successful,
+        // policySession→isPPRequired will be SET to indicate that this check is required when
+        // the policy is used for authorization" (C `CheckPolicyAuthSession()`: `TPM_RC_PP`,
+        // checked after the locality).
+        if session.is_pp_required && !self.state.physical_presence {
+            return Err(TpmRc::PP.with(pos));
+        }
+
         if session.policy_hash_len > 0 {
             let expected = &session.policy_hash[..session.policy_hash_len];
             let ok = if session.is_cp_hash_defined {
                 expected == cp_hash
+            } else if session.is_parameters_hash_defined {
+                // TPM 2.0 Part 3, TPM2_PolicyParameters: "The pHash is the hash of the
+                // commandCode and all of the parameters of the command being authorized by the
+                // policy session" (C `CompareParametersHash()`, over the parameters as received).
+                let mut p_hash = [0u8; 64];
+                let p_hash_len = compute_hash_parts(
+                    &self.crypto(),
+                    session.auth_hash,
+                    &[&command_code.to_be_bytes(), parameters],
+                    &mut p_hash,
+                )?;
+                expected == &p_hash[..p_hash_len]
             } else if session.is_name_hash_defined {
                 let mut name_hash_input = [0u8; 512];
                 let mut name_hash_offset = 0;
@@ -4418,6 +4700,11 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 return Err(TpmRc::POLICY_FAIL.with(pos));
             }
         }
+
+        // `TPM2_PolicyTransportSPDM()`: the command must be protected by an SPDM session
+        // (`TPM_RC_CHANNEL`) established with the required keys (`TPM_RC_CHANNEL_KEY`).
+        #[cfg(feature = "sec-channel")]
+        self.check_sec_channel_policy(&session.sec_channel, session.auth_hash, pos)?;
 
         Ok(())
     }
@@ -4490,10 +4777,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             .copy_from_slice(&resp_buffer[10 + resp_handles_size..14 + resp_handles_size]);
         let param_size = u32::from_be_bytes(param_size_bytes) as usize;
 
-        if param_size > 2048 {
+        if param_size > MAX_RESPONSE_SIZE {
             return Err(TpmRc::SIZE.to_rc());
         }
-        let mut resp_params = [0u8; 2048];
+        let mut resp_params = [0u8; MAX_RESPONSE_SIZE];
         if param_size > 0 {
             if resp_buffer.len() < 14 + resp_handles_size + param_size {
                 return Err(TpmRc::MEMORY);
@@ -4650,10 +4937,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         }
 
         let rp_hash_input_len = 4 + 4 + param_size;
-        if rp_hash_input_len > 2048 {
+        if rp_hash_input_len > MAX_RESPONSE_SIZE + 8 {
             return Err(TpmRc::SIZE.to_rc());
         }
-        let mut rp_hash_input = [0u8; 2048];
+        let mut rp_hash_input = [0u8; MAX_RESPONSE_SIZE + 8];
         rp_hash_input[0..4].copy_from_slice(&0u32.to_be_bytes());
         rp_hash_input[4..8].copy_from_slice(&command_code.to_be_bytes());
         rp_hash_input[8..rp_hash_input_len].copy_from_slice(&resp_params[..param_size]);
@@ -4857,10 +5144,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     session_state.policy_hash_len = 0;
                     session_state.is_name_hash_defined = false;
                     session_state.is_template_hash_defined = false;
+                    session_state.is_parameters_hash_defined = false;
+                    session_state.is_pp_required = false;
                     session_state.is_auth_value_needed = false;
                     session_state.is_password_needed = false;
                     session_state.check_nv_written = false;
                     session_state.nv_written_state = false;
+                    session_state.sec_channel = Default::default();
                 }
             }
 
@@ -4912,10 +5202,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         }
 
         let resp_params_size = shadow_len - 10 - resp_handles_size;
-        if resp_params_size > 2048 {
+        if resp_params_size > MAX_RESPONSE_SIZE {
             return Err(TpmRc::SIZE.to_rc());
         }
-        let mut resp_params = [0u8; 2048];
+        let mut resp_params = [0u8; MAX_RESPONSE_SIZE];
         if resp_params_size > 0 {
             if resp_buffer.len() < 10 + resp_handles_size + resp_params_size {
                 return Err(TpmRc::MEMORY);
@@ -5058,10 +5348,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         }
 
         let rp_hash_input_len = 4 + 4 + resp_params_size;
-        if rp_hash_input_len > 2048 {
+        if rp_hash_input_len > MAX_RESPONSE_SIZE + 8 {
             return Err(TpmRc::SIZE.to_rc());
         }
-        let mut rp_hash_input = [0u8; 2048];
+        let mut rp_hash_input = [0u8; MAX_RESPONSE_SIZE + 8];
         rp_hash_input[0..4].copy_from_slice(&0u32.to_be_bytes());
         rp_hash_input[4..8].copy_from_slice(&command_code.to_be_bytes());
         rp_hash_input[8..rp_hash_input_len].copy_from_slice(&resp_params[..resp_params_size]);
@@ -5265,10 +5555,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     session_state.policy_hash_len = 0;
                     session_state.is_name_hash_defined = false;
                     session_state.is_template_hash_defined = false;
+                    session_state.is_parameters_hash_defined = false;
+                    session_state.is_pp_required = false;
                     session_state.is_auth_value_needed = false;
                     session_state.is_password_needed = false;
                     session_state.check_nv_written = false;
                     session_state.nv_written_state = false;
+                    session_state.sec_channel = Default::default();
                 }
             }
 
@@ -5366,7 +5659,56 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         }
         // Pass 2: the load status (with the engine's remaining, implementation-specific value
         // checks, e.g. unimplemented hierarchies).
-        self.check_command_handles(cc, handles, handles_len)
+        self.check_command_handles(cc, handles, handles_len)?;
+        // The Read-Only mode checks that depend on the referenced entities, which must precede
+        // any authorization check (see `crate::read_only`).
+        self.check_read_only_entities(cc, handles, handles_len)
+    }
+
+    /// Fails with `TPM_RC_READ_ONLY` if the TPM is in Read-Only mode and command `cc` is not
+    /// permitted on the entities its (validated) handles reference: Part 3, TPM2_ReadOnlyControl,
+    /// "Commands Permitted in Read-Only Mode": `TPM2_NV_Write`, `TPM2_NV_Extend`,
+    /// `TPM2_NV_SetBits`, `TPM2_NV_WriteLock` and `TPM2_NV_ReadLock` are "Permitted only when
+    /// the NV index is defined with `TPMA_NV_ORDERLY` and `TPMA_NV_CLEAR_STCLEAR`", and
+    /// `TPM2_PolicySecret` is "Not permitted when used with a PIN Pass/Fail NV index". Part 1
+    /// requires the rejection "before performing authorization checks which would be evaluated
+    /// during the execution of the command", so this runs right after the handle validation.
+    fn check_read_only_entities(
+        &mut self,
+        cc: TpmCc,
+        handles: &[u32],
+        handles_len: usize,
+    ) -> Result<(), TpmRc> {
+        if !cfg!(feature = "cc-read-only-control") || !self.state.read_only {
+            return Ok(());
+        }
+        if let Some(h_idx) = crate::read_only::nv_restricted_index_handle(cc)
+            && h_idx < handles_len
+        {
+            let permitted =
+                self.read_nv_index_public(handles[h_idx])
+                    .is_some_and(|(_, nv_public)| {
+                        crate::read_only::nv_command_permitted(nv_public.attributes)
+                    });
+            if !permitted {
+                return Err(TpmRc::READ_ONLY);
+            }
+        }
+        if cc == TpmCc::PolicySecret
+            && handles_len >= 1
+            && Handle(handles[0]).handle_type() == Some(TpmHt::NVIndex)
+            && self
+                .read_nv_index_public(handles[0])
+                .is_some_and(|(_, nv_public)| {
+                    matches!(
+                        nv_public.attributes.get_index_type(),
+                        Ok(tpm2::TpmNt::PinPass | tpm2::TpmNt::PinFail)
+                    )
+                })
+        {
+            return Err(TpmRc::READ_ONLY);
+        }
+        Ok(())
     }
 
     /// Pass 2 of [`Self::validate_command_handles`]: the load status of the entities the
@@ -5585,8 +5927,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                             | 0x4000000C // Platform
                             | 0x4000000A // Lockout
                             | 0x40000007 // Null
-                            | 0x40000010 // RH_AUTH_00 (VENDOR_PERMANENT)
-                        );
+                        ) || is_vendor_permanent_auth(handle);
                         if !is_valid_entity {
                             return Err(TpmRc::VALUE.with(pos));
                         }
@@ -5653,8 +5994,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     | 0x4000000C // Platform
                     | 0x4000000A // Lockout
                     | 0x40000007 // Null
-                    | 0x40000010 // RH_AUTH_00 (VENDOR_PERMANENT)
-                ) || crate::hierarchy::is_limited(handle)
+                ) || is_vendor_permanent_auth(handle)
+                    || crate::hierarchy::is_limited(handle)
                     || crate::act::is_implemented_act(handle);
                 if !is_valid_hierarchy {
                     return Err(TpmRc::VALUE.with(pos));
@@ -5681,7 +6022,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             {
                 // `VENDOR_PERMANENT_AUTH_HANDLE` (`TPM_RH_AUTH_00`) is part of the endorsement
                 // hierarchy (`EntityGetLoadStatus`).
-                if handle == Handle::RH_AUTH_00.0 && !self.state.eh_enable {
+                if is_vendor_permanent_auth(handle) && !self.state.eh_enable {
                     return Err(TpmRc::HIERARCHY.with(pos));
                 }
                 if handle == 0x40000001 && !self.state.sh_enable {
@@ -5846,11 +6187,21 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             TpmCc::RSADecrypt => handler.rsa_decrypt(request),
             TpmCc::RSAEncrypt => handler.rsa_encrypt(request),
             TpmCc::ECDHZGen => handler.ecdh_zgen(request),
+            // With CMAC the TPM implements `TPM2_MAC` (same command code as `TPM2_HMAC`).
+            #[cfg(feature = "cmac")]
+            TpmCc::MAC => handler.mac_with_scheme(request),
+            #[cfg(not(feature = "cmac"))]
             TpmCc::MAC => handler.mac(request),
             TpmCc::NVDefineSpace => handler.nv_define_space(request),
             TpmCc::NVUndefineSpace => handler.nv_undefine_space(request),
             TpmCc::NVUndefineSpaceSpecial => handler.nv_undefine_space_special(request),
             TpmCc::NVReadPublic => handler.nv_read_public(request),
+            #[cfg(feature = "cc-nv-define-space2")]
+            TpmCc::NVDefineSpace2 => handler.nv_define_space2(request),
+            #[cfg(feature = "cc-nv-read-public2")]
+            TpmCc::NVReadPublic2 => handler.nv_read_public2(request),
+            #[cfg(feature = "cc-read-only-control")]
+            TpmCc::ReadOnlyControl => handler.read_only_control(request),
             TpmCc::GetCapability => handler.get_capability(request),
             TpmCc::TestParms => handler.test_parms(request),
             TpmCc::SelfTest => handler.self_test(request),
@@ -5899,6 +6250,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             TpmCc::PolicyOR => handler.policy_or(request),
             TpmCc::PolicyAuthorizeNV => handler.policy_authorize_nv(request),
             TpmCc::PolicyTemplate => handler.policy_template(request),
+            #[cfg(feature = "cc-policy-transport-spdm")]
+            TpmCc::PolicyTransportSPDM => handler.policy_transport_spdm(request),
             TpmCc::PolicyAuthValue => handler.policy_auth_value(request),
             TpmCc::PolicyPassword => handler.policy_password(request),
             TpmCc::PolicyPCR => handler.policy_pcr(request),
@@ -5907,10 +6260,51 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             TpmCc::SequenceUpdate => handler.sequence_update(request),
             TpmCc::SequenceComplete => handler.sequence_complete(request),
             TpmCc::EventSequenceComplete => handler.event_sequence_complete(request),
+            // With CMAC the TPM implements `TPM2_MAC_Start` (same command code as
+            // `TPM2_HMAC_Start`).
+            #[cfg(feature = "cmac")]
+            TpmCc::MACStart => handler.mac_start_with_scheme(request),
+            #[cfg(not(feature = "cmac"))]
             TpmCc::MACStart => handler.mac_start(request),
+            #[cfg(feature = "cc-sign-digest")]
+            TpmCc::SignDigest => handler.sign_digest(request),
+            #[cfg(feature = "cc-verify-digest-signature")]
+            TpmCc::VerifyDigestSignature => handler.verify_digest_signature(request),
+            #[cfg(feature = "cc-sign-sequence-start")]
+            TpmCc::SignSequenceStart => handler.sign_sequence_start(request),
+            #[cfg(feature = "cc-sign-sequence-complete")]
+            TpmCc::SignSequenceComplete => handler.sign_sequence_complete(request),
+            #[cfg(feature = "cc-verify-sequence-start")]
+            TpmCc::VerifySequenceStart => handler.verify_sequence_start(request),
+            #[cfg(feature = "cc-verify-sequence-complete")]
+            TpmCc::VerifySequenceComplete => handler.verify_sequence_complete(request),
             TpmCc::PolicyRestart => handler.policy_restart(request),
             TpmCc::ECDHKeyGen => handler.ecdh_keygen(request),
+            #[cfg(feature = "cc-ec-ephemeral")]
+            TpmCc::ECEphemeral => handler.ec_ephemeral(request),
+            #[cfg(feature = "cc-zgen-2phase")]
+            TpmCc::ZGen2Phase => handler.zgen_2phase(request),
+            #[cfg(feature = "cc-ecc-encrypt")]
+            TpmCc::ECCEncrypt => handler.ecc_encrypt(request),
+            #[cfg(feature = "cc-ecc-decrypt")]
+            TpmCc::ECCDecrypt => handler.ecc_decrypt(request),
+            #[cfg(feature = "cc-encapsulate")]
+            TpmCc::Encapsulate => handler.encapsulate(request),
+            #[cfg(feature = "cc-decapsulate")]
+            TpmCc::Decapsulate => handler.decapsulate(request),
             TpmCc::ECCParameters => handler.ecc_parameters(request),
+            #[cfg(feature = "cc-pp-commands")]
+            TpmCc::PPCommands => handler.pp_commands(request),
+            #[cfg(feature = "cc-set-algorithm-set")]
+            TpmCc::SetAlgorithmSet => handler.set_algorithm_set(request),
+            #[cfg(feature = "cc-policy-physical-presence")]
+            TpmCc::PolicyPhysicalPresence => handler.policy_physical_presence(request),
+            #[cfg(feature = "cc-policy-ac-send-select")]
+            TpmCc::PolicyACSendSelect => handler.policy_ac_send_select(request),
+            #[cfg(feature = "cc-policy-capability")]
+            TpmCc::PolicyCapability => handler.policy_capability(request),
+            #[cfg(feature = "cc-policy-parameters")]
+            TpmCc::PolicyParameters => handler.policy_parameters(request),
             TpmCc::VendorTcgTest => handler.vendor_tcg_test(request),
             #[cfg(feature = "ntc2-vendor-commands")]
             TpmCc::NTC2PreConfig => handler.ntc2_pre_config(request),
@@ -5990,11 +6384,19 @@ pub fn command_handles_count(cc: TpmCc) -> usize {
         TpmCc::RSAEncrypt => 1,
         TpmCc::ECDHZGen => 1,
         TpmCc::ECDHKeyGen => 1,
+        TpmCc::ZGen2Phase => 1,
+        TpmCc::ECCEncrypt => 1,
+        TpmCc::ECCDecrypt => 1,
+        TpmCc::Encapsulate => 1,
+        TpmCc::Decapsulate => 1,
         TpmCc::MAC => 1,
         TpmCc::NVDefineSpace => 1,
         TpmCc::NVUndefineSpace => 2,
         TpmCc::NVUndefineSpaceSpecial => 2,
         TpmCc::NVReadPublic => 1,
+        TpmCc::NVDefineSpace2 => 1,
+        TpmCc::NVReadPublic2 => 1,
+        TpmCc::ReadOnlyControl => 1,
         TpmCc::GetCapability => 0,
         TpmCc::Certify => 2,
         TpmCc::Quote => 1,
@@ -6042,17 +6444,30 @@ pub fn command_handles_count(cc: TpmCc) -> usize {
         TpmCc::PolicyPassword => 1,
         TpmCc::PolicyPCR => 1,
         TpmCc::PolicyTemplate => 1,
+        TpmCc::PolicyTransportSPDM => 1,
         TpmCc::Hash => 0,
         TpmCc::HashSequenceStart => 0,
         TpmCc::SequenceUpdate => 1,
         TpmCc::SequenceComplete => 1,
         TpmCc::EventSequenceComplete => 2,
         TpmCc::MACStart => 1,
+        TpmCc::SignDigest => 1,
+        TpmCc::VerifyDigestSignature => 1,
+        TpmCc::SignSequenceStart => 1,
+        TpmCc::VerifySequenceStart => 1,
+        TpmCc::SignSequenceComplete => 2,
+        TpmCc::VerifySequenceComplete => 2,
         TpmCc::TestParms => 0,
         TpmCc::ECCParameters => 0,
         TpmCc::IncrementalSelfTest => 0,
         TpmCc::GetTestResult => 0,
         TpmCc::PolicyRestart => 1,
+        TpmCc::PPCommands => 1,
+        TpmCc::SetAlgorithmSet => 1,
+        TpmCc::PolicyPhysicalPresence => 1,
+        TpmCc::PolicyACSendSelect => 1,
+        TpmCc::PolicyCapability => 1,
+        TpmCc::PolicyParameters => 1,
         _ => 0,
     }
 }
@@ -6078,6 +6493,7 @@ pub fn get_command_attribute(cc: TpmCc) -> tpm2::TpmaCc {
             | TpmCc::PCRAllocate
             | TpmCc::PCRSetAuthPolicy
             | TpmCc::PPCommands
+            | TpmCc::SetAlgorithmSet
             | TpmCc::SetPrimaryPolicy
             | TpmCc::NVGlobalWriteLock
             | TpmCc::GetCommandAuditDigest
@@ -6102,6 +6518,8 @@ pub fn get_command_attribute(cc: TpmCc) -> tpm2::TpmaCc {
             | TpmCc::EventSequenceComplete
             | TpmCc::ChangeEPS
             | TpmCc::ChangePPS
+            | TpmCc::NVDefineSpace2
+            | TpmCc::ReadOnlyControl
     ) {
         attr |= tpm2::TpmaCc::NV;
     }
@@ -6112,7 +6530,16 @@ pub fn get_command_attribute(cc: TpmCc) -> tpm2::TpmaCc {
     ) {
         attr |= tpm2::TpmaCc::EXTENSIVE;
     }
-    if matches!(cc, TpmCc::SequenceComplete | TpmCc::EventSequenceComplete) {
+    // TPM 2.0 Part 3 marks `TPM_CC_SignSequenceComplete {F}` and
+    // `TPM_CC_VerifySequenceComplete {F}` (their sequence object is flushed) like
+    // `TPM_CC_SequenceComplete {F}`.
+    if matches!(
+        cc,
+        TpmCc::SequenceComplete
+            | TpmCc::EventSequenceComplete
+            | TpmCc::SignSequenceComplete
+            | TpmCc::VerifySequenceComplete
+    ) {
         attr |= tpm2::TpmaCc::FLUSHED;
     }
     // Vendor commands (`TPMA_CC_INITIALIZER(..., v = 1, ...)`): `commandIndex` is the low 16
@@ -6129,6 +6556,16 @@ pub fn get_command_attribute(cc: TpmCc) -> tpm2::TpmaCc {
         attr |= tpm2::TpmaCc::NV;
     }
     attr
+}
+
+/// Returns whether `handle` is the vendor-specific permanent authorization handle
+/// `TPM_RH_AUTH_00` (`VENDOR_PERMANENT_AUTH_HANDLE`) of a TPM that implements it (the
+/// `vendor-permanent-auth` feature). It is an entity of the endorsement hierarchy whose
+/// authValue is the platform's unique value (Part 1, "Permanent Resource Handles (MSO=40)").
+/// Without the feature, `TPM_RH_AUTH_00` is a valid `TPMI_DH_ENTITY` value that references no
+/// entity (`EntityGetLoadStatus`: `TPM_RC_VALUE`), like any other `TPM_RH_AUTH_xx`.
+pub(crate) const fn is_vendor_permanent_auth(handle: u32) -> bool {
+    cfg!(feature = "vendor-permanent-auth") && handle == Handle::RH_AUTH_00.0
 }
 
 /// Returns `false` for the commands that have the `NO_SESSIONS` attribute in
@@ -6154,7 +6591,7 @@ pub(crate) fn is_session_allowed(cc: TpmCc) -> bool {
 /// List of the TPM 2.0 library command codes supported by this engine implementation (the
 /// vendor-specific commands are in [`VENDOR_COMMANDS`]).
 /// The command codes (`TpmCc`) are defined in TCG TPM 2.0 Library Specification Part 3: Commands.
-pub(crate) const SUPPORTED_COMMANDS: [TpmCc; 105] = [
+pub(crate) const SUPPORTED_COMMANDS: &[TpmCc] = &[
     TpmCc::GetRandom,
     TpmCc::StirRandom,
     TpmCc::Startup,
@@ -6260,6 +6697,55 @@ pub(crate) const SUPPORTED_COMMANDS: [TpmCc; 105] = [
     TpmCc::DictionaryAttackParameters,
     TpmCc::PCRAllocate,
     TpmCc::ACTSetTimeout,
+    // policy: Physical Presence, the platform settings and the policy assertions.
+    #[cfg(feature = "cc-pp-commands")]
+    TpmCc::PPCommands,
+    #[cfg(feature = "cc-set-algorithm-set")]
+    TpmCc::SetAlgorithmSet,
+    #[cfg(feature = "cc-policy-physical-presence")]
+    TpmCc::PolicyPhysicalPresence,
+    #[cfg(feature = "cc-policy-ac-send-select")]
+    TpmCc::PolicyACSendSelect,
+    #[cfg(feature = "cc-policy-capability")]
+    TpmCc::PolicyCapability,
+    #[cfg(feature = "cc-policy-parameters")]
+    TpmCc::PolicyParameters,
+    #[cfg(feature = "cc-nv-define-space2")]
+    TpmCc::NVDefineSpace2,
+    #[cfg(feature = "cc-nv-read-public2")]
+    TpmCc::NVReadPublic2,
+    #[cfg(feature = "cc-read-only-control")]
+    TpmCc::ReadOnlyControl,
+    // The version 185 signing commands (one profile feature each).
+    #[cfg(feature = "cc-sign-digest")]
+    TpmCc::SignDigest,
+    #[cfg(feature = "cc-verify-digest-signature")]
+    TpmCc::VerifyDigestSignature,
+    #[cfg(feature = "cc-sign-sequence-start")]
+    TpmCc::SignSequenceStart,
+    #[cfg(feature = "cc-sign-sequence-complete")]
+    TpmCc::SignSequenceComplete,
+    #[cfg(feature = "cc-verify-sequence-start")]
+    TpmCc::VerifySequenceStart,
+    #[cfg(feature = "cc-verify-sequence-complete")]
+    TpmCc::VerifySequenceComplete,
+    // pqc: the KEM commands (version 185).
+    #[cfg(feature = "cc-encapsulate")]
+    TpmCc::Encapsulate,
+    #[cfg(feature = "cc-decapsulate")]
+    TpmCc::Decapsulate,
+    // Secure channel support (spdm).
+    #[cfg(feature = "cc-policy-transport-spdm")]
+    TpmCc::PolicyTransportSPDM,
+    // ECC key exchange and encryption (ecc-cmds).
+    #[cfg(feature = "cc-ec-ephemeral")]
+    TpmCc::ECEphemeral,
+    #[cfg(feature = "cc-zgen-2phase")]
+    TpmCc::ZGen2Phase,
+    #[cfg(feature = "cc-ecc-encrypt")]
+    TpmCc::ECCEncrypt,
+    #[cfg(feature = "cc-ecc-decrypt")]
+    TpmCc::ECCDecrypt,
 ];
 
 /// The vendor-specific commands (command codes with the `V` bit, `CC_VEND`) this engine
@@ -6296,7 +6782,7 @@ pub(crate) fn is_command_supported(cc: TpmCc) -> bool {
 /// command audit digest list the commands in this order.
 pub(crate) fn implemented_commands_in_order() -> [TpmCc; TOTAL_COMMAND_COUNT] {
     let mut all = [TpmCc::default(); TOTAL_COMMAND_COUNT];
-    all[..SUPPORTED_COMMANDS.len()].copy_from_slice(&SUPPORTED_COMMANDS);
+    all[..SUPPORTED_COMMANDS.len()].copy_from_slice(SUPPORTED_COMMANDS);
     all[SUPPORTED_COMMANDS.len()..].copy_from_slice(VENDOR_COMMANDS);
     all.sort_unstable_by_key(|cc| cc.code());
     all
@@ -6338,6 +6824,9 @@ fn command_supports_decryption(cc: TpmCc) -> bool {
             | TpmCc::CreateLoaded
             | TpmCc::CreatePrimary
             | TpmCc::Duplicate
+            | TpmCc::ECCDecrypt
+            | TpmCc::ECCEncrypt
+            | TpmCc::Decapsulate
             | TpmCc::ECDHZGen
             | TpmCc::EncryptDecrypt2
             | TpmCc::EventSequenceComplete
@@ -6356,23 +6845,28 @@ fn command_supports_decryption(cc: TpmCc) -> bool {
             | TpmCc::NVCertify
             | TpmCc::NVChangeAuth
             | TpmCc::NVDefineSpace
+            | TpmCc::NVDefineSpace2
             | TpmCc::NVExtend
             | TpmCc::NVWrite
             | TpmCc::ObjectChangeAuth
             | TpmCc::PCREvent
             | TpmCc::PCRSetAuthPolicy
             | TpmCc::PCRSetAuthValue
+            | TpmCc::PolicyACSendSelect
             | TpmCc::PolicyAuthorize
+            | TpmCc::PolicyCapability
             | TpmCc::PolicyCounterTimer
             | TpmCc::PolicyCpHash
             | TpmCc::PolicyDuplicationSelect
             | TpmCc::PolicyNV
             | TpmCc::PolicyNameHash
             | TpmCc::PolicyPCR
+            | TpmCc::PolicyParameters
             | TpmCc::PolicySecret
             | TpmCc::PolicySigned
             | TpmCc::PolicyTemplate
             | TpmCc::PolicyTicket
+            | TpmCc::PolicyTransportSPDM
             | TpmCc::Quote
             | TpmCc::RSADecrypt
             | TpmCc::RSAEncrypt
@@ -6381,9 +6875,15 @@ fn command_supports_decryption(cc: TpmCc) -> bool {
             | TpmCc::SequenceUpdate
             | TpmCc::SetPrimaryPolicy
             | TpmCc::Sign
+            | TpmCc::SignDigest
+            | TpmCc::SignSequenceComplete
+            | TpmCc::SignSequenceStart
             | TpmCc::StartAuthSession
             | TpmCc::StirRandom
+            | TpmCc::VerifyDigestSignature
+            | TpmCc::VerifySequenceStart
             | TpmCc::VerifySignature
+            | TpmCc::ZGen2Phase
     )
 }
 
@@ -6400,12 +6900,17 @@ fn command_supports_encryption(cc: TpmCc) -> bool {
             | TpmCc::Certify
             | TpmCc::CertifyCreation
             | TpmCc::Commit
+            | TpmCc::Decapsulate
+            | TpmCc::Encapsulate
             | TpmCc::Create
             | TpmCc::CreateLoaded
             | TpmCc::CreatePrimary
             | TpmCc::Duplicate
+            | TpmCc::ECCDecrypt
+            | TpmCc::ECCEncrypt
             | TpmCc::ECDHKeyGen
             | TpmCc::ECDHZGen
+            | TpmCc::ECEphemeral
             | TpmCc::EncryptDecrypt
             | TpmCc::EncryptDecrypt2
             | TpmCc::GetCommandAuditDigest
@@ -6422,6 +6927,7 @@ fn command_supports_encryption(cc: TpmCc) -> bool {
             | TpmCc::NVCertify
             | TpmCc::NVRead
             | TpmCc::NVReadPublic
+            | TpmCc::NVReadPublic2
             | TpmCc::ObjectChangeAuth
             | TpmCc::PolicyGetDigest
             | TpmCc::PolicySecret
@@ -6434,6 +6940,7 @@ fn command_supports_encryption(cc: TpmCc) -> bool {
             | TpmCc::SequenceComplete
             | TpmCc::StartAuthSession
             | TpmCc::Unseal
+            | TpmCc::ZGen2Phase
     )
 }
 
@@ -6446,7 +6953,9 @@ pub(crate) fn command_resp_handles_size(cc: TpmCc) -> usize {
         | TpmCc::LoadExternal
         | TpmCc::Load
         | TpmCc::HashSequenceStart
-        | TpmCc::MACStart => 4,
+        | TpmCc::MACStart
+        | TpmCc::SignSequenceStart
+        | TpmCc::VerifySequenceStart => 4,
         _ => 0,
     }
 }
@@ -6534,6 +7043,10 @@ fn expects_permanent_handle(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::GetTime
                 | TpmCc::NVDefineSpace
                 | TpmCc::NVGlobalWriteLock
+                | TpmCc::PPCommands
+                | TpmCc::SetAlgorithmSet
+                | TpmCc::NVDefineSpace2
+                | TpmCc::ReadOnlyControl
         )
     } else {
         false
@@ -6567,14 +7080,19 @@ fn permanent_handle_type(cc: TpmCc, handle_index: usize) -> Option<&'static [u32
         | TpmCc::ClockSet
         | TpmCc::ClockRateAdjust
         | TpmCc::NVDefineSpace
+        | TpmCc::NVDefineSpace2
         | TpmCc::NVGlobalWriteLock
         | TpmCc::SetCommandCodeAuditStatus => &[OWNER, PLATFORM],
         // TPMI_RH_CLEAR
         TpmCc::Clear | TpmCc::ClearControl => &[LOCKOUT, PLATFORM],
         // TPMI_RH_PLATFORM
-        TpmCc::ChangePPS | TpmCc::ChangeEPS | TpmCc::PCRAllocate | TpmCc::PCRSetAuthPolicy => {
-            &[PLATFORM]
-        }
+        TpmCc::ChangePPS
+        | TpmCc::ChangeEPS
+        | TpmCc::PCRAllocate
+        | TpmCc::PCRSetAuthPolicy
+        | TpmCc::PPCommands
+        | TpmCc::SetAlgorithmSet
+        | TpmCc::ReadOnlyControl => &[PLATFORM],
         // TPMI_RH_LOCKOUT
         TpmCc::DictionaryAttackLockReset | TpmCc::DictionaryAttackParameters => &[LOCKOUT],
         // TPMI_RH_ENDORSEMENT
@@ -6592,6 +7110,8 @@ fn expects_object_handle(cc: TpmCc, handle_index: usize) -> bool {
             TpmCc::ReadPublic
                 | TpmCc::Sign
                 | TpmCc::RSADecrypt
+                | TpmCc::Encapsulate
+                | TpmCc::Decapsulate
                 | TpmCc::ECDHZGen
                 | TpmCc::MAC
                 | TpmCc::Certify
@@ -6615,9 +7135,17 @@ fn expects_object_handle(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::RSAEncrypt
                 | TpmCc::ECDHKeyGen
                 | TpmCc::ZGen2Phase
+                | TpmCc::ECCEncrypt
+                | TpmCc::ECCDecrypt
                 | TpmCc::Commit
                 | TpmCc::Rewrap
                 | TpmCc::PolicySigned
+                | TpmCc::SignDigest
+                | TpmCc::VerifyDigestSignature
+                | TpmCc::SignSequenceStart
+                | TpmCc::VerifySequenceStart
+                | TpmCc::SignSequenceComplete
+                | TpmCc::VerifySequenceComplete
         )
     } else if handle_index == 1 {
         matches!(
@@ -6633,6 +7161,8 @@ fn expects_object_handle(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::EventSequenceComplete
                 | TpmCc::Rewrap
                 | TpmCc::GetTime
+                | TpmCc::SignSequenceComplete
+                | TpmCc::VerifySequenceComplete
         )
     } else {
         false
@@ -6749,7 +7279,12 @@ fn expects_policy_session_handle(cc: TpmCc, handle_index: usize) -> bool {
         | TpmCc::PolicyOR
         | TpmCc::PolicyRestart
         | TpmCc::PolicyTemplate
-        | TpmCc::PolicyTicket => handle_index == 0,
+        | TpmCc::PolicyTicket
+        | TpmCc::PolicyPhysicalPresence
+        | TpmCc::PolicyACSendSelect
+        | TpmCc::PolicyCapability
+        | TpmCc::PolicyParameters
+        | TpmCc::PolicyTransportSPDM => handle_index == 0,
         _ => false,
     }
 }
@@ -6833,9 +7368,14 @@ pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::Commit
                 | TpmCc::Sign
                 | TpmCc::RSADecrypt
+                | TpmCc::Decapsulate
                 | TpmCc::ECDHZGen
+                | TpmCc::ZGen2Phase
+                | TpmCc::ECCDecrypt
                 | TpmCc::MAC
                 | TpmCc::NVDefineSpace
+                | TpmCc::NVDefineSpace2
+                | TpmCc::ReadOnlyControl
                 | TpmCc::NVUndefineSpace
                 | TpmCc::NVUndefineSpaceSpecial
                 | TpmCc::Certify
@@ -6873,6 +7413,11 @@ pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::MACStart
                 | TpmCc::DictionaryAttackLockReset
                 | TpmCc::DictionaryAttackParameters
+                | TpmCc::PPCommands
+                | TpmCc::SetAlgorithmSet
+                | TpmCc::SignDigest
+                | TpmCc::SignSequenceComplete
+                | TpmCc::VerifySequenceComplete
         )
     } else if handle_index == 1 {
         matches!(
@@ -6885,6 +7430,7 @@ pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {
                 | TpmCc::ActivateCredential
                 | TpmCc::EventSequenceComplete
                 | TpmCc::NVUndefineSpaceSpecial
+                | TpmCc::SignSequenceComplete
         )
     } else {
         false
@@ -7057,6 +7603,27 @@ fn compute_hash(
     Ok(len)
 }
 
+/// Hashes the concatenation of `parts` with `auth_hash` into `hash_out`, returning the digest
+/// size.
+fn compute_hash_parts(
+    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
+    auth_hash: TpmiAlgHash,
+    parts: &[&[u8]],
+    hash_out: &mut [u8],
+) -> Result<usize, TpmRc> {
+    let mut hash_ctx = HashStream::new(crypto, auth_hash).map_err(|_| TpmRc::HASH.to_rc())?;
+    for data in parts {
+        hash_ctx.update(data).map_err(|_| TpmRc::HASH.to_rc())?;
+    }
+    let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
+    let digest = hash_ctx
+        .finalize(&mut digest_buf)
+        .map_err(|_| TpmRc::HASH.to_rc())?;
+    let slice = digest.digest();
+    hash_out[..slice.len()].copy_from_slice(slice);
+    Ok(slice.len())
+}
+
 fn compute_response_hmac(
     crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
     auth_hash: TpmiAlgHash,
@@ -7090,6 +7657,8 @@ pub fn command_returns_handle(cc: TpmCc) -> bool {
             | TpmCc::LoadExternal
             | TpmCc::HashSequenceStart
             | TpmCc::MACStart
+            | TpmCc::SignSequenceStart
+            | TpmCc::VerifySequenceStart
     )
 }
 

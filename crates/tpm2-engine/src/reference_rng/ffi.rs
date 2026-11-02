@@ -847,12 +847,16 @@ pub(super) fn ecc_pairwise_test(
     check(rc)
 }
 
-/// The ECDSA case of `CryptEccSign()`: signs `digest` with the private scalar `d` on `curve_id`,
-/// drawing the nonces from `rand`. Writes `r` and `s` and returns their size (the order size).
+/// `CryptEccSign()` with the signature scheme `sig_alg` (`TPM_ALG_ECDSA`, `TPM_ALG_SM2` or
+/// `TPM_ALG_ECSCHNORR`) and its hash `hash_alg` (used by EC-Schnorr only): signs `digest` with the
+/// private scalar `d` on `curve_id`, drawing the nonces from `rand`. Writes `r` and `s` and
+/// returns their size (the order size).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn ecdsa_sign(
+pub(super) fn ecc_sign(
     rng: &mut RefRng<'_>,
     mut rand: Option<&mut DrbgState>,
+    sig_alg: u16,
+    hash_alg: u16,
     curve_id: u16,
     d: &[u8],
     digest: &[u8],
@@ -860,30 +864,35 @@ pub(super) fn ecdsa_sign(
     s: &mut [u8],
 ) -> Result<usize, TpmRc> {
     let mut key = ecc_object(curve_id, &ecc_parameter(d)?, None);
+    // The digest may be longer than a `TPM2B_DIGEST` (the self test of EC-Schnorr signs the
+    // 64-byte `c_ecTestValue` also without SHA-512, through a `(TPM2B_DIGEST*)` cast in C), so it
+    // is passed in a larger `TPM2B`, as the reference does.
+    let mut digest2b = Buffer2b::<MAX_INPUT>::new(digest, TpmRc::SIZE.to_rc())?;
     // SAFETY: plain C data, valid when zeroed.
-    let (mut digest2b, mut signature): (sys::TPM2B_DIGEST, sys::TPMT_SIGNATURE) =
-        unsafe { (zeroed(), zeroed()) };
-    {
-        // SAFETY: the `t` view is the TPM2B's own layout.
-        let t = unsafe { &mut digest2b.t };
-        copy_out(&mut t.buffer, digest).map_err(|_| TpmRc::SIZE.to_rc())?;
-        t.size = digest.len() as u16;
-    }
-    signature.sigAlg = TPM_ALG_ECDSA;
+    let mut signature: sys::TPMT_SIGNATURE = unsafe { zeroed() };
+    signature.sigAlg = sig_alg;
+    // Every ECC member of `TPMU_SIGNATURE` starts with the scheme's hash (`TPMS_SCHEME_HASH`).
+    signature.signature.any.hashAlg = hash_alg;
     let mut local = load_rand(rand.as_deref_mut());
     let state = rand_ptr(&mut local);
-    let (sig_ptr, key_ptr, digest_ptr) = (&raw mut signature, &raw mut key, &raw const digest2b);
-    // SAFETY: every pointer is to a live local; the scheme is only used for ECDAA.
+    let (sig_ptr, key_ptr) = (&raw mut signature, &raw mut key);
+    let digest_ptr = digest2b
+        .as_mut_ptr()
+        .cast::<sys::TPM2B_DIGEST>()
+        .cast_const();
+    // SAFETY: every pointer is to a live local; the scheme is only used for ECDAA; the C code
+    // reads the digest only through its `TPM2B` view (size and that many bytes).
     let rc = call(rng, |_| unsafe {
         sys::CryptEccSign(sig_ptr, key_ptr, digest_ptr, null_mut(), state)
     })?;
     store_rand(rand, &local);
     check(rc)?;
-    // SAFETY: `CryptEccSign()` set the ECDSA member.
-    let ecdsa = unsafe { &signature.signature.ecdsa };
+    // SAFETY: `CryptEccSign()` set the member of the scheme, and every ECC member is a
+    // `TPMS_SIGNATURE_ECC`.
+    let ecc = unsafe { &signature.signature.ecdsa };
     let (rs, ss) = (
-        ecc_parameter_bytes(&ecdsa.signatureR),
-        ecc_parameter_bytes(&ecdsa.signatureS),
+        ecc_parameter_bytes(&ecc.signatureR),
+        ecc_parameter_bytes(&ecc.signatureS),
     );
     if rs.len() != ss.len() {
         return Err(TpmRc::FAILURE);
@@ -891,4 +900,18 @@ pub(super) fn ecdsa_sign(
     copy_out(r, rs)?;
     copy_out(s, ss)?;
     Ok(rs.len())
+}
+
+/// The ECDSA case of `CryptEccSign()` ([`ecc_sign`] with `TPM_ALG_ECDSA`).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn ecdsa_sign(
+    rng: &mut RefRng<'_>,
+    rand: Option<&mut DrbgState>,
+    curve_id: u16,
+    d: &[u8],
+    digest: &[u8],
+    r: &mut [u8],
+    s: &mut [u8],
+) -> Result<usize, TpmRc> {
+    ecc_sign(rng, rand, TPM_ALG_ECDSA, 0x0010, curve_id, d, digest, r, s)
 }

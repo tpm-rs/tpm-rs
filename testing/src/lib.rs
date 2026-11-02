@@ -28,6 +28,15 @@
 #![cfg_attr(not(feature = "differential"), forbid(unsafe_code))]
 #![allow(dead_code)]
 
+// The public TCG reference implements no SHA-512 (`ALG_SHA512 NO` upstream), so tpm-rs must be
+// built without it to have the same profile (`--no-default-features --features target-tcgtpm`,
+// see the Makefile's `TARGET_ARGS_tcgtpm`).
+#[cfg(all(feature = "target-tcgtpm", feature = "sha512"))]
+compile_error!(
+    "target-tcgtpm needs a TPM without SHA-512: build with `--no-default-features --features \
+     target-tcgtpm`"
+);
+
 pub mod _common;
 pub use _common as test_utils;
 

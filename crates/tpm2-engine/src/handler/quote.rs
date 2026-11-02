@@ -69,9 +69,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )?;
 
         // 5. The PCR digest uses the hash algorithm of the selected scheme. A NULL selected scheme
-        //    (always the case for TPM_RH_NULL) has no hash: TPM_RC_SCHEME + RC_Quote_inScheme.
-        let hash_alg = actual_in_scheme
-            .and_then(|s| s.hash_alg())
+        //    (always the case for TPM_RH_NULL) has no hash: TPM_RC_SCHEME + RC_Quote_inScheme. A
+        //    scheme without a hash (pure ML-DSA) uses the signing key's nameAlg (version 185
+        //    errata, "Hash algorithm used by `TPM2_Quote()` for signing keys without a scheme
+        //    hash").
+        let hash_alg = super::attest_hash_alg(signer_obj_opt.as_ref(), actual_in_scheme)
             .ok_or_else(|| TpmRc::SCHEME.with(Position::parameter(2)))?;
         let pcr_digest = self.compute_pcr_digest(&cmd.pcr_select, hash_alg)?;
 

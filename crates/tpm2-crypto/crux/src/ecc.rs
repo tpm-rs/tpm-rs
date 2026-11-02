@@ -351,10 +351,24 @@ impl Ecc for CruxCryptoProvider {
         Ok(CruxEccBnP256)
     }
 
-    type NistP192Context = !;
+    // NIST P-192, BN P-638 and SM2 P-256: the generic constant-time short-Weierstrass
+    // arithmetic of `tpm2-crypto-weierstrass` (no ECDAA, as for the other curves).
+    type NistP192Context = tpm2_crypto_weierstrass::NistP192;
+    fn nist_p192(&self) -> Result<Self::NistP192Context, CryptoError> {
+        tpm2_crypto_weierstrass::nist_p192()
+    }
+
+    type BnP638Context = tpm2_crypto_weierstrass::BnP638;
+    fn bn_p638(&self) -> Result<Self::BnP638Context, CryptoError> {
+        tpm2_crypto_weierstrass::bn_p638()
+    }
+
+    type Sm2P256Context = tpm2_crypto_weierstrass::Sm2P256;
+    fn sm2_p256(&self) -> Result<Self::Sm2P256Context, CryptoError> {
+        tpm2_crypto_weierstrass::sm2_p256()
+    }
+
     type NistP224Context = !;
-    type BnP638Context = !;
-    type Sm2P256Context = !;
     type BpP256R1Context = !;
     type BpP384R1Context = !;
     type BpP512R1Context = !;

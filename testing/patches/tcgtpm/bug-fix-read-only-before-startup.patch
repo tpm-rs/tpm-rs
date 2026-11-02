@@ -1,0 +1,37 @@
+read-only-before-startup: commands before TPM2_Startup are TPM_RC_INITIALIZE, not TPM_RC_READ_ONLY
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, "TPM2_Startup", "General Description"):
+"TPM2_Startup() is always preceded by _TPM_Init, which is the physical
+indication that TPM initialization is necessary because of a system-wide
+reset. TPM2_Startup() is only valid after _TPM_Init. Additional
+TPM2_Startup() commands are not allowed after it has completed successfully.
+If a TPM requires TPM2_Startup() and another command is received, or if the
+TPM receives TPM2_Startup() when it is not required, the TPM shall return
+TPM_RC_INITIALIZE." Part 2, TPMA_STARTUP_CLEAR: "readOnly is CLEAR on TPM
+Reset or TPM Restart and preserved by TPM Resume", i.e. it is established by
+TPM2_Startup.
+
+ExecuteCommand() rejects the commands that are not permitted in Read-Only
+mode (RO_DISALLOW) when gc.readOnly is set before it checks whether the TPM
+has been started, and gc is only established by TPM2_Startup (TPM_RESET,
+TPM_RESTART: HierarchyStartup(); TPM_RESUME: NvRead(&gc, ...)). Between
+_TPM_Init and TPM2_Startup gc.readOnly holds whatever is left in memory, so
+such a command can fail with TPM_RC_READ_ONLY instead of TPM_RC_INITIALIZE.
+The Read-Only check now applies only to a started TPM, as in tpm-rs.
+diff --git a/TPMCmd/tpm/src/main/ExecCommand.c b/TPMCmd/tpm/src/main/ExecCommand.c
+--- a/TPMCmd/tpm/src/main/ExecCommand.c
++++ b/TPMCmd/tpm/src/main/ExecCommand.c
+@@ -156,7 +156,10 @@
+     // that are disallowed in this mode before performing any further auth checks.
+     // The execution of some commands may still be disallowed under certain conditions,
+     // but those will be evaluated in the corresponding command implementation.
+-    if(gc.readOnly && IsDisallowedInReadOnlyMode(command.index))
++    // tpm-rs differential testing -- spec deviation fix (NOT determinism): before
++    // TPM2_Startup, gc (and so gc.readOnly) is not established and every command
++    // but TPM2_Startup fails with TPM_RC_INITIALIZE.
++    if(TPMIsStarted() && gc.readOnly && IsDisallowedInReadOnlyMode(command.index))
+     {
+         result = TPM_RC_READ_ONLY;
+         goto Cleanup;

@@ -562,3 +562,75 @@ pub fn init_hmac_inner_state(hash_alg: TpmiAlgHash, key: &[u8]) -> StreamingHash
     state.update(&ipad[..blk_size]);
     state
 }
+
+/// Initializes the outer `StreamingHashState` of an HMAC by feeding `opad` (`k_prime ^ 0x5c`), so
+/// that the HMAC can be finished later ([`finalize_hmac_with_outer_state`]) without the key.
+pub fn init_hmac_outer_state(hash_alg: TpmiAlgHash, key: &[u8]) -> StreamingHashState {
+    let mut state = StreamingHashState::new(hash_alg);
+    let blk_size = state.block_size();
+
+    let mut k_prime = [0u8; 128];
+    if key.len() > blk_size {
+        let mut key_hash = StreamingHashState::new(hash_alg);
+        key_hash.update(key);
+        let (kh, kh_len) = key_hash.finalize();
+        k_prime[..kh_len].copy_from_slice(&kh[..kh_len]);
+    } else {
+        k_prime[..key.len()].copy_from_slice(key);
+    }
+
+    let mut opad = [0x5cu8; 128];
+    for i in 0..blk_size {
+        opad[i] ^= k_prime[i];
+    }
+
+    state.update(&opad[..blk_size]);
+    state
+}
+
+/// Finishes an HMAC from its inner state ([`init_hmac_inner_state`] plus the data) and its outer
+/// state ([`init_hmac_outer_state`]).
+pub fn finalize_hmac_with_outer_state(
+    inner_state: &StreamingHashState,
+    outer_state: &StreamingHashState,
+) -> ([u8; 64], usize) {
+    let (inner_digest, digest_len) = inner_state.finalize();
+    let mut outer = *outer_state;
+    outer.update(&inner_digest[..digest_len]);
+    outer.finalize()
+}
+
+#[cfg(test)]
+mod hmac_state_tests {
+    use super::*;
+
+    /// An HMAC finished from saved inner and outer states equals one finished with the key, for
+    /// a short key and for a key longer than the block (hashed first).
+    #[test]
+    fn outer_state_finish_matches_key_finish() {
+        for (alg, key) in [
+            (TpmiAlgHash::Sha256, &[0x0b_u8; 20][..]),
+            (TpmiAlgHash::Sha384, &[0xaa_u8; 131][..]),
+        ] {
+            let mut inner = init_hmac_inner_state(alg, key);
+            inner.update(b"Hi There");
+            let outer = init_hmac_outer_state(alg, key);
+            assert_eq!(
+                finalize_hmac_with_outer_state(&inner, &outer),
+                finalize_hmac_from_inner_state(alg, key, &inner)
+            );
+        }
+        // RFC 4231 test case 1 (HMAC-SHA-256).
+        let key = [0x0b_u8; 20];
+        let mut inner = init_hmac_inner_state(TpmiAlgHash::Sha256, &key);
+        inner.update(b"Hi There");
+        let (mac, len) = finalize_hmac_with_outer_state(
+            &inner,
+            &init_hmac_outer_state(TpmiAlgHash::Sha256, &key),
+        );
+        assert_eq!(
+            &mac[..len],
+            hex_literal::hex!("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")
+        );
+    }
+}

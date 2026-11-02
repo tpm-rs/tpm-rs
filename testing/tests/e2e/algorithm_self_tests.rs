@@ -12,7 +12,8 @@ use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 
 /// The algorithms that need a test after `_TPM_Init`, in ascending order: the implemented hashes,
-/// AES with CFB, the RSA and ECC schemes that have a test, ECDH and KDFa.
+/// AES with CFB, the RSA and ECC schemes that have a test, ECDH, KDFa, and ML-KEM and ML-DSA when
+/// implemented.
 fn initial_to_do_list() -> Vec<Alg> {
     let mut algs = vec![Alg::SHA1, Alg::AES, Alg::SHA256, Alg::SHA384];
     if TpmiAlgHash::try_from(Alg::SHA512).is_ok() {
@@ -25,9 +26,18 @@ fn initial_to_do_list() -> Vec<Alg> {
         Alg::OAEP,
         Alg::ECDSA,
         Alg::ECDH,
-        Alg::KDF1_SP800_108,
-        Alg::CFB,
     ]);
+    // EC-Schnorr has a known-answer test (`ecschnorr`); SM2 has none.
+    if cfg!(feature = "ecschnorr") {
+        algs.push(Alg::ECSCHNORR);
+    }
+    algs.extend([Alg::KDF1_SP800_108, Alg::CFB]);
+    if cfg!(feature = "mlkem") {
+        algs.push(Alg::MLKEM);
+    }
+    if cfg!(feature = "mldsa") {
+        algs.push(Alg::MLDSA);
+    }
     algs
 }
 

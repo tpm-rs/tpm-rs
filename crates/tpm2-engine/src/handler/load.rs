@@ -1,5 +1,6 @@
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
+use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::req_resp::RequestThenResponse;
 use tpm2::Handle;
 use tpm2::Marshal;
@@ -94,7 +95,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &cmd.in_private,
             &parent_seed_val[..parent_info.seed_len],
             parent_info.name_alg,
-            parent_info.sym_bits,
+            parent_info.sym_alg,
             &object_name,
             &mut decrypted_blob,
         )?;
@@ -111,7 +112,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )?;
         // 4. Validate public-private key consistency and import the private key. C ObjectLoad
         // skips CryptValidateKeys when the parent is fixedTPM (this TPM produced the blob).
-        let mut actual_private_key = [0u8; 1536];
+        let mut actual_private_key = [0u8; MAX_PRIVATE_KEY_SIZE];
         let actual_private_key_len = if parent_info.attributes.contains(TpmaObject::FIXED_TPM) {
             self.import_sensitive_unvalidated(
                 &public_struct,
@@ -175,7 +176,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         in_private: &Tpm2bPrivate<'_>,
         parent_seed_val: &[u8],
         parent_name_alg: TpmiAlgHash,
-        sym_key_bits: u32,
+        sym_alg: tpm2::AlgSym,
         object_name: &crate::owned::OwnedName,
         decrypted_blob: &'c mut [u8; 2048],
     ) -> Result<TpmtSensitive<'c>, TpmRc> {
@@ -250,6 +251,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let encrypted_blob = &iv_and_enc[18..];
 
         let mut sym_key_buf = [0u8; 32];
+        let sym_key_bits = u32::from(sym_alg.key_bits());
         let sym_key_len = (sym_key_bits / 8) as usize;
         kdfa_bits(
             &self.crypto(),
@@ -268,8 +270,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
         decrypted_blob[..encrypted_blob.len()].copy_from_slice(encrypted_blob);
 
-        let sym_alg =
-            tpm2::TpmtSymDefObject::aes_cfb(sym_key_bits as u16).map_err(|_| TpmRc::FAILURE)?;
+        let sym_alg = crate::handler::protection_cfb(sym_alg);
         self.sym_encrypt_decrypt(
             sym_alg,
             &sym_key_buf[..sym_key_len],

@@ -1,0 +1,71 @@
+policy-capability-sec-channel: TPM2_PolicyCapability supports the SPDM capabilities
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, version 185, TPM2_PolicyCapability, Table
+"Capability Contents"): "TPM_CAP_PUB_KEYS | TPM_PUB_KEY | TPM2B_PUBLIC" and
+"TPM_CAP_SPDM_SESSION_INFO | reserved | TPMS_SPDM_SESSION_INFO"; "If the
+requested TPM *property* does not exist, the TPM will return `TPM_RC_POLICY`
+unless the *operation* is `TPM_EO_NEQ`."
+
+With SEC_CHANNEL_SUPPORT, the reference's TPM2_PolicyCapability has no case for
+the two capabilities added in version 184 and returns TPM_RC_VALUE (capability)
+for them. The patch adds them: TPM_CAP_PUB_KEYS compares against the
+TPM2B_PUBLIC of the TPM SPDM key (the reference has only
+TPM_PUB_KEY_TPM_SPDM_00; another key of the TPM_PUB_KEY range does not exist,
+a property beyond TPM_PUB_KEY_TPM_SPDM_FF is TPM_RC_VALUE), and
+TPM_CAP_SPDM_SESSION_INFO against the TPMS_SPDM_SESSION_INFO of the SPDM
+session protecting the command (its reserved property must be 0, as in
+TPM2_GetCapability).
+diff --git a/TPMCmd/tpm/src/command/EA/PolicyCapability.c b/TPMCmd/tpm/src/command/EA/PolicyCapability.c
+--- a/TPMCmd/tpm/src/command/EA/PolicyCapability.c
++++ b/TPMCmd/tpm/src/command/EA/PolicyCapability.c
+@@ -46,6 +46,12 @@ TPM2_PolicyCapability(PolicyCapability_In* in  // IN: input parameter list
+ #  if ACT_SUPPORT
+         TPMS_ACT_DATA act;
+ #  endif  // ACT_SUPPORT
++#  if SEC_CHANNEL_SUPPORT
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // the property types of TPM_CAP_PUB_KEYS and TPM_CAP_SPDM_SESSION_INFO.
++        TPM2B_PUBLIC           pubKey;
++        TPMS_SPDM_SESSION_INFO spdmSessionInfo;
++#  endif  // SEC_CHANNEL_SUPPORT
+     } propertyUnion;
+ 
+     SESSION*     session;
+@@ -185,6 +191,35 @@ TPM2_PolicyCapability(PolicyCapability_In* in  // IN: input parameter list
+                 }
+                 break;
+ #  endif  // ACT_SUPPORT
++#  if SEC_CHANNEL_SUPPORT
++            // tpm-rs differential testing -- C-ref spec deviation fix (NOT
++            // determinism): Part 3, TPM2_PolicyCapability, "Capability Contents"
++            // lists TPM_CAP_PUB_KEYS (TPM_PUB_KEY, TPM2B_PUBLIC) and
++            // TPM_CAP_SPDM_SESSION_INFO (reserved, TPMS_SPDM_SESSION_INFO); the
++            // reference only has the TPM SPDM key TPM_PUB_KEY_TPM_SPDM_00.
++            case TPM_CAP_PUB_KEYS:
++                if(in->property > 0xFF)  // TPM_PUB_KEY_TPM_SPDM_FF
++                    return TPM_RCS_VALUE + RC_PolicyCapability_property;
++                if((TPM_PUB_KEY)in->property == TPM_PUB_KEY_TPM_SPDM_00)
++                {
++                    GetTpmSpdmPubKey(&propertyUnion.pubKey.publicArea);
++                    TPM2B_PUBLIC_Marshal(&propertyUnion.pubKey, &buffer, &bufferSize);
++                    propertySize = (UINT16)(sizeof(propertyData) - bufferSize);
++                }
++                break;
++            case TPM_CAP_SPDM_SESSION_INFO:
++                // The property is reserved, as in TPM2_GetCapability().
++                if(in->property != 0)
++                    return TPM_RCS_VALUE + RC_PolicyCapability_property;
++                if(IsSpdmSessionActive(&propertyUnion.spdmSessionInfo.reqKeyName,
++                                       &propertyUnion.spdmSessionInfo.tpmKeyName))
++                {
++                    TPMS_SPDM_SESSION_INFO_Marshal(
++                        &propertyUnion.spdmSessionInfo, &buffer, &bufferSize);
++                    propertySize = (UINT16)(sizeof(propertyData) - bufferSize);
++                }
++                break;
++#  endif  // SEC_CHANNEL_SUPPORT
+             case TPM_CAP_VENDOR_PROPERTY:
+                 // vendor property is not implemented
+             default:

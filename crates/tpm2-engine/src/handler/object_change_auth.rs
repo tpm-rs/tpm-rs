@@ -171,7 +171,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             &parent_seed_val[..parent_info.seed_len],
             &object.name,
             parent_info.name_alg,
-            parent_info.sym_bits,
+            parent_info.sym_alg,
             &mut private_buf,
         )?;
 

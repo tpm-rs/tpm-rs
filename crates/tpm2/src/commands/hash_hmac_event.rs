@@ -83,6 +83,52 @@ impl<'a> UnmarshalMessage<'a> for HMACStartRsp {
     }
 }
 
+/// [TPM2.0 1.83] 17.3 TPM2_MAC_Start (Command)
+///
+/// `TPM2_MAC_Start` shares its command code with `TPM2_HMAC_Start` ([`HMACStart`]); a TPM
+/// implements one of them (a TPM with `TPM_ALG_CMAC` implements `TPM2_MAC_Start`). Its last
+/// parameter `inScheme` is a `TPMI_ALG_MAC_SCHEME+` rather than a `TPMI_ALG_HASH+`. The response
+/// has the layout of [`HMACStartRsp`].
+#[doc(alias = "TPM2_MAC_Start")]
+#[doc(alias = "MAC_Start_In")]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+pub struct MACStart<'a> {
+    pub handle: Handle,
+    pub auth: Tpm2bAuth<'a>,
+    pub in_scheme: Option<TpmiAlgMacScheme>,
+}
+
+impl Command for MACStart<'_> {
+    const CMD_CODE: TpmCc = TpmCc::MACStart;
+    type Response<'a> = HMACStartRsp;
+}
+impl Message for MACStart<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.handle]
+    }
+}
+impl Marshal for MACStart<'_> {
+    const MAX_SIZE: usize = Tpm2bAuth::MAX_SIZE + <Option<TpmiAlgMacScheme>>::MAX_SIZE;
+    type MaxBuffer = [u8; MACStart::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.auth, dst, 0);
+        marshal_helper(&self.in_scheme, dst, count)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for MACStart<'a> {
+    fn unmarshal_with_handles(
+        [handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            handle,
+            auth: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
+            in_scheme: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(2))?,
+        })
+    }
+}
+
 /// [TPM2.0 1.83] 17.4 TPM2_HashSequenceStart (Command)
 #[doc(alias = "TPM2_HashSequenceStart")]
 #[doc(alias = "HashSequenceStart_In")]

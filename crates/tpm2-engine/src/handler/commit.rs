@@ -1,5 +1,6 @@
 use super::encrypt_decrypt::{crypto_check, crypto_len};
 use crate::handle_checks::{Tpmi, check};
+use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -49,12 +50,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.validate_commit_object_attributes(cmd.sign_handle, num_sessions)?;
 
         // 2. Validate input point P1 and parameters S2/Y2
-        let param_size = match curve {
-            TpmEccCurve::NistP224 => 28,
-            TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => 32,
-            TpmEccCurve::NistP384 => 48,
-            TpmEccCurve::NistP521 => 66,
-            _ => return Err(TpmRc::KEY.with(Position::handle(1))),
+        let param_size = match crate::ecc_curves::param_size(curve) {
+            Some(size) => size,
+            None => return Err(TpmRc::KEY.with(Position::handle(1))),
         };
         let mut p1_buf = [0u8; 256];
         let (p1_is_empty, xy2_opt) = self.validate_commit_inputs(
@@ -157,7 +155,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<
         (
             crate::owned::OwnedPublic,
-            [u8; 1536],
+            [u8; MAX_PRIVATE_KEY_SIZE],
             TpmEccCurve,
             tpm2::TpmiAlgHash,
             crate::owned::OwnedName,
@@ -520,7 +518,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 iterations += 1;
                 let mut hmac = self
                     .crypto()
-                    .hmac_stream(commit_kdf_hash(), &self.context.state.commit_nonce)
+                    .hmac_stream(
+                        commit_kdf_hash(),
+                        &self.context.state.commit_nonce[..crate::engine::COMMIT_NONCE_SIZE],
+                    )
                     .ok()?;
                 hmac.update(&iterations.to_be_bytes()).ok()?;
                 hmac.update(COMMIT_STRING).ok()?;
@@ -559,44 +560,10 @@ fn commit_kdf_hash() -> tpm2::TpmiAlgHash {
     crate::handler::context_integrity_hash_alg()
 }
 
-/// Size in bytes of the largest supported curve order (NIST P-521).
-pub(crate) const MAX_ECC_ORDER_SIZE: usize = 66;
+/// Size in bytes of the largest supported curve order.
+pub(crate) const MAX_ECC_ORDER_SIZE: usize = tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES;
 
 /// Returns the big-endian group order `n` of `curve`, or `None` for unsupported curves.
 pub(crate) fn curve_order(curve: TpmEccCurve) -> Option<&'static [u8]> {
-    const NIST_P224_N: [u8; 28] = [
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x16,
-        0xa2, 0xe0, 0xb8, 0xf0, 0x3e, 0x13, 0xdd, 0x29, 0x45, 0x5c, 0x5c, 0x2a, 0x3d,
-    ];
-    const NIST_P256_N: [u8; 32] = [
-        0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63,
-        0x25, 0x51,
-    ];
-    const BN_P256_N: [u8; 32] = [
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xfc, 0xf0, 0xcd, 0x46, 0xe5, 0xf2, 0x5e, 0xee, 0x71, 0xa4,
-        0x9e, 0x0c, 0xdc, 0x65, 0xfb, 0x12, 0x99, 0x92, 0x1a, 0xf6, 0x2d, 0x53, 0x6c, 0xd1, 0x0b,
-        0x50, 0x0d,
-    ];
-    const NIST_P384_N: [u8; 48] = [
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc7, 0x63, 0x4d, 0x81, 0xf4, 0x37,
-        0x2d, 0xdf, 0x58, 0x1a, 0x0d, 0xb2, 0x48, 0xb0, 0xa7, 0x7a, 0xec, 0xec, 0x19, 0x6a, 0xcc,
-        0xc5, 0x29, 0x73,
-    ];
-    const NIST_P521_N: [u8; 66] = [
-        0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xfa, 0x51, 0x86, 0x87, 0x83, 0xbf, 0x2f, 0x96, 0x6b, 0x7f, 0xcc, 0x01,
-        0x48, 0xf7, 0x09, 0xa5, 0xd0, 0x3b, 0xb5, 0xc9, 0xb8, 0x89, 0x9c, 0x47, 0xae, 0xbb, 0x6f,
-        0xb7, 0x1e, 0x91, 0x38, 0x64, 0x09,
-    ];
-    match curve {
-        TpmEccCurve::NistP224 => Some(&NIST_P224_N),
-        TpmEccCurve::NistP256 => Some(&NIST_P256_N),
-        TpmEccCurve::BNP256 => Some(&BN_P256_N),
-        TpmEccCurve::NistP384 => Some(&NIST_P384_N),
-        TpmEccCurve::NistP521 => Some(&NIST_P521_N),
-        _ => None,
-    }
+    crate::ecc_curves::curve_params(curve).map(|c| c.n)
 }

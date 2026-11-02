@@ -13,20 +13,45 @@ The bugs of the C reference `tcgtpm-185-feature` that the `bug-fix-*.patch` file
   - [rsa-prime-range](#rsa-prime-range)
   - [sequence-complete-ticket-error-state](#sequence-complete-ticket-error-state)
   - [svn-fw-limited-entity-hierarchy](#svn-fw-limited-entity-hierarchy)
+  - [verify-sequence-ticket](#verify-sequence-ticket)
   - [expiration-absolute-value](#expiration-absolute-value)
+  - [nv-define-space2-external-nv](#nv-define-space2-external-nv)
   - [persistent-copy-handle-alias](#persistent-copy-handle-alias)
+  - [policy-capability-session-handle](#policy-capability-session-handle)
+  - [policy-capability-transient-handle](#policy-capability-transient-handle)
+  - [read-only-before-authorization](#read-only-before-authorization)
   - [svn-fw-limited-load-external](#svn-fw-limited-load-external)
-  - [vendor-auth-entity-break](#vendor-auth-entity-break)
+  - [verify-signature-mldsa-not-supported](#verify-signature-mldsa-not-supported)
   - [act-preserve-signaled](#act-preserve-signaled)
   - [cipher-mode-error-code](#cipher-mode-error-code)
+  - [ecdaa-signature-context](#ecdaa-signature-context)
+  - [ecc-point-coordinate-range](#ecc-point-coordinate-range)
   - [get-test-result-needs-test](#get-test-result-needs-test)
   - [nv-certify-null-sign-handle-digest](#nv-certify-null-sign-handle-digest)
+  - [nv-define-space2-dispatch](#nv-define-space2-dispatch)
+  - [nv-exp-index-range](#nv-exp-index-range)
   - [pcr-reset-handle-type](#pcr-reset-handle-type)
+  - [policy-authorize-ticket-tags](#policy-authorize-ticket-tags)
+  - [policy-capability-sec-channel](#policy-capability-sec-channel)
+  - [read-only-before-startup](#read-only-before-startup)
+  - [sequence-complete-flushed-attribute](#sequence-complete-flushed-attribute)
   - [session-audit-attribute-dependency](#session-audit-attribute-dependency)
+  - [sign-digest-hmac-scheme](#sign-digest-hmac-scheme)
+  - [sign-mldsa-not-supported](#sign-mldsa-not-supported)
+  - [sm2-signature-sequence](#sm2-signature-sequence)
+  - [sec-channel-property-count](#sec-channel-property-count)
   - [svn-fw-limited-evict-control](#svn-fw-limited-evict-control)
   - [symmetric-unique](#symmetric-unique)
   - [template-size](#template-size)
   - [tpmu-name-size](#tpmu-name-size)
+  - [verify-digest-signature-scheme](#verify-digest-signature-scheme)
+  - [verify-digest-signature-ticket](#verify-digest-signature-ticket)
+  - [verify-sequence-complete-scheme](#verify-sequence-complete-scheme)
+  - [cmac-self-test](#cmac-self-test)
+  - [select-sym-def-object-camellia](#select-sym-def-object-camellia)
+  - [zgen-2phase-mqv-sm2](#zgen-2phase-mqv-sm2)
+  - [ecc-decrypt-c1-point](#ecc-decrypt-c1-point)
+  - [zgen-2phase-out-z2](#zgen-2phase-out-z2)
 - [Locality problems (not patched)](#locality-problems-not-patched)
   - [pcr-extended-locality](#pcr-extended-locality)
 
@@ -40,20 +65,45 @@ The bugs of the C reference `tcgtpm-185-feature` that the `bug-fix-*.patch` file
 | [rsa-prime-range](bug-fix-rsa-prime-range.patch) ([details](#rsa-prime-range)) | `security`, `dos`, `crypto`, `input-validation`, `spec` | medium | RSA key loading does not check the range of the computed prime Q, so a crafted key can put the TPM in failure mode. |
 | [sequence-complete-ticket-error-state](bug-fix-sequence-complete-ticket-error-state.patch) ([details](#sequence-complete-ticket-error-state)) | `security`, `dos`, `state`, `fw-limited`, `spec` | medium | A TPM2_SequenceComplete that fails computing its ticket leaves the sequence loaded with a consumed hash state, whose reuse enters failure mode. |
 | [svn-fw-limited-entity-hierarchy](bug-fix-svn-fw-limited-entity-hierarchy.patch) ([details](#svn-fw-limited-entity-hierarchy)) | `security`, `attestation`, `fw-limited`, `spec` | medium | EntityGetHierarchy() reports the base hierarchy for objects in limited hierarchies, so their creation/auth tickets use the base proof. |
+| [verify-sequence-ticket](bug-fix-verify-sequence-ticket.patch) ([details](#verify-sequence-ticket)) | `security`, `dos`, `functional`, `state`, `spec` | medium | TPM2_VerifySequenceComplete returns a TPM_ST_VERIFIED ticket over the digest (NULL for HMAC) instead of a TPM_ST_MESSAGE_VERIFIED ticket over the message, and a failed verification consumes the running state (a later update enters failure mode). |
+| [select-sym-def-object-camellia](bug-fix-select-sym-def-object-camellia.patch) ([details](#select-sym-def-object-camellia)) | `security`, `dos`, `functional`, `spec` | medium | A storage parent whose symmetric algorithm is Camellia puts the TPM into failure mode: the SM4/Camellia case labels of CryptoCommon_SelectSymDefObject() are profile switches, not algorithm IDs. |
 | [expiration-absolute-value](bug-fix-expiration-absolute-value.patch) ([details](#expiration-absolute-value)) | `ub`, `interop`, `spec` | low | The absolute value of expiration = INT32_MIN overflows, giving a wrong policy timeout and ticket. |
+| [nv-define-space2-external-nv](bug-fix-nv-define-space2-external-nv.patch) ([details](#nv-define-space2-external-nv)) | `memory-safety`, `ub`, `functional`, `spec` | low | TPM2_NV_DefineSpace2 of an external NV Index defines an Index at an uninitialized handle, and external NV handles can never be loaded. |
 | [persistent-copy-handle-alias](bug-fix-persistent-copy-handle-alias.patch) ([details](#persistent-copy-handle-alias)) | `security`, `spec` | low | A later transient handle that names the slot of a persistent object's per-command RAM copy resolves to that persistent object instead of failing with TPM_RC_REFERENCE_Hn. |
+| [policy-capability-session-handle](bug-fix-policy-capability-session-handle.patch) ([details](#policy-capability-session-handle)) | `security`, `auth-bypass`, `spec` | low | TPM2_PolicyCapability(TPM_CAP_HANDLES) reports a saved session as loaded and a loaded session as saved. |
+| [policy-capability-transient-handle](bug-fix-policy-capability-transient-handle.patch) ([details](#policy-capability-transient-handle)) | `security`, `auth-bypass`, `spec` | low | TPM2_PolicyCapability(TPM_CAP_HANDLES) reports a transient handle as existing whenever any object with a larger handle is loaded. |
+| [read-only-before-authorization](bug-fix-read-only-before-authorization.patch) ([details](#read-only-before-authorization)) | `security`, `spec`, `state` | low | In Read-Only mode, TPM2_NV_Write/Extend/SetBits/WriteLock/ReadLock on other than ORDERLY+CLEAR_STCLEAR Indexes and TPM2_PolicySecret with a PIN Index are rejected only after authorization, so a wrong authorization updates the DA counter or pinCount. |
 | [svn-fw-limited-load-external](bug-fix-svn-fw-limited-load-external.patch) ([details](#svn-fw-limited-load-external)) | `security`, `input-validation`, `fw-limited`, `spec` | low | TPM2_LoadExternal accepts a public-only object with firmwareLimited or svnLimited SET. |
-| [vendor-auth-entity-break](bug-fix-vendor-auth-entity-break.patch) ([details](#vendor-auth-entity-break)) | `security`, `dos`, `functional`, `spec` | low | Missing break for VENDOR_PERMANENT_AUTH_HANDLE in EntityGetAuthValue() falls into FAIL(), so using the vendor authValue puts the TPM into failure mode. |
+| [verify-signature-mldsa-not-supported](bug-fix-verify-signature-mldsa-not-supported.patch) ([details](#verify-signature-mldsa-not-supported)) | `security`, `attestation`, `memory-safety`, `input-validation`, `spec` | low | TPM2_VerifySignature with an external-mu ML-DSA key ("Not supported") verifies the digest as an external mu, without checking the signature algorithm, and returns a TPMT_TK_VERIFIED ticket. |
+| [cmac-self-test](bug-fix-cmac-self-test.patch) ([details](#cmac-self-test)) | `self-test`, `spec` | — | TPM2_MAC/TPM2_MAC_Start compute a CMAC with the block cipher of the key without testing it, leaving it untested. |
 | [act-preserve-signaled](bug-fix-act-preserve-signaled.patch) ([details](#act-preserve-signaled)) | `state`, `spec` | — | ACT preserveSignaled is cleared/merged by power loss instead of being CLEAR on TPM Reset/Restart and a copy of signaled on TPM Resume. |
 | [cipher-mode-error-code](bug-fix-cipher-mode-error-code.patch) ([details](#cipher-mode-error-code)) | `rc-only`, `spec` | — | TPMI_ALG_CIPHER_MODE values are rejected with TPM_RC_SYMMETRIC instead of TPM_RC_MODE. |
+| [ecdaa-signature-context](bug-fix-ecdaa-signature-context.patch) ([details](#ecdaa-signature-context)) | `spec-185`, `functional`, `spec` | — | TPM2B_SIGNATURE_CTX is limited to 0 octets without ML-DSA, and TPM2_SignDigest/TPM2_SignSequenceStart reject keys whose scheme is TPM_ALG_ECDAA instead of taking the commit counter from context. |
+| [ecc-point-coordinate-range](bug-fix-ecc-point-coordinate-range.patch) ([details](#ecc-point-coordinate-range)) | `spec`, `input-validation`, `crypto` | — | BnIsPointOnCurve() checks only the curve equation modulo p, so ECC points with a coordinate not below p (x + p) are accepted as valid points. |
 | [get-test-result-needs-test](bug-fix-get-test-result-needs-test.patch) ([details](#get-test-result-needs-test)) | `self-test`, `spec` | — | TPM2_GetTestResult always returns TPM_RC_SUCCESS instead of TPM_RC_NEEDS_TEST while algorithms remain untested. |
 | [nv-certify-null-sign-handle-digest](bug-fix-nv-certify-null-sign-handle-digest.patch) ([details](#nv-certify-null-sign-handle-digest)) | `spec-185`, `functional`, `spec` | — | TPM2_NV_Certify with a NULL signHandle and size = offset = 0 always returns TPM_RC_SCHEME because the caller's inScheme is cleared before its hash is used. |
+| [nv-define-space2-dispatch](bug-fix-nv-define-space2-dispatch.patch) ([details](#nv-define-space2-dispatch)) | `functional`, `spec` | — | TPM2_NV_DefineSpace2 unmarshals publicInfo into the auth member, so the command never defines an Index (TPM_RC_HANDLE + publicInfo). |
+| [nv-exp-index-range](bug-fix-nv-exp-index-range.patch) ([details](#nv-exp-index-range)) | `spec`, `input-validation` | — | TPMI_RH_NV_EXP_INDEX admits the ordinary NV Index range instead of the external NV Index range. |
 | [pcr-reset-handle-type](bug-fix-pcr-reset-handle-type.patch) ([details](#pcr-reset-handle-type)) | `input-validation`, `rc-only`, `spec` | — | TPM2_PCR_Reset unmarshals pcrHandle as TPMI_DH_PCR+, accepting TPM_RH_NULL instead of TPM_RC_VALUE + H1. |
+| [policy-authorize-ticket-tags](bug-fix-policy-authorize-ticket-tags.patch) ([details](#policy-authorize-ticket-tags)) | `spec-185`, `functional`, `spec` | — | TPM2_PolicyAuthorize recomputes every ticket as TPM_ST_VERIFIED, so valid TPM_ST_MESSAGE_VERIFIED and TPM_ST_DIGEST_VERIFIED tickets are rejected with TPM_RC_VALUE. |
+| [policy-capability-sec-channel](bug-fix-policy-capability-sec-channel.patch) ([details](#policy-capability-sec-channel)) | `spec`, `functional` | — | With SEC_CHANNEL_SUPPORT, TPM2_PolicyCapability rejects TPM_CAP_PUB_KEYS and TPM_CAP_SPDM_SESSION_INFO with TPM_RC_VALUE although its Capability Contents table lists them. |
+| [read-only-before-startup](bug-fix-read-only-before-startup.patch) ([details](#read-only-before-startup)) | `spec`, `rc-only` | — | Before TPM2_Startup, a command not permitted in Read-Only mode can fail with TPM_RC_READ_ONLY (from a stale or unestablished gc.readOnly) instead of TPM_RC_INITIALIZE. |
+| [sequence-complete-flushed-attribute](bug-fix-sequence-complete-flushed-attribute.patch) ([details](#sequence-complete-flushed-attribute)) | `spec` | — | TPMA_CC of TPM2_VerifySequenceComplete and TPM2_SignSequenceComplete has flushed CLEAR although Part 3 marks both {F}. |
 | [session-audit-attribute-dependency](bug-fix-session-audit-attribute-dependency.patch) ([details](#session-audit-attribute-dependency)) | `spec`, `rc-only` | — | auditExclusive/auditReset without audit are ignored on HMAC/policy sessions instead of returning TPM_RC_ATTRIBUTES. |
+| [sign-digest-hmac-scheme](bug-fix-sign-digest-hmac-scheme.patch) ([details](#sign-digest-hmac-scheme)) | `input-validation`, `spec` | — | TPM2_SignDigest signs with a key whose scheme is TPM_ALG_HMAC instead of returning TPM_RC_SCHEME. |
+| [sign-mldsa-not-supported](bug-fix-sign-mldsa-not-supported.patch) ([details](#sign-mldsa-not-supported)) | `rc-only`, `spec` | — | TPM2_Sign with an ML-DSA key ("Not supported") selects the NULL scheme and fails later with TPM_RC_SIZE, TPM_RC_EXT_MU or TPM_RC_VALUE instead of TPM_RC_SCHEME + inScheme. |
+| [sm2-signature-sequence](bug-fix-sm2-signature-sequence.patch) ([details](#sm2-signature-sequence)) | `spec-185`, `functional`, `spec` | — | TPM2_SignSequenceStart/TPM2_VerifySequenceStart reject SM2 keys (185TODO) instead of signing/verifying the message with context as ID_A, and TPMU_SIGNATURE_CTX lacks the SM2 id member. |
+| [sec-channel-property-count](bug-fix-sec-channel-property-count.patch) ([details](#sec-channel-property-count)) | `spec` | — | TPM_CAP_PUB_KEYS and TPM_CAP_SPDM_SESSION_INFO return their entry even with propertyCount = 0 (moreData NO) instead of an empty list with moreData YES. |
 | [svn-fw-limited-evict-control](bug-fix-svn-fw-limited-evict-control.patch) ([details](#svn-fw-limited-evict-control)) | `spec`, `rc-only`, `fw-limited` | — | TPM2_EvictControl rejects objects of limited hierarchies with TPM_RC_HIERARCHY instead of TPM_RC_ATTRIBUTES. |
 | [symmetric-unique](bug-fix-symmetric-unique.patch) ([details](#symmetric-unique)) | `interop`, `crypto`, `spec` | — | unique of symmetric/keyed-hash parents is an HMAC instead of H_nameAlg(seedValue || key), giving non-interoperable Names and binding checks. |
 | [template-size](bug-fix-template-size.patch) ([details](#template-size)) | `input-validation`, `spec` | — | TPM2B_TEMPLATE is bounded by the padded C sizeof(TPMT_PUBLIC) (356) instead of the unpadded 350 bytes, so oversized templates are accepted. |
 | [tpmu-name-size](bug-fix-tpmu-name-size.patch) ([details](#tpmu-name-size)) | `input-validation`, `spec` | — | Alignment padding of the TPM_HANDLE member makes sizeof(TPMU_NAME) 68, so 67/68-octet TPM2B_NAMEs are accepted instead of TPM_RC_SIZE. |
+| [verify-digest-signature-scheme](bug-fix-verify-digest-signature-scheme.patch) ([details](#verify-digest-signature-scheme)) | `input-validation`, `spec` | — | TPM2_VerifyDigestSignature accepts keys without a digest-signing scheme (or HMAC), digests of any size and signatures of another scheme/hash than the key's. |
+| [verify-digest-signature-ticket](bug-fix-verify-digest-signature-ticket.patch) ([details](#verify-digest-signature-ticket)) | `spec-185`, `functional`, `interop`, `spec` | — | TPM2_VerifyDigestSignature returns a TPM_ST_VERIFIED ticket instead of a TPM_ST_DIGEST_VERIFIED ticket with the hash algorithm as metadata. |
+| [verify-sequence-complete-scheme](bug-fix-verify-sequence-complete-scheme.patch) ([details](#verify-sequence-complete-scheme)) | `input-validation`, `spec` | — | TPM2_VerifySequenceComplete verifies a signature of another scheme or hash than the sequence's (digest-signing schemes) instead of returning TPM_RC_SCHEME. |
+| [zgen-2phase-mqv-sm2](bug-fix-zgen-2phase-mqv-sm2.patch) ([details](#zgen-2phase-mqv-sm2)) | `security`, `dos`, `crypto`, `spec` | low | TPM2_ZGen_2Phase: Full MQV never sets the curve order and the x coordinate of Q_e,B (division by zero puts the TPM into failure mode), the associated values mask the wrong bits and avfSM2() uses an f one too small, and a Z at infinity is TPM_RC_NO_RESULT instead of an Empty Point. |
+| [ecc-decrypt-c1-point](bug-fix-ecc-decrypt-c1-point.patch) ([details](#ecc-decrypt-c1-point)) | `input-validation`, `spec` | — | TPM2_ECC_Decrypt does not check that C1 is on the curve of the key; it continues with C1 itself as [d]C1 and fails later with TPM_RC_VALUE instead of TPM_RC_ECC_POINT. |
+| [zgen-2phase-out-z2](bug-fix-zgen-2phase-out-z2.patch) ([details](#zgen-2phase-out-z2)) | `functional`, `spec` | — | The dispatch table of TPM2_ZGen_2Phase marshals outZ1 twice, so the response never contains outZ2 (Ze for ECDH, the Empty Point for MQV/SM2). |
 
 ## Categories
 
@@ -303,6 +353,62 @@ Firmware-limited and SVN-limited hierarchies exist so that objects stay protecte
 
 ---
 
+### verify-sequence-ticket
+
+**Categories:** `security`, `dos`, `functional`, `state`, `spec`.
+
+**Severity:** medium
+
+**Description:**
+
+`TPM2_VerifySequenceComplete` (`command/Signature/VerifySequenceComplete.c`) has two problems.
+
+1. **Wrong ticket.** Part 3 requires a `TPM_ST_MESSAGE_VERIFIED` ticket, and Part 2 defines it as an HMAC over the tag, the *message* and the key's Name. The reference ends the running hash of the message and returns the `TPM_ST_VERIFIED` ticket of `TPM2_VerifySignature` over that *digest* (`CryptoCommon_TicketComputeVerified()`). For the HMAC (and ML-DSA) schemes, which have no digest, it returns a NULL `TPM_ST_VERIFIED` ticket even for a key in a real hierarchy. So no `TPM_ST_MESSAGE_VERIFIED` ticket is ever produced, and the ticket it does produce looks like a `TPM2_VerifySignature` ticket for a digest the caller never supplied.
+2. **A failed verification consumes the sequence.** The running hash (or HMAC) is ended in place (`CryptoHash_HashEnd()`/`CryptoHash_HmacEnd()` set the state to `HASH_STATE_EMPTY`) before the signature is checked. When the signature is not genuine, the command returns `TPM_RC_SIGNATURE` but leaves the sequence object loaded, so the TPM state did change. A later `TPM2_SequenceUpdate` on it reaches `FAIL_VOID(FATAL_ERROR_INTERNAL)` in `CryptoHash_DigestUpdate()`, and a retried `TPM2_VerifySequenceComplete` reaches `pAssert_ZERO` in `CryptoHash_HashEnd()`: the TPM enters failure mode.
+
+The patch makes the ticket a running HMAC alongside the sequence:
+- `TPM2_VerifySequenceStart` obtains the proof of the key's hierarchy (`GetHierarchy()`; none for `TPM_RH_NULL` or a key with nameAlg `TPM_ALG_NULL`) before the sequence object is allocated, so `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED` leave the TPM unchanged. After `ObjectCreateVerifySequence()` it starts HMAC<sub>contextAlg</sub>(proof, ...) with the tag `TPM_ST_MESSAGE_VERIFIED`.
+- The running HMAC is kept in a new member of the `state` union of `SEQUENCE_OBJECT` (`state.verify.ticket`, after the running state of the message, which aliases `hashState[0]`/`hmacState`), because a `SEQUENCE_OBJECT` has to fit in an `OBJECT` slot (`MUST_BE(sizeof(SEQUENCE_OBJECT) <= sizeof(OBJECT))`). Its hierarchy is a new field `ticketHierarchy` before `state`. `SequenceDataExport()`/`SequenceDataImport()` export and import the running HMAC, so a context save/load preserves it.
+- `ObjectVerifySequenceUpdate()` (`TPM2_SequenceUpdate`) adds the message to it.
+- `TPM2_VerifySequenceComplete` ends the message's running hash or HMAC on a copy, so a failed verification leaves the sequence unchanged. After a successful verification, for every scheme, it checks that the proof is still available, adds the key's Name to a copy of the running HMAC and returns `<TPM_ST_MESSAGE_VERIFIED, hierarchy, HMAC>`, or `<TPM_ST_MESSAGE_VERIFIED, TPM_RH_NULL, Empty Buffer>` without a running HMAC. Only then is the sequence marked for flushing.
+
+For ML-DSA, the message's library-owned state is completed on a copy made with `CryptoMldsa_VerifySequenceExport()`/`CryptoMldsa_VerifySequenceImport()`. The running ticket HMAC follows the largest form of the message state (including the exported ML-DSA state), and it is exported/imported before the early return of an ML-DSA sequence in `SequenceDataExport()`/`SequenceDataImport()`. This matches tpm-rs.
+
+**Security:**
+
+Any caller can trigger the failure mode without knowing any authorization value. They load any public key with `TPM2_LoadExternal` (no authorization needed; e.g. in the NULL hierarchy), start a verification sequence with `TPM2_VerifySequenceStart` (no authorization of the key, and the caller chooses the sequence's authValue), send `TPM2_VerifySequenceComplete` with a wrong signature, and then send `TPM2_SequenceUpdate` (or `TPM2_VerifySequenceComplete` again) on the sequence. The TPM enters failure mode until the next `_TPM_Init`, a denial of service for every user of the TPM. No secret is disclosed and no ticket can be forged, so the severity is medium.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_VerifySequenceComplete", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7325-L7331)
+
+> This command is like `TPM2_VerifySignature()` with the following differences:
+>
+> - Verifying with *context* (provided in `TPM2_VerifySequenceStart()`) is
+>   supported (requires a supporting signing scheme, e.g., TPM\_ALG\_MLDSA).
+> - Verifying takes a message (provided via `TPM2_SequenceUpdate()`) rather than a
+>   digest.
+> - The ticket's *tag* is `TPM_ST_MESSAGE_VERIFIED`.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, "TPMT_TK_VERIFIED"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7497-L7525)
+
+> $$ \mathbf{HMAC}_{\mathit{contextAlg}}(\mathit{proof}, (\mathit{tag} \parallel
+>     \mathit{digestOrMessage} \parallel \mathit{keyName} \parallel \mathit{metadata})) $$
+>
+> ...
+>
+> The *metadata* is the serialized
+> [TPMU_TK_VERIFIED_META](#sec:TPMU-TK-VERIFIED-META) contents according to the
+> *tag* value. For some cases, *metadata* is zero-length.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "Response Codes"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L922-L926)
+
+> The normal response for any command is `TPM_RC_SUCCESS`. Any other value
+> indicates that the command did not complete and the state of the TPM is
+> unchanged. An exception to this general rule is that the logic
+> associated with dictionary attack protection is allowed to be modified
+> when an authorization failure occurs.
+
+---
+
 ### expiration-absolute-value
 
 **Categories:** `ub`, `interop`, `spec`.
@@ -338,6 +444,30 @@ Any caller that can run `TPM2_PolicySigned`/`TPM2_PolicySecret` can trigger it, 
 
 ---
 
+### nv-define-space2-external-nv
+
+**Categories:** `memory-safety`, `ub`, `functional`, `spec`.
+
+**Severity:** low
+
+**Description:**
+
+With `EXTERNAL_NV YES` (the default profile), TPM2_NV_DefineSpace2 accepts a `TPM2B_NV_PUBLIC_2` whose `handleType` is `TPM_HT_EXTERNAL_NV` and converts its `TPMS_NV_PUBLIC_EXP_ATTR` to the legacy `TPMS_NV_PUBLIC` with `NvPublicFromNvPublic2()`. That function copies the attributes, `authPolicy`, `dataSize` and `nameAlg`, but not `nvIndex`, so `NvDefineSpace()` checks (`NvIndexIsDefined()`) and defines an Index whose handle is whatever the uninitialized stack variable `legacyPublic` holds; the external Index the caller named is not created. Even with the handle copied, the Index could not be used: `EntityGetLoadStatus()` rejects every `TPM_HT_EXTERNAL_NV` handle ("Not yet supported", `TPM_RC_VALUE`), so it could neither be read, written nor undefined. The patch compiles the external NV case out, so TPM2_NV_DefineSpace2 rejects the handle type like every other one it does not support (`TPM_RC_HANDLE` + `publicInfo`).
+
+**Security:**
+
+A caller with owner or platform authorization (needed to define any Index) gets an Index at an unpredictable handle derived from stack contents, consuming NV space under a handle it did not choose. The severity is low because the caller is already authorized to define Indexes.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_NV_DefineSpace2"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L16041-L16052)
+
+> This command is identical to `TPM2_NV_DefineSpace()`, except that the *publicInfo* parameter is a `TPM2B_NV_PUBLIC_2`, allowing all types of NV indices that support DefineSpace to be defined. The following types of NV indices are supported by this command: `TPM_HT_NV_INDEX` (the legacy NV index type), `TPM_HT_EXTERNAL_NV`
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMS_NV_PUBLIC_EXP_ATTR Structure"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L11824-L11835)
+
+> nvIndex | TPMI_RH_NV_EXP_INDEX | the handle of the data area
+
+---
+
 ### persistent-copy-handle-alias
 
 **Categories:** `security`, `spec`.
@@ -362,6 +492,89 @@ Any caller can trigger this, but the aliased handle refers to a persistent objec
 >     1.  If the handle references a transient object, the handle shall
 >         reference a loaded object (`TPM_RC_REFERENCE_H0` + N where N is the
 >         number of the handle in the command).
+
+---
+
+### policy-capability-session-handle
+
+**Categories:** `security`, `auth-bypass`, `spec`.
+
+**Severity:** low
+
+**Description:**
+
+For `TPM_CAP_HANDLES`, `TPM_HT_LOADED_SESSION` (0x02) handles name loaded sessions and `TPM_HT_SAVED_SESSION` (0x03) handles saved session contexts, as `TPM2_GetCapability` lists them. `SessionCapGetOneLoaded()` and `SessionCapGetOneSaved()`, which `TPM2_PolicyCapability` uses, only check that the session slot is in use (`gr.contextArray[slot] != 0`), not whether the session is loaded (`contextArray[slot] <= MAX_LOADED_SESSIONS`) or saved (`> MAX_LOADED_SESSIONS`) as `SessionCapGetLoaded()`/`SessionCapGetSaved()` do. A saved session therefore exists as a loaded one and a loaded session as a saved one.
+
+**Security:** a policy that gates an authorization on a session being loaded (or saved) with `TPM2_PolicyCapability` is satisfied by a session in the other state (low).
+
+The patch adds the check of the slot's state.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_GetCapability"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L14307-L14314)
+
+> For this capability, use of `TPM_HT_LOADED_SESSION` and
+> `TPM_HT_SAVED_SESSION` is allowed. Requesting handles with a handle
+> type of `TPM_HT_LOADED_SESSION` will return handles for loaded
+> sessions. [...] If saved sessions are requested, all returned values
+> will have the `TPM_HT_HMAC_SESSION` handle type because the TPM does
+> not track the session type of saved sessions.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, "TPM_HT"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L3865-L3876)
+
+> TPM_HT_LOADED_SESSION | 0x02 | **Loaded Authorization Session** - loaded sessions of type `TPM_HT_HMAC_SESSION` or `TPM_HT_POLICY_SESSION`
+>
+> TPM_HT_SAVED_SESSION | 0x03 | **Saved Authorization Session** - [...] This type references saved authorization session contexts for which the TPM is maintaining tracking information.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_PolicyCapability"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L11252-L11253)
+
+> If the requested TPM *property* does not exist, the TPM will return
+> `TPM_RC_POLICY` unless the *operation* is `TPM_EO_NEQ`.
+
+---
+
+### policy-capability-transient-handle
+
+**Categories:** `security`, `auth-bypass`, `spec`.
+
+**Severity:** low
+
+**Description:**
+
+`TPM2_PolicyCapability` asserts a condition on one property of a capability; for `TPM_CAP_HANDLES` the property is a handle, which exists if the TPM has an entity under it, and a property that does not exist satisfies only `TPM_EO_NEQ`. For a transient handle the reference calls `ObjectCapGetOneLoaded()`, which loops over every object slot from the handle's slot to `MAX_LOADED_OBJECTS` and returns TRUE for the first occupied one. A transient handle whose object was flushed (or never loaded) therefore "exists" as long as any object with a larger handle is loaded, and the comparison is made against the queried handle value itself, so an assertion such as "handle 0x80000000 is loaded" (`TPM_EO_EQ` with that handle as operandB) holds although no such object exists.
+
+**Security:** a policy that gates an authorization on a loaded transient object with `TPM2_PolicyCapability` is satisfied by loading any other object (low: the condition is under the caller's control anyway).
+
+The patch checks only the handle's own slot.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_PolicyCapability"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L11252-L11265)
+
+> If the requested TPM *property* does not exist, the TPM will return
+> `TPM_RC_POLICY` unless the *operation* is `TPM_EO_NEQ`.
+>
+> TPM_CAP_HANDLES | TPM_HANDLE | TPM_HANDLE
+
+---
+
+### read-only-before-authorization
+
+**Categories:** `security`, `spec`, `state`.
+
+**Severity:** low
+
+**Description:**
+
+In Read-Only mode (`TPM2_ReadOnlyControl`), the commands that are never permitted (`RO_DISALLOW`) are rejected by `ExecuteCommand()` right after the command code, but the commands that are permitted only on some entities are checked in their actions: `NvReadOnlyModeChecks()` for TPM2_NV_Write, TPM2_NV_Extend, TPM2_NV_SetBits, TPM2_NV_WriteLock and TPM2_NV_ReadLock on an Index without both `TPMA_NV_ORDERLY` and `TPMA_NV_CLEAR_STCLEAR`, and `TPM2_PolicySecret()` for a PIN Pass/PIN Fail `authHandle`. These run after the authorization area has been processed, so a command with a wrong authorization reports `TPM_RC_AUTH_FAIL`/`TPM_RC_BAD_AUTH` instead of `TPM_RC_READ_ONLY`, and its failed authorization is accounted: the DA failure counter increments, and for a PIN Index authorizing TPM2_PolicySecret its `pinCount` (NV data) is updated, although Read-Only mode must not change NV. The patch runs the same checks in `ExecuteCommand()` once the handles are validated (`EntityGetLoadStatus()`) and before the authorization area.
+
+**Security:**
+
+Read-Only mode is meant to freeze the TPM's persistent state (Part 1: it "prevents making persistent changes, including object eviction, NV update operations, authorization changes"). With the upstream order, any caller can still change NV in Read-Only mode by sending a not-permitted command with a wrong authorization: each attempt increments the DA failure counter (eventually locking out the TPM's DA-protected entities) or a PIN Index's `pinCount` (exhausting a PIN Fail Index's `pinLimit`). The severity is low: the affected values are the ones failed authorizations always update, and the caller must know an Index of the right kind.
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "Read-Only Mode of Operation"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L15801-L15806)
+
+> The error code `TPM_RC_READ_ONLY`, which indicates that an operation was rejected because the operation required a change to TPM state that is unsupported while in Read-Only mode. A device supporting Read-Only mode must reject any affected command before performing authorization checks which would be evaluated during the execution of the command.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, Table "Commands Permitted in Read-Only Mode"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L12568-L12572)
+
+> TPM2_PolicySecret | Permitted | Not permitted when used with a PIN Pass/Fail NV index. ... TPM2_NV_Write | Permitted | Permitted only when the NV index is defined with `TPMA_NV_ORDERLY` and `TPMA_NV_CLEAR_STCLEAR`.
 
 ---
 
@@ -399,37 +612,23 @@ Any caller can trigger this, because `TPM2_LoadExternal` into `TPM_RH_NULL` need
 
 ---
 
-### vendor-auth-entity-break
+### verify-signature-mldsa-not-supported
 
-**Categories:** `security`, `dos`, `functional`, `spec`.
+**Categories:** `security`, `attestation`, `memory-safety`, `input-validation`, `spec`.
 
 **Severity:** low
 
 **Description:**
 
-In `EntityGetAuthValue()`, the `VENDOR_PERMANENT_AUTH_HANDLE` case sets `pAuth = &g_platformUniqueAuth` but has no `break`, so it falls through into `default`, which calls `FAIL(FATAL_ERROR_INTERNAL)`. Any use of the authValue of the vendor-specific TPM_RH_AUTH_xx handle therefore puts the TPM into failure mode instead of being checked. This includes a password or HMAC authorization of that handle (e.g. as the `authHandle` of TPM2_PolicySecret) and using it as the bind entity of TPM2_StartAuthSession. As a result the vendor authorization value can never be used. The code is compiled only with `VENDOR_PERMANENT_AUTH_ENABLED == YES`, which is NO by default upstream. The test build enables it with `profile-enable-vendor-permanent-auth.patch`.
+`TPM2_VerifySignature()` does not support (pure) ML-DSA keys: an external mu is verified with `TPM2_VerifyDigestSignature()`, a message with `TPM2_VerifySequenceComplete()`. Version 185's `CryptoCommon_ValidateDigestSignature()` verifies the `TPM2_VerifySignature()` digest as an external mu for a key with *allowExternalMu* and returns a `TPMT_TK_VERIFIED` ticket over it; it reads `signature.mldsa` without checking that `sigAlg` is `TPM_ALG_MLDSA`, so any signature type is interpreted as an ML-DSA signature (the union member of another algorithm).
 
-The patch adds the missing `break`, so the vendor authorization value is returned and checked like any other authValue.
+**Security:** a `TPMT_TK_VERIFIED` ticket is produced for a combination the specification does not support, over an external mu that a later `TPM2_PolicyAuthorize()` cannot relate to a message (version 185 errata, "Ticket produced by `TPM2_VerifyDigestSignature()` for ML-DSA", recommends a NULL ticket for exactly this reason), and the signature union is read as the wrong type.
 
-**Security:**
+The patch returns `TPM_RC_SCHEME + RC_VerifySignature_signature` for an ML-DSA key after the *sign* attribute check.
 
-This applies only where the vendor permanent authorization is enabled; with the default upstream configuration the code is not compiled and there is no impact. Where it is enabled, any caller can trigger it without knowing the vendor authValue: a TPM2_PolicySecret with `authHandle` = the vendor TPM_RH_AUTH_xx handle and a password session, or a TPM2_StartAuthSession bound to that handle, reaches `EntityGetAuthValue()` before any comparison. The TPM then enters failure mode until it is reset, which is a denial of service against all users. The feature itself (vendor-authorized policies and bound sessions) also cannot work. The severity is low because the denial of service exists only in non-default builds.
+**Spec:** [TPM 2.0 (version 185), Part 3, Table "Signing commands overview"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7191-L7196)
 
-**Spec:** [TPM 2.0 (version 185), Part 1, "Permanent Resource Handles (MSO=$\text{40}_{16}$)"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L3995-L4003)
-
-> Another type of permanent resource handle is the vendor-specific
-> authorization value. These optional resources can be populated with
-> authorization values that are known only by the TPM manufacturer or some
-> other privileged entity. The update of these authorization values is
-> TPM-manufacturer-dependent.
->
-> If present, a vendor-specific authorization value can be used as a bind
-> value within an authorization session or to authorize a policy using the
-> `TPM2_PolicySecret()` command. ...
-
-**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of (TPM_HANDLE) TPMI_DH_ENTITY Type"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L5850-L5850)
-
-> {TPM_RH_AUTH_00 : TPM_RH_AUTH_FF}: range of vendor-specific authorization values
+> (Pure) ML-DSA | Message (see Note) | Not supported | Signs/verifies the provided (external) Mu value for the message | Signs/verifies the message
 
 ---
 
@@ -490,6 +689,58 @@ The patch passes `TPM_RC_MODE` in both functions.
 **Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of (TPM_ALG_ID) TPMI_ALG_CIPHER_MODE Type"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L6702-L6714)
 
 > TPM_ALG_CTR; TPM_ALG_OFB; TPM_ALG_CBC; TPM_ALG_CFB; TPM_ALG_ECB; +TPM_ALG_NULL | required; #TPM_RC_MODE
+
+---
+
+### ecdaa-signature-context
+
+**Categories:** `spec-185`, `functional`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+The version 185 signing commands have no *inScheme*. The counter of a split signing scheme (ECDAA), which `TPM2_Sign` takes from *inScheme*, is passed in *context* instead: `TPMU_SIGNATURE_CTX` defines `commitCount[sizeof(UINT16)]` for `TPM_ALG_ECDAA`, and Part 3 requires *context* to carry the counter from `TPM2_Commit()`. The reference's `TPM2_SignDigest` and `TPM2_SignSequenceStart` select the key's scheme with a NULL selector, which `CryptoCommon_SelectSignScheme()` rejects for a split scheme, and accept *context* only for ML-DSA. A key whose scheme is `TPM_ALG_ECDAA` therefore can never sign: it gets `TPM_RC_VALUE` (*context*) with its counter, and `TPM_RC_SCHEME` without one. Moreover, without ML-DSA, the reference unmarshals *context* with the limit `MAX_SIG_CTX_SIZE` = 0 (`TpmAlgorithmDefines.h`, "185TODO: Incorporate DAA context size"), although `TPM2B_SIGNATURE_CTX` holds up to sizeof(`TPMU_SIGNATURE_CTX`) octets and its `TPMU_SIGNATURE_CTX` has the 2-octet `commitCount`, so any non-empty *context* is `TPM_RC_SIZE` in every command that takes one.
+
+The patch sets `MAX_SIG_CTX_SIZE` to 2 with ECDAA (still `MLDSA_CTX_MAX_SIZE` with ML-DSA).
+
+For a key whose scheme is `TPM_ALG_ECDAA`, it requires *context* to be exactly the 2-octet big-endian counter (otherwise `TPM_RC_VALUE + RC_<command>_context`). It selects the key's scheme with that counter through `CryptoCommon_SelectSignScheme()`, whose failure is `TPM_RC_VALUE + RC_<command>_context`. `TPM2_SignDigest` signs with that scheme, and a signing sequence keeps it, so that `TPM2_SignSequenceComplete` signs with it, consuming the commit (an unknown or used counter is the `TPM_RC_VALUE` of the ECDAA signing, as in `TPM2_Sign`). Other keys are unchanged, and the verification commands still reject ECDAA keys with `TPM_RC_SCHEME`. This matches tpm-rs.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMU_SIGNATURE_CTX Union"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L10414-L10416)
+
+> commitCount\[sizeof(UINT16)\] | BYTE | `TPM_ALG_ECDAA` | the counter value that is used between `TPM2_Commit()` and the sign operation
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPM2B_SIGNATURE_CTX Structure"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L10446-L10456)
+
+> size | UINT16 | size of *context*; context\[size\]{:sizeof(TPMU_SIGNATURE_CTX)} | BYTE
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_SignSequenceStart", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L5586-L5588)
+
+> If the scheme of *keyHandle* uses a counter value (e.g., TPM\_ALG\_ECDAA), then
+> *context* shall contain the counter value from `TPM2_Commit()` to use for the
+> signature.
+
+---
+
+### ecc-point-coordinate-range
+
+**Categories:** `spec`, `input-validation`, `crypto`.
+
+**Severity:** —
+
+**Description:**
+
+`BnIsPointOnCurve()` (`BnMath.c`), which validates every ECC point the TPM receives (public keys of `TPM2_LoadExternal`/`TPM2_Load`, `inPoint` of `TPM2_ECDH_ZGen`, `P1`/`(x2, y2)` of `TPM2_Commit`, ...), evaluates the curve equation modulo p but never checks that the coordinates are field elements. A coordinate `x + p` (or `y + p`) passes whenever the integer still fits the `TPM2B_ECC_PARAMETER` of the curve: for every point of BN P-638 (p is about 2^637.2 in 80 bytes) and for points with small coordinates of the curves whose p is not close to 2^(8n) (e.g. NIST P-224). The TPM then accepts and keeps a non-canonical encoding of the point, so the same public key has several Names.
+
+The patch rejects a coordinate that is not below p, as `tpm-rs` does (`TPM_RC_ECC_POINT`/`TPM_RC_KEY` like any other point off the curve).
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "ECDH"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L2085-L2085)
+
+> "(Cofactor) One-Pass Diffie-Hellman, C(1e, 1s, ECC CDH)" from SP 800-56A
+
+**Spec:** NIST SP 800-56A Rev. 3, 5.6.2.3.3 "ECC Full Public-Key Validation Routine", step 2
+
+> Verify that xQ and yQ are integers in the interval [0, p - 1] in the case that q is an odd prime p
 
 ---
 
@@ -575,6 +826,38 @@ signature).
 
 ---
 
+### nv-define-space2-dispatch
+
+**Categories:** `functional`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+The dispatch table of TPM2_NV_DefineSpace2 (`CommandDispatch.inl`) unmarshals its second parameter, the `TPM2B_NV_PUBLIC_2`, at the offset of the `auth` member instead of `publicInfo`. `publicInfo` therefore stays zero, so its `handleType` (0) fails the handle-type check of every well-formed command with `TPM_RC_HANDLE` + `publicInfo`, and the authValue just unmarshaled is overwritten: the command can never define an Index. The patch makes the entry target `publicInfo`, as in the public `tcgtpm` and `ibmswtpm2`.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, Table "TPM2_NV_DefineSpace2 Command"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L16061-L16086)
+
+> TPM2B_AUTH | auth | the authorization value. TPM2B_NV_PUBLIC_2 | publicInfo | the public parameters of the NV area
+
+---
+
+### nv-exp-index-range
+
+**Categories:** `spec`, `input-validation`.
+
+**Severity:** —
+
+**Description:**
+
+Part 2 defines `TPMI_RH_NV_EXP_INDEX`, the type of the `nvIndex` of a `TPMS_NV_PUBLIC_EXP_ATTR` (the `TPM_HT_EXTERNAL_NV` member of a `TPM2B_NV_PUBLIC_2`), as `{EXTERNAL_NV_FIRST:EXTERNAL_NV_LAST}`. This reference's `TPMI_RH_NV_EXP_INDEX_RANGES` (`Marshal.c`) hold `{NV_INDEX_FIRST, NV_INDEX_LAST}` instead, so the member accepts ordinary NV Index handles and rejects every external NV handle with `TPM_RC_VALUE` (the public `tcgtpm`, `ibmswtpm2` and `tpm-rs` use the external range). The patch uses the external NV Index range.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of (TPM_HANDLE) TPMI_RH_NV_EXP_INDEX Type"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L6318-L6333)
+
+> {EXTERNAL_NV_FIRST:EXTERNAL_NV_LAST}: range of external NV Indexes. #TPM_RC_VALUE: error returned if the handle is out of range
+
+---
+
 ### pcr-reset-handle-type
 
 **Categories:** `input-validation`, `rc-only`, `spec`.
@@ -602,6 +885,117 @@ The patch changes the dispatch entry to `MARSHAL_ID_TPMI_DH_PCR`, so `TPM_RH_NUL
 **Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of (TPM_HANDLE) TPMI_DH_PCR Type"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L5874-L5878)
 
 > {PCR_FIRST:PCR_LAST}; +TPM_RH_NULL | conditional value; #TPM_RC_VALUE
+
+---
+
+### policy-authorize-ticket-tags
+
+**Categories:** `spec-185`, `functional`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+Version 185 adds two `TPMT_TK_VERIFIED` tags: `TPM_ST_MESSAGE_VERIFIED` (`TPM2_VerifySequenceComplete`, an HMAC over the message) and `TPM_ST_DIGEST_VERIFIED` (`TPM2_VerifyDigestSignature`, an HMAC over the digest followed by its hash algorithm as metadata). Part 3 says that each of the three verification commands produces a ticket that `TPM2_PolicyAuthorize` accepts. The reference's `TPM2_PolicyAuthorize` (`command/EA/PolicyAuthorize.c`) unmarshals all three tags, but recomputes every *checkTicket* as a `TPM_ST_VERIFIED` ticket over aHash = H<sub>nameAlg(keySign)</sub>(*approvedPolicy* || *policyRef*). A valid ticket with either new tag therefore never matches, and the command fails with `TPM_RC_VALUE`.
+
+The patch recomputes the ticket according to its tag:
+- `TPM_ST_VERIFIED`: unchanged.
+- `TPM_ST_MESSAGE_VERIFIED`: HMAC(proof, (tag || *approvedPolicy* || *policyRef* || *keySign*)), the message being *toBeSigned*.
+- `TPM_ST_DIGEST_VERIFIED`: HMAC(proof, (tag || aHash || *keySign* || hashAlg)), with aHash computed with the hash algorithm hashAlg of the ticket's metadata.
+
+This matches tpm-rs.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_PolicyAuthorize", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L10586-L10590)
+
+> This signature over *toBeSigned* is verified using `TPM2_VerifySignature()`,
+> `TPM2_VerifySequenceComplete()`, or `TPM2_VerifyDigestSignature()`. Each of
+> these commands produces a `TPMT_TK_VERIFIED` ticket.
+>
+> The ticket is then used in `TPM2_PolicyAuthorize()` to satisfy the policy.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, "TPMT_TK_VERIFIED"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7497-L7525)
+
+> $$ \mathbf{HMAC}_{\mathit{contextAlg}}(\mathit{proof}, (\mathit{tag} \parallel
+>     \mathit{digestOrMessage} \parallel \mathit{keyName} \parallel \mathit{metadata})) $$
+>
+> ...
+>
+> The *metadata* is the serialized
+> [TPMU_TK_VERIFIED_META](#sec:TPMU-TK-VERIFIED-META) contents according to the
+> *tag* value. For some cases, *metadata* is zero-length.
+
+---
+
+### policy-capability-sec-channel
+
+**Categories:** `spec`, `functional`.
+
+**Severity:** —
+
+**Description:**
+
+Version 184 added `TPM_CAP_PUB_KEYS` (the TPM SPDM public keys) and `TPM_CAP_SPDM_SESSION_INFO` (the key Names of the SPDM session protecting the command) to `TPM2_GetCapability`, and to the "Capability Contents" table of `TPM2_PolicyCapability` with the property types `TPM2B_PUBLIC` and `TPMS_SPDM_SESSION_INFO`. The reference implements both in `TPM2_GetCapability` (with `SEC_CHANNEL_SUPPORT`), but its `TPM2_PolicyCapability` switch has no case for them, so a policy assertion on an SPDM key or on the SPDM session fails with `TPM_RC_VALUE` (capability) instead of comparing.
+
+The patch adds both cases: `TPM_CAP_PUB_KEYS` compares against the `TPM2B_PUBLIC` of the TPM SPDM key (the reference has only `TPM_PUB_KEY_TPM_SPDM_00`; another key of the `TPM_PUB_KEY` range does not exist, a property beyond `TPM_PUB_KEY_TPM_SPDM_FF` is `TPM_RC_VALUE`), `TPM_CAP_SPDM_SESSION_INFO` against the `TPMS_SPDM_SESSION_INFO` of the current SPDM session (property 0, else `TPM_RC_VALUE` as in `TPM2_GetCapability`).
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_PolicyCapability"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L11252-L11288)
+
+> If the requested TPM *property* does not exist, the TPM will return
+> `TPM_RC_POLICY` unless the *operation* is `TPM_EO_NEQ`.
+>
+> TPM_CAP_PUB_KEYS | TPM_PUB_KEY | TPM2B_PUBLIC
+>
+> TPM_CAP_SPDM_SESSION_INFO | reserved | TPMS_SPDM_SESSION_INFO
+
+**Spec:** [TPM 2.0 (version 185), Part 2, "TPM_PUB_KEY"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L3801-L3811)
+
+> TPM_PUB_KEY_TPM_SPDM_00 | 0x00000000 | Start of the property range for TPM SPDM authentication public keys
+>
+> TPM_PUB_KEY_TPM_SPDM_FF | 0x000000FF | End of the property range for TPM SPDM authentication public keys
+
+---
+
+### read-only-before-startup
+
+**Categories:** `spec`, `rc-only`.
+
+**Severity:** —
+
+**Description:**
+
+`ExecuteCommand()` rejects the commands that are never permitted in Read-Only mode (`RO_DISALLOW`) when `gc.readOnly` is set, before it checks whether the TPM has been started. `gc` is only established by TPM2_Startup (`HierarchyStartup()` for TPM Reset/Restart, `NvRead(&gc, NV_STATE_CLEAR_DATA, ...)` for TPM Resume), so between `_TPM_Init` and TPM2_Startup `gc.readOnly` holds whatever is left in memory, and such a command can fail with `TPM_RC_READ_ONLY` instead of `TPM_RC_INITIALIZE`. The command is refused either way, so only the response code differs. The patch applies the Read-Only check only to a started TPM.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_Startup"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L1162-L1168)
+
+> `TPM2_Startup()` is only valid after `_TPM_Init`. ... If a TPM requires `TPM2_Startup()` and another command is received, or if the TPM receives `TPM2_Startup()` when it is not required, the TPM shall return `TPM_RC_INITIALIZE`.
+
+---
+
+### sequence-complete-flushed-attribute
+
+**Categories:** `spec`.
+
+**Severity:** —
+
+**Description:**
+
+Part 3 marks the command codes of `TPM2_VerifySequenceComplete` and `TPM2_SignSequenceComplete` with `{F}`, so the *flushed* attribute of their `TPMA_CC` is SET: both commands flush the sequence object they complete, as `TPM2_SequenceComplete` does. The reference's `s_ccAttr` table (`CommandAttributeData.h`) has *flushed* CLEAR for `TPM_CC` 0x1A3 and 0x1A4, so `TPM2_GetCapability(TPM_CAP_COMMANDS)` reports them without it. The patch sets *flushed* for both, as in tpm-rs. Command execution does not change.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "Description Modifier {F}"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L215-L218)
+
+> This modifier indicates that the "flushed" attribute will be SET in the
+> `TPMA_CC` for the command. The modifier may follow the *commandCode* in
+> the "Description" column to indicate that any transient handle context
+> used by the command will be flushed from the TPM when the command
+> completes.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, Table "TPM2_VerifySequenceComplete Command"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7375-L7375)
+
+> TPM_CC | commandCode | TPM_CC_VerifySequenceComplete {F}
+
+**Spec:** [TPM 2.0 (version 185), Part 3, Table "TPM2_SignSequenceComplete Command"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7699-L7699)
+
+> TPM_CC | commandCode | TPM_CC_SignSequenceComplete {F}
 
 ---
 
@@ -649,6 +1043,121 @@ SET while `audit` is CLEAR. Found by differential fuzzing.
 > audit digest of the session should be initialized and the exclusive status of
 > the session SET. This setting is only allowed if the *audit* attribute is SET
 > (TPM_RC_ATTRIBUTES).
+
+---
+
+### sec-channel-property-count
+
+**Categories:** `spec`.
+
+**Severity:** —
+
+**Description:**
+
+With `SEC_CHANNEL_SUPPORT`, `TPM2_GetCapability(TPM_CAP_PUB_KEYS)` returns the reference's TPM SPDM public key (`SpdmCapGetTpmPubKeys()` ignores its `count` argument) and `TPM2_GetCapability(TPM_CAP_SPDM_SESSION_INFO)` returns the entry of the current SPDM session (`SpdmCapGetSessionInfo()` takes no count) whatever `propertyCount` is: with `propertyCount = 0` the list still holds one entry and `moreData` is NO. The specification bounds every capability list by `propertyCount` and reports the values left out with `moreData`, as the reference's other capabilities do (e.g. `PCRCapGetAllocation()` for `TPM_CAP_PCRS`, `ActGetCapabilityData()` for `TPM_CAP_ACT`).
+
+The patch leaves the entry out and sets `moreData = YES` when `propertyCount` is 0 (tests `e2e::secure_channel_capabilities::pub_keys_with_zero_count_returns_no_key`, `e2e::secure_channel_capabilities::spdm_session_info_with_zero_count_returns_no_entry`).
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_GetCapability"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L14152-L14155)
+
+> The *propertyCount* parameter indicates the number of capabilities in
+> the indicated group that are requested. The TPM will return no more than
+> the number of requested values (*propertyCount*) or until the last
+> property of the requested type has been returned.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_GetCapability"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L14406-L14407)
+
+> The *moreData* parameter will have a value of YES if there are more
+> values of the requested type that were not returned.
+
+---
+
+### sign-digest-hmac-scheme
+
+**Categories:** `input-validation`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+`TPM2_SignDigest` (`command/Signature/SignDigest.c`) takes the scheme of the key from `CryptoCommon_SelectSignScheme()` with a NULL selector and signs with any scheme it returns. For a keyed-hash signing key with scheme `TPM_ALG_HMAC`, it returns an HMAC of *digest*, although Part 3 excludes HMAC from `TPM2_SignDigest` (HMAC signs a message, not a digest; HMAC keys sign with `TPM2_SignSequenceComplete`, or with the deprecated `TPM2_Sign`). The patch returns `TPM_RC_SCHEME + RC_SignDigest_keyHandle` for such a key, at the scheme check, as in tpm-rs.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_SignDigest", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7749-L7752)
+
+> The scheme of *keyHandle* must be a signing scheme that supports signing a
+> digest (e.g., TPM\_ALG\_ECDSA, but not TPM\_ALG\_HMAC).
+> The size of *digest* must match the size of the hash algorithm of the signing
+> scheme.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, Table "Signing commands overview"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7150-L7158)
+
+> Signing algorithm: HMAC | Signs message, or digest?: Message | `TPM2_SignDigest()`/`TPM2_VerifyDigestSignature()`: Not supported
+
+---
+
+### sign-mldsa-not-supported
+
+**Categories:** `rc-only`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+`TPM2_Sign()` does not support (pure) ML-DSA keys (they sign with `TPM2_SignSequenceComplete()`, or an external mu with `TPM2_SignDigest()`), so no signing scheme is valid for such a key and the command must fail with `TPM_RC_SCHEME`. Version 185's `CryptoCommon_SelectSignScheme()` selects the NULL scheme for an ML-DSA key and accepts it; the command then checks the digest against the (zero) size of the NULL hash (`TPM_RC_SIZE + RC_Sign_digest` for any non-empty digest), computes a hash-check ticket with the NULL hash for a restricted key, and finally treats the digest as an external mu (`TPM_RC_EXT_MU` without *allowExternalMu*, `TPM_RC_VALUE` for its size). It never signs, so only the response code differs.
+
+The patch returns `TPM_RC_SCHEME + RC_Sign_inScheme` for an ML-DSA key after the *x509sign* check (test `e2e::mldsa_attestation`/`e2e::mldsa_keys` TPM2_Sign cases).
+
+**Spec:** [TPM 2.0 (version 185), Part 3, Table "Signing commands overview"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7191-L7196)
+
+> (Pure) ML-DSA | Message (see Note) | Not supported | Signs/verifies the provided (external) Mu value for the message | Signs/verifies the message
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_Sign"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7547-L7548)
+
+> If *inScheme* is not a valid signing scheme for the type of keyHandle
+> (or `TPM_ALG_NULL`), then the TPM shall return `TPM_RC_SCHEME`.
+
+---
+
+### sm2-signature-sequence
+
+**Categories:** `spec-185`, `functional`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+Version 185 makes SM2 a message-signing scheme for the signing and verification sequences: `TPM2_SignSequenceComplete`/`TPM2_VerifySequenceComplete` sign or verify the message "using the provided *context* as *ID$_A$*". Per Part 1, that means computing Z<sub>A</sub> from ID<sub>A</sub>, the curve and the public key, and then the internal digest e = H(Z<sub>A</sub> || M). The reference does not implement this: `SelectSignSequenceScheme()`/`SelectVerifySequenceScheme()` reject a key whose scheme is `TPM_ALG_SM2` with `TPM_RC_SCHEME` ("185TODO"). Its `TPMU_SIGNATURE_CTX` also lacks the `id[MAX_SM2_ID_BYTES]` member of Part 2, so a `TPM2B_SIGNATURE_CTX` could not carry an ID<sub>A</sub>.
+
+The patch:
+- accepts SM2 in both `TPM2_*SequenceStart` commands, with any *context* (`Sign/VerifySequenceSchemeTakesContext()`);
+- in `ObjectCreateSignSequence()`/`ObjectCreateVerifySequence()`, starts the running hash of the scheme with Z<sub>A</sub> = H(ENTL<sub>A</sub> || ID<sub>A</sub> || a || b || x<sub>G</sub> || y<sub>G</sub> || x<sub>A</sub> || y<sub>A</sub>), where ENTL<sub>A</sub> is the length of ID<sub>A</sub> in octets (2 octets, big-endian), a, b and G come from the curve (`CryptoEcc_GetParameters()`), and every field element is left-padded to the size of the field. The complete commands therefore sign or verify e with the existing digest-based SM2 code;
+- adds `id[MAX_SM2_ID_BYTES]` (`MAX_SM2_ID_BYTES` = 255) to `TPMU_SIGNATURE_CTX`, and uses it as `MAX_SIG_CTX_SIZE` with SM2 and without ML-DSA.
+
+This matches tpm-rs. `TPM2_SignDigest`/`TPM2_VerifyDigestSignature` are unchanged: with SM2, their *digest* is e and their *context* must be empty.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, Table "Signing commands overview"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7178-L7182)
+
+> SM2 | Message (see Note) | Signs/verifies the internal digest *e* | Signs/verifies the internal digest *e*, *context* must be empty | Signs/verifies the message using the provided *context* as *ID$_A$*
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "SM2 Sign"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L17369-L17410)
+
+> $$ {\mathit{Z}}_{\mathit{A}} := {\mathbf{H}}( {\mathit{ENTL}}_{\mathit{A}}
+>     \parallel {\mathit{ID}}_{\mathit{A}} \parallel {\mathit{a}} \parallel
+>     {\mathit{b}} \parallel {\mathit{x}}_{\mathit{G}} \parallel
+>     {\mathit{y}}_{\mathit{G}} \parallel {\mathit{x}}_{\mathit{A}}
+>     \parallel {\mathit{y}}_{\mathit{A}}) $$
+>
+> ...
+>
+> *ENTL$_A$* is two octets containing the length of *ID$_A$* in octets
+>
+> ...
+>
+> $$ {\mathit{e}} := {\mathbf{H}}({\mathit{Z}}_{\mathit{A}} \parallel {\mathit{M}}) $$
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMU_SIGNATURE_CTX Union"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L10418-L10420)
+
+> id\[MAX_SM2_ID_BYTES\] | BYTE | `TPM_ALG_SM2` | Value for *ID$_A$* "identifying an entity's identity"
 
 ---
 
@@ -794,6 +1303,288 @@ The patch declares the `handle` member as `BYTE handle[sizeof(TPM_HANDLE)]` (sam
 > structures. When used in a table to indicate a maximum size, the
 > sizeof() function returns the octet-aligned size of the structure, with
 > no padding.
+
+---
+
+### verify-digest-signature-scheme
+
+**Categories:** `input-validation`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+For keys other than ML-DSA, `TPM2_VerifyDigestSignature` (`command/Signature/VerifyDigestSignature.c`) passes *digest* and *signature* straight to `CryptoCommon_ValidateDigestSignature()`, like `TPM2_VerifySignature`. That function verifies with the scheme and hash algorithm of the *signature*, not those of the key. So the command accepts:
+- a key without a signing scheme of its own (scheme `TPM_ALG_NULL`), or with `TPM_ALG_HMAC`, which Part 3 excludes;
+- a *digest* of any size;
+- a signature whose scheme or hash algorithm differs from the key's (e.g. an RSAPSS signature for an RSASSA key, or a SHA-1 signature for a SHA-256 scheme).
+
+The patch adds the checks in this order, after the *context* check:
+1. The key's scheme (`CryptoCommon_SelectSignScheme()` with a NULL selector) fails or is `TPM_ALG_HMAC`: `TPM_RC_SCHEME + RC_VerifyDigestSignature_keyHandle`.
+2. The size of *digest* is not the digest size of the scheme's hash: `TPM_RC_SIZE + RC_VerifyDigestSignature_digest`.
+3. The *signature*'s sigAlg or hash algorithm is not the key scheme's: `TPM_RC_SCHEME + RC_VerifyDigestSignature_signature`.
+
+The signature is then validated as before. This matches tpm-rs.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_VerifyDigestSignature", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7424-L7434)
+
+> This command is like `TPM2_VerifySequenceComplete()`, except that it verifies a digest of
+> a message instead of the raw message, and the produced ticket has *tag*
+> `TPM_ST_DIGEST_VERIFIED`.
+>
+> The scheme of *keyHandle* must be a signing scheme that supports signing a
+> digest (e.g., TPM\_ALG\_ECDSA). The size of *digest* must match the size of the
+> hash algorithm of the signing scheme.
+>
+> The TPM will verify that the signing scheme (including the hash or XOF
+> algorithm) in *signature* matches the signing scheme of *keyHandle*
+> (TPM_RC_SCHEME).
+
+**Spec:** [TPM 2.0 (version 185), Part 3, Table "Signing commands overview"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7150-L7158)
+
+> Signing algorithm: HMAC | Signs message, or digest?: Message | `TPM2_SignDigest()`/`TPM2_VerifyDigestSignature()`: Not supported
+
+---
+
+### verify-digest-signature-ticket
+
+**Categories:** `spec-185`, `functional`, `interop`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+`TPM2_VerifyDigestSignature` returns the ticket of `TPM2_VerifySignature`: `TPM_ST_VERIFIED`, HMAC(proof, (`TPM_ST_VERIFIED` || *digest* || keyName)), and a NULL Ticket with tag `TPM_ST_VERIFIED`. Version 185 requires tag `TPM_ST_DIGEST_VERIFIED`, whose metadata (`TPMU_TK_VERIFIED_META.digestVerified`) is the hash algorithm that produced the digest and is included in the HMAC. The reference's `TPMT_TK_VERIFIED` and its marshaling already support the metadata; only the command does not produce it.
+
+The patch returns `<TPM_ST_DIGEST_VERIFIED, hierarchy, hashAlg, HMAC(proof, (TPM_ST_DIGEST_VERIFIED || digest || keyName || hashAlg))>`, where hashAlg is the hash algorithm of the key's scheme. For a key in `TPM_RH_NULL` or with nameAlg `TPM_ALG_NULL`, it returns the NULL Ticket `<TPM_ST_DIGEST_VERIFIED, TPM_RH_NULL, hashAlg, Empty Buffer>`. For an ML-DSA key (an external mu), the ticket is always the NULL Ticket, as the version 185 errata recommend, with the key's nameAlg as metadata (SHAKE256 is not a `TPMI_ALG_HASH`). This matches tpm-rs, and `TPM2_PolicyAuthorize` accepts the ticket with `bug-fix-policy-authorize-ticket-tags.patch`.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_VerifyDigestSignature", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7424-L7434)
+
+> This command is like `TPM2_VerifySequenceComplete()`, except that it verifies a digest of
+> a message instead of the raw message, and the produced ticket has *tag*
+> `TPM_ST_DIGEST_VERIFIED`.
+>
+> The scheme of *keyHandle* must be a signing scheme that supports signing a
+> digest (e.g., TPM\_ALG\_ECDSA). The size of *digest* must match the size of the
+> hash algorithm of the signing scheme.
+>
+> The TPM will verify that the signing scheme (including the hash or XOF
+> algorithm) in *signature* matches the signing scheme of *keyHandle*
+> (TPM_RC_SCHEME).
+
+**Spec:** [TPM 2.0 (version 185), Part 2, "TPMT_TK_VERIFIED"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7497-L7525)
+
+> $$ \mathbf{HMAC}_{\mathit{contextAlg}}(\mathit{proof}, (\mathit{tag} \parallel
+>     \mathit{digestOrMessage} \parallel \mathit{keyName} \parallel \mathit{metadata})) $$
+>
+> ...
+>
+> The *metadata* is the serialized
+> [TPMU_TK_VERIFIED_META](#sec:TPMU-TK-VERIFIED-META) contents according to the
+> *tag* value. For some cases, *metadata* is zero-length.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMU_TK_VERIFIED_META Union"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7473-L7475)
+
+> digestVerified | TPMI_ALG_HASH | `TPM_ST_DIGEST_VERIFIED` | The hash algorithm or XOF used to produce the digest that was verified
+
+**Spec:** [TPM 2.0 (version 185), Errata, "Ticket produced by `TPM2_VerifyDigestSignature()` for ML-DSA"](../../../_agents/skills/tpm2-spec/resources/spec/errata.tcg.txt#L145-L160)
+
+> To avoid returning a nonviable ticket to the user, it is preferable for the TPM
+> to return a NULL `TPMT_TK_VERIFIED` ticket instead.
+
+---
+
+### verify-sequence-complete-scheme
+
+**Categories:** `input-validation`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+A verification sequence is bound to the scheme of the key that started it (`signScheme`; `TPM2_VerifySequenceComplete` has no scheme parameter). `TPM2_VerifySequenceComplete` checks the *signature*'s scheme for the HMAC and ML-DSA schemes (`TPM_RC_SCHEME`). For a scheme that signs a digest, however, it calls `CryptoCommon_ValidateDigestSignature()`, which verifies with the scheme and hash algorithm of the *signature*, as `TPM2_VerifySignature` does. It therefore accepts, e.g., an RSAPSS signature for an RSASSA key, or a signature with another hash algorithm over the digest of the sequence's hash. The patch returns `TPM_RC_SCHEME + RC_VerifySequenceComplete_signature` when the *signature*'s sigAlg or hash algorithm is not the sequence's, before the hash is ended. This matches tpm-rs.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_PolicyAuthorize", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L10593-L10598)
+
+> If this signature is verified using `TPM2_VerifySignature()`, the key is not
+> used according to its public parameters. Instead, the signature scheme is
+> modified as discussed in @sec:policy-authorize-edge-cases.
+>
+> In all other cases, the signature scheme is as determined by the public
+> parameters of the key.
+
+---
+
+### cmac-self-test
+
+**Categories:** `self-test`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+`TPM2_MAC` and `TPM2_MAC_Start` with a SYMCIPHER signing key compute a CMAC
+(`TPM_ALG_CMAC`) with the block cipher of the key. `CryptCmacStart()` and the
+CMAC data/end functions use the key schedule of the block cipher directly
+(`ENCRYPT()`), which bypasses the `TEST()` of `CryptSymmetricEncrypt()`, so on
+a TPM where AES has not been tested yet (after `_TPM_Init`, before
+`TPM2_SelfTest`) the command returns a MAC computed with untested AES, and AES
+stays in the `toDoList` of `TPM2_IncrementalSelfTest` (and
+`TPM2_GetTestResult` keeps reporting `TPM_RC_NEEDS_TEST`). The HMAC path tests
+its hash in `CryptHashStart()` (`TPM_DO_SELF_TEST(hashAlg)`). The patch runs
+`TPM_DO_SELF_TEST()` on the block cipher in `CryptCmacStart()`, i.e. when
+`TPM2_MAC`/`TPM2_MAC_Start` start the CMAC (Camellia has no test vectors in the
+reference and is never in `g_toTest`, so it is unaffected).
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "Self-Test Modes"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L2926-L2929)
+
+> If a command requires use of an untested algorithm or functional module,
+> the TPM performs the test and then completes the command actions.
+
+---
+
+### select-sym-def-object-camellia
+
+**Categories:** `security`, `dos`, `functional`, `spec`.
+
+**Severity:** medium
+
+**Description:**
+
+`CryptoCommon_SelectSymDefObject()` (`CryptUtil.c`) copies the symmetric definition of a parent (RSA, ECC, SYMCIPHER or ML-KEM) for the protection of its children (`ComputeProtectionKeyParms()`, the IV size of a private area, credential protection). It switches on the algorithm ID, but its SM4 and Camellia case labels are `ALG_SM4` and `ALG_CAMELLIA`, the profile switches (value 1 when enabled, i.e. `TPM_ALG_RSA`), instead of `TPM_ALG_SM4` and `TPM_ALG_CAMELLIA`. A parent with a Camellia symmetric definition (which `TPM2_CreatePrimary` accepts) therefore reaches the `default` case, `FAIL_BOOL(FATAL_ERROR_INTERNAL)`: the first `TPM2_Create`, `TPM2_Load`, `TPM2_Import`, `TPM2_Duplicate`, `TPM2_MakeCredential` or `TPM2_ActivateCredential` using it puts the TPM into failure mode, so Camellia storage keys are unusable.
+
+The patch uses the algorithm IDs `TPM_ALG_SM4` and `TPM_ALG_CAMELLIA` as the case labels.
+
+**Security:**
+
+Any caller who may create a storage key (a primary object under an enabled hierarchy, or a child of any storage parent) can put the TPM into failure mode with a Camellia symmetric definition, so every later command fails until the next `_TPM_Init` (denial of service). No data is disclosed and no authorization is bypassed. Severity is medium, as for the other caller-triggered failure-mode bugs.
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "Symmetric Encryption"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L8651-L8652)
+
+> The block cipher used for encrypting the object's sensitive area is the
+> symmetric cipher of the Storage Parent.
+
+---
+
+### zgen-2phase-mqv-sm2
+
+**Categories:** `security`, `dos`, `crypto`, `spec`.
+
+**Severity:** low
+
+**Description:**
+
+`C_2_2_MQV()` declares the curve order `bnN` and the coordinate `bnXeB` with
+`CRYPT_ECC_NUM()` but never sets them. `avf1()` therefore uses
+`f = (SizeInBits(0) + 1) / 2 = 0`, and the following
+`ModMult(bnTa, bnDsA, bnTa, bnN)` divides by zero (`FATAL_ERROR_DIVIDE_ZERO`):
+every `TPM2_ZGen_2Phase` with `TPM_ALG_ECMQV` puts the TPM into failure mode
+(denial of service by any user of an ECC decryption key). Even with `bnN` set,
+`avf(Q_e,B)` would be the constant `2^f` instead of a function of the x
+coordinate of `Q_e,B`. `avf1()` and `avfSm2()` reduce `x` modulo `2^f` with
+`MaskBits()`, whose mask keeps `64 - (f mod 64)` bits of the last word instead of
+`f mod 64` (80 instead of 112 bits for NIST P-224), so the associated value is
+wrong whenever `f` is not a multiple of 64. `ComputeWForSM2()` returns
+`MostSigBitNum(n) / 2 - 1`, but the most significant bit number is zero-based,
+one less than `ceil(log2(n))`, so `avfSM2()` uses `f` one smaller than Part 1's
+`ceil(ceil(log2(n)) / 2) - 1` and the SM2 Z value does not match a conformant
+peer. Both key exchanges return `TPM_RC_NO_RESULT` when Z is the point at
+infinity (which the caller can force for MQV with
+`Q_s,B := -[avf(Q_e,B)^-1]Q_e,B`), where Part 3 requires an Empty Point.
+
+The patch sets `bnN` to the curve order and `bnXeB` to the x coordinate of
+`Q_e,B`, reduces `x` modulo `2^f` with a modular reduction (`MaskBits()` itself is
+left alone: the random-number code uses it), computes `f` from the size of `n` in bits, and returns success with
+the Empty Point (the caller initializes `outZ1` empty) for a Z at infinity.
+
+**Security:** an authorized user of any ECC decryption key puts the TPM into
+failure mode with one `TPM2_ZGen_2Phase(TPM_ALG_ECMQV)` (until the next
+`_TPM_Init`).
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "Full MQV"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L17261-L17304)
+
+> 1.  Set $\mathit{f} := \lceil \frac{\lceil {\mathit{log}}_2(n)\rceil}{2} \rceil$
+>
+> 2.  Set *x'* = 2*$^f$* + (*x* mod 2*$^f$* )
+>
+> ...
+>
+> 7.  set *t$_A$* $:=$ (*d$_{e,A}$* + *d$_{s,A}$* $·$ **avf**(*Q$_{e,A}$*)) (mod *n*)
+>
+> 8.  set *outZ1* $:=$ \[*h* $·$ *t$_A$*\] (*Q$_{e,B}$* + \[**avf**(*Q$_{e,B}$*)\](*Q$_{s,B}$*))
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "SM2 Key Exchange"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L17589-L17628)
+
+> 1.  set $\mathit{f} := \lceil \frac{\lceil log_2(\mathit{n}) \rceil}{2} \rceil - 1$
+>
+> 2.  set *x'* $:=$ 2$^f$ + (*x* (mod 2$^f$))
+
+**Spec:** [TPM 2.0 (version 185), Part 3, TPM2_ZGen_2Phase](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L4221-L4222)
+
+> If a computation of either Z produces the point at infinity, then the
+> corresponding Z value will be an Empty Point.
+
+Part 1, "SM2 Key Exchange Protocol", step 6 reads "if Z is the point at infinity, return
+failure". Part 3 defines the response of `TPM2_ZGen_2Phase` for every scheme it supports
+(`TPM_ALG_ECDH`, `TPM_ALG_ECMQV` and `TPM_ALG_SM2`), while Part 1 describes the protocol
+without a response code, so the Empty Point of Part 3 applies to SM2 as well.
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "SM2 Key Exchange Protocol"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L17630-L17672)
+
+> 6.  if *Z* is the point at infinity, return failure
+
+---
+
+### ecc-decrypt-c1-point
+
+**Categories:** `input-validation`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+`TPM2_ECC_Decrypt` passes `C1` to `CryptEccDecrypt()`, which ignores the
+result of `TpmEcc_PointMult(C1, C1, D, ...)`: for a `C1` that is not on the
+curve the multiplication fails with `TPM_RC_ECC_POINT`, `C1` is left unchanged
+and used as `P2 = (x2, y2)`, so the command fails with `TPM_RC_VALUE` at the
+`C3` check (or, for a `C3` the caller computed over `C1`, returns a "plaintext"
+unmasked with a value unrelated to the key). The decryption of
+GB/T 32918.4-2016, which Part 1 implements, starts by verifying that `C1` is on
+the curve. The patch checks `C1` after the scheme selection and returns
+`TPM_RC_ECC_POINT + RC_ECC_Decrypt_C1`, as `TPM2_ECDH_ZGen` does for its input
+point.
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "SM2 Encryption and Decryption"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L17674-L17680)
+
+> These clauses describe the encryption and decryption process of GB/T
+> 32918.4-2016 as implemented in the TPM.
+
+---
+
+### zgen-2phase-out-z2
+
+**Categories:** `functional`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+The response dispatch table of `TPM2_ZGen_2Phase` in `CommandDispatch.inl` lists
+`MAKE_OUTPUT_DISPATCH_ENTRY(MARSHAL_ID_TPM2B_ECC_POINT, outZ1)` for both response
+parameters, so the second parameter repeats `outZ1`: with `TPM_ALG_ECDH` the
+caller gets `Zs` twice and never `Ze`, and with `TPM_ALG_ECMQV`/`TPM_ALG_SM2` it
+gets `Z` instead of the Empty Point. The patch marshals `outZ2` as the second
+parameter.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, TPM2_ZGen_2Phase](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L4195-L4214)
+
+> For `TPM_ALG_ECDH` *outZ1* will be Zs and *outZ2* will be Ze as defined in
+> clause 6.1.1.2 of SP 800-56A [@{sp800-56a}].
+>
+> ...
+>
+> For `TPM_ALG_ECMQV` or `TPM_ALG_SM2` *outZ1* will be *Z* and *outZ2*
+> will be an Empty Point.
 
 ## Locality problems (not patched)
 

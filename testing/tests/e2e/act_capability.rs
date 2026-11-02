@@ -106,8 +106,8 @@ fn act_capability_reports_the_pending_timeout() {
     assert_eq!(list, vec![(ACT_0, 29, 0)]);
 }
 
-/// The implemented ACTs are permanent handles (`TPM_CAP_HANDLES`), in handle order after
-/// `TPM_RH_AUTH_00`.
+/// The implemented ACTs are permanent handles (`TPM_CAP_HANDLES`), in handle order after the
+/// hierarchies (and `TPM_RH_AUTH_00`, if implemented).
 #[test]
 fn act_handles_are_permanent_handles() {
     let mut sim = Tpm::new();

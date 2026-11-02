@@ -144,10 +144,17 @@ fn test_tpm2b_private_max_size_accommodates_rsa_4096() {
 
 #[test]
 fn test_tpm2b_encrypted_secret_max_size_sizeof_tpmu_encrypted_secret() {
+    // "mlkem[MAX_MLKEM_CT_SIZE]" only with the `mlkem` feature.
+    let mlkem_ciphertext = if cfg!(feature = "mlkem") {
+        tpm2::TPM2_MAX_MLKEM_CT_SIZE
+    } else {
+        0
+    };
     let expected_max = [
         TpmsEccPoint::MAX_SIZE,
         TPM2_MAX_RSA_KEY_BYTES as usize,
         Tpm2bDigest::MAX_SIZE,
+        mlkem_ciphertext,
     ]
     .into_iter()
     .max()
@@ -359,14 +366,21 @@ fn test_max_sym_data_and_max_nv_buffer_size_limits() {
 fn test_tpm2b_signature_ctx_and_kem_ciphertext_max_buffer_sizes() {
     use tags::Tpm2bTag;
 
-    // 1. Verify Tpm2bSignatureCtx::CAP = 255 (sizeof(TPMU_SIGNATURE_CTX) per Part 2 Section 11.3.5-11.3.6)
-    assert_eq!(TPM2_MAX_SIGNATURE_CTX_SIZE, 255);
-    assert_eq!(tags::SignatureCtx::CAP, 255);
-    assert_eq!(Tpm2bSignatureCtx::CAP, 255);
-    assert_eq!(Tpm2bSignatureCtx::MAX_BUFFER_SIZE, 255);
-    assert_eq!(Tpm2bSignatureCtx::MAX_SIZE, 257);
+    // 1. Tpm2bSignatureCtx::CAP = sizeof(TPMU_SIGNATURE_CTX) (Part 2, TPMU_SIGNATURE_CTX): the
+    // largest member for the implemented schemes (`buffer[255]` with ML-DSA, `commitCount[2]`
+    // with ECDAA).
+    let cap = if cfg!(feature = "mldsa") || cfg!(feature = "sm2") {
+        255
+    } else {
+        2
+    };
+    assert_eq!(TPM2_MAX_SIGNATURE_CTX_SIZE, cap);
+    assert_eq!(tags::SignatureCtx::CAP, cap);
+    assert_eq!(Tpm2bSignatureCtx::CAP, cap);
+    assert_eq!(Tpm2bSignatureCtx::MAX_BUFFER_SIZE, cap);
+    assert_eq!(Tpm2bSignatureCtx::MAX_SIZE, cap + 2);
 
-    for valid_len in [0usize, 1, 2, 255] {
+    for valid_len in [0usize, 1, 2, cap] {
         let payload = [0x11u8; 255];
         let ctx = Tpm2bSignatureCtx::from_bytes(&payload[..valid_len]).unwrap();
         assert_eq!(ctx.get_size() as usize, valid_len);
@@ -381,8 +395,8 @@ fn test_tpm2b_signature_ctx_and_kem_ciphertext_max_buffer_sizes() {
         assert!(src.is_empty());
     }
 
-    // Reject 256-byte (and larger) buffer with UnmarshalError::SIZE
-    for bad_len in [256usize, 257, 512] {
+    // Reject larger buffers with UnmarshalError::SIZE
+    for bad_len in [cap + 1, 256, 257, 512] {
         let mut wire = [0x22u8; 2 + 512];
         wire[0..2].copy_from_slice(&(bad_len as u16).to_be_bytes());
         let mut src = &wire[..2 + bad_len];
@@ -395,6 +409,22 @@ fn test_tpm2b_signature_ctx_and_kem_ciphertext_max_buffer_sizes() {
             Err(UnmarshalError::SIZE)
         );
     }
+
+    // Tpm2bSignatureHint::CAP = MAX_SIGNATURE_HINT_SIZE: an EdDSA R with EdDSA, otherwise 0 (no
+    // other algorithm takes a hint).
+    let hint_cap = if cfg!(feature = "eddsa") {
+        TpmEccCurve::MAX_ECC_KEY_BYTES
+    } else {
+        0
+    };
+    assert_eq!(TPM2_MAX_SIGNATURE_HINT_SIZE, hint_cap);
+    assert_eq!(Tpm2bSignatureHint::CAP, hint_cap);
+    let payload = [0x33u8; 2 + 128];
+    assert!(Tpm2bSignatureHint::from_bytes(&payload[..hint_cap]).is_ok());
+    assert_eq!(
+        Tpm2bSignatureHint::from_bytes(&payload[..hint_cap + 1]),
+        Err(UnmarshalError::SIZE)
+    );
 
     // 2. Verify Tpm2bKemCiphertext::CAP = 1568 (sizeof(TPMU_KEM_CIPHERTEXT) per Part 2 Section 10.4.10-10.4.11)
     assert_eq!(TPM2_MAX_MLKEM_CT_SIZE, 1568);

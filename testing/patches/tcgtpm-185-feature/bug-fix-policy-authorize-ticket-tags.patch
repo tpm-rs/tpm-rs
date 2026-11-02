@@ -1,0 +1,101 @@
+policy-authorize-ticket-tags: TPM2_PolicyAuthorize accepts TPM_ST_MESSAGE_VERIFIED and TPM_ST_DIGEST_VERIFIED tickets
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3 (version 185), "TPM2_PolicyAuthorize",
+"General Description"):
+
+  "This signature over toBeSigned is verified using TPM2_VerifySignature(),
+  TPM2_VerifySequenceComplete(), or TPM2_VerifyDigestSignature(). Each of
+  these commands produces a TPMT_TK_VERIFIED ticket. The ticket is then used
+  in TPM2_PolicyAuthorize() to satisfy the policy."
+
+Specification (TPM 2.0 Library, Part 2 (version 185), "TPMT_TK_VERIFIED"):
+
+  "HMAC_contextAlg(proof, (tag || digestOrMessage || keyName || metadata))"
+  ... "The metadata is the serialized TPMU_TK_VERIFIED_META contents according
+  to the tag value."
+
+TPM2_PolicyAuthorize recomputes every checkTicket as a TPM_ST_VERIFIED ticket
+over aHash = H_nameAlg(approvedPolicy || policyRef), so a valid
+TPM_ST_MESSAGE_VERIFIED ticket of TPM2_VerifySequenceComplete() (over the
+message approvedPolicy || policyRef) or TPM_ST_DIGEST_VERIFIED ticket of
+TPM2_VerifyDigestSignature() (over aHash computed with the hash algorithm in
+its metadata, followed by that algorithm) never matches and the command fails
+with TPM_RC_VALUE. The ticket is now recomputed according to its tag, as in
+tpm-rs.
+diff --git a/TPMCmd/tpm/src/command/EA/PolicyAuthorize.c b/TPMCmd/tpm/src/command/EA/PolicyAuthorize.c
+--- a/TPMCmd/tpm/src/command/EA/PolicyAuthorize.c
++++ b/TPMCmd/tpm/src/command/EA/PolicyAuthorize.c
+@@ -5,6 +5,54 @@
+ 
+ #  include "Policy_spt_fp.h"
+ 
++// tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++// recomputes a TPM_ST_MESSAGE_VERIFIED or TPM_ST_DIGEST_VERIFIED 'checkTicket'
++// (Part 2, TPMT_TK_VERIFIED: HMAC(proof, (tag || digestOrMessage || keyName ||
++// metadata))). The message of a TPM_ST_MESSAGE_VERIFIED ticket is
++// (approvedPolicy || policyRef); the digest of a TPM_ST_DIGEST_VERIFIED ticket
++// is aHash computed with the hash algorithm in its metadata, which is also the
++// metadata.
++static TPM_RC PolicyAuthorizeTicketCompute(PolicyAuthorize_In* in,     // IN
++                                           TPMT_TK_VERIFIED*   ticket  // OUT
++)
++{
++    TPM_RC      result;
++    TPM2B_PROOF proof;
++    HMAC_STATE  hmacState;
++    //
++    ticket->tag       = in->checkTicket.tag;
++    ticket->hierarchy = in->checkTicket.hierarchy;
++    result            = HierarchyGetProof(in->checkTicket.hierarchy, &proof);
++    if(result != TPM_RC_SUCCESS)
++        return result;
++    ticket->digest.t.size =
++        CryptoCommon_HmacStart2B(&hmacState, CONTEXT_INTEGRITY_HASH_ALG, &proof.b);
++    MemorySet(proof.b.buffer, 0, proof.b.size);
++    CryptoCommon_DigestUpdateInt(&hmacState, sizeof(TPM_ST), ticket->tag);
++    if(in->checkTicket.tag == TPM_ST_MESSAGE_VERIFIED)
++    {
++        CryptoCommon_DigestUpdate2B(&hmacState.hashState, &in->approvedPolicy.b);
++        CryptoCommon_DigestUpdate2B(&hmacState.hashState, &in->policyRef.b);
++        CryptoCommon_DigestUpdate2B(&hmacState.hashState, &in->keySign.b);
++    }
++    else
++    {
++        TPM_ALG_ID   metadataHash = in->checkTicket.metadata.digestVerified;
++        HASH_STATE   hashState;
++        TPM2B_DIGEST aHash;
++        //
++        aHash.t.size = CryptoHash_HashStart(&hashState, metadataHash);
++        CryptoCommon_DigestUpdate2B(&hashState, &in->approvedPolicy.b);
++        CryptoCommon_DigestUpdate2B(&hashState, &in->policyRef.b);
++        CryptoCommon_HashEnd2B(&hashState, &aHash.b);
++        CryptoCommon_DigestUpdate2B(&hmacState.hashState, &aHash.b);
++        CryptoCommon_DigestUpdate2B(&hmacState.hashState, &in->keySign.b);
++        CryptoCommon_DigestUpdateInt(&hmacState, sizeof(TPM_ALG_ID), metadataHash);
++    }
++    CryptoCommon_HmacEnd2B(&hmacState, &ticket->digest.b);
++    return TPM_RC_SUCCESS;
++}
++
+ /*(See part 3 specification)
+ // Change policy by a signature from authority
+ */
+@@ -76,8 +124,14 @@ TPM2_PolicyAuthorize(PolicyAuthorize_In* in,   // IN: input parameter list
+         CryptoCommon_HashEnd2B(&hashState, &authHash.b);
+ 
+         // re-compute TPMT_TK_VERIFIED
+-        result = CryptoCommon_TicketComputeVerified(
+-            in->checkTicket.hierarchy, &authHash, &in->keySign, &ticket);
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // the ticket is recomputed according to its tag; only a TPM_ST_VERIFIED
++        // ticket is over (TPM_ST_VERIFIED || aHash || keySign).
++        if(in->checkTicket.tag == TPM_ST_VERIFIED)
++            result = CryptoCommon_TicketComputeVerified(
++                in->checkTicket.hierarchy, &authHash, &in->keySign, &ticket);
++        else
++            result = PolicyAuthorizeTicketCompute(in, &ticket);
+         if(result != TPM_RC_SUCCESS)
+             return result;
+ 

@@ -66,14 +66,16 @@ fn test_symmetric_unsupported_algorithms() {
         Err(UnmarshalError::MODE)
     );
 
-    // Unsupported mode (ECB)
-    let res = tpm2::crypto::encrypt(
+    // Unsupported cipher (SM4): every provider implements AES and Camellia only.
+    let res = tpm2::crypto::Symmetric::sm4_128(
         &provider,
-        SymmetricKey::Aes128(&key),
+        &key,
         ModeIv::new(TpmiAlgCipherMode::Ecb, &mut []).unwrap(),
+        tpm2::crypto::Direction::Encrypt,
         &mut data,
     );
     assert_eq!(res.unwrap_err(), CryptoError::Unsupported);
+    assert_eq!(data, [0u8; 16]);
 }
 
 #[test]

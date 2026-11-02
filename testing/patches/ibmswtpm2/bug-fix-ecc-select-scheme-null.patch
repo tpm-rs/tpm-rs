@@ -1,0 +1,37 @@
+fix-ecc-select-scheme-null: select a TPM_ALG_NULL KDF scheme as version 185 does
+
+Classification: spec-deviation bug fix (pre-185 behavior).
+
+Specification (TPM 2.0 Library, Part 3, TPM2_ECC_Encrypt/TPM2_ECC_Decrypt):
+"If the default key scheme is TPM_ALG_NULL, an appropriate inScheme is
+required. If the default key scheme is not TPM_ALG_NULL, the key scheme and
+inScheme must be the same, and the scheme must be a valid encryption
+scheme."; Part 1, "SM2 Encryption and Decryption": "Currently, only KDF2
+(TPM_ALG_KDF2) is supported."
+
+When both the key's kdf and inScheme are TPM_ALG_NULL, CryptEccSelectScheme()
+returns FALSE (TPM_RC_SCHEME + RC_ECC_Encrypt_inScheme/RC_ECC_Decrypt_inScheme,
+before any other check) while version 185 (CryptoCommon_EccSelectScheme())
+selects the NULL scheme, which the encryption/decryption then rejects like
+every other unsupported scheme (a bare TPM_RC_SCHEME, after the checks of C1).
+tpm-rs implements version 185; the patch drops the "scheme != TPM_ALG_NULL"
+condition so that both TPMs report the same response code.
+
+diff --git a/src/CryptEccCrypt.c b/src/CryptEccCrypt.c
+--- a/src/CryptEccCrypt.c
++++ b/src/CryptEccCrypt.c
+@@ -86,9 +86,12 @@ BOOL CryptEccSelectScheme(OBJECT*          key,    //IN: key containing default
+ 	*scheme = *keyScheme;
+     if(keyScheme->scheme == TPM_ALG_NULL)
+ 	keyScheme = scheme;
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // as in version 185 (CryptoCommon_EccSelectScheme()), a TPM_ALG_NULL scheme of
++    // both the key and inScheme is selected, and CryptEccEncrypt()/CryptEccDecrypt()
++    // reject it as an unsupported scheme (TPM_RC_SCHEME without a position).
+     return (
+-	    scheme->scheme != TPM_ALG_NULL
+-	    && (keyScheme->scheme == scheme->scheme
++	    (keyScheme->scheme == scheme->scheme
+ 		&& keyScheme->details.anyKdf.hashAlg == scheme->details.anyKdf.hashAlg));
+ }
+ 

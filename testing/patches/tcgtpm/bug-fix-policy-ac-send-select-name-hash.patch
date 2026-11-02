@@ -1,0 +1,30 @@
+policy-ac-send-select-name-hash: TPM2_Policy_AC_SendSelect marks nameHash as set
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, version 185, TPM2_Policy_AC_SendSelect): "If
+either policySession→cpHash or policySession→nameHash has been previously set,
+the TPM shall return `TPM_RC_CPHASH`. Otherwise, policySession→nameHash will be
+set to nameHash ≔ H_policyAlg(objectName ∥ authHandleName ∥ acName)", and
+TPM2_PolicyNameHash/TPM2_PolicyCpHash/TPM2_PolicyParameters/
+TPM2_PolicyTemplate return `TPM_RC_CPHASH` if it is set.
+
+The reference stores the nameHash in session->u1.cpHash but leaves
+isNameHashDefined CLEAR, so IsCpHashUnionOccupied() is FALSE afterwards and a
+later TPM2_PolicyNameHash (or PolicyCpHash, PolicyParameters, PolicyTemplate)
+succeeds and overwrites the nameHash. The patch sets isNameHashDefined.
+diff --git a/TPMCmd/tpm/src/command/AttachedComponent/Policy_AC_SendSelect.c b/TPMCmd/tpm/src/command/AttachedComponent/Policy_AC_SendSelect.c
+--- a/TPMCmd/tpm/src/command/AttachedComponent/Policy_AC_SendSelect.c
++++ b/TPMCmd/tpm/src/command/AttachedComponent/Policy_AC_SendSelect.c
+@@ -44,6 +44,11 @@ TPM2_Policy_AC_SendSelect(Policy_AC_SendSelect_In* in  // IN: input parameter li
+ 
+     //  complete hash
+     CryptHashEnd2B(&hashState, &session->u1.cpHash.b);
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // policySession->nameHash is now set (Part 3, TPM2_Policy_AC_SendSelect), so
++    // the cpHash union is occupied (IsCpHashUnionOccupied()) and a later
++    // TPM2_PolicyCpHash/NameHash/Parameters/Template returns TPM_RC_CPHASH.
++    session->attributes.isNameHashDefined = SET;
+ 
+     // update policy hash
+     // Old policyDigest size should be the same as the new policyDigest size since

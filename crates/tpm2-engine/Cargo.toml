@@ -28,7 +28,7 @@ tpm2-crypto-crux = { workspace = true }
 tpm2-crypto-bssl = { workspace = true }
 
 [features]
-default = ["dev_crypto_bssl", "sha512"]
+default = ["dev_crypto_bssl", "sha512", "vendor-permanent-auth"]
 # SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
 # reference built without `ALG_SHA512`) is built with every crate without it.
 sha512 = ["tpm2/sha512"]
@@ -45,6 +45,28 @@ std = ["dep:anyhow"]
 # C compiler, binutils, libclang and OpenSSL's `libcrypto.a`); the crate then uses
 # `unsafe` (confined to `reference_rng::ffi`) and libc. For differential testing.
 reference-rng = ["dep:libc", "dep:bindgen"]
+
+# Algorithms and ECC curves beyond the default set of `tpm2` (all disabled by
+# default), each forwarding to the `tpm2` feature of the same name; enabled e.g.
+# to match a C reference TPM in differential testing.
+#
+# The NIST P-192 curve (`TPM_ECC_NIST_P192`).
+ecc_curve_nist_p192 = ["tpm2/ecc_curve_nist_p192"]
+# The BN P-638 curve (`TPM_ECC_BN_P638`); grows `MAX_ECC_KEY_BYTES` to 80.
+ecc_curve_bn_p638 = ["tpm2/ecc_curve_bn_p638"]
+# The SM2 P-256 curve (`TPM_ECC_SM2_P256`).
+ecc_curve_sm2_p256 = ["tpm2/ecc_curve_sm2_p256"]
+# The SM2 signature scheme (`TPM_ALG_SM2`, GB/T 32918.2), on any curve.
+sm2 = ["tpm2/sm2"]
+# The EC-Schnorr signature scheme (`TPM_ALG_ECSCHNORR`, TPM 2.0 Part 1, C.5.3).
+ecschnorr = ["tpm2/ecschnorr"]
+# RSA key sizes beyond the default RSA-1024 and RSA-2048 (the `rsa3072` and
+# `rsa4096` features of `tpm2`, which also size the profile-dependent buffers:
+# `MAX_RSA_KEY_BYTES`, `TPM2B_PUBLIC_KEY_RSA`, `TPM2B_PRIVATE_KEY_RSA`,
+# `TPM2B_ENCRYPTED_SECRET`, `TPM2B_PRIVATE`, `TPM2B_TEMPLATE`, ...). Disabled by
+# default; the C reference TPMs enable both (`RSA_3072`, `RSA_4096`).
+rsa3072 = ["tpm2/rsa3072"]
+rsa4096 = ["tpm2/rsa4096"]
 
 # Profile settings that differ between TPM implementations. All are disabled by
 # default (the TCG reference profile); they are enabled e.g. to match a C
@@ -71,11 +93,135 @@ act-a = []
 # `TPM2_ECC_Parameters` reports `TPM_ALG_NULL` as the recommended KDF of every
 # curve (default: KDF1_SP800_56A with the hash of the curve's strength).
 ecc-parameters-null-kdf = []
+# Secure channel (SPDM) support (`SEC_CHANNEL_SUPPORT` of the TCG reference):
+# `TPM2_GetCapability(TPM_CAP_PUB_KEYS)` and `TPM2_GetCapability(TPM_CAP_SPDM_SESSION_INFO)`
+# report the platform's secure transport layer (`tpm2::platform::SecureChannel`), and the
+# deferred `TPM2_PolicyTransportSPDM()` checks (`TPM_RC_CHANNEL`, `TPM_RC_CHANNEL_KEY`) use it.
+# Implies `cc-policy-transport-spdm` (like the reference, which requires `SEC_CHANNEL_SUPPORT ==
+# CC_PolicyTransportSPDM`).
+sec-channel = ["cc-policy-transport-spdm"]
+# The command `TPM2_PolicyTransportSPDM()`. Implies `sec-channel`.
+cc-policy-transport-spdm = ["sec-channel"]
 # The Nuvoton vendor commands `NTC2_PreConfig`, `NTC2_LockPreConfig` and
 # `NTC2_GetConfig` (`CC_VEND + 0x211..=0x213`, not in the TPM 2.0 specification)
 # as emulated by `ibmswtpm2` (built with `TPM_NUVOTON`), in addition to
 # `TPM2_Vendor_TCG_Test` (default: only `TPM2_Vendor_TCG_Test`).
 ntc2-vendor-commands = []
+# The command `TPM2_PolicyCapability` (TPM 2.0 Part 3, an immediate policy
+# assertion on the value of one TPM capability property).
+cc-policy-capability = []
+# The command `TPM2_PolicyParameters` (TPM 2.0 Part 3, a deferred policy
+# assertion binding the command code and parameters, but not the handles).
+cc-policy-parameters = []
+# The command `TPM2_PolicyPhysicalPresence` (TPM 2.0 Part 3, a deferred policy
+# assertion that Physical Presence is asserted when the session is used).
+cc-policy-physical-presence = []
+# The command `TPM2_PP_Commands` (TPM 2.0 Part 3, changes the list of commands
+# that require Physical Presence with platform authorization). Without it, the
+# list holds no implemented command (TPM 2.0 Part 3 leaves it vendor specific).
+cc-pp-commands = []
+# The command `TPM2_Policy_AC_SendSelect` (TPM 2.0 Part 3, deprecated in
+# version 184; a policy assertion selecting the Object, authorization and
+# Attached Component of a `TPM2_AC_Send`, which no reference implements).
+cc-policy-ac-send-select = []
+# The command `TPM2_SetAlgorithmSet` (TPM 2.0 Part 3, sets the vendor-dependent
+# `TPM_PT_ALGORITHM_SET` value; this TPM has a single algorithm set, so the
+# value selects nothing else).
+cc-set-algorithm-set = []
+# `TPM2_NV_DefineSpace2` (`TPM_CC_NV_DefineSpace2`, Part 3): defines an NV Index from a
+# `TPM2B_NV_PUBLIC_2` (default: not implemented).
+cc-nv-define-space2 = []
+# `TPM2_NV_ReadPublic2` (`TPM_CC_NV_ReadPublic2`, Part 3): reads the public area of an NV
+# Index as a `TPM2B_NV_PUBLIC_2` (default: not implemented).
+cc-nv-read-public2 = []
+# `TPM2_ReadOnlyControl` (`TPM_CC_ReadOnlyControl`, Part 3) and the Read-Only mode of
+# operation (Part 1, "Read-Only Mode of Operation"; `TPMA_STARTUP_CLEAR.readOnly`) (default:
+# not implemented).
+cc-read-only-control = []
+# The vendor-specific permanent authorization handle `TPM_RH_AUTH_00`
+# (`VENDOR_PERMANENT_AUTH_HANDLE`, Part 1 "Permanent Resource Handles"), authorized with the
+# platform's unique value. Unlike the profile settings above it is a default feature (like
+# `sha512`, forwarded by `tpm2-simulator`'s default features); the workspace dependency on
+# `tpm2-engine` has no default features, so `testing`'s differential targets build without it,
+# like the C references (upstream `VENDOR_PERMANENT_AUTH_ENABLED NO`).
+vendor-permanent-auth = []
+# `TPM2_SignDigest` (TPM 2.0 version 185): signs a digest with the scheme of a key
+# (default: not implemented).
+cc-sign-digest = []
+# `TPM2_VerifyDigestSignature` (version 185): verifies a signature over a digest and
+# produces a `TPM_ST_DIGEST_VERIFIED` ticket (default: not implemented).
+cc-verify-digest-signature = []
+# `TPM2_SignSequenceStart` (version 185): starts a signing sequence (default: not
+# implemented).
+cc-sign-sequence-start = []
+# `TPM2_SignSequenceComplete` (version 185): signs the message of a signing sequence
+# (default: not implemented).
+cc-sign-sequence-complete = []
+# `TPM2_VerifySequenceStart` (version 185): starts a signature verification sequence
+# (default: not implemented).
+cc-verify-sequence-start = []
+# `TPM2_VerifySequenceComplete` (version 185): verifies a signature over the message of a
+# verification sequence and produces a `TPM_ST_MESSAGE_VERIFIED` ticket (default: not
+# implemented).
+cc-verify-sequence-complete = []
+# The Camellia block cipher (`TPM_ALG_CAMELLIA`) with a 128-bit key
+# (`TPMI_CAMELLIA_KEY_BITS` 128), for SYMCIPHER objects, the symmetric
+# definitions of parents and sessions, and `TPM2_EncryptDecrypt` (default: not
+# implemented).
+camellia128 = ["tpm2/camellia128"]
+# Camellia with a 192-bit key (`TPMI_CAMELLIA_KEY_BITS` 192; default: not
+# implemented).
+camellia192 = ["tpm2/camellia192"]
+# Camellia with a 256-bit key (`TPMI_CAMELLIA_KEY_BITS` 256; default: not
+# implemented).
+camellia256 = ["tpm2/camellia256"]
+# The block cipher MAC `TPM_ALG_CMAC` (the `TPM_ALG_CMAC` mode of SYMCIPHER
+# signing keys): the TPM implements `TPM2_MAC`/`TPM2_MAC_Start` (whose
+# `inScheme` is a `TPMI_ALG_MAC_SCHEME`) in place of `TPM2_HMAC`/
+# `TPM2_HMAC_Start`, which share their command codes (default: `TPM2_HMAC`/
+# `TPM2_HMAC_Start`, no CMAC).
+cmac = ["tpm2/cmac"]
+# ML-KEM keys (`TPM_ALG_MLKEM`, the `mlkem` feature of `tpm2`): FIPS 203 key
+# encapsulation keys with the parameter sets ML-KEM-512, -768 and -1024, as
+# restricted decryption (parent) keys with the ML-KEM Labeled KEM, and
+# `TPM_PT_ML_PARAMETER_SETS` (default: not implemented). The contexts of ML-KEM
+# objects need `MAX_CONTEXT_SIZE` 4344 (`max-context-size-4344`).
+mlkem = ["tpm2/mlkem", "max-context-size-4344"]
+# ML-DSA keys (`TPM_ALG_MLDSA`, the `mldsa` feature of `tpm2`): FIPS 204 signing
+# keys with the parameter sets ML-DSA-44, -65 and -87, external-mu support
+# (`allowExternalMu`), attestation and `TPM2_PolicySigned()` with ML-DSA
+# signatures, and `TPM_PT_ML_PARAMETER_SETS` (default: not implemented). The
+# contexts of ML-DSA objects need `MAX_CONTEXT_SIZE` 4344 (`max-context-size-4344`),
+# and ML-DSA-87 signatures (4627 octets) and the responses that carry them or an
+# ML-DSA-87 public key need `MAX_COMMAND_SIZE`/`MAX_RESPONSE_SIZE` 8192
+# (`max-command-size-8192`, as in the version 185 reference).
+mldsa = ["tpm2/mldsa", "max-context-size-4344", "max-command-size-8192"]
+# HashML-DSA keys (`TPM_ALG_HASH_MLDSA`, the `hash_mldsa` feature of `tpm2`):
+# pre-hash ML-DSA signing keys (default: not implemented).
+hash_mldsa = ["mldsa", "tpm2/hash_mldsa"]
+# `TPM2_Encapsulate()` (default: not implemented).
+cc-encapsulate = []
+# `TPM2_Decapsulate()` (default: not implemented).
+cc-decapsulate = []
+
+# The ECC MQV key-exchange scheme `TPM_ALG_ECMQV` (Full MQV, C(2e, 2s, ECC MQV),
+# TPM 2.0 Part 1, "Full MQV"): ECC decryption keys may name it as their scheme and
+# `TPM2_ZGen_2Phase` (`cc-zgen-2phase`) computes it (default: not implemented).
+ecmqv = ["tpm2/ecmqv"]
+# The command `TPM2_EC_Ephemeral` (TPM 2.0 Part 3): an ephemeral key from the
+# commit mechanism for a two-phase key exchange (default: not implemented).
+cc-ec-ephemeral = []
+# The command `TPM2_ZGen_2Phase` (TPM 2.0 Part 3): the second phase of the
+# two-phase key exchanges `TPM_ALG_ECDH`, `TPM_ALG_ECMQV` (with `ecmqv`) and
+# `TPM_ALG_SM2` (with `sm2`), with the ephemeral key of `TPM2_EC_Ephemeral`
+# (default: not implemented).
+cc-zgen-2phase = []
+# The command `TPM2_ECC_Encrypt` (TPM 2.0 Part 3; Part 1, "SM2 Encryption and
+# Decryption", with KDF2) (default: not implemented).
+cc-ecc-encrypt = []
+# The command `TPM2_ECC_Decrypt` (TPM 2.0 Part 3; Part 1, "SM2 Encryption and
+# Decryption", with KDF2) (default: not implemented).
+cc-ecc-decrypt = []
 
 
 

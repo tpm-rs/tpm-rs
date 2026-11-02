@@ -30,8 +30,8 @@ fn command_code_digest_and_handle_errors() {
     // 3. Create a valid Policy session.
     let policy_session = start_session_handle(&mut sim, TpmSe::Policy);
 
-    // 4. Unsupported command code (e.g. TpmCc::PPCommands) -> returns TpmRc::POLICY_CC (0x120)
-    let res = policy_command_code(&mut sim, policy_session, TpmCc::PPCommands);
+    // 4. Unsupported command code (e.g. TpmCc::FieldUpgradeStart) -> returns TpmRc::POLICY_CC (0x120)
+    let res = policy_command_code(&mut sim, policy_session, TpmCc::FieldUpgradeStart);
     // C TPM2_PolicyCommandCode: TPM_RCS_POLICY_CC + RC_PolicyCommandCode_code (+P1).
     assert_eq!(
         res.err(),
@@ -284,12 +284,12 @@ fn unsupported_or_conflicting_code_rejected() {
     )
     .unwrap();
 
-    // 1. Call PolicyCommandCode with unsupported code (TpmCc::PPCommands)
+    // 1. Call PolicyCommandCode with unsupported code (TpmCc::FieldUpgradeStart)
     let res = exec_command(
         &mut sim,
         &PolicyCommandCode {
             policy_session: resp_handles.session_handle,
-            code: TpmCc::PPCommands,
+            code: TpmCc::FieldUpgradeStart,
         },
         &[],
     );

@@ -1,0 +1,33 @@
+cmac-self-test: test the block cipher of a CMAC before using it
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 1, "Self-Test Modes"): "If a command requires use
+of an untested algorithm or functional module, the TPM performs the test and
+then completes the command actions."
+
+TPM2_MAC and TPM2_MAC_Start with a SYMCIPHER key compute a CMAC with the
+block cipher of the key (AES), but CryptCmacStart() does not test it (its
+CMAC code uses the key schedule of the block cipher directly, which bypasses
+the TEST() of CryptSymmetricEncrypt()), so a MAC is returned while AES is
+still untested (it stays in the toDoList of TPM2_IncrementalSelfTest, and
+TPM2_GetTestResult reports TPM_RC_NEEDS_TEST). The HMAC path tests its hash in
+CryptHashStart(). The patch runs TPM_DO_SELF_TEST() on the block cipher in
+CryptCmacStart(), as tpm-rs does when it starts a CMAC (Camellia has no test
+vectors and needs no test).
+
+diff --git a/src/CryptCmac.c b/src/CryptCmac.c
+--- a/src/CryptCmac.c
++++ b/src/CryptCmac.c
+@@ -87,6 +87,11 @@
+     //
+     if(macAlg != TPM_ALG_CMAC)
+ 	return 0;
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the CMAC is computed with the block cipher of the key, so the block cipher
++    // is tested first if it is untested (Part 1 "Self-Test Modes"), as
++    // CryptHashStart() does for the hash of an HMAC.
++    TPM_DO_SELF_TEST(def->algorithm);
+     // set up the encryption algorithm and parameters
+     cState->symAlg      = def->algorithm;
+     cState->keySizeBits = def->keyBits.sym;

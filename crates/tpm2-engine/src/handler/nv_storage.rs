@@ -7,6 +7,8 @@ use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
+#[cfg(feature = "cc-nv-define-space2")]
+use tpm2::commands::NVDefineSpace2;
 use tpm2::commands::responses;
 use tpm2::commands::{
     NVCertify, NVChangeAuth, NVDefineSpace, NVExtend, NVGlobalWriteLock, NVIncrement, NVRead,
@@ -21,6 +23,8 @@ use tpm2::{
     Tpm2bAuth, Tpm2bMaxNvBuffer, Tpm2bNvPublic, TpmaNv, TpmsAttest, TpmsNvCertifyInfo,
     TpmsNvDigestCertifyInfo, TpmsNvPinCounterParameters, TpmsNvPublic, TpmuAttest,
 };
+#[cfg(feature = "cc-nv-read-public2")]
+use tpm2::{Tpm2bNvPublic2, commands::NVReadPublic2};
 
 pub(crate) trait NvHeaderAuth {
     fn marshal_auth(&self, buf: &mut [u8]) -> usize;
@@ -482,11 +486,30 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .to_struct()
             .map_err(|e| e.in_parameter(2).to_rc())?;
 
+        self.define_nv_index(auth_handle_u32, cmd.auth.get_buffer(), &nv_public_struct)?;
+
+        let response = request.into_response();
+        self.write_response_none(response, &session_responses[..num_sessions])?;
+
+        Ok(())
+    }
+
+    /// The command actions shared by `TPM2_NV_DefineSpace` and `TPM2_NV_DefineSpace2` (C
+    /// `NvDefineSpace()`): validates the public area `nv_public_struct` (a
+    /// `TPM_HT_NV_INDEX` Index), the authValue `auth` and the authorizing hierarchy
+    /// `auth_handle`, then allocates the Index in NV. Errors blame `auth` as parameter 1 and
+    /// the public area as parameter 2, as both commands have the same parameter layout.
+    fn define_nv_index(
+        &mut self,
+        auth_handle_u32: u32,
+        auth: &[u8],
+        nv_public_struct: &TpmsNvPublic<'_>,
+    ) -> Result<(), TpmRc> {
         // 2. Validate index, attributes, and size consistency
         Self::validate_nv_public_attributes(
-            &nv_public_struct,
+            nv_public_struct,
             auth_handle_u32,
-            cmd.auth.get_buffer(),
+            auth,
             self.context.state.ph_enable_nv,
         )?;
 
@@ -511,20 +534,88 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.return_if_nv_is_not_available()?;
 
         // C `NvDefineSpace` stores the authValue with trailing zeros removed.
-        let auth = Tpm2bAuth::from_bytes(crate::util::strip_trailing_zeros(cmd.auth.get_buffer()))
+        let auth = Tpm2bAuth::from_bytes(crate::util::strip_trailing_zeros(auth))
             .map_err(|_| TpmRc::SIZE.with(Position::parameter(1)))?;
 
         let mut storage = StorageManager::new(&mut *self.context.platform.storage);
 
-        // 3. Allocate NV Index space and write metadata header
+        // 3. Allocate NV Index space and write metadata header (the public area in its legacy
+        // `TPM2B_NV_PUBLIC` form, from which the Name is computed).
         Self::allocate_nv_space(
             nv_public_struct.nv_index.0,
             &auth,
-            &cmd.public_info,
+            &Tpm2bNvPublic::new(*nv_public_struct),
             nv_public_struct.data_size,
             nv_public_struct.attributes.0,
             &mut storage,
-        )?;
+        )
+    }
+
+    /// Handles the [TpmCc::NVDefineSpace2] (`0x19d`) command (the `cc-nv-define-space2`
+    /// feature).
+    ///
+    /// # Description
+    /// Like [TpmCc::NVDefineSpace], but the public area is a `TPM2B_NV_PUBLIC_2`, a tagged
+    /// union over the NV Index handle types.
+    ///
+    /// # Spec Citation
+    /// TCG TPM 2.0 Library Specification, Part 3: Commands, TPM2_NV_DefineSpace2: "This command
+    /// is identical to `TPM2_NV_DefineSpace()`, except that the *publicInfo* parameter is a
+    /// `TPM2B_NV_PUBLIC_2`, allowing all types of NV indices that support DefineSpace to be
+    /// defined." The supported types are `TPM_HT_NV_INDEX` and `TPM_HT_EXTERNAL_NV`.
+    ///
+    /// tpm-rs does not implement external NV Indexes (`TPM_HT_EXTERNAL_NV`; like the handles
+    /// of external and permanent NV Indexes, which no command accepts, see
+    /// `TpmEngine::check_command_handles`), so a `publicInfo` of any other handle type than
+    /// `TPM_HT_NV_INDEX` is rejected with `TPM_RC_HANDLE` + `publicInfo`, as the reference's
+    /// `TPM2_NV_DefineSpace2()` does for the handle types it does not support (its `default:`
+    /// case). An Index defined by this command is indistinguishable from one defined by
+    /// `TPM2_NV_DefineSpace` with the same `TPMS_NV_PUBLIC`.
+    ///
+    /// # Relationships
+    /// - Read back with [TpmCc::NVReadPublic] or [TpmCc::NVReadPublic2].
+    #[cfg(feature = "cc-nv-define-space2")]
+    pub fn nv_define_space2(
+        &mut self,
+        request_response: RequestThenResponse<'_, '_>,
+    ) -> Result<(), TpmRc> {
+        let mut request = request_response;
+
+        let handles = request.try_unmarshal_handles::<NVDefineSpace2>()?;
+        let [auth_handle] = handles;
+        check(auth_handle, Tpmi::RhProvision, Position::handle(1))?;
+        let auth_handle_u32 = auth_handle.0;
+
+        if auth_handle_u32 != Handle::RH_OWNER.0 && auth_handle_u32 != Handle::RH_PLATFORM.0 {
+            return Err(TpmRc::VALUE.with(Position::handle(1)));
+        }
+
+        let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
+        let provided_auth = self.context.state.parsed_auths[..self.context.state.parsed_auths_len]
+            .first()
+            .cloned();
+
+        // 1. Verify credentials for TPMI_RH_PROVISION
+        if !self.state().in_shadow_execution || provided_auth.is_some() {
+            self.validate_nv_define_space_auth(auth_handle_u32, provided_auth)?;
+        }
+
+        let cmd = request.try_unmarshal_command::<NVDefineSpace2>(handles)?;
+
+        if request.remaining_bytes() != 0 {
+            return Err(TpmRc::SIZE.to_rc());
+        }
+
+        let nv_public_2 = cmd
+            .public_info
+            .to_struct()
+            .map_err(|e| e.in_parameter(2).to_rc())?;
+        // Only `TPM_HT_NV_INDEX` public areas are supported (see above).
+        let tpm2::TpmuNvPublic2::NvIndex(nv_public_struct) = nv_public_2.public_area else {
+            return Err(TpmRc::HANDLE.with(Position::parameter(2)));
+        };
+
+        self.define_nv_index(auth_handle_u32, cmd.auth.get_buffer(), &nv_public_struct)?;
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;
@@ -720,6 +811,74 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let rsp = responses::NVReadPublic {
             nv_public: public_info,
+            nv_name: nv_name.as_tpm2b(),
+        };
+
+        let response = request.into_response();
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
+
+        Ok(())
+    }
+
+    /// Handles the [TpmCc::NVReadPublic2] (`0x19e`) command (the `cc-nv-read-public2`
+    /// feature).
+    ///
+    /// # Description
+    /// Like [TpmCc::NVReadPublic], but returns the public area as a `TPM2B_NV_PUBLIC_2`.
+    ///
+    /// # Spec Citation
+    /// TCG TPM 2.0 Library Specification, Part 3: Commands, TPM2_NV_ReadPublic2: "This command
+    /// is identical to `TPM2_NV_ReadPublic()`, except that it supports NV indices of all types,
+    /// and returns the public area as a `TPM2B_NV_PUBLIC_2`. The Name of a `TPM_HT_NV_INDEX` is
+    /// consistent whether it is returned from `TPM2_NV_ReadPublic()` or
+    /// `TPM2_NV_ReadPublic2()`." tpm-rs only has `TPM_HT_NV_INDEX` Indexes (external and
+    /// permanent NV handles are rejected at the handle area, see
+    /// `TpmEngine::check_command_handles`), returned as the `nvIndex` member of the union
+    /// (`handleType` = `TPM_HT_NV_INDEX`).
+    #[cfg(feature = "cc-nv-read-public2")]
+    pub fn nv_read_public2(
+        &mut self,
+        request_response: RequestThenResponse<'_, '_>,
+    ) -> Result<(), TpmRc> {
+        let mut request = request_response;
+
+        let handles = request.try_unmarshal_handles::<NVReadPublic2>()?;
+        let [nv_index] = handles;
+        check(nv_index, Tpmi::RhNvIndex, Position::handle(1))?;
+        let nv_index = nv_index.0;
+
+        let (session_responses, num_sessions) = self.parse_and_validate_sessions(&mut request)?;
+
+        let _cmd = request.try_unmarshal_command::<NVReadPublic2>(handles)?;
+
+        if request.remaining_bytes() != 0 {
+            return Err(TpmRc::SIZE.to_rc());
+        }
+
+        // C `NvIndexIsAccessible` (handle unmarshaling): undefined indices and indices of a
+        // disabled hierarchy are reported as `TPM_RC_HANDLE + RC_H1`.
+        self.nv_accessible_index_header(nv_index, Position::handle(1))?;
+
+        let storage = StorageManager::new(&mut *self.context.platform.storage);
+        let metadata = storage
+            .get_metadata(nv_index)
+            .map_err(|_| TpmRc::HANDLE.with(Position::handle(1)))?;
+        let read_len = core::cmp::min(metadata.data_size as usize, 1536);
+        let mut read_buf = [0u8; 1536];
+        storage
+            .read_item(nv_index, 0, &mut read_buf[..read_len])
+            .map_err(|_| TpmRc::FAILURE)?;
+
+        let (_, nv_public_struct, _, _, hash_target) =
+            unmarshal_nv_header_bytes(&read_buf[..read_len])?;
+        // The Name hashes the marshaled `TPMU_NV_PUBLIC_2` member without the `handleType`
+        // tag, i.e. the `TPMS_NV_PUBLIC` (Part 1, "Names"), exactly as for TPM2_NV_ReadPublic.
+        let nv_name = self.compute_name(Some(nv_public_struct.name_alg), hash_target)?;
+
+        let rsp = responses::NVReadPublic2 {
+            nv_public: Tpm2bNvPublic2::new(tpm2::TpmtNvPublic2::new(tpm2::TpmuNvPublic2::NvIndex(
+                nv_public_struct,
+            ))),
             nv_name: nv_name.as_tpm2b(),
         };
 
@@ -1132,12 +1291,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // (`signHandle` is TPM_RH_NULL) it is the hash algorithm of `inScheme`, and a
             // TPM_ALG_NULL scheme is TPM_RC_SCHEME (Part 3, TPM2_NV_Certify, version 185;
             // versions 1.83 and earlier returned an Empty Buffer instead).
-            let digest_scheme = if signer_obj_opt.is_some() {
-                actual_in_scheme
+            // A scheme without a hash (pure ML-DSA) uses the signing key's nameAlg (version 185
+            // errata, "Hash algorithm used by `TPM2_NV_Certify()` for signing keys without a
+            // scheme hash").
+            let digest_hash = if signer_obj_opt.is_some() {
+                super::attest_hash_alg(signer_obj_opt.as_ref(), actual_in_scheme)
             } else {
-                cmd.in_scheme
+                cmd.in_scheme.and_then(|s| s.hash_alg())
             };
-            let Some(hash_alg) = digest_scheme.and_then(|s| s.hash_alg()) else {
+            let Some(hash_alg) = digest_hash else {
                 return Err(TpmRc::SCHEME.with(Position::parameter(2)));
             };
             StorageManager::new(&mut *self.context.platform.storage)

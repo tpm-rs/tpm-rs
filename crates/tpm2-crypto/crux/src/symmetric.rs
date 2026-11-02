@@ -1,61 +1,15 @@
 use crate::CruxCryptoProvider;
-use aes::cipher::{BlockEncrypt, KeyInit};
 use tpm2::crypto::{CryptoError, Direction, ModeIv, Symmetric};
+// The mode loops (and their IV chaining) are shared with the Rust backend.
+use tpm2_crypto_rust::rust_crypto_mode;
 
-/// Encrypts or decrypts `data` in place with CFB-128 over the 128-bit block
-/// cipher `cipher`, starting from the chaining value `iv`.
+/// AES-128, AES-192, AES-256 and Camellia-128, Camellia-192, Camellia-256 in the CTR, OFB, CBC,
+/// CFB and ECB modes (see [`tpm2_crypto_rust::run_mode`] for the IV chaining).
 ///
-/// Every keystream block is `E(iv)`, and each processed byte replaces the byte
-/// of `iv` at the same block position with the ciphertext byte (the output when
-/// encrypting, the input when decrypting). On return, `iv` holds the chaining
-/// value for a following call: after whole blocks it is the last ciphertext
-/// block; after a trailing partial block of `r` bytes, its first `r` bytes are
-/// that partial ciphertext and the remaining bytes are those of the previous
-/// chaining value. An empty `data` leaves `iv` unchanged.
-fn cfb128<C: BlockEncrypt>(cipher: &C, iv: &mut [u8; 16], dir: Direction, data: &mut [u8]) {
-    let mut keystream = [0u8; 16];
-    let mut pos = 16;
-    for byte in data.iter_mut() {
-        if pos == 16 {
-            let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(iv);
-            cipher.encrypt_block(&mut block);
-            keystream.copy_from_slice(&block);
-            pos = 0;
-        }
-        let input = *byte;
-        let output = input ^ keystream[pos];
-        *byte = output;
-        iv[pos] = match dir {
-            Direction::Encrypt => output,
-            Direction::Decrypt => input,
-        };
-        pos += 1;
-    }
-}
-
-/// Runs the one-shot AES operation of [`Symmetric`] for the AES variant `C`.
+/// The other block cipher (SM4) is not supported and returns `Err(CryptoError::Unsupported)`.
 ///
-/// Only CFB is supported: any other `mode` returns
-/// `Err(`[`CryptoError::Unsupported`]`)` (checked first). The `key` length
-/// always matches `C` (the [`Symmetric`] methods take fixed-size keys), so key
-/// setup only fails ([`CryptoError::Internal`]) on an internal error.
-fn aes_cfb<C: BlockEncrypt + KeyInit>(
-    key: &[u8],
-    mode: ModeIv<'_>,
-    dir: Direction,
-    data: &mut [u8],
-) -> Result<(), CryptoError> {
-    let ModeIv::Cfb(iv) = mode else {
-        return Err(CryptoError::Unsupported);
-    };
-    let cipher = C::new_from_slice(key).map_err(|_| CryptoError::Internal)?;
-    cfb128(&cipher, iv, dir, data);
-    Ok(())
-}
-
-/// AES-128, AES-192, and AES-256 in CFB mode (the IV is updated in place with
-/// the final chaining value). Other modes and ciphers return
-/// [`CryptoError::Unsupported`].
+/// libcrux has no AES-CBC/CTR/OFB/ECB or Camellia, so the block ciphers are the RustCrypto
+/// `aes` and `camellia` crates.
 impl Symmetric for CruxCryptoProvider {
     fn aes128(
         &self,
@@ -64,7 +18,7 @@ impl Symmetric for CruxCryptoProvider {
         dir: Direction,
         data: &mut [u8],
     ) -> Result<(), CryptoError> {
-        aes_cfb::<aes::Aes128>(key, mode, dir, data)
+        rust_crypto_mode::<aes::Aes128>(key, mode, dir, data)
     }
 
     fn aes192(
@@ -74,7 +28,7 @@ impl Symmetric for CruxCryptoProvider {
         dir: Direction,
         data: &mut [u8],
     ) -> Result<(), CryptoError> {
-        aes_cfb::<aes::Aes192>(key, mode, dir, data)
+        rust_crypto_mode::<aes::Aes192>(key, mode, dir, data)
     }
 
     fn aes256(
@@ -84,7 +38,37 @@ impl Symmetric for CruxCryptoProvider {
         dir: Direction,
         data: &mut [u8],
     ) -> Result<(), CryptoError> {
-        aes_cfb::<aes::Aes256>(key, mode, dir, data)
+        rust_crypto_mode::<aes::Aes256>(key, mode, dir, data)
+    }
+
+    fn camellia128(
+        &self,
+        key: &[u8; 16],
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        rust_crypto_mode::<camellia::Camellia128>(key, mode, dir, data)
+    }
+
+    fn camellia192(
+        &self,
+        key: &[u8; 24],
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        rust_crypto_mode::<camellia::Camellia192>(key, mode, dir, data)
+    }
+
+    fn camellia256(
+        &self,
+        key: &[u8; 32],
+        mode: ModeIv<'_>,
+        dir: Direction,
+        data: &mut [u8],
+    ) -> Result<(), CryptoError> {
+        rust_crypto_mode::<camellia::Camellia256>(key, mode, dir, data)
     }
 }
 
@@ -241,41 +225,62 @@ mod tests {
         assert_eq!(iv, IV);
     }
 
+    /// The AES-128 modes other than CFB match the first block of NIST SP 800-38A F.1.1 (ECB),
+    /// F.2.1 (CBC), F.4.1 (OFB) and F.5.1 (CTR), with the TCG reference's `ivOut`; SM4 is
+    /// unsupported.
     #[test]
-    fn non_cfb_modes_are_unsupported() {
+    fn other_modes_match_sp800_38a() {
         let c = CruxCryptoProvider;
-        let mut data = PLAINTEXT;
+        let pt: [u8; 16] = PLAINTEXT[..16].try_into().unwrap();
+        let mut data = pt;
+        c.aes128(&KEY_128, ModeIv::Ecb, Direction::Encrypt, &mut data)
+            .unwrap();
+        assert_eq!(data, hex!("3ad77bb40d7a3660a89ecaf32466ef97"));
         let mut iv = IV;
-        let (mut ctr_iv, mut ofb_iv, mut cbc_iv) = (IV, IV, IV);
-        let modes = [
-            ModeIv::Ctr(&mut ctr_iv),
-            ModeIv::Ofb(&mut ofb_iv),
-            ModeIv::Cbc(&mut cbc_iv),
-            ModeIv::Ecb,
-        ];
-        for mode in modes {
-            assert_eq!(
-                c.aes128(&KEY_128, mode, Direction::Encrypt, &mut data),
-                Err(CryptoError::Unsupported)
-            );
-        }
-        assert_eq!((ctr_iv, ofb_iv, cbc_iv), (IV, IV, IV));
-        assert_eq!(
-            c.aes256(&KEY_256, ModeIv::Ecb, Direction::Decrypt, &mut data),
-            Err(CryptoError::Unsupported)
-        );
-        assert_eq!(data, PLAINTEXT);
+        c.aes128(
+            &KEY_128,
+            ModeIv::Cbc(&mut iv),
+            Direction::Decrypt,
+            &mut data,
+        )
+        .unwrap();
+        assert_eq!(iv, hex!("3ad77bb40d7a3660a89ecaf32466ef97"));
+        let mut data = pt;
+        let mut iv = IV;
+        c.aes128(
+            &KEY_128,
+            ModeIv::Cbc(&mut iv),
+            Direction::Encrypt,
+            &mut data,
+        )
+        .unwrap();
+        assert_eq!(data, hex!("7649abac8119b246cee98e9b12e9197d"));
+        assert_eq!(iv, data);
+        let mut data = pt;
+        let mut iv = IV;
+        c.aes128(
+            &KEY_128,
+            ModeIv::Ofb(&mut iv),
+            Direction::Encrypt,
+            &mut data,
+        )
+        .unwrap();
+        assert_eq!(data, hex!("3b3fd92eb72dad20333449f8e83cfb4a"));
+        assert_eq!(iv, hex!("50fe67cc996d32b6da0937e99bafec60"));
+        let mut data = pt;
+        let mut iv = hex!("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
+        c.aes128(
+            &KEY_128,
+            ModeIv::Ctr(&mut iv),
+            Direction::Encrypt,
+            &mut data,
+        )
+        .unwrap();
+        assert_eq!(data, hex!("874d6191b620e3261bef6864990db6ce"));
+        assert_eq!(iv, hex!("f0f1f2f3f4f5f6f7f8f9fafbfcfdff00"));
+        let mut iv = IV;
         assert_eq!(
             c.sm4_128(
-                &KEY_128,
-                ModeIv::Cfb(&mut iv),
-                Direction::Encrypt,
-                &mut data
-            ),
-            Err(CryptoError::Unsupported)
-        );
-        assert_eq!(
-            c.camellia128(
                 &KEY_128,
                 ModeIv::Cfb(&mut iv),
                 Direction::Encrypt,

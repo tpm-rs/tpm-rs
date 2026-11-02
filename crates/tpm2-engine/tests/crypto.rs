@@ -68,7 +68,7 @@ fn test_adv_mac_unsupported_hash() {
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
-        private: [0xee; 1536],
+        private: [0xee; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
         private_len: 32,
         qualified_name: (Tpm2bName::default()).into(),
         hierarchy: 0x40000001,
@@ -89,9 +89,16 @@ fn test_adv_mac_unsupported_hash() {
     let _size = tpm.execute_command_separate(&with_pw_session(&request, 1)[..], &mut response[..]);
     let error_code = u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
 
+    // `TPM2_HMAC`'s `hashAlg` is a `TPMI_ALG_HASH+` (TPM_RC_HASH); with CMAC the TPM implements
+    // `TPM2_MAC`, whose `inScheme` is a `TPMI_ALG_MAC_SCHEME+` (TPM_RC_SYMMETRIC).
+    let expected = if cfg!(feature = "cmac") {
+        0x000002D6
+    } else {
+        0x000002C3
+    };
     assert_eq!(
-        error_code, 0x000002C3,
-        "Expected TPM_RC_HASH with parameter 2 (0x2C3), got 0x{:08X}",
+        error_code, expected,
+        "Expected TPM_RC_HASH (TPM_RC_SYMMETRIC with CMAC) with parameter 2, got 0x{:08X}",
         error_code
     );
 }
@@ -133,7 +140,7 @@ fn test_ecdh_zgen_scheme_error() {
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
-        private: [0xbb; 1536],
+        private: [0xbb; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
         private_len: 32,
         qualified_name: (Tpm2bName::default()).into(),
         hierarchy: 0x40000001,
@@ -202,7 +209,7 @@ fn test_ecdh_zgen_public_only_key_error() {
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
-        private: [0u8; 1536],
+        private: [0u8; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
         private_len: 0,
         qualified_name: (Tpm2bName::default()).into(),
         hierarchy: 0x40000001,

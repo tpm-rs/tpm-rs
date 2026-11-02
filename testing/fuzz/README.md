@@ -84,7 +84,7 @@ processes, so build it first (with the same target) and point the fuzzer at it
 (the tools in `src/bin/` always use this mode):
 
 ```sh
-cargo build --release -p testing --features target-tcgtpm --bin reference
+cargo build --release -p testing --no-default-features --features target-tcgtpm --bin reference
 export REFERENCE_BIN=$PWD/target/release/reference
 cargo fuzz build --fuzz-dir testing/fuzz
 ```

@@ -12,8 +12,8 @@ use tpm2::errors::TpmRc;
 use super::{RefRng, ffi};
 use crate::engine::DrbgState;
 
-/// Largest coordinate or order size of the supported curves (NIST P-521).
-const MAX_COORD_BYTES: usize = 66;
+/// Largest coordinate or order size of the supported curves (NIST P-521, or BN P-638).
+const MAX_COORD_BYTES: usize = tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES;
 
 /// Splits `q` into the `x` and `y` halves of a point output buffer.
 fn split_point(q: &mut [u8]) -> (&mut [u8], &mut [u8]) {
@@ -91,6 +91,36 @@ pub fn sign_ecdsa(
     ffi::ecdsa_sign(
         rng,
         rand,
+        curve.into(),
+        d,
+        digest,
+        &mut r[..cap],
+        &mut s[..cap],
+    )
+}
+
+/// `CryptEccSign()` with the signature scheme `scheme` (ECDSA, SM2 or EC-Schnorr) and its hash
+/// `hash` (used by EC-Schnorr only): signs `digest` with the private scalar `d` on `curve`, drawing
+/// the nonces from `rand` (`None`: the TPM's DRBG). Writes `r` and `s` (each padded to the order
+/// size) to the fronts of `r` and `s`, and returns the order size.
+#[allow(clippy::too_many_arguments)]
+pub fn sign(
+    rng: &mut RefRng<'_>,
+    rand: Option<&mut DrbgState>,
+    scheme: tpm2::Alg,
+    hash: tpm2::TpmiAlgHash,
+    curve: TpmEccCurve,
+    d: &[u8],
+    digest: &[u8],
+    r: &mut [u8],
+    s: &mut [u8],
+) -> Result<usize, TpmRc> {
+    let cap = MAX_COORD_BYTES.min(r.len()).min(s.len());
+    ffi::ecc_sign(
+        rng,
+        rand,
+        scheme.id(),
+        tpm2::Alg::from(hash).id(),
         curve.into(),
         d,
         digest,
@@ -181,6 +211,64 @@ mod tests {
         let before = state;
         pairwise_test(&mut tpm(&mut state), TpmEccCurve::NistP256, &d).unwrap();
         assert_eq!(state.reseed_counter, before.reseed_counter + 2);
+    }
+
+    /// SM2 and EC-Schnorr signatures of the linked `CryptEccSign()` verify with the engine's own
+    /// verification (`ecc_schemes`), for every implemented hash.
+    #[test]
+    fn sm2_and_schnorr_signatures_verify_with_the_engine() {
+        let crypto = Crypto;
+        let mut state = tpm_drbg();
+        let (mut d, mut q) = ([0u8; 32], [0u8; 64]);
+        new_key_pair(&mut tpm(&mut state), TpmEccCurve::NistP256, &mut d, &mut q).unwrap();
+        let digest = [0x42u8; 64];
+        for hash in [
+            tpm2::TpmiAlgHash::Sha1,
+            tpm2::TpmiAlgHash::Sha256,
+            tpm2::TpmiAlgHash::Sha384,
+        ]
+        .into_iter()
+        .chain(crate::handler::capability::sha512())
+        {
+            for scheme in [tpm2::Alg::SM2, tpm2::Alg::ECSCHNORR] {
+                let (mut r, mut s) = ([0u8; 80], [0u8; 80]);
+                let len = sign(
+                    &mut tpm(&mut state),
+                    None,
+                    scheme,
+                    hash,
+                    TpmEccCurve::NistP256,
+                    &d,
+                    &digest,
+                    &mut r,
+                    &mut s,
+                )
+                .unwrap_or_else(|e| panic!("{scheme:?} {hash:?}: {e:?}"));
+                assert_eq!(len, 32);
+                let verified = if scheme == tpm2::Alg::SM2 {
+                    crate::ecc_schemes::sm2_verify(
+                        &crypto,
+                        TpmEccCurve::NistP256,
+                        &q,
+                        &digest,
+                        &r[..32],
+                        &s[..32],
+                    )
+                } else {
+                    crate::ecc_schemes::schnorr_verify(
+                        &crypto,
+                        &crypto,
+                        TpmEccCurve::NistP256,
+                        hash,
+                        &q,
+                        &digest,
+                        &r[..32],
+                        &s[..32],
+                    )
+                };
+                assert_eq!(verified, Ok(true), "{scheme:?} {hash:?}");
+            }
+        }
     }
 
     /// ECDSA signatures are drawn from the selected DRBG (the signature itself is checked by the

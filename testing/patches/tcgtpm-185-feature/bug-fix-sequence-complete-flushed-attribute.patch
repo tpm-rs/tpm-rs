@@ -1,0 +1,35 @@
+sequence-complete-flushed-attribute: TPMA_CC flushed is SET for TPM2_VerifySequenceComplete and TPM2_SignSequenceComplete
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3 (version 185), "Description Modifier
+{F}"):
+
+  "This modifier indicates that the "flushed" attribute will be SET in the
+  TPMA_CC for the command."
+
+Part 3 (version 185) lists "TPM_CC_VerifySequenceComplete {F}" and
+"TPM_CC_SignSequenceComplete {F}" in the command tables. The s_ccAttr entries
+of both commands (TPM_CC 0x1A3 and 0x1A4) have flushed CLEAR, so
+TPM2_GetCapability(TPM_CAP_COMMANDS) reports them without it. Both are now
+SET, as in tpm-rs.
+diff --git a/TPMCmd/tpm/include/private/CommandAttributeData.h b/TPMCmd/tpm/include/private/CommandAttributeData.h
+--- a/TPMCmd/tpm/include/private/CommandAttributeData.h
++++ b/TPMCmd/tpm/include/private/CommandAttributeData.h
+@@ -381,10 +381,14 @@ const TPMA_CC    s_ccAttr [] = {
+         TPMA_CC_INITIALIZER(0x01A1, 0, 0, 0, 0, 1, 0, 0, 0),
+ #endif
+ #if CC_VerifySequenceComplete
+-        TPMA_CC_INITIALIZER(0x01A3, 0, 0, 0, 0, 2, 0, 0, 0),
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // 'flushed' is SET (Part 3 marks the command {F}).
++        TPMA_CC_INITIALIZER(0x01A3, 0, 0, 0, 1, 2, 0, 0, 0),
+ #endif
+ #if CC_SignSequenceComplete  
+-        TPMA_CC_INITIALIZER(0x01A4, 0, 0, 0, 0, 2, 0, 0, 0),
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // 'flushed' is SET (Part 3 marks the command {F}).
++        TPMA_CC_INITIALIZER(0x01A4, 0, 0, 0, 1, 2, 0, 0, 0),
+ #endif
+ #if CC_VerifyDigestSignature 
+         TPMA_CC_INITIALIZER(0x01A5, 0, 0, 0, 0, 1, 0, 0, 0),

@@ -1,0 +1,27 @@
+[package]
+name = "tpm2-crypto-weierstrass"
+description = "Generic constant-time short-Weierstrass curve arithmetic for the TPM 2.0 crypto backends"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+# No `ecc_curve_*` features: the curve parameters are the always-present statics of
+# `tpm2::crypto::ecc_params`, and enabling curve features here would widen the TPM.
+tpm2 = { workspace = true }
+# Without the default `rand` feature (which needs `std`), so that the crate stays `no_std`.
+crypto-bigint = { version = "0.5.5", default-features = false }
+
+[features]
+default = ["sha512"]
+# SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
+# reference built without `ALG_SHA512`) is built with every crate without it.
+sha512 = ["tpm2/sha512"]
+
+[dev-dependencies]
+hex-literal = { workspace = true }

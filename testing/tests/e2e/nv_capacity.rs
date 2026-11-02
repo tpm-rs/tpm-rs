@@ -4,7 +4,9 @@
 //! estimate"), so tpm-rs follows the reference's `NvTestSpace()` accounting
 //! (`tpm2_engine::storage::nv_capacity`, whose model [`NvUsage`] gives the expected results): with
 //! the default profile (`NV_MEMORY_SIZE` 16384, `MIN_EVICT_OBJECTS` 2), a dynamic area of 11228
-//! bytes (11088 with the `act-a` feature: the ACT state moves `NV_INDEX_RAM_DATA`), every persistent object taking 1288 bytes whatever its key type, an Index `4 + 148`
+//! bytes (11088 with the `act-a` feature: the ACT state moves `NV_INDEX_RAM_DATA`), every
+//! persistent object taking 1288 bytes whatever its key type (2184 with the `rsa4096` feature:
+//! `sizeof(OBJECT)` grows with the largest RSA key), an Index `4 + 148`
 //! bytes plus its data (orderly data in a 512-byte RAM area with 12-byte headers), and room
 //! reserved for 2 persistent objects (when defining an Index) and 8 counter Indices (unless
 //! defining a counter). The profile features of `tpm2-engine` (e.g. of a differential target)
@@ -14,11 +16,13 @@ use crate::_common::{create_ecc_parent_key, create_parent_key, evict_control_rc,
 use testing::tpm::Tpm;
 use tpm2::{Handle, TpmaNv, TpmiAlgHash, TpmsNvPublic};
 use tpm2_engine::storage::nv_capacity::{
-    MIN_EVICT_OBJECTS, NV_INDEX_RAM_DATA, NV_MEMORY_SIZE, NvUsage,
+    MIN_EVICT_OBJECTS, NV_INDEX_RAM_DATA, NV_MEMORY_SIZE, NvUsage, SIZEOF_OBJECT,
 };
 
-/// Whether the TPM has the default NV profile, whose results the tests also check literally.
-const DEFAULT_NV_PROFILE: bool = NV_MEMORY_SIZE == 16384 && MIN_EVICT_OBJECTS == 2;
+/// Whether the TPM has the default NV profile, whose results the tests also check literally
+/// (`sizeof(OBJECT)` grows with the RSA-3072/4096 key sizes).
+const DEFAULT_NV_PROFILE: bool =
+    NV_MEMORY_SIZE == 16384 && MIN_EVICT_OBJECTS == 2 && SIZEOF_OBJECT == 1280;
 
 /// `TPM_RC_NV_SPACE`.
 const RC_NV_SPACE: u32 = 0x14B;
@@ -233,7 +237,11 @@ fn nv_availability_properties_follow_the_accounting() {
         assert_eq!(expected(&usage), (7, 1, 24));
     }
     let key = create_ecc_parent_key(&mut tpm);
+    // (A large `sizeof(OBJECT)`, as with ML-DSA, leaves room for fewer than three.)
     for i in 0..3 {
+        if !usage.can_add_evict_object() {
+            break;
+        }
         assert_eq!(
             evict_control_rc(&mut tpm, Handle(OWNER), key.0, 0x8100_0400 + i),
             0

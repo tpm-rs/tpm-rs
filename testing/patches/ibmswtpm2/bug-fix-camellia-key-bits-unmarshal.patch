@@ -1,0 +1,50 @@
+camellia-key-bits-unmarshal: accept the implemented Camellia key sizes in TPMI_CAMELLIA_KEY_BITS
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 2, "TPMI_!ALG.S_KEY_BITS" (Table: the
+TPM_KEY_BITS interface types of the symmetric algorithms)):
+
+  "TPMI_CAMELLIA_KEY_BITS ... Allowed Values {128, 192, 256}"
+
+TPMI_CAMELLIA_KEY_BITS admits every Camellia key size the TPM implements
+(here CAMELLIA_128 and CAMELLIA_256 of TpmProfile_Common.h); upstream
+hard-codes 128, so a Camellia-256 symmetric definition (TPM2_TestParms, a
+SYMCIPHER key, the symmetric algorithm of a storage key or of a session) is
+rejected with TPM_RC_VALUE although Camellia-256 is implemented.
+
+diff --git a/src/Unmarshal.c b/src/Unmarshal.c
+--- a/src/Unmarshal.c
++++ b/src/Unmarshal.c
+@@ -2700,19 +2700,31 @@
+ TPMI_CAMELLIA_KEY_BITS_Unmarshal(TPMI_CAMELLIA_KEY_BITS *target, BYTE **buffer, INT32 *size)
+ {
+     TPM_RC rc = TPM_RC_SUCCESS;
+ 
+     if (rc == TPM_RC_SUCCESS) {
+ 	rc = TPM_KEY_BITS_Unmarshal(target, buffer, size);
+     }
+     if (rc == TPM_RC_SUCCESS) {
+ 	switch (*target) {
++	  // tpm-rs differential testing -- spec deviation fix (NOT determinism):
++	  // TPMI_CAMELLIA_KEY_BITS admits the implemented key sizes (Part 2,
++	  // "$CAMELLIA_KEY_SIZES_BITS"); upstream hard-codes 128 although the
++	  // profile implements CAMELLIA_256 (and CAMELLIA_192 when enabled).
++#if CAMELLIA_128
+ 	  case 128:
++#endif
++#if CAMELLIA_192
++	  case 192:
++#endif
++#if CAMELLIA_256
++	  case 256:
++#endif
+ 	    break;
+ 	  default:
+ 	    rc = TPM_RC_VALUE;
+ 	}
+     }
+     return rc;
+ }
+ #endif
+ 

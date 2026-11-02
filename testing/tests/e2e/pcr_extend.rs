@@ -266,7 +266,8 @@ fn pcr_extend_updates_allocated_banks() {
 }
 
 // 6. PCRExtend unsupported banks are ignored and command succeeds
-/// PCR_Extend with an unallocated SHA-512 digest succeeds and still extends SHA-256.
+/// PCR_Extend with a digest of an implemented but unallocated bank (SHA-512, or SHA-1 without
+/// SHA-512) succeeds and still extends SHA-256.
 #[test]
 fn unallocated_bank_ignored() {
     let mut sim = Tpm::new();
@@ -275,7 +276,13 @@ fn unallocated_bank_ignored() {
     let initial_sha256 = read_pcr_by_alg_id(&mut sim, ALG_SHA256, pcr_idx).unwrap();
 
     let extend_val_sha256 = vec![0x22u8; 32];
-    let extend_val_sha512 = vec![0x55u8; 64]; // unsupported bank
+    // An implemented bank that is not allocated (the default banks are SHA-256 and SHA-384).
+    let (unallocated_alg, unallocated_size) = if crate::_common::SHA512_IMPLEMENTED {
+        (ALG_SHA512, 64)
+    } else {
+        (crate::_common::ALG_SHA1, 20)
+    };
+    let extend_val_unallocated = vec![0x55u8; unallocated_size];
 
     // Execute PCR_Extend: should succeed and NOT return TpmRc::HASH (or any other error)
     let rc = pcr_extend_at(
@@ -284,7 +291,7 @@ fn unallocated_bank_ignored() {
         pcr_idx as u32,
         &[
             (ALG_SHA256, extend_val_sha256.clone()),
-            (ALG_SHA512, extend_val_sha512), // Add unsupported bank digest
+            (unallocated_alg, extend_val_unallocated), // Add unallocated bank digest
         ],
     );
     assert_eq!(rc, 0, "PCR_Extend failed: {rc:#x}");

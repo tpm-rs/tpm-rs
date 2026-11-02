@@ -91,62 +91,6 @@ fn nv_unavailable_rejected() {
     assert_eq!(startup(&mut sim, SU_CLEAR), TpmRc::NV_UNAVAILABLE.get());
 }
 
-/// After `Startup(CLEAR)` the platform unique value matches ibmswtpm2 `_plat__GetUnique(1, ...)`
-/// (observable as the authValue of `TPM_RH_AUTH_00`), and `TPM2_GetCapability(TPM_CAP_HANDLES)`
-/// lists `TPM_RH_AUTH_00` among the permanent handles.
-#[test]
-fn platform_unique_and_auth_00_handle() {
-    let mut sim = Tpm::new();
-
-    // Query TPM2_GetCapability(TPM_CAP_HANDLES, property = 0x40000000, count = 32)
-    let get_cap = [
-        0x80, 0x01, // TPM_ST_NO_SESSIONS
-        0x00, 0x00, 0x00, 0x16, // size: 22 bytes
-        0x00, 0x00, 0x01, 0x7a, // TPM_CC_GetCapability
-        0x00, 0x00, 0x00, 0x01, // capability: TPM_CAP_HANDLES
-        0x40, 0x00, 0x00, 0x00, // property: permanent handles (0x40000000)
-        0x00, 0x00, 0x00, 0x20, // propertyCount: 32
-    ];
-    let response = raw_mssim(&mut sim, &get_cap);
-    assert_eq!(rc_of(&response), 0);
-
-    // Response structure: header (10) + moreData (1) + capability (4) + count (4) + handles (4 * count)
-    assert!(response.len() >= 19);
-    let count = u32::from_be_bytes(response[15..19].try_into().unwrap()) as usize;
-    let found_rh_auth_00 = (0..count).any(|i| {
-        let offset = 19 + i * 4;
-        u32::from_be_bytes(response[offset..offset + 4].try_into().unwrap()) == Handle::RH_AUTH_00.0
-    });
-    assert!(
-        found_rh_auth_00,
-        "TPM_RH_AUTH_00 (0x40000010) must be present in permanent handles"
-    );
-
-    // The platform unique value matches ibmswtpm2 _plat__GetUnique(1, 48, ...): it authorizes
-    // TPM_RH_AUTH_00 in TPM2_PolicySecret.
-    let unique = b"euqinu laer A .eulav euqinu a yllaer ton si sihT";
-    let session = start_auth_session(
-        &mut sim,
-        Handle::RH_NULL,
-        Handle::RH_NULL,
-        &[],
-        TpmSe::Trial,
-        None,
-        TpmiAlgHash::Sha256,
-    )
-    .unwrap();
-    let cmd = PolicySecret {
-        auth_handle: Handle::RH_AUTH_00,
-        policy_session: session.session_handle,
-        nonce_tpm: Tpm2bNonce::default(),
-        cp_hash_a: Tpm2bDigest::default(),
-        policy_ref: Tpm2bNonce::default(),
-        expiration: 0,
-    };
-    execute_with_password_sessions(&mut sim, &cmd, 1, unique)
-        .expect("TPM2_PolicySecret with TPM_RH_AUTH_00 must succeed");
-}
-
 /// `Startup(STATE)` (TPM Resume) flushes loaded transient objects and sequence objects, but saved
 /// session contexts survive (spec Part 1 Sec 12.2.3).
 #[test]

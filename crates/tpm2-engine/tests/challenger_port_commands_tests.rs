@@ -165,6 +165,9 @@ impl Asymmetric for StressTestCrypto {
     }
 }
 
+impl tpm2::crypto::Mlkem for StressTestCrypto {}
+impl tpm2::crypto::Mldsa for StressTestCrypto {}
+
 impl CryptoProvider for StressTestCrypto {
     /// Its algorithms are fakes, which fail the known-answer self tests.
     const KNOWN_ANSWER_TESTS: bool = false;
@@ -371,7 +374,7 @@ fn test_duplicate_import_load_roundtrip() {
         public: (target_public).into(),
         // The prime derived from this fake private key must have its MSB set (C
         // `CryptValidateKeys()`), or loading the imported object fails with TPM_RC_KEY_SIZE.
-        private: [0xb3; 1536],
+        private: [0xb3; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
         private_len: 256,
         qualified_name: target_name,
         hierarchy: 0x40000001,
@@ -414,7 +417,7 @@ fn test_duplicate_import_load_roundtrip() {
             ),
         })
         .into(),
-        private: [0x55; 1536],
+        private: [0x55; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
         private_len: 256,
         qualified_name: (Tpm2bName::from_bytes(&[4, 5, 6]).unwrap()).into(),
         hierarchy: 0x40000001,
@@ -490,7 +493,7 @@ fn test_duplicate_import_load_roundtrip() {
             ),
         })
         .into(),
-        private: [0; 1536],
+        private: [0; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
         private_len: 16,
         qualified_name: (Tpm2bName::default()).into(),
         hierarchy: 0x40000001,

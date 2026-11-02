@@ -88,7 +88,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let is_st_clear =
                     obj.st_clear || obj.public.object_attributes.contains(TpmaObject::ST_CLEAR);
 
-                let len = Self::serialize_transient_object(obj, entity_buf)?;
+                let len = self.serialize_transient_object(obj, entity_buf)?;
 
                 let out_saved_handle = if is_st_clear {
                     0x80000002_u32
@@ -182,8 +182,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
     /// Serializes key seed, handle, public and private templates, name, and attributes
     /// of a transient object into a raw buffer for saving.
-    fn serialize_transient_object(obj: &TransientObject, buf: &mut [u8]) -> Result<usize, TpmRc> {
-        if buf.len() < 4096 {
+    ///
+    /// The private key of an RSA object is saved in its compact prime-only form (the prime `P`
+    /// of [`tpm2::crypto::Asymmetric::rsa_private_key_to_prime_p`], at most half the modulus)
+    /// instead of the crypto provider's format, and rebuilt from the prime and the public area
+    /// by `TPM2_ContextLoad`, so that the context of the largest RSA key of the profile fits
+    /// `MAX_CONTEXT_SIZE` (see [`MAX_SAVED_PRIVATE_SIZE`]). Every other private value is saved as
+    /// it is.
+    fn serialize_transient_object(
+        &self,
+        obj: &TransientObject,
+        buf: &mut [u8],
+    ) -> Result<usize, TpmRc> {
+        if buf.len() < MAX_TRANSIENT_OBJECT_ENTITY_SIZE {
             return Err(TpmRc::SIZE.to_rc());
         }
         let mut offset = 0;
@@ -214,11 +225,28 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .unwrap(),
         );
 
-        buf[offset..offset + 2].copy_from_slice(&(obj.private_len as u16).to_be_bytes());
+        let mut prime = [0u8; MAX_SAVED_PRIVATE_SIZE];
+        let private = if saves_rsa_prime(obj) {
+            let len = match self
+                .crypto()
+                .rsa_private_key_to_prime_p(&obj.private[..obj.private_len], &mut prime)
+            {
+                Ok(Some(len)) => len,
+                // Every loaded RSA private key is valid.
+                Ok(None) | Err(_) => return Err(TpmRc::FAILURE),
+            };
+            &prime[..len]
+        } else {
+            &obj.private[..obj.private_len]
+        };
+        if private.len() > MAX_SAVED_PRIVATE_SIZE {
+            return Err(TpmRc::FAILURE);
+        }
+        buf[offset..offset + 2].copy_from_slice(&(private.len() as u16).to_be_bytes());
         offset += 2;
 
-        buf[offset..offset + obj.private_len].copy_from_slice(&obj.private[..obj.private_len]);
-        offset += obj.private_len;
+        buf[offset..offset + private.len()].copy_from_slice(private);
+        offset += private.len();
 
         offset += obj.qualified_name.marshal(
             (&mut buf[offset..offset + tpm2::Tpm2bName::MAX_SIZE])
@@ -443,11 +471,26 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // Session flags byte: bit 0 = `TPM2_PolicyTemplate` has been asserted
         // (`isTemplateHashDefined`), so the template restriction survives a save/load cycle;
-        // bit 1 = `isDaBound`, bit 2 = `isLockoutBound`.
+        // bit 1 = `isDaBound`, bit 2 = `isLockoutBound`, bit 3 = `isPPRequired`
+        // (`TPM2_PolicyPhysicalPresence`), bit 4 = `isParametersHashDefined`
+        // (`TPM2_PolicyParameters`).
         buf[offset] = u8::from(sess.is_template_hash_defined)
             | (u8::from(sess.is_da_bound) << 1)
-            | (u8::from(sess.is_lockout_bound) << 2);
+            | (u8::from(sess.is_lockout_bound) << 2)
+            | (u8::from(sess.is_pp_required) << 3)
+            | (u8::from(sess.is_parameters_hash_defined) << 4);
         offset += 1;
+
+        // The secure channel restrictions of `TPM2_PolicyTransportSPDM()`: their flags
+        // (`SecChannelPolicy::flags`) and *scKeyNameHash*.
+        let sc = &sess.sec_channel;
+        buf[offset] = sc.flags();
+        offset += 1;
+        buf[offset..offset + 2].copy_from_slice(&(sc.sc_key_name_hash_len as u16).to_be_bytes());
+        offset += 2;
+        buf[offset..offset + sc.sc_key_name_hash_len]
+            .copy_from_slice(&sc.sc_key_name_hash[..sc.sc_key_name_hash_len]);
+        offset += sc.sc_key_name_hash_len;
 
         Ok(offset)
     }
@@ -493,9 +536,24 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 );
                 offset += key_len;
             }
+            #[cfg(feature = "cmac")]
+            crate::SequenceType::Cmac { state } => {
+                buf[offset] = 5;
+                offset += 1;
+                offset += state.serialize(&mut buf[offset..]);
+            }
             crate::SequenceType::Event => {
                 buf[offset] = 0;
                 offset += 1;
+            }
+            crate::SequenceType::Sign(sequence) | crate::SequenceType::Verify(sequence) => {
+                buf[offset] = if matches!(seq.sequence_type, crate::SequenceType::Sign(_)) {
+                    3
+                } else {
+                    4
+                };
+                offset += 1;
+                offset += sequence.serialize(&mut buf[offset..]);
             }
         }
 
@@ -507,8 +565,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         buf[offset] = seq.first_bytes_len as u8;
         offset += 1;
 
-        for state in &seq.hash_states {
-            offset += state.serialize(&mut buf[offset..]);
+        for i in 0..seq.hash_states.len() {
+            offset += seq.serialize_state(i, &mut buf[offset..]);
         }
 
         Ok(offset)
@@ -540,10 +598,39 @@ const fn array_len<S, T, const N: usize>(_field: fn(&S) -> &[T; N]) -> usize {
 const CONTEXT_OVERHEAD: usize =
     8 + 4 + 4 + 2 + (2 + crate::handler::TICKET_DIGEST_SIZE) + CONTEXT_FINGERPRINT_SIZE;
 
+/// Whether the saved context of `obj` holds its RSA private key in the prime-only form (see
+/// `serialize_transient_object`): an RSA object with a private key.
+pub(crate) fn saves_rsa_prime(obj: &TransientObject) -> bool {
+    obj.public.algorithm() == tpm2::Alg::RSA && !obj.public_only && obj.private_len > 0
+}
+
+/// The largest private value in a saved object context: the members of
+/// `TPMU_SENSITIVE_COMPOSITE` in their compact form (TPM 2.0 Part 2, Table "Definition of
+/// TPMU_SENSITIVE_COMPOSITE Union"): an RSA prime (`MAX_RSA_KEY_BYTES` / 2, the RSA private key is
+/// saved as its prime), an ECC private scalar (`TPM2B_ECC_PARAMETER`), the data of a keyed-hash
+/// object (`TPM2B_SENSITIVE_DATA`) or a symmetric key (`TPM2B_SYM_KEY`).
+pub(crate) const MAX_SAVED_PRIVATE_SIZE: usize = {
+    let rsa_prime = tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BYTES / 2;
+    let mut max = rsa_prime;
+    let others = [
+        tpm2::Tpm2bEccParameter::CAP,
+        tpm2::Tpm2bSensitiveData::CAP,
+        tpm2::Tpm2bSymKey::CAP,
+    ];
+    let mut i = 0;
+    while i < others.len() {
+        if others[i] > max {
+            max = others[i];
+        }
+        i += 1;
+    }
+    max
+};
+
 /// Upper bound of `serialize_transient_object`: every field at its capacity. The
 /// public area is bounded by the profile's `sizeof(TPMT_PUBLIC)` (every loaded public area passed
-/// the profile-checked unmarshaling), the private blob by the capacity of
-/// `TransientObject::private`.
+/// the profile-checked unmarshaling), the private value by [`MAX_SAVED_PRIVATE_SIZE`] (which
+/// also holds the seed of an ML-KEM or ML-DSA key).
 const MAX_TRANSIENT_OBJECT_ENTITY_SIZE: usize = 4 // handle
     + 1
     + array_len(|o: &TransientObject| &o.seed)
@@ -551,17 +638,31 @@ const MAX_TRANSIENT_OBJECT_ENTITY_SIZE: usize = 4 // handle
     + tpm2::Tpm2bAuth::MAX_SIZE
     + crate::handler::capability::SIZEOF_TPMT_PUBLIC
     + 2
-    + array_len(|o: &TransientObject| &o.private)
+    + MAX_SAVED_PRIVATE_SIZE
     + tpm2::Tpm2bName::MAX_SIZE // qualified name
     + 1; // flags
 
-/// Upper bound of `serialize_sequence` (HMAC sequences carry the largest
-/// variant; every bank's hash state is always serialized).
+// The private value of an ML-KEM or ML-DSA object is its seed (an ML-KEM seed `d || z` is the
+// larger one).
+#[cfg(any(feature = "mlkem", feature = "mldsa"))]
+const _: () = assert!(tpm2::crypto::MLKEM_SEED_SIZE <= MAX_SAVED_PRIVATE_SIZE);
+
+/// The largest sequence type of `serialize_sequence`: an HMAC sequence (hash and key), a CMAC
+/// sequence or a signing/verification sequence ([`crate::SignatureSequence::serialize`]).
+const MAX_SEQUENCE_TYPE_SIZE: usize = {
+    let hmac = tpm2::TpmiAlgHash::MAX_SIZE + tpm2::Tpm2bSensitiveData::MAX_SIZE;
+    let signature = crate::SignatureSequence::SERIALIZED_MAX_SIZE;
+    // A MAC sequence of `TPM2_MAC_Start` with CMAC (its streaming state, `cmac::CmacState`).
+    let cmac = crate::cmac::CmacState::SERIALIZED_SIZE;
+    let max = if hmac > signature { hmac } else { signature };
+    if cmac > max { cmac } else { max }
+};
+
+/// Upper bound of `serialize_sequence` (every bank's hash state is always serialized).
 const MAX_SEQUENCE_ENTITY_SIZE: usize = 4 // handle
     + tpm2::Tpm2bAuth::MAX_SIZE
     + 1
-    + tpm2::TpmiAlgHash::MAX_SIZE
-    + tpm2::Tpm2bSensitiveData::MAX_SIZE
+    + MAX_SEQUENCE_TYPE_SIZE
     + 4 // sequence length
     + 4 + 1 // first bytes
     + array_len(|s: &crate::ActiveSequence| &s.hash_states)
@@ -591,7 +692,9 @@ const MAX_SESSION_ENTITY_SIZE: usize = 4 // handle
     + 1 + 1 // isAuthValueNeeded, isPasswordNeeded
     + 1 + 4 // pcrCounter
     + 1 + 1 + 1 // checkNvWritten, nvWrittenState, locality
-    + 1; // flags
+    + 1 // flags
+    + 1 + 2 // secure channel flags, scKeyNameHash size
+    + array_len(|s: &SessionState| &s.sec_channel.sc_key_name_hash);
 
 /// `TPM_PT_MAX_OBJECT_CONTEXT`, the largest object (or sequence object) context this TPM returns.
 /// TPM 2.0 Part 2, TPM_PT: "TPM_PT_MAX_OBJECT_CONTEXT | PT_FIXED + 33 | the maximum size of an

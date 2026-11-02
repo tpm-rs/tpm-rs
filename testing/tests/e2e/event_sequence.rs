@@ -58,9 +58,12 @@ fn extends_pcr_with_all_bank_digests() {
         &expected_pcr0
     );
 
-    // C returns one digest per implemented hash (HASH_COUNT = 4: SHA1/256/384/512),
-    // EventSequenceComplete.c:52.
-    assert_eq!(complete_resp.results.count(), 4);
+    // C returns one digest per implemented hash (HASH_COUNT: SHA1/256/384 and SHA-512 if
+    // implemented), EventSequenceComplete.c:52.
+    assert_eq!(
+        complete_resp.results.count(),
+        crate::_common::IMPLEMENTED_HASH_ALGS.len()
+    );
     assert_eq!(
         *complete_resp.results.digests().nth(1).unwrap(),
         TpmtHa::Sha256(&event_digest)

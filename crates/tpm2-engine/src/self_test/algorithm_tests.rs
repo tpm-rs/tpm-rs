@@ -128,7 +128,7 @@ pub(crate) fn clear_untestable(state: &SelfTestState) {
                 clear_both(state, &mut v, alg);
                 set_both(state, &mut v, id(Alg::NULL));
             }
-            Class::RsaScheme | Class::Kdf | Class::EccScheme => {}
+            Class::RsaScheme | Class::Kdf | Class::EccScheme | Class::Mlkem | Class::Mldsa => {}
             // ECC is tested with ECDH.
             Class::Ecc => {
                 clear_both(state, &mut v, alg);
@@ -162,8 +162,12 @@ enum Class {
     Ecc,
     /// `TPM_ALG_ECDSA`, `TPM_ALG_ECDH`, `TPM_ALG_ECSCHNORR`.
     EccScheme,
+    /// `TPM_ALG_MLKEM` (version 185).
+    Mlkem,
+    /// `TPM_ALG_MLDSA` (version 185).
+    Mldsa,
     /// Every other algorithm: it has no test (e.g. KEYEDHASH, XOR, MGF1, ECDAA, SYMCIPHER, the
-    /// other KDFs, SM4, Camellia, CMAC, SM2, ECMQV, and the post-quantum algorithms).
+    /// other KDFs, SM4, Camellia, CMAC, SM2, ECMQV, and HashML-DSA).
     Untestable,
 }
 
@@ -190,6 +194,8 @@ fn classify(alg: u16) -> Class {
         a if a == id(Alg::ECDSA) || a == id(Alg::ECDH) || a == id(Alg::ECSCHNORR) => {
             Class::EccScheme
         }
+        a if a == id(Alg::MLKEM) => Class::Mlkem,
+        a if a == id(Alg::MLDSA) => Class::Mldsa,
         _ => Class::Untestable,
     }
 }
@@ -327,6 +333,8 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
                 self.test_ecc(id(Alg::ECDH), v)
             }
             Class::EccScheme => self.test_ecc(alg, v),
+            Class::Mlkem => self.test_mlkem(v),
+            Class::Mldsa => self.test_mldsa(v),
             Class::Untestable => {
                 clear_both(state, &mut v, alg);
                 Ok(())
@@ -415,8 +423,8 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
             &mut data,
         );
         if encrypted == Err(CryptoError::Unsupported) {
-            // A crypto provider that does not implement the mode (e.g. the BoringSSL provider,
-            // which implements only CFB) cannot return any value that depends on it (Part 3,
+            // A crypto provider that does not implement the mode (e.g. a test double that
+            // implements only CFB) cannot return any value that depends on it (Part 3,
             // "Testing": "The TPM may perform operations using testable functions before those
             // functions have been tested as long as the TPM returns no value that depends on the
             // correctness of the testable function"), so there is nothing to test.
@@ -749,27 +757,40 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         })
     }
 
-    /// `TestEccSignAndVerify()`: verifies a known ECDSA signature, then signs (random nonce) and
-    /// verifies the signature.
+    /// `TestEccSignAndVerify()`: verifies a known ECDSA (or EC-Schnorr) signature, then signs
+    /// (random nonce) and verifies the signature.
     fn test_ecc_sign_and_verify(&mut self, scheme: u16, mut v: Vector<'_>) -> TestResult {
         let state = self.state();
         clear_both(state, &mut v, scheme);
         clear_both(state, &mut v, id(Alg::ECDH));
-        if scheme != id(Alg::ECDSA) {
-            // The reference has no test for SM2; this TPM has no EC-Schnorr test vectors (and
-            // the C references do not implement EC-Schnorr in the profiles tpm-rs is compared
-            // with).
+        let schnorr = cfg!(feature = "ecschnorr") && scheme == id(Alg::ECSCHNORR);
+        if scheme != id(Alg::ECDSA) && !schnorr {
+            // The reference has no test for SM2.
             return Ok(());
         }
         self.test_default_hash(v.reborrow())?;
         let hash = default_test_hash();
-        let digest = &EC_TEST_VALUE[..hash.digest_size()];
-        let ha = TpmtHa::new(hash, digest).ok_or_else(|| self.failure())?;
         let mut qs = [0u8; 64];
         qs[..32].copy_from_slice(&EC_TEST_KEY_QS_X);
         qs[32..].copy_from_slice(&EC_TEST_KEY_QS_Y);
-        let (kvt_r, kvt_s) = ecdsa_kvt(hash);
         let mut signature = [0u8; 64];
+        if schnorr {
+            #[cfg(feature = "ecschnorr")]
+            {
+                // The whole test value is the digest (`(TPM2B_DIGEST*)&c_ecTestValue`).
+                let digest = &EC_TEST_VALUE;
+                let (kvt_r, kvt_s) = ecschnorr_kvt(hash);
+                signature[..32].copy_from_slice(kvt_r);
+                signature[32..].copy_from_slice(kvt_s);
+                self.ecschnorr_verify(hash, &qs, digest, &signature)?;
+                self.ecschnorr_sign(hash, digest, &mut signature)?;
+                self.ecschnorr_verify(hash, &qs, digest, &signature)?;
+            }
+            return Ok(());
+        }
+        let digest = &EC_TEST_VALUE[..hash.digest_size()];
+        let ha = TpmtHa::new(hash, digest).ok_or_else(|| self.failure())?;
+        let (kvt_r, kvt_s) = ecdsa_kvt(hash);
         signature[..32].copy_from_slice(kvt_r);
         signature[32..].copy_from_slice(kvt_s);
         let verified = self.crypto.inner.ecdsa_verify(&qs, ha, &signature);
@@ -777,6 +798,76 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         self.ecdsa_sign(digest, &mut signature)?;
         let verified = self.crypto.inner.ecdsa_verify(&qs, ha, &signature);
         self.check_crypto(&verified, |ok| *ok)
+    }
+
+    /// Verifies the EC-Schnorr signature `r || s` of `digest` with the test key (`qs`).
+    #[cfg(feature = "ecschnorr")]
+    fn ecschnorr_verify(
+        &mut self,
+        hash: TpmiAlgHash,
+        qs: &[u8; 64],
+        digest: &[u8],
+        signature: &[u8; 64],
+    ) -> TestResult {
+        let (r, s) = signature.split_at(32);
+        let verified = crate::ecc_schemes::schnorr_verify(
+            self.crypto.inner,
+            &self.crypto,
+            TEST_CURVE,
+            hash,
+            qs,
+            digest,
+            r,
+            s,
+        );
+        self.check_crypto(&verified, |ok| *ok)
+    }
+
+    /// An EC-Schnorr signature (`r || s`) of `digest` with the test key, drawing the nonce from
+    /// the TPM's DRBG as the reference's `CryptEccSign()` does.
+    #[cfg(feature = "ecschnorr")]
+    fn ecschnorr_sign(
+        &mut self,
+        hash: TpmiAlgHash,
+        digest: &[u8],
+        out: &mut [u8; 64],
+    ) -> TestResult {
+        #[cfg(feature = "reference-rng")]
+        {
+            let Some(rng) = self.rng.as_mut() else {
+                // Only the engine's self tester has the DRBG these tests draw from.
+                self.crypto.state.fail();
+                return Err(TpmRc::FAILURE);
+            };
+            let (r, s) = out.split_at_mut(32);
+            let signed = ecc::sign(
+                rng,
+                None,
+                Alg::ECSCHNORR,
+                hash,
+                TEST_CURVE,
+                &EC_TEST_KEY_DS,
+                digest,
+                r,
+                s,
+            );
+            self.check(signed == Ok(32))
+        }
+        #[cfg(not(feature = "reference-rng"))]
+        {
+            let crypto = self.crypto;
+            let signed = crate::ecc_schemes::schnorr_sign(
+                crypto.inner,
+                &crypto,
+                TEST_CURVE,
+                hash,
+                &EC_TEST_KEY_DS,
+                digest,
+                |buf: &mut [u8]| crypto.inner.get_random(buf),
+                &mut out[..],
+            );
+            self.check_crypto(&signed, |len| *len == Some(64))
+        }
     }
 
     /// An ECDSA signature (`r || s`) of `digest` with the test key, drawing the nonce from the
@@ -855,6 +946,106 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         };
         self.check_crypto(&derived, |len| *len == 20 && &out == expected)
     }
+
+    // ---------------------------------------------------------------------------------------
+    // ML-KEM and ML-DSA.
+    // ---------------------------------------------------------------------------------------
+
+    /// Random bytes from the TPM's DRBG (`CryptoRand_DRBG_Generate(NULL, ...)`), as the ML-KEM
+    /// encapsulation and the ML-DSA signature of the tests draw them.
+    fn draw_random(&mut self, out: &mut [u8]) -> TestResult {
+        #[cfg(feature = "reference-rng")]
+        {
+            let Some(rng) = self.rng.as_mut() else {
+                // Only the engine's self tester has the DRBG these tests draw from.
+                self.crypto.state.fail();
+                return Err(TpmRc::FAILURE);
+            };
+            crate::reference_rng::drbg::fill(rng, None, out)
+        }
+        #[cfg(not(feature = "reference-rng"))]
+        {
+            self.crypto
+                .inner
+                .get_random(out)
+                .map_err(|_| self.failure())
+        }
+    }
+
+    /// `TestMlkem()`: a known-answer decapsulation, then an encapsulation (with randomness from
+    /// the TPM's DRBG) to the test key whose result decapsulates to the same shared secret. The
+    /// vectors are ML-KEM-512 (`MLKEM_TEST_PARMS`: the first implemented parameter set).
+    fn test_mlkem(&mut self, mut v: Vector<'_>) -> TestResult {
+        use super::pqc_vectors::*;
+        clear_both(self.state(), &mut v, id(Alg::MLKEM));
+        let param = tpm2::TpmiMlkemParms::Mlkem512;
+        let mut secret = [0u8; tpm2::crypto::MLKEM_SHARED_SECRET_SIZE];
+        let decapsulated = self.crypto.inner.mlkem_decapsulate(
+            param,
+            &MLKEM_KAT_SEED,
+            &MLKEM_KAT_CIPHERTEXT,
+            &mut secret,
+        );
+        self.check_crypto(&decapsulated, |ok| *ok && secret == MLKEM_KAT_SECRET)?;
+
+        let mut entropy = [0u8; tpm2::crypto::MLKEM_ENTROPY_SIZE];
+        self.draw_random(&mut entropy)?;
+        let mut ciphertext = [0u8; MLKEM_KAT_CIPHERTEXT.len()];
+        let encapsulated = self.crypto.inner.mlkem_encapsulate(
+            param,
+            &MLKEM_TEST_PUB,
+            &entropy,
+            &mut ciphertext,
+            &mut secret,
+        );
+        self.check_crypto(&encapsulated, |len| *len == Some(ciphertext.len()))?;
+        if encapsulated.is_err() {
+            return Ok(());
+        }
+        let mut check_secret = [0u8; tpm2::crypto::MLKEM_SHARED_SECRET_SIZE];
+        let decapsulated = self.crypto.inner.mlkem_decapsulate(
+            param,
+            &MLKEM_TEST_SEED,
+            &ciphertext,
+            &mut check_secret,
+        );
+        self.check_crypto(&decapsulated, |ok| *ok && check_secret == secret)
+    }
+
+    /// `TestMldsa()`: a known-answer verification of a signature over a known message
+    /// representative `mu`, then a signature of `mu` with the test key (with randomness from the
+    /// TPM's DRBG) that has to verify. The vectors are ML-DSA-44 (`MLDSA_TEST_PARMS`: the first
+    /// implemented parameter set).
+    fn test_mldsa(&mut self, mut v: Vector<'_>) -> TestResult {
+        use super::pqc_vectors::*;
+        clear_both(self.state(), &mut v, id(Alg::MLDSA));
+        let param = tpm2::TpmiMldsaParms::Mldsa44;
+        let verified =
+            self.crypto
+                .inner
+                .mldsa_verify_mu(param, &MLDSA_KAT_PUB, &MLDSA_KAT_MU, &MLDSA_KAT_SIG);
+        self.check_crypto(&verified, |ok| *ok)?;
+
+        let mut rnd = [0u8; tpm2::crypto::MLDSA_RND_SIZE];
+        self.draw_random(&mut rnd)?;
+        let mut signature = [0u8; MLDSA_KAT_SIG.len()];
+        let signed = self.crypto.inner.mldsa_sign_mu(
+            param,
+            &MLDSA_TEST_SEED,
+            &MLDSA_KAT_MU,
+            &rnd,
+            &mut signature,
+        );
+        self.check_crypto(&signed, |len| *len == Some(signature.len()))?;
+        if signed.is_err() {
+            return Ok(());
+        }
+        let verified =
+            self.crypto
+                .inner
+                .mldsa_verify_mu(param, &MLDSA_TEST_PUB, &MLDSA_KAT_MU, &signature);
+        self.check_crypto(&verified, |ok| *ok)
+    }
 }
 
 /// `MakeIv()`: the IV of the symmetric tests (none for ECB; for CTR the block size bytes ending
@@ -896,6 +1087,16 @@ fn rsassa_kvt(hash: TpmiAlgHash) -> [u8; RSA_TEST_KEY_SIZE] {
 
 fn rsapss_kvt(hash: TpmiAlgHash) -> &'static [u8; RSA_TEST_KEY_SIZE] {
     by_hash(hash, &RSAPSS_KVT_SHA512, &RSAPSS_KVT_SHA384)
+}
+
+/// The known EC-Schnorr signature of the test value with the default test hash `hash`.
+#[cfg(feature = "ecschnorr")]
+fn ecschnorr_kvt(hash: TpmiAlgHash) -> (&'static [u8; 32], &'static [u8; 32]) {
+    by_hash(
+        hash,
+        (&EC_TEST_ECSCHNORR_R_SHA512, &EC_TEST_ECSCHNORR_S_SHA512),
+        (&EC_TEST_ECSCHNORR_R_SHA384, &EC_TEST_ECSCHNORR_S_SHA384),
+    )
 }
 
 fn ecdsa_kvt(hash: TpmiAlgHash) -> (&'static [u8; 32], &'static [u8; 32]) {

@@ -193,14 +193,14 @@ fn unmapped_command_code_rejected() {
     assert_eq!(&response[6..10], &0x143u32.to_be_bytes());
 }
 
-/// Unimplemented command codes (PP_Commands, FieldUpgrade*, ...) return TPM_RC_COMMAND_CODE
+/// Unimplemented command codes (FirmwareRead, FieldUpgrade*, ...) return TPM_RC_COMMAND_CODE
 #[test]
 fn unsupported_command_codes_rejected() {
     let mut sim = Tpm::new();
 
     // Pick multiple other unimplemented command codes and check they return TPM_RC_COMMAND_CODE (0x143)
     let unimplemented_codes: [u32; 3] = [
-        0x0000012D, // TPM_CC_PPCommands
+        0x00000179, // TPM_CC_FirmwareRead
         0x0000012F, // TPM_CC_FieldUpgradeStart
         0x00000141, // TPM_CC_FieldUpgradeData
     ];

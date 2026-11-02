@@ -63,6 +63,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             protector_obj.public.parms_and_id,
             crate::owned::OwnedPublicParmsAndId::Rsa(_, _)
                 | crate::owned::OwnedPublicParmsAndId::Ecc(_, _)
+                | crate::owned::OwnedPublicParmsAndId::Mlkem(_, _)
+                | crate::owned::OwnedPublicParmsAndId::Mldsa(_, _)
         ) || !attrs.contains(TpmaObject::DECRYPT)
             || !attrs.contains(TpmaObject::RESTRICTED)
         {
@@ -84,7 +86,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 3. Generate seed and encrypt it into secret (`CryptSecretEncrypt`, returned unmodified)
         let mut seed = [0u8; 64];
-        let mut secret_buf = [0u8; 512];
+        let mut secret_buf = [0u8; tpm2::Tpm2bEncryptedSecret::CAP];
         let (_, secret_len) =
             self.crypt_secret_encrypt(&protector_obj, b"IDENTITY", &mut seed, &mut secret_buf)?;
         let secret = Tpm2bEncryptedSecret::from_bytes(&secret_buf[..secret_len])
@@ -100,6 +102,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .symmetric
                 .ok_or(TpmRc::TYPE.with(Position::handle(1)))?,
             crate::owned::OwnedPublicParmsAndId::Ecc(parms, _) => parms
+                .symmetric
+                .ok_or(TpmRc::TYPE.with(Position::handle(1)))?,
+            crate::owned::OwnedPublicParmsAndId::Mlkem(parms, _) => parms
                 .symmetric
                 .ok_or(TpmRc::TYPE.with(Position::handle(1)))?,
             _ => return Err(TpmRc::TYPE.with(Position::handle(1))),

@@ -1,0 +1,30 @@
+fix-zgen-2phase-out-z2: marshal outZ2 as the second response parameter of TPM2_ZGen_2Phase
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3, TPM2_ZGen_2Phase, Table "TPM2_ZGen_2Phase
+Response"): "TPM2B_ECC_POINT outZ1 | X and Y coordinates of the computed value
+(scheme dependent); TPM2B_ECC_POINT outZ2 | X and Y coordinates of the second
+computed value (scheme dependent)"; "For TPM_ALG_ECDH outZ1 will be Zs and
+outZ2 will be Ze".
+
+The dispatch table of TPM2_ZGen_2Phase (CommandDispatch.inl) lists outZ1 for
+both response parameters, so the response repeats outZ1 (Zs) instead of
+outZ2: TPM_ALG_ECDH never returns Ze, and TPM_ALG_ECMQV/TPM_ALG_SM2 return Z
+twice instead of Z and an Empty Point. The patch marshals outZ2 as the second
+parameter.
+
+diff --git a/TPMCmd/tpm/include/private/CommandDispatch.inl b/TPMCmd/tpm/include/private/CommandDispatch.inl
+--- a/TPMCmd/tpm/include/private/CommandDispatch.inl
++++ b/TPMCmd/tpm/include/private/CommandDispatch.inl
+@@ -2290,7 +2290,9 @@ MAKE_DISPATCH_TABLE(
+     MAKE_DISPATCH_SEPARATOR(START_OUTPUT_PARAMETERS),
+     // Response output parameters
+     MAKE_OUTPUT_DISPATCH_ENTRY(MARSHAL_ID_TPM2B_ECC_POINT, outZ1),
+-    MAKE_OUTPUT_DISPATCH_ENTRY(MARSHAL_ID_TPM2B_ECC_POINT, outZ1),
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // Part 3, TPM2_ZGen_2Phase Response: the second parameter is outZ2.
++    MAKE_OUTPUT_DISPATCH_ENTRY(MARSHAL_ID_TPM2B_ECC_POINT, outZ2),
+ );
+ #undef CURRENT_TPM_COMMAND
+ #endif  // CC_ZGen_2Phase

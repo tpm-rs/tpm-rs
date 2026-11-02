@@ -1,7 +1,9 @@
+#[cfg(not(all(feature = "rsa3072", feature = "rsa4096")))]
 use testing::tpm::ExecuteError;
 use testing::tpm::Tpm;
 use tpm2::TpmEccCurve;
 use tpm2::commands::TestParms;
+#[cfg(not(all(feature = "rsa3072", feature = "rsa4096")))]
 use tpm2::errors::TpmRc;
 use tpm2::{TpmiRsaKeyBits, TpmsEccParms, TpmsRsaParms, TpmtPublicParms};
 
@@ -65,6 +67,8 @@ fn test_test_parms_rsa2048() {
     sim.execute(cmd).unwrap();
 }
 
+// Only without the `rsa3072` feature; with it, RSA-3072 is a key size of the profile.
+#[cfg(not(feature = "rsa3072"))]
 // Original Go test: test_parms_test.go - TestTestParms/rsa3072 - unsupported
 #[test]
 fn test_test_parms_rsa3072_unsupported() {
@@ -86,6 +90,8 @@ fn test_test_parms_rsa3072_unsupported() {
     assert_eq!(rc.to_fmt1().map(|(rc, _)| rc), Some(TpmRc::VALUE));
 }
 
+// Only without the `rsa4096` feature; with it, RSA-4096 is a key size of the profile.
+#[cfg(not(feature = "rsa4096"))]
 // Original Go test: test_parms_test.go - TestTestParms/rsa4096 - unsupported
 #[test]
 fn test_test_parms_rsa4096_unsupported() {

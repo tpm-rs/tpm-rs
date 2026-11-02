@@ -25,7 +25,7 @@ succeed), `spec` (everything else: check the spec).
 
 Rendering with `to_test` uses process mode, so the reference binary of the
 fuzz crate's target must be built (e.g. `cargo build --release -p testing
---features target-tcgtpm --bin reference`).
+--no-default-features --features target-tcgtpm --bin reference`).
 """
 import collections
 import concurrent.futures as cf

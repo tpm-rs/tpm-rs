@@ -887,12 +887,12 @@ fn capability_difference_is_documented(
     };
     match e_cap {
         // TPM_CAP_TPM_PROPERTIES: values of implementation-specific
-        // properties may differ; C additionally reports, from version 185
-        // on, TPM_PT_ML_PARAMETER_SETS (0x131) with no ML-KEM/ML-DSA
-        // parameter set implemented (value 0), and ibmswtpm2 (an older code
-        // base) does not report TPM_PT_FIRMWARE_SVN/TPM_PT_FIRMWARE_MAX_SVN
-        // (0x12F/0x130, spec 1.83+), which tpm-rs and tcgtpm report. All
-        // other properties must match exactly.
+        // properties may differ, and ibmswtpm2 (an older code base) does not
+        // report TPM_PT_FIRMWARE_SVN/TPM_PT_FIRMWARE_MAX_SVN (0x12F/0x130,
+        // spec 1.83+), which tpm-rs and tcgtpm report. All other properties
+        // must match exactly (TPM_PT_ML_PARAMETER_SETS, 0x131, which version
+        // 185 reports, included: tpm-rs reports it with ML-KEM/ML-DSA, which
+        // its target enables).
         6 => {
             const IMPLEMENTATION_SPECIFIC: &[u32] = &[
                 0x10F, // TPM_PT_HR_PERSISTENT_MIN
@@ -910,7 +910,6 @@ fn capability_difference_is_documented(
                 0x12D, // TPM_PT_MODES (vendor certification modes)
             ];
             let prop = |x: &[u8]| be32(x, 0).unwrap_or(0);
-            let ref_only = |x: &[u8]| prop(x) == 0x131 && be32(x, 4) == Some(0);
             let rs_only = |x: &[u8]| {
                 implementation == Implementation::Ibmswtpm2 && matches!(prop(x), 0x12F | 0x130)
             };
@@ -924,10 +923,7 @@ fn capability_difference_is_documented(
                     })
                     .collect()
             };
-            // C's `moreData` may be YES where tpm-rs's is NO: tpm-rs returned every property
-            // it has from the requested one on, and C's list (equal up to the C-only entries)
-            // was cut by `propertyCount` before or within its C-only tail (0x131), the only
-            // property C has beyond tpm-rs's last. Conversely (ibmswtpm2), tpm-rs's
+            // With ibmswtpm2, tpm-rs's
             // `moreData` may be YES where C's is NO if tpm-rs's list was cut before or within
             // its tpm-rs-only tail (0x12F/0x130): C returned every property it has, and
             // tpm-rs's last returned property is the one before that tail (0x12E) or in it.
@@ -935,8 +931,8 @@ fn capability_difference_is_documented(
                 && e_more == 1
                 && a_more == 0
                 && e.last().is_some_and(|x| matches!(prop(x), 0x12E | 0x12F));
-            let more_matches = e_more == a_more || (e_more == 0 && a_more == 1) || rs_tail_cut;
-            more_matches && mask(keep(&e, &rs_only)) == mask(keep(&a, &ref_only))
+            let more_matches = e_more == a_more || rs_tail_cut;
+            more_matches && mask(keep(&e, &rs_only)) == mask(a.iter().map(|x| x.to_vec()).collect())
         }
         _ => false,
     }

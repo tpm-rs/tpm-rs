@@ -191,8 +191,8 @@ fn truncated_input_and_unsupported_curve() {
         rc_p(TpmRc::INSUFFICIENT, 1)
     );
 
-    // NIST P-192 unmarshals as a curve ID but is not implemented.
-    let mut params = 0x0001u16.to_be_bytes().to_vec();
+    // Brainpool P-256 unmarshals as a curve ID but is not implemented.
+    let mut params = 0x0030u16.to_be_bytes().to_vec();
     params.push(0);
     let cmd = build_raw_cmd(ST_NO_SESSIONS, CC_ECC_PARAMETERS, &[], None, &params);
     assert_eq!(mssim_rc_of(&mut sim, &cmd), rc_p(TpmRc::CURVE, 1));

@@ -797,9 +797,9 @@ fn verified_tickets_of_limited_hierarchies() {
             .validation;
         assert_eq!(ticket.hierarchy(), hierarchy);
         assert_eq!(
-            ticket.digest().get_size(),
-            64,
-            "a real ticket (SHA-512 HMAC)"
+            usize::from(ticket.digest().get_size()),
+            crate::_common::STRONGEST_DIGEST_SIZE,
+            "a real ticket (an HMAC with the context integrity hash)"
         );
 
         let start = StartAuthSession {
@@ -842,7 +842,10 @@ fn hash_check_tickets_of_limited_hierarchies() {
         };
         let rsp = tpm.execute(hash).unwrap();
         assert_eq!(rsp.validation.hierarchy(), hierarchy);
-        assert_eq!(rsp.validation.digest().get_size(), 64);
+        assert_eq!(
+            usize::from(rsp.validation.digest().get_size()),
+            crate::_common::STRONGEST_DIGEST_SIZE
+        );
 
         let (signer, _) = create_ecc_signing_key(&mut tpm, hierarchy, true);
         let sign = Sign {
@@ -1089,8 +1092,10 @@ fn short_context_blob_of_unavailable_hierarchy_fails_with_svn_limited() {
         let mut params = 1u64.to_be_bytes().to_vec(); // sequence
         params.extend_from_slice(&0x8000_0000u32.to_be_bytes()); // savedHandle
         params.extend_from_slice(&hierarchy.to_be_bytes());
-        let mut blob = (64u16).to_be_bytes().to_vec(); // integrity (SHA-512)
-        blob.extend_from_slice(&[0x11; 64]);
+        // integrity (the context integrity hash: SHA-512, or SHA-384 without it)
+        let integrity = crate::_common::STRONGEST_DIGEST_SIZE;
+        let mut blob = (integrity as u16).to_be_bytes().to_vec();
+        blob.extend_from_slice(&vec![0x11; integrity]);
         blob.extend_from_slice(&vec![0x22; protected_len]);
         let mut sized = (blob.len() as u16).to_be_bytes().to_vec();
         sized.extend_from_slice(&blob);
@@ -1164,7 +1169,8 @@ fn certify_creation_ticket_of_limited_hierarchy() {
 /// hierarchy before it compares it (TCG reference: `TicketComputeVerified()` ->
 /// `HierarchyGetProof()`), so an SVN-limited ticket hierarchy beyond the firmware's SVN fails
 /// with `TPM_RC_SVN_LIMITED` instead of `TPM_RC_VALUE` on the ticket. Found by differential
-/// fuzzing.
+/// fuzzing. The replayed ticket carries a SHA-512 HMAC, so the test needs a TPM with SHA-512.
+#[cfg(feature = "sha512")]
 #[test]
 fn policy_authorize_ticket_of_unavailable_hierarchy_fails() {
     let response_code = |rsp: &[u8]| u32::from_be_bytes(rsp[6..10].try_into().unwrap());

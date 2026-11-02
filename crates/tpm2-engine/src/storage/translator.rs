@@ -51,6 +51,19 @@ pub const INDEX_ORDERLY_RAM_SIZE: usize = 512;
 pub const S_OBJECTS_SIZE: usize = 3612;
 /// Size of each object slot in `s_objects`.
 pub const OBJECT_SLOT_SIZE: usize = 1204;
+
+// A signing or verification sequence (the largest sequence type) fits an object slot: kind,
+// handle, auth, type tag and state, sequence length, first bytes and the hash states.
+const _: () = assert!(
+    1 + 4
+        + Tpm2bAuth::MAX_SIZE
+        + 1
+        + crate::engine::SignatureSequence::SERIALIZED_MAX_SIZE
+        + 4
+        + 5
+        + 4 * StreamingHashState::SERIALIZED_SIZE
+        <= OBJECT_SLOT_SIZE
+);
 /// Size of `s_pcrs` in bytes (24 PCRs * 100 bytes).
 pub const S_PCRS_SIZE: usize = 2400;
 /// Size of each PCR entry in `s_pcrs` (SHA-1 20B + SHA-256 32B + SHA-384 48B).
@@ -697,7 +710,7 @@ impl TpmStateTranslator {
         if slice.len() < priv_len {
             return Err(StorageError::OutOfBounds);
         }
-        let mut private = [0u8; 1536];
+        let mut private = [0u8; crate::handler::MAX_PRIVATE_KEY_SIZE];
         private[..priv_len].copy_from_slice(&slice[..priv_len]);
 
         Ok(TransientObject {
@@ -745,9 +758,26 @@ impl TpmStateTranslator {
                     offset += key.marshal(dst);
                 }
             }
+            #[cfg(feature = "cmac")]
+            SequenceType::Cmac { state } => {
+                slot[offset] = 5;
+                offset += 1;
+                offset += state.serialize(&mut slot[offset..]);
+            }
             SequenceType::Event => {
                 slot[offset] = 0;
                 offset += 1;
+            }
+            SequenceType::Sign(sequence) | SequenceType::Verify(sequence) => {
+                slot[offset] = if matches!(seq.sequence_type, SequenceType::Sign(_)) {
+                    3
+                } else {
+                    4
+                };
+                offset += 1;
+                if offset + crate::engine::SignatureSequence::SERIALIZED_MAX_SIZE <= slot.len() {
+                    offset += sequence.serialize(&mut slot[offset..]);
+                }
             }
         }
         slot[offset..offset + 4].copy_from_slice(&(seq.sequence_len as u32).to_be_bytes());
@@ -756,9 +786,9 @@ impl TpmStateTranslator {
         offset += 4;
         slot[offset] = seq.first_bytes_len as u8;
         offset += 1;
-        for state in &seq.hash_states {
+        for i in 0..seq.hash_states.len() {
             if offset + StreamingHashState::SERIALIZED_SIZE <= slot.len() {
-                offset += state.serialize(&mut slot[offset..]);
+                offset += seq.serialize_state(i, &mut slot[offset..]);
             }
         }
     }
@@ -784,6 +814,21 @@ impl TpmStateTranslator {
                     .into();
                 SequenceType::Hmac { hash_alg, key }
             }
+            3 => SequenceType::Sign(
+                crate::engine::SignatureSequence::deserialize(&mut slice)
+                    .ok_or(StorageError::OutOfBounds)?,
+            ),
+            4 => SequenceType::Verify(
+                crate::engine::SignatureSequence::deserialize(&mut slice)
+                    .ok_or(StorageError::OutOfBounds)?,
+            ),
+            #[cfg(feature = "cmac")]
+            5 => {
+                let state =
+                    crate::cmac::CmacState::deserialize(slice).ok_or(StorageError::OutOfBounds)?;
+                slice = &slice[crate::cmac::CmacState::SERIALIZED_SIZE..];
+                SequenceType::Cmac { state }
+            }
             _ => SequenceType::Event,
         };
         let sequence_len =
@@ -797,9 +842,19 @@ impl TpmStateTranslator {
         slice = &slice[5..];
 
         let mut hash_states = [StreamingHashState::default(); 4];
-        for state in &mut hash_states {
+        let mut mu_state = None;
+        let has_mu_state = ActiveSequence::has_mu_state(&sequence_type);
+        for (i, state) in hash_states.iter_mut().enumerate() {
             if slice.len() >= StreamingHashState::SERIALIZED_SIZE {
-                *state = StreamingHashState::deserialize(slice).ok_or(StorageError::OutOfBounds)?;
+                if has_mu_state && i == ActiveSequence::MU_STATE_SLOT {
+                    mu_state = Some(
+                        ActiveSequence::mu_state_from_slot(slice)
+                            .ok_or(StorageError::OutOfBounds)?,
+                    );
+                } else {
+                    *state =
+                        StreamingHashState::deserialize(slice).ok_or(StorageError::OutOfBounds)?;
+                }
                 slice = &slice[StreamingHashState::SERIALIZED_SIZE..];
             }
         }
@@ -814,6 +869,7 @@ impl TpmStateTranslator {
             first_bytes,
             first_bytes_len,
             hash_states,
+            mu_state,
         })
     }
 
@@ -920,6 +976,12 @@ impl TpmStateTranslator {
         if sess.is_lockout_bound {
             flags |= 1 << 9;
         }
+        if sess.is_parameters_hash_defined {
+            flags |= 1 << 10;
+        }
+        if sess.is_pp_required {
+            flags |= 1 << 11;
+        }
         slot[offset..offset + 2].copy_from_slice(&flags.to_be_bytes());
         offset += 2;
         slot[offset] = sess.command_locality;
@@ -1010,6 +1072,8 @@ impl TpmStateTranslator {
             is_cp_hash_defined: (flags & (1 << 0)) != 0,
             is_name_hash_defined: (flags & (1 << 1)) != 0,
             is_template_hash_defined: (flags & (1 << 2)) != 0,
+            is_parameters_hash_defined: (flags & (1 << 10)) != 0,
+            is_pp_required: (flags & (1 << 11)) != 0,
             policy_digest,
             policy_digest_len: pd_len,
             command_code,
@@ -1025,6 +1089,9 @@ impl TpmStateTranslator {
             include_auth: (flags & (1 << 7)) != 0,
             is_da_bound: (flags & (1 << 8)) != 0,
             is_lockout_bound: (flags & (1 << 9)) != 0,
+            // `ibmswtpm2` has no secure channel support (no *checkSecureChannel* in its
+            // `SESSION`).
+            sec_channel: Default::default(),
         })
     }
 }

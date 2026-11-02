@@ -1,0 +1,141 @@
+fix-zgen-2phase-mqv-sm2: compute Full MQV and the SM2 key exchange as Part 1 defines them
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 1, "Full MQV"): "avf(): 1. Set
+f := ceil(ceil(log2(n)) / 2) 2. Set x' = 2^f + (x mod 2^f) ... 7. set
+t_A := (d_e,A + d_s,A * avf(Q_e,A)) (mod n) 8. set outZ1 := [h * t_A]
+(Q_e,B + [avf(Q_e,B)](Q_s,B))"; Part 1, "SM2 Key Exchange": "avfSM2():
+1. set f := ceil(ceil(log2(n)) / 2) - 1"; Part 3, TPM2_ZGen_2Phase: "If a
+computation of either Z produces the point at infinity, then the
+corresponding Z value will be an Empty Point." (Part 1, "SM2 Key Exchange
+Protocol", step 6 reads "if Z is the point at infinity, return failure"; Part 3
+defines the response of the command for every scheme it supports, while Part 1
+describes the protocol without a response code, so Part 3 applies.)
+
+C_2_2_MQV() never sets the curve order bnN (so avf() uses f = 0 and the
+modular multiplication divides by zero: FATAL_ERROR_DIVIDE_ZERO, the TPM
+enters failure mode) nor bnXeB, the x coordinate of Q_e,B (so avf(Q_e,B) is
+a constant). avf1() and avfSm2() reduce x modulo 2^f with MaskBits(),
+whose mask keeps 64 - (f mod 64) bits of the last word instead of f mod 64
+(80 instead of 112 bits for NIST P-224, so the result is wrong whenever f is
+not a multiple of 64). ComputeWForSM2() uses the zero-based number of the most
+significant bit of n instead of ceil(log2(n)), one less than the f of
+avfSM2(). Both key exchanges return TPM_RC_NO_RESULT for a Z at infinity
+instead of an Empty Point. The patch sets bnN and bnXeB, reduces x modulo 2^f
+with a modular reduction (MaskBits() itself is left alone: the random-number
+code uses it), computes f from the size of n in bits, and returns the Empty Point (outZ1 is initialized empty)
+for a Z at infinity.
+
+diff --git a/TPMCmd/tpm/cryptolibs/implementations/EccRef/CryptEccKeyExchange.c b/TPMCmd/tpm/cryptolibs/implementations/EccRef/CryptEccKeyExchange.c
+--- a/TPMCmd/tpm/cryptolibs/implementations/EccRef/CryptEccKeyExchange.c
++++ b/TPMCmd/tpm/cryptolibs/implementations/EccRef/CryptEccKeyExchange.c
+@@ -31,8 +31,15 @@ static BOOL avf1(Crypt_Int* bnX,  // IN/OUT: the reduced value
+     // compute f = 2^(ceil(ceil(log2(n)) / 2))
+     int f = (CryptoMath_SizeInBits(bnN) + 1) / 2;
+     // x' = 2^f + (x mod 2^f)
+-    CryptoMath_MaskBits(bnX, f);  // This is mod 2*2^f but it doesn't matter because
+-    // the next operation will SET the extra bit anyway
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the associated value needs x mod 2^f, but MaskBits() keeps 64 - (f mod 64) bits of
++    // the last word instead of f mod 64 (e.g. 80 bits instead of 112 for NIST P-224).
++    {
++        CRYPT_ECC_NUM(bnPow);
++        CryptoMath_SetWord(bnPow, 0);
++        CryptoMath_SetBit(bnPow, f);
++        CryptoMath_Mod(bnX, bnPow);
++    }
+     if(!CryptoMath_SetBit(bnX, f))
+     {
+         FAIL(FATAL_ERROR_CRYPTO);
+@@ -82,6 +89,10 @@ static TPM_RC C_2_2_MQV(TPMS_ECC_POINT* outZ,   // OUT: the computed point
+     //  3. If P = O, output an error indicator.
+     //  4. Z=xP, where xP is the x-coordinate of P.
+ 
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // Part 1, "Full MQV": avf() uses n, the order of the curve (bnN was never set).
++    CryptoMath_Copy(bnN, CryptoMath_CurveGetOrder(curveId));
++
+     // Compute the public ephemeral key pQeA = [de,A]G
+     if((retVal = TpmEcc_PointMult(
+             pQeA, CryptoMath_CurveGetG(curveId), bnDeA, NULL, NULL, E))
+@@ -114,17 +125,27 @@ static TPM_RC C_2_2_MQV(TPMS_ECC_POINT* outZ,   // OUT: the computed point
+     // 'outZ' = (tA)(Qe,B + avf(Qe,B)Qs,B).
+ 
+     // first, compute XeB = avf(XeB)
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // Part 1, "Full MQV": avf(Q_e,B) of the x coordinate of Q_e,B (bnXeB was never set).
++    CryptoMath_Copy(bnXeB, CryptoMath_PointX(pQeB));
+     avf1(bnXeB, bnN);
+ 
+     // QsB := [XeB]QsB
+     TpmEcc_PointMult(pQsB, pQsB, bnXeB, NULL, NULL, E);
+     CryptoMath_PointAdd(pQeB, pQeB, pQsB, E);
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // Part 3, TPM2_ZGen_2Phase: "If a computation of either Z produces the point at
++    // infinity, then the corresponding Z value will be an Empty Point" (outZ is empty).
++    if(CryptoMath_IsInfinityPoint(pQeB))
++        goto Exit;
+ 
+     // QeB := [tA]QeB = [tA](QsB + [Xe,B]QeB) and check for at infinity
+     // If the result is not the point at infinity, return QeB
+     TpmEcc_PointMult(pQeB, pQeB, bnTa, NULL, NULL, E);
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // Part 3, TPM2_ZGen_2Phase: a Z at infinity is the Empty Point (outZ is empty).
+     if(CryptoMath_IsInfinityPoint(pQeB))
+-        ERROR_EXIT(TPM_RC_NO_RESULT);
++        goto Exit;
+     // Convert Crypt_Int* E to TPM2B E
+     TpmEcc_PointTo2B(outZ, pQeB, E);
+ 
+@@ -233,7 +254,10 @@ LIB_EXPORT TPM_RC CryptoEcc_2PhaseKeyExchange(
+ static UINT32 ComputeWForSM2(TPM_ECC_CURVE curveId)
+ {
+     //  w := ceil(ceil(log2(n)) / 2) - 1
+-    return (CryptoMath_MostSigBitNum(CryptoMath_CurveGetOrder(curveId)) / 2 - 1);
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // Part 1, "SM2 Key Exchange": f := ceil(ceil(log2(n)) / 2) - 1, where ceil(log2(n))
++    // is the size of n in bits (one more than the zero-based number of its MSb).
++    return ((CryptoMath_SizeInBits(CryptoMath_CurveGetOrder(curveId)) + 1) / 2 - 1);
+ }
+ 
+ //*** avfSm2()
+@@ -251,9 +275,15 @@ static Crypt_Int* avfSm2(Crypt_Int* bn,  // IN/OUT: the reduced value
+     // b)   set x' := 2^w + ( x & (2^w - 1))
+     // This is just like the avf for MQV where x' = 2^w + (x mod 2^w)
+ 
+-    CryptoMath_MaskBits(bn, w);  // as with avf1, this is too big by a factor of 2 but
+-                                 // it doesn't matter because we SET the extra bit
+-                                 // anyway
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the associated value needs x mod 2^f, but MaskBits() keeps 64 - (f mod 64) bits of
++    // the last word instead of f mod 64 (e.g. 80 bits instead of 112 for NIST P-224).
++    {
++        CRYPT_ECC_NUM(bnPow);
++        CryptoMath_SetWord(bnPow, 0);
++        CryptoMath_SetBit(bnPow, w);
++        CryptoMath_Mod(bn, bnPow);
++    }
+     if(!CryptoMath_SetBit(bn, w))
+     {
+         FAIL(FATAL_ERROR_CRYPTO);
+@@ -332,11 +362,19 @@ LIB_EXPORT TPM_RC SM2KeyExchange(
+     // Now that 'tA' is (h * 'tA' mod n)
+     // 'outZ' = ['tA'](QsB + [avf(QeB.x)](QeB)).
+     CryptoMath_Copy(XeB, CryptoMath_PointX(QeB));
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // Part 3, TPM2_ZGen_2Phase: a Z at infinity is the Empty Point (outZ is empty).
+     if(!CryptoMath_PointMultiplyAndAdd(Z, QsB, One, QeB, avfSm2(XeB, w), E))
++    {
++        retVal = TPM_RC_SUCCESS;
+         goto Exit;
++    }
+     // QeB := [tA]QeB = [tA](QsB + [Xe,B]QeB) and check for at infinity
+     if(!CryptoMath_PointMultiply(Z, Z, Ta, E))
++    {
++        retVal = TPM_RC_SUCCESS;
+         goto Exit;
++    }
+     // Convert Crypt_Int* E to TPM2B E
+     TpmEcc_PointTo2B(outZ, Z, E);
+     retVal = TPM_RC_SUCCESS;

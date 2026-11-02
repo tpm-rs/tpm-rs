@@ -239,14 +239,14 @@ fn scheme_seed_unique_and_key_size_checks() {
         rc_p(TpmRc::KEY, 2)
     );
 
-    // 4. RSA-3072 is not a key size of this TPM's profile (1024 and 2048 bits), so `keyBits`
-    //    fails to unmarshal: VALUE + P2. TPM 2.0 Part 2, Table "Definition of (RSA)
-    //    (TPM_KEY_BITS) TPMI_RSA_KEY_BITS Type": "$RSA_KEY_SIZES_BITS | the number of bits in
-    //    the supported key", "#TPM_RC_VALUE | error when key size is not supported". (Its note
-    //    allows "limited support for smaller RSA key sizes" in `TPM2_LoadExternal()`, not larger
-    //    ones.)
-    //    The `tpm2` types of this TPM cannot hold an RSA-3072 key, so a 2048-bit key is
-    //    marshaled, its keyBits replaced and its modulus grown to 384 octets.
+    // 4. A key size outside this TPM's profile (RSA-3072 or RSA-4096 without the `rsa3072`/
+    //    `rsa4096` features, otherwise the nonexistent RSA-1536) fails to unmarshal at `keyBits`:
+    //    VALUE + P2. TPM 2.0 Part 2, Table "Definition of (RSA) (TPM_KEY_BITS) TPMI_RSA_KEY_BITS
+    //    Type": "$RSA_KEY_SIZES_BITS | the number of bits in the supported key", "#TPM_RC_VALUE |
+    //    error when key size is not supported". (Its note allows "limited support for smaller RSA
+    //    key sizes" in `TPM2_LoadExternal()`, not larger ones.)
+    //    The `tpm2` types of this TPM cannot hold such a key, so a 2048-bit key is marshaled, its
+    //    keyBits replaced and its modulus grown to the size of the key.
     let mut modulus = [0x33u8; 256];
     modulus[0] = 0xd5;
     let t = TpmtPublic {
@@ -273,13 +273,17 @@ fn scheme_seed_unique_and_key_size_checks() {
     // (empty), symmetric (NULL), scheme (NULL), keyBits, exponent and the modulus.
     let in_public = params + 2;
     let key_bits = crate::_common::tpm2b_public_name_alg(in_public) + 2 + 4 + 2 + 2 + 2;
-    crate::_common::put_u16(&mut raw, key_bits, 3072);
+    let unsupported_bits = [3072u16, 4096]
+        .into_iter()
+        .find(|&bits| TpmiRsaKeyBits::try_from(bits).is_err())
+        .unwrap_or(1536);
+    crate::_common::put_u16(&mut raw, key_bits, unsupported_bits);
     let modulus_end = crate::_common::tpm2b_end(&raw, key_bits + 2 + 4);
     crate::_common::grow_command(
         &mut raw,
         &[in_public, key_bits + 6],
         modulus_end,
-        &[0x33; 128],
+        &vec![0x33; (usize::from(unsupported_bits) / 8).saturating_sub(256)],
     );
     assert_eq!(
         crate::_common::raw_rc(&mut sim, &raw),
@@ -374,7 +378,7 @@ fn name_alg_and_curve_outside_the_profile_rejected_at_unmarshal() {
     let steps: [(&str, u32); 3] = [
         (
             concat!(
-                "80010000006800000167000000560023000b000400400000001000100011001000203561244d853489754cf0710d875a",
+                "80010000006800000167000000560023000b000400400000001000100030001000203561244d853489754cf0710d875a",
                 "7ba4b2aca9cc38a5d02985d4ceb83bcbd0a20020f8f0017d0000000000000013823d0402018200040004010004000000",
                 "1000000052820201",
             ),

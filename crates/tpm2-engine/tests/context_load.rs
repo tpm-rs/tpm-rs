@@ -41,7 +41,7 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
         name: (tpm2::Tpm2bName::default()).into(),
         auth: (tpm2::Tpm2bAuth::default()).into(),
         public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),
-        private: [0u8; 1536],
+        private: [0u8; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
         private_len: 0,
         qualified_name: (tpm2::Tpm2bName::default()).into(),
         hierarchy: 0x40000001, // RH_OWNER

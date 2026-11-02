@@ -1,0 +1,46 @@
+policy-capability-transient-handle: a transient handle exists only if it is loaded
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, version 185, TPM2_PolicyCapability): "If the
+requested TPM *property* does not exist, the TPM will return `TPM_RC_POLICY`
+unless the *operation* is `TPM_EO_NEQ`", with the property type `TPM_HANDLE`
+for `TPM_CAP_HANDLES`.
+
+ObjectCapGetOneLoaded() loops over every object slot from the handle's slot
+on and returns TRUE for the first occupied one, so TPM2_PolicyCapability
+(TPM_CAP_HANDLES) reports a transient handle as existing (and compares the
+handle value itself) whenever any object with a larger handle is loaded. The
+patch checks only the handle's own slot.
+diff --git a/TPMCmd/tpm/src/subsystem/Object.c b/TPMCmd/tpm/src/subsystem/Object.c
+--- a/TPMCmd/tpm/src/subsystem/Object.c
++++ b/TPMCmd/tpm/src/subsystem/Object.c
+@@ -868,20 +868,19 @@ ObjectCapGetLoaded(TPMI_DH_OBJECT handle,     // IN: start handle
+ // This function returns whether a handle is loaded.
+ BOOL ObjectCapGetOneLoaded(TPMI_DH_OBJECT handle)  // IN: handle
+ {
+-    UINT32 i;
++    UINT32 i = handle - TRANSIENT_FIRST;
+ 
+     pAssert_BOOL(HandleGetType(handle) == TPM_HT_TRANSIENT);
+ 
+-    // Iterate object slots to get loaded object handles
+-    for(i = handle - TRANSIENT_FIRST; i < MAX_LOADED_OBJECTS; i++)
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the handle exists only if an object is loaded in exactly its slot (the
++    // original loop reported any loaded object at or after the handle's slot).
++    if(i < MAX_LOADED_OBJECTS && s_objects[i].attributes.occupied == TRUE)
+     {
+-        if(s_objects[i].attributes.occupied == TRUE)
+-        {
+-            // A valid transient object can not be the copy of a persistent object
+-            pAssert_BOOL(s_objects[i].attributes.evict == CLEAR);
++        // A valid transient object can not be the copy of a persistent object
++        pAssert_BOOL(s_objects[i].attributes.evict == CLEAR);
+ 
+-            return TRUE;
+-        }
++        return TRUE;
+     }
+ 
+     return FALSE;

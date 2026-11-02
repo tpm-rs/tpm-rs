@@ -7,7 +7,8 @@
 //!    differential tests pin (checked against `testing/build.rs`) and applies the same patches
 //!    as the differential reference (`testing/patches/tcgtpm/*.patch`, in sorted file-name
 //!    order), so that the code is compiled with exactly the profile the reference runs with
-//!    (none of the patches changes the random-number generation).
+//!    (none of the patches changes the random-number generation), except that SHA-512 is
+//!    enabled (`enable_sha512`) when this crate's `sha512` feature is.
 //! 2. It compiles the unmodified reference files the random-number code consists of
 //!    ([`SOURCES`]) with the reference's compiler flags, plus command-line macros that redirect
 //!    the three mutable globals involved to accessor functions implemented in Rust
@@ -53,7 +54,7 @@ mod reference_rng {
 
     /// The unmodified reference sources (relative to `TPMCmd/`) that are compiled. Their
     /// functions that the entry points do not reach are discarded by the partial link.
-    const SOURCES: [&str; 26] = [
+    const SOURCES: [&str; 28] = [
         // The DRBG.
         "tpm/src/crypt/CryptRand.c",
         // Hashes (OAEP, PSS, MGF1, KDFa).
@@ -68,6 +69,9 @@ mod reference_rng {
         "tpm/src/crypt/CryptEccData.c",
         "tpm/src/crypt/CryptEccSignature.c",
         "tpm/src/crypt/ecc/TpmEcc_Signature_ECDSA.c",
+        // SM2 and EC-Schnorr signing (`CryptEccSign()`), with `ALG_SM2`/`ALG_ECSCHNORR`.
+        "tpm/src/crypt/ecc/TpmEcc_Signature_SM2.c",
+        "tpm/src/crypt/ecc/TpmEcc_Signature_Schnorr.c",
         // Referenced by `CryptEccSign()` for ECDAA signatures, which Rust never requests.
         "tpm/src/crypt/ecc/TpmEcc_Signature_ECDAA.c",
         "tpm/src/crypt/ecc/TpmEcc_Signature_Util.c",
@@ -280,6 +284,30 @@ mod reference_rng {
                 &format!("git apply {}", patch.display()),
             );
         }
+        if std::env::var_os("CARGO_FEATURE_SHA512").is_some() {
+            enable_sha512(repo_dir);
+        }
+    }
+
+    /// The profile header whose `ALG_SHA512` [`enable_sha512`] sets.
+    const PROFILE_HEADER: &str = "TPMCmd/TpmConfiguration/TpmConfiguration/TpmProfile_Common.h";
+
+    /// Enables SHA-512 in the checkout's profile (`ALG_SHA512 ALG_YES`) for a `tpm-rs` with
+    /// SHA-512 (this crate's `sha512` feature). The public TCG reference has no SHA-512 upstream
+    /// (and is compared with a `tpm-rs` built without it), but a `tpm-rs` with SHA-512 (compared
+    /// with the other references, which have it) needs its hashes (KDFa of seeded key generation,
+    /// OAEP, PSS) and the profile they imply.
+    fn enable_sha512(repo_dir: &Path) {
+        let path = repo_dir.join(PROFILE_HEADER);
+        let header = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let line = header
+            .lines()
+            .find(|l| l.split_whitespace().take(2).eq(["#define", "ALG_SHA512"]))
+            .unwrap_or_else(|| panic!("no ALG_SHA512 in {}", path.display()))
+            .to_owned();
+        let enabled = header.replacen(&line, "#define ALG_SHA512 ALG_YES", 1);
+        std::fs::write(&path, enabled).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
     }
 
     /// The path of OpenSSL's `libcrypto.a` (found via `pkg-config`, as in `testing/build.rs`).
@@ -342,6 +370,9 @@ mod reference_rng {
             stamp_file(&mut expected_stamp, patch);
         }
         expected_stamp.extend_from_slice(include_bytes!("build.rs"));
+        if std::env::var_os("CARGO_FEATURE_SHA512").is_some() {
+            expected_stamp.extend_from_slice(b"\nsha512\n");
+        }
 
         let repo_dir = out.join("tcgtpm");
         let tpm_cmd = repo_dir.join("TPMCmd");

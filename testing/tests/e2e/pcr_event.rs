@@ -83,8 +83,12 @@ fn event_digests_and_extension() {
     let initial_pcr_null_sha256 = read_pcr_by_alg_id(&mut sim, ALG_SHA256, pcr_idx).unwrap();
     let (rc, digests_null) = pcr_event_at(&mut sim, 0, RH_NULL, event_bytes);
     assert_eq!(rc, 0, "PCR_Event(TPM_RH_NULL) failed: {rc:#x}");
-    // Digests are still returned (one per implemented hash: SHA1/256/384/512)
-    assert_eq!(digests_null.unwrap().count(), 4);
+    // Digests are still returned (one per implemented hash: SHA1/256/384 and SHA-512 if
+    // implemented)
+    assert_eq!(
+        digests_null.unwrap().count(),
+        crate::_common::IMPLEMENTED_HASH_ALGS.len()
+    );
     // But PCR state did not change
     assert_eq!(
         read_pcr_by_alg_id(&mut sim, ALG_SHA256, pcr_idx).unwrap(),
@@ -184,8 +188,12 @@ fn pcr_event_returns_digests_and_extends_banks() {
     let expected_sha256_hash = hash_bytes::<32>(TpmiAlgHash::Sha256, event_data);
     let expected_sha384_hash = hash_bytes::<48>(TpmiAlgHash::Sha384, event_data);
 
-    // C PCR_Event returns one digest per implemented hash (SHA1/256/384/512), PCR_Event.c.
-    assert_eq!(evt_resp.digests.count(), 4);
+    // C PCR_Event returns one digest per implemented hash (SHA1/256/384 and SHA-512 if
+    // implemented), PCR_Event.c.
+    assert_eq!(
+        evt_resp.digests.count(),
+        crate::_common::IMPLEMENTED_HASH_ALGS.len()
+    );
     assert_eq!(
         evt_resp.digests.digests().next().unwrap().digest(),
         &expected_sha1_hash[..]
@@ -234,7 +242,10 @@ fn pcr_event_returns_digests_and_extends_banks() {
         &[pw()],
     )
     .unwrap();
-    assert_eq!(null_resp.digests.count(), 4);
+    assert_eq!(
+        null_resp.digests.count(),
+        crate::_common::IMPLEMENTED_HASH_ALGS.len()
+    );
     assert_eq!(
         null_resp.digests.digests().next().unwrap().digest(),
         &expected_sha1_hash[..]

@@ -1,0 +1,34 @@
+sign-digest-hmac-scheme: TPM2_SignDigest rejects a key whose scheme is TPM_ALG_HMAC
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3 (version 185), "TPM2_SignDigest",
+"General Description"):
+
+  "The scheme of keyHandle must be a signing scheme that supports signing a
+  digest (e.g., TPM_ALG_ECDSA, but not TPM_ALG_HMAC)."
+
+Part 3, Table "Signing commands overview": HMAC with TPM2_SignDigest() /
+TPM2_VerifyDigestSignature() is "Not supported".
+
+TPM2_SignDigest accepts any scheme that CryptoCommon_SelectSignScheme()
+accepts, so a keyed-hash key with scheme TPM_ALG_HMAC produces an HMAC of the
+digest. The command now returns TPM_RC_SCHEME + RC_SignDigest_keyHandle for
+it, as in tpm-rs.
+diff --git a/TPMCmd/tpm/src/command/Signature/SignDigest.c b/TPMCmd/tpm/src/command/Signature/SignDigest.c
+--- a/TPMCmd/tpm/src/command/Signature/SignDigest.c
++++ b/TPMCmd/tpm/src/command/Signature/SignDigest.c
+@@ -124,6 +124,13 @@ TPM2_SignDigest(SignDigest_In*  in,  // IN: input parameter list
+             return TPM_RCS_SCHEME + RC_SignDigest_keyHandle;
+         }
+     }
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the scheme "must be a signing scheme that supports signing a digest (e.g.,
++    // TPM_ALG_ECDSA, but not TPM_ALG_HMAC)" (Part 3, TPM2_SignDigest).
++    if(objectScheme.scheme == TPM_ALG_HMAC)
++    {
++        return TPM_RCS_SCHEME + RC_SignDigest_keyHandle;
++    }
+     hashAlg = CryptoCommon_GetSignSchemeHashAlg(&objectScheme);
+ 
+     // If validation is provided, or the key is restricted, check the ticket

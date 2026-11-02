@@ -690,10 +690,10 @@ fn verify_signature_rejects_unsupported_scheme() {
             signature_s: Tpm2bEccParameter::default(),
         }),
     };
-    // sigAlg = TPM_ALG_SM2 (not a `TpmtSignature` of this TPM), after the digest.
+    // sigAlg = TPM_ALG_EDDSA (not a `TpmtSignature` of this TPM), after the digest.
     let res =
         crate::_common::execute_with_corrupted_bytes_status(&mut sim, &verify_cmd, 0, &[], |p| {
-            crate::_common::put_u16(p, crate::_common::tpm2b_end(p, 0), tpm2::Alg::SM2.id());
+            crate::_common::put_u16(p, crate::_common::tpm2b_end(p, 0), tpm2::Alg::EDDSA.id());
         });
     // VerifySignature.c: RcSafeAddToResult(TPM_RC_SCHEME, RC_VerifySignature_signature).
     assert_eq!(

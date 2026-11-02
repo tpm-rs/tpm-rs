@@ -46,18 +46,36 @@ fn mistyped_session_handle_reported_before_decrypt_attribute() {
     );
 }
 
-/// CMAC is not implemented: an AES key with CMAC mode is rejected by CreatePrimary
-/// (TPM_RC_MODE + RC_P2) and CMAC as EncryptDecrypt(2) mode parameter fails to unmarshal
-/// (TPM_RC_MODE)
+/// CMAC is not a cipher mode: without CMAC an AES key with CMAC mode is rejected by
+/// CreatePrimary (TPM_RC_MODE + RC_P2); with CMAC such a (signing) key is created but
+/// EncryptDecrypt rejects it (TPM_RC_MODE + RC_H1); and CMAC as EncryptDecrypt(2) mode parameter
+/// (`TPMI_ALG_CIPHER_MODE`) always fails to unmarshal (TPM_RC_MODE)
 #[test]
 fn cmac_mode_rejected() {
     let mut sim = Tpm::new();
-    // 1. `TPMI_ALG_SYM_MODE` excludes unimplemented modes, so the CMAC key template of
+    // 1. Without CMAC, `TPMI_ALG_SYM_MODE` excludes it, so the CMAC key template of
     //    TPM2_CreatePrimary (parameter 2, inPublic) fails with TPM_RC_MODE + TPM_RC_P + TPM_RC_2.
-    assert_eq!(
-        crate::_common::try_create_aes_key_with_mode(&mut sim, tpm2::Alg::CMAC).unwrap_err(),
-        TpmRc::MODE.with(Position::parameter(2)).get()
-    );
+    //    With CMAC, the key's mode is not a block cipher mode for encryption (Part 3,
+    //    TPM2_EncryptDecrypt: TPM_RC_MODE for the key).
+    let cmac_key = crate::_common::try_create_aes_key_with_mode(&mut sim, tpm2::Alg::CMAC);
+    if cfg!(feature = "cmac") {
+        let cmd = EncryptDecrypt {
+            key_handle: cmac_key.unwrap(),
+            decrypt: false,
+            mode: None,
+            iv_in: Tpm2bIv::from_bytes(&[0u8; 16]).unwrap(),
+            in_data: Tpm2bMaxBuffer::from_bytes(&[0u8; 16]).unwrap(),
+        };
+        assert_eq!(
+            execute_with_corrupted_bytes_status(&mut sim, &cmd, 1, b"password", |_| {}).err(),
+            Some(TpmRc::MODE.with(Position::handle(1)).get())
+        );
+    } else {
+        assert_eq!(
+            cmac_key.unwrap_err(),
+            TpmRc::MODE.with(Position::parameter(2)).get()
+        );
+    }
     let key_handle = create_aes_key(&mut sim, TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb));
 
     let cmd = EncryptDecrypt {

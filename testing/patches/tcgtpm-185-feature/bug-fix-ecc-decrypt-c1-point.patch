@@ -1,0 +1,33 @@
+fix-ecc-decrypt-c1-point: reject a C1 that is not on the curve of the key
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 1, "SM2 Encryption and Decryption"):
+"These clauses describe the encryption and decryption process of GB/T
+32918.4-2016 as implemented in the TPM." ... "Decryption ... 1. extract
+P1 = x1, y1 from C1 2. compute P2 := (x2, y2) := [d_B]P1"; GB/T 32918.4-2016
+B1 requires verifying that C1 satisfies the curve equation and reporting an
+error otherwise.
+
+TPM2_ECC_Decrypt does not validate C1: CryptEccDecrypt() ignores the
+TPM_RC_ECC_POINT of the point multiplication, so it continues with C1 itself
+as P2 and fails later with TPM_RC_VALUE (or, with a C3 computed over C1 by the
+caller, "decrypts" with an unrelated mask). The patch checks C1 after the
+scheme selection and returns TPM_RC_ECC_POINT + RC_ECC_Decrypt_C1, as
+TPM2_ECDH_ZGen and TPM2_ZGen_2Phase do for their input points.
+
+diff --git a/TPMCmd/tpm/src/command/Asymmetric/ECC_Decrypt.c b/TPMCmd/tpm/src/command/Asymmetric/ECC_Decrypt.c
+--- a/TPMCmd/tpm/src/command/Asymmetric/ECC_Decrypt.c
++++ b/TPMCmd/tpm/src/command/Asymmetric/ECC_Decrypt.c
+@@ -27,6 +27,11 @@ TPM2_ECC_Decrypt(ECC_Decrypt_In*  in,  // IN: input parameter list
+     // Have to have a scheme selected
+     if(!CryptoCommon_EccSelectScheme(key, &in->inScheme))
+         return TPM_RCS_SCHEME + RC_ECC_Decrypt_inScheme;
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // TPM 2.0 Part 1, "SM2 Encryption and Decryption" (GB/T 32918.4-2016, B1): C1 must
++    // be a point on the curve of the key.
++    if(!CryptoEcc_IsPointOnCurve(key->publicArea.parameters.eccDetail.curveID, &in->C1.point))
++        return TPM_RCS_ECC_POINT + RC_ECC_Decrypt_C1;
+     //  Command Output
+     return CryptoEcc_Decrypt(
+         key, &in->inScheme, &out->plainText, &in->C1.point, &in->C2, &in->C3);

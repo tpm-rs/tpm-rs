@@ -11,6 +11,7 @@ members = [
     "crates/tpm2-crypto/crux",
     "crates/tpm2-crypto/bssl",
     "crates/tpm2-crypto/tests",
+    "crates/tpm2-crypto/weierstrass",
     "testing",
 ]
 exclude = [
@@ -77,6 +78,7 @@ tpm2-crypto-rust = { path = "crates/tpm2-crypto/rust", default-features = false 
 tpm2-crypto-crux = { path = "crates/tpm2-crypto/crux", default-features = false }
 tpm2-crypto-bssl = { path = "crates/tpm2-crypto/bssl", default-features = false }
 tpm2-crypto-tests = { path = "crates/tpm2-crypto/tests" }
+tpm2-crypto-weierstrass = { path = "crates/tpm2-crypto/weierstrass", default-features = false }
 
 [profile.release]
 lto = true # default is lto = false

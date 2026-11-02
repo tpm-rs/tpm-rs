@@ -1,0 +1,364 @@
+verify-sequence-ticket: TPM2_VerifySequenceComplete produces a TPM_ST_MESSAGE_VERIFIED ticket over the message and keeps the sequence on failure
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3 (version 185),
+"TPM2_VerifySequenceComplete"):
+
+  "This command is like TPM2_VerifySignature() with the following
+  differences: [...] Verifying takes a message (provided via
+  TPM2_SequenceUpdate()) rather than a digest. The ticket's tag is
+  TPM_ST_MESSAGE_VERIFIED."
+
+Specification (TPM 2.0 Library, Part 2 (version 185), "TPMT_TK_VERIFIED"):
+
+  "HMAC_contextAlg(proof, (tag || digestOrMessage || keyName || metadata))"
+  (digestOrMessage: "the signed digest or message"; metadata is empty for
+  TPM_ST_MESSAGE_VERIFIED.)
+
+Specification (TPM 2.0 Library, Part 3 (version 185), "Response Codes"):
+
+  "Any other value indicates that the command did not complete and the state
+  of the TPM is unchanged."
+
+TPM2_VerifySequenceComplete returns a TPM_ST_VERIFIED ticket over the digest
+of the message for a scheme that signs a digest, and a NULL TPM_ST_VERIFIED
+ticket for the HMAC and ML-DSA schemes. It also ends the running hash or HMAC
+of the sequence in place, so after a failed verification (TPM_RC_SIGNATURE)
+the sequence object stays loaded with a consumed state. The ticket is now a
+running HMAC alongside the sequence: TPM2_VerifySequenceStart obtains the
+proof of the key's hierarchy (before the sequence object is allocated, so its
+error leaves the TPM unchanged) and starts HMAC_contextAlg(proof, ...) with
+the tag (the running HMAC is kept in the 'state' union after the running
+state of the message, because a SEQUENCE_OBJECT has to fit in an OBJECT slot,
+and is exported/imported by a context save/load; its hierarchy is a new
+field before 'state'), TPM2_SequenceUpdate adds the message to it, and TPM2_VerifySequenceComplete adds the key's Name and returns
+<TPM_ST_MESSAGE_VERIFIED, hierarchy, HMAC> for every scheme, or
+<TPM_ST_MESSAGE_VERIFIED, TPM_RH_NULL, Empty Buffer> for a key in TPM_RH_NULL
+or with nameAlg TPM_ALG_NULL. The running state of the message (hash, HMAC,
+or ML-DSA through its context export/import) is completed on a copy, so a
+failed verification leaves the sequence unchanged. As in tpm-rs.
+diff --git a/TPMCmd/tpm/include/private/Global.h b/TPMCmd/tpm/include/private/Global.h
+--- a/TPMCmd/tpm/include/private/Global.h
++++ b/TPMCmd/tpm/include/private/Global.h
+@@ -227,6 +227,13 @@ typedef struct SEQUENCE_OBJECT
+     // save/load. Object.c asserts that 'state' is the last member.
+     TPMT_SIG_SCHEME signScheme;
+     TPM2B_NAME      associatedName;
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // a verification sequence also accumulates its TPM_ST_MESSAGE_VERIFIED
++    // ticket, HMAC(proof, (tag || message || keyName)) (Part 2,
++    // TPMT_TK_VERIFIED), in 'state.verify.ticket', keyed with the proof of
++    // 'ticketHierarchy', the hierarchy of the key when the sequence was started.
++    // TPM_RH_NULL means a NULL Ticket and no running ticket HMAC.
++    TPMI_RH_HIERARCHY ticketHierarchy;
+     union
+     {
+         // attributes.hashSeq == SET or
+@@ -234,6 +241,21 @@ typedef struct SEQUENCE_OBJECT
+         HASH_STATE hashState[HASH_COUNT];
+         // type = TPM_ALG_HMAC
+         HMAC_STATE hmacState;
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // attributes.verifySeq == SET: the running state of the message
++        // ('hashState[0]', 'hmacState' or the exported ML-DSA state, which
++        // alias 'message') followed by the running HMAC of the ticket.
++        struct
++        {
++            union
++            {
++                HMAC_STATE hmac;
++#  if ALG_MLDSA
++                CRYPTO_MLDSA_EXPORTED_VERIFY_SEQUENCE_STATE mldsa;
++#  endif  // ALG_MLDSA
++            } message;
++            HMAC_STATE ticket;
++        } verify;
+ #  if ALG_MLDSA
+         // Running state of an ML-DSA signing sequence, and the form of that
+         // state that is written into a saved context.
+diff --git a/TPMCmd/tpm/src/command/Context/Context_spt.c b/TPMCmd/tpm/src/command/Context/Context_spt.c
+--- a/TPMCmd/tpm/src/command/Context/Context_spt.c
++++ b/TPMCmd/tpm/src/command/Context/Context_spt.c
+@@ -192,6 +192,21 @@ void SequenceDataExport(
+ {
+     int count;
+ 
++#if CC_VerifySequenceStart
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the running HMAC of the ticket of a verification sequence is exported too,
++    // also for ML-DSA (which returns early below). It follows the largest form
++    // of the message state, so it does not overlap an exported ML-DSA state.
++    if(object->attributes.verifySeq == SET && object->ticketHierarchy != TPM_RH_NULL)
++    {
++        HASH_STATE* hash   = &object->state.verify.ticket.hashState;
++        size_t      offset = (BYTE*)hash - (BYTE*)object;
++        //
++        CryptoHash_ExportState(
++            hash, (EXPORT_HASH_STATE*)&((BYTE*)exportObject)[offset]);
++    }
++#endif  // CC_VerifySequenceStart
++
+ #if ALG_MLDSA && CC_SignSequenceStart
+     // An ML-DSA signing sequence keeps a reference to state that is owned by the
+     // crypto library rather than a hash context, so it has to be replaced by its
+@@ -250,6 +265,21 @@ void SequenceDataImport(
+ {
+     int count;
+ 
++#if CC_VerifySequenceStart
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the running HMAC of the ticket of a verification sequence is imported too,
++    // also for ML-DSA (which returns early below). It follows the largest form
++    // of the message state, so it does not overlap an exported ML-DSA state.
++    if(object->attributes.verifySeq == SET && object->ticketHierarchy != TPM_RH_NULL)
++    {
++        HASH_STATE* hash   = &object->state.verify.ticket.hashState;
++        size_t      offset = (BYTE*)hash - (BYTE*)object;
++        //
++        CryptoHash_ImportState(
++            hash, (EXPORT_HASH_STATE*)&((BYTE*)exportObject)[offset]);
++    }
++#endif  // CC_VerifySequenceStart
++
+ #if ALG_MLDSA && CC_SignSequenceStart
+     // Rebuild the crypto library's ML-DSA state from the exported form that was
+     // written by SequenceDataExport().
+diff --git a/TPMCmd/tpm/src/command/Signature/VerifySequenceComplete.c b/TPMCmd/tpm/src/command/Signature/VerifySequenceComplete.c
+--- a/TPMCmd/tpm/src/command/Signature/VerifySequenceComplete.c
++++ b/TPMCmd/tpm/src/command/Signature/VerifySequenceComplete.c
+@@ -25,8 +25,8 @@ TPM2_VerifySequenceComplete(
+     SEQUENCE_OBJECT* sequenceObject =
+         (SEQUENCE_OBJECT*)HandleToObject(in->sequenceHandle);
+     OBJECT*           signObject = HandleToObject(in->keyHandle);
+-    TPMI_RH_HIERARCHY hierarchy;
+     TPM2B_DIGEST      digest;
++    HASH_STATE        hashState;
+     TPM_RC            result;
+     //
+     // Input Validation
+@@ -45,14 +45,11 @@ TPM2_VerifySequenceComplete(
+         return TPM_RC_SIGN_CONTEXT_KEY + RC_VerifySequenceComplete_keyHandle;
+ 
+     // Internal Data Update
+-    // The running state of the sequence is completed below, so the sequence
+-    // object is not usable after this point. It is only flushed if the signature
+-    // is genuine; if it is not, the caller is left to flush it so that a failed
+-    // command does not consume the handle.
+-
+-    // The ticket produced by this command names the value that the signature was
+-    // verified over. Only a scheme that verifies a digest of the message has such
+-    // a value; for anything else an empty ticket is produced.
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the running state of a hash or HMAC sequence is completed on a copy below,
++    // so a failed verification leaves the sequence usable (Part 3, "Response
++    // Codes": "the state of the TPM is unchanged"). The sequence object is only
++    // flushed if the signature is genuine.
+     digest.t.size = 0;
+ 
+     switch(sequenceObject->signScheme.scheme)
+@@ -61,12 +58,26 @@ TPM2_VerifySequenceComplete(
+         case TPM_ALG_MLDSA:
+             if(in->signature.sigAlg != TPM_ALG_MLDSA)
+                 return TPM_RCS_SCHEME + RC_VerifySequenceComplete_signature;
+-            result = CryptoMldsa_VerifySequenceComplete(
+-                signObject->publicArea.parameters.mldsaDetail.parameterSet,
+-                &signObject->publicArea.unique.mldsa,
+-                &sequenceObject->state.mldsaVerifyState,
+-                &in->signature.signature.mldsa);
++        {
++            // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++            // the ML-DSA state is completed on a copy (made with the
++            // export/import of a context save/load).
++            CRYPTO_MLDSA_EXPORTED_VERIFY_SEQUENCE_STATE exported;
++            CRYPTO_MLDSA_VERIFY_SEQUENCE_STATE          copy =
++                CryptoMldsa_VerifySequenceInit();
++            //
++            CryptoMldsa_VerifySequenceExport(&sequenceObject->state.mldsaVerifyState,
++                                             &exported);
++            result = CryptoMldsa_VerifySequenceImport(&exported, &copy);
++            if(result == TPM_RC_SUCCESS)
++                result = CryptoMldsa_VerifySequenceComplete(
++                    signObject->publicArea.parameters.mldsaDetail.parameterSet,
++                    &signObject->publicArea.unique.mldsa,
++                    &copy,
++                    &in->signature.signature.mldsa);
++            CryptoMldsa_VerifySequenceFree(&copy);
+             break;
++        }
+ #  endif  // ALG_MLDSA
+         case TPM_ALG_HMAC:
+         {
+@@ -74,13 +85,17 @@ TPM2_VerifySequenceComplete(
+             // signature is simply the expected value of that HMAC.
+             TPMI_ALG_HASH hashAlg = sequenceObject->signScheme.details.hmac.hashAlg;
+             TPMT_HA       hmac;
++            HMAC_STATE    hmacState;
+             //
+             if(in->signature.sigAlg != TPM_ALG_HMAC
+                || in->signature.signature.hmac.hashAlg != hashAlg)
+                 return TPM_RCS_SCHEME + RC_VerifySequenceComplete_signature;
+ 
+             hmac.hashAlg = hashAlg;
+-            CryptoHash_HmacEnd(&sequenceObject->state.hmacState,
++            // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++            // the HMAC is ended on a copy of the running state.
++            hmacState = sequenceObject->state.hmacState;
++            CryptoHash_HmacEnd(&hmacState,
+                                CryptoCommon_HashGetDigestSize(hashAlg),
+                                (BYTE*)&hmac.digest);
+             if(!MemoryEqual(&hmac.digest,
+@@ -102,9 +117,11 @@ TPM2_VerifySequenceComplete(
+                 return TPM_RCS_SCHEME + RC_VerifySequenceComplete_signature;
+             // The sequence accumulated the message into a running hash, so the
+             // signature is over the completed digest.
+-            digest.t.size = CryptoHash_HashEnd(&sequenceObject->state.hashState[0],
+-                                               sizeof(digest.t.buffer),
+-                                               digest.t.buffer);
++            // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++            // the hash is ended on a copy of the running state.
++            hashState     = sequenceObject->state.hashState[0];
++            digest.t.size = CryptoHash_HashEnd(
++                &hashState, sizeof(digest.t.buffer), digest.t.buffer);
+             // 185TODO: We need to replace this with a new sequenced verification helper so that the
+             // reference code works even if external mu is not supported.
+             result = CryptoCommon_ValidateDigestSignature(
+@@ -114,30 +131,43 @@ TPM2_VerifySequenceComplete(
+     if(result != TPM_RC_SUCCESS)
+         return RcSafeAddToResult(result, RC_VerifySequenceComplete_signature);
+ 
+-    // The signature is genuine, so the sequence object has done its job. Mark it
+-    // as evict so that it is flushed on the way out.
+-    sequenceObject->attributes.evict = SET;
+-
+     // Command Output
+-    hierarchy = GetHierarchy(in->keyHandle);
+-    if(digest.t.size == 0 || hierarchy == TPM_RH_NULL
+-       || signObject->publicArea.nameAlg == TPM_ALG_NULL)
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // "The ticket's tag is TPM_ST_MESSAGE_VERIFIED" (Part 3,
++    // TPM2_VerifySequenceComplete) for every scheme, and the ticket is
++    // HMAC(proof, (tag || message || keyName)) (Part 2, TPMT_TK_VERIFIED). The
++    // running HMAC started by TPM2_VerifySequenceStart() holds the tag and the
++    // message; a sequence without one produces a NULL Ticket.
++    out->validation.tag = TPM_ST_MESSAGE_VERIFIED;
++    if(sequenceObject->ticketHierarchy == TPM_RH_NULL)
+     {
+-        // produce an empty ticket if there is no digest to name in it, if the
+-        // hierarchy is TPM_RH_NULL, or if nameAlg is TPM_ALG_NULL
+-        out->validation.tag           = TPM_ST_VERIFIED;
+         out->validation.hierarchy     = TPM_RH_NULL;
+         out->validation.digest.t.size = 0;
+     }
+     else
+     {
+-        // Compute ticket
+-        result = CryptoCommon_TicketComputeVerified(
+-            hierarchy, &digest, &signObject->name, &out->validation);
++        // The proof of the hierarchy has to be still available (e.g., the
++        // firmware SVN of an SVN-limited hierarchy has not changed).
++        TPM2B_PROOF proof;
++        HMAC_STATE  ticketState;
++        //
++        result = HierarchyGetProof(sequenceObject->ticketHierarchy, &proof);
++        MemorySet(proof.b.buffer, 0, proof.b.size);
+         if(result != TPM_RC_SUCCESS)
+             return result;
++        ticketState                   = sequenceObject->state.verify.ticket;
++        out->validation.hierarchy     = sequenceObject->ticketHierarchy;
++        out->validation.digest.t.size = CryptoCommon_HashGetDigestSize(
++            ticketState.hashState.hashAlg);
++        CryptoCommon_DigestUpdate2B(&ticketState.hashState,
++                                    &sequenceObject->associatedName.b);
++        CryptoCommon_HmacEnd2B(&ticketState, &out->validation.digest.b);
+     }
+ 
++    // The signature is genuine, so the sequence object has done its job. Mark it
++    // as evict so that it is flushed on the way out.
++    sequenceObject->attributes.evict = SET;
++
+     return TPM_RC_SUCCESS;
+ }
+ 
+diff --git a/TPMCmd/tpm/src/command/Signature/VerifySequenceStart.c b/TPMCmd/tpm/src/command/Signature/VerifySequenceStart.c
+--- a/TPMCmd/tpm/src/command/Signature/VerifySequenceStart.c
++++ b/TPMCmd/tpm/src/command/Signature/VerifySequenceStart.c
+@@ -110,8 +110,11 @@ TPM2_VerifySequenceStart(VerifySequenceStart_In*  in,  // IN: input parameter li
+                          VerifySequenceStart_Out* out  // OUT: output parameter list
+ )
+ {
+-    OBJECT*         signObject = HandleToObject(in->keyHandle);
+-    TPMT_SIG_SCHEME scheme;
++    OBJECT*           signObject = HandleToObject(in->keyHandle);
++    TPMT_SIG_SCHEME   scheme;
++    TPMI_RH_HIERARCHY ticketHierarchy;
++    TPM2B_PROOF       proof;
++    TPM_RC            result;
+     //
+     // Input Validation
+ 
+@@ -141,11 +144,47 @@ TPM2_VerifySequenceStart(VerifySequenceStart_In*  in,  // IN: input parameter li
+     if(in->hint.t.size != 0 && !VerifySequenceSchemeTakesHint(scheme.scheme))
+         return TPM_RCS_VALUE + RC_VerifySequenceStart_hint;
+ 
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the TPM_ST_MESSAGE_VERIFIED ticket of TPM2_VerifySequenceComplete() is an
++    // HMAC over the message, so it runs alongside the sequence, keyed with the
++    // proof of the key's hierarchy (a NULL Ticket for a key in TPM_RH_NULL or
++    // with nameAlg TPM_ALG_NULL). The proof is obtained before the sequence is
++    // created, so that its error (TPM_RC_FW_LIMITED, TPM_RC_SVN_LIMITED) leaves
++    // the TPM unchanged.
++    ticketHierarchy = GetHierarchy(in->keyHandle);
++    if(signObject->publicArea.nameAlg == TPM_ALG_NULL)
++        ticketHierarchy = TPM_RH_NULL;
++    if(ticketHierarchy != TPM_RH_NULL)
++    {
++        result = HierarchyGetProof(ticketHierarchy, &proof);
++        if(result != TPM_RC_SUCCESS)
++            return result;
++    }
++
+     // Internal Data Update and Command Output
+     // NOTE: Authorization of 'keyHandle' is not required here. It is checked
+     // when TPM2_VerifySequenceComplete() is called.
+-    return ObjectCreateVerifySequence(
++    result = ObjectCreateVerifySequence(
+         signObject, &scheme, &in->auth, &in->context, &out->sequenceHandle);
++    if(result == TPM_RC_SUCCESS)
++    {
++        SEQUENCE_OBJECT* sequenceObject =
++            (SEQUENCE_OBJECT*)HandleToObject(out->sequenceHandle);
++        //
++        sequenceObject->ticketHierarchy = ticketHierarchy;
++        if(ticketHierarchy != TPM_RH_NULL)
++        {
++            CryptoCommon_HmacStart2B(&sequenceObject->state.verify.ticket,
++                                     CONTEXT_INTEGRITY_HASH_ALG,
++                                     &proof.b);
++            CryptoCommon_DigestUpdateInt(&sequenceObject->state.verify.ticket,
++                                         sizeof(TPM_ST),
++                                         TPM_ST_MESSAGE_VERIFIED);
++        }
++    }
++    if(ticketHierarchy != TPM_RH_NULL)
++        MemorySet(proof.b.buffer, 0, proof.b.size);
++    return result;
+ }
+ 
+ #endif  // CC_VerifySequenceStart
+diff --git a/TPMCmd/tpm/src/subsystem/Object.c b/TPMCmd/tpm/src/subsystem/Object.c
+--- a/TPMCmd/tpm/src/subsystem/Object.c
++++ b/TPMCmd/tpm/src/subsystem/Object.c
+@@ -869,6 +869,12 @@ ObjectVerifySequenceUpdate(SEQUENCE_OBJECT*  sequenceObject,  // IN/OUT: the seq
+ {
+     pAssert_RC(sequenceObject->attributes.verifySeq == SET);
+ 
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the running HMAC of the ticket covers the message.
++    if(sequenceObject->ticketHierarchy != TPM_RH_NULL)
++        CryptoCommon_DigestUpdate2B(&sequenceObject->state.verify.ticket.hashState,
++                                    &buffer->b);
++
+     switch(sequenceObject->signScheme.scheme)
+     {
+ #  if ALG_MLDSA

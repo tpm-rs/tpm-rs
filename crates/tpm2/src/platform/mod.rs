@@ -16,14 +16,17 @@
 //! - [`pcr`]: Structure containing platform configuration register banks.
 //! - [`firmware`]: Firmware identity (Firmware Secret, Firmware SVN Secrets, SVNs) for the
 //!   firmware-limited and SVN-limited hierarchies.
+//! - [`secure_channel`]: Secure channel (SPDM) information of the TPM's secure transport layer.
 
 pub mod firmware;
 pub mod pcr;
+pub mod secure_channel;
 pub mod storage;
 pub mod timer;
 
 pub use firmware::{FirmwareSecretUnavailable, SimulatedFirmware, TpmFirmware};
 pub use pcr::PcrState;
+pub use secure_channel::{SecureChannel, SimulatedSecureChannel, SpdmSession};
 pub use storage::{NvStorage, StorageError};
 pub use timer::TpmTimer;
 
@@ -54,6 +57,12 @@ where
     /// (`Sync`) so that a platform can change it (e.g. a simulated firmware update) while the
     /// TPM borrows it.
     pub firmware: Option<&'a (dyn TpmFirmware + Sync)>,
+    /// Secure channel information of the TPM's secure transport layer ([`SecureChannel`]: the
+    /// TPM SPDM authentication public keys and the SPDM session protecting the current
+    /// command), used with the `sec-channel` feature of `tpm2-engine`. `None` (the default of
+    /// [`TpmPlatform::new`]) is a TPM without SPDM keys that never receives a command within an
+    /// SPDM session.
+    pub secure_channel: Option<&'a (dyn SecureChannel + Sync)>,
 }
 
 impl<'a, C, S, T, R> TpmPlatform<'a, C, S, T, R>
@@ -71,6 +80,7 @@ where
             timer,
             rng,
             firmware: None,
+            secure_channel: None,
         }
     }
 
@@ -78,6 +88,13 @@ where
     /// SVN-limited hierarchies (see [`TpmPlatform::firmware`]).
     pub fn with_firmware(mut self, firmware: &'a (dyn TpmFirmware + Sync)) -> Self {
         self.firmware = Some(firmware);
+        self
+    }
+
+    /// Gives the TPM the secure transport layer `secure_channel` (see
+    /// [`TpmPlatform::secure_channel`]).
+    pub fn with_secure_channel(mut self, secure_channel: &'a (dyn SecureChannel + Sync)) -> Self {
+        self.secure_channel = Some(secure_channel);
         self
     }
 }

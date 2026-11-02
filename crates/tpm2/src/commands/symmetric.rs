@@ -333,3 +333,50 @@ impl<'a> UnmarshalMessage<'a> for HMACRsp<'a> {
         })
     }
 }
+
+/// [TPM2.0 1.83] 15.6 TPM2_MAC (Command)
+///
+/// `TPM2_MAC` shares its command code with `TPM2_HMAC` ([`HMAC`]); a TPM implements one of them
+/// (a TPM with `TPM_ALG_CMAC` implements `TPM2_MAC`). The only difference on the wire is the type
+/// of the last parameter: `inScheme` is a `TPMI_ALG_MAC_SCHEME+` (a hash for an HMAC, or a block
+/// cipher MAC such as `TPM_ALG_CMAC`) rather than the `TPMI_ALG_HASH+` `hashAlg`. The response
+/// (`outMAC`, a `TPM2B_DIGEST`) has the layout of [`HMACRsp`].
+#[doc(alias = "TPM2_MAC")]
+#[doc(alias = "MAC_In")]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+pub struct MAC<'a> {
+    pub handle: Handle,
+    pub buffer: Tpm2bMaxBuffer<'a>,
+    pub in_scheme: Option<TpmiAlgMacScheme>,
+}
+
+impl Command for MAC<'_> {
+    const CMD_CODE: TpmCc = TpmCc::MAC;
+    type Response<'a> = HMACRsp<'a>;
+}
+impl Message for MAC<'_> {
+    type Handles = [Handle; 1];
+    fn handles(&self) -> Self::Handles {
+        [self.handle]
+    }
+}
+impl Marshal for MAC<'_> {
+    const MAX_SIZE: usize = Tpm2bMaxBuffer::MAX_SIZE + <Option<TpmiAlgMacScheme>>::MAX_SIZE;
+    type MaxBuffer = [u8; MAC::MAX_SIZE];
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        let count = marshal_helper(&self.buffer, dst, 0);
+        marshal_helper(&self.in_scheme, dst, count)
+    }
+}
+impl<'a> UnmarshalMessage<'a> for MAC<'a> {
+    fn unmarshal_with_handles(
+        [handle]: Self::Handles,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
+        Ok(Self {
+            handle,
+            buffer: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(1))?,
+            in_scheme: Unmarshal::unmarshal(src).map_err(|e| e.in_parameter(2))?,
+        })
+    }
+}

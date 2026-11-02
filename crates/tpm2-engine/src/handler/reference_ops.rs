@@ -33,20 +33,26 @@ pub(crate) struct PrimaryCreation<'p> {
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
-    /// `TpmEcc_SignEcdsa()` with the TPM's DRBG: signs `digest` with the private scalar `d`
-    /// (big-endian) on `curve`, writing `r` and `s` (each padded to the order size) into
-    /// `r_out`/`s_out`. Returns the order size.
-    pub(crate) fn reference_ecdsa_sign(
+    /// `CryptEccSign()` with the TPM's DRBG for the scheme `scheme` (ECDSA, SM2 or EC-Schnorr)
+    /// and its hash `hash`: signs `digest` with the private scalar `d` (big-endian) on `curve`,
+    /// writing `r` and `s` (each padded to the order size) into `r_out`/`s_out`. Returns the
+    /// order size.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reference_ecc_sign(
         &mut self,
+        scheme: tpm2::Alg,
+        hash: tpm2::TpmiAlgHash,
         curve: TpmEccCurve,
         d: &[u8],
         digest: &[u8],
         r_out: &mut [u8],
         s_out: &mut [u8],
     ) -> Result<usize, TpmRc> {
-        ecc::sign_ecdsa(
+        ecc::sign(
             &mut self.context.ref_rng(),
             None,
+            scheme,
+            hash,
             curve,
             d,
             digest,
@@ -129,6 +135,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if matches!(parms_and_id, OwnedPublicParmsAndId::Ecc(..)) {
             self.do_self_test(tpm2::Alg::ECDSA)?;
         }
+        // `CryptoMlkem_GenerateKey()`/`CryptoMldsa_GenerateKey()` test the algorithm before they
+        // draw the seed.
+        self.pqc_key_generation_self_test(parms_and_id)?;
 
         // `DRBG_AdditionalData()` input of endorsement Primary Objects: shProof and ehProof.
         let endorsement_proofs = match &primary {
@@ -176,7 +185,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         .ok_or(TpmRc::FAILURE)?
                 }
                 OwnedPublicParmsAndId::Ecc(parms, point) => {
-                    let mut q = [0u8; 2 * 66];
+                    let mut q = [0u8; 2 * TpmEccCurve::MAX_ECC_KEY_BYTES];
                     let len = ecc::generate_key(
                         &mut rng,
                         seeded.as_mut(),
@@ -195,6 +204,53 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     let len = sym_def.key_bits() as usize / 8;
                     Self::sensitive_or_random(data, len, &mut rng, seeded.as_mut(), private_key)?
                 }
+                // `CryptoMlkem_GenerateKey()`/`CryptoMldsa_GenerateKey()`: the seed is drawn from
+                // the DRBG, and the public key derived from it.
+                OwnedPublicParmsAndId::Mlkem(parms, unique) => {
+                    let mut seed = [0u8; tpm2::crypto::MLKEM_SEED_SIZE];
+                    drbg::fill(&mut rng, seeded.as_mut(), &mut seed)?;
+                    let mut public_key = [0u8; tpm2::TPM2_MAX_MLKEM_PUB_SIZE];
+                    let len = tpm2::crypto::Mlkem::mlkem_generate_key(
+                        crypto,
+                        parms.parameter_set,
+                        &seed,
+                        &mut public_key,
+                    )
+                    .map_err(|_| TpmRc::PARMS.to_rc())?;
+                    *unique =
+                        OwnedTpm2b::from_bytes(&public_key[..len]).map_err(|_| TpmRc::FAILURE)?;
+                    private_key
+                        .get_mut(..seed.len())
+                        .ok_or(TpmRc::FAILURE)?
+                        .copy_from_slice(&seed);
+                    seed.len()
+                }
+                OwnedPublicParmsAndId::Mldsa(
+                    tpm2::TpmsMldsaParms { parameter_set, .. },
+                    unique,
+                )
+                | OwnedPublicParmsAndId::HashMldsa(
+                    tpm2::TpmsHashMldsaParms { parameter_set, .. },
+                    unique,
+                ) => {
+                    let mut seed = [0u8; tpm2::crypto::MLDSA_SEED_SIZE];
+                    drbg::fill(&mut rng, seeded.as_mut(), &mut seed)?;
+                    let mut public_key = [0u8; tpm2::TPM2_MAX_MLDSA_PUB_SIZE];
+                    let len = tpm2::crypto::Mldsa::mldsa_generate_key(
+                        crypto,
+                        *parameter_set,
+                        &seed,
+                        &mut public_key,
+                    )
+                    .map_err(|_| TpmRc::PARMS.to_rc())?;
+                    *unique =
+                        OwnedTpm2b::from_bytes(&public_key[..len]).map_err(|_| TpmRc::FAILURE)?;
+                    private_key
+                        .get_mut(..seed.len())
+                        .ok_or(TpmRc::FAILURE)?
+                        .copy_from_slice(&seed);
+                    seed.len()
+                }
                 OwnedPublicParmsAndId::KeyedHash(scheme, _) => {
                     let hash = match scheme {
                         Some(TpmtKeyedHashScheme::Hmac(h))
@@ -212,7 +268,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         private_key,
                     )?
                 }
-                _ => return Err(TpmRc::TYPE.with(Position::parameter(2))),
             };
             // Only Primary Objects have a seeded DRBG to mix the proofs into.
             if let (Some(((sh, sh_len), (eh, eh_len))), Some(state)) =

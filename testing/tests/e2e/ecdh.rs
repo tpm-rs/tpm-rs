@@ -186,7 +186,9 @@ fn keygen_checks_key_type_first() {
 
 /// ECDH_ZGen checks key type before attributes; TPM2_HMAC checks restricted before hash selection.
 ///
-/// ECDH_ZGen checks the key type before its attributes and rejects trailing bytes.
+/// ECDH_ZGen checks the key type before its attributes and rejects trailing bytes. With CMAC the
+/// TPM implements `TPM2_MAC` instead of `TPM2_HMAC`, which selects the MAC before it checks
+/// `restricted`, so the mismatching hash is reported (`TPM_RC_VALUE + RC_P2`).
 #[test]
 fn zgen_and_hmac_validation_order() {
     let mut sim = Tpm::new();
@@ -213,15 +215,20 @@ fn zgen_and_hmac_validation_order() {
         rc_at(TpmRc::KEY, Position::handle(1))
     );
 
-    // TPM2_HMAC: restricted is checked before the hash algorithm selection.
+    // TPM2_HMAC: restricted is checked before the hash algorithm selection (TPM2_MAC: after).
     let hmac = HMAC {
         handle: hmac_key,
         buffer: Tpm2bMaxBuffer::from_bytes(b"data").unwrap(),
         hash_alg: Some(TpmiAlgHash::Sha1),
     };
+    let expected = if cfg!(feature = "cmac") {
+        rc_at(TpmRc::VALUE, Position::parameter(2))
+    } else {
+        rc_at(TpmRc::ATTRIBUTES, Position::handle(1))
+    };
     assert_eq!(
         execute_with_password_sessions(&mut sim, &hmac, 1, &[]).unwrap_err(),
-        rc_at(TpmRc::ATTRIBUTES, Position::handle(1))
+        expected
     );
 }
 

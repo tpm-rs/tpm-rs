@@ -1447,7 +1447,7 @@ impl<'a> Unmarshal<'a> for Option<TpmiAlgMacScheme> {
 /// `TPMI_ALG_SIG_SCHEME` interface type defined in TPM 2.0 Part 2: Structures, Section 9.32 (Table 78).
 ///
 /// Selects a signature scheme algorithm (`RSASSA`, `RSAPSS`, `ECDSA`, `ECDAA`, `SM2`, `ECSCHNORR`,
-/// `EDDSA`, `HASH_EDDSA`, `HMAC`).
+/// `EDDSA`, `HASH_EDDSA`, `HMAC`, `MLDSA`, `HASH_MLDSA`).
 /// Note: `+TPM_ALG_NULL` is represented as `Option<TpmiAlgSigScheme>::None`.
 #[doc(alias = "TPMI_ALG_SIG_SCHEME")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -1470,6 +1470,10 @@ pub enum TpmiAlgSigScheme {
     /// `TPM_ALG_HASH_EDDSA` (converted and unmarshaled only with the `eddsa` Cargo feature).
     HashEddsa = Alg::HASH_EDDSA.tag(),
     Hmac = Alg::HMAC.tag(),
+    /// `TPM_ALG_MLDSA` (converted and unmarshaled only with the `mldsa` Cargo feature).
+    Mldsa = Alg::MLDSA.tag(),
+    /// `TPM_ALG_HASH_MLDSA` (converted and unmarshaled only with the `hash_mldsa` Cargo feature).
+    HashMldsa = Alg::HASH_MLDSA.tag(),
 }
 
 impl TryFrom<Alg> for TpmiAlgSigScheme {
@@ -1493,6 +1497,10 @@ impl TryFrom<Alg> for TpmiAlgSigScheme {
             #[cfg(feature = "eddsa")]
             Alg::HASH_EDDSA => Ok(Self::HashEddsa),
             Alg::HMAC => Ok(Self::Hmac),
+            #[cfg(feature = "mldsa")]
+            Alg::MLDSA => Ok(Self::Mldsa),
+            #[cfg(feature = "hash_mldsa")]
+            Alg::HASH_MLDSA => Ok(Self::HashMldsa),
             _ => Err(UnmarshalError::SCHEME),
         }
     }
@@ -1862,7 +1870,7 @@ pub enum TpmiAlgPublic {
     Mlkem = Alg::MLKEM.tag(),
     /// `TPM_ALG_MLDSA` (converted and unmarshaled only with the `mldsa` Cargo feature).
     Mldsa = Alg::MLDSA.tag(),
-    /// `TPM_ALG_HASH_MLDSA` (converted and unmarshaled only with the `mldsa` Cargo feature).
+    /// `TPM_ALG_HASH_MLDSA` (converted and unmarshaled only with the `hash_mldsa` Cargo feature).
     HashMldsa = Alg::HASH_MLDSA.tag(),
 }
 
@@ -1881,7 +1889,7 @@ impl TryFrom<Alg> for TpmiAlgPublic {
             Alg::MLKEM => Ok(Self::Mlkem),
             #[cfg(feature = "mldsa")]
             Alg::MLDSA => Ok(Self::Mldsa),
-            #[cfg(feature = "mldsa")]
+            #[cfg(feature = "hash_mldsa")]
             Alg::HASH_MLDSA => Ok(Self::HashMldsa),
             _ => Err(UnmarshalError::TYPE),
         }

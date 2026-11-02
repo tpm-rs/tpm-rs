@@ -317,7 +317,8 @@ fn import_checks_seed_size_before_attributes() {
         encryption_key: Tpm2bData::default(),
         object_public: tpm2::Tpm2b(target_pub),
         duplicate: Tpm2bPrivate::from_bytes(&[0u8; 10]).unwrap(),
-        // Grown to 512 octets below (> 256, more than the `tpm2` types of this TPM can hold).
+        // Grown below to one octet more than `TPM2B_ENCRYPTED_SECRET` holds in this profile
+        // (more than the `tpm2` types of this TPM can hold).
         in_sym_seed: Tpm2bEncryptedSecret::from_bytes(&[0x55u8; 256]).unwrap(),
         symmetric_alg: None,
     };
@@ -327,7 +328,12 @@ fn import_checks_seed_size_before_attributes() {
     // encryptionKey, objectPublic and duplicate, then inSymSeed.
     let seed = (0..3).fold(params, |offset, _| crate::_common::tpm2b_end(&raw, offset));
     let seed_end = crate::_common::tpm2b_end(&raw, seed);
-    crate::_common::grow_command(&mut raw, &[seed], seed_end, &[0x55; 256]);
+    crate::_common::grow_command(
+        &mut raw,
+        &[seed],
+        seed_end,
+        &[0x55; tpm2::Tpm2bEncryptedSecret::CAP + 1 - 256],
+    );
     let rc = crate::_common::raw_rc(&mut sim, &raw);
     assert_eq!(rc, TpmRc::SIZE.with(Position::parameter(4)).get());
 }
@@ -756,11 +762,12 @@ fn symmetric_attributes_and_seed_size() {
         "Expected TPM_RC_ATTRIBUTES (0x0282) for Import with FixedTPM / SensitiveDataOrigin attributes"
     );
 
-    // 3. Step 3: Import with inSymSeed of 512 bytes (oversized for RSA 2048) -> TPM_RC_SIZE (Pos4, 0x04D5)
+    // 3. Step 3: Import with inSymSeed one octet larger than `TPM2B_ENCRYPTED_SECRET` holds
+    // (`MAX_RSA_KEY_BYTES` of the profile) -> TPM_RC_SIZE (Pos4, 0x04D5)
     let req3 = import_request(
         parent_handle,
         child_pub_bytes,
-        &[0u8; 512],
+        &vec![0u8; tpm2::Tpm2bEncryptedSecret::CAP + 1],
         &hex_checked("0010"),
     );
     let rc3 = raw_rc(&mut sim, &req3);
@@ -1232,7 +1239,14 @@ fn import_checks_follow_unmarshaling_then_object_attributes() {
                 "6d8bcda3fd8d1bf863ab60c021e7dae1cb3f8bf425bfe1d835fecd86054731984f62d03b8b829fc5176d195af8796028",
                 "9f9b83c37174de5b0678c4ac1e5910e7dc7c299b73000aeeee11111111111111110200000600800003",
             ),
-            0x4d5,
+            // A 512-octet `inSymSeed` (of which only 6 octets follow) exceeds the capacity of
+            // `TPM2B_ENCRYPTED_SECRET` unless the profile has RSA-4096 (`MAX_RSA_KEY_BYTES` 512),
+            // where the missing octets are found instead.
+            if 512 > tpm2::Tpm2bEncryptedSecret::CAP {
+                TpmRc::SIZE.with(Position::parameter(4)).get()
+            } else {
+                TpmRc::INSUFFICIENT.with(Position::parameter(4)).get()
+            },
         ),
     ];
     for (i, (cmd, rc)) in steps.into_iter().enumerate() {
@@ -1248,7 +1262,9 @@ fn import_checks_follow_unmarshaling_then_object_attributes() {
 /// TPM2_Import accepts `symmetricAlg` with mode `TPM_ALG_NULL`: TPM 2.0 Part 2, TPMU_SYM_MODE:
 /// "aes | TPMI_ALG_SYM_MODE+", whose values include "+TPM_ALG_NULL" (the inner wrapper is always
 /// CFB), so the command proceeds to its later checks instead of failing with `TPM_RC_MODE` on
-/// `symmetricAlg`. Found by differential fuzzing.
+/// `symmetricAlg`. Found by differential fuzzing. The replayed parent has a SHA-512 nameAlg, so the
+/// test needs a TPM with SHA-512.
+#[cfg(feature = "sha512")]
 #[test]
 fn import_accepts_null_inner_wrapper_mode() {
     let response_code = |rsp: &[u8]| u32::from_be_bytes(rsp[6..10].try_into().unwrap());

@@ -33,9 +33,9 @@ use tpm2::{
     TpmtEccScheme, TpmtPublic,
 };
 
-/// Offset of `encrypted.size` in the blob: `integrity.size (2) || integrity (64)` (the integrity
-/// HMAC uses SHA-512, the strongest implemented hash).
-const ENC_SIZE_OFFSET: usize = 2 + 64;
+/// Offset of `encrypted.size` in the blob: `integrity.size (2) || integrity` (the integrity HMAC
+/// uses the strongest implemented hash: 64 octets with SHA-512, 48 without).
+const ENC_SIZE_OFFSET: usize = 2 + tpm2::TpmiAlgHash::MAX_DIGEST_BYTES;
 /// Size of the sequence fingerprint at the start of the encrypted plaintext.
 const FINGERPRINT_SIZE: usize = 8;
 

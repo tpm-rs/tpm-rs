@@ -1,0 +1,35 @@
+fix-ecc-point-coordinate-range: reject ECC point coordinates not below the field prime
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 1, "ECDH" and the key-exchange and
+commit operations, which follow NIST SP 800-56A; SP 800-56A Rev. 3, 5.6.2.3.3
+"ECC Full Public-Key Validation Routine", step 2):
+
+  "Verify that xQ and yQ are integers in the interval [0, p - 1] in the case
+  that q is an odd prime p ..."
+
+A point on an elliptic curve over GF(p) has coordinates that are field
+elements. BnIsPointOnCurve() only checks the curve equation modulo p, so it
+accepts (x + p, y) or (x, y + p) whenever the larger integer still fits the
+TPM2B_ECC_PARAMETER of the curve (e.g. any BN P-638 coordinate, or a small x
+of NIST P-224), and the TPM then works with a non-canonical encoding of the
+point (TPM2_LoadExternal, TPM2_ECDH_ZGen, TPM2_Commit, ...). The patch
+rejects coordinates that are not below p, as tpm-rs does.
+
+diff --git a/TPMCmd/tpm/cryptolibs/implementations/TpmBigNum/BnMath.c b/TPMCmd/tpm/cryptolibs/implementations/TpmBigNum/BnMath.c
+index 24e9e49..b61c530 100644
+--- a/TPMCmd/tpm/cryptolibs/implementations/TpmBigNum/BnMath.c
++++ b/TPMCmd/tpm/cryptolibs/implementations/TpmBigNum/BnMath.c
+@@ -460,6 +460,11 @@ BOOL BnIsPointOnCurve(pointConst Q, const TPMBN_ECC_CURVE_CONSTANTS* C)
+     BN_VAR(left, (MAX_ECC_KEY_BITS * 2));
+     bigConst prime = BnCurveGetPrime(C);
+     //
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the coordinates of a point are field elements, integers in [0, p - 1]
++    // (SP 800-56A Rev. 3, 5.6.2.3.3, ECC Full Public-Key Validation, step 2).
++    if(BnUnsignedCmp(Q->x, prime) >= 0 || BnUnsignedCmp(Q->y, prime) >= 0)
++        return FALSE;
+     // Show that point is on the curve y^2 = x^3 + ax + b;
+     // Or y^2 = x(x^2 + a) + b
+     // y^2

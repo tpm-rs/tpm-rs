@@ -1,5 +1,6 @@
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
+use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::req_resp::RequestThenResponse;
 use tpm2::Marshal;
 #[allow(unused_imports)]
@@ -75,16 +76,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // `symmetricAlg` checks of `TPMT_SYM_DEF_OBJECT+` unmarshaling (Pos5): key size and
         // block cipher mode. TPM 2.0 Part 2, TPMU_SYM_MODE: "aes | TPMI_ALG_SYM_MODE+", whose
-        // values include "+TPM_ALG_NULL", so a NULL mode is accepted (the inner wrapper is
-        // always decrypted in CFB mode, as in the TCG reference `DuplicateToSensitive()`);
-        // CMAC is not a mode of this TPM's profile (`TPM_RC_MODE`).
+        // values include "+TPM_ALG_NULL", so a NULL mode is accepted, and so is any implemented
+        // mode (with the `cmac` feature, `TPM_ALG_CMAC`): the inner wrapper is always decrypted
+        // in CFB mode, as in the TCG reference `DuplicateToSensitive()`.
         if let Some(sym_def) = cmd.symmetric_alg {
             let bits = sym_def.key_bits();
             if bits != 128 && bits != 256 && bits != 192 {
                 return Err(TpmRc::SYMMETRIC.with(Position::parameter(5)));
-            }
-            if sym_def.mode().map(tpm2::Alg::from) == Some(tpm2::Alg::CMAC) {
-                return Err(TpmRc::MODE.with(Position::parameter(5)));
             }
         }
 
@@ -224,18 +222,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let encrypted_blob = &duplicate_bytes[2 + mac_len..];
 
             // Verify outer integrity HMAC and derive outer symmetric key/IV dynamically
-            let mut sym_key_bits = match &parent_obj.public.parms_and_id {
-                OwnedPublicParmsAndId::Rsa(parms, _) => {
-                    parms.symmetric.map(|s| s.key_bits() as u32).unwrap_or(128)
-                }
-                OwnedPublicParmsAndId::Ecc(parms, _) => {
-                    parms.symmetric.map(|s| s.key_bits() as u32).unwrap_or(128)
-                }
-                _ => 128,
-            };
-            if sym_key_bits == 0 {
-                sym_key_bits = 128;
-            }
+            let outer_sym_alg = crate::handler::protection_sym_alg(&parent_obj.public.parms_and_id);
+            let sym_key_bits = u32::from(outer_sym_alg.key_bits());
             let outer_key_len = (sym_key_bits / 8) as usize;
 
             let mut sym_key_iv = [0u8; 48];
@@ -299,8 +287,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             inner_blob_len = encrypted_blob.len();
             inner_blob[..inner_blob_len].copy_from_slice(encrypted_blob);
 
-            let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((outer_key_len * 8) as u16)
-                .map_err(|_| TpmRc::FAILURE)?;
+            let sym_alg = crate::handler::protection_cfb(outer_sym_alg);
             self.sym_encrypt_decrypt(
                 sym_alg,
                 &outer_key[..outer_key_len],
@@ -332,8 +319,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             decrypted_inner[..inner_blob_len].copy_from_slice(&inner_blob[..inner_blob_len]);
 
             let mut iv = [0u8; 16];
-            let sym_alg = tpm2::TpmtSymDefObject::aes_cfb((inner_key_len * 8) as u16)
-                .map_err(|_| TpmRc::FAILURE)?;
+            let sym_alg = crate::handler::protection_cfb(sym_def.alg);
             self.sym_encrypt_decrypt(
                 sym_alg,
                 &inner_key[..inner_key_len],
@@ -451,7 +437,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 6. Public-Private consistency check and import validation
         // Per TCG Part 3 Section 13.3.3: if parent has fixedTPM set, binding/sensitive validation must be checked on import.
         // If parent has fixedTPM clear, binding and secret formatting validation need only be checked when the object is loaded.
-        let mut actual_private_key = [0u8; 1536];
+        let mut actual_private_key = [0u8; MAX_PRIVATE_KEY_SIZE];
         let actual_private_key_len = if parent_obj
             .public
             .object_attributes
@@ -530,7 +516,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             false,
             false,
             parent_info.name_alg,
-            parent_info.sym_bits,
+            parent_info.sym_alg,
             parent_obj
                 .public
                 .object_attributes

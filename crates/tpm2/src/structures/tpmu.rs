@@ -140,6 +140,18 @@ impl Marshal for TpmuSensitiveComposite<'_> {
     }
 }
 
+/// A private seed of an ML-DSA or ML-KEM key, which must fill its buffer.
+#[cfg(any(feature = "mldsa", feature = "mlkem"))]
+fn exact_seed<T: limits::Tag>(
+    seed: Tpm2bSized<'_, T>,
+) -> Result<Tpm2bSized<'_, T>, UnmarshalError> {
+    if seed.as_slice().len() == T::CAP {
+        Ok(seed)
+    } else {
+        Err(UnmarshalError::SIZE)
+    }
+}
+
 impl<'a> TpmuSensitiveComposite<'a> {
     pub fn unmarshal_variant(selector: Alg, src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         match selector {
@@ -149,12 +161,20 @@ impl<'a> TpmuSensitiveComposite<'a> {
             Alg::ECC => Ok(Self::Ecc(Tpm2bEccParameter::unmarshal(src)?)),
             Alg::KEYEDHASH => Ok(Self::KeyedHash(Tpm2bSensitiveData::unmarshal(src)?)),
             Alg::SYMCIPHER => Ok(Self::Sym(Tpm2bSymKey::unmarshal(src)?)),
+            // `TPM2B_PRIVATE_KEY_MLDSA` / `TPM2B_PRIVATE_KEY_MLKEM`: "size | UINT16 | shall be
+            // 32" / "shall be 64" (fixed-size seeds), so any other size is `TPM_RC_SIZE`.
             #[cfg(feature = "mldsa")]
-            Alg::MLDSA => Ok(Self::Mldsa(Tpm2bPrivateKeyMldsa::unmarshal(src)?)),
-            #[cfg(feature = "mldsa")]
-            Alg::HASH_MLDSA => Ok(Self::HashMldsa(Tpm2bPrivateKeyMldsa::unmarshal(src)?)),
+            Alg::MLDSA => Ok(Self::Mldsa(exact_seed(Tpm2bPrivateKeyMldsa::unmarshal(
+                src,
+            )?)?)),
+            #[cfg(feature = "hash_mldsa")]
+            Alg::HASH_MLDSA => Ok(Self::HashMldsa(exact_seed(
+                Tpm2bPrivateKeyMldsa::unmarshal(src)?,
+            )?)),
             #[cfg(feature = "mlkem")]
-            Alg::MLKEM => Ok(Self::Mlkem(Tpm2bPrivateKeyMlkem::unmarshal(src)?)),
+            Alg::MLKEM => Ok(Self::Mlkem(exact_seed(Tpm2bPrivateKeyMlkem::unmarshal(
+                src,
+            )?)?)),
             _ => Err(UnmarshalError::SELECTOR),
         }
     }
@@ -190,7 +210,7 @@ impl<'a> TpmuPublicId<'a> {
             Alg::ECC => Ok(Self::Ecc(Unmarshal::unmarshal(src)?)),
             #[cfg(feature = "mldsa")]
             Alg::MLDSA => Ok(Self::Mldsa(Unmarshal::unmarshal(src)?)),
-            #[cfg(feature = "mldsa")]
+            #[cfg(feature = "hash_mldsa")]
             Alg::HASH_MLDSA => Ok(Self::HashMldsa(Unmarshal::unmarshal(src)?)),
             #[cfg(feature = "mlkem")]
             Alg::MLKEM => Ok(Self::Mlkem(Unmarshal::unmarshal(src)?)),
@@ -290,7 +310,7 @@ impl<'a> PublicParmsAndId<'a> {
                 Unmarshal::unmarshal(src)?,
                 Unmarshal::unmarshal(src)?,
             )),
-            #[cfg(feature = "mldsa")]
+            #[cfg(feature = "hash_mldsa")]
             Alg::HASH_MLDSA => Ok(Self::HashMldsa(
                 Unmarshal::unmarshal(src)?,
                 Unmarshal::unmarshal(src)?,
@@ -321,7 +341,7 @@ impl<'a> PublicParmsAndId<'a> {
             Alg::ECC => Self::Ecc(Unmarshal::unmarshal(src)?, TpmsEccPoint::default()),
             #[cfg(feature = "mldsa")]
             Alg::MLDSA => Self::Mldsa(Unmarshal::unmarshal(src)?, Tpm2bPublicKeyMldsa::default()),
-            #[cfg(feature = "mldsa")]
+            #[cfg(feature = "hash_mldsa")]
             Alg::HASH_MLDSA => {
                 Self::HashMldsa(Unmarshal::unmarshal(src)?, Tpm2bPublicKeyMldsa::default())
             }

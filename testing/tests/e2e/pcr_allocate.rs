@@ -78,15 +78,15 @@ fn drtm_pcr_required_and_size_reporting() {
 
     // Removing PCR 17 from every bank while keeping PCR 18 is rejected.
     let no17 = [0xFF, 0xFF, 0xFD];
-    let (rc, _) = pcr_allocate(
-        &mut sim,
-        &[
-            (ALG_SHA1, [0, 0, 0]),
-            (ALG_SHA256, no17),
-            (ALG_SHA384, no17),
-            (ALG_SHA512, [0, 0, 0]),
-        ],
-    );
+    let mut banks = vec![
+        (ALG_SHA1, [0, 0, 0]),
+        (ALG_SHA256, no17),
+        (ALG_SHA384, no17),
+    ];
+    if crate::_common::SHA512_IMPLEMENTED {
+        banks.push((ALG_SHA512, [0, 0, 0]));
+    }
+    let (rc, _) = pcr_allocate(&mut sim, &banks);
     assert_eq!(rc, TpmRc::PCR.get());
 
     // sizeNeeded = sum over the new allocation of popcount * digest size.
@@ -96,7 +96,11 @@ fn drtm_pcr_required_and_size_reporting() {
     assert_eq!(success, 1);
     assert_eq!(max_pcr, 24);
     assert_eq!(size_needed, 2 * 20 + 24 * 32 + 24 * 48);
-    assert_eq!(size_available, 24 * (20 + 32 + 48 + 64));
+    let digest_sizes: usize = crate::_common::IMPLEMENTED_HASH_ALGS
+        .iter()
+        .map(|alg| alg.digest_size())
+        .sum();
+    assert_eq!(size_available as usize, 24 * digest_sizes);
 
     // NV unavailable -> TPM_RC_NV_UNAVAILABLE, even though the TPM is not orderly.
     nv_off(&mut sim);
@@ -188,8 +192,12 @@ fn platform_allocate_reports_sizes() {
     // (PCR.c:939-972): new SHA256 bank 24 * 32 + existing SHA384 bank 24 * 48 = 1920.
     assert_eq!(rsp.size_needed, 1920);
     // C reports sizeof(s_pcrs), i.e. room for every implemented bank (PCR.c:981):
-    // 24 * (20 + 32 + 48 + 64) = 3936.
-    assert_eq!(rsp.size_available, 3936);
+    // 24 * (20 + 32 + 48 + 64) = 3936 (2400 without SHA-512).
+    let digest_sizes: usize = crate::_common::IMPLEMENTED_HASH_ALGS
+        .iter()
+        .map(|alg| alg.digest_size())
+        .sum();
+    assert_eq!(rsp.size_available as usize, 24 * digest_sizes);
 }
 
 /// A new PCR allocation is inactive until Shutdown(CLEAR) + _TPM_Init + Startup(CLEAR) allocates SHA-1.

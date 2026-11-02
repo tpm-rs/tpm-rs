@@ -1,0 +1,48 @@
+policy-capability-session-handle: loaded and saved session handles are distinguished
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, version 185, TPM2_PolicyCapability): "If the
+requested TPM *property* does not exist, the TPM will return `TPM_RC_POLICY`
+unless the *operation* is `TPM_EO_NEQ`"; TPM2_GetCapability: "Requesting
+handles with a handle type of `TPM_HT_LOADED_SESSION` will return handles for
+loaded sessions", and Part 2, TPM_HT: `TPM_HT_SAVED_SESSION` "references saved
+authorization session contexts".
+
+SessionCapGetOneLoaded() and SessionCapGetOneSaved() only check that the
+session slot is in use (gr.contextArray[] != 0), so TPM2_PolicyCapability
+(TPM_CAP_HANDLES) reports a saved session as loaded and a loaded session as
+saved. The patch also checks the state of the slot (a loaded session's entry is
+at most MAX_LOADED_SESSIONS, a saved one's above), as SessionCapGetLoaded()/
+SessionCapGetSaved() do.
+diff --git a/TPMCmd/tpm/src/subsystem/Session.c b/TPMCmd/tpm/src/subsystem/Session.c
+--- a/TPMCmd/tpm/src/subsystem/Session.c
++++ b/TPMCmd/tpm/src/subsystem/Session.c
+@@ -878,8 +878,12 @@ BOOL SessionCapGetOneLoaded(TPMI_SH_POLICY handle)  // IN: handle
+ {
+     pAssert_BOOL(HandleGetType(handle) == TPM_HT_LOADED_SESSION);
+ 
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the slot must hold a loaded session (contextArray[] <= MAX_LOADED_SESSIONS); the
++    // original check accepted any active session, loaded or saved.
+     if((handle & HR_HANDLE_MASK) < MAX_ACTIVE_SESSIONS
+-       && gr.contextArray[(handle & HR_HANDLE_MASK)])
++       && gr.contextArray[(handle & HR_HANDLE_MASK)] != 0
++       && gr.contextArray[(handle & HR_HANDLE_MASK)] <= MAX_LOADED_SESSIONS)
+     {
+         return TRUE;
+     }
+@@ -951,8 +955,12 @@ BOOL SessionCapGetOneSaved(TPMI_SH_HMAC handle)  // IN: handle
+ {
+     pAssert_BOOL(HandleGetType(handle) == TPM_HT_SAVED_SESSION);
+ 
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the slot must hold a saved session (contextArray[] > MAX_LOADED_SESSIONS); the
++    // original check accepted any active session, loaded or saved.
+     if((handle & HR_HANDLE_MASK) < MAX_ACTIVE_SESSIONS
+-       && gr.contextArray[(handle & HR_HANDLE_MASK)])
++       && gr.contextArray[(handle & HR_HANDLE_MASK)] != 0
++       && gr.contextArray[(handle & HR_HANDLE_MASK)] > MAX_LOADED_SESSIONS)
+     {
+         return TRUE;
+     }

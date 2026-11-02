@@ -149,16 +149,16 @@ fn incremental_alg_list_framing() {
     );
 }
 
-/// IncrementalSelfTest rejects ALG_NULL and unimplemented SM2 without partially testing AES.
+/// IncrementalSelfTest rejects ALG_NULL and the unimplemented SM4 without partially testing AES.
 #[test]
-fn incremental_rejects_null_and_sm2_algs() {
+fn incremental_rejects_null_and_unimplemented_algs() {
     let mut sim = Tpm::new();
     assert_eq!(
         incremental_self_test(&mut sim, &[Alg::NULL]),
         Err(TpmRc::VALUE.with(Position::parameter(1)).get())
     );
     assert_eq!(
-        incremental_self_test(&mut sim, &[Alg::AES, Alg::SM2]),
+        incremental_self_test(&mut sim, &[Alg::AES, Alg::SM4]),
         Err(TpmRc::VALUE.with(Position::parameter(1)).get())
     );
     assert!(
@@ -278,7 +278,7 @@ fn reserved_algorithm_error_codes() {
     }
 }
 
-/// IncrementalSelfTest with an algorithm this TPM does not implement (TPM_ALG_ECSCHNORR, absent
+/// IncrementalSelfTest with an algorithm this TPM does not implement (TPM_ALG_EDDSA, absent
 /// from `TPM_CAP_ALGS`) in `toTest` fails with `TPM_RC_VALUE + RC_P1`, even though the rest of the
 /// list is implemented (found by differential fuzzing). TPM 2.0 Part 3 TPM2_IncrementalSelfTest is
 /// silent on unimplemented algorithms; the TCG reference checks `g_implementedAlgorithms`.
@@ -286,7 +286,7 @@ fn reserved_algorithm_error_codes() {
 fn unimplemented_algorithm_in_to_test_rejected() {
     let mut sim = Tpm::new();
     let cmd = IncrementalSelfTest {
-        to_test: TpmlAlg::from_slice(&[Alg::SHA256, Alg::ECSCHNORR, Alg::AES]).unwrap(),
+        to_test: TpmlAlg::from_slice(&[Alg::SHA256, Alg::EDDSA, Alg::AES]).unwrap(),
     };
     assert_eq!(
         sim.execute(cmd).err().map(rc_of_error),

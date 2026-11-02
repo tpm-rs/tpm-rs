@@ -1,0 +1,39 @@
+nv-define-space2-external-nv: TPM2_NV_DefineSpace2 rejects external NV Indexes it cannot support
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 2, Table "Definition of TPMT_NV_PUBLIC_2
+Structure": "The handleType member is the same as the first byte of the public
+member, the nvIndex field."; Part 2, Table "Definition of
+TPMS_NV_PUBLIC_EXP_ATTR Structure": "nvIndex | TPMI_RH_NV_EXP_INDEX | the
+handle of the data area"; Part 3, TPM2_NV_DefineSpace2: "allowing all types of
+NV indices that support DefineSpace to be defined").
+
+For handleType = TPM_HT_EXTERNAL_NV, NvPublicFromNvPublic2() copies the
+attributes, authPolicy, dataSize and nameAlg of the TPMS_NV_PUBLIC_EXP_ATTR
+but not its nvIndex, so NvDefineSpace() checks and defines an Index whose
+handle is uninitialized stack memory (undefined behavior; the Index the caller
+named is not created). The reference cannot use external NV Indexes anyway:
+EntityGetLoadStatus() rejects every TPM_HT_EXTERNAL_NV handle ("Not yet
+supported", TPM_RC_VALUE), so such an Index could neither be read, written nor
+undefined. The external NV case is compiled out, so TPM2_NV_DefineSpace2
+rejects the handle type like any other one it does not support
+(TPM_RC_HANDLE + publicInfo, its default case), as tpm-rs, which does not
+implement external NV Indexes, does.
+diff --git a/TPMCmd/tpm/src/command/NVStorage/NV_DefineSpace2.c b/TPMCmd/tpm/src/command/NVStorage/NV_DefineSpace2.c
+--- a/TPMCmd/tpm/src/command/NVStorage/NV_DefineSpace2.c
++++ b/TPMCmd/tpm/src/command/NVStorage/NV_DefineSpace2.c
+@@ -37,7 +37,12 @@ TPM2_NV_DefineSpace2(NV_DefineSpace2_In* in,    // IN: input parameter list
+     {
+         case TPM_HT_NV_INDEX:
+             break;
+-#  if EXTERNAL_NV
++#  if EXTERNAL_NV && 0  // tpm-rs differential testing -- spec deviation fix (NOT
++                        // determinism): an external NV Index is defined with an
++                        // uninitialized nvIndex (NvPublicFromNvPublic2() does not
++                        // copy it) and could never be loaded (EntityGetLoadStatus:
++                        // "Not yet supported", TPM_RC_VALUE), so reject the handle
++                        // type like the other unsupported ones (default case).
+         case TPM_HT_EXTERNAL_NV:
+             // The reference implementation may let you define an "external" NV
+             // index, but it doesn't currently support setting any of the extended

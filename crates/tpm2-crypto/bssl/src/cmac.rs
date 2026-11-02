@@ -46,6 +46,75 @@ impl tpm2::crypto::Finalize<16> for BsslCmacAes256 {
     }
 }
 
+/// Camellia-128-CMAC context wrapper for `BsslCryptoProvider`.
+///
+/// BoringSSL is built without Camellia (`OPENSSL_NO_CAMELLIA`), so this is a
+/// fallback on the RustCrypto `cmac` and `camellia` crates.
+pub struct BsslCmacCamellia128(cmac::Cmac<camellia::Camellia128>);
+
+impl tpm2::crypto::Update for BsslCmacCamellia128 {
+    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        self.0.update(data);
+        Ok(())
+    }
+}
+
+impl tpm2::crypto::Finalize<16> for BsslCmacCamellia128 {
+    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        let res = self.0.finalize().into_bytes();
+        out.copy_from_slice(&res);
+        Ok(())
+    }
+}
+
+/// Camellia-192-CMAC context wrapper for `BsslCryptoProvider`.
+///
+/// BoringSSL is built without Camellia (`OPENSSL_NO_CAMELLIA`), so this is a
+/// fallback on the RustCrypto `cmac` and `camellia` crates.
+pub struct BsslCmacCamellia192(cmac::Cmac<camellia::Camellia192>);
+
+impl tpm2::crypto::Update for BsslCmacCamellia192 {
+    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        self.0.update(data);
+        Ok(())
+    }
+}
+
+impl tpm2::crypto::Finalize<16> for BsslCmacCamellia192 {
+    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        let res = self.0.finalize().into_bytes();
+        out.copy_from_slice(&res);
+        Ok(())
+    }
+}
+
+/// Camellia-256-CMAC context wrapper for `BsslCryptoProvider`.
+///
+/// BoringSSL is built without Camellia (`OPENSSL_NO_CAMELLIA`), so this is a
+/// fallback on the RustCrypto `cmac` and `camellia` crates.
+pub struct BsslCmacCamellia256(cmac::Cmac<camellia::Camellia256>);
+
+impl tpm2::crypto::Update for BsslCmacCamellia256 {
+    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        self.0.update(data);
+        Ok(())
+    }
+}
+
+impl tpm2::crypto::Finalize<16> for BsslCmacCamellia256 {
+    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        let res = self.0.finalize().into_bytes();
+        out.copy_from_slice(&res);
+        Ok(())
+    }
+}
+
 impl tpm2::crypto::Cmac for BsslCryptoProvider {
     type Aes128Context = BsslCmacAes128;
     fn aes128(&self, key: &[u8; 16]) -> Result<Self::Aes128Context, CryptoError> {
@@ -69,7 +138,34 @@ impl tpm2::crypto::Cmac for BsslCryptoProvider {
     }
 
     type Sm4_128Context = !;
-    type Camellia128Context = !;
-    type Camellia192Context = !;
-    type Camellia256Context = !;
+
+    type Camellia128Context = BsslCmacCamellia128;
+    fn camellia128(&self, key: &[u8; 16]) -> Result<Self::Camellia128Context, CryptoError> {
+        use cmac::Mac as _;
+        // The key array always has the cipher's key length, so this cannot
+        // fail; if it did, that would be an internal error.
+        cmac::Cmac::<camellia::Camellia128>::new_from_slice(key)
+            .map(BsslCmacCamellia128)
+            .map_err(|_| CryptoError::Internal)
+    }
+
+    type Camellia192Context = BsslCmacCamellia192;
+    fn camellia192(&self, key: &[u8; 24]) -> Result<Self::Camellia192Context, CryptoError> {
+        use cmac::Mac as _;
+        // The key array always has the cipher's key length, so this cannot
+        // fail; if it did, that would be an internal error.
+        cmac::Cmac::<camellia::Camellia192>::new_from_slice(key)
+            .map(BsslCmacCamellia192)
+            .map_err(|_| CryptoError::Internal)
+    }
+
+    type Camellia256Context = BsslCmacCamellia256;
+    fn camellia256(&self, key: &[u8; 32]) -> Result<Self::Camellia256Context, CryptoError> {
+        use cmac::Mac as _;
+        // The key array always has the cipher's key length, so this cannot
+        // fail; if it did, that would be an internal error.
+        cmac::Cmac::<camellia::Camellia256>::new_from_slice(key)
+            .map(BsslCmacCamellia256)
+            .map_err(|_| CryptoError::Internal)
+    }
 }

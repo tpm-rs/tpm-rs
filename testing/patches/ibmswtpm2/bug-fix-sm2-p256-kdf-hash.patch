@@ -1,0 +1,40 @@
+fix-sm2-p256-kdf-hash: no unimplemented SM3 in the KDF of TPM2_ECC_Parameters(SM2 P-256)
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 2, "TPMI_ALG_HASH"):
+
+  "TPMI_ALG_HASH is an interface type of all the hash algorithms
+  implemented on a specific TPM. ... if the algorithm is not implemented in
+  a specific TPM, that algorithm is not included in the interface type."
+
+and Part 2, "TPMS_ALGORITHM_DETAIL_ECC", kdf: "the default KDF and hash
+algorithm recommended for use in secret sharing operations (may be
+TPM_ALG_NULL)".
+
+The recommended KDF of SM2 P-256 in the curve table is KDF1_SP800_56A with
+SM3_256, which TPM2_ECC_Parameters returns even when the TPM does not
+implement SM3 (ALG_SM3_256 = NO in this profile): the response then carries
+a TPMI_ALG_HASH value outside the interface type, which the TPM itself
+rejects on input. Without SM3 the curve has no implementable recommended
+KDF, so TPM_ALG_NULL is reported (as tpm-rs does).
+
+diff --git a/src/CryptEccData.c b/src/CryptEccData.c
+index 15264b2..ca633c2 100644
+--- a/src/CryptEccData.c
++++ b/src/CryptEccData.c
+@@ -143,7 +143,14 @@ const TPM_ECC_CURVE_METADATA eccCurves[] = {
+ #  if ECC_SM2_P256
+     comma{TPM_ECC_SM2_P256,
+ 	    256,
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // a TPMI_ALG_HASH is an implemented hash (TPM 2.0 Part 2, "TPMI_ALG_HASH"), so
++    // without SM3 the recommended KDF of SM2 P-256 is TPM_ALG_NULL.
++#    if ALG_SM3_256
+ 		{TPM_ALG_KDF1_SP800_56A, {{TPM_ALG_SM3_256}}},
++#    else
++		{TPM_ALG_NULL, {{TPM_ALG_NULL}}},
++#    endif
+ 		    {TPM_ALG_NULL, {{TPM_ALG_NULL}}},
+ 	    OID_ECC_SM2_P256 CURVE_NAME("SM2_P256")}
+ #    undef comma

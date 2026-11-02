@@ -1,0 +1,42 @@
+select-sym-def-object-camellia: Camellia storage parents select their symmetric definition
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 1, "Symmetric Encryption" (Protected
+Storage)):
+
+  "The block cipher used for encrypting the object's sensitive area is the
+  symmetric cipher of the Storage Parent."
+
+CryptoCommon_SelectSymDefObject() switches on the algorithm ID of the
+parent's symmetric definition, but its SM4 and Camellia case labels are the
+ALG_SM4/ALG_CAMELLIA profile switches (value 1) instead of TPM_ALG_SM4 and
+TPM_ALG_CAMELLIA, so every RSA, ECC or SYMCIPHER parent whose symmetric
+algorithm is Camellia reaches FAIL_BOOL(FATAL_ERROR_INTERNAL): TPM2_Create,
+TPM2_Load, TPM2_Import, TPM2_MakeCredential/TPM2_ActivateCredential and the
+other users of the parent's symmetric definition put the TPM into failure mode
+instead of protecting the object with Camellia.
+
+diff --git a/TPMCmd/tpm/cryptolibs/common/CryptUtil.c b/TPMCmd/tpm/cryptolibs/common/CryptUtil.c
+--- a/TPMCmd/tpm/cryptolibs/common/CryptUtil.c
++++ b/TPMCmd/tpm/cryptolibs/common/CryptUtil.c
+@@ -1375,13 +1375,17 @@
+             symDefObject->keyBits.aes = objectSym->keyBits.aes;
+             break;
+ #endif  // ALG_AES
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT
++        // determinism): the case labels are the algorithm IDs TPM_ALG_SM4 and
++        // TPM_ALG_CAMELLIA, not the ALG_SM4/ALG_CAMELLIA profile switches (1),
++        // which sent every SM4/Camellia parent to the FAIL below.
+ #if ALG_SM4
+-        case ALG_SM4:
++        case TPM_ALG_SM4:
+             symDefObject->keyBits.sm4 = objectSym->keyBits.sm4;
+             break;
+ #endif  // ALG_SM2
+ #if ALG_CAMELLIA
+-        case ALG_CAMELLIA:
++        case TPM_ALG_CAMELLIA:
+             symDefObject->keyBits.camellia = objectSym->keyBits.camellia;
+             break;
+ #endif  // ALG_SM2

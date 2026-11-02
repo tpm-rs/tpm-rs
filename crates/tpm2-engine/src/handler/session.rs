@@ -184,6 +184,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             is_cp_hash_defined: false,
             is_name_hash_defined: false,
             is_template_hash_defined: false,
+            is_parameters_hash_defined: false,
+            is_pp_required: false,
             policy_digest: [0u8; 64],
             policy_digest_len: auth_hash_digest_size,
             command_code: 0,
@@ -199,6 +201,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             include_auth: false,
             is_da_bound,
             is_lockout_bound,
+            sec_channel: Default::default(),
         };
         self.context.state.add_session(session_state)?;
 
@@ -282,6 +285,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 key_obj.public.parms_and_id,
                 crate::owned::OwnedPublicParmsAndId::Rsa(..)
                     | crate::owned::OwnedPublicParmsAndId::Ecc(..)
+                    | crate::owned::OwnedPublicParmsAndId::Mlkem(..)
+                    | crate::owned::OwnedPublicParmsAndId::Mldsa(..)
             ) {
                 return Err(TpmRc::KEY.with(Position::handle(1)));
             }
@@ -378,7 +383,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 && bind_handle != Handle::RH_ENDORSEMENT.0
                 && bind_handle != Handle::RH_PLATFORM.0
                 && bind_handle != Handle::RH_LOCKOUT.0
-                && bind_handle != Handle::RH_AUTH_00.0
+                && !crate::engine::is_vendor_permanent_auth(bind_handle)
             {
                 return Err(handle_err);
             }
@@ -699,6 +704,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             session_state.is_cp_hash_defined = false;
             session_state.is_name_hash_defined = false;
             session_state.is_template_hash_defined = false;
+            session_state.is_parameters_hash_defined = false;
+            session_state.is_pp_required = false;
             // `u1.cpHash.b.size = 0` and `timeout = 0` in C `SessionResetPolicyData`.
             session_state.policy_hash = [0u8; 64];
             session_state.policy_hash_len = 0;
@@ -707,6 +714,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             session_state.nv_written_state = false;
             session_state.pcr_counter = None;
             session_state.command_locality = 0;
+            session_state.sec_channel = Default::default();
         }
 
         let response = request.into_response();

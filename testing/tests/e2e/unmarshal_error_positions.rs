@@ -864,7 +864,8 @@ fn sign_validation_ticket_error() {
 
 /// TPM2_GetCapability validates `capability` while it is unmarshaled, before `property`: with a
 /// truncated `property`, a capability the TPM's `TPM_CAP` unmarshaler rejects is `TPM_RC_VALUE`
-/// on parameter 1, while an accepted one is `TPM_RC_INSUFFICIENT` on parameter 2.
+/// on parameter 1, while an accepted one is `TPM_RC_INSUFFICIENT` on parameter 2
+/// (`TPM_CAP_PUB_KEYS` is accepted with secure channel support).
 ///
 /// TPM 2.0 Part 2, \"Definition of (UINT32) TPM_CAP Constants\" ends with `#TPM_RC_VALUE`.
 #[test]
@@ -882,9 +883,18 @@ fn get_capability_validates_capability_before_property() {
         transact_rc_of(&mut sim, &cmd(0x9)),
         TpmRc::INSUFFICIENT.with(Position::parameter(2)).get()
     );
-    // TPM_CAP_PUB_KEYS: not a capability of this TPM.
+    // TPM_CAP_PUB_KEYS: a capability of this TPM only with secure channel support.
     assert_eq!(
         transact_rc_of(&mut sim, &cmd(0xB)),
+        if cfg!(feature = "sec-channel") {
+            TpmRc::INSUFFICIENT.with(Position::parameter(2)).get()
+        } else {
+            TpmRc::VALUE.with(Position::parameter(1)).get()
+        }
+    );
+    // TPM_CAP_SPDM_SESSION_INFO + 1 (0xD): not a capability.
+    assert_eq!(
+        transact_rc_of(&mut sim, &cmd(0xD)),
         TpmRc::VALUE.with(Position::parameter(1)).get()
     );
     // TPM_CAP_ACT.
@@ -900,10 +910,10 @@ fn get_capability_validates_capability_before_property() {
 /// byte more on `objectName` (`TPM_RC_SIZE` + P1).
 ///
 /// TPM 2.0 Part 2, `TPM2B_NAME`: "name[size]{:sizeof(TPMU_NAME)}", where `TPMU_NAME` is a
-/// `TPMT_HA` or a `TPM_HANDLE`: 66 bytes with SHA-512.
+/// `TPMT_HA` or a `TPM_HANDLE`: 66 bytes with SHA-512 (50 without).
 #[test]
 fn name_parameter_bounded_by_sizeof_tpmu_name() {
-    let name_cap: usize = 66;
+    let name_cap: usize = 2 + crate::_common::STRONGEST_DIGEST_SIZE;
     let mut sim = Tpm::new();
     let (session, _) = crate::_common::start_policy(&mut sim, TpmSe::Policy);
     for (size, expected) in [

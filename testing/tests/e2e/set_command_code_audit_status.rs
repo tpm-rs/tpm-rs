@@ -22,7 +22,7 @@ const CC_PCR_READ: u32 = 0x17E;
 const CC_PCR_EVENT: u32 = 0x13C;
 const CC_STARTUP: u32 = 0x144;
 const CC_SHUTDOWN: u32 = 0x145;
-const CC_SET_ALGORITHM_SET: u32 = 0x13F;
+const CC_FIELD_UPGRADE_START: u32 = 0x12F;
 const CC_CLEAR: u32 = 0x126;
 const CC_GET_COMMAND_AUDIT_DIGEST: u32 = 0x133;
 const CC_HASH: u32 = 0x17D;
@@ -211,7 +211,7 @@ fn command_in_both_lists_is_not_audited() {
 #[test]
 fn shutdown_and_unimplemented_commands_are_ignored() {
     let mut sim = Tpm::new();
-    let ignored = [CC_SHUTDOWN, CC_SET_ALGORITHM_SET, 0x1FF, 0x2000_0100];
+    let ignored = [CC_SHUTDOWN, CC_FIELD_UPGRADE_START, 0x1FF, 0x2000_0100];
     assert_eq!(
         set_command_code_audit_status(&mut sim, OWNER, ALG_NULL, &ignored, &ignored),
         0

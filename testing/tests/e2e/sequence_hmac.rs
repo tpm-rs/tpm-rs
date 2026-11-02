@@ -179,10 +179,12 @@ fn hmac_start_restricted_checked_before_sign() {
 /// HMAC_Start reports attribute errors (restricted: ATTRIBUTES + H1) before an incompatible
 /// hashAlg (VALUE + P2).
 ///
-/// This TPM implements `TPM2_HMAC_Start` (no CMAC), whose reference order (`HMAC_Start.c`) is:
-/// key type, `restricted`, `sign`, then the hash selection. A restricted HMAC key with a
+/// Without CMAC this TPM implements `TPM2_HMAC_Start`, whose reference order (`HMAC_Start.c`)
+/// is: key type, `restricted`, `sign`, then the hash selection. A restricted HMAC key with a
 /// mismatching `hashAlg` therefore reports `TPM_RC_ATTRIBUTES + RC_H1`, while an unrestricted
-/// signing key with the same `hashAlg` reports `TPM_RC_VALUE + RC_P2`.
+/// signing key with the same `hashAlg` reports `TPM_RC_VALUE + RC_P2`. With CMAC it implements
+/// `TPM2_MAC_Start`, which selects the MAC (`CryptSelectMac()`) before it checks `restricted`
+/// and `sign`, so both keys report `TPM_RC_VALUE + RC_P2`.
 #[test]
 fn hmac_start_attributes_checked_before_hash() {
     let mut sim = Tpm::new();
@@ -212,7 +214,14 @@ fn hmac_start_attributes_checked_before_hash() {
     };
     for (handle, expected) in [
         (key, rc_at(TpmRc::VALUE, Position::parameter(2))),
-        (restricted, rc_at(TpmRc::ATTRIBUTES, Position::handle(1))),
+        (
+            restricted,
+            if cfg!(feature = "cmac") {
+                rc_at(TpmRc::VALUE, Position::parameter(2))
+            } else {
+                rc_at(TpmRc::ATTRIBUTES, Position::handle(1))
+            },
+        ),
     ] {
         assert_eq!(
             execute_with_password_sessions(&mut sim, &HMACStart { handle, ..start }, 1, &[])

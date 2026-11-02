@@ -44,6 +44,8 @@ pub fn make_test_session_state(
         is_cp_hash_defined: false,
         is_name_hash_defined: false,
         is_template_hash_defined: false,
+        is_parameters_hash_defined: false,
+        is_pp_required: false,
         policy_digest: [0u8; 64],
         policy_digest_len: 0,
         command_code: 0,
@@ -59,6 +61,7 @@ pub fn make_test_session_state(
         include_auth: false,
         is_da_bound: false,
         is_lockout_bound: false,
+        sec_channel: Default::default(),
     }
 }
 
@@ -344,6 +347,9 @@ impl tpm2::crypto::Ecc for FakeCrypto {
         Ok(Some(s_out.len()))
     }
 }
+
+impl tpm2::crypto::Mlkem for FakeCrypto {}
+impl tpm2::crypto::Mldsa for FakeCrypto {}
 
 impl CryptoProvider for FakeCrypto {
     /// Its algorithms are fakes, which fail the known-answer self tests.

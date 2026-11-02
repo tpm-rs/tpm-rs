@@ -24,7 +24,8 @@
 //!   multiplication runs ([`Tested`], the hooked crypto provider of the engine, see
 //!   [`crate::engine::TpmEngine::crypto`]);
 //! - an RSA encryption, decryption, signature or signature verification uses an untested scheme,
-//!   an ECC key is generated or an ECDSA signature is computed (explicit
+//!   an ECC key is generated, an ECDSA signature is computed, or an ML-KEM or ML-DSA key is
+//!   generated or used (explicit
 //!   [`crate::engine::TpmEngine::self_test`] calls at the counterparts of the reference's
 //!   `CryptRsaEncrypt()`, `CryptRsaDecrypt()`, `CryptRsaSign()`, `CryptRsaValidateSignature()`,
 //!   `CryptEccGenerateKey()` and `CryptEccSign()`), and for the hashes that the reference's RSA
@@ -34,6 +35,7 @@
 //! A failed test puts the TPM into Failure mode ([`SelfTestState::failed`]).
 
 mod algorithm_tests;
+mod pqc_vectors;
 mod tested;
 pub(crate) mod vectors;
 
@@ -278,6 +280,20 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         match sequence_type {
             crate::SequenceType::Hash { alg } => test(*alg),
             crate::SequenceType::Hmac { hash_alg, .. } => test(*hash_alg),
+            // The block cipher of the CMAC key, as the hash of an HMAC sequence (TPM 2.0 Part 1,
+            // "Self-Test": no value may depend on an untested function).
+            #[cfg(feature = "cmac")]
+            crate::SequenceType::Cmac { state } => crypto
+                .do_self_test(state.alg.algorithm())
+                .map_err(|_| TpmRc::FAILURE),
+            // `ObjectCreateSignSequence()`/`ObjectCreateVerifySequence()`: the hash (or the HMAC)
+            // of the scheme.
+            crate::SequenceType::Sign(seq) | crate::SequenceType::Verify(seq) => {
+                match seq.scheme.hash_alg() {
+                    Some(hash) => test(hash),
+                    None => Ok(()),
+                }
+            }
             crate::SequenceType::Event => {
                 for alg in [Alg::SHA1, Alg::SHA256, Alg::SHA384, Alg::SHA512] {
                     if let Ok(hash) = TpmiAlgHash::try_from(alg) {

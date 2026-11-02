@@ -729,7 +729,14 @@ fn oversized_salt_and_unknown_symmetric_algorithm_rejected_at_unmarshal() {
     let steps: [(&str, u32); 2] = [
         (
             "80010000002b0000017640000007400000070010a30850fa000000005c0000000000118102000000118102",
-            0x2d5,
+            // A 512-byte `encryptedSalt` (of which only 6 bytes follow) exceeds the capacity of
+            // `TPM2B_ENCRYPTED_SECRET` unless the profile has RSA-4096 (`MAX_RSA_KEY_BYTES` 512) or
+            // ML-KEM (1568), where the missing bytes are found instead.
+            if 512 > tpm2::Tpm2bEncryptedSecret::CAP {
+                0x2d5
+            } else {
+                0x2da
+            },
         ),
         (
             "80010000002b0000017640000007400000070010009e00000000000000000000000003000000001000000b",

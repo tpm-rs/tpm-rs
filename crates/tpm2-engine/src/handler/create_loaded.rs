@@ -3,6 +3,7 @@ use super::KeyDerivationArgs;
 use super::rsa_sensitive::RSA_PRIVATE_SIZE;
 use super::{ParentSchemeInfo, ResolvedParentInfo, TransientObject};
 use crate::handle_checks::{Tpmi, check};
+use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::self_test::kdfa_bits;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
@@ -96,7 +97,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let mut obj_seed = [0u8; 64];
-        let mut actual_private_key = [0u8; 1536];
+        let mut actual_private_key = [0u8; MAX_PRIVATE_KEY_SIZE];
         let (obj_seed_len, actual_private_key_len) = if is_derived {
             // 4-5. Derived Object: sensitive value and seedValue come from the KDFa stream of
             // the derivation parent (Part 1, "Entropy for Derived Objects"). An ECC key is
@@ -108,6 +109,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             ) {
                 self.do_self_test(tpm2::Alg::ECDSA)?;
             }
+            // `CryptoMlkem_GenerateKey()`/`CryptoMldsa_GenerateKey()` test the algorithm before
+            // they draw the seed (the tests draw from the TPM's DRBG).
+            self.pqc_key_generation_self_test(&in_public_struct.parms_and_id)?;
             let lens = self.derive_object_material(
                 &parent_seed_val[..parent_info.seed_len],
                 parent_info.name_alg,
@@ -222,7 +226,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             is_primary,
             is_derived,
             parent_info.name_alg,
-            parent_info.sym_bits,
+            parent_info.sym_alg,
             parent_info.attributes.contains(TpmaObject::FIXED_TPM),
             &mut private_buf,
         )?;
@@ -361,6 +365,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .ok_or(TpmRc::CURVE.with(Position::parameter(2)))?;
                 n.len()
             }
+            // ML-KEM/ML-DSA: the private seed comes first in the stream, as the reference's
+            // `CryptoMlkem_GenerateKey()`/`CryptoMldsa_GenerateKey()` draw it from the KDF.
+            OwnedPublicParmsAndId::Mlkem(..) => tpm2::crypto::MLKEM_SEED_SIZE,
+            OwnedPublicParmsAndId::Mldsa(..) | OwnedPublicParmsAndId::HashMldsa(..) => {
+                tpm2::crypto::MLDSA_SEED_SIZE
+            }
             _ => return Err(TpmRc::TYPE.with(Position::parameter(2))),
         };
 
@@ -400,6 +410,28 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     &[&obj_seed[..seed_len], &actual_private_key[..key_len]],
                 )?;
                 *unique = crate::owned::OwnedDigest::from_bytes(&digest[..digest_len])
+                    .map_err(|_| TpmRc::FAILURE)?;
+            }
+            OwnedPublicParmsAndId::Mlkem(parms, unique) => {
+                let seed: &[u8; tpm2::crypto::MLKEM_SEED_SIZE] = actual_private_key[..key_len]
+                    .try_into()
+                    .map_err(|_| TpmRc::FAILURE)?;
+                let mut public_key = [0u8; tpm2::TPM2_MAX_MLKEM_PUB_SIZE];
+                let len = self.mlkem_public_key(parms.parameter_set, seed, &mut public_key)?;
+                *unique = crate::owned::OwnedTpm2b::from_bytes(&public_key[..len])
+                    .map_err(|_| TpmRc::FAILURE)?;
+            }
+            OwnedPublicParmsAndId::Mldsa(tpm2::TpmsMldsaParms { parameter_set, .. }, unique)
+            | OwnedPublicParmsAndId::HashMldsa(
+                tpm2::TpmsHashMldsaParms { parameter_set, .. },
+                unique,
+            ) => {
+                let seed: &[u8; tpm2::crypto::MLDSA_SEED_SIZE] = actual_private_key[..key_len]
+                    .try_into()
+                    .map_err(|_| TpmRc::FAILURE)?;
+                let mut public_key = [0u8; tpm2::TPM2_MAX_MLDSA_PUB_SIZE];
+                let len = self.mldsa_public_key(*parameter_set, seed, &mut public_key)?;
+                *unique = crate::owned::OwnedTpm2b::from_bytes(&public_key[..len])
                     .map_err(|_| TpmRc::FAILURE)?;
             }
             _ => {}
@@ -514,9 +546,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// CLEAR), so such keys carry an empty `seedValue`.
     pub(crate) fn object_seed_value<'s>(public: &TpmtPublic, seed: &'s [u8]) -> &'s [u8] {
         let attrs = public.object_attributes;
-        let asymmetric = matches!(
+        let asymmetric = !matches!(
             public.parms_and_id,
-            PublicParmsAndId::Rsa(_, _) | PublicParmsAndId::Ecc(_, _)
+            PublicParmsAndId::Sym(_, _) | PublicParmsAndId::KeyedHash(_, _)
         );
         if asymmetric
             && (attrs.contains(TpmaObject::SIGN_ENCRYPT) || !attrs.contains(TpmaObject::RESTRICTED))
@@ -537,7 +569,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         name: crate::owned::OwnedName,
         user_auth: crate::owned::OwnedAuth,
         public_struct: crate::owned::OwnedPublic,
-        private_key: [u8; 1536],
+        private_key: [u8; MAX_PRIVATE_KEY_SIZE],
         private_key_len: usize,
         qualified_name: crate::owned::OwnedName,
         parent_handle: Option<u32>,
@@ -600,7 +632,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 hierarchy_val: parent_handle,
                 has_st_clear: false,
                 name_alg: TpmiAlgHash::Sha256,
-                sym_bits: 128,
+                sym_alg: tpm2::AlgSym::Aes128,
                 attributes: TpmaObject(0),
                 is_derivation_parent: false,
                 scheme: None,
@@ -671,18 +703,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let qn_buf = dyn_qn.get_buffer();
         let qn_len = qn_buf.len();
         parent_qn_buf[..qn_len].copy_from_slice(qn_buf);
-        let mut sym_bits = match &obj.public.parms_and_id {
-            crate::owned::OwnedPublicParmsAndId::Rsa(parms, _) => {
-                parms.symmetric.map(|s| s.key_bits() as u32).unwrap_or(128)
-            }
-            crate::owned::OwnedPublicParmsAndId::Ecc(parms, _) => {
-                parms.symmetric.map(|s| s.key_bits() as u32).unwrap_or(128)
-            }
-            _ => 128,
-        };
-        if sym_bits == 0 {
-            sym_bits = 128;
-        }
+        let sym_alg = crate::handler::protection_sym_alg(&obj.public.parms_and_id);
         let mut name_alg = obj.public.name_alg.unwrap_or(TpmiAlgHash::Sha256);
         let is_derivation_parent = matches!(
             &obj.public.parms_and_id,
@@ -712,7 +733,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             hierarchy_val: obj.hierarchy,
             has_st_clear: parent_has_st_clear,
             name_alg,
-            sym_bits,
+            sym_alg,
             attributes: attrs,
             is_derivation_parent,
             scheme: Some(ParentSchemeInfo {
@@ -720,6 +741,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 symmetric: match &obj.public.parms_and_id {
                     crate::owned::OwnedPublicParmsAndId::Rsa(parms, _) => parms.symmetric,
                     crate::owned::OwnedPublicParmsAndId::Ecc(parms, _) => parms.symmetric,
+                    crate::owned::OwnedPublicParmsAndId::Mlkem(parms, _) => parms.symmetric,
                     crate::owned::OwnedPublicParmsAndId::Sym(sym, _) => Some(*sym),
                     _ => None,
                 },
@@ -753,17 +775,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::HASH.with(error_pos));
         }
         // `TPMI_ALG_SYM_MODE` only includes implemented modes (Part 2, the `#ifdef`-delimited
-        // interface type). This TPM does not implement CMAC, so a `TPMT_SYM_DEF_OBJECT` with
-        // mode `TPM_ALG_CMAC` fails to unmarshal with `TPM_RC_MODE` (as in `TPM2_TestParms`).
-        let sym_def = match &public_struct.parms_and_id {
-            PublicParmsAndId::Sym(sym, _) => Some(*sym),
-            PublicParmsAndId::Rsa(parms, _) => parms.symmetric,
-            PublicParmsAndId::Ecc(parms, _) => parms.symmetric,
-            _ => None,
-        };
-        if sym_def.and_then(|s| s.mode()).map(tpm2::Alg::from) == Some(tpm2::Alg::CMAC) {
-            return Err(TpmRc::MODE.with(error_pos));
-        }
+        // interface type), which the `tpm2` wire type already enforces: `TPM_ALG_CMAC` only with
+        // the `cmac` feature, and then it is valid for a SYMCIPHER signing key (a decryption key
+        // with it fails in `scheme_checks`, `TPM_RC_SCHEME`) and, like in the TCG reference, in
+        // the `symmetric` of a parent (whose protections always use CFB).
 
         // 2. If there is an authPolicy, it needs to be the size of the digest produced by nameAlg
         if public_struct.auth_policy.get_size() != 0 {
@@ -1011,9 +1026,41 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 }
                 Some(parms.symmetric)
             }
-            PublicParmsAndId::Mldsa(_, _)
-            | PublicParmsAndId::HashMldsa(_, _)
-            | PublicParmsAndId::Mlkem(_, _) => return Ok(()),
+            // ML-DSA (`SchemeChecksMLDSA()` of the version 185 reference): a signing-only key;
+            // `allowExternalMu` is not allowed for a restricted key (Part 1, "ML-DSA
+            // Cryptographic Primitives": external mu "as long as *allowExternalMu* is TRUE
+            // (which implies *restricted* is FALSE)") nor, as in the reference, for an
+            // `x509sign` key.
+            PublicParmsAndId::Mldsa(parms, _) => {
+                if !sign || decrypt {
+                    return Err(TpmRc::ATTRIBUTES.to_rc());
+                }
+                if parms.allow_external_mu && (restricted || attrs.contains(TpmaObject::X509_SIGN))
+                {
+                    return Err(TpmRc::ATTRIBUTES.to_rc());
+                }
+                None
+            }
+            // HashML-DSA: a signing-only key.
+            PublicParmsAndId::HashMldsa(_, _) => {
+                if !sign || decrypt {
+                    return Err(TpmRc::ATTRIBUTES.to_rc());
+                }
+                None
+            }
+            // ML-KEM (`SchemeChecksMLKEM()`): a decryption-only (key encapsulation) key whose
+            // symmetric algorithm is `TPM_ALG_NULL` unless it is restricted (Part 2,
+            // TPMS_MLKEM_PARMS: "if the key is not a restricted decryption key, this field shall
+            // be set to TPM_ALG_NULL"); a restricted one is a parent (checked below).
+            PublicParmsAndId::Mlkem(parms, _) => {
+                if !decrypt || sign {
+                    return Err(TpmRc::ATTRIBUTES.to_rc());
+                }
+                if !restricted && parms.symmetric.is_some() {
+                    return Err(TpmRc::SYMMETRIC.to_rc());
+                }
+                Some(parms.symmetric)
+            }
         };
 
         // A restricted decryption key with symmetric algorithms is an ordinary parent: it needs
@@ -1233,7 +1280,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         parent_seed_val: &[u8],
         object_name: &crate::owned::OwnedName,
         parent_name_alg: TpmiAlgHash,
-        sym_key_bits: u32,
+        sym_alg: tpm2::AlgSym,
         private_buf: &mut [u8; 2048],
     ) -> Result<usize, TpmRc> {
         let mut tpm2b_sensitive_buf = [0u8; 2048];
@@ -1257,6 +1304,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // KDFA for symmetric key
         let mut sym_key_buf = [0u8; 32];
+        let sym_key_bits = u32::from(sym_alg.key_bits());
         let sym_key_len = (sym_key_bits / 8) as usize;
         kdfa_bits(
             &self.crypto(),
@@ -1274,8 +1322,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context.random_platform(&mut iv)?;
         let orig_iv = iv;
 
-        let sym_alg =
-            tpm2::TpmtSymDefObject::aes_cfb(sym_key_bits as u16).map_err(|_| TpmRc::FAILURE)?;
+        let sym_alg = crate::handler::protection_cfb(sym_alg);
         self.sym_encrypt_decrypt(
             sym_alg,
             &sym_key_buf[..sym_key_len],
@@ -1341,7 +1388,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         is_primary: bool,
         is_derived: bool,
         parent_name_alg: TpmiAlgHash,
-        sym_key_bits: u32,
+        sym_alg: tpm2::AlgSym,
         parent_fixed_tpm: bool,
         private_buf: &'c mut [u8; 2048],
     ) -> Result<Tpm2bPrivate<'c>, TpmRc> {
@@ -1422,7 +1469,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             parent_seed_val,
             object_name,
             parent_name_alg,
-            sym_key_bits,
+            sym_alg,
             private_buf,
         )?;
         Ok(Tpm2bPrivate::from_bytes(&private_buf[..final_private_len])

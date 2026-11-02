@@ -194,14 +194,29 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .unwrap();
 
         // For hash sequences, only the first data block decides whether a ticket may be
-        // produced (`TicketIsSafe` on the first block in `SequenceUpdate.c`).
-        if matches!(seq_obj.sequence_type, crate::SequenceType::Hash { .. }) {
+        // produced (`TicketIsSafe` on the first block in `SequenceUpdate.c`); for signing
+        // sequences, whether a restricted key may sign the message (`ObjectSignSequenceUpdate()`).
+        if matches!(
+            seq_obj.sequence_type,
+            crate::SequenceType::Hash { .. } | crate::SequenceType::Sign(_)
+        ) {
             record_first_block(seq_obj, data);
         }
 
         // The data is consumed by the streaming hash states, so there is no limit on the total
         // length of a sequence (C has none either).
         seq_obj.update_hash_states(data);
+
+        // A CMAC sequence is updated with the block cipher of the crypto provider.
+        #[cfg(feature = "cmac")]
+        if let crate::SequenceType::Cmac { mut state } = seq_obj.sequence_type {
+            state
+                .update(&self.crypto(), data)
+                .map_err(|_| TpmRc::FAILURE)?;
+            if let Some(seq_obj) = self.context.state.find_active_sequence_mut(sequence_handle) {
+                seq_obj.sequence_type = crate::SequenceType::Cmac { state };
+            }
+        }
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;
@@ -274,7 +289,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             state.update(final_chunk);
 
             match &seq_obj.sequence_type {
-                crate::SequenceType::Event => {
+                // Only a hash or HMAC sequence can be completed here: an event sequence needs
+                // `TPM2_EventSequenceComplete`, a signing or verification sequence
+                // `TPM2_SignSequenceComplete`/`TPM2_VerifySequenceComplete`.
+                crate::SequenceType::Event
+                | crate::SequenceType::Sign(_)
+                | crate::SequenceType::Verify(_) => {
                     return Err(TpmRc::MODE.with(Position::handle(1)));
                 }
                 crate::SequenceType::Hash { alg } => {
@@ -312,6 +332,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     let validation =
                         tpm2::TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default());
                     (digest_bytes, digest_len, validation)
+                }
+                // A MAC sequence (like an HMAC sequence) returns a NULL ticket.
+                #[cfg(feature = "cmac")]
+                crate::SequenceType::Cmac { state } => {
+                    let mut state = *state;
+                    let crypto = self.crypto();
+                    state
+                        .update(&crypto, final_chunk)
+                        .map_err(|_| TpmRc::FAILURE)?;
+                    let tag = state.finalize(&crypto).map_err(|_| TpmRc::FAILURE)?;
+                    let mut digest_bytes = [0u8; 64];
+                    digest_bytes[..tag.len()].copy_from_slice(&tag);
+                    let validation =
+                        tpm2::TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default());
+                    (digest_bytes, tag.len(), validation)
                 }
             }
         };
@@ -597,7 +632,7 @@ const TPM_GENERATED_VALUE: [u8; 4] = [0xFF, b'T', b'C', b'G'];
 /// `TicketIsSafe` (`Ticket.c`): a hash ticket may only be produced if the first data block is at
 /// least 4 bytes long and does not start with `TPM_GENERATED_VALUE`, so that a ticket can never
 /// vouch for a digest over data that could be mistaken for a TPM-generated structure.
-fn ticket_is_safe(first_block: &[u8]) -> bool {
+pub(super) fn ticket_is_safe(first_block: &[u8]) -> bool {
     first_block.len() >= 4 && first_block[..4] != TPM_GENERATED_VALUE
 }
 
@@ -621,6 +656,6 @@ fn record_first_block(seq: &mut crate::ActiveSequence, data: &[u8]) {
 }
 
 /// Returns whether the first block recorded by [`record_first_block`] makes a ticket safe.
-fn first_block_was_safe(seq: &crate::ActiveSequence) -> bool {
+pub(super) fn first_block_was_safe(seq: &crate::ActiveSequence) -> bool {
     seq.first_bytes_len == 4 && seq.first_bytes != TPM_GENERATED_VALUE
 }

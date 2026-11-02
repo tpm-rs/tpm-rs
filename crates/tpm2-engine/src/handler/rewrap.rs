@@ -34,13 +34,7 @@ fn oaep_label(label: &[u8], buf: &mut [u8; 32]) -> usize {
 
 /// Returns the coordinate size in bytes of an ECC curve, or `None` if unsupported.
 fn ecc_param_size(curve: TpmEccCurve) -> Option<usize> {
-    match curve {
-        TpmEccCurve::NistP224 => Some(28),
-        TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => Some(32),
-        TpmEccCurve::NistP384 => Some(48),
-        TpmEccCurve::NistP521 => Some(66),
-        _ => None,
-    }
+    crate::ecc_curves::param_size(curve)
 }
 
 /// Left-pads an ECC coordinate to `param_size` bytes into `out`. Fails if it is larger.
@@ -62,21 +56,15 @@ fn is_storage_object(obj: &TransientObject) -> bool {
         && !attrs.contains(TpmaObject::SIGN_ENCRYPT)
         && matches!(
             obj.public.parms_and_id,
-            OwnedPublicParmsAndId::Rsa(_, _) | OwnedPublicParmsAndId::Ecc(_, _)
+            OwnedPublicParmsAndId::Rsa(_, _)
+                | OwnedPublicParmsAndId::Ecc(_, _)
+                | OwnedPublicParmsAndId::Mlkem(_, _)
         )
 }
 
-/// Symmetric key size (bits) of a storage parent's outer wrapper (AES-CFB).
-fn outer_sym_bits(obj: &TransientObject) -> u32 {
-    let bits = match &obj.public.parms_and_id {
-        OwnedPublicParmsAndId::Rsa(parms, _) => parms.symmetric.map(|s| s.key_bits() as u32),
-        OwnedPublicParmsAndId::Ecc(parms, _) => parms.symmetric.map(|s| s.key_bits() as u32),
-        _ => None,
-    };
-    match bits {
-        Some(b) if b != 0 => b,
-        _ => 128,
-    }
+/// The block cipher of a storage parent's outer wrapper (its `symmetric`, used in CFB mode).
+fn outer_sym_alg(obj: &TransientObject) -> tpm2::AlgSym {
+    crate::handler::protection_sym_alg(&obj.public.parms_and_id)
 }
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
@@ -176,7 +164,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             private_blob[..private_blob_len].copy_from_slice(encrypted_blob);
             self.outer_cfb(
                 old_name_alg,
-                outer_sym_bits(&old_parent_obj),
+                outer_sym_alg(&old_parent_obj),
                 &seed[..seed_len],
                 cmd.name.get_buffer(),
                 &mut private_blob[..private_blob_len],
@@ -190,7 +178,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 2. Produce Outer Wrap using newParent (if present)
         let mut final_duplicate = [0u8; Tpm2bPrivate::CAP];
-        let mut encrypted_secret = [0u8; 512];
+        let mut encrypted_secret = [0u8; tpm2::Tpm2bEncryptedSecret::CAP];
         let out_sym_seed;
         let out_duplicate;
 
@@ -225,7 +213,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             body.copy_from_slice(&private_blob[..private_blob_len]);
             self.outer_cfb(
                 new_name_alg,
-                outer_sym_bits(&new_parent_obj),
+                outer_sym_alg(&new_parent_obj),
                 &seed[..seed_len],
                 cmd.name.get_buffer(),
                 body,
@@ -311,17 +299,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 
     /// Encrypts (or decrypts) `data` in place with the outer-wrapper key
-    /// `KDFa(hashAlg, seed, "STORAGE", name, NULL, symBits)` in AES-CFB with a zero IV
-    /// (duplication blobs do not carry an IV).
+    /// `KDFa(hashAlg, seed, "STORAGE", name, NULL, symBits)` in CFB mode of the parent's block
+    /// cipher `sym_alg` with a zero IV (duplication blobs do not carry an IV).
     fn outer_cfb(
         &self,
         hash_alg: tpm2::TpmiAlgHash,
-        sym_bits: u32,
+        sym_alg: tpm2::AlgSym,
         seed: &[u8],
         name: &[u8],
         data: &mut [u8],
         encrypt: bool,
     ) -> Result<(), TpmRc> {
+        let sym_bits = u32::from(sym_alg.key_bits());
         let key_len = (sym_bits / 8) as usize;
         let mut key = [0u8; 32];
         kdfa_bits(
@@ -336,8 +325,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         )
         .map_err(|_| TpmRc::FAILURE)?;
         let mut iv = [0u8; 16];
-        let sym_alg =
-            tpm2::TpmtSymDefObject::aes_cfb(sym_bits as u16).map_err(|_| TpmRc::FAILURE)?;
+        let sym_alg = crate::handler::protection_cfb(sym_alg);
         let direction = if encrypt {
             Direction::Encrypt
         } else {
@@ -434,7 +422,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 // front of the buffer and ignores the rest).
                 let mut slice = secret;
                 let eph_point = TpmsEccPoint::unmarshal(&mut slice).map_err(|e| e.to_rc())?;
-                let mut eph = [0u8; 132];
+                let mut eph = [0u8; 2 * TpmEccCurve::MAX_ECC_KEY_BYTES];
                 pad_coordinate(eph_point.x.get_buffer(), param_size, &mut eph[..param_size])?;
                 pad_coordinate(
                     eph_point.y.get_buffer(),
@@ -469,6 +457,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .map_err(|_| TpmRc::FAILURE)?;
                 Ok(digest_size)
             }
+            OwnedPublicParmsAndId::Mlkem(_, _) => {
+                self.mlkem_secret_decrypt(parent, label, secret, seed)
+            }
             _ => Err(TpmRc::TYPE.to_rc()),
         }
     }
@@ -484,7 +475,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         parent: &TransientObject,
         label: &[u8],
         seed: &mut [u8; 64],
-        secret_out: &mut [u8; 512],
+        secret_out: &mut [u8; tpm2::Tpm2bEncryptedSecret::CAP],
     ) -> Result<(usize, usize), TpmRc> {
         let name_alg = parent.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
         let digest_size = name_alg.digest_size();
@@ -529,7 +520,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             OwnedPublicParmsAndId::Ecc(parms, unique) => {
                 let curve = parms.curve_id;
                 let param_size = ecc_param_size(curve).ok_or(TpmRc::CURVE.to_rc())?;
-                let mut parent_point = [0u8; 132];
+                let mut parent_point = [0u8; 2 * TpmEccCurve::MAX_ECC_KEY_BYTES];
                 pad_coordinate(
                     unique.x.get_buffer(),
                     param_size,
@@ -594,6 +585,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let len = eph_point.marshal(&mut point_buf);
                 secret_out[..len].copy_from_slice(&point_buf[..len]);
                 Ok((digest_size, len))
+            }
+            OwnedPublicParmsAndId::Mlkem(_, _) => {
+                self.mlkem_secret_encrypt(parent, label, seed, &mut secret_out[..])
             }
             _ => Err(TpmRc::TYPE.to_rc()),
         }

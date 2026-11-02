@@ -70,14 +70,20 @@ fn tpm_properties_stay_within_the_requested_group() {
     }
 }
 
-/// A capability this TPM does not implement (`TPM_CAP_PUB_KEYS`, `TPM_CAP_SPDM_SESSION_INFO`) is
+/// A capability this TPM does not implement (`TPM_CAP_PUB_KEYS` and `TPM_CAP_SPDM_SESSION_INFO`
+/// without secure channel support, the unassigned `0x0D` and `0xFF`) is
 /// `TPM_RC_VALUE + RC_P1` while it is unmarshaled, so it wins over
 /// trailing bytes (`TPM_RC_SIZE`) and over missing later parameters (found by differential
 /// fuzzing). TPM 2.0 Part 2, "Definition of (UINT32) TPM_CAP Constants": "#TPM_RC_VALUE".
 #[test]
 fn unimplemented_capability_rejected_while_unmarshaling() {
     let mut sim = Tpm::new();
-    for capability in [0x0Bu32, 0x0C] {
+    let unimplemented: &[u32] = if cfg!(feature = "sec-channel") {
+        &[0x0D, 0xFF]
+    } else {
+        &[0x0B, 0x0C, 0x0D, 0xFF]
+    };
+    for &capability in unimplemented {
         let mut params = capability.to_be_bytes().to_vec();
         params.extend_from_slice(&[0, 0, 0, 0x0A, 0, 0, 0, 0, 0, 0, 1, 0]); // + 4 trailing bytes
         for len in [params.len(), 4] {
@@ -882,14 +888,20 @@ fn max_context_sizes_bound_saved_contexts() {
 /// past the last fixed property this TPM reports: the response lists every implemented property
 /// of the group from 0x10C on, in order, and `moreData` is NO, as no value remains (TPM 2.0
 /// Part 3, TPM2_GetCapability: "The *moreData* parameter will have a value of YES if there are
-/// more values of the requested type that were not returned."). `tcgtpm` version 185 also reports
-/// `TPM_PT_ML_PARAMETER_SETS`, so its list is cut there, and `ibmswtpm2` does not report the
-/// firmware-SVN properties (`differential.md` rule 2).
+/// more values of the requested type that were not returned."). With ML-KEM or ML-DSA, the last
+/// one is `TPM_PT_ML_PARAMETER_SETS` (0x131), and `ibmswtpm2` does not report the firmware-SVN
+/// properties (`differential.md` rule 2).
 #[test]
 fn fixed_properties_to_the_end_of_the_group() {
     let mut tpm = Tpm::new();
+    // 0x10C..=0x130 are 37 values; one more with TPM_PT_ML_PARAMETER_SETS.
+    let count = if cfg!(any(feature = "mlkem", feature = "mldsa")) {
+        0x25
+    } else {
+        0x24
+    };
     let cmd = [
-        0x80, 0x01, 0, 0, 0, 0x16, 0, 0, 0x01, 0x7A, 0, 0, 0, 6, 0, 0, 0x01, 0x0C, 0, 0, 0, 0x24,
+        0x80, 0x01, 0, 0, 0, 0x16, 0, 0, 0x01, 0x7A, 0, 0, 0, 6, 0, 0, 0x01, 0x0C, 0, 0, 0, count,
     ];
     let rsp = tpm.send_command(&cmd);
     assert_eq!(rc_of(&rsp), 0);
@@ -897,12 +909,13 @@ fn fixed_properties_to_the_end_of_the_group() {
 }
 
 /// TPM_CAP_TPM_PROPERTIES of the last fixed property this TPM reports
-/// (`TPM_PT_FIRMWARE_MAX_SVN`, 0x130) with `propertyCount` 1: that property, and `moreData` NO,
+/// (`TPM_PT_FIRMWARE_MAX_SVN`, 0x130, or with ML-KEM or ML-DSA `TPM_PT_ML_PARAMETER_SETS`,
+/// 0x131) with `propertyCount` 1: that property, and `moreData` NO,
 /// as no further value of this TPM remains (TPM 2.0 Part 3, TPM2_GetCapability: "The *moreData*
 /// parameter will have a value of YES if there are more values of the requested type that were
 /// not returned."), while `TPM_PT_MAX_CAP_BUFFER` (0x12E) is followed by the firmware-SVN
-/// properties. `tcgtpm` version 185 has `TPM_PT_ML_PARAMETER_SETS` after them, and
-/// `ibmswtpm2` does not report the firmware-SVN properties (`differential.md` rule 2).
+/// properties. `ibmswtpm2` does not report the firmware-SVN properties (`differential.md` rule
+/// 2).
 #[test]
 fn last_fixed_property_has_no_more_data() {
     let mut tpm = Tpm::new();
@@ -912,13 +925,18 @@ fn last_fixed_property_has_no_more_data() {
             0x01,
         ]
     };
-    let rsp = tpm.send_command(&query(0x30));
+    let last = if cfg!(any(feature = "mlkem", feature = "mldsa")) {
+        0x31
+    } else {
+        0x30
+    };
+    let rsp = tpm.send_command(&query(last));
     assert_eq!(rc_of(&rsp), 0);
     assert_eq!(rsp[10], 0, "moreData");
     assert_eq!(
         rsp[19..23],
-        0x130u32.to_be_bytes(),
-        "TPM_PT_FIRMWARE_MAX_SVN"
+        (0x100 | u32::from(last)).to_be_bytes(),
+        "last fixed property"
     );
     let rsp = tpm.send_command(&query(0x2E));
     assert_eq!(rc_of(&rsp), 0);

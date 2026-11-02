@@ -97,7 +97,8 @@ fn invalid_curve_ids_rejected() {
 /// ECC_Parameters(NIST P-224) returns the FIPS 186-4 domain parameters and KDF1_SP800_56A/SHA-256
 ///
 /// `TPM2_ECC_Parameters(TPM_ECC_NIST_P224)` returns the FIPS 186-4 domain parameters and the
-/// curve's KDF (`KDF1_SP800_56A` with SHA-256), as `CryptEccData.c`.
+/// curve's KDF (`KDF1_SP800_56A` with SHA-256), as `CryptEccData.c`; the other NIST curves report
+/// their KDF hash, except NIST P-521 without SHA-512 (`TPM_ALG_NULL`).
 #[test]
 fn nist_p224_domain_parameters() {
     let mut sim = Tpm::new();
@@ -119,8 +120,11 @@ fn nist_p224_domain_parameters() {
         assert_eq!(rc, 0);
         let p = &resp[10..];
         assert_eq!(u16::from_be_bytes(p[0..2].try_into().unwrap()), curve);
-        if !tpm2_engine::ECC_PARAMETERS_REPORT_KDF {
-            // `ecc-parameters-null-kdf`: the KDF is `TPM_ALG_NULL` (no details).
+        // `ecc-parameters-null-kdf`: the KDF is `TPM_ALG_NULL` (no details); so is the KDF of
+        // NIST P-521 without SHA-512, whose hash would not be a `TPMI_ALG_HASH` of the TPM.
+        let null_kdf = !tpm2_engine::ECC_PARAMETERS_REPORT_KDF
+            || (curve == 0x0005 && !crate::_common::SHA512_IMPLEMENTED);
+        if null_kdf {
             assert_eq!(
                 u16::from_be_bytes(p[4..6].try_into().unwrap()),
                 0x0010,

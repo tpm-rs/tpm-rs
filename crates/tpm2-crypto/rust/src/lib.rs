@@ -5,9 +5,16 @@ extern crate alloc;
 
 use tpm2::crypto::{ConstantTimeEq, CryptoError, CryptoProvider, Random};
 
-/// A cryptographic provider implementation using RustCrypto crates (such as `aes`, `rsa`, `p256`, `sha2`, `hmac`).
+/// A cryptographic provider implementation using RustCrypto crates (such as `aes`, `camellia`,
+/// `rsa`, `p256`, `sha2`, `hmac`).
 ///
-/// This provider supplies all the necessary cryptographic primitives required by the TPM 2.0 stack.
+/// This provider supplies all the necessary cryptographic primitives required by the TPM 2.0 stack,
+/// including AES-128/192/256 and Camellia-128/192/256 (CMAC, and the CTR, OFB, CBC, CFB and ECB
+/// modes for symmetric encryption), ML-KEM-512/768/1024 ([`tpm2::crypto::Mlkem`], `ml-kem`) and
+/// ML-DSA-44/65/87 ([`tpm2::crypto::Mldsa`], `ml-dsa`; see the [`pqc`] module).
+/// The curves NIST P-192, BN P-638 and SM2 P-256 (point operations and key generation), which
+/// RustCrypto does not offer, use the generic constant-time short-Weierstrass arithmetic of
+/// `tpm2-crypto-weierstrass`.
 pub struct RustCryptoProvider;
 
 impl CryptoProvider for RustCryptoProvider {
@@ -88,5 +95,7 @@ pub mod asymmetric;
 pub mod cmac;
 pub mod ecc;
 pub mod hash;
+pub mod pqc;
 pub mod symmetric;
+pub use symmetric::{BlockCipher, RustCryptoCipher, run_mode, rust_crypto_mode};
 pub use {cmac::*, ecc::*, hash::*};

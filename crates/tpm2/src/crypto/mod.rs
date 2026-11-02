@@ -17,19 +17,24 @@
 //!
 //! All items are re-exported at the top level of this module (e.g.
 //! [`crypto::kdfa`](kdfa)). The [`asymmetric`](mod@asymmetric),
-//! [`cmac`](mod@cmac), [`ecc`](mod@ecc), [`kdf`](mod@kdf), [`rng`](mod@rng),
-//! and [`symmetric`](mod@symmetric) submodules are also public, so that paths
+//! [`cmac`](mod@cmac), [`ecc`](mod@ecc), [`kdf`](mod@kdf), [`pqc`](mod@pqc),
+//! [`rng`](mod@rng), and [`symmetric`](mod@symmetric) submodules are also public, so that paths
 //! like `tpm2::crypto::kdf::kdfa` and `tpm2::crypto::asymmetric::KeyParams`
 //! keep working.
 pub mod asymmetric;
 pub mod cmac;
 pub mod ecc;
+pub mod ecc_params;
 mod hash;
 mod hmac;
 pub mod kdf;
+pub mod pqc;
 pub mod rng;
 pub mod symmetric;
-pub use {asymmetric::*, cmac::*, ecc::*, hash::*, hmac::*, kdf::*, rng::*, symmetric::*};
+pub use {
+    asymmetric::*, cmac::*, ecc::*, ecc_params::*, hash::*, hmac::*, kdf::*, pqc::*, rng::*,
+    symmetric::*,
+};
 
 /// Common error type for all cryptographic traits.
 ///
@@ -167,6 +172,8 @@ impl<const N: usize> Finalize<N> for ! {
 /// #     type Curve25519Context = !;
 /// #     type Curve448Context = !;
 /// # }
+/// # impl Mlkem for MyBackend {}
+/// # impl Mldsa for MyBackend {}
 /// impl CryptoProvider for MyBackend {
 ///     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
 ///         // Fill `dest` from the backend's CSPRNG.
@@ -177,7 +184,17 @@ impl<const N: usize> Finalize<N> for ! {
 /// }
 /// ```
 pub trait CryptoProvider:
-    Hash + Hmac + Cmac + Symmetric + ConstantTimeEq + Random + Asymmetric + AsymmetricSign + Ecc
+    Hash
+    + Hmac
+    + Cmac
+    + Symmetric
+    + ConstantTimeEq
+    + Random
+    + Asymmetric
+    + AsymmetricSign
+    + Ecc
+    + Mlkem
+    + Mldsa
 {
     /// Fills `dest` with cryptographically secure random bytes from the
     /// provider's CSPRNG.

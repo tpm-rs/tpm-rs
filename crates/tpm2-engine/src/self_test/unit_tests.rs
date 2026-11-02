@@ -19,8 +19,8 @@ fn ids(algs: &[Alg]) -> Vec<u16> {
 
 /// The algorithms that need a test after `_TPM_Init` (`CryptInitializeToTest()`), in ascending
 /// order: the implemented hashes, AES and CFB (the other modes are tested with AES when
-/// `TPM2_SelfTest(fullTest = YES)` asks for them), the RSA and ECC schemes with a test, ECDH (for
-/// ECC) and KDFa. RSA itself is tested with raw RSA (`TPM_ALG_NULL`, which is not implemented and
+/// `TPM2_SelfTest(fullTest = YES)` asks for them), the RSA and ECC schemes with a test (ECDSA, and
+/// EC-Schnorr with `ecschnorr`), ECDH (for ECC) and KDFa. RSA itself is tested with raw RSA (`TPM_ALG_NULL`, which is not implemented and
 /// so not listed), HMAC with the default test hash; the algorithms without a test are not listed.
 fn initial_to_do_list() -> Vec<u16> {
     let mut algs = vec![Alg::SHA1, Alg::AES, Alg::SHA256, Alg::SHA384];
@@ -34,9 +34,17 @@ fn initial_to_do_list() -> Vec<u16> {
         Alg::OAEP,
         Alg::ECDSA,
         Alg::ECDH,
-        Alg::KDF1_SP800_108,
-        Alg::CFB,
     ]);
+    if cfg!(feature = "ecschnorr") {
+        algs.push(Alg::ECSCHNORR);
+    }
+    algs.extend([Alg::KDF1_SP800_108, Alg::CFB]);
+    if cfg!(feature = "mlkem") {
+        algs.push(Alg::MLKEM);
+    }
+    if cfg!(feature = "mldsa") {
+        algs.push(Alg::MLDSA);
+    }
     ids(&algs)
 }
 

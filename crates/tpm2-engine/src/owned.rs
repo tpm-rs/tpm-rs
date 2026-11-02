@@ -131,6 +131,7 @@ impl_owned_marshal!(
     50 => 52,
     64 => 66,
     66 => 68,
+    80 => 82,
     128 => 130,
     256 => 258,
     512 => 514,
@@ -172,6 +173,7 @@ pub type OwnedPublicKeyMldsa = OwnedTpm2b<{ Tpm2bPublicKeyMldsa::CAP }>;
 pub type OwnedPrivateKeyMldsa = OwnedTpm2b<{ Tpm2bPrivateKeyMldsa::CAP }>;
 pub type OwnedPublicKeyMlkem = OwnedTpm2b<{ Tpm2bPublicKeyMlkem::CAP }>;
 pub type OwnedPrivateKeyMlkem = OwnedTpm2b<{ Tpm2bPrivateKeyMlkem::CAP }>;
+pub type OwnedSignatureMldsa = OwnedTpm2b<{ tpm2::Tpm2bSignatureMldsa::CAP }>;
 
 /// Owned equivalent of `TpmsEccPoint<'a>`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -521,9 +523,28 @@ pub enum OwnedSignature {
         signature_r: OwnedEccParameter,
         signature_s: OwnedEccParameter,
     },
+    #[cfg(feature = "sm2")]
+    Sm2 {
+        hash: TpmiAlgHash,
+        signature_r: OwnedEccParameter,
+        signature_s: OwnedEccParameter,
+    },
+    #[cfg(feature = "ecschnorr")]
+    Ecschnorr {
+        hash: TpmiAlgHash,
+        signature_r: OwnedEccParameter,
+        signature_s: OwnedEccParameter,
+    },
     /// An HMAC signature (`TPM_ALG_HMAC`) produced by a keyed-hash signing key. Only the first
     /// `hash.digest_size()` bytes of `digest` are meaningful.
     Hmac { hash: TpmiAlgHash, digest: [u8; 64] },
+    /// An ML-DSA signature (`TPM_ALG_MLDSA`).
+    Mldsa(OwnedSignatureMldsa),
+    /// A HashML-DSA signature (`TPM_ALG_HASH_MLDSA`) with its pre-hash algorithm.
+    HashMldsa {
+        hash: TpmiAlgHash,
+        sig: OwnedSignatureMldsa,
+    },
 }
 
 impl OwnedSignature {
@@ -555,10 +576,37 @@ impl OwnedSignature {
                 signature_r: signature_r.as_tpm2b(),
                 signature_s: signature_s.as_tpm2b(),
             }),
+            #[cfg(feature = "sm2")]
+            Self::Sm2 {
+                hash,
+                signature_r,
+                signature_s,
+            } => TpmtSignature::Sm2(TpmsSignatureEcc {
+                hash: *hash,
+                signature_r: signature_r.as_tpm2b(),
+                signature_s: signature_s.as_tpm2b(),
+            }),
+            #[cfg(feature = "ecschnorr")]
+            Self::Ecschnorr {
+                hash,
+                signature_r,
+                signature_s,
+            } => TpmtSignature::Ecschnorr(TpmsSignatureEcc {
+                hash: *hash,
+                signature_r: signature_r.as_tpm2b(),
+                signature_s: signature_s.as_tpm2b(),
+            }),
             Self::Hmac { hash, digest } => TpmtSignature::Hmac(
                 tpm2::TpmtHa::new(*hash, &digest[..hash.digest_size()])
                     .expect("HMAC digest length always matches its hash algorithm"),
             ),
+            Self::Mldsa(sig) => TpmtSignature::Mldsa(sig.as_tpm2b()),
+            Self::HashMldsa { hash, sig } => {
+                TpmtSignature::HashMldsa(tpm2::TpmsSignatureHashMldsa {
+                    hash: *hash,
+                    sig: sig.as_tpm2b(),
+                })
+            }
         }
     }
 }

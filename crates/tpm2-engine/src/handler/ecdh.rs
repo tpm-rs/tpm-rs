@@ -4,7 +4,6 @@ use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, owned::OwnedPublicParmsAndId, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::TpmEccCurve;
 use tpm2::commands::ECDHKeyGen;
 use tpm2::commands::responses;
 use tpm2::crypto::{CryptoProvider, Rng};
@@ -49,12 +48,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         };
 
-        let param_size = match curve {
-            TpmEccCurve::NistP224 => 28,
-            TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => 32,
-            TpmEccCurve::NistP384 => 48,
-            TpmEccCurve::NistP521 => 66,
-            _ => return Err(TpmRc::VALUE.to_rc()),
+        let param_size = match crate::ecc_curves::param_size(curve) {
+            Some(size) => size,
+            None => return Err(TpmRc::VALUE.to_rc()),
         };
 
         let qs_point = match &obj.public.parms_and_id {

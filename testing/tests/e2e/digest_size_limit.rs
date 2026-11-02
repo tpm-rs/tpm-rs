@@ -9,8 +9,9 @@ use testing::tpm::Tpm;
 use tpm2::errors::TpmRc;
 use tpm2::{Handle, TpmSe};
 
-/// The largest digest of the TPM's hash algorithms (`sizeof(TPMU_HA)`): SHA-512.
-const LARGEST_DIGEST: usize = 64;
+/// The largest digest of the TPM's hash algorithms (`sizeof(TPMU_HA)`): SHA-512, or SHA-384
+/// without it.
+const LARGEST_DIGEST: usize = crate::_common::STRONGEST_DIGEST_SIZE;
 
 const CC_POLICY_TICKET: u32 = 0x172;
 const CC_PCR_RESET: u32 = 0x13D;

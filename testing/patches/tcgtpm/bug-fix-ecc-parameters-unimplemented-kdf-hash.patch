@@ -1,0 +1,49 @@
+ecc-parameters-unimplemented-kdf-hash: no unimplemented hash in TPM2_ECC_Parameters
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 2, "TPMI_ALG_HASH"): "TPMI_ALG_HASH is an
+interface type of all the hash algorithms implemented on a specific TPM. ...
+if the algorithm is not implemented in a specific TPM, that algorithm is not
+included in the interface type", and Table "Definition of (ECC)
+TPMS_ALGORITHM_DETAIL_ECC Structure": kdf "the default KDF and hash
+algorithm recommended for use in secret sharing operations (may be
+TPM_ALG_NULL)".
+
+The curve table reports KDF1_SP800_56A with SHA-512 for NIST P-521 also when
+SHA-512 is not implemented (ALG_SHA512 NO, the upstream profile), and with
+SM3_256 for SM2 P-256 although SM3 is not implemented (ALG_SM3_256 NO), so
+TPM2_ECC_Parameters returns a TPMI_ALG_HASH value the TPM does not accept.
+Without the hash the recommended KDF of the curve is TPM_ALG_NULL.
+diff --git a/TPMCmd/tpm/src/crypt/CryptEccData.c b/TPMCmd/tpm/src/crypt/CryptEccData.c
+index dd212fc..f9a3c25 100644
+--- a/TPMCmd/tpm/src/crypt/CryptEccData.c
++++ b/TPMCmd/tpm/src/crypt/CryptEccData.c
+@@ -56,7 +56,13 @@ const TPM_ECC_CURVE_METADATA eccCurves[] = {
+ #  if ECC_NIST_P521
+     comma{TPM_ECC_NIST_P521,
+           521,
++#    if ALG_SHA512
+           {TPM_ALG_KDF1_SP800_56A, {{TPM_ALG_SHA512}}},
++#    else
++          // tpm-rs differential testing -- spec deviation fix (NOT determinism):
++          // the KDF hash is a TPMI_ALG_HASH, which has no unimplemented hash.
++          {TPM_ALG_NULL, {{TPM_ALG_NULL}}},
++#    endif
+           {TPM_ALG_NULL, {{TPM_ALG_NULL}}},
+           OID_ECC_NIST_P521 CURVE_NAME("NIST_P521")}
+ #    undef comma
+@@ -83,7 +89,13 @@ const TPM_ECC_CURVE_METADATA eccCurves[] = {
+ #  if ECC_SM2_P256
+     comma{TPM_ECC_SM2_P256,
+           256,
++#    if ALG_SM3_256
+           {TPM_ALG_KDF1_SP800_56A, {{TPM_ALG_SM3_256}}},
++#    else
++          // tpm-rs differential testing -- spec deviation fix (NOT determinism):
++          // the KDF hash is a TPMI_ALG_HASH, which has no unimplemented hash.
++          {TPM_ALG_NULL, {{TPM_ALG_NULL}}},
++#    endif
+           {TPM_ALG_NULL, {{TPM_ALG_NULL}}},
+           OID_ECC_SM2_P256 CURVE_NAME("SM2_P256")}
+ #    undef comma

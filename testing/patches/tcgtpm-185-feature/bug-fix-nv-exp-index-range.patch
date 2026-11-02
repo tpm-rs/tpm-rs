@@ -1,0 +1,30 @@
+nv-exp-index-range: TPMI_RH_NV_EXP_INDEX is the external NV Index range
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 2, Table "Definition of (TPM_HANDLE)
+TPMI_RH_NV_EXP_INDEX Type"): "{EXTERNAL_NV_FIRST:EXTERNAL_NV_LAST} | range of
+external NV Indexes", "#TPM_RC_VALUE | error returned if the handle is out of
+range".
+
+The reference's TPMI_RH_NV_EXP_INDEX_RANGES admit {NV_INDEX_FIRST:
+NV_INDEX_LAST} instead, so the nvIndex of a TPMS_NV_PUBLIC_EXP_ATTR (the
+TPM_HT_EXTERNAL_NV member of a TPM2B_NV_PUBLIC_2) accepts ordinary NV Index
+handles and rejects every external NV handle with TPM_RC_VALUE (as the public
+tcgtpm, ibmswtpm2 and tpm-rs do not).
+diff --git a/TPMCmd/tpm/src/support/Marshal.c b/TPMCmd/tpm/src/support/Marshal.c
+--- a/TPMCmd/tpm/src/support/Marshal.c
++++ b/TPMCmd/tpm/src/support/Marshal.c
+@@ -979,8 +979,11 @@ TPMI_RH_NV_LEGACY_INDEX_MarshalUnmarshal(
+                                        ARRAYSIZE(TPMI_RH_NV_LEGACY_INDEX_RANGES));
+ }
+ 
++// tpm-rs differential testing -- spec deviation fix (NOT determinism): Part 2,
++// TPMI_RH_NV_EXP_INDEX: "{EXTERNAL_NV_FIRST:EXTERNAL_NV_LAST} | range of external
++// NV Indexes"; upstream admits the ordinary NV Index range instead.
+ const TPM_HANDLE_RANGE TPMI_RH_NV_EXP_INDEX_RANGES[] = {
+-    {NV_INDEX_FIRST, NV_INDEX_LAST},
++    {EXTERNAL_NV_FIRST, EXTERNAL_NV_LAST},
+ };
+ 
+ // Table "Definition of TPMI_RH_NV_EXP_INDEX Type" (Part 2: Structures)

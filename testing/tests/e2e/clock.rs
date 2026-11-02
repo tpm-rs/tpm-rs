@@ -378,8 +378,8 @@ fn clock_rate_adjustment_rounds_like_the_platform() {
 fn rejected_command_updates_clock_in_nv() {
     let mut tpm = Tpm::new();
     testing::tpm::sleep(std::time::Duration::from_millis(1 << 22));
-    // An unimplemented command code (TPM2_VerifyDigestSignature).
-    let rsp = tpm.send_command(&[0x80, 0x01, 0, 0, 0, 10, 0, 0, 0x01, 0xa5]);
+    // An unimplemented command code (TPM2_FirmwareRead, which no profile implements).
+    let rsp = tpm.send_command(&[0x80, 0x01, 0, 0, 0, 10, 0, 0, 0x01, 0x79]);
     assert_eq!(crate::_common::rc_of(&rsp), 0x143);
     tpm.signal_platform(testing::tpm::SimulatorPlatformSignal::PowerOff)
         .unwrap();

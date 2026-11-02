@@ -11,6 +11,10 @@ categories.workspace = true
 
 [dependencies]
 tpm2 = { workspace = true }
+tpm2-crypto-weierstrass = { workspace = true }
+# The block cipher mode loops (`run_mode`), shared with the Rust backend, and
+# its ML-KEM/ML-DSA code (`tpm2_crypto_rust::pqc`) for what this backend lacks.
+tpm2-crypto-rust = { workspace = true }
 hex-literal = { workspace = true }
 libcrux-sha2 = "0.0.7"
 libcrux-hmac = "0.0.6"
@@ -28,12 +32,18 @@ sha2 = "0.10.9"
 hmac = "0.12.1"
 cmac = "0.7.2"
 aes = "0.8.4"
+# libcrux has no Camellia: Camellia (CFB and CMAC) uses the RustCrypto crate.
+camellia = "0.1.0"
 cfb-mode = "0.8.2"
 rand_core = "0.6.4"
 subtle = { version = "2.6.1", default-features = false }
+# 0.0.9: the newer releases need `hax-lib` 0.3.7+, which conflicts with the
+# `hax-lib` 0.3.6 that `libcrux-p256`/`libcrux-aesgcm` pin.
+libcrux-ml-kem = { version = "0.0.9", default-features = false, features = ["mlkem512", "mlkem768", "mlkem1024"] }
+libcrux-ml-dsa = { version = "0.0.9", default-features = false, features = ["mldsa44", "mldsa65", "mldsa87"] }
 
 [features]
 default = ["sha512"]
 # SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
 # reference built without `ALG_SHA512`) is built with every crate without it.
-sha512 = ["tpm2/sha512"]
+sha512 = ["tpm2/sha512", "tpm2-crypto-weierstrass/sha512", "tpm2-crypto-rust/sha512"]

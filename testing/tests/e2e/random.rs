@@ -34,12 +34,12 @@ fn get_random_returns_requested_bytes() {
 /// GetRandom returns at most one largest digest of bytes: TPM 2.0 Part 3, TPM2_GetRandom: "If
 /// *bytesRequested* is more than will fit into a `TPM2B_DIGEST` on the TPM, no error is returned
 /// but the TPM will only return as much data as will fit into a `TPM2B_DIGEST` buffer for the
-/// TPM." That is 64 bytes (SHA-512).
+/// TPM." That is 64 bytes (SHA-512), or 48 without SHA-512.
 ///
 /// Found by differential fuzzing.
 #[test]
 fn get_random_returns_at_most_one_largest_digest() {
-    const LARGEST_DIGEST_SIZE: usize = 64;
+    const LARGEST_DIGEST_SIZE: usize = crate::_common::STRONGEST_DIGEST_SIZE;
     let mut sim = Tpm::new();
     for requested in [
         LARGEST_DIGEST_SIZE as u16,

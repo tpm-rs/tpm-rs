@@ -29,7 +29,9 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4.13"
 arbitrary = { version = "1.4.2", features = ["derive"] }
-testing = { path = ".." }
+# Without its default `sha512` feature, which the targets enable as their
+# references do (the public TCG reference has no SHA-512 upstream).
+testing = { path = "..", default-features = false }
 # The features are unified with those `testing` enables.
 tpm2 = { path = "../../crates/tpm2" }
 
@@ -41,8 +43,8 @@ default = ["target-tcgtpm"]
 # The C reference TPM the conversations are compared with (exactly one; see
 # `testing`'s features of the same names).
 target-tcgtpm = ["testing/target-tcgtpm"]
-target-tcgtpm-v185 = ["testing/target-tcgtpm-v185"]
-target-ibmswtpm2 = ["testing/target-ibmswtpm2"]
+target-tcgtpm-v185 = ["testing/target-tcgtpm-v185", "testing/sha512"]
+target-ibmswtpm2 = ["testing/target-ibmswtpm2", "testing/sha512"]
 # Mirror to the C reference linked into the fuzzer process (`testing`'s
 # `fuzz-inproc`) instead of reference processes: no pipe round trips and no
 # REFERENCE_BIN needed (`cargo fuzz build --features inproc`).

@@ -41,7 +41,7 @@ fn ticket_with_unknown_tag_rejected_with_tag() {
 }
 
 /// PolicyAuthorize with a `TPM_ST_MESSAGE_VERIFIED` ticket (produced only by
-/// TPM2_VerifySequenceComplete, which this TPM does not implement) unmarshals the ticket and
+/// TPM2_VerifySequenceComplete) unmarshals the ticket and
 /// fails on its oversized `hmac` (`TPM_RC_SIZE` on the ticket): TPM 2.0 Part 2,
 /// TPMT_TK_VERIFIED: "#TPM_RC_TAG | | error returned when *tag* is not one of the values in
 /// @tbl:tpm-st-for-signatures", and that table lists `TPM_ST_VERIFIED`,
@@ -70,7 +70,7 @@ fn message_verified_ticket_is_unmarshaled() {
 }
 
 /// PolicyAuthorize with a `TPM_ST_DIGEST_VERIFIED` ticket (produced only by
-/// TPM2_VerifyDigestSignature, which this TPM does not implement) unmarshals its
+/// TPM2_VerifyDigestSignature) unmarshals its
 /// `TPMI_ALG_HASH` metadata (TPM 2.0 Part 2, TPMU_TK_VERIFIED_META: "digestVerified |
 /// TPMI_ALG_HASH | `TPM_ST_DIGEST_VERIFIED`"), so a metadata value that is not a hash
 /// algorithm is `TPM_RC_HASH` on the ticket, and with a valid one the command proceeds past

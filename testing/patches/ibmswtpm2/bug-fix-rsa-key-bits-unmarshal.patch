@@ -10,7 +10,7 @@ of (RSA) (TPM_KEY_BITS) TPMI_RSA_KEY_BITS Type)):
 
 TPMI_RSA_KEY_BITS admits only the implemented key sizes (Part 2,
 $RSA_KEY_SIZES_BITS); upstream hard-codes 1024/2048/3072 regardless of the
-RSA_* profile switches.
+RSA_* profile switches, so RSA-4096 (RSA_4096 = YES upstream) is rejected.
 
 diff --git a/src/Unmarshal.c b/src/Unmarshal.c
 --- a/src/Unmarshal.c

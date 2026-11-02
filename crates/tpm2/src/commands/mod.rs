@@ -106,9 +106,11 @@
 //! - [`TpmCc::HMAC`] and [`TpmCc::MAC`] are the same (`0x00000155`).
 //! - [`TpmCc::HMACStart`] and [`TpmCc::MACStart`] are the same (`0x0000015B`).
 //!
-//! We choose to just define [`HMAC`] and [`HMACStart`] using
-//! [`Option<TpmiAlgHash>`](crate::TpmiAlgHash) (`TPMI_ALG_HASH+`) rather than
-//! the `MAC` command using `TPMI_ALG_MAC_SCHEME+`.
+//! [`HMAC`] and [`HMACStart`] use [`Option<TpmiAlgHash>`](crate::TpmiAlgHash)
+//! (`TPMI_ALG_HASH+`), [`MAC`] and [`MACStart`] use
+//! [`Option<TpmiAlgMacScheme>`](crate::TpmiAlgMacScheme) (`TPMI_ALG_MAC_SCHEME+`, which
+//! includes `TPM_ALG_CMAC` with the `cmac` feature). A TPM implements either the
+//! `HMAC` or the `MAC` form; their responses have the same layout.
 //!
 //! ### Commands needing additional types
 //!
@@ -266,8 +268,8 @@ pub use {
     ephemeral::{Commit, ECEphemeral},
     field_upgrade::{FieldUpgradeData, FieldUpgradeStart, FirmwareRead},
     hash_hmac_event::{
-        EventSequenceComplete, HMACStart, HashSequenceStart, SequenceComplete, SequenceUpdate,
-        SignSequenceStart, VerifySequenceStart,
+        EventSequenceComplete, HMACStart, HashSequenceStart, MACStart, SequenceComplete,
+        SequenceUpdate, SignSequenceStart, VerifySequenceStart,
     },
     hierarchy::{
         ChangeEPS, ChangePPS, Clear, ClearControl, CreatePrimary, HierarchyChangeAuth,
@@ -294,7 +296,7 @@ pub use {
         VerifySignature,
     },
     startup::{Init, Shutdown, Startup},
-    symmetric::{EncryptDecrypt, EncryptDecrypt2, HMAC, Hash},
+    symmetric::{EncryptDecrypt, EncryptDecrypt2, HMAC, Hash, MAC},
     testing::{GetTestResult, IncrementalSelfTest, SelfTest},
     vendor::{Ntc2CfgStruct, Ntc2GetConfig, Ntc2LockPreConfig, Ntc2PreConfig, VendorTcgTest},
 };
@@ -336,6 +338,7 @@ pub mod responses {
     pub use super::field_upgrade::FirmwareReadRsp as FirmwareRead;
     pub use super::hash_hmac_event::EventSequenceCompleteRsp as EventSequenceComplete;
     pub use super::hash_hmac_event::HMACStartRsp as HMACStart;
+    pub use super::hash_hmac_event::HMACStartRsp as MACStart;
     pub use super::hash_hmac_event::HashSequenceStartRsp as HashSequenceStart;
     pub use super::hash_hmac_event::SequenceCompleteRsp as SequenceComplete;
     pub use super::hash_hmac_event::SignSequenceStartRsp as SignSequenceStart;
@@ -368,6 +371,7 @@ pub mod responses {
     pub use super::symmetric::EncryptDecrypt2Rsp as EncryptDecrypt2;
     pub use super::symmetric::EncryptDecryptRsp as EncryptDecrypt;
     pub use super::symmetric::HMACRsp as HMAC;
+    pub use super::symmetric::HMACRsp as MAC;
     pub use super::symmetric::HashRsp as Hash;
     pub use super::testing::GetTestResultRsp as GetTestResult;
     pub use super::testing::IncrementalSelfTestRsp as IncrementalSelfTest;

@@ -156,11 +156,11 @@ fn long_data_event_banks_and_start_error_order() {
     }
     sequence_complete(&mut sim, seq, b"", Handle::RH_NULL).unwrap();
 
-    // Event sequence: SHA-1, SHA-256, SHA-384 and SHA-512 digests.
+    // Event sequence: SHA-1, SHA-256, SHA-384 and (if implemented) SHA-512 digests.
     let ev = start_hash_sequence(&mut sim, None);
     assert_eq!(
         event_sequence_complete(&mut sim, Handle::RH_NULL, ev, b"event").unwrap(),
-        4
+        crate::_common::IMPLEMENTED_HASH_ALGS.len()
     );
 
     // HMAC_Start with a restricted, non-signing key -> ATTRIBUTES (restricted first).

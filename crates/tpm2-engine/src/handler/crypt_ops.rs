@@ -74,6 +74,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
         }
 
+        // TPM 2.0 Part 3, "Signing commands overview": `TPM2_VerifySignature()` with (pure) ML-DSA
+        // and HashML-DSA keys is "Not supported" (they verify messages, external-mu digests or
+        // pre-hashed digests with `TPM2_VerifySequenceComplete()`/`TPM2_VerifyDigestSignature()`
+        // instead): no scheme of the key can verify a `TPM2_VerifySignature()` digest.
+        if super::pqc::mldsa_key(&_obj).is_some() {
+            return Err(TpmRc::SCHEME.with(Position::parameter(2)));
+        }
+
         // CryptValidateSignature(): TPM_RC_SCHEME, TPM_RC_HANDLE or TPM_RC_SIGNATURE, all
         // reported against the `signature` parameter (RcSafeAddToResult).
         self.validate_signature(&_obj, cmd.digest.get_buffer(), &cmd.signature)
@@ -130,12 +138,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ///
     /// Returns bare (position-less) response codes:
     /// - `TPM_RC_SCHEME`: the signature algorithm is not supported for the key type
-    ///   (including ECDAA, which can't be verified by the TPM, and the unimplemented
-    ///   `TPM_ALG_SM2` / `TPM_ALG_ECSCHNORR`);
+    ///   (including ECDAA, which can't be verified by the TPM, and `TPM_ALG_SM2` /
+    ///   `TPM_ALG_ECSCHNORR` in a build without the `sm2` / `ecschnorr` feature);
     /// - `TPM_RC_HANDLE`: a keyed-hash key whose sensitive area is not loaded;
     /// - `TPM_RC_SIGNATURE`: the signature is malformed or not genuine;
     /// - `TPM_RC_VALUE`: the key's curve is not supported.
-    fn validate_signature(
+    pub(crate) fn validate_signature(
         &mut self,
         obj: &super::TransientObject,
         digest: &[u8],
@@ -177,17 +185,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             OwnedPublicParmsAndId::Ecc(parms, point) => {
                 // CryptEccValidateSignature()
-                let order =
-                    super::commit::curve_order(parms.curve_id).ok_or(TpmRc::VALUE.to_rc())?;
-                let param_size = match parms.curve_id {
-                    TpmEccCurve::NistP224 => 28,
-                    TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => 32,
-                    TpmEccCurve::NistP384 => 48,
-                    TpmEccCurve::NistP521 => 66,
-                    _ => return Err(TpmRc::VALUE.to_rc()),
-                };
-                let sig_ecc = match signature {
-                    TpmtSignature::Ecdsa(sig) => sig,
+                let curve = parms.curve_id;
+                let order = super::commit::curve_order(curve).ok_or(TpmRc::VALUE.to_rc())?;
+                let param_size =
+                    crate::ecc_curves::param_size(curve).ok_or(TpmRc::VALUE.to_rc())?;
+                let (sign_alg, sig_ecc) = match signature {
+                    TpmtSignature::Ecdsa(sig) => (Alg::ECDSA, sig),
+                    #[cfg(feature = "sm2")]
+                    TpmtSignature::Sm2(sig) => (Alg::SM2, sig),
+                    #[cfg(feature = "ecschnorr")]
+                    TpmtSignature::Ecschnorr(sig) => (Alg::ECSCHNORR, sig),
                     _ => return Err(TpmRc::SCHEME.to_rc()),
                 };
                 let x_buf = point.x.get_buffer();
@@ -213,11 +220,44 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         return Err(TpmRc::SIGNATURE.to_rc());
                     }
                 }
-                // `TpmEcc_ValidateSignatureEcdsa()` multiplies points (`TpmEcc_PointMult()`
-                // tests ECDH); ECDSA itself is tested by signing only.
-                self.crypto()
-                    .do_self_test(Alg::ECDH)
-                    .map_err(|_| TpmRc::FAILURE)?;
+                // `TpmEcc_ValidateSignatureEcdsa()` and `TpmEcc_ValidateSignatureEcSchnorr()`
+                // multiply points with `TpmEcc_PointMult()`, which tests ECDH;
+                // `TpmEcc_ValidateSignatureEcSm2()` multiplies without it. The signature schemes
+                // themselves are tested by signing only.
+                if sign_alg != Alg::SM2 {
+                    self.crypto()
+                        .do_self_test(Alg::ECDH)
+                        .map_err(|_| TpmRc::FAILURE)?;
+                }
+                if sign_alg != Alg::ECDSA || !provider_ecdsa_curve(curve) {
+                    // The schemes and curves the crypto provider's verification interface (which
+                    // carries no curve) cannot express.
+                    let (r, s) = sig_buf[..2 * param_size].split_at(param_size);
+                    let q = &pub_key[..2 * param_size];
+                    let crypto = self.crypto();
+                    let verified = match sign_alg {
+                        Alg::ECDSA => {
+                            crate::ecc_schemes::ecdsa_verify(crypto.inner, curve, q, digest, r, s)
+                        }
+                        Alg::SM2 => {
+                            crate::ecc_schemes::sm2_verify(crypto.inner, curve, q, digest, r, s)
+                        }
+                        _ => crate::ecc_schemes::schnorr_verify(
+                            crypto.inner,
+                            &crypto,
+                            curve,
+                            sig_ecc.hash,
+                            q,
+                            digest,
+                            r,
+                            s,
+                        ),
+                    };
+                    return match verified {
+                        Ok(true) => Ok(()),
+                        Ok(false) | Err(_) => Err(TpmRc::SIGNATURE.to_rc()),
+                    };
+                }
                 (
                     Alg::ECDSA,
                     Alg::from(sig_ecc.hash),
@@ -308,6 +348,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::ATTRIBUTES.with(Position::handle(1)));
         }
 
+        // TPM 2.0 Part 3, "Signing commands overview": `TPM2_Sign()` with (pure) ML-DSA and
+        // HashML-DSA keys is "Not supported" (they sign with `TPM2_SignSequenceComplete()` and
+        // `TPM2_SignDigest()`): no signing scheme can be selected, `TPM_RC_SCHEME + RC_Sign_inScheme`.
+        if super::pqc::mldsa_key(&_obj).is_some() {
+            return Err(TpmRc::SCHEME.with(Position::parameter(2)));
+        }
+
         // CryptSelectSignScheme(): any failure is TPM_RC_SCHEME + RC_Sign_inScheme.
         let selected_scheme = select_sign_scheme(&_obj.public.parms_and_id, cmd.in_scheme)
             .ok_or_else(|| TpmRc::SCHEME.with(Position::parameter(2)))?;
@@ -340,36 +387,72 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::AUTH_UNAVAILABLE);
         }
 
-        let mut sig_r = [0u8; 128];
-        let mut sig_s = [0u8; 128];
-        let mut sig_buf = [0u8; 512];
-        let hmac_bytes: [u8; 64];
-        let signature = if let TpmtSigScheme::Ecdaa(ecdaa_s) = &selected_scheme {
+        let mut bufs = SignatureBuffers::new();
+        let signature = self.sign_with_scheme(
+            &_obj,
+            &selected_scheme,
+            cmd.digest.get_buffer(),
+            SignPositions {
+                key: Position::handle(1),
+                digest: Position::parameter(1),
+                scheme: Position::parameter(2),
+            },
+            &mut bufs,
+        )?;
+
+        let rsp = responses::Sign { signature };
+        let response = request.into_response();
+        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
+        Ok(())
+    }
+
+    /// Signs `digest` with the loaded key `obj` and the already selected and validated scheme
+    /// `selected_scheme` (`CryptSign()`): the core of `TPM2_Sign`, shared by `TPM2_SignDigest`
+    /// and `TPM2_SignSequenceComplete`. The caller has checked the key (a signing key with its
+    /// private part), the scheme (`select_sign_scheme`) and the digest size or ticket.
+    ///
+    /// The returned signature borrows from `bufs`; `pos` gives the positions the errors are
+    /// reported against (the key handle, the digest and the scheme parameter of the command).
+    pub(crate) fn sign_with_scheme<'s>(
+        &mut self,
+        obj: &super::TransientObject,
+        selected_scheme: &TpmtSigScheme,
+        digest: &[u8],
+        pos: SignPositions,
+        bufs: &'s mut SignatureBuffers,
+    ) -> Result<TpmtSignature<'s>, TpmRc> {
+        let scheme_hash_alg = selected_scheme
+            .hash_alg()
+            .ok_or_else(|| TpmRc::SCHEME.with(pos.scheme))?;
+        let SignatureBuffers {
+            r: sig_r,
+            s: sig_s,
+            sig: sig_buf,
+            hmac: hmac_bytes,
+        } = bufs;
+        let signature = if let TpmtSigScheme::Ecdaa(ecdaa_s) = selected_scheme {
             let hash_alg = ecdaa_s.hash_alg;
-            let curve = match &_obj.public.parms_and_id {
+            let curve = match &obj.public.parms_and_id {
                 OwnedPublicParmsAndId::Ecc(parms, _) => parms.curve_id,
                 _ => {
-                    return Err(TpmRc::KEY.with(Position::handle(1)));
+                    return Err(TpmRc::KEY.with(pos.key));
                 }
             };
-            let param_size = match curve {
-                TpmEccCurve::NistP224 => 28,
-                TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => 32,
-                TpmEccCurve::NistP384 => 48,
-                TpmEccCurve::NistP521 => 66,
-                _ => return Err(TpmRc::VALUE.to_rc()),
+            let param_size = match crate::ecc_curves::param_size(curve) {
+                Some(size) => size,
+                None => return Err(TpmRc::VALUE.to_rc()),
             };
             // CryptGenerateR(): the count must reference an outstanding commitment
             // (TPM_RC_VALUE otherwise, as returned by TpmEcc_SignEcdaa()).
             let (commit_r, r_len) =
-                self.generate_committed_r(ecdaa_s.count, _obj.name.get_buffer(), curve)?;
+                self.generate_committed_r(ecdaa_s.count, obj.name.get_buffer(), curve)?;
             debug_assert_eq!(r_len, param_size);
             let (k_len, s_len) = self.ecdaa_sign(
                 curve,
                 hash_alg,
                 &commit_r[..param_size],
-                &_obj.private[.._obj.private_len],
-                cmd.digest.get_buffer(),
+                &obj.private[..obj.private_len],
+                digest,
                 &mut sig_r[..param_size],
                 &mut sig_s[..param_size],
             )?;
@@ -384,40 +467,41 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // used again (reusing `r` would reveal the private key).
             self.end_commit(ecdaa_s.count);
             signature
-        } else if let TpmtSigScheme::Hmac(_) = &selected_scheme {
-            (hmac_bytes, _) = self
-                .compute_hmac(
-                    scheme_hash_alg,
-                    &_obj.private[.._obj.private_len],
-                    &[cmd.digest.get_buffer()],
-                )
-                .map_err(|_| TpmRc::VALUE.with(Position::handle(1)))?;
+        } else if let TpmtSigScheme::Hmac(_) = selected_scheme {
+            let (hmac_out, _) = self
+                .compute_hmac(scheme_hash_alg, &obj.private[..obj.private_len], &[digest])
+                .map_err(|_| TpmRc::VALUE.with(pos.key))?;
+            *hmac_bytes = hmac_out;
             let tpmt_ha = tpm2::TpmtHa::new(
                 scheme_hash_alg,
                 &hmac_bytes[..scheme_hash_alg.digest_size()],
             )
-            .ok_or_else(|| TpmRc::VALUE.with(Position::parameter(2)))?;
+            .ok_or_else(|| TpmRc::VALUE.with(pos.scheme))?;
             TpmtSignature::Hmac(tpmt_ha)
         } else {
-            let (sign_alg, resolved_hash_alg_tpmi) = match selected_scheme {
+            let (sign_alg, resolved_hash_alg_tpmi) = match *selected_scheme {
                 TpmtSigScheme::Rsassa(h) => (Alg::RSASSA, h),
                 TpmtSigScheme::Rsapss(h) => (Alg::RSAPSS, h),
                 TpmtSigScheme::Ecdsa(h) => (Alg::ECDSA, h),
+                #[cfg(feature = "sm2")]
+                TpmtSigScheme::Sm2(h) => (Alg::SM2, h),
+                #[cfg(feature = "ecschnorr")]
+                TpmtSigScheme::Ecschnorr(h) => (Alg::ECSCHNORR, h),
                 _ => return Err(TpmRc::SCHEME.to_rc()),
             };
 
-            let digest_ha = tpm2::TpmtHa::new(resolved_hash_alg_tpmi, cmd.digest.get_buffer())
-                .ok_or_else(|| TpmRc::SIZE.with(Position::parameter(1)))?;
+            let digest_ha = tpm2::TpmtHa::new(resolved_hash_alg_tpmi, digest)
+                .ok_or_else(|| TpmRc::SIZE.with(pos.digest))?;
 
             let sig_len = match self.sign_asymmetric(
                 sign_alg,
-                &_obj.public.parms_and_id,
-                &_obj.private[.._obj.private_len],
+                &obj.public.parms_and_id,
+                &obj.private[..obj.private_len],
                 digest_ha,
-                &mut sig_buf,
+                &mut sig_buf[..],
             ) {
                 Ok(Some(len)) => len,
-                Ok(None) | Err(_) => return Err(TpmRc::VALUE.with(Position::handle(1))),
+                Ok(None) | Err(_) => return Err(TpmRc::VALUE.with(pos.key)),
             };
 
             match selected_scheme {
@@ -431,26 +515,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     sig: Tpm2bPublicKeyRsa::from_bytes(&sig_buf[..sig_len])
                         .map_err(|_| TpmRc::FAILURE)?,
                 }),
-                TpmtSigScheme::Ecdsa(_) => {
-                    let param_size = sig_len / 2;
-                    let signature_r = Tpm2bEccParameter::from_bytes(&sig_buf[..param_size])
-                        .map_err(|_| TpmRc::FAILURE)?;
-                    let signature_s = Tpm2bEccParameter::from_bytes(&sig_buf[param_size..sig_len])
-                        .map_err(|_| TpmRc::FAILURE)?;
-                    TpmtSignature::Ecdsa(TpmsSignatureEcc {
-                        hash: resolved_hash_alg_tpmi,
-                        signature_r,
-                        signature_s,
-                    })
+                TpmtSigScheme::Ecdsa(_) => TpmtSignature::Ecdsa(ecc_signature(
+                    resolved_hash_alg_tpmi,
+                    &sig_buf[..sig_len],
+                )?),
+                #[cfg(feature = "sm2")]
+                TpmtSigScheme::Sm2(_) => {
+                    TpmtSignature::Sm2(ecc_signature(resolved_hash_alg_tpmi, &sig_buf[..sig_len])?)
                 }
+                #[cfg(feature = "ecschnorr")]
+                TpmtSigScheme::Ecschnorr(_) => TpmtSignature::Ecschnorr(ecc_signature(
+                    resolved_hash_alg_tpmi,
+                    &sig_buf[..sig_len],
+                )?),
                 _ => return Err(TpmRc::SCHEME.to_rc()),
             }
         };
-
-        let rsp = responses::Sign { signature };
-        let response = request.into_response();
-        self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
-        Ok(())
+        Ok(signature)
     }
 
     /// Signs `digest` with the asymmetric scheme `sign_alg` (RSASSA, RSAPSS or ECDSA) and the
@@ -492,10 +573,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
         #[cfg(feature = "reference-rng")]
         match (sign_alg, key) {
-            (Alg::ECDSA, OwnedPublicParmsAndId::Ecc(parms, _)) => {
-                let (mut r, mut s) = ([0u8; 66], [0u8; 66]);
+            (Alg::ECDSA | Alg::SM2 | Alg::ECSCHNORR, OwnedPublicParmsAndId::Ecc(parms, _)) => {
+                const MAX: usize = TpmEccCurve::MAX_ECC_KEY_BYTES;
+                let (mut r, mut s) = ([0u8; MAX], [0u8; MAX]);
                 let len = self
-                    .reference_ecdsa_sign(
+                    .reference_ecc_sign(
+                        sign_alg,
+                        digest.hash_alg(),
                         parms.curve_id,
                         private_key,
                         digest.digest(),
@@ -525,7 +609,48 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             _ => {}
         }
         #[cfg(not(feature = "reference-rng"))]
-        let _ = key;
+        if let OwnedPublicParmsAndId::Ecc(parms, _) = key {
+            // The schemes and curves the crypto provider's signing interface (which carries no
+            // curve) cannot express, with nonces from the provider's random number generator.
+            let curve = parms.curve_id;
+            let crypto = self.crypto();
+            let nonce = |buf: &mut [u8]| crypto.get_random(buf);
+            match sign_alg {
+                Alg::ECDSA if !provider_ecdsa_curve(curve) => {
+                    return crate::ecc_schemes::ecdsa_sign(
+                        crypto.inner,
+                        curve,
+                        private_key,
+                        digest.digest(),
+                        nonce,
+                        out,
+                    );
+                }
+                Alg::SM2 => {
+                    return crate::ecc_schemes::sm2_sign(
+                        crypto.inner,
+                        curve,
+                        private_key,
+                        digest.digest(),
+                        nonce,
+                        out,
+                    );
+                }
+                Alg::ECSCHNORR => {
+                    return crate::ecc_schemes::schnorr_sign(
+                        crypto.inner,
+                        &crypto,
+                        curve,
+                        digest.hash_alg(),
+                        private_key,
+                        digest.digest(),
+                        nonce,
+                        out,
+                    );
+                }
+                _ => {}
+            }
+        }
         self.crypto().sign_inner(sign_alg, private_key, digest, out)
     }
 
@@ -1003,12 +1128,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let in_x = in_point_struct.x.get_buffer();
         let in_y = in_point_struct.y.get_buffer();
-        let param_size = match curve {
-            TpmEccCurve::NistP224 => 28,
-            TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => 32,
-            TpmEccCurve::NistP384 => 48,
-            TpmEccCurve::NistP521 => 66,
-            _ => return Err(TpmRc::CURVE.with(Position::handle(1))),
+        let param_size = match crate::ecc_curves::param_size(curve) {
+            Some(size) => size,
+            None => return Err(TpmRc::CURVE.with(Position::handle(1))),
         };
 
         if in_x.len() > param_size || in_y.len() > param_size {
@@ -1056,6 +1178,38 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 }
 
+/// Buffers backing the signature built by [`CommandHandler::sign_with_scheme`] (the `r` and
+/// `s` halves of an ECC signature, the RSA signature and the HMAC).
+pub(crate) struct SignatureBuffers {
+    r: [u8; 128],
+    s: [u8; 128],
+    sig: [u8; 512],
+    hmac: [u8; 64],
+}
+
+impl SignatureBuffers {
+    /// Zeroed buffers.
+    pub(crate) fn new() -> Self {
+        Self {
+            r: [0; 128],
+            s: [0; 128],
+            sig: [0; 512],
+            hmac: [0; 64],
+        }
+    }
+}
+
+/// The positions that the errors of [`CommandHandler::sign_with_scheme`] are reported against.
+#[derive(Clone, Copy)]
+pub(crate) struct SignPositions {
+    /// The signing key handle.
+    pub(crate) key: Position,
+    /// The digest parameter.
+    pub(crate) digest: Position,
+    /// The scheme parameter (the key handle for commands that have none).
+    pub(crate) scheme: Position,
+}
+
 /// Returns `true` if `hash_alg` is a hash algorithm implemented (and advertised in
 /// `TPM_CAP_ALGS`) by this TPM, i.e. `CryptHashIsValidAlg(hash_alg, FALSE)`.
 fn is_implemented_hash(hash_alg: TpmiAlgHash) -> bool {
@@ -1072,12 +1226,12 @@ fn is_implemented_hash(hash_alg: TpmiAlgHash) -> bool {
 /// - Otherwise both schemes must have the same algorithm and hash.
 ///
 /// The resulting scheme must be a signing scheme valid for the key type, and its hash must be
-/// an implemented hash. Signing schemes that this TPM does not implement (`TPM_ALG_SM2`,
-/// `TPM_ALG_ECSCHNORR`, EdDSA; none are listed in `TPM_CAP_ALGS`) are treated as invalid, as
-/// in a C build without those algorithms.
+/// an implemented hash. Signing schemes that this TPM does not implement (EdDSA, and SM2 or
+/// EC-Schnorr without the `sm2`/`ecschnorr` features; not listed in `TPM_CAP_ALGS`) are treated
+/// as invalid, as in a C build without those algorithms.
 ///
 /// Returns `None` on any failure; the caller reports `TPM_RC_SCHEME + RC_Sign_inScheme`.
-fn select_sign_scheme(
+pub(crate) fn select_sign_scheme(
     parms: &OwnedPublicParmsAndId,
     in_scheme: Option<TpmtSigScheme>,
 ) -> Option<TpmtSigScheme> {
@@ -1094,6 +1248,10 @@ fn select_sign_scheme(
             None => Ok(None),
             Some(TpmtEccScheme::Ecdsa(h)) => Ok(Some(TpmtSigScheme::Ecdsa(h))),
             Some(TpmtEccScheme::Ecdaa(s)) => Ok(Some(TpmtSigScheme::Ecdaa(s))),
+            #[cfg(feature = "sm2")]
+            Some(TpmtEccScheme::Sm2(h)) => Ok(Some(TpmtSigScheme::Sm2(h))),
+            #[cfg(feature = "ecschnorr")]
+            Some(TpmtEccScheme::Ecschnorr(h)) => Ok(Some(TpmtSigScheme::Ecschnorr(h))),
             Some(_) => Err(()),
         },
         OwnedPublicParmsAndId::KeyedHash(scheme, _) => match scheme {
@@ -1128,9 +1286,14 @@ fn select_sign_scheme(
                 TpmtSigScheme::Rsassa(_) | TpmtSigScheme::Rsapss(_)
             )
         }
-        OwnedPublicParmsAndId::Ecc(..) => {
-            matches!(selected, TpmtSigScheme::Ecdsa(_) | TpmtSigScheme::Ecdaa(_))
-        }
+        OwnedPublicParmsAndId::Ecc(..) => match selected {
+            TpmtSigScheme::Ecdsa(_) | TpmtSigScheme::Ecdaa(_) => true,
+            #[cfg(feature = "sm2")]
+            TpmtSigScheme::Sm2(_) => true,
+            #[cfg(feature = "ecschnorr")]
+            TpmtSigScheme::Ecschnorr(_) => true,
+            _ => false,
+        },
         OwnedPublicParmsAndId::KeyedHash(..) => matches!(selected, TpmtSigScheme::Hmac(_)),
         _ => false,
     };
@@ -1140,7 +1303,31 @@ fn select_sign_scheme(
     Some(selected)
 }
 
-/// Returns `bytes` without its leading zero bytes (the magnitude of a big-endian integer).
+/// The `TPMS_SIGNATURE_ECC` with the scheme hash `hash` of the signature `rs` (`r || s`, two
+/// halves of the order size).
+pub(crate) fn ecc_signature(hash: TpmiAlgHash, rs: &[u8]) -> Result<TpmsSignatureEcc<'_>, TpmRc> {
+    let (r, s) = rs.split_at(rs.len() / 2);
+    Ok(TpmsSignatureEcc {
+        hash,
+        signature_r: Tpm2bEccParameter::from_bytes(r).map_err(|_| TpmRc::FAILURE)?,
+        signature_s: Tpm2bEccParameter::from_bytes(s).map_err(|_| TpmRc::FAILURE)?,
+    })
+}
+
+/// Whether the crypto provider's ECDSA interface ([`tpm2::crypto::AsymmetricSign::ecdsa_sign`],
+/// [`tpm2::crypto::Asymmetric::ecdsa_verify`]), which identifies the curve by the key size, covers
+/// `curve`: the NIST curves P-224 to P-521. ECDSA on the other curves (BN P-256, NIST P-192,
+/// BN P-638, SM2 P-256) is computed by [`crate::ecc_schemes`].
+pub(crate) fn provider_ecdsa_curve(curve: TpmEccCurve) -> bool {
+    matches!(
+        curve,
+        TpmEccCurve::NistP224
+            | TpmEccCurve::NistP256
+            | TpmEccCurve::NistP384
+            | TpmEccCurve::NistP521
+    )
+}
+
 /// Whether the ECDSA signature components `r` and `s` are in `[1, n - 1]` for the order `n` of
 /// `curve` (`CryptEccValidateSignature()` rejects other values before it multiplies points).
 pub(crate) fn ecdsa_signature_in_range(curve: TpmEccCurve, r: &[u8], s: &[u8]) -> bool {
@@ -1155,6 +1342,7 @@ pub(crate) fn ecdsa_signature_in_range(curve: TpmEccCurve, r: &[u8], s: &[u8]) -
     })
 }
 
+/// Returns `bytes` without its leading zero bytes (the magnitude of a big-endian integer).
 fn strip_leading_zeros(bytes: &[u8]) -> &[u8] {
     let first_non_zero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
     &bytes[first_non_zero..]

@@ -268,7 +268,7 @@ fn create_transient_key(
         ),
     };
     let name = compute_key_name(crypto, &public);
-    let mut private = [0u8; 1536];
+    let mut private = [0u8; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE];
     private[..priv_len].copy_from_slice(&priv_buf[..priv_len]);
     TransientObject {
         handle,
@@ -337,7 +337,7 @@ fn create_transient_ecc_key(
         ),
     };
     let name = compute_key_name(crypto, &public);
-    let mut private = [0u8; 1536];
+    let mut private = [0u8; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE];
     private[..priv_len].copy_from_slice(&priv_buf[..priv_len]);
     TransientObject {
         handle,

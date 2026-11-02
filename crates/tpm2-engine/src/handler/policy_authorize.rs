@@ -46,8 +46,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // one of the values in @tbl:tpm-st-for-signatures", and that table lists
         // `TPM_ST_VERIFIED`, `TPM_ST_MESSAGE_VERIFIED` and `TPM_ST_DIGEST_VERIFIED`: all three
         // tags unmarshal (the last with its `TPMI_ALG_HASH` metadata), as in the TCG reference
-        // of version 185, even though this TPM produces only `TPM_ST_VERIFIED` tickets; the
-        // ticket comparison below rejects the others.
+        // of version 185; TPM2_VerifySequenceComplete and TPM2_VerifyDigestSignature (`cc-*`
+        // features) produce the latter two, and the ticket comparison below recomputes each
+        // with its own *tag* and *metadata* (Part 2, TPMT_TK_VERIFIED).
         let cmd = request.try_unmarshal_command::<PolicyAuthorize>(handles)?;
         if request.remaining_bytes() != 0 {
             return Err(TpmRc::SIZE.to_rc());

@@ -1,6 +1,10 @@
+use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::{
     handler::{CommandHandler, SessionState, TransientObject},
-    owned::{OwnedAuth, OwnedDigest, OwnedName, OwnedNonce, OwnedPublic, OwnedSensitiveData},
+    owned::{
+        OwnedAuth, OwnedDigest, OwnedName, OwnedNonce, OwnedPublic, OwnedPublicParmsAndId,
+        OwnedSensitiveData,
+    },
     req_resp::RequestThenResponse,
     storage::NvStorage,
     timer::TpmTimer,
@@ -14,7 +18,7 @@ struct TransientObjectFields {
     name: OwnedName,
     auth: OwnedAuth,
     public: OwnedPublic,
-    private: [u8; 1536],
+    private: [u8; MAX_PRIVATE_KEY_SIZE],
     private_len: usize,
     qualified_name: OwnedName,
 }
@@ -28,14 +32,16 @@ use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt};
 use tpm2::{TpmSe, TpmiAlgHash};
 
-use super::context_save::{CONTEXT_ENCRYPTION_ALG, CONTEXT_FINGERPRINT_SIZE};
+use super::context_save::{
+    CONTEXT_ENCRYPTION_ALG, CONTEXT_FINGERPRINT_SIZE, MAX_SAVED_PRIVATE_SIZE,
+};
 
 /// `MAX_CONTEXT_SIZE` of this TPM's profile: the capacity of `TPM2B_CONTEXT_SENSITIVE` (TPM 2.0
 /// Part 2, Table "Definition of TPM2B_CONTEXT_SENSITIVE Structure": "buffer\[size\]{:MAX_CONTEXT_SIZE}").
 /// The value is implementation-specific: 2264 octets by default, or the value of a C reference
-/// TPM with the `max-context-size-2168` (the public TCG reference), `max-context-size-2680`
-/// (`ibmswtpm2`) or `max-context-size-4344` (the TCG reference version 185) feature; with several,
-/// the largest applies.
+/// TPM with the `max-context-size-2168` (the public TCG reference, which has no SHA-512),
+/// `max-context-size-2680` (`ibmswtpm2`) or `max-context-size-4344` (the TCG reference version
+/// 185) feature; with several, the largest applies.
 const MAX_CONTEXT_SIZE: usize = if cfg!(feature = "max-context-size-4344") {
     4344
 } else if cfg!(feature = "max-context-size-2680") {
@@ -259,8 +265,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             handle
         } else {
             // 3. Unmarshal decrypted buffer into fields
-            let (fields, ancestor_has_st_clear) =
+            let (mut fields, ancestor_has_st_clear) =
                 Self::unmarshal_decrypted_context(plaintext).map_err(malformed_context)?;
+            self.rebuild_saved_rsa_private_key(&mut fields)?;
 
             // 4. Resolve empty slot and load transient object
             let (slot, handle) = self.context.state.find_empty_transient_slot(true)?;
@@ -379,6 +386,45 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
+    /// Rebuilds the crypto provider's private key of a saved RSA object from the prime-only form
+    /// its context holds (see `TPM2_ContextSave`, `serialize_transient_object`) and the modulus
+    /// and exponent of its public area. Other objects are left unchanged.
+    ///
+    /// The blob passed the integrity check, so it was produced by this TPM: a prime that does not
+    /// rebuild the key is a TPM failure.
+    fn rebuild_saved_rsa_private_key(
+        &self,
+        fields: &mut TransientObjectFields,
+    ) -> Result<(), TpmRc> {
+        let OwnedPublicParmsAndId::Rsa(parms, unique) = &fields.public.parms_and_id else {
+            return Ok(());
+        };
+        if fields.public_only || fields.private_len == 0 {
+            return Ok(());
+        }
+        let mut prime = [0u8; MAX_SAVED_PRIVATE_SIZE];
+        let prime_len = fields.private_len;
+        if prime_len > prime.len() {
+            return Err(TpmRc::FAILURE);
+        }
+        prime[..prime_len].copy_from_slice(&fields.private[..prime_len]);
+        let exponent = if parms.exponent == 0 {
+            65537
+        } else {
+            parms.exponent
+        };
+        fields.private_len = match self.crypto().rsa_import_private_key(
+            unique.get_buffer(),
+            &prime[..prime_len],
+            exponent,
+            &mut fields.private,
+        ) {
+            Ok(Some(len)) => len,
+            Ok(None) | Err(_) => return Err(TpmRc::FAILURE),
+        };
+        Ok(())
+    }
+
     /// Unmarshals serialized fields from decrypted raw bytes.
     fn unmarshal_decrypted_context(
         sensitive_buf: &[u8],
@@ -407,7 +453,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if slice.len() < priv_len {
             return Err(TpmRc::FAILURE);
         }
-        let mut priv_buf = [0u8; 1536];
+        let mut priv_buf = [0u8; MAX_PRIVATE_KEY_SIZE];
         priv_buf[..priv_len].copy_from_slice(&slice[..priv_len]);
         slice = &slice[priv_len..];
         let qualified_name = OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
@@ -525,6 +571,20 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else {
             0
         };
+        // The secure channel restrictions (see `serialize_session`).
+        let mut sec_channel = crate::handler::SecChannelPolicy::default();
+        if !slice.is_empty() {
+            let flags = u8::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
+            let len = u16::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? as usize;
+            if len > sec_channel.sc_key_name_hash.len() || len > slice.len() {
+                return Err(TpmRc::FAILURE);
+            }
+            sec_channel.check_secure_channel = flags & 0b001 != 0;
+            sec_channel.check_req_key = flags & 0b010 != 0;
+            sec_channel.check_tpm_key = flags & 0b100 != 0;
+            sec_channel.sc_key_name_hash[..len].copy_from_slice(&slice[..len]);
+            sec_channel.sc_key_name_hash_len = len;
+        }
 
         Ok(SessionState {
             session_handle,
@@ -546,6 +606,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             is_cp_hash_defined,
             is_name_hash_defined,
             is_template_hash_defined: session_flags & 1 != 0,
+            is_pp_required: session_flags & (1 << 3) != 0,
+            is_parameters_hash_defined: session_flags & (1 << 4) != 0,
             policy_digest,
             policy_digest_len,
             command_code,
@@ -561,6 +623,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             include_auth: false,
             is_da_bound: session_flags & 0b010 != 0,
             is_lockout_bound: session_flags & 0b100 != 0,
+            sec_channel,
         })
     }
 
@@ -579,7 +642,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let key = OwnedSensitiveData::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
                 crate::SequenceType::Hmac { hash_alg, key }
             }
+            #[cfg(feature = "cmac")]
+            5 => {
+                let state = crate::cmac::CmacState::deserialize(slice).ok_or(TpmRc::FAILURE)?;
+                slice = &slice[crate::cmac::CmacState::SERIALIZED_SIZE..];
+                crate::SequenceType::Cmac { state }
+            }
             0 => crate::SequenceType::Event,
+            3 => crate::SequenceType::Sign(
+                crate::SignatureSequence::deserialize(&mut slice).ok_or(TpmRc::FAILURE)?,
+            ),
+            4 => crate::SequenceType::Verify(
+                crate::SignatureSequence::deserialize(&mut slice).ok_or(TpmRc::FAILURE)?,
+            ),
             _ => return Err(TpmRc::FAILURE),
         };
         let sequence_len = u32::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? as usize;
@@ -595,8 +670,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         slice = &slice[5..];
 
         let mut hash_states = [crate::StreamingHashState::default(); 4];
-        for state in &mut hash_states {
-            *state = crate::StreamingHashState::deserialize(slice).ok_or(TpmRc::FAILURE)?;
+        let mut mu_state = None;
+        let has_mu_state = crate::ActiveSequence::has_mu_state(&sequence_type);
+        for (i, state) in hash_states.iter_mut().enumerate() {
+            if has_mu_state && i == crate::ActiveSequence::MU_STATE_SLOT {
+                mu_state =
+                    Some(crate::ActiveSequence::mu_state_from_slot(slice).ok_or(TpmRc::FAILURE)?);
+            } else {
+                *state = crate::StreamingHashState::deserialize(slice).ok_or(TpmRc::FAILURE)?;
+            }
             slice = &slice[crate::StreamingHashState::SERIALIZED_SIZE..];
         }
 
@@ -611,6 +693,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             first_bytes,
             first_bytes_len,
             hash_states,
+            mu_state,
         })
     }
 }

@@ -39,9 +39,18 @@ mod context_save;
 mod create;
 mod create_loaded;
 mod create_primary;
-mod crypt_ops;
+pub(crate) mod crypt_ops;
 mod da;
 mod duplicate;
+#[cfg(any(feature = "cc-ecc-encrypt", feature = "cc-ecc-decrypt"))]
+mod ecc_encrypt_decrypt;
+#[cfg(any(
+    feature = "cc-ec-ephemeral",
+    feature = "cc-zgen-2phase",
+    feature = "cc-ecc-encrypt",
+    feature = "cc-ecc-decrypt"
+))]
+mod ecc_key_exchange;
 mod ecdh;
 mod encrypt_decrypt;
 mod evict_control;
@@ -52,15 +61,25 @@ mod get_time;
 mod hierarchy_change_auth;
 mod hierarchy_control;
 mod import;
+#[cfg(any(feature = "cc-encapsulate", feature = "cc-decapsulate"))]
+mod kem;
 mod load;
 mod load_external;
+#[cfg(feature = "cmac")]
+mod mac;
 mod make_credential;
 pub(crate) mod nv_storage;
 mod object_change_auth;
 mod pcr;
+#[cfg(any(feature = "cc-pp-commands", feature = "cc-set-algorithm-set"))]
+mod platform_settings;
+#[cfg(feature = "cc-policy-ac-send-select")]
+mod policy_ac_send_select;
 mod policy_auth_value;
 mod policy_authorize;
 mod policy_authorize_nv;
+#[cfg(feature = "cc-policy-capability")]
+mod policy_capability;
 mod policy_counter_timer;
 mod policy_cp_hash;
 mod policy_duplication_select;
@@ -69,15 +88,24 @@ mod policy_name_hash;
 mod policy_nv;
 mod policy_nv_written;
 mod policy_or;
+#[cfg(feature = "cc-policy-parameters")]
+mod policy_parameters;
 mod policy_password;
 mod policy_pcr;
+#[cfg(feature = "cc-policy-physical-presence")]
+mod policy_physical_presence;
 mod policy_secret;
 mod policy_signed;
 mod policy_template;
 mod policy_ticket;
+#[cfg(feature = "cc-policy-transport-spdm")]
+mod policy_transport_spdm;
+pub(crate) mod pqc;
 mod quote;
 mod random;
 mod read_clock;
+#[cfg(feature = "cc-read-only-control")]
+mod read_only_control;
 mod read_public;
 #[cfg(feature = "reference-rng")]
 pub(crate) mod reference_ops;
@@ -88,6 +116,8 @@ pub(crate) mod session;
 mod set_command_code_audit_status;
 mod set_primary_policy;
 mod shutdown;
+mod sign_digest;
+mod signature_sequence;
 mod startup;
 mod testing;
 mod unseal;
@@ -136,6 +166,17 @@ pub struct AttestHeader<'c> {
     pub firmware_version: u64,
 }
 
+/// The capacity of a loaded object's private key in the crypto provider's format
+/// ([`TransientObject::private`]): at least 1536 octets, and enough for the PKCS#8 DER encoding of
+/// the largest RSA key of the profile (`TPMI_RSA_KEY_BITS`, which grows with the `rsa3072` and
+/// `rsa4096` features). A two-prime `RSAPrivateKey` (RFC 8017, A.1.2) of an `n`-octet modulus
+/// takes at most `4.5 * n` octets of integers plus a few dozen of DER headers and the PKCS#8
+/// wrapper (about 2380 octets for RSA-4096); 128 octets of margin cover the headers.
+pub const MAX_PRIVATE_KEY_SIZE: usize = {
+    let rsa = tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BYTES * 9 / 2 + 128;
+    if rsa > 1536 { rsa } else { 1536 }
+};
+
 /// Represents an object loaded into the TPM's volatile memory.
 /// This structure holds the state of a transient object, which could be a key or a data object,
 /// that is actively being used by the TPM.
@@ -165,7 +206,7 @@ pub struct TransientObject {
     /// The public area of the object, describing its attributes and public key.
     pub public: OwnedPublic,
     /// The encrypted private area of the object, containing sensitive data like the private key.
-    pub private: [u8; 1536],
+    pub private: [u8; MAX_PRIVATE_KEY_SIZE],
     /// The actual length of the data stored in the `private` array.
     pub private_len: usize,
     /// The qualified name of the object, recursively linking it to the hierarchy root.
@@ -214,6 +255,11 @@ pub struct SessionState {
     pub is_cp_hash_defined: bool,
     pub is_name_hash_defined: bool,
     pub is_template_hash_defined: bool,
+    /// `TPM2_PolicyParameters` set `policy_hash` to a pHash (C `isParametersHashDefined`).
+    pub is_parameters_hash_defined: bool,
+    /// `TPM2_PolicyPhysicalPresence` was asserted: Physical Presence must be asserted when the
+    /// session authorizes (C `isPPRequired`).
+    pub is_pp_required: bool,
     pub policy_digest: [u8; 64],
     pub policy_digest_len: usize,
     pub command_code: u32,
@@ -233,6 +279,76 @@ pub struct SessionState {
     pub is_da_bound: bool,
     /// The session is DA-bound to `TPM_RH_LOCKOUT` (C `isLockoutBound`).
     pub is_lockout_bound: bool,
+    /// The secure channel restrictions of `TPM2_PolicyTransportSPDM()`.
+    pub sec_channel: SecChannelPolicy,
+}
+
+/// The secure channel restrictions a policy session collects with `TPM2_PolicyTransportSPDM()`
+/// (TPM 2.0 Part 1, policy session context: *checkSecureChannel*, *checkReqKey*,
+/// *checkTpmKey* and *scKeyNameHash*), checked when the session is used for authorization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SecChannelPolicy {
+    /// *checkSecureChannel*: the authorized command must be protected by an SPDM session.
+    pub check_secure_channel: bool,
+    /// *checkReqKey*: the SPDM session must have been established with a specific requester
+    /// key.
+    pub check_req_key: bool,
+    /// *checkTpmKey*: the SPDM session must have been established with a specific TPM key.
+    pub check_tpm_key: bool,
+    /// *scKeyNameHash*: the hash of the required requester and/or TPM key Names (meaningful
+    /// only with *checkReqKey* or *checkTpmKey*).
+    pub sc_key_name_hash: [u8; 64],
+    /// The size of `sc_key_name_hash`.
+    pub sc_key_name_hash_len: usize,
+}
+
+impl Default for SecChannelPolicy {
+    fn default() -> Self {
+        Self {
+            check_secure_channel: false,
+            check_req_key: false,
+            check_tpm_key: false,
+            sc_key_name_hash: [0; 64],
+            sc_key_name_hash_len: 0,
+        }
+    }
+}
+
+impl SecChannelPolicy {
+    /// The bits of the context-save flags byte (bit 0 = *checkSecureChannel*, bit 1 =
+    /// *checkReqKey*, bit 2 = *checkTpmKey*).
+    pub(crate) fn flags(&self) -> u8 {
+        u8::from(self.check_secure_channel)
+            | (u8::from(self.check_req_key) << 1)
+            | (u8::from(self.check_tpm_key) << 2)
+    }
+}
+
+/// The block cipher (algorithm and key size) of the protections a storage parent provides for its
+/// children, credentials and duplication blobs: the parent's `symmetric` (TPM 2.0 Part 1,
+/// "Symmetric Encryption" of the protected-storage protections: "the symmetric algorithm
+/// specified by the parent"), always used in CFB mode ([`protection_cfb`]). For an RSA or ECC
+/// parent it is `parameters.asymDetail.symmetric`; for a SYMCIPHER parent its own definition (the
+/// TCG reference reads both through the same union member). A parent without one (a hierarchy,
+/// or a derivation parent, whose protections do not use it) gets AES-128.
+pub(crate) fn protection_sym_alg(parms: &OwnedPublicParmsAndId) -> tpm2::AlgSym {
+    let sym = match parms {
+        OwnedPublicParmsAndId::Rsa(parms, _) => parms.symmetric,
+        OwnedPublicParmsAndId::Ecc(parms, _) => parms.symmetric,
+        OwnedPublicParmsAndId::Mlkem(parms, _) => parms.symmetric,
+        OwnedPublicParmsAndId::Sym(sym, _) => Some(*sym),
+        _ => None,
+    };
+    sym.map_or(tpm2::AlgSym::Aes128, |s| s.alg)
+}
+
+/// `alg` in CFB mode: the symmetric definition of the protections of a storage parent
+/// ([`protection_sym_alg`]) and of the inner wrapper of a duplication blob.
+pub(crate) const fn protection_cfb(alg: tpm2::AlgSym) -> TpmtSymDefObject {
+    TpmtSymDefObject {
+        alg,
+        mode: Some(TpmiAlgSymMode::Cipher(tpm2::TpmiAlgCipherMode::Cfb)),
+    }
 }
 
 /// Resolved parent object or hierarchy information returned by `resolve_parent_object_or_hierarchy`.
@@ -243,7 +359,8 @@ pub struct ResolvedParentInfo {
     pub hierarchy_val: u32,
     pub has_st_clear: bool,
     pub name_alg: TpmiAlgHash,
-    pub sym_bits: u32,
+    /// The block cipher of the parent's protections (`protection_sym_alg`).
+    pub sym_alg: tpm2::AlgSym,
     pub attributes: TpmaObject,
     pub is_derivation_parent: bool,
     /// Scheme-relevant properties of a parent *object* (`None` for hierarchy parents).
@@ -263,6 +380,24 @@ pub struct ParentSchemeInfo {
 }
 
 /// Parameters for key derivation during key generation.
+/// The hash algorithm of the digest an attestation command computes (the PCR digest of
+/// `TPM2_Quote()`, the NV digest of `TPM2_NV_Certify()`; C `AttestHashAlg()`): the hash of the
+/// selected `scheme` or, for a scheme without one, the HashML-DSA key's pre-hash algorithm or the
+/// signing key's nameAlg (version 185 errata). `None` if there is none.
+pub(crate) fn attest_hash_alg(
+    signer: Option<&TransientObject>,
+    scheme: Option<tpm2::TpmtSigScheme>,
+) -> Option<TpmiAlgHash> {
+    if let Some(hash) = scheme.and_then(|s| s.hash_alg()) {
+        return Some(hash);
+    }
+    let signer = signer?;
+    match &signer.public.parms_and_id {
+        OwnedPublicParmsAndId::HashMldsa(parms, _) => Some(parms.hash_alg),
+        _ => signer.public.name_alg,
+    }
+}
+
 pub struct KeyDerivationArgs<'a> {
     pub gen_seed: Option<&'a [u8]>,
     pub obj_seed: &'a [u8],
@@ -837,9 +972,67 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 unique,
                 actual_private_key,
             ),
-            OwnedPublicParmsAndId::Mldsa(_, _)
-            | OwnedPublicParmsAndId::HashMldsa(_, _)
-            | OwnedPublicParmsAndId::Mlkem(_, _) => Err(TpmRc::TYPE.to_rc()),
+            OwnedPublicParmsAndId::Mlkem(parms, unique) => {
+                let param_set = parms.parameter_set;
+                // `CryptoMlkem_GenerateKey()` tests ML-KEM before it draws the seed.
+                self.crypto()
+                    .do_self_test(Alg::MLKEM)
+                    .map_err(|_| TpmRc::FAILURE)?;
+                let mut seed = [0u8; tpm2::crypto::MLKEM_SEED_SIZE];
+                self.pqc_creation_entropy(name_alg, &args, &mut seed)?;
+                let mut public_key = [0u8; tpm2::TPM2_MAX_MLKEM_PUB_SIZE];
+                let len = self.mlkem_public_key(param_set, &seed, &mut public_key)?;
+                *unique = OwnedTpm2b::from_bytes(&public_key[..len]).map_err(|_| TpmRc::FAILURE)?;
+                actual_private_key[..seed.len()].copy_from_slice(&seed);
+                Ok(seed.len())
+            }
+            OwnedPublicParmsAndId::Mldsa(tpm2::TpmsMldsaParms { parameter_set, .. }, unique)
+            | OwnedPublicParmsAndId::HashMldsa(
+                tpm2::TpmsHashMldsaParms { parameter_set, .. },
+                unique,
+            ) => {
+                let param_set = *parameter_set;
+                // `CryptoMldsa_GenerateKey()` tests ML-DSA before it draws the seed.
+                self.crypto()
+                    .do_self_test(Alg::MLDSA)
+                    .map_err(|_| TpmRc::FAILURE)?;
+                let mut seed = [0u8; tpm2::crypto::MLDSA_SEED_SIZE];
+                self.pqc_creation_entropy(name_alg, &args, &mut seed)?;
+                let mut public_key = [0u8; tpm2::TPM2_MAX_MLDSA_PUB_SIZE];
+                let len = self.mldsa_public_key(param_set, &seed, &mut public_key)?;
+                *unique = OwnedTpm2b::from_bytes(&public_key[..len]).map_err(|_| TpmRc::FAILURE)?;
+                actual_private_key[..seed.len()].copy_from_slice(&seed);
+                Ok(seed.len())
+            }
+        }
+    }
+
+    /// The seed of an ML-KEM or ML-DSA key created without the `reference-rng` feature: derived
+    /// from the creation seed of a Primary Object (KDFa with the label `PQC Key Seed`), or drawn
+    /// from the crypto provider's CSPRNG for an ordinary object.
+    fn pqc_creation_entropy(
+        &self,
+        name_alg: TpmiAlgHash,
+        args: &KeyDerivationArgs<'_>,
+        out: &mut [u8],
+    ) -> Result<(), TpmRc> {
+        if let Some(seed) = args.gen_seed {
+            let mut derived = [0u8; 64];
+            kdfa_bits(
+                &self.crypto(),
+                name_alg,
+                seed,
+                b"PQC Key Seed",
+                &[],
+                &[],
+                (out.len() * 8) as u32,
+                &mut derived,
+            )
+            .map_err(|_| TpmRc::FAILURE)?;
+            out.copy_from_slice(&derived[..out.len()]);
+            Ok(())
+        } else {
+            self.crypto().get_random(out).map_err(|_| TpmRc::FAILURE)
         }
     }
 
@@ -898,7 +1091,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if parms.exponent != 0 && parms.exponent != DEFAULT_EXPONENT {
             return Err(TpmRc::RANGE.to_rc());
         }
-        let mut priv_buf = [0u8; 1536];
+        let mut priv_buf = [0u8; MAX_PRIVATE_KEY_SIZE];
         let mut pub_buf = [0u8; 512];
         let bits = parms.key_bits;
         let (pub_len, priv_len) = self

@@ -7,10 +7,21 @@ use tpm2::crypto::{ConstantTimeEq, CryptoError, CryptoProvider, Random};
 /// ([`CryptoProvider`] and its super-traits).
 ///
 /// Supported algorithms: SHA-1/SHA-256/SHA-384/SHA-512 (hash and HMAC),
-/// AES-128/192/256 (CMAC, and CFB for symmetric encryption), RSA 1024-4096
+/// AES-128/192/256 (CMAC, and the CTR, OFB, CBC, CFB and ECB modes for symmetric
+/// encryption), Camellia-128/192/256 (the same; BoringSSL is built without
+/// Camellia, `OPENSSL_NO_CAMELLIA`, so these fall back to the RustCrypto
+/// `camellia` and `cmac` crates), RSA 1024-4096
 /// (RSASSA, RSAPSS, RSAES, OAEP, raw RSA, key generation and import), the NIST
 /// P-224/P-256/P-384/P-521 curves (ECDSA, point operations and key generation),
-/// and BN-P256 (point operations and key generation).
+/// and BN-P256 (point operations and key generation), NIST P-192, BN P-638
+/// and SM2 P-256 (point operations and key generation) with the generic
+/// constant-time short-Weierstrass arithmetic of `tpm2-crypto-weierstrass`
+/// (BoringSSL limits custom curves to 66-byte fields, too small for BN P-638;
+/// the same implementation serves the other two curves for uniformity, see
+/// `bssl-algorithms.md`), and ML-KEM-768/1024 and ML-DSA-44/65/87 key
+/// generation and verification.
+/// ML-KEM-512 and ML-DSA signing (with the TPM's signing randomness) fall back
+/// to RustCrypto `ml-kem`/`ml-dsa` ([`tpm2_crypto_rust::pqc`]; see [`pqc`]).
 /// Everything else returns [`CryptoError::Unsupported`].
 pub struct BsslCryptoProvider;
 
@@ -45,6 +56,8 @@ pub mod cmac;
 pub mod ecc;
 #[forbid(unsafe_code)]
 pub mod hash;
+#[forbid(unsafe_code)]
+pub mod pqc;
 #[forbid(unsafe_code)]
 pub mod symmetric;
 pub use {bssl::*, cmac::*, ecc::*, hash::*};

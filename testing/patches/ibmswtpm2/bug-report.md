@@ -14,15 +14,19 @@ The bugs of the C reference `ibmswtpm2` that the `bug-fix-*.patch` files in this
   - [certify-sequence-object](#certify-sequence-object)
   - [expiration-absolute-value](#expiration-absolute-value)
   - [fw-svn-limited-hierarchy-handles](#fw-svn-limited-hierarchy-handles)
+  - [nv-define-space2-external-nv](#nv-define-space2-external-nv)
   - [nv-public-index-unmarshal](#nv-public-index-unmarshal)
   - [persistent-copy-handle-alias](#persistent-copy-handle-alias)
+  - [policy-capability-session-handle](#policy-capability-session-handle)
+  - [policy-capability-transient-handle](#policy-capability-transient-handle)
   - [sequence-complete-ticket-error-state](#sequence-complete-ticket-error-state)
   - [svn-fw-limited-entity-hierarchy](#svn-fw-limited-entity-hierarchy)
   - [svn-fw-limited-load-external](#svn-fw-limited-load-external)
-  - [vendor-auth-entity-break](#vendor-auth-entity-break)
   - [act-preserve-signaled](#act-preserve-signaled)
   - [certify-creation-sequence-object](#certify-creation-sequence-object)
   - [command-tag-unmarshal](#command-tag-unmarshal)
+  - [cmac-self-test](#cmac-self-test)
+  - [ecc-point-coordinate-range](#ecc-point-coordinate-range)
   - [get-test-result-needs-test](#get-test-result-needs-test)
   - [nv-certify-null-sign-handle-digest](#nv-certify-null-sign-handle-digest)
   - [nv-undefine-defined-index](#nv-undefine-defined-index)
@@ -32,12 +36,18 @@ The bugs of the C reference `ibmswtpm2` that the `bug-fix-*.patch` files in this
   - [self-test-clear-untestable](#self-test-clear-untestable)
   - [sequence-object-hierarchy](#sequence-object-hierarchy)
   - [session-audit-attribute-dependency](#session-audit-attribute-dependency)
+  - [set-algorithm-set-pp-command](#set-algorithm-set-pp-command)
+  - [sm2-p256-kdf-hash](#sm2-p256-kdf-hash)
   - [svn-fw-limited-evict-control](#svn-fw-limited-evict-control)
   - [symmetric-unique](#symmetric-unique)
   - [template-size](#template-size)
   - [tk-verified-tags](#tk-verified-tags)
   - [tpm-st-unmarshal](#tpm-st-unmarshal)
   - [tpmu-name-size](#tpmu-name-size)
+  - [camellia-key-bits-unmarshal](#camellia-key-bits-unmarshal)
+  - [zgen-2phase-mqv-sm2](#zgen-2phase-mqv-sm2)
+  - [ecc-decrypt-c1-point](#ecc-decrypt-c1-point)
+  - [ecc-select-scheme-null](#ecc-select-scheme-null)
 - [Locality problems (not patched)](#locality-problems-not-patched)
   - [pcr-extended-locality](#pcr-extended-locality)
 
@@ -52,30 +62,40 @@ The bugs of the C reference `ibmswtpm2` that the `bug-fix-*.patch` files in this
 | [certify-sequence-object](bug-fix-certify-sequence-object.patch) ([details](#certify-sequence-object)) | `security`, `attestation`, `spec` | low | Certify accepts a sequence object and signs an attestation with an empty certified Name. |
 | [expiration-absolute-value](bug-fix-expiration-absolute-value.patch) ([details](#expiration-absolute-value)) | `ub`, `interop`, `spec` | low | The absolute value of expiration = INT32_MIN overflows, giving a wrong policy timeout and ticket. |
 | [fw-svn-limited-hierarchy-handles](bug-fix-fw-svn-limited-hierarchy-handles.patch) ([details](#fw-svn-limited-hierarchy-handles)) | `spec`, `input-validation`, `fw-limited`, `functional`, `memory-safety` | low | TPMI_RH_HIERARCHY/TPMI_DH_PARENT reject the firmware-limited and SVN-limited handles, and TPM2_Hash/SequenceComplete/CertifyCreation ignore ticket computation errors. |
+| [nv-define-space2-external-nv](bug-fix-nv-define-space2-external-nv.patch) ([details](#nv-define-space2-external-nv)) | `memory-safety`, `ub`, `functional`, `spec` | low | TPM2_NV_DefineSpace2 of an external NV Index defines an Index at an uninitialized handle, and external NV handles can never be loaded. |
 | [nv-public-index-unmarshal](bug-fix-nv-public-index-unmarshal.patch) ([details](#nv-public-index-unmarshal)) | `security`, `state`, `input-validation`, `spec` | low | TPMS_NV_PUBLIC.nvIndex accepts external and permanent NV handles, so TPM2_NV_DefineSpace can define an index with a non-ordinary NV handle. |
 | [persistent-copy-handle-alias](bug-fix-persistent-copy-handle-alias.patch) ([details](#persistent-copy-handle-alias)) | `security`, `spec` | low | A later transient handle that names the slot of a persistent object's per-command RAM copy resolves to that persistent object instead of failing with TPM_RC_REFERENCE_Hn. |
+| [policy-capability-session-handle](bug-fix-policy-capability-session-handle.patch) ([details](#policy-capability-session-handle)) | `security`, `auth-bypass`, `spec` | low | TPM2_PolicyCapability(TPM_CAP_HANDLES) reports a saved session as loaded and a loaded session as saved. |
+| [policy-capability-transient-handle](bug-fix-policy-capability-transient-handle.patch) ([details](#policy-capability-transient-handle)) | `security`, `auth-bypass`, `spec` | low | TPM2_PolicyCapability(TPM_CAP_HANDLES) reports a transient handle as existing whenever any object with a larger handle is loaded. |
 | [sequence-complete-ticket-error-state](bug-fix-sequence-complete-ticket-error-state.patch) ([details](#sequence-complete-ticket-error-state)) | `security`, `dos`, `state`, `fw-limited`, `spec` | low | A TPM2_SequenceComplete that fails computing its ticket leaves the sequence loaded with a consumed hash state (latent upstream). |
 | [svn-fw-limited-entity-hierarchy](bug-fix-svn-fw-limited-entity-hierarchy.patch) ([details](#svn-fw-limited-entity-hierarchy)) | `security`, `attestation`, `fw-limited`, `spec` | low | EntityGetHierarchy() reports the base hierarchy for objects in limited hierarchies, so their creation/auth tickets use the base proof (latent upstream). |
 | [svn-fw-limited-load-external](bug-fix-svn-fw-limited-load-external.patch) ([details](#svn-fw-limited-load-external)) | `security`, `input-validation`, `fw-limited`, `spec` | low | TPM2_LoadExternal accepts a public-only object with firmwareLimited or svnLimited SET. |
-| [vendor-auth-entity-break](bug-fix-vendor-auth-entity-break.patch) ([details](#vendor-auth-entity-break)) | `security`, `dos`, `functional`, `spec` | low | Missing break for VENDOR_PERMANENT_AUTH_HANDLE in EntityGetAuthValue() falls into FAIL(), so using the vendor authValue puts the TPM into failure mode. |
 | [act-preserve-signaled](bug-fix-act-preserve-signaled.patch) ([details](#act-preserve-signaled)) | `state`, `spec` | — | ACT preserveSignaled is cleared/merged by power loss instead of being CLEAR on TPM Reset/Restart and a copy of signaled on TPM Resume. |
 | [certify-creation-sequence-object](bug-fix-certify-creation-sequence-object.patch) ([details](#certify-creation-sequence-object)) | `spec`, `rc-only` | — | CertifyCreation of a sequence object fails with TPM_RC_TICKET (or a signHandle error) instead of TPM_RC_TYPE on objectHandle. |
 | [command-tag-unmarshal](bug-fix-command-tag-unmarshal.patch) ([details](#command-tag-unmarshal)) | `rc-only`, `spec` | — | A command tag that is not a TPM_ST constant is rejected with TPM_RC_VALUE instead of TPM_RC_BAD_TAG. |
+| [cmac-self-test](bug-fix-cmac-self-test.patch) ([details](#cmac-self-test)) | `self-test`, `spec` | — | TPM2_MAC/TPM2_MAC_Start compute a CMAC with the block cipher of the key without testing it, leaving it untested. |
+| [ecc-point-coordinate-range](bug-fix-ecc-point-coordinate-range.patch) ([details](#ecc-point-coordinate-range)) | `spec`, `input-validation`, `crypto` | — | BnIsPointOnCurve() checks only the curve equation modulo p, so ECC points with a coordinate not below p (x + p) are accepted as valid points. |
 | [get-test-result-needs-test](bug-fix-get-test-result-needs-test.patch) ([details](#get-test-result-needs-test)) | `self-test`, `spec` | — | TPM2_GetTestResult always returns TPM_RC_SUCCESS instead of TPM_RC_NEEDS_TEST while algorithms remain untested. |
 | [nv-certify-null-sign-handle-digest](bug-fix-nv-certify-null-sign-handle-digest.patch) ([details](#nv-certify-null-sign-handle-digest)) | `spec-185`, `functional`, `spec` | — | TPM2_NV_Certify with a NULL signHandle and size = offset = 0 returns an Empty Buffer digest (pre-185 rule) instead of a digest with inScheme's hash or TPM_RC_SCHEME. |
 | [nv-undefine-defined-index](bug-fix-nv-undefine-defined-index.patch) ([details](#nv-undefine-defined-index)) | `input-validation`, `rc-only`, `spec` | — | TPM2_NV_UndefineSpace(Special) unmarshal nvIndex as TPMI_RH_NV_INDEX, accepting permanent NV handles and reporting a later error instead of TPM_RC_VALUE. |
 | [persist-public-only-objects](bug-fix-persist-public-only-objects.patch) ([details](#persist-public-only-objects)) | `spec-185`, `spec` | — | TPM2_EvictControl rejects public-only objects with TPM_RC_ATTRIBUTES (pre-185 rule) although version 185 allows persisting them. |
 | [response-code-positions](bug-fix-response-code-positions.patch) ([details](#response-code-positions)) | `spec`, `rc-only` | — | Seven command headers number handle/parameter response-code positions wrongly (handles as parameters, parameters off by one, a parameter as handle 2). |
-| [rsa-key-bits-unmarshal](bug-fix-rsa-key-bits-unmarshal.patch) ([details](#rsa-key-bits-unmarshal)) | `input-validation`, `spec` | — | TPMI_RSA_KEY_BITS unmarshaling hard-codes 1024/2048/3072 instead of following the implemented RSA key sizes. |
+| [rsa-key-bits-unmarshal](bug-fix-rsa-key-bits-unmarshal.patch) ([details](#rsa-key-bits-unmarshal)) | `input-validation`, `spec` | — | TPMI_RSA_KEY_BITS unmarshaling hard-codes 1024/2048/3072 instead of following the implemented RSA key sizes, so RSA-4096 keys are rejected. |
 | [self-test-clear-untestable](bug-fix-self-test-clear-untestable.patch) ([details](#self-test-clear-untestable)) | `self-test`, `functional`, `spec` | — | Algorithms without a self test are cleared only from the local vector, so they stay on the toDoList forever after TPM2_SelfTest(fullTest = YES). |
 | [sequence-object-hierarchy](bug-fix-sequence-object-hierarchy.patch) ([details](#sequence-object-hierarchy)) | `spec`, `functional` | — | Sequence objects get hierarchy 0 (not TPM_RH_NULL), so ContextSave reports an invalid hierarchy. |
 | [session-audit-attribute-dependency](bug-fix-session-audit-attribute-dependency.patch) ([details](#session-audit-attribute-dependency)) | `spec`, `rc-only` | — | auditExclusive/auditReset without audit are ignored on HMAC/policy sessions instead of returning TPM_RC_ATTRIBUTES. |
+| [set-algorithm-set-pp-command](bug-fix-set-algorithm-set-pp-command.patch) ([details](#set-algorithm-set-pp-command)) | `spec`, `functional` | — | TPM2_PP_Commands discards TPM2_SetAlgorithmSet although its TPMI_RH_PLATFORM handle makes it gatable with Physical Presence. |
+| [sm2-p256-kdf-hash](bug-fix-sm2-p256-kdf-hash.patch) ([details](#sm2-p256-kdf-hash)) | `spec`, `functional` | — | TPM2_ECC_Parameters(TPM_ECC_SM2_P256) recommends KDF1_SP800_56A with SM3_256, a TPMI_ALG_HASH value the TPM does not implement, instead of TPM_ALG_NULL. |
 | [svn-fw-limited-evict-control](bug-fix-svn-fw-limited-evict-control.patch) ([details](#svn-fw-limited-evict-control)) | `spec`, `rc-only`, `fw-limited` | — | TPM2_EvictControl rejects objects of limited hierarchies with TPM_RC_HIERARCHY instead of TPM_RC_ATTRIBUTES. |
 | [symmetric-unique](bug-fix-symmetric-unique.patch) ([details](#symmetric-unique)) | `interop`, `crypto`, `spec` | — | unique of symmetric/keyed-hash parents is an HMAC instead of H_nameAlg(seedValue || key), giving non-interoperable Names and binding checks. |
 | [template-size](bug-fix-template-size.patch) ([details](#template-size)) | `input-validation`, `spec` | — | TPM2B_TEMPLATE is bounded by the padded C sizeof(TPMT_PUBLIC) (356) instead of the unpadded 350 bytes, so oversized templates are accepted. |
 | [tk-verified-tags](bug-fix-tk-verified-tags.patch) ([details](#tk-verified-tags)) | `spec-185`, `input-validation`, `spec` | — | TPMT_TK_VERIFIED unmarshaling rejects the version 185 tags TPM_ST_MESSAGE_VERIFIED/TPM_ST_DIGEST_VERIFIED with TPM_RC_TAG. |
 | [tpm-st-unmarshal](bug-fix-tpm-st-unmarshal.patch) ([details](#tpm-st-unmarshal)) | `rc-only`, `spec` | — | TPM_ST unmarshaling rejects non-constant values with TPM_RC_VALUE, so tickets with a bad tag fail with TPM_RC_VALUE instead of TPM_RC_TAG. |
 | [tpmu-name-size](bug-fix-tpmu-name-size.patch) ([details](#tpmu-name-size)) | `input-validation`, `spec` | — | Alignment padding of the TPM_HANDLE member makes sizeof(TPMU_NAME) 68, so 67/68-octet TPM2B_NAMEs are accepted instead of TPM_RC_SIZE. |
+| [camellia-key-bits-unmarshal](bug-fix-camellia-key-bits-unmarshal.patch) ([details](#camellia-key-bits-unmarshal)) | `input-validation`, `spec` | — | TPMI_CAMELLIA_KEY_BITS unmarshaling hard-codes 128 instead of following the implemented Camellia key sizes, rejecting Camellia-256. |
+| [zgen-2phase-mqv-sm2](bug-fix-zgen-2phase-mqv-sm2.patch) ([details](#zgen-2phase-mqv-sm2)) | `security`, `dos`, `crypto`, `spec` | low | TPM2_ZGen_2Phase: Full MQV never sets the curve order and the x coordinate of Q_e,B (division by zero puts the TPM into failure mode), the associated values mask the wrong bits and avfSM2() uses an f one too small, and a Z at infinity is TPM_RC_NO_RESULT instead of an Empty Point. |
+| [ecc-decrypt-c1-point](bug-fix-ecc-decrypt-c1-point.patch) ([details](#ecc-decrypt-c1-point)) | `input-validation`, `spec` | — | TPM2_ECC_Decrypt does not check that C1 is on the curve of the key; it continues with C1 itself as [d]C1 and fails later with TPM_RC_VALUE instead of TPM_RC_ECC_POINT. |
+| [ecc-select-scheme-null](bug-fix-ecc-select-scheme-null.patch) ([details](#ecc-select-scheme-null)) | `spec-185`, `rc-only`, `spec` | — | TPM2_ECC_Encrypt/TPM2_ECC_Decrypt with a TPM_ALG_NULL key kdf and inScheme fail with TPM_RC_SCHEME + inScheme (pre-185 CryptEccSelectScheme()) instead of version 185's bare TPM_RC_SCHEME after the other checks. |
 
 ## Categories
 
@@ -319,6 +339,30 @@ Upstream, the limited handles are rejected at unmarshal, so the ticket paths are
 
 ---
 
+### nv-define-space2-external-nv
+
+**Categories:** `memory-safety`, `ub`, `functional`, `spec`.
+
+**Severity:** low
+
+**Description:**
+
+With `EXTERNAL_NV YES` (the default profile), TPM2_NV_DefineSpace2 accepts a `TPM2B_NV_PUBLIC_2` whose `handleType` is `TPM_HT_EXTERNAL_NV` and converts its `TPMS_NV_PUBLIC_EXP_ATTR` to the legacy `TPMS_NV_PUBLIC` with `NvPublicFromNvPublic2()`. That function copies the attributes, `authPolicy`, `dataSize` and `nameAlg`, but not `nvIndex`, so `NvDefineSpace()` checks (`NvIndexIsDefined()`) and defines an Index whose handle is whatever the uninitialized stack variable `legacyPublic` holds; the external Index the caller named is not created. Even with the handle copied, the Index could not be used: `EntityGetLoadStatus()` rejects every `TPM_HT_EXTERNAL_NV` handle ("Not yet supported", `TPM_RC_VALUE`), so it could neither be read, written nor undefined. The patch compiles the external NV case out, so TPM2_NV_DefineSpace2 rejects the handle type like every other one it does not support (`TPM_RC_HANDLE` + `publicInfo`).
+
+**Security:**
+
+A caller with owner or platform authorization (needed to define any Index) gets an Index at an unpredictable handle derived from stack contents, consuming NV space under a handle it did not choose. The severity is low because the caller is already authorized to define Indexes.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_NV_DefineSpace2"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L16041-L16052)
+
+> This command is identical to `TPM2_NV_DefineSpace()`, except that the *publicInfo* parameter is a `TPM2B_NV_PUBLIC_2`, allowing all types of NV indices that support DefineSpace to be defined. The following types of NV indices are supported by this command: `TPM_HT_NV_INDEX` (the legacy NV index type), `TPM_HT_EXTERNAL_NV`
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMS_NV_PUBLIC_EXP_ATTR Structure"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L11824-L11835)
+
+> nvIndex | TPMI_RH_NV_EXP_INDEX | the handle of the data area
+
+---
+
 ### nv-public-index-unmarshal
 
 **Categories:** `security`, `state`, `input-validation`, `spec`.
@@ -374,6 +418,65 @@ Any caller can trigger this, but the aliased handle refers to a persistent objec
 >     1.  If the handle references a transient object, the handle shall
 >         reference a loaded object (`TPM_RC_REFERENCE_H0` + N where N is the
 >         number of the handle in the command).
+
+---
+
+### policy-capability-session-handle
+
+**Categories:** `security`, `auth-bypass`, `spec`.
+
+**Severity:** low
+
+**Description:**
+
+For `TPM_CAP_HANDLES`, `TPM_HT_LOADED_SESSION` (0x02) handles name loaded sessions and `TPM_HT_SAVED_SESSION` (0x03) handles saved session contexts, as `TPM2_GetCapability` lists them. `SessionCapGetOneLoaded()` and `SessionCapGetOneSaved()`, which `TPM2_PolicyCapability` uses, only check that the session slot is in use (`gr.contextArray[slot] != 0`), not whether the session is loaded (`contextArray[slot] <= MAX_LOADED_SESSIONS`) or saved (`> MAX_LOADED_SESSIONS`) as `SessionCapGetLoaded()`/`SessionCapGetSaved()` do. A saved session therefore exists as a loaded one and a loaded session as a saved one.
+
+**Security:** a policy that gates an authorization on a session being loaded (or saved) with `TPM2_PolicyCapability` is satisfied by a session in the other state (low).
+
+The patch adds the check of the slot's state.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_GetCapability"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L14307-L14314)
+
+> For this capability, use of `TPM_HT_LOADED_SESSION` and
+> `TPM_HT_SAVED_SESSION` is allowed. Requesting handles with a handle
+> type of `TPM_HT_LOADED_SESSION` will return handles for loaded
+> sessions. [...] If saved sessions are requested, all returned values
+> will have the `TPM_HT_HMAC_SESSION` handle type because the TPM does
+> not track the session type of saved sessions.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, "TPM_HT"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L3865-L3876)
+
+> TPM_HT_LOADED_SESSION | 0x02 | **Loaded Authorization Session** - loaded sessions of type `TPM_HT_HMAC_SESSION` or `TPM_HT_POLICY_SESSION`
+>
+> TPM_HT_SAVED_SESSION | 0x03 | **Saved Authorization Session** - [...] This type references saved authorization session contexts for which the TPM is maintaining tracking information.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_PolicyCapability"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L11252-L11253)
+
+> If the requested TPM *property* does not exist, the TPM will return
+> `TPM_RC_POLICY` unless the *operation* is `TPM_EO_NEQ`.
+
+---
+
+### policy-capability-transient-handle
+
+**Categories:** `security`, `auth-bypass`, `spec`.
+
+**Severity:** low
+
+**Description:**
+
+`TPM2_PolicyCapability` asserts a condition on one property of a capability; for `TPM_CAP_HANDLES` the property is a handle, which exists if the TPM has an entity under it, and a property that does not exist satisfies only `TPM_EO_NEQ`. For a transient handle the reference calls `ObjectCapGetOneLoaded()`, which loops over every object slot from the handle's slot to `MAX_LOADED_OBJECTS` and returns TRUE for the first occupied one. A transient handle whose object was flushed (or never loaded) therefore "exists" as long as any object with a larger handle is loaded, and the comparison is made against the queried handle value itself, so an assertion such as "handle 0x80000000 is loaded" (`TPM_EO_EQ` with that handle as operandB) holds although no such object exists.
+
+**Security:** a policy that gates an authorization on a loaded transient object with `TPM2_PolicyCapability` is satisfied by loading any other object (low: the condition is under the caller's control anyway).
+
+The patch checks only the handle's own slot.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_PolicyCapability"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L11252-L11265)
+
+> If the requested TPM *property* does not exist, the TPM will return
+> `TPM_RC_POLICY` unless the *operation* is `TPM_EO_NEQ`.
+>
+> TPM_CAP_HANDLES | TPM_HANDLE | TPM_HANDLE
 
 ---
 
@@ -498,40 +601,6 @@ Any caller can trigger this, because `TPM2_LoadExternal` into `TPM_RH_NULL` need
 
 ---
 
-### vendor-auth-entity-break
-
-**Categories:** `security`, `dos`, `functional`, `spec`.
-
-**Severity:** low
-
-**Description:**
-
-In `EntityGetAuthValue()`, the `VENDOR_PERMANENT_AUTH_HANDLE` case sets `pAuth = &g_platformUniqueAuth` but has no `break`, so it falls through into `default`, which calls `FAIL(FATAL_ERROR_INTERNAL)`. Any use of the authValue of the vendor-specific TPM_RH_AUTH_xx handle therefore puts the TPM into failure mode instead of being checked. This includes a password or HMAC authorization of that handle (e.g. as the `authHandle` of TPM2_PolicySecret) and using it as the bind entity of TPM2_StartAuthSession. As a result the vendor authorization value can never be used. The code is compiled only with `VENDOR_PERMANENT_AUTH_ENABLED == YES`, which is NO by default upstream. The test build enables it with `profile-enable-vendor-permanent-auth.patch`.
-
-The patch adds the missing `break`, so the vendor authorization value is returned and checked like any other authValue.
-
-**Security:**
-
-This applies only where the vendor permanent authorization is enabled; with the default upstream configuration the code is not compiled and there is no impact. Where it is enabled, any caller can trigger it without knowing the vendor authValue: a TPM2_PolicySecret with `authHandle` = the vendor TPM_RH_AUTH_xx handle and a password session, or a TPM2_StartAuthSession bound to that handle, reaches `EntityGetAuthValue()` before any comparison. The TPM then enters failure mode until it is reset, which is a denial of service against all users. The feature itself (vendor-authorized policies and bound sessions) also cannot work. The severity is low because the denial of service exists only in non-default builds.
-
-**Spec:** [TPM 2.0 (version 185), Part 1, "Permanent Resource Handles (MSO=$\text{40}_{16}$)"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L3995-L4003)
-
-> Another type of permanent resource handle is the vendor-specific
-> authorization value. These optional resources can be populated with
-> authorization values that are known only by the TPM manufacturer or some
-> other privileged entity. The update of these authorization values is
-> TPM-manufacturer-dependent.
->
-> If present, a vendor-specific authorization value can be used as a bind
-> value within an authorization session or to authorize a policy using the
-> `TPM2_PolicySecret()` command. ...
-
-**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of (TPM_HANDLE) TPMI_DH_ENTITY Type"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L5850-L5850)
-
-> {TPM_RH_AUTH_00 : TPM_RH_AUTH_FF}: range of vendor-specific authorization values
-
----
-
 ### act-preserve-signaled
 
 **Categories:** `state`, `spec`.
@@ -610,6 +679,56 @@ The patch reads the tag as a plain `UINT16`, so every value other than the two c
 **Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of (TPM_ST) TPMI_ST_COMMAND_TAG Type"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L6641-L6645)
 
 > TPM_ST_NO_SESSIONS; TPM_ST_SESSIONS; #TPM_RC_BAD_TAG
+
+---
+
+### cmac-self-test
+
+**Categories:** `self-test`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+`TPM2_MAC` and `TPM2_MAC_Start` with a SYMCIPHER signing key compute a CMAC
+(`TPM_ALG_CMAC`) with the block cipher of the key. `CryptCmacStart()` and the
+CMAC data/end functions use the key schedule of the block cipher directly
+(`ENCRYPT()`), which bypasses the `TEST()` of `CryptSymmetricEncrypt()`, so on
+a TPM where AES has not been tested yet (after `_TPM_Init`, before
+`TPM2_SelfTest`) the command returns a MAC computed with untested AES, and AES
+stays in the `toDoList` of `TPM2_IncrementalSelfTest` (and
+`TPM2_GetTestResult` keeps reporting `TPM_RC_NEEDS_TEST`). The HMAC path tests
+its hash in `CryptHashStart()` (`TPM_DO_SELF_TEST(hashAlg)`). The patch runs
+`TPM_DO_SELF_TEST()` on the block cipher in `CryptCmacStart()`, i.e. when
+`TPM2_MAC`/`TPM2_MAC_Start` start the CMAC (Camellia has no test vectors in the
+reference and is never in `g_toTest`, so it is unaffected).
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "Self-Test Modes"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L2926-L2929)
+
+> If a command requires use of an untested algorithm or functional module,
+> the TPM performs the test and then completes the command actions.
+
+---
+
+### ecc-point-coordinate-range
+
+**Categories:** `spec`, `input-validation`, `crypto`.
+
+**Severity:** —
+
+**Description:**
+
+`BnIsPointOnCurve()` (`BnMath.c`), which validates every ECC point the TPM receives (public keys of `TPM2_LoadExternal`/`TPM2_Load`, `inPoint` of `TPM2_ECDH_ZGen`, `P1`/`(x2, y2)` of `TPM2_Commit`, ...), evaluates the curve equation modulo p but never checks that the coordinates are field elements. A coordinate `x + p` (or `y + p`) passes whenever the integer still fits the `TPM2B_ECC_PARAMETER` of the curve: for every point of BN P-638 (p is about 2^637.2 in 80 bytes) and for points with small coordinates of the curves whose p is not close to 2^(8n) (e.g. NIST P-224). The TPM then accepts and keeps a non-canonical encoding of the point, so the same public key has several Names.
+
+The patch rejects a coordinate that is not below p, as `tpm-rs` does (`TPM_RC_ECC_POINT`/`TPM_RC_KEY` like any other point off the curve).
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "ECDH"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L2085-L2085)
+
+> "(Cofactor) One-Pass Diffie-Hellman, C(1e, 1s, ECC CDH)" from SP 800-56A
+
+**Spec:** NIST SP 800-56A Rev. 3, 5.6.2.3.3 "ECC Full Public-Key Validation Routine", step 2
+
+> Verify that xQ and yQ are integers in the interval [0, p - 1] in the case that q is an odd prime p
 
 ---
 
@@ -835,7 +954,7 @@ parameters as `TPM_RC_P + TPM_RC_1`.
 
 **Description:**
 
-`TPMI_RSA_KEY_BITS` admits exactly the RSA key sizes the TPM implements (`$RSA_KEY_SIZES_BITS`), with `TPM_RC_VALUE` for any other size. The hand-written `TPMI_RSA_KEY_BITS_Unmarshal()` (`Unmarshal.c`) hard-codes 1024, 2048 and 3072 regardless of the `RSA_1024`/`RSA_2048`/`RSA_3072`/`RSA_4096` profile switches. With `RSA_3072 = NO` (the profile used here), an RSA-3072 `keyBits` is accepted while unmarshaling: `TPM2_TestParms` reports RSA-3072 as supported, and `TPM2_LoadExternal` of a 3072-bit public key fails only later at the oversized modulus (`TPM_RC_SIZE`) instead of with `TPM_RC_VALUE` at `keyBits`. Conversely, with `RSA_4096 = YES` (the upstream default) a 4096-bit key is rejected although it is implemented.
+`TPMI_RSA_KEY_BITS` admits exactly the RSA key sizes the TPM implements (`$RSA_KEY_SIZES_BITS`), with `TPM_RC_VALUE` for any other size. The hand-written `TPMI_RSA_KEY_BITS_Unmarshal()` (`Unmarshal.c`) hard-codes 1024, 2048 and 3072 regardless of the `RSA_1024`/`RSA_2048`/`RSA_3072`/`RSA_4096` profile switches. With `RSA_4096 = YES` (the upstream default and the profile used here) a 4096-bit key is rejected with `TPM_RC_VALUE` although it is implemented: `TPM2_TestParms`, `TPM2_CreatePrimary`/`TPM2_Create` and `TPM2_LoadExternal` of RSA-4096 keys fail. Conversely, with `RSA_3072 = NO` an RSA-3072 `keyBits` is accepted while unmarshaling: `TPM2_TestParms` reports RSA-3072 as supported, and `TPM2_LoadExternal` of a 3072-bit public key fails only later at the oversized modulus (`TPM_RC_SIZE`) instead of with `TPM_RC_VALUE` at `keyBits`.
 
 The patch makes each `case` conditional on the matching `RSA_*` switch and adds the missing `case 4096`, as in the TCG reference's generated unmarshaler.
 
@@ -957,6 +1076,64 @@ SET while `audit` is CLEAR. Found by differential fuzzing.
 > audit digest of the session should be initialized and the exclusive status of
 > the session SET. This setting is only allowed if the *audit* attribute is SET
 > (TPM_RC_ATTRIBUTES).
+
+---
+
+### set-algorithm-set-pp-command
+
+**Categories:** `spec`, `functional`.
+
+**Severity:** —
+
+**Description:**
+
+Part 1 allows any command with `TPM_RH_PLATFORM` in the Description column of one of its handles to be added to the list of commands that require Physical Presence, and Part 3, `TPM2_PP_Commands`, admits every command with a `TPMI_RH_PLATFORM` (or `TPMI_RH_PROVISION`, `TPMI_RH_CLEAR`, `TPMI_RH_HIERARCHY`) handle. `TPM2_SetAlgorithmSet` authorizes `authHandle`, a `TPMI_RH_PLATFORM` with the Description `TPM_RH_PLATFORM`, but its entry in the reference's command attribute table lacks `PP_COMMAND`, so `TPM2_PP_Commands` silently discards it from *setList*: the platform cannot make it require Physical Presence, and it never appears in `TPM_CAP_PP_COMMANDS`. The TCG reference version 185 gives it `PP_COMMAND`.
+
+The patch adds `PP_COMMAND` to its attributes.
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "Physical Presence Authorization"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L5547-L5552)
+
+> The TPM maintains a table of the commands that require that PP be
+> asserted to authorize command execution. Only certain commands can be
+> included in this table. If, in Part 3, the schematic for a
+> command has `TPM_RH_PLATFORM` in the "Description" column for one of the
+> handles, then that command can be added to the list of commands that
+> require PP. Otherwise, it cannot.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_PP_Commands"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L13005-L13008)
+
+> Only commands with handle types of `TPMI_RH_PLATFORM`,
+> `TPMI_RH_PROVISION`, `TPMI_RH_CLEAR`, or `TPMI_RH_HIERARCHY` can be
+> gated with Physical Presence. If any other command is in either list, it
+> is discarded.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, Table "TPM2_SetAlgorithmSet Command"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L13123-L13123)
+
+> TPMI_RH_PLATFORM | \@authHandle | TPM_RH_PLATFORM
+
+---
+
+### sm2-p256-kdf-hash
+
+**Categories:** `spec`, `functional`.
+
+**Severity:** —
+
+**Description:**
+
+The curve table `eccCurves` (`CryptEccData.c`) gives SM2 P-256 the recommended KDF `TPM_ALG_KDF1_SP800_56A` with `TPM_ALG_SM3_256`, and `TPM2_ECC_Parameters` returns it in `parameters.kdf` even though this profile does not implement SM3 (`ALG_SM3_256` is `NO`). The `TPMT_KDF_SCHEME` of the response then holds a `TPMI_ALG_HASH` value outside the interface type: the same TPM rejects that value (`TPM_RC_HASH`) wherever a caller passes it back, so the recommendation cannot be used. Without SM3 there is no implementable recommended KDF for the curve, and the field "may be `TPM_ALG_NULL`".
+
+The patch keeps the SM3 entry only with `ALG_SM3_256` and reports `TPM_ALG_NULL` otherwise, as `tpm-rs` does (version 185 reports `TPM_ALG_NULL` for every curve).
+
+**Spec:** [TPM 2.0 (version 185), Part 2, "TPMI_ALG_HASH"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L6367-L6378)
+
+> `TPMI_ALG_HASH` is an interface type of all the hash algorithms
+> implemented on a specific TPM. ... if the algorithm is not implemented in a
+> specific TPM, that algorithm is not included in the interface type.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMS_ALGORITHM_DETAIL_ECC Structure"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L10002-L10003)
+
+> kdf | TPMT_KDF_SCHEME+ | the default KDF and hash algorithm recommended for use in secret sharing operations (may be `TPM_ALG_NULL`)
 
 ---
 
@@ -1198,6 +1375,145 @@ The patch declares the `handle` member as `BYTE handle[sizeof(TPM_HANDLE)]` (sam
 > structures. When used in a table to indicate a maximum size, the
 > sizeof() function returns the octet-aligned size of the structure, with
 > no padding.
+
+---
+
+### camellia-key-bits-unmarshal
+
+**Categories:** `input-validation`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+`TPMI_CAMELLIA_KEY_BITS` admits the Camellia key sizes the TPM implements (`$CAMELLIA_KEY_SIZES_BITS`, a subset of {128, 192, 256}), with `TPM_RC_VALUE` for any other size. The hand-written `TPMI_CAMELLIA_KEY_BITS_Unmarshal()` (`Unmarshal.c`) hard-codes 128 regardless of the `CAMELLIA_128`/`CAMELLIA_192`/`CAMELLIA_256` profile switches. With the upstream profile (`CAMELLIA_128 = YES`, `CAMELLIA_256 = YES`), every Camellia-256 symmetric definition is rejected with `TPM_RC_VALUE` while unmarshaling: `TPM2_TestParms` reports Camellia-256 as unsupported, and SYMCIPHER keys, storage keys and sessions with Camellia-256 cannot be created or started, although Camellia-256 is implemented (`TPM_CAP_ALGS` lists `TPM_ALG_CAMELLIA`, and the self-test and crypto code handle 256-bit keys).
+
+The patch makes each `case` conditional on the matching `CAMELLIA_*` switch and adds the missing `case 192` and `case 256`, as in the TCG reference's generated unmarshaler.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMI_!ALG.S_KEY_BITS Types" (TPMI_CAMELLIA_KEY_BITS)](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L8846-L8848)
+
+> TPMI_CAMELLIA_KEY_BITS | {128, 192, 256}
+
+---
+
+### zgen-2phase-mqv-sm2
+
+**Categories:** `security`, `dos`, `crypto`, `spec`.
+
+**Severity:** low
+
+**Description:**
+
+`C_2_2_MQV()` declares the curve order `bnN` and the coordinate `bnXeB` with
+`CRYPT_ECC_NUM()` but never sets them. `avf1()` therefore uses
+`f = (SizeInBits(0) + 1) / 2 = 0`, and the following
+`ModMult(bnTa, bnDsA, bnTa, bnN)` divides by zero (`FATAL_ERROR_DIVIDE_ZERO`):
+every `TPM2_ZGen_2Phase` with `TPM_ALG_ECMQV` puts the TPM into failure mode
+(denial of service by any user of an ECC decryption key). Even with `bnN` set,
+`avf(Q_e,B)` would be the constant `2^f` instead of a function of the x
+coordinate of `Q_e,B`. `avf1()` and `avfSm2()` reduce `x` modulo `2^f` with
+`MaskBits()`, whose mask keeps `64 - (f mod 64)` bits of the last word instead of
+`f mod 64` (80 instead of 112 bits for NIST P-224), so the associated value is
+wrong whenever `f` is not a multiple of 64. `ComputeWForSM2()` returns
+`MostSigBitNum(n) / 2 - 1`, but the most significant bit number is zero-based,
+one less than `ceil(log2(n))`, so `avfSM2()` uses `f` one smaller than Part 1's
+`ceil(ceil(log2(n)) / 2) - 1` and the SM2 Z value does not match a conformant
+peer. Both key exchanges return `TPM_RC_NO_RESULT` when Z is the point at
+infinity (which the caller can force for MQV with
+`Q_s,B := -[avf(Q_e,B)^-1]Q_e,B`), where Part 3 requires an Empty Point.
+
+The patch sets `bnN` to the curve order and `bnXeB` to the x coordinate of
+`Q_e,B`, reduces `x` modulo `2^f` with a modular reduction (`MaskBits()` itself is
+left alone: the random-number code uses it), computes `f` from the size of `n` in bits, and returns success with
+the Empty Point (the caller initializes `outZ1` empty) for a Z at infinity.
+
+**Security:** an authorized user of any ECC decryption key puts the TPM into
+failure mode with one `TPM2_ZGen_2Phase(TPM_ALG_ECMQV)` (until the next
+`_TPM_Init`).
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "Full MQV"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L17261-L17304)
+
+> 1.  Set $\mathit{f} := \lceil \frac{\lceil {\mathit{log}}_2(n)\rceil}{2} \rceil$
+>
+> 2.  Set *x'* = 2*$^f$* + (*x* mod 2*$^f$* )
+>
+> ...
+>
+> 7.  set *t$_A$* $:=$ (*d$_{e,A}$* + *d$_{s,A}$* $·$ **avf**(*Q$_{e,A}$*)) (mod *n*)
+>
+> 8.  set *outZ1* $:=$ \[*h* $·$ *t$_A$*\] (*Q$_{e,B}$* + \[**avf**(*Q$_{e,B}$*)\](*Q$_{s,B}$*))
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "SM2 Key Exchange"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L17589-L17628)
+
+> 1.  set $\mathit{f} := \lceil \frac{\lceil log_2(\mathit{n}) \rceil}{2} \rceil - 1$
+>
+> 2.  set *x'* $:=$ 2$^f$ + (*x* (mod 2$^f$))
+
+**Spec:** [TPM 2.0 (version 185), Part 3, TPM2_ZGen_2Phase](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L4221-L4222)
+
+> If a computation of either Z produces the point at infinity, then the
+> corresponding Z value will be an Empty Point.
+
+Part 1, "SM2 Key Exchange Protocol", step 6 reads "if Z is the point at infinity, return
+failure". Part 3 defines the response of `TPM2_ZGen_2Phase` for every scheme it supports
+(`TPM_ALG_ECDH`, `TPM_ALG_ECMQV` and `TPM_ALG_SM2`), while Part 1 describes the protocol
+without a response code, so the Empty Point of Part 3 applies to SM2 as well.
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "SM2 Key Exchange Protocol"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L17630-L17672)
+
+> 6.  if *Z* is the point at infinity, return failure
+
+---
+
+### ecc-decrypt-c1-point
+
+**Categories:** `input-validation`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+`TPM2_ECC_Decrypt` passes `C1` to `CryptEccDecrypt()`, which ignores the
+result of `TpmEcc_PointMult(C1, C1, D, ...)`: for a `C1` that is not on the
+curve the multiplication fails with `TPM_RC_ECC_POINT`, `C1` is left unchanged
+and used as `P2 = (x2, y2)`, so the command fails with `TPM_RC_VALUE` at the
+`C3` check (or, for a `C3` the caller computed over `C1`, returns a "plaintext"
+unmasked with a value unrelated to the key). The decryption of
+GB/T 32918.4-2016, which Part 1 implements, starts by verifying that `C1` is on
+the curve. The patch checks `C1` after the scheme selection and returns
+`TPM_RC_ECC_POINT + RC_ECC_Decrypt_C1`, as `TPM2_ECDH_ZGen` does for its input
+point.
+
+**Spec:** [TPM 2.0 (version 185), Part 1, "SM2 Encryption and Decryption"](../../../_agents/skills/tpm2-spec/resources/spec/part1.tcg.txt#L17674-L17680)
+
+> These clauses describe the encryption and decryption process of GB/T
+> 32918.4-2016 as implemented in the TPM.
+
+---
+
+### ecc-select-scheme-null
+
+**Categories:** `spec-185`, `rc-only`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+`CryptEccSelectScheme()` returns FALSE when both the key's `kdf` and `inScheme`
+are `TPM_ALG_NULL`, so `TPM2_ECC_Encrypt`/`TPM2_ECC_Decrypt` fail with
+`TPM_RC_SCHEME + RC_ECC_Encrypt_inScheme`/`RC_ECC_Decrypt_inScheme` before any
+other check. Version 185 (`CryptoCommon_EccSelectScheme()`) selects the NULL
+scheme and rejects it in `CryptoEcc_Encrypt()`/`CryptoEcc_Decrypt()` like every
+other scheme but KDF2: a bare `TPM_RC_SCHEME`, after the check of `C1`. The
+patch drops the `scheme != TPM_ALG_NULL` condition so that the reference
+follows version 185.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, TPM2_ECC_Encrypt](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L4303-L4306)
+
+> If the default key scheme is `TPM_ALG_NULL`, an appropriate *inScheme*
+> is required. If the default key scheme is not `TPM_ALG_NULL`, the key
+> scheme and *inScheme* must be the same, and the scheme must be a valid
+> encryption scheme.
 
 ## Locality problems (not patched)
 

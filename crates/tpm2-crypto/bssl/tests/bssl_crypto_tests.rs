@@ -626,28 +626,79 @@ fn test_provider_symmetric_cfb_matches_nist_vectors_and_updates_iv() {
     assert_eq!(block, hex!("b5a8a1747ed889ebce581f4ea2a5646e"));
 }
 
+/// The AES modes other than CFB (`AesBlock`) match the first block of NIST SP 800-38A F.1.1
+/// (ECB), F.2.1 (CBC), F.4.1 (OFB) and F.5.1 (CTR), with the TCG reference's `ivOut`; SM4 is
+/// unsupported.
 #[test]
-fn test_provider_symmetric_rejects_unsupported_modes_and_ciphers() {
+fn test_provider_symmetric_modes_and_unsupported_cipher() {
     use tpm2::AlgSym;
-    use tpm2::crypto::{CryptoError, Direction, ModeIv, SymmetricKey, encrypt_decrypt};
+    use tpm2::crypto::{CryptoError, Direction, ModeIv, Symmetric, SymmetricKey, encrypt_decrypt};
 
     let provider = BsslCryptoProvider;
-    let key = [0x11u8; 16];
+    let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
     let aes = SymmetricKey::new(AlgSym::Aes128, &key).unwrap();
-    let mut data = [0u8; 16];
-    let mut iv = [0u8; 16];
+    let pt = hex!("6bc1bee22e409f96e93d7e117393172a");
+    let iv0 = hex!("000102030405060708090a0b0c0d0e0f");
+    let counter = hex!("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
+
+    let mut data = pt;
+    encrypt_decrypt(&provider, aes, ModeIv::Ecb, Direction::Encrypt, &mut data).unwrap();
+    assert_eq!(data, hex!("3ad77bb40d7a3660a89ecaf32466ef97"));
+    encrypt_decrypt(&provider, aes, ModeIv::Ecb, Direction::Decrypt, &mut data).unwrap();
+    assert_eq!(data, pt);
+
+    let mut iv = iv0;
+    encrypt_decrypt(
+        &provider,
+        aes,
+        ModeIv::Cbc(&mut iv),
+        Direction::Encrypt,
+        &mut data,
+    )
+    .unwrap();
+    assert_eq!(data, hex!("7649abac8119b246cee98e9b12e9197d"));
+    assert_eq!(iv, data);
+    let mut iv = iv0;
+    encrypt_decrypt(
+        &provider,
+        aes,
+        ModeIv::Cbc(&mut iv),
+        Direction::Decrypt,
+        &mut data,
+    )
+    .unwrap();
+    assert_eq!(data, pt);
+
+    let mut iv = iv0;
+    encrypt_decrypt(
+        &provider,
+        aes,
+        ModeIv::Ofb(&mut iv),
+        Direction::Encrypt,
+        &mut data,
+    )
+    .unwrap();
+    assert_eq!(data, hex!("3b3fd92eb72dad20333449f8e83cfb4a"));
+    // ivOut is the keystream block.
+    assert_eq!(iv, hex!("50fe67cc996d32b6da0937e99bafec60"));
+
+    let mut data = pt;
+    let mut iv = counter;
+    encrypt_decrypt(
+        &provider,
+        aes,
+        ModeIv::Ctr(&mut iv),
+        Direction::Encrypt,
+        &mut data,
+    )
+    .unwrap();
+    assert_eq!(data, hex!("874d6191b620e3261bef6864990db6ce"));
+    // ivOut is the next counter block.
+    assert_eq!(iv, hex!("f0f1f2f3f4f5f6f7f8f9fafbfcfdff00"));
+
+    let mut iv = iv0;
     assert_eq!(
-        encrypt_decrypt(&provider, aes, ModeIv::Ecb, Direction::Encrypt, &mut data),
-        Err(CryptoError::Unsupported)
-    );
-    assert_eq!(
-        encrypt_decrypt(
-            &provider,
-            aes,
-            ModeIv::Cbc(&mut iv),
-            Direction::Decrypt,
-            &mut data
-        ),
+        provider.sm4_128(&key, ModeIv::Cbc(&mut iv), Direction::Decrypt, &mut data),
         Err(CryptoError::Unsupported)
     );
 }
@@ -897,7 +948,7 @@ fn test_provider_ecc_dispatch_conventions() {
 
     // Unsupported curves and key sizes.
     assert!(matches!(
-        provider.nist_p192(),
+        provider.bp_p256_r1(),
         Err(CryptoError::Unsupported)
     ));
     assert_eq!(

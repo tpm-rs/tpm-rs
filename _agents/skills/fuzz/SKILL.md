@@ -51,10 +51,13 @@ Read these first; this skill does not repeat them:
 3. **Commands only `tpm-rs` supports:** ignore the discrepancy. Add a narrow
    `server.rs` exception for that command and `Implementation`, plus a
    `differential.md` entry. Do not change `tpm-rs`.
-4. **Commands only a reference supports:** turn them off in that reference
-   with a `profile-*` patch, so both sides answer `TPM_RC_COMMAND_CODE`. Today
-   `profile-command-list.patch` (one per reference directory) does this.
-   Extend it when `tpm-rs` drops a command or a reference gains one.
+4. **Commands only a reference supports:** `tpm-rs` implements every command
+   of every reference, each behind a `tpm2-engine` feature `cc-<command>` that
+   exactly the targets of the references with that command enable
+   (`testing/Cargo.toml`), so both sides expose the same command set. No
+   reference patch disables commands; when a reference gains a command,
+   implement it the same way (report it to the user rather than adding a
+   `profile-*` patch).
 5. **Bad input must never produce `TPM_RC_FAILURE`** in `tpm-rs`. The only
    allowed `FAILURE` is the one the spec requires: the `TPM2_ContextLoad`
    fingerprint check. Every `0x101` the fuzzer found was a real bug.
@@ -93,7 +96,7 @@ root themselves):
 # in triage.py). A differential build compares tpm-rs with one C reference, its
 # `target-*` feature (tcgtpm, tcgtpm-v185 or ibmswtpm2); the fuzz crate
 # defaults to target-tcgtpm (`--no-default-features --features target-<name>`).
-cargo build --release -p testing --features target-tcgtpm --bin reference
+cargo build --release -p testing --no-default-features --features target-tcgtpm --bin reference
 export REFERENCE_BIN=$PWD/target/release/reference
 ```
 

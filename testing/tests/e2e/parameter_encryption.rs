@@ -402,7 +402,9 @@ fn get_random_response() {
 #[test]
 fn hierarchy_change_auth_sizes() {
     // Test different sizes of new_auth to verify CFB block boundaries and stream logic
-    let sizes = [0, 1, 7, 8, 15, 16, 17, 31, 32, 33, 64];
+    // The largest newAuth is the context integrity digest (64 bytes with SHA-512, 48 without).
+    let max_auth = crate::_common::STRONGEST_DIGEST_SIZE;
+    let sizes = [0, 1, 7, 8, 15, 16, 17, 31, 32, 33, max_auth];
 
     for &size in &sizes {
         // Create a fresh simulator for each size to avoid persisting Owner Auth state modifications
@@ -433,8 +435,8 @@ fn hierarchy_change_auth_sizes() {
             // remaining buffer (`bufferSize <= 0`) after the size field, so an
             // empty newAuth (the only parameter) fails with SIZE+S1 (0x995).
             assert_eq!(result.err(), Some(0x995), "size 0");
-        } else if size <= 64 {
-            // newAuth may be as large as the context-integrity digest (SHA-512).
+        } else if size <= max_auth {
+            // newAuth may be as large as the context-integrity digest (SHA-512, or SHA-384).
             assert!(
                 result.is_ok(),
                 "Failed decryption boundary test for size {} with error {:?}",

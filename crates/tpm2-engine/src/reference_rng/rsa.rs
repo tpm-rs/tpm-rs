@@ -7,7 +7,7 @@
 //! Compared to generic implementations, the reference code draws its randomness in a specific way
 //! (e.g. RSAES-PKCS1-v1_5 replaces zero padding bytes with `0x55` instead of drawing new ones, and
 //! PSS uses the largest salt FIPS 186-4 allows), which is why the encodings come from the
-//! reference too. Moduli are limited to the reference profile's `MAX_RSA_KEY_BYTES` (3072 bits).
+//! reference too. Moduli are limited to the reference profile's `MAX_RSA_KEY_BYTES` (4096 bits).
 
 use tpm2::errors::TpmRc;
 use tpm2::{Alg, TpmiAlgHash};

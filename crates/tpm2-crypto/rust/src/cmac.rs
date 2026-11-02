@@ -61,6 +61,66 @@ impl tpm2::crypto::Finalize<16> for RustCryptoCmacAes256 {
     }
 }
 
+/// Camellia-128-CMAC context wrapper for `RustCryptoProvider`.
+pub struct RustCryptoCmacCamellia128(cmac::Cmac<camellia::Camellia128>);
+
+impl tpm2::crypto::Update for RustCryptoCmacCamellia128 {
+    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        self.0.update(data);
+        Ok(())
+    }
+}
+
+impl tpm2::crypto::Finalize<16> for RustCryptoCmacCamellia128 {
+    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        let res = self.0.finalize().into_bytes();
+        out.copy_from_slice(&res);
+        Ok(())
+    }
+}
+
+/// Camellia-192-CMAC context wrapper for `RustCryptoProvider`.
+pub struct RustCryptoCmacCamellia192(cmac::Cmac<camellia::Camellia192>);
+
+impl tpm2::crypto::Update for RustCryptoCmacCamellia192 {
+    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        self.0.update(data);
+        Ok(())
+    }
+}
+
+impl tpm2::crypto::Finalize<16> for RustCryptoCmacCamellia192 {
+    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        let res = self.0.finalize().into_bytes();
+        out.copy_from_slice(&res);
+        Ok(())
+    }
+}
+
+/// Camellia-256-CMAC context wrapper for `RustCryptoProvider`.
+pub struct RustCryptoCmacCamellia256(cmac::Cmac<camellia::Camellia256>);
+
+impl tpm2::crypto::Update for RustCryptoCmacCamellia256 {
+    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        self.0.update(data);
+        Ok(())
+    }
+}
+
+impl tpm2::crypto::Finalize<16> for RustCryptoCmacCamellia256 {
+    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
+        use cmac::Mac as _;
+        let res = self.0.finalize().into_bytes();
+        out.copy_from_slice(&res);
+        Ok(())
+    }
+}
+
 // The key arrays always have the cipher's key length, so `new_from_slice` cannot fail; if it did,
 // that would be an internal error (`CryptoError::Internal`).
 impl tpm2::crypto::Cmac for RustCryptoProvider {
@@ -89,7 +149,28 @@ impl tpm2::crypto::Cmac for RustCryptoProvider {
     }
 
     type Sm4_128Context = !;
-    type Camellia128Context = !;
-    type Camellia192Context = !;
-    type Camellia256Context = !;
+
+    type Camellia128Context = RustCryptoCmacCamellia128;
+    fn camellia128(&self, key: &[u8; 16]) -> Result<Self::Camellia128Context, CryptoError> {
+        use cmac::Mac as _;
+        cmac::Cmac::<camellia::Camellia128>::new_from_slice(key)
+            .map(RustCryptoCmacCamellia128)
+            .map_err(|_| CryptoError::Internal)
+    }
+
+    type Camellia192Context = RustCryptoCmacCamellia192;
+    fn camellia192(&self, key: &[u8; 24]) -> Result<Self::Camellia192Context, CryptoError> {
+        use cmac::Mac as _;
+        cmac::Cmac::<camellia::Camellia192>::new_from_slice(key)
+            .map(RustCryptoCmacCamellia192)
+            .map_err(|_| CryptoError::Internal)
+    }
+
+    type Camellia256Context = RustCryptoCmacCamellia256;
+    fn camellia256(&self, key: &[u8; 32]) -> Result<Self::Camellia256Context, CryptoError> {
+        use cmac::Mac as _;
+        cmac::Cmac::<camellia::Camellia256>::new_from_slice(key)
+            .map(RustCryptoCmacCamellia256)
+            .map_err(|_| CryptoError::Internal)
+    }
 }

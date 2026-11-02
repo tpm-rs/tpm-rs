@@ -16,7 +16,9 @@ use tpm2::*;
 fn change_auth_keeps_index_data() {
     let mut sim = Tpm::new();
     let index = 0x0150_0500;
-    let size = 1600u16;
+    // 1600 bytes, or less if the profile's NV accounting leaves less (two writes either way).
+    let size = definable_nv_size(OWNER_RW | TpmaNv::AUTHREAD | TpmaNv::AUTHWRITE, 1600);
+    assert!(size > 1000);
     define_change_auth_index(&mut sim, index, size);
     let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
     owner_write(&mut sim, index, 0, &data[..1000]).unwrap();

@@ -1,0 +1,242 @@
+sm2-signature-sequence: SM2 signing and verification sequences use context as ID_A
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3 (version 185), Table "Signing commands
+overview"):
+
+  "SM2 | Message (see Note) | ... | TPM2_SignSequenceComplete()/
+  TPM2_VerifySequenceComplete(): Signs/verifies the message using the provided
+  context as ID_A"
+
+Specification (TPM 2.0 Library, Part 1 (version 185), "SM2 Sign"):
+
+  "Z_A := H(ENTL_A || ID_A || a || b || x_G || y_G || x_A || y_A)" ...
+  "ENTL_A is two octets containing the length of ID_A in octets" ...
+  "e := H(Z_A || M)"
+
+Specification (TPM 2.0 Library, Part 2 (version 185), "TPMU_SIGNATURE_CTX"):
+
+  "id[MAX_SM2_ID_BYTES] | BYTE | TPM_ALG_SM2 | Value for ID_A"
+
+TPM2_SignSequenceStart and TPM2_VerifySequenceStart reject keys whose scheme
+is TPM_ALG_SM2 with TPM_RC_SCHEME ("185TODO"), and the reference's
+TPMU_SIGNATURE_CTX has no SM2 member, so a TPM2B_SIGNATURE_CTX cannot hold an
+ID_A. SM2 is now accepted by both commands, with any context as ID_A: the
+sequence's running hash (the scheme's hash H) starts with Z_A, computed from
+ENTL_A (the length of ID_A in octets, 2 octets big-endian), ID_A, the curve's
+a, b, x_G and y_G and the key's x_A and y_A, each left-padded to the size of
+the field, so that TPM2_SignSequenceComplete/TPM2_VerifySequenceComplete sign
+or verify the SM2 internal digest e = H(Z_A || M). TPMU_SIGNATURE_CTX gets the
+id[MAX_SM2_ID_BYTES] member (MAX_SM2_ID_BYTES = 255), which is also the bound
+of a TPM2B_SIGNATURE_CTX with SM2 and without ML-DSA. As in tpm-rs.
+diff --git a/TPMCmd/tpm/include/tpm_public/TpmAlgorithmDefines.h b/TPMCmd/tpm/include/tpm_public/TpmAlgorithmDefines.h
+--- a/TPMCmd/tpm/include/tpm_public/TpmAlgorithmDefines.h
++++ b/TPMCmd/tpm/include/tpm_public/TpmAlgorithmDefines.h
+@@ -232,12 +232,19 @@
+ #  define MAX_SIGNATURE_HINT_SIZE 1
+ #endif
+ 
++// tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++// the size of the ID_A of SM2 in a TPMU_SIGNATURE_CTX (Part 2,
++// "id[MAX_SM2_ID_BYTES]"), which also bounds a TPM2B_SIGNATURE_CTX with SM2.
++#define MAX_SM2_ID_BYTES 255
++
+ // 185TODO: Incorporate DAA context size into the calculation of MAX_SIG_CTX_SIZE.
+ // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
+ // a TPM2B_SIGNATURE_CTX holds up to sizeof(TPMU_SIGNATURE_CTX) octets (Part 2),
+ // which is sizeof(UINT16) (commitCount) for ECDAA without ML-DSA.
+ #if ALG_MLDSA
+ #  define MAX_SIG_CTX_SIZE MLDSA_CTX_MAX_SIZE
++#elif ALG_SM2
++#  define MAX_SIG_CTX_SIZE MAX_SM2_ID_BYTES
+ #elif ALG_ECDAA
+ #  define MAX_SIG_CTX_SIZE 2
+ #else
+diff --git a/TPMCmd/tpm/include/tpm_public/TpmTypes.h b/TPMCmd/tpm/include/tpm_public/TpmTypes.h
+--- a/TPMCmd/tpm/include/tpm_public/TpmTypes.h
++++ b/TPMCmd/tpm/include/tpm_public/TpmTypes.h
+@@ -2344,6 +2344,11 @@ typedef union
+ #if ALG_ECDAA
+     BYTE commitCount[sizeof(UINT16)];
+ #endif  // ALG_ECDAA
++#if ALG_SM2
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // the ID_A of SM2 (Part 2, TPMU_SIGNATURE_CTX).
++    BYTE id[MAX_SM2_ID_BYTES];
++#endif  // ALG_SM2
+ #if ALG_MLDSA || ALG_HASH_MLDSA
+     BYTE buffer[MLDSA_CTX_MAX_SIZE];
+ #endif  // ALG_MLDSA || ALG_HASH_MLDSA
+diff --git a/TPMCmd/tpm/src/command/Signature/SignSequenceStart.c b/TPMCmd/tpm/src/command/Signature/SignSequenceStart.c
+--- a/TPMCmd/tpm/src/command/Signature/SignSequenceStart.c
++++ b/TPMCmd/tpm/src/command/Signature/SignSequenceStart.c
+@@ -19,6 +19,13 @@ static BOOL SignSequenceSchemeTakesContext(TPM_ALG_ID scheme)
+         case TPM_ALG_MLDSA:
+             return TRUE;
+ #  endif  // ALG_MLDSA
++#  if ALG_SM2
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // SM2 "Signs/verifies the message using the provided context as ID_A"
++        // (Part 3, Table "Signing commands overview").
++        case TPM_ALG_SM2:
++            return TRUE;
++#  endif  // ALG_SM2
+         default:
+             return FALSE;
+     }
+@@ -57,15 +64,10 @@ static BOOL SelectSignSequenceScheme(OBJECT*          signObject,  // IN: signin
+ 
+     switch(scheme->scheme)
+     {
+-#  if ALG_SM2
+-        case TPM_ALG_SM2:
+-            // 185TODO: TPM2_SignSequenceComplete() is required to sign the
+-            // message itself with SM2, using 'context' as the identity value
+-            // (ID_A). The crypto layer can only sign an SM2 internal digest 'e'
+-            // that has already been computed, so reject SM2 keys for now rather
+-            // than sign the wrong value.
+-            return FALSE;
+-#  endif  // ALG_SM2
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // SM2 is supported: the sequence hashes Z_A (computed with 'context' as
++        // ID_A) before the message, so TPM2_SignSequenceComplete() signs the
++        // SM2 internal digest e (ObjectCreateSignSequence()).
+         default:
+             return TRUE;
+     }
+diff --git a/TPMCmd/tpm/src/command/Signature/VerifySequenceStart.c b/TPMCmd/tpm/src/command/Signature/VerifySequenceStart.c
+--- a/TPMCmd/tpm/src/command/Signature/VerifySequenceStart.c
++++ b/TPMCmd/tpm/src/command/Signature/VerifySequenceStart.c
+@@ -19,6 +19,13 @@ static BOOL VerifySequenceSchemeTakesContext(TPM_ALG_ID scheme)
+         case TPM_ALG_MLDSA:
+             return TRUE;
+ #  endif  // ALG_MLDSA
++#  if ALG_SM2
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // SM2 "Signs/verifies the message using the provided context as ID_A"
++        // (Part 3, Table "Signing commands overview").
++        case TPM_ALG_SM2:
++            return TRUE;
++#  endif  // ALG_SM2
+         default:
+             return FALSE;
+     }
+@@ -75,14 +82,10 @@ static BOOL SelectVerifySequenceScheme(OBJECT* signObject,      // IN: signing k
+ 
+     switch(scheme->scheme)
+     {
+-#  if ALG_SM2
+-        case TPM_ALG_SM2:
+-            // As in TPM2_SignSequenceStart(), SM2 is required to process the
+-            // message itself using 'context' as the identity value (ID_A), and
+-            // the crypto layer can only work with an SM2 internal digest 'e'
+-            // that has already been computed.
+-            return FALSE;
+-#  endif  // ALG_SM2
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // SM2 is supported: the sequence hashes Z_A (computed with 'context' as
++        // ID_A) before the message, so TPM2_VerifySequenceComplete() verifies
++        // the SM2 internal digest e (ObjectCreateVerifySequence()).
+         default:
+             return TRUE;
+     }
+diff --git a/TPMCmd/tpm/src/subsystem/Object.c b/TPMCmd/tpm/src/subsystem/Object.c
+--- a/TPMCmd/tpm/src/subsystem/Object.c
++++ b/TPMCmd/tpm/src/subsystem/Object.c
+@@ -606,6 +606,63 @@ ObjectCreateEventSequence(TPM2B_AUTH*     auth,      // IN: authValue
+     return TPM_RC_SUCCESS;
+ }
+ 
++#if ALG_SM2 && (CC_SignSequenceStart || CC_VerifySequenceStart)
++//*** ObjectSm2DigestZa()
++// tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++// adds Z_A of an SM2 signing or verification sequence to its running hash
++// (Part 1, "SM2 Sign": Z_A := H(ENTL_A || ID_A || a || b || x_G || y_G || x_A ||
++// y_A), "ENTL_A is two octets containing the length of ID_A in octets", and
++// e := H(Z_A || M)), with 'context' as ID_A and each field element in
++// big-endian form with the size of the field.
++//  Return Type: TPM_RC
++//      TPM_RC_FAILURE              the curve parameters could not be read
++static TPM_RC ObjectSm2DigestZa(
++    HASH_STATE*          hashState,  // IN/OUT: the running hash of the sequence
++    TPMI_ALG_HASH        hashAlg,    // IN: the hash of the scheme
++    OBJECT*              signKey,    // IN: the SM2 key
++    TPM2B_SIGNATURE_CTX* id          // IN: ID_A
++)
++{
++    TPM_ECC_CURVE curveId = signKey->publicArea.parameters.eccDetail.curveID;
++    UINT16        size    = BITS_TO_BYTES(CryptoEcc_GetKeySizeForCurve(curveId));
++    TPMS_ALGORITHM_DETAIL_ECC curve;
++    TPM2B_ECC_PARAMETER*      values[6];
++    TPM2B_ECC_PARAMETER       element;
++    HASH_STATE                zaState;
++    TPM2B_DIGEST              za;
++    int                       i;
++    //
++    MemorySet(&curve, 0, sizeof(curve));
++    if(!CryptoEcc_GetParameters(curveId, &curve) || size == 0
++       || size > sizeof(element.t.buffer))
++        return TPM_RC_FAILURE;
++    values[0] = &curve.a;
++    values[1] = &curve.b;
++    values[2] = &curve.gX;
++    values[3] = &curve.gY;
++    values[4] = &signKey->publicArea.unique.ecc.x;
++    values[5] = &signKey->publicArea.unique.ecc.y;
++    CryptoHash_HashStart(&zaState, hashAlg);
++    CryptoCommon_DigestUpdateInt(&zaState, sizeof(UINT16), id->t.size);
++    CryptoCommon_DigestUpdate2B(&zaState, &id->b);
++    for(i = 0; i < 6; i++)
++    {
++        // Left-pad each value to the size of the field.
++        if(values[i]->t.size > size)
++            return TPM_RC_FAILURE;
++        element.t.size = size;
++        MemorySet(element.t.buffer, 0, size);
++        MemoryCopy(&element.t.buffer[size - values[i]->t.size],
++                   values[i]->t.buffer,
++                   values[i]->t.size);
++        CryptoCommon_DigestUpdate2B(&zaState, &element.b);
++    }
++    za.t.size = CryptoHash_HashEnd(&zaState, sizeof(za.t.buffer), za.t.buffer);
++    CryptoCommon_DigestUpdate2B(hashState, &za.b);
++    return TPM_RC_SUCCESS;
++}
++#endif  // ALG_SM2 && (CC_SignSequenceStart || CC_VerifySequenceStart)
++
+ #if CC_SignSequenceStart
+ //*** ObjectCreateSignSequence()
+ // This function creates a signing sequence object.
+@@ -668,6 +725,15 @@ ObjectCreateSignSequence(
+             // accumulates the message into a running hash.
+             CryptoHash_HashStart(&sequenceObject->state.hashState[0],
+                                  CryptoCommon_GetSignSchemeHashAlg(scheme));
++#  if ALG_SM2
++            // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++            // an SM2 sequence computes e = H(Z_A || M).
++            if(scheme->scheme == TPM_ALG_SM2)
++                result = ObjectSm2DigestZa(&sequenceObject->state.hashState[0],
++                                           CryptoCommon_GetSignSchemeHashAlg(scheme),
++                                           signKey,
++                                           context);
++#  endif  // ALG_SM2
+             break;
+     }
+     if(result != TPM_RC_SUCCESS)
+@@ -776,6 +842,15 @@ ObjectCreateVerifySequence(
+             // accumulates the message into a running hash.
+             CryptoHash_HashStart(&sequenceObject->state.hashState[0],
+                                  CryptoCommon_GetSignSchemeHashAlg(scheme));
++#  if ALG_SM2
++            // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++            // an SM2 sequence computes e = H(Z_A || M).
++            if(scheme->scheme == TPM_ALG_SM2)
++                result = ObjectSm2DigestZa(&sequenceObject->state.hashState[0],
++                                           CryptoCommon_GetSignSchemeHashAlg(scheme),
++                                           signKey,
++                                           context);
++#  endif  // ALG_SM2
+             break;
+     }
+     if(result != TPM_RC_SUCCESS)

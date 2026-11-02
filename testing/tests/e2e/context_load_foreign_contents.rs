@@ -13,6 +13,9 @@
 /// in the specification only to allow calculation of the maximum size for
 /// `TPM2B_CONTEXT_DATA`."). The C references receive the blob with an invalid integrity value
 /// (`differential.md` rule 9) and reject it too.
+///
+/// The replayed blob carries a SHA-512 integrity value, so the test needs a TPM with SHA-512.
+#[cfg(feature = "sha512")]
 #[test]
 fn authentic_blob_with_foreign_contents_is_integrity_error() {
     let response_code = |rsp: &[u8]| u32::from_be_bytes(rsp[6..10].try_into().unwrap());

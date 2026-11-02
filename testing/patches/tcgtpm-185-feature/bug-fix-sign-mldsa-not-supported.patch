@@ -1,0 +1,42 @@
+sign-mldsa-not-supported: TPM2_Sign rejects ML-DSA keys with TPM_RC_SCHEME
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3, "Signing and Signature
+Verification", Table "Signing commands overview"):
+
+  "(Pure) ML-DSA | Message (see Note) | Not supported | ..."
+
+Specification (TPM 2.0 Library, Part 3, "TPM2_Sign"):
+
+  "If inScheme is not a valid signing scheme for the type of keyHandle (or
+  TPM_ALG_NULL), then the TPM shall return TPM_RC_SCHEME."
+
+TPM2_Sign() does not support ML-DSA keys, so no signing scheme is valid for
+them. Version 185 selects the NULL scheme for an ML-DSA key and goes on: it
+checks the digest against the size of the NULL hash (TPM_RC_SIZE for any
+non-empty digest), computes a hash-check ticket with a NULL hash for a
+restricted key, and finally treats the digest as an external mu
+(TPM_RC_EXT_MU without allowExternalMu, TPM_RC_VALUE for its size). The
+patch returns TPM_RC_SCHEME + RC_Sign_inScheme for an ML-DSA key after the
+x509sign check.
+diff --git a/TPMCmd/tpm/src/command/Signature/Sign.c b/TPMCmd/tpm/src/command/Signature/Sign.c
+index 7077c5a5..b5da25f4 100644
+--- a/TPMCmd/tpm/src/command/Signature/Sign.c
++++ b/TPMCmd/tpm/src/command/Signature/Sign.c
+@@ -47,6 +47,15 @@ TPM2_Sign(Sign_In*  in,  // IN: input parameter list
+         return TPM_RCS_ATTRIBUTES + RC_Sign_keyHandle;
+     }
+ 
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // TPM2_Sign() with an ML-DSA key is "Not supported" (Part 3, Table "Signing
++    // commands overview"), so no signing scheme is valid for the key type
++    // (TPM_RC_SCHEME, Part 3, TPM2_Sign).
++#if ALG_MLDSA
++    if(signObject->publicArea.type == TPM_ALG_MLDSA)
++        return TPM_RCS_SCHEME + RC_Sign_inScheme;
++#endif  // ALG_MLDSA
++
+     // Pick a scheme for signing. If the input signing scheme is not compatible
+     // with the default scheme or the signing key type, return an error. If a
+     // valid hash algorithm is not specified, return an error.

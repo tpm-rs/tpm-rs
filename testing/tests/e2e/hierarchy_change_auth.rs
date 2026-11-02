@@ -10,7 +10,11 @@ use tpm2::commands::HierarchyChangeAuth;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bAuth};
 
-/// TPM2_HierarchyChangeAuth rejects a 65-byte newAuth with TPM_RC_SIZE + P1 and accepts 64 bytes
+/// The largest `TPM2B_AUTH`: the largest digest (64 bytes with SHA-512, 48 without).
+const MAX_AUTH: usize = crate::_common::STRONGEST_DIGEST_SIZE;
+
+/// TPM2_HierarchyChangeAuth rejects a newAuth longer than the largest digest with TPM_RC_SIZE + P1
+/// and accepts one of that size (64 bytes with SHA-512)
 #[test]
 fn hierarchy_change_auth_rejects_auth_over_digest_size() {
     let mut sim = Tpm::new();
@@ -18,27 +22,30 @@ fn hierarchy_change_auth_rejects_auth_over_digest_size() {
     // The max auth size is the digest size of the context integrity hash (Part 1,
     // "Authorization Size Convention"), which must be the strongest implemented hash (Part 1,
     // "Context Integrity Protection"): SHA-512 -> 64 bytes, also the TPM2B_AUTH maximum.
-    // A raw 65-byte newAuth (empty ownerAuth still in place) fails while unmarshaling the
+    // A raw newAuth one byte longer (empty ownerAuth still in place) fails while unmarshaling the
     // TPM2B_AUTH parameter: TPM_RC_SIZE + RC_P1.
-    let mut params = 65u16.to_be_bytes().to_vec();
-    params.extend_from_slice(&[2u8; 65]);
+    let mut params = (MAX_AUTH as u16 + 1).to_be_bytes().to_vec();
+    params.extend_from_slice(&[2u8; MAX_AUTH + 1]);
     let cmd = build_pw_cmd(CC_HIERARCHY_CHANGE_AUTH, &[Handle::RH_OWNER.0], 1, &params);
     assert_eq!(
         mssim_rc_of(&mut sim, &cmd),
         TpmRc::SIZE.with(Position::parameter(1)).get(),
-        "65-byte newAuth must fail with TPM_RC_SIZE + P1"
+        "an oversized newAuth must fail with TPM_RC_SIZE + P1"
     );
 
-    let valid_auth = vec![1u8; 64];
+    let valid_auth = vec![1u8; MAX_AUTH];
     let hca_cmd = HierarchyChangeAuth {
         auth_handle: Handle::RH_OWNER,
         new_auth: Tpm2bAuth::from_bytes(&valid_auth).unwrap(),
     };
     let resp = execute_with_password_sessions(&mut sim, &hca_cmd, 1, &[]);
-    assert!(resp.is_ok(), "64 byte auth should be valid");
+    assert!(
+        resp.is_ok(),
+        "a newAuth of the largest digest size should be valid"
+    );
 }
 
-/// HierarchyChangeAuth with 40- and 64-byte newAuth values (responses are printed, not asserted).
+/// HierarchyChangeAuth with 40-byte and largest-digest-size newAuth values (responses are printed, not asserted).
 #[test]
 fn oversized_new_auth() {
     let mut sim = Tpm::new();
@@ -55,14 +62,14 @@ fn oversized_new_auth() {
     let resp = execute_with_password_sessions(&mut sim, &hca_cmd, 1, &[]);
     println!("Resp for 40 bytes auth: {:?}", resp);
 
-    let max_auth = vec![2u8; 64];
+    let max_auth = vec![2u8; MAX_AUTH];
     let hca_cmd2 = HierarchyChangeAuth {
         auth_handle: Handle::RH_PLATFORM,
         new_auth: Tpm2bAuth::from_bytes(&max_auth).unwrap(),
     };
 
     let resp2 = execute_with_password_sessions(&mut sim, &hca_cmd2, 1, &[]);
-    println!("Resp for 64 bytes auth: {:?}", resp2);
+    println!("Resp for {MAX_AUTH} bytes auth: {:?}", resp2);
 }
 
 /// HierarchyChangeAuth of the owner auth succeeds (orderly state handling).

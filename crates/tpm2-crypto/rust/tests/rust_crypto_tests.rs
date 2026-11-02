@@ -281,32 +281,83 @@ fn test_rust_crypto_provider_aes_cfb_partial_block_iv() {
     assert_eq!(iv, NIST_IV);
 }
 
+/// The AES-256 modes other than CFB match the first block of NIST SP 800-38A F.1.5 (ECB), F.2.5
+/// (CBC), F.4.5 (OFB) and F.5.5 (CTR), with the TCG reference's `ivOut`; SM4 is unsupported and
+/// leaves the data and the IV untouched.
 #[test]
-fn test_rust_crypto_provider_symmetric_unsupported() {
+fn test_rust_crypto_provider_symmetric_modes() {
     let provider = RustCryptoProvider;
     let key = SymmetricKey::new(AlgSym::Aes256, &AES256_KEY).unwrap();
+    let pt: [u8; 16] = NIST_PLAINTEXT[..16].try_into().unwrap();
 
-    // Only CFB is implemented: the other modes are rejected before touching
-    // the data or the IV.
-    for dir in [Direction::Encrypt, Direction::Decrypt] {
-        let mut data = NIST_PLAINTEXT;
-        let res = encrypt_decrypt(&provider, key, ModeIv::Ecb, dir, &mut data);
-        assert_eq!(res, Err(CryptoError::Unsupported));
-        assert_eq!(data, NIST_PLAINTEXT);
+    let mut data = pt;
+    encrypt_decrypt(&provider, key, ModeIv::Ecb, Direction::Encrypt, &mut data).unwrap();
+    assert_eq!(data, hex!("f3eed1bdb5d2a03c064b5a7e3db181f8"));
+    encrypt_decrypt(&provider, key, ModeIv::Ecb, Direction::Decrypt, &mut data).unwrap();
+    assert_eq!(data, pt);
 
-        for mode in 0..3 {
-            let mut iv = NIST_IV;
-            let mode_iv = match mode {
-                0 => ModeIv::Cbc(&mut iv),
-                1 => ModeIv::Ctr(&mut iv),
-                _ => ModeIv::Ofb(&mut iv),
-            };
-            let res = encrypt_decrypt(&provider, key, mode_iv, dir, &mut data);
-            assert_eq!(res, Err(CryptoError::Unsupported));
-            assert_eq!(data, NIST_PLAINTEXT);
-            assert_eq!(iv, NIST_IV);
-        }
-    }
+    let mut iv = NIST_IV;
+    encrypt_decrypt(
+        &provider,
+        key,
+        ModeIv::Cbc(&mut iv),
+        Direction::Encrypt,
+        &mut data,
+    )
+    .unwrap();
+    assert_eq!(data, hex!("f58c4c04d6e5f1ba779eabfb5f7bfbd6"));
+    assert_eq!(iv, data);
+    let mut iv = NIST_IV;
+    encrypt_decrypt(
+        &provider,
+        key,
+        ModeIv::Cbc(&mut iv),
+        Direction::Decrypt,
+        &mut data,
+    )
+    .unwrap();
+    assert_eq!(data, pt);
+
+    let mut iv = NIST_IV;
+    encrypt_decrypt(
+        &provider,
+        key,
+        ModeIv::Ofb(&mut iv),
+        Direction::Encrypt,
+        &mut data,
+    )
+    .unwrap();
+    assert_eq!(data, hex!("dc7e84bfda79164b7ecd8486985d3860"));
+    // ivOut is the keystream block.
+    assert_eq!(iv, hex!("b7bf3a5df43989dd97f0fa97ebce2f4a"));
+
+    let mut data = pt;
+    let mut iv = hex!("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
+    encrypt_decrypt(
+        &provider,
+        key,
+        ModeIv::Ctr(&mut iv),
+        Direction::Encrypt,
+        &mut data,
+    )
+    .unwrap();
+    assert_eq!(data, hex!("601ec313775789a5b7a7f504bbf3d228"));
+    // ivOut is the next counter block.
+    assert_eq!(iv, hex!("f0f1f2f3f4f5f6f7f8f9fafbfcfdff00"));
+
+    use tpm2::crypto::Symmetric;
+    let mut data = pt;
+    let mut iv = NIST_IV;
+    assert_eq!(
+        provider.sm4_128(
+            &AES128_KEY,
+            ModeIv::Cbc(&mut iv),
+            Direction::Encrypt,
+            &mut data
+        ),
+        Err(CryptoError::Unsupported)
+    );
+    assert_eq!((data, iv), (pt, NIST_IV));
 }
 
 /// A CMAC test vector: the cipher, its key, and the MACs of the first 0, 16,
@@ -365,23 +416,9 @@ fn test_rust_crypto_provider_cmac_known_answer() {
 fn test_rust_crypto_provider_cmac_unsupported() {
     let provider = RustCryptoProvider;
     let key16 = [0x11u8; 16];
-    let key24 = [0x22u8; 24];
-    let key32 = [0x33u8; 32];
     use tpm2::crypto::Cmac;
     assert!(matches!(
         provider.sm4_128(&key16),
-        Err(CryptoError::Unsupported)
-    ));
-    assert!(matches!(
-        provider.camellia128(&key16),
-        Err(CryptoError::Unsupported)
-    ));
-    assert!(matches!(
-        provider.camellia192(&key24),
-        Err(CryptoError::Unsupported)
-    ));
-    assert!(matches!(
-        provider.camellia256(&key32),
         Err(CryptoError::Unsupported)
     ));
 }

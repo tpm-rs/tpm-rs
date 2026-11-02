@@ -537,7 +537,9 @@ fn session_audit_rejects_policy_session() {
 /// "Session Audit": "A session is designated for auditing by setting the *audit* attribute in
 /// the session." and "When a session is first used as an audit session, the TPM will initialize
 /// the audit hash for the audit session." (TCG reference: only `s_auditSessionIndex` is
-/// audited). Found by differential fuzzing.
+/// audited). Found by differential fuzzing. The replayed conversation (with its session HMACs)
+/// was recorded on a TPM with SHA-512, so the test needs one.
+#[cfg(feature = "sha512")]
 #[test]
 fn audit_cp_hash_of_failed_command_is_discarded() {
     let response_code = |rsp: &[u8]| u32::from_be_bytes(rsp[6..10].try_into().unwrap());

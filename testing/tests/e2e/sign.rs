@@ -690,7 +690,7 @@ fn sign_rejects_unloaded_key_handle() {
 /// Expected: TPM_RC_SCHEME.
 #[test]
 #[allow(deprecated)]
-fn sign_rejects_unsupported_sm2_scheme() {
+fn sign_rejects_unimplemented_scheme() {
     let mut sim = Tpm::new();
 
     // Load ECC key
@@ -714,12 +714,12 @@ fn sign_rejects_unsupported_sm2_scheme() {
         in_scheme: Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
         validation: TpmtTkHashcheck::default(),
     };
-    // inScheme = TPM_ALG_SM2 (not a `TpmtSigScheme` of this TPM), after the digest.
+    // inScheme = TPM_ALG_EDDSA (not a `TpmtSigScheme` of this TPM), after the digest.
     let res =
         crate::_common::execute_with_corrupted_bytes_status(&mut sim, &sign_cmd, 1, &[], |p| {
-            crate::_common::put_u16(p, crate::_common::tpm2b_end(p, 0), tpm2::Alg::SM2.id());
+            crate::_common::put_u16(p, crate::_common::tpm2b_end(p, 0), tpm2::Alg::EDDSA.id());
         });
-    // Sign.c: TPM_RCS_SCHEME + RC_Sign_inScheme (SM2 is not implemented).
+    // `TPMI_ALG_SIG_SCHEME`: TPM_RCS_SCHEME + RC_Sign_inScheme (EdDSA is not implemented).
     assert_eq!(
         res.err(),
         Some(TpmRc::SCHEME.with(Position::parameter(2)).get())

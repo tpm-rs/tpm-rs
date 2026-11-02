@@ -1,0 +1,37 @@
+verify-sequence-complete-scheme: TPM2_VerifySequenceComplete rejects a signature of another scheme or hash
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3 (version 185), "TPM2_PolicyAuthorize",
+"General Description"):
+
+  "If this signature is verified using TPM2_VerifySignature(), the key is not
+  used according to its public parameters. [...] In all other cases, the
+  signature scheme is as determined by the public parameters of the key."
+
+A verification sequence is bound to the scheme of the key that started it,
+and TPM2_VerifySequenceComplete checks the signature's scheme for the HMAC and
+ML-DSA schemes (TPM_RC_SCHEME), but for a scheme that signs a digest it
+verifies the signature with the signature's own scheme and hash algorithm (as
+TPM2_VerifySignature does), e.g. an RSAPSS signature with an RSASSA key, or a
+signature with another hash algorithm over the digest of the sequence's hash.
+A signature whose sigAlg or hash algorithm is not the sequence's is now
+TPM_RC_SCHEME + RC_VerifySequenceComplete_signature, as in tpm-rs.
+diff --git a/TPMCmd/tpm/src/command/Signature/VerifySequenceComplete.c b/TPMCmd/tpm/src/command/Signature/VerifySequenceComplete.c
+--- a/TPMCmd/tpm/src/command/Signature/VerifySequenceComplete.c
++++ b/TPMCmd/tpm/src/command/Signature/VerifySequenceComplete.c
+@@ -92,6 +92,14 @@ TPM2_VerifySequenceComplete(
+             break;
+         }
+         default:
++            // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++            // the signature is checked with the scheme of the key that started
++            // the sequence, so a signature of another scheme or hash algorithm is
++            // TPM_RC_SCHEME (as for the HMAC and ML-DSA schemes above).
++            if(in->signature.sigAlg != sequenceObject->signScheme.scheme
++               || CryptoCommon_GetSignHashAlg(&in->signature)
++                      != CryptoCommon_GetSignSchemeHashAlg(&sequenceObject->signScheme))
++                return TPM_RCS_SCHEME + RC_VerifySequenceComplete_signature;
+             // The sequence accumulated the message into a running hash, so the
+             // signature is over the completed digest.
+             digest.t.size = CryptoHash_HashEnd(&sequenceObject->state.hashState[0],

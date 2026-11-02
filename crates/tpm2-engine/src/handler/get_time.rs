@@ -18,8 +18,8 @@ use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmGenerated};
 use tpm2::{
-    TpmEccCurve, TpmaObject, TpmiAlgHash, TpmsAttest, TpmsTimeAttestInfo, TpmtEccScheme,
-    TpmtKeyedHashScheme, TpmtRsaScheme, TpmtSigScheme, TpmuAttest,
+    TpmaObject, TpmiAlgHash, TpmsAttest, TpmsTimeAttestInfo, TpmtEccScheme, TpmtKeyedHashScheme,
+    TpmtRsaScheme, TpmtSigScheme, TpmuAttest,
 };
 
 /// The default signing scheme of a key, as seen by `CryptSelectSignScheme()`.
@@ -177,6 +177,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let scheme_err = TpmRc::SCHEME.with(scheme_pos);
+        // An ML-DSA or HashML-DSA key has no scheme selector: its parameter set (and the
+        // HashML-DSA key's hash) determine how it signs (the version 185 reference's
+        // `SelectAttestSignScheme()`: "The caller may name the key's scheme but may not choose
+        // a different one").
+        let immutable = match &public_area.parms_and_id {
+            OwnedPublicParmsAndId::Mldsa(..) => Some(TpmtSigScheme::Mldsa),
+            OwnedPublicParmsAndId::HashMldsa(..) => Some(TpmtSigScheme::HashMldsa),
+            _ => None,
+        };
+        if let Some(key_scheme) = immutable {
+            return match in_scheme {
+                Some(input) if input.algorithm() != key_scheme.algorithm() => Err(scheme_err),
+                _ => Ok(Some(key_scheme)),
+            };
+        }
         let key_scheme = match &public_area.parms_and_id {
             OwnedPublicParmsAndId::Rsa(parms, _) => match parms.scheme {
                 None => KeySignScheme::Null,
@@ -188,6 +203,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 None => KeySignScheme::Null,
                 Some(TpmtEccScheme::Ecdsa(h)) => KeySignScheme::Sign(TpmtSigScheme::Ecdsa(h)),
                 Some(TpmtEccScheme::Ecdaa(s)) => KeySignScheme::Sign(TpmtSigScheme::Ecdaa(s)),
+                #[cfg(feature = "sm2")]
+                Some(TpmtEccScheme::Sm2(h)) => KeySignScheme::Sign(TpmtSigScheme::Sm2(h)),
+                #[cfg(feature = "ecschnorr")]
+                Some(TpmtEccScheme::Ecschnorr(h)) => {
+                    KeySignScheme::Sign(TpmtSigScheme::Ecschnorr(h))
+                }
                 Some(_) => KeySignScheme::NonSign,
             },
             OwnedPublicParmsAndId::KeyedHash(scheme, _) => match scheme {
@@ -220,16 +241,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         // CryptIsValidSignScheme(): scheme compatible with the key type, valid hash algorithm.
-        let valid_for_type = matches!(
-            (&public_area.parms_and_id, selected),
+        let valid_for_type = match (&public_area.parms_and_id, selected) {
             (
                 OwnedPublicParmsAndId::Rsa(..),
-                TpmtSigScheme::Rsassa(_) | TpmtSigScheme::Rsapss(_)
-            ) | (
-                OwnedPublicParmsAndId::Ecc(..),
-                TpmtSigScheme::Ecdsa(_) | TpmtSigScheme::Ecdaa(_)
-            ) | (OwnedPublicParmsAndId::KeyedHash(..), TpmtSigScheme::Hmac(_))
-        );
+                TpmtSigScheme::Rsassa(_) | TpmtSigScheme::Rsapss(_),
+            )
+            | (OwnedPublicParmsAndId::Ecc(..), TpmtSigScheme::Ecdsa(_) | TpmtSigScheme::Ecdaa(_))
+            | (OwnedPublicParmsAndId::KeyedHash(..), TpmtSigScheme::Hmac(_)) => true,
+            #[cfg(feature = "sm2")]
+            (OwnedPublicParmsAndId::Ecc(..), TpmtSigScheme::Sm2(_)) => true,
+            #[cfg(feature = "ecschnorr")]
+            (OwnedPublicParmsAndId::Ecc(..), TpmtSigScheme::Ecschnorr(_)) => true,
+            _ => false,
+        };
         let valid_hash = selected.hash_alg().is_some_and(is_implemented_sign_hash);
         if !valid_for_type || !valid_hash {
             return Err(scheme_err);
@@ -243,7 +267,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// - When `signer` is `None` (`signHandle == TPM_RH_NULL`), no signature is produced and
     ///   `Ok(None)` is returned (the response carries a `TPM_ALG_NULL` signature).
     /// - Otherwise the digest `H(attest_bytes)` is signed with `scheme` (RSASSA, RSAPSS, ECDSA,
-    ///   ECDAA or HMAC). Errors from the signing operation are returned without a position, as in
+    ///   ECDAA, SM2, EC-Schnorr, HMAC or HashML-DSA), or for ML-DSA the attestation block itself.
+    ///   Errors from the signing operation are returned without a position, as in
     ///   the reference implementation.
     /// - Because a signed attestation reveals the current clock, a successful signature clears
     ///   the NV orderly state (`NvClearOrderly()`), which fails with `TPM_RC_NV_UNAVAILABLE` when
@@ -261,18 +286,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let scheme = scheme.ok_or_else(|| TpmRc::SCHEME.to_rc())?;
         let priv_key = &signer.private[..signer.private_len];
 
-        let signature = if let TpmtSigScheme::Ecdaa(ecdaa_s) = scheme {
+        let signature = if let TpmtSigScheme::Mldsa = scheme {
+            self.sign_attestation_mldsa(signer, attest_bytes)?
+        } else if let TpmtSigScheme::HashMldsa = scheme {
+            self.sign_attestation_hash_mldsa(signer, attest_bytes)?
+        } else if let TpmtSigScheme::Ecdaa(ecdaa_s) = scheme {
             let hash_alg = ecdaa_s.hash_alg;
             let curve = match &signer.public.parms_and_id {
                 OwnedPublicParmsAndId::Ecc(parms, _) => parms.curve_id,
                 _ => return Err(TpmRc::KEY.to_rc()),
             };
-            let param_size = match curve {
-                TpmEccCurve::NistP224 => 28,
-                TpmEccCurve::NistP256 | TpmEccCurve::BNP256 => 32,
-                TpmEccCurve::NistP384 => 48,
-                TpmEccCurve::NistP521 => 66,
-                _ => return Err(TpmRc::VALUE.to_rc()),
+            let param_size = match crate::ecc_curves::param_size(curve) {
+                Some(size) => size,
+                None => return Err(TpmRc::VALUE.to_rc()),
             };
             // CryptGenerateR(): the count must reference an outstanding commitment
             // (bare TPM_RC_VALUE otherwise, as returned by TpmEcc_SignEcdaa()).
@@ -324,6 +350,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 TpmtSigScheme::Rsassa(h) => (h, Alg::RSASSA),
                 TpmtSigScheme::Rsapss(h) => (h, Alg::RSAPSS),
                 TpmtSigScheme::Ecdsa(h) => (h, Alg::ECDSA),
+                #[cfg(feature = "sm2")]
+                TpmtSigScheme::Sm2(h) => (h, Alg::SM2),
+                #[cfg(feature = "ecschnorr")]
+                TpmtSigScheme::Ecschnorr(h) => (h, Alg::ECSCHNORR),
                 _ => return Err(TpmRc::SCHEME.to_rc()),
             };
 
@@ -367,16 +397,26 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     }
                 }
                 TpmtSigScheme::Ecdsa(_) => {
-                    if sig_len % 2 != 0 {
-                        return Err(TpmRc::FAILURE);
-                    }
-                    let param_size = sig_len / 2;
-                    let signature_r = OwnedEccParameter::from_bytes(&sig_bytes[..param_size])
-                        .map_err(|_| TpmRc::FAILURE)?;
-                    let signature_s =
-                        OwnedEccParameter::from_bytes(&sig_bytes[param_size..sig_len])
-                            .map_err(|_| TpmRc::FAILURE)?;
+                    let (signature_r, signature_s) = owned_ecc_signature(&sig_bytes[..sig_len])?;
                     OwnedSignature::Ecdsa {
+                        hash: hash_alg,
+                        signature_r,
+                        signature_s,
+                    }
+                }
+                #[cfg(feature = "sm2")]
+                TpmtSigScheme::Sm2(_) => {
+                    let (signature_r, signature_s) = owned_ecc_signature(&sig_bytes[..sig_len])?;
+                    OwnedSignature::Sm2 {
+                        hash: hash_alg,
+                        signature_r,
+                        signature_s,
+                    }
+                }
+                #[cfg(feature = "ecschnorr")]
+                TpmtSigScheme::Ecschnorr(_) => {
+                    let (signature_r, signature_s) = owned_ecc_signature(&sig_bytes[..sig_len])?;
+                    OwnedSignature::Ecschnorr {
                         hash: hash_alg,
                         signature_r,
                         signature_s,
@@ -392,4 +432,81 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         Ok(Some(signature))
     }
+
+    /// The ML-DSA signature of an attestation block: pure ML-DSA signs the message rather than
+    /// a digest of it, with an empty context (an attestation has no caller-supplied context;
+    /// the version 185 reference's `SignAttestMessageMldsa()`).
+    #[cfg(feature = "mldsa")]
+    fn sign_attestation_mldsa(
+        &mut self,
+        signer: &TransientObject,
+        attest_bytes: &[u8],
+    ) -> Result<OwnedSignature, TpmRc> {
+        let mut signature = [0u8; tpm2::TPM2_MAX_MLDSA_SIG_SIZE];
+        let len = self.mldsa_sign_message(signer, &[attest_bytes], &mut signature)?;
+        Ok(OwnedSignature::Mldsa(
+            crate::owned::OwnedSignatureMldsa::from_bytes(&signature[..len])
+                .map_err(|_| TpmRc::FAILURE)?,
+        ))
+    }
+
+    #[cfg(not(feature = "mldsa"))]
+    fn sign_attestation_mldsa(
+        &mut self,
+        _signer: &TransientObject,
+        _attest_bytes: &[u8],
+    ) -> Result<OwnedSignature, TpmRc> {
+        Err(TpmRc::SCHEME.to_rc())
+    }
+
+    /// The HashML-DSA signature of an attestation block: the digest of the block with the key's
+    /// pre-hash algorithm, signed with an empty context (FIPS 204, Algorithm 4).
+    #[cfg(feature = "mldsa")]
+    fn sign_attestation_hash_mldsa(
+        &mut self,
+        signer: &TransientObject,
+        attest_bytes: &[u8],
+    ) -> Result<OwnedSignature, TpmRc> {
+        let OwnedPublicParmsAndId::HashMldsa(parms, public_key) = &signer.public.parms_and_id
+        else {
+            return Err(TpmRc::SCHEME.to_rc());
+        };
+        let hash_alg = parms.hash_alg;
+        let (digest, digest_len) = self.compute_hash(hash_alg, &[attest_bytes])?;
+        let mu = crate::mldsa::hash_mu(
+            public_key.get_buffer(),
+            &[],
+            hash_alg,
+            &digest[..digest_len],
+        )
+        .ok_or(TpmRc::SCHEME.to_rc())?;
+        let mut signature = [0u8; tpm2::TPM2_MAX_MLDSA_SIG_SIZE];
+        let len = self.mldsa_sign_mu(signer, &mu, &mut signature)?;
+        Ok(OwnedSignature::HashMldsa {
+            hash: hash_alg,
+            sig: crate::owned::OwnedSignatureMldsa::from_bytes(&signature[..len])
+                .map_err(|_| TpmRc::FAILURE)?,
+        })
+    }
+
+    #[cfg(not(feature = "mldsa"))]
+    fn sign_attestation_hash_mldsa(
+        &mut self,
+        _signer: &TransientObject,
+        _attest_bytes: &[u8],
+    ) -> Result<OwnedSignature, TpmRc> {
+        Err(TpmRc::SCHEME.to_rc())
+    }
+}
+
+/// The components `r` and `s` of the ECC signature `rs` (`r || s`, two halves of the order size).
+fn owned_ecc_signature(rs: &[u8]) -> Result<(OwnedEccParameter, OwnedEccParameter), TpmRc> {
+    if !rs.len().is_multiple_of(2) {
+        return Err(TpmRc::FAILURE);
+    }
+    let (r, s) = rs.split_at(rs.len() / 2);
+    Ok((
+        OwnedEccParameter::from_bytes(r).map_err(|_| TpmRc::FAILURE)?,
+        OwnedEccParameter::from_bytes(s).map_err(|_| TpmRc::FAILURE)?,
+    ))
 }

@@ -38,22 +38,25 @@ fn get_random_in_place() {
         "0000017B" // command code
         "000c" // requested random bytes
     );
-    let expected_response = &hex!(
+    // Random bytes after 384 FakeRng draws at manufacture (EPS, SPS, PPS, phProof, shProof,
+    // ehProof; 64 bytes each) and 192 + the commit nonce at Startup (null_proof, null_seed,
+    // drbg_state instantiation, plus the commit nonce of the largest digest size drawn at TPM
+    // Reset, as in C TPM_Reset -> CryptStartup/commitNonce: 64 bytes with SHA-512, 48 without);
+    // FakeRng's u8 counter is then at 0x81 (0x71 without SHA-512).
+    let drawn = 384 + 192 + tpm2::TpmiAlgHash::MAX_DIGEST_BYTES;
+    let mut expected_response = hex!(
         "8001" // session
         "00000018" // size
         "00000000" // successful response
         "000c"     // 2B size prefix
-        // Random bytes after 384 FakeRng draws at manufacture (EPS, SPS, PPS, phProof,
-        // shProof, ehProof; 64 bytes each) and 256 at Startup (null_proof, null_seed,
-        // drbg_state instantiation, plus the 64-byte commit nonce drawn at TPM Reset, as in C
-        // TPM_Reset -> CryptStartup/commitNonce); FakeRng's u8 counter is then at 0x81.
-        "8182838485868788898a8b8c"
-    );
+    )
+    .to_vec();
+    expected_response.extend((0..12).map(|i| ((drawn + 1 + i) % 256) as u8));
 
     let mut response = request.to_vec();
     response.resize(256, 0xFF);
     let size = tpm.execute_command_in_place(response.as_mut_slice(), request.len());
-    assert_eq!(&response[..size], expected_response);
+    assert_eq!(&response[..size], &expected_response[..]);
 }
 
 #[test]
@@ -83,7 +86,7 @@ fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
             name: (tpm2::Tpm2bName::default()).into(),
             auth: (tpm2::Tpm2bAuth::default()).into(),
             public: (tpm2::TpmtPublic::unmarshal(&mut (&tpmt_public_buf[..])).unwrap()).into(),
-            private: [0u8; 1536],
+            private: [0u8; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
             private_len: 0,
             qualified_name: (tpm2::Tpm2bName::default()).into(),
             hierarchy: 0x40000001,

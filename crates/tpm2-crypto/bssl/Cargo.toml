@@ -12,14 +12,22 @@ build = false
 
 [dependencies]
 tpm2 = { workspace = true }
+tpm2-crypto-weierstrass = { workspace = true }
+# The block cipher mode loops (`run_mode`), shared with the Rust backend, and
+# its ML-KEM/ML-DSA code (`tpm2_crypto_rust::pqc`) for what this backend lacks.
+tpm2-crypto-rust = { workspace = true }
 bssl-crypto = { git = "https://boringssl.googlesource.com/boringssl" }
 bssl-sys = { git = "https://boringssl.googlesource.com/boringssl" }
 rand_chacha = "0.3.1"
 rand_core = "0.6.4"
 hex-literal = { workspace = true }
+# BoringSSL is built without Camellia (`OPENSSL_NO_CAMELLIA`): Camellia (CFB and
+# CMAC) falls back to the RustCrypto crates.
+camellia = "0.1.0"
+cmac = "0.7.2"
 
 [features]
 default = ["sha512"]
 # SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
 # reference built without `ALG_SHA512`) is built with every crate without it.
-sha512 = ["tpm2/sha512"]
+sha512 = ["tpm2/sha512", "tpm2-crypto-weierstrass/sha512", "tpm2-crypto-rust/sha512"]

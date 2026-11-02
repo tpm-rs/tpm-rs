@@ -60,18 +60,27 @@ extern crate alloc;
 extern crate std;
 
 pub mod act;
+pub mod cmac;
 pub mod command_audit;
+mod ecc_curves;
+mod ecc_schemes;
 mod error;
 mod handle_checks;
 pub mod handler;
 pub mod hash_state;
 mod hierarchy;
+#[cfg(feature = "mldsa")]
+pub(crate) mod mldsa;
 mod modular;
 pub mod owned;
+pub mod physical_presence;
 pub mod platform_connection;
+mod read_only;
 #[cfg(feature = "reference-rng")]
 pub mod reference_rng;
 pub mod self_test;
+#[cfg_attr(not(feature = "mldsa"), allow(dead_code))]
+pub(crate) mod shake256;
 pub mod storage;
 #[cfg(test)]
 pub mod test_support;
@@ -81,11 +90,13 @@ mod util;
 mod engine;
 mod req_resp;
 mod rng;
+#[cfg(feature = "sec-channel")]
+mod sec_channel;
 pub use engine::{
     ActiveSequence, DRBG_MAGIC, DrbgState, GlobalState, MAX_ACTIVE_SEQUENCES, MAX_COMMAND_SIZE,
     MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS, MAX_RESPONSE_SIZE, MAX_SEQUENCE_BUFFER,
-    ResponseBufferTooSmall, SequenceType, TpmEngine, command_handles_count, command_returns_handle,
-    get_command_attribute, handle_requires_auth,
+    ResponseBufferTooSmall, SequenceType, SignatureSequence, TpmEngine, command_handles_count,
+    command_returns_handle, get_command_attribute, handle_requires_auth,
 };
 pub use error::InternalError;
 pub use hash_state::StreamingHashState;
@@ -105,6 +116,20 @@ pub const ECC_PARAMETERS_REPORT_KDF: bool = !cfg!(feature = "ecc-parameters-null
 /// `NTC2_GetConfig` vendor commands of `ibmswtpm2` (the `ntc2-vendor-commands` feature) in
 /// addition to `TPM2_Vendor_TCG_Test`.
 pub const NTC2_VENDOR_COMMANDS: bool = cfg!(feature = "ntc2-vendor-commands");
+
+/// Whether the TPM implements `TPM2_NV_DefineSpace2` (the `cc-nv-define-space2` feature).
+pub const CC_NV_DEFINE_SPACE2: bool = cfg!(feature = "cc-nv-define-space2");
+
+/// Whether the TPM implements `TPM2_NV_ReadPublic2` (the `cc-nv-read-public2` feature).
+pub const CC_NV_READ_PUBLIC2: bool = cfg!(feature = "cc-nv-read-public2");
+
+/// Whether the TPM implements `TPM2_ReadOnlyControl` and the Read-Only mode of operation (the
+/// `cc-read-only-control` feature).
+pub const CC_READ_ONLY_CONTROL: bool = cfg!(feature = "cc-read-only-control");
+
+/// Whether the TPM implements the vendor-specific permanent authorization handle
+/// `TPM_RH_AUTH_00` (the `vendor-permanent-auth` feature, a default feature).
+pub const VENDOR_PERMANENT_AUTH: bool = cfg!(feature = "vendor-permanent-auth");
 
 pub mod pcr {
     pub use tpm2::platform::PcrState;

@@ -483,7 +483,9 @@ fn hmac_rejects_rsa_signing_key_raw() {
 
 /// Test MAC with a symmetric cipher key (invalid key type).
 ///
-/// Expected: TPM_RC_TYPE.
+/// Expected: TPM_RC_TYPE + RC_H1 for `TPM2_HMAC` (KEYEDHASH keys only). With CMAC the TPM
+/// implements `TPM2_MAC`, which accepts SYMCIPHER keys: the hash `inScheme` then differs from
+/// the key's mode (CFB), `TPM_RC_VALUE + RC_P2`.
 #[test]
 fn hmac_rejects_symcipher_key() {
     let mut sim = Tpm::new();
@@ -518,7 +520,12 @@ fn hmac_rejects_symcipher_key() {
         "MAC should fail for non-keyedhash key types (symmetric cipher)"
     );
     let err = res.err().unwrap();
-    assert_eq!(err.get(), TpmRc::TYPE.with(Position::handle(1)).get());
+    let expected = if cfg!(feature = "cmac") {
+        TpmRc::VALUE.with(Position::parameter(2))
+    } else {
+        TpmRc::TYPE.with(Position::handle(1))
+    };
+    assert_eq!(err.get(), expected.get());
 
     flush_context(&mut sim, object_handle).unwrap();
 }
@@ -542,7 +549,8 @@ fn hmac_rejects_unloaded_key_handle() {
 
 /// 2. Test MAC with unsupported/non-SHA256 hash algorithm (e.g. SHA384).
 ///
-/// Expected: TPM_RC_HASH.
+/// Expected: TPM_RC_HASH + RC_P2 (`hashAlg` is a `TPMI_ALG_HASH+`); with CMAC (`TPM2_MAC`,
+/// whose `inScheme` is a `TPMI_ALG_MAC_SCHEME+`) TPM_RC_SYMMETRIC + RC_P2.
 #[test]
 fn hmac_rejects_unsupported_hash_alg() {
     let mut sim = Tpm::new();
@@ -578,10 +586,12 @@ fn hmac_rejects_unsupported_hash_alg() {
         crate::_common::execute_with_corrupted_bytes_status(&mut sim, &hmac_cmd, 1, &[], |p| {
             crate::_common::put_u16(p, crate::_common::tpm2b_end(p, 0), tpm2::Alg::SM3_256.id());
         });
-    assert_eq!(
-        res.err(),
-        Some(TpmRc::HASH.with(Position::parameter(2)).get())
-    );
+    let expected = if cfg!(feature = "cmac") {
+        TpmRc::SYMMETRIC
+    } else {
+        TpmRc::HASH
+    };
+    assert_eq!(res.err(), Some(expected.with(Position::parameter(2)).get()));
 
     flush_context(&mut sim, resp_handles.object_handle).unwrap();
 }

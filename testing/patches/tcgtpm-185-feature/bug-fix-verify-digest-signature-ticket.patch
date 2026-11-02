@@ -1,0 +1,97 @@
+verify-digest-signature-ticket: TPM2_VerifyDigestSignature produces a TPM_ST_DIGEST_VERIFIED ticket
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3 (version 185),
+"TPM2_VerifyDigestSignature"):
+
+  "This command is like TPM2_VerifySequenceComplete(), except that it verifies
+  a digest of a message instead of the raw message, and the produced ticket has
+  tag TPM_ST_DIGEST_VERIFIED."
+
+Specification (TPM 2.0 Library, Part 2 (version 185), "TPMT_TK_VERIFIED" and
+"TPMU_TK_VERIFIED_META"):
+
+  "HMAC_contextAlg(proof, (tag || digestOrMessage || keyName || metadata))"
+  ... "digestVerified: TPMI_ALG_HASH, TPM_ST_DIGEST_VERIFIED: The hash
+  algorithm or XOF used to produce the digest that was verified"
+
+TPM2_VerifyDigestSignature returns a TPM_ST_VERIFIED ticket (the ticket of
+TPM2_VerifySignature, without metadata). It now returns <TPM_ST_DIGEST_VERIFIED,
+hierarchy, hashAlg, HMAC(proof, (TPM_ST_DIGEST_VERIFIED || digest || keyName ||
+hashAlg))>, where hashAlg is the hash algorithm of the key's scheme, and the
+NULL Ticket <TPM_ST_DIGEST_VERIFIED, TPM_RH_NULL, hashAlg, Empty Buffer>. For an
+ML-DSA key (an external mu) the ticket is a NULL Ticket per the version 185
+errata ("Ticket produced by TPM2_VerifyDigestSignature() for ML-DSA": "it is
+preferable for the TPM to return a NULL TPMT_TK_VERIFIED ticket instead"),
+with the key's nameAlg as metadata (SHAKE256 is not a TPMI_ALG_HASH). As in
+tpm-rs.
+diff --git a/TPMCmd/tpm/src/command/Signature/VerifyDigestSignature.c b/TPMCmd/tpm/src/command/Signature/VerifyDigestSignature.c
+--- a/TPMCmd/tpm/src/command/Signature/VerifyDigestSignature.c
++++ b/TPMCmd/tpm/src/command/Signature/VerifyDigestSignature.c
+@@ -103,22 +103,61 @@ TPM2_VerifyDigestSignature(
+         return RcSafeAddToResult(result, RC_VerifyDigestSignature_signature);
+ 
+     // Command Output
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // "tag will be TPM_ST_DIGEST_VERIFIED" (Part 3, TPM2_VerifyDigestSignature),
++    // with the hash algorithm of the verified digest as metadata, and the ticket
++    // is HMAC(proof, (tag || digest || keyName || metadata)) (Part 2,
++    // TPMT_TK_VERIFIED).
++    out->validation.tag = TPM_ST_DIGEST_VERIFIED;
++    // An ML-DSA key verifies an external mu, for which the ticket is a NULL
++    // Ticket (errata for version 185, "Ticket produced by
++    // TPM2_VerifyDigestSignature() for ML-DSA"), whose metadata is the key's
++    // nameAlg (SHAKE256 is not a TPMI_ALG_HASH).
++#  if ALG_MLDSA
++    if(signObject->publicArea.type == TPM_ALG_MLDSA)
++        out->validation.metadata.digestVerified = signObject->publicArea.nameAlg;
++    else
++#  endif  // ALG_MLDSA
++    {
++        TPMT_SIG_SCHEME objectScheme;
++        //
++        objectScheme.scheme = TPM_ALG_NULL;
++        CryptoCommon_SelectSignScheme(signObject, &objectScheme);
++        out->validation.metadata.digestVerified =
++            CryptoCommon_GetSignSchemeHashAlg(&objectScheme);
++    }
+     hierarchy = GetHierarchy(in->keyHandle);
+-    if(hierarchy == TPM_RH_NULL || signObject->publicArea.nameAlg == TPM_ALG_NULL)
++    if(hierarchy == TPM_RH_NULL || signObject->publicArea.nameAlg == TPM_ALG_NULL
++#  if ALG_MLDSA
++       || signObject->publicArea.type == TPM_ALG_MLDSA
++#  endif  // ALG_MLDSA
++    )
+     {
+         // produce empty ticket if hierarchy is TPM_RH_NULL or nameAlg is
+         // TPM_ALG_NULL
+-        out->validation.tag           = TPM_ST_VERIFIED;
+         out->validation.hierarchy     = TPM_RH_NULL;
+         out->validation.digest.t.size = 0;
+     }
+     else
+     {
+         // Compute ticket
+-        result = CryptoCommon_TicketComputeVerified(
+-            hierarchy, &in->digest, &signObject->name, &out->validation);
++        TPM2B_PROOF proof;
++        HMAC_STATE  hmacState;
++        //
++        out->validation.hierarchy = hierarchy;
++        result                    = HierarchyGetProof(hierarchy, &proof);
+         if(result != TPM_RC_SUCCESS)
+             return result;
++        out->validation.digest.t.size =
++            CryptoCommon_HmacStart2B(&hmacState, CONTEXT_INTEGRITY_HASH_ALG, &proof.b);
++        MemorySet(proof.b.buffer, 0, proof.b.size);
++        CryptoCommon_DigestUpdateInt(&hmacState, sizeof(TPM_ST), out->validation.tag);
++        CryptoCommon_DigestUpdate2B(&hmacState.hashState, &in->digest.b);
++        CryptoCommon_DigestUpdate2B(&hmacState.hashState, &signObject->name.b);
++        CryptoCommon_DigestUpdateInt(&hmacState,
++                                     sizeof(TPM_ALG_ID),
++                                     out->validation.metadata.digestVerified);
++        CryptoCommon_HmacEnd2B(&hmacState, &out->validation.digest.b);
+     }
+ 
+     return TPM_RC_SUCCESS;

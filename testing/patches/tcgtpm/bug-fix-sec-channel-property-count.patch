@@ -1,0 +1,51 @@
+sec-channel-property-count: TPM_CAP_PUB_KEYS/TPM_CAP_SPDM_SESSION_INFO honor propertyCount
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, version 185, TPM2_GetCapability): "The
+*propertyCount* parameter indicates the number of capabilities in the
+indicated group that are requested. The TPM will return no more than the
+number of requested values (*propertyCount*) or until the last property of
+the requested type has been returned", and "The *moreData* parameter will have
+a value of YES if there are more values of the requested type that were not
+returned."
+
+With SEC_CHANNEL_SUPPORT, the reference returns its TPM SPDM public key
+(SpdmCapGetTpmPubKeys() ignores its count argument) and the entry of the
+current SPDM session (SpdmCapGetSessionInfo() takes no count) even with
+propertyCount = 0, with moreData = NO. The patch leaves the entry out and sets
+moreData = YES in that case, like the reference's other capabilities (e.g.
+PCRCapGetAllocation() for TPM_CAP_PCRS) and tpm-rs.
+--- a/TPMCmd/tpm/src/command/Capability/GetCapability.c
++++ b/TPMCmd/tpm/src/command/Capability/GetCapability.c
+@@ -130,12 +130,30 @@
+                 return TPM_RCS_VALUE + RC_GetCapability_property;
+             out->moreData = SpdmCapGetTpmPubKeys(
+                 (TPM_PUB_KEY)in->property, in->propertyCount, &data->pubKeys);
++            // tpm-rs differential testing -- C-ref spec deviation fix (NOT
++            // determinism): the list holds "no more than the number of requested
++            // values (propertyCount)" (Part 3, TPM2_GetCapability), so with
++            // propertyCount = 0 the key is left out and reported by moreData.
++            // SpdmCapGetTpmPubKeys() ignores propertyCount.
++            if(in->propertyCount == 0 && data->pubKeys.count != 0)
++            {
++                data->pubKeys.count = 0;
++                out->moreData       = YES;
++            }
+             break;
+         case TPM_CAP_SPDM_SESSION_INFO:
+             // Input property must be 0
+             if(in->property != 0)
+                 return TPM_RCS_VALUE + RC_GetCapability_property;
+             out->moreData = SpdmCapGetSessionInfo(&data->spdmSessionInfo);
++            // tpm-rs differential testing -- C-ref spec deviation fix (NOT
++            // determinism): as for TPM_CAP_PUB_KEYS, propertyCount bounds the
++            // list (SpdmCapGetSessionInfo() takes no count).
++            if(in->propertyCount == 0 && data->spdmSessionInfo.count != 0)
++            {
++                data->spdmSessionInfo.count = 0;
++                out->moreData               = YES;
++            }
+             break;
+ #  endif  // SEC_CHANNEL_SUPPORT
+         case TPM_CAP_VENDOR_PROPERTY:

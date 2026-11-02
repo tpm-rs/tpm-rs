@@ -84,9 +84,10 @@ fn sequence_object_bind_is_loaded() {
     let sequence = hash_sequence(&mut tpm);
     let mut params = vec![0, 16];
     params.extend_from_slice(&[0x33; 16]);
-    // encryptedSalt: 257 bytes, one more than sizeof(TPMU_ENCRYPTED_SECRET).
-    params.extend_from_slice(&257u16.to_be_bytes());
-    params.extend_from_slice(&[0x44; 257]);
+    // encryptedSalt: one byte more than sizeof(TPMU_ENCRYPTED_SECRET) (`MAX_RSA_KEY_BYTES`).
+    let salt_len = tpm2::Tpm2bEncryptedSecret::CAP + 1;
+    params.extend_from_slice(&(salt_len as u16).to_be_bytes());
+    params.extend_from_slice(&vec![0x44; salt_len]);
     params.push(0x00); // TPM_SE_HMAC
     params.extend_from_slice(&[0x00, 0x10]); // TPM_ALG_NULL
     params.extend_from_slice(&[0x00, 0x0b]); // TPM_ALG_SHA256

@@ -2,6 +2,7 @@
 use super::KeyDerivationArgs;
 use super::TransientObject;
 use crate::handle_checks::{Tpmi, check};
+use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -86,7 +87,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .ok_or(TpmRc::HASH.with(Position::parameter(2)))?;
 
         let mut obj_seed = [0u8; 64];
-        let mut actual_private_key = [0u8; 1536];
+        let mut actual_private_key = [0u8; MAX_PRIVATE_KEY_SIZE];
         // 2. With `reference-rng`, as the reference's `CryptCreateObject()` with the DRBG seeded
         // from the hierarchy's Primary Seed (`DRBG_InstantiateSeeded()`).
         #[cfg(feature = "reference-rng")]

@@ -105,6 +105,8 @@ fn invalid_include_object_rejected() {
 }
 
 /// PolicyDuplicationSelect with 66- and 65-byte names and includeObject=NO succeeds
+// SHA-512 Names need a TPM with SHA-512 (a larger `TPM2B_NAME` otherwise).
+#[cfg(feature = "sha512")]
 #[test]
 fn name_size_limits_without_include_object() {
     let mut sim = Tpm::new();
@@ -269,6 +271,8 @@ fn policy_duplication_select_accepts_opaque_short_name() {
 }
 
 /// TPM2_PolicyDuplicationSelect accepts a maximum-size 66-byte SHA-512 Name with includeObject=NO
+// SHA-512 Names need a TPM with SHA-512 (a larger `TPM2B_NAME` otherwise).
+#[cfg(feature = "sha512")]
 #[test]
 fn policy_duplication_select_accepts_sha512_name() {
     let mut sim = Tpm::new();
@@ -858,6 +862,8 @@ fn repeat_and_cp_hash_after_select_rejected() {
 }
 
 /// PolicyDuplicationSelect with a 66-byte (SHA-512) object name succeeds
+// SHA-512 Names need a TPM with SHA-512 (a larger `TPM2B_NAME` otherwise).
+#[cfg(feature = "sha512")]
 #[test]
 fn sha512_object_name_accepted() {
     let res = policy_duplication_select_66(false);
@@ -869,6 +875,8 @@ fn sha512_object_name_accepted() {
 }
 
 /// PolicyDuplicationSelect with a 66-byte object name and includeObject=YES succeeds
+// SHA-512 Names need a TPM with SHA-512 (a larger `TPM2B_NAME` otherwise).
+#[cfg(feature = "sha512")]
 #[test]
 fn sha512_object_name_with_include_object() {
     let res = policy_duplication_select_66(true);

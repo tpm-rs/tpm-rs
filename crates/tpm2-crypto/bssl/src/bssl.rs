@@ -409,6 +409,77 @@ impl Drop for AesCfb {
     }
 }
 
+/// The AES block cipher (BoringSSL's `AES_KEY`, `AES_encrypt` and `AES_decrypt`) keyed for both
+/// directions, for the block cipher modes that are built on single-block operations (CTR, OFB,
+/// CBC and ECB).
+pub struct AesBlock {
+    encrypt_key: bssl_sys::AES_KEY,
+    decrypt_key: bssl_sys::AES_KEY,
+}
+
+impl AesBlock {
+    /// Expands the AES-128, AES-192 or AES-256 key `key` (16, 24 or 32 bytes) into the
+    /// encryption and decryption key schedules. Any other key length is
+    /// [`BsslError::InvalidData`].
+    pub fn new(key: &[u8]) -> Result<Self, BsslError> {
+        if !matches!(key.len(), 16 | 24 | 32) {
+            return Err(BsslError::InvalidData);
+        }
+        let bits = (key.len() * 8) as c_uint;
+        let mut encrypt_key = MaybeUninit::<bssl_sys::AES_KEY>::uninit();
+        let mut decrypt_key = MaybeUninit::<bssl_sys::AES_KEY>::uninit();
+        // SAFETY: `key` is valid for `bits / 8` bytes, and both schedules are valid uninitialized
+        // memory for an `AES_KEY`.
+        let (res_enc, res_dec) = unsafe {
+            (
+                bssl_sys::AES_set_encrypt_key(key.as_ptr(), bits, encrypt_key.as_mut_ptr()),
+                bssl_sys::AES_set_decrypt_key(key.as_ptr(), bits, decrypt_key.as_mut_ptr()),
+            )
+        };
+        // `AES_set_{en,de}crypt_key` return 0 on success and a negative value on error.
+        if res_enc != 0 || res_dec != 0 {
+            return Err(BsslError::Internal);
+        }
+        // SAFETY: both calls returned 0, so both schedules are initialized.
+        Ok(unsafe {
+            Self {
+                encrypt_key: encrypt_key.assume_init(),
+                decrypt_key: decrypt_key.assume_init(),
+            }
+        })
+    }
+
+    /// Encrypts the 16-byte `block` in place.
+    pub fn encrypt_block(&self, block: &mut [u8; 16]) {
+        let input = *block;
+        // SAFETY: `input` and `block` are valid 16-byte blocks; `self.encrypt_key` is initialized.
+        unsafe { bssl_sys::AES_encrypt(input.as_ptr(), block.as_mut_ptr(), &self.encrypt_key) };
+    }
+
+    /// Decrypts the 16-byte `block` in place.
+    pub fn decrypt_block(&self, block: &mut [u8; 16]) {
+        let input = *block;
+        // SAFETY: `input` and `block` are valid 16-byte blocks; `self.decrypt_key` is initialized.
+        unsafe { bssl_sys::AES_decrypt(input.as_ptr(), block.as_mut_ptr(), &self.decrypt_key) };
+    }
+}
+
+impl Drop for AesBlock {
+    fn drop(&mut self) {
+        // SAFETY: both key schedules are valid fields of `self`.
+        unsafe {
+            bssl_sys::OPENSSL_cleanse(
+                ptr::from_mut(&mut self.encrypt_key).cast::<c_void>(),
+                core::mem::size_of_val(&self.encrypt_key),
+            );
+            bssl_sys::OPENSSL_cleanse(
+                ptr::from_mut(&mut self.decrypt_key).cast::<c_void>(),
+                core::mem::size_of_val(&self.decrypt_key),
+            );
+        }
+    }
+}
+
 macro_rules! impl_bssl_aes_cfb {
     ($name:ident, $key_len:literal, $doc:expr) => {
         #[doc = $doc]
@@ -2133,3 +2204,329 @@ pub fn ec_generate_key(
     }
     Err(BsslError::Internal)
 }
+
+// ============================================================================
+// ML-KEM-768/1024 and ML-DSA-44/65/87 Safe Bindings over `bssl-sys`
+// ============================================================================
+
+/// A BoringSSL key structure (`MLKEM*_private_key`, `MLDSA*_private_key`, ...)
+/// initialized by a C function, cleansed with `OPENSSL_cleanse` on drop.
+struct CleansedKey<T> {
+    key: MaybeUninit<T>,
+}
+
+impl<T> CleansedKey<T> {
+    /// Initializes the key with `init`, which returns BoringSSL's 1 on success.
+    fn new(init: impl FnOnce(*mut T) -> c_int) -> Result<Self, BsslError> {
+        let mut key = Self {
+            key: MaybeUninit::uninit(),
+        };
+        if init(key.key.as_mut_ptr()) == 1 {
+            Ok(key)
+        } else {
+            Err(BsslError::Internal)
+        }
+    }
+
+    /// Returns a pointer to the key, which `new` initialized.
+    fn as_ptr(&self) -> *const T {
+        self.key.as_ptr()
+    }
+}
+
+impl<T> Drop for CleansedKey<T> {
+    fn drop(&mut self) {
+        // SAFETY: `self.key` is valid for `size_of::<T>()` bytes.
+        unsafe {
+            bssl_sys::OPENSSL_cleanse(
+                self.key.as_mut_ptr().cast::<c_void>(),
+                core::mem::size_of::<T>(),
+            );
+        }
+    }
+}
+
+/// Serializes into exactly `out.len()` bytes with a `marshal` function writing
+/// to a fixed `CBB` over `out`.
+fn marshal_fixed(
+    out: &mut [u8],
+    marshal: impl FnOnce(*mut bssl_sys::CBB) -> c_int,
+) -> Result<(), BsslError> {
+    let mut cbb = MaybeUninit::<bssl_sys::CBB>::uninit();
+    // SAFETY: `CBB_init_fixed` initializes `cbb` to write to `out`, which is
+    // valid for `out.len()` bytes and outlives `cbb`.
+    if unsafe { bssl_sys::CBB_init_fixed(cbb.as_mut_ptr(), out.as_mut_ptr(), out.len()) } != 1 {
+        return Err(BsslError::Internal);
+    }
+    let ok = marshal(cbb.as_mut_ptr()) == 1
+        // SAFETY: `cbb` is initialized.
+        && unsafe { bssl_sys::CBB_len(cbb.as_ptr()) } == out.len();
+    // SAFETY: `cbb` is initialized; a fixed `CBB` does not own `out`.
+    unsafe { bssl_sys::CBB_cleanup(cbb.as_mut_ptr()) };
+    if ok { Ok(()) } else { Err(BsslError::Internal) }
+}
+
+impl EvpPkey {
+    /// Parses the raw public key `key` of the algorithm `alg`
+    /// (`EVP_PKEY_from_raw_public_key`), or [`BsslError::InvalidData`] if BoringSSL
+    /// rejects it.
+    fn from_raw_public_key(
+        alg: *const bssl_sys::EVP_PKEY_ALG,
+        key: &[u8],
+    ) -> Result<Self, BsslError> {
+        // SAFETY: `alg` is a static `EVP_PKEY_ALG` and `key` is valid for
+        // `key.len()` bytes; the result is a new `EVP_PKEY` or NULL.
+        let ptr = unsafe { bssl_sys::EVP_PKEY_from_raw_public_key(alg, key.as_ptr(), key.len()) };
+        NonNull::new(ptr)
+            .map(|ptr| Self { ptr })
+            .ok_or(BsslError::InvalidData)
+    }
+}
+
+/// Defines a module with the ML-KEM bindings of one parameter set.
+macro_rules! mlkem_bindings {
+    (
+        $(#[$doc:meta])* $module:ident,
+        $private:ident, $public:ident, $public_bytes:expr, $ciphertext_bytes:expr,
+        $from_seed:ident, $public_from_private:ident, $marshal:ident, $decap:ident,
+        $evp_pkey_alg:ident, $evp_kem:ident $(,)?
+    ) => {
+        $(#[$doc])*
+        pub mod $module {
+            use super::*;
+
+            /// The size of an encapsulation key.
+            pub const PUBLIC_KEY_BYTES: usize = $public_bytes;
+            /// The size of a ciphertext.
+            pub const CIPHERTEXT_BYTES: usize = $ciphertext_bytes;
+
+            /// Expands the decapsulation key of the seed `d || z`.
+            fn private_key(
+                seed: &[u8; 64],
+            ) -> Result<CleansedKey<bssl_sys::$private>, BsslError> {
+                // SAFETY: `key` is valid for writing a private key and `seed` is
+                // valid for `seed.len()` bytes.
+                CleansedKey::new(|key| unsafe {
+                    bssl_sys::$from_seed(key, seed.as_ptr(), seed.len())
+                })
+            }
+
+            /// Writes the encapsulation key of the seed `d || z` to `out`
+            /// (`ML-KEM.KeyGen_internal(d, z)`).
+            pub fn public_key_from_seed(
+                seed: &[u8; 64],
+                out: &mut [u8; PUBLIC_KEY_BYTES],
+            ) -> Result<(), BsslError> {
+                let private = private_key(seed)?;
+                let mut public = MaybeUninit::<bssl_sys::$public>::uninit();
+                // SAFETY: `private` is initialized and `public` is valid for
+                // writing a public key, which this initializes.
+                let public = unsafe {
+                    bssl_sys::$public_from_private(public.as_mut_ptr(), private.as_ptr());
+                    public.assume_init()
+                };
+                // SAFETY: `cbb` is an initialized `CBB` and `public` an initialized
+                // public key.
+                marshal_fixed(out, |cbb| unsafe { bssl_sys::$marshal(cbb, &public) })
+            }
+
+            /// Encapsulates to the encapsulation key `public_key` with the
+            /// randomness `entropy` (`ML-KEM.Encaps_internal(ek, m)`), or
+            /// [`BsslError::InvalidData`] if `public_key` fails BoringSSL's
+            /// parsing (its size and the modulus check of FIPS 203, Section 7.2).
+            ///
+            /// The randomness goes through
+            /// `EVP_KEM_encap_external_entropy_for_testing`, BoringSSL's only
+            /// public derandomized encapsulation; the TPM draws `entropy` from
+            /// its DRBG (TPM 2.0 Part 1), as the TCG reference does.
+            pub fn encapsulate(
+                public_key: &[u8],
+                entropy: &[u8; 32],
+                ciphertext_out: &mut [u8; CIPHERTEXT_BYTES],
+                shared_secret_out: &mut [u8; 32],
+            ) -> Result<(), BsslError> {
+                // SAFETY: `$evp_pkey_alg` returns a static `EVP_PKEY_ALG`.
+                let pkey = EvpPkey::from_raw_public_key(
+                    unsafe { bssl_sys::$evp_pkey_alg() },
+                    public_key,
+                )?;
+                // SAFETY: `$evp_kem` returns a static `EVP_KEM`; the output buffers
+                // and `entropy` are valid for their lengths, and `pkey` is a valid
+                // public key of the KEM's type.
+                let res = unsafe {
+                    bssl_sys::EVP_KEM_encap_external_entropy_for_testing(
+                        bssl_sys::$evp_kem(),
+                        ciphertext_out.as_mut_ptr(),
+                        ciphertext_out.len(),
+                        shared_secret_out.as_mut_ptr(),
+                        shared_secret_out.len(),
+                        pkey.as_ptr(),
+                        entropy.as_ptr(),
+                        entropy.len(),
+                    )
+                };
+                if res == 1 { Ok(()) } else { Err(BsslError::Internal) }
+            }
+
+            /// Decapsulates `ciphertext` with the key of the seed `d || z`
+            /// (`ML-KEM.Decaps`, with implicit rejection).
+            pub fn decapsulate(
+                seed: &[u8; 64],
+                ciphertext: &[u8; CIPHERTEXT_BYTES],
+                shared_secret_out: &mut [u8; 32],
+            ) -> Result<(), BsslError> {
+                let private = private_key(seed)?;
+                // SAFETY: the buffers are valid for their lengths and `private` is
+                // an initialized private key.
+                let res = unsafe {
+                    bssl_sys::$decap(
+                        shared_secret_out.as_mut_ptr(),
+                        ciphertext.as_ptr(),
+                        ciphertext.len(),
+                        private.as_ptr(),
+                    )
+                };
+                if res == 1 { Ok(()) } else { Err(BsslError::Internal) }
+            }
+        }
+    };
+}
+
+mlkem_bindings!(
+    /// ML-KEM-768 (`MLKEM768_*`).
+    mlkem768,
+    MLKEM768_private_key,
+    MLKEM768_public_key,
+    1184,
+    1088,
+    MLKEM768_private_key_from_seed,
+    MLKEM768_public_from_private,
+    MLKEM768_marshal_public_key,
+    MLKEM768_decap,
+    EVP_pkey_ml_kem_768,
+    EVP_kem_ml_kem_768,
+);
+
+mlkem_bindings!(
+    /// ML-KEM-1024 (`MLKEM1024_*`).
+    mlkem1024,
+    MLKEM1024_private_key,
+    MLKEM1024_public_key,
+    1568,
+    1568,
+    MLKEM1024_private_key_from_seed,
+    MLKEM1024_public_from_private,
+    MLKEM1024_marshal_public_key,
+    MLKEM1024_decap,
+    EVP_pkey_ml_kem_1024,
+    EVP_kem_ml_kem_1024,
+);
+
+/// Defines a module with the ML-DSA bindings of one parameter set.
+macro_rules! mldsa_bindings {
+    (
+        $(#[$doc:meta])* $module:ident,
+        $private:ident, $public:ident, $public_bytes:expr,
+        $from_seed:ident, $public_from_private:ident, $marshal:ident, $parse:ident,
+        $verify:ident $(,)?
+    ) => {
+        $(#[$doc])*
+        pub mod $module {
+            use super::*;
+
+            /// The size of a verification key.
+            pub const PUBLIC_KEY_BYTES: usize = $public_bytes;
+
+            /// Writes the verification key of the seed `xi` to `out`
+            /// (`ML-DSA.KeyGen_internal(xi)`).
+            pub fn public_key_from_seed(
+                seed: &[u8; 32],
+                out: &mut [u8; PUBLIC_KEY_BYTES],
+            ) -> Result<(), BsslError> {
+                // SAFETY: `key` is valid for writing a private key and `seed` is
+                // valid for `seed.len()` bytes.
+                let private = CleansedKey::<bssl_sys::$private>::new(|key| unsafe {
+                    bssl_sys::$from_seed(key, seed.as_ptr(), seed.len())
+                })?;
+                // SAFETY: `public` is valid for writing a public key and `private`
+                // is an initialized private key.
+                let public = CleansedKey::<bssl_sys::$public>::new(|public| unsafe {
+                    bssl_sys::$public_from_private(public, private.as_ptr())
+                })?;
+                // SAFETY: `cbb` is an initialized `CBB` and `public` an initialized
+                // public key.
+                marshal_fixed(out, |cbb| unsafe { bssl_sys::$marshal(cbb, public.as_ptr()) })
+            }
+
+            /// Verifies `signature` over the message representative `mu` with the
+            /// encoded verification key `public_key` (`ML-DSA.Verify_internal`
+            /// from line 8 on), or [`BsslError::InvalidData`] if the key does not
+            /// parse or the signature is invalid.
+            pub fn verify_mu(
+                public_key: &[u8],
+                mu: &[u8; 64],
+                signature: &[u8],
+            ) -> Result<(), BsslError> {
+                let mut cbs = MaybeUninit::<bssl_sys::CBS>::uninit();
+                // SAFETY: `CBS_init` initializes `cbs` over `public_key`, which is
+                // valid for `public_key.len()` bytes and outlives `cbs`.
+                unsafe { bssl_sys::CBS_init(cbs.as_mut_ptr(), public_key.as_ptr(), public_key.len()) };
+                // SAFETY: `public` is valid for writing a public key and `cbs` is
+                // initialized.
+                let public = CleansedKey::<bssl_sys::$public>::new(|public| unsafe {
+                    bssl_sys::$parse(public, cbs.as_mut_ptr())
+                })
+                .map_err(|_| BsslError::InvalidData)?;
+                // SAFETY: `cbs` is initialized.
+                if unsafe { bssl_sys::CBS_len(cbs.as_ptr()) } != 0 {
+                    return Err(BsslError::InvalidData);
+                }
+                // SAFETY: `public` is an initialized public key, and `signature`
+                // and `mu` are valid for their lengths.
+                let res = unsafe {
+                    bssl_sys::$verify(public.as_ptr(), signature.as_ptr(), signature.len(), mu.as_ptr())
+                };
+                if res == 1 { Ok(()) } else { Err(BsslError::InvalidData) }
+            }
+        }
+    };
+}
+
+mldsa_bindings!(
+    /// ML-DSA-44 (`MLDSA44_*`).
+    mldsa44,
+    MLDSA44_private_key,
+    MLDSA44_public_key,
+    1312,
+    MLDSA44_private_key_from_seed,
+    MLDSA44_public_from_private,
+    MLDSA44_marshal_public_key,
+    MLDSA44_parse_public_key,
+    MLDSA44_verify_message_representative,
+);
+
+mldsa_bindings!(
+    /// ML-DSA-65 (`MLDSA65_*`).
+    mldsa65,
+    MLDSA65_private_key,
+    MLDSA65_public_key,
+    1952,
+    MLDSA65_private_key_from_seed,
+    MLDSA65_public_from_private,
+    MLDSA65_marshal_public_key,
+    MLDSA65_parse_public_key,
+    MLDSA65_verify_message_representative,
+);
+
+mldsa_bindings!(
+    /// ML-DSA-87 (`MLDSA87_*`).
+    mldsa87,
+    MLDSA87_private_key,
+    MLDSA87_public_key,
+    2592,
+    MLDSA87_private_key_from_seed,
+    MLDSA87_public_from_private,
+    MLDSA87_marshal_public_key,
+    MLDSA87_parse_public_key,
+    MLDSA87_verify_message_representative,
+);

@@ -325,6 +325,13 @@ pub(crate) fn command_handle_types(cc: TpmCc) -> &'static [Tpmi] {
         TpmCc::MACStart => &[Tpmi::DhObject],
         TpmCc::SequenceUpdate => &[Tpmi::DhObject],
         TpmCc::Sign => &[Tpmi::DhObject],
+        // `TPMI_DH_OBJECT` (Part 3, the version 185 signing commands).
+        TpmCc::SignDigest => &[Tpmi::DhObject],
+        TpmCc::VerifyDigestSignature => &[Tpmi::DhObject],
+        TpmCc::SignSequenceStart => &[Tpmi::DhObject],
+        TpmCc::VerifySequenceStart => &[Tpmi::DhObject],
+        TpmCc::SignSequenceComplete => &[Tpmi::DhObject, Tpmi::DhObject],
+        TpmCc::VerifySequenceComplete => &[Tpmi::DhObject, Tpmi::DhObject],
         TpmCc::Unseal => &[Tpmi::DhObject],
         TpmCc::PolicySigned => &[Tpmi::DhObject, Tpmi::ShPolicy],
         TpmCc::ContextSave => &[Tpmi::DhContext],

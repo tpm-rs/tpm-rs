@@ -50,14 +50,17 @@ fn create_loaded_template_rc(tpm: &mut Tpm, len: u16) -> u32 {
 }
 
 /// `TPM2B_TEMPLATE` holds at most `sizeof(TPMT_PUBLIC)`, the unpadded size (350 bytes with RSA
-/// 2048 and ECDAA): TPM 2.0 Part 2, Table "Definition of TPM2B_TEMPLATE Structure":
-/// "buffer\[size\]{:sizeof(TPMT_PUBLIC)}", and Part 2, "Data Alignment": "When used in a table
-/// to indicate a maximum size, the sizeof() function returns the octet-aligned size of the
-/// structure, with no padding." The padded C size (356) is too large.
+/// 2048 and ECDAA, 478 with RSA-3072, 606 with RSA-4096, 1662 with ML-KEM and 2686 with
+/// ML-DSA): TPM 2.0 Part 2, Table "Definition of TPM2B_TEMPLATE Structure":
+/// "buffer\[size\]{:sizeof(TPMT_PUBLIC)}", and Part 2, "Data Alignment": "When used in a table to
+/// indicate a maximum size, the sizeof() function returns the octet-aligned size of the
+/// structure, with no padding." The padded C size (6 bytes more: 356, 484, 612, 1668 or 2692) is
+/// too large.
 #[test]
 fn template_larger_than_unpadded_tpmt_public_rejected() {
     let mut tpm = Tpm::new();
-    for len in [351, 356, 357, 0x0400] {
+    let cap = tpm2::Tpm2bTemplate::CAP as u16;
+    for len in [cap + 1, cap + 6, cap + 7, (cap + 1).max(0x0800)] {
         assert_eq!(
             create_loaded_template_rc(&mut tpm, len),
             rc_p(TpmRc::SIZE, 2),
@@ -65,19 +68,20 @@ fn template_larger_than_unpadded_tpmt_public_rejected() {
         );
     }
     assert_ne!(
-        create_loaded_template_rc(&mut tpm, 350),
+        create_loaded_template_rc(&mut tpm, cap),
         rc_p(TpmRc::SIZE, 2)
     );
 }
 
-/// A `TPM2B_ECC_PARAMETER` holds at most `MAX_ECC_KEY_BYTES` (66, NIST P-521): TPM 2.0 Part 2,
-/// Table "Definition of (ECC) TPM2B_ECC_PARAMETER Structure": "buffer\[size\]
-/// {:MAX_ECC_KEY_BYTES}". A 67-byte `unique.x` of a `TPM2_LoadExternal` public area is
-/// `TPM_RC_SIZE` at `inPublic`.
+/// A `TPM2B_ECC_PARAMETER` holds at most `MAX_ECC_KEY_BYTES` (66 for NIST P-521, 80 with BN
+/// P-638): TPM 2.0 Part 2, Table "Definition of (ECC) TPM2B_ECC_PARAMETER Structure":
+/// "buffer\[size\] {:MAX_ECC_KEY_BYTES}". A `unique.x` one byte longer in a `TPM2_LoadExternal`
+/// public area is `TPM_RC_SIZE` at `inPublic`.
 #[test]
 fn ecc_parameter_larger_than_max_ecc_key_bytes_rejected() {
     let mut tpm = Tpm::new();
-    for (x_len, rejected) in [(66u16, false), (67, true), (80, true)] {
+    let max = tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES as u16;
+    for (x_len, rejected) in [(max, false), (max + 1, true), (max + 14, true)] {
         let mut public = ECC_SIGNING_TEMPLATE[..20].to_vec();
         public.extend_from_slice(&x_len.to_be_bytes());
         public.resize(public.len() + usize::from(x_len), 0x11);

@@ -68,15 +68,25 @@ fn accepts_mgf1_ecc_kdf() {
     assert_eq!(res, Ok(()));
 }
 
-/// TPM2_TestParms rejects the ECC schemes this TPM does not implement (SM2, EC-Schnorr, ECMQV;
-/// not in TPM_CAP_ALGS) with TPM_RC_SCHEME + P1: `TPMI_ALG_ECC_SCHEME` only includes
-/// implemented schemes.
+/// TPM2_TestParms rejects the ECC schemes this TPM does not implement (EdDSA, and SM2,
+/// EC-Schnorr and ECMQV without their features; not in TPM_CAP_ALGS) with TPM_RC_SCHEME + P1:
+/// `TPMI_ALG_ECC_SCHEME` only includes implemented schemes.
 #[test]
 fn rejects_unimplemented_ecc_schemes() {
     let mut sim = Tpm::new();
     // The schemes are not `TpmtEccScheme`s of this TPM: an ECDSA scheme is marshaled and its
     // algorithm replaced (type, symmetric (NULL), then scheme).
-    for scheme in [tpm2::Alg::SM2, tpm2::Alg::ECSCHNORR, tpm2::Alg::ECMQV] {
+    let mut schemes = vec![tpm2::Alg::EDDSA];
+    if !cfg!(feature = "sm2") {
+        schemes.push(tpm2::Alg::SM2);
+    }
+    if !cfg!(feature = "ecschnorr") {
+        schemes.push(tpm2::Alg::ECSCHNORR);
+    }
+    if !cfg!(feature = "ecmqv") {
+        schemes.push(tpm2::Alg::ECMQV);
+    }
+    for scheme in schemes {
         let ecc_parms = TpmtPublicParms::Ecc(TpmsEccParms {
             symmetric: None,
             scheme: Some(TpmtEccScheme::Ecdsa(TpmiAlgHash::Sha256)),

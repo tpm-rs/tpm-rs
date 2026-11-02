@@ -21,7 +21,8 @@ fn high_index_value_round_trips() {
         name_alg: TpmiAlgHash::Sha256,
         attributes: TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD,
         auth_policy: tpm2::Tpm2bDigest::default(),
-        data_size: 2000, // Large index size
+        // A large index: 2000 bytes, or what the profile's NV accounting leaves.
+        data_size: crate::_common::definable_nv_size(TpmaNv::OWNERWRITE | TpmaNv::OWNERREAD, 2000),
     };
 
     let public_info = tpm2::Tpm2b(nv_public_struct);

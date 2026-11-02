@@ -18,7 +18,7 @@ pub struct Args {
 
 use tpm2::Connection;
 use tpm2::commands::Command;
-use tpm2::platform::SimulatedFirmware;
+use tpm2::platform::{SimulatedFirmware, SimulatedSecureChannel};
 use tpm2_engine::{GlobalState, InternalError, TpmEngine};
 pub use tpm2_engine::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
 use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform};
@@ -127,7 +127,11 @@ impl<'a> Simulator<'a> {
         platform_rng: &'a mut LinuxRng,
         firmware: &'a SimulatedFirmware,
     ) -> Result<Self, InternalError> {
-        let platform = create_linux_platform(crypto, storage, timer, platform_rng, firmware);
+        // Like the TCG reference, the simulator has a dummy secure transport layer that
+        // protects every command with an SPDM session (`SimulatedSecureChannel`); the TPM uses
+        // it with the `sec-channel` feature of `tpm2-engine`.
+        let platform = create_linux_platform(crypto, storage, timer, platform_rng, firmware)
+            .with_secure_channel(&SimulatedSecureChannel);
         let mut context = Box::new(TpmEngine::new(platform)?);
         context.init_storage();
         Ok(Self {
@@ -397,6 +401,17 @@ impl<'a> Simulator<'a> {
                 if self.is_power_on {
                     self.is_nv_on = false;
                     self.context.set_nv_available(false);
+                }
+                stream.write_all(&0u32.to_be_bytes())?;
+            }
+            // `_rpc__Signal_PhysicalPresenceOn()`/`Off()`: the physical presence "pin"
+            // (`_plat__Signal_PhysicalPresenceOn()`/`Off()`), ignored while the power is off and
+            // otherwise kept across power cycles.
+            SimulatorPlatformSignal::PhysicalPresenceOn
+            | SimulatorPlatformSignal::PhysicalPresenceOff => {
+                if self.is_power_on {
+                    self.context
+                        .set_physical_presence(code == SimulatorPlatformSignal::PhysicalPresenceOn);
                 }
                 stream.write_all(&0u32.to_be_bytes())?;
             }

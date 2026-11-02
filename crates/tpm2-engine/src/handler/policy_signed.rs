@@ -133,7 +133,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let Some(obj) = obj.as_ref() else {
                 return Err(TpmRc::SCHEME.with(Position::parameter(5)));
             };
-            if let crate::owned::OwnedPublicParmsAndId::KeyedHash(scheme, _) =
+            if super::pqc::mldsa_key(obj).is_some() {
+                self.policy_signed_validate_mldsa(obj, &cmd.auth, &to_be_signed[..offset])
+                    .map_err(|rc| rc.with_position(Position::parameter(5)))?;
+            } else if let crate::owned::OwnedPublicParmsAndId::KeyedHash(scheme, _) =
                 &obj.public.parms_and_id
             {
                 // An HMAC key whose sensitive area is not loaded cannot verify anything.
@@ -184,12 +187,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     }
                     crate::owned::OwnedPublicParmsAndId::Ecc(parms, ref point) => {
                         let curve = parms.curve_id;
-                        let param_size = match curve {
-                            tpm2::TpmEccCurve::NistP224 => 28,
-                            tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
-                            tpm2::TpmEccCurve::NistP384 => 48,
-                            tpm2::TpmEccCurve::NistP521 => 66,
-                            _ => return Err(TpmRc::KEY_SIZE.to_rc()),
+                        let param_size = match crate::ecc_curves::param_size(curve) {
+                            Some(size) => size,
+                            None => return Err(TpmRc::KEY_SIZE.to_rc()),
                         };
                         pub_len = param_size * 2;
                         if pub_len > pub_buf.len() {
@@ -221,6 +221,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let sig_matches_key = match cmd.auth {
                     TpmtSignature::Rsassa(_) | TpmtSignature::Rsapss(_) => is_rsa_key,
                     TpmtSignature::Ecdsa(_) => !is_rsa_key,
+                    #[cfg(feature = "sm2")]
+                    TpmtSignature::Sm2(_) => !is_rsa_key,
+                    #[cfg(feature = "ecschnorr")]
+                    TpmtSignature::Ecschnorr(_) => !is_rsa_key,
                     _ => false,
                 };
                 if !sig_matches_key {
@@ -248,7 +252,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         sig_buf[offset..pub_len].copy_from_slice(bytes);
                         (tpm2::Alg::RSAPSS, tpm2::Alg::from(sig.hash))
                     }
-                    TpmtSignature::Ecdsa(ref sig) => {
+                    _ => {
+                        let Some((ecc_alg, sig)) = ecc_signature(&cmd.auth) else {
+                            return Err(TpmRc::SCHEME.with(Position::parameter(5)));
+                        };
                         let param_size = pub_len / 2;
                         let r_bytes = sig.signature_r.get_buffer();
                         let s_bytes = sig.signature_s.get_buffer();
@@ -262,10 +269,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         sig_buf[param_size - r_bytes.len()..param_size].copy_from_slice(r_bytes);
                         sig_buf[param_size * 2 - s_bytes.len()..param_size * 2]
                             .copy_from_slice(s_bytes);
-                        (tpm2::Alg::ECDSA, tpm2::Alg::from(sig.hash))
-                    }
-                    _ => {
-                        return Err(TpmRc::SCHEME.with(Position::parameter(5)));
+                        (ecc_alg, tpm2::Alg::from(sig.hash))
                     }
                 };
 
@@ -292,14 +296,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                             }
                         }
                     }
-                    (
-                        TpmtSignature::Ecdsa(sig),
-                        crate::owned::OwnedPublicParmsAndId::Ecc(parms, _),
-                    ) if super::crypt_ops::ecdsa_signature_in_range(
-                        parms.curve_id,
-                        sig.signature_r.get_buffer(),
-                        sig.signature_s.get_buffer(),
-                    ) =>
+                    // `TpmEcc_ValidateSignatureEcSm2()` multiplies points without the ECDH test.
+                    (auth, crate::owned::OwnedPublicParmsAndId::Ecc(parms, _))
+                        if sign_alg != tpm2::Alg::SM2
+                            && ecc_signature(auth).is_some_and(|(_, sig)| {
+                                super::crypt_ops::ecdsa_signature_in_range(
+                                    parms.curve_id,
+                                    sig.signature_r.get_buffer(),
+                                    sig.signature_s.get_buffer(),
+                                )
+                            }) =>
                     {
                         self.crypto()
                             .do_self_test(tpm2::Alg::ECDH)
@@ -310,16 +316,51 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
                 // `Ok(false)` (bad signature or unusable key) and any crypto error both fail
                 // with `TPM_RC_SIGNATURE` (`RC_PolicySigned_auth`), as exp's catch-all did.
-                if !matches!(
-                    self.crypto().verify_inner(
+                let verified = match obj.public.parms_and_id {
+                    // The schemes and curves the crypto provider's verification interface (which
+                    // carries no curve) cannot express.
+                    crate::owned::OwnedPublicParmsAndId::Ecc(parms, _)
+                        if sign_alg != tpm2::Alg::ECDSA
+                            || !super::crypt_ops::provider_ecdsa_curve(parms.curve_id) =>
+                    {
+                        let (r, s) = sig_buf[..sig_len].split_at(sig_len / 2);
+                        let q = &pub_buf[..pub_len];
+                        let digest = &digest_bytes[..digest_len];
+                        let crypto = self.crypto();
+                        let curve = parms.curve_id;
+                        match sign_alg {
+                            tpm2::Alg::ECDSA => crate::ecc_schemes::ecdsa_verify(
+                                crypto.inner,
+                                curve,
+                                q,
+                                digest,
+                                r,
+                                s,
+                            ),
+                            tpm2::Alg::SM2 => {
+                                crate::ecc_schemes::sm2_verify(crypto.inner, curve, q, digest, r, s)
+                            }
+                            _ => crate::ecc_schemes::schnorr_verify(
+                                crypto.inner,
+                                &crypto,
+                                curve,
+                                tpmi_hash,
+                                q,
+                                digest,
+                                r,
+                                s,
+                            ),
+                        }
+                    }
+                    _ => self.crypto().verify_inner(
                         sign_alg,
                         &pub_buf[..pub_len],
                         rsa_exponent,
                         digest_ha,
                         &sig_buf[..sig_len],
                     ),
-                    Ok(true)
-                ) {
+                };
+                if !matches!(verified, Ok(true)) {
                     return Err(TpmRc::SIGNATURE.with(Position::parameter(5)));
                 }
             }
@@ -469,5 +510,73 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
 
         Ok(())
+    }
+
+    /// Verifies the `auth` signature of `TPM2_PolicySigned()` with an ML-DSA or HashML-DSA
+    /// `authObject`. A pure ML-DSA key signs *toBeSigned* itself rather than a digest of it,
+    /// with an empty context (`TPM2_PolicySigned()` defines none; the version 185 reference's
+    /// `PolicySignedValidateMldsaMessage()`); a HashML-DSA key signs the digest *aHash* of
+    /// *toBeSigned* with the signature's hash algorithm. Returns bare response codes:
+    /// `TPM_RC_SCHEME` for a signature of another algorithm, `TPM_RC_SIGNATURE` for a signature
+    /// that does not verify.
+    #[cfg(feature = "mldsa")]
+    fn policy_signed_validate_mldsa(
+        &mut self,
+        auth_object: &crate::handler::TransientObject,
+        auth: &TpmtSignature<'_>,
+        to_be_signed: &[u8],
+    ) -> Result<(), TpmRc> {
+        let verified = match (&auth_object.public.parms_and_id, auth) {
+            (crate::owned::OwnedPublicParmsAndId::Mldsa(..), TpmtSignature::Mldsa(sig)) => {
+                self.mldsa_verify_message(auth_object, &[to_be_signed], sig.get_buffer())?
+            }
+            (
+                crate::owned::OwnedPublicParmsAndId::HashMldsa(_, public_key),
+                TpmtSignature::HashMldsa(sig),
+            ) => {
+                let (a_hash, a_hash_len) = self.compute_hash(sig.hash, &[to_be_signed])?;
+                let Some(mu) = crate::mldsa::hash_mu(
+                    public_key.get_buffer(),
+                    &[],
+                    sig.hash,
+                    &a_hash[..a_hash_len],
+                ) else {
+                    return Err(TpmRc::SCHEME.to_rc());
+                };
+                self.mldsa_verify_mu(auth_object, &mu, sig.sig.get_buffer())?
+            }
+            _ => return Err(TpmRc::SCHEME.to_rc()),
+        };
+        if verified {
+            Ok(())
+        } else {
+            Err(TpmRc::SIGNATURE.to_rc())
+        }
+    }
+
+    /// Without ML-DSA (`mldsa`), there are no ML-DSA keys.
+    #[cfg(not(feature = "mldsa"))]
+    fn policy_signed_validate_mldsa(
+        &mut self,
+        _auth_object: &crate::handler::TransientObject,
+        _auth: &TpmtSignature<'_>,
+        _to_be_signed: &[u8],
+    ) -> Result<(), TpmRc> {
+        Err(TpmRc::SCHEME.to_rc())
+    }
+}
+
+/// The algorithm and the `TPMS_SIGNATURE_ECC` of an ECC signature (ECDSA, SM2 or EC-Schnorr;
+/// ECDAA signatures cannot be verified), or `None` for any other signature.
+fn ecc_signature<'s>(
+    signature: &'s TpmtSignature<'_>,
+) -> Option<(tpm2::Alg, &'s tpm2::TpmsSignatureEcc<'s>)> {
+    match signature {
+        TpmtSignature::Ecdsa(sig) => Some((tpm2::Alg::ECDSA, sig)),
+        #[cfg(feature = "sm2")]
+        TpmtSignature::Sm2(sig) => Some((tpm2::Alg::SM2, sig)),
+        #[cfg(feature = "ecschnorr")]
+        TpmtSignature::Ecschnorr(sig) => Some((tpm2::Alg::ECSCHNORR, sig)),
+        _ => None,
     }
 }

@@ -55,7 +55,7 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
-        private: [0xcc; 1536],
+        private: [0xcc; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
         private_len: 256,
         qualified_name: (Tpm2bName::default()).into(),
         hierarchy: 0x40000001,
@@ -148,7 +148,10 @@ fn command_audit_state_persists_across_tpm_init() {
     assert_eq!(execute_rc(&mut tpm, &cmd), 0);
     assert!(tpm.state.audit_commands.is_audited(TpmCc::GetRandom));
     assert_eq!(tpm.state.audit_counter, 1);
-    assert_eq!(tpm.state.command_audit_digest.get_size(), 64);
+    assert_eq!(
+        usize::from(tpm.state.command_audit_digest.get_size()),
+        tpm2::TpmiAlgHash::MAX_DIGEST_BYTES
+    );
 
     // Change the algorithm: the digest is cleared and the counter unchanged.
     let cmd = set_command_code_audit_status_cmd(0x000B, &[], &[]);
@@ -192,7 +195,13 @@ fn rejected_commands_leave_command_audit_state_unchanged() {
     let cmd = set_command_code_audit_status_cmd(0x000B, &[0x17B], &[]);
     assert_eq!(execute_rc(&mut tpm, &cmd), 0x1C4);
     assert!(!tpm.state.audit_commands.is_audited(TpmCc::GetRandom));
-    assert_eq!(tpm.state.audit_hash_alg, 0x000D);
+    // The context integrity hash: SHA-512, or SHA-384 without it.
+    let default_alg = if tpm2::TpmiAlgHash::MAX_DIGEST_BYTES == 64 {
+        0x000D
+    } else {
+        0x000C
+    };
+    assert_eq!(tpm.state.audit_hash_alg, default_alg);
     assert_eq!(tpm.state.audit_counter, 0);
     assert_eq!(tpm.state.command_audit_digest.get_size(), 0);
 

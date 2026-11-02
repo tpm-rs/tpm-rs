@@ -5,16 +5,30 @@
 //! ECDH/ECDSA), and with RustCrypto crates for the rest:
 //!   - [`Hash`](tpm2::crypto::Hash): SHA-1, SHA-256, SHA-384, SHA-512.
 //!   - [`Hmac`](tpm2::crypto::Hmac): HMAC with SHA-1, SHA-256, SHA-384, SHA-512.
-//!   - [`Cmac`](tpm2::crypto::Cmac): AES-128, AES-192, AES-256.
-//!   - [`Symmetric`](tpm2::crypto::Symmetric): AES-128, AES-192, AES-256 in CFB
-//!     mode (other modes return [`CryptoError::Unsupported`]).
+//!   - [`Cmac`](tpm2::crypto::Cmac): AES-128, AES-192, AES-256, Camellia-128,
+//!     Camellia-192, Camellia-256.
+//!   - [`Symmetric`](tpm2::crypto::Symmetric): AES-128, AES-192, AES-256,
+//!     Camellia-128, Camellia-192, Camellia-256 in the CTR, OFB, CBC, CFB and
+//!     ECB modes. libcrux has no Camellia and no AES modes other than GCM, so the
+//!     block ciphers (here and in [`Cmac`](tpm2::crypto::Cmac)) are the
+//!     RustCrypto `aes` and `camellia` crates.
 //!   - [`Asymmetric`](tpm2::crypto::Asymmetric) /
 //!     [`AsymmetricSign`](tpm2::crypto::AsymmetricSign): RSASSA, RSA-PSS,
 //!     RSA-OAEP, raw RSA, RSA key generation and import, ECDSA on NIST P-256
 //!     (SHA-256), P-384 (SHA-384) and P-521 (SHA-512), and ECC key generation on
-//!     NIST P-256/P-384/P-521 and BN P-256.
+//!     NIST P-256/P-384/P-521 and BN P-256, and (as below) NIST P-192, BN P-638
+//!     and SM2 P-256.
 //!   - [`Ecc`](tpm2::crypto::Ecc): NIST P-256, P-384, P-521 and BN P-256 (no
-//!     ECDAA).
+//!     ECDAA), and NIST P-192, BN P-638 and SM2 P-256 with the generic
+//!     constant-time short-Weierstrass arithmetic of `tpm2-crypto-weierstrass`
+//!     (neither `libcrux` nor RustCrypto offers these curves).
+//!   - [`Mlkem`](tpm2::crypto::Mlkem): ML-KEM-512/768/1024 (`libcrux-ml-kem`).
+//!   - [`Mldsa`](tpm2::crypto::Mldsa): ML-DSA-44/65/87 key generation
+//!     (`libcrux-ml-dsa`); signing and verification on an external `mu` fall
+//!     back to RustCrypto `ml-dsa` ([`tpm2_crypto_rust::pqc`]), as
+//!     `libcrux-ml-dsa` signs and verifies whole messages only (see [`pqc`]), so
+//!     the formal verification of `libcrux` does not cover ML-DSA signing and
+//!     verification here.
 //!   - The provider CSPRNG ([`CryptoProvider::get_random`]) draws from the
 //!     operating system RNG.
 //!
@@ -75,6 +89,7 @@ pub mod asymmetric;
 pub mod cmac;
 pub mod ecc;
 pub mod hash;
+pub mod pqc;
 pub mod symmetric;
 pub use {cmac::*, ecc::*, hash::*};
 

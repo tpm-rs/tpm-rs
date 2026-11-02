@@ -21,20 +21,23 @@ step() {
 step "check" "$C check"
 step "fmt" "$C fmt --check"
 step "clippy" "$C clippy --all-targets -- -D warnings"
+# The public TCG reference has no SHA-512 upstream: tpm-rs is built without it
+# for target-tcgtpm (as `TARGET_ARGS_tcgtpm` in the Makefile).
+args() { [ "$1" = tcgtpm ] && echo "--no-default-features"; }
 for t in tcgtpm tcgtpm-v185 ibmswtpm2; do
-  step "clippy target-$t" "$C clippy --all-targets -p testing --features target-$t -- -D warnings"
+  step "clippy target-$t" "$C clippy --all-targets -p testing $(args $t) --features target-$t -- -D warnings"
 done
-step "clippy fuzz-inproc" "$C clippy --all-targets -p testing --features target-tcgtpm,fuzz-inproc -- -D warnings"
+step "clippy fuzz-inproc" "$C clippy --all-targets -p testing --no-default-features --features target-tcgtpm,fuzz-inproc -- -D warnings"
 step "clippy reference-rng" "$C clippy --all-targets -p tpm2-engine --features reference-rng -- -D warnings"
 step "test" "$C test --release"
 step "test reference-rng" "$C test --release -p tpm2-engine --features reference-rng"
 for t in tcgtpm tcgtpm-v185 ibmswtpm2; do
-  step "differential (target-$t)" "$C test --release -p testing --features target-$t"
+  step "differential (target-$t)" "$C test --release -p testing $(args $t) --features target-$t"
 done
-step "fuzz-inproc lib" "$C test --release -p testing --features target-tcgtpm,fuzz-inproc --lib inproc"
-step "fuzz-inproc reset_determinism" "$C test --release -p testing --features target-tcgtpm,fuzz-inproc --test e2e reset_determinism"
+step "fuzz-inproc lib" "$C test --release -p testing --no-default-features --features target-tcgtpm,fuzz-inproc --lib inproc"
+step "fuzz-inproc reset_determinism" "$C test --release -p testing --no-default-features --features target-tcgtpm,fuzz-inproc --test e2e reset_determinism"
 # The fuzz crate's default target; restores REFERENCE_BIN for the fuzz crate tests.
-step "reference binary (target-tcgtpm)" "$C build --release -p testing --features target-tcgtpm --bin reference"
+step "reference binary (target-tcgtpm)" "$C build --release -p testing --no-default-features --features target-tcgtpm --bin reference"
 step "fuzz crate tests" "cd testing/fuzz && $C test --release --lib && $C test --release --bin gen_dict --bin trace2conv --bin to_test"
 step "fuzz crate clippy" "cd testing/fuzz && $C clippy --all-targets -- -D warnings && $C clippy --all-targets --features inproc -- -D warnings"
 step "fuzz crate fmt" "cd testing/fuzz && $C fmt --check"

@@ -55,6 +55,9 @@ fn test_adv_nv_storage_failure() {
     assert_eq!(rc, TpmRc::FAILURE.get());
 }
 
+/// `TPM_RH_AUTH_00` (the `vendor-permanent-auth` feature) is authorized with the platform
+/// unique value, which `TPM2_Startup(CLEAR)` keeps when it is already set.
+#[cfg(feature = "vendor-permanent-auth")]
 #[test]
 fn test_startup_preserves_custom_platform_unique_details_and_allows_policy_secret() {
     let mut crypto = FakeCrypto;

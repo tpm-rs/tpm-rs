@@ -613,7 +613,8 @@ fn symcipher_unique_binding_mismatch() {
 /// sensitive area (`TPM_RC_BINDING`). `tpm-rs` returned `TPM_RC_KEY + P2` for the `unique` size
 /// (found by differential fuzzing). TPM 2.0 Part 3, TPM2_LoadExternal: "If *nameAlg* is not
 /// `TPM_ALG_NULL`, then the same consistency checks between *inPublic* and *inPrivate* are made
-/// as for `TPM2_Load()`."
+/// as for `TPM2_Load()`." (The object's nameAlg is SHA-512, so the test needs a TPM with it.)
+#[cfg(feature = "sha512")]
 #[test]
 fn keyed_hash_seed_size_checked_before_unique_size() {
     let mut tpm = Tpm::new();
@@ -673,10 +674,11 @@ fn rsa_exponent_without_private_exponent_is_binding_error() {
 /// `TPM_RC_SIZE + RC_LoadExternal_inPrivate` (TPM 2.0 Part 2, Table "Definition of
 /// TPM2B_PRIVATE_KEY_RSA Structure": "buffer[size]{:RSA_PRIVATE_SIZE }" and "`RSA_PRIVATE_SIZE`
 /// is a vendor specific value that can be (`MAX_RSA_KEY_BYTES` / 2) or ((`MAX_RSA_KEY_BYTES` \*
-/// 5) / 2)"). tpm-rs uses the larger value (640 octets for RSA 2048).
+/// 5) / 2)"). tpm-rs uses the larger value (640 octets for RSA 2048, 960 for RSA-3072 and 1280
+/// for RSA-4096).
 #[test]
 fn rsa_private_key_larger_than_capacity_rejected() {
-    const RSA_PRIVATE_KEY_CAP: usize = 640;
+    const RSA_PRIVATE_KEY_CAP: usize = tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BYTES * 5 / 2;
     let mut sim = Tpm::new();
     let sensitive_create = TpmtSensitive {
         auth_value: Tpm2bAuth::default(),

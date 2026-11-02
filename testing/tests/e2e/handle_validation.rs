@@ -137,7 +137,9 @@ fn handle_positions_for_less_common_commands() {
 }
 
 /// Unrecognized permanent handles carry their own position, and `TPM_RH_AUTH_00` belongs to the
-/// endorsement hierarchy.
+/// endorsement hierarchy if the TPM implements it (`tpm2-engine`'s `vendor-permanent-auth`);
+/// otherwise it
+/// references no entity (`TPM_RC_VALUE`, see `vendor_permanent_auth.rs`).
 #[test]
 fn permanent_handle_positions_and_auth_00_hierarchy() {
     let mut sim = Tpm::new();
@@ -159,7 +161,12 @@ fn permanent_handle_positions_and_auth_00_hierarchy() {
         None,
         &policy_secret_default_params(),
     );
-    assert_eq!(mssim_rc_of(&mut sim, &cmd), rc_h(TpmRc::HIERARCHY, 1));
+    let expected = if tpm2_engine::VENDOR_PERMANENT_AUTH {
+        TpmRc::HIERARCHY
+    } else {
+        TpmRc::VALUE
+    };
+    assert_eq!(mssim_rc_of(&mut sim, &cmd), rc_h(expected, 1));
 }
 
 /// `TPM2_PolicySigned`'s `authObject` is a `TPMI_DH_OBJECT`, also for trial sessions.

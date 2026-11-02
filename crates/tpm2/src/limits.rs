@@ -297,13 +297,15 @@ pub struct KemCiphertext;
 impl Tag for KemCiphertext {
     const CAP: usize = crate::constants::TPM2_MAX_KEM_CIPHERTEXT_SIZE;
 }
-/// Signature context buffer capacity (`sizeof(TPMU_SIGNATURE_CTX)` = 255 bytes).
+/// Signature context buffer capacity (`sizeof(TPMU_SIGNATURE_CTX)`, profile-dependent: see
+/// [`crate::constants::TPM2_MAX_SIGNATURE_CTX_SIZE`]).
 pub struct SignatureCtx;
 impl Tag for SignatureCtx {
     const CAP: usize = crate::constants::TPM2_MAX_SIGNATURE_CTX_SIZE;
 }
-/// Signature hint buffer capacity.
+/// Signature hint buffer capacity (`MAX_SIGNATURE_HINT_SIZE`, profile-dependent: see
+/// [`crate::constants::TPM2_MAX_SIGNATURE_HINT_SIZE`]).
 pub struct SignatureHint;
 impl Tag for SignatureHint {
-    const CAP: usize = 64;
+    const CAP: usize = crate::constants::TPM2_MAX_SIGNATURE_HINT_SIZE;
 }

@@ -1,0 +1,38 @@
+verify-signature-mldsa-not-supported: TPM2_VerifySignature rejects ML-DSA keys with TPM_RC_SCHEME
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3, "Signing and Signature
+Verification", Table "Signing commands overview"):
+
+  "(Pure) ML-DSA | Message (see Note) | Not supported | Signs/verifies the
+  provided (external) Mu value for the message | Signs/verifies the message"
+
+TPM2_VerifySignature() does not support ML-DSA keys (an external mu is
+verified with TPM2_VerifyDigestSignature()). Version 185 verifies the digest
+of TPM2_VerifySignature() as an external mu for a key with allowExternalMu
+and returns a TPMT_TK_VERIFIED ticket for it; it does not even check that the
+signature is an ML-DSA signature (it reads the signature union as one). The
+patch returns TPM_RC_SCHEME + RC_VerifySignature_signature for an ML-DSA key
+after the sign attribute check.
+diff --git a/TPMCmd/tpm/src/command/Signature/VerifySignature.c b/TPMCmd/tpm/src/command/Signature/VerifySignature.c
+index 51e98b91..c59d54ec 100644
+--- a/TPMCmd/tpm/src/command/Signature/VerifySignature.c
++++ b/TPMCmd/tpm/src/command/Signature/VerifySignature.c
+@@ -27,6 +27,16 @@ TPM2_VerifySignature(VerifySignature_In*  in,  // IN: input parameter list
+     if(!IS_ATTRIBUTE(signObject->publicArea.objectAttributes, TPMA_OBJECT, sign))
+         return TPM_RCS_ATTRIBUTES + RC_VerifySignature_keyHandle;
+ 
++    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++    // TPM2_VerifySignature() with an ML-DSA key is "Not supported" (Part 3,
++    // Table "Signing commands overview"; external-mu signatures are verified
++    // with TPM2_VerifyDigestSignature()), so no signature scheme is valid for
++    // the key (TPM_RC_SCHEME).
++#if ALG_MLDSA
++    if(signObject->publicArea.type == TPM_ALG_MLDSA)
++        return TPM_RCS_SCHEME + RC_VerifySignature_signature;
++#endif  // ALG_MLDSA
++
+     // Validate Signature.  TPM_RC_SCHEME, TPM_RC_HANDLE or TPM_RC_SIGNATURE
+     // error may be returned by CryptCVerifySignatrue()
+     result = CryptoCommon_ValidateDigestSignature(

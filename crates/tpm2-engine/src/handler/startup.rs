@@ -266,8 +266,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.context.crypt_rand_startup()?;
             if kind == StartupKind::Reset {
                 let mut value = [0u8; 64];
-                self.context.crypt_random_generate(&mut value)?;
+                self.context
+                    .crypt_random_generate(&mut value[..crate::engine::COMMIT_NONCE_SIZE])?;
                 self.context.state.commit_nonce = value;
+                value = [0u8; 64];
                 self.context.crypt_random_generate(&mut value)?;
                 self.context.state.null_proof = value;
                 self.context.state.null_proof_size = 64;
@@ -292,6 +294,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.context.state.sh_enable = true;
             self.context.state.eh_enable = true;
             self.context.state.ph_enable_nv = true;
+            // Part 1, "Read-Only Mode of Operation": "A TPM exits Read-Only mode if the TPM
+            // receives a `TPM2_Startup()` for TPM Reset or TPM Restart. However Read-Only mode
+            // will remain enabled during TPM Resume."
+            self.context.state.read_only = false;
             self.context.state.platform_auth = crate::owned::OwnedAuth::default();
             self.context.state.platform_policy = crate::owned::OwnedDigest::default();
             self.context.state.platform_alg = None;
@@ -498,7 +504,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     self.context.state.null_proof = value;
                     self.context.state.null_proof_size = 64;
 
-                    self.context.random_platform(&mut value)?;
+                    let mut value = [0u8; 64];
+                    self.context
+                        .random_platform(&mut value[..crate::engine::COMMIT_NONCE_SIZE])?;
                     self.context.state.commit_nonce = value;
                 }
                 self.context.state.commit_counter = 0;

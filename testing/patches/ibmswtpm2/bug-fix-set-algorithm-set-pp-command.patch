@@ -1,0 +1,33 @@
+set-algorithm-set-pp-command: TPM2_SetAlgorithmSet can be gated with Physical Presence
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 1, version 185, "Physical Presence
+Authorization"): "If, in Part 3, the schematic for a command has
+`TPM_RH_PLATFORM` in the "Description" column for one of the handles, then
+that command can be added to the list of commands that require PP."; Part 3,
+TPM2_PP_Commands: "Only commands with handle types of `TPMI_RH_PLATFORM`,
+`TPMI_RH_PROVISION`, `TPMI_RH_CLEAR`, or `TPMI_RH_HIERARCHY` can be gated with
+Physical Presence. If any other command is in either list, it is discarded."
+
+TPM2_SetAlgorithmSet authorizes `authHandle`, a `TPMI_RH_PLATFORM` whose
+Description is `TPM_RH_PLATFORM`, but the reference's command attribute table
+lacks PP_COMMAND for it, so TPM2_PP_Commands silently discards it and it never
+appears in TPM_CAP_PP_COMMANDS (the TCG reference version 185 has
+PP_COMMAND). The patch adds PP_COMMAND to its attributes.
+diff --git a/src/CommandAttributeData.h b/src/CommandAttributeData.h
+--- a/src/CommandAttributeData.h
++++ b/src/CommandAttributeData.h
+@@ -613,7 +613,11 @@ const COMMAND_ATTRIBUTES    s_commandAttributes [] = {
+ #endif
+ #if (PAD_LIST  || CC_SetAlgorithmSet)
+     (COMMAND_ATTRIBUTES)(CC_SetAlgorithmSet             *  // 0x013f
+-			 (IS_IMPLEMENTED+HANDLE_1_USER)),
++			 // tpm-rs differential testing -- C-ref spec deviation fix (NOT
++			 // determinism): authHandle is a TPMI_RH_PLATFORM, so the command
++			 // can be gated with Physical Presence (Part 1, "Physical Presence
++			 // Authorization"; Part 3, TPM2_PP_Commands).
++			 (IS_IMPLEMENTED+HANDLE_1_USER+PP_COMMAND)),
+ #endif
+ #if (PAD_LIST  || CC_SetCommandCodeAuditStatus)
+     (COMMAND_ATTRIBUTES)(CC_SetCommandCodeAuditStatus   *  // 0x0140

@@ -1,0 +1,62 @@
+verify-digest-signature-scheme: TPM2_VerifyDigestSignature checks the key scheme, the digest size and the signature scheme
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Library, Part 3 (version 185),
+"TPM2_VerifyDigestSignature", "General Description"):
+
+  "The scheme of keyHandle must be a signing scheme that supports signing a
+  digest (e.g., TPM_ALG_ECDSA). The size of digest must match the size of the
+  hash algorithm of the signing scheme.
+
+  The TPM will verify that the signing scheme (including the hash or XOF
+  algorithm) in signature matches the signing scheme of keyHandle
+  (TPM_RC_SCHEME)."
+
+Part 3, Table "Signing commands overview": HMAC with TPM2_SignDigest() /
+TPM2_VerifyDigestSignature() is "Not supported".
+
+Apart from ML-DSA keys, TPM2_VerifyDigestSignature verifies the signature like
+TPM2_VerifySignature, with the scheme and hash algorithm of the signature: a
+key without a signing scheme of its own or with TPM_ALG_HMAC is accepted, a
+digest of any size is verified, and a signature of another scheme or hash
+than the key's (e.g., RSAPSS for an RSASSA key) is verified instead of
+rejected. The command now checks, in this order: the key's scheme
+(CryptoCommon_SelectSignScheme() with a NULL selector; failure or TPM_ALG_HMAC
+is TPM_RC_SCHEME + RC_VerifyDigestSignature_keyHandle), the digest size
+(TPM_RC_SIZE + RC_VerifyDigestSignature_digest) and the signature's scheme and
+hash algorithm (TPM_RC_SCHEME + RC_VerifyDigestSignature_signature), as in
+tpm-rs.
+diff --git a/TPMCmd/tpm/src/command/Signature/VerifyDigestSignature.c b/TPMCmd/tpm/src/command/Signature/VerifyDigestSignature.c
+--- a/TPMCmd/tpm/src/command/Signature/VerifyDigestSignature.c
++++ b/TPMCmd/tpm/src/command/Signature/VerifyDigestSignature.c
+@@ -71,6 +71,29 @@ TPM2_VerifyDigestSignature(
+         if(in->context.t.size != 0)
+             return TPM_RCS_VALUE + RC_VerifyDigestSignature_context;
+ 
++        // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
++        // "The scheme of keyHandle must be a signing scheme that supports signing
++        // a digest (e.g., TPM_ALG_ECDSA). The size of digest must match the size
++        // of the hash algorithm of the signing scheme. The TPM will verify that
++        // the signing scheme (including the hash or XOF algorithm) in signature
++        // matches the signing scheme of keyHandle (TPM_RC_SCHEME)." (Part 3,
++        // TPM2_VerifyDigestSignature)
++        {
++            TPMT_SIG_SCHEME objectScheme;
++            TPMI_ALG_HASH   schemeHashAlg;
++            //
++            objectScheme.scheme = TPM_ALG_NULL;
++            if(!CryptoCommon_SelectSignScheme(signObject, &objectScheme)
++               || objectScheme.scheme == TPM_ALG_HMAC)
++                return TPM_RCS_SCHEME + RC_VerifyDigestSignature_keyHandle;
++            schemeHashAlg = CryptoCommon_GetSignSchemeHashAlg(&objectScheme);
++            if(in->digest.t.size != CryptoCommon_HashGetDigestSize(schemeHashAlg))
++                return TPM_RCS_SIZE + RC_VerifyDigestSignature_digest;
++            if(in->signature.sigAlg != objectScheme.scheme
++               || CryptoCommon_GetSignHashAlg(&in->signature) != schemeHashAlg)
++                return TPM_RCS_SCHEME + RC_VerifyDigestSignature_signature;
++        }
++
+         // Validate Signature.  TPM_RC_SCHEME, TPM_RC_HANDLE or TPM_RC_SIGNATURE
+         // error may be returned by CryptoCommon_ValidateDigestSignature()
+         result = CryptoCommon_ValidateDigestSignature(

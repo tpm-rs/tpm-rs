@@ -131,8 +131,10 @@ hkdf = []
 # Post-Quantum Algorithms
 # ML-KEM key encapsulation keys (`TPM_ALG_MLKEM`)
 mlkem = []
-# ML-DSA signing keys (`TPM_ALG_MLDSA` and `TPM_ALG_HASH_MLDSA`)
+# ML-DSA signing keys (`TPM_ALG_MLDSA`)
 mldsa = []
+# HashML-DSA (pre-hash ML-DSA) signing keys (`TPM_ALG_HASH_MLDSA`)
+hash_mldsa = ["mldsa"]
 
 [dependencies]
 bitflags = { workspace = true }

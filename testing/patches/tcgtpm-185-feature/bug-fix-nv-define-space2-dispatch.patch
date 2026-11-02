@@ -1,0 +1,28 @@
+nv-define-space2-dispatch: TPM2_NV_DefineSpace2 unmarshals publicInfo into publicInfo
+
+Classification: spec-deviation bug fix.
+
+Specification (TPM 2.0 Part 3, Table "TPM2_NV_DefineSpace2 Command"):
+"TPM2B_AUTH | auth | the authorization value", "TPM2B_NV_PUBLIC_2 |
+publicInfo | the public parameters of the NV area".
+
+The command's dispatch table (CommandDispatch.inl) unmarshals the second
+parameter, the TPM2B_NV_PUBLIC_2, at the offset of the auth member instead of
+publicInfo: publicInfo stays zero (handleType 0, so every well-formed command
+fails with TPM_RC_HANDLE + publicInfo) and the authValue is overwritten. The
+entry now targets publicInfo, so TPM2_NV_DefineSpace2 defines an ordinary NV
+Index like TPM2_NV_DefineSpace (as the public tcgtpm, ibmswtpm2 and tpm-rs do).
+diff --git a/TPMCmd/tpm/include/private/CommandDispatch.inl b/TPMCmd/tpm/include/private/CommandDispatch.inl
+--- a/TPMCmd/tpm/include/private/CommandDispatch.inl
++++ b/TPMCmd/tpm/include/private/CommandDispatch.inl
+@@ -2546,7 +2546,9 @@
+     MAKE_DISPATCH_SEPARATOR(START_INPUT_PARAMETERS),
+     // Command input parameters
+     MAKE_INPUT_DISPATCH_ENTRY(MARSHAL_ID_TPM2B_AUTH, auth),
+-    MAKE_INPUT_DISPATCH_ENTRY(MARSHAL_ID_TPM2B_NV_PUBLIC_2, auth),
++    // tpm-rs differential testing -- spec deviation fix (NOT determinism):
++    // publicInfo was unmarshaled into the auth member.
++    MAKE_INPUT_DISPATCH_ENTRY(MARSHAL_ID_TPM2B_NV_PUBLIC_2, publicInfo),
+ 
+     MAKE_DISPATCH_SEPARATOR(START_OUTPUT_HANDLES),
+     // Response output handles
