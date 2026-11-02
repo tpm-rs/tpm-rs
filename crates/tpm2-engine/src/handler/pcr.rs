@@ -75,6 +75,18 @@ pub(crate) fn pcr_belongs_tcb_group(pcr: u32) -> bool {
     (20..=22).contains(&pcr)
 }
 
+/// Returns `true` if `pcr` belongs to the PCR authorization-value group
+/// (`PCRBelongsAuthGroup`: PCRs 20-22 share `gc.pcrAuthValues.auth[0]`).
+pub(crate) fn pcr_belongs_auth_group(pcr: u32) -> bool {
+    (20..=22).contains(&pcr)
+}
+
+/// Returns `true` if `pcr` belongs to the PCR policy group (`PCRBelongsPolicyGroup`: PCRs 20-22
+/// share `gp.pcrPolicies`).
+pub(crate) fn pcr_belongs_policy_group(pcr: u32) -> bool {
+    (20..=22).contains(&pcr)
+}
+
 /// Returns `true` if `pcr` is state-saved on `TPM2_Shutdown(TPM_SU_STATE)` (`PCRIsStateSaved`;
 /// PCRs 0-15 in `PlatformPcr.c`). Modifying such a PCR invalidates the orderly state.
 pub(crate) fn pcr_is_state_saved(pcr: u32) -> bool {
@@ -587,7 +599,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // Only PCRs belonging to an authorization group (PCR 20-22) allow an authValue; the C
         // reference returns a bare `TPM_RC_VALUE` here.
-        if !(20..=22).contains(&pcr_handle) {
+        if !pcr_belongs_auth_group(pcr_handle) {
             return Err(TpmRc::VALUE.to_rc());
         }
 
@@ -649,7 +661,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         // Only PCRs belonging to a policy group (PCR 20-22) allow a policy.
-        if !(20..=22).contains(&cmd.pcr_num.0) {
+        if !pcr_belongs_policy_group(cmd.pcr_num.0) {
             return Err(TpmRc::VALUE.with(Position::parameter(3)));
         }
 

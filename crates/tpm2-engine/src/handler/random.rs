@@ -38,7 +38,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
         let requested_bytes = cmd.bytes_requested as usize;
-        let returned_bytes = core::cmp::min(requested_bytes, tpm2::Tpm2bDigest::MAX_BUFFER_SIZE);
+        // TPM 2.0 Part 3, TPM2_GetRandom: "If *bytesRequested* is more than will fit into a
+        // `TPM2B_DIGEST` on the TPM, no error is returned but the TPM will only return as much
+        // data as will fit into a `TPM2B_DIGEST` buffer for the TPM." That is
+        // `Tpm2bDigest::CAP`, the largest digest (48 bytes without SHA-512).
+        let returned_bytes = core::cmp::min(requested_bytes, tpm2::Tpm2bDigest::CAP);
 
         // Generate the random bytes before building the response so that an entropy-source
         // failure fails the command with TPM_RC_FAILURE (the C reference enters failure mode via

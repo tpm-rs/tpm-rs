@@ -227,9 +227,7 @@ impl Tpmi {
             }
             Self::RhLockout => handle == Handle::RH_LOCKOUT,
             Self::RhNvIndex => {
-                is_nv_index(handle)
-                    || is_external_nv(handle)
-                    || (Handle::PERMANENT_NV_FIRST..=Handle::PERMANENT_NV_LAST).contains(&handle)
+                is_nv_index(handle) || is_external_nv(handle) || is_permanent_nv(handle)
             }
             Self::RhNvDefinedIndex => is_nv_index(handle) || is_external_nv(handle),
             Self::RhNvLegacyIndex => is_nv_index(handle),
@@ -412,6 +410,11 @@ fn is_nv_index(handle: Handle) -> bool {
 /// `{EXTERNAL_NV_FIRST:EXTERNAL_NV_LAST}`.
 fn is_external_nv(handle: Handle) -> bool {
     (Handle::EXTERNAL_NV_FIRST..=Handle::EXTERNAL_NV_LAST).contains(&handle)
+}
+
+/// `{PERMANENT_NV_FIRST:PERMANENT_NV_LAST}`.
+fn is_permanent_nv(handle: Handle) -> bool {
+    (Handle::PERMANENT_NV_FIRST..=Handle::PERMANENT_NV_LAST).contains(&handle)
 }
 
 /// `{HMAC_SESSION_FIRST:HMAC_SESSION_LAST}`.

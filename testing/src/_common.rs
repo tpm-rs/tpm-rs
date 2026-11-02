@@ -8592,12 +8592,14 @@ pub fn oracle_validate_parms(parms: &TpmtPublicParms) -> Result<(), TpmRc> {
                 }
                 None => {}
             }
-            if parms.curve_id != TpmEccCurve::NistP224
-                && parms.curve_id != TpmEccCurve::NistP256
-                && parms.curve_id != TpmEccCurve::NistP384
-                && parms.curve_id != TpmEccCurve::NistP521
-                && parms.curve_id != TpmEccCurve::BNP256
-            {
+            if !matches!(
+                parms.curve_id,
+                TpmEccCurve::NistP224
+                    | TpmEccCurve::NistP256
+                    | TpmEccCurve::NistP384
+                    | TpmEccCurve::NistP521
+                    | TpmEccCurve::BNP256
+            ) {
                 return Err(TpmRc::CURVE.with(Position::parameter(1)));
             }
             if let Some(kdf) = parms.kdf {

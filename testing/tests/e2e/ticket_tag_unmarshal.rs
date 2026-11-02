@@ -42,3 +42,21 @@ fn auth_ticket_with_verified_tag_is_tag_error() {
         rc_p(TpmRc::TAG, 5)
     );
 }
+
+/// A `TPMT_TK_AUTH` tag that is no defined ticket tag (an undefined `0x9D9D`, `0x0000`, or the
+/// verification ticket tag `TPM_ST_MESSAGE_VERIFIED`) is `TPM_RC_TAG` on the ticket parameter
+/// like any other tag of the wrong ticket type: `TPM_ST` itself unmarshals any value (Part 2,
+/// "TPM_ST Constants" has no `#TPM_RC_VALUE`). Found by differential fuzzing.
+#[test]
+fn auth_ticket_with_undefined_tag_is_tag_error() {
+    let mut tpm = Tpm::new();
+    // A failing command leaves the session unchanged, so one session serves every case.
+    let (session, _) = start_policy(&mut tpm, TpmSe::Policy);
+    for tag in [0x9D9D, 0x8026, 0x0000] {
+        assert_eq!(
+            policy_ticket_with_ticket_tag(&mut tpm, session, tag),
+            rc_p(TpmRc::TAG, 5),
+            "TPMT_TK_AUTH tag {tag:#06x}"
+        );
+    }
+}

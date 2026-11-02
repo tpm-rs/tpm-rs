@@ -133,8 +133,8 @@ fn pcr_selection_with_more_banks_than_hash_algorithms_rejected() {
     }
 }
 
-/// The largest digest of this TPM's profile (SHA-512), in bytes.
-const DIGEST_CAP: u16 = 64;
+/// The largest digest of this TPM's profile (SHA-512, or SHA-384 without it), in bytes.
+const DIGEST_CAP: u16 = crate::_common::STRONGEST_DIGEST_SIZE as u16;
 
 /// `TPM_CC_HashSequenceStart`.
 const TPM_CC_HASH_SEQUENCE_START: u32 = 0x0000_0186;

@@ -32,8 +32,10 @@ arbitrary = { version = "1.4.2", features = ["derive"] }
 # Without its default `sha512` feature, which the targets enable as their
 # references do (the public TCG reference has no SHA-512 upstream).
 testing = { path = "..", default-features = false }
-# The features are unified with those `testing` enables.
-tpm2 = { path = "../../crates/tpm2" }
+# The features are unified with those `testing` enables (the default ones of
+# `tpm2` except `sha512`, like the root workspace; `tpm2`'s own defaults would
+# turn SHA-512 on for `target-tcgtpm`).
+tpm2 = { path = "../../crates/tpm2", default-features = false }
 
 [lib]
 path = "src/lib.rs"

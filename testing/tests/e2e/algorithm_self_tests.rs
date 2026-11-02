@@ -205,7 +205,8 @@ fn incremental_self_test_rejects_unimplemented_algorithms_before_testing() {
 }
 
 /// Creating an ECC key runs the ECDSA test first (which draws random values from the DRBG); the
-/// key and every later random value match the reference.
+/// key and every later random value match the reference. The first signature then tests nothing
+/// more.
 #[test]
 #[allow(deprecated)] // TPM2_Sign is deprecated upstream, but the TPM implements it.
 fn ecc_key_creation_tests_ecdsa() {
@@ -493,4 +494,98 @@ fn first_rsassa_signature_tests_rsassa() {
         bytes_requested: 32,
     })
     .expect("TPM2_GetRandom");
+}
+
+/// Loading an external ECC key with its private part (and a nameAlg) checks that the private key
+/// generated the public point, a point multiplication: it tests ECDH first.
+#[test]
+fn external_ecc_private_key_load_tests_ecdh() {
+    let mut sim = Tpm::new();
+    load_external_ecc_key(&mut sim, external_attributes());
+    check_after(&mut sim, &[Alg::SHA256, Alg::ECDH]);
+}
+
+/// `TPM2_EC_Ephemeral` multiplies the generator by the committed random value: it tests ECDH
+/// first (and nothing else of ECC). `TPM2_EC_Ephemeral` is implemented with `cc-ec-ephemeral`.
+#[cfg(feature = "cc-ec-ephemeral")]
+#[test]
+fn ec_ephemeral_tests_ecdh() {
+    let mut sim = Tpm::new();
+    sim.execute(ECEphemeral {
+        curve_id: TpmEccCurve::NistP256,
+    })
+    .expect("TPM2_EC_Ephemeral");
+    let to_do = to_do_list(&mut sim);
+    assert!(!to_do.contains(&Alg::ECDH), "ECDH in {to_do:?}");
+    assert!(to_do.contains(&Alg::ECDSA), "ECDSA tested in {to_do:?}");
+}
+
+/// An ECDSA signature with r = 0 fails verification before any point multiplication, so it tests
+/// nothing of ECC.
+#[test]
+fn ecdsa_verification_of_out_of_range_signature_tests_nothing() {
+    let mut sim = Tpm::new();
+    let key = load_external_ecc(&mut sim);
+    let sig = TpmsSignatureEcc {
+        hash: TpmiAlgHash::Sha256,
+        signature_r: Tpm2bEccParameter::default(),
+        signature_s: Tpm2bEccParameter::from_bytes(&[0x01]).unwrap(),
+    };
+    verify_bad_signature(&mut sim, key, TpmtSignature::Ecdsa(sig));
+    check_after(&mut sim, &[Alg::SHA256]);
+}
+
+/// The first RSASSA-PSS signature tests RSAPSS (with the default test hash) and the signature's
+/// hash, which the PSS encoding uses.
+#[test]
+#[allow(deprecated)] // TPM2_Sign is deprecated upstream, but the TPM implements it.
+fn first_rsapss_signature_tests_rsapss_and_its_hash() {
+    let mut sim = Tpm::new();
+    let key = create_primary_with_auth(
+        &mut sim,
+        rsa_sign_template(Some(TpmtRsaScheme::Rsapss(TpmiAlgHash::Sha1))),
+        b"",
+    );
+    let before = to_do_list(&mut sim);
+    assert!(before.contains(&Alg::SHA1), "SHA1 tested in {before:?}");
+    let sign = Sign {
+        key_handle: key,
+        digest: Tpm2bDigest::from_bytes(&[0x5a; 20]).unwrap(),
+        in_scheme: None,
+        validation: TpmtTkHashcheck::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default()),
+    };
+    execute_with_password_sessions(&mut sim, &sign, 1, &[]).expect("TPM2_Sign");
+    let mut expected = before;
+    expected.retain(|&alg| alg != Alg::RSAPSS && alg != Alg::SHA1 && alg != default_test_hash());
+    assert_eq!(to_do_list(&mut sim), expected);
+}
+
+/// An OAEP decryption hashes with the OAEP hash once the ciphertext passed the size and modulus
+/// checks: decrypting an OAEP (SHA-256) ciphertext as OAEP with SHA-1 fails (`TPM_RC_VALUE`) but
+/// tests SHA-1.
+#[test]
+fn failed_oaep_decryption_still_tests_its_hash() {
+    let mut sim = Tpm::new();
+    let key = create_primary_with_auth(&mut sim, rsa_decrypt_public(2048), b"");
+    let encrypted = sim
+        .execute(RSAEncrypt {
+            key_handle: key,
+            message: Tpm2bPublicKeyRsa::from_bytes(&[0x11; 16]).unwrap(),
+            in_scheme: Some(TpmtRsaDecrypt::Oaep(TpmiAlgHash::Sha256)),
+            label: Tpm2bData::default(),
+        })
+        .expect("TPM2_RSA_Encrypt");
+    let cipher_text = encrypted.out_data.get_buffer().to_vec();
+    assert!(to_do_list(&mut sim).contains(&Alg::SHA1));
+    let cmd = RSADecrypt {
+        key_handle: key,
+        cipher_text: Tpm2bPublicKeyRsa::from_bytes(&cipher_text).unwrap(),
+        in_scheme: Some(TpmtRsaDecrypt::Oaep(TpmiAlgHash::Sha1)),
+        label: Tpm2bData::default(),
+    };
+    assert_eq!(
+        execute_with_password_sessions(&mut sim, &cmd, 1, &[]).map(|_| ()),
+        Err(TpmRc::VALUE.to_rc().get())
+    );
+    assert!(!to_do_list(&mut sim).contains(&Alg::SHA1));
 }

@@ -137,10 +137,13 @@ pub const MAX_LOADED_SESSIONS: usize = 3;
 /// Maximum number of active (loaded or saved) authorization sessions (`MAX_ACTIVE_SESSIONS`); the
 /// low 24 bits of a session handle index this many session slots.
 pub const MAX_ACTIVE_SESSIONS: usize = tpm2::TPM2_MAX_ACTIVE_SESSIONS as usize;
-/// `MAX_CONTEXT_GAP` of the C reference with a 16-bit `CONTEXT_SLOT`: the largest permitted
-/// distance between the current session context counter and the sequence number of a saved
-/// session context (also reported as `TPM_PT_CONTEXT_GAP_MAX + 1`).
-pub const MAX_CONTEXT_GAP: u64 = 0x1_0000;
+/// The C reference's `CONTEXT_SLOT`: the low-order bits of the session context counter that
+/// identify a saved session context (`gr.contextArray`). 16 bits.
+type ContextSlot = u16;
+/// `MAX_CONTEXT_GAP` of the C reference (the `CONTEXT_SLOT` range, see `ContextSlot`): the
+/// largest permitted distance between the current session context counter and the sequence
+/// number of a saved session context (also reported as `TPM_PT_CONTEXT_GAP_MAX + 1`).
+pub const MAX_CONTEXT_GAP: u64 = ContextSlot::MAX as u64 + 1;
 /// Maximum number of active hash/HMAC sequences in RAM.
 pub const MAX_ACTIVE_SEQUENCES: usize = 3;
 /// Maximum sequence buffer size per active sequence.
@@ -542,7 +545,8 @@ pub struct GlobalState {
     /// Persistent; reset to zero by `TPM2_Clear`.
     pub audit_counter: u64,
     /// Hash algorithm of the command audit digest (`gp.auditHashAlg`), changed by
-    /// `TPM2_SetCommandCodeAuditStatus`. Persistent; SHA-512 at manufacture.
+    /// `TPM2_SetCommandCodeAuditStatus`. Persistent; `context_integrity_hash_alg()` at
+    /// manufacture (SHA-512, or SHA-384 without SHA-512).
     pub audit_hash_alg: u16,
     /// The commands whose execution is recorded in the command audit digest
     /// (`gp.auditCommands`). Persistent.
@@ -1286,12 +1290,14 @@ impl GlobalState {
             .min_by_key(|&slot| self.saved_session_sequences[slot])
     }
 
-    /// Returns `true` if the context gap is exhausted: the low 16 bits of the session context
-    /// counter (the `CONTEXT_SLOT` value the next save would use) equal those of the oldest
-    /// saved session context, so saving another context would make the oldest ambiguous.
+    /// Returns `true` if the context gap is exhausted: the low bits (`ContextSlot`) of the
+    /// session context counter (the `CONTEXT_SLOT` value the next save would use) equal those of
+    /// the oldest saved session context, so saving another context would make the oldest
+    /// ambiguous.
     pub fn context_gap_exhausted(&self) -> bool {
         self.oldest_saved_session_slot().is_some_and(|slot| {
-            (self.saved_session_sequences[slot] as u16) == (self.context_counter as u16)
+            (self.saved_session_sequences[slot] as ContextSlot)
+                == (self.context_counter as ContextSlot)
         })
     }
 
@@ -1308,7 +1314,7 @@ impl GlobalState {
         }
         // The low counter values 0..=MAX_LOADED_SESSIONS mark loaded sessions in the C
         // `contextArray` and are never used as context IDs.
-        let low = self.context_counter as u16 as u64;
+        let low = self.context_counter as ContextSlot as u64;
         if low <= MAX_LOADED_SESSIONS as u64 {
             self.context_counter += MAX_LOADED_SESSIONS as u64 + 1 - low;
         }
@@ -1320,7 +1326,7 @@ impl GlobalState {
             .context_counter
             .checked_add(1)
             .ok_or(TpmRc::TOO_MANY_CONTEXTS)?;
-        if (self.context_counter as u16) == 0 {
+        if (self.context_counter as ContextSlot) == 0 {
             self.context_counter += MAX_LOADED_SESSIONS as u64 + 1;
         }
         self.saved_sessions[slot] = Some(handle);
@@ -1551,7 +1557,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             self.load_persistent_object(handle)
                 .map(|obj| obj.auth)
                 .unwrap_or_default()
-        } else if (20..=22).contains(&handle) {
+        } else if crate::handler::pcr::pcr_belongs_auth_group(handle) {
             self.state.pcr_auth_value
         } else {
             OwnedAuth::default()
@@ -1608,7 +1614,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         } else if (0x81000000..=0x81FFFFFF).contains(&handle) {
             let obj = self.load_persistent_object(handle)?;
             Ok(obj.public.auth_policy)
-        } else if (20..=22).contains(&handle) {
+        } else if crate::handler::pcr::pcr_belongs_policy_group(handle) {
             Ok(self.state.pcr_policy)
         } else {
             Ok(OwnedDigest::default())
@@ -3829,7 +3835,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 }
             }
             AuthRole::User | AuthRole::None => {
-                (20..=22).contains(&handle) && self.state.pcr_policy_alg.is_some()
+                crate::handler::pcr::pcr_belongs_policy_group(handle)
+                    && self.state.pcr_policy_alg.is_some()
             }
         }
     }
@@ -4520,7 +4527,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             let (_, nv_public, _, _) =
                 crate::handler::nv_storage::unmarshal_nv_header(&read_buf[..read_len]).ok()?;
             Some(nv_public.name_alg)
-        } else if (20..=22).contains(&handle) {
+        } else if crate::handler::pcr::pcr_belongs_policy_group(handle) {
             self.state.pcr_policy_alg
         } else {
             None
@@ -4572,7 +4579,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         // authPolicy.
         let is_object = (0x80000000..=0x81FFFFFF).contains(&entity_handle)
             && self.state.find_active_sequence(entity_handle).is_none();
-        let is_policy_pcr = (20..=22).contains(&entity_handle);
+        let is_policy_pcr = crate::handler::pcr::pcr_belongs_policy_group(entity_handle);
         if policy.get_size() == 0 && !is_object && !is_policy_pcr {
             return Err(TpmRc::AUTH_UNAVAILABLE);
         }

@@ -89,9 +89,10 @@ impl fmt::Display for Divergence {
 /// A C reference TPM implementation that `tpm-rs` is compared with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Implementation {
-    /// The TCG reference implementation, binary `tcgtpm`.
+    /// The TCG reference implementation, binary `tcgtpm` (`target-tcgtpm`,
+    /// `target-tcgtpm-v185`).
     Tcgtpm,
-    /// The IBM software TPM, binary `ibmswtpm2`.
+    /// The IBM software TPM, binary `ibmswtpm2` (`target-ibmswtpm2`).
     Ibmswtpm2,
 }
 

@@ -10,12 +10,20 @@
 # <dir>/art (crash artifacts), <dir>/build.log, <dir>/fuzz.log and
 # <dir>/tree.txt (the git revision and dirty files the binary was built from).
 # Keep <dir> outside the repository (e.g. /tmp/tpm-rs-fuzz/campaign1).
+#
+# FUZZ_TARGET selects the differential target (the fuzz crate's `target-*`
+# feature without `target-`; default `tcgtpm`), e.g. `ibmswtpm2`. Each target
+# enables SHA-512 (`testing/sha512`) exactly when its reference has it. Each
+# target has its own default target dir (`fuzztarget-<target>`), so the builds do not
+# invalidate each other.
 set -euo pipefail
 R=$(cd "$(dirname "$0")/../../../.." && pwd)
 D=$(realpath -m "$1")
 SECS=${2:-1800}
 FORKS=${3:-$(($(nproc) / 2))}
-TARGET_DIR=${FUZZ_TARGET_DIR:-$(dirname "$D")/fuzztarget}
+TARGET=${FUZZ_TARGET:-tcgtpm}
+FEATURES=inproc,target-$TARGET
+TARGET_DIR=${FUZZ_TARGET_DIR:-$(dirname "$D")/fuzztarget-$TARGET}
 CARGO=${CARGO:-$HOME/.cargo/bin/cargo}
 
 if [ ! -d "$R/testing/fuzz/corpus/diff_conversation" ] || \
@@ -26,10 +34,10 @@ fi
 
 rm -rf "$D"; mkdir -p "$D/work" "$D/art"
 cd "$R"
-{ git rev-parse HEAD; git status --short; } > "$D/tree.txt"
+{ git rev-parse HEAD; echo "target: $TARGET"; git status --short; } > "$D/tree.txt"
 # The target name is required: without it the -s none build also builds the
 # src/bin tools and fails to link (undefined __sanitizer_cov_*).
-"$CARGO" fuzz build --fuzz-dir testing/fuzz -O -s none --features inproc \
+"$CARGO" fuzz build --fuzz-dir testing/fuzz -O -s none --no-default-features --features "$FEATURES" \
     --target-dir "$TARGET_DIR" diff_conversation > "$D/build.log" 2>&1
 cp "$TARGET_DIR/x86_64-unknown-linux-gnu/release/diff_conversation" "$D/diff_conversation"
 cp testing/fuzz/corpus/diff_conversation/* "$D/work/"

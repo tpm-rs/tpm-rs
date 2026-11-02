@@ -485,11 +485,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let ticket_digest = Tpm2bDigest::from_bytes(&hmac_digest_bytes[..hmac_len]).unwrap();
             let ticket = TpmtTkAuth::Signed(tpm2::Handle(ticket_hierarchy), ticket_digest);
 
-            let mut timeout_val = auth_timeout;
-            if cmd.nonce_tpm.get_buffer().is_empty() {
-                timeout_val |= 1u64 << 63; // EXPIRATION_BIT
-            }
-            timeout_bytes = timeout_val.to_be_bytes();
+            // The TPM-specific timeout buffer (`crate::handler::encode_auth_timeout`).
+            timeout_bytes = crate::handler::encode_auth_timeout(
+                auth_timeout,
+                cmd.nonce_tpm.get_buffer().is_empty(),
+            );
             let timeout = Tpm2bTimeout::from_bytes(&timeout_bytes).unwrap();
 
             (timeout, ticket)

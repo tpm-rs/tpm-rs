@@ -23,9 +23,12 @@ Tags: `us-only` (every reference answers TPM_RC_COMMAND_CODE and tpm-rs does
 not), `them-only` (tpm-rs answers TPM_RC_COMMAND_CODE and the references
 succeed), `spec` (everything else: check the spec).
 
-Rendering with `to_test` uses process mode, so the reference binary of the
-fuzz crate's target must be built (e.g. `cargo build --release -p testing
---no-default-features --features target-tcgtpm --bin reference`).
+The campaign's target (the `target:` line of <dir>/tree.txt, else FUZZ_TARGET,
+else `tcgtpm`) selects the fuzz crate features of every build. Rendering with
+`to_test` uses process mode, so the reference binary of that target must be
+built (e.g. `cargo build --release -p testing --no-default-features --features
+target-tcgtpm --bin reference`, or `--features target-ibmswtpm2` for that
+target; REFERENCE_BIN overrides its path).
 """
 import collections
 import concurrent.futures as cf
@@ -114,14 +117,45 @@ def minimize(binary, rep, sig):
     return rep
 
 
-def build_to_test():
+def campaign_target(d):
+    """The differential target of campaign `d` (the `target:` line campaign.sh
+    writes to <dir>/tree.txt), else FUZZ_TARGET, else `tcgtpm`."""
+    try:
+        for line in open(os.path.join(d, "tree.txt")):
+            if line.startswith("target: "):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return os.environ.get("FUZZ_TARGET", "tcgtpm")
+
+
+def target_features(target):
+    """The fuzz crate features (with `--no-default-features`) of `target`: its
+    `target-*` feature, which enables SHA-512 exactly when the target's reference
+    has it."""
+    return [f"target-{target}"]
+
+
+def target_dir(campaign, target):
+    """The fuzz build directory next to `campaign`: one per target, so that
+    the builds do not invalidate each other."""
+    return os.path.join(os.path.dirname(campaign), f"fuzztarget-{target}")
+
+
+def build_to_test(target):
+    # `to_test` runs in process mode (never `inproc`), against the reference
+    # binary of the same target; each target gets its own target dir.
+    target_path = os.path.join(R, "testing/fuzz/target", target)
     subprocess.run([CARGO, "build", "-q", "--release", "--manifest-path",
-                    "testing/fuzz/Cargo.toml", "--bin", "to_test"], cwd=R, check=True)
-    return os.path.join(R, "testing/fuzz/target/release/to_test")
+                    "testing/fuzz/Cargo.toml", "--bin", "to_test", "--no-default-features",
+                    "--features", ",".join(target_features(target)),
+                    "--target-dir", target_path], cwd=R, check=True)
+    return os.path.join(target_path, "release/to_test")
 
 
 def render(to_test, rep):
-    env = dict(ENV, REFERENCE_BIN=f"{R}/target/release/reference")
+    env = dict(ENV)
+    env.setdefault("REFERENCE_BIN", f"{R}/target/release/reference")
     p = subprocess.run([to_test, rep], cwd=R, capture_output=True, text=True,
                        errors="replace", env=env, timeout=600)
     note = ("// NOTE: no finding when replayed on the current source (fixed since?)\n"
@@ -163,7 +197,7 @@ def group(d, top, do_render):
         for i, m in zip(renderable, ex.map(lambda i: minimize(binary, reps[i][1], reps[i][0]),
                                            renderable)):
             reps[i] = (reps[i][0], m)
-    to_test = build_to_test() if do_render else None
+    to_test = build_to_test(campaign_target(d)) if do_render else None
     lines = [f"# Findings of {os.path.basename(d)} by family", "",
              f"{len(sigs)} artifacts, {len({s for s in sigs.values()})} signatures, "
              f"{len(order)} families.", ""]
@@ -184,9 +218,12 @@ def group(d, top, do_render):
 
 def replay(old, binary):
     if binary is None:
-        target = os.path.join(os.path.dirname(old), "fuzztarget")
+        reference = campaign_target(old)
+        target = target_dir(old, reference)
         subprocess.run([CARGO, "fuzz", "build", "--fuzz-dir", "testing/fuzz", "-O", "-s", "none",
-                        "--features", "inproc", "--target-dir", target, "diff_conversation"],
+                        "--no-default-features", "--features",
+                        ",".join(["inproc"] + target_features(reference)),
+                        "--target-dir", target, "diff_conversation"],
                        cwd=R, check=True)
         binary = os.path.join(target, "x86_64-unknown-linux-gnu/release/diff_conversation")
     sigs = json.load(open(os.path.join(old, "signatures.json")))

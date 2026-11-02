@@ -86,15 +86,20 @@ fn policy_index_name(alg: TpmiAlgHash) -> Vec<u8> {
             "ae32cfc60c4d120609ed6768afcf090c",
         ]),
         #[cfg(feature = "sha512")]
-        TpmiAlgHash::Sha512 => hex_to_bytes(&[
-            "000d", // TPM_ALG_SHA512
-            "1c47c0bbcbd3cf7d7cae6987d31937c1",
-            "71015dde3b7f0d3c869bca1f7e8a223b",
-            "9acfadb49b7c9cf14d450f41e9327de3",
-            "4d9291eece2c58ab1dc10e9059cce560",
-        ]),
+        TpmiAlgHash::Sha512 => sha512_policy_index_name(),
         _ => panic!("no PolicyIndexName for {alg:?}"),
     }
+}
+
+/// The SHA-512 Policy Index Name from "Computing Policy Index Names" section.
+fn sha512_policy_index_name() -> Vec<u8> {
+    hex_to_bytes(&[
+        "000d", // TPM_ALG_SHA512
+        "1c47c0bbcbd3cf7d7cae6987d31937c1",
+        "71015dde3b7f0d3c869bca1f7e8a223b",
+        "9acfadb49b7c9cf14d450f41e9327de3",
+        "4d9291eece2c58ab1dc10e9059cce560",
+    ])
 }
 
 /// PolicyC values from "Computing PolicyC" section.
@@ -217,9 +222,24 @@ fn test_calculate_policy_index_name_sha_384() {
 
 // Original Go test: ek_test.go - TestCalculatePolicyIndexName/SHA-512
 #[test]
-#[cfg(feature = "sha512")]
 fn test_calculate_policy_index_name_sha_512() {
+    #[cfg(feature = "sha512")]
     calculate_policy_index_name(TpmiAlgHash::Sha512);
+    #[cfg(not(feature = "sha512"))]
+    assert_sha512_name_unrepresentable();
+}
+
+/// Without the `sha512` feature (a TPM without SHA-512), a SHA-512 Name (66 bytes) does not fit a
+/// `TPM2B_NAME`, which then holds at most a SHA-384 Name (50 bytes): the SHA-512 Policy Index
+/// Name can be neither computed nor used with this TPM.
+#[cfg(not(feature = "sha512"))]
+fn assert_sha512_name_unrepresentable() {
+    let name_bytes = sha512_policy_index_name();
+    assert_eq!(name_bytes.len(), 2 + 64);
+    assert!(
+        Tpm2bName::from_bytes(&name_bytes).is_err(),
+        "a SHA-512 Name must not fit the TPM2B_NAME of a TPM without SHA-512"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -250,9 +270,11 @@ fn test_calculate_policy_c_sha_384() {
 
 // Original Go test: ek_test.go - TestCalculatePolicyC/SHA-512
 #[test]
-#[cfg(feature = "sha512")]
 fn test_calculate_policy_c_sha_512() {
+    #[cfg(feature = "sha512")]
     calculate_policy_c(TpmiAlgHash::Sha512);
+    #[cfg(not(feature = "sha512"))]
+    assert_sha512_name_unrepresentable();
 }
 
 // ---------------------------------------------------------------------------

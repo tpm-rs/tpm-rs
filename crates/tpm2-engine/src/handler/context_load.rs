@@ -565,7 +565,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             0
         };
         // Session flags byte (see `serialize_session`): bit 0 = `isTemplateHashDefined`,
-        // bit 1 = `isDaBound`, bit 2 = `isLockoutBound`.
+        // bit 1 = `isDaBound`, bit 2 = `isLockoutBound`, bit 3 = `isPPRequired`.
         let session_flags = if !slice.is_empty() {
             u8::unmarshal(&mut slice).unwrap_or(0)
         } else {

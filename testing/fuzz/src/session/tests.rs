@@ -588,11 +588,16 @@ fn requests_without_sessions_fall_back_to_password() {
 // ---------------------------------------------------------------------------
 
 /// An unbound HMAC session authorizes `TPM2_NV_DefineSpace` with the owner's
-/// authValue for every session hash; the nonces roll and the response HMACs
-/// verify on consecutive uses.
+/// authValue for every session hash the target implements; the nonces roll and
+/// the response HMACs verify on consecutive uses.
 #[test]
 fn hmac_session_authorizes_nv_define_space_with_every_hash() {
-    for hash in [SHA1, SHA256, SHA384, SHA512] {
+    // Every hash the target implements (no SHA-512 for `target-tcgtpm`).
+    let hashes = [SHA1, SHA256, SHA384, SHA512];
+    for hash in hashes
+        .into_iter()
+        .filter(|h| TpmiAlgHash::try_from(*h).is_ok())
+    {
         let mut c = Conv::new();
         c.set_hierarchy_auth(RH_OWNER, b"", b"owner-secret");
         let h = c.start_session(RH_NULL, b"", SE_HMAC, SYM_NULL, hash);

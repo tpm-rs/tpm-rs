@@ -70,7 +70,7 @@ mod mac;
 mod make_credential;
 pub(crate) mod nv_storage;
 mod object_change_auth;
-mod pcr;
+pub(crate) mod pcr;
 #[cfg(any(feature = "cc-pp-commands", feature = "cc-set-algorithm-set"))]
 mod platform_settings;
 #[cfg(feature = "cc-policy-ac-send-select")]
@@ -146,11 +146,19 @@ use tpm2::{
 /// The `qualifiedSigner` reported in attestation structures when `signHandle` is `TPM_RH_NULL`.
 const ATTEST_NULL_SIGNER_NAME: [u8; 4] = Handle::RH_NULL.0.to_be_bytes();
 
+/// `TPM_PT_FIRMWARE_VERSION_1` (`gp.firmwareV1`), reported by
+/// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)` and in [`ATTEST_FIRMWARE_VERSION`].
+pub(crate) const FIRMWARE_VERSION_1: u32 = 1;
+/// `TPM_PT_FIRMWARE_VERSION_2` (`gp.firmwareV2`), reported by
+/// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)` and in [`ATTEST_FIRMWARE_VERSION`].
+pub(crate) const FIRMWARE_VERSION_2: u32 = 0;
+
 /// The plain-text `firmwareVersion` reported in attestation structures:
-/// `(TPM_PT_FIRMWARE_VERSION_1 << 32) | TPM_PT_FIRMWARE_VERSION_2`, which must agree with the
-/// values reported by `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)` (see `capability.rs`:
-/// `FIRMWARE_VERSION_1 = 1`, `FIRMWARE_VERSION_2 = 0`).
-pub(crate) const ATTEST_FIRMWARE_VERSION: u64 = 1u64 << 32;
+/// `(TPM_PT_FIRMWARE_VERSION_1 << 32) | TPM_PT_FIRMWARE_VERSION_2` (`FillInAttestInfo()`), which
+/// agrees with the values reported by `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)`
+/// ([`FIRMWARE_VERSION_1`], [`FIRMWARE_VERSION_2`]).
+pub(crate) const ATTEST_FIRMWARE_VERSION: u64 =
+    ((FIRMWARE_VERSION_1 as u64) << 32) | FIRMWARE_VERSION_2 as u64;
 
 /// The common header fields of an attestation structure (`TPMS_ATTEST`), as filled in by
 /// `FillInAttestInfo()` in the reference implementation. Produced by
@@ -466,6 +474,39 @@ pub(crate) const MAX_DIGEST_SIZE: usize = TpmiAlgHash::MAX_DIGEST_BYTES;
 /// Convention").
 pub(crate) fn context_integrity_hash_alg() -> TpmiAlgHash {
     TpmiAlgHash::try_from(tpm2::Alg::SHA512).unwrap_or(TpmiAlgHash::Sha384)
+}
+
+/// Size of the TPM-specific `timeout` buffer (`TPM2B_TIMEOUT`) of the authorization tickets of
+/// `TPM2_PolicySigned`/`TPM2_PolicySecret`, which `TPM2_PolicyTicket` takes back: 8 bytes, the
+/// 64-bit timeout with the expires-on-reset flag in its most significant bit.
+pub(crate) const AUTH_TIMEOUT_SIZE: usize = 8;
+
+/// The expires-on-reset flag of an authorization ticket's timeout (`EXPIRATION_BIT`).
+const AUTH_TIMEOUT_EXPIRATION_BIT: u64 = 1 << 63;
+
+/// Encodes the `timeout` buffer of an authorization ticket ([`AUTH_TIMEOUT_SIZE`] bytes) from
+/// the ticket's timeout and whether the ticket expires on a TPM Reset (no `nonceTPM` given).
+pub(crate) fn encode_auth_timeout(
+    auth_timeout: u64,
+    expires_on_reset: bool,
+) -> [u8; AUTH_TIMEOUT_SIZE] {
+    let mut timeout_val = auth_timeout;
+    if expires_on_reset {
+        timeout_val |= AUTH_TIMEOUT_EXPIRATION_BIT;
+    }
+    timeout_val.to_be_bytes()
+}
+
+/// Decodes the `timeout` buffer of an authorization ticket (see [`encode_auth_timeout`]) into
+/// the ticket's timeout and its expires-on-reset flag.
+///
+/// Returns `None` if the buffer does not have [`AUTH_TIMEOUT_SIZE`] bytes.
+pub(crate) fn decode_auth_timeout(buf: &[u8]) -> Option<(u64, bool)> {
+    let timeout_val = u64::from_be_bytes(buf.try_into().ok()?);
+    Some((
+        timeout_val & !AUTH_TIMEOUT_EXPIRATION_BIT,
+        (timeout_val & AUTH_TIMEOUT_EXPIRATION_BIT) != 0,
+    ))
 }
 
 /// Returns the first `size` bytes of a Primary Seed or hierarchy proof buffer.

@@ -75,15 +75,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.with(Position::parameter(5)));
         }
 
-        // The timeout buffer must hold exactly a UINT64 (`TPM_RCS_SIZE + RC_PolicyTicket_timeout`).
-        if cmd.timeout.get_size() != 8 {
-            return Err(TpmRc::SIZE.with(Position::parameter(1)));
-        }
-        let mut timeout_buf = [0u8; 8];
-        timeout_buf.copy_from_slice(cmd.timeout.get_buffer());
-        let timeout_val = u64::from_be_bytes(timeout_buf);
-        let expires_on_reset = (timeout_val & (1u64 << 63)) != 0;
-        let auth_timeout_masked = timeout_val & !(1u64 << 63);
+        // The timeout buffer must hold exactly a UINT64 (`TPM_RCS_SIZE + RC_PolicyTicket_timeout`);
+        // see `crate::handler::decode_auth_timeout`.
+        let (auth_timeout_masked, expires_on_reset) =
+            crate::handler::decode_auth_timeout(cmd.timeout.get_buffer())
+                .ok_or(TpmRc::SIZE.with(Position::parameter(1)))?;
 
         // The normal cpHashA/timeout checks (C `PolicyParameterChecks`) run before the ticket is
         // validated: NV availability, expiration (including a time epoch change), and cpHashA.

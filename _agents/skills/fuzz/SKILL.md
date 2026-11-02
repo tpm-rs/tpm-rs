@@ -81,7 +81,7 @@ root themselves):
 
 | Script | What it does |
 |---|---|
-| [`campaign.sh`](scripts/campaign.sh) `<dir> [secs=1800] [forks]` | Builds the in-process target into its own target dir and freezes the binary in `<dir>`. Fuzzes a scratch copy of the seed corpus and writes artifacts to `<dir>/art`. Records the tree state in `<dir>/tree.txt`. |
+| [`campaign.sh`](scripts/campaign.sh) `<dir> [secs=1800] [forks]` | Builds the in-process target into its own target dir and freezes the binary in `<dir>`. Fuzzes a scratch copy of the seed corpus and writes artifacts to `<dir>/art`. Records the tree state and the differential target (`FUZZ_TARGET`, default `tcgtpm`) in `<dir>/tree.txt`. |
 | [`triage.py`](scripts/triage.py) `group <dir> [--top N]` | Computes signatures (cached), groups them into families, minimizes the top N representatives and renders them with `to_test` into `<dir>/families.md`, with `us-only`/`them-only`/`spec` tags. |
 | [`triage.py`](scripts/triage.py) `replay <old dir> [binary]` | Replays an old campaign's artifacts on a new build and lists, per family, what still reproduces. |
 | [`coverage.sh`](scripts/coverage.sh) `[corpus] [out]` | Source-based coverage (`cargo fuzz coverage` + `llvm-cov`), including the `tpm2-engine` handler table. |
@@ -131,6 +131,9 @@ cargo fuzz build --fuzz-dir testing/fuzz -O -s none --features inproc diff_conve
 _agents/skills/fuzz/scripts/campaign.sh /tmp/tpm-rs-fuzz/campaign1 1800 72
 ```
 
+- `FUZZ_TARGET=<target>` fuzzes against another target (e.g.
+  `FUZZ_TARGET=ibmswtpm2`); each target has its own build dir
+  (`fuzztarget-<target>`), and `triage.py` follows the campaign's target.
 - The script freezes a copy of the binary. Triage and replay must use the
   same binary even if the tree changes meanwhile. Note which fixes were in
   the tree when it was built (`tree.txt`).

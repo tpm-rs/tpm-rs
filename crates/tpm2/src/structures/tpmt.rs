@@ -1758,6 +1758,16 @@ pub trait Ticket {
     fn digest(&self) -> Tpm2bDigest<'_>;
 }
 
+/// Unmarshals the `tag` of a `TPMT_TK_*` ticket: [`UnmarshalError::TAG`] unless it is one of
+/// `allowed`.
+fn unmarshal_ticket_tag(src: &mut &[u8], allowed: &[TpmSt]) -> Result<u16, UnmarshalError> {
+    let tag = u16::unmarshal(src)?;
+    if !allowed.iter().any(|st| st.id() == tag) {
+        return Err(UnmarshalError::TAG);
+    }
+    Ok(tag)
+}
+
 /// `TPMT_TK_CREATION` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.5 (Table 104).
 ///
 /// Creation ticket produced by `TPM2_Create` or `TPM2_CreatePrimary` to prove that a creation digest was produced by the TPM.
@@ -1822,10 +1832,7 @@ impl Marshal for TpmtTkCreation<'_> {
 
 impl<'a> Unmarshal<'a> for TpmtTkCreation<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        let tag = u16::unmarshal(src)?;
-        if tag != TpmSt::CREATION.id() {
-            return Err(UnmarshalError::TAG);
-        }
+        unmarshal_ticket_tag(src, &[TpmSt::CREATION])?;
         let hierarchy = TpmiRhHierarchy::unmarshal(src)?.0;
         let digest = Tpm2bDigest::unmarshal(src)?;
         Ok(Self::Creation(hierarchy, digest))
@@ -1904,10 +1911,7 @@ impl Marshal for TpmtTkAuth<'_> {
 
 impl<'a> Unmarshal<'a> for TpmtTkAuth<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        let tag = u16::unmarshal(src)?;
-        if tag != TpmSt::AUTH_SIGNED.id() && tag != TpmSt::AUTH_SECRET.id() {
-            return Err(UnmarshalError::TAG);
-        }
+        let tag = unmarshal_ticket_tag(src, &[TpmSt::AUTH_SIGNED, TpmSt::AUTH_SECRET])?;
         let hierarchy = TpmiRhHierarchy::unmarshal(src)?.0;
         let digest = Tpm2bDigest::unmarshal(src)?;
         if tag == TpmSt::AUTH_SIGNED.id() {
@@ -2032,13 +2036,14 @@ impl Marshal for TpmtTkVerified<'_> {
 
 impl<'a> Unmarshal<'a> for TpmtTkVerified<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        let tag = u16::unmarshal(src)?;
-        if tag != TpmSt::VERIFIED.id()
-            && tag != TpmSt::MESSAGE_VERIFIED.id()
-            && tag != TpmSt::DIGEST_VERIFIED.id()
-        {
-            return Err(UnmarshalError::TAG);
-        }
+        let tag = unmarshal_ticket_tag(
+            src,
+            &[
+                TpmSt::VERIFIED,
+                TpmSt::MESSAGE_VERIFIED,
+                TpmSt::DIGEST_VERIFIED,
+            ],
+        )?;
         let hierarchy = TpmiRhHierarchy::unmarshal(src)?.0;
         let metadata = TpmuTkVerifiedMeta::unmarshal_variant(TpmSt::new(tag), src)?;
         let digest = Tpm2bDigest::unmarshal(src)?;
@@ -2122,10 +2127,7 @@ impl Marshal for TpmtTkHashcheck<'_> {
 
 impl<'a> Unmarshal<'a> for TpmtTkHashcheck<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        let tag = u16::unmarshal(src)?;
-        if tag != TpmSt::HASHCHECK.id() {
-            return Err(UnmarshalError::TAG);
-        }
+        unmarshal_ticket_tag(src, &[TpmSt::HASHCHECK])?;
         let hierarchy = TpmiRhHierarchy::unmarshal(src)?.0;
         let digest = Tpm2bDigest::unmarshal(src)?;
         Ok(Self::Hashcheck(hierarchy, digest))

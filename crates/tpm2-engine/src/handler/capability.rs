@@ -626,8 +626,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     (TpmPt::VENDOR_STRING_3, 0),
                     (TpmPt::VENDOR_STRING_4, 0),
                     (TpmPt::VENDOR_TPM_TYPE, 1),
-                    (TpmPt::FIRMWARE_VERSION_1, 1),
-                    (TpmPt::FIRMWARE_VERSION_2, 0),
+                    (TpmPt::FIRMWARE_VERSION_1, super::FIRMWARE_VERSION_1),
+                    (TpmPt::FIRMWARE_VERSION_2, super::FIRMWARE_VERSION_2),
                     (TpmPt::INPUT_BUFFER, 1024),
                     (
                         TpmPt::HR_TRANSIENT_MIN,
@@ -639,7 +639,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     // The PCR count for PC Client profile platforms (TPM 2.0 Library Specification Part 4: Support Structures, Section 8.1).
                     (TpmPt::PCR_COUNT, 24),
                     (TpmPt::PCR_SELECT_MIN, 3),
-                    (TpmPt::CONTEXT_GAP_MAX, 0xFFFF),
+                    // `(1 << (8 * sizeof(CONTEXT_SLOT))) - 1` (`PropertyCap.c`).
+                    (
+                        TpmPt::CONTEXT_GAP_MAX,
+                        (crate::engine::MAX_CONTEXT_GAP - 1) as u32,
+                    ),
                     (TpmPt::NV_COUNTERS_MAX, 8),
                     (
                         TpmPt::NV_INDEX_MAX,
@@ -696,7 +700,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         TpmPt::VENDOR_COMMANDS,
                         crate::engine::VENDOR_COMMANDS.len() as u32,
                     ),
-                    (TpmPt::NV_BUFFER_MAX, 1024),
+                    (TpmPt::NV_BUFFER_MAX, tpm2::TPM2_MAX_NV_BUFFER_SIZE),
                     (TpmPt::MODES, tpm2::TpmaModes::empty().bits()),
                     (TpmPt::MAX_CAP_BUFFER, tpm2::limits::MAX_CAP_BUFFER as u32),
                     // TPM 2.0 Part 2, TPM_PT: "TPM_PT_FIRMWARE_SVN | PT_FIXED + 47 | the TPM
@@ -1065,11 +1069,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     tpm2::Handle::RH_LOCKOUT.0,
                     tpm2::Handle::RH_ENDORSEMENT.0,
                     tpm2::Handle::RH_PLATFORM.0,
-                    // The implemented ACTs, with their ACT-specific policies.
-                    crate::act::act_handle(0).0,
-                    #[cfg(feature = "act-a")]
-                    crate::act::act_handle(0xA).0,
                 ];
+                // The implemented ACTs, with their ACT-specific policies.
+                let acts = crate::act::IMPLEMENTED_ACTS
+                    .iter()
+                    .map(|&act| crate::act::act_handle(act).0);
                 // The firmware-limited and SVN-limited hierarchies have the policy of their base
                 // hierarchy (C `EntityGetAuthPolicy` → `HierarchyNormalizeHandle`); those of
                 // `TPM_RH_NULL` have none and are skipped (`TPM_ALG_ERROR`).
@@ -1078,7 +1082,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 } else {
                     &[]
                 };
-                for &h in handles.iter().chain(limited) {
+                for h in handles
+                    .into_iter()
+                    .chain(acts)
+                    .chain(limited.iter().copied())
+                {
                     if h >= cmd.property {
                         if tagged_policies.count() < cmd.property_count as usize
                             && tagged_policies.count() < tpm2::TPM2_MAX_TAGGED_POLICIES

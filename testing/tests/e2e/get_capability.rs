@@ -13,7 +13,27 @@ use crate::_common::{
 use testing::tpm::Tpm;
 use tpm2::commands::GetCapability;
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, Marshal, TpmCap, TpmCc, TpmPt, TpmSe, TpmiStCommandTag, Unmarshal};
+use tpm2::{Handle, Marshal, TpmCap, TpmCc, TpmPs, TpmPt, TpmSe, TpmiStCommandTag, Unmarshal};
+
+/// The TPM follows no platform-specific specification: `TPM_PT_PS_FAMILY_INDICATOR` is
+/// `TPM_PS_MAIN` ("not platform specific"; Part 2, TPM_PT: "a TPM_PS value"), and the level,
+/// revision and date of the platform-specific specification are 0.
+#[test]
+fn platform_specific_properties_report_no_platform_specification() {
+    let mut sim = Tpm::new();
+    assert_eq!(
+        get_tpm_property(&mut sim, TpmPt::PS_FAMILY_INDICATOR),
+        TpmPs::MAIN.as_u32()
+    );
+    for property in [
+        TpmPt::PS_LEVEL,
+        TpmPt::PS_REVISION,
+        TpmPt::PS_DAY_OF_YEAR,
+        TpmPt::PS_YEAR,
+    ] {
+        assert_eq!(get_tpm_property(&mut sim, property), 0, "{property:?}");
+    }
+}
 
 /// A `TPM_CAP_ACT` property that is not an ACT handle is `TPM_RC_VALUE + RC_P2`, not `RC_P1`
 /// (the ACTs themselves are covered by `act_capability`).

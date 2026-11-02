@@ -44,6 +44,7 @@ fn get_random_returns_at_most_one_largest_digest() {
     for requested in [
         LARGEST_DIGEST_SIZE as u16,
         LARGEST_DIGEST_SIZE as u16 + 1,
+        64,
         256,
         0xFFFF,
     ] {
