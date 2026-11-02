@@ -1,11 +1,11 @@
 //! Builds the reference RNG library of the opt-in `reference-rng` feature.
 //!
 //! With the feature, `tpm-rs` draws its random numbers with the original C code of the TCG
-//! reference TPM (`mstpm20`), linked into this crate without any hand-written C:
+//! reference TPM (`tcgtpm`), linked into this crate without any hand-written C:
 //!
 //! 1. The build clones `https://github.com/TrustedComputingGroup/TPM` at the commit the
 //!    differential tests pin (checked against `testing/build.rs`) and applies the same patches
-//!    as the differential reference (`testing/patches/mstpm20/*.patch`, in sorted file-name
+//!    as the differential reference (`testing/patches/tcgtpm/*.patch`, in sorted file-name
 //!    order), so that the code is compiled with exactly the profile the reference runs with
 //!    (none of the patches changes the random-number generation).
 //! 2. It compiles the unmodified reference files the random-number code consists of
@@ -41,10 +41,10 @@ mod reference_rng {
     use std::process::Command;
 
     /// Git repository of the TCG reference TPM.
-    const MSTPM20_REPO: &str = "https://github.com/TrustedComputingGroup/TPM";
-    /// Pinned commit of [`MSTPM20_REPO`]; must be the commit the differential tests use for the
-    /// `mstpm20` reference (checked against `testing/build.rs`).
-    const MSTPM20_COMMIT: &str = "3b1f0e623f244abe2015df9e3ba86de5c9118524";
+    const TCGTPM_REPO: &str = "https://github.com/TrustedComputingGroup/TPM";
+    /// Pinned commit of [`TCGTPM_REPO`]; must be the commit the differential tests use for the
+    /// `tcgtpm` reference (checked against `testing/build.rs`).
+    const TCGTPM_COMMIT: &str = "3b1f0e623f244abe2015df9e3ba86de5c9118524";
 
     /// Name of the static library (`lib<name>.a`).
     const LIB_NAME: &str = "tpmrs_refrng";
@@ -212,7 +212,7 @@ mod reference_rng {
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
-    /// The patches of the differential `mstpm20` reference, in the order they are applied.
+    /// The patches of the differential `tcgtpm` reference, in the order they are applied.
     fn patch_files(dir: &Path) -> Vec<PathBuf> {
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
             .unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
@@ -220,7 +220,7 @@ mod reference_rng {
             .filter(|p| p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("patch"))
             .collect();
         files.sort();
-        assert!(!files.is_empty(), "no patches in testing/patches/mstpm20");
+        assert!(!files.is_empty(), "no patches in testing/patches/tcgtpm");
         files
     }
 
@@ -233,16 +233,16 @@ mod reference_rng {
         stamp.extend_from_slice(&bytes);
     }
 
-    /// Clones (or reuses) the reference at [`MSTPM20_COMMIT`] in `repo_dir` and applies
+    /// Clones (or reuses) the reference at [`TCGTPM_COMMIT`] in `repo_dir` and applies
     /// `patches` (as `testing/build.rs` does for the differential reference).
     fn checkout(repo_dir: &Path, patches: &[PathBuf]) {
         if !repo_dir.join(".git").exists() {
             let _ = std::fs::remove_dir_all(repo_dir);
             run(
                 Command::new("git")
-                    .args(["clone", "--no-checkout", MSTPM20_REPO])
+                    .args(["clone", "--no-checkout", TCGTPM_REPO])
                     .arg(repo_dir),
-                &format!("git clone {MSTPM20_REPO}"),
+                &format!("git clone {TCGTPM_REPO}"),
             );
         }
         let git = |args: &[&str], desc: &str| {
@@ -252,23 +252,23 @@ mod reference_rng {
         let has_commit = Command::new("git")
             .arg("-C")
             .arg(repo_dir)
-            .args(["cat-file", "-e", &format!("{MSTPM20_COMMIT}^{{commit}}")])
+            .args(["cat-file", "-e", &format!("{TCGTPM_COMMIT}^{{commit}}")])
             .status()
             .is_ok_and(|s| s.success());
         if !has_commit {
-            git(&["fetch", "origin"], "git fetch mstpm20");
+            git(&["fetch", "origin"], "git fetch tcgtpm");
         }
         git(
-            &["checkout", "--force", MSTPM20_COMMIT],
-            &format!("git checkout mstpm20@{MSTPM20_COMMIT}"),
+            &["checkout", "--force", TCGTPM_COMMIT],
+            &format!("git checkout tcgtpm@{TCGTPM_COMMIT}"),
         );
-        let head = git(&["rev-parse", "HEAD"], "git rev-parse mstpm20");
+        let head = git(&["rev-parse", "HEAD"], "git rev-parse tcgtpm");
         assert_eq!(
             head.trim(),
-            MSTPM20_COMMIT,
-            "mstpm20 checkout is not at the pinned commit"
+            TCGTPM_COMMIT,
+            "tcgtpm checkout is not at the pinned commit"
         );
-        git(&["clean", "-fdx"], "git clean mstpm20");
+        git(&["clean", "-fdx"], "git clean tcgtpm");
         // One `git apply` per patch, in sorted order, so that a failure names the patch.
         for patch in patches {
             run(
@@ -321,7 +321,7 @@ mod reference_rng {
     /// Clones and patches the reference, and builds `lib<LIB_NAME>.a` in `out` unless an
     /// up-to-date one exists. Returns the reference's `TPMCmd` directory.
     fn build_library(manifest: &Path, out: &Path) -> PathBuf {
-        let patch_dir = manifest.join("../../testing/patches/mstpm20");
+        let patch_dir = manifest.join("../../testing/patches/tcgtpm");
         let testing_build = manifest.join("../../testing/build.rs");
         println!("cargo:rerun-if-changed={}", patch_dir.display());
         println!("cargo:rerun-if-changed={}", testing_build.display());
@@ -330,20 +330,20 @@ mod reference_rng {
         let testing_build_rs =
             std::fs::read_to_string(&testing_build).expect("read testing/build.rs");
         assert!(
-            testing_build_rs.contains(MSTPM20_COMMIT),
-            "MSTPM20_COMMIT differs from the mstpm20 commit pinned by testing/build.rs"
+            testing_build_rs.contains(TCGTPM_COMMIT),
+            "TCGTPM_COMMIT differs from the tcgtpm commit pinned by testing/build.rs"
         );
 
         let patches = patch_files(&patch_dir);
         // Everything the library is built from (the pinned commit, the patches in their order
         // and this build script) is part of the stamp, so a change never reuses a stale library.
-        let mut expected_stamp = format!("{MSTPM20_REPO}@{MSTPM20_COMMIT}\n").into_bytes();
+        let mut expected_stamp = format!("{TCGTPM_REPO}@{TCGTPM_COMMIT}\n").into_bytes();
         for patch in &patches {
             stamp_file(&mut expected_stamp, patch);
         }
         expected_stamp.extend_from_slice(include_bytes!("build.rs"));
 
-        let repo_dir = out.join("mstpm20");
+        let repo_dir = out.join("tcgtpm");
         let tpm_cmd = repo_dir.join("TPMCmd");
         let archive = out.join(format!("lib{LIB_NAME}.a"));
         let stamp_path = out.join(format!("{LIB_NAME}.stamp"));
@@ -562,7 +562,7 @@ mod reference_rng {
         }
         builder
             .generate()
-            .expect("bindgen for the mstpm20 headers")
+            .expect("bindgen for the tcgtpm headers")
             .write_to_file(out.join("refrng_bindings.rs"))
             .expect("write refrng_bindings.rs");
     }

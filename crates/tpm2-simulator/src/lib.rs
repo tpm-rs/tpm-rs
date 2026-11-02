@@ -612,7 +612,7 @@ pub fn __new_reference_simulator(pid: u32, realtime_ms: u64) -> Simulator<'stati
 }
 
 /// Like [`create_simulator!`], but the simulator reproduces the randomness and
-/// clock of a C reference TPM process (`mstpm20`/`ibmswtpm2` built for
+/// clock of a C reference TPM process (`tcgtpm`/`ibmswtpm2` built for
 /// differential testing) with process ID `$pid` whose `_plat__RealTime()`
 /// started at `$realtime_ms` milliseconds:
 ///

@@ -87,7 +87,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // referenced persistent object into RAM for the duration of the command. If all the slots
         // are previously occupied, the TPM may return this value. A TPM is allowed to use object
         // slots for other purposes and return this value." The specification leaves the slot use
-        // of TPM2_Create to the implementation, so tpm-rs follows mstpm20, whose TPM2_Create takes
+        // of TPM2_Create to the implementation, so tpm-rs follows tcgtpm, whose TPM2_Create takes
         // a free slot right after the parent check ("Get a slot for the creation":
         // `FindEmptyObjectSlot(NULL)`, else TPM_RC_OBJECT_MEMORY). The slot is only scratch
         // memory, so nothing is allocated; a persistent parent's RAM copy already counts in

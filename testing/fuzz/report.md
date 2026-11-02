@@ -1,7 +1,7 @@
 # Differential fuzzing of tpm-rs: final report
 
 This report covers the differential fuzzing campaign of `tpm-rs` against the
-C reference TPMs `mstpm20` (TCG reference, version 185) and `ibmswtpm2` with
+C reference TPMs `tcgtpm` (TCG reference, version 185) and `ibmswtpm2` with
 the `diff_conversation` target (see [README.md](README.md)): what the fuzzer
 reached, every `tpm-rs` bug it found and how each was fixed, and the
 discrepancies that are still deliberately ignored.
@@ -54,7 +54,7 @@ Campaign 5 found nothing: no crash, timeout or out-of-memory input, with an
 empty `known_divergences.txt`. Campaigns 4 and 5 started from the grown corpus (see 1.2), which is why they
 execute fewer, longer inputs than campaign 3.
 
-Campaigns 6 and later run against `mstpm20` built from the `185-feature`
+Campaigns 6 and later run against `tcgtpm` built from the `185-feature`
 branch of the TCG-internal repository (instead of tag `v185.0.0`, see
 [differential.md](../../differential.md) item 22) with the extended input model:
 besides commands, a round can be a platform signal (`PowerOff`, `PowerOn`,
@@ -629,7 +629,7 @@ header comment): no finding signature is suppressed in the fuzz target.
   (exception 1), so the values differ legitimately (exception 2).
 - **Commands one side implements and the other does not**: there are none.
   Each reference's `profile-command-list.patch` disables exactly the commands
-  `tpm-rs` does not implement (14 for `mstpm20`, 21 for `mstpm20` version
+  `tpm-rs` does not implement (14 for `tcgtpm`, 21 for `tcgtpm` version
   185, 12 for `ibmswtpm2`), so every campaign signature was tagged `spec`
   (never `us-only` or `them-only`).
 - **Untranslatable `TPM2_ContextLoad` blobs** (exception 9) are deliberately

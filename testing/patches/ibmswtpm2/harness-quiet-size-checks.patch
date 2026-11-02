@@ -34,7 +34,7 @@ diff --git a/src/TpmSizeChecks.c b/src/TpmSizeChecks.c
  		PASS = FALSE;
  	    }
 -	else if (MAX_CONTEXT_SIZE > biggestContext)
-+	// tpm-rs differential testing: MAX_CONTEXT_SIZE is fixed to mstpm20's
++	// tpm-rs differential testing: MAX_CONTEXT_SIZE is fixed to tcgtpm's
 +	// value on purpose; no informational output.
 +	else if (0 && MAX_CONTEXT_SIZE > biggestContext)
  	    {

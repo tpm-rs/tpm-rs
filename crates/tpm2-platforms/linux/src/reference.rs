@@ -1,7 +1,7 @@
 //! The simulator-platform entropy source and clock of the C reference TPMs
 //! (`reference-rng` feature).
 //!
-//! The TCG reference implementation (`mstpm20`) and the IBM software TPM
+//! The TCG reference implementation (`tcgtpm`) and the IBM software TPM
 //! (`ibmswtpm2`) share the platform code of `Entropy.c`: their
 //! `_plat__GetEntropy()` seeds the C library's `rand()` with
 //! `(unsigned)_plat__RealTime() ^ getpid()` when the TPM is initialized and

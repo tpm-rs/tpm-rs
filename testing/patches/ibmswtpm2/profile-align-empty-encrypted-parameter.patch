@@ -18,7 +18,7 @@ diff --git a/src/CryptUtil.c b/src/CryptUtil.c
  
 -    if(cipherSize > bufferSize)
 +    // tpm-rs differential testing (implementation-defined behavior aligned
-+    // with tpm-rs and mstpm20, NOT a spec deviation): an encrypted parameter
++    // with tpm-rs and tcgtpm, NOT a spec deviation): an encrypted parameter
 +    // that is an empty TPM2B ending the command is rejected with TPM_RC_SIZE,
 +    // as the TCG reference's CryptParameterDecryption() (`bufferSize <= 0`)
 +    // does. The specification defines no error for this case; the upstream

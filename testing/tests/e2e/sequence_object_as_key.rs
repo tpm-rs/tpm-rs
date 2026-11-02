@@ -106,7 +106,7 @@ fn certify_creation_params() -> Vec<u8> {
 /// sequence object too. TPM 2.0 Part 3, TPM2_CertifyCreation: "This command is
 /// used to prove the association between an object and its creation data.", and
 /// a sequence object has no creation data; the specification gives no response
-/// code, so tpm-rs follows `mstpm20` version 185 ("Cannot certify creation of a
+/// code, so tpm-rs follows `tcgtpm` version 185 ("Cannot certify creation of a
 /// sequence object"; the other references are patched alike,
 /// `bug-fix-certify-creation-sequence-object.patch`).
 #[test]
@@ -147,7 +147,7 @@ fn certify_creation_checks_sign_handle_first() {
 /// TPM2_CertifyCreation of a sequence object (unsigned) is `TPM_RC_TYPE` on
 /// `objectHandle`: a sequence object was not created with creation data (TPM
 /// 2.0 Part 3, TPM2_CertifyCreation: "This command is used to prove the
-/// association between an object and its creation data."), as in `mstpm20`
+/// association between an object and its creation data."), as in `tcgtpm`
 /// version 185.
 #[test]
 fn certify_creation_of_sequence_object_is_type_error() {
@@ -197,7 +197,7 @@ fn policy_signed_with_sequence_object_is_scheme_error() {
 /// TPM 2.0 Part 3, TPM2_Certify: "The object may be any object that is loaded
 /// with `TPM2_Load()` or `TPM2_CreatePrimary()`.", and a sequence object is
 /// neither. The specification gives no response code; `TPM_RC_TYPE` is the
-/// one of `mstpm20` version 185 (the other references are patched alike,
+/// one of `tcgtpm` version 185 (the other references are patched alike,
 /// `bug-fix-certify-sequence-object.patch`).
 #[test]
 fn certify_of_sequence_object_is_type_error() {

@@ -651,7 +651,7 @@ mod tests {
             response: vec![0x80, 1, 0, 0, 0, 10, 0, 0, 0, 0],
             divergences: vec![
                 Divergence {
-                    implementation: Implementation::Mstpm20,
+                    implementation: Implementation::Tcgtpm,
                     reference_response: Some(vec![0x80, 1, 0, 0, 0, 10, 0, 0, 1, 0x43]),
                     message: "differs".into(),
                 },
@@ -670,7 +670,7 @@ mod tests {
         assert_eq!(
             f.signatures(),
             [
-                "DIVERGENCE[mstpm20:round3:0x17a:0x0:0x143]",
+                "DIVERGENCE[tcgtpm:round3:0x17a:0x0:0x143]",
                 "DIVERGENCE[ibmswtpm2:round3:0x17a:0x0:none]",
             ]
         );
@@ -860,13 +860,13 @@ mod tests {
     #[test]
     fn known_divergences_suppress_only_full_matches() {
         let known =
-            KnownDivergences::parse("# comment\n\nDIVERGENCE[mstpm20:*:0x17a:*:*]  # trailing\n");
-        assert_eq!(known.patterns(), ["DIVERGENCE[mstpm20:*:0x17a:*:*]"]);
+            KnownDivergences::parse("# comment\n\nDIVERGENCE[tcgtpm:*:0x17a:*:*]  # trailing\n");
+        assert_eq!(known.patterns(), ["DIVERGENCE[tcgtpm:*:0x17a:*:*]"]);
         let f = divergence();
         // The ibmswtpm2 signature is not covered.
         assert!(!known.suppresses(&f));
         let known = KnownDivergences::parse(
-            "DIVERGENCE[mstpm20:*:0x17a:*:*]\nDIVERGENCE[ibmswtpm2:*:*:*:none]",
+            "DIVERGENCE[tcgtpm:*:0x17a:*:*]\nDIVERGENCE[ibmswtpm2:*:*:*:none]",
         );
         assert!(known.suppresses(&f));
     }

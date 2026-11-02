@@ -15,8 +15,8 @@
 # A differential run builds `testing` with one `target-*` feature: tpm-rs gets
 # the profile of that C reference TPM (its `tpm2`/`tpm2-impl` features, see
 # testing/Cargo.toml) and every E2E and Go parity test is compared with it.
-# `mstpm20-v185` needs access to the TCG-internal TPM-Internal repository;
-# without it, run e.g. `make test DIFFERENTIAL_TARGETS="mstpm20 ibmswtpm2"`.
+# `tcgtpm-v185` needs access to the TCG-internal TPM-Internal repository;
+# without it, run e.g. `make test DIFFERENTIAL_TARGETS="tcgtpm ibmswtpm2"`.
 #
 # BoringSSL is built by `bssl-sys` (cmake, ninja, bindgen and libclang are
 # needed; set BORINGSSL_BUILD_DIR to reuse a build), and the C references need
@@ -24,9 +24,9 @@
 
 CARGO ?= cargo
 # The differential targets: the `target-*` features of `testing`.
-DIFFERENTIAL_TARGETS ?= mstpm20 mstpm20-v185 ibmswtpm2
+DIFFERENTIAL_TARGETS ?= tcgtpm tcgtpm-v185 ibmswtpm2
 # The target of the in-process reference tests.
-INPROC_TARGET ?= mstpm20
+INPROC_TARGET ?= tcgtpm
 # Extra arguments for every `cargo test` (e.g. CARGO_TEST_ARGS="--no-fail-fast").
 CARGO_TEST_ARGS ?=
 
@@ -79,7 +79,7 @@ clippy: $(DIFFERENTIAL_CLIPPY)
 	$(CARGO) clippy --all-targets -p tpm2-impl -p tpm2-crypto-rust -p tpm2-crypto-crux \
 		-p tpm2-crypto-bssl -p tpm2-client --no-default-features \
 		--features tpm2-impl/dev_crypto_bssl,tpm2-impl/reference-rng -- -D warnings
-	$(CARGO) clippy --all-targets -p testing --no-default-features --features target-mstpm20 -- -D warnings
+	$(CARGO) clippy --all-targets -p testing --no-default-features --features target-tcgtpm -- -D warnings
 
 $(DIFFERENTIAL_CLIPPY): clippy-%:
 	$(CARGO) clippy --all-targets -p testing --features target-$* -- -D warnings

@@ -59,8 +59,8 @@ sha512 = ["tpm2/sha512", "tpm2-impl/sha512", "tpm2-simulator/sha512", "tpm2-plat
 differential = []
 
 # The public TCG reference implementation
-# (https://github.com/TrustedComputingGroup/TPM), `testing/patches/mstpm20/`.
-target-mstpm20 = [
+# (https://github.com/TrustedComputingGroup/TPM), `testing/patches/tcgtpm/`.
+target-tcgtpm = [
     "differential",
     "tpm2/tpma-object-fixed-firmware",
     "tpm2-impl/max-context-size-2168",
@@ -69,8 +69,8 @@ target-mstpm20 = [
 
 # The TCG reference implementation version 185 (the TCG-internal
 # https://github.com/TrustedComputingGroup/TPM-Internal, `185-feature` branch),
-# `testing/patches/mstpm20-185-feature/`.
-target-mstpm20-v185 = [
+# `testing/patches/tcgtpm-185-feature/`.
+target-tcgtpm-v185 = [
     "differential",
     "tpm2/tpma-object-fixed-firmware",
     "tpm2/max-cap-buffer-3072",

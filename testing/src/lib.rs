@@ -6,7 +6,7 @@
 //! pinned (seeded, virtual-clock) `tpm-rs` simulator that, in a differential
 //! build (one `target-*` feature), mirrors every interaction to the C
 //! reference TPM of the target (the public or version 185 TCG reference
-//! `mstpm20`, or the IBM `ibmswtpm2`) and fails the test on any undocumented
+//! `tcgtpm`, or the IBM `ibmswtpm2`) and fails the test on any undocumented
 //! difference between `tpm-rs`'s and the reference's responses. The same tests
 //! are therefore both the `tpm-rs` E2E tests and the differential tests.
 //!

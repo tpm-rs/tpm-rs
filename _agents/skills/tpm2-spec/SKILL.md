@@ -1,6 +1,6 @@
 ---
 name: tpm2-spec
-description: The TPM 2.0 spec (version 185) and where to get the C reference implementations (mstpm20 v185, ibmswtpm2)
+description: The TPM 2.0 spec (version 185) and where to get the C reference implementations (tcgtpm v185, ibmswtpm2)
 ---
 
 # The TPM 2.0 spec and the C reference implementations
@@ -8,7 +8,7 @@ description: The TPM 2.0 spec (version 185) and where to get the C reference imp
 This skill provides:
 1. The TPM 2.0 Library specification, version 185, as text files in
    `resources/spec`.
-2. Where to get the C reference implementations `mstpm20` (version 185) and
+2. Where to get the C reference implementations `tcgtpm` (version 185) and
    `ibmswtpm2`, so that you can clone and read them.
 
 ## The spec (version 185)
@@ -31,19 +31,19 @@ rather than reading them whole.
 ## The C reference implementations
 
 Read these to see how a TPM actually behaves, especially where the spec is
-silent. `tpm-rs` follows the spec first and `mstpm20` only where the spec is
+silent. `tpm-rs` follows the spec first and `tcgtpm` only where the spec is
 silent; `ibmswtpm2` never decides.
 
 | Implementation | Repository |
 |---|---|
-| `mstpm20` v185 (TCG reference implementation) | https://github.com/TrustedComputingGroup/TPM-Internal, branch `185-feature` (pinned in `testing/build.rs`) |
+| `tcgtpm` v185 (TCG reference implementation) | https://github.com/TrustedComputingGroup/TPM-Internal, branch `185-feature` (pinned in `testing/build.rs`) |
 | `ibmswtpm2` (IBM software TPM), latest | https://github.com/kgoldman/ibmswtpm2 |
 
 Clone them into `/tmp/` or into your artifact folder, never into the
 repository:
 
 ```sh
-git clone --depth 1 --branch 185-feature https://github.com/TrustedComputingGroup/TPM-Internal /tmp/mstpm20-185-feature
+git clone --depth 1 --branch 185-feature https://github.com/TrustedComputingGroup/TPM-Internal /tmp/tcgtpm-185-feature
 git clone --depth 1 https://github.com/kgoldman/ibmswtpm2 /tmp/ibmswtpm2
 ```
 

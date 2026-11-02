@@ -1,6 +1,6 @@
 //! The known-answer test vectors of the algorithm self tests (`crate::self_test`).
 //!
-//! Generated from the TCG reference implementation's self-test data (`mstpm20`,
+//! Generated from the TCG reference implementation's self-test data (`tcgtpm`,
 //! `TPMCmd/tpm/include/private/{HashTestData,KdfTestData,SymmetricTestData,RsaTestData,
 //! EccTestData}.h`), so that the tests check the same values as the C reference TPMs. The
 //! vectors that depend on the default test hash (`DEFAULT_TEST_HASH`: SHA-512, or SHA-384 in a

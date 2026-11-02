@@ -21,7 +21,7 @@ diff --git a/src/AttestationCommands.c b/src/AttestationCommands.c
      }
      // Input Validation
 +    // tpm-rs differential testing -- C-ref spec deviation fix (NOT determinism):
-+    // a sequence object has no creation data (as in mstpm20 version 185:
++    // a sequence object has no creation data (as in tcgtpm version 185:
 +    // "Cannot certify creation of a sequence object").
 +    if(ObjectIsSequence(certified))
 +	return TPM_RCS_TYPE + RC_CertifyCreation_objectHandle;

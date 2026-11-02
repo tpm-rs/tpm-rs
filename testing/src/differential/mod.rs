@@ -5,14 +5,13 @@
 //! feature, which also gives `tpm-rs` the profile of that reference (see
 //! `testing/Cargo.toml`):
 //!
-//! * `target-mstpm20` ([`Implementation::Mstpm20`]): the TCG reference
-//!   implementation (the Microsoft `ms-tpm-20-ref` code base) from
-//!   `https://github.com/TrustedComputingGroup/TPM`, patched by
-//!   `testing/patches/mstpm20/`;
-//! * `target-mstpm20-v185` ([`Implementation::Mstpm20`]): version 185 of the
+//! * `target-tcgtpm` ([`Implementation::Tcgtpm`]): the TCG reference
+//!   implementation from `https://github.com/TrustedComputingGroup/TPM`,
+//!   patched by `testing/patches/tcgtpm/`;
+//! * `target-tcgtpm-v185` ([`Implementation::Tcgtpm`]): version 185 of the
 //!   TCG reference implementation from the TCG-internal
 //!   `https://github.com/TrustedComputingGroup/TPM-Internal`, patched by
-//!   `testing/patches/mstpm20-185-feature/`;
+//!   `testing/patches/tcgtpm-185-feature/`;
 //! * `target-ibmswtpm2` ([`Implementation::Ibmswtpm2`]): the IBM software TPM
 //!   (`https://github.com/kgoldman/ibmswtpm2`), patched by
 //!   `testing/patches/ibmswtpm2/`.
@@ -90,39 +89,39 @@ impl fmt::Display for Divergence {
 /// A C reference TPM implementation that `tpm-rs` is compared with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Implementation {
-    /// The TCG (Microsoft) reference implementation, binary `mstpm20`.
-    Mstpm20,
+    /// The TCG reference implementation, binary `tcgtpm`.
+    Tcgtpm,
     /// The IBM software TPM, binary `ibmswtpm2`.
     Ibmswtpm2,
 }
 
 #[cfg(not(any(
-    feature = "target-mstpm20",
-    feature = "target-mstpm20-v185",
+    feature = "target-tcgtpm",
+    feature = "target-tcgtpm-v185",
     feature = "target-ibmswtpm2"
 )))]
 compile_error!(
     "a differential build of `testing` needs a target: enable one of the features \
-     `target-mstpm20`, `target-mstpm20-v185` and `target-ibmswtpm2`"
+     `target-tcgtpm`, `target-tcgtpm-v185` and `target-ibmswtpm2`"
 );
 
 impl Implementation {
     /// Every implementation.
-    pub const ALL: [Self; 2] = [Self::Mstpm20, Self::Ibmswtpm2];
+    pub const ALL: [Self; 2] = [Self::Tcgtpm, Self::Ibmswtpm2];
 
     /// The implementation of the target of this build (its `target-*` feature): the only
     /// implementation linked into it.
     pub const TARGET: Self = if cfg!(feature = "target-ibmswtpm2") {
         Self::Ibmswtpm2
     } else {
-        Self::Mstpm20
+        Self::Tcgtpm
     };
 
     /// The name of the implementation, which is also the name of its
     /// reference binary.
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Mstpm20 => "mstpm20",
+            Self::Tcgtpm => "tcgtpm",
             Self::Ibmswtpm2 => "ibmswtpm2",
         }
     }

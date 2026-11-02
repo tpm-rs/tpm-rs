@@ -132,7 +132,7 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> tpm2::Connecti
 
 /// Maximum number of loaded transient objects in RAM.
 pub const MAX_LOADED_OBJECTS: usize = tpm2::TPM2_MAX_LOADED_OBJECTS as usize;
-/// Maximum number of active authorization sessions in RAM (aligns with TCG PC Client spec & ms-tpm-20-ref).
+/// Maximum number of active authorization sessions in RAM (aligns with the TCG PC Client spec and the TCG reference implementation).
 pub const MAX_LOADED_SESSIONS: usize = 3;
 /// Maximum number of active (loaded or saved) authorization sessions (`MAX_ACTIVE_SESSIONS`); the
 /// low 24 bits of a session handle index this many session slots.

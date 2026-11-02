@@ -1,4 +1,4 @@
-//! Checks the linked reference code against outputs of the C reference code (`mstpm20` at the
+//! Checks the linked reference code against outputs of the C reference code (`tcgtpm` at the
 //! pinned commit, with the differential-testing profile), produced by a small C program that calls
 //! the same functions (`DRBG_InstantiateSeeded()`, `DRBG_Generate()`, `CryptRsaGenerateKey()`,
 //! `TpmEcc_GenPrivateScalar()`, `TpmEcc_SignEcdsa()`) with the inputs below. These guard the

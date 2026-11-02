@@ -4,7 +4,7 @@
 //!
 //! `testing/build.rs` compiles the target into a symbol-isolated static
 //! archive whose only global symbols are its entry points, prefixed with its
-//! name (`difftest_mstpm20_*` or `difftest_ibmswtpm2_*`), and links the
+//! name (`difftest_tcgtpm_*` or `difftest_ibmswtpm2_*`), and links the
 //! archive into this crate. The archives call back into the harness through
 //! symbols this module defines:
 //!
@@ -162,8 +162,8 @@ macro_rules! entry_points {
 }
 
 // Only the archive of the target is linked (see `testing/build.rs`).
-#[cfg(any(feature = "target-mstpm20", feature = "target-mstpm20-v185"))]
-entry_points!(mstpm20, "difftest_mstpm20_");
+#[cfg(any(feature = "target-tcgtpm", feature = "target-tcgtpm-v185"))]
+entry_points!(tcgtpm, "difftest_tcgtpm_");
 #[cfg(feature = "target-ibmswtpm2")]
 entry_points!(ibmswtpm2, "difftest_ibmswtpm2_");
 
@@ -181,7 +181,7 @@ fn entry_points(implementation: Implementation) -> &'static EntryPoints {
     #[cfg(feature = "target-ibmswtpm2")]
     return &ibmswtpm2::ENTRY_POINTS;
     #[cfg(not(feature = "target-ibmswtpm2"))]
-    return &mstpm20::ENTRY_POINTS;
+    return &tcgtpm::ENTRY_POINTS;
 }
 
 /// The process ID the C references see; `0` until [`set_reference_pid`]
@@ -241,16 +241,16 @@ fn reset_rand(implementation: Implementation) {
         .unwrap_or_else(|e| e.into_inner()) = None;
 }
 
-/// `rand()` of `mstpm20` (redirected by `testing/build.rs`).
+/// `rand()` of `tcgtpm` (redirected by `testing/build.rs`).
 #[unsafe(no_mangle)]
-pub extern "C" fn difftest_mstpm20_rand() -> i32 {
-    rand(Implementation::Mstpm20)
+pub extern "C" fn difftest_tcgtpm_rand() -> i32 {
+    rand(Implementation::Tcgtpm)
 }
 
-/// `srand()` of `mstpm20` (redirected by `testing/build.rs`).
+/// `srand()` of `tcgtpm` (redirected by `testing/build.rs`).
 #[unsafe(no_mangle)]
-pub extern "C" fn difftest_mstpm20_srand(seed: u32) {
-    srand(Implementation::Mstpm20, seed);
+pub extern "C" fn difftest_tcgtpm_srand(seed: u32) {
+    srand(Implementation::Tcgtpm, seed);
 }
 
 /// `rand()` of `ibmswtpm2` (redirected by `testing/build.rs`).
@@ -502,16 +502,16 @@ mod tests {
     fn references_have_separate_rand_generators() {
         // Hosting a reference (re)seeds and resets its generator.
         let _hosting = HOSTING.lock().unwrap_or_else(|e| e.into_inner());
-        difftest_mstpm20_srand(1234);
+        difftest_tcgtpm_srand(1234);
         difftest_ibmswtpm2_srand(1234);
         let mut expected = GlibcRand::new(1234);
         let first = expected.next() as i32;
-        assert_eq!(difftest_mstpm20_rand(), first);
+        assert_eq!(difftest_tcgtpm_rand(), first);
         difftest_ibmswtpm2_srand(99);
         for _ in 0..5 {
             difftest_ibmswtpm2_rand();
         }
-        assert_eq!(difftest_mstpm20_rand(), expected.next() as i32);
+        assert_eq!(difftest_tcgtpm_rand(), expected.next() as i32);
         difftest_ibmswtpm2_srand(1234);
         assert_eq!(difftest_ibmswtpm2_rand(), first);
     }

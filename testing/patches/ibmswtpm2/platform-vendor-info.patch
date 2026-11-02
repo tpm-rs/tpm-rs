@@ -38,7 +38,7 @@ diff --git a/src/VendorInfo.h b/src/VendorInfo.h
  
  // Define the TPM specification-specific capability values.
 +// tpm-rs differential testing: the specification and platform-specification
-+// capability values tpm-rs reports (as in mstpm20).
++// capability values tpm-rs reports (as in tcgtpm).
  #define TPM_SPEC_FAMILY      (0x322E3000)
  #define TPM_SPEC_LEVEL       (00)
 -#define TPM_SPEC_VERSION     (183)

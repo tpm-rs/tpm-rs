@@ -8,7 +8,7 @@
 //!
 //! In a differential build (a `target-*` feature), every interaction is
 //! additionally mirrored to the patched C reference TPM of the target (the
-//! public or version 185 TCG reference `mstpm20`, or the IBM `ibmswtpm2`),
+//! public or version 185 TCG reference `tcgtpm`, or the IBM `ibmswtpm2`),
 //! running in a child process of its own (see `crate::differential`): each
 //! command is first executed by `tpm-rs`, then by the reference, and the
 //! reference's response must be identical to the `tpm-rs` response except for

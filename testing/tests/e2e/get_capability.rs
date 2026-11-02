@@ -32,7 +32,7 @@ fn act_capability_rejected_on_property() {
 /// `TPM_CAP_ALGS` and `TPM_CAP_ECC_CURVES` take only the low 16 bits of `property` as the first
 /// `TPM_ALG_ID`/`TPM_ECC_CURVE` (the reference casts it), so set upper bits do not empty the
 /// list (found by differential fuzzing). Part 3 `TPM2_GetCapability` only says the ID "is cast to a
-/// UINT32" and is silent on set upper bits, so `tpm-rs` follows `mstpm20`.
+/// UINT32" and is silent on set upper bits, so `tpm-rs` follows `tcgtpm`.
 #[test]
 fn algorithm_and_curve_properties_ignore_upper_bits() {
     /// `TPM_CAP_ECC_CURVES`.
@@ -882,7 +882,7 @@ fn max_context_sizes_bound_saved_contexts() {
 /// past the last fixed property this TPM reports: the response lists every implemented property
 /// of the group from 0x10C on, in order, and `moreData` is NO, as no value remains (TPM 2.0
 /// Part 3, TPM2_GetCapability: "The *moreData* parameter will have a value of YES if there are
-/// more values of the requested type that were not returned."). `mstpm20` version 185 also reports
+/// more values of the requested type that were not returned."). `tcgtpm` version 185 also reports
 /// `TPM_PT_ML_PARAMETER_SETS`, so its list is cut there, and `ibmswtpm2` does not report the
 /// firmware-SVN properties (`differential.md` rule 2).
 #[test]
@@ -901,7 +901,7 @@ fn fixed_properties_to_the_end_of_the_group() {
 /// as no further value of this TPM remains (TPM 2.0 Part 3, TPM2_GetCapability: "The *moreData*
 /// parameter will have a value of YES if there are more values of the requested type that were
 /// not returned."), while `TPM_PT_MAX_CAP_BUFFER` (0x12E) is followed by the firmware-SVN
-/// properties. `mstpm20` version 185 has `TPM_PT_ML_PARAMETER_SETS` after them, and
+/// properties. `tcgtpm` version 185 has `TPM_PT_ML_PARAMETER_SETS` after them, and
 /// `ibmswtpm2` does not report the firmware-SVN properties (`differential.md` rule 2).
 #[test]
 fn last_fixed_property_has_no_more_data() {

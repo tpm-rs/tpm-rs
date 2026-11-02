@@ -901,7 +901,7 @@ definition as the list of algorithms that have not been tested, and software tha
 waits for an empty `toDoList` never sees one.
 
 The patch uses `CLEAR_BOTH(alg)` in both places, which clears the bit in the
-caller's vector and in `g_toTest`, as the TCG reference (mstpm20) does.
+caller's vector and in `g_toTest`, as the TCG reference (tcgtpm) does.
 
 **Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_SelfTest"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L1524-L1527)
 

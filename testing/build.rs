@@ -5,14 +5,14 @@
 //! enables the `differential` feature and the `tpm2`/`tpm2-impl` features that
 //! give `tpm-rs` the profile of that reference, see `Cargo.toml`):
 //!
-//! * `target-mstpm20`: the TCG / Microsoft reference implementation from the
+//! * `target-tcgtpm`: the TCG reference implementation from the
 //!   public repository `https://github.com/TrustedComputingGroup/TPM`, patched
-//!   by `testing/patches/mstpm20/*.patch`;
-//! * `target-mstpm20-v185`: the TCG reference implementation version 185, from
+//!   by `testing/patches/tcgtpm/*.patch`;
+//! * `target-tcgtpm-v185`: the TCG reference implementation version 185, from
 //!   the TCG-internal repository
 //!   `https://github.com/TrustedComputingGroup/TPM-Internal` on its
 //!   `185-feature` branch (only TCG members can clone it), patched by
-//!   `testing/patches/mstpm20-185-feature/*.patch`;
+//!   `testing/patches/tcgtpm-185-feature/*.patch`;
 //! * `target-ibmswtpm2`: `https://github.com/kgoldman/ibmswtpm2` (the IBM
 //!   software TPM), patched by `testing/patches/ibmswtpm2/*.patch`.
 //!
@@ -71,7 +71,7 @@ struct Version {
 /// The reference implementations.
 const REFERENCES: [Reference; 2] = [
     Reference {
-        name: "mstpm20",
+        name: "tcgtpm",
         versions: &[
             // The TCG-internal repository, which only TCG members can clone.
             Version {
@@ -80,9 +80,9 @@ const REFERENCES: [Reference; 2] = [
                 // Latest commit of the `185-feature` branch (after tag
                 // `v185.0.0`).
                 commit: "5b5e8df4142885bbd7a947dd064c3dc1b812a979",
-                patch_dir: "mstpm20-185-feature",
-                sources: mstpm20_v185_sources,
-                include_dirs: mstpm20_v185_include_dirs,
+                patch_dir: "tcgtpm-185-feature",
+                sources: tcgtpm_v185_sources,
+                include_dirs: tcgtpm_v185_include_dirs,
                 cflags: &[
                     "-O2",
                     "-fPIC",
@@ -108,9 +108,9 @@ const REFERENCES: [Reference; 2] = [
                 label: "public",
                 repo: "https://github.com/TrustedComputingGroup/TPM",
                 commit: "3b1f0e623f244abe2015df9e3ba86de5c9118524",
-                patch_dir: "mstpm20",
-                sources: mstpm20_sources,
-                include_dirs: mstpm20_include_dirs,
+                patch_dir: "tcgtpm",
+                sources: tcgtpm_sources,
+                include_dirs: tcgtpm_include_dirs,
                 cflags: &[
                     "-O2",
                     "-fPIC",
@@ -255,8 +255,8 @@ fn main() {
 /// The `target-*` features: the feature (without `target-`), the name of its
 /// reference and the label of its version.
 const TARGETS: [(&str, &str, &str); 3] = [
-    ("mstpm20", "mstpm20", "public"),
-    ("mstpm20-v185", "mstpm20", "v185"),
+    ("tcgtpm", "tcgtpm", "public"),
+    ("tcgtpm-v185", "tcgtpm", "v185"),
     ("ibmswtpm2", "ibmswtpm2", "public"),
 ];
 
@@ -640,7 +640,7 @@ fn collect_c(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// The TCG reference's TPM library, platform and simulator command layer
 /// (without the TCP server).
-fn mstpm20_sources(repo: &Path) -> Vec<PathBuf> {
+fn tcgtpm_sources(repo: &Path) -> Vec<PathBuf> {
     let tpm_cmd = repo.join("TPMCmd");
     let mut c_files = Vec::new();
     collect_c(&tpm_cmd.join("Platform/src"), &mut c_files);
@@ -651,7 +651,7 @@ fn mstpm20_sources(repo: &Path) -> Vec<PathBuf> {
     c_files
 }
 
-fn mstpm20_include_dirs(repo: &Path) -> Vec<PathBuf> {
+fn tcgtpm_include_dirs(repo: &Path) -> Vec<PathBuf> {
     let tpm_cmd = repo.join("TPMCmd");
     [
         "TpmConfiguration",
@@ -680,14 +680,14 @@ fn mstpm20_include_dirs(repo: &Path) -> Vec<PathBuf> {
 /// into a common part and one implementation per algorithm family
 /// (`tpm/cryptolibs/implementations/`); the implementations are the ones the
 /// cflags select (as in the version's CMake build).
-fn mstpm20_v185_sources(repo: &Path) -> Vec<PathBuf> {
+fn tcgtpm_v185_sources(repo: &Path) -> Vec<PathBuf> {
     let tpm_cmd = repo.join("TPMCmd");
     let mut c_files = Vec::new();
     collect_c(&tpm_cmd.join("Platform/src"), &mut c_files);
     collect_c(&tpm_cmd.join("TpmConfiguration"), &mut c_files);
     collect_c(&tpm_cmd.join("tpm/src"), &mut c_files);
     collect_c(&tpm_cmd.join("tpm/cryptolibs/common"), &mut c_files);
-    for implementation in MSTPM20_V185_CRYPTO_IMPLEMENTATIONS {
+    for implementation in TCGTPM_V185_CRYPTO_IMPLEMENTATIONS {
         collect_c(
             &tpm_cmd
                 .join("tpm/cryptolibs/implementations")
@@ -701,7 +701,7 @@ fn mstpm20_v185_sources(repo: &Path) -> Vec<PathBuf> {
 
 /// The crypto implementations (`TPMCmd/tpm/cryptolibs/implementations/`) the
 /// TCG reference's version 185 is built with (its CMake defaults).
-const MSTPM20_V185_CRYPTO_IMPLEMENTATIONS: [&str; 7] = [
+const TCGTPM_V185_CRYPTO_IMPLEMENTATIONS: [&str; 7] = [
     "EccRef",
     "KdfRef",
     "Ossl",
@@ -711,7 +711,7 @@ const MSTPM20_V185_CRYPTO_IMPLEMENTATIONS: [&str; 7] = [
     "TpmBigNum",
 ];
 
-fn mstpm20_v185_include_dirs(repo: &Path) -> Vec<PathBuf> {
+fn tcgtpm_v185_include_dirs(repo: &Path) -> Vec<PathBuf> {
     let tpm_cmd = repo.join("TPMCmd");
     let mut dirs: Vec<PathBuf> = [
         "TpmConfiguration",
@@ -732,7 +732,7 @@ fn mstpm20_v185_include_dirs(repo: &Path) -> Vec<PathBuf> {
     .collect();
     // Not every implementation has headers (e.g. `KdfRef`).
     dirs.extend(
-        MSTPM20_V185_CRYPTO_IMPLEMENTATIONS
+        TCGTPM_V185_CRYPTO_IMPLEMENTATIONS
             .iter()
             .map(|implementation| {
                 tpm_cmd

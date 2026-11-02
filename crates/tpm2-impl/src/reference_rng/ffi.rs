@@ -1,5 +1,5 @@
 //! The FFI boundary to the linked C reference code (`libtpmrs_refrng.a`, built by `build.rs`
-//! from the unmodified `mstpm20` sources), and all glue between it and Rust.
+//! from the unmodified `tcgtpm` sources), and all glue between it and Rust.
 //!
 //! This is the only module of the crate with `unsafe` code. It provides, in Rust, everything the
 //! reference code needs around its random-number functions:

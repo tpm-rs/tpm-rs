@@ -145,7 +145,7 @@ fn sequence_object_protector_is_type_error() {
 /// command enables the association of a credential with an object in a way
 /// that ensures that the TPM has validated the parameters of the credentialed
 /// object."; the specification gives no response code for a sequence object,
-/// so tpm-rs follows `mstpm20` version 185 ("Cannot activate credential of
+/// so tpm-rs follows `tcgtpm` version 185 ("Cannot activate credential of
 /// sequence object"; the other references are patched alike,
 /// `bug-fix-activate-credential-sequence-object.patch`).
 #[test]

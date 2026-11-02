@@ -1,64 +1,58 @@
-# Bug report: mstpm20 (TCG reference implementation, pre-185)
+# Bug report: tcgtpm-185-feature (TCG reference implementation, version 185)
 
-The bugs of the C reference `mstpm20` that the `bug-fix-*.patch` files in this directory fix for differential testing against `tpm-rs`. Security Severity is the security severity of the bug in the unpatched reference (— = no security impact).
+The bugs of the C reference `tcgtpm-185-feature` that the `bug-fix-*.patch` files in this directory fix for differential testing against `tpm-rs`. Security Severity is the security severity of the bug in the unpatched reference (— = no security impact).
 
 ## Contents
 
 - [Summary](#summary)
 - [Categories](#categories)
 - [Bugs](#bugs)
-  - [activate-credential-sequence-object](#activate-credential-sequence-object)
-  - [certify-sequence-object](#certify-sequence-object)
   - [pcr-extended-locality](#pcr-extended-locality)
   - [bind-entity-public-only](#bind-entity-public-only)
   - [object-change-auth-derived-object](#object-change-auth-derived-object)
+  - [read-public-null-name-alg](#read-public-null-name-alg)
   - [rsa-prime-range](#rsa-prime-range)
   - [sequence-complete-ticket-error-state](#sequence-complete-ticket-error-state)
   - [svn-fw-limited-entity-hierarchy](#svn-fw-limited-entity-hierarchy)
-  - [certify-creation-sequence-object](#certify-creation-sequence-object)
   - [expiration-absolute-value](#expiration-absolute-value)
   - [persistent-copy-handle-alias](#persistent-copy-handle-alias)
   - [svn-fw-limited-load-external](#svn-fw-limited-load-external)
   - [vendor-auth-entity-break](#vendor-auth-entity-break)
   - [act-preserve-signaled](#act-preserve-signaled)
+  - [cipher-mode-error-code](#cipher-mode-error-code)
   - [get-test-result-needs-test](#get-test-result-needs-test)
-  - [hierarchy-control-base-hierarchy](#hierarchy-control-base-hierarchy)
   - [nv-certify-null-sign-handle-digest](#nv-certify-null-sign-handle-digest)
-  - [persist-public-only-objects](#persist-public-only-objects)
+  - [pcr-reset-handle-type](#pcr-reset-handle-type)
   - [session-audit-attribute-dependency](#session-audit-attribute-dependency)
   - [svn-fw-limited-evict-control](#svn-fw-limited-evict-control)
   - [symmetric-unique](#symmetric-unique)
   - [template-size](#template-size)
-  - [tk-verified-tags](#tk-verified-tags)
   - [tpmu-name-size](#tpmu-name-size)
 
 ## Summary
 
 | Patch | Categories | Security Severity | Description |
 |---|---|---|---|
-| [activate-credential-sequence-object](bug-fix-activate-credential-sequence-object.patch) ([details](#activate-credential-sequence-object)) | `security`, `auth-bypass`, `memory-safety`, `spec` | high | ActivateCredential accepts a sequence object, whose stale Name lets an attacker activate credentials for any public area loaded earlier in the slot. |
-| [certify-sequence-object](bug-fix-certify-sequence-object.patch) ([details](#certify-sequence-object)) | `security`, `attestation`, `memory-safety`, `spec` | high | Certify accepts a sequence object and signs the stale Name/Qualified Name of an earlier (possibly public-only) object in the slot. |
 | [pcr-extended-locality](bug-fix-pcr-extended-locality.patch) ([details](#pcr-extended-locality)) | `security`, `ub`, `spec` | high | PCR reset/extend checks shift by an extended locality (UB), so localities 32+ alias localities 0-4 and can modify D-RTM PCRs. |
 | [bind-entity-public-only](bug-fix-bind-entity-public-only.patch) ([details](#bind-entity-public-only)) | `security`, `dos`, `spec` | medium | A bound HMAC session authorizing a public-only object hits an assertion in the bind check (failure mode) instead of TPM_RC_AUTH_UNAVAILABLE. |
 | [object-change-auth-derived-object](bug-fix-object-change-auth-derived-object.patch) ([details](#object-change-auth-derived-object)) | `security`, `memory-safety`, `dos`, `spec` | medium | TPM2_ObjectChangeAuth of a derived object uses an uninitialized symmetric definition of the Derivation Parent. |
+| [read-public-null-name-alg](bug-fix-read-public-null-name-alg.patch) ([details](#read-public-null-name-alg)) | `security`, `dos`, `spec` | medium | ReadPublic of a LoadExternal object with nameAlg TPM_ALG_NULL fails response marshaling and puts the TPM into failure mode. |
 | [rsa-prime-range](bug-fix-rsa-prime-range.patch) ([details](#rsa-prime-range)) | `security`, `dos`, `crypto`, `input-validation`, `spec` | medium | RSA key loading does not check the range of the computed prime Q, so a crafted key can put the TPM in failure mode. |
 | [sequence-complete-ticket-error-state](bug-fix-sequence-complete-ticket-error-state.patch) ([details](#sequence-complete-ticket-error-state)) | `security`, `dos`, `state`, `fw-limited`, `spec` | medium | A TPM2_SequenceComplete that fails computing its ticket leaves the sequence loaded with a consumed hash state, whose reuse enters failure mode. |
 | [svn-fw-limited-entity-hierarchy](bug-fix-svn-fw-limited-entity-hierarchy.patch) ([details](#svn-fw-limited-entity-hierarchy)) | `security`, `attestation`, `fw-limited`, `spec` | medium | EntityGetHierarchy() reports the base hierarchy for objects in limited hierarchies, so their creation/auth tickets use the base proof. |
-| [certify-creation-sequence-object](bug-fix-certify-creation-sequence-object.patch) ([details](#certify-creation-sequence-object)) | `security`, `attestation`, `memory-safety`, `spec` | low | CertifyCreation accepts a sequence object and checks/signs the creation ticket against the stale Name of an earlier object in the slot. |
 | [expiration-absolute-value](bug-fix-expiration-absolute-value.patch) ([details](#expiration-absolute-value)) | `ub`, `interop`, `spec` | low | The absolute value of expiration = INT32_MIN overflows, giving a wrong policy timeout and ticket. |
 | [persistent-copy-handle-alias](bug-fix-persistent-copy-handle-alias.patch) ([details](#persistent-copy-handle-alias)) | `security`, `spec` | low | A later transient handle that names the slot of a persistent object's per-command RAM copy resolves to that persistent object instead of failing with TPM_RC_REFERENCE_Hn. |
 | [svn-fw-limited-load-external](bug-fix-svn-fw-limited-load-external.patch) ([details](#svn-fw-limited-load-external)) | `security`, `input-validation`, `fw-limited`, `spec` | low | TPM2_LoadExternal accepts a public-only object with firmwareLimited or svnLimited SET. |
 | [vendor-auth-entity-break](bug-fix-vendor-auth-entity-break.patch) ([details](#vendor-auth-entity-break)) | `security`, `dos`, `functional`, `spec` | low | Missing break for VENDOR_PERMANENT_AUTH_HANDLE in EntityGetAuthValue() falls into FAIL(), so using the vendor authValue puts the TPM into failure mode. |
 | [act-preserve-signaled](bug-fix-act-preserve-signaled.patch) ([details](#act-preserve-signaled)) | `state`, `spec` | — | ACT preserveSignaled is cleared/merged by power loss instead of being CLEAR on TPM Reset/Restart and a copy of signaled on TPM Resume. |
+| [cipher-mode-error-code](bug-fix-cipher-mode-error-code.patch) ([details](#cipher-mode-error-code)) | `rc-only`, `spec` | — | TPMI_ALG_CIPHER_MODE values are rejected with TPM_RC_SYMMETRIC instead of TPM_RC_MODE. |
 | [get-test-result-needs-test](bug-fix-get-test-result-needs-test.patch) ([details](#get-test-result-needs-test)) | `self-test`, `spec` | — | TPM2_GetTestResult always returns TPM_RC_SUCCESS instead of TPM_RC_NEEDS_TEST while algorithms remain untested. |
-| [hierarchy-control-base-hierarchy](bug-fix-hierarchy-control-base-hierarchy.patch) ([details](#hierarchy-control-base-hierarchy)) | `spec`, `input-validation`, `rc-only` | — | TPM2_HierarchyControl unmarshals authHandle as TPMI_RH_HIERARCHY instead of TPMI_RH_BASE_HIERARCHY. |
-| [nv-certify-null-sign-handle-digest](bug-fix-nv-certify-null-sign-handle-digest.patch) ([details](#nv-certify-null-sign-handle-digest)) | `spec-185`, `functional`, `spec` | — | TPM2_NV_Certify with a NULL signHandle and size = offset = 0 returns an Empty Buffer digest (pre-185 rule) instead of a digest with inScheme's hash or TPM_RC_SCHEME. |
-| [persist-public-only-objects](bug-fix-persist-public-only-objects.patch) ([details](#persist-public-only-objects)) | `spec-185`, `spec` | — | TPM2_EvictControl rejects public-only objects with TPM_RC_ATTRIBUTES (pre-185 rule) although version 185 allows persisting them. |
+| [nv-certify-null-sign-handle-digest](bug-fix-nv-certify-null-sign-handle-digest.patch) ([details](#nv-certify-null-sign-handle-digest)) | `spec-185`, `functional`, `spec` | — | TPM2_NV_Certify with a NULL signHandle and size = offset = 0 always returns TPM_RC_SCHEME because the caller's inScheme is cleared before its hash is used. |
+| [pcr-reset-handle-type](bug-fix-pcr-reset-handle-type.patch) ([details](#pcr-reset-handle-type)) | `input-validation`, `rc-only`, `spec` | — | TPM2_PCR_Reset unmarshals pcrHandle as TPMI_DH_PCR+, accepting TPM_RH_NULL instead of TPM_RC_VALUE + H1. |
 | [session-audit-attribute-dependency](bug-fix-session-audit-attribute-dependency.patch) ([details](#session-audit-attribute-dependency)) | `spec`, `rc-only` | — | auditExclusive/auditReset without audit are ignored on HMAC/policy sessions instead of returning TPM_RC_ATTRIBUTES. |
 | [svn-fw-limited-evict-control](bug-fix-svn-fw-limited-evict-control.patch) ([details](#svn-fw-limited-evict-control)) | `spec`, `rc-only`, `fw-limited` | — | TPM2_EvictControl rejects objects of limited hierarchies with TPM_RC_HIERARCHY instead of TPM_RC_ATTRIBUTES. |
 | [symmetric-unique](bug-fix-symmetric-unique.patch) ([details](#symmetric-unique)) | `interop`, `crypto`, `spec` | — | unique of symmetric/keyed-hash parents is an HMAC instead of H_nameAlg(seedValue || key), giving non-interoperable Names and binding checks. |
 | [template-size](bug-fix-template-size.patch) ([details](#template-size)) | `input-validation`, `spec` | — | TPM2B_TEMPLATE is bounded by the padded C sizeof(TPMT_PUBLIC) (356) instead of the unpadded 350 bytes, so oversized templates are accepted. |
-| [tk-verified-tags](bug-fix-tk-verified-tags.patch) ([details](#tk-verified-tags)) | `spec-185`, `input-validation`, `spec` | — | TPMT_TK_VERIFIED unmarshaling rejects the version 185 tags TPM_ST_MESSAGE_VERIFIED/TPM_ST_DIGEST_VERIFIED with TPM_RC_TAG. |
 | [tpmu-name-size](bug-fix-tpmu-name-size.patch) ([details](#tpmu-name-size)) | `input-validation`, `spec` | — | Alignment padding of the TPM_HANDLE member makes sizeof(TPMU_NAME) 68, so 67/68-octet TPM2B_NAMEs are accepted instead of TPM_RC_SIZE. |
 
 ## Categories
@@ -83,59 +77,6 @@ Categories form a tree; a child category implies its parent.
 - `fw-limited`: concerns the firmware-limited / SVN-limited hierarchies.
 
 ## Bugs
-
-### activate-credential-sequence-object
-
-**Categories:** `security`, `auth-bypass`, `memory-safety`, `spec`.
-
-**Severity:** high
-
-**Description:**
-
-TPM2_ActivateCredential accepts a hash, HMAC or event sequence object as `activateHandle`. A sequence object has no public area that the TPM has validated. In this reference, `FindEmptyObjectSlot()` clears only the slot's internal attributes and `AllocateSequenceSlot()` sets neither the Name nor the Qualified Name, so the sequence object keeps the Name of whatever object last used the slot (a stale-memory read). The credential check (`name` in the decrypted credential blob vs. `activateObject->name`) therefore compares against that stale Name. A caller can load a public area chosen by them in the lowest free slot with TPM2_LoadExternal, flush it, and start a sequence (which takes the same slot) with an authValue of their own choosing. The sequence then carries the Name of that public area and satisfies the ADMIN-role authorization of `activateHandle` with the caller's own password, and TPM2_ActivateCredential releases the credential secret for that Name.
-
-The patch returns TPM_RC_TYPE + RC_ActivateCredential_activateHandle for a sequence object, after the `keyHandle` checks. This matches the TCG reference's version 185 ("Cannot activate credential of sequence object") and tpm-rs.
-
-**Security:**
-
-The attacker needs only TPM2_LoadExternal (no authorization), a sequence start, and the USER-role authorization of the decrypting key `keyHandle` (typically the EK, whose default policy needs endorsement authorization, which the platform owner has and which is often empty). Neither the private key nor the authorization of the credentialed object is needed: a public-only load is enough, and its `fixedTPM`/`restricted` attributes may be set freely because no private area is loaded. The attacker can therefore pass a privacy-CA / attestation-CA enrollment for an arbitrary key, for example a software key presented as a TPM-resident, restricted AK: the CA encrypts a credential to the genuine EK, bound to the Name of the forged AK, and the attacker recovers it. This defeats the guarantee TPM2_ActivateCredential exists to provide (that the credentialed object is resident in the same TPM as the EK and that its parameters were validated), so AK certificates can be issued for non-TPM keys. The severity is high because it breaks the root of the remote-attestation enrollment protocol and needs no privileged access beyond the EK use authorization.
-
-**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_ActivateCredential", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L2772-L2774)
-
-> This command enables the association of a credential with an object in a
-> way that ensures that the TPM has validated the parameters of the
-> credentialed object.
-
----
-
-### certify-sequence-object
-
-**Categories:** `security`, `attestation`, `memory-safety`, `spec`.
-
-**Severity:** high
-
-**Description:**
-
-TPM2_Certify accepts a hash, HMAC or event sequence object as `objectHandle` and signs a TPMS_CERTIFY_INFO over its Name and Qualified Name. A sequence object is not loaded with TPM2_Load() or TPM2_CreatePrimary(). In this reference, `FindEmptyObjectSlot()` clears only the slot's attributes and `AllocateSequenceSlot()` sets neither name field, so the attestation contains the stale Name and Qualified Name of whatever object last used the slot. A caller can load any public area (including one with `fixedTPM`/`fixedParent` set) with TPM2_LoadExternal, flush it, and start a sequence in the same slot with an authValue of their choosing. TPM2_Certify then attests the public-only object's Name, which the specification explicitly forbids certifying.
-
-The patch returns TPM_RC_TYPE + RC_Certify_objectHandle for a sequence object, after the `signHandle` and scheme checks. This matches the TCG reference's version 185 ("Cannot certify a sequence object") and tpm-rs.
-
-**Security:**
-
-The caller needs TPM2_LoadExternal (no authorization), a sequence start, and the USER-role authorization of a signing key `signHandle` (for example their own restricted AK). The ADMIN-role authorization of `objectHandle` is satisfied by the sequence's caller-chosen authValue, so neither the private key nor the authorization of the certified object is needed. The resulting attestation, signed by a genuine AK, claims that an object with an arbitrary Name (e.g. the Name of a software key whose public area says `fixedTPM`) is loaded in this TPM. A verifier that relies on TPM2_Certify to establish key residency would accept a non-TPM key. The severity is high: a genuine AK signs a key-residency attestation for a key that never was in the TPM, which is what TPM2_Certify-based enrollment (e.g. a privacy CA certifying a TPM-resident key) relies on. A careful verifier could notice that the Qualified Name reflects the LoadExternal hierarchy rather than a real parent chain, but most verifiers only check the Name and attributes.
-
-**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_Certify", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L6143-L6152)
-
-> The object may be any object that is loaded with `TPM2_Load()` or
-> `TPM2_CreatePrimary()`. An object that only has its public area loaded
-> cannot be certified.
->
-> **Note:** The restriction occurs because the Name is used to identify the
-> object being certified. If the TPM has not validated that the public
-> area is associated with a matched sensitive area, then the public area
-> may not represent a valid object and cannot be certified.
-
----
 
 ### pcr-extended-locality
 
@@ -232,6 +173,45 @@ The caller needs a Derived Object it controls: `TPM2_CreateLoaded` under any Der
 
 ---
 
+### read-public-null-name-alg
+
+**Categories:** `security`, `dos`, `spec`.
+
+**Severity:** medium
+
+**Description:**
+
+Version 185 validates values while marshaling responses. Its dispatch table marshals the `outPublic` of TPM2_ReadPublic as a TPM2B_PUBLIC whose `nameAlg` is a TPMI_ALG_HASH without the "+" (TPM_ALG_NULL not allowed). TPM2_LoadExternal, however, may load a public area with `nameAlg` = TPM_ALG_NULL (the Name is then the Empty Buffer), as Part 3 permits. A TPM2_ReadPublic of such an object fails the TPMI_ALG_HASH check during response marshaling, which the reference treats as an internal error, and the TPM enters failure mode instead of returning the public area.
+
+The patch marshals the response with `MARSHAL_ID_TPM2B_PUBLIC_Plus`, i.e. as TPM2B_PUBLIC+ (the public area exactly as it was loaded), so TPM2_ReadPublic returns it with `nameAlg` = TPM_ALG_NULL.
+
+**Security:**
+
+Any caller can trigger this without authorization: TPM2_LoadExternal of a public area with `nameAlg` = TPM_ALG_NULL (e.g. in the NULL hierarchy) needs no authorization, and neither does TPM2_ReadPublic. The TPM then enters failure mode and refuses all commands except TPM2_GetTestResult/TPM2_GetCapability until it is reset. This is a denial of service against every user of the TPM, but it does not disclose or modify protected data. The severity is medium.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMT_PUBLIC Structure"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L11002-L11008)
+
+> nameAlg: +TPMI_ALG_HASH: algorithm used for computing the Name of the object
+> ... The "+" indicates that the instance of a TPMT_PUBLIC may have a "+" to
+> indicate that the *nameAlg* may be TPM_ALG_NULL.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_LoadExternal", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L2633-L2634)
+
+> If *hierarchy* is `TPM_RH_NULL` or *nameAlg* is `TPM_ALG_NULL`, a ticket
+> produced using the object shall be a NULL Ticket.
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "Type Decoration +"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L171-L179)
+
+> When appended to a value in the Type column of a command, this symbol
+> indicates that the parameter is allowed to use the optional value of the
+> data type (see TPM 2.0 Part 2, *Conditional Types*). The optional value
+> is usually `TPM_RH_NULL` for a handle or `TPM_ALG_NULL` for an algorithm
+> selector.
+>
+> **Note:** This decoration is not appended to response parameters
+
+---
+
 ### rsa-prime-range
 
 **Categories:** `security`, `dos`, `crypto`, `input-validation`, `spec`.
@@ -240,7 +220,7 @@ The caller needs a Derived Object it controls: `TPM2_CreateLoaded` under any Der
 
 **Description:**
 
-When an RSA key with a sensitive area is loaded (`TPM2_LoadExternal`, `TPM2_Load` under a non-fixedTPM parent, `TPM2_Import`), the key validation (`CryptValidateKeys()`) checks only the *provided* prime P: it must be half the size of the modulus with its most significant bit SET, and it must divide N. `CryptRsaLoadPrivateExponent()` (`crypt/CryptRsa.c`) then computes the second prime Q = N / P and checks only that the remainder is zero. **Q's range is never checked.** Part 1 requires both "the provided and computed prime factors" to be in range, meaning each prime squared has as many significant bits as N. A crafted modulus with a P just above 2^(k/2-1) can give a Q that is one bit longer than half the modulus, and such a key is accepted. The private exponent is then expanded into the five-value CRT form (P, Q, dP, dQ, qInv), with the larger prime determining the element size. For RSA-2048 the packed size (5 × 129 = 645 bytes) exceeds the `TPM2B_PRIVATE_KEY_RSA` buffer (`RSA_MAX_PRIME` × 5 = 640). `PackExponent()`'s size assertion fires and the TPM enters failure mode. For RSA-1024, the key under a fixedTPM parent gets a 325-byte CRT sensitive value that `TPM2_Load` later rejects.
+When an RSA key with a sensitive area is loaded (`TPM2_LoadExternal`, `TPM2_Load` under a non-fixedTPM parent, `TPM2_Import`), the key validation (`CryptoCommon_ValidateKeys()`) checks only the *provided* prime P: it must be half the size of the modulus with its most significant bit SET, and it must divide N. `CryptoRsa_LoadPrivateExponent()` (`cryptolibs/implementations/RsaRef/CryptRsa.c`) then computes the second prime Q = N / P and checks only that the remainder is zero. **Q's range is never checked.** Part 1 requires both "the provided and computed prime factors" to be in range, meaning each prime squared has as many significant bits as N. A crafted modulus with a P just above 2^(k/2-1) can give a Q that is one bit longer than half the modulus, and such a key is accepted. The private exponent is then expanded into the five-value CRT form (P, Q, dP, dQ, qInv), with the larger prime determining the element size. For RSA-2048 the packed size (5 × 129 = 645 bytes) exceeds the `TPM2B_PRIVATE_KEY_RSA` buffer (`RSA_MAX_PRIME` × 5 = 640). `PackExponent()`'s size assertion fires and the TPM enters failure mode. For RSA-1024, the key under a fixedTPM parent gets a 325-byte CRT sensitive value that `TPM2_Load` later rejects.
 
 The patch squares both P and Q after the division and requires each square to have the same number of significant bits as N. Otherwise it returns `TPM_RC_BINDING`, the function's existing code for a key whose public and private parts do not fit together.
 
@@ -280,18 +260,18 @@ Any caller can trigger this. `TPM2_LoadExternal` of an RSA-2048 key with a sensi
 **Description:**
 
 For a hash sequence, `TPM2_SequenceComplete` (`command/HashHMAC/SequenceComplete.c`) runs in this order:
-1. Adds the last `buffer` with `CryptDigestUpdate2B()`.
-2. Ends the hash with `CryptHashEnd()`, which consumes the state.
+1. Adds the last `buffer` to the hash state.
+2. Ends the hash with `TpmHash_HashEnd`, which consumes the state.
 3. May set `ticketSafe`.
-4. Only then calls `TicketComputeHashCheck()`.
+4. Only then computes the `TPMT_TK_HASHCHECK` ticket.
 
-Step 4 can fail. This reference accepts the firmware-limited and SVN-limited handles for `TPMI_RH_HIERARCHY+`, and `HierarchyGetProof()` returns `TPM_RC_SVN_LIMITED` for an SVN above the firmware's current SVN (or `TPM_RC_FW_LIMITED` when the Firmware Secret is unavailable). The command then returns the error, but the sequence object is **not** flushed: it stays loaded with an ended hash state and possibly an updated `ticketSafe`. This contradicts Part 3: after an error, "the state of the TPM is unchanged". In the public reference code, `HashEnd()` sets the state's type to `HASH_STATE_EMPTY`, and `CryptDigestUpdate()` on a state that is neither `HASH_STATE_HASH` nor `HASH_STATE_HMAC` calls `FAIL(FATAL_ERROR_INTERNAL)`. So a later `TPM2_SequenceUpdate` on the handle, or a retried `TPM2_SequenceComplete` (which also calls `CryptDigestUpdate2B()` first), puts the TPM into failure mode instead of continuing the sequence.
+Step 4 can fail. `HierarchyGetProof()` returns `TPM_RC_SVN_LIMITED` for an SVN-limited *hierarchy* whose SVN is above the firmware's current SVN, and `TPM_RC_FW_LIMITED` when the Firmware Secret is unavailable. The command then returns the error, but the sequence object is **not** flushed: it stays loaded with an ended hash state and possibly an updated `ticketSafe`. This contradicts Part 3: after an error, "the state of the TPM is unchanged". A later `TPM2_SequenceUpdate` or `TPM2_SequenceComplete` on that handle operates on the consumed hash state, and the TPM enters failure mode.
 
-The patch checks the hierarchy's proof with `HierarchyGetProof()` (and wipes the copy) **before** changing the sequence, under exactly the conditions in which a ticket would be computed: a non-NULL hierarchy, and either `ticketSafe` already SET or this is the first block and `TicketIsSafe()` accepts it. If the proof is unavailable, the command fails with the sequence intact.
+The patch checks the hierarchy's proof with `HierarchyGetProof()` (and wipes the copy) **before** changing the sequence, under exactly the conditions in which a ticket would be computed: a non-NULL hierarchy, and either `ticketSafe` already SET or this is the first block and `CryptoCommon_TicketIsSafe()` accepts it. If the proof is unavailable, the command fails with the sequence intact, so it can be retried with another hierarchy.
 
 **Security:**
 
-Any caller can trigger this without authorization. `TPM2_HashSequenceStart` needs no auth, the caller chooses the sequence's auth value, and the *hierarchy* parameter of `TPM2_SequenceComplete` is not authorized. The caller passes an SVN-limited hierarchy with a too-high SVN and then reuses the sequence handle. As traced above, the reuse reaches `FAIL(FATAL_ERROR_INTERNAL)`, a failure-mode denial of service until the next reset. No secret or forgery is involved. The severity is medium: like the 185 code base, any caller can put the TPM into failure mode (traced in the public pre-185 code, not the pinned commit).
+Any caller can trigger this without authorization. `TPM2_HashSequenceStart` needs no auth, the caller chooses the sequence's auth value, and the *hierarchy* parameter of `TPM2_SequenceComplete` is not authorized. It is enough to pass an SVN-limited hierarchy handle with an SVN above the current firmware SVN, send safe data, and then call `TPM2_SequenceUpdate`/`TPM2_SequenceComplete` again. The TPM then enters failure mode, a denial of service that lasts until the next `_TPM_Init` (reset). The attacker gains no secrets and cannot forge anything, so the severity is medium.
 
 **Spec:** [TPM 2.0 (version 185), Part 3, "Response Codes"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L922-L926)
 
@@ -317,7 +297,7 @@ Any caller can trigger this without authorization. `TPM2_HashSequenceStart` need
 
 **Description:**
 
-`EntityGetHierarchy()` (`support/Entity.c`) determines an object's hierarchy from its `ppsHierarchy`/`spsHierarchy`/`epsHierarchy` attributes, and those attributes only ever hold the *base* hierarchy. An object in a firmware-limited or SVN-limited hierarchy (a primary key created with `TPM_RH_FW_*`/`TPM_RH_SVN_*_BASE + SVN`, an external object loaded into such a hierarchy, or any descendant) is therefore treated as belonging to `TPM_RH_OWNER`/`TPM_RH_PLATFORM`/`TPM_RH_ENDORSEMENT`. As a result, `TPM2_Create`'s creation ticket and the `TPM2_PolicySigned`/`TPM2_PolicySecret` auth tickets for such an object are labelled with the base hierarchy and HMACed with the base hierarchy's proof. `TPM2_VerifySignature`, which goes through `GetHierarchy()`, already uses the object's limited hierarchy. Part 2 says the ticket hierarchy is "the hierarchy containing *name*" or "the hierarchy of the object used to produce the ticket", and Part 1 says an object is in the limited hierarchy even without *firmwareLimited*/*svnLimited* SET.
+`EntityGetHierarchy()` (`support/Entity.c`, version 185 code base) determines an object's hierarchy from its `ppsHierarchy`/`spsHierarchy`/`epsHierarchy` attributes, and those attributes only ever hold the *base* hierarchy. An object in a firmware-limited or SVN-limited hierarchy (a primary key created with `TPM_RH_FW_*`/`TPM_RH_SVN_*_BASE + SVN`, an external object loaded into such a hierarchy, or any descendant) is therefore treated as belonging to `TPM_RH_OWNER`/`TPM_RH_PLATFORM`/`TPM_RH_ENDORSEMENT`. As a result, `TPM2_Create`'s creation ticket and the `TPM2_PolicySigned`/`TPM2_PolicySecret` auth tickets for such an object are labelled with the base hierarchy and HMACed with the base hierarchy's proof. `TPM2_VerifySignature`, which goes through `GetHierarchy()`, already uses the object's limited hierarchy. Part 2 says the ticket hierarchy is "the hierarchy containing *name*" or "the hierarchy of the object used to produce the ticket", and Part 1 says an object is in the limited hierarchy even without *firmwareLimited*/*svnLimited* SET.
 
 The patch makes `EntityGetHierarchy()` return `object->hierarchy` when it is firmware-limited or SVN-limited (`HierarchyIsFirmwareLimited()`/`HierarchyIsSvnLimited()`). Every other object keeps the attribute-based result.
 
@@ -355,31 +335,6 @@ Firmware-limited and SVN-limited hierarchies exist so that objects stay protecte
 > vulnerable firmware that has access to base hierarchy seeds and proof
 > values, users should certify SVN-limited objects via a firmware-limited
 > or SVN-limited AK.
-
----
-
-### certify-creation-sequence-object
-
-**Categories:** `security`, `attestation`, `memory-safety`, `spec`.
-
-**Severity:** low
-
-**Description:**
-
-TPM2_CertifyCreation accepts a hash, HMAC or event sequence object as `objectHandle`. A sequence object has no creation data, yet the reference recomputes the creation ticket over `certified->name`. That Name is stale, left by whatever object last used the slot, because `FindEmptyObjectSlot()` clears only the slot's attributes and `AllocateSequenceSlot()` does not set it. If the caller holds a valid creation ticket for that earlier object, the TPM signs a TPMS_CREATION_INFO for an object that is no longer loaded. Otherwise the command fails with TPM_RC_TICKET, and it also checks `signHandle` before rejecting the object.
-
-The patch returns TPM_RC_TYPE + RC_CertifyCreation_objectHandle for a sequence object, before the `signHandle` and scheme checks. This matches the TCG reference's version 185 ("Cannot certify creation of a sequence object") and tpm-rs.
-
-**Security:**
-
-The caller needs a sequence object (with an authValue of their choosing, which satisfies the ADMIN role of `objectHandle`), USER-role authorization of a signing key, and a creation ticket that the TPM produced for the object whose Name is stale in the slot. Creation tickets are HMACs under a hierarchy proof, so the attacker can only reuse tickets the TPM really issued, and the signed creation data is therefore true. The main gain is skipping the certified object's own ADMIN authorization: someone who saw an object's creation ticket can get its creation certified without that object's authorization or policy. They do so by loading its public area (LoadExternal is enough) to plant the Name and then starting a sequence. The severity is low because no false statement about creation data can be produced.
-
-**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_CertifyCreation", "General Description"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L6228-L6231)
-
-> This command is used to prove the association between an object and its
-> creation data. The TPM will validate that the ticket was produced by the
-> TPM and that the ticket validates the association between a loaded
-> public area and the provided hash of the creation data (*creationHash*).
 
 ---
 
@@ -549,6 +504,30 @@ every other startup, as Part 2 requires.
 
 ---
 
+### cipher-mode-error-code
+
+**Categories:** `rc-only`, `spec`.
+
+**Severity:** —
+
+**Description:**
+
+The error code of the `TPMI_ALG_CIPHER_MODE` interface type is `TPM_RC_MODE`. In version 185, `TPMI_ALG_CIPHER_MODE_MarshalUnmarshal()` and `TPMI_ALG_CIPHER_MODE_Plus_MarshalUnmarshal()` (`Marshal.c`) pass `TPM_RC_SYMMETRIC` as the error of the table-driven value check, so a mode that is not an implemented block cipher mode (e.g. `TPM_ALG_CMAC` as `mode` of `TPM2_EncryptDecrypt`) is rejected with `TPM_RC_SYMMETRIC` instead of `TPM_RC_MODE`. Only the response code differs; the value is still rejected.
+
+The patch passes `TPM_RC_MODE` in both functions.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, "TPMI_ALG_CIPHER_MODE"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L6693-L6695)
+
+> ... `TPMI_ALG_CIPHER_MODE` is an interface type of all the
+> symmetric block cipher, encryption/decryption modes that are listed in
+> the TCG algorithm registry.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of (TPM_ALG_ID) TPMI_ALG_CIPHER_MODE Type"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L6702-L6714)
+
+> TPM_ALG_CTR; TPM_ALG_OFB; TPM_ALG_CBC; TPM_ALG_CFB; TPM_ALG_ECB; +TPM_ALG_NULL | required; #TPM_RC_MODE
+
+---
+
 ### get-test-result-needs-test
 
 **Categories:** `self-test`, `spec`.
@@ -558,7 +537,7 @@ every other startup, as Part 2 requires.
 **Description:**
 
 `TPM2_GetTestResult` outside Failure mode always returns `testResult =
-TPM_RC_SUCCESS` with empty `outData`: `CryptGetTestResult()` is a placeholder (its own comment
+TPM_RC_SUCCESS` with empty `outData`: `CryptoCommon_GetTestResult()` is a placeholder (its own comment
 says the behavior "is NOT the correct behavior for a real TPM implementation").
 After `_TPM_Init`, before any `TPM2_SelfTest`, or after `TPM2_IncrementalSelfTest`
 of only some algorithms, software asking for the test status is told that all
@@ -586,26 +565,6 @@ returns `TPM_RC_NEEDS_TEST` while any bit of `g_toTest` is SET and
 
 ---
 
-### hierarchy-control-base-hierarchy
-
-**Categories:** `spec`, `input-validation`, `rc-only`.
-
-**Severity:** —
-
-**Description:**
-
-Part 3 types `TPM2_HierarchyControl`'s *authHandle* as `TPMI_RH_BASE_HIERARCHY`. That type admits only `TPM_RH_OWNER`, `TPM_RH_PLATFORM` and `TPM_RH_ENDORSEMENT`, and anything else must fail to unmarshal with `TPM_RC_VALUE`. This reference's command descriptor (`CommandDispatchData.h`) instead unmarshals *authHandle* as `TPMI_RH_HIERARCHY_H_UNMARSHAL`. That type also admits `TPM_RH_NULL` and, in this reference, the firmware-limited and SVN-limited hierarchy handles. Such a handle therefore passes unmarshaling and is rejected later, by the hierarchy load-status check or the authorization logic (for example, `TPM_RC_FW_LIMITED + H1` for `TPM_RH_FW_OWNER` when the Firmware Secret is unavailable), instead of with `TPM_RC_VALUE + H1`. The command is still refused, so only the response code differs. The patch switches the descriptor to the existing `TPMI_RH_BASE_HIERARCHY_H_UNMARSHAL` handle type, matching version 185 of the reference.
-
-**Spec:** [TPM 2.0 (version 185), Part 3, Table "TPM2_HierarchyControl Command"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L11875-L11880)
-
-> TPMI_RH_BASE_HIERARCHY | @authHandle | TPM_RH_ENDORSEMENT, TPM_RH_OWNER or TPM_RH_PLATFORM+{PP} Auth Index: 1 Auth Role: USER
-
-**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of (TPM_HANDLE) TPMI_RH_BASE_HIERARCHY Type"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L6106-L6112)
-
-> TPM_RH_OWNER: Storage hierarchy. TPM_RH_PLATFORM: Platform hierarchy. TPM_RH_ENDORSEMENT: Endorsement hierarchy. #TPM_RC_VALUE: response code returned when the unmarshaling of this type fails
-
----
-
 ### nv-certify-null-sign-handle-digest
 
 **Categories:** `spec-185`, `functional`, `spec`.
@@ -614,24 +573,21 @@ Part 3 types `TPM2_HierarchyControl`'s *authHandle* as `TPMI_RH_BASE_HIERARCHY`.
 
 **Description:**
 
-This reference implements the pre-185 rule. For `TPM2_NV_Certify` with
-`signHandle = TPM_RH_NULL`, `CryptSelectSignScheme()` replaces `inScheme` with `TPM_ALG_NULL`, and
-for `size = offset = 0` the digest of the Index data is then started with the hash
-algorithm of that cleared scheme, i.e. `TPM_ALG_NULL`. The response is a
-`TPM_ST_ATTEST_NV_DIGEST` attestation whose `nvDigest` is an Empty Buffer,
-whatever scheme the caller asked for, and a caller passing a NULL scheme gets the
-same Empty Buffer instead of an error. Versions 1.83 and earlier allowed this
-Empty Buffer; version 185 requires the digest to be computed with the hash
-algorithm of `inScheme` and `TPM_RC_SCHEME` when the scheme or its hash algorithm
-is `TPM_ALG_NULL`. Without the fix, an unsigned digest attestation (used, e.g.,
-to obtain the digest of an Index larger than `MAX_NV_BUFFER_SIZE` that the caller
-then checks itself) never contains the digest.
+This reference targets version 185 but implements the new rule incorrectly. For
+`TPM2_NV_Certify` with `signHandle = TPM_RH_NULL`, `SelectAttestSignScheme()`
+(`CryptoCommon_SelectSignScheme()`) replaces `inScheme` with `TPM_ALG_NULL`, and
+for `size = offset = 0` the digest's hash algorithm is then taken from that
+cleared scheme by `AttestHashAlg()`. It is always `TPM_ALG_NULL`, so the command
+always fails with `TPM_RC_SCHEME`, even when the caller supplied a valid scheme
+such as `TPM_ALG_RSASSA`/`TPM_ALG_SHA256`. The unsigned NV digest attestation that
+version 185 introduced as the replacement of the pre-185 Empty Buffer (versions
+1.83 and earlier allowed an Empty Buffer digest here) is therefore unusable.
 
-The patch saves the caller's `inScheme` before the scheme selection and, in the
-digest branch with a NULL `signHandle`, returns `TPM_RC_SCHEME` (+
-`RC_NV_Certify_inScheme`) if that scheme or its `hashAlg` is `TPM_ALG_NULL` and
-otherwise computes the digest with its `hashAlg`. The attestation stays unsigned
-(NULL signature).
+The patch saves the caller's `inScheme` before the scheme selection and passes it
+to `AttestHashAlg()` when `signHandle` is NULL, so the digest is computed with the
+hash algorithm of `inScheme` and `TPM_RC_SCHEME` is returned only when that scheme
+or its hash algorithm is `TPM_ALG_NULL`. The attestation stays unsigned (NULL
+signature).
 
 **Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_NV_Certify"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L15942-L15951)
 
@@ -654,46 +610,33 @@ otherwise computes the digest with its `hashAlg`. The attestation stays unsigned
 
 ---
 
-### persist-public-only-objects
+### pcr-reset-handle-type
 
-**Categories:** `spec-185`, `spec`.
+**Categories:** `input-validation`, `rc-only`, `spec`.
 
 **Severity:** —
 
 **Description:**
 
-This reference implements the pre-185 rule of `TPM2_EvictControl`: it refuses to
-make a transient object persistent when `attributes.publicOnly` is SET (for
-example the public-only object loaded by `TPM2_LoadExternal(hierarchy =
-TPM_RH_OWNER)`) and returns `TPM_RC_ATTRIBUTES` + `RC_EvictControl_objectHandle`.
-Older versions of the specification did not allow persisting public-only objects
-(for NV space efficiency); version 185 removed that condition, so only objects in
-the NULL, firmware-limited or SVN-limited hierarchies, and temporary or `stClear`
-objects, are rejected. Without the fix, software written for version 185 cannot
-persist an external public key (for example a verification key for
-`TPM2_PolicyAuthorize` or `TPM2_VerifySignature`) and must reload it after every
-TPM Reset.
+The `pcrHandle` of `TPM2_PCR_Reset` is a `TPMI_DH_PCR` without the `+` decoration, so its conditional value `TPM_RH_NULL` is not allowed and must be rejected while unmarshaling the handle area with `TPM_RC_VALUE + TPM_RC_H + TPM_RC_1`. In version 185, the dispatch table (`CommandDispatch.inl`) unmarshals `pcrHandle` as `TPMI_DH_PCR+` (`MARSHAL_ID_TPMI_DH_PCR_Plus`), so `TPM_RH_NULL` is accepted and the command fails only later with another response code (e.g. `TPM_RC_AUTH_MISSING` in the authorization checks). Only the response code differs.
 
-The patch drops the `publicOnly` condition, so only temporary and `stClear`
-objects are rejected, as in version 185. The persistent copy keeps
-`attributes.publicOnly` (`NvAddEvictObject()` stores the whole `OBJECT`), so it
-still has neither authValue nor authPolicy available. Found by differential
-fuzzing.
+The patch changes the dispatch entry to `MARSHAL_ID_TPMI_DH_PCR`, so `TPM_RH_NULL` is rejected with `TPM_RC_VALUE + TPM_RC_H + TPM_RC_1`.
 
-**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_EvictControl"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L13748-L13761)
+**Spec:** [TPM 2.0 (version 185), Part 3, Table "TPM2_PCR_Reset Command"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L8636-L8636)
 
-> If *objectHandle* references a Transient Object:
->
-> 1.  The TPM shall return `TPM_RC_ATTRIBUTES` if
->
->     1.  it is in the hierarchy of `TPM_RH_NULL` or a firmware-limited or
->         SVN-limited hierarchy, or
->
->         Older versions of the specification did not allow an object to be persisted
->     when only the public portion of the object was loaded (for NV space efficiency).
->     Support for persisting public-only objects was added in version 185.
->
->     2.  the *stClear* is SET in the object or in an ancestor key.
+> TPMI_DH_PCR | @pcrHandle | the PCR to reset
+
+**Spec:** [TPM 2.0 (version 185), Part 3, "Type Decoration +"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L171-L175)
+
+> When appended to a value in the Type column of a command, this symbol
+> indicates that the parameter is allowed to use the optional value of the
+> data type (see TPM 2.0 Part 2, *Conditional Types*). The optional value
+> is usually `TPM_RH_NULL` for a handle or `TPM_ALG_NULL` for an algorithm
+> selector.
+
+**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of (TPM_HANDLE) TPMI_DH_PCR Type"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L5874-L5878)
+
+> {PCR_FIRST:PCR_LAST}; +TPM_RH_NULL | conditional value; #TPM_RC_VALUE
 
 ---
 
@@ -835,7 +778,7 @@ included.
 
 **Description:**
 
-The maximum size of a `TPM2B_TEMPLATE` is `sizeof(TPMT_PUBLIC)`, which Part 2 defines as the octet-aligned size of the structure without padding. `TPM2B_TEMPLATE_Unmarshal()` (`Marshal.c`) compares the size field with the C `sizeof(TPMT_PUBLIC)`, and the C size includes the alignment padding caused by the 4-byte alignment of the `UINT32` members (`TPMA_OBJECT` and the `exponent` of `TPMS_RSA_PARMS`): 356 bytes instead of 350 with this profile (RSA-2048, 66-byte `authPolicy` for SHA-512). A `TPM2_CreateLoaded` whose `inPublic` template is 351 to 356 bytes long is therefore accepted by the unmarshaler and processed further (so it fails later with another response code, or not at all) instead of being rejected with `TPM_RC_SIZE` for `inPublic`. This is the same kind of padding issue as `tpmu-name-size`. There is no memory-safety impact: the C buffer of `TPM2B_TEMPLATE` has the padded size, so the extra bytes still fit.
+The maximum size of a `TPM2B_TEMPLATE` is `sizeof(TPMT_PUBLIC)`, which Part 2 defines as the octet-aligned size of the structure without padding. `TPM2B_TEMPLATE_MarshalUnmarshal()` (`Marshal.c`) passes the C `sizeof(TPMT_PUBLIC)` to `TPM2B_MarshalUnmarshal()` as the maximum size, and the C size includes the alignment padding caused by the 4-byte alignment of the `UINT32` members (`TPMA_OBJECT` and the `exponent` of `TPMS_RSA_PARMS`): 356 bytes instead of 350 with this profile (RSA-2048, 66-byte `authPolicy` for SHA-512). A `TPM2_CreateLoaded` whose `inPublic` template is 351 to 356 bytes long is therefore accepted by the unmarshaler and processed further (so it fails later with another response code, or not at all) instead of being rejected with `TPM_RC_SIZE` for `inPublic`. This is the same kind of padding issue as `tpmu-name-size`. There is no memory-safety impact: the C buffer of `TPM2B_TEMPLATE` has the padded size, so the extra bytes still fit.
 
 The patch computes the unpadded size `TPMT_PUBLIC_PACKED_SIZE` from the members (`type`, `nameAlg`, `objectAttributes`, `authPolicy`, the larger of the packed `TPMS_RSA_PARMS` and `TPMS_ECC_PARMS`, and `TPMU_PUBLIC_ID`) and uses it as the bound.
 
@@ -849,68 +792,6 @@ The patch computes the unpadded size `TPMT_PUBLIC_PACKED_SIZE` from the members 
 > structures. When used in a table to indicate a maximum size, the
 > sizeof() function returns the octet-aligned size of the structure, with
 > no padding.
-
----
-
-### tk-verified-tags
-
-**Categories:** `spec-185`, `input-validation`, `spec`.
-
-**Severity:** —
-
-**Description:**
-
-This reference was written before version 185 and unmarshals a `TPMT_TK_VERIFIED`
-(the `checkTicket` of `TPM2_PolicyAuthorize`) only with `tag = TPM_ST_VERIFIED`;
-any other tag fails with `TPM_RC_TAG`. Version 185 added
-`TPM2_VerifySequenceComplete()` and `TPM2_VerifyDigestSignature()`, whose tickets
-carry the new tags `TPM_ST_MESSAGE_VERIFIED` (0x8026) and `TPM_ST_DIGEST_VERIFIED`
-(0x8027), and a tag-selected `metadata` field (`TPMU_TK_VERIFIED_META`, a
-`TPMI_ALG_HASH` for `TPM_ST_DIGEST_VERIFIED`) between `hierarchy` and the HMAC.
-A version 185 command carrying such a ticket (for example a NULL Verified Ticket
-with one of the new tags) is rejected at unmarshaling with `TPM_RC_TAG`
-(+ the parameter position) instead of being parsed and judged by
-`TPM2_PolicyAuthorize`, so the response code differs from a version 185 TPM, and
-a `TPM_ST_DIGEST_VERIFIED` ticket would be mis-parsed if its tag were accepted
-without the metadata.
-
-The patch accepts both new tags and, for `TPM_ST_DIGEST_VERIFIED`, unmarshals
-(and discards) the `TPMI_ALG_HASH` metadata before the HMAC. No such ticket can be
-valid on this TPM (it implements neither `TPM2_VerifySequenceComplete` nor
-`TPM2_VerifyDigestSignature`), so `TPM2_PolicyAuthorize` still rejects it when it
-checks the ticket.
-
-**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMT_TK_VERIFIED Structure"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7539-L7554)
-
-> Table: Definition of TPMT_TK_VERIFIED Structure
->
-> tag | TPM_ST | ticket structure tag
-> #TPM_RC_TAG | | error returned when *tag* is not one of the values in @tbl:tpm-st-for-signatures
-> hierarchy | TPMI_RH_HIERARCHY+ | the hierarchy containing *keyName*.
-> \[tag\]metadata | TPMU_TK_VERIFIED_META | Additional (if any) metadata required in order to validate the ticket.
-
-**Spec:** [TPM 2.0 (version 185), Part 2, Table "TPM_ST Values For Signature Verification Commands"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7527-L7537)
-
-> Table: TPM_ST Values For Signature Verification Commands
->
-> `TPM_ST_VERIFIED`: `TPM2_VerifySignature()`; `TPM_ST_MESSAGE_VERIFIED`:
-> `TPM2_VerifySequenceComplete()`; `TPM_ST_DIGEST_VERIFIED`:
-> `TPM2_VerifyDigestSignature()`.
-
-**Spec:** [TPM 2.0 (version 185), Part 2, Table "Definition of TPMU_TK_VERIFIED_META Union"](../../../_agents/skills/tpm2-spec/resources/spec/part2.tcg.txt#L7462-L7476)
-
-> verified | TPMS_EMPTY | `TPM_ST_VERIFIED`; messageVerified | TPMS_EMPTY |
-> `TPM_ST_MESSAGE_VERIFIED`; digestVerified | TPMI_ALG_HASH |
-> `TPM_ST_DIGEST_VERIFIED` | The hash algorithm or XOF used to produce the digest
-> that was verified
-
-**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_VerifySequenceComplete"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7359-L7359)
-
-> `TPM2_VerifySequenceComplete()` was added in version 185.
-
-**Spec:** [TPM 2.0 (version 185), Part 3, "TPM2_VerifyDigestSignature"](../../../_agents/skills/tpm2-spec/resources/spec/part3.tcg.txt#L7443-L7443)
-
-> `TPM2_VerifyDigestSignature()` was added in version 185.
 
 ---
 

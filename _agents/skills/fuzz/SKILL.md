@@ -1,6 +1,6 @@
 ---
 name: fuzz
-description: Run differential fuzzing campaigns of tpm-rs against the C reference TPMs (mstpm20, ibmswtpm2), triage and fix the findings. Only run fuzzing when the user explicitly asks for it.
+description: Run differential fuzzing campaigns of tpm-rs against the C reference TPMs (tcgtpm, ibmswtpm2), triage and fix the findings. Only run fuzzing when the user explicitly asks for it.
 ---
 
 # Differential fuzzing of tpm-rs and fixing its findings
@@ -35,11 +35,11 @@ Read these first; this skill does not repeat them:
 1. **Spec first.** For every discrepancy, look up the TPM 2.0 spec: Part 2
    unmarshal tables (the `#TPM_RC_*` rows) and Part 3 (the command's
    "Detailed Actions", "Command Header/Handle Area/Session Area Validation",
-   "Response Code Details"). `tpm-rs` follows the spec. It follows `mstpm20` only
+   "Response Code Details"). `tpm-rs` follows the spec. It follows `tcgtpm` only
    where the spec is silent or ambiguous. `ibmswtpm2` never decides.
    - Part 3 "Command Validation" says the order of the checks is not normative
      unless stated otherwise. For pure check-order differences, follow the
-     `mstpm20` order and quote that sentence.
+     `tcgtpm` order and quote that sentence.
    - Derive limits (TPM2B sizes, list bounds) from the Part 2 definitions. Never
      derive them by probing what a reference accepts.
 2. **Quote the spec verbatim.** Citing a section number is not enough.
@@ -47,7 +47,7 @@ Read these first; this skill does not repeat them:
      source, e.g. `// TPM 2.0 Part 3, 12.1 TPM2_Create: "..."`.
    - A reference patch quotes the spec in its header.
    - Where the spec is silent, quote the closest text and say plainly that the
-     spec does not cover the point and that you followed `mstpm20`.
+     spec does not cover the point and that you followed `tcgtpm`.
 3. **Commands only `tpm-rs` supports:** ignore the discrepancy. Add a narrow
    `server.rs` exception for that command and `Implementation`, plus a
    `differential.md` entry. Do not change `tpm-rs`.
@@ -91,9 +91,9 @@ root themselves):
 ```sh
 # Reference binary of the target (process mode: to_test, trace2conv, rendering
 # in triage.py). A differential build compares tpm-rs with one C reference, its
-# `target-*` feature (mstpm20, mstpm20-v185 or ibmswtpm2); the fuzz crate
-# defaults to target-mstpm20 (`--no-default-features --features target-<name>`).
-cargo build --release -p testing --features target-mstpm20 --bin reference
+# `target-*` feature (tcgtpm, tcgtpm-v185 or ibmswtpm2); the fuzz crate
+# defaults to target-tcgtpm (`--no-default-features --features target-<name>`).
+cargo build --release -p testing --features target-tcgtpm --bin reference
 export REFERENCE_BIN=$PWD/target/release/reference
 ```
 
@@ -186,7 +186,7 @@ Then decide with the spec:
 
 | Finding | Action |
 |---|---|
-| `tpm-rs` deviates from the spec, or from `mstpm20` where the spec is silent | Fix `crates/tpm2*` with a verbatim spec-quote comment and add an E2E regression test (step 5). |
+| `tpm-rs` deviates from the spec, or from `tcgtpm` where the spec is silent | Fix `crates/tpm2*` with a verbatim spec-quote comment and add an E2E regression test (step 5). |
 | A reference deviates from the spec (also when the references disagree with each other) | `testing/patches/<impl>/bug-fix-<topic>.patch` in every affected reference directory, plus a `differential.md` item (step 6). |
 | A command or algorithm one side does not implement | Rules 3 and 4 (`server.rs` exception, or a `profile-*` patch). |
 | Implementation-defined (blob layouts, capability values the spec leaves to the vendor) | A narrow `server.rs` exception plus a `differential.md` Part IV row (step 7). |
@@ -211,7 +211,7 @@ series, the file must have no active entries.
   - Replace the `TODO(triage)` with the specified response code.
 - Run the test against every target:
   `cargo test --release -p testing --features target-<target> <name>` for
-  `mstpm20`, `mstpm20-v185` and `ibmswtpm2` (`make test-differential` runs
+  `tcgtpm`, `tcgtpm-v185` and `ibmswtpm2` (`make test-differential` runs
   the whole suite against all three).
 - Update any `tpm2-impl` unit test that encoded the old behavior.
 - Delete temporary probe tests and examples before you hand off. In the first
@@ -254,7 +254,7 @@ Recurring `tpm-rs` bug classes (details and spec quotes are in `report.md`
 
 ### 6. Write a reference patch
 
-- File: `testing/patches/{mstpm20,mstpm20-185-feature,ibmswtpm2}/bug-fix-<topic>.patch`.
+- File: `testing/patches/{tcgtpm,tcgtpm-185-feature,ibmswtpm2}/bug-fix-<topic>.patch`.
   Use the same name in every directory that needs it, and check each version
   separately. For example, v185 already persisted public-only objects
   correctly. Patches apply in file-name order.
@@ -284,7 +284,7 @@ Recurring `tpm-rs` bug classes (details and spec quotes are in `report.md`
     `tpm-rs`'s default.
   - Do not use `git init`/`git apply` to check a patch, even in `/tmp`; use
     `patch -p1 --dry-run`.
-- Add a `differential.md` item: Part II for `mstpm20`, Part VI for
+- Add a `differential.md` item: Part II for `tcgtpm`, Part VI for
   `ibmswtpm2`, Part VII for spec 185. Also add a summary-table row, and keep
   the numbering consistent.
 
@@ -300,7 +300,7 @@ Recurring `tpm-rs` bug classes (details and spec quotes are in `report.md`
   bytes.
 - After changing context translation, rerun the full `context_*` E2E suite.
   An earlier "invert one integrity byte" mask turned a tampered test blob back
-  into an authentic one and crashed the `mstpm20` process.
+  into an authentic one and crashed the `tcgtpm` process.
 - `DIFFERENTIAL_LOG_EXCEPTIONS=1` logs every applied exception.
 
 ### 8. Recheck, loop and finish

@@ -14,7 +14,7 @@ g_toTest. After TPM2_SelfTest(fullTest = YES), which sets g_toTest to every
 implemented algorithm, these algorithms therefore stay on the toDoList forever:
 no TPM2_SelfTest or TPM2_IncrementalSelfTest naming them removes them, although
 the TPM has nothing left to test (after _TPM_Init they are not listed at all).
-They are now cleared in both vectors (CLEAR_BOTH), as in mstpm20 and tpm-rs.
+They are now cleared in both vectors (CLEAR_BOTH), as in tcgtpm and tpm-rs.
 
 diff --git a/src/AlgorithmTests.c b/src/AlgorithmTests.c
 --- a/src/AlgorithmTests.c
@@ -24,7 +24,7 @@ diff --git a/src/AlgorithmTests.c b/src/AlgorithmTests.c
  	    if(!TEST_BIT(alg, g_implementedAlgorithms))
  		{
 -		    CLEAR_BIT(alg, *toTest);
-+		    CLEAR_BOTH(alg);  // tpm-rs differential testing (bug fix): also g_toTest, as mstpm20
++		    CLEAR_BOTH(alg);  // tpm-rs differential testing (bug fix): also g_toTest, as tcgtpm
  		    continue;
  		}
  	    // Process whatever is left.
@@ -33,7 +33,7 @@ diff --git a/src/AlgorithmTests.c b/src/AlgorithmTests.c
  #  endif  // ALG_ECC
  		  default:
 -		    CLEAR_BIT(alg, *toTest);
-+		    CLEAR_BOTH(alg);  // tpm-rs differential testing (bug fix): also g_toTest, as mstpm20
++		    CLEAR_BOTH(alg);  // tpm-rs differential testing (bug fix): also g_toTest, as tcgtpm
  		    break;
  		}
  	    if(result != TPM_RC_SUCCESS)

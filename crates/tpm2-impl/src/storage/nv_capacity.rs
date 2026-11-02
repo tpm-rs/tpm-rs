@@ -5,7 +5,7 @@
 //! / `TPM_PT_HR_PERSISTENT_AVAIL` "This value is an estimate", and Part 3 TPM2_NV_DefineSpace
 //! and TPM2_EvictControl only say that `TPM_RC_NV_SPACE` is returned when there is "insufficient
 //! space for the Index" / "no space in NV memory" for the object. `tpm-rs` therefore follows
-//! `mstpm20` (`NvDynamic.c`), whose NV layout and struct sizes (`ibmswtpm2` has the same values
+//! `tcgtpm` (`NvDynamic.c`), whose NV layout and struct sizes (`ibmswtpm2` has the same values
 //! with its profile patches) decide the capacity:
 //!
 //! * NV Indices and persistent ("evict") objects share the dynamic area from `NV_USER_DYNAMIC`
@@ -20,7 +20,7 @@
 //! * The data of orderly Indices lives in the `RAM_INDEX_SPACE` bytes of `s_indexOrderlyRam`,
 //!   each with an `NV_RAM_HEADER` (`NvRamTestSpaceIndex()`).
 //!
-//! The constants are the values of the reference build `testing` compiles (`mstpm20` `public`
+//! The constants are the values of the reference build `testing` compiles (`tcgtpm` `public`
 //! and `v185`, and `ibmswtpm2`, all with the RSA 1024/2048 and ECC profile; `sizeof` taken from
 //! the compiled C structures).
 

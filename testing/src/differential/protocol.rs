@@ -1,5 +1,5 @@
 //! The pipe protocol between a [`super::Reference`] and its reference TPM
-//! process (`mstpm20` or `ibmswtpm2`, see [`super::Implementation`]).
+//! process (`tcgtpm` or `ibmswtpm2`, see [`super::Implementation`]).
 //!
 //! Every request is answered by exactly one reply. All integers are
 //! big-endian; byte strings are a `u32` length followed by the bytes.

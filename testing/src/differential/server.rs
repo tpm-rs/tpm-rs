@@ -1,5 +1,5 @@
 //! The server side of differential testing: hosts one C reference TPM in a
-//! reference process (`mstpm20` or `ibmswtpm2`, see `src/bin/`) and compares
+//! reference process (`tcgtpm` or `ibmswtpm2`, see `src/bin/`) and compares
 //! its responses with those of `tpm-rs`.
 //!
 //! A reference binary links its patched C reference TPM (built by
@@ -263,7 +263,7 @@ impl DiffState {
     /// authentic `tpm-rs` blob from another run (e.g. a fuzzing seed) would
     /// also pass the integrity check of a C reference, which would then
     /// interpret `tpm-rs`'s implementation-defined contents as its own
-    /// (`ibmswtpm2` loads garbage, `mstpm20` enters failure mode on the
+    /// (`ibmswtpm2` loads garbage, `tcgtpm` enters failure mode on the
     /// fingerprint). On a real TPM no other implementation can authenticate a
     /// blob, so C must reject it as unauthentic (`TPM_RC_INTEGRITY`, or a size
     /// error the integrity check never reaches; exception 9). Commands without
@@ -902,7 +902,7 @@ fn capability_difference_is_documented(
         // on, TPM_PT_ML_PARAMETER_SETS (0x131) with no ML-KEM/ML-DSA
         // parameter set implemented (value 0), and ibmswtpm2 (an older code
         // base) does not report TPM_PT_FIRMWARE_SVN/TPM_PT_FIRMWARE_MAX_SVN
-        // (0x12F/0x130, spec 1.83+), which tpm-rs and mstpm20 report. All
+        // (0x12F/0x130, spec 1.83+), which tpm-rs and tcgtpm report. All
         // other properties must match exactly.
         6 => {
             const IMPLEMENTATION_SPECIFIC: &[u32] = &[
@@ -1207,7 +1207,7 @@ mod tests {
             response: vec![0x80, 0x01, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0],
             ..MockBackend::default()
         };
-        let mut server = Server::new(Implementation::Mstpm20, backend, "reinit".into()).unwrap();
+        let mut server = Server::new(Implementation::Tcgtpm, backend, "reinit".into()).unwrap();
         assert_eq!(server.backend.inits, [5_000]);
         server.handle(Request::AdvanceClock(250)).unwrap();
         assert_eq!(virtual_ms(), 5_250);
@@ -1257,7 +1257,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut server =
-            Server::new(Implementation::Mstpm20, MockBackend::default(), "fw".into()).unwrap();
+            Server::new(Implementation::Tcgtpm, MockBackend::default(), "fw".into()).unwrap();
         for setting in [FirmwareSetting::Hash(7), FirmwareSetting::Svn(3)] {
             server.handle(Request::SetFirmware(setting)).unwrap();
         }

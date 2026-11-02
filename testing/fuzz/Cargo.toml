@@ -4,7 +4,7 @@
 # every command goes to tpm-rs and to the C reference of the selected target
 # (`testing` with that `target-*` feature, which also gives tpm-rs the profile
 # of that reference), and any undocumented response difference is a finding.
-# Build and run from the repository root (default target: `target-mstpm20`):
+# Build and run from the repository root (default target: `target-tcgtpm`):
 #
 #   cargo fuzz build --fuzz-dir testing/fuzz
 #   cargo fuzz run --fuzz-dir testing/fuzz diff_conversation
@@ -37,11 +37,11 @@ tpm2 = { path = "../../crates/tpm2" }
 path = "src/lib.rs"
 
 [features]
-default = ["target-mstpm20"]
+default = ["target-tcgtpm"]
 # The C reference TPM the conversations are compared with (exactly one; see
 # `testing`'s features of the same names).
-target-mstpm20 = ["testing/target-mstpm20"]
-target-mstpm20-v185 = ["testing/target-mstpm20-v185"]
+target-tcgtpm = ["testing/target-tcgtpm"]
+target-tcgtpm-v185 = ["testing/target-tcgtpm-v185"]
 target-ibmswtpm2 = ["testing/target-ibmswtpm2"]
 # Mirror to the C reference linked into the fuzzer process (`testing`'s
 # `fuzz-inproc`) instead of reference processes: no pipe round trips and no

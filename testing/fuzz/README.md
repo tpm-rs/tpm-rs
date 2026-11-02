@@ -1,6 +1,6 @@
 # Differential fuzzing of tpm-rs (`testing/fuzz`)
 
-This crate fuzzes `tpm-rs` against the C reference TPMs (`mstpm20` and
+This crate fuzzes `tpm-rs` against the C reference TPMs (`tcgtpm` and
 `ibmswtpm2`) with [`cargo fuzz`](https://rust-fuzz.github.io/book/cargo-fuzz.html)
 (libFuzzer). One fuzz input is a **conversation**: up to 32 rounds with a
 fresh TPM that is powered on, has NV available and has received
@@ -74,7 +74,7 @@ cargo fuzz build --fuzz-dir testing/fuzz -O -s none --features inproc diff_conve
 ```
 
 The fuzzer compares `tpm-rs` with one C reference TPM, selected by a
-`target-*` feature (default `target-mstpm20`; e.g. `--no-default-features
+`target-*` feature (default `target-tcgtpm`; e.g. `--no-default-features
 --features target-ibmswtpm2,inproc`), which also gives `tpm-rs` the profile of
 that reference (see `testing/Cargo.toml`). To fuzz against every reference,
 run one campaign per target.
@@ -84,7 +84,7 @@ processes, so build it first (with the same target) and point the fuzzer at it
 (the tools in `src/bin/` always use this mode):
 
 ```sh
-cargo build --release -p testing --features target-mstpm20 --bin reference
+cargo build --release -p testing --features target-tcgtpm --bin reference
 export REFERENCE_BIN=$PWD/target/release/reference
 cargo fuzz build --fuzz-dir testing/fuzz
 ```
