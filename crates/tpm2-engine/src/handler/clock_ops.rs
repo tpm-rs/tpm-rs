@@ -97,7 +97,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        self.context.state.clock_rate_adjust = cmd.rate_adjust;
         // `TimeSetAdjustRate` / `_plat__ClockRateAdjust`: "slower" increases and "faster"
         // decreases the cumulative divisor applied to elapsed platform time, clamped to
         // `CLOCK_NOMINAL ± CLOCK_ADJUST_LIMIT`.

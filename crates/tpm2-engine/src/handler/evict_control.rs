@@ -6,14 +6,13 @@ use crate::storage::manager::StorageManager;
 use crate::storage::nv_capacity;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
-use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::TpmaObject;
 use tpm2::commands::EvictControl;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, Tpm2bDigest, TpmHt};
+use tpm2::{Handle, TpmHt};
 
 impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
@@ -232,72 +231,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
-    /// Serializes and writes a transient object's fields to NV space.
+    /// Writes `obj` as the persistent object `persistent_handle`
+    /// ([`crate::storage::nv::NvPersistentObjectRecord`]).
     fn persist_transient_object(
         persistent_handle: u32,
         obj: &TransientObject,
         storage: &mut StorageManager<'_>,
     ) -> Result<(), TpmRc> {
-        let mut buf = [0u8; 4096];
-        let mut offset = 0;
-
-        // seedValue: TPM2B (2-byte size followed by the full nameAlg-sized seed).
-        offset += Tpm2bDigest::from_bytes(obj.seed_bytes())
-            .map_err(|_| TpmRc::FAILURE)?
-            .marshal(
-                (&mut buf[offset..offset + Tpm2bDigest::MAX_SIZE])
-                    .try_into()
-                    .unwrap(),
-            );
-
-        offset += obj.name.marshal(
-            (&mut buf[offset..offset + tpm2::Tpm2bName::MAX_SIZE])
-                .try_into()
-                .unwrap(),
-        );
-        offset += obj.auth.marshal(
-            (&mut buf[offset..offset + tpm2::Tpm2bAuth::MAX_SIZE])
-                .try_into()
-                .unwrap(),
-        );
-        offset += obj.public.marshal(
-            (&mut buf[offset..offset + tpm2::TpmtPublic::MAX_SIZE])
-                .try_into()
-                .unwrap(),
-        );
-
-        let priv_len = obj.private_len;
-        offset += (priv_len as u16).marshal((&mut buf[offset..offset + 2]).try_into().unwrap());
-        buf[offset..offset + priv_len].copy_from_slice(&obj.private[..priv_len]);
-        offset += priv_len;
-
-        offset += obj.qualified_name.marshal(
-            (&mut buf[offset..offset + tpm2::Tpm2bName::MAX_SIZE])
-                .try_into()
-                .unwrap(),
-        );
-        offset += obj.hierarchy.marshal(
-            (&mut buf[offset..offset + tpm2::Handle::MAX_SIZE])
-                .try_into()
-                .unwrap(),
-        );
-        // Flags byte (C keeps `attributes.external`/`publicOnly` in the persisted `OBJECT`):
-        // bit 0 = external, bit 1 = public-only. A record without it (written before
-        // public-only objects could be persisted) has both clear.
-        buf[offset] = u8::from(obj.external) | (u8::from(obj.public_only) << 1);
-        offset += 1;
-
-        storage
-            .define_space(persistent_handle, offset as u16, 0)
-            .map_err(|_| TpmRc::NV_SPACE)?;
-        if storage
-            .write_item(persistent_handle, 0, &buf[..offset])
-            .is_err()
-        {
-            let _ = storage.undefine_space(persistent_handle);
-            return Err(TpmRc::FAILURE);
-        }
-        Ok(())
+        crate::storage::nv::NvPersistentObjectRecord::from_object(obj)
+            .write(storage, persistent_handle)
     }
 
     /// Validates the eviction of a persistent object (C `EvictControl.c` order): the

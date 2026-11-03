@@ -40,7 +40,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(0, &self.context.state.reset_count.to_be_bytes())
+            .write_nv(
+                crate::storage::nv::NvHeader::RESET_COUNT_OFFSET,
+                &self.context.state.reset_count.to_be_bytes(),
+            )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -48,7 +51,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(8, &self.context.state.total_reset_count.to_be_bytes())
+            .write_nv(
+                crate::storage::nv::NvHeader::TOTAL_RESET_COUNT_OFFSET,
+                &self.context.state.total_reset_count.to_be_bytes(),
+            )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -56,7 +62,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(4, &self.context.state.orderly_state.to_be_bytes())
+            .write_nv(
+                crate::storage::nv::NvHeader::ORDERLY_STATE_OFFSET,
+                &self.context.state.orderly_state.to_be_bytes(),
+            )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -66,7 +75,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(16, &self.context.state.max_counter.to_be_bytes())
+            .write_nv(
+                crate::storage::nv::NvHeader::MAX_COUNTER_OFFSET,
+                &self.context.state.max_counter.to_be_bytes(),
+            )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -74,7 +86,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// Loads the monotonic NV `max_counter` (`s_maxCounter`, 8 bytes at offset 16) from non-volatile storage.
     pub(crate) fn nv_load_persistent_max_counter(&mut self) -> Result<(), TpmRc> {
         let mut buf = [0u8; 8];
-        if self.context.platform.storage.read_nv(16, &mut buf).is_ok() {
+        if self
+            .context
+            .platform
+            .storage
+            .read_nv(crate::storage::nv::NvHeader::MAX_COUNTER_OFFSET, &mut buf)
+            .is_ok()
+        {
             let nv_val = u64::from_be_bytes(buf);
             if nv_val > self.context.state.max_counter {
                 self.context.state.max_counter = nv_val;
@@ -113,7 +131,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(32, &self.context.state.failed_tries.to_be_bytes())
+            .write_nv(
+                crate::storage::nv::NvHeader::FAILED_TRIES_OFFSET,
+                &self.context.state.failed_tries.to_be_bytes(),
+            )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -123,7 +144,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(36, &self.context.state.drbg_state.to_bytes())
+            .write_nv(
+                crate::storage::nv::NvHeader::DRBG_OFFSET,
+                &self.context.state.drbg_state.to_bytes(),
+            )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -131,7 +155,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// Loads the internal SP800-90A CTR_DRBG state (`go.drbgState`, 76 bytes at offset 36) from non-volatile storage.
     pub(crate) fn nv_load_persistent_drbg_state(&mut self) -> Result<(), TpmRc> {
         let mut buf = [0u8; 76];
-        if self.context.platform.storage.read_nv(36, &mut buf).is_ok() {
+        if self
+            .context
+            .platform
+            .storage
+            .read_nv(crate::storage::nv::NvHeader::DRBG_OFFSET, &mut buf)
+            .is_ok()
+        {
             self.context.state.drbg_state = crate::engine::DrbgState::from_bytes(&buf);
         }
         Ok(())
@@ -145,7 +175,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context
             .platform
             .storage
-            .write_nv(112, &buf)
+            .write_nv(crate::storage::nv::NvHeader::SELF_HEAL_TIMER_OFFSET, &buf)
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -153,7 +183,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// Loads the dictionary attack recovery timers (`go.selfHealTimer`, `go.lockoutTimer`, 16 bytes at offset 112) from non-volatile storage.
     pub(crate) fn nv_load_persistent_da_timers(&mut self) -> Result<(), TpmRc> {
         let mut buf = [0u8; 16];
-        if self.context.platform.storage.read_nv(112, &mut buf).is_ok() {
+        if self
+            .context
+            .platform
+            .storage
+            .read_nv(
+                crate::storage::nv::NvHeader::SELF_HEAL_TIMER_OFFSET,
+                &mut buf,
+            )
+            .is_ok()
+        {
             let mut sh_bytes = [0u8; 8];
             let mut lo_bytes = [0u8; 8];
             sh_bytes.copy_from_slice(&buf[0..8]);
@@ -281,7 +320,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         self.context.state.orderly_state = SU_NONE_VALUE;
         self.nv_sync_persistent_orderly_state()?;
-        self.context.state.power_was_lost = false;
         self.context.state.pcr_reconfig = false;
 
         self.context.state.initialized = true;
@@ -334,7 +372,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         for p in self.context.state.transient_parents.iter_mut() {
             *p = None;
         }
-        self.context.state.next_transient_index = 0;
         for sess in self.context.state.active_sessions.iter_mut() {
             *sess = None;
         }
@@ -368,7 +405,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // C `TPM2_Startup()`: "This can be reset after the first completion of a TPM2_Startup()
         // after a power loss."
-        self.context.state.power_lost_since_startup = false;
+        self.context.state.power_was_lost = false;
 
         let _response = request.into_response();
         Ok(())

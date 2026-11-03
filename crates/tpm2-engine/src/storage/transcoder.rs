@@ -21,8 +21,8 @@
 //! This module provides lossless bidirectional translation between both formats.
 
 use super::manager::{RESERVED_SIZE, StorageManager};
+use super::nv::{AUDIT_EXT_LEN, AUDIT_EXT_MARKER, PERSISTENT_EXT_LEN, PERSISTENT_EXT_MARKER};
 use super::{NvStorage, StorageError, Tpm2Storage};
-use crate::engine::{AUDIT_EXT_LEN, AUDIT_EXT_MARKER, PERSISTENT_EXT_LEN, PERSISTENT_EXT_MARKER};
 
 /// Total byte size of the monolithic `ibmswtpm2` NVRAM image (`s_NV`).
 pub const NV_MEMORY_SIZE: usize = 16384;
@@ -100,7 +100,7 @@ pub fn transcode_s_nv_to_storage(
     //     orderly_state (748..750), time_epoch (750..758)
     storage.write_nv(0, &s_nv[740..744])?; // reset_count (u32)
     storage.write_nv(4, &s_nv[748..750])?; // orderly_state (u16)
-    storage.write_nv(8, &s_nv[732..736])?; // total_reset_count low 32 bits (u32)
+    storage.write_nv(8, &s_nv[732..740])?; // total_reset_count (u64)
     storage.write_nv(24, &s_nv[750..758])?; // time_epoch (u64)
     storage.write_nv(32, &s_nv[744..748])?; // failed_tries (u32)
 
@@ -302,8 +302,8 @@ pub fn transcode_storage_to_s_nv(
 
     // reset_count (0..4) -> gp offset 740..744
     s_nv[740..744].copy_from_slice(&hdr[0..4]);
-    // total_reset_count (8..12) -> gp offset 732..736
-    s_nv[732..736].copy_from_slice(&hdr[8..12]);
+    // total_reset_count (8..16) -> gp offset 732..740
+    s_nv[732..740].copy_from_slice(&hdr[8..16]);
     // orderly_state (4..6) -> gp offset 748..750
     s_nv[748..750].copy_from_slice(&hdr[4..6]);
     // time_epoch (24..32) -> gp offset 750..758

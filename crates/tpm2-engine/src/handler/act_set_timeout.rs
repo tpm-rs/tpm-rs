@@ -72,7 +72,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
         state.act.record_set_timeout(index);
         state.clear_orderly = true;
-        state.state_saved = false;
 
         let response = request.into_response();
         self.write_response_none(response, &session_responses[..num_sessions])?;

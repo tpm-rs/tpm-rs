@@ -117,18 +117,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let attest_len = attest.marshal(&mut attest_buf);
 
         // 6. Sign the attestation payload
-        if let Some(TpmtSigScheme::Ecdaa(ecdaa_s)) = actual_in_scheme
-            && let Ok((digest_buf, digest_len)) =
-                self.compute_hash(ecdaa_s.hash_alg, &[&attest_buf[..attest_len]])
-        {
-            let mut ecdaa_digest = [0u8; 128];
-            let q_len = cmd.qualifying_data.get_buffer().len().min(64);
-            ecdaa_digest[..q_len].copy_from_slice(&cmd.qualifying_data.get_buffer()[..q_len]);
-            ecdaa_digest[q_len..q_len + digest_len].copy_from_slice(&digest_buf[..digest_len]);
-            let dlen = (q_len + digest_len).min(64);
-            self.context.state.debug_provided_auth[..dlen].copy_from_slice(&ecdaa_digest[..dlen]);
-            self.context.state.debug_provided_auth_len = dlen;
-        }
         let owned_sig = self.sign_attestation_block(
             signer_obj_opt.as_ref(),
             actual_in_scheme,
@@ -295,18 +283,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let attest_len = attest.marshal(&mut attest_buf);
 
         // 7. Sign the attestation payload
-        if let Some(TpmtSigScheme::Ecdaa(ecdaa_s)) = actual_in_scheme
-            && let Ok((digest_buf, digest_len)) =
-                self.compute_hash(ecdaa_s.hash_alg, &[&attest_buf[..attest_len]])
-        {
-            let mut ecdaa_digest = [0u8; 128];
-            let q_len = cmd.qualifying_data.get_buffer().len().min(64);
-            ecdaa_digest[..q_len].copy_from_slice(&cmd.qualifying_data.get_buffer()[..q_len]);
-            ecdaa_digest[q_len..q_len + digest_len].copy_from_slice(&digest_buf[..digest_len]);
-            let dlen = (q_len + digest_len).min(64);
-            self.context.state.debug_provided_auth[..dlen].copy_from_slice(&ecdaa_digest[..dlen]);
-            self.context.state.debug_provided_auth_len = dlen;
-        }
         let owned_sig = self.sign_attestation_block(
             signer_obj_opt.as_ref(),
             actual_in_scheme,

@@ -5,6 +5,7 @@ use crate::storage::nv_capacity;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
+use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 #[cfg(feature = "cc-nv-define-space2")]
@@ -18,7 +19,6 @@ use tpm2::commands::{
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmGenerated, TpmNt, TpmiAlgHash};
-use tpm2::{Marshal, Unmarshal};
 use tpm2::{
     Tpm2bAuth, Tpm2bMaxNvBuffer, Tpm2bNvPublic, TpmaNv, TpmsAttest, TpmsNvCertifyInfo,
     TpmsNvDigestCertifyInfo, TpmsNvPinCounterParameters, TpmsNvPublic, TpmuAttest,
@@ -26,52 +26,20 @@ use tpm2::{
 #[cfg(feature = "cc-nv-read-public2")]
 use tpm2::{Tpm2bNvPublic2, commands::NVReadPublic2};
 
-pub(crate) trait NvHeaderAuth {
-    fn marshal_auth(&self, buf: &mut [u8]) -> usize;
-}
+// The layout of an NV Index item (`TPM2B_AUTH || TPM2B_NV_PUBLIC || data`) is defined in
+// `crate::storage::nv` ([`crate::storage::nv::NvIndexRecord`]).
+pub(crate) use crate::storage::nv::{NvHeaderAuth, NvHeaderPub};
 
-impl NvHeaderAuth for Tpm2bAuth<'_> {
-    fn marshal_auth(&self, buf: &mut [u8]) -> usize {
-        self.marshal((&mut buf[..Tpm2bAuth::MAX_SIZE]).try_into().unwrap())
-    }
-}
-
-impl NvHeaderAuth for crate::owned::OwnedAuth {
-    fn marshal_auth(&self, buf: &mut [u8]) -> usize {
-        self.as_tpm2b().marshal_auth(buf)
-    }
-}
-
-pub(crate) trait NvHeaderPub {
-    fn marshal_pub(&self, buf: &mut [u8]) -> usize;
-}
-
-impl NvHeaderPub for Tpm2bNvPublic<'_> {
-    fn marshal_pub(&self, buf: &mut [u8]) -> usize {
-        self.marshal((&mut buf[..Tpm2bNvPublic::MAX_SIZE]).try_into().unwrap())
-    }
-}
-
-impl NvHeaderPub for crate::owned::OwnedNvPublic {
-    fn marshal_pub(&self, buf: &mut [u8]) -> usize {
-        self.as_tpm2b().marshal_pub(buf)
-    }
-}
-
+/// Encodes an NV Index header (see [`crate::storage::nv::encode_nv_index_header`]).
 pub(crate) fn marshal_nv_header(
     auth: &impl NvHeaderAuth,
     public_info: &impl NvHeaderPub,
     buf: &mut [u8],
 ) -> Result<usize, TpmRc> {
-    if buf.len() < Tpm2bAuth::MAX_SIZE + Tpm2bNvPublic::MAX_SIZE {
-        return Err(TpmRc::FAILURE);
-    }
-    let mut offset = 0;
-    offset += auth.marshal_auth(&mut buf[offset..]);
-    offset += public_info.marshal_pub(&mut buf[offset..]);
-    Ok(offset)
+    crate::storage::nv::encode_nv_index_header(auth, public_info, buf)
 }
 
+/// Decodes an NV Index header into owned values: `(metadata_size, public, auth, public)`.
 pub(crate) fn unmarshal_nv_header(
     buf: &[u8],
 ) -> Result<
@@ -83,12 +51,14 @@ pub(crate) fn unmarshal_nv_header(
     ),
     TpmRc,
 > {
-    let (metadata_size, nv_public, auth, _, _) = unmarshal_nv_header_bytes(buf)?;
-    let owned_pub = crate::owned::OwnedNvPublic::from(nv_public);
-    let owned_auth = crate::owned::OwnedAuth::from(auth);
-    Ok((metadata_size, owned_pub, owned_auth, owned_pub))
+    let record = crate::storage::nv::NvIndexRecord::decode(buf)?;
+    let owned_pub = crate::owned::OwnedNvPublic::from(record.public);
+    let owned_auth = crate::owned::OwnedAuth::from(record.auth);
+    Ok((record.metadata_size, owned_pub, owned_auth, owned_pub))
 }
 
+/// Decodes an NV Index header (borrowing `buf`): `(metadata_size, public, auth, public_info,
+/// public_bytes)`.
 pub(crate) fn unmarshal_nv_header_bytes<'a>(
     buf: &'a [u8],
 ) -> Result<
@@ -101,17 +71,14 @@ pub(crate) fn unmarshal_nv_header_bytes<'a>(
     ),
     TpmRc,
 > {
-    let mut slice = buf;
-    let auth = Tpm2bAuth::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
-    if slice.len() < 2 {
-        return Err(TpmRc::FAILURE);
-    }
-    let pub_len = u16::from_be_bytes([slice[0], slice[1]]) as usize;
-    let public_bytes = slice.get(2..2 + pub_len).ok_or(TpmRc::FAILURE)?;
-    let public_info = Tpm2bNvPublic::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
-    let metadata_size = buf.len() - slice.len();
-    let nv_public = public_info.0;
-    Ok((metadata_size, nv_public, auth, public_info, public_bytes))
+    let record = crate::storage::nv::NvIndexRecord::decode(buf)?;
+    Ok((
+        record.metadata_size,
+        record.public,
+        record.auth,
+        record.public_info,
+        record.public_bytes,
+    ))
 }
 
 /// Size of a buffer large enough to hold the largest serialized NV Index header

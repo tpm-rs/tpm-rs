@@ -308,7 +308,6 @@ fn dup_policy_auth(global_state: &mut tpm2_engine::GlobalState) -> TpmsAuthComma
         tpm2::TpmSe::Policy,
         TpmiAlgHash::Sha256,
         Default::default(),
-        Default::default(),
         &[],
         None,
         Handle::RH_NULL,

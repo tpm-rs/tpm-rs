@@ -115,7 +115,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 }
             }
 
-            self.context.state.state_saved = false;
             self.context.save_hierarchy_auths();
         }
 

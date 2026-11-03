@@ -1,12 +1,10 @@
-use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::platform::PcrState;
 
 use crate::handle_checks::{Tpmi, check};
-use crate::storage::manager::StorageManager;
-use crate::storage::{NvStorage, Tpm2Storage};
+use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use tpm2::commands::{
     PCRAllocate, PCREvent, PCRExtend, PCRRead, PCRReset, PCRSetAuthPolicy, PCRSetAuthValue,
@@ -534,7 +532,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             TpmlPcrSelection::from_slice(&selections[..count]).ok_or(TpmRc::FAILURE)?;
         self.write_nv_pcr_allocation(&new_allocation)?;
         self.context.state.pcr_reconfig = true;
-        self.context.state.state_saved = false;
 
         let resp = responses::PCRAllocate {
             allocation_success: true,
@@ -548,21 +545,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
-    /// Writes the NV copy of the PCR allocation (`NV_WRITE_PERSISTENT(pcrAllocated, ...)`),
-    /// which becomes the active allocation at the next `_TPM_Init`.
+    /// Writes the pending PCR allocation ([`crate::storage::nv::NvPcrAllocationRecord`]).
     fn write_nv_pcr_allocation(&mut self, allocation: &TpmlPcrSelection) -> Result<(), TpmRc> {
-        let mut buf = [0u8; TpmlPcrSelection::MAX_SIZE];
-        let len = allocation.marshal(&mut buf);
-        let handle = crate::engine::PCR_ALLOCATION_HANDLE;
-        let mut storage = StorageManager::new(&mut *self.context.platform.storage);
-        let _ = storage.undefine_space(handle);
-        storage
-            .define_space(handle, len as u16, 0)
-            .map_err(|_| TpmRc::NV_SPACE)?;
-        storage
-            .write_item(handle, 0, &buf[..len])
-            .map_err(|_| TpmRc::FAILURE)?;
-        Ok(())
+        crate::storage::nv::NvPcrAllocationRecord {
+            allocation: *allocation,
+        }
+        .write(&mut *self.context.platform.storage)
     }
 
     /// Handles the [TpmCc::PCRSetAuthValue] (`0x183`) command.
@@ -609,7 +597,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.context.state.pcr_auth_value =
             crate::owned::OwnedAuth::from_bytes(stripped).map_err(|_| TpmRc::SIZE.to_rc())?;
 
-        self.context.state.state_saved = false;
         self.context.save_hierarchy_auths();
 
         let response = request.into_response();

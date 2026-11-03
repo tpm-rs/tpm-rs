@@ -27,9 +27,7 @@ use super::{NvStorage, StorageError};
 use crate::engine::{ActiveSequence, GlobalState, SequenceType};
 use crate::handler::{SessionState, TransientObject};
 use crate::hash_state::StreamingHashState;
-use crate::owned::{
-    OwnedAuth, OwnedDigest, OwnedName, OwnedNonce, OwnedPublic, OwnedSensitiveData,
-};
+use crate::owned::{OwnedAuth, OwnedName, OwnedNonce, OwnedPublic, OwnedSensitiveData};
 use tpm2::{
     Handle, Marshal, Tpm2bAuth, Tpm2bName, Tpm2bNonce, TpmSe, TpmiAlgHash, TpmtPublic, TpmtSymDef,
     Unmarshal,
@@ -389,7 +387,7 @@ impl TpmStateTranslator {
 
         // 2. Synchronize live `GlobalState` counters and flags into `s_nv` and extract RAM copies.
         dto.s_nv[740..744].copy_from_slice(&global_state.reset_count.to_be_bytes());
-        dto.s_nv[732..736].copy_from_slice(&(global_state.total_reset_count as u32).to_be_bytes());
+        dto.s_nv[732..740].copy_from_slice(&global_state.total_reset_count.to_be_bytes());
         dto.s_nv[748..750].copy_from_slice(&global_state.orderly_state.to_be_bytes());
         dto.s_nv[750..758].copy_from_slice(&global_state.time_epoch.to_be_bytes());
         dto.s_nv[744..748].copy_from_slice(&global_state.failed_tries.to_be_bytes());
@@ -549,8 +547,7 @@ impl TpmStateTranslator {
         // Restore persistent scalars from `gp` and `gc`.
         global_state.reset_count =
             u32::from_be_bytes([dto.gp[740], dto.gp[741], dto.gp[742], dto.gp[743]]);
-        global_state.total_reset_count =
-            u32::from_be_bytes([dto.gp[732], dto.gp[733], dto.gp[734], dto.gp[735]]) as u64;
+        global_state.total_reset_count = u64::from_be_bytes(dto.gp[732..740].try_into().unwrap());
         global_state.time_epoch = u64::from_be_bytes([
             dto.gp[750],
             dto.gp[751],
@@ -780,8 +777,6 @@ impl TpmStateTranslator {
                 }
             }
         }
-        slot[offset..offset + 4].copy_from_slice(&(seq.sequence_len as u32).to_be_bytes());
-        offset += 4;
         slot[offset..offset + 4].copy_from_slice(&seq.first_bytes);
         offset += 4;
         slot[offset] = seq.first_bytes_len as u8;
@@ -831,8 +826,6 @@ impl TpmStateTranslator {
             }
             _ => SequenceType::Event,
         };
-        let sequence_len =
-            u32::unmarshal(&mut slice).map_err(|_| StorageError::OutOfBounds)? as usize;
         if slice.len() < 5 {
             return Err(StorageError::OutOfBounds);
         }
@@ -861,11 +854,8 @@ impl TpmStateTranslator {
 
         Ok(ActiveSequence {
             handle,
-            intermediate_digest: OwnedDigest::default(),
             auth,
             sequence_type,
-            sequence_buffer: [0u8; crate::MAX_SEQUENCE_BUFFER],
-            sequence_len,
             first_bytes,
             first_bytes_len,
             hash_states,
@@ -886,9 +876,6 @@ impl TpmStateTranslator {
         }
         if let Ok(dst) = (&mut slot[offset..offset + Tpm2bNonce::MAX_SIZE]).try_into() {
             offset += sess.nonce_tpm.marshal(dst);
-        }
-        if let Ok(dst) = (&mut slot[offset..offset + Tpm2bNonce::MAX_SIZE]).try_into() {
-            offset += sess.nonce_caller.marshal(dst);
         }
 
         let sk_len = core::cmp::min(sess.session_key_len, 32);
@@ -996,9 +983,6 @@ impl TpmStateTranslator {
         let nonce_tpm: OwnedNonce = Tpm2bNonce::unmarshal(&mut slice)
             .map_err(|_| StorageError::OutOfBounds)?
             .into();
-        let nonce_caller: OwnedNonce = Tpm2bNonce::unmarshal(&mut slice)
-            .map_err(|_| StorageError::OutOfBounds)?
-            .into();
 
         let sk_len = u8::unmarshal(&mut slice).map_err(|_| StorageError::OutOfBounds)? as usize;
         if slice.len() < sk_len {
@@ -1057,7 +1041,6 @@ impl TpmStateTranslator {
             session_type,
             auth_hash,
             nonce_tpm,
-            nonce_caller,
             session_key,
             session_key_len: sk_len,
             symmetric,
@@ -1065,8 +1048,6 @@ impl TpmStateTranslator {
             bound_entity,
             audit_digest,
             audit_digest_len,
-            audit_cp_hash: [0; 64],
-            audit_cp_hash_len: 0,
             policy_hash: [0; 64],
             policy_hash_len: 0,
             is_cp_hash_defined: (flags & (1 << 0)) != 0,

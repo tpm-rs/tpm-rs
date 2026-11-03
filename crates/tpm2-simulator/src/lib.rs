@@ -362,7 +362,7 @@ impl<'a> Simulator<'a> {
                     // `_TPM_Init` after a power loss: `NvPowerOn()` re-enables NV
                     // (`_plat__NVEnable()`), which `Context::reset` does.
                     self.is_nv_on = true;
-                    self.context.state.power_lost_since_startup = true;
+                    self.context.state.power_was_lost = true;
                     // `_plat__Signal_PowerOn()` resets the timer (`_plat__TimerReset()`).
                     self.context.platform_timer_reset();
                     self.context.reset();
@@ -379,7 +379,7 @@ impl<'a> Simulator<'a> {
                     // unless no `TPM2_Startup` has completed since the last power loss
                     // (`g_powerWasLost` is sticky until then, and `NvPowerOn()` re-enables NV).
                     self.context.reset();
-                    if self.context.state.power_lost_since_startup {
+                    if self.context.state.power_was_lost {
                         self.is_nv_on = true;
                     }
                     self.context.set_nv_available(self.is_nv_on);

@@ -2,8 +2,7 @@ use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::{
     handler::{CommandHandler, SessionState, TransientObject},
     owned::{
-        OwnedAuth, OwnedDigest, OwnedName, OwnedNonce, OwnedPublic, OwnedPublicParmsAndId,
-        OwnedSensitiveData,
+        OwnedAuth, OwnedName, OwnedNonce, OwnedPublic, OwnedPublicParmsAndId, OwnedSensitiveData,
     },
     req_resp::RequestThenResponse,
     storage::NvStorage,
@@ -486,7 +485,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let session_type = TpmSe::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let auth_hash = TpmiAlgHash::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let nonce_tpm = OwnedNonce::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
-        let nonce_caller = OwnedNonce::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
 
         let session_key_len = u16::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? as usize;
         if slice.len() < session_key_len {
@@ -514,14 +512,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else {
             (None, 0)
         };
-
-        let audit_cp_hash_len = u16::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? as usize;
-        if slice.len() < audit_cp_hash_len {
-            return Err(TpmRc::FAILURE);
-        }
-        let mut audit_cp_hash = [0u8; 64];
-        audit_cp_hash[..audit_cp_hash_len].copy_from_slice(&slice[..audit_cp_hash_len]);
-        slice = &slice[audit_cp_hash_len..];
 
         let policy_hash_len = u16::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? as usize;
         if slice.len() < policy_hash_len {
@@ -591,7 +581,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             session_type,
             auth_hash,
             nonce_tpm,
-            nonce_caller,
             session_key,
             session_key_len,
             symmetric,
@@ -599,8 +588,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             bound_entity,
             audit_digest,
             audit_digest_len,
-            audit_cp_hash,
-            audit_cp_hash_len,
             policy_hash,
             policy_hash_len,
             is_cp_hash_defined,
@@ -657,10 +644,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             ),
             _ => return Err(TpmRc::FAILURE),
         };
-        let sequence_len = u32::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? as usize;
-        if sequence_len > crate::MAX_SEQUENCE_BUFFER {
-            return Err(TpmRc::FAILURE);
-        }
         if slice.len() < 5 + 4 * crate::StreamingHashState::SERIALIZED_SIZE {
             return Err(TpmRc::FAILURE);
         }
@@ -682,14 +665,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             slice = &slice[crate::StreamingHashState::SERIALIZED_SIZE..];
         }
 
-        let sequence_buffer = [0u8; crate::MAX_SEQUENCE_BUFFER];
         Ok(crate::ActiveSequence {
             handle,
-            intermediate_digest: OwnedDigest::default(),
             auth,
             sequence_type,
-            sequence_buffer,
-            sequence_len,
             first_bytes,
             first_bytes_len,
             hash_states,

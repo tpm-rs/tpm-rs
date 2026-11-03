@@ -132,4 +132,4 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
 /// NV offset of the persisted DRBG state (`go.drbgState`, 76 bytes).
 #[cfg(feature = "reference-rng")]
-pub(crate) const DRBG_STATE_NV_OFFSET: usize = 36;
+pub(crate) const DRBG_STATE_NV_OFFSET: usize = crate::storage::nv::NvHeader::DRBG_OFFSET;

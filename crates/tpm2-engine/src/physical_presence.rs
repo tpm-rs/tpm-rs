@@ -130,12 +130,8 @@ impl PpList {
 }
 
 /// Reserved handle of the internal NV record holding the platform settings `gp.ppList` and
-/// `gp.algorithmSet` (an implementation-specific value, not defined by the specification).
-pub(crate) const PLATFORM_SETTINGS_HANDLE: u32 = 0x00FF_FFFC;
-
-/// Size of the platform settings record: the [`PpList`] bits and the algorithm set, both
-/// big-endian `u32`.
-const PLATFORM_SETTINGS_LEN: usize = 8;
+/// `gp.algorithmSet` ([`crate::storage::nv::NvPlatformSettingsRecord`]).
+pub(crate) use crate::storage::nv::PLATFORM_SETTINGS_HANDLE;
 
 impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
     /// Sets whether Physical Presence is asserted (C `_plat__Signal_PhysicalPresenceOn()` /
@@ -155,30 +151,21 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
     /// Writes `gp.ppList` and `gp.algorithmSet` to NV (`NV_SYNC_PERSISTENT(ppList)` /
     /// `NV_SYNC_PERSISTENT(algorithmSet)`).
     pub(crate) fn save_platform_settings(&mut self) {
-        let mut record = [0u8; PLATFORM_SETTINGS_LEN];
-        record[..4].copy_from_slice(&self.state.pp_list.bits().to_be_bytes());
-        record[4..].copy_from_slice(&self.state.algorithm_set.to_be_bytes());
-        let mut storage = StorageManager::new(&mut *self.platform.storage);
-        if storage.get_metadata(PLATFORM_SETTINGS_HANDLE).is_err() {
-            let _ = storage.define_space(PLATFORM_SETTINGS_HANDLE, PLATFORM_SETTINGS_LEN as u16, 0);
+        crate::storage::nv::NvPlatformSettingsRecord {
+            pp_list: self.state.pp_list.bits(),
+            algorithm_set: self.state.algorithm_set,
         }
-        let _ = storage.write_item(PLATFORM_SETTINGS_HANDLE, 0, &record);
+        .write(&mut *self.platform.storage);
     }
 
     /// Reloads `gp.ppList` and `gp.algorithmSet` from NV at `_TPM_Init`; without a record (as
     /// after manufacture) they keep their manufacture defaults.
     pub(crate) fn restore_platform_settings(&mut self) {
-        let storage = StorageManager::new(&mut *self.platform.storage);
-        let mut record = [0u8; PLATFORM_SETTINGS_LEN];
-        if storage.get_metadata(PLATFORM_SETTINGS_HANDLE).is_ok()
-            && storage
-                .read_item(PLATFORM_SETTINGS_HANDLE, 0, &mut record)
-                .is_ok()
+        if let Some(record) =
+            crate::storage::nv::NvPlatformSettingsRecord::read(&mut *self.platform.storage)
         {
-            let pp = u32::from_be_bytes([record[0], record[1], record[2], record[3]]);
-            self.state.pp_list = PpList::from_bits(pp);
-            self.state.algorithm_set =
-                u32::from_be_bytes([record[4], record[5], record[6], record[7]]);
+            self.state.pp_list = PpList::from_bits(record.pp_list);
+            self.state.algorithm_set = record.algorithm_set;
         }
     }
 

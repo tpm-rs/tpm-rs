@@ -78,9 +78,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // go.clock = 0; go.clockSafe = YES;
         self.context.state.clock_offset = -(self.context.state.tpm_time_ms as i64);
         self.context.state.clock_safe = true;
-        self.context.state.clock_rate_adjust = tpm2::TpmClockAdjust::NoChange;
-
-        self.context.state.nv_locked = false;
 
         self.context.state.sh_proof.copy_from_slice(&new_sh_proof);
         self.context.state.sh_proof_size = 64;

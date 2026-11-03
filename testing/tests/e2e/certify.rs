@@ -464,7 +464,11 @@ fn ecdaa_certify_is_anonymous() {
     match resp.signature {
         Some(tpm2::TpmtSignature::Ecdaa(sig)) => {
             assert_eq!(sig.hash, TpmiAlgHash::Sha256);
-            assert_eq!(sig.signature_r.get_buffer().len(), 32);
+            // `signatureR` is the random nonceK in its minimal encoding (C `TpmEcc_SignEcdaa()`:
+            // `CryptoMath_IntTo2B(bnT, &nonceK->b, 0)`), so it is shorter when its leading octet
+            // is zero; `signatureS` is padded to the size of the curve order.
+            let r_len = sig.signature_r.get_buffer().len();
+            assert!((1..=32).contains(&r_len), "signatureR size {r_len}");
             assert_eq!(sig.signature_s.get_buffer().len(), 32);
         }
         _ => panic!("Expected Some(TpmtSignature::Ecdaa)"),

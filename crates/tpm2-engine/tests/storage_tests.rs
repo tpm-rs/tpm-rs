@@ -93,7 +93,9 @@ fn test_bidirectional_s_nv_transcoder_roundtrip() {
     // Populate reserved header fields in `storage_src` (0..128)
     storage_src.write_nv(0, &42u32.to_be_bytes()).unwrap(); // reset_count
     storage_src.write_nv(4, &0x0001u16.to_be_bytes()).unwrap(); // orderly_state (SU_STATE)
-    storage_src.write_nv(8, &105u32.to_be_bytes()).unwrap(); // total_reset_count
+    storage_src
+        .write_nv(8, &0x0000_0001_0000_0069u64.to_be_bytes())
+        .unwrap(); // total_reset_count (u64, above 2^32)
     storage_src
         .write_nv(16, &0x0123456789ABCDEFu64.to_be_bytes())
         .unwrap(); // max_counter
@@ -131,7 +133,10 @@ fn test_bidirectional_s_nv_transcoder_roundtrip() {
 
     // Verify scalar offsets in `s_NV`
     assert_eq!(u32::from_be_bytes(s_nv[740..744].try_into().unwrap()), 42);
-    assert_eq!(u32::from_be_bytes(s_nv[732..736].try_into().unwrap()), 105);
+    assert_eq!(
+        u64::from_be_bytes(s_nv[732..740].try_into().unwrap()),
+        0x0000_0001_0000_0069
+    );
     assert_eq!(
         u16::from_be_bytes(s_nv[748..750].try_into().unwrap()),
         0x0001
@@ -155,10 +160,10 @@ fn test_bidirectional_s_nv_transcoder_roundtrip() {
     storage_dst.read_nv(4, &mut buf2).unwrap();
     assert_eq!(u16::from_be_bytes(buf2), 0x0001);
 
-    storage_dst.read_nv(8, &mut buf4).unwrap();
-    assert_eq!(u32::from_be_bytes(buf4), 105);
-
     let mut buf8 = [0u8; 8];
+    storage_dst.read_nv(8, &mut buf8).unwrap();
+    assert_eq!(u64::from_be_bytes(buf8), 0x0000_0001_0000_0069);
+
     storage_dst.read_nv(16, &mut buf8).unwrap();
     assert_eq!(u64::from_be_bytes(buf8), 0x0123456789ABCDEF);
 
@@ -314,7 +319,7 @@ fn test_live_migration_state_translator_roundtrip() {
         tpm_time_ms: 123_456_789,
         time_epoch: 99,
         reset_count: 7,
-        total_reset_count: 42,
+        total_reset_count: 0x0000_0001_0000_002A,
         failed_tries: 2,
         self_heal_timer: 5000,
         lockout_timer: 10000,
@@ -337,7 +342,6 @@ fn test_live_migration_state_translator_roundtrip() {
         session_type: TpmSe::Policy,
         auth_hash: TpmiAlgHash::Sha256,
         nonce_tpm: nonce_tpm.into(),
-        nonce_caller: tpm2::Tpm2bNonce::default().into(),
         session_key: [0x11; 128],
         session_key_len: 32,
         symmetric: None,
@@ -345,8 +349,6 @@ fn test_live_migration_state_translator_roundtrip() {
         bound_entity: tpm2::Tpm2bName::default().into(),
         audit_digest: None,
         audit_digest_len: 0,
-        audit_cp_hash: [0; 64],
-        audit_cp_hash_len: 0,
         policy_hash: [0; 64],
         policy_hash_len: 0,
         is_cp_hash_defined: true,
@@ -395,7 +397,7 @@ fn test_live_migration_state_translator_roundtrip() {
     assert_eq!(dst_state.tpm_time_ms, 123_456_789);
     assert_eq!(dst_state.time_epoch, 99);
     assert_eq!(dst_state.reset_count, 7);
-    assert_eq!(dst_state.total_reset_count, 42);
+    assert_eq!(dst_state.total_reset_count, 0x0000_0001_0000_002A);
     assert_eq!(dst_state.failed_tries, 2);
     assert_eq!(dst_state.self_heal_timer, 5000);
     assert_eq!(dst_state.lockout_timer, 10000);
@@ -437,7 +439,6 @@ fn test_live_migration_active_sequence_roundtrip() {
             alg: TpmiAlgHash::Sha256,
         },
     );
-    seq.sequence_len = 64;
     seq.first_bytes = [1, 2, 3, 4];
     seq.first_bytes_len = 4;
     src_state.active_sequences[0] = Some(seq);
@@ -456,7 +457,6 @@ fn test_live_migration_active_sequence_roundtrip() {
         .expect("active sequence should be restored");
     assert_eq!(restored_seq.handle, 0x8000_0000);
     assert_eq!(restored_seq.auth.get_buffer(), &[0x55; 16]);
-    assert_eq!(restored_seq.sequence_len, 64);
     assert_eq!(restored_seq.first_bytes, [1, 2, 3, 4]);
     assert_eq!(restored_seq.first_bytes_len, 4);
 }

@@ -54,7 +54,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if cmd.state != self.context.state.read_only {
             self.nv_clear_orderly()?;
             self.context.state.read_only = cmd.state;
-            self.context.state.state_saved = false;
         }
 
         let response = request.into_response();

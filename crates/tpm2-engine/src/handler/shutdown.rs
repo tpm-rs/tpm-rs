@@ -78,7 +78,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.nv_sync_persistent_drbg_state()?;
         self.nv_sync_persistent_da_timers()?;
         self.context.save_hierarchy_auths();
-        self.context.state.state_saved = true;
 
         let _response = request.into_response();
         Ok(())

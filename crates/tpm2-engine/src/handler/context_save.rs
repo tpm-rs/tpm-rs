@@ -367,11 +367,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .try_into()
                 .unwrap(),
         );
-        offset += sess.nonce_caller.marshal(
-            (&mut buf[offset..offset + tpm2::Tpm2bNonce::MAX_SIZE])
-                .try_into()
-                .unwrap(),
-        );
 
         buf[offset..offset + 2].copy_from_slice(&(sess.session_key_len as u16).to_be_bytes());
         offset += 2;
@@ -407,12 +402,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             buf[offset] = 0;
             offset += 1;
         }
-
-        buf[offset..offset + 2].copy_from_slice(&(sess.audit_cp_hash_len as u16).to_be_bytes());
-        offset += 2;
-        buf[offset..offset + sess.audit_cp_hash_len]
-            .copy_from_slice(&sess.audit_cp_hash[..sess.audit_cp_hash_len]);
-        offset += sess.audit_cp_hash_len;
 
         buf[offset..offset + 2].copy_from_slice(&(sess.policy_hash_len as u16).to_be_bytes());
         offset += 2;
@@ -557,9 +546,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
-        buf[offset..offset + 4].copy_from_slice(&(seq.sequence_len as u32).to_be_bytes());
-        offset += 4;
-
         buf[offset..offset + 4].copy_from_slice(&seq.first_bytes);
         offset += 4;
         buf[offset] = seq.first_bytes_len as u8;
@@ -663,7 +649,6 @@ const MAX_SEQUENCE_ENTITY_SIZE: usize = 4 // handle
     + tpm2::Tpm2bAuth::MAX_SIZE
     + 1
     + MAX_SEQUENCE_TYPE_SIZE
-    + 4 // sequence length
     + 4 + 1 // first bytes
     + array_len(|s: &crate::ActiveSequence| &s.hash_states)
         * crate::hash_state::StreamingHashState::SERIALIZED_SIZE;
@@ -672,7 +657,7 @@ const MAX_SEQUENCE_ENTITY_SIZE: usize = 4 // handle
 const MAX_SESSION_ENTITY_SIZE: usize = 4 // handle
     + tpm2::TpmSe::MAX_SIZE
     + tpm2::TpmiAlgHash::MAX_SIZE
-    + 2 * tpm2::Tpm2bNonce::MAX_SIZE // nonceTPM, nonceCaller
+    + tpm2::Tpm2bNonce::MAX_SIZE // nonceTPM
     + 2
     + array_len(|s: &SessionState| &s.session_key)
     + <Option<tpm2::TpmtSymDef>>::MAX_SIZE
@@ -680,8 +665,6 @@ const MAX_SESSION_ENTITY_SIZE: usize = 4 // handle
     + tpm2::Tpm2bName::MAX_SIZE
     + 1 + 2
     + array_len(|s: &SessionState| s.audit_digest.as_ref().unwrap())
-    + 2
-    + array_len(|s: &SessionState| &s.audit_cp_hash)
     + 2
     + array_len(|s: &SessionState| &s.policy_hash)
     + 1 + 1 // isCpHashDefined, isNameHashDefined

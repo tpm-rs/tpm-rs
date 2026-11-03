@@ -24,11 +24,12 @@
 //! digest register is cleared and that execution is not audited.
 
 use crate::engine::{
-    AUDIT_EXT_LEN, AUDIT_EXT_MARKER, GlobalState, TpmEngine, VENDOR_COMMANDS,
-    command_resp_handles_size, is_command_supported,
+    GlobalState, TpmEngine, VENDOR_COMMANDS, command_resp_handles_size, is_command_supported,
 };
 use crate::owned::OwnedDigest;
 use crate::storage::NvStorage;
+#[cfg(test)]
+use crate::storage::nv::{AUDIT_EXT_LEN, AUDIT_EXT_MARKER};
 use crate::timer::TpmTimer;
 use tpm2::crypto::{CryptoProvider, Rng};
 use tpm2::errors::TpmRc;
@@ -181,35 +182,29 @@ impl GlobalState {
     }
 }
 
-/// Writes the persistent command audit record (`AUDIT_EXT_MARKER || auditHashAlg ||
-/// auditCounter || auditCommands`, big-endian) into `dst`, which must hold at least
-/// [`AUDIT_EXT_LEN`] bytes. Returns the number of bytes written.
+/// Writes the persistent command audit record ([`crate::storage::nv::NvAuditExt`]) of
+/// `global_state` into `dst`, which must hold at least
+/// [`AUDIT_EXT_LEN`](crate::storage::nv::AUDIT_EXT_LEN) bytes. Returns the number
+/// of bytes written.
 pub(crate) fn encode_audit_ext(global_state: &GlobalState, dst: &mut [u8]) -> usize {
-    dst[0] = AUDIT_EXT_MARKER;
-    dst[1..3].copy_from_slice(&global_state.audit_hash_alg.to_be_bytes());
-    dst[3..11].copy_from_slice(&global_state.audit_counter.to_be_bytes());
-    dst[11..AUDIT_EXT_LEN].copy_from_slice(global_state.audit_commands.as_bytes());
-    AUDIT_EXT_LEN
+    crate::storage::nv::NvAuditExt {
+        hash_alg: global_state.audit_hash_alg,
+        counter: global_state.audit_counter,
+        commands: *global_state.audit_commands.as_bytes(),
+    }
+    .encode(dst)
 }
 
 /// Loads the persistent command audit record written by [`encode_audit_ext`] from the start of
 /// `src`. Returns `false` (leaving `global_state` untouched) if `src` does not start with a
 /// complete record or the record names an unsupported hash algorithm.
 pub(crate) fn decode_audit_ext(global_state: &mut GlobalState, src: &[u8]) -> bool {
-    let Some(ext) = src.get(..AUDIT_EXT_LEN) else {
+    let Some(ext) = crate::storage::nv::NvAuditExt::decode(src) else {
         return false;
     };
-    let alg = u16::from_be_bytes([ext[1], ext[2]]);
-    if ext[0] != AUDIT_EXT_MARKER || TpmiAlgHash::try_from(alg).is_err() {
-        return false;
-    }
-    let mut counter = [0u8; 8];
-    counter.copy_from_slice(&ext[3..11]);
-    let mut bits = [0u8; COMMAND_AUDIT_LIST_SIZE];
-    bits.copy_from_slice(&ext[11..AUDIT_EXT_LEN]);
-    global_state.audit_hash_alg = alg;
-    global_state.audit_counter = u64::from_be_bytes(counter);
-    global_state.audit_commands = CommandAuditList::from_bytes(&bits);
+    global_state.audit_hash_alg = ext.hash_alg;
+    global_state.audit_counter = ext.counter;
+    global_state.audit_commands = CommandAuditList::from_bytes(&ext.commands);
     true
 }
 

@@ -2,15 +2,18 @@
 //! session tracking.
 
 use crate::_common::{
-    ATTR_AUDIT, ATTR_AUDIT_EXCLUSIVE, ATTR_CONT, CC_GET_RANDOM, CC_POLICY_CP_HASH,
-    CC_POLICY_TEMPLATE, ST_NO_SESSIONS, SessUse, build_raw_cmd, context_load_raw, context_save_raw,
-    context_sequence, exec, execute_with_password_sessions, flush_rc, loaded_sessions, mssim_rc_of,
-    rc_p, session_handles, start_auth_session, start_session, start_session_raw,
+    ATTR_AUDIT, ATTR_AUDIT_EXCLUSIVE, ATTR_AUDIT_RESET, ATTR_CONT, CC_GET_RANDOM,
+    CC_POLICY_CP_HASH, CC_POLICY_TEMPLATE, ST_NO_SESSIONS, SessUse, audited_get_capability,
+    build_raw_cmd, context_load_raw, context_save_raw, context_sequence, cp_hash,
+    create_primary_key, exec, execute_with_hmac_sessions, execute_with_password_sessions, flush_rc,
+    loaded_sessions, marshal_to_vec, mssim_rc_of, rc_p, session_audit_digest, session_handles,
+    sha256, sign_cmd_and_handles, start_auth_session, start_hmac_session, start_session,
+    start_session_raw,
 };
 use testing::tpm::Tpm;
-use tpm2::commands::ContextSave;
+use tpm2::commands::{ContextSave, GetCapability};
 use tpm2::errors::TpmRc;
-use tpm2::{Handle, TpmSe, TpmiAlgHash};
+use tpm2::{Handle, TpmCap, TpmCc, TpmPt, TpmSe, TpmaSession, TpmiAlgHash};
 
 /// After the context counter advances 64K past the oldest saved session, saving fails with TPM_RC_CONTEXT_GAP until the oldest is loaded.
 ///
@@ -204,4 +207,67 @@ fn stale_replayed_and_flushed_contexts_rejected() {
     cp.extend_from_slice(&[0x77; 32]);
     let cmd = build_raw_cmd(ST_NO_SESSIONS, CC_POLICY_CP_HASH, &[p], None, &cp);
     assert_eq!(mssim_rc_of(&mut sim, &cmd), TpmRc::CPHASH.get());
+}
+
+/// A reloaded HMAC session uses the nonceCaller and cpHash of each command, not saved copies.
+///
+/// After `TPM2_ContextSave`/`TPM2_ContextLoad`, a session still authorizes commands with
+/// verified response HMACs over the new command's nonceCaller (Part 1, "Session Nonces": "For a
+/// response, the TPM uses the last nonceCaller"), and its audit digest still chains as
+/// `H(auditDigest || cpHash || rpHash)` with the cpHash of the audited command. Like the C
+/// references, whose `SESSION` keeps neither (`s_nonceCaller[]` and the command's cpHash are
+/// per-command globals), the saved context holds only nonceTPM, the session key and the
+/// audit digest.
+#[test]
+fn reloaded_session_uses_per_command_nonce_caller_and_cp_hash() {
+    let mut sim = Tpm::new();
+    let key = create_primary_key(&mut sim);
+
+    // Authorization: the response HMAC is verified by `execute_with_hmac_sessions`.
+    let mut sessions = [start_hmac_session(&mut sim)];
+    sessions[0].attributes = TpmaSession::CONTINUE_SESSION;
+    execute_with_hmac_sessions(
+        &mut sim,
+        &sign_cmd_and_handles(key),
+        &[],
+        &mut sessions,
+        &[&[]],
+    )
+    .unwrap_or_else(|rc| panic!("Sign before ContextSave failed: {rc:#x}"));
+    let handle = sessions[0].session_handle.0;
+    let ctx = context_save_raw(&mut sim, handle).unwrap();
+    assert_eq!(context_load_raw(&mut sim, &ctx), Ok(handle));
+    execute_with_hmac_sessions(
+        &mut sim,
+        &sign_cmd_and_handles(key),
+        &[],
+        &mut sessions,
+        &[&[]],
+    )
+    .unwrap_or_else(|rc| panic!("Sign after ContextLoad failed: {rc:#x}"));
+
+    // Audit: the digest chain continues across the save/load with the next command's cpHash.
+    let params = marshal_to_vec(&GetCapability {
+        capability: TpmCap::TPMProperties,
+        property: u32::from(TpmPt::FAMILY_INDICATOR),
+        property_count: 1,
+    });
+    let cp = cp_hash(TpmCc::GetCapability, &[], &params);
+    let rp = |resp_params: &[u8]| {
+        sha256(&[
+            &0u32.to_be_bytes(),
+            &TpmCc::GetCapability.code().to_be_bytes(),
+            resp_params,
+        ])
+    };
+    let session = &mut sessions[0];
+    let (rp1, _) =
+        audited_get_capability(&mut sim, session, ATTR_AUDIT | ATTR_AUDIT_RESET | ATTR_CONT);
+    let digest_1 = sha256(&[&[0u8; 32], &cp, &rp(&rp1)]);
+    assert_eq!(session_audit_digest(&mut sim, handle), digest_1);
+    let ctx = context_save_raw(&mut sim, handle).unwrap();
+    assert_eq!(context_load_raw(&mut sim, &ctx), Ok(handle));
+    let (rp2, _) = audited_get_capability(&mut sim, session, ATTR_AUDIT | ATTR_CONT);
+    let digest_2 = sha256(&[&digest_1, &cp, &rp(&rp2)]);
+    assert_eq!(session_audit_digest(&mut sim, handle), digest_2);
 }

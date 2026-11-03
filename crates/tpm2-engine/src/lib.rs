@@ -94,9 +94,9 @@ mod rng;
 mod sec_channel;
 pub use engine::{
     ActiveSequence, DRBG_MAGIC, DrbgState, GlobalState, MAX_ACTIVE_SEQUENCES, MAX_COMMAND_SIZE,
-    MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS, MAX_RESPONSE_SIZE, MAX_SEQUENCE_BUFFER,
-    ResponseBufferTooSmall, SequenceType, SignatureSequence, TpmEngine, command_handles_count,
-    command_returns_handle, get_command_attribute, handle_requires_auth,
+    MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS, MAX_RESPONSE_SIZE, ResponseBufferTooSmall,
+    SequenceType, SignatureSequence, TpmEngine, command_handles_count, command_returns_handle,
+    get_command_attribute, handle_requires_auth,
 };
 pub use error::InternalError;
 pub use hash_state::StreamingHashState;
