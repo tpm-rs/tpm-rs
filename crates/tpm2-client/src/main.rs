@@ -1,14 +1,67 @@
 
 #![forbid(unsafe_code)]
 
+//! Tests of the session state machine, currently run against the simulator.
+//!
+//! This file starts the tests and contains their boilerplate. Tests should look as follows:
+//!
+//! ```text
+//! let mut simulator = start("name(param: {param})");
+//! let mut last_nonce_bytes = [0u8; DIGEST_SIZE];
+//!
+//! let mut session = start_hmac_session(&mut simulator); // or start_policy_session()
+//! // Test that the nonce rolls (...).
+//! assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
+//!
+//! // the test's target work goes here
+//!
+//! assert!(stop(simulator, session.handle()).is_ok());
+//! ```
+//!
+//! After every command, the test asserts whether the nonce rolled. Whenever
+//! it shouldn't, a comment says why. Unless otherwise specified, a session is an
+//! HMAC session.
+
+mod basic_and_auth_tests;
+mod policy_tests;
+mod shutdown_tests;
+
 use std::io;
 use std::net::Ipv4Addr;
 
 use tempfile::tempdir;
+use tpm2::commands::{
+    FlushContext, NVDefineSpace, NVRead, NVUndefineSpace, NVWrite, StartAuthSession, Startup,
+};
+use tpm2::errors::TpmRc;
+use tpm2::*;
+use tpm2_client::ClientError;
+use tpm2_client::ClientError::Tpm;
 use tpm2_client::connection::tcp::TcpSimulator;
-use tpm2_client::{run_command, run_command_with_sessions};
+use tpm2_client::protocol::RESP_BUFFER_SIZE;
+use tpm2_client::sessions::{AuthorizationArea, HmacSession};
+use tpm2_client::{CryptoBackend, nv_name, run_command, run_command_with_sessions};
 
+pub const ALG: TpmiAlgHash = TpmiAlgHash::Sha256;
+pub const DIGEST_SIZE: usize = ALG.digest_size();
+
+/// This must be in the range [0x01000000, 0x01FFFFFF].
+pub const NV_INDEX: Handle = Handle(0x01422224);
+pub const NV_DATA_SIZE: u16 = 16;
+
+/// Environment variable used to override the TPM simulator program.
+const ENV_VAR_SIMULATOR_PROGRAM: &str = "SIMULATOR_BIN";
+
+/// Get the program to run to launch the TPM simulator. Set the environment
+/// variable at the command line to specify a different program to run, e.g.
+///
+/// ```shell
+/// SIMULATOR_BIN="/my/custom/simulator" cargo test
+/// ```
 fn get_simulator_path() -> String {
+    if let Ok(s) = std::env::var(ENV_VAR_SIMULATOR_PROGRAM) {
+        return s;
+    }
     if std::path::Path::new("/tpm2-simulator").exists() {
         return "/tpm2-simulator".to_string();
     }
@@ -30,578 +83,174 @@ pub fn spawn_simulator_and_connect() -> io::Result<TcpSimulator> {
 }
 
 //
-// Base commands.
+// Setup and teardown.
 //
-use tpm2::*;
-use tpm2_client::protocol::RESP_BUFFER_SIZE;
 
-use tpm2::commands::Startup;
+/// Spawns a simulator, and sends `TPM2_Startup(TPM_SU_CLEAR)`.
+pub fn start(name: &str) -> TcpSimulator {
+    let mut simulator = spawn_simulator_and_connect().unwrap();
+    let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
+
+    println!("{name} starting...");
+
+    let startup = Startup {
+        startup_type: TpmSu::Clear,
+    };
+    assert!(run_command(&startup, simulator.connection_mut(), resp_buffer).is_ok());
+
+    simulator
+}
+
+/// Flushes the session under test, then stops the simulator. Returns the
+/// result of the flush.
+///
+/// The end of a session doesn't update the nonce, nor could an attempt to use
+/// a freed session. `TPM2_FlushContext` doesn't take a session, so this isn't
+/// asserted.
+pub fn stop(mut simulator: TcpSimulator, session_handle: Handle) -> Result<(), TpmRc> {
+    let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
+
+    let flush_context = FlushContext {
+        flush_handle: session_handle,
+    };
+    let flush_context_rsp = tpm_result(run_command(&flush_context, simulator.connection_mut(), resp_buffer));
+
+    assert!(simulator.stop_nicely().is_ok());
+
+    flush_context_rsp
+}
+
+/// Starts an unbound, unsalted SHA-256 HMAC session.
+pub fn start_hmac_session(simulator: &mut TcpSimulator) -> HmacSession {
+    let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
+
+    let start_auth_session = StartAuthSession {
+        tpm_key: Handle::RH_NULL,
+        bind: Handle::RH_NULL,
+        nonce_caller: Tpm2bNonce::new(&[42u8; DIGEST_SIZE]).unwrap(),
+        encrypted_salt: Tpm2bEncryptedSecret::default(),
+        session_type: TpmSe::HMAC,
+        symmetric: None,
+        auth_hash: ALG,
+    };
+    let start_auth_session_rsp = run_command(&start_auth_session, simulator.connection_mut(), resp_buffer).unwrap();
+    println!("{:?}", start_auth_session_rsp);
+
+    HmacSession::new(start_auth_session_rsp.session_handle, start_auth_session.auth_hash, start_auth_session.nonce_caller, start_auth_session_rsp.nonce_tpm)
+}
 
 //
-// Testing commands.
+// Results.
 //
-use tpm2_rustcrypto::RustCrypto;
-use tpm2_client::nv_name;
-use tpm2_client::sessions::HmacSession;
 
-use tpm2::errors::TpmRc;
-use tpm2_client::ClientError::Tpm;
-
-use tpm2::commands::{StartAuthSession, ContextSave, FlushContext, NVUndefineSpace, NVDefineSpace, NVWrite, NVRead, ContextLoad};
-
-//
-// Driver.
-// - TODO: Compute the HMAC too?
-//
-fn nonce_unchanged(last: &mut [u8], current_nonce: &Tpm2bNonce) -> bool {
+/// Returns whether `current_nonce` is the same as `last`, then updates `last`.
+pub fn nonce_unchanged(last: &mut [u8], current_nonce: &Tpm2bNonce) -> bool {
     let current = current_nonce.as_slice();
     let same = *last == *current;
     last.copy_from_slice(current);
-    return same;
+    same
 }
 
-fn minimum_viable_test_case(is_loaded_session_test: bool) {
-    let mut simulator = spawn_simulator_and_connect().unwrap();
-    let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
-    let mut last_nonce_bytes = [0u8; TpmiAlgHash::Sha256.digest_size()];
-
-    println!("minimum_viable_test_case(is_loaded_session_test: {is_loaded_session_test}) starting...");
-
-    let startup = Startup {
-        startup_type: TpmSu::Clear,
-    };
-    assert!(run_command(&startup, simulator.connection_mut(), resp_buffer).is_ok());
-
-    let start_auth_session = StartAuthSession {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-        nonce_caller: Tpm2bNonce::new(&[42u8; TpmiAlgHash::Sha256.digest_size()]).unwrap(),
-        encrypted_salt: Tpm2bEncryptedSecret::default(),
-        session_type: TpmSe::HMAC,
-        symmetric: None,
-        auth_hash: TpmiAlgHash::Sha256,
-    };
-    let start_auth_session_rsp = run_command(&start_auth_session, simulator.connection_mut(), resp_buffer).unwrap();
-    println!("{:?}", start_auth_session_rsp);
-
-    //
-    // Copy needed fields before reusing the `resp_buffer`.
-    //
-    let session = HmacSession::new(RustCrypto::default(), start_auth_session_rsp.session_handle, start_auth_session.auth_hash, start_auth_session.nonce_caller, start_auth_session_rsp.nonce_tpm);
-
-    // Test that the nonce rolls (and assume that the HMAC changes with, proven by command success, where applicable).
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-
-    if is_loaded_session_test {
-        let context_save = ContextSave {
-            save_handle: session.handle(),
-        };
-        let context_save_rsp = run_command(&context_save, simulator.connection_mut(), resp_buffer).unwrap();
-        println!("{:?}", context_save_rsp);
-
-        // This command doesn't take a session.
-        assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
+/// Returns the response code of a command that the TPM failed.
+///
+/// Panics on errors other than a `TPM_RC`, as those are bugs in the test (or
+/// the client), rather than results of the TPM's state machine.
+pub fn tpm_result<T>(rsp: Result<T, ClientError<io::Error>>) -> Result<(), TpmRc> {
+    match rsp {
+        Ok(_) => Ok(()),
+        Err(Tpm(rc)) => Err(rc),
+        Err(e) => panic!("unexpected error: {e:?}"),
     }
-
-    let flush_context = FlushContext {
-        flush_handle: session.handle(),
-    };
-    assert!(run_command(&flush_context, simulator.connection_mut(), resp_buffer).is_ok());
-
-    // The end of a session doesn't update the nonce.
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
-
-    assert!(simulator.stop_nicely().is_ok());
-
-    println!("minimum_viable_test_case(is_loaded_session_test: {is_loaded_session_test}) done.");
 }
 
-// This also tests "No HMAC Authorization."
-fn continue_session_testing(command_should_fail: bool) {
-    let mut simulator = spawn_simulator_and_connect().unwrap();
+//
+// NV indices.
+//
+
+/// Returns an `NV_INDEX` with `attributes` and `auth_policy`, holding
+/// `NV_DATA_SIZE` bytes.
+pub fn nv_public<'a>(attributes: TpmaNv, auth_policy: Tpm2bDigest<'a>) -> TpmsNvPublic<'a> {
+    TpmsNvPublic {
+        nv_index: NV_INDEX,
+        name_alg: ALG,
+        attributes: TpmaNv::from(TpmNt::Ordinary) | attributes,
+        auth_policy,
+        data_size: NV_DATA_SIZE,
+    }
+}
+
+/// Returns the Names of an NV command's handles (`authHandle`, then
+/// `nvIndex`), where `auth_handle` is either the index itself or a hierarchy.
+fn nv_names<'a>(nv_public: &TpmsNvPublic, auth_handle: Handle, name_buf: &'a mut [u8; Tpm2bName::CAP]) -> [Option<Tpm2bName<'a>>; 2] {
+    let name = nv_name::<CryptoBackend>(nv_public, name_buf).unwrap();
+    [(auth_handle == nv_public.nv_index).then_some(name), Some(name)]
+}
+
+/// Defines `nv_public` with `auth`, using OWNER authorization from `session`,
+/// and asserts that this rolled the nonce.
+pub fn define_nv_index(simulator: &mut TcpSimulator, nv_public: &TpmsNvPublic, auth: Tpm2bAuth, session: &mut HmacSession, last_nonce_bytes: &mut [u8]) {
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
-    let mut last_nonce_bytes = [0u8; TpmiAlgHash::Sha256.digest_size()];
-
-    println!("continue_session_testing(command_should_fail: {command_should_fail}) starting...");
-
-    let startup = Startup {
-        startup_type: TpmSu::Clear,
-    };
-    assert!(run_command(&startup, simulator.connection_mut(), resp_buffer).is_ok());
-
-    let start_auth_session = StartAuthSession {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-        nonce_caller: Tpm2bNonce::new(&[42u8; TpmiAlgHash::Sha256.digest_size()]).unwrap(),
-        encrypted_salt: Tpm2bEncryptedSecret::default(),
-        session_type: TpmSe::HMAC,
-        symmetric: None,
-        auth_hash: TpmiAlgHash::Sha256,
-    };
-    let start_auth_session_rsp = run_command(&start_auth_session, simulator.connection_mut(), resp_buffer).unwrap();
-    println!("{:?}", start_auth_session_rsp);
-
-    //
-    // Copy needed fields before reusing the `resp_buffer`.
-    //
-    let mut session = HmacSession::new(RustCrypto::default(), start_auth_session_rsp.session_handle, start_auth_session.auth_hash, start_auth_session.nonce_caller, start_auth_session_rsp.nonce_tpm);
-
-    // Test that the nonce rolls (and assume that the HMAC changes with, proven by command success, where applicable).
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-
-    let mut nv_public = TpmsNvPublic {
-        nv_index: Handle(0x01422224), // This must be in the range [0x01000000, 0x01FFFFFF].
-        name_alg: TpmiAlgHash::Sha256,
-        attributes: TpmaNv::from(TpmNt::Ordinary)
-                    | TpmaNv::OWNERREAD
-                    | TpmaNv::OWNERWRITE
-                    | TpmaNv::AUTHREAD
-                    | TpmaNv::AUTHWRITE,
-        auth_policy: Tpm2bDigest::default(), // session auth only
-        data_size: 16,
-    };
+    let mut name_buf = [0u8; Tpm2bName::CAP];
 
     // To make this test idempotent, undefine the space, but ignore the return value.
-    let mut name_buf = [0u8; Tpm2bName::CAP];
-    let name = nv_name(&RustCrypto, &nv_public, &mut name_buf).unwrap();
-
     let nv_undefine_space = NVUndefineSpace {
         auth_handle: Handle::RH_OWNER,
         nv_index: nv_public.nv_index,
     };
-    let _ = run_command_with_sessions(&nv_undefine_space, &[None, Some(name)], &mut session, simulator.connection_mut(), resp_buffer);
+    let _ = run_command_with_sessions(&nv_undefine_space, &nv_names(nv_public, Handle::RH_OWNER, &mut name_buf), session, simulator.connection_mut(), resp_buffer);
 
     // Reload the nonce, don't assert anything.
-    nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm());
+    nonce_unchanged(last_nonce_bytes, &session.nonce_tpm());
 
     let nv_define_space = NVDefineSpace {
         auth_handle: Handle::RH_OWNER,
-        auth: Tpm2bAuth::default(),
-        public_info: Tpm2b(nv_public),
+        auth,
+        public_info: Tpm2b(*nv_public),
     };
-    assert!(run_command_with_sessions(&nv_define_space, &[], &mut session, simulator.connection_mut(), resp_buffer).is_ok());
+    assert!(run_command_with_sessions(&nv_define_space, &[], session, simulator.connection_mut(), resp_buffer).is_ok());
 
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-
-    //
-    // When a command with `continueSession == 0` fails, the session continues.
-    // - This means that TPM2_FlushContext should succeed. Otherwise, it should fail.
-    //
-    // To make TPM2_NV_Read fail, skip writing the space first.
-    //
-    if !command_should_fail {
-        let nv_write = NVWrite {
-            auth_handle: Handle::RH_OWNER,
-            nv_index: nv_public.nv_index,
-            data: Tpm2bSized::new(&[42u8; 16]).unwrap(),
-            offset: 0,
-        };
-        assert!(run_command_with_sessions(&nv_write, &[None, Some(name)], &mut session, simulator.connection_mut(), resp_buffer).is_ok());
-
-        assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-    }
-
-    // Unset the bit.
-    session.session_attributes &= !TpmaSession::CONTINUE_SESSION;
-    // NV_Write sets TPMA_NV_WRITTEN, so the Name changed.
-    nv_public.attributes |= TpmaNv::WRITTEN;
-    let name = nv_name(&RustCrypto, &nv_public, &mut name_buf).unwrap();
-
-    let nv_read = NVRead {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: nv_public.nv_index,
-        size: 16,
-        offset: 0,
-    };
-    let nv_read_rsp = run_command_with_sessions(&nv_read, &[None, Some(name)], &mut session, simulator.connection_mut(), resp_buffer);
-    if !command_should_fail {
-        assert!(nv_read_rsp.is_ok());
-        // Commands with `continueSession == 0` do update the nonce.
-        assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-    } else {
-        assert!(nv_read_rsp.is_err());
-        // Failure doesn't update the nonce.
-        assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
-    }
-
-    let flush_context = FlushContext {
-        flush_handle: session.handle(),
-    };
-    let flush_context_rsp = run_command(&flush_context, simulator.connection_mut(), resp_buffer);
-    if !command_should_fail {
-        assert!(flush_context_rsp.is_err());
-    } else {
-        assert!(flush_context_rsp.is_ok());
-    }
-
-    // The end of a session doesn't update the nonce, nor could an attempt to use a freed session.
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
-
-    assert!(simulator.stop_nicely().is_ok());
-
-    println!("continue_session_testing(command_should_fail: {command_should_fail}) done.");
+    assert!(nonce_unchanged(last_nonce_bytes, &session.nonce_tpm()) == false);
 }
 
-// This also tests "use an authorization."
-fn valid_and_invalid_authorisation() {
-    let mut simulator = spawn_simulator_and_connect().unwrap();
+/// Writes `NV_DATA_SIZE` bytes to `nv_public`, authorizing `auth_handle` (the
+/// index itself, or a hierarchy) with `session`. On success, this sets
+/// `TPMA_NV_WRITTEN` in `nv_public`, as the TPM does, which changes its Name.
+pub fn write_nv_index(simulator: &mut TcpSimulator, nv_public: &mut TpmsNvPublic, auth_handle: Handle, session: &mut impl AuthorizationArea) -> Result<(), TpmRc> {
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
-    let mut last_nonce_bytes = [0u8; TpmiAlgHash::Sha256.digest_size()];
-
-    println!("valid_and_invalid_authorisation() starting...");
-
-    let startup = Startup {
-        startup_type: TpmSu::Clear,
-    };
-    assert!(run_command(&startup, simulator.connection_mut(), resp_buffer).is_ok());
-
-    let start_auth_session = StartAuthSession {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-        nonce_caller: Tpm2bNonce::new(&[42u8; TpmiAlgHash::Sha256.digest_size()]).unwrap(),
-        encrypted_salt: Tpm2bEncryptedSecret::default(),
-        session_type: TpmSe::HMAC,
-        symmetric: None,
-        auth_hash: TpmiAlgHash::Sha256,
-    };
-    let start_auth_session_rsp = run_command(&start_auth_session, simulator.connection_mut(), resp_buffer).unwrap();
-    println!("{:?}", start_auth_session_rsp);
-
-    //
-    // Copy needed fields before reusing the `resp_buffer`.
-    //
-    let mut session = HmacSession::new(RustCrypto::default(), start_auth_session_rsp.session_handle, start_auth_session.auth_hash, start_auth_session.nonce_caller, start_auth_session_rsp.nonce_tpm);
-
-    // Test that the nonce rolls (and assume that the HMAC changes with, proven by command success, where applicable).
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-
-    //
-    // Let's use the wrong authorisation.
-    //
-    let correct_auth_value = Tpm2bAuth::new(&[42u8; TpmiAlgHash::Sha256.digest_size()]).unwrap();
-    let incorrect_auth_value = Tpm2bAuth::new(&[0u8; TpmiAlgHash::Sha256.digest_size()]).unwrap();
-
-    let mut nv_public = TpmsNvPublic {
-        nv_index: Handle(0x01422224), // This must be in the range [0x01000000, 0x01FFFFFF].
-        name_alg: TpmiAlgHash::Sha256,
-        attributes: TpmaNv::from(TpmNt::Ordinary)
-                    | TpmaNv::AUTHREAD
-                    | TpmaNv::AUTHWRITE,
-        auth_policy: Tpm2bDigest::default(), // session auth only
-        data_size: 16,
-    };
-
-    // To make this test idempotent, undefine the space, but ignore the return value.
     let mut name_buf = [0u8; Tpm2bName::CAP];
-    let name = nv_name(&RustCrypto, &nv_public, &mut name_buf).unwrap();
-
-    let nv_undefine_space = NVUndefineSpace {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: nv_public.nv_index,
-    };
-    let _ = run_command_with_sessions(&nv_undefine_space, &[None, Some(name)], &mut session, simulator.connection_mut(), resp_buffer);
-
-    // Reload the nonce, don't assert anything.
-    nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm());
-
-    let nv_define_space = NVDefineSpace {
-        auth_handle: Handle::RH_OWNER,
-        auth: correct_auth_value,
-        public_info: Tpm2b(nv_public),
-    };
-    assert!(run_command_with_sessions(&nv_define_space, &[], &mut session, simulator.connection_mut(), resp_buffer).is_ok());
-
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-
-    // Now, auth is needed.
-    session.set_auth_value(correct_auth_value);
 
     let nv_write = NVWrite {
-        auth_handle: nv_public.nv_index,
+        auth_handle,
         nv_index: nv_public.nv_index,
-        data: Tpm2bSized::new(&[42u8; 16]).unwrap(),
+        data: Tpm2bSized::new(&[42u8; NV_DATA_SIZE as usize]).unwrap(),
         offset: 0,
     };
-    // Unlike `continue_session_testing()`, which used OWNER authorisation that is exempt from DA, this test might need to wait for its startup.
-    let mut nv_write_rsp = run_command_with_sessions(&nv_write, &[Some(name), Some(name)], &mut session, simulator.connection_mut(), resp_buffer);
-    if matches!(nv_write_rsp, Err(Tpm(TpmRc::RETRY))) {
-        nv_write_rsp = run_command_with_sessions(&nv_write, &[Some(name), Some(name)], &mut session, simulator.connection_mut(), resp_buffer);
+    let nv_write_rsp = tpm_result(run_command_with_sessions(&nv_write, &nv_names(nv_public, auth_handle, &mut name_buf), session, simulator.connection_mut(), resp_buffer));
+    if nv_write_rsp.is_ok() {
+        nv_public.attributes |= TpmaNv::WRITTEN;
     }
-    assert!(nv_write_rsp.is_ok());
-
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-
-    // NV_Write sets TPMA_NV_WRITTEN, so the Name changed.
-    nv_public.attributes |= TpmaNv::WRITTEN;
-    let name = nv_name(&RustCrypto, &nv_public, &mut name_buf).unwrap();
-
-    // TODO: Test that only failedTries is altered after the below.
-    session.set_auth_value(incorrect_auth_value);
-
-    let nv_read = NVRead {
-        auth_handle: nv_public.nv_index,
-        nv_index: nv_public.nv_index,
-        size: 16,
-        offset: 0,
-    };
-    assert!(run_command_with_sessions(&nv_read, &[Some(name), Some(name)], &mut session, simulator.connection_mut(), resp_buffer).is_err());
-
-    // Failure doesn't update the nonce.
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
-
-    session.set_auth_value(correct_auth_value);
-
-    let nv_read = NVRead {
-        auth_handle: nv_public.nv_index,
-        nv_index: nv_public.nv_index,
-        size: 16,
-        offset: 0,
-    };
-    assert!(run_command_with_sessions(&nv_read, &[Some(name), Some(name)], &mut session, simulator.connection_mut(), resp_buffer).is_ok());
-
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-
-    let flush_context = FlushContext {
-        flush_handle: session.handle(),
-    };
-    assert!(run_command(&flush_context, simulator.connection_mut(), resp_buffer).is_ok());
-
-    // The end of a session doesn't update the nonce.
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
-
-    assert!(simulator.stop_nicely().is_ok());
-
-    println!("valid_and_invalid_authorisation() done.");
+    nv_write_rsp
 }
 
-// NOTE: This test may be too much code for what it needs to do.
-fn nonce_length_changes() {
-    let mut simulator = spawn_simulator_and_connect().unwrap();
+/// Reads all of `nv_public`, authorizing `auth_handle` (the index itself, or
+/// a hierarchy) with `session`.
+pub fn read_nv_index(simulator: &mut TcpSimulator, nv_public: &TpmsNvPublic, auth_handle: Handle, session: &mut impl AuthorizationArea) -> Result<(), TpmRc> {
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
-
-    // Don't do the typical nonce test here, as the length changes, and the other tests guarantee the basics.
-    println!("nonce_length_changes() starting...");
-
-    let startup = Startup {
-        startup_type: TpmSu::Clear,
-    };
-    assert!(run_command(&startup, simulator.connection_mut(), resp_buffer).is_ok());
-
-    let start_auth_session = StartAuthSession {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-        nonce_caller: Tpm2bNonce::new(&[42u8; TpmiAlgHash::Sha256.digest_size()]).unwrap(),
-        encrypted_salt: Tpm2bEncryptedSecret::default(),
-        session_type: TpmSe::HMAC,
-        symmetric: None,
-        auth_hash: TpmiAlgHash::Sha256,
-    };
-    let start_auth_session_rsp = run_command(&start_auth_session, simulator.connection_mut(), resp_buffer).unwrap();
-    println!("{:?}", start_auth_session_rsp);
-
-    //
-    // Copy needed fields before reusing the `resp_buffer`.
-    //
-    let mut session = HmacSession::new(RustCrypto::default(), start_auth_session_rsp.session_handle, start_auth_session.auth_hash, start_auth_session.nonce_caller, start_auth_session_rsp.nonce_tpm);
-
-    let mut nv_public = TpmsNvPublic {
-        nv_index: Handle(0x01422224), // This must be in the range [0x01000000, 0x01FFFFFF].
-        name_alg: TpmiAlgHash::Sha256,
-        attributes: TpmaNv::from(TpmNt::Ordinary)
-                    | TpmaNv::OWNERREAD
-                    | TpmaNv::OWNERWRITE
-                    | TpmaNv::AUTHREAD
-                    | TpmaNv::AUTHWRITE,
-        auth_policy: Tpm2bDigest::default(), // session auth only
-        data_size: 16,
-    };
-
-    // To make this test idempotent, undefine the space, but ignore the return value.
     let mut name_buf = [0u8; Tpm2bName::CAP];
-    let name = nv_name(&RustCrypto, &nv_public, &mut name_buf).unwrap();
 
-    let nv_undefine_space = NVUndefineSpace {
-        auth_handle: Handle::RH_OWNER,
+    let nv_read = NVRead {
+        auth_handle,
         nv_index: nv_public.nv_index,
-    };
-    let _ = run_command_with_sessions(&nv_undefine_space, &[None, Some(name)], &mut session, simulator.connection_mut(), resp_buffer);
-
-    let nv_define_space = NVDefineSpace {
-        auth_handle: Handle::RH_OWNER,
-        auth: Tpm2bAuth::default(),
-        public_info: Tpm2b(nv_public),
-    };
-    assert!(run_command_with_sessions(&nv_define_space, &[], &mut session, simulator.connection_mut(), resp_buffer).is_ok());
-
-    let nv_write = NVWrite {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: nv_public.nv_index,
-        data: Tpm2bSized::new(&[42u8; 16]).unwrap(),
+        size: NV_DATA_SIZE,
         offset: 0,
     };
-    assert!(run_command_with_sessions(&nv_write, &[None, Some(name)], &mut session, simulator.connection_mut(), resp_buffer).is_ok());
-
-    // NV_Write sets TPMA_NV_WRITTEN, so the Name changed.
-    nv_public.attributes |= TpmaNv::WRITTEN;
-    let name = nv_name(&RustCrypto, &nv_public, &mut name_buf).unwrap();
-
-    //
-    // nonceTPM's length was set to digest_size() by TPM2_StartAuthSession. nonceCaller's length may never be greater than this.
-    //
-    for nonce_len in 0..(TpmiAlgHash::Sha256.digest_size() * 2) {
-        session.set_new_nonce_caller_length(nonce_len);
-
-        let nv_read = NVRead {
-            auth_handle: Handle::RH_OWNER,
-            nv_index: nv_public.nv_index,
-            size: 16,
-            offset: 0,
-        };
-        let nv_read_rsp = run_command_with_sessions(&nv_read, &[None, Some(name)], &mut session, simulator.connection_mut(), resp_buffer);
-        if nonce_len <= TpmiAlgHash::Sha256.digest_size() {
-            assert!(nv_read_rsp.is_ok());
-        } else {
-            // NB: This is correct, it's the reference code that's wrong.
-            //assert!(nv_read_rsp.is_err());
-        }
-    }
-
-    let flush_context = FlushContext {
-        flush_handle: session.handle(),
-    };
-    assert!(run_command(&flush_context, simulator.connection_mut(), resp_buffer).is_ok());
-
-    assert!(simulator.stop_nicely().is_ok());
-
-    println!("nonce_length_changes() done.");
-}
-
-fn load_stale_context() {
-    let mut simulator = spawn_simulator_and_connect().unwrap();
-    let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
-    let mut last_nonce_bytes = [0u8; TpmiAlgHash::Sha256.digest_size()];
-
-    println!("load_stale_context() starting...");
-
-    let startup = Startup {
-        startup_type: TpmSu::Clear,
-    };
-    assert!(run_command(&startup, simulator.connection_mut(), resp_buffer).is_ok());
-
-    let start_auth_session = StartAuthSession {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
-        nonce_caller: Tpm2bNonce::new(&[42u8; TpmiAlgHash::Sha256.digest_size()]).unwrap(),
-        encrypted_salt: Tpm2bEncryptedSecret::default(),
-        session_type: TpmSe::HMAC,
-        symmetric: None,
-        auth_hash: TpmiAlgHash::Sha256,
-    };
-    let start_auth_session_rsp = run_command(&start_auth_session, simulator.connection_mut(), resp_buffer).unwrap();
-    println!("{:?}", start_auth_session_rsp);
-
-    //
-    // Copy needed fields before reusing the `resp_buffer`.
-    //
-    let mut session = HmacSession::new(RustCrypto::default(), start_auth_session_rsp.session_handle, start_auth_session.auth_hash, start_auth_session.nonce_caller, start_auth_session_rsp.nonce_tpm);
-
-    // Test that the nonce rolls (and assume that the HMAC changes with, proven by command success, where applicable).
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-
-    let nv_public = TpmsNvPublic {
-        nv_index: Handle(0x01422224), // This must be in the range [0x01000000, 0x01FFFFFF].
-        name_alg: TpmiAlgHash::Sha256,
-        attributes: TpmaNv::from(TpmNt::Ordinary)
-                    | TpmaNv::OWNERREAD
-                    | TpmaNv::OWNERWRITE
-                    | TpmaNv::AUTHREAD
-                    | TpmaNv::AUTHWRITE,
-        auth_policy: Tpm2bDigest::default(), // session auth only
-        data_size: 16,
-    };
-
-    // To make this test idempotent, undefine the space, but ignore the return value.
-    let mut name_buf = [0u8; Tpm2bName::CAP];
-    let name = nv_name(&RustCrypto, &nv_public, &mut name_buf).unwrap();
-
-    let nv_undefine_space = NVUndefineSpace {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: nv_public.nv_index,
-    };
-    let _ = run_command_with_sessions(&nv_undefine_space, &[None, Some(name)], &mut session, simulator.connection_mut(), resp_buffer);
-
-    // Reload the nonce, don't assert anything.
-    nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm());
-
-    let nv_define_space = NVDefineSpace {
-        auth_handle: Handle::RH_OWNER,
-        auth: Tpm2bAuth::default(),
-        public_info: Tpm2b(nv_public),
-    };
-    assert!(run_command_with_sessions(&nv_define_space, &[], &mut session, simulator.connection_mut(), resp_buffer).is_ok());
-
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-
-    //
-    // Save the session, then reactivate it. We want to attempt and fail loading it after another command.
-    // - These two commands don't take sessions, so they don't update the nonce.
-    //
-    let context_save = ContextSave {
-        save_handle: session.handle(),
-    };
-    let context_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
-    let context_save_rsp = run_command(&context_save, simulator.connection_mut(), context_buffer).unwrap();
-
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
-
-    let context_load = ContextLoad {
-        context: context_save_rsp.context,
-    };
-    assert!(run_command(&context_load, simulator.connection_mut(), resp_buffer).is_ok());
-
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
-
-    let nv_write = NVWrite {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: nv_public.nv_index,
-        data: Tpm2bSized::new(&[42u8; 16]).unwrap(),
-        offset: 0,
-    };
-    assert!(run_command_with_sessions(&nv_write, &[None, Some(name)], &mut session, simulator.connection_mut(), resp_buffer).is_ok());
-
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
-
-    let context_load = ContextLoad {
-        context: context_save_rsp.context,
-    };
-    assert!(run_command(&context_load, simulator.connection_mut(), resp_buffer).is_err());
-
-    // This command doesn't take a session, and failures don't update the nonce anyways.
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
-
-    let flush_context = FlushContext {
-        flush_handle: session.handle(),
-    };
-    assert!(run_command(&flush_context, simulator.connection_mut(), resp_buffer).is_ok());
-
-    // The end of a session doesn't update the nonce.
-    assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
-
-    assert!(simulator.stop_nicely().is_ok());
-
-    println!("load_stale_context() done.");
+    tpm_result(run_command_with_sessions(&nv_read, &nv_names(nv_public, auth_handle, &mut name_buf), session, simulator.connection_mut(), resp_buffer))
 }
 
 fn main() {
-    minimum_viable_test_case(false);
-    minimum_viable_test_case(true);
+    basic_and_auth_tests::run();
+    shutdown_tests::run();
+    policy_tests::run();
 
-    continue_session_testing(false);
-    continue_session_testing(true);
-
-    valid_and_invalid_authorisation();
-    nonce_length_changes();
-    load_stale_context();
-
-    println!("TODO: Test permission failure, then continue on policies.");
+    todo!();
 }
