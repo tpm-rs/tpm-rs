@@ -127,7 +127,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             session_state.policy_digest_len = new_digest_len;
             session_state.policy_hash[..name_hash_len].copy_from_slice(&name_hash[..name_hash_len]);
             session_state.policy_hash_len = name_hash_len;
-            session_state.is_name_hash_defined = true;
             session_state.command_code = TpmCc::Duplicate.code();
         }
 

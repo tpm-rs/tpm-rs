@@ -153,11 +153,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let bind_name = self.context.handle_name(bind.0);
             bound_entity = compute_bound_entity(bind_name.get_buffer(), bind_auth_stripped)?;
         }
-        let bind_entity = if is_bound_session {
-            bind
-        } else {
-            Handle::RH_NULL
-        };
         // A DA-protected bind entity makes every use of the session subject to DA, for all
         // session types (C `SessionCreate`: `isDaBound`, `isLockoutBound`).
         let is_da_bound = bind != Handle::RH_NULL && self.context.has_da_protection(bind.0);
@@ -172,14 +167,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             session_key,
             session_key_len,
             symmetric: cmd.symmetric,
-            bind_entity,
             bound_entity,
             audit_digest: None,
             audit_digest_len: 0,
             policy_hash: [0u8; 64],
             policy_hash_len: 0,
             is_cp_hash_defined: false,
-            is_name_hash_defined: false,
             is_template_hash_defined: false,
             is_parameters_hash_defined: false,
             is_pp_required: false,
@@ -699,7 +692,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             session_state.is_auth_value_needed = false;
             session_state.is_password_needed = false;
             session_state.is_cp_hash_defined = false;
-            session_state.is_name_hash_defined = false;
             session_state.is_template_hash_defined = false;
             session_state.is_parameters_hash_defined = false;
             session_state.is_pp_required = false;

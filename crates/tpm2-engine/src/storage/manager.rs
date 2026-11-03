@@ -1,15 +1,23 @@
 use super::types::{Handle, ItemMetadata};
 use super::{NvStorage, StorageError, Tpm2Storage};
 
-/// The maximum number of persistent objects or NV indices that can be stored simultaneously.
-/// This is a custom storage limitation: 64 items, or more with a larger accounted NV memory
-/// (`nv_capacity::NV_MEMORY_SIZE`, one item per 256 octets), so that the table never fills up
-/// before the NV space accounting (`TPM_RC_NV_SPACE`) does.
-pub const MAX_ITEMS: usize = if super::nv_capacity::NV_MEMORY_SIZE as usize / 256 > 64 {
-    super::nv_capacity::NV_MEMORY_SIZE as usize / 256
-} else {
-    64
+/// The maximum number of items (NV Indices, persistent objects and the engine's internal
+/// records) that can be stored simultaneously: a custom storage limitation, sized so that the
+/// table never fills up before the NV space accounting (`TPM_RC_NV_SPACE`,
+/// [`super::nv_capacity`]) does. The smallest entry that accounting admits is an orderly Index,
+/// whose data is in RAM: `sizeof(UINT32) + sizeof(NV_INDEX)` octets of the reference's dynamic
+/// area (`NV_USER_DYNAMIC..NV_USER_DYNAMIC_END`). So the table holds as many of them as fit
+/// (rounded up), plus the four internal records ([`super::nv`]).
+pub const MAX_ITEMS: usize = {
+    use super::nv_capacity::{
+        NV_USER_DYNAMIC, NV_USER_DYNAMIC_END, SIZEOF_NV_INDEX, SIZEOF_UINT32,
+    };
+    let smallest = (SIZEOF_UINT32 + SIZEOF_NV_INDEX) as usize;
+    let dynamic = (NV_USER_DYNAMIC_END - NV_USER_DYNAMIC) as usize;
+    dynamic.div_ceil(smallest) + INTERNAL_RECORDS
 };
+/// The number of internal records of the engine ([`super::nv::is_internal_record`]).
+const INTERNAL_RECORDS: usize = 4;
 /// Serialized byte size of the Table of Contents (TOC) index tracking NV storage items.
 /// Calculated as MAX_ITEMS * ItemMetadata::SIZE. Custom storage design property.
 pub const TOC_SIZE: usize = MAX_ITEMS * ItemMetadata::SIZE;

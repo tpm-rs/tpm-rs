@@ -6,9 +6,9 @@ use crate::storage::{NvStorage, StorageError};
 use crate::timer::TpmTimer;
 use alloc::vec::Vec;
 use tpm2::Alg;
+use tpm2::TpmSe;
 use tpm2::crypto::{Asymmetric, AsymmetricSign, Cmac, ConstantTimeEq, Random, Rng, Symmetric};
 use tpm2::crypto::{CryptoError, CryptoProvider, Direction, ModeIv};
-use tpm2::{Handle, TpmSe};
 use tpm2::{Tpm2bNonce, TpmiAlgHash, TpmtSymDef};
 
 #[allow(clippy::too_many_arguments)]
@@ -19,7 +19,6 @@ pub fn make_test_session_state(
     nonce_tpm: Tpm2bNonce,
     session_key_slice: &[u8],
     symmetric: Option<TpmtSymDef>,
-    bind_entity: Handle,
 ) -> SessionState {
     let mut session_key = [0u8; 128];
     session_key[..session_key_slice.len()].copy_from_slice(session_key_slice);
@@ -31,14 +30,12 @@ pub fn make_test_session_state(
         session_key,
         session_key_len: session_key_slice.len(),
         symmetric,
-        bind_entity,
         bound_entity: tpm2::Tpm2bName::default().into(),
         audit_digest: None,
         audit_digest_len: 0,
         policy_hash: [0u8; 64],
         policy_hash_len: 0,
         is_cp_hash_defined: false,
-        is_name_hash_defined: false,
         is_template_hash_defined: false,
         is_parameters_hash_defined: false,
         is_pp_required: false,

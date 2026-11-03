@@ -162,7 +162,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             actual_private_key,
             actual_private_key_len,
             qualified_name,
-            Some(parent_handle),
             parent_info.hierarchy_val,
             parent_info.has_st_clear || st_clear,
         );

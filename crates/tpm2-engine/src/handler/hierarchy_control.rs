@@ -105,12 +105,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // the `ppsHierarchy`/`spsHierarchy`/`epsHierarchy` attributes, which are set from the
             // normalized hierarchy).
             if !state && enable != Handle::RH_PLATFORM_NV.0 {
-                for (i, slot) in self.context.state.transient_objects.iter_mut().enumerate() {
+                for slot in self.context.state.transient_objects.iter_mut() {
                     if let Some(obj) = slot
                         && crate::hierarchy::normalize(obj.hierarchy) == enable
                     {
                         *slot = None;
-                        self.context.state.transient_parents[i] = None;
                     }
                 }
             }

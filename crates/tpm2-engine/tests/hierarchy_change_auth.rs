@@ -155,5 +155,6 @@ fn test_no_nv_writes_stress() {
     let _ = tpm.execute_command_separate(&req_buf[..offset], &mut response[..]);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
     assert_eq!(rc, 0);
-    assert_eq!(storage.writes, 66);
+    // One write of the table of contents (one write per entry) and two item writes.
+    assert_eq!(storage.writes, tpm2_engine::storage::manager::MAX_ITEMS + 2);
 }

@@ -216,7 +216,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             name.get_buffer(),
         )?;
 
-        self.context.state.transient_parents[index] = Some(primary_handle.0);
         self.context.state.transient_objects[index] = Some(TransientObject {
             handle,
             seed: stored_seed,

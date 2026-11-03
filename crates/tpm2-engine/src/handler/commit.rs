@@ -83,23 +83,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             key_name.get_buffer(),
         )?;
 
-        // Store the X coordinate of the committed point (E if P1 present or s2 absent, else L)
-        self.context.state.commit_x.fill(0);
-        self.context.state.commit_p1.fill(0);
-        if !p1_is_empty {
-            let len = param_size * 2;
-            self.context.state.commit_p1[..len].copy_from_slice(&p1_buf[..len]);
-        }
-        if !p1_is_empty || xy2_opt.is_none() {
-            self.context.state.commit_x[..param_size].copy_from_slice(&e_buf[..param_size]);
-        } else {
-            self.context.state.commit_x[..param_size].copy_from_slice(&l_buf[..param_size]);
-        }
-
         // The commit computation succeeded, so complete the commitment (`CryptCommit`): mark
         // the counter value as outstanding and advance the counter.
         let committed = self.crypt_commit();
-        debug_assert_eq!(committed, old_counter);
+        debug_assert_eq!(committed, old_counter as u16);
 
         let mut k_x = Tpm2bEccParameter::default();
         let mut k_y = Tpm2bEccParameter::default();
@@ -129,7 +116,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             k: tpm2::Tpm2b(TpmsEccPoint { x: k_x, y: k_y }),
             l: tpm2::Tpm2b(TpmsEccPoint { x: l_x, y: l_y }),
             e: tpm2::Tpm2b(TpmsEccPoint { x: e_x, y: e_y }),
-            counter: old_counter,
+            counter: committed,
         };
 
         let response = request.into_response();
@@ -288,7 +275,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         l_buf: &mut [u8; 256],
         e_buf: &mut [u8; 256],
         param_size: usize,
-        commit_counter: u16,
+        commit_counter: u64,
         key_name: &[u8],
     ) -> Result<(), TpmRc> {
         // Commit phase of `CryptGenerateR`: derive `r` from the current counter value. The
@@ -372,8 +359,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// value is returned to the caller of `TPM2_Commit` and later passed as
     /// `inScheme.details.ecdaa.count` to consume the commitment.
     pub(crate) fn crypt_commit(&mut self) -> u16 {
-        let old_count = self.context.state.commit_counter;
-        self.context.state.commit_counter = old_count.wrapping_add(1);
+        let old_count = self.context.state.commit_counter as u16;
+        self.context.state.commit_counter = self.context.state.commit_counter.wrapping_add(1);
         let bit = usize::from(old_count & COMMIT_INDEX_MASK);
         self.context.state.commit_array[bit / 8] |= 1 << (bit % 8);
         old_count
@@ -415,13 +402,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // of `count` are greater than or equal to the low bits of the current counter, the
         // counter has wrapped the window since then.
         let mut current = self.context.state.commit_counter;
-        if (count & COMMIT_INDEX_MASK) >= (current & COMMIT_INDEX_MASK) {
-            current = current.wrapping_sub(COMMIT_INDEX_MASK + 1);
+        if (count & COMMIT_INDEX_MASK) >= (current as u16 & COMMIT_INDEX_MASK) {
+            current = current.wrapping_sub(u64::from(COMMIT_INDEX_MASK) + 1);
         }
-        if (current & !COMMIT_INDEX_MASK) != (count & !COMMIT_INDEX_MASK) {
+        if (current as u16 & !COMMIT_INDEX_MASK) != (count & !COMMIT_INDEX_MASK) {
             return Err(TpmRc::VALUE.to_rc());
         }
-        self.generate_r(count, name, curve)
+        // The counter value when the commitment was made: the upper 48 bits of the current
+        // counter (as adjusted above) and the 16 bits of `count`.
+        let committed = (current & !0xFFFF) | u64::from(count);
+        self.generate_r(committed, name, curve)
             .ok_or_else(|| TpmRc::VALUE.to_rc())
     }
 
@@ -495,7 +485,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// found.
     pub(crate) fn generate_r(
         &self,
-        count: u16,
+        count: u64,
         name: &[u8],
         curve: TpmEccCurve,
     ) -> Option<([u8; MAX_ECC_ORDER_SIZE], usize)> {
@@ -504,9 +494,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.crypto().do_self_test(tpm2::Alg::KDF1_SP800_108).ok()?;
         let n_len = n.len();
         let size_in_bits = (n_len as u32) * 8;
-        // C marshals the full (64-bit) commit counter; the upper 48 bits are always zero here
-        // because the counter is 16 bits wide.
-        let cntr = u64::from(count).to_be_bytes();
+        // C marshals the full (64-bit) commit counter.
+        let cntr = count.to_be_bytes();
         let digest_size = commit_kdf_hash().digest_size();
 
         let mut r = [0u8; MAX_ECC_ORDER_SIZE];
@@ -518,10 +507,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 iterations += 1;
                 let mut hmac = self
                     .crypto()
-                    .hmac_stream(
-                        commit_kdf_hash(),
-                        &self.context.state.commit_nonce[..crate::engine::COMMIT_NONCE_SIZE],
-                    )
+                    .hmac_stream(commit_kdf_hash(), &self.context.state.commit_nonce)
                     .ok()?;
                 hmac.update(&iterations.to_be_bytes()).ok()?;
                 hmac.update(COMMIT_STRING).ok()?;

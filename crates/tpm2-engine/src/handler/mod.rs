@@ -251,14 +251,15 @@ pub struct SessionState {
     pub session_key: [u8; 128],
     pub session_key_len: usize,
     pub symmetric: Option<TpmtSymDef>,
-    pub bind_entity: Handle,
+    /// The bind value of a bound HMAC session (`u1.boundEntity`, see
+    /// `handler::session::compute_bound_entity`); empty if the session is not bound
+    /// (`isBound` is `bound_entity.size > 0`).
     pub bound_entity: OwnedName,
     pub audit_digest: Option<[u8; 64]>,
     pub audit_digest_len: usize,
     pub policy_hash: [u8; 64],
     pub policy_hash_len: usize,
     pub is_cp_hash_defined: bool,
-    pub is_name_hash_defined: bool,
     pub is_template_hash_defined: bool,
     /// `TPM2_PolicyParameters` set `policy_hash` to a pHash (C `isParametersHashDefined`).
     pub is_parameters_hash_defined: bool,
@@ -270,7 +271,9 @@ pub struct SessionState {
     pub command_code: u32,
     pub start_time: u64,
     pub timeout: u64,
-    pub epoch: u64,
+    /// The time epoch when the session's timing interval started (`CLOCK_NONCE`, a `UINT32` in
+    /// the reference profile, whose `CLOCK_STOPS` is `NO`).
+    pub epoch: u32,
     pub is_auth_value_needed: bool,
     pub is_password_needed: bool,
     pub pcr_counter: Option<u32>,
@@ -286,6 +289,23 @@ pub struct SessionState {
     pub is_lockout_bound: bool,
     /// The secure channel restrictions of `TPM2_PolicyTransportSPDM()`.
     pub sec_channel: SecChannelPolicy,
+}
+
+impl SessionState {
+    /// Whether `policy_hash` holds a nameHash (C `isNameHashDefined`): set by
+    /// `TPM2_PolicyNameHash`, `TPM2_PolicyDuplicationSelect` and `TPM2_PolicyACSendSelect`,
+    /// which require the cpHash union to be unoccupied and store a non-empty digest. It is
+    /// derived rather than kept: `policy_hash` is non-empty and holds neither a cpHash, a
+    /// templateHash nor a pHash. A cpHash that `TPM2_PolicySigned`, `TPM2_PolicySecret` or
+    /// `TPM2_PolicyTicket` add over an equal nameHash takes precedence wherever the flags are
+    /// read (every check that reads `isNameHashDefined` also reads `isCpHashDefined` first or
+    /// with it), so the reference's state with both flags SET behaves as this one.
+    pub fn is_name_hash_defined(&self) -> bool {
+        self.policy_hash_len > 0
+            && !self.is_cp_hash_defined
+            && !self.is_template_hash_defined
+            && !self.is_parameters_hash_defined
+    }
 }
 
 /// The secure channel restrictions a policy session collects with `TPM2_PolicyTransportSPDM()`

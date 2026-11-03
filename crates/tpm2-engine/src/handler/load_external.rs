@@ -145,7 +145,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let qualified_name = name;
 
-        self.context.state.transient_parents[index] = Some(cmd.hierarchy.0);
         self.context.state.transient_objects[index] = Some(TransientObject {
             handle,
             seed,

@@ -4,7 +4,7 @@
 use crate::_common::{
     SU_CLEAR, SU_STATE, create_storage_primary_with_auth, hex_checked, nv_off, nv_unavailable,
     power_cycle, power_cycle_with, raw_mssim, raw_rc, raw_rc_at, rc_of, shutdown, shutdown_raw,
-    start_auth_session, startup, u16_param_command,
+    start_auth_session, startup, u16_param_command, update_counter,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::*;
@@ -44,6 +44,54 @@ fn pcr_extend_invalidates_saved_state() {
         startup(&mut sim, SU_STATE),
         TpmRc::VALUE.with(Position::parameter(1)).get()
     );
+}
+
+/// `TPM2_PCR_Extend` of PCR `pcr` with a SHA-256 digest, authorized with an empty password.
+fn extend_pcr_sha256(sim: &mut Tpm, pcr: u8) -> u32 {
+    let mut cmd = vec![
+        0x80, 0x02, // TPM_ST_SESSIONS
+        0x00, 0x00, 0x00, 0x41, // size: 65 bytes
+        0x00, 0x00, 0x01, 0x82, // TPM_CC_PCR_Extend
+        0x00, 0x00, 0x00, pcr, // pcrHandle
+        0x00, 0x00, 0x00, 0x09, // authSize: 9 bytes
+        0x40, 0x00, 0x00, 0x09, // TPM_RS_PW
+        0x00, 0x00, // nonce size 0
+        0x01, // sessionAttributes: continueSession
+        0x00, 0x00, // hmac size 0
+        0x00, 0x00, 0x00, 0x01, // count: 1 digest
+        0x00, 0x0b, // hashAlg: SHA256
+    ];
+    cmd.extend_from_slice(&[0x5A; 32]);
+    rc_of(&raw_mssim(sim, &cmd))
+}
+
+/// The change of the PCR update counter from a `TPM2_Shutdown(TPM_SU_STATE)` to the following
+/// `TPM2_Startup(startup_type)`, with PCR 16 (which is not state-saved, so its change does not
+/// invalidate the saved state) extended in between if `extend`.
+fn update_counter_across_shutdown_state(sim: &mut Tpm, extend: bool, startup_type: u16) -> u32 {
+    let before = update_counter(sim);
+    assert_eq!(shutdown(sim, SU_STATE), 0);
+    if extend {
+        assert_eq!(extend_pcr_sha256(sim, 16), 0);
+        assert!(update_counter(sim) > before);
+    }
+    power_cycle(sim);
+    assert_eq!(startup(sim, startup_type), 0);
+    update_counter(sim) - before
+}
+
+/// The PCR update counter is part of the state that `TPM2_Shutdown(TPM_SU_STATE)` saves
+/// (`gr.pcrCounter`, which `TPM2_Startup` reads back from NV for TPM Resume and TPM Restart):
+/// an extend of PCR 16 after the shutdown is forgotten by the counter, so the counter changes
+/// across the power cycle exactly as without the extend, for both TPM Resume and TPM Restart.
+#[test]
+fn pcr_update_counter_resumes_from_shutdown_state() {
+    let mut sim = Tpm::new();
+    for startup_type in [SU_STATE, SU_CLEAR] {
+        let without_extend = update_counter_across_shutdown_state(&mut sim, false, startup_type);
+        let with_extend = update_counter_across_shutdown_state(&mut sim, true, startup_type);
+        assert_eq!(with_extend, without_extend, "startup type {startup_type}");
+    }
 }
 
 /// `TPM2_HierarchyChangeAuth(TPM_RH_PLATFORM)` after `Shutdown(STATE)` invalidates the saved

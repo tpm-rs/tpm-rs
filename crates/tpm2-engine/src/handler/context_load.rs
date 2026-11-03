@@ -271,7 +271,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // 4. Resolve empty slot and load transient object
             let (slot, handle) = self.context.state.find_empty_transient_slot(true)?;
 
-            self.context.state.transient_parents[slot] = None;
             self.context.state.transient_objects[slot] = Some(TransientObject {
                 handle,
                 seed: fields.seed,
@@ -496,7 +495,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let symmetric =
             <Option<tpm2::TpmtSymDef>>::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
-        let bind_entity = Handle::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let bound_entity = OwnedName::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
 
         let has_audit_digest = u8::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? != 0;
@@ -522,7 +520,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         slice = &slice[policy_hash_len..];
 
         let is_cp_hash_defined = u8::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? != 0;
-        let is_name_hash_defined = u8::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? != 0;
 
         let policy_digest_len = u16::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? as usize;
         if slice.len() < policy_digest_len {
@@ -535,7 +532,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let command_code = u32::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let start_time = u64::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
         let timeout = u64::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
-        let epoch = u64::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
+        let epoch = u32::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)?;
 
         let is_auth_value_needed = u8::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? != 0;
         let is_password_needed = u8::unmarshal(&mut slice).map_err(|_| TpmRc::FAILURE)? != 0;
@@ -584,14 +581,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             session_key,
             session_key_len,
             symmetric,
-            bind_entity,
             bound_entity,
             audit_digest,
             audit_digest_len,
             policy_hash,
             policy_hash_len,
             is_cp_hash_defined,
-            is_name_hash_defined,
             is_template_hash_defined: session_flags & 1 != 0,
             is_pp_required: session_flags & (1 << 3) != 0,
             is_parameters_hash_defined: session_flags & (1 << 4) != 0,
@@ -644,13 +639,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             ),
             _ => return Err(TpmRc::FAILURE),
         };
-        if slice.len() < 5 + 4 * crate::StreamingHashState::SERIALIZED_SIZE {
+        if slice.len() < 1 + 4 * crate::StreamingHashState::SERIALIZED_SIZE {
             return Err(TpmRc::FAILURE);
         }
-        let mut first_bytes = [0u8; 4];
-        first_bytes.copy_from_slice(&slice[..4]);
-        let first_bytes_len = (slice[4] as usize).min(4);
-        slice = &slice[5..];
+        let first_block = slice[0] & 1 != 0;
+        let ticket_safe = slice[0] & 2 != 0;
+        slice = &slice[1..];
 
         let mut hash_states = [crate::StreamingHashState::default(); 4];
         let mut mu_state = None;
@@ -669,8 +663,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             handle,
             auth,
             sequence_type,
-            first_bytes,
-            first_bytes_len,
+            first_block,
+            ticket_safe,
             hash_states,
             mu_state,
         })

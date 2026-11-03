@@ -379,11 +379,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .try_into()
                 .unwrap(),
         );
-        offset += sess.bind_entity.marshal(
-            (&mut buf[offset..offset + tpm2::Handle::MAX_SIZE])
-                .try_into()
-                .unwrap(),
-        );
         offset += sess.bound_entity.marshal(
             (&mut buf[offset..offset + tpm2::Tpm2bName::MAX_SIZE])
                 .try_into()
@@ -412,9 +407,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         buf[offset] = if sess.is_cp_hash_defined { 1 } else { 0 };
         offset += 1;
 
-        buf[offset] = if sess.is_name_hash_defined { 1 } else { 0 };
-        offset += 1;
-
         buf[offset..offset + 2].copy_from_slice(&(sess.policy_digest_len as u16).to_be_bytes());
         offset += 2;
         buf[offset..offset + sess.policy_digest_len]
@@ -430,8 +422,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         buf[offset..offset + 8].copy_from_slice(&sess.timeout.to_be_bytes());
         offset += 8;
 
-        buf[offset..offset + 8].copy_from_slice(&sess.epoch.to_be_bytes());
-        offset += 8;
+        buf[offset..offset + 4].copy_from_slice(&sess.epoch.to_be_bytes());
+        offset += 4;
 
         buf[offset] = if sess.is_auth_value_needed { 1 } else { 0 };
         offset += 1;
@@ -546,9 +538,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
         }
 
-        buf[offset..offset + 4].copy_from_slice(&seq.first_bytes);
-        offset += 4;
-        buf[offset] = seq.first_bytes_len as u8;
+        // The first-block flags: bit 0 = `firstBlock`, bit 1 = `ticketSafe`.
+        buf[offset] = u8::from(seq.first_block) | (u8::from(seq.ticket_safe) << 1);
         offset += 1;
 
         for i in 0..seq.hash_states.len() {
@@ -649,7 +640,7 @@ const MAX_SEQUENCE_ENTITY_SIZE: usize = 4 // handle
     + tpm2::Tpm2bAuth::MAX_SIZE
     + 1
     + MAX_SEQUENCE_TYPE_SIZE
-    + 4 + 1 // first bytes
+    + 1 // first-block flags
     + array_len(|s: &crate::ActiveSequence| &s.hash_states)
         * crate::hash_state::StreamingHashState::SERIALIZED_SIZE;
 
@@ -661,17 +652,16 @@ const MAX_SESSION_ENTITY_SIZE: usize = 4 // handle
     + 2
     + array_len(|s: &SessionState| &s.session_key)
     + <Option<tpm2::TpmtSymDef>>::MAX_SIZE
-    + tpm2::Handle::MAX_SIZE
     + tpm2::Tpm2bName::MAX_SIZE
     + 1 + 2
     + array_len(|s: &SessionState| s.audit_digest.as_ref().unwrap())
     + 2
     + array_len(|s: &SessionState| &s.policy_hash)
-    + 1 + 1 // isCpHashDefined, isNameHashDefined
+    + 1 // isCpHashDefined
     + 2
     + array_len(|s: &SessionState| &s.policy_digest)
     + 4 // command code
-    + 8 + 8 + 8 // start time, timeout, epoch
+    + 8 + 8 + 4 // start time, timeout, epoch
     + 1 + 1 // isAuthValueNeeded, isPasswordNeeded
     + 1 + 4 // pcrCounter
     + 1 + 1 + 1 // checkNvWritten, nvWrittenState, locality

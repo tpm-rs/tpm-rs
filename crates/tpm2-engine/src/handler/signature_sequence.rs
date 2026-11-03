@@ -293,7 +293,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             };
             // The first block decides whether a restricted key may sign the message; if no
             // block was added yet, *buffer* is the first block.
-            let safe = if seq.first_bytes_len != 0 {
+            let safe = if seq.first_block {
                 first_block_was_safe(seq)
             } else {
                 ticket_is_safe(buffer)

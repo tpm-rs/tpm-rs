@@ -64,7 +64,7 @@ use tpm2::{CommandHeader, Handle, ResponseHeader, TpmCc, TpmHt, TpmSe, TpmSt};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{
     Tpm2bAuth, Tpm2bNonce, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
-    TpmiStCommandTag, TpmsAuthCommand, TpmsAuthResponse,
+    TpmiStCommandTag, TpmsAuthResponse,
 };
 
 /// The only symmetric block cipher mode allowed for session parameter encryption (TPM 2.0
@@ -303,8 +303,10 @@ pub struct GlobalState {
     pub restart_count: u32,
     /// A counter that increments upon every TPM clear operation (TPM_PT_CLEAR_COUNT).
     pub clear_count: u32,
-    /// A random nonce that acts as an epoch identifier for the current continuous clock period.
-    pub time_epoch: u64,
+    /// The time epoch (`gp.timeEpoch`, a `CLOCK_NONCE`): incremented whenever the platform timer
+    /// was stopped. `CLOCK_NONCE` is a `UINT32` in the reference profile (`CLOCK_STOPS` is
+    /// `NO`).
+    pub time_epoch: u32,
     /// The current locality of the TPM, used to enforce locality-based access controls.
     pub locality: u8,
     /// Indicates whether the Non-Volatile (NV) memory is available for read/write operations.
@@ -350,8 +352,6 @@ pub struct GlobalState {
     /// by which `TPM2_Startup` after an orderly shutdown and a power cycle rebases the
     /// dictionary-attack timers.
     pub shutdown_time_ms: u64,
-    /// Tracks the identifier for the object context.
-    pub object_context_id: u32,
     /// If true, the TPM2_Clear command is disabled.
     pub disable_clear: bool,
     /// Flag indicating whether the Storage Hierarchy is enabled.
@@ -403,8 +403,6 @@ pub struct GlobalState {
     pub null_proof_size: u16,
     /// An array holding the currently loaded transient objects.
     pub transient_objects: [Option<TransientObject>; MAX_LOADED_OBJECTS],
-    /// An array tracking the parent handle for each transient object slot.
-    pub transient_parents: [Option<u32>; MAX_LOADED_OBJECTS],
     /// An array holding the active authorization sessions.
     pub active_sessions: [Option<SessionState>; MAX_LOADED_SESSIONS],
     /// Handles of the sessions whose context has been saved (and that are neither flushed nor
@@ -473,20 +471,16 @@ pub struct GlobalState {
     /// Tracks the highest monotonic NV counter value ever allocated or incremented across the lifetime
     /// of the TPM (`s_maxCounter` in `ibmswtpm2`).
     pub max_counter: u64,
-    /// A counter tracking the number of times TPM2_Commit has been executed.
-    pub commit_counter: u16,
+    /// The commit counter (`gr.commitCounter`, a `UINT64`): incremented by every successful
+    /// `TPM2_Commit`; its low 16 bits are the `counter` returned to the caller.
+    pub commit_counter: u64,
     /// Bitmap of outstanding commitments (`gr.commitArray`). Bit `count & COMMIT_INDEX_MASK` is
     /// set by TPM2_Commit and cleared once an ECDAA signature consumes the commitment, so each
     /// committed `r` can be used for at most one signature.
     pub commit_array: [u8; 16],
-    /// A secret nonce used to derive commit scalars (`r`) deterministically via KDFa per `CryptGenerateR`.
-    /// Only the first `COMMIT_NONCE_SIZE` bytes are drawn and used.
-    pub commit_nonce: [u8; 64],
-    /// The X coordinate of the point committed during the last TPM2_Commit (`E` if `P1` was present, else `L`).
-    /// Sized for the largest supported curve (`MAX_ECC_KEY_BYTES`).
-    pub commit_x: [u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
-    /// The P1 point passed to the last TPM2_Commit (`x || y`), if any. Sized for the largest supported curve.
-    pub commit_p1: [u8; 2 * tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
+    /// A secret nonce used to derive commit scalars (`r`) deterministically via KDFa per
+    /// `CryptGenerateR` (`gr.commitNonce`).
+    pub commit_nonce: [u8; COMMIT_NONCE_SIZE],
     /// A sequence number used for generating unique context identifiers for saved objects.
     pub context_counter: u64,
     pub object_context_counter: u64,
@@ -577,8 +571,13 @@ pub struct ActiveSequence {
     pub handle: u32,
     pub auth: OwnedAuth,
     pub sequence_type: SequenceType,
-    pub first_bytes: [u8; 4],
-    pub first_bytes_len: usize,
+    /// Whether a data block has been received (C `firstBlock`, see
+    /// `handler::sequence::record_first_block`).
+    pub first_block: bool,
+    /// Whether the first data block makes a ticket safe (C `ticketSafe`: it is at least 4
+    /// octets long and does not start with `TPM_GENERATED_VALUE`); meaningful once
+    /// `first_block` is set.
+    pub ticket_safe: bool,
     /// Portable streaming hash contexts (`HASH_STATE` parity with `ibmswtpm2`).
     /// For Hash/HMAC sequences, index 0 holds the active hash/inner-HMAC state.
     /// For Event sequences, indices 0..4 hold SHA-1, SHA-256, SHA-384, and SHA-512 states (the
@@ -639,8 +638,8 @@ impl ActiveSequence {
             handle,
             auth,
             sequence_type,
-            first_bytes: [0u8; 4],
-            first_bytes_len: 0,
+            first_block: false,
+            ticket_safe: false,
             hash_states,
             mu_state: None,
         }
@@ -935,7 +934,6 @@ impl Default for GlobalState {
             timer_stopped: true,
             timer_was_reset: true,
             shutdown_time_ms: 0,
-            object_context_id: 0,
             disable_clear: false,
             sh_enable: true,
             eh_enable: true,
@@ -960,7 +958,6 @@ impl Default for GlobalState {
             null_proof: [0; 64],
             null_proof_size: 0,
             transient_objects: [const { None }; MAX_LOADED_OBJECTS],
-            transient_parents: [None; MAX_LOADED_OBJECTS],
             active_sessions: [const { None }; MAX_LOADED_SESSIONS],
             saved_sessions: [None; MAX_ACTIVE_SESSIONS],
             saved_session_sequences: [0; MAX_ACTIVE_SESSIONS],
@@ -992,9 +989,7 @@ impl Default for GlobalState {
             max_counter: 0,
             commit_counter: 0,
             commit_array: [0u8; 16],
-            commit_nonce: [0x5a; 64],
-            commit_x: [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
-            commit_p1: [0u8; 2 * tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
+            commit_nonce: [0x5a; COMMIT_NONCE_SIZE],
             context_counter: 0,
             object_context_counter: 0,
             parsed_auths: [
@@ -1058,7 +1053,7 @@ impl GlobalState {
         self.lockout_timer = 0;
         self.lockout_auth_enabled = true;
         self.da_pending_on_nv = false;
-        self.commit_nonce = [0x5a; 64];
+        self.commit_nonce = [0x5a; COMMIT_NONCE_SIZE];
         self.audit_hash_alg = tpm2::Alg::from(crate::handler::context_integrity_hash_alg()).id();
         self.audit_commands = crate::command_audit::CommandAuditList::manufacture_default();
     }
@@ -1079,7 +1074,6 @@ impl GlobalState {
         self.startup_locality_3 = false;
         self.da_used = false;
         self.da_pending_on_nv = false;
-        self.object_context_id = 0;
         self.disable_clear = false;
         self.sh_enable = true;
         self.eh_enable = true;
@@ -1104,9 +1098,6 @@ impl GlobalState {
         self.null_proof_size = 0;
         for obj in self.transient_objects.iter_mut() {
             *obj = None;
-        }
-        for p in self.transient_parents.iter_mut() {
-            *p = None;
         }
         for sess in self.active_sessions.iter_mut() {
             *sess = None;
@@ -1133,9 +1124,7 @@ impl GlobalState {
         self.lockout_alg = None;
         self.commit_counter = 0;
         self.commit_array = [0u8; 16];
-        self.commit_nonce = [0x5a; 64];
-        self.commit_x.fill(0);
-        self.commit_p1.fill(0);
+        self.commit_nonce = [0x5a; COMMIT_NONCE_SIZE];
         self.context_counter = 0;
         self.object_context_counter = 0;
         for auth in self.parsed_auths.iter_mut() {
@@ -1345,12 +1334,11 @@ impl GlobalState {
 
     /// Removes a transient object by its handle, returning `Ok(())` if found and removed.
     pub fn remove_transient_object(&mut self, handle: u32) -> Result<(), TpmRc> {
-        for (i, slot) in self.transient_objects.iter_mut().enumerate() {
+        for slot in self.transient_objects.iter_mut() {
             if let Some(obj) = slot
                 && obj.handle == handle
             {
                 *slot = None;
-                self.transient_parents[i] = None;
                 return Ok(());
             }
         }
@@ -1786,35 +1774,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         self.state.nv_available = available;
     }
 
-    /// Serializes the entire TPM execution state (`GlobalState` + persistent `NvStorage`)
-    /// into an [`crate::storage::translator::Ibmswtpm2StateDto`] suitable for live migration.
-    pub fn serialize_migration_state(
-        &mut self,
-        dto: &mut crate::storage::translator::Ibmswtpm2StateDto,
-    ) -> Result<(), crate::storage::StorageError> {
-        self.save_hierarchy_auths();
-        crate::storage::translator::TpmStateTranslator::serialize_state(
-            &self.state,
-            &mut *self.platform.storage,
-            dto,
-        )
-    }
-
-    /// Deserializes an [`crate::storage::translator::Ibmswtpm2StateDto`] back into the TPM
-    /// execution state (`GlobalState` + persistent `NvStorage`) for live migration restore.
-    pub fn unserialize_migration_state(
-        &mut self,
-        dto: &crate::storage::translator::Ibmswtpm2StateDto,
-    ) -> Result<(), crate::storage::StorageError> {
-        crate::storage::translator::TpmStateTranslator::unserialize_state(
-            dto,
-            &mut self.state,
-            &mut *self.platform.storage,
-        )?;
-        self.restore_hierarchy_auths();
-        Ok(())
-    }
-
     /// `_TPM_Init`: resets the volatile state and reloads the persistent state from NV,
     /// including the Primary Seeds and hierarchy proofs written at manufacture
     /// ([`Self::init_storage`]) or by `TPM2_Clear`/`TPM2_ChangeEPS`/`TPM2_ChangePPS`.
@@ -1823,9 +1782,9 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         #[cfg(feature = "reference-rng")]
         self.crypt_rand_init();
         self.time_power_on();
-        // `_plat__ACT_EnableTicks(FALSE)`: the ACTs do not count until the next TPM2_Startup.
+        // `_plat__ACT_EnableTicks(FALSE)`: the ACTs do not count until the next TPM2_Startup
+        // (`reset_in_place` clears `initialized`, see `Self::act_catch_up`).
         self.act_catch_up();
-        self.state.act.disable_ticks();
         self.state.reset_in_place();
         // `CryptInitializeToTest()` (`CryptInit()`): every algorithm needs its test again, and
         // Failure mode ends.
@@ -1856,19 +1815,13 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         let record = NvHierarchyRecord {
             owner_auth: s.owner_auth,
             endorsement_auth: s.endorsement_auth,
-            platform_auth: s.platform_auth,
             lockout_auth: s.lockout_auth,
             owner_policy: s.owner_policy,
             endorsement_policy: s.endorsement_policy,
-            platform_policy: s.platform_policy,
             lockout_policy: s.lockout_policy,
             owner_alg: s.owner_alg,
             endorsement_alg: s.endorsement_alg,
-            platform_alg: s.platform_alg,
             lockout_alg: s.lockout_alg,
-            sh_enable: s.sh_enable,
-            eh_enable: s.eh_enable,
-            ph_enable_nv: s.ph_enable_nv,
             seeds: Some(NvHierarchySeeds {
                 sp_seed: s.sp_seed,
                 sp_seed_size: s.sp_seed_size,
@@ -1905,10 +1858,10 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         record.write(&mut *self.platform.storage);
     }
 
-    /// Reloads the hierarchy record ([`NvHierarchyRecord`]) at `_TPM_Init`. `platformAuth`,
-    /// `platformPolicy`, `shEnable` and `ehEnable` are not reloaded: they are `gc` state, reset by
-    /// TPM Reset (TPM 2.0 Part 1, \"Hierarchy Control\"; Section 14.3: `shEnable`/`ehEnable` are
-    /// SET at `_TPM_Init`).
+    /// Reloads the hierarchy record ([`NvHierarchyRecord`]) at `_TPM_Init`. The record has no
+    /// `platformAuth`, `platformPolicy`, `platformAlg`, `shEnable`, `ehEnable` or `phEnableNV`:
+    /// they are `gc` state, which `TPM2_Startup` sets (TPM Reset/Restart; TPM 2.0 Part 1,
+    /// "Hierarchy Control") or restores from the state-save record (TPM Resume).
     pub fn restore_hierarchy_auths(&mut self) {
         let Some(r) = NvHierarchyRecord::read(&mut *self.platform.storage) else {
             return;
@@ -1922,12 +1875,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         st.lockout_policy = r.lockout_policy;
         st.owner_alg = r.owner_alg;
         st.endorsement_alg = r.endorsement_alg;
-        st.platform_alg = r.platform_alg;
         st.lockout_alg = r.lockout_alg;
-        st.ph_enable_nv = r.ph_enable_nv;
-        if st.ph_enable_nv {
-            st.ph_enable = true;
-        }
         if let Some(seeds) = &r.seeds {
             st.sp_seed = seeds.sp_seed;
             st.sp_seed_size = seeds.sp_seed_size;
@@ -2000,14 +1948,16 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// as the state-save record ([`NvStateSaveRecord`]).
     ///
     /// `STATE_RESET_DATA` (restored on Restart and Resume): `nullSeed`, `nullProof`,
-    /// `restartCount`, `objectContextID`, the context counters, the saved-session table,
+    /// `restartCount`, `pcrCounter`, the context counters, the saved-session table,
     /// `commitCounter`, `commitNonce`, `commitArray` and `commandAuditDigest`. `STATE_CLEAR_DATA` (restored on Resume only): `platformAuth`,
     /// `platformPolicy`, `platformAlg`, `shEnable`, `ehEnable`, `phEnableNV` and `readOnly`. The ACT state
     /// of `ORDERLY_DATA` (restored on Resume only): the timeouts and `signaled` attributes
     /// saved by [`crate::act::ActState::shutdown_state`] and the ACT policies.
     ///
     /// PCR values and the remaining `GlobalState` fields are not written here; they are kept by
-    /// the platform RAM, which `_TPM_Init` ([`GlobalState::reset_in_place`]) does not clear.
+    /// the platform RAM, which `_TPM_Init` ([`GlobalState::reset_in_place`]) does not clear. The
+    /// PCR update counter, which is `gr` state, is: TPM Restart and TPM Resume continue from its
+    /// value at the shutdown, as in the references, where `TPM2_Startup` reads `gr` back from NV.
     pub(crate) fn save_state_data(&mut self) -> Result<(), TpmRc> {
         let s = &self.state;
         let record = NvStateSaveRecord {
@@ -2016,7 +1966,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             null_proof: s.null_proof,
             null_proof_size: s.null_proof_size,
             restart_count: s.restart_count,
-            object_context_id: s.object_context_id,
+            pcr_update_counter: s.pcrs.update_counter,
             context_counter: s.context_counter,
             object_context_counter: s.object_context_counter,
             saved_sessions: s.saved_sessions,
@@ -2057,7 +2007,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         st.null_proof_size = r.null_proof_size;
         st.null_proof = r.null_proof;
         st.restart_count = r.restart_count;
-        st.object_context_id = r.object_context_id;
+        st.pcrs.update_counter = r.pcr_update_counter;
         st.context_counter = r.context_counter;
         st.object_context_counter = r.object_context_counter;
         st.saved_sessions = r.saved_sessions;
@@ -2271,7 +2221,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             self.state.time_epoch = self.state.time_epoch.wrapping_add(1);
             let _ = self.platform.storage.write_nv(
                 crate::storage::nv::NvHeader::TIME_EPOCH_OFFSET,
-                &self.state.time_epoch.to_be_bytes(),
+                &crate::storage::nv::NvHeader::encode_time_epoch(self.state.time_epoch),
             );
         }
         let elapsed_ms = self.advance_time();
@@ -2404,10 +2354,11 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
     /// Processes the once-per-second ACT ticks that elapsed since the last call (see
     /// [`crate::act`]). The ticks are applied lazily, before each command and at `_TPM_Init`:
-    /// only commands observe the ACTs.
+    /// only commands observe the ACTs. Ticks are allowed (C `actTicksAllowed`) exactly while
+    /// the TPM is initialized: from `TPM2_Startup` until the next `_TPM_Init`.
     pub(crate) fn act_catch_up(&mut self) {
         let now_ms = self.platform.timer.timer_read();
-        self.state.act.catch_up(now_ms);
+        self.state.act.catch_up(now_ms, self.state.initialized);
     }
 
     /// The `signaled` attribute of the ACT with handle `handle` (`_plat__ACT_GetSignaled()`,
@@ -3222,7 +3173,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 nonce_tpm,
                 symmetric,
                 auth_hash,
-                _bind_entity,
                 _bound_entity,
                 _is_policy,
                 _is_auth_value_needed,
@@ -3239,7 +3189,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     session_state.nonce_tpm,
                     session_state.symmetric,
                     session_state.auth_hash,
-                    session_state.bind_entity,
                     session_state.bound_entity,
                     session_state.session_type == TpmSe::Policy,
                     session_state.is_auth_value_needed,
@@ -3827,7 +3776,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     auth_hash,
                     nonce_tpm,
                     session_key_len,
-                    bind_entity,
                     bound_entity,
                     is_policy,
                     is_auth_value_needed,
@@ -3847,7 +3795,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                         session_state.auth_hash,
                         session_state.nonce_tpm,
                         session_key_len,
-                        session_state.bind_entity,
                         session_state.bound_entity,
                         session_state.session_type == TpmSe::Policy,
                         session_state.is_auth_value_needed,
@@ -3861,7 +3808,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 let entity_auth_stripped =
                     crate::util::strip_trailing_zeros(entity_auth.get_buffer());
                 let is_bound = match entity_handle {
-                    Some(h) if bind_entity != Handle::RH_NULL => {
+                    // Only a bound session has a bind value (`isBound`).
+                    Some(h) if bound_entity.get_size() > 0 => {
                         let name = self.handle_name(h);
                         crate::handler::session::compute_bound_entity(
                             name.get_buffer(),
@@ -4202,7 +4150,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     &mut p_hash,
                 )?;
                 expected == &p_hash[..p_hash_len]
-            } else if session.is_name_hash_defined {
+            } else if session.is_name_hash_defined() {
                 let mut name_hash_input = [0u8; 512];
                 let mut name_hash_offset = 0;
                 for name in handle_names {
@@ -4369,7 +4317,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 let (
                     symmetric,
                     auth_hash,
-                    _bind_entity,
                     _bound_entity,
                     _is_policy,
                     _is_auth_value_needed,
@@ -4386,7 +4333,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     (
                         session_state.symmetric,
                         session_state.auth_hash,
-                        session_state.bind_entity,
                         session_state.bound_entity,
                         session_state.session_type == TpmSe::Policy,
                         session_state.is_auth_value_needed,
@@ -4545,8 +4491,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     .copy_from_slice(&session_state.session_key[..session_state.session_key_len]);
                 session_key_len = session_state.session_key_len;
                 let is_policy = session_state.session_type == tpm2::TpmSe::Policy;
-                let is_bound = session_state.bind_entity != Handle::RH_NULL
-                    || session_state.bound_entity.get_size() > 0;
+                let is_bound = session_state.bound_entity.get_size() > 0;
                 let include_auth = (!is_policy && !is_bound)
                     || (is_policy
                         && (session_state.is_auth_value_needed
@@ -4671,7 +4616,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 }
                 session_state.nonce_tpm = nonce_tpm_new;
                 if auth.session_attributes.0 & 0x80 != 0 {
-                    session_state.bind_entity = Handle::RH_NULL;
                     session_state.bound_entity = OwnedName::default();
                 }
                 // The nonce rolls, so a continued policy session is reset and starts a new
@@ -4690,7 +4634,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     session_state.is_cp_hash_defined = false;
                     session_state.policy_hash[..].fill(0);
                     session_state.policy_hash_len = 0;
-                    session_state.is_name_hash_defined = false;
                     session_state.is_template_hash_defined = false;
                     session_state.is_parameters_hash_defined = false;
                     session_state.is_pp_required = false;
@@ -4790,7 +4733,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             let (
                 symmetric,
                 auth_hash,
-                _bind_entity,
                 _bound_entity,
                 _is_policy,
                 _is_auth_value_needed,
@@ -4806,7 +4748,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 (
                     session_state.symmetric,
                     session_state.auth_hash,
-                    session_state.bind_entity,
                     session_state.bound_entity,
                     session_state.session_type == TpmSe::Policy,
                     session_state.is_auth_value_needed,
@@ -4954,8 +4895,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     .copy_from_slice(&session_state.session_key[..session_state.session_key_len]);
                 session_key_len = session_state.session_key_len;
                 let is_policy = session_state.session_type == tpm2::TpmSe::Policy;
-                let is_bound = session_state.bind_entity != Handle::RH_NULL
-                    || session_state.bound_entity.get_size() > 0;
+                let is_bound = session_state.bound_entity.get_size() > 0;
                 let include_auth = (!is_policy && !is_bound)
                     || (is_policy
                         && (session_state.is_auth_value_needed
@@ -5080,7 +5020,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                 }
                 session_state.nonce_tpm = nonce_tpm_new;
                 if auth.session_attributes.0 & 0x80 != 0 {
-                    session_state.bind_entity = Handle::RH_NULL;
                     session_state.bound_entity = OwnedName::default();
                 }
                 // The nonce rolls, so a continued policy session is reset and starts a new
@@ -5099,7 +5038,6 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
                     session_state.is_cp_hash_defined = false;
                     session_state.policy_hash[..].fill(0);
                     session_state.policy_hash_len = 0;
-                    session_state.is_name_hash_defined = false;
                     session_state.is_template_hash_defined = false;
                     session_state.is_parameters_hash_defined = false;
                     session_state.is_pp_required = false;
@@ -6986,27 +6924,6 @@ pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {
 /// Returns whether `cc` requires the ADMIN role for its handle at `handle_index`.
 pub fn is_admin_role_auth(cc: TpmCc, handle_index: usize) -> bool {
     command_auth_role(cc, handle_index) == AuthRole::Admin
-}
-
-fn handle_is_authorized(
-    global_state: &GlobalState,
-    cc: TpmCc,
-    handle_index: usize,
-    handle: u32,
-    auth_sessions: &[TpmsAuthCommand],
-) -> bool {
-    if handle_requires_auth(cc, handle_index) {
-        return true;
-    }
-    for auth in auth_sessions {
-        let session_handle = auth.session_handle.0;
-        if let Some(session_state) = global_state.session(session_handle)
-            && session_state.bind_entity.0 == handle
-        {
-            return true;
-        }
-    }
-    false
 }
 
 fn compute_hash_and_hmac(

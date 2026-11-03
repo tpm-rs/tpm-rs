@@ -304,11 +304,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         {
             self.context.crypt_rand_startup()?;
             if kind == StartupKind::Reset {
+                let mut nonce = [0u8; crate::engine::COMMIT_NONCE_SIZE];
+                self.context.crypt_random_generate(&mut nonce)?;
+                self.context.state.commit_nonce = nonce;
                 let mut value = [0u8; 64];
-                self.context
-                    .crypt_random_generate(&mut value[..crate::engine::COMMIT_NONCE_SIZE])?;
-                self.context.state.commit_nonce = value;
-                value = [0u8; 64];
                 self.context.crypt_random_generate(&mut value)?;
                 self.context.state.null_proof = value;
                 self.context.state.null_proof_size = 64;
@@ -368,9 +367,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
         for obj in self.context.state.transient_objects.iter_mut() {
             *obj = None;
-        }
-        for p in self.context.state.transient_parents.iter_mut() {
-            *p = None;
         }
         for sess in self.context.state.active_sessions.iter_mut() {
             *sess = None;
@@ -541,15 +537,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     self.context.state.null_proof = value;
                     self.context.state.null_proof_size = 64;
 
-                    let mut value = [0u8; 64];
-                    self.context
-                        .random_platform(&mut value[..crate::engine::COMMIT_NONCE_SIZE])?;
-                    self.context.state.commit_nonce = value;
+                    let mut nonce = [0u8; crate::engine::COMMIT_NONCE_SIZE];
+                    self.context.random_platform(&mut nonce)?;
+                    self.context.state.commit_nonce = nonce;
                 }
                 self.context.state.commit_counter = 0;
                 self.context.state.commit_array = [0u8; 16];
 
-                self.context.state.object_context_id = 0;
                 self.context.state.clear_count = 0;
                 self.context.state.reset_count += 1;
                 self.nv_sync_persistent_reset_count()?;

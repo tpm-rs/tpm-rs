@@ -67,7 +67,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .session(policy_session)
                 .ok_or(TpmRc::HANDLE.with(Position::handle(1)))?;
             let is_occupied = session_state.is_cp_hash_defined
-                || session_state.is_name_hash_defined
+                || session_state.is_name_hash_defined()
                 || session_state.is_parameters_hash_defined
                 || session_state.is_template_hash_defined;
 

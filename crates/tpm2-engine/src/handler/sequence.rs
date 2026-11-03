@@ -301,7 +301,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     let (digest_bytes, digest_len) = state.finalize();
 
                     // If no data block was received yet, the final chunk is the first block.
-                    let ticket_safe = if seq_obj.first_bytes_len == 0 {
+                    let ticket_safe = if !seq_obj.first_block {
                         ticket_is_safe(final_chunk)
                     } else {
                         first_block_was_safe(seq_obj)
@@ -636,26 +636,18 @@ pub(super) fn ticket_is_safe(first_block: &[u8]) -> bool {
     first_block.len() >= 4 && first_block[..4] != TPM_GENERATED_VALUE
 }
 
-/// Records the first data block of a hash sequence (`firstBlock` / `ticketSafe` attributes).
-///
-/// The persisted `first_bytes` / `first_bytes_len` fields encode the result:
-/// - `first_bytes_len == 0`: no data block has been received yet;
-/// - `1..=3`: the first block was shorter than 4 bytes (including an empty block), so a ticket
-///   is not safe;
-/// - `4`: `first_bytes` holds the first 4 bytes of the first block.
-///
-/// Later blocks do not change the decision.
+/// Records the first data block of a hash sequence (the `firstBlock` / `ticketSafe`
+/// attributes): the first block (even an empty one) sets `first_block` and decides
+/// `ticket_safe` ([`ticket_is_safe`]). Later blocks do not change the decision.
 fn record_first_block(seq: &mut crate::ActiveSequence, data: &[u8]) {
-    if seq.first_bytes_len != 0 {
+    if seq.first_block {
         return;
     }
-    let take = data.len().min(4);
-    seq.first_bytes = [0u8; 4];
-    seq.first_bytes[..take].copy_from_slice(&data[..take]);
-    seq.first_bytes_len = take.max(1);
+    seq.first_block = true;
+    seq.ticket_safe = ticket_is_safe(data);
 }
 
 /// Returns whether the first block recorded by [`record_first_block`] makes a ticket safe.
 pub(super) fn first_block_was_safe(seq: &crate::ActiveSequence) -> bool {
-    seq.first_bytes_len == 4 && seq.first_bytes != TPM_GENERATED_VALUE
+    seq.first_block && seq.ticket_safe
 }

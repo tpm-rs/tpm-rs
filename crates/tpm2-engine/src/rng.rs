@@ -123,8 +123,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         self.crypt_rand_init();
         self.state.drbg_state.magic = 0;
         self.crypt_rand_startup()?;
-        let mut nonce = [0u8; 64];
-        self.crypt_random_generate(&mut nonce[..crate::engine::COMMIT_NONCE_SIZE])?;
+        let mut nonce = [0u8; crate::engine::COMMIT_NONCE_SIZE];
+        self.crypt_random_generate(&mut nonce)?;
         self.state.commit_nonce = nonce;
         Ok(())
     }

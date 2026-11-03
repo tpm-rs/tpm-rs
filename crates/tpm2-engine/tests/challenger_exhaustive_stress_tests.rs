@@ -283,7 +283,6 @@ fn dup_policy_auth(global_state: &mut tpm2_engine::GlobalState) -> TpmsAuthComma
         Default::default(),
         &[],
         None,
-        Handle::RH_NULL,
     );
     session.command_code = u32::from(tpm2::TpmCc::Duplicate);
     global_state.add_session(session).unwrap();

@@ -60,7 +60,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             // C `IsCpHashUnionOccupied` (policy sessions are never bound).
             let is_occupied = session_state.is_cp_hash_defined
-                || session_state.is_name_hash_defined
+                || session_state.is_name_hash_defined()
                 || session_state.is_parameters_hash_defined
                 || session_state.is_template_hash_defined;
             (

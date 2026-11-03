@@ -73,6 +73,8 @@ mod hierarchy;
 pub(crate) mod mldsa;
 mod modular;
 pub mod owned;
+#[cfg(feature = "persistence")]
+pub mod persistence;
 pub mod physical_presence;
 pub mod platform_connection;
 mod read_only;
@@ -103,7 +105,6 @@ pub use hash_state::StreamingHashState;
 pub use platform_connection::SimulatorPlatformSignal;
 #[cfg(feature = "std")]
 pub use platform_connection::{NO_STREAM, PlatformConnection};
-pub use storage::translator::{Ibmswtpm2StateDto, TpmStateTranslator};
 
 pub use tpm2::platform::TpmPlatform;
 

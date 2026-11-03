@@ -190,13 +190,12 @@ pub struct ActState {
     /// (`s_ActUpdated`, one bit per ACT number), whose timeouts `TPM2_Shutdown(TPM_SU_STATE)`
     /// saves unhalved.
     pub updated: u16,
-    /// Whether ticks are processed (`actTicksAllowed`): from `TPM2_Startup()` until the next
-    /// `_TPM_Init` or power loss.
-    pub ticks_allowed: bool,
-    /// The platform timer (ms) at the last power on: the ticks are its whole seconds since.
-    pub tick_anchor_ms: u64,
-    /// The number of ticks since the last power on that have been processed (or dropped).
-    pub ticks_seen: u64,
+    /// The latest platform timer reading (ms) the ticks have been counted up to.
+    pub tick_last_read_ms: u64,
+    /// The platform milliseconds since the last whole second after the power on (the last
+    /// tick), as of `tick_last_read_ms`: the ticks are the whole seconds of the platform timer
+    /// since the last power on.
+    pub tick_phase_ms: u64,
 }
 
 impl Default for ActState {
@@ -208,9 +207,8 @@ impl Default for ActState {
             saved_signaled: 0,
             preserved_signaled: 0,
             updated: 0,
-            ticks_allowed: false,
-            tick_anchor_ms: 0,
-            ticks_seen: 0,
+            tick_last_read_ms: 0,
+            tick_phase_ms: 0,
         }
     }
 }
@@ -219,27 +217,28 @@ impl ActState {
     /// A power on at platform time `now_ms` (`_plat__TimerReset()`): the ticks restart at the
     /// whole seconds after it.
     pub fn power_on(&mut self, now_ms: u64) {
-        self.tick_anchor_ms = now_ms;
-        self.ticks_seen = 0;
+        self.tick_last_read_ms = now_ms;
+        self.tick_phase_ms = 0;
     }
 
-    /// Processes the ticks that elapsed up to platform time `now_ms`. Ticks that elapse while
-    /// ticks are not allowed are dropped.
-    pub fn catch_up(&mut self, now_ms: u64) {
-        let elapsed = now_ms.saturating_sub(self.tick_anchor_ms) / 1000;
-        let ticks = elapsed.saturating_sub(self.ticks_seen);
-        self.ticks_seen = self.ticks_seen.max(elapsed);
-        if self.ticks_allowed {
+    /// Processes the ticks that elapsed up to platform time `now_ms` (a reading before the
+    /// latest one adds nothing). Ticks are processed only while they are allowed
+    /// (`ticks_allowed`, C `actTicksAllowed`: from `TPM2_Startup()` until the next `_TPM_Init`
+    /// or power loss, i.e. while the TPM is initialized); the others are dropped.
+    pub fn catch_up(&mut self, now_ms: u64, ticks_allowed: bool) {
+        if now_ms > self.tick_last_read_ms {
+            self.tick_phase_ms = self
+                .tick_phase_ms
+                .saturating_add(now_ms - self.tick_last_read_ms);
+            self.tick_last_read_ms = now_ms;
+        }
+        let ticks = self.tick_phase_ms / 1000;
+        self.tick_phase_ms %= 1000;
+        if ticks_allowed {
             for counter in self.counters.iter_mut() {
                 counter.tick_n(ticks);
             }
         }
-    }
-
-    /// `_TPM_Init` (or a power loss): ticks are not processed until the next `TPM2_Startup()`
-    /// (`_plat__ACT_EnableTicks(FALSE)`).
-    pub fn disable_ticks(&mut self) {
-        self.ticks_allowed = false;
     }
 
     /// `TPM2_Startup()` (the reference's `ActStartup()`): every counter is zeroed, and
@@ -255,7 +254,8 @@ impl ActState {
     ///   `TPMA_ACT`: "On a TPM Resume, the state of each ACT signaled is copied to the
     ///   corresponding preservedSignaled"); the policies are kept.
     ///
-    /// Then no ACT has been written since this startup, and ticks are processed.
+    /// Then no ACT has been written since this startup (and ticks are processed, since the TPM
+    /// is initialized).
     pub fn startup(&mut self, kind: ActStartupKind) {
         self.counters = [ActCounter::default(); ACT_COUNT];
         match kind {
@@ -281,7 +281,6 @@ impl ActState {
             }
         }
         self.updated = 0;
-        self.ticks_allowed = true;
     }
 
     /// `TPM2_Shutdown(TPM_SU_STATE)` (the reference's `ActShutdown()`): saves the timeout and the
@@ -475,17 +474,21 @@ mod tests {
         s.power_on(10_500);
         s.startup(ActStartupKind::ResetOrRestart);
         s.counters[0].update(10);
-        s.catch_up(11_499);
+        s.catch_up(11_499, true);
         assert_eq!(s.counters[0].timeout(), 10);
-        s.catch_up(11_500);
+        s.catch_up(11_500, true);
         assert_eq!(s.counters[0].remaining, 9);
-        s.catch_up(11_900);
+        s.catch_up(11_900, true);
         assert_eq!(s.counters[0].remaining, 9);
-        s.catch_up(14_500);
+        s.catch_up(14_500, true);
         assert_eq!(s.counters[0].remaining, 6);
         // A timer that does not advance (or a stale read) adds no tick.
-        s.catch_up(13_000);
+        s.catch_up(13_000, true);
         assert_eq!(s.counters[0].remaining, 6);
+        s.catch_up(15_499, true);
+        assert_eq!(s.counters[0].remaining, 6);
+        s.catch_up(15_500, true);
+        assert_eq!(s.counters[0].remaining, 5);
     }
 
     #[test]
@@ -494,24 +497,24 @@ mod tests {
         s.power_on(0);
         s.startup(ActStartupKind::ResetOrRestart);
         s.counters[0].update(10);
-        s.catch_up(1_000);
+        s.catch_up(1_000, true);
         assert_eq!(s.counters[0].remaining, 9);
-        s.disable_ticks();
-        s.catch_up(5_000);
+        // `_TPM_Init`: not initialized until the next TPM2_Startup.
+        s.catch_up(5_000, false);
         assert_eq!(s.counters[0].remaining, 9);
         s.startup(ActStartupKind::ResetOrRestart);
         assert_eq!(s.counters[0], ActCounter::default());
         s.counters[0].update(10);
         // The dropped ticks are not processed later.
-        s.catch_up(5_999);
+        s.catch_up(5_999, true);
         assert_eq!(s.counters[0].timeout(), 10);
-        s.catch_up(6_000);
+        s.catch_up(6_000, true);
         assert_eq!(s.counters[0].remaining, 9);
         // A power on restarts the seconds.
         s.power_on(6_300);
-        s.catch_up(7_299);
+        s.catch_up(7_299, true);
         assert_eq!(s.counters[0].remaining, 9);
-        s.catch_up(7_300);
+        s.catch_up(7_300, true);
         assert_eq!(s.counters[0].remaining, 8);
     }
 
@@ -543,9 +546,7 @@ mod tests {
         s.policies[0].hash_alg = Some(TpmiAlgHash::Sha256);
         s.counters[0] = counter(0, true);
         s.shutdown_state();
-        s.disable_ticks();
         s.startup(ActStartupKind::Resume);
-        assert!(s.ticks_allowed);
         assert_eq!(s.counters[0], counter(0, true));
         let data = s.act_data(0);
         assert_eq!(data.handle, Handle::RH_ACT_0);

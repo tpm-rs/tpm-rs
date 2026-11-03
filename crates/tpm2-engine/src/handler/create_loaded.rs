@@ -253,7 +253,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             actual_private_key,
             actual_private_key_len,
             qualified_name,
-            Some(parent_handle),
             parent_info.hierarchy_val,
             parent_info.has_st_clear,
         );
@@ -572,13 +571,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         private_key: [u8; MAX_PRIVATE_KEY_SIZE],
         private_key_len: usize,
         qualified_name: crate::owned::OwnedName,
-        parent_handle: Option<u32>,
         hierarchy: u32,
         st_clear: bool,
     ) {
         let (stored_seed, seed_len) = TransientObject::seed_from_bytes(obj_seed);
 
-        self.context.state.transient_parents[index] = parent_handle;
         self.context.state.transient_objects[index] = Some(TransientObject {
             handle,
             seed: stored_seed,

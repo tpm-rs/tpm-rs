@@ -79,7 +79,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // C `IsCpHashUnionOccupied` (policy sessions are never bound). Unlike PolicyCpHash and
             // PolicyTemplate, PolicyNameHash does not accept a repeat of the same value.
             let is_occupied = session_state.is_cp_hash_defined
-                || session_state.is_name_hash_defined
+                || session_state.is_name_hash_defined()
                 || session_state.is_parameters_hash_defined
                 || session_state.is_template_hash_defined;
 
@@ -112,7 +112,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             session_state.policy_hash[..cmd.name_hash.get_size() as usize]
                 .copy_from_slice(cmd.name_hash.get_buffer());
             session_state.policy_hash_len = cmd.name_hash.get_size() as usize;
-            session_state.is_name_hash_defined = true;
         }
 
         // 5. Write the response

@@ -5,7 +5,7 @@ use common::make_test_session_state;
 
 #[test]
 fn test_global_state_session_lifecycle() {
-    use tpm2::{Handle, TpmSe};
+    use tpm2::TpmSe;
     use tpm2::{Tpm2bNonce, TpmiAlgHash};
     use tpm2_engine::GlobalState;
 
@@ -21,7 +21,6 @@ fn test_global_state_session_lifecycle() {
         Tpm2bNonce::default(),
         &[1, 2, 3],
         None,
-        Handle::RH_NULL,
     );
 
     // Add session 1
@@ -45,7 +44,6 @@ fn test_global_state_session_lifecycle() {
             Tpm2bNonce::default(),
             &[i as u8],
             None,
-            Handle::RH_NULL,
         );
         assert!(state.add_session(session).is_ok());
     }
@@ -58,7 +56,6 @@ fn test_global_state_session_lifecycle() {
         Tpm2bNonce::default(),
         &[65],
         None,
-        Handle::RH_NULL,
     );
     assert_eq!(
         state.add_session(session65).unwrap_err(),

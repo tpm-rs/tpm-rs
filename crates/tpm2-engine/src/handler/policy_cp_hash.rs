@@ -81,7 +81,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // isParametersHashDefined || isTemplateHashDefined. Policy sessions are never bound
             // (see `start_auth_session`), so `isBound` is always clear here.
             let is_occupied = session_state.is_cp_hash_defined
-                || session_state.is_name_hash_defined
+                || session_state.is_name_hash_defined()
                 || session_state.is_parameters_hash_defined
                 || session_state.is_template_hash_defined;
 

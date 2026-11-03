@@ -16,11 +16,12 @@
 //! | [`PCR_ALLOCATION_HANDLE`] `0x00FF_FFFD` | [`NvPcrAllocationRecord`] | the PCR allocation of the last `TPM2_PCR_Allocate`, applied at the next `_TPM_Init` |
 //! | [`PLATFORM_SETTINGS_HANDLE`] `0x00FF_FFFC` | [`NvPlatformSettingsRecord`] | `gp.ppList` and `gp.algorithmSet` |
 //!
-//! Every layout is defined only here: the engine reads and writes NV through these records.
+//! Every layout is defined only here: the engine reads and writes NV through these records, and
+//! `persistence` uses them to load the NV-synced state from a restored NV image.
 
 use crate::act::{ACT_COUNT, ActPolicy};
 use crate::command_audit::COMMAND_AUDIT_LIST_SIZE;
-use crate::engine::{DrbgState, MAX_ACTIVE_SESSIONS};
+use crate::engine::{COMMIT_NONCE_SIZE, DrbgState, MAX_ACTIVE_SESSIONS};
 use crate::handler::{MAX_PRIVATE_KEY_SIZE, TransientObject};
 use crate::owned::{OwnedAuth, OwnedDigest, OwnedName, OwnedPublic};
 use crate::storage::manager::{RESERVED_SIZE, StorageManager};
@@ -68,8 +69,8 @@ pub struct NvHeader {
     pub total_reset_count: u64,
     /// `s_maxCounter`.
     pub max_counter: u64,
-    /// `gp.timeEpoch`.
-    pub time_epoch: u64,
+    /// `gp.timeEpoch` (a `UINT32` `CLOCK_NONCE`, zero-extended in its 8-octet slot).
+    pub time_epoch: u32,
     /// `gp.failedTries`.
     pub failed_tries: u32,
     /// `go.drbgState` (written at startup, shutdown, `TPM2_Clear` and Clock updates).
@@ -91,6 +92,11 @@ impl NvHeader {
     pub const SELF_HEAL_TIMER_OFFSET: usize = 112;
     pub const LOCKOUT_TIMER_OFFSET: usize = 120;
 
+    /// The octets of `time_epoch` in its slot at [`Self::TIME_EPOCH_OFFSET`].
+    pub fn encode_time_epoch(time_epoch: u32) -> [u8; 8] {
+        u64::from(time_epoch).to_be_bytes()
+    }
+
     /// Decodes the header from its [`HEADER_SIZE`] octets.
     pub fn decode(b: &[u8; HEADER_SIZE]) -> Self {
         let u32_at = |o: usize| u32::from_be_bytes(b[o..o + 4].try_into().unwrap());
@@ -103,7 +109,7 @@ impl NvHeader {
             ]),
             total_reset_count: u64_at(Self::TOTAL_RESET_COUNT_OFFSET),
             max_counter: u64_at(Self::MAX_COUNTER_OFFSET),
-            time_epoch: u64_at(Self::TIME_EPOCH_OFFSET),
+            time_epoch: u64_at(Self::TIME_EPOCH_OFFSET) as u32,
             failed_tries: u32_at(Self::FAILED_TRIES_OFFSET),
             drbg: DrbgState::from_bytes(
                 b[Self::DRBG_OFFSET..Self::DRBG_OFFSET + 76]
@@ -129,7 +135,10 @@ impl NvHeader {
             &self.total_reset_count.to_be_bytes(),
         );
         put(Self::MAX_COUNTER_OFFSET, &self.max_counter.to_be_bytes());
-        put(Self::TIME_EPOCH_OFFSET, &self.time_epoch.to_be_bytes());
+        put(
+            Self::TIME_EPOCH_OFFSET,
+            &Self::encode_time_epoch(self.time_epoch),
+        );
         put(Self::FAILED_TRIES_OFFSET, &self.failed_tries.to_be_bytes());
         put(Self::DRBG_OFFSET, &self.drbg.to_bytes());
         put(
@@ -244,32 +253,29 @@ pub const AUDIT_EXT_LEN: usize = 1 + 2 + 8 + COMMAND_AUDIT_LIST_SIZE;
 
 /// The hierarchy record: the persistent hierarchy data (`gp`) and a few related values.
 ///
-/// Layout: the four auths and four policies (`TPM2B`s, owner/endorsement/platform/lockout), the
-/// four policy algorithms (`TPMI_ALG_HASH+`), `shEnable`/`ehEnable`/`phEnableNV` (one octet
-/// each), then the optional sections, each introduced by its marker: [`NvHierarchySeeds`]
-/// ([`SEEDS_MARKER`]), followed by [`NvLifecycleExt`] ([`PERSISTENT_EXT_MARKER`]) and
-/// [`NvAuditExt`] ([`AUDIT_EXT_MARKER`]). Older layouts (and the records the `ibmswtpm2`
-/// transcoder builds, which have no lifecycle extension) end before a section.
+/// Layout: the three auths and three policies (`TPM2B`s, owner/endorsement/lockout), the three
+/// policy algorithms (`TPMI_ALG_HASH+`), then the optional sections, each introduced by its
+/// marker: [`NvHierarchySeeds`] ([`SEEDS_MARKER`]), followed by [`NvLifecycleExt`]
+/// ([`PERSISTENT_EXT_MARKER`]) and [`NvAuditExt`] ([`AUDIT_EXT_MARKER`]). Older layouts end
+/// before a section, and the audit extension is also recognized directly after the seeds section
+/// (a record without the lifecycle extension).
 ///
-/// `platform_auth`/`platform_policy`, `sh_enable`/`eh_enable` and the PCR auth value are written
-/// but are `gc` state: `_TPM_Init` does not reload the first four, and the live values are in RAM.
+/// The `gc` state of the platform hierarchy (`platformAuth`, `platformPolicy`, `platformAlg`,
+/// `shEnable`, `ehEnable`, `phEnableNV`) is not in this record: every `TPM2_Startup` sets it
+/// (TPM Reset/Restart) or restores it from the state-save record ([`NvStateSaveRecord`], TPM
+/// Resume) before it is used, and the live values are in RAM. The PCR auth value (also `gc`) is
+/// in the seeds section: TPM Resume keeps the copy that `_TPM_Init` reloads from it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct NvHierarchyRecord {
     pub owner_auth: OwnedAuth,
     pub endorsement_auth: OwnedAuth,
-    pub platform_auth: OwnedAuth,
     pub lockout_auth: OwnedAuth,
     pub owner_policy: OwnedDigest,
     pub endorsement_policy: OwnedDigest,
-    pub platform_policy: OwnedDigest,
     pub lockout_policy: OwnedDigest,
     pub owner_alg: Option<TpmiAlgHash>,
     pub endorsement_alg: Option<TpmiAlgHash>,
-    pub platform_alg: Option<TpmiAlgHash>,
     pub lockout_alg: Option<TpmiAlgHash>,
-    pub sh_enable: bool,
-    pub eh_enable: bool,
-    pub ph_enable_nv: bool,
     pub seeds: Option<NvHierarchySeeds>,
     pub lifecycle: Option<NvLifecycleExt>,
     pub audit: Option<NvAuditExt>,
@@ -382,8 +388,7 @@ impl NvAuditExt {
     }
 }
 
-/// A policy algorithm of the hierarchy record: an invalid stored value (e.g. the transcoder's raw
-/// `0`) falls back to the algorithm of the policy's digest size. The algorithms themselves are
+/// A policy algorithm of the hierarchy record: an invalid stored value (e.g. a raw `0`) falls back to the algorithm of the policy's digest size. The algorithms themselves are
 /// part of the record's fixed part, which [`NvHierarchyRecord::decode`] requires in full.
 fn decode_policy_alg(raw: u16, policy: &OwnedDigest) -> Option<TpmiAlgHash> {
     match <Option<TpmiAlgHash>>::unmarshal(&mut &raw.to_be_bytes()[..]) {
@@ -396,35 +401,19 @@ impl NvHierarchyRecord {
     /// Encodes the record into `buf` and returns its length.
     pub fn encode(&self, buf: &mut [u8; HIERARCHY_RECORD_SIZE]) -> usize {
         let mut w = Writer::new(buf);
-        for auth in [
-            &self.owner_auth,
-            &self.endorsement_auth,
-            &self.platform_auth,
-            &self.lockout_auth,
-        ] {
+        for auth in [&self.owner_auth, &self.endorsement_auth, &self.lockout_auth] {
             w.marshal(auth);
         }
         for policy in [
             &self.owner_policy,
             &self.endorsement_policy,
-            &self.platform_policy,
             &self.lockout_policy,
         ] {
             w.marshal(policy);
         }
-        for alg in [
-            &self.owner_alg,
-            &self.endorsement_alg,
-            &self.platform_alg,
-            &self.lockout_alg,
-        ] {
+        for alg in [&self.owner_alg, &self.endorsement_alg, &self.lockout_alg] {
             w.marshal(alg);
         }
-        w.bytes(&[
-            u8::from(self.sh_enable),
-            u8::from(self.eh_enable),
-            u8::from(self.ph_enable_nv),
-        ]);
         if let Some(s) = &self.seeds {
             w.bytes(&[SEEDS_MARKER]);
             put_sized64(&mut w, &s.sp_seed, s.sp_seed_size);
@@ -454,35 +443,23 @@ impl NvHierarchyRecord {
         let s = &mut slice;
         let owner_auth = OwnedAuth::unmarshal(s).ok()?;
         let endorsement_auth = OwnedAuth::unmarshal(s).ok()?;
-        let platform_auth = OwnedAuth::unmarshal(s).ok()?;
         let lockout_auth = OwnedAuth::unmarshal(s).ok()?;
         let owner_policy = OwnedDigest::unmarshal(s).ok()?;
         let endorsement_policy = OwnedDigest::unmarshal(s).ok()?;
-        let platform_policy = OwnedDigest::unmarshal(s).ok()?;
         let lockout_policy = OwnedDigest::unmarshal(s).ok()?;
         let owner_alg = decode_policy_alg(u16::unmarshal(s).ok()?, &owner_policy);
         let endorsement_alg = decode_policy_alg(u16::unmarshal(s).ok()?, &endorsement_policy);
-        let platform_alg = decode_policy_alg(u16::unmarshal(s).ok()?, &platform_policy);
         let lockout_alg = decode_policy_alg(u16::unmarshal(s).ok()?, &lockout_policy);
-        let sh_enable = u8::unmarshal(s).ok()? != 0;
-        let eh_enable = u8::unmarshal(s).ok()? != 0;
-        let ph_enable_nv = u8::unmarshal(s).ok()? != 0;
         let mut record = Self {
             owner_auth,
             endorsement_auth,
-            platform_auth,
             lockout_auth,
             owner_policy,
             endorsement_policy,
-            platform_policy,
             lockout_policy,
             owner_alg,
             endorsement_alg,
-            platform_alg,
             lockout_alg,
-            sh_enable,
-            eh_enable,
-            ph_enable_nv,
             seeds: None,
             lifecycle: None,
             audit: None,
@@ -496,7 +473,7 @@ impl NvHierarchyRecord {
         };
         record.seeds = Some(seeds);
         // The audit extension follows the lifecycle extension, or the PCR data directly when the
-        // record was built from an `s_NV` image (`transcoder`).
+        // record has no lifecycle extension.
         record.lifecycle = NvLifecycleExt::decode(slice);
         if record.lifecycle.is_some() {
             slice = &slice[PERSISTENT_EXT_LEN..];
@@ -599,15 +576,18 @@ pub struct NvStateSaveRecord {
     pub null_proof: [u8; 64],
     pub null_proof_size: u16,
     pub restart_count: u32,
-    pub object_context_id: u32,
+    /// `gr.pcrCounter`: TPM Restart and TPM Resume continue from the value saved by
+    /// `TPM2_Shutdown(TPM_SU_STATE)`, as the references (`gr` is read back from NV), so a change
+    /// of a PCR that is not state-saved after the shutdown is not counted.
+    pub pcr_update_counter: u32,
     pub context_counter: u64,
     pub object_context_counter: u64,
     /// The saved sessions by slot (`GlobalState::saved_sessions`).
     pub saved_sessions: [Option<u32>; MAX_ACTIVE_SESSIONS],
     /// Their context sequence numbers (`GlobalState::saved_session_sequences`).
     pub saved_session_sequences: [u64; MAX_ACTIVE_SESSIONS],
-    pub commit_counter: u16,
-    pub commit_nonce: [u8; 64],
+    pub commit_counter: u64,
+    pub commit_nonce: [u8; COMMIT_NONCE_SIZE],
     pub commit_array: [u8; 16],
     pub sh_enable: bool,
     pub eh_enable: bool,
@@ -630,7 +610,7 @@ impl NvStateSaveRecord {
         put_sized64(&mut w, &self.null_seed, self.null_seed_size);
         put_sized64(&mut w, &self.null_proof, self.null_proof_size);
         w.bytes(&self.restart_count.to_be_bytes());
-        w.bytes(&self.object_context_id.to_be_bytes());
+        w.bytes(&self.pcr_update_counter.to_be_bytes());
         w.bytes(&self.context_counter.to_be_bytes());
         w.bytes(&self.object_context_counter.to_be_bytes());
         let saved_count = self.saved_sessions.iter().flatten().count();
@@ -674,7 +654,7 @@ impl NvStateSaveRecord {
         let (null_seed, null_seed_size) = get_sized64(s)?;
         let (null_proof, null_proof_size) = get_sized64(s)?;
         let restart_count = u32::unmarshal(s).ok()?;
-        let object_context_id = u32::unmarshal(s).ok()?;
+        let pcr_update_counter = u32::unmarshal(s).ok()?;
         let context_counter = u64::unmarshal(s).ok()?;
         let object_context_counter = u64::unmarshal(s).ok()?;
         let mut saved_sessions = [None; MAX_ACTIVE_SESSIONS];
@@ -690,8 +670,8 @@ impl NvStateSaveRecord {
             saved_sessions[slot] = Some(handle);
             saved_session_sequences[slot] = sequence;
         }
-        let commit_counter = u16::unmarshal(s).ok()?;
-        let commit_nonce = <[u8; 64]>::unmarshal(s).ok()?;
+        let commit_counter = u64::unmarshal(s).ok()?;
+        let commit_nonce = <[u8; COMMIT_NONCE_SIZE]>::unmarshal(s).ok()?;
         let commit_array = <[u8; 16]>::unmarshal(s).ok()?;
         let sh_enable = u8::unmarshal(s).ok()? != 0;
         let eh_enable = u8::unmarshal(s).ok()? != 0;
@@ -717,7 +697,7 @@ impl NvStateSaveRecord {
             null_proof,
             null_proof_size,
             restart_count,
-            object_context_id,
+            pcr_update_counter,
             context_counter,
             object_context_counter,
             saved_sessions,
@@ -1091,19 +1071,13 @@ mod tests {
         NvHierarchyRecord {
             owner_auth: auth(b"owner"),
             endorsement_auth: auth(b"endorsement"),
-            platform_auth: auth(b"platform"),
             lockout_auth: auth(b"lockout"),
             owner_policy: digest(&[0x11; 32]),
             endorsement_policy: digest(&[0x22; 48]),
-            platform_policy: OwnedDigest::default(),
-            lockout_policy: digest(&[0x44; 32]),
+            lockout_policy: OwnedDigest::default(),
             owner_alg: Some(TpmiAlgHash::Sha256),
             endorsement_alg: Some(TpmiAlgHash::Sha384),
-            platform_alg: None,
-            lockout_alg: Some(TpmiAlgHash::Sha256),
-            sh_enable: true,
-            eh_enable: false,
-            ph_enable_nv: true,
+            lockout_alg: None,
             seeds: Some(NvHierarchySeeds {
                 sp_seed: [0x01; 64],
                 sp_seed_size: 32,
@@ -1147,7 +1121,7 @@ mod tests {
             orderly_state: 0x8001,
             total_reset_count: 0x1112_1314_1516_1718,
             max_counter: 0x2122_2324_2526_2728,
-            time_epoch: 0x3132_3334_3536_3738,
+            time_epoch: 0x3536_3738,
             failed_tries: 0x4142_4344,
             drbg: DrbgState::default(),
             self_heal_timer: -5,
@@ -1181,11 +1155,11 @@ mod tests {
         assert_eq!(decoded.lifecycle, record.lifecycle);
         assert_eq!(decoded.audit, record.audit);
         assert_eq!(decoded.endorsement_alg, Some(TpmiAlgHash::Sha384));
-        assert_eq!(decoded.platform_alg, None);
+        assert_eq!(decoded.lockout_alg, None);
     }
 
-    /// The optional sections: a record without seeds has no extensions, and a record built from
-    /// an `s_NV` image (`transcoder`: no lifecycle extension) still has its audit extension.
+    /// The optional sections: a record without seeds has no extensions, and a record without the
+    /// lifecycle extension still has its audit extension.
     #[test]
     fn hierarchy_record_optional_sections() {
         let mut record = full_hierarchy_record();
@@ -1213,11 +1187,10 @@ mod tests {
         let record = full_hierarchy_record();
         let mut buf = [0u8; HIERARCHY_RECORD_SIZE];
         let len = record.encode(&mut buf);
-        // The owner algorithm follows the four authorizations and the four policies.
+        // The owner algorithm follows the three authorizations and the three policies.
         let owner_alg_offset = [
             &record.owner_auth,
             &record.endorsement_auth,
-            &record.platform_auth,
             &record.lockout_auth,
         ]
         .iter()
@@ -1226,7 +1199,6 @@ mod tests {
             + [
                 &record.owner_policy,
                 &record.endorsement_policy,
-                &record.platform_policy,
                 &record.lockout_policy,
             ]
             .iter()
@@ -1277,13 +1249,13 @@ mod tests {
             null_proof: [0x02; 64],
             null_proof_size: 64,
             restart_count: 3,
-            object_context_id: 4,
+            pcr_update_counter: 4,
             context_counter: 5,
             object_context_counter: 6,
             saved_sessions,
             saved_session_sequences,
-            commit_counter: 7,
-            commit_nonce: [0x08; 64],
+            commit_counter: 0x0001_0000_0007,
+            commit_nonce: [0x08; COMMIT_NONCE_SIZE],
             commit_array: [0x09; 16],
             sh_enable: true,
             eh_enable: false,
