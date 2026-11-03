@@ -74,11 +74,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // after the handle and parameter checks of the dispatcher.
         self.nv_clear_orderly()?;
 
-        // Plaintext layout: `sequence (8 bytes, fingerprint) || serialized entity`.
+        // Plaintext layout: `sequence (8 bytes, fingerprint) || serialized entity`, with the
+        // `fixed-size-context` feature `sequence || entity length (UINT16) || serialized entity
+        // || zero padding` up to the reported maximum context size.
         // The fingerprint is checked by `TPM2_ContextLoad` after decryption
         // (TPM 2.0 Part 1, "Context Confidentiality Protection").
         let mut sensitive_buf = [0u8; TPM2_MAX_CONTEXT_SIZE as usize];
-        let entity_buf = &mut sensitive_buf[CONTEXT_FINGERPRINT_SIZE..];
+        let entity_buf = &mut sensitive_buf[PLAINTEXT_PREFIX_SIZE..];
         let mut is_session = false;
         let mut _is_sequence = false;
 
@@ -113,17 +115,23 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             } else {
                 return Err(TpmRc::REFERENCE_H0);
             };
-        let offset = CONTEXT_FINGERPRINT_SIZE + entity_len;
+        let max_context_size = if is_session {
+            MAX_SESSION_CONTEXT_SIZE
+        } else {
+            MAX_OBJECT_CONTEXT_SIZE
+        };
         // The reported `TPM_PT_MAX_OBJECT_CONTEXT`/`TPM_PT_MAX_SESSION_CONTEXT` bound every saved
         // context.
-        debug_assert!(
-            CONTEXT_OVERHEAD - CONTEXT_FINGERPRINT_SIZE + offset
-                <= if is_session {
-                    MAX_SESSION_CONTEXT_SIZE
-                } else {
-                    MAX_OBJECT_CONTEXT_SIZE
-                }
-        );
+        debug_assert!(CONTEXT_OVERHEAD + entity_len <= max_context_size);
+        let offset = if cfg!(feature = "fixed-size-context") {
+            // Every context has exactly the reported maximum size: the entity's length, the
+            // entity and zeros (`sensitive_buf` is zero-initialized).
+            sensitive_buf[CONTEXT_FINGERPRINT_SIZE..PLAINTEXT_PREFIX_SIZE]
+                .copy_from_slice(&(entity_len as u16).to_be_bytes()[2 - ENTITY_LENGTH_SIZE..]);
+            max_context_size - CONTEXT_FRAME_SIZE
+        } else {
+            PLAINTEXT_PREFIX_SIZE + entity_len
+        };
 
         let handle_bytes = out_saved_handle.to_be_bytes();
         let (proof_secret, _) = self.resolve_hierarchy_proof(obj_hierarchy)?;
@@ -570,10 +578,39 @@ const fn array_len<S, T, const N: usize>(_field: fn(&S) -> &[T; N]) -> usize {
 /// The bytes of a `TPMS_CONTEXT` returned by `TPM2_ContextSave` around the serialized entity:
 /// `sequence` (`UINT64`), `savedHandle` (`TPMI_DH_SAVED`), `hierarchy` (`TPMI_RH_HIERARCHY+`), the
 /// `size` of `contextBlob` (`TPM2B_CONTEXT_DATA`), its `integrity` (`TPM2B_DIGEST` of
-/// `CONTEXT_INTEGRITY_HASH_ALG`) and the encrypted `sequence` fingerprint. The C references use the
-/// same layout (`PropertyCap.c`: `SIZE_OF_CONTEXT_OVERHEAD`).
-const CONTEXT_OVERHEAD: usize =
-    8 + 4 + 4 + 2 + (2 + crate::handler::TICKET_DIGEST_SIZE) + CONTEXT_FINGERPRINT_SIZE;
+/// `CONTEXT_INTEGRITY_HASH_ALG`), the `size` of `encrypted` (`TPM2B_CONTEXT_SENSITIVE`), the
+/// encrypted `sequence` fingerprint and, with the `fixed-size-context` feature, the length of the
+/// entity ([`ENTITY_LENGTH_SIZE`]). The C references use a similar layout (`PropertyCap.c`:
+/// `SIZE_OF_CONTEXT_OVERHEAD`).
+const CONTEXT_OVERHEAD: usize = CONTEXT_FRAME_SIZE + PLAINTEXT_PREFIX_SIZE;
+
+/// The bytes of a returned `TPMS_CONTEXT` before its encrypted area (see [`CONTEXT_OVERHEAD`]).
+const CONTEXT_FRAME_SIZE: usize = 8 + 4 + 4 + 2 + (2 + CONTEXT_INTEGRITY_SIZE) + 2;
+
+/// The bytes of the plaintext before the serialized entity: the `sequence` fingerprint and, with
+/// the `fixed-size-context` feature, the entity's length.
+pub(crate) const PLAINTEXT_PREFIX_SIZE: usize = CONTEXT_FINGERPRINT_SIZE + ENTITY_LENGTH_SIZE;
+
+/// The size of the big-endian `UINT16` length of the serialized entity that precedes it in the
+/// plaintext of a padded context (the `fixed-size-context` feature; 0 without it).
+pub(crate) const ENTITY_LENGTH_SIZE: usize = if cfg!(feature = "fixed-size-context") {
+    2
+} else {
+    0
+};
+
+/// The size of the context integrity value. The bound of the largest one
+/// ([`crate::handler::TICKET_DIGEST_SIZE`]) is enough unless the contexts have exactly their
+/// maximum size (`fixed-size-context`) or the integrity hash is a fixed smaller one
+/// (`context-hash-sha256`).
+const CONTEXT_INTEGRITY_SIZE: usize = if cfg!(any(
+    feature = "fixed-size-context",
+    feature = "context-hash-sha256"
+)) {
+    crate::handler::CONTEXT_INTEGRITY_DIGEST_SIZE
+} else {
+    crate::handler::TICKET_DIGEST_SIZE
+};
 
 /// Whether the saved context of `obj` holds its RSA private key in the prime-only form (see
 /// `serialize_transient_object`): an RSA object with a private key.
@@ -698,7 +735,9 @@ const _: () = {
         MAX_SESSION_CONTEXT_SIZE
     };
     assert!(max - 18 <= super::context_load::CONTEXT_DATA_CAPACITY);
-    assert!(max - CONTEXT_OVERHEAD + CONTEXT_FINGERPRINT_SIZE <= TPM2_MAX_CONTEXT_SIZE as usize);
+    assert!(max - CONTEXT_FRAME_SIZE <= TPM2_MAX_CONTEXT_SIZE as usize);
+    // The entity length of a padded context fits its `UINT16`.
+    assert!(max <= u16::MAX as usize);
 };
 
 /// Maximum marshaled size of [`RawContextSaveRsp`].

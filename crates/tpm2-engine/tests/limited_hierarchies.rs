@@ -20,7 +20,7 @@ use tpm2::{
 
 /// The context integrity hash of this build (SHA-512, or SHA-384 without SHA-512).
 fn context_hash() -> TpmiAlgHash {
-    TpmiAlgHash::try_from(tpm2::Alg::SHA512).unwrap_or(TpmiAlgHash::Sha384)
+    common::context_integrity_hash_alg()
 }
 
 /// The proof of a limited hierarchy (TPM 2.0 Part 1, Equation "seed-proof-limited-hierarchy"):

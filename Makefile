@@ -9,6 +9,7 @@
 #   make test-<target>      the differential tests against one target (see DIFFERENTIAL_TARGETS)
 #   make test-inproc        the in-process reference tests (`fuzz-inproc`)
 #   make test-features      tpm2-engine and the E2E tests with every optional feature
+#   make test-vtpm          the tpm2-engine tests with the vTPM profile features
 #   make lint               fmt, clippy (also of every differential target, with
 #                           every optional feature, each optional feature alone
 #                           and without SHA-512) and docs (tcgtpm is built without
@@ -55,16 +56,22 @@ comma := ,
 empty :=
 space := $(empty) $(empty)
 ALL_OPTIONAL_FEATURES := $(subst $(space),$(comma),$(strip $(OPTIONAL_FEATURES)))
+# The profile features of the vTPM engine (`tpm2_engine_vtpm` in google3): the NV size of
+# `ibmswtpm2` and the settings for compatibility with the guests of Google's vTPM (like its
+# production `ibmswtpm2`). They change values that the E2E and differential tests
+# compare with the references, so `testing` does not forward them; only the tpm2-engine tests
+# run with them.
+VTPM_FEATURES := nv-memory-size-32k,context-hash-sha256,rsa-sensitive-prime-only,fixed-size-context
 
 DIFFERENTIAL_TESTS := $(addprefix test-,$(DIFFERENTIAL_TARGETS))
 DIFFERENTIAL_CLIPPY := $(addprefix clippy-,$(DIFFERENTIAL_TARGETS))
 
 .PHONY: test test-workspace test-reference-rng test-no-sha512 test-backends test-differential \
-	$(DIFFERENTIAL_TESTS) test-inproc test-features lint fmt clippy clippy-features \
+	$(DIFFERENTIAL_TESTS) test-inproc test-features test-vtpm lint fmt clippy clippy-features \
 	$(DIFFERENTIAL_CLIPPY) doc
 
 test: test-workspace test-reference-rng test-no-sha512 test-backends test-differential test-inproc \
-	test-features
+	test-features test-vtpm
 
 test-workspace:
 	$(CARGO) test --release $(CARGO_TEST_ARGS)
@@ -106,6 +113,12 @@ test-features:
 	$(CARGO) test --release -p tpm2-engine --features $(ALL_OPTIONAL_FEATURES) $(CARGO_TEST_ARGS)
 	$(CARGO) test --release -p testing --features $(ALL_OPTIONAL_FEATURES) $(CARGO_TEST_ARGS)
 
+# The vTPM profile features together, also on a TPM without SHA-512.
+test-vtpm:
+	$(CARGO) test --release -p tpm2-engine --features $(VTPM_FEATURES) $(CARGO_TEST_ARGS)
+	$(CARGO) test --release -p tpm2-engine --no-default-features \
+		--features dev_crypto_bssl,$(VTPM_FEATURES) $(CARGO_TEST_ARGS)
+
 lint: fmt clippy doc
 
 fmt:
@@ -115,6 +128,7 @@ clippy: $(DIFFERENTIAL_CLIPPY) clippy-features
 	$(CARGO) clippy --all-targets -- -D warnings
 	$(CARGO) clippy --all-targets -p tpm2-engine -p testing --features $(ALL_OPTIONAL_FEATURES) -- -D warnings
 	$(CARGO) clippy --all-targets -p tpm2-engine --features reference-rng -- -D warnings
+	$(CARGO) clippy --all-targets -p tpm2-engine --features $(VTPM_FEATURES) -- -D warnings
 	# A TPM without SHA-512 (every crate without its default `sha512` feature).
 	$(CARGO) clippy --all-targets -p tpm2-engine -p tpm2-crypto-rust -p tpm2-crypto-crux \
 		-p tpm2-crypto-bssl -p tpm2-client --no-default-features \

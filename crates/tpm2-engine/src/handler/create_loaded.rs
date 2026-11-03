@@ -1402,7 +1402,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 // fixedTPM) is kept as it is.
                 let len = match self.rsa_sensitive_value(
                     actual_private_key,
-                    parent_fixed_tpm,
+                    parent_fixed_tpm && super::rsa_sensitive::WRITES_CRT_FORM,
                     &mut rsa_value,
                 )? {
                     Some(len) => len,

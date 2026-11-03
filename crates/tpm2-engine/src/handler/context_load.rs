@@ -32,7 +32,7 @@ use tpm2::{Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt};
 use tpm2::{TpmSe, TpmiAlgHash};
 
 use super::context_save::{
-    CONTEXT_ENCRYPTION_ALG, CONTEXT_FINGERPRINT_SIZE, MAX_SAVED_PRIVATE_SIZE,
+    CONTEXT_ENCRYPTION_ALG, CONTEXT_FINGERPRINT_SIZE, ENTITY_LENGTH_SIZE, MAX_SAVED_PRIVATE_SIZE,
 };
 
 /// `MAX_CONTEXT_SIZE` of this TPM's profile: the capacity of `TPM2B_CONTEXT_SENSITIVE` (TPM 2.0
@@ -195,6 +195,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::FAILURE);
         }
         let plaintext = &sensitive_buf[CONTEXT_FINGERPRINT_SIZE..enc_size];
+        // A padded context (`fixed-size-context`): the entity's length, the entity and zeros.
+        let plaintext = if ENTITY_LENGTH_SIZE == 2 {
+            let len = match plaintext {
+                [hi, lo, ..] => u16::from_be_bytes([*hi, *lo]) as usize,
+                _ => return Err(TpmRc::INTEGRITY.with(Position::parameter(1))),
+            };
+            plaintext
+                .get(ENTITY_LENGTH_SIZE..ENTITY_LENGTH_SIZE + len)
+                .ok_or(TpmRc::INTEGRITY.with(Position::parameter(1)))?
+        } else {
+            plaintext
+        };
 
         let is_session = matches!(
             Handle(saved_handle.0).handle_type(),

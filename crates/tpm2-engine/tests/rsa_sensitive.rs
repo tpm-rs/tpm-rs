@@ -4,6 +4,9 @@
 //! produce (the prime-only form, corrupted CRT values, wrong sizes) are forged with that seed to
 //! exercise `TPM2_Load` under a fixedTPM parent.
 
+// With `rsa-sensitive-prime-only`, the TPM writes no CRT form for the forging tests to start from.
+#![cfg_attr(feature = "rsa-sensitive-prime-only", allow(dead_code, unused_imports))]
+
 mod common;
 
 use common::{
@@ -267,6 +270,7 @@ fn sign_and_flush(tpm: &mut RealCryptoEngine<'_>, key: Handle) {
 /// prime) where `P` is a factor of the modulus, `Q = N / P`, and `dP`, `dQ`, `qInv` are computed
 /// with the larger prime as "p" (the reference's `TpmRsaUtil_PackExponent()` layout).
 #[test]
+#[cfg(not(feature = "rsa-sensitive-prime-only"))]
 fn create_stores_the_reference_crt_layout() {
     setup!(tpm);
     let parent = storage_primary(&mut tpm);
@@ -288,10 +292,33 @@ fn create_stores_the_reference_crt_layout() {
     }
 }
 
+/// With the `rsa-sensitive-prime-only` feature, `TPM2_Create` under a fixedTPM parent stores
+/// only the prime `P` (half the modulus), a factor of the modulus.
+#[test]
+#[cfg(feature = "rsa-sensitive-prime-only")]
+fn create_stores_the_prime_only_form() {
+    setup!(tpm);
+    let parent = storage_primary(&mut tpm);
+    let seed = seed_of(&tpm, parent);
+    for _ in 0..4 {
+        let (private, public) = create_rsa_key(&mut tpm, parent);
+        let (name, modulus) = name_and_modulus(&public);
+        let value = rsa_value(&unwrap_private(&seed, &name, private.get_buffer()));
+        assert_eq!(value.len(), 64);
+        let p = BigUint::from_bytes_be(&value);
+        let n = BigUint::from_bytes_be(&modulus);
+        assert_eq!(&n % &p, BigUint::from(0u32));
+        // The key loads and signs.
+        let key = load(&mut tpm, parent, private, public).expect("Load (prime only)");
+        sign_and_flush(&mut tpm, key);
+    }
+}
+
 /// `TPM2_Load` under a fixedTPM parent accepts the prime-only form (which this TPM no longer
 /// writes there), and the CRT form only if every value belongs to the key rebuilt from the
 /// prime and the size is five primes; otherwise `TPM_RC_BINDING`.
 #[test]
+#[cfg(not(feature = "rsa-sensitive-prime-only"))]
 fn load_under_fixed_tpm_parent_checks_the_stored_form() {
     setup!(tpm);
     let parent = storage_primary(&mut tpm);

@@ -121,6 +121,14 @@ fn execute_rc(
     u32::from_be_bytes(response[6..10].try_into().unwrap())
 }
 
+/// An audit algorithm other than the manufacture default (the context integrity hash) and its
+/// digest size: SHA-256, or SHA-384 with `context-hash-sha256` (where SHA-256 is the default).
+const OTHER_AUDIT_ALG: (u16, u16) = if cfg!(feature = "context-hash-sha256") {
+    (0x000C, 48)
+} else {
+    (0x000B, 32)
+};
+
 /// The audit list, algorithm and counter survive `_TPM_Init` (they are reloaded from NV), and
 /// the audit digest is cleared by the TPM Reset that follows.
 #[test]
@@ -150,26 +158,31 @@ fn command_audit_state_persists_across_tpm_init() {
     assert_eq!(tpm.state.audit_counter, 1);
     assert_eq!(
         usize::from(tpm.state.command_audit_digest.get_size()),
-        tpm2::TpmiAlgHash::MAX_DIGEST_BYTES
+        // The manufacture default is the context integrity hash.
+        if cfg!(feature = "context-hash-sha256") {
+            32
+        } else {
+            tpm2::TpmiAlgHash::MAX_DIGEST_BYTES
+        }
     );
 
     // Change the algorithm: the digest is cleared and the counter unchanged.
-    let cmd = set_command_code_audit_status_cmd(0x000B, &[], &[]);
+    let cmd = set_command_code_audit_status_cmd(OTHER_AUDIT_ALG.0, &[], &[]);
     assert_eq!(execute_rc(&mut tpm, &cmd), 0);
-    assert_eq!(tpm.state.audit_hash_alg, 0x000B);
+    assert_eq!(tpm.state.audit_hash_alg, OTHER_AUDIT_ALG.0);
     assert_eq!(tpm.state.command_audit_digest.get_size(), 0);
     assert_eq!(tpm.state.audit_counter, 1);
 
-    // An audited command starts a SHA-256 log.
+    // An audited command starts a log of the other algorithm.
     let get_random = hex!("8001 0000000c 0000017b 0008");
     assert_eq!(execute_rc(&mut tpm, &get_random), 0);
     assert_eq!(tpm.state.audit_counter, 2);
-    assert_eq!(tpm.state.command_audit_digest.get_size(), 32);
+    assert_eq!(tpm.state.command_audit_digest.get_size(), OTHER_AUDIT_ALG.1);
 
     // `_TPM_Init` without an orderly shutdown, then TPM Reset.
     tpm.reset();
     assert!(tpm.state.audit_commands.is_audited(TpmCc::GetRandom));
-    assert_eq!(tpm.state.audit_hash_alg, 0x000B);
+    assert_eq!(tpm.state.audit_hash_alg, OTHER_AUDIT_ALG.0);
     assert_eq!(tpm.state.audit_counter, 2);
     assert_eq!(execute_rc(&mut tpm, &startup), 0);
     assert_eq!(tpm.state.command_audit_digest.get_size(), 0);
@@ -192,11 +205,14 @@ fn rejected_commands_leave_command_audit_state_unchanged() {
     let startup = hex!("8001 0000000c 00000144 0000");
     assert_eq!(execute_rc(&mut tpm, &startup), 0);
 
-    let cmd = set_command_code_audit_status_cmd(0x000B, &[0x17B], &[]);
+    let cmd = set_command_code_audit_status_cmd(OTHER_AUDIT_ALG.0, &[0x17B], &[]);
     assert_eq!(execute_rc(&mut tpm, &cmd), 0x1C4);
     assert!(!tpm.state.audit_commands.is_audited(TpmCc::GetRandom));
-    // The context integrity hash: SHA-512, or SHA-384 without it.
-    let default_alg = if tpm2::TpmiAlgHash::MAX_DIGEST_BYTES == 64 {
+    // The context integrity hash: SHA-512, or SHA-384 without it (SHA-256 with
+    // `context-hash-sha256`).
+    let default_alg = if cfg!(feature = "context-hash-sha256") {
+        0x000B
+    } else if tpm2::TpmiAlgHash::MAX_DIGEST_BYTES == 64 {
         0x000D
     } else {
         0x000C

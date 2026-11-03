@@ -666,9 +666,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         TpmPt::MAX_RESPONSE_SIZE,
                         crate::engine::MAX_RESPONSE_SIZE as u32,
                     ),
+                    // The size of the largest digest this TPM produces (`sizeof(TPMU_HA)`), also
+                    // when the context integrity hash is a smaller one (`context-hash-sha256`).
                     (
                         TpmPt::MAX_DIGEST,
-                        crate::handler::context_integrity_hash_alg().digest_size() as u32,
+                        tpm2::TpmiAlgHash::MAX_DIGEST_BYTES as u32,
                     ),
                     // Part 2, TPM_PT: "the maximum size of an object context that will be
                     // returned by TPM2_ContextSave()" / "the maximum size of a session context

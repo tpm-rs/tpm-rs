@@ -34,8 +34,13 @@ use tpm2::{
 };
 
 /// Offset of `encrypted.size` in the blob: `integrity.size (2) || integrity` (the integrity HMAC
-/// uses the strongest implemented hash: 64 octets with SHA-512, 48 without).
-const ENC_SIZE_OFFSET: usize = 2 + tpm2::TpmiAlgHash::MAX_DIGEST_BYTES;
+/// uses the strongest implemented hash: 64 octets with SHA-512, 48 without; 32 with
+/// `context-hash-sha256`).
+const ENC_SIZE_OFFSET: usize = 2 + if cfg!(feature = "context-hash-sha256") {
+    32
+} else {
+    tpm2::TpmiAlgHash::MAX_DIGEST_BYTES
+};
 /// Size of the sequence fingerprint at the start of the encrypted plaintext.
 const FINGERPRINT_SIZE: usize = 8;
 
@@ -123,12 +128,7 @@ fn forge_integrity(
 ) -> Vec<u8> {
     let crypto = TestCryptoProvider;
     let proof = &gs.sh_proof[..gs.sh_proof_size as usize];
-    let mut hmac = HmacStream::new(
-        &crypto,
-        TpmiAlgHash::try_from(tpm2::Alg::SHA512).unwrap_or(TpmiAlgHash::Sha384),
-        proof,
-    )
-    .unwrap();
+    let mut hmac = HmacStream::new(&crypto, common::context_integrity_hash_alg(), proof).unwrap();
     hmac.update(&gs.total_reset_count.to_be_bytes()).unwrap();
     hmac.update(&context.sequence.to_be_bytes()).unwrap();
     hmac.update(&context.saved_handle.0.to_be_bytes()).unwrap();
@@ -164,7 +164,7 @@ fn context_cfb(
     let mut key_iv = [0u8; 32];
     tpm2::crypto::kdf::kdfa_bits(
         &crypto,
-        TpmiAlgHash::try_from(tpm2::Alg::SHA512).unwrap_or(TpmiAlgHash::Sha384),
+        common::context_integrity_hash_alg(),
         proof,
         b"CONTEXT",
         &context.sequence.to_be_bytes(),

@@ -49,6 +49,10 @@ cargo test --release
 # Execute tpm2-engine tests with the reference RNG port
 cargo test --release -p tpm2-engine --features reference-rng
 
+# Execute tpm2-engine tests with the vTPM profile features (`make test-vtpm`; `testing` does not
+# forward them, as they change values the E2E and differential tests compare)
+cargo test --release -p tpm2-engine --features nv-memory-size-32k,context-hash-sha256,rsa-sensitive-prime-only,fixed-size-context
+
 # Execute the E2E tests differentially against one C reference TPM (target), with tpm-rs built
 # with that reference's profile; `make test-differential` runs all three (`make test-<target>`
 # one; tcgtpm has no SHA-512, so its build has no default features)

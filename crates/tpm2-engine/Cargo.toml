@@ -103,6 +103,26 @@ act-a = []
 # `TPM2_ECC_Parameters` reports `TPM_ALG_NULL` as the recommended KDF of every
 # curve (default: KDF1_SP800_56A with the hash of the curve's strength).
 ecc-parameters-null-kdf = []
+# `CONTEXT_INTEGRITY_HASH_ALG` (`TPM_PT_CONTEXT_HASH`) is SHA-256 (default: the strongest
+# implemented hash, SHA-512 or SHA-384), like Google's production `ibmswtpm2` (b/64836800). It
+# keys the context integrity HMACs, the tickets and the KDFs of the hierarchy proofs, and bounds
+# the hierarchy authValues of `TPM2_HierarchyChangeAuth` to 32 octets (`TPM_RC_SIZE`), so that
+# e.g. EDK2's `RandomizePlatformAuth` (an auth of the largest PCR bank digest size) fails and the
+# platform auth stays empty. Not spec-conformant (Part 1, "Context Integrity Protection").
+context-hash-sha256 = []
+# Under a *fixedTPM* parent, the RSA sensitive value of a private area is written in the
+# prime-only form (`MAX_RSA_KEY_BYTES` / 2) instead of the CRT form (default; like the TCG
+# reference with `CRT_FORMAT_RSA = YES`). Both are allowed by Part 2, TPM2B_PRIVATE_KEY_RSA;
+# `TPM2_Load` still accepts both. The smaller private areas fit e.g. the fixed 1024-byte
+# key blob buffer of Windows' `PCPTool`, like those of Google's production `ibmswtpm2`.
+rsa-sensitive-prime-only = []
+# `TPM2_ContextSave` returns every context with exactly the reported maximum size
+# (`TPM_PT_MAX_OBJECT_CONTEXT` for objects and sequence objects, `TPM_PT_MAX_SESSION_CONTEXT`
+# for sessions): the serialized entity is prefixed with its length and zero-padded (default:
+# contexts of the size of their content). Windows' TPM Base Services pad `TPM2_ContextLoad` to
+# `10 + TPM_PT_MAX_*_CONTEXT` octets, like the contexts of the C references, which always have
+# their maximum size; without this feature, the trailing octets are `TPM_RC_SIZE`.
+fixed-size-context = []
 # Secure channel (SPDM) support (`SEC_CHANNEL_SUPPORT` of the TCG reference):
 # `TPM2_GetCapability(TPM_CAP_PUB_KEYS)` and `TPM2_GetCapability(TPM_CAP_SPDM_SESSION_INFO)`
 # report the platform's secure transport layer (`tpm2::platform::SecureChannel`), and the

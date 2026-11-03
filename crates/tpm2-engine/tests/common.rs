@@ -1239,3 +1239,14 @@ pub fn password_auth(auth: &'static [u8]) -> tpm2::TpmsAuthCommand<'static> {
         hmac: tpm2::Tpm2bAuth::from_bytes(auth).unwrap(),
     }
 }
+
+/// The context integrity hash of the engine (`CONTEXT_INTEGRITY_HASH_ALG`): the strongest
+/// implemented hash (SHA-512, or SHA-384 without it), or SHA-256 with `context-hash-sha256`.
+#[allow(dead_code)]
+pub fn context_integrity_hash_alg() -> tpm2::TpmiAlgHash {
+    if cfg!(feature = "context-hash-sha256") {
+        tpm2::TpmiAlgHash::Sha256
+    } else {
+        tpm2::TpmiAlgHash::try_from(tpm2::Alg::SHA512).unwrap_or(tpm2::TpmiAlgHash::Sha384)
+    }
+}

@@ -21,6 +21,10 @@
 //! `TPM2_Load` under a *fixedTPM* parent accepts both forms; under any other parent (and
 //! `TPM2_LoadExternal`) only the prime (`CryptoCommon_ValidateKeys()`: otherwise
 //! `TPM_RC_KEY_SIZE`).
+//!
+//! With the `rsa-sensitive-prime-only` feature, the private areas under a *fixedTPM* parent
+//! hold the prime as well (the smaller `RSA_PRIVATE_SIZE`, like Google's production
+//! `ibmswtpm2`), see [`WRITES_CRT_FORM`]; `TPM2_Load` still accepts both forms.
 
 use tpm2::Tpm2bPrivateKeyRsa;
 use tpm2::crypto::{CryptoProvider, Rng};
@@ -35,6 +39,10 @@ pub(crate) const CRT_VALUES: usize = 5;
 
 /// The largest RSA sensitive value (`RSA_PRIVATE_SIZE`, the capacity of `TPM2B_PRIVATE_KEY_RSA`).
 pub(crate) const RSA_PRIVATE_SIZE: usize = Tpm2bPrivateKeyRsa::CAP;
+
+/// Whether the private areas this TPM writes under a *fixedTPM* parent hold the CRT form of an
+/// RSA key (otherwise the prime, with the `rsa-sensitive-prime-only` feature).
+pub(crate) const WRITES_CRT_FORM: bool = !cfg!(feature = "rsa-sensitive-prime-only");
 
 /// Returns `bytes` without its leading zero octets (the number it represents).
 fn significant(bytes: &[u8]) -> &[u8] {

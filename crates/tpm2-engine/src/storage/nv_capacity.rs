@@ -327,7 +327,8 @@ mod tests {
         - MIN_COUNTER_INDICES * NV_INDEX_COUNTER_SIZE)
         / NV_EVICT_OBJECT_SIZE;
 
-    const _: () = assert!(SIZEOF_OBJECT != 1280 || PERSISTENT == 7);
+    // The TCG reference profile (16 KiB of NV, `nv-memory-size-*` changes it).
+    const _: () = assert!(SIZEOF_OBJECT != 1280 || NV_MEMORY_SIZE != 16384 || PERSISTENT == 7);
 
     /// The reference fits seven persistent objects into empty NV (four with RSA-4096; the next one
     /// would eat into the space reserved for `MIN_COUNTER_INDICES` counters), whatever the key

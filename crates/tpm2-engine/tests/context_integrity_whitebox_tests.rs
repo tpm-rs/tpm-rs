@@ -93,10 +93,10 @@ fn test_context_save_kdfa_bug() {
 
     let proof = &tpm.state.sh_proof[..tpm.state.sh_proof_size as usize];
     // CONTEXT_INTEGRITY_HASH_ALG: the strongest implemented hash (Part 1, "Context Integrity
-    // Protection").
+    // Protection"), or SHA-256 with `context-hash-sha256`.
     let mut hmac = tpm2::crypto::HmacStream::new(
         &*tpm.platform.crypto,
-        TpmiAlgHash::try_from(tpm2::Alg::SHA512).unwrap_or(TpmiAlgHash::Sha384),
+        common::context_integrity_hash_alg(),
         proof,
     )
     .unwrap();

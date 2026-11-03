@@ -123,7 +123,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let len = self
                     .rsa_sensitive_value(
                         &object.private[..object.private_len],
-                        parent_info.attributes.contains(TpmaObject::FIXED_TPM),
+                        parent_info.attributes.contains(TpmaObject::FIXED_TPM)
+                            && super::rsa_sensitive::WRITES_CRT_FORM,
                         &mut rsa_value,
                     )?
                     .ok_or(TpmRc::FAILURE)?;

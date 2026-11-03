@@ -489,9 +489,22 @@ pub(crate) const MAX_DIGEST_SIZE: usize = TpmiAlgHash::MAX_DIGEST_BYTES;
 /// Tickets are HMACs with this algorithm (Part 2, `TPMT_TK_*`), and the hierarchy authValue
 /// limit of `TPM2_HierarchyChangeAuth` is its digest size (Part 1, "Authorization Size
 /// Convention").
+///
+/// With the `context-hash-sha256` feature it is SHA-256, like Google's production `ibmswtpm2`
+/// (which pins `CONTEXT_INTEGRITY_HASH_ALG`), although that is not the strongest hash.
 pub(crate) fn context_integrity_hash_alg() -> TpmiAlgHash {
+    if cfg!(feature = "context-hash-sha256") {
+        return TpmiAlgHash::Sha256;
+    }
     TpmiAlgHash::try_from(tpm2::Alg::SHA512).unwrap_or(TpmiAlgHash::Sha384)
 }
+
+/// The digest size of [`context_integrity_hash_alg`].
+pub(crate) const CONTEXT_INTEGRITY_DIGEST_SIZE: usize = if cfg!(feature = "context-hash-sha256") {
+    32
+} else {
+    TpmiAlgHash::MAX_DIGEST_BYTES
+};
 
 /// Size of the TPM-specific `timeout` buffer (`TPM2B_TIMEOUT`) of the authorization tickets of
 /// `TPM2_PolicySigned`/`TPM2_PolicySecret`, which `TPM2_PolicyTicket` takes back: 8 bytes, the
