@@ -15,15 +15,25 @@ categories.workspace = true
 [dependencies]
 tpm2 = { workspace = true }
 hex-literal = "1"
+tpm2-openssl = { path = "../../crates/tpm2-openssl", optional = true }
 tpm2-rustcrypto = { path = "../../crates/tpm2-rustcrypto", features = ["rsa"], optional = true }
 
 [dev-dependencies]
 aes = "0.9"
 
 [features]
-default = ["rustcrypto"]
+default = ["rustcrypto", "openssl"]
+openssl = ["dep:tpm2-openssl"]
 rustcrypto = ["dep:tpm2-rustcrypto"]
 
 [[test]]
 name = "rustcrypto"
 required-features = ["rustcrypto"]
+
+[[test]]
+name = "openssl"
+required-features = ["openssl"]
+
+[[test]]
+name = "openssl_rustcrypto"
+required-features = ["openssl", "rustcrypto"]
