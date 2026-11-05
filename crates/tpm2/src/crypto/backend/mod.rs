@@ -45,6 +45,13 @@
 //! (e.g. to call a native implementation when the RNG uses the system entropy
 //! source).
 //!
+//! Only key generation ([`PrivateKey::generate`]) needs to be deterministic
+//! for an RNG from [`Random::from_seed`](super::Random::from_seed). Operations
+//! whose output depends on randomness (e.g. signing, encryption, and
+//! encapsulation) are always called with an RNG from
+//! [`Random::from_entropy`](super::Random::from_entropy), so a backend may use
+//! its own (approved) RNG for them instead of drawing from the one passed in.
+//!
 //! A complete backend implements all the family traits,
 //! [`Random`](super::Random), and the [`Crypto`](super::Crypto) supertrait.
 //!
