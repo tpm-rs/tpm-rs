@@ -12,13 +12,19 @@ jobs:
     outputs:
       crates: ${{ steps.meta.outputs.crates }}
     steps:
+      # tpm2-boringssl packages (and builds) the BoringSSL submodule, which
+      # needs CMake and libclang.
       - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
       - name: Get publishable crates
         id: meta
         run: |
           crates=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.publish != []) | "\(.name)@\(.version)"')
           echo crates=${crates} >> "$GITHUB_OUTPUT"
-      - run: cargo publish --dry-run
+      # `--workspace`, as tpm2-boringssl isn't a default member.
+      - run: cargo publish --workspace --dry-run
 
   publish:
     needs: dry-run
@@ -29,8 +35,11 @@ jobs:
       id-token: write    # Required for OIDC token exchange
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
-      - run: cargo publish
+      - run: cargo publish --workspace
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

@@ -1,0 +1,54 @@
+[package]
+name = "tpm2-boringssl"
+description = "BoringSSL cryptography backend for tpm2"
+publish = false
+# Prevents linking two copies of this crate's (prefixed) BoringSSL.
+links = "tpm2_bssl"
+
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Only the parts of the BoringSSL submodule CMake needs to build `libcrypto`
+# with `BUILD_TESTING=OFF` (it also configures `ssl`, `decrepit`, `pki`, and
+# the `bssl` tool, so their sources are needed too).
+include = [
+    "/build.rs",
+    "/wrapper.h",
+    "/README.md",
+    "/src/**",
+    "/boringssl/CMakeLists.txt",
+    "/boringssl/LICENSE",
+    "/boringssl/cmake/**",
+    "/boringssl/include/**",
+    "/boringssl/gen/sources.cmake",
+    "/boringssl/gen/*.inc",
+    "/boringssl/gen/bcm/**",
+    "/boringssl/gen/crypto/**",
+    "/boringssl/third_party/fiat/**",
+    "/boringssl/crypto/**/*.S",
+    "/boringssl/crypto/**/*.cc",
+    "/boringssl/crypto/**/*.h",
+    "/boringssl/crypto/**/*.inc",
+    "/boringssl/decrepit/**/*.cc",
+    "/boringssl/decrepit/**/*.h",
+    "/boringssl/pki/*.cc",
+    "/boringssl/pki/*.h",
+    "/boringssl/pki/testdata/nist-pkits/pkits_testcases-inl.h",
+    "/boringssl/ssl/*.cc",
+    "/boringssl/ssl/*.h",
+    "/boringssl/tool/*.cc",
+    "/boringssl/tool/*.h",
+]
+
+[dependencies]
+tpm2.workspace = true
+
+[build-dependencies]
+bindgen = { version = "0.72", default-features = false, features = ["runtime"] }
+cmake = "0.1"
