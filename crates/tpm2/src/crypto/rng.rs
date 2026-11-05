@@ -20,6 +20,10 @@ pub trait Random {
     /// Used for deterministic primary-key generation (`TPM2_CreatePrimary`).
     /// The same `seed`, followed by the same sequence of [`Rng`] calls, must
     /// always produce the same output (across runs, versions, and platforms).
+    ///
+    /// Such an RNG is only passed to key generation, never to operations whose
+    /// output depends on randomness (e.g. signing or encryption); see the
+    /// [`backend`](super::backend) module.
     fn from_seed(seed: &[u8]) -> Result<Self::Rng, CryptoError>;
 
     /// Fills `out` with random bytes in one shot.

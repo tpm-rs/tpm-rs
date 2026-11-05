@@ -1,7 +1,13 @@
 [workspace]
 resolver = "3"
 
-members = ["crates/tpm2", "crates/tpm2-client", "crates/tpm2-impl"]
+members = [
+    "crates/tpm2",
+    "crates/tpm2-client",
+    "crates/tpm2-impl",
+    "crates/tpm2-rustcrypto",
+    "testing/crypto",
+]
 
 # Package keys that should be used by all packages.
 # We don't set: authors (deprecated), license-file, exclude, include, or publish
@@ -24,7 +30,7 @@ categories = ["cryptography", "no-std"]
 bitflags = "2.13"
 
 # Workspace crates used by other workspace crates.
-tpm2 = { path = "crates/tpm2" }
+tpm2 = { path = "crates/tpm2", version = "0.2.0" }
 
 [profile.release]
 lto = true        # default is lto = false
