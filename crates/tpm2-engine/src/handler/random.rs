@@ -1,16 +1,15 @@
+use crate::Platform;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::StirRandom;
 use tpm2::errors::{Position, TpmRc};
 
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{InternalError, handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
+#[cfg(not(feature = "reference-rng"))]
+use tpm2::crypto::Rng;
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     fn try_get_random(&mut self, buffer: &mut [u8]) -> Result<(), InternalError> {
         self.context
             .random_platform(buffer)
@@ -104,7 +103,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let _ = self
                 .context
                 .platform
-                .rng
+                .rng()
                 .stir_bytes(cmd.in_data.get_buffer());
         }
 

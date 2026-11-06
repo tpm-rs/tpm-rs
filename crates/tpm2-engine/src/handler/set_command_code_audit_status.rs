@@ -1,17 +1,14 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, owned::OwnedDigest, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::SetCommandCodeAuditStatus;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Alg, TpmiAlgHash};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::SetCommandCodeAuditStatus] (`0x140`) command.
     ///
     /// # Description

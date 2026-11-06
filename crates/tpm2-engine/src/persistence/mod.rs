@@ -79,11 +79,12 @@ pub mod types;
 pub use conversion::{DeserializeError, SerializeError};
 pub use types::*;
 
+use crate::Platform;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{State, TpmEngine};
+use tpm2::crypto::Crypto;
 use tpm2::crypto::backend::Hash;
-use tpm2::crypto::{Crypto, Rng};
 
 /// Extracts the persisted state of `global_state` and `storage` into `persisted`; `now_ms` is
 /// the current reading of the platform timer (see the module documentation).
@@ -136,7 +137,7 @@ pub fn deserialize<H: Hash, S: NvStorage>(
         .expect("Failed to deserialize");
 }
 
-impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
+impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// Extracts the complete state of the TPM (its [`State`], its NV storage and its
     /// algorithm self-test state) into `persisted`, relative to the current reading of its
     /// platform timer.
@@ -144,8 +145,8 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
         &self,
         persisted: &mut PersistedTpmState,
     ) -> Result<(), SerializeError> {
-        let now_ms = self.platform.timer.timer_read();
-        try_serialize(&self.state, &*self.platform.storage, now_ms, persisted)?;
+        let now_ms = self.platform.timer().timer_read();
+        try_serialize(&self.state, self.platform.storage(), now_ms, persisted)?;
         persisted.extract_self_test(&self.self_test)
     }
 
@@ -161,11 +162,11 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
         // Validate the self-test state first, so that a failure leaves the TPM unchanged.
         let staged = crate::self_test::SelfTestState::default();
         persisted.apply_self_test(&staged)?;
-        let now_ms = self.platform.timer.timer_read();
-        try_deserialize::<C, S>(
+        let now_ms = self.platform.timer().timer_read();
+        try_deserialize::<C, P::Storage>(
             persisted,
             &mut self.state,
-            &mut *self.platform.storage,
+            self.platform.storage_mut(),
             now_ms,
         )?;
         persisted.apply_self_test(&self.self_test)

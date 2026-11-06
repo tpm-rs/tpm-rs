@@ -25,7 +25,7 @@ use tpm2::platform::{SimulatedFirmware, SimulatedSecureChannel};
 use tpm2_engine::persistence::{
     DeserializeError, PersistedPlatformState, PersistedTpmState, SerializeError,
 };
-use tpm2_engine::{InternalError, TpmEngine};
+use tpm2_engine::{InternalError, TpmEngine, TpmPlatform};
 pub use tpm2_engine::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
 use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform};
 
@@ -111,11 +111,13 @@ pub const NV_STORAGE_SIZE: usize = 2 * tpm2_engine::storage::nv_capacity::NV_MEM
 pub struct Simulator<'a> {
     context: Box<
         TpmEngine<
-            'a,
-            PlatformCryptoProvider,
-            RamStorageMock<NV_STORAGE_SIZE>,
-            LinuxTimer,
-            LinuxRng,
+            TpmPlatform<
+                'a,
+                PlatformCryptoProvider,
+                RamStorageMock<NV_STORAGE_SIZE>,
+                LinuxTimer,
+                LinuxRng,
+            >,
         >,
     >,
     is_power_on: bool,

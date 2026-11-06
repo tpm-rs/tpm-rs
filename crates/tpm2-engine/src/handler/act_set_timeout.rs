@@ -1,21 +1,18 @@
+use crate::Platform;
 use crate::act::act_index;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::ACTSetTimeout;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
 /// `SU_DA_USED_VALUE`: the orderly states below it are orderly (`NV_IS_ORDERLY`).
 const SU_DA_USED_VALUE: u16 = 0xFFFE;
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ACTSetTimeout] (`0x198`) command.
     ///
     /// # Description

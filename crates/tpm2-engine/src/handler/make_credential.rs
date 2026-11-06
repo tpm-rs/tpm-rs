@@ -1,24 +1,21 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use crate::self_test::kdfa_bits;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::MakeCredential;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bIdObject, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash,
     TpmiAlgSymMode, TpmsIdObject, TpmtSymDefObject,
 };
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::MakeCredential] (`0x168`) command.
     ///
     /// # Description

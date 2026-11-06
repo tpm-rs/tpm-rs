@@ -1,15 +1,14 @@
+use crate::Platform;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::platform::PcrState;
 
 use crate::handle_checks::{Tpmi, check};
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use tpm2::commands::{
     PCRAllocate, PCREvent, PCRExtend, PCRRead, PCRReset, PCRSetAuthPolicy, PCRSetAuthValue,
 };
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, Tpm2bDigest, TpmiAlgHash, TpmlDigest, TpmlDigestValues, TpmlPcrSelection,
@@ -113,9 +112,7 @@ fn pcr_storage_size() -> u32 {
     (per_pcr as u32) * IMPLEMENTATION_PCR
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Records that PCR `pcr` changed (`PCRChanged`): increments the PCR update counter unless
     /// the PCR belongs to the TCB group (PCRs 20-22).
     pub(crate) fn pcr_changed(&mut self, pcr: u32) {
@@ -550,7 +547,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         crate::storage::nv::NvPcrAllocationRecord {
             allocation: *allocation,
         }
-        .write(&mut *self.context.platform.storage)
+        .write(self.context.platform.storage_mut())
     }
 
     /// Handles the [TpmCc::PCRSetAuthValue] (`0x183`) command.

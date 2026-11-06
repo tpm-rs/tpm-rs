@@ -1,23 +1,20 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use crate::self_test::kdfa_bits;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::ActivateCredential;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bDigest, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmtSymDefObject,
 };
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ActivateCredential] (`0x147`) command.
     ///
     /// # Description

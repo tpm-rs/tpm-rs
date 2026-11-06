@@ -1,3 +1,4 @@
+use crate::Platform;
 use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::{
     handler::{CommandHandler, SessionState, TransientObject},
@@ -5,8 +6,6 @@ use crate::{
         OwnedAuth, OwnedName, OwnedNonce, OwnedPublic, OwnedPublicParmsAndId, OwnedSensitiveData,
     },
     req_resp::RequestThenResponse,
-    storage::NvStorage,
-    timer::TpmTimer,
 };
 
 struct TransientObjectFields {
@@ -26,7 +25,7 @@ use crate::self_test::kdfa_bits;
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt};
 use tpm2::{TpmSe, TpmiAlgHash};
@@ -59,9 +58,7 @@ const MAX_CONTEXT_SIZE: usize = if cfg!(feature = "max-context-size-4344") {
 /// is unmarshaled, before any missing bytes (`TPM_RC_INSUFFICIENT`).
 pub(crate) const CONTEXT_DATA_CAPACITY: usize = (2 + 64) + (2 + MAX_CONTEXT_SIZE);
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ContextLoad] (`0x113`) command.
     ///
     /// # Description

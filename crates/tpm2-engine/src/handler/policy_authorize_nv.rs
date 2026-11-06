@@ -1,17 +1,15 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
+use crate::storage::Tpm2Storage;
 use crate::storage::manager::StorageManager;
-use crate::storage::{NvStorage, Tpm2Storage};
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::TpmiAlgHash;
 use tpm2::commands::PolicyAuthorizeNV;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmCc, TpmSe};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::PolicyAuthorizeNV] (`0x177`) command.
     ///
     /// # Description
@@ -74,7 +72,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 2. Resolve NV Index metadata from storage
         let mut read_buf = [0u8; 1536];
         let (metadata_size, nv_public, public_bytes) = {
-            let storage = StorageManager::new(&mut *self.context.platform.storage);
+            let storage = StorageManager::new(self.context.platform.storage_mut());
             let metadata = storage
                 .get_metadata(nv_index)
                 .map_err(|_| TpmRc::HANDLE.with(Position::handle(2)))?;
@@ -105,7 +103,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut val_buf = [0u8; 2 + tpm2::TpmtHa::MAX_DIGEST_SIZE];
             let read_data_len = core::cmp::min(nv_public.data_size as usize, val_buf.len());
             {
-                let storage = StorageManager::new(&mut *self.context.platform.storage);
+                let storage = StorageManager::new(self.context.platform.storage_mut());
                 storage
                     .read_item(nv_index, metadata_size, &mut val_buf[..read_data_len])
                     .map_err(|_| TpmRc::FAILURE)?;

@@ -1,14 +1,14 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::{CommandHandler, SessionState};
 use crate::req_resp::RequestThenResponse;
 use crate::self_test::kdfa_bits;
-use crate::storage::{NvStorage, Tpm2Storage};
-use crate::timer::TpmTimer;
+use crate::storage::Tpm2Storage;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{PolicyCommandCode, PolicyGetDigest, PolicyRestart, StartAuthSession};
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TPM2_MAX_ACTIVE_SESSIONS, TpmSe};
 use tpm2::{
@@ -16,9 +16,7 @@ use tpm2::{
     TpmsAuthCommand, TpmsAuthResponse, Unmarshal,
 };
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::StartAuthSession] (`0x11F`) command.
     ///
     /// # Description
@@ -391,7 +389,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// Returns `None` when `nv_index` is not defined (or its stored header cannot be parsed).
     pub(crate) fn read_nv_public(&mut self, nv_index: u32) -> Option<crate::owned::OwnedNvPublic> {
         let storage_mgr =
-            crate::storage::manager::StorageManager::new(&mut *self.context.platform.storage);
+            crate::storage::manager::StorageManager::new(self.context.platform.storage_mut());
         let metadata = storage_mgr.get_metadata(nv_index).ok()?;
         let mut read_buf = [0u8; 1536];
         let read_len = core::cmp::min(metadata.data_size as usize, read_buf.len());

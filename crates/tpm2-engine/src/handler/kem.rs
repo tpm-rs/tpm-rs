@@ -6,18 +6,15 @@
 //! requires the *kdf* of an ECC key to be `TPM_ALG_NULL` (as the TCG reference does, which also
 //! implements only ML-KEM in these commands), so an ECC key is never a KEM key here.
 
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use tpm2::Tpm2bSharedSecret;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles [tpm2::TpmCc::Encapsulate] (`0x1A7`).
     ///
     /// TPM 2.0 Part 3, TPM2_Encapsulate: "Given a recipient's public key, `TPM2_Encapsulate()`

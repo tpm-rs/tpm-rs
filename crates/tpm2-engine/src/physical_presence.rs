@@ -16,12 +16,12 @@
 //!
 //! [`State::physical_presence`]: crate::State::physical_presence
 
+use crate::Platform;
 use crate::engine::{TpmEngine, is_command_supported};
+use crate::storage::Tpm2Storage;
 use crate::storage::manager::StorageManager;
-use crate::storage::{NvStorage, Tpm2Storage};
-use crate::timer::TpmTimer;
 use tpm2::TpmCc;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 
 /// The commands that can be gated with Physical Presence (C `PP_COMMAND`/`PP_REQUIRED`): the
 /// commands with a `TPMI_RH_PLATFORM`, `TPMI_RH_PROVISION`, `TPMI_RH_CLEAR`, `TPMI_RH_HIERARCHY`
@@ -133,7 +133,7 @@ impl PpList {
 /// `gp.algorithmSet` ([`crate::storage::nv::NvPlatformSettingsRecord`]).
 pub(crate) use crate::storage::nv::PLATFORM_SETTINGS_HANDLE;
 
-impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
+impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// Sets whether Physical Presence is asserted (C `_plat__Signal_PhysicalPresenceOn()` /
     /// `_plat__Signal_PhysicalPresenceOff()`). The platform keeps it across `_TPM_Init`.
     pub fn set_physical_presence(&mut self, asserted: bool) {
@@ -155,14 +155,14 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
             pp_list: self.state.nv.persistent.pp_list.bits(),
             algorithm_set: self.state.nv.persistent.algorithm_set,
         }
-        .write(&mut *self.platform.storage);
+        .write(self.platform.storage_mut());
     }
 
     /// Reloads `gp.ppList` and `gp.algorithmSet` from NV at `_TPM_Init`; without a record (as
     /// after manufacture) they keep their manufacture defaults.
     pub(crate) fn restore_platform_settings(&mut self) {
         if let Some(record) =
-            crate::storage::nv::NvPlatformSettingsRecord::read(&mut *self.platform.storage)
+            crate::storage::nv::NvPlatformSettingsRecord::read(self.platform.storage_mut())
         {
             self.state.nv.persistent.pp_list = PpList::from_bits(record.pp_list);
             self.state.nv.persistent.algorithm_set = record.algorithm_set;
@@ -171,7 +171,7 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
 
     /// Forgets the platform settings record (manufacture).
     pub(crate) fn clear_platform_settings(&mut self) {
-        let mut storage = StorageManager::new(&mut *self.platform.storage);
+        let mut storage = StorageManager::new(self.platform.storage_mut());
         let _ = storage.undefine_space(PLATFORM_SETTINGS_HANDLE);
         self.state.nv.persistent.pp_list = PpList::manufacture_default();
         self.state.nv.persistent.algorithm_set = 0;

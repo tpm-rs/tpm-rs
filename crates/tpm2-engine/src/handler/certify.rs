@@ -1,6 +1,5 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, owned::OwnedName, req_resp::RequestThenResponse};
 use tpm2::Marshal;
 #[allow(unused_imports)]
@@ -8,13 +7,11 @@ use tpm2::TpmCc;
 use tpm2::TpmGenerated;
 use tpm2::commands::responses;
 use tpm2::commands::{Certify, CertifyCreation};
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bName, TpmsAttest, TpmsCertifyInfo, TpmsCreationInfo, TpmtSigScheme, TpmuAttest};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::Certify] (`0x148`) command.
     ///
     /// # Description

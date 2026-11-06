@@ -7,8 +7,9 @@
 //! (the TPM's DRBG, or the DRBG seeded from a hierarchy's Primary Seed for Primary Objects). The
 //! raw RSA operations on the padded blocks use the crypto backend.
 
+use crate::Platform;
 use tpm2::Marshal;
-use tpm2::crypto::{Crypto, Rng, RsaPublicKey};
+use tpm2::crypto::{Crypto, RsaPublicKey};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, Tpm2bPublicKeyRsa, TpmEccCurve, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmsRsaParms,
@@ -19,8 +20,6 @@ use crate::engine::DrbgState;
 use crate::handler::CommandHandler;
 use crate::owned::{OwnedDigest, OwnedEccPoint, OwnedPublicParmsAndId, OwnedTpm2b};
 use crate::reference_rng::{RefRng, drbg, ecc, rsa};
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 
 /// `PRIMARY_OBJECT_CREATION`: the DRBG purpose of Primary Objects, with its terminating NUL.
 const PRIMARY_OBJECT_CREATION: &[u8] = b"Primary Object Creation\0";
@@ -33,9 +32,7 @@ pub(crate) struct PrimaryCreation<'p> {
     pub endorsement: bool,
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// `CryptEccSign()` with the TPM's DRBG for the scheme `scheme` (ECDSA, SM2 or EC-Schnorr)
     /// and its hash `hash`: signs `digest` with the private scalar `d` (big-endian) on `curve`,
     /// writing `r` and `s` (each padded to the order size) into `r_out`/`s_out`. Returns the
@@ -162,7 +159,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let engine = &mut *self.context;
             let mut rng = RefRng {
                 drbg: Some(&mut engine.state.nv.orderly.drbg_state),
-                entropy: Some(&mut *engine.platform.rng),
+                entropy: Some(engine.platform.rng()),
             };
             let key_len = match parms_and_id {
                 OwnedPublicParmsAndId::Rsa(parms, unique) => {

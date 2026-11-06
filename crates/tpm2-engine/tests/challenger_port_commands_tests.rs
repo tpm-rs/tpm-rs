@@ -30,7 +30,7 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> TpmEngine<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng> {
+) -> TpmEngine<TpmPlatform<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>> {
     let platform = TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     tpm.init_storage();
@@ -46,7 +46,7 @@ fn setup_tpm<'a>(
 }
 
 fn execute_tpm_command_with_auths<C: Command>(
-    tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -59,7 +59,7 @@ where
 /// Like [`execute_tpm_command_with_auths`], but `patch` may modify the marshaled parameter area
 /// before the command is sent (e.g. to send a value the `tpm2` types cannot represent).
 fn execute_tpm_command_with_patched_parameters<C: Command>(
-    tpm: &mut TpmEngine<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
     patch: impl FnOnce(&mut [u8]),

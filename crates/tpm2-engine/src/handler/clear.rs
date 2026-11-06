@@ -1,17 +1,15 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
-use crate::storage::{NvStorage, Tpm2Storage};
-use crate::timer::TpmTimer;
+use crate::storage::Tpm2Storage;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::Clear;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::Clear] (`0x126`) command.
     ///
     /// # Description
@@ -174,7 +172,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // C code re-iterates from the beginning after `NvDelete`).
             let toc = {
                 let storage = crate::storage::manager::StorageManager::new(
-                    &mut *self.context.platform.storage,
+                    self.context.platform.storage_mut(),
                 );
                 storage.read_toc().map_err(|_| TpmRc::FAILURE)?
             };
@@ -186,7 +184,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         continue;
                     }
                     let storage = crate::storage::manager::StorageManager::new(
-                        &mut *self.context.platform.storage,
+                        self.context.platform.storage_mut(),
                     );
                     if let Ok(meta) = storage.get_metadata(item.handle)
                         && (meta.attributes & PLATFORMCREATE) == 0
@@ -213,7 +211,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.fold_nv_counter_into_max_counter(handle);
             }
             let mut storage =
-                crate::storage::manager::StorageManager::new(&mut *self.context.platform.storage);
+                crate::storage::manager::StorageManager::new(self.context.platform.storage_mut());
             storage.undefine_space(handle).map_err(|_| TpmRc::FAILURE)?;
         }
     }
@@ -221,7 +219,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// If `handle` is a written NV counter index, raises `max_counter` to its current value.
     fn fold_nv_counter_into_max_counter(&mut self, handle: u32) {
         let storage =
-            crate::storage::manager::StorageManager::new(&mut *self.context.platform.storage);
+            crate::storage::manager::StorageManager::new(self.context.platform.storage_mut());
         let Ok(meta) = storage.get_metadata(handle) else {
             return;
         };

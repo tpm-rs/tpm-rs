@@ -1,10 +1,9 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use tpm2::commands::{GetCapability, PolicyCapability};
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Marshal, TpmCap, TpmCc, TpmEo, TpmSe, TpmsCapabilityData, Unmarshal};
 
@@ -27,9 +26,7 @@ const MAX_PROPERTY_SIZE: usize = {
 /// A property of a capability as its marshaled property structure (operand A).
 type PropertyData = ([u8; MAX_PROPERTY_SIZE], usize);
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::PolicyCapability] (`0x19B`) command.
     ///
     /// # Description

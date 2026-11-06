@@ -26,13 +26,12 @@
 //! hold the prime as well (the smaller `RSA_PRIVATE_SIZE`, like Google's production
 //! `ibmswtpm2`), see [`WRITES_CRT_FORM`]; `TPM2_Load` still accepts both forms.
 
-use tpm2::crypto::{Crypto, CryptoError, Rng, RsaPrivateKey};
+use crate::Platform;
+use tpm2::crypto::{Crypto, CryptoError, RsaPrivateKey};
 use tpm2::errors::TpmRc;
 use tpm2::{Tpm2bPrivateKeyRsa, TpmsRsaParms};
 
 use crate::handler::CommandHandler;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 
 /// The number of prime-sized values in the CRT form (`P`, `Q`, `dP`, `dQ`, `qInv`).
 pub(crate) const CRT_VALUES: usize = 5;
@@ -123,9 +122,7 @@ fn square_bit_length(x: &[u8]) -> usize {
     bit_length(&bytes)
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Writes the sensitive value (`TPMU_SENSITIVE_COMPOSITE.rsa`) of the RSA key with the
     /// parameters `parms`, the modulus `modulus` and the prime `prime` (the private value of the
     /// object, [`TransientObject::private`](crate::handler::TransientObject::private)) to `out`

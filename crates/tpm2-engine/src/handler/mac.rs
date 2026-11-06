@@ -4,15 +4,14 @@
 //! is a `TPMI_ALG_MAC_SCHEME+` (a hash for an HMAC, or `TPM_ALG_CMAC`), and the key may be a
 //! KEYEDHASH (HMAC) or a SYMCIPHER (CMAC) signing key.
 
+use crate::Platform;
 use crate::cmac::CmacState;
 use crate::handle_checks::{Tpmi, check};
 use crate::owned::{OwnedPublicParmsAndId, OwnedSensitiveData};
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::commands::responses;
 use tpm2::commands::{MAC, MACStart};
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, AlgSym, Handle, Tpm2bDigest, TpmaObject, TpmiAlgHash, TpmiAlgMacScheme, TpmiAlgSymMode,
@@ -28,9 +27,7 @@ enum SelectedMac {
     Cmac(AlgSym),
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// `CryptSelectMac()`: the MAC algorithm of the key `key_handle` (already checked to be a
     /// loaded object) for `in_scheme`, together with the key's attributes.
     ///

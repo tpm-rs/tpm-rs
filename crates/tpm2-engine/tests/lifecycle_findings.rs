@@ -49,7 +49,7 @@ fn plain_command(cc: u32, params: &[u8]) -> Vec<u8> {
 
 /// Executes `cmd` and returns the response code.
 fn run<R: Rng + Sync>(
-    tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, R>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, FakeStorage, FakeTimer, R>>,
     cmd: &[u8],
 ) -> u32 {
     let mut rsp = [0u8; 4096];
@@ -67,7 +67,9 @@ const TPM_RH_LOCKOUT: u32 = 0x4000_000A;
 const TPM_RH_PLATFORM: u32 = 0x4000_000C;
 
 /// Powers on (`_TPM_Init`) with `gs` and runs `TPM2_Startup(CLEAR)`.
-fn power_on_startup<R: Rng + Sync>(tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, R>) {
+fn power_on_startup<R: Rng + Sync>(
+    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, FakeStorage, FakeTimer, R>>,
+) {
     tpm.reset();
     assert_eq!(run(tpm, &plain_command(TPM_CC_STARTUP, &[0, 0])), 0);
 }

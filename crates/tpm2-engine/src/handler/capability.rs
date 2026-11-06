@@ -1,11 +1,10 @@
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
+use crate::Platform;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{ECCParameters, GetCapability, TestParms};
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Alg, TpmCap, TpmEccCurve, TpmPt};
 use tpm2::{
@@ -434,9 +433,7 @@ pub(crate) fn is_unmarshalable_capability(capability: u32) -> bool {
     capability <= LAST_CAP as u32 || capability == CAP_VENDOR_PROPERTY
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::GetCapability] (`0x17A`) command.
     ///
     /// # Description
@@ -544,7 +541,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 );
                 let (persistent_count, nv_index_count) = {
                     let storage = crate::storage::manager::StorageManager::new(
-                        &mut *self.context.platform.storage,
+                        self.context.platform.storage_mut(),
                     );
                     if let Ok(toc) = storage.read_toc() {
                         let p = toc
@@ -565,7 +562,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 // `storage::nv_capacity`.
                 let nv_usage = crate::storage::nv_capacity::scan(
                     &crate::storage::manager::StorageManager::new(
-                        &mut *self.context.platform.storage,
+                        self.context.platform.storage_mut(),
                     ),
                 )
                 .unwrap_or_default();
@@ -616,27 +613,29 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     startup_clear_attr |= tpm2::TpmaStartupClear::READ_ONLY;
                 }
 
-                let (firmware_svn, firmware_max_svn) = match self.context.platform.firmware {
+                let (firmware_svn, firmware_max_svn) = match self.context.platform.firmware() {
                     Some(firmware) => (
                         u32::from(firmware.firmware_svn()),
                         u32::from(firmware.firmware_max_svn()),
                     ),
                     None => (0, 0),
                 };
+                let info = *self.context.platform.info();
                 let all_properties = [
                     (TpmPt::FAMILY_INDICATOR, tpm2::TPM_SPEC_FAMILY), // "2.0\0"
                     (TpmPt::LEVEL, tpm2::TPM_SPEC_LEVEL),
                     (TpmPt::REVISION, tpm2::TPM_SPEC_VERSION),
                     (TpmPt::DAY_OF_YEAR, tpm2::TPM_SPEC_DAY_OF_YEAR),
                     (TpmPt::YEAR, tpm2::TPM_SPEC_YEAR),
-                    (TpmPt::MANUFACTURER, 0x474F4F47),    // "GOOG"
-                    (TpmPt::VENDOR_STRING_1, 0x54504D2D), // "TPM-"
-                    (TpmPt::VENDOR_STRING_2, 0x52555354), // "RUST"
-                    (TpmPt::VENDOR_STRING_3, 0),
-                    (TpmPt::VENDOR_STRING_4, 0),
-                    (TpmPt::VENDOR_TPM_TYPE, 1),
-                    (TpmPt::FIRMWARE_VERSION_1, super::FIRMWARE_VERSION_1),
-                    (TpmPt::FIRMWARE_VERSION_2, super::FIRMWARE_VERSION_2),
+                    // The vendor and firmware identification of the platform's `Info`.
+                    (TpmPt::MANUFACTURER, info.manufacturer),
+                    (TpmPt::VENDOR_STRING_1, info.vendor_strings[0]),
+                    (TpmPt::VENDOR_STRING_2, info.vendor_strings[1]),
+                    (TpmPt::VENDOR_STRING_3, info.vendor_strings[2]),
+                    (TpmPt::VENDOR_STRING_4, info.vendor_strings[3]),
+                    (TpmPt::VENDOR_TPM_TYPE, info.vendor_tpm_type),
+                    (TpmPt::FIRMWARE_VERSION_1, info.firmware_version_1),
+                    (TpmPt::FIRMWARE_VERSION_2, info.firmware_version_2),
                     (TpmPt::INPUT_BUFFER, 1024),
                     (
                         TpmPt::HR_TRANSIENT_MIN,
@@ -910,7 +909,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         return Err(TpmRc::VALUE.with(property_pos));
                     }
                     let storage = crate::storage::manager::StorageManager::new(
-                        &mut *self.context.platform.storage,
+                        self.context.platform.storage_mut(),
                     );
                     if let Ok(toc) = storage.read_toc() {
                         let mut matching = [0u32; crate::storage::manager::MAX_ITEMS];

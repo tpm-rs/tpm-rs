@@ -75,6 +75,7 @@ pub mod owned;
 #[cfg(feature = "persistence")]
 pub mod persistence;
 pub mod physical_presence;
+pub mod platform;
 pub mod platform_connection;
 mod read_only;
 #[cfg(feature = "reference-rng")]
@@ -108,7 +109,7 @@ pub use platform_connection::SimulatorPlatformSignal;
 #[cfg(feature = "std")]
 pub use platform_connection::{NO_STREAM, PlatformConnection};
 
-pub use tpm2::platform::TpmPlatform;
+pub use platform::{Info, Platform, TpmPlatform};
 
 /// Whether `TPM2_ECC_Parameters` reports a recommended KDF for the NIST curves
 /// (`KDF1_SP800_56A` with the hash of the curve's strength); without (the

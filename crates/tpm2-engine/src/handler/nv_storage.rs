@@ -1,9 +1,9 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::owned::{OwnedAuthCommand, OwnedDigest};
+use crate::storage::Tpm2Storage;
 use crate::storage::manager::StorageManager;
 use crate::storage::nv_capacity;
-use crate::storage::{NvStorage, Tpm2Storage};
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Marshal;
 #[allow(unused_imports)]
@@ -16,7 +16,7 @@ use tpm2::commands::{
     NVReadLock, NVReadPublic, NVSetBits, NVUndefineSpace, NVUndefineSpaceSpecial, NVWrite,
     NVWriteLock,
 };
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmGenerated, TpmNt, TpmiAlgHash};
 use tpm2::{
@@ -169,9 +169,7 @@ fn nv_read_access_checks(auth_handle: u32, nv_index: u32, attributes: TpmaNv) ->
     Ok(())
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Reads and parses the header of the NV Index `nv_index`.
     ///
     /// Returns `missing` if the index is not defined.
@@ -180,7 +178,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         nv_index: u32,
         missing: TpmRc,
     ) -> Result<NvIndexHeader, TpmRc> {
-        let storage = StorageManager::new(&mut *self.context.platform.storage);
+        let storage = StorageManager::new(self.context.platform.storage_mut());
         let metadata = storage.get_metadata(nv_index).map_err(|_| missing)?;
         let read_len = core::cmp::min(metadata.data_size as usize, NV_HEADER_BUF_SIZE);
         let mut read_buf = [0u8; NV_HEADER_BUF_SIZE];
@@ -208,7 +206,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         updated_public.attributes = attributes;
         let mut write_buf = [0u8; NV_HEADER_BUF_SIZE];
         let len = marshal_nv_header(&header.auth, &updated_public, &mut write_buf)?;
-        let mut storage = StorageManager::new(&mut *self.context.platform.storage);
+        let mut storage = StorageManager::new(self.context.platform.storage_mut());
         storage
             .write_item(nv_index, 0, &write_buf[..len])
             .map_err(|_| TpmRc::FAILURE)
@@ -327,7 +325,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if attributes.contains(TpmaNv::WRITTEN) && !attributes.contains(TpmaNv::ORDERLY) {
             let mut current = [0u8; MAX_NV_INDEX_SIZE as usize];
             let current = &mut current[..data.len()];
-            if StorageManager::new(&mut *self.context.platform.storage)
+            if StorageManager::new(self.context.platform.storage_mut())
                 .read_item(nv_index, header.metadata_size + offset, current)
                 .is_ok()
                 && current == data
@@ -349,7 +347,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     0xFF
                 };
                 let cleared = [erased; MAX_NV_INDEX_SIZE as usize];
-                StorageManager::new(&mut *self.context.platform.storage)
+                StorageManager::new(self.context.platform.storage_mut())
                     .write_item(
                         nv_index,
                         header.metadata_size,
@@ -363,7 +361,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.context.state.update_nv |= crate::engine::UT_ORDERLY;
             }
         }
-        StorageManager::new(&mut *self.context.platform.storage)
+        StorageManager::new(self.context.platform.storage_mut())
             .write_item(nv_index, header.metadata_size + offset, data)
             .map_err(|_| TpmRc::FAILURE)?;
         if !attributes.contains(TpmaNv::ORDERLY) {
@@ -375,7 +373,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// Reads the 8-byte value of a counter, bit field, or PIN index.
     fn nv_read_u64_data(&mut self, nv_index: u32, header: &NvIndexHeader) -> Result<u64, TpmRc> {
         let mut val_bytes = [0u8; 8];
-        StorageManager::new(&mut *self.context.platform.storage)
+        StorageManager::new(self.context.platform.storage_mut())
             .read_item(nv_index, header.metadata_size, &mut val_bytes)
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(u64::from_be_bytes(val_bytes))
@@ -393,7 +391,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         } else {
             None
         };
-        StorageManager::new(&mut *self.context.platform.storage)
+        StorageManager::new(self.context.platform.storage_mut())
             .undefine_space(nv_index)
             .map_err(|_| TpmRc::FAILURE)?;
         if let Some(val) = counter_val {
@@ -487,7 +485,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // space for the Index"; Part 2 TPM_PT_NV_COUNTERS_AVAIL: "This value is an estimate"),
         // so tpm-rs accounts NV like the reference (`storage::nv_capacity`).
         {
-            let storage = StorageManager::new(&mut *self.context.platform.storage);
+            let storage = StorageManager::new(self.context.platform.storage_mut());
             if storage.get_metadata(nv_public_struct.nv_index.0).is_ok() {
                 return Err(TpmRc::NV_DEFINED);
             }
@@ -504,7 +502,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let auth = Tpm2bAuth::from_bytes(crate::util::strip_trailing_zeros(auth))
             .map_err(|_| TpmRc::SIZE.with(Position::parameter(1)))?;
 
-        let mut storage = StorageManager::new(&mut *self.context.platform.storage);
+        let mut storage = StorageManager::new(self.context.platform.storage_mut());
 
         // 3. Allocate NV Index space and write metadata header (the public area in its legacy
         // `TPM2B_NV_PUBLIC` form, from which the Name is computed).
@@ -762,7 +760,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // disabled hierarchy are reported as `TPM_RC_HANDLE + RC_H1`.
         self.nv_accessible_index_header(nv_index, Position::handle(1))?;
 
-        let storage = StorageManager::new(&mut *self.context.platform.storage);
+        let storage = StorageManager::new(self.context.platform.storage_mut());
         let metadata = storage
             .get_metadata(nv_index)
             .map_err(|_| TpmRc::HANDLE.with(Position::handle(1)))?;
@@ -826,7 +824,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // disabled hierarchy are reported as `TPM_RC_HANDLE + RC_H1`.
         self.nv_accessible_index_header(nv_index, Position::handle(1))?;
 
-        let storage = StorageManager::new(&mut *self.context.platform.storage);
+        let storage = StorageManager::new(self.context.platform.storage_mut());
         let metadata = storage
             .get_metadata(nv_index)
             .map_err(|_| TpmRc::HANDLE.with(Position::handle(1)))?;
@@ -1219,7 +1217,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // 5. Construct the attestation structure.
         let nv_name = {
-            let storage = StorageManager::new(&mut *self.context.platform.storage);
+            let storage = StorageManager::new(self.context.platform.storage_mut());
             let mut read_buf = [0u8; NV_HEADER_BUF_SIZE];
             let read_len = core::cmp::min(header.metadata_size as usize, NV_HEADER_BUF_SIZE);
             storage
@@ -1239,7 +1237,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let digest;
         let attested = if cmd.size != 0 || cmd.offset != 0 {
             // TPM_ST_ATTEST_NV: the selected range of the index data.
-            StorageManager::new(&mut *self.context.platform.storage)
+            StorageManager::new(self.context.platform.storage_mut())
                 .read_item(
                     nv_index,
                     header.metadata_size + cmd.offset,
@@ -1269,7 +1267,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let Some(hash_alg) = digest_hash else {
                 return Err(TpmRc::SCHEME.with(Position::parameter(2)));
             };
-            StorageManager::new(&mut *self.context.platform.storage)
+            StorageManager::new(self.context.platform.storage_mut())
                 .read_item(
                     nv_index,
                     header.metadata_size,
@@ -1367,7 +1365,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let mut read_data = [0u8; tpm2::TPM2_MAX_NV_BUFFER_SIZE as usize];
-        StorageManager::new(&mut *self.context.platform.storage)
+        StorageManager::new(self.context.platform.storage_mut())
             .read_item(
                 nv_index,
                 header.metadata_size + cmd.offset,
@@ -1508,7 +1506,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::FAILURE);
         }
         if attributes.contains(TpmaNv::WRITTEN) {
-            StorageManager::new(&mut *self.context.platform.storage)
+            StorageManager::new(self.context.platform.storage_mut())
                 .read_item(nv_index, header.metadata_size, &mut old_bytes[..data_size])
                 .map_err(|_| TpmRc::FAILURE)?;
         }
@@ -1627,7 +1625,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // C `NvSetGlobalLock`: set TPMA_NV_WRITELOCKED on every index with TPMA_NV_GLOBALLOCK.
         // Changing a non-orderly index needs NV memory; storage errors are reported.
-        let toc = StorageManager::new(&mut *self.context.platform.storage)
+        let toc = StorageManager::new(self.context.platform.storage_mut())
             .read_toc()
             .map_err(|_| TpmRc::FAILURE)?;
         for item in toc.iter().filter(|item| item.in_use != 0) {
@@ -1854,7 +1852,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut data_buf = [0u8; MAX_NV_INDEX_SIZE as usize];
             let mut header_buf = [0u8; NV_HEADER_BUF_SIZE];
             let header_len = marshal_nv_header(&new_nv_auth, &header.public, &mut header_buf)?;
-            let mut storage = StorageManager::new(&mut *self.context.platform.storage);
+            let mut storage = StorageManager::new(self.context.platform.storage_mut());
             storage
                 .read_item(nv_index, header.metadata_size, &mut data_buf[..data_len])
                 .map_err(|_| TpmRc::FAILURE)?;

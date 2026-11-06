@@ -1,3 +1,4 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
@@ -7,14 +8,10 @@ use tpm2::Unmarshal;
 use tpm2::commands::PolicyAuthorize;
 use tpm2::errors::{Position, TpmRc};
 
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::{Handle, TpmSe, TpmiAlgHash};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::PolicyAuthorize] (`0x16A`) command.
     ///
     /// # Description

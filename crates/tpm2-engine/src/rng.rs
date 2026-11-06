@@ -13,20 +13,21 @@
 //!   are arranged so that the values are drawn in the order and with the sizes of the reference
 //!   code.
 //!
-//! [`TpmPlatform::rng`]: tpm2::platform::TpmPlatform
+//! [`TpmPlatform::rng`]: crate::TpmPlatform
 //! [`State::drbg_state`]: crate::State
 
+use crate::Platform;
+#[cfg(feature = "reference-rng")]
+use crate::storage::NvStorage;
 use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::TpmRc;
 
 use crate::engine::TpmEngine;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 
 #[cfg(feature = "reference-rng")]
 use crate::reference_rng::{RefRng, drbg};
 
-impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
+impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// Random bytes for values that the default build draws from the platform RNG (seeds,
     /// proofs, nonces, `TPM2_GetRandom`, IVs).
     pub(crate) fn random_platform(&mut self, out: &mut [u8]) -> Result<(), TpmRc> {
@@ -37,7 +38,7 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
         #[cfg(not(feature = "reference-rng"))]
         {
             self.platform
-                .rng
+                .rng()
                 .fill_bytes(out)
                 .map_err(|_| TpmRc::FAILURE)
         }
@@ -69,7 +70,7 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
     pub(crate) fn ref_rng(&mut self) -> RefRng<'_> {
         RefRng {
             drbg: Some(&mut self.state.nv.orderly.drbg_state),
-            entropy: Some(&mut *self.platform.rng),
+            entropy: Some(self.platform.rng()),
         }
     }
 
@@ -78,7 +79,7 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
     #[cfg(feature = "reference-rng")]
     pub(crate) fn crypt_rand_init(&mut self) {
         // The reference ignores the result; a failing source fails later draws instead.
-        let _ = self.platform.rng.init();
+        let _ = self.platform.rng().init();
     }
 
     /// `CryptRandStartup()` with `_DRBG_STATE_SAVE`: reseeds the DRBG restored from NV with
@@ -92,7 +93,7 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
     /// manufacture, `TPM2_Shutdown`, `TPM2_Clear` and Clock updates).
     #[cfg(feature = "reference-rng")]
     pub(crate) fn save_drbg_state(&mut self) {
-        let _ = self.platform.storage.write_nv(
+        let _ = self.platform.storage_mut().write_nv(
             DRBG_STATE_NV_OFFSET,
             &self.state.nv.orderly.drbg_state.to_bytes(),
         );
@@ -106,7 +107,7 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
         let mut buf = [0u8; 76];
         if self
             .platform
-            .storage
+            .storage()
             .read_nv(DRBG_STATE_NV_OFFSET, &mut buf)
             .is_ok()
         {

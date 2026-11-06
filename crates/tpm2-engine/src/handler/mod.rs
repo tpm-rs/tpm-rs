@@ -123,18 +123,17 @@ mod testing;
 mod unseal;
 pub(crate) mod vendor;
 
+use crate::Platform;
 use crate::owned::{
     AuthCommandLike, OwnedAuth, OwnedAuthCommand, OwnedDigest, OwnedEccPoint, OwnedName,
     OwnedNonce, OwnedPublic, OwnedPublicKeyRsa, OwnedPublicParmsAndId, OwnedTpm2b,
 };
 use crate::req_resp::RequestThenResponse;
 use crate::self_test::kdfa_bits;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{State, TpmEngine};
 use tpm2::Alg;
 use tpm2::crypto::{
-    CipherInput, Crypto, CryptoError, Direction, Rng, RsaPrivateKey, RsaPublicKey, SymmetricKey,
+    CipherInput, Crypto, CryptoError, Direction, RsaPrivateKey, RsaPublicKey, SymmetricKey,
 };
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmSe};
@@ -146,20 +145,6 @@ use tpm2::{
 
 /// The `qualifiedSigner` reported in attestation structures when `signHandle` is `TPM_RH_NULL`.
 const ATTEST_NULL_SIGNER_NAME: [u8; 4] = Handle::RH_NULL.0.to_be_bytes();
-
-/// `TPM_PT_FIRMWARE_VERSION_1` (`gp.firmwareV1`), reported by
-/// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)` and in [`ATTEST_FIRMWARE_VERSION`].
-pub(crate) const FIRMWARE_VERSION_1: u32 = 1;
-/// `TPM_PT_FIRMWARE_VERSION_2` (`gp.firmwareV2`), reported by
-/// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)` and in [`ATTEST_FIRMWARE_VERSION`].
-pub(crate) const FIRMWARE_VERSION_2: u32 = 0;
-
-/// The plain-text `firmwareVersion` reported in attestation structures:
-/// `(TPM_PT_FIRMWARE_VERSION_1 << 32) | TPM_PT_FIRMWARE_VERSION_2` (`FillInAttestInfo()`), which
-/// agrees with the values reported by `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)`
-/// ([`FIRMWARE_VERSION_1`], [`FIRMWARE_VERSION_2`]).
-pub(crate) const ATTEST_FIRMWARE_VERSION: u64 =
-    ((FIRMWARE_VERSION_1 as u64) << 32) | FIRMWARE_VERSION_2 as u64;
 
 /// The common header fields of an attestation structure (`TPMS_ATTEST`), as filled in by
 /// `FillInAttestInfo()` in the reference implementation. Produced by
@@ -556,9 +541,9 @@ pub fn sym_encrypt_decrypt<C: Crypto>(
 
 /// The context that all command handler functions are given access to in order for them to process
 /// their given command.
-pub struct CommandHandler<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> {
+pub struct CommandHandler<'b, P: Platform> {
     /// The engine (platform and TPM state) the command operates on.
-    pub context: &'b mut TpmEngine<'a, C, S, T, R>,
+    pub context: &'b mut TpmEngine<P>,
 }
 
 /// `sizeof(TPMU_HA)`: the largest digest of the implemented hashes (64 octets, or 48 without
@@ -649,11 +634,9 @@ pub(crate) const TICKET_DIGEST_SIZE: usize = 64;
 /// A ticket digest: an HMAC with [`context_integrity_hash_alg`].
 pub(crate) type TicketDigest = crate::owned::OwnedTpm2b<TICKET_DIGEST_SIZE>;
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Creates a new `CommandHandler` object.
-    pub fn new(context: &'b mut TpmEngine<'a, C, S, T, R>) -> Self {
+    pub fn new(context: &'b mut TpmEngine<P>) -> Self {
         Self { context }
     }
 
@@ -1504,7 +1487,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         let mut clock_info = self.get_clock_info();
-        let mut firmware_version = ATTEST_FIRMWARE_VERSION;
+        // The plain-text firmware version (`FillInAttestInfo()`), which agrees with
+        // `TPM_PT_FIRMWARE_VERSION_1`/`_2` of `TPM2_GetCapability` (the platform's `Info`).
+        let mut firmware_version = self.context.platform.info().attest_firmware_version();
 
         // Signers outside the Endorsement and Platform hierarchies (and TPM_RH_NULL) must not
         // reveal the plain reset/restart counts and firmware version. A signer in a
@@ -1728,11 +1713,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TpmPlatform;
     use crate::req_resp::{RequestResponseCursor, Response};
     use crate::test_support::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
     use alloc::vec::Vec;
     use tpm2::commands::responses;
-    use tpm2::platform::TpmPlatform;
     use tpm2::{AlgSym, Tpm2bName, TpmiAlgCipherMode};
 
     /// A self-test state in which every algorithm is tested, so that [`fake_crypto`] runs no
@@ -1745,7 +1730,8 @@ mod tests {
         crate::self_test::Tested::new(&ALL_TESTED)
     }
 
-    type TestHandler<'a, 'b> = CommandHandler<'a, 'b, FakeCrypto, FakeStorage, FakeTimer, FakeRng>;
+    type TestHandler<'a, 'b> =
+        CommandHandler<'b, TpmPlatform<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng>>;
 
     /// Where the response handle area starts (after the 10-byte response header).
     const RESPONSE_OFFSET: usize = 10;

@@ -4,14 +4,13 @@
 //! is supported").
 
 use super::ecc_key_exchange::MAX_COORDINATE_SIZE;
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::owned::OwnedPublicParmsAndId;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmiAlgHash, TpmtKdfScheme};
 
@@ -46,9 +45,7 @@ fn kdf2_hash(scheme: Option<TpmtKdfScheme>) -> Result<TpmiAlgHash, TpmRc> {
     }
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// KDF2 (ISO/IEC 18033-2, the references' `CryptMGF_KDF()` with the counter starting at 1):
     /// fills `mask` with `H(z || 1) || H(z || 2) || ...`.
     fn kdf2(&self, hash: TpmiAlgHash, z: &[u8], mask: &mut [u8]) -> Result<(), TpmRc> {

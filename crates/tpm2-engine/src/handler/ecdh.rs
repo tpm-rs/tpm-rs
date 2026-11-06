@@ -1,18 +1,15 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, owned::OwnedPublicParmsAndId, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::ECDHKeyGen;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bEccParameter, TpmsEccPoint};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [tpm2::TpmCc::ECDHKeyGen] (`0x163`) command.
     ///
     /// # Description

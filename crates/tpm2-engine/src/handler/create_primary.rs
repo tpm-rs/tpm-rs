@@ -1,10 +1,9 @@
 #[cfg(not(feature = "reference-rng"))]
 use super::KeyDerivationArgs;
 use super::TransientObject;
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::MAX_PRIVATE_KEY_SIZE;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Handle;
 use tpm2::Marshal;
@@ -12,13 +11,11 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::commands::CreatePrimary;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Alg, Tpm2bDigest, Tpm2bName, TpmaLocality, TpmsCreationData, TpmtTkCreation};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::CreatePrimary] (`0x131`) command.
     ///
     /// # Description

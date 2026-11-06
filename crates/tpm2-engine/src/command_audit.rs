@@ -23,14 +23,13 @@
 //! cleared from the list), except when it changes the audit hash algorithm, in which case the
 //! digest register is cleared and that execution is not audited.
 
+use crate::Platform;
 use crate::State;
 use crate::engine::{TpmEngine, VENDOR_COMMANDS, command_resp_handles_size, is_command_supported};
 use crate::owned::OwnedDigest;
-use crate::storage::NvStorage;
 #[cfg(test)]
 use crate::storage::nv::{AUDIT_EXT_LEN, AUDIT_EXT_MARKER};
-use crate::timer::TpmTimer;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::TpmRc;
 use tpm2::{TpmCc, TpmiAlgHash, TpmtHa};
 
@@ -209,7 +208,7 @@ pub(crate) fn decode_audit_ext(global_state: &mut State, src: &[u8]) -> bool {
     true
 }
 
-impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
+impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// Prepares the command audit of `cc` before the command is executed (`CheckCommandAudit()`,
     /// called from `ParseSessionBuffer()` / `CheckAuthNoSession()` once authorization has
     /// succeeded and before any parameter decryption).

@@ -31,7 +31,7 @@ fn setup_tpm_with_fake_platform<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> TpmEngine<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng> {
+) -> TpmEngine<TpmPlatform<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng>> {
     let platform = TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     tpm.init_storage();

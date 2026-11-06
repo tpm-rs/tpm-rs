@@ -17,20 +17,19 @@
 //!   and the use of the policy session for authorization checks the channel
 //!   ([`TpmEngine::check_sec_channel_policy`]: `TPM_RC_CHANNEL`, `TPM_RC_CHANNEL_KEY`).
 
+use crate::Platform;
 use crate::engine::TpmEngine;
 use crate::handler::SecChannelPolicy;
 use crate::owned::OwnedName;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Marshal, TpmiAlgHash, TpmtPublic};
 
-impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
+impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// The public area of the TPM SPDM authentication key `TPM_PUB_KEY_TPM_SPDM_00 + index`
     /// (TPM 2.0 Part 2, `TPM_PUB_KEY`), or `None` if the platform has no such key.
     pub(crate) fn tpm_spdm_public_key(&self, index: u8) -> Option<TpmtPublic<'_>> {
-        self.platform.secure_channel?.tpm_spdm_public_key(index)
+        self.platform.secure_channel()?.tpm_spdm_public_key(index)
     }
 
     /// The Name of the TPM SPDM key `index`: `nameAlg || H_nameAlg(publicArea)` (TPM 2.0 Part 1,
@@ -63,7 +62,7 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
     pub(crate) fn spdm_session_names(&self) -> Result<Option<(OwnedName, OwnedName)>, TpmRc> {
         let Some(session) = self
             .platform
-            .secure_channel
+            .secure_channel()
             .and_then(|channel| channel.spdm_session())
         else {
             return Ok(None);

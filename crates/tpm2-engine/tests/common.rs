@@ -699,8 +699,9 @@ where
 
 /// A [`tpm2_engine::TpmEngine`] backed by the real test crypto backend and the
 /// fake storage/timer/RNG.
-pub type RealCryptoEngine<'a> =
-    tpm2_engine::TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>;
+pub type RealCryptoEngine<'a> = tpm2_engine::TpmEngine<
+    tpm2_engine::TpmPlatform<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
+>;
 
 /// Builds a [`RealCryptoEngine`] plus its [`tpm2_engine::State`] and runs
 /// `TPM2_Startup(TPM_SU_CLEAR)`, so white-box tests can drive real commands

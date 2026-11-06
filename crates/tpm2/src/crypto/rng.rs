@@ -60,7 +60,7 @@ pub trait Rng {
     /// (`_TPM_Init`, and at manufacture).
     ///
     /// This is a tpm-rs extension, used for the platform RNG
-    /// ([`TpmPlatform::rng`](crate::platform::TpmPlatform::rng)): it is like
+    /// (`tpm2_engine::Platform::rng`): it is like
     /// `_plat__GetEntropy(NULL, 0)` of the reference implementation's simulator
     /// platform, which seeds its software entropy source. Does nothing by default.
     fn init(&mut self) -> Result<(), CryptoError> {

@@ -115,7 +115,7 @@ fn set_command_code_audit_status_cmd(
 
 /// Executes `request` and returns the response code.
 fn execute_rc(
-    tpm: &mut TpmEngine<'_, common::FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, common::FakeCrypto, FakeStorage, FakeTimer, FakeRng>>,
     request: &[u8],
 ) -> u32 {
     let mut response = [0u8; 4096];

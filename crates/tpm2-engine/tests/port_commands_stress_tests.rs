@@ -31,7 +31,7 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng> {
+) -> TpmEngine<TpmPlatform<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>> {
     let platform = TpmPlatform::new(crypto, storage, timer, rng);
     let mut tpm = TpmEngine::new(platform).unwrap();
     tpm.init_storage();
@@ -58,7 +58,7 @@ const DUP_POLICY_DIGEST: [u8; 32] =
 /// This is a separate, non-generic function so that the generic bounds of
 /// [`execute_tpm_command`] do not interfere with resolving the bounds for these commands.
 fn start_duplicate_policy_session(
-    tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>>,
     auth_hash: TpmiAlgHash,
 ) -> Result<TpmsAuthCommand<'static>, u32> {
     use tpm2::commands::{PolicyCommandCode, StartAuthSession};
@@ -96,7 +96,7 @@ fn start_duplicate_policy_session(
 /// `TPM_RC_AUTH_MISSING` otherwise): empty password sessions for USER/ADMIN handles, and for
 /// `TPM2_Duplicate` a policy session that satisfied `PolicyCommandCode(TPM_CC_Duplicate)`.
 fn execute_tpm_command<C: Command>(
-    tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -136,7 +136,7 @@ where
 }
 
 fn execute_tpm_command_raw<C: Command>(
-    tpm: &mut TpmEngine<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>

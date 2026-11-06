@@ -14,7 +14,8 @@
 
 #![cfg_attr(not(any(feature = "mlkem", feature = "mldsa")), allow(dead_code))]
 
-use tpm2::crypto::{Crypto, CryptoError, Rng};
+use crate::Platform;
+use tpm2::crypto::{Crypto, CryptoError};
 #[cfg(feature = "mldsa")]
 use tpm2::crypto::{MldsaPrivateKey, MldsaPublicKey};
 #[cfg(feature = "mlkem")]
@@ -25,8 +26,6 @@ use tpm2::{Alg, TpmiMldsaParms, TpmiMlkemParms};
 use crate::handler::{CommandHandler, TransientObject};
 use crate::owned::OwnedPublicParmsAndId;
 use crate::self_test::kdfa_bits;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 
 /// The parameter set and encapsulation key of an ML-KEM key, or `None` for another type.
 pub(crate) fn mlkem_key(object: &TransientObject) -> Option<(TpmiMlkemParms, &[u8])> {
@@ -304,9 +303,7 @@ fn crypto_rc(error: CryptoError) -> TpmRc {
     }
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// The encapsulation key of the ML-KEM key with private seed `seed`
     /// (`CryptoMlkem_Internal_GenerateKeyFromSeed()`), written to the start of `out`. Returns
     /// its length.
@@ -522,9 +519,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// The self test of `CryptoMlkem_GenerateKey()`/`CryptoMldsa_GenerateKey()` before the key
     /// of `parms_and_id` is generated (nothing for the other types).
     pub(crate) fn pqc_key_generation_self_test(

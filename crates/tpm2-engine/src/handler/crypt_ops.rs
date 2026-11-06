@@ -1,3 +1,4 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::owned::OwnedPublicParmsAndId;
 use tpm2::Handle;
@@ -14,15 +15,13 @@ use tpm2::{
     TpmtRsaScheme, TpmtSigScheme, TpmtSignature, TpmtTkVerified,
 };
 
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Alg;
-use tpm2::crypto::{Crypto, EccPrivateKey, Rng, RsaPrivateKey};
+#[cfg(not(feature = "reference-rng"))]
+use tpm2::crypto::Rng;
+use tpm2::crypto::{Crypto, EccPrivateKey, RsaPrivateKey};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::VerifySignature] (`0x177`) command.
     ///
     /// # Description

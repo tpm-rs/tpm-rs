@@ -1,18 +1,17 @@
 use super::encrypt_decrypt::crypto_len;
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::owned::OwnedPublicParmsAndId;
 use crate::req_resp::RequestThenResponse;
 use crate::self_test::kdfa_bits;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use tpm2::Alg;
 use tpm2::Handle;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{Duplicate, responses};
-use tpm2::crypto::{Crypto, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bData, Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bPrivate,
@@ -20,9 +19,7 @@ use tpm2::{
     TpmuSensitiveComposite,
 };
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::Duplicate] (`0x14B`) command.
     ///
     /// # Description

@@ -6,7 +6,7 @@ use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2_engine::{TpmEngine, TpmPlatform};
 
-fn setup_tpm() -> TpmEngine<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng> {
+fn setup_tpm() -> TpmEngine<TpmPlatform<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng>> {
     // Create static references or owned items that match the test common setup
     // We can allocate them on the heap or leak box for tests or follow random_tests structure
     let crypto = FakeCrypto;
@@ -34,7 +34,7 @@ fn setup_tpm() -> TpmEngine<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng
 }
 
 fn send_da_lock_reset(
-    tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>>,
     auth_handle: u32,
     tag: u16,
 ) -> u32 {
@@ -72,7 +72,7 @@ fn send_da_lock_reset(
 }
 
 fn send_da_parameters(
-    tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>>,
     auth_handle: u32,
     new_max_tries: u32,
     new_recovery_time: u32,

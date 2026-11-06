@@ -1,25 +1,22 @@
+use crate::Platform;
 use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::handler::rsa_sensitive::{RSA_PRIVATE_SIZE, split_sensitive_value};
 use crate::handler::{CommandHandler, TransientObject};
 use crate::req_resp::RequestThenResponse;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use tpm2::Handle;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::LoadExternal;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     PublicParmsAndId, Tpm2bSensitive, TpmaObject, TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive,
     TpmuSensitiveComposite,
 };
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::LoadExternal] (`0x131`) command.
     ///
     /// # Description

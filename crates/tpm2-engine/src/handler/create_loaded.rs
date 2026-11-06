@@ -2,11 +2,10 @@
 use super::KeyDerivationArgs;
 use super::rsa_sensitive::RSA_PRIVATE_SIZE;
 use super::{ParentSchemeInfo, ResolvedParentInfo, TransientObject};
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::MAX_PRIVATE_KEY_SIZE;
 use crate::self_test::kdfa_bits;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Alg;
 use tpm2::Handle;
@@ -17,7 +16,7 @@ use tpm2::Unmarshal;
 #[allow(deprecated)] // `TPM2_CreateLoaded` is deprecated, but this TPM still implements it.
 use tpm2::commands::CreateLoaded;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     PublicParmsAndId, Tpm2bDigest, Tpm2bEccParameter, Tpm2bPrivate, Tpm2bPrivateKeyRsa,
@@ -26,9 +25,7 @@ use tpm2::{
     TpmuSensitiveComposite,
 };
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::CreateLoaded] (`0x197`) command.
     ///
     /// # Description

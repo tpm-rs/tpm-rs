@@ -12,6 +12,7 @@
 //! *keyName* || *metadata*))), keyed with the proof of the hierarchy of the key at the start of
 //! the sequence.
 
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::crypt_ops::{SignPositions, SignatureBuffers};
 use crate::handler::sign_digest::{
@@ -19,15 +20,13 @@ use crate::handler::sign_digest::{
     verified_ticket_hierarchy,
 };
 use crate::owned::{OwnedPublicParmsAndId, OwnedSensitiveData};
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{SequenceType, SignatureSequence};
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bDigest, TpmaObject, TpmtSigScheme, TpmtSignature, TpmtTkVerified};
 
@@ -41,9 +40,7 @@ enum SequenceKind {
     Verify,
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::SignSequenceStart] (`0x1AA`) command.
     ///
     /// # Description

@@ -1,18 +1,17 @@
 use super::encrypt_decrypt::{crypto_check, crypto_len};
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::{CommandHandler, TransientObject};
 use crate::owned::OwnedPublicParmsAndId;
 use crate::req_resp::RequestThenResponse;
 use crate::self_test::kdfa_bits;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use tpm2::Handle;
 use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::{Rewrap, responses};
-use tpm2::crypto::{Crypto, Direction, EccPrivateKey, Rng};
+use tpm2::crypto::{Crypto, Direction, EccPrivateKey};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bPrivate, TpmEccCurve, TpmaObject,
@@ -65,9 +64,7 @@ fn outer_sym_alg(obj: &TransientObject) -> tpm2::AlgSym {
     crate::handler::protection_sym_alg(&obj.public.parms_and_id)
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::Rewrap] (`0x152`) command.
     ///
     /// # Description

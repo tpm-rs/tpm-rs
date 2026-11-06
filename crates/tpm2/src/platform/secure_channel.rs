@@ -15,7 +15,7 @@
 //! `TPM2_GetCapability(TPM_CAP_SPDM_SESSION_INFO)` (the key Names of the SPDM session that
 //! protects the command) and the deferred checks of `TPM2_PolicyTransportSPDM()`
 //! (`TPM_RC_CHANNEL`, `TPM_RC_CHANNEL_KEY`). A platform without a [`SecureChannel`]
-//! (`TpmPlatform::secure_channel` is `None`) has no TPM SPDM keys and never protects a command
+//! (`tpm2_engine::Platform::secure_channel` is `None`) has no TPM SPDM keys and never protects a command
 //! with an SPDM session.
 //!
 //! [`SimulatedSecureChannel`] is the *insecure* dummy of the TCG reference implementation

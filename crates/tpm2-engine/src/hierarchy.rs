@@ -27,13 +27,13 @@
 //! The firmware secrets come from the platform ([`tpm2::platform::TpmFirmware`]); a platform
 //! without them does not support limited hierarchies (`TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`).
 
+use crate::Platform;
 use crate::TpmEngine;
 use crate::handler::{context_integrity_hash_alg, provisioned_secret};
 use crate::self_test::kdfa_bits;
 use tpm2::Handle;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Fmt1, TpmRc};
-use tpm2::platform::{NvStorage, TpmTimer};
 
 /// The `bSecretLabel` of a seed derivation (Part 1, Equation "seed-proof-limited-hierarchy",
 /// note: "The Reference Code uses "H_SEED_SECRET" and "H_PROOF_SECRET" for deriving seeds and
@@ -149,7 +149,7 @@ impl core::fmt::Debug for HierarchySecret {
     }
 }
 
-impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
+impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// Whether the base hierarchy `base` is enabled (`TPM_RH_NULL` always is); `None` if `base`
     /// is not a base hierarchy.
     pub(crate) fn base_hierarchy_enabled(&self, base: u32) -> Option<bool> {
@@ -177,11 +177,11 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
         match modifier {
             Modifier::None => {}
             Modifier::Firmware => {
-                if self.platform.firmware.is_none() {
+                if self.platform.firmware().is_none() {
                     return Err(TpmRc::FW_LIMITED);
                 }
             }
-            Modifier::Svn(svn) => match self.platform.firmware {
+            Modifier::Svn(svn) => match self.platform.firmware() {
                 Some(firmware) if svn <= firmware.firmware_svn() => {}
                 _ => return Err(TpmRc::SVN_LIMITED),
             },
@@ -201,7 +201,7 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
 
     /// Whether the TPM supports limited hierarchies (its platform has a firmware identity).
     pub(crate) fn supports_limited_hierarchies(&self) -> bool {
-        self.platform.firmware.is_some()
+        self.platform.firmware().is_some()
     }
 
     /// The proof of hierarchy `handle` (the reference's `HierarchyGetProof`): `shProof`,
@@ -270,14 +270,14 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
         let (additional_len, additional_label) = match modifier {
             Modifier::None => (0, &[][..]),
             Modifier::Firmware => {
-                let firmware = self.platform.firmware.ok_or(TpmRc::FW_LIMITED.to_rc())?;
+                let firmware = self.platform.firmware().ok_or(TpmRc::FW_LIMITED.to_rc())?;
                 let len = firmware
                     .firmware_secret(&mut additional)
                     .map_err(|_| TpmRc::FW_LIMITED.to_rc())?;
                 (len, FW_SECRET_LABEL)
             }
             Modifier::Svn(svn) => {
-                let firmware = self.platform.firmware.ok_or(TpmRc::SVN_LIMITED.to_rc())?;
+                let firmware = self.platform.firmware().ok_or(TpmRc::SVN_LIMITED.to_rc())?;
                 let len = firmware
                     .firmware_svn_secret(svn, &mut additional)
                     .map_err(|_| TpmRc::SVN_LIMITED.to_rc())?;

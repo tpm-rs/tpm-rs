@@ -44,15 +44,14 @@ pub(crate) use algorithm_tests::SelfTester;
 pub use tested::Tested;
 pub use tested::kdfa_bits;
 
+use crate::Platform;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::TpmRc;
 use tpm2::{Alg, TpmiAlgHash};
 
 use crate::engine::TpmEngine;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 
 /// `TPM_ALG_FIRST`: the first algorithm ID that is tested (`TPM_ALG_RSA`).
 pub const ALG_FIRST: u16 = 0x0001;
@@ -252,7 +251,7 @@ impl SelfTestState {
     }
 }
 
-impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
+impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// The crypto backend with the on-demand self tests of the algorithms it is used with
     /// ([`Tested`]). Every cryptographic operation of the engine and the command handlers uses
     /// it.
@@ -268,7 +267,7 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
             #[cfg(feature = "reference-rng")]
             rng: Some(crate::reference_rng::RefRng {
                 drbg: Some(&mut self.state.nv.orderly.drbg_state),
-                entropy: Some(&mut *self.platform.rng),
+                entropy: Some(self.platform.rng()),
             }),
         }
     }

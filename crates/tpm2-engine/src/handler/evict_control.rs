@@ -1,22 +1,20 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::{CommandHandler, TransientObject};
 use crate::owned::OwnedAuthCommand;
 use crate::req_resp::RequestThenResponse;
+use crate::storage::Tpm2Storage;
 use crate::storage::manager::StorageManager;
 use crate::storage::nv_capacity;
-use crate::storage::{NvStorage, Tpm2Storage};
-use crate::timer::TpmTimer;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::TpmaObject;
 use tpm2::commands::EvictControl;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmHt};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::EvictControl] (`0x120`) command.
     ///
     /// # Description
@@ -108,7 +106,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // 3. Persist the transient object to NV storage. C checks `TPM_RC_NV_DEFINED`
             // before `NvAddEvictObject`, which fails with `TPM_RC_NV_UNAVAILABLE` before NV
             // is modified.
-            if StorageManager::new(&mut *self.context.platform.storage)
+            if StorageManager::new(self.context.platform.storage_mut())
                 .get_metadata(persistent_handle)
                 .is_ok()
             {
@@ -121,14 +119,14 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // like the reference (`storage::nv_capacity`): every persistent object takes
             // `NV_EVICT_OBJECT_SIZE` bytes whatever its type.
             let usage =
-                nv_capacity::scan(&StorageManager::new(&mut *self.context.platform.storage))
+                nv_capacity::scan(&StorageManager::new(self.context.platform.storage_mut()))
                     .map_err(|_| TpmRc::FAILURE)?;
             if !usage.can_add_evict_object() {
                 return Err(TpmRc::NV_SPACE);
             }
             self.return_if_nv_is_not_available()?;
             self.nv_clear_orderly()?;
-            let mut storage = StorageManager::new(&mut *self.context.platform.storage);
+            let mut storage = StorageManager::new(self.context.platform.storage_mut());
             Self::persist_transient_object(persistent_handle, &obj, &mut storage)?;
         } else {
             // 4. Evict persistent object from storage
@@ -148,7 +146,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // `NvDeleteEvict` fails with `TPM_RC_NV_UNAVAILABLE` before NV is modified.
             self.return_if_nv_is_not_available()?;
             self.nv_clear_orderly()?;
-            StorageManager::new(&mut *self.context.platform.storage)
+            StorageManager::new(self.context.platform.storage_mut())
                 .undefine_space(object_handle)
                 .map_err(|_| TpmRc::HANDLE.with(Position::handle(2)))?;
         }

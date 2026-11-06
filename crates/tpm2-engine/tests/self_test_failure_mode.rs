@@ -11,7 +11,7 @@ use tpm2_engine::TpmPlatform;
 
 /// Executes `request` and returns the response.
 fn execute(
-    tpm: &mut TpmEngine<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>>,
     request: &[u8],
 ) -> Vec<u8> {
     let mut response = [0u8; 1024];

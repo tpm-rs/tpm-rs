@@ -1,9 +1,9 @@
+use crate::Platform;
 use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
 /// Custom value matching the TCG reference code implementation indicating that no orderly shutdown
@@ -33,13 +33,11 @@ fn is_orderly(value: u16) -> bool {
     value < SU_DA_USED_VALUE
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     pub(crate) fn nv_sync_persistent_reset_count(&mut self) -> Result<(), TpmRc> {
         self.context
             .platform
-            .storage
+            .storage_mut()
             .write_nv(
                 crate::storage::nv::NvHeader::RESET_COUNT_OFFSET,
                 &self.context.state.nv.persistent.reset_count.to_be_bytes(),
@@ -50,7 +48,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     fn nv_sync_persistent_total_reset_count(&mut self) -> Result<(), TpmRc> {
         self.context
             .platform
-            .storage
+            .storage_mut()
             .write_nv(
                 crate::storage::nv::NvHeader::TOTAL_RESET_COUNT_OFFSET,
                 &self
@@ -67,7 +65,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub(crate) fn nv_sync_persistent_orderly_state(&mut self) -> Result<(), TpmRc> {
         self.context
             .platform
-            .storage
+            .storage_mut()
             .write_nv(
                 crate::storage::nv::NvHeader::ORDERLY_STATE_OFFSET,
                 &self.context.state.nv.persistent.orderly_state.to_be_bytes(),
@@ -80,7 +78,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub(crate) fn nv_sync_persistent_max_counter(&mut self) -> Result<(), TpmRc> {
         self.context
             .platform
-            .storage
+            .storage_mut()
             .write_nv(
                 crate::storage::nv::NvHeader::MAX_COUNTER_OFFSET,
                 &self.context.state.nv.persistent.max_counter.to_be_bytes(),
@@ -95,7 +93,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if self
             .context
             .platform
-            .storage
+            .storage()
             .read_nv(crate::storage::nv::NvHeader::MAX_COUNTER_OFFSET, &mut buf)
             .is_ok()
         {
@@ -138,7 +136,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub(crate) fn nv_sync_persistent_failed_tries(&mut self) -> Result<(), TpmRc> {
         self.context
             .platform
-            .storage
+            .storage_mut()
             .write_nv(
                 crate::storage::nv::NvHeader::FAILED_TRIES_OFFSET,
                 &self.context.state.nv.persistent.failed_tries.to_be_bytes(),
@@ -151,7 +149,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     pub(crate) fn nv_sync_persistent_drbg_state(&mut self) -> Result<(), TpmRc> {
         self.context
             .platform
-            .storage
+            .storage_mut()
             .write_nv(
                 crate::storage::nv::NvHeader::DRBG_OFFSET,
                 &self.context.state.nv.orderly.drbg_state.to_bytes(),
@@ -167,7 +165,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if self
             .context
             .platform
-            .storage
+            .storage()
             .read_nv(crate::storage::nv::NvHeader::DRBG_OFFSET, &mut buf)
             .is_ok()
         {
@@ -183,7 +181,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         buf[8..16].copy_from_slice(&self.context.state.nv.orderly.lockout_timer.to_be_bytes());
         self.context
             .platform
-            .storage
+            .storage_mut()
             .write_nv(crate::storage::nv::NvHeader::SELF_HEAL_TIMER_OFFSET, &buf)
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
@@ -195,7 +193,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if self
             .context
             .platform
-            .storage
+            .storage()
             .read_nv(
                 crate::storage::nv::NvHeader::SELF_HEAL_TIMER_OFFSET,
                 &mut buf,
@@ -298,14 +296,14 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .nv
                     .orderly
                     .drbg_state
-                    .reseed(self.context.platform.rng)?;
+                    .reseed(self.context.platform.rng())?;
             } else {
                 self.context
                     .state
                     .nv
                     .orderly
                     .drbg_state
-                    .instantiate(self.context.platform.rng)?;
+                    .instantiate(self.context.platform.rng())?;
             }
             self.nv_sync_persistent_drbg_state()?;
         }
@@ -647,7 +645,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         use tpm2::{Marshal, TpmaNv};
         const HEADER_MAX: usize = tpm2::Tpm2bAuth::MAX_SIZE + tpm2::Tpm2bNvPublic::MAX_SIZE;
         let mut storage =
-            crate::storage::manager::StorageManager::new(&mut *self.context.platform.storage);
+            crate::storage::manager::StorageManager::new(self.context.platform.storage_mut());
         let toc = storage.read_toc().map_err(|_| TpmRc::FAILURE)?;
         for item in toc.iter().filter(|item| item.in_use != 0) {
             if (item.handle >> 24) != tpm2::TpmHt::NVIndex as u32 {

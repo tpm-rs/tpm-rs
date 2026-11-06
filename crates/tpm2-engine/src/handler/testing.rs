@@ -1,17 +1,14 @@
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
+use crate::Platform;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Alg;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::TpmlAlg;
 use tpm2::commands::{GetTestResult, IncrementalSelfTest, SelfTest, responses};
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::SelfTest] command.
     pub fn self_test(
         &mut self,

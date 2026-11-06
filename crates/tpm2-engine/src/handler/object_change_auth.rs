@@ -1,3 +1,4 @@
+use crate::Platform;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::ObjectChangeAuth;
@@ -10,14 +11,10 @@ use tpm2::{
 
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::rsa_sensitive::RSA_PRIVATE_SIZE;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ObjectChangeAuth] (`0x14C`) command.
     ///
     /// # Description

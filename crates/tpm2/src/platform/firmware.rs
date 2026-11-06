@@ -11,7 +11,7 @@
 //! (e.g. from a bootloader or hardware registers) "is outside the scope of this specification",
 //! so it is the platform's job: the [`TpmFirmware`] trait.
 //!
-//! A platform without a [`TpmFirmware`] (`TpmPlatform::firmware` is `None`) supports neither
+//! A platform without a [`TpmFirmware`] (`tpm2_engine::Platform::firmware` is `None`) supports neither
 //! kind of limited hierarchy: their handles fail with `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`
 //! ("the Firmware Secret is unavailable").
 //!

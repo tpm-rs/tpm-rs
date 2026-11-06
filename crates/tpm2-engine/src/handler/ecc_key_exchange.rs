@@ -23,14 +23,13 @@
 )]
 
 use super::encrypt_decrypt::crypto_len;
+use crate::Platform;
 use crate::ecc_curves::{CurveParams, curve_params};
 use crate::handle_checks::{Tpmi, check};
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bEccParameter, Tpm2bEccPoint, TpmEccCurve, TpmsEccPoint};
 
@@ -142,9 +141,7 @@ fn times_cofactor(params: &CurveParams, t: &[u8], out: &mut [u8]) {
     }
 }
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ECEphemeral] (`0x18E`) command.
     ///
     /// # Description

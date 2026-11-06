@@ -1,3 +1,4 @@
+use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::handler::MAX_PRIVATE_KEY_SIZE;
@@ -12,14 +13,10 @@ use tpm2::commands::responses;
 use tpm2::errors::{Position, TpmRc};
 
 use crate::self_test::kdfa_bits;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
-use tpm2::crypto::{Crypto, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction};
 use tpm2::{Tpm2bPrivate, TpmaObject, TpmiAlgHash, TpmtSensitive};
 
-impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
-    CommandHandler<'a, 'b, C, S, T, R>
-{
+impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// Handles the [TpmCc::Load] (`0x12C`) command.
     ///
     /// # Description
