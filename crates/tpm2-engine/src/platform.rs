@@ -6,7 +6,7 @@
 //! [`Nv::index`]), the firmware identity, the secure transport layer and the immutable
 //! platform [`Info`]. The platform also decides how the NV data reaches external storage
 //! ([`Platform::load_nv`], [`Platform::store_nv`]) and how the runtime state is serialized
-//! for migration ([`Platform::serialize`], [`Platform::deserialize`], with the `persistence`
+//! for migration (`Platform::serialize`, `Platform::deserialize`, with the `persistence`
 //! feature). The component interfaces themselves ([`crate::storage::NvStorage`], [`TpmTimer`],
 //! [`TpmFirmware`], [`SecureChannel`]) live in [`tpm2::platform`].
 //!
@@ -71,7 +71,7 @@ impl Default for Info {
 /// engine is monomorphized over them), the immutable platform [`Info`] and the
 /// customizations of how the TPM state reaches storage: loading and storing the NV data
 /// ([`Platform::load_nv`], [`Platform::store_nv`]) and serializing the runtime state
-/// ([`Platform::serialize`], [`Platform::deserialize`]).
+/// (`Platform::serialize`, `Platform::deserialize`, with the `persistence` feature).
 pub trait Platform: Sized {
     /// Cryptography backend ([`Crypto`]). The backend's interfaces are static (its algorithms
     /// are associated types); the platform only selects it.

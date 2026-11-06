@@ -71,13 +71,13 @@ pub struct State<P: Platform> {
     /// Flag indicating if Dictionary Attack (DA) mitigation logic is currently active.
     pub da_used: bool,
     /// Power was lost and no `TPM2_Startup` has completed since (`g_powerWasLost` of the TCG
-    /// reference): kept across `_TPM_Init` ([`TpmEngine::reset`]), set by the platform on
+    /// reference): kept across `_TPM_Init` ([`crate::TpmEngine::reset`]), set by the platform on
     /// power on and cleared by a successful `TPM2_Startup`. While it is set, `_TPM_Init`
     /// re-enables NV (`NvPowerOn()`).
     pub power_was_lost: bool,
     /// The platform timer was reset by a power on since the last time epoch was started
     /// (`s_timerStopped` of the TCG reference platform, set by `_plat__TimerReset()`): kept across
-    /// `_TPM_Init` ([`TpmEngine::reset`]) and consumed by the time update of the next
+    /// `_TPM_Init` ([`crate::TpmEngine::reset`]) and consumed by the time update of the next
     /// `TPM2_Startup`, which then starts a new time epoch (`TimeUpdate()`:
     /// `if(_plat__TimerWasStopped()) { TimeNewEpoch(); }`).
     pub timer_stopped: bool,
@@ -327,10 +327,10 @@ pub struct ResetState {
     pub null_proof_size: u16,
     /// Handles of the sessions whose context has been saved (and that are neither flushed nor
     /// loaded again), indexed by session slot (`handle & 0x00FF_FFFF`). Together with
-    /// [`State::saved_session_sequences`] this is the saved part of `gr.contextArray`.
+    /// [`ResetState::saved_session_sequences`] this is the saved part of `gr.contextArray`.
     pub saved_sessions: [Option<u32>; MAX_ACTIVE_SESSIONS],
     /// Context sequence number (`TPMS_CONTEXT.sequence`) of the latest `TPM2_ContextSave` of
-    /// the session in each slot of [`State::saved_sessions`]. Only that context may be
+    /// the session in each slot of [`ResetState::saved_sessions`]. Only that context may be
     /// loaded again (`SequenceNumberForSavedContextIsValid`).
     pub saved_session_sequences: [u64; MAX_ACTIVE_SESSIONS],
     /// The commit counter (`gr.commitCounter`, a `UINT64`): incremented by every successful

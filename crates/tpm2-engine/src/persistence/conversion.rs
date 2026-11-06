@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
-//! Bidirectional conversion between [`PersistedTpmState`] and `tpm-rs` [`State`] +
-//! [`NvStorage`].
+//! Bidirectional conversion between [`PersistedTpmState`] and `tpm-rs` [`State`] (with its NV
+//! data, [`crate::Nv::index`]).
 //!
 //! Extraction copies the NV content (the reserved header and the canonical payloads of the
 //! storage manager's items, see [`PersistedNvImage`]) and the state that is ahead of NV or only
-//! in RAM. Restore rewrites the NV storage from the image, reloads every NV-synced field of
+//! in RAM. Restore rewrites the NV data from the image, reloads every NV-synced field of
 //! [`State`] from the NV records of the image ([`crate::storage::nv`]: [`NvHeader`],
 //! [`NvHierarchyRecord`] and [`NvPlatformSettingsRecord`]), applies the RAM groups, recomputes
 //! the derivable values and sets the derived fields to the values they have between two

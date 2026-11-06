@@ -253,7 +253,7 @@ impl DrbgState {
 
     /// Instantiates a fresh DRBG state (`DRBG_Instantiate`), drawing fresh entropy from `rng`.
     ///
-    /// Draws 48 bytes of seed material from `rng` ([`Rng::fill_bytes`]), then 16 bytes for the
+    /// Draws 48 bytes of seed material from `rng` ([`Rng::fill_bytes`](tpm2::crypto::Rng::fill_bytes)), then 16 bytes for the
     /// continuous health test history (`last_value`).
     pub fn instantiate<R: tpm2::crypto::Rng>(&mut self, rng: &mut R) -> Result<(), TpmRc> {
         self.magic = DRBG_MAGIC;
@@ -276,7 +276,7 @@ impl DrbgState {
 
     /// Reseeds an existing DRBG state (`DRBG_Reseed`), mixing fresh platform entropy into `seed`.
     ///
-    /// Draws 48 bytes of fresh entropy from `rng` ([`Rng::fill_bytes`]).
+    /// Draws 48 bytes of fresh entropy from `rng` ([`Rng::fill_bytes`](tpm2::crypto::Rng::fill_bytes)).
     pub fn reseed<R: tpm2::crypto::Rng>(&mut self, rng: &mut R) -> Result<(), TpmRc> {
         let mut entropy = [0u8; 48];
         rng.fill_bytes(&mut entropy).map_err(|_| TpmRc::FAILURE)?;
