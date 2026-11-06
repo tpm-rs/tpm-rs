@@ -13,7 +13,6 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::commands::GetTime;
 use tpm2::commands::responses;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmGenerated};
 use tpm2::{
@@ -38,7 +37,7 @@ fn is_implemented_sign_hash(hash_alg: TpmiAlgHash) -> bool {
     crate::handler::capability::is_implemented_algorithm(tpm2::Alg::from(hash_alg))
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::GetTime] (`0x14C`) command.
     ///
     /// # Description

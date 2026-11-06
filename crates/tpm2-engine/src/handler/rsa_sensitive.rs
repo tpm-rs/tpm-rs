@@ -27,7 +27,7 @@
 //! `ibmswtpm2`), see [`WRITES_CRT_FORM`]; `TPM2_Load` still accepts both forms.
 
 use crate::Platform;
-use tpm2::crypto::{Crypto, CryptoError, RsaPrivateKey};
+use tpm2::crypto::{CryptoError, RsaPrivateKey};
 use tpm2::errors::TpmRc;
 use tpm2::{Tpm2bPrivateKeyRsa, TpmsRsaParms};
 
@@ -122,7 +122,7 @@ fn square_bit_length(x: &[u8]) -> usize {
     bit_length(&bytes)
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Writes the sensitive value (`TPMU_SENSITIVE_COMPOSITE.rsa`) of the RSA key with the
     /// parameters `parms`, the modulus `modulus` and the prime `prime` (the private value of the
     /// object, [`TransientObject::private`](crate::handler::TransientObject::private)) to `out`
@@ -146,7 +146,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             out.copy_from_slice(prime);
             return Ok(Some(prime.len()));
         }
-        let key = match crate::handler::rsa_private_key::<C>(parms, modulus, prime) {
+        let key = match crate::handler::rsa_private_key::<P::Crypto>(parms, modulus, prime) {
             Ok(Some(key)) => key,
             Ok(None) | Err(_) => return Ok(None),
         };
@@ -157,7 +157,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// reference's layout ([`order_crt_for_prime`]) to `out` and returns its length.
     pub(crate) fn rsa_crt_value(
         &self,
-        key: &RsaPrivateKey<C>,
+        key: &RsaPrivateKey<P::Crypto>,
         prime: &[u8],
         out: &mut [u8; RSA_PRIVATE_SIZE],
     ) -> Result<usize, TpmRc> {
@@ -180,7 +180,11 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     /// A crypto backend without [`RsaPrivateKey::crt`] (`CryptoError::Unsupported`) cannot
     /// check the range; the key is then accepted (such a backend cannot produce the CRT form
     /// either).
-    pub(crate) fn rsa_primes_in_range(&self, key: &RsaPrivateKey<C>, modulus: &[u8]) -> bool {
+    pub(crate) fn rsa_primes_in_range(
+        &self,
+        key: &RsaPrivateKey<P::Crypto>,
+        modulus: &[u8],
+    ) -> bool {
         let mut crt = [0u8; RSA_PRIVATE_SIZE];
         let len = match key.crt(&mut crt) {
             Ok(crt) => crt.as_slice().len(),

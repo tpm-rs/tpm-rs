@@ -32,7 +32,6 @@ use crate::TpmEngine;
 use crate::handler::{context_integrity_hash_alg, provisioned_secret};
 use crate::self_test::kdfa_bits;
 use tpm2::Handle;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Fmt1, TpmRc};
 
 /// The `bSecretLabel` of a seed derivation (Part 1, Equation "seed-proof-limited-hierarchy",
@@ -149,7 +148,7 @@ impl core::fmt::Debug for HierarchySecret {
     }
 }
 
-impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
+impl<P: Platform> TpmEngine<P> {
     /// Whether the base hierarchy `base` is enabled (`TPM_RH_NULL` always is); `None` if `base`
     /// is not a base hierarchy.
     pub(crate) fn base_hierarchy_enabled(&self, base: u32) -> Option<bool> {

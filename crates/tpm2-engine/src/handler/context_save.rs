@@ -11,14 +11,14 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::TpmaObject;
 use tpm2::commands::ContextSave;
-use tpm2::crypto::{Crypto, Direction};
+use tpm2::crypto::Direction;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     AlgSym, Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
     TpmtSymDefObject,
 };
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ContextSave] (`0x112`) command.
     ///
     /// # Description

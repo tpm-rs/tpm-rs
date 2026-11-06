@@ -29,7 +29,6 @@ use crate::engine::{TpmEngine, VENDOR_COMMANDS, command_resp_handles_size, is_co
 use crate::owned::OwnedDigest;
 #[cfg(test)]
 use crate::storage::nv::{AUDIT_EXT_LEN, AUDIT_EXT_MARKER};
-use tpm2::crypto::Crypto;
 use tpm2::errors::TpmRc;
 use tpm2::{TpmCc, TpmiAlgHash, TpmtHa};
 
@@ -208,7 +207,7 @@ pub(crate) fn decode_audit_ext<P: Platform>(global_state: &mut State<P>, src: &[
     true
 }
 
-impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
+impl<P: Platform> TpmEngine<P> {
     /// Prepares the command audit of `cc` before the command is executed (`CheckCommandAudit()`,
     /// called from `ParseSessionBuffer()` / `CheckAuthNoSession()` once authorization has
     /// succeeded and before any parameter decryption).

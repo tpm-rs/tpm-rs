@@ -7,10 +7,9 @@ use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{ClockRateAdjust, ClockSet};
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [tpm2::TpmCc::ClockSet] (`0x00000128`) command.
     ///
     /// # Description

@@ -6,11 +6,10 @@ use crate::req_resp::RequestThenResponse;
 use tpm2::TpmCc;
 use tpm2::commands::PolicySecret;
 use tpm2::commands::responses;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bDigest, Tpm2bTimeout, TpmHt, TpmNt, TpmSe, TpmaNv, TpmtTkAuth};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::PolicySecret] (`0x151`) command.
     ///
     /// # Description

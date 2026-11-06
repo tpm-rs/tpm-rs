@@ -8,11 +8,10 @@ use tpm2::errors::{Position, TpmRc};
 use crate::handle_checks::{Tpmi, check};
 use crate::{handler::CommandHandler, owned::OwnedDigest, req_resp::RequestThenResponse};
 use tpm2::commands::GetCommandAuditDigest;
-use tpm2::crypto::Crypto;
 use tpm2::{Alg, Handle, TpmGenerated};
 use tpm2::{TpmsAttest, TpmsCommandAuditInfo, TpmuAttest};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::GetCommandAuditDigest] (`0x133`) command.
     pub fn get_command_audit_digest(
         &mut self,

@@ -16,7 +16,7 @@ use tpm2::Unmarshal;
 #[allow(deprecated)] // `TPM2_CreateLoaded` is deprecated, but this TPM still implements it.
 use tpm2::commands::CreateLoaded;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Direction};
+use tpm2::crypto::Direction;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     PublicParmsAndId, Tpm2bDigest, Tpm2bEccParameter, Tpm2bPrivate, Tpm2bPrivateKeyRsa,
@@ -25,7 +25,7 @@ use tpm2::{
     TpmuSensitiveComposite,
 };
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::CreateLoaded] (`0x197`) command.
     ///
     /// # Description
@@ -494,7 +494,8 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             Ok(digest_size)
         } else {
             let seed_len = digest_size;
-            C::rand_bytes(&mut obj_seed[..digest_size]).map_err(|_| TpmRc::FAILURE)?;
+            <P::Crypto as tpm2::crypto::Random>::rand_bytes(&mut obj_seed[..digest_size])
+                .map_err(|_| TpmRc::FAILURE)?;
             Ok(seed_len)
         }
     }

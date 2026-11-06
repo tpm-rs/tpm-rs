@@ -6,13 +6,12 @@ use crate::req_resp::RequestThenResponse;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::ACTSetTimeout;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
 /// `SU_DA_USED_VALUE`: the orderly states below it are orderly (`NV_IS_ORDERLY`).
 const SU_DA_USED_VALUE: u16 = 0xFFFE;
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ACTSetTimeout] (`0x198`) command.
     ///
     /// # Description

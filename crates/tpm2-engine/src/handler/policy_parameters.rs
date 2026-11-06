@@ -3,11 +3,10 @@ use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use tpm2::commands::PolicyParameters;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmCc, TpmSe};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::PolicyParameters] (`0x19C`) command.
     ///
     /// # Description

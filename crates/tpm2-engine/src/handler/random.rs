@@ -5,11 +5,10 @@ use tpm2::commands::StirRandom;
 use tpm2::errors::{Position, TpmRc};
 
 use crate::{InternalError, handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::crypto::Crypto;
 #[cfg(not(feature = "reference-rng"))]
 use tpm2::crypto::Rng;
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     fn try_get_random(&mut self, buffer: &mut [u8]) -> Result<(), InternalError> {
         self.context
             .random_platform(buffer)

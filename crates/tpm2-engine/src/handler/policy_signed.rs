@@ -6,11 +6,10 @@ use crate::req_resp::RequestThenResponse;
 use tpm2::TpmCc;
 use tpm2::commands::PolicySigned;
 use tpm2::commands::responses;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bDigest, Tpm2bTimeout, TpmSe, TpmtSignature, TpmtTkAuth};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::PolicySigned] (`0x160`) command.
     ///
     /// # Description
@@ -322,18 +321,18 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                         let crypto = self.crypto();
                         let curve = parms.curve_id;
                         match sign_alg {
-                            tpm2::Alg::ECDSA => {
-                                crate::ecc_schemes::ecdsa_verify::<C>(curve, q, digest, r, s)
-                            }
+                            tpm2::Alg::ECDSA => crate::ecc_schemes::ecdsa_verify::<P::Crypto>(
+                                curve, q, digest, r, s,
+                            ),
                             tpm2::Alg::SM2 => {
-                                crate::ecc_schemes::sm2_verify::<C>(curve, q, digest, r, s)
+                                crate::ecc_schemes::sm2_verify::<P::Crypto>(curve, q, digest, r, s)
                             }
                             _ => crate::ecc_schemes::schnorr_verify(
                                 &crypto, curve, tpmi_hash, q, digest, r, s,
                             ),
                         }
                     }
-                    ref key => super::crypt_ops::verify_signature_with_backend::<C>(
+                    ref key => super::crypt_ops::verify_signature_with_backend::<P::Crypto>(
                         sign_alg,
                         key,
                         &pub_buf[..pub_len],

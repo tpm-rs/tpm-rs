@@ -12,7 +12,6 @@ use tpm2::{Alg, Tpm2bIv, Tpm2bMaxBuffer, TpmaObject, TpmiAlgCipherMode, TpmiAlgS
 
 use crate::handle_checks::{Tpmi, check};
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::crypto::Crypto;
 
 /// Maps the result of a crypto operation that reports a semantic failure as `Ok(None)` (an
 /// invalid input such as a point at infinity, a bad ciphertext / padding, or an inconsistent key)
@@ -40,7 +39,7 @@ pub(super) fn crypto_check(result: Result<bool, CryptoError>, rc: TpmRc) -> Resu
     }
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::EncryptDecrypt] (`0x162`) command.
     ///
     /// # Description

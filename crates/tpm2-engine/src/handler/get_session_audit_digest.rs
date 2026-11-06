@@ -7,11 +7,10 @@ use tpm2::TpmCc;
 use tpm2::TpmGenerated;
 use tpm2::commands::GetSessionAuditDigest;
 use tpm2::commands::responses;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bDigest, TpmsAttest, TpmsSessionAuditInfo, TpmuAttest};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::GetSessionAuditDigest] (`0x14D`) command.
     ///
     /// # Description

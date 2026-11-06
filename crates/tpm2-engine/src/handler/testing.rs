@@ -5,10 +5,9 @@ use tpm2::Alg;
 use tpm2::TpmCc;
 use tpm2::TpmlAlg;
 use tpm2::commands::{GetTestResult, IncrementalSelfTest, SelfTest, responses};
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::SelfTest] command.
     pub fn self_test(
         &mut self,

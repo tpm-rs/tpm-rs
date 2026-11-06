@@ -12,10 +12,10 @@ use tpm2::errors::{Position, TpmRc};
 
 use crate::owned::OwnedPublicParmsAndId;
 use crate::self_test::kdfa_bits;
-use tpm2::crypto::{Crypto, Direction};
+use tpm2::crypto::Direction;
 use tpm2::{TpmaObject, TpmsSensitiveCreate, TpmtSensitive, TpmuSensitiveComposite};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::Import] (`0x156`) command.
     ///
     /// # Description

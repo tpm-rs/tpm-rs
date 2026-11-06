@@ -32,7 +32,7 @@ pub(crate) struct PrimaryCreation<'p> {
     pub endorsement: bool,
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// `CryptEccSign()` with the TPM's DRBG for the scheme `scheme` (ECDSA, SM2 or EC-Schnorr)
     /// and its hash `hash`: signs `digest` with the private scalar `d` (big-endian) on `curve`,
     /// writing `r` and `s` (each padded to the order size) into `r_out`/`s_out`. Returns the
@@ -178,7 +178,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                         p,
                     )?;
                     *unique = OwnedTpm2b::from_bytes(n).map_err(|_| TpmRc::FAILURE)?;
-                    let key = crate::handler::rsa_private_key::<C>(parms, n, p)
+                    let key = crate::handler::rsa_private_key::<P::Crypto>(parms, n, p)
                         .map_err(|_| TpmRc::FAILURE)?
                         .ok_or(TpmRc::FAILURE)?;
                     crate::handler::rsa_private_prime(&key, private_key)
@@ -209,7 +209,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                 OwnedPublicParmsAndId::Mlkem(parms, unique) => {
                     let mut seed = [0u8; tpm2::TpmiMlkemParms::PRIV_KEY_BYTES];
                     drbg::fill(&mut rng, seeded.as_mut(), &mut seed)?;
-                    *unique = mlkem_public_key::<C, _>(parms.parameter_set, &seed)?;
+                    *unique = mlkem_public_key::<P::Crypto, _>(parms.parameter_set, &seed)?;
                     private_key
                         .get_mut(..seed.len())
                         .ok_or(TpmRc::FAILURE)?
@@ -226,7 +226,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                 ) => {
                     let mut seed = [0u8; tpm2::TpmiMldsaParms::PRIV_KEY_BYTES];
                     drbg::fill(&mut rng, seeded.as_mut(), &mut seed)?;
-                    *unique = mldsa_public_key::<C, _>(*parameter_set, &seed)?;
+                    *unique = mldsa_public_key::<P::Crypto, _>(*parameter_set, &seed)?;
                     private_key
                         .get_mut(..seed.len())
                         .ok_or(TpmRc::FAILURE)?
@@ -317,14 +317,14 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             .ok()
             .and_then(TpmiRsaKeyBits::new)
             .zip(Tpm2bPublicKeyRsa::new(modulus))
-            .map(|(bits, modulus)| RsaPublicKey::<C>::load(bits, exponent, modulus))
+            .map(|(bits, modulus)| RsaPublicKey::<P::Crypto>::load(bits, exponent, modulus))
             .transpose()
             .map_err(|_| TpmRc::FAILURE)?
             .flatten();
         let Some(public) = public else {
             return Ok(None);
         };
-        crate::rsa::rsa_encrypt::<C>(
+        crate::rsa::rsa_encrypt::<P::Crypto>(
             &mut self.context.crypto_rng,
             &public,
             Alg::NULL,
@@ -353,12 +353,12 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         let mut encoded = [0u8; 512];
         let encoded = encoded.get_mut(..modulus.len()).ok_or(TpmRc::FAILURE)?;
         rsa::pss_encode(&mut self.context.ref_rng(), hash_alg, digest, encoded)?;
-        let Some(key) = crate::handler::rsa_private_key::<C>(parms, modulus, prime)
+        let Some(key) = crate::handler::rsa_private_key::<P::Crypto>(parms, modulus, prime)
             .map_err(|_| TpmRc::FAILURE)?
         else {
             return Ok(None);
         };
-        crate::rsa::rsa_decrypt::<C>(
+        crate::rsa::rsa_decrypt::<P::Crypto>(
             &mut self.context.crypto_rng,
             &key,
             Alg::NULL,

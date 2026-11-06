@@ -303,7 +303,7 @@ fn crypto_rc(error: CryptoError) -> TpmRc {
     }
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// The encapsulation key of the ML-KEM key with private seed `seed`
     /// (`CryptoMlkem_Internal_GenerateKeyFromSeed()`), written to the start of `out`. Returns
     /// its length.
@@ -313,7 +313,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         seed: &[u8; MLKEM_SEED_SIZE],
         out: &mut [u8],
     ) -> Result<usize, TpmRc> {
-        mlkem_expand_public::<C>(param_set, seed, out)
+        mlkem_expand_public::<P::Crypto>(param_set, seed, out)
     }
 
     /// The verification key of the ML-DSA key with private seed `seed`
@@ -325,7 +325,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         seed: &[u8; MLDSA_SEED_SIZE],
         out: &mut [u8],
     ) -> Result<usize, TpmRc> {
-        mldsa_expand_public::<C>(param_set, seed, out)
+        mldsa_expand_public::<P::Crypto>(param_set, seed, out)
     }
 
     /// `CryptoMlkem_Encapsulate()` with the TPM's DRBG: tests ML-KEM if needed, draws the 32
@@ -345,7 +345,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         self.do_self_test(Alg::MLKEM)?;
         let mut entropy = [0u8; MLKEM_ENTROPY_SIZE];
         self.context.random_crypto(&mut entropy)?;
-        mlkem_encapsulate_with::<C>(
+        mlkem_encapsulate_with::<P::Crypto>(
             param_set,
             public_key,
             &entropy,
@@ -366,7 +366,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         let (param_set, _) = mlkem_key(key).ok_or(TpmRc::TYPE.to_rc())?;
         self.do_self_test(Alg::MLKEM)?;
         let seed: [u8; MLKEM_SEED_SIZE] = seed_of(key)?;
-        mlkem_decapsulate_with::<C>(param_set, &seed, ciphertext, shared_secret_out)
+        mlkem_decapsulate_with::<P::Crypto>(param_set, &seed, ciphertext, shared_secret_out)
     }
 
     /// The `seed` of the ML-KEM Labeled KEM (TPM 2.0 Part 1, "ML-KEM Labeled KEM"):
@@ -456,7 +456,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         let seed: [u8; MLDSA_SEED_SIZE] = seed_of(key)?;
         let mut rnd = [0u8; MLDSA_RND_SIZE];
         self.context.random_crypto(&mut rnd)?;
-        mldsa_sign_mu_with::<C>(param_set, &seed, mu, &rnd, signature_out)
+        mldsa_sign_mu_with::<P::Crypto>(param_set, &seed, mu, &rnd, signature_out)
     }
 
     /// `CryptoMldsa_VerifyMu()`: tests ML-DSA if needed and verifies `signature` over the
@@ -470,7 +470,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         let (param_set, _) = mldsa_key(key).ok_or(TpmRc::TYPE.to_rc())?;
         self.do_self_test(Alg::MLDSA)?;
         let (_, public_key) = mldsa_key(key).ok_or(TpmRc::TYPE.to_rc())?;
-        mldsa_verify_mu_with::<C>(param_set, public_key, mu, signature)
+        mldsa_verify_mu_with::<P::Crypto>(param_set, public_key, mu, signature)
     }
 
     /// A pure ML-DSA signature of the message made of `parts` with an empty context (FIPS 204,
@@ -519,7 +519,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     }
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// The self test of `CryptoMlkem_GenerateKey()`/`CryptoMldsa_GenerateKey()` before the key
     /// of `parms_and_id` is generated (nothing for the other types).
     pub(crate) fn pqc_key_generation_self_test(

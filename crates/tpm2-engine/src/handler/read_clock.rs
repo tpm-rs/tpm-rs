@@ -6,9 +6,8 @@ use tpm2::errors::TpmRc;
 
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::commands::ReadClock;
-use tpm2::crypto::Crypto;
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [tpm2::TpmCc::ReadClock] (`0x00000181`) command.
     ///
     /// # Description

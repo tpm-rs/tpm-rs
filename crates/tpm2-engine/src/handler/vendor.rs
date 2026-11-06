@@ -15,7 +15,6 @@ use crate::Platform;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{VendorTcgTest, responses};
-use tpm2::crypto::Crypto;
 use tpm2::errors::TpmRc;
 
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -55,7 +54,7 @@ pub const NTC2_INITIAL_CONFIG: Ntc2CfgStruct = Ntc2CfgStruct {
     is_locked: NTC2_CLEAR,
 };
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::VendorTcgTest] (`0x20000000`) command.
     ///
     /// # Description

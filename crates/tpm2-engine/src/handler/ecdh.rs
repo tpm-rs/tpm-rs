@@ -5,11 +5,12 @@ use crate::{handler::CommandHandler, owned::OwnedPublicParmsAndId, req_resp::Req
 use tpm2::TpmCc;
 use tpm2::commands::ECDHKeyGen;
 use tpm2::commands::responses;
+#[cfg(not(feature = "reference-rng"))]
 use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bEccParameter, TpmsEccPoint};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [tpm2::TpmCc::ECDHKeyGen] (`0x163`) command.
     ///
     /// # Description
@@ -83,7 +84,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         #[cfg(not(feature = "reference-rng"))]
         self.do_self_test(tpm2::Alg::ECDH)?;
         #[cfg(not(feature = "reference-rng"))]
-        let (pub_len, priv_len) = generate_ecc_key_pair::<C>(
+        let (pub_len, priv_len) = generate_ecc_key_pair::<P::Crypto>(
             &mut self.context.crypto_rng,
             curve,
             &mut de_buf,

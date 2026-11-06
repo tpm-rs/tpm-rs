@@ -11,7 +11,7 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::{Rewrap, responses};
-use tpm2::crypto::{Crypto, Direction, EccPrivateKey};
+use tpm2::crypto::{Direction, EccPrivateKey};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bPrivate, TpmEccCurve, TpmaObject,
@@ -64,7 +64,7 @@ fn outer_sym_alg(obj: &TransientObject) -> tpm2::AlgSym {
     crate::handler::protection_sym_alg(&obj.public.parms_and_id)
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::Rewrap] (`0x152`) command.
     ///
     /// # Description
@@ -389,12 +389,12 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                 let label_len = oaep_label(label, &mut label_buf);
                 // The private key of a loaded object was validated when it was loaded.
                 let key = parent
-                    .rsa_private_key::<C>()
+                    .rsa_private_key::<P::Crypto>()
                     .ok()
                     .flatten()
                     .ok_or(TpmRc::VALUE.to_rc())?;
                 let mut plaintext = [0u8; 512];
-                let decrypted = crate::rsa::rsa_decrypt::<C>(
+                let decrypted = crate::rsa::rsa_decrypt::<P::Crypto>(
                     &mut self.context.crypto_rng,
                     &key,
                     Alg::OAEP,
@@ -432,7 +432,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                     &mut eph[param_size..param_size * 2],
                 )?;
                 crypto_check(
-                    crate::ecc_curves::validate_point::<C>(curve, &eph[..param_size * 2]),
+                    crate::ecc_curves::validate_point::<P::Crypto>(curve, &eph[..param_size * 2]),
                     TpmRc::ECC_POINT.to_rc(),
                 )?;
                 let mut z = [0u8; 256];
@@ -505,8 +505,8 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                 };
                 #[cfg(not(feature = "reference-rng"))]
                 let encrypted =
-                    match crate::handler::rsa_public_key::<C>(parms, unique.get_buffer()) {
-                        Ok(Some(key)) => crate::rsa::rsa_encrypt::<C>(
+                    match crate::handler::rsa_public_key::<P::Crypto>(parms, unique.get_buffer()) {
+                        Ok(Some(key)) => crate::rsa::rsa_encrypt::<P::Crypto>(
                             &mut self.context.crypto_rng,
                             &key,
                             Alg::OAEP,
@@ -600,7 +600,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         eph_pub: &mut [u8],
     ) -> Result<usize, TpmRc> {
         let param_size = ecc_param_size(curve).ok_or(TpmRc::CURVE.to_rc())?;
-        let key = EccPrivateKey::<C>::generate(&mut self.context.crypto_rng, curve, None)
+        let key = EccPrivateKey::<P::Crypto>::generate(&mut self.context.crypto_rng, curve, None)
             .map_err(|_| TpmRc::FAILURE)?;
         let priv_len = key
             .scalar(eph_priv)

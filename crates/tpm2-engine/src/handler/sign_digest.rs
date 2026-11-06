@@ -16,7 +16,6 @@ use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bDigest, TpmaObject, TpmtSigScheme, TpmtSignature, TpmtTkVerified};
 
@@ -97,7 +96,7 @@ pub(crate) fn verified_ticket_hierarchy(obj: &TransientObject) -> Option<u32> {
     (real && obj.public.name_alg.is_some()).then_some(hierarchy)
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::SignDigest] (`0x1A6`) command.
     ///
     /// # Description

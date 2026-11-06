@@ -80,7 +80,6 @@ pub use types::*;
 
 use crate::timer::TpmTimer;
 use crate::{Platform, State, TpmEngine};
-use tpm2::crypto::Crypto;
 use tpm2::crypto::backend::Hash;
 
 /// Extracts the persisted state of `global_state` (including its NV data, [`crate::Nv::index`])
@@ -171,7 +170,7 @@ pub fn deserialize<H: Hash, P: Platform>(
     try_deserialize::<H, P>(persisted, global_state, now_ms).expect("Failed to deserialize");
 }
 
-impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
+impl<P: Platform> TpmEngine<P> {
     /// Extracts the complete state of the TPM (its [`State`] with its NV data and its algorithm
     /// self-test state) into `persisted`, relative to the current reading of its platform
     /// timer.
@@ -212,7 +211,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         // Validate the self-test state first, so that a failure leaves the TPM unchanged.
         let staged = crate::self_test::SelfTestState::default();
         persisted.apply_self_test(&staged)?;
-        try_deserialize::<C, P>(
+        try_deserialize::<P::Crypto, P>(
             persisted,
             &mut self.state,
             self.platform.timer().timer_read(),

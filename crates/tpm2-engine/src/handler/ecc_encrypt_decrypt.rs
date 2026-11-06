@@ -10,7 +10,6 @@ use crate::owned::OwnedPublicParmsAndId;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmiAlgHash, TpmtKdfScheme};
 
@@ -45,7 +44,7 @@ fn kdf2_hash(scheme: Option<TpmtKdfScheme>) -> Result<TpmiAlgHash, TpmRc> {
     }
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// KDF2 (ISO/IEC 18033-2, the references' `CryptMGF_KDF()` with the counter starting at 1):
     /// fills `mask` with `H(z || 1) || H(z || 2) || ...`.
     fn kdf2(&self, hash: TpmiAlgHash, z: &[u8], mask: &mut [u8]) -> Result<(), TpmRc> {
@@ -110,7 +109,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         #[cfg(not(feature = "reference-rng"))]
         let k_len = {
             self.do_self_test(tpm2::Alg::ECDH)?;
-            super::ecdh::generate_ecc_key_pair::<C>(
+            super::ecdh::generate_ecc_key_pair::<P::Crypto>(
                 &mut self.context.crypto_rng,
                 curve,
                 &mut k,
@@ -220,7 +219,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             .to_struct()
             .is_ok_and(|p| pad_point(&p, size, &mut c1))
             && matches!(
-                crate::ecc_curves::validate_point::<C>(curve, &c1[..2 * size]),
+                crate::ecc_curves::validate_point::<P::Crypto>(curve, &c1[..2 * size]),
                 Ok(true)
             );
         if !on_curve {

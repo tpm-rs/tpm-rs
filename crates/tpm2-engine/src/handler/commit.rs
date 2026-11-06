@@ -7,11 +7,10 @@ use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{Commit, responses};
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bEccParameter, TpmEccCurve, TpmaObject, TpmsEccPoint};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::Commit] (`0x18B`) command.
     ///
     /// # Description
@@ -227,7 +226,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             p1_buf[param_size * 2 - p1_y.len()..param_size * 2].copy_from_slice(p1_y);
 
             crypto_check(
-                crate::ecc_curves::validate_point::<C>(curve, &p1_buf[..param_size * 2]),
+                crate::ecc_curves::validate_point::<P::Crypto>(curve, &p1_buf[..param_size * 2]),
                 TpmRc::ECC_POINT.with(Position::parameter(1)),
             )?;
         }
@@ -246,7 +245,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             xy2[param_size * 2 - y2_buf.len()..param_size * 2].copy_from_slice(y2_buf);
 
             crypto_check(
-                crate::ecc_curves::validate_point::<C>(curve, &xy2[..param_size * 2]),
+                crate::ecc_curves::validate_point::<P::Crypto>(curve, &xy2[..param_size * 2]),
                 TpmRc::ECC_POINT.with(Position::parameter(3)),
             )?;
 

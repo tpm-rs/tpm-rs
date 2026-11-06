@@ -11,10 +11,9 @@ use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
 use tpm2::Tpm2bSharedSecret;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles [tpm2::TpmCc::Encapsulate] (`0x1A7`).
     ///
     /// TPM 2.0 Part 3, TPM2_Encapsulate: "Given a recipient's public key, `TPM2_Encapsulate()`

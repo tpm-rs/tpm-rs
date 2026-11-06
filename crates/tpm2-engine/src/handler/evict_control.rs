@@ -9,11 +9,10 @@ use crate::storage::nv_capacity;
 use tpm2::TpmCc;
 use tpm2::TpmaObject;
 use tpm2::commands::EvictControl;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmHt};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::EvictControl] (`0x120`) command.
     ///
     /// # Description

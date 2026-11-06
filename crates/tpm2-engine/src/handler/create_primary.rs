@@ -11,11 +11,10 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::commands::CreatePrimary;
 use tpm2::commands::responses;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Alg, Tpm2bDigest, Tpm2bName, TpmaLocality, TpmsCreationData, TpmtTkCreation};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::CreatePrimary] (`0x131`) command.
     ///
     /// # Description

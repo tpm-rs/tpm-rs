@@ -25,7 +25,7 @@ use crate::self_test::kdfa_bits;
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Direction};
+use tpm2::crypto::Direction;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt};
 use tpm2::{TpmSe, TpmiAlgHash};
@@ -58,7 +58,7 @@ const MAX_CONTEXT_SIZE: usize = if cfg!(feature = "max-context-size-4344") {
 /// is unmarshaled, before any missing bytes (`TPM_RC_INSUFFICIENT`).
 pub(crate) const CONTEXT_DATA_CAPACITY: usize = (2 + 64) + (2 + MAX_CONTEXT_SIZE);
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ContextLoad] (`0x113`) command.
     ///
     /// # Description
@@ -424,7 +424,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             return Err(TpmRc::FAILURE);
         }
         prime[..prime_len].copy_from_slice(&fields.private[..prime_len]);
-        let key = match crate::handler::rsa_private_key::<C>(
+        let key = match crate::handler::rsa_private_key::<P::Crypto>(
             parms,
             unique.get_buffer(),
             &prime[..prime_len],

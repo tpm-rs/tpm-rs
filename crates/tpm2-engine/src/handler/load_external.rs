@@ -9,14 +9,13 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::commands::LoadExternal;
 use tpm2::commands::responses;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     PublicParmsAndId, Tpm2bSensitive, TpmaObject, TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive,
     TpmuSensitiveComposite,
 };
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::LoadExternal] (`0x131`) command.
     ///
     /// # Description
@@ -263,7 +262,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                     split_sensitive_value(p.get_buffer(), usize::from(rsa_unique.get_size()))
                         .ok_or(TpmRc::BINDING.to_rc())?;
                 // Exp mapped every failure (`InvalidData` included) to `TPM_RC_BINDING`.
-                let key = match crate::handler::rsa_private_key::<C>(
+                let key = match crate::handler::rsa_private_key::<P::Crypto>(
                     rsa_parms,
                     rsa_unique.get_buffer(),
                     prime,
@@ -375,7 +374,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                     } else {
                         // Exp mapped every failure (`InvalidData` included) to `TPM_RC_BINDING`.
                         // Both primes must also be in the acceptable range (`rsa_sensitive`).
-                        match crate::handler::rsa_private_key::<C>(
+                        match crate::handler::rsa_private_key::<P::Crypto>(
                             rsa_parms,
                             rsa_unique.get_buffer(),
                             rsa_private.get_buffer(),
@@ -712,7 +711,10 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
 
             // Exp mapped every failure (invalid point included) to `TPM_RC_ECC_POINT`.
             if !matches!(
-                crate::ecc_curves::validate_point::<C>(curve, &ecc_pub_key[..param_size * 2]),
+                crate::ecc_curves::validate_point::<P::Crypto>(
+                    curve,
+                    &ecc_pub_key[..param_size * 2]
+                ),
                 Ok(true)
             ) {
                 return Err(TpmRc::ECC_POINT.with(Position::parameter(2)));

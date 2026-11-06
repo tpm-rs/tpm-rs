@@ -2,11 +2,10 @@ use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::commands::PolicyCpHash;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmCc, TpmSe};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::PolicyCpHash] (`0x163`) command.
     ///
     /// # Description

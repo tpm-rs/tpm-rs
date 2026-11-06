@@ -8,13 +8,13 @@ use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::ActivateCredential;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Direction};
+use tpm2::crypto::Direction;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bDigest, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmtSymDefObject,
 };
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ActivateCredential] (`0x147`) command.
     ///
     /// # Description

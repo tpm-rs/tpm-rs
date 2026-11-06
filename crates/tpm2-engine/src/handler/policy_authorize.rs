@@ -8,10 +8,9 @@ use tpm2::Unmarshal;
 use tpm2::commands::PolicyAuthorize;
 use tpm2::errors::{Position, TpmRc};
 
-use tpm2::crypto::Crypto;
 use tpm2::{Handle, TpmSe, TpmiAlgHash};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::PolicyAuthorize] (`0x16A`) command.
     ///
     /// # Description

@@ -2,10 +2,9 @@ use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::commands::{DictionaryAttackLockReset, DictionaryAttackParameters};
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the `TPM2_DictionaryAttackLockReset` (`0x00000139`) command.
     ///
     /// # Description

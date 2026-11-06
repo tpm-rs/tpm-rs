@@ -8,14 +8,14 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::commands::MakeCredential;
 use tpm2::commands::responses;
-use tpm2::crypto::{Crypto, Direction};
+use tpm2::crypto::Direction;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bIdObject, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash,
     TpmiAlgSymMode, TpmsIdObject, TpmtSymDefObject,
 };
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::MakeCredential] (`0x168`) command.
     ///
     /// # Description

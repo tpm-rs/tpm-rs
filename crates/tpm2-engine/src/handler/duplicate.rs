@@ -11,7 +11,7 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{Duplicate, responses};
-use tpm2::crypto::{Crypto, Direction};
+use tpm2::crypto::Direction;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bData, Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bPrivate,
@@ -19,7 +19,7 @@ use tpm2::{
     TpmuSensitiveComposite,
 };
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::Duplicate] (`0x14B`) command.
     ///
     /// # Description
@@ -447,11 +447,11 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                 self.do_self_test(Alg::OAEP)?;
 
                 // RSA seed encryption
-                let encrypted = match crate::handler::rsa_public_key::<C>(
+                let encrypted = match crate::handler::rsa_public_key::<P::Crypto>(
                     &parent_rsa_parms.ok_or(TpmRc::FAILURE)?,
                     &parent_pub_modulus[..parent_pub_modulus_len],
                 ) {
-                    Ok(Some(key)) => crate::rsa::rsa_encrypt::<C>(
+                    Ok(Some(key)) => crate::rsa::rsa_encrypt::<P::Crypto>(
                         &mut self.context.crypto_rng,
                         &key,
                         Alg::OAEP,

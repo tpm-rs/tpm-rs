@@ -5,10 +5,9 @@ use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::ReadOnlyControl;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ReadOnlyControl] (`0x1A0`) command.
     ///
     /// # Description

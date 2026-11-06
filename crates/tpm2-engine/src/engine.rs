@@ -119,7 +119,7 @@ impl core::error::Error for ResponseBufferTooSmall {}
 
 /// A [`TpmEngine`] is a TPM that is reached directly, without any transport: each transaction
 /// executes the command in-process at the engine's current locality.
-impl<C: Crypto, P: Platform<Crypto = C>> tpm2::Connection for TpmEngine<P> {
+impl<P: Platform> tpm2::Connection for TpmEngine<P> {
     type Error = ResponseBufferTooSmall;
 
     fn transact<'r>(&mut self, cmd: &[u8], rsp: &'r mut [u8]) -> Result<&'r mut [u8], Self::Error> {
@@ -1045,7 +1045,7 @@ impl<P: Platform> State<P> {
     }
 }
 
-impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
+impl<P: Platform> TpmEngine<P> {
     /// Returns the current adjusted clock value in milliseconds (`go.clock`).
     pub fn get_clock(&self) -> u64 {
         // `clock_offset` is the two's-complement difference `Clock - Time`, so wrapping arithmetic
@@ -1386,7 +1386,8 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
             platform,
             state: State::new(index),
             self_test: Default::default(),
-            crypto_rng: C::from_entropy().map_err(|_| InternalError::HardwareError)?,
+            crypto_rng: <P::Crypto as tpm2::crypto::Random>::from_entropy()
+                .map_err(|_| InternalError::HardwareError)?,
         })
     }
 
@@ -4280,7 +4281,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
 
                     let mut new_digest = [0u8; 64];
                     let new_digest_len = compute_hash(
-                        &crate::self_test::Tested::<C>::new(&self.self_test),
+                        &crate::self_test::Tested::<P::Crypto>::new(&self.self_test),
                         auth_hash,
                         &extend_buf[..d_len + cp_len + rp_hash_len],
                         &mut new_digest,
@@ -4685,7 +4686,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
 
                     let mut new_digest = [0u8; 64];
                     let new_digest_len = compute_hash(
-                        &crate::self_test::Tested::<C>::new(&self.self_test),
+                        &crate::self_test::Tested::<P::Crypto>::new(&self.self_test),
                         auth_hash,
                         &extend_buf[..d_len + cp_len + rp_hash_len],
                         &mut new_digest,
@@ -6137,10 +6138,7 @@ fn compute_nv_name<C: Crypto>(
     OwnedName::from_bytes(&name_bytes[..offset + digest_slice.len()]).map_err(|_| TpmRc::FAILURE)
 }
 
-fn handle_name<C: Crypto, P: Platform<Crypto = C>>(
-    ctx: &mut TpmEngine<P>,
-    handle: u32,
-) -> OwnedName {
+fn handle_name<P: Platform>(ctx: &mut TpmEngine<P>, handle: u32) -> OwnedName {
     if ctx.state.find_active_sequence(handle).is_some() {
         return OwnedName::default();
     }

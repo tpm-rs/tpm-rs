@@ -15,7 +15,6 @@ use tpm2::commands::{
     NVReadLock, NVReadPublic, NVSetBits, NVUndefineSpace, NVUndefineSpaceSpecial, NVWrite,
     NVWriteLock,
 };
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmGenerated, TpmNt, TpmiAlgHash};
 use tpm2::{
@@ -168,7 +167,7 @@ fn nv_read_access_checks(auth_handle: u32, nv_index: u32, attributes: TpmaNv) ->
     Ok(())
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Reads and parses the header of the NV Index `nv_index`.
     ///
     /// Returns `missing` if the index is not defined.

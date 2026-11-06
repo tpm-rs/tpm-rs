@@ -4,11 +4,10 @@ use crate::{handler::CommandHandler, owned::OwnedDigest, req_resp::RequestThenRe
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::SetCommandCodeAuditStatus;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Alg, TpmiAlgHash};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::SetCommandCodeAuditStatus] (`0x140`) command.
     ///
     /// # Description

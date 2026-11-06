@@ -5,7 +5,6 @@ use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{ECCParameters, GetCapability, TestParms};
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Alg, TpmCap, TpmEccCurve, TpmPt};
 use tpm2::{
@@ -434,7 +433,7 @@ pub(crate) fn is_unmarshalable_capability(capability: u32) -> bool {
     capability <= LAST_CAP as u32 || capability == CAP_VENDOR_PROPERTY
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::GetCapability] (`0x17A`) command.
     ///
     /// # Description

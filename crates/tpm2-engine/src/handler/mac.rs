@@ -11,7 +11,6 @@ use crate::owned::{OwnedPublicParmsAndId, OwnedSensitiveData};
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::commands::responses;
 use tpm2::commands::{MAC, MACStart};
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, AlgSym, Handle, Tpm2bDigest, TpmaObject, TpmiAlgHash, TpmiAlgMacScheme, TpmiAlgSymMode,
@@ -27,7 +26,7 @@ enum SelectedMac {
     Cmac(AlgSym),
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// `CryptSelectMac()`: the MAC algorithm of the key `key_handle` (already checked to be a
     /// loaded object) for `in_scheme`, together with the key's attributes.
     ///

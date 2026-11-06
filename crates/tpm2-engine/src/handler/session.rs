@@ -16,7 +16,7 @@ use tpm2::{
     TpmsAuthCommand, TpmsAuthResponse, Unmarshal,
 };
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::StartAuthSession] (`0x11F`) command.
     ///
     /// # Description

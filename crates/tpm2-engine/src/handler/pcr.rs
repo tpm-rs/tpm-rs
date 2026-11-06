@@ -8,7 +8,6 @@ use crate::handle_checks::{Tpmi, check};
 use tpm2::commands::{
     PCRAllocate, PCREvent, PCRExtend, PCRRead, PCRReset, PCRSetAuthPolicy, PCRSetAuthValue,
 };
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, Tpm2bDigest, TpmiAlgHash, TpmlDigest, TpmlDigestValues, TpmlPcrSelection,
@@ -112,7 +111,7 @@ fn pcr_storage_size() -> u32 {
     (per_pcr as u32) * IMPLEMENTATION_PCR
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Records that PCR `pcr` changed (`PCRChanged`): increments the PCR update counter unless
     /// the PCR belongs to the TCB group (PCRs 20-22).
     pub(crate) fn pcr_changed(&mut self, pcr: u32) {

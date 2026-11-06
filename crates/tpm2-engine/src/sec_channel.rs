@@ -21,11 +21,10 @@ use crate::Platform;
 use crate::engine::TpmEngine;
 use crate::handler::SecChannelPolicy;
 use crate::owned::OwnedName;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Marshal, TpmiAlgHash, TpmtPublic};
 
-impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
+impl<P: Platform> TpmEngine<P> {
     /// The public area of the TPM SPDM authentication key `TPM_PUB_KEY_TPM_SPDM_00 + index`
     /// (TPM 2.0 Part 2, `TPM_PUB_KEY`), or `None` if the platform has no such key.
     pub(crate) fn tpm_spdm_public_key(&self, index: u8) -> Option<TpmtPublic<'_>> {

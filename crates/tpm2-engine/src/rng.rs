@@ -18,7 +18,7 @@
 use crate::Platform;
 #[cfg(feature = "reference-rng")]
 use crate::storage::IndexState;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::Rng;
 use tpm2::errors::TpmRc;
 
 use crate::engine::TpmEngine;
@@ -26,7 +26,7 @@ use crate::engine::TpmEngine;
 #[cfg(feature = "reference-rng")]
 use crate::reference_rng::{RefRng, drbg};
 
-impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
+impl<P: Platform> TpmEngine<P> {
     /// Random bytes for values that the default build draws from the platform RNG (seeds,
     /// proofs, nonces, `TPM2_GetRandom`, IVs).
     pub(crate) fn random_platform(&mut self, out: &mut [u8]) -> Result<(), TpmRc> {

@@ -9,9 +9,8 @@ use tpm2::{Tpm2bSensitiveData, TpmaObject};
 use crate::handle_checks::{Tpmi, check};
 use crate::owned::OwnedPublicParmsAndId;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::crypto::Crypto;
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::Unseal] (`0x15E`) command.
     ///
     /// # Description

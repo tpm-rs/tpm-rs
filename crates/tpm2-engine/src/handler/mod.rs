@@ -634,7 +634,7 @@ pub(crate) const TICKET_DIGEST_SIZE: usize = 64;
 /// A ticket digest: an HMAC with [`context_integrity_hash_alg`].
 pub(crate) type TicketDigest = crate::owned::OwnedTpm2b<TICKET_DIGEST_SIZE>;
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Creates a new `CommandHandler` object.
     pub fn new(context: &'b mut TpmEngine<P>) -> Self {
         Self { context }
@@ -651,7 +651,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     }
 
     #[inline]
-    pub fn crypto(&self) -> crate::self_test::Tested<'_, C> {
+    pub fn crypto(&self) -> crate::self_test::Tested<'_, P::Crypto> {
         self.context.crypto()
     }
 
@@ -1176,7 +1176,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             out.copy_from_slice(&derived[..out.len()]);
             Ok(())
         } else {
-            C::rand_bytes(out).map_err(|_| TpmRc::FAILURE)
+            <P::Crypto as tpm2::crypto::Random>::rand_bytes(out).map_err(|_| TpmRc::FAILURE)
         }
     }
 
@@ -1198,11 +1198,11 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             .do_self_test(Alg::ECDSA)
             .map_err(|_| TpmRc::FAILURE)?;
         let mut rng = match gen_seed_arg {
-            Some(seed) => C::from_seed(seed),
-            None => C::from_entropy(),
+            Some(seed) => <P::Crypto as tpm2::crypto::Random>::from_seed(seed),
+            None => <P::Crypto as tpm2::crypto::Random>::from_entropy(),
         }
         .map_err(|_| TpmRc::FAILURE)?;
-        let key = tpm2::crypto::EccPrivateKey::<C>::generate(&mut rng, curve, None)
+        let key = tpm2::crypto::EccPrivateKey::<P::Crypto>::generate(&mut rng, curve, None)
             .map_err(|_| TpmRc::FAILURE)?;
         let scalar_len = {
             let mut scalar = [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES];
@@ -1253,11 +1253,11 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             return Err(TpmRc::RANGE.to_rc());
         }
         let mut rng = match gen_seed_arg {
-            Some(seed) => C::from_seed(seed),
-            None => C::from_entropy(),
+            Some(seed) => <P::Crypto as tpm2::crypto::Random>::from_seed(seed),
+            None => <P::Crypto as tpm2::crypto::Random>::from_entropy(),
         }
         .map_err(|_| TpmRc::FAILURE)?;
-        let key = RsaPrivateKey::<C>::generate(&mut rng, parms.key_bits, DEFAULT_EXPONENT)
+        let key = RsaPrivateKey::<P::Crypto>::generate(&mut rng, parms.key_bits, DEFAULT_EXPONENT)
             .map_err(|_| TpmRc::FAILURE)?;
         let priv_len = rsa_private_prime(&key, actual_private_key).map_err(|_| TpmRc::FAILURE)?;
         let mut modulus = [0u8; tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
@@ -1296,7 +1296,8 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             actual_private_key[..key_size].copy_from_slice(&generated_key[..key_size]);
             key_size
         } else if args.get_random_fallback {
-            C::rand_bytes(&mut actual_private_key[..key_size]).map_err(|_| TpmRc::FAILURE)?;
+            <P::Crypto as tpm2::crypto::Random>::rand_bytes(&mut actual_private_key[..key_size])
+                .map_err(|_| TpmRc::FAILURE)?;
             key_size
         } else {
             return Err(TpmRc::VALUE.to_rc());
@@ -1337,7 +1338,10 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             actual_private_key[..sym_key_size].copy_from_slice(&generated_key[..sym_key_size]);
             sym_key_size
         } else if args.get_random_fallback {
-            C::rand_bytes(&mut actual_private_key[..sym_key_size]).map_err(|_| TpmRc::FAILURE)?;
+            <P::Crypto as tpm2::crypto::Random>::rand_bytes(
+                &mut actual_private_key[..sym_key_size],
+            )
+            .map_err(|_| TpmRc::FAILURE)?;
             sym_key_size
         } else {
             return Err(TpmRc::VALUE.to_rc());

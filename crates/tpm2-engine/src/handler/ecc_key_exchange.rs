@@ -29,7 +29,6 @@ use crate::handle_checks::{Tpmi, check};
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bEccParameter, Tpm2bEccPoint, TpmEccCurve, TpmsEccPoint};
 
@@ -141,7 +140,7 @@ fn times_cofactor(params: &CurveParams, t: &[u8], out: &mut [u8]) {
     }
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ECEphemeral] (`0x18E`) command.
     ///
     /// # Description
@@ -290,7 +289,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         ] {
             let on_curve = point.to_struct().is_ok_and(|p| pad_point(&p, size, buf))
                 && matches!(
-                    crate::ecc_curves::validate_point::<C>(curve, &buf[..2 * size]),
+                    crate::ecc_curves::validate_point::<P::Crypto>(curve, &buf[..2 * size]),
                     Ok(true)
                 );
             if !on_curve {

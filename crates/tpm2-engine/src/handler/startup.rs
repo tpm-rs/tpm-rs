@@ -3,7 +3,6 @@ use crate::storage::IndexState;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 
 /// Custom value matching the TCG reference code implementation indicating that no orderly shutdown
@@ -33,7 +32,7 @@ fn is_orderly(value: u16) -> bool {
     value < SU_DA_USED_VALUE
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     pub(crate) fn nv_sync_persistent_reset_count(&mut self) -> Result<(), TpmRc> {
         self.context
             .state

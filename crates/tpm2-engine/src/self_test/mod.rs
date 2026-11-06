@@ -47,7 +47,6 @@ pub use tested::kdfa_bits;
 use crate::Platform;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use tpm2::crypto::Crypto;
 use tpm2::errors::TpmRc;
 use tpm2::{Alg, TpmiAlgHash};
 
@@ -251,17 +250,17 @@ impl SelfTestState {
     }
 }
 
-impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
+impl<P: Platform> TpmEngine<P> {
     /// The crypto backend with the on-demand self tests of the algorithms it is used with
     /// ([`Tested`]). Every cryptographic operation of the engine and the command handlers uses
     /// it.
-    pub fn crypto(&self) -> Tested<'_, C> {
+    pub fn crypto(&self) -> Tested<'_, P::Crypto> {
         Tested::new(&self.self_test)
     }
 
     /// The runner of the algorithm self tests, with the TPM's DRBG for the tests that draw random
     /// values.
-    pub(crate) fn self_tester(&mut self) -> SelfTester<'_, C> {
+    pub(crate) fn self_tester(&mut self) -> SelfTester<'_, P::Crypto> {
         SelfTester {
             crypto: Tested::new(&self.self_test),
             #[cfg(feature = "reference-rng")]

@@ -12,9 +12,8 @@ use tpm2::{
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::rsa_sensitive::RSA_PRIVATE_SIZE;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::crypto::Crypto;
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::ObjectChangeAuth] (`0x14C`) command.
     ///
     /// # Description

@@ -2,7 +2,6 @@ use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::commands::PolicyTransportSPDM;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmCc, TpmSe, TpmiAlgHash};
 
@@ -28,7 +27,7 @@ fn check_key_name(name: &[u8], pos: Position) -> Result<(), TpmRc> {
     Ok(())
 }
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::PolicyTransportSPDM] (`0x1A1`) command.
     ///
     /// # Description

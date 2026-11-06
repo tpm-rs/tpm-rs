@@ -4,11 +4,10 @@ use crate::storage::IndexState;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::TpmiAlgHash;
 use tpm2::commands::PolicyAuthorizeNV;
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmCc, TpmSe};
 
-impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
+impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::PolicyAuthorizeNV] (`0x177`) command.
     ///
     /// # Description
