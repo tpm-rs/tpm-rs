@@ -138,31 +138,32 @@ pub trait Platform: Sized {
         let _ = nv;
     }
 
-    /// Serializes the runtime state `state` into `persisted` (for migrating the TPM, see
-    /// [`crate::persistence`]). The default is the lossless
-    /// [`crate::persistence::PersistedTpmState`] of the state, relative to the current reading
-    /// of the platform timer.
+    /// Serializes the runtime state `state` (with its NV data) into `out`, for migrating the
+    /// TPM, and returns the number of octets written. The default is the compact binary
+    /// encoding of [`crate::persistence::try_serialize_to_slice`], relative to the current
+    /// reading of the platform timer.
     #[cfg(feature = "persistence")]
     fn serialize(
         &self,
         state: &State<Self>,
-        persisted: &mut crate::persistence::PersistedTpmState,
-    ) -> Result<(), crate::persistence::SerializeError> {
-        crate::persistence::try_serialize(state, self.timer().timer_read(), persisted)
+        out: &mut [u8],
+    ) -> Result<usize, crate::persistence::SerializeError> {
+        crate::persistence::try_serialize_to_slice(state, self.timer().timer_read(), out)
     }
 
-    /// Restores the runtime state `state` from `persisted` (written by
-    /// [`Platform::serialize`], possibly on another platform). The default rebases the
-    /// platform time on the current reading of the platform timer and recomputes the Names of
-    /// the loaded objects with the crypto backend; a rejected state leaves `state` unchanged.
+    /// Restores the runtime state `state` (with its NV data) from `data`, written by
+    /// [`Platform::serialize`] (possibly on another platform). The default
+    /// ([`crate::persistence::try_deserialize_from_slice`]) rebases the platform time on the
+    /// current reading of the platform timer and recomputes the Names of the loaded objects
+    /// with the crypto backend; a rejected state leaves `state` unchanged.
     #[cfg(feature = "persistence")]
     fn deserialize(
         &self,
-        persisted: &crate::persistence::PersistedTpmState,
+        data: &[u8],
         state: &mut State<Self>,
     ) -> Result<(), crate::persistence::DeserializeError> {
-        crate::persistence::try_deserialize::<Self::Crypto, Self>(
-            persisted,
+        crate::persistence::try_deserialize_from_slice::<Self::Crypto, Self>(
+            data,
             state,
             self.timer().timer_read(),
         )

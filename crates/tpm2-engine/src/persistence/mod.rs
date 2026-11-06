@@ -72,13 +72,13 @@
 //! [`TpmEngine::restore_persisted_state`] persist and restore it as well.
 
 pub mod conversion;
-#[cfg(feature = "serde")]
 mod serde_arrays;
 pub mod types;
 
 pub use conversion::{DeserializeError, SerializeError};
 pub use types::*;
 
+use crate::timer::TpmTimer;
 use crate::{Platform, State, TpmEngine};
 use tpm2::crypto::Crypto;
 use tpm2::crypto::backend::Hash;
@@ -122,6 +122,46 @@ pub fn try_deserialize<H: Hash, P: Platform>(
     persisted.apply_to_global_state::<H, P>(global_state, now_ms)
 }
 
+/// Serializes `global_state` (including its NV data) into `out` and returns the number of
+/// octets written: the [`PersistedTpmState`] of [`try_serialize`] in a compact binary encoding
+/// (`postcard`, the `serde` implementation of the persisted types), which
+/// [`try_deserialize_from_slice`] reads back. `now_ms` is the current reading of the platform
+/// timer.
+///
+/// Fails like [`try_serialize`], or with [`SerializeError::Encoding`] if `out` is too small.
+/// The self-test state is the state after `_TPM_Init` (see [`try_serialize`]).
+pub fn try_serialize_to_slice<P: Platform>(
+    global_state: &State<P>,
+    now_ms: u64,
+    out: &mut [u8],
+) -> Result<usize, SerializeError> {
+    let mut persisted = PersistedTpmState::default();
+    try_serialize(global_state, now_ms, &mut persisted)?;
+    postcard::to_slice(&persisted, out)
+        .map(|written| written.len())
+        .map_err(|_| SerializeError::Encoding)
+}
+
+/// Restores `global_state` (including its NV data) from `data`, written by
+/// [`try_serialize_to_slice`]; `now_ms` is the current reading of the target's platform timer
+/// and the hashes of the crypto backend `H` compute the Names of the loaded objects (see
+/// [`try_deserialize`]).
+///
+/// Fails with [`DeserializeError::Encoding`] if `data` is not exactly one encoded persisted
+/// state, or like [`try_deserialize`]; a rejected state leaves `global_state` unchanged.
+pub fn try_deserialize_from_slice<H: Hash, P: Platform>(
+    data: &[u8],
+    global_state: &mut State<P>,
+    now_ms: u64,
+) -> Result<(), DeserializeError> {
+    let (persisted, rest): (PersistedTpmState, &[u8]) =
+        postcard::take_from_bytes(data).map_err(|_| DeserializeError::Encoding)?;
+    if !rest.is_empty() {
+        return Err(DeserializeError::Encoding);
+    }
+    try_deserialize::<H, P>(&persisted, global_state, now_ms)
+}
+
 /// Like [`try_deserialize`], panicking on failure.
 pub fn deserialize<H: Hash, P: Platform>(
     persisted: &PersistedTpmState,
@@ -133,22 +173,38 @@ pub fn deserialize<H: Hash, P: Platform>(
 
 impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// Extracts the complete state of the TPM (its [`State`] with its NV data and its algorithm
-    /// self-test state) into `persisted`, with the platform's serialization
-    /// ([`Platform::serialize`]).
+    /// self-test state) into `persisted`, relative to the current reading of its platform
+    /// timer.
     pub fn save_persisted_state(
         &self,
         persisted: &mut PersistedTpmState,
     ) -> Result<(), SerializeError> {
-        self.platform.serialize(&self.state, persisted)?;
+        try_serialize(&self.state, self.platform.timer().timer_read(), persisted)?;
         persisted.extract_self_test(&self.self_test)
     }
 
+    /// Serializes the runtime state of the TPM ([`State`] with its NV data) into `out` with
+    /// the platform's serialization ([`Platform::serialize`]) and returns the number of octets
+    /// written.
+    pub fn serialize_state(&self, out: &mut [u8]) -> Result<usize, SerializeError> {
+        self.platform.serialize(&self.state, out)
+    }
+
+    /// Restores the runtime state of the TPM ([`State`] with its NV data) from `data`, written
+    /// by [`Self::serialize_state`] (possibly on another platform), with the platform's
+    /// deserialization ([`Platform::deserialize`]); the NV data is then synced
+    /// ([`Platform::store_nv`]). A rejected state leaves the TPM unchanged.
+    pub fn deserialize_state(&mut self, data: &[u8]) -> Result<(), DeserializeError> {
+        self.platform.deserialize(data, &mut self.state)?;
+        self.platform.store_nv(&self.state.nv);
+        Ok(())
+    }
+
     /// Restores the complete state of the TPM (its [`State`] with its NV data and its algorithm
-    /// self-test state) from `persisted`, e.g. on the target of a live migration, with the
-    /// platform's deserialization ([`Platform::deserialize`]; by default the platform time
-    /// continues from the current reading of its platform timer, and the Names of the loaded
-    /// objects are recomputed with its crypto backend, directly, without the algorithm self
-    /// tests, which would change the self-test state).
+    /// self-test state) from `persisted`, e.g. on the target of a live migration. The platform
+    /// time continues from the current reading of its platform timer, and the Names of the
+    /// loaded objects are recomputed with its crypto backend (directly, without the algorithm
+    /// self tests, which would change the self-test state).
     pub fn restore_persisted_state(
         &mut self,
         persisted: &PersistedTpmState,
@@ -156,7 +212,11 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         // Validate the self-test state first, so that a failure leaves the TPM unchanged.
         let staged = crate::self_test::SelfTestState::default();
         persisted.apply_self_test(&staged)?;
-        self.platform.deserialize(persisted, &mut self.state)?;
+        try_deserialize::<C, P>(
+            persisted,
+            &mut self.state,
+            self.platform.timer().timer_read(),
+        )?;
         persisted.apply_self_test(&self.self_test)?;
         self.platform.store_nv(&self.state.nv);
         Ok(())

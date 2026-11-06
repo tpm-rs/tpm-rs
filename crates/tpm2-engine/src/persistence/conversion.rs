@@ -72,6 +72,9 @@ pub enum DeserializeError {
     InvalidValue(&'static str),
     /// Writing the NV storage failed.
     Storage(StorageError),
+    /// The serialized bytes are not a valid encoding of a [`PersistedTpmState`]
+    /// ([`crate::persistence::try_deserialize_from_slice`]).
+    Encoding,
 }
 
 impl fmt::Display for DeserializeError {
@@ -100,6 +103,7 @@ impl fmt::Display for DeserializeError {
             }
             DeserializeError::InvalidValue(msg) => write!(f, "Invalid value: {}", msg),
             DeserializeError::Storage(err) => write!(f, "NV storage error: {:?}", err),
+            DeserializeError::Encoding => write!(f, "Invalid encoding of the persisted state"),
         }
     }
 }
@@ -123,6 +127,9 @@ pub enum SerializeError {
     InvalidState(&'static str),
     /// Reading the NV storage failed.
     Storage(StorageError),
+    /// The persisted state cannot be encoded into the output buffer (it is too small,
+    /// [`crate::persistence::try_serialize_to_slice`]).
+    Encoding,
 }
 
 impl fmt::Display for SerializeError {
@@ -140,6 +147,9 @@ impl fmt::Display for SerializeError {
             SerializeError::InvalidStorage(msg) => write!(f, "Invalid NV storage: {}", msg),
             SerializeError::InvalidState(msg) => write!(f, "Invalid TPM state: {}", msg),
             SerializeError::Storage(err) => write!(f, "NV storage error: {:?}", err),
+            SerializeError::Encoding => {
+                write!(f, "The persisted state does not fit the output buffer")
+            }
         }
     }
 }

@@ -4,7 +4,7 @@
 //! components.
 //!
 //! Every type is `Copy` (except [`PersistedTpmState`] itself, which is only `Clone` because of
-//! its size) and, with the `serde` feature, implements `serde`'s `Serialize` and `Deserialize`,
+//! its size) and implements `serde`'s `Serialize` and `Deserialize`,
 //! so that the persisted state can be written in any `serde` format and mapped field by field
 //! onto another representation (e.g. the `ibmswtpm2` live-migration state). An [`Array`] is serialized as the sequence of its
 //! active elements, and fixed byte arrays as byte strings (see `serde_arrays`).
@@ -210,11 +210,10 @@ impl<'a, T, const N: usize> IntoIterator for &'a mut Array<T, N> {
 /// The item metadata of the storage manager is derived at restore: the payload size, and the
 /// item attributes, which are only read for `TPMA_NV_PLATFORMCREATE` of an NV Index (the
 /// attributes of its public area; 0 for the other items).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PersistedNvImage {
     /// The reserved header ([`crate::storage::nv::NvHeader`]), as raw octets.
-    #[cfg_attr(feature = "serde", serde(with = "super::serde_arrays::bytes"))]
+    #[serde(with = "super::serde_arrays::bytes")]
     pub header: [u8; NV_HEADER_SIZE],
     /// The handles of the items, in ascending order.
     pub handles: Array<u32, MAX_NV_ITEMS>,
@@ -233,12 +232,11 @@ impl Default for PersistedNvImage {
 }
 
 /// Persisted representation of the NIST SP800-90A CTR_DRBG state (`DrbgState`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PersistedDrbgState {
     pub reseed_counter: u64,
     pub magic: u32,
-    #[cfg_attr(feature = "serde", serde(with = "super::serde_arrays::bytes"))]
+    #[serde(with = "super::serde_arrays::bytes")]
     pub seed: [u8; 48],
     pub last_value: [u32; 4],
 }
@@ -257,8 +255,7 @@ impl Default for PersistedDrbgState {
 /// The state-reset data (C `gr`, `STATE_RESET_DATA`): written to NV only by
 /// `TPM2_Shutdown(TPM_SU_STATE)` (the state-save record), kept by TPM Restart and TPM Resume and
 /// reset by TPM Reset. Between shutdowns the RAM values are the live ones.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedResetData {
     /// `gr.nullProof`.
     pub null_proof: Array<u8, SEED_CAP>,
@@ -286,8 +283,7 @@ pub struct PersistedResetData {
 /// The state-clear data (C `gc`, `STATE_CLEAR_DATA`): written to NV only by
 /// `TPM2_Shutdown(TPM_SU_STATE)`, kept by TPM Resume and reset by TPM Reset and TPM Restart.
 /// Between shutdowns the RAM values are the live ones.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedClearData {
     pub sh_enable: bool,
     pub eh_enable: bool,
@@ -304,8 +300,7 @@ pub struct PersistedClearData {
 
 /// The orderly data (C `go`, `ORDERLY_DATA`): written to NV on every orderly `TPM2_Shutdown`
 /// (and the clock at `NV_CLOCK_UPDATE_INTERVAL`); the RAM values are the live ones.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedOrderlyData {
     /// `go.drbgState`.
     pub drbg: PersistedDrbgState,
@@ -324,8 +319,7 @@ pub struct PersistedOrderlyData {
 /// The platform timer is not persisted: its readings are meaningless on another platform (or
 /// after the platform restarted). The platform milliseconds that have elapsed but are not yet in
 /// *Time* are persisted instead, and restore continues from the reading of the target's timer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedTimeState {
     /// *Time* (`g_time` / `s_tpmTime`).
     pub time_ms: u64,
@@ -344,8 +338,7 @@ pub struct PersistedTimeState {
 }
 
 /// The volatile state that is lost at `_TPM_Init` (C `g_*` globals and platform inputs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedRuntimeState {
     /// `g_initialized` (it also enables the ACT ticks, C `actTicksAllowed`).
     pub initialized: bool,
@@ -389,10 +382,9 @@ pub struct PersistedRuntimeState {
 
 /// One PCR bank: the 24 PCR values, each padded to 64 octets. The bank's algorithm is implied by
 /// its position in [`PersistedPcrState::banks`] (`PcrState::IMPLEMENTED_BANKS`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PersistedPcrBank {
-    #[cfg_attr(feature = "serde", serde(with = "super::serde_arrays::nested_bytes"))]
+    #[serde(with = "super::serde_arrays::nested_bytes")]
     pub values: [[u8; DIGEST_CAP]; PCR_COUNT],
 }
 
@@ -405,8 +397,7 @@ impl Default for PersistedPcrBank {
 }
 
 /// The PCR banks and the active allocation (`s_pcrs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedPcrState {
     /// The implemented banks, in `PcrState::IMPLEMENTED_BANKS` order, allocated or not.
     pub banks: Array<PersistedPcrBank, MAX_PCR_BANKS>,
@@ -417,8 +408,7 @@ pub struct PersistedPcrState {
 
 /// A loaded transient object in RAM. Its Name (`nameAlg || H_nameAlg(public)`) is recomputed at
 /// restore.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedTransientObject {
     pub handle: u32,
     pub hierarchy: u32,
@@ -436,8 +426,7 @@ pub struct PersistedTransientObject {
 }
 
 /// The secure channel restrictions of a policy session (`TPM2_PolicyTransportSPDM()`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedSecChannelPolicy {
     pub check_secure_channel: bool,
     pub check_req_key: bool,
@@ -449,8 +438,7 @@ pub struct PersistedSecChannelPolicy {
 /// `isNameHashDefined` follows from `policy_hash` and the other flags
 /// (`SessionState::is_name_hash_defined`), and `includeAuth` is recomputed by every command
 /// before it is used.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedSessionState {
     pub session_handle: u32,
     /// `TPM_SE`.
@@ -488,8 +476,7 @@ pub struct PersistedSessionState {
 /// A session whose context has been saved (an entry of `gr.contextArray`). Only its slot is
 /// observable, not the type of its handle: the lookups of saved sessions ignore the handle type,
 /// and `TPM2_GetCapability(TPM_CAP_HANDLES)` reports HMAC session handles.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedSavedSession {
     /// The session slot (`handle & 0x00FF_FFFF`).
     pub slot: u32,
@@ -501,8 +488,7 @@ pub struct PersistedSavedSession {
 }
 
 /// Type of an active cryptographic sequence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum PersistedSequenceType {
     #[default]
     Event,
@@ -515,7 +501,7 @@ pub enum PersistedSequenceType {
     },
     /// A CMAC sequence (`TPM2_MAC_Start`, the `cmac` feature): the serialized `CmacState`.
     Cmac {
-        #[cfg_attr(feature = "serde", serde(with = "super::serde_arrays::bytes"))]
+        #[serde(with = "super::serde_arrays::bytes")]
         state: [u8; CmacState::SERIALIZED_SIZE],
     },
     /// A signing sequence: the serialized `SignatureSequence`.
@@ -529,8 +515,7 @@ pub enum PersistedSequenceType {
 }
 
 /// An active hash/HMAC/event/MAC/signature sequence in RAM.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PersistedActiveSequence {
     pub handle: u32,
     pub auth: Array<u8, DIGEST_CAP>,
@@ -541,7 +526,7 @@ pub struct PersistedActiveSequence {
     pub ticket_safe: bool,
     /// The serialized streaming hash states (`ActiveSequence::serialize_state`, which holds the
     /// ML-DSA `mu` state in place of the last one).
-    #[cfg_attr(feature = "serde", serde(with = "super::serde_arrays::nested_bytes"))]
+    #[serde(with = "super::serde_arrays::nested_bytes")]
     pub hash_states: [[u8; StreamingHashState::SERIALIZED_SIZE]; 4],
 }
 
@@ -561,8 +546,7 @@ impl Default for PersistedActiveSequence {
 /// The objects, sessions and sequences loaded in RAM (`s_objects`, `s_sessions`), each in
 /// ascending handle order. Their slots in RAM are not observable (every lookup goes by handle,
 /// and `TPM_CAP_HANDLES` sorts): restore assigns them in this order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedLoadedEntities {
     pub objects: Array<PersistedTransientObject, MAX_LOADED_OBJECTS>,
     pub sessions: Array<PersistedSessionState, MAX_LOADED_SESSIONS>,
@@ -570,12 +554,11 @@ pub struct PersistedLoadedEntities {
 }
 
 /// The ECDAA commit state (`gr.commitCounter`, `gr.commitArray`, `gr.commitNonce`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedCommitState {
     /// `gr.commitCounter`.
     pub counter: u64,
-    #[cfg_attr(feature = "serde", serde(with = "super::serde_arrays::bytes"))]
+    #[serde(with = "super::serde_arrays::bytes")]
     pub array: [u8; 16],
     /// `gr.commitNonce`: the octets the commit KDF uses (the size of the largest implemented
     /// digest).
@@ -587,8 +570,7 @@ pub struct PersistedCommitState {
 /// (`s_failFunction`, `s_failLine`, `s_failCode`) have no counterpart: in Failure mode `tpm-rs`
 /// always reports the location 0 and `FATAL_ERROR_SELF_TEST` (see the `persistence` module
 /// documentation).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedSelfTestState {
     /// The algorithms that still need a self test, in ascending order.
     pub untested_algorithms: Array<u16, MAX_UNTESTED_ALGORITHMS>,
@@ -597,8 +579,7 @@ pub struct PersistedSelfTestState {
 }
 
 /// One Authenticated Countdown Timer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedAct {
     pub remaining: u32,
     pub new_value: u32,
@@ -612,8 +593,7 @@ pub struct PersistedAct {
 }
 
 /// The Authenticated Countdown Timers (`ActState`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedActState {
     /// One entry per implemented ACT (`act::IMPLEMENTED_ACTS` order).
     pub acts: Array<PersistedAct, MAX_ACTS>,
@@ -627,8 +607,7 @@ pub struct PersistedActState {
 }
 
 /// Vendor-specific state in RAM.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedVendorState {
     /// The vendor-permanent authorization value of `TPM_RH_AUTH_00`
     /// (`g_platformUniqueDetails`).
@@ -640,8 +619,7 @@ pub struct PersistedVendorState {
 /// The platform state that the platform (e.g. the simulator), not the engine, keeps: the
 /// installed firmware image (the `SetFirmwareHash`/`SetFirmwareSvn` platform signals). The
 /// platform is powered on with NV enabled at every point where the state is saved.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedPlatformState {
     /// The firmware hash the Firmware Secret is derived from.
     pub firmware_hash: u32,
@@ -652,8 +630,7 @@ pub struct PersistedPlatformState {
 /// The complete state of a TPM: its NV content, the state that is ahead of NV or only in RAM,
 /// and (when saved by a platform) the platform state. See the `persistence` module documentation
 /// for what is not persisted and why.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistedTpmState {
     /// The raw NV content: the source of truth for every NV-synced field.
     pub nv: PersistedNvImage,

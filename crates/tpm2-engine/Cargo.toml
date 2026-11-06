@@ -15,9 +15,10 @@ tpm2 = { workspace = true }
 anyhow = { version = "1.0.102", optional = true }
 # `reference-rng`: thread-local storage (`pthread_*`) for the linked C code's state.
 libc = { version = "0.2", default-features = false, optional = true }
-# `serde`: `Serialize`/`Deserialize` of `persistence::PersistedTpmState` (`no_std`, without
-# `alloc`).
+# `persistence`: `Serialize`/`Deserialize` of `persistence::PersistedTpmState` (`no_std`,
+# without `alloc`) and its binary encoding into a byte buffer (`postcard`).
 serde = { version = "1.0.228", default-features = false, features = ["derive"], optional = true }
+postcard = { version = "1.1.3", default-features = false, optional = true }
 
 [build-dependencies]
 # `reference-rng`: Rust types and prototypes of the linked C reference code.
@@ -43,11 +44,12 @@ dev_crypto_bssl = []
 # `no_std` without it.
 std = ["dep:anyhow"]
 # The `persistence` module: the complete TPM state as `persistence::PersistedTpmState`
-# (`GlobalState`, NV storage and self-test state), e.g. for live migration.
-persistence = []
-# `serde` `Serialize`/`Deserialize` of `persistence::PersistedTpmState` and the types it
-# references (`no_std`, without `alloc`). Implies `persistence`.
-serde = ["persistence", "dep:serde"]
+# (`State` with its NV data, and the self-test state), e.g. for live migration, with
+# `serde` `Serialize`/`Deserialize` (`no_std`, without `alloc`) and the binary encoding
+# into a byte buffer of `Platform::serialize`/`deserialize` (`postcard`).
+persistence = ["dep:serde", "dep:postcard"]
+# Kept for compatibility: the `serde` support is part of `persistence`.
+serde = ["persistence"]
 # Reproduce the random-number generation of the C reference TPMs (`tcgtpm`,
 # `ibmswtpm2`) exactly by linking their original, unmodified C code: their CTR-DRBG
 # and every algorithm that consumes its output (see `src/reference_rng/mod.rs`).

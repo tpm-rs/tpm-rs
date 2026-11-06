@@ -739,12 +739,12 @@ fn field_of(err: DeserializeError) -> &'static str {
         DeserializeError::InvalidType { field, .. }
         | DeserializeError::InvalidLength { field, .. } => field,
         DeserializeError::Storage(_) => "storage",
+        DeserializeError::Encoding => "encoding",
     }
 }
 
 /// The persisted state of a running TPM survives a `serde` round trip (JSON): the deserialized
 /// state is equal to the original and restores a TPM that continues with the same results.
-#[cfg(feature = "serde")]
 #[test]
 fn persisted_state_serde_json_round_trip() {
     two_engines!(source, target);
@@ -765,9 +765,63 @@ fn persisted_state_serde_json_round_trip() {
     );
 }
 
+/// The platform's byte serialization (`TpmEngine::serialize_state`, the default
+/// `Platform::serialize`/`deserialize`) migrates the runtime state: the target holds the same
+/// `State` with the same NV data and continues with the same results.
+#[test]
+fn state_byte_serialization_round_trip() {
+    two_engines!(source, target);
+    let handles = populate(&mut source);
+    let mut buf = vec![0u8; 256 * 1024];
+    let len = source.serialize_state(&mut buf).unwrap();
+    assert!(len > 0 && len < 64 * 1024, "{len} bytes");
+    assert_eq!(
+        persistence::try_serialize_to_slice(&source.state, 0, &mut vec![0u8; len]).unwrap(),
+        len
+    );
+
+    target.deserialize_state(&buf[..len]).unwrap();
+    assert_eq!(
+        persisted_of(&source.state, 0),
+        persisted_of(&target.state, 0)
+    );
+    assert_eq!(
+        continue_after_populate(&mut source, handles),
+        continue_after_populate(&mut target, handles)
+    );
+}
+
+/// The byte serialization fails cleanly: an output buffer that is too small, and truncated,
+/// extended or corrupted input, which leaves the target unchanged.
+#[test]
+fn state_byte_serialization_rejects_bad_buffers() {
+    two_engines!(source, target);
+    populate(&mut source);
+    let mut buf = vec![0u8; 256 * 1024];
+    let len = source.serialize_state(&mut buf).unwrap();
+    assert_eq!(
+        source.serialize_state(&mut buf[..len - 1]),
+        Err(persistence::SerializeError::Encoding)
+    );
+
+    let before = persisted_of(&target.state, 0);
+    assert_eq!(
+        target.deserialize_state(&buf[..len - 1]),
+        Err(DeserializeError::Encoding)
+    );
+    assert_eq!(
+        target.deserialize_state(&buf[..len + 1]),
+        Err(DeserializeError::Encoding)
+    );
+    assert_eq!(
+        target.deserialize_state(&[]),
+        Err(DeserializeError::Encoding)
+    );
+    assert_eq!(before, persisted_of(&target.state, 0));
+}
+
 /// `Array` serializes its active elements only and rejects a sequence longer than
 /// its capacity.
-#[cfg(feature = "serde")]
 #[test]
 fn array_serde_uses_active_elements_and_checks_capacity() {
     let mut array: Array<u8, 4> = Array::from_slice(&[1, 2]);
@@ -780,7 +834,6 @@ fn array_serde_uses_active_elements_and_checks_capacity() {
 }
 
 /// The fixed byte arrays (DRBG seed, PCR values, ...) must have their exact length.
-#[cfg(feature = "serde")]
 #[test]
 fn fixed_byte_arrays_require_their_exact_length() {
     let state = Box::<RamState>::default();
