@@ -206,18 +206,6 @@ impl<S: NvStorage + ?Sized> IndexState for S {
         let (_, _, item) = find_item(handle, &toc).ok_or(StorageError::AccessDenied)?;
         Ok(item)
     }
-
-    fn erase(&mut self) -> Result<(), StorageError> {
-        let zero_block = [0u8; 128];
-        let cap = self.capacity();
-        let mut pos = 0;
-        while pos < cap {
-            let len = (cap - pos).min(zero_block.len());
-            self.write_nv(pos, &zero_block[..len])?;
-            pos += len;
-        }
-        self.flush()
-    }
 }
 
 /// Reads the entire TOC into a fixed-size array.

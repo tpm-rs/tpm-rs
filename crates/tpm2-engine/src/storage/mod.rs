@@ -70,9 +70,6 @@ pub trait IndexState {
 
     /// The metadata of the item `handle` ([`StorageError::AccessDenied`] if it does not exist).
     fn get_metadata(&self, handle: Handle) -> Result<ItemMetadata, StorageError>;
-
-    /// Erases the whole NV memory: the reserved header is zeroed and no item is defined.
-    fn erase(&mut self) -> Result<(), StorageError>;
 }
 
 pub use tpm2::platform::{NvStorage, StorageError};

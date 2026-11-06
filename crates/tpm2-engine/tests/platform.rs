@@ -288,10 +288,4 @@ fn state_default_and_index_state_of_a_medium() {
     // The reserved header is limited to its 128 octets.
     assert!(state.nv.index.write_reserved(127, &[0, 0]).is_err());
     assert!(state.nv.index.read_reserved(120, &mut [0; 9]).is_err());
-
-    state.nv.index.erase().unwrap();
-    assert!(state.nv.index.get_metadata(0x0150_0000).is_err());
-    let mut header = [0xFFu8; 2];
-    state.nv.index.read_reserved(0, &mut header).unwrap();
-    assert_eq!(header, [0, 0]);
 }

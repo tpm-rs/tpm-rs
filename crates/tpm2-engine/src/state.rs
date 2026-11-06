@@ -17,7 +17,7 @@
 //!   - [`ClearState`] (`gc`, `STATE_CLEAR_DATA`): written to NV by
 //!     `TPM2_Shutdown(TPM_SU_STATE)` and read by `TPM2_Startup(TPM_SU_STATE)` (TPM Resume).
 //!   - [`Nv::index`]: the platform-specific structure that holds the NV data
-//!     ([`crate::Platform::IndexState`], an [`IndexState`]): the NV Indices, the persistent
+//!     ([`crate::Platform::IndexState`], an [`IndexState`](crate::storage::IndexState)): the NV Indices, the persistent
 //!     objects and the engine's internal records, which keep the NV copy of the groups above.
 //!
 //! The NV layout of these values (the reserved NV header and the engine's internal NV
@@ -33,10 +33,6 @@ use crate::engine::{
 use crate::handler::{SessionState, TransientObject};
 use crate::owned::{OwnedAuth, OwnedAuthCommand, OwnedDigest};
 use crate::physical_presence::PpList;
-use crate::storage::manager::MAX_ITEMS;
-use crate::storage::types::ItemMetadata;
-use crate::storage::{IndexState, StorageError};
-use core::marker::PhantomData;
 use tpm2::Handle;
 use tpm2::platform::PcrState;
 
@@ -433,106 +429,55 @@ impl<P: Platform> State<P> {
     /// Returns every value of the state to that of a new TPM ([`State::new`]) except the NV
     /// data structure [`Nv::index`], which is kept as it is.
     pub fn reinitialize(&mut self) {
-        self.replace_except_index(State::<Detached<P>>::new(NoIndex));
-    }
-
-    /// Replaces every value of the state with the one of `other`, except the NV data
-    /// structure [`Nv::index`], which is kept (`other`'s is dropped).
-    pub(crate) fn replace_except_index<Q: Platform>(&mut self, other: State<Q>) {
-        let State {
-            initialized,
-            locality,
-            nv_available,
-            g_nv_ok,
-            prev_orderly_state,
-            update_nv,
-            clear_orderly,
-            drtm_pre_startup,
-            drtm_handle,
-            startup_locality_3,
-            da_used,
-            power_was_lost,
-            timer_stopped,
-            timer_was_reset,
-            ph_enable,
-            transient_objects,
-            active_sessions,
-            active_sequences,
-            command_persistent_objects,
-            platform_unique_details,
-            tpm_time_ms,
-            last_timer_read_ms,
-            da_pending_on_nv,
-            parsed_auths,
-            parsed_auths_len,
-            session_audit_cp_hashes,
-            sessions_validated_by_handler,
-            exclusive_audit_session,
-            in_shadow_execution,
-            clock_adjust_rate,
-            clock_adjust_remainder,
-            pcrs,
-            pcr_reconfig,
-            command_audit_cp_hash,
-            command_audit_alg_changed,
-            act,
-            #[cfg(feature = "ntc2-vendor-commands")]
-            ntc2_config,
-            physical_presence,
-            nv:
-                Nv {
-                    persistent,
-                    orderly,
-                    reset,
-                    clear,
-                    index: _,
-                },
-        } = other;
-        self.initialized = initialized;
-        self.locality = locality;
-        self.nv_available = nv_available;
-        self.g_nv_ok = g_nv_ok;
-        self.prev_orderly_state = prev_orderly_state;
-        self.update_nv = update_nv;
-        self.clear_orderly = clear_orderly;
-        self.drtm_pre_startup = drtm_pre_startup;
-        self.drtm_handle = drtm_handle;
-        self.startup_locality_3 = startup_locality_3;
-        self.da_used = da_used;
-        self.power_was_lost = power_was_lost;
-        self.timer_stopped = timer_stopped;
-        self.timer_was_reset = timer_was_reset;
-        self.ph_enable = ph_enable;
-        self.transient_objects = transient_objects;
-        self.active_sessions = active_sessions;
-        self.active_sequences = active_sequences;
-        self.command_persistent_objects = command_persistent_objects;
-        self.platform_unique_details = platform_unique_details;
-        self.tpm_time_ms = tpm_time_ms;
-        self.last_timer_read_ms = last_timer_read_ms;
-        self.da_pending_on_nv = da_pending_on_nv;
-        self.parsed_auths = parsed_auths;
-        self.parsed_auths_len = parsed_auths_len;
-        self.session_audit_cp_hashes = session_audit_cp_hashes;
-        self.sessions_validated_by_handler = sessions_validated_by_handler;
-        self.exclusive_audit_session = exclusive_audit_session;
-        self.in_shadow_execution = in_shadow_execution;
-        self.clock_adjust_rate = clock_adjust_rate;
-        self.clock_adjust_remainder = clock_adjust_remainder;
-        self.pcrs = pcrs;
-        self.pcr_reconfig = pcr_reconfig;
-        self.command_audit_cp_hash = command_audit_cp_hash;
-        self.command_audit_alg_changed = command_audit_alg_changed;
-        self.act = act;
+        self.initialized = false;
+        self.locality = 0;
+        self.nv_available = true;
+        self.g_nv_ok = false;
+        self.prev_orderly_state = 0xFFFF;
+        self.update_nv = UT_NONE;
+        self.clear_orderly = false;
+        self.drtm_pre_startup = false;
+        self.drtm_handle = Handle::RH_UNASSIGNED.0;
+        self.startup_locality_3 = false;
+        self.da_used = false;
+        self.power_was_lost = true;
+        self.timer_stopped = true;
+        self.timer_was_reset = true;
+        self.ph_enable = true;
+        self.transient_objects = [const { None }; MAX_LOADED_OBJECTS];
+        self.active_sessions = [const { None }; MAX_LOADED_SESSIONS];
+        self.active_sequences = [const { None }; MAX_ACTIVE_SEQUENCES];
+        self.command_persistent_objects = 0;
+        self.platform_unique_details = OwnedAuth::default();
+        self.tpm_time_ms = 0;
+        self.last_timer_read_ms = None;
+        self.da_pending_on_nv = false;
+        self.parsed_auths = [
+            OwnedAuthCommand::default(),
+            OwnedAuthCommand::default(),
+            OwnedAuthCommand::default(),
+        ];
+        self.parsed_auths_len = 0;
+        self.session_audit_cp_hashes = [None; 3];
+        self.sessions_validated_by_handler = false;
+        self.exclusive_audit_session = None;
+        self.in_shadow_execution = false;
+        self.clock_adjust_rate = CLOCK_NOMINAL;
+        self.clock_adjust_remainder = 0;
+        self.pcrs = PcrState::default();
+        self.pcr_reconfig = false;
+        self.command_audit_cp_hash = None;
+        self.command_audit_alg_changed = false;
+        self.act = crate::act::ActState::default();
         #[cfg(feature = "ntc2-vendor-commands")]
         {
-            self.ntc2_config = ntc2_config;
+            self.ntc2_config = crate::handler::vendor::NTC2_INITIAL_CONFIG;
         }
-        self.physical_presence = physical_presence;
-        self.nv.persistent = persistent;
-        self.nv.orderly = orderly;
-        self.nv.reset = reset;
-        self.nv.clear = clear;
+        self.physical_presence = false;
+        self.nv.persistent = PersistentState::default();
+        self.nv.orderly = OrderlyState::default();
+        self.nv.reset = ResetState::default();
+        self.nv.clear = ClearState::default();
     }
 }
 
@@ -542,75 +487,6 @@ where
 {
     fn default() -> Self {
         Self::new(P::IndexState::default())
-    }
-}
-
-/// A [`Platform`] with the component types of `P` but without NV data ([`NoIndex`]), for
-/// staging a [`State`] that is not attached to an [`IndexState`] (see
-/// [`State::replace_except_index`]). Its components are never used.
-pub(crate) struct Detached<P>(PhantomData<fn() -> P>);
-
-impl<P: Platform> Platform for Detached<P> {
-    type Crypto = P::Crypto;
-    type Timer = P::Timer;
-    type Rng = P::Rng;
-    type IndexState = NoIndex;
-
-    fn timer(&self) -> &P::Timer {
-        unreachable!("a detached platform has no timer")
-    }
-
-    fn rng(&mut self) -> &mut P::Rng {
-        unreachable!("a detached platform has no RNG")
-    }
-}
-
-/// The NV data structure of a [`Detached`] platform: it holds nothing, and every access fails.
-pub(crate) struct NoIndex;
-
-impl IndexState for NoIndex {
-    fn nv_capacity(&self) -> usize {
-        0
-    }
-
-    fn read_reserved(&self, _offset: usize, _buf: &mut [u8]) -> Result<(), StorageError> {
-        Err(StorageError::AccessDenied)
-    }
-
-    fn write_reserved(&mut self, _offset: usize, _data: &[u8]) -> Result<(), StorageError> {
-        Err(StorageError::AccessDenied)
-    }
-
-    fn items(&self) -> Result<[ItemMetadata; MAX_ITEMS], StorageError> {
-        Err(StorageError::AccessDenied)
-    }
-
-    fn define_space(&mut self, _handle: u32, _size: u16, _attrs: u32) -> Result<(), StorageError> {
-        Err(StorageError::AccessDenied)
-    }
-
-    fn undefine_space(&mut self, _handle: u32) -> Result<(), StorageError> {
-        Err(StorageError::AccessDenied)
-    }
-
-    fn resize_item(&mut self, _handle: u32, _new_size: u16) -> Result<(), StorageError> {
-        Err(StorageError::AccessDenied)
-    }
-
-    fn write_item(&mut self, _handle: u32, _offset: u16, _data: &[u8]) -> Result<(), StorageError> {
-        Err(StorageError::AccessDenied)
-    }
-
-    fn read_item(&self, _handle: u32, _offset: u16, _buf: &mut [u8]) -> Result<(), StorageError> {
-        Err(StorageError::AccessDenied)
-    }
-
-    fn get_metadata(&self, _handle: u32) -> Result<ItemMetadata, StorageError> {
-        Err(StorageError::AccessDenied)
-    }
-
-    fn erase(&mut self) -> Result<(), StorageError> {
-        Err(StorageError::AccessDenied)
     }
 }
 
