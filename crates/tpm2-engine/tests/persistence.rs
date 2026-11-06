@@ -44,7 +44,7 @@ const NV_STORAGE_SIZE: usize = 2 * tpm2_engine::storage::nv_capacity::NV_MEMORY_
 /// A standalone TPM state whose NV data is held in its own [`RamStorageMock`] of the
 /// simulator's size.
 type RamState = State<
-    tpm2_engine::TpmPlatform<
+    common::FakePlatform<
         'static,
         TestCryptoProvider,
         RamStorageMock<NV_STORAGE_SIZE>,
@@ -96,7 +96,7 @@ macro_rules! two_engines {
         let mut rng_b = FakeRng::new();
         #[allow(unused_mut)]
         let mut $b = tpm2_engine::TpmEngine::new(
-            tpm2_engine::TpmPlatform::new(&mut crypto_b, &mut timer_b, &mut rng_b),
+            common::FakePlatform::new(&mut crypto_b, &mut timer_b, &mut rng_b),
             &mut storage_b,
         )
         .unwrap();

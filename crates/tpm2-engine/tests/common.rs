@@ -4,13 +4,16 @@ extern crate alloc;
 extern crate std;
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 use tpm2::crypto::backend::{
     CmacState, EccCurve, HashState, HmacState, PrivateKey, RsaKey, SymmetricState, default_crypt,
 };
 use tpm2::crypto::{Block, CipherInput, CryptoError, Direction, Random, Rng};
+use tpm2::platform::{SecureChannel, TpmFirmware};
 use tpm2::{Handle, TpmSe};
 use tpm2::{Tpm2bNonce, TpmiAlgHash};
 use tpm2_engine::handler::SessionState;
+use tpm2_engine::storage::IndexState;
 use tpm2_engine::storage::{NvStorage, StorageError};
 use tpm2_engine::timer::TpmTimer;
 
@@ -91,7 +94,7 @@ pub fn make_test_session_state(
 /// A deterministic platform RNG ([`Rng`]): fills buffers with an incrementing (wrapping) byte
 /// counter that starts at 1 and continues across calls.
 ///
-/// [`TpmPlatform`](tpm2_engine::TpmPlatform) borrows its RNG mutably, so pass `&mut rng`. A
+/// [`FakePlatform`] borrows its RNG mutably, so pass `&mut rng`. A
 /// `FakeRng` that is reused for several engines one after the other keeps counting where the
 /// previous engine stopped. It is also the RNG of [`FakeCrypto`] (a separate instance per
 /// [`Random::from_entropy`] call).
@@ -700,7 +703,7 @@ where
 /// A [`tpm2_engine::TpmEngine`] backed by the real test crypto backend and the
 /// fake storage/timer/RNG.
 pub type RealCryptoEngine<'a> = tpm2_engine::TpmEngine<
-    tpm2_engine::TpmPlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer, FakeRng>,
+    FakePlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer, FakeRng>,
 >;
 
 /// Builds a [`RealCryptoEngine`] plus its [`tpm2_engine::State`] and runs
@@ -712,7 +715,7 @@ pub fn setup_real_crypto_tpm<'a>(
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
 ) -> RealCryptoEngine<'a> {
-    let platform = tpm2_engine::TpmPlatform::new(crypto, timer, rng);
+    let platform = FakePlatform::new(crypto, timer, rng);
     let mut tpm = tpm2_engine::TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -826,13 +829,119 @@ pub fn context_integrity_hash_alg() -> tpm2::TpmiAlgHash {
     }
 }
 
-/// A [`tpm2_engine::Platform`] over the fake components whose NV data structure is an owned
+/// A [`FakePlatform`] over the fake components whose NV data structure is an owned
 /// [`FakeStorage`], for tests of a standalone [`TestState`].
 #[allow(dead_code)]
-pub type TestPlatform =
-    tpm2_engine::TpmPlatform<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng>;
+pub type TestPlatform = FakePlatform<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng>;
 
 /// A standalone TPM state ([`tpm2_engine::State`]) over [`TestPlatform`]; its
 /// [`Default`](tpm2_engine::State::default) has a fresh [`FakeStorage`].
 #[allow(dead_code)]
 pub type TestState = tpm2_engine::State<TestPlatform>;
+
+/// A test platform that borrows its components (every platform crate defines its own
+/// platform type; the engine's tests use this one).
+///
+/// `I` is the [`tpm2_engine::Platform::IndexState`] of the TPM, which the engine owns
+/// ([`tpm2_engine::TpmEngine::new`]); typically an NV medium or a mutable reference to one.
+#[allow(dead_code)]
+pub struct FakePlatform<'a, C, I, T, R>
+where
+    C: tpm2::crypto::Crypto,
+    I: IndexState,
+    T: TpmTimer,
+    R: Rng,
+{
+    /// Cryptography backend ([`Crypto`]). The backend's interfaces are static (its
+    /// algorithms are associated types); the reference only selects and borrows it.
+    pub crypto: &'a mut C,
+    /// Monotonic timer.
+    pub timer: &'a mut T,
+    /// Platform random number generator ([`tpm2_engine::Platform::Rng`]).
+    pub rng: &'a mut R,
+    /// Firmware identity ([`tpm2_engine::Platform::firmware`]); `None` by default ([`FakePlatform::new`]).
+    pub firmware: Option<&'a (dyn TpmFirmware + Sync)>,
+    /// Secure channel information of the TPM's secure transport layer
+    /// ([`tpm2_engine::Platform::secure_channel`]); `None` by default ([`FakePlatform::new`]).
+    pub secure_channel: Option<&'a (dyn SecureChannel + Sync)>,
+    /// Immutable platform information ([`tpm2_engine::Platform::info`]); [`tpm2_engine::Info::DEFAULT`] by default
+    /// ([`FakePlatform::new`]).
+    pub info: tpm2_engine::Info,
+    /// The type of the TPM's NV data structure ([`tpm2_engine::Platform::IndexState`]).
+    index: PhantomData<fn() -> I>,
+}
+
+#[allow(dead_code)]
+impl<'a, C, I, T, R> FakePlatform<'a, C, I, T, R>
+where
+    C: tpm2::crypto::Crypto,
+    I: IndexState,
+    T: TpmTimer,
+    R: Rng,
+{
+    /// Constructs a new `FakePlatform` from mutable references to hardware providers.
+    pub fn new(crypto: &'a mut C, timer: &'a mut T, rng: &'a mut R) -> Self {
+        Self {
+            crypto,
+            timer,
+            rng,
+            firmware: None,
+            secure_channel: None,
+            info: tpm2_engine::Info::DEFAULT,
+            index: PhantomData,
+        }
+    }
+
+    /// Gives the TPM the firmware identity `firmware`, enabling the firmware-limited and
+    /// SVN-limited hierarchies (see [`tpm2_engine::Platform::firmware`]).
+    pub fn with_firmware(mut self, firmware: &'a (dyn TpmFirmware + Sync)) -> Self {
+        self.firmware = Some(firmware);
+        self
+    }
+
+    /// Gives the TPM the secure transport layer `secure_channel` (see
+    /// [`tpm2_engine::Platform::secure_channel`]).
+    pub fn with_secure_channel(mut self, secure_channel: &'a (dyn SecureChannel + Sync)) -> Self {
+        self.secure_channel = Some(secure_channel);
+        self
+    }
+
+    /// Gives the TPM the platform information `info` (see [`tpm2_engine::Platform::info`]).
+    pub fn with_info(mut self, info: tpm2_engine::Info) -> Self {
+        self.info = info;
+        self
+    }
+}
+
+impl<C, I, T, R> tpm2_engine::Platform for FakePlatform<'_, C, I, T, R>
+where
+    C: tpm2::crypto::Crypto,
+    I: IndexState,
+    T: TpmTimer,
+    R: Rng + Sync,
+{
+    type Crypto = C;
+    type Timer = T;
+    type Rng = R;
+    type IndexState = I;
+
+    fn info(&self) -> &tpm2_engine::Info {
+        &self.info
+    }
+
+    fn timer(&self) -> &T {
+        self.timer
+    }
+
+    fn rng(&mut self) -> &mut R {
+        self.rng
+    }
+
+    fn firmware(&self) -> Option<&(dyn TpmFirmware + Sync)> {
+        self.firmware
+    }
+
+    fn secure_channel(&self) -> Option<&(dyn SecureChannel + Sync)> {
+        self.secure_channel
+    }
+}

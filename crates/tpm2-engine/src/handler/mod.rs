@@ -1713,8 +1713,8 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TpmPlatform;
     use crate::req_resp::{RequestResponseCursor, Response};
+    use crate::test_support::FakePlatform;
     use crate::test_support::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
     use alloc::vec::Vec;
     use tpm2::commands::responses;
@@ -1731,7 +1731,7 @@ mod tests {
     }
 
     type TestHandler<'a, 'b> =
-        CommandHandler<'b, TpmPlatform<'a, FakeCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>>;
+        CommandHandler<'b, FakePlatform<'a, FakeCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>>;
 
     /// Where the response handle area starts (after the 10-byte response header).
     const RESPONSE_OFFSET: usize = 10;
@@ -1742,7 +1742,7 @@ mod tests {
         let mut storage = FakeStorage::default();
         let mut timer = FakeTimer;
         let mut rng = FakeRng::new();
-        let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+        let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
         let mut engine = crate::TpmEngine::new(platform, &mut storage).unwrap();
         engine.state.in_shadow_execution = in_shadow_execution;
         let handler = CommandHandler::new(&mut engine);

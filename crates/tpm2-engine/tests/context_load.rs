@@ -4,9 +4,9 @@ use tpm2::errors::{Position, TpmRc};
 use tpm2::{Unmarshal, UnmarshalMessage};
 mod common;
 
+use common::FakePlatform;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use tpm2_engine::TpmEngine;
-use tpm2_engine::TpmPlatform;
 use tpm2_engine::handler::TransientObject;
 
 #[test]
@@ -15,7 +15,7 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;

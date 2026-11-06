@@ -1,9 +1,9 @@
 mod common;
 
+use common::FakePlatform;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2_engine::TpmEngine;
-use tpm2_engine::TpmPlatform;
 
 #[test]
 fn test_clear_overflow() {
@@ -11,7 +11,7 @@ fn test_clear_overflow() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();

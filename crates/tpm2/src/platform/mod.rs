@@ -18,8 +18,8 @@
 //!   firmware-limited and SVN-limited hierarchies.
 //! - [`secure_channel`]: Secure channel (SPDM) information of the TPM's secure transport layer.
 //!
-//! The `Platform` trait that combines these components for the TPM engine (and `TpmPlatform`,
-//! the generic platform that borrows them) is defined by `tpm2-engine`.
+//! The `Platform` trait that combines these components for the TPM engine is defined by
+//! `tpm2-engine`; every platform crate implements it with its own platform type.
 
 pub mod firmware;
 pub mod pcr;

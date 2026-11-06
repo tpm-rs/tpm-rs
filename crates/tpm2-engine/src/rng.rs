@@ -4,7 +4,7 @@
 //! [`TpmEngine::random_platform`] / [`TpmEngine::random_crypto`] (and, for the algorithms that
 //! consume random numbers, through [`TpmEngine::ref_rng`]):
 //!
-//! - By default, `random_platform` draws from the platform RNG ([`TpmPlatform::rng`]) and
+//! - By default, `random_platform` draws from the platform RNG ([`Platform::rng`](crate::Platform::rng)) and
 //!   `random_crypto` from the crypto backend's random number generator
 //!   ([`TpmEngine::crypto_rng`], a `C::Rng` created with [`tpm2::crypto::Random::from_entropy`]).
 //! - With the `reference-rng` feature, both draw from the TPM's own CTR-DRBG (`drbgDefault`,
@@ -13,7 +13,6 @@
 //!   are arranged so that the values are drawn in the order and with the sizes of the reference
 //!   code.
 //!
-//! [`TpmPlatform::rng`]: crate::TpmPlatform
 //! [`State::drbg_state`]: crate::State
 
 use crate::Platform;

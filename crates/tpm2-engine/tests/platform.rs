@@ -6,11 +6,12 @@
 
 mod common;
 
+use common::FakePlatform;
 use common::{FakeCrypto, FakeRng, FakeTimer};
 use tpm2::{TpmCap, TpmPt};
 use tpm2_engine::storage::IndexState;
 use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
-use tpm2_engine::{Info, Nv, Platform, State, TpmEngine, TpmPlatform};
+use tpm2_engine::{Info, Nv, Platform, State, TpmEngine};
 
 /// The size of the NV memory of the test platforms.
 const NV_SIZE: usize = 2 * tpm2_engine::storage::nv_capacity::NV_MEMORY_SIZE as usize;
@@ -132,7 +133,7 @@ fn expected_properties(info: &Info) -> Vec<(TpmPt, u32)> {
     ]
 }
 
-/// `TpmPlatform` reports `Info::DEFAULT` ("GOOG", "TPM-RUST", firmware version 1.0) unless it
+/// `FakePlatform` reports `Info::DEFAULT` ("GOOG", "TPM-RUST", firmware version 1.0) unless it
 /// is given other information.
 #[test]
 fn default_platform_reports_default_info() {
@@ -142,7 +143,7 @@ fn default_platform_reports_default_info() {
 
     let (mut crypto, mut timer, mut rng) = (FakeCrypto, FakeTimer, FakeRng::new());
     let mut storage = Box::new(Ram::new());
-    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
     let mut tpm = Box::new(TpmEngine::new(platform, &mut *storage).unwrap());
     tpm.init_storage();
     power_on_start_up(&mut *tpm);

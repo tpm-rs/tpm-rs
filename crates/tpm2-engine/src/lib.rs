@@ -109,7 +109,7 @@ pub use platform_connection::SimulatorPlatformSignal;
 #[cfg(feature = "std")]
 pub use platform_connection::{NO_STREAM, PlatformConnection};
 
-pub use platform::{Info, Platform, TpmPlatform};
+pub use platform::{Info, Platform};
 
 /// Whether `TPM2_ECC_Parameters` reports a recommended KDF for the NIST curves
 /// (`KDF1_SP800_56A` with the hash of the curve's strength); without (the

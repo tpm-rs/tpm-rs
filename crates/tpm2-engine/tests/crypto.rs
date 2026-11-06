@@ -1,9 +1,9 @@
 mod common;
 
+use common::FakePlatform;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2_engine::TpmEngine;
-use tpm2_engine::TpmPlatform;
 
 use tpm2::{
     PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bName, TpmaObject, TpmiAlgHash, TpmtPublic,
@@ -31,8 +31,8 @@ fn setup_tpm_with_fake_platform<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> TpmEngine<TpmPlatform<'a, FakeCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>> {
-    let platform = TpmPlatform::new(crypto, timer, rng);
+) -> TpmEngine<FakePlatform<'a, FakeCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>> {
+    let platform = FakePlatform::new(crypto, timer, rng);
     let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
 

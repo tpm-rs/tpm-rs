@@ -1,9 +1,10 @@
 mod common;
 
+use common::FakePlatform;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use tpm2::Handle;
 use tpm2::TpmiAlgHash;
-use tpm2_engine::{TpmEngine, TpmPlatform};
+use tpm2_engine::TpmEngine;
 
 #[test]
 fn test_hcrtm_pre_startup_sequence_and_slot_eviction() {
@@ -11,7 +12,7 @@ fn test_hcrtm_pre_startup_sequence_and_slot_eviction() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;

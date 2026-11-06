@@ -20,13 +20,14 @@ compile_error!("Features 'rust' and 'bssl' are mutually exclusive.");
 compile_error!("Features 'crux' and 'bssl' are mutually exclusive.");
 
 use std::fs::File;
+use std::marker::PhantomData;
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Instant;
 use tpm2::crypto::{Crypto, CryptoError, Random, Rng};
-use tpm2::platform::TpmFirmware;
-use tpm2_engine::TpmPlatform;
+use tpm2::platform::{SecureChannel, TpmFirmware};
 use tpm2_engine::storage::IndexState;
 use tpm2_engine::timer::TpmTimer;
+use tpm2_engine::{Info, Nv, Platform};
 
 #[cfg(feature = "rust")]
 pub use tpm2_crypto_rust::RustCryptoProvider as PlatformCryptoProvider;
@@ -106,7 +107,7 @@ static URANDOM_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 
 /// Linux-specific random number generator reading from OS entropy source.
 ///
-/// Implements the platform [`Rng`] of [`TpmPlatform`]: [`Rng::fill_bytes`]
+/// Implements the platform [`Rng`] of [`LinuxPlatform`]: [`Rng::fill_bytes`]
 /// draws from the [`PlatformCryptoProvider`]'s entropy source
 /// ([`Random::rand_bytes`], the `getrandom` syscall), falling back to
 /// `/dev/urandom`. [`Rng::stir_bytes`] is a no-op,
@@ -253,23 +254,111 @@ impl Rng for LinuxRng {
     }
 }
 
-/// Helper function to instantiate a `TpmPlatform` with Linux hardware components and the
-/// firmware identity `firmware` (the Firmware Secret, Firmware SVN Secrets and SVNs of the
-/// firmware-limited and SVN-limited hierarchies; a simulator uses
-/// [`tpm2::platform::SimulatedFirmware`]). The TPM's NV data structure `I`
-/// ([`tpm2_engine::Platform::IndexState`], e.g. a mutable reference to an NV medium) is given
-/// to [`tpm2_engine::TpmEngine::new`].
+/// The Linux [`Platform`]: the TPM's crypto backend `C`, the Linux timer and platform RNG
+/// ([`LinuxTimer`], [`LinuxRng`]), the firmware identity, an optional secure transport layer
+/// and the platform [`Info`]. It borrows its components.
+///
+/// `I` is the TPM's NV data structure ([`Platform::IndexState`], e.g. a mutable reference to
+/// an NV medium), which is given to [`tpm2_engine::TpmEngine::new`] together with the
+/// platform. The NV data is the medium itself, so the NV hooks ([`Platform::load_nv`],
+/// [`Platform::store_nv`]) have nothing to do.
+pub struct LinuxPlatform<'a, C: Crypto, I: IndexState> {
+    /// The crypto backend ([`Platform::Crypto`]); the reference only selects and borrows it.
+    pub crypto: &'a mut C,
+    /// The monotonic timer.
+    pub timer: &'a mut LinuxTimer,
+    /// The platform random number generator.
+    pub rng: &'a mut LinuxRng,
+    /// The firmware identity (the Firmware Secret, Firmware SVN Secrets and SVNs of the
+    /// firmware-limited and SVN-limited hierarchies).
+    pub firmware: &'a (dyn TpmFirmware + Sync),
+    /// The secure transport layer ([`Platform::secure_channel`]); `None` by default.
+    pub secure_channel: Option<&'a (dyn SecureChannel + Sync)>,
+    /// The platform information ([`Platform::info`]); [`Info::DEFAULT`] by default.
+    pub info: Info,
+    /// The type of the TPM's NV data structure.
+    index: PhantomData<fn() -> I>,
+}
+
+impl<'a, C: Crypto, I: IndexState> LinuxPlatform<'a, C, I> {
+    /// A Linux platform with the crypto backend `crypto`, the timer `timer`, the platform RNG
+    /// `platform_rng` and the firmware identity `firmware` (a simulator uses
+    /// [`tpm2::platform::SimulatedFirmware`]), without a secure transport layer and with
+    /// [`Info::DEFAULT`].
+    pub fn new(
+        crypto: &'a mut C,
+        timer: &'a mut LinuxTimer,
+        platform_rng: &'a mut LinuxRng,
+        firmware: &'a (dyn TpmFirmware + Sync),
+    ) -> Self {
+        Self {
+            crypto,
+            timer,
+            rng: platform_rng,
+            firmware,
+            secure_channel: None,
+            info: Info::DEFAULT,
+            index: PhantomData,
+        }
+    }
+
+    /// Gives the TPM the secure transport layer `secure_channel` (see
+    /// [`Platform::secure_channel`]).
+    pub fn with_secure_channel(mut self, secure_channel: &'a (dyn SecureChannel + Sync)) -> Self {
+        self.secure_channel = Some(secure_channel);
+        self
+    }
+
+    /// Gives the TPM the platform information `info` (see [`Platform::info`]).
+    pub fn with_info(mut self, info: Info) -> Self {
+        self.info = info;
+        self
+    }
+}
+
+impl<C: Crypto, I: IndexState> Platform for LinuxPlatform<'_, C, I> {
+    type Crypto = C;
+    type Timer = LinuxTimer;
+    type Rng = LinuxRng;
+    type IndexState = I;
+
+    fn info(&self) -> &Info {
+        &self.info
+    }
+
+    fn timer(&self) -> &LinuxTimer {
+        self.timer
+    }
+
+    fn rng(&mut self) -> &mut LinuxRng {
+        self.rng
+    }
+
+    fn firmware(&self) -> Option<&(dyn TpmFirmware + Sync)> {
+        Some(self.firmware)
+    }
+
+    fn secure_channel(&self) -> Option<&(dyn SecureChannel + Sync)> {
+        self.secure_channel
+    }
+
+    fn load_nv(&mut self, _nv: &mut Nv<Self>) {}
+
+    fn store_nv(&mut self, _nv: &Nv<Self>) {}
+}
+
+/// Instantiates a [`LinuxPlatform`] ([`LinuxPlatform::new`]).
 pub fn create_linux_platform<'a, C, I>(
     crypto: &'a mut C,
     timer: &'a mut LinuxTimer,
     platform_rng: &'a mut LinuxRng,
     firmware: &'a (dyn TpmFirmware + Sync),
-) -> TpmPlatform<'a, C, I, LinuxTimer, LinuxRng>
+) -> LinuxPlatform<'a, C, I>
 where
     C: Crypto,
     I: IndexState,
 {
-    TpmPlatform::new(crypto, timer, platform_rng).with_firmware(firmware)
+    LinuxPlatform::new(crypto, timer, platform_rng, firmware)
 }
 
 impl Default for LinuxTimer {

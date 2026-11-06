@@ -3,6 +3,7 @@ use common::marshal_to_slice;
 use tpm2::{Marshal, Unmarshal};
 mod common;
 
+use common::FakePlatform;
 use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
@@ -19,7 +20,6 @@ use tpm2::{
 };
 use tpm2::{Handle, TpmCc, TpmSe};
 use tpm2_engine::TpmEngine;
-use tpm2_engine::TpmPlatform;
 use tpm2_engine::handler::TransientObject;
 
 fn leak_bytes(bytes: &[u8]) -> &'static [u8] {
@@ -31,8 +31,8 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> TpmEngine<TpmPlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer, FakeRng>> {
-    let platform = TpmPlatform::new(crypto, timer, rng);
+) -> TpmEngine<FakePlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer, FakeRng>> {
+    let platform = FakePlatform::new(crypto, timer, rng);
     let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -59,7 +59,7 @@ const DUP_POLICY_DIGEST: [u8; 32] =
 /// [`execute_tpm_command`] do not interfere with resolving the bounds for these commands.
 fn start_duplicate_policy_session(
     tpm: &mut TpmEngine<
-        TpmPlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
+        FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
     >,
     auth_hash: TpmiAlgHash,
 ) -> Result<TpmsAuthCommand<'static>, u32> {
@@ -99,7 +99,7 @@ fn start_duplicate_policy_session(
 /// `TPM2_Duplicate` a policy session that satisfied `PolicyCommandCode(TPM_CC_Duplicate)`.
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<
-        TpmPlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
+        FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
     >,
     cmd: &C,
     auths: &[TpmsAuthCommand],
@@ -141,7 +141,7 @@ where
 
 fn execute_tpm_command_raw<C: Command>(
     tpm: &mut TpmEngine<
-        TpmPlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
+        FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
     >,
     cmd: &C,
     auths: &[TpmsAuthCommand],

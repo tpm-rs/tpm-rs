@@ -2,10 +2,10 @@ use tpm2::Unmarshal;
 use tpm2::errors::TpmRc;
 mod common;
 
+use common::FakePlatform;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2_engine::TpmEngine;
-use tpm2_engine::TpmPlatform;
 use tpm2_engine::handler::TransientObject;
 
 #[test]
@@ -18,7 +18,7 @@ fn get_random_in_place() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
@@ -115,7 +115,7 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
 
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
@@ -185,7 +185,7 @@ fn test_platform_construction_with_generic_rng() {
     let mut storage = RamStorageMock::<128>::new();
     let mut timer = SoftwareTimer { tick: 0 };
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
     let tpm = TpmEngine::new(platform, &mut storage).unwrap();
 
     // Before manufacture there are no Primary Seeds.

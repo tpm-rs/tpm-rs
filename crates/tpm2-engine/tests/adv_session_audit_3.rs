@@ -4,12 +4,12 @@ extern crate alloc;
 
 mod common;
 
+use common::FakePlatform;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use tpm2::commands::{Command, FlushContext};
 use tpm2::{Handle, Marshal};
 use tpm2::{TpmiAlgHash, TpmsAuthCommand};
 use tpm2_engine::TpmEngine;
-use tpm2_engine::TpmPlatform;
 use tpm2_engine::handler::SessionState;
 
 struct StressTestCrypto;
@@ -22,8 +22,8 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> TpmEngine<TpmPlatform<'a, StressTestCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>> {
-    let platform = TpmPlatform::new(crypto, timer, rng);
+) -> TpmEngine<FakePlatform<'a, StressTestCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>> {
+    let platform = FakePlatform::new(crypto, timer, rng);
     let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -38,7 +38,9 @@ fn setup_tpm<'a>(
 }
 
 fn execute_tpm_command_with_auths<C: Command>(
-    tpm: &mut TpmEngine<TpmPlatform<'_, StressTestCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<
+        FakePlatform<'_, StressTestCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>,
+    >,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<(), u32>

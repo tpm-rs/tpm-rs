@@ -315,8 +315,119 @@ impl TpmTimer for FakeTimer {
 
 /// A [`crate::Platform`] over the fake components whose NV data structure is an owned
 /// [`FakeStorage`], for tests of a standalone [`TestState`].
-pub type TestPlatform = crate::TpmPlatform<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng>;
+pub type TestPlatform = FakePlatform<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng>;
 
 /// A standalone TPM state ([`crate::State`]) over [`TestPlatform`]; its
 /// [`Default`](crate::State::default) has a fresh [`FakeStorage`].
 pub type TestState = crate::State<TestPlatform>;
+
+/// A test platform that borrows its components (every platform crate defines its own
+/// platform type; the engine's tests use this one).
+///
+/// `I` is the [`crate::Platform::IndexState`] of the TPM, which the engine owns
+/// ([`crate::TpmEngine::new`]); typically an NV medium or a mutable reference to one.
+#[allow(dead_code)]
+pub struct FakePlatform<'a, C, I, T, R>
+where
+    C: Crypto,
+    I: IndexState,
+    T: TpmTimer,
+    R: Rng,
+{
+    /// Cryptography backend ([`Crypto`]). The backend's interfaces are static (its
+    /// algorithms are associated types); the reference only selects and borrows it.
+    pub crypto: &'a mut C,
+    /// Monotonic timer.
+    pub timer: &'a mut T,
+    /// Platform random number generator ([`crate::Platform::Rng`]).
+    pub rng: &'a mut R,
+    /// Firmware identity ([`crate::Platform::firmware`]); `None` by default ([`FakePlatform::new`]).
+    pub firmware: Option<&'a (dyn TpmFirmware + Sync)>,
+    /// Secure channel information of the TPM's secure transport layer
+    /// ([`crate::Platform::secure_channel`]); `None` by default ([`FakePlatform::new`]).
+    pub secure_channel: Option<&'a (dyn SecureChannel + Sync)>,
+    /// Immutable platform information ([`crate::Platform::info`]); [`crate::Info::DEFAULT`] by default
+    /// ([`FakePlatform::new`]).
+    pub info: crate::Info,
+    /// The type of the TPM's NV data structure ([`crate::Platform::IndexState`]).
+    index: PhantomData<fn() -> I>,
+}
+
+#[allow(dead_code)]
+impl<'a, C, I, T, R> FakePlatform<'a, C, I, T, R>
+where
+    C: Crypto,
+    I: IndexState,
+    T: TpmTimer,
+    R: Rng,
+{
+    /// Constructs a new `FakePlatform` from mutable references to hardware providers.
+    pub fn new(crypto: &'a mut C, timer: &'a mut T, rng: &'a mut R) -> Self {
+        Self {
+            crypto,
+            timer,
+            rng,
+            firmware: None,
+            secure_channel: None,
+            info: crate::Info::DEFAULT,
+            index: PhantomData,
+        }
+    }
+
+    /// Gives the TPM the firmware identity `firmware`, enabling the firmware-limited and
+    /// SVN-limited hierarchies (see [`crate::Platform::firmware`]).
+    pub fn with_firmware(mut self, firmware: &'a (dyn TpmFirmware + Sync)) -> Self {
+        self.firmware = Some(firmware);
+        self
+    }
+
+    /// Gives the TPM the secure transport layer `secure_channel` (see
+    /// [`crate::Platform::secure_channel`]).
+    pub fn with_secure_channel(mut self, secure_channel: &'a (dyn SecureChannel + Sync)) -> Self {
+        self.secure_channel = Some(secure_channel);
+        self
+    }
+
+    /// Gives the TPM the platform information `info` (see [`crate::Platform::info`]).
+    pub fn with_info(mut self, info: crate::Info) -> Self {
+        self.info = info;
+        self
+    }
+}
+
+impl<C, I, T, R> crate::Platform for FakePlatform<'_, C, I, T, R>
+where
+    C: Crypto,
+    I: IndexState,
+    T: TpmTimer,
+    R: Rng + Sync,
+{
+    type Crypto = C;
+    type Timer = T;
+    type Rng = R;
+    type IndexState = I;
+
+    fn info(&self) -> &crate::Info {
+        &self.info
+    }
+
+    fn timer(&self) -> &T {
+        self.timer
+    }
+
+    fn rng(&mut self) -> &mut R {
+        self.rng
+    }
+
+    fn firmware(&self) -> Option<&(dyn TpmFirmware + Sync)> {
+        self.firmware
+    }
+
+    fn secure_channel(&self) -> Option<&(dyn SecureChannel + Sync)> {
+        self.secure_channel
+    }
+}
+
+use crate::storage::IndexState;
+use core::marker::PhantomData;
+use tpm2::platform::{SecureChannel, TpmFirmware};

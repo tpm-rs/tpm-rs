@@ -2,11 +2,11 @@ use common::marshal_to_slice;
 
 mod common;
 
+use common::FakePlatform;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use tpm2::Handle;
 use tpm2::commands::HierarchyChangeAuth;
 use tpm2_engine::TpmEngine;
-use tpm2_engine::TpmPlatform;
 
 #[test]
 fn test_no_direct_nv_write() {
@@ -15,7 +15,7 @@ fn test_no_direct_nv_write() {
     storage.fail_on_write = true; // MUST NOT write to NV directly
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -112,7 +112,7 @@ fn test_no_nv_writes_stress() {
     };
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;

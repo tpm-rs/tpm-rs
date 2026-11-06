@@ -10,15 +10,14 @@
 //! feature). The component interfaces themselves ([`crate::storage::NvStorage`], [`TpmTimer`],
 //! [`TpmFirmware`], [`SecureChannel`]) live in [`tpm2::platform`].
 //!
-//! [`TpmPlatform`] is the generic platform that borrows its components; most users (the
-//! simulator, the Linux platform and the tests) build a [`TpmEngine`](crate::TpmEngine) over it.
+//! Every platform crate defines its own platform type implementing [`Platform`] (e.g.
+//! `tpm2_platform_linux::LinuxPlatform`) and builds a [`TpmEngine`](crate::TpmEngine) over it.
 
 use crate::state::Nv;
 #[cfg(feature = "persistence")]
 use crate::state::State;
 use crate::storage::IndexState;
 use crate::timer::TpmTimer;
-use core::marker::PhantomData;
 use tpm2::crypto::{Crypto, Rng};
 use tpm2::platform::{SecureChannel, TpmFirmware};
 
@@ -167,109 +166,5 @@ pub trait Platform: Sized {
             state,
             self.timer().timer_read(),
         )
-    }
-}
-
-/// The generic [`Platform`] that borrows its components.
-///
-/// `I` is the [`Platform::IndexState`] of the TPM, which the engine owns
-/// ([`crate::TpmEngine::new`]); typically an NV medium or a mutable reference to one.
-pub struct TpmPlatform<'a, C, I, T, R>
-where
-    C: Crypto,
-    I: IndexState,
-    T: TpmTimer,
-    R: Rng,
-{
-    /// Cryptography backend ([`Crypto`]). The backend's interfaces are static (its
-    /// algorithms are associated types); the reference only selects and borrows it.
-    pub crypto: &'a mut C,
-    /// Monotonic timer.
-    pub timer: &'a mut T,
-    /// Platform random number generator ([`Platform::Rng`]).
-    pub rng: &'a mut R,
-    /// Firmware identity ([`Platform::firmware`]); `None` by default ([`TpmPlatform::new`]).
-    pub firmware: Option<&'a (dyn TpmFirmware + Sync)>,
-    /// Secure channel information of the TPM's secure transport layer
-    /// ([`Platform::secure_channel`]); `None` by default ([`TpmPlatform::new`]).
-    pub secure_channel: Option<&'a (dyn SecureChannel + Sync)>,
-    /// Immutable platform information ([`Platform::info`]); [`Info::DEFAULT`] by default
-    /// ([`TpmPlatform::new`]).
-    pub info: Info,
-    /// The type of the TPM's NV data structure ([`Platform::IndexState`]).
-    index: PhantomData<fn() -> I>,
-}
-
-impl<'a, C, I, T, R> TpmPlatform<'a, C, I, T, R>
-where
-    C: Crypto,
-    I: IndexState,
-    T: TpmTimer,
-    R: Rng,
-{
-    /// Constructs a new `TpmPlatform` from mutable references to hardware providers.
-    pub fn new(crypto: &'a mut C, timer: &'a mut T, rng: &'a mut R) -> Self {
-        Self {
-            crypto,
-            timer,
-            rng,
-            firmware: None,
-            secure_channel: None,
-            info: Info::DEFAULT,
-            index: PhantomData,
-        }
-    }
-
-    /// Gives the TPM the firmware identity `firmware`, enabling the firmware-limited and
-    /// SVN-limited hierarchies (see [`Platform::firmware`]).
-    pub fn with_firmware(mut self, firmware: &'a (dyn TpmFirmware + Sync)) -> Self {
-        self.firmware = Some(firmware);
-        self
-    }
-
-    /// Gives the TPM the secure transport layer `secure_channel` (see
-    /// [`Platform::secure_channel`]).
-    pub fn with_secure_channel(mut self, secure_channel: &'a (dyn SecureChannel + Sync)) -> Self {
-        self.secure_channel = Some(secure_channel);
-        self
-    }
-
-    /// Gives the TPM the platform information `info` (see [`Platform::info`]).
-    pub fn with_info(mut self, info: Info) -> Self {
-        self.info = info;
-        self
-    }
-}
-
-impl<C, I, T, R> Platform for TpmPlatform<'_, C, I, T, R>
-where
-    C: Crypto,
-    I: IndexState,
-    T: TpmTimer,
-    R: Rng + Sync,
-{
-    type Crypto = C;
-    type Timer = T;
-    type Rng = R;
-    type IndexState = I;
-
-    fn info(&self) -> &Info {
-        &self.info
-    }
-
-    fn timer(&self) -> &T {
-        self.timer
-    }
-
-    fn rng(&mut self) -> &mut R {
-        self.rng
-    }
-
-    fn firmware(&self) -> Option<&(dyn TpmFirmware + Sync)> {
-        self.firmware
-    }
-
-    fn secure_channel(&self) -> Option<&(dyn SecureChannel + Sync)> {
-        self.secure_channel
     }
 }

@@ -6,7 +6,7 @@
 //! the execution of a command) and the corresponding requester and TPM public keys used in the
 //! secure channel negotiation have to be provided to a TPM application layer via internal
 //! protected capabilities". The platform's secure transport layer provides it
-//! ([`tpm2::platform::SecureChannel`], `TpmPlatform::secure_channel`); this module derives what
+//! ([`tpm2::platform::SecureChannel`], `Platform::secure_channel`); this module derives what
 //! the commands need from it:
 //!
 //! * `TPM2_GetCapability(TPM_CAP_PUB_KEYS)` lists the TPM SPDM authentication public keys

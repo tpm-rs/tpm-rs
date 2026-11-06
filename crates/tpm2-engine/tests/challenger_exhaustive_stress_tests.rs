@@ -5,6 +5,7 @@ use tpm2::errors::TpmRc;
 use tpm2::{Marshal, Unmarshal};
 mod common;
 
+use common::FakePlatform;
 use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
@@ -19,7 +20,6 @@ use tpm2::{
     TpmsAuthCommand, TpmsRsaParms, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2_engine::TpmEngine;
-use tpm2_engine::TpmPlatform;
 use tpm2_engine::handler::TransientObject;
 
 fn setup_tpm<'a>(
@@ -27,8 +27,8 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> TpmEngine<TpmPlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer, FakeRng>> {
-    let platform = TpmPlatform::new(crypto, timer, rng);
+) -> TpmEngine<FakePlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer, FakeRng>> {
+    let platform = FakePlatform::new(crypto, timer, rng);
     let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -44,7 +44,7 @@ fn setup_tpm<'a>(
 
 fn execute_tpm_command<C: Command>(
     tpm: &mut TpmEngine<
-        TpmPlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
+        FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
     >,
     cmd: &C,
     auths: &[TpmsAuthCommand],

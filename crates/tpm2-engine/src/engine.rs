@@ -73,7 +73,7 @@ const CFB_MODE: TpmiAlgSymMode = TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb);
 /// The object that processes incoming TPM requests and produces the corresponding TPM response.
 ///
 /// A `TpmEngine` owns everything a TPM needs: the platform dependencies ([`Platform`]: crypto,
-/// timer, RNG, firmware, e.g. a [`crate::TpmPlatform`]) and the TPM state ([`State`], with its
+/// timer, RNG, firmware) and the TPM state ([`State`], with its
 /// NV data). Commands are sent to it as marshaled byte buffers, either with the inherent
 /// `execute_command*` methods or through its [`tpm2::Connection`] implementation.
 ///

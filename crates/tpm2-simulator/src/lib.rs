@@ -25,9 +25,11 @@ use tpm2::platform::{SimulatedFirmware, SimulatedSecureChannel};
 use tpm2_engine::persistence::{
     DeserializeError, PersistedPlatformState, PersistedTpmState, SerializeError,
 };
-use tpm2_engine::{InternalError, TpmEngine, TpmPlatform};
+use tpm2_engine::{InternalError, TpmEngine};
 pub use tpm2_engine::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
-use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform};
+use tpm2_platform_linux::{
+    LinuxPlatform, LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform,
+};
 
 /// Commands for the command server.
 const TPM_SIGNAL_HASH_START: u32 = 5;
@@ -111,13 +113,7 @@ pub const NV_STORAGE_SIZE: usize = 2 * tpm2_engine::storage::nv_capacity::NV_MEM
 pub struct Simulator<'a> {
     context: Box<
         TpmEngine<
-            TpmPlatform<
-                'a,
-                PlatformCryptoProvider,
-                &'a mut RamStorageMock<NV_STORAGE_SIZE>,
-                LinuxTimer,
-                LinuxRng,
-            >,
+            LinuxPlatform<'a, PlatformCryptoProvider, &'a mut RamStorageMock<NV_STORAGE_SIZE>>,
         >,
     >,
     is_power_on: bool,

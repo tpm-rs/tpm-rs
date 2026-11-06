@@ -2,19 +2,20 @@ use common::marshal_to_slice;
 
 mod common;
 
+use common::FakePlatform;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
-use tpm2_engine::{TpmEngine, TpmPlatform};
+use tpm2_engine::TpmEngine;
 
 fn setup_tpm()
--> TpmEngine<TpmPlatform<'static, FakeCrypto, &'static mut FakeStorage, FakeTimer, FakeRng>> {
+-> TpmEngine<FakePlatform<'static, FakeCrypto, &'static mut FakeStorage, FakeTimer, FakeRng>> {
     // Create static references or owned items that match the test common setup
     // We can allocate them on the heap or leak box for tests or follow random_tests structure
     let crypto = FakeCrypto;
     let storage = FakeStorage::default();
     let timer = FakeTimer::new();
     let rng = FakeRng::new();
-    let platform = TpmPlatform::new(
+    let platform = FakePlatform::new(
         Box::leak(Box::new(crypto)),
         Box::leak(Box::new(timer)),
         Box::leak(Box::new(rng)),
@@ -34,7 +35,7 @@ fn setup_tpm()
 }
 
 fn send_da_lock_reset(
-    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<FakePlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
     auth_handle: u32,
     tag: u16,
 ) -> u32 {
@@ -72,7 +73,7 @@ fn send_da_lock_reset(
 }
 
 fn send_da_parameters(
-    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<FakePlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
     auth_handle: u32,
     new_max_tries: u32,
     new_recovery_time: u32,

@@ -4,14 +4,14 @@
 
 mod common;
 
+use common::FakePlatform;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use tpm2::errors::TpmRc;
 use tpm2_engine::TpmEngine;
-use tpm2_engine::TpmPlatform;
 
 /// Executes `request` and returns the response.
 fn execute(
-    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<FakePlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
     request: &[u8],
 ) -> Vec<u8> {
     let mut response = [0u8; 1024];
@@ -32,7 +32,7 @@ fn failed_self_test_enters_failure_mode_until_tpm_init() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.reset();
